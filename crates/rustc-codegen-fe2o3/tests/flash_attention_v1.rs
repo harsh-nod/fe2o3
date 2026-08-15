@@ -3,6 +3,11 @@ use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use fe2o3_artifact_transaction::{
+    BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+};
+use sha2::{Digest as _, Sha256};
+
 const PIPELINE: &str = "collected-flash-attention-v1";
 const CRATE_NAME: &str = "fe2o3_collected_flash_attention_v1_fixture";
 const REVIEWED_METADATA: &str = "fe2o3-flash-attention-v1-reviewed";
@@ -156,6 +161,15 @@ fn compile(
     .expect("write path-only FlashAttention fixture root");
     let artifact_dir = output.path.join(format!("{label}-artifacts"));
     std::fs::create_dir_all(&artifact_dir).expect("create empty artifact directory");
+    let producer = ProducerIdentity::from_codegen(profile.crate_name, Some(&crate_root))
+        .expect("FlashAttention fixture producer");
+    let attempt = begin_build_attempt(
+        &artifact_dir,
+        &producer,
+        BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
+        BuildSession::from_bytes([0x46; 16]),
+    )
+    .expect("begin FlashAttention managed build attempt");
     let fixture_manifest =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-flash-attention-v1");
 
@@ -194,6 +208,7 @@ fn compile(
             CARGO_METADATA_OBSERVATION,
         )
         .env("FE2O3_HSACO_DIR", &artifact_dir)
+        .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
         .env("FE2O3_TARGET", profile.target)
         .env("FE2O3_CODEGEN_PIPELINE", PIPELINE)
         .output()
@@ -310,16 +325,14 @@ fn exact_phase_a_source_authenticates_complete_flash_attention_profile() {
         stderr.contains("authenticated exact attributed source bytes"),
         "exact admission failed:\n{stderr}"
     );
-    assert!(
-        !result.status.success(),
-        "admission-only pipeline emitted code"
-    );
+    assert!(result.status.success(), "exact handoff failed:\n{stderr}");
     for marker in [
         "exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest",
         "complete reachable portable-MIR closure modulo those identity-bound terminals 0b017dd135cfce94f3a223126363b42853f5dbbf27c244cceafdd65f49e89e7e",
         "closed causal FlashAttention B1/H1/N8/D16 semantic KIR with 10 ordered recurrence steps",
         "adjacent-pair output ownership",
-        "no generic lowering, terminal-body refinement, compiler-refinement proof, LLVM lowering, Worker V2, finalizer, link, host, runtime, artifact, load, launch, Verus refinement, or hardware authority",
+        "published an inert Worker V2 compiler handoff",
+        "this grants no terminal-body or compiler-refinement proof, exponential-law/IEEE/OCML semantic proof",
     ] {
         assert!(stderr.contains(marker), "missing `{marker}`:\n{stderr}");
     }
@@ -328,17 +341,17 @@ fn exact_phase_a_source_authenticates_complete_flash_attention_profile() {
             .split_once("consumed sealed source authority ")
             .expect("authenticated authority marker")
             .1
-            .split_once(" (bound value ")
+            .split_once(" to select closed causal")
             .expect("authenticated authority terminator")
             .0;
         println!("FLASH_ATTENTION_AUTHORITY {authority}");
     }
-    assert_eq!(
+    assert!(
         std::fs::read_dir(output.path.join("exact-artifacts"))
-            .expect("read admission-only artifact directory")
-            .count(),
-        0,
-        "admission-only pipeline published an artifact"
+            .expect("read compiler-handoff artifact directory")
+            .next()
+            .is_some(),
+        "exact pipeline did not publish its managed handoff"
     );
 }
 

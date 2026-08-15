@@ -535,6 +535,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     PipelineSelection::Valid(CodegenPipeline::CollectedFlashAttentionV1)
                 ) {
                     let admission = (|| -> Result<_, String> {
+                        let attempt = build_attempt.ok_or_else(|| {
+                            format!(
+                                "{} requires a managed {BUILD_ATTEMPT_ENV}",
+                                collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
+                            )
+                        })?;
                         let collection = collector::collect_device_functions(
                             tcx,
                             mono_partitions.codegen_units,
@@ -545,6 +551,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             .map_err(|error| {
                                 format!("frontend record extraction failed: {error}")
                             })?;
+                        let typed_roots =
+                            compiler_descriptor::typed_descriptor_roots_from_collection(
+                                tcx,
+                                &collection.functions,
+                            )
+                            .map_err(|error| error.to_string())?;
                         collector::dump_device_functions(tcx, &collection.functions);
                         let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
                             || !tcx.sess.opts.cg.passes.is_empty();
@@ -559,15 +571,42 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         let root = receipt.root_instance_identity().to_owned();
                         let portable_mir = receipt.portable_mir_hex();
                         let authority = receipt.authority_hex();
+                        let authority_commitment = *receipt.authority_commitment();
                         let authenticated = receipt.consume().map_err(|error| error.to_string())?;
+                        let descriptor = authenticated.descriptor_hex();
+                        let grid = authenticated.profile().grid;
+                        let semantic_summary = authenticated.semantic_summary();
+                        let handoff =
+                            worker_v2_producer::prepare_flash_attention_v1_worker_handoff(
+                                authenticated.into_finalization_inputs(),
+                                typed_roots,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        if handoff.frontend_authority_commitment() != &authority_commitment {
+                            return Err(
+                                "prepared FlashAttention handoff lost its authenticated authority"
+                                    .to_owned(),
+                            );
+                        }
+                        let ocml_boundary = handoff.ocml_boundary_hex();
+                        let canonical_handoff_bytes = handoff.handoff().canonical_bytes().len();
+                        let llvm_bytes = handoff.handoff().module_bytes().len();
+                        let publication =
+                            worker_v2_producer::publish_prepared_flash_attention_v1_worker_handoff(
+                                output_dir, &producer, attempt, handoff,
+                            )
+                            .map_err(|error| error.to_string())?;
                         Ok((
                             root,
                             portable_mir,
                             authority,
-                            authenticated.source_authority_hex(),
-                            authenticated.descriptor_hex(),
-                            authenticated.profile().grid,
-                            authenticated.semantic_summary(),
+                            descriptor,
+                            grid,
+                            semantic_summary,
+                            ocml_boundary,
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication.length(),
                         ))
                     })();
                     match admission {
@@ -575,14 +614,17 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             root,
                             portable_mir,
                             authority,
-                            consumed_authority,
                             descriptor,
                             grid,
                             (batches, heads, sequence, dimension, recurrence_steps),
-                        )) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed source authority {authority} (bound value {consumed_authority}) to select closed causal FlashAttention B{batches}/H{heads}/N{sequence}/D{dimension} semantic KIR with {recurrence_steps} ordered recurrence steps, exact grid {grid:?}, adjacent-pair output ownership, and descriptor/resource identity {descriptor}; reviewed source-to-profile correspondence only; no generic lowering, terminal-body refinement, compiler-refinement proof, LLVM lowering, Worker V2, finalizer, link, host, runtime, artifact, load, launch, Verus refinement, or hardware authority was entered",
+                            ocml_boundary,
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication_bytes,
+                        )) => eprintln!(
+                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed source authority {authority} to select closed causal FlashAttention B{batches}/H{heads}/N{sequence}/D{dimension} semantic KIR with {recurrence_steps} ordered recurrence steps, exact grid {grid:?}, adjacent-pair output ownership, and descriptor/resource identity {descriptor}; published an inert Worker V2 compiler handoff ({canonical_handoff_bytes} canonical bytes, {llvm_bytes} LLVM bytes, {publication_bytes} receipt bytes) with exact COV6/Wave64/WG64 ABI and unresolved `__ocml_exp_f32` boundary {ocml_boundary}; this grants no terminal-body or compiler-refinement proof, exponential-law/IEEE/OCML semantic proof, provider selection, final machine-body semantics, worker execution, link result, HSACO, runtime, GPU, numerical, performance, load, launch, or hardware authority",
                             collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
-                        )),
+                        ),
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,

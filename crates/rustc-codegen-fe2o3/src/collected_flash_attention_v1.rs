@@ -227,6 +227,10 @@ impl FlashAttentionFrontendReceiptV1 {
         encode_hex(&self.authority().authority_identity)
     }
 
+    pub(crate) fn authority_commitment(&self) -> &[u8; 32] {
+        &self.authority().authority_identity
+    }
+
     pub(crate) fn consume(
         &mut self,
     ) -> Result<AuthenticatedFlashAttentionV1, CollectedFlashAttentionErrorV1> {
@@ -305,10 +309,6 @@ impl AuthenticatedFlashAttentionV1 {
 
     pub(crate) fn profile(&self) -> &FlashAttentionProfileV1 {
         &self.profile
-    }
-
-    pub(crate) fn source_authority_hex(&self) -> String {
-        encode_hex(&self.source_authority_identity)
     }
 
     pub(crate) fn descriptor_hex(&self) -> String {

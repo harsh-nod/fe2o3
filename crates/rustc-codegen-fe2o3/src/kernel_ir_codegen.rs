@@ -37,6 +37,11 @@ const REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256: [u8; 32] = [
     0x0a, 0x33, 0x13, 0x67, 0x53, 0x44, 0x43, 0x7b, 0xc7, 0xb8, 0x94, 0xad, 0x2f, 0x4d, 0xad, 0xb3,
     0x81, 0x07, 0xd9, 0x02, 0x96, 0xa9, 0x66, 0x5b, 0x76, 0x32, 0x34, 0xac, 0xd2, 0x40, 0x5a, 0xcc,
 ];
+pub(crate) const FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_SECTION_V1: &str =
+    ".fe2o3.flash-attention-authority-transcript.v1";
+pub(crate) const FLASH_ATTENTION_AUTHORITY_SECTION_V1: &str = ".fe2o3.flash-attention-auth.v1";
+pub(crate) const FLASH_ATTENTION_OCML_BOUNDARY_SECTION_V1: &str =
+    ".fe2o3.flash-attention-ocml-exp.v1";
 
 const MAX_COMPILER_MODULE_ID_BYTES: usize = 256;
 const MAX_COMPILER_MODULE_SYMBOL_BYTES: usize = 256;
@@ -134,6 +139,7 @@ pub(crate) enum CompilerModuleConstructionError {
     TiledGemmLowering(String),
     TiledGemmLdsSlice1Lowering(String),
     RowSoftmaxLowering(String),
+    FlashAttentionLowering(String),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -173,6 +179,9 @@ impl fmt::Display for CompilerModuleConstructionError {
             }
             Self::RowSoftmaxLowering(error) => {
                 write!(formatter, "exact row-softmax lowering rejected: {error}")
+            }
+            Self::FlashAttentionLowering(error) => {
+                write!(formatter, "exact FlashAttention lowering rejected: {error}")
             }
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
@@ -475,6 +484,291 @@ pub(crate) fn construct_inert_row_softmax_v1_module_text(
     })
 }
 
+/// Constructs the sole LLVM module admitted by the authenticated fixed-shape
+/// FlashAttention sidecar. The two call sites retain one unresolved OCML exp
+/// import; provider selection and native finalization remain later stages.
+pub(crate) fn construct_inert_flash_attention_v1_module_text(
+    ir: &fe2o3_kernel_ir::FlashAttentionKernelIrV1,
+    profile: &fe2o3_kernel_ir::FlashAttentionProfileV1,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    fe2o3_kernel_ir::verify_flash_attention_v1(ir, profile).map_err(|error| {
+        CompilerModuleConstructionError::FlashAttentionLowering(error.to_string())
+    })?;
+    let llvm_ir = canonical_flash_attention_v1_llvm();
+    let declaration = "declare float @__ocml_exp_f32(float)";
+    let call = "call float @__ocml_exp_f32(float ";
+    let exact = llvm_ir.matches("define amdgpu_kernel").count() == 1
+        && llvm_ir.matches(declaration).count() == 1
+        && llvm_ir.matches(call).count() == 2
+        && llvm_ir.matches("call void @llvm.trap()").count() == 1
+        && llvm_ir.contains("\"target-cpu\"=\"gfx942\"")
+        && llvm_ir.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"")
+        && llvm_ir.contains("\"fp-contract\"=\"off\"")
+        && !llvm_ir.contains(" fast ")
+        && !llvm_ir.contains("contract ")
+        && !llvm_ir.contains("reassoc ")
+        && !llvm_ir.contains("comgr")
+        && !llvm_ir.contains("COMGR");
+    if !exact {
+        return Err(CompilerModuleConstructionError::FlashAttentionLowering(
+            "canonical LLVM closure audit failed".to_owned(),
+        ));
+    }
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: vec![fe2o3_kernel_ir::FLASH_ATTENTION_V1_KERNEL_ID.to_owned()],
+        device_definitions: Vec::new(),
+        internal_helpers: Vec::new(),
+        device_ffi_exports: Vec::new(),
+        external_declarations: vec!["__ocml_exp_f32".to_owned()],
+        descriptor_source_identity: None,
+        unbound_target_properties: [
+            UnboundCompilerModuleTargetPropertyV1::DataLayout,
+            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
+            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
+        ],
+    })
+}
+
+fn canonical_flash_attention_v1_llvm() -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::with_capacity(48 * 1024);
+    writeln!(output, "target triple = \"amdgcn-amd-amdhsa\"").unwrap();
+    writeln!(
+        output,
+        "target datalayout = \"{}\"\n",
+        dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
+    )
+    .unwrap();
+    output.push_str(
+        "declare i32 @llvm.amdgcn.workitem.id.x() #1\n\
+         declare void @llvm.trap()\n\
+         declare float @__ocml_exp_f32(float)\n\n\
+         define amdgpu_kernel void @flash_attention_causal_f32_b1_h1_n8_d16_v1(ptr addrspace(1) nocapture readonly align 4 %q.data, i64 %q.len, ptr addrspace(1) nocapture readonly align 4 %k.data, i64 %k.len, ptr addrspace(1) nocapture readonly align 4 %v.data, i64 %v.len, ptr addrspace(1) noalias nocapture writeonly align 4 %output.data, i64 %output.len) #0 !reqd_work_group_size !0 !kernel_arg_access_qual !1 !kernel_arg_type !2 !kernel_arg_base_type !2 !kernel_arg_type_qual !3 {\n\
+         entry:\n\
+           %lane.i32 = call i32 @llvm.amdgcn.workitem.id.x()\n\
+           %lane = zext i32 %lane.i32 to i64\n\
+           %lane.ok = icmp ult i64 %lane, 64\n\
+           %q.len.ok = icmp eq i64 %q.len, 128\n\
+           %k.len.ok = icmp eq i64 %k.len, 128\n\
+           %v.len.ok = icmp eq i64 %v.len, 128\n\
+           %output.len.ok = icmp eq i64 %output.len, 128\n\
+           %shape.ok.0 = and i1 %lane.ok, %q.len.ok\n\
+           %shape.ok.1 = and i1 %shape.ok.0, %k.len.ok\n\
+           %shape.ok.2 = and i1 %shape.ok.1, %v.len.ok\n\
+           %shape.ok = and i1 %shape.ok.2, %output.len.ok\n\
+           br i1 %shape.ok, label %scan.cond, label %trap\n\n\
+         scan.cond:\n\
+           %scan.index = phi i64 [ 0, %entry ], [ %scan.next, %scan.body ]\n\
+           %scan.more = icmp ult i64 %scan.index, 128\n\
+           br i1 %scan.more, label %scan.body, label %scan.done\n\n\
+         scan.body:\n\
+           %scan.q.ptr = getelementptr inbounds float, ptr addrspace(1) %q.data, i64 %scan.index\n\
+           %scan.k.ptr = getelementptr inbounds float, ptr addrspace(1) %k.data, i64 %scan.index\n\
+           %scan.v.ptr = getelementptr inbounds float, ptr addrspace(1) %v.data, i64 %scan.index\n\
+           %scan.q = load float, ptr addrspace(1) %scan.q.ptr, align 4\n\
+           %scan.k = load float, ptr addrspace(1) %scan.k.ptr, align 4\n\
+           %scan.v = load float, ptr addrspace(1) %scan.v.ptr, align 4\n\
+           %scan.q.bits = bitcast float %scan.q to i32\n\
+           %scan.k.bits = bitcast float %scan.k to i32\n\
+           %scan.v.bits = bitcast float %scan.v to i32\n\
+           %scan.q.exponent = and i32 %scan.q.bits, 2139095040\n\
+           %scan.k.exponent = and i32 %scan.k.bits, 2139095040\n\
+           %scan.v.exponent = and i32 %scan.v.bits, 2139095040\n\
+           %scan.q.finite = icmp ne i32 %scan.q.exponent, 2139095040\n\
+           %scan.k.finite = icmp ne i32 %scan.k.exponent, 2139095040\n\
+           %scan.v.finite = icmp ne i32 %scan.v.exponent, 2139095040\n\
+           %scan.qk.finite = and i1 %scan.q.finite, %scan.k.finite\n\
+           %scan.all.finite = and i1 %scan.qk.finite, %scan.v.finite\n\
+           %scan.next = add nuw i64 %scan.index, 1\n\
+           br i1 %scan.all.finite, label %scan.cond, label %trap\n\n\
+         scan.done:\n\
+           %first = shl nuw nsw i64 %lane, 1\n\
+           %query = udiv i64 %first, 16\n\
+           %column = urem i64 %first, 16\n",
+    );
+    emit_flash_score(&mut output, "initial", "0");
+    output.push_str(
+        "  br i1 %initial.score.finite, label %initial.ok, label %trap\n\n\
+         initial.ok:\n\
+           %initial.value0.index = add i64 %column, 0\n\
+           %initial.value1.index = add i64 %column, 1\n\
+           %initial.value0.ptr = getelementptr inbounds float, ptr addrspace(1) %v.data, i64 %initial.value0.index\n\
+           %initial.value1.ptr = getelementptr inbounds float, ptr addrspace(1) %v.data, i64 %initial.value1.index\n\
+           %initial.value0 = load float, ptr addrspace(1) %initial.value0.ptr, align 4\n\
+           %initial.value1 = load float, ptr addrspace(1) %initial.value1.ptr, align 4\
+           br label %recur.cond\n\n\
+         recur.cond:\n\
+           %key = phi i64 [ 1, %initial.ok ], [ %next.key, %recur.ok ]\n\
+           %running.max = phi float [ %initial.score, %initial.ok ], [ %next.max, %recur.ok ]\n\
+           %running.sum = phi float [ 1.000000e+00, %initial.ok ], [ %next.sum, %recur.ok ]\n\
+           %numerator0 = phi float [ %initial.value0, %initial.ok ], [ %next.numerator0, %recur.ok ]\n\
+           %numerator1 = phi float [ %initial.value1, %initial.ok ], [ %next.numerator1, %recur.ok ]\n\
+           %recur.more = icmp ule i64 %key, %query\n\
+           br i1 %recur.more, label %recur.body, label %finish\n\n\
+         recur.body:\n",
+    );
+    emit_flash_score(&mut output, "next", "%key");
+    output.push_str(
+        "  br i1 %next.score.finite, label %recur.score.ok, label %trap\n\n\
+         recur.score.ok:\n\
+           %score.greater = fcmp ogt float %next.score, %running.max\n\
+           %next.max = select i1 %score.greater, float %next.score, float %running.max\n\
+           %previous.delta = fsub float %running.max, %next.max\n\
+           %current.delta = fsub float %next.score, %next.max\n\
+           %previous.weight = call float @__ocml_exp_f32(float %previous.delta)\n\
+           %current.weight = call float @__ocml_exp_f32(float %current.delta)\n\
+           %previous.weight.bits = bitcast float %previous.weight to i32\n\
+           %current.weight.bits = bitcast float %current.weight to i32\n\
+           %previous.weight.exponent = and i32 %previous.weight.bits, 2139095040\n\
+           %current.weight.exponent = and i32 %current.weight.bits, 2139095040\n\
+           %previous.weight.finite = icmp ne i32 %previous.weight.exponent, 2139095040\n\
+           %current.weight.finite = icmp ne i32 %current.weight.exponent, 2139095040\n\
+           %weights.finite = and i1 %previous.weight.finite, %current.weight.finite\n\
+           %next.value.base = mul nuw i64 %key, 16\n\
+           %next.value0.index = add nuw i64 %next.value.base, %column\n\
+           %next.value1.index = add nuw i64 %next.value0.index, 1\n\
+           %next.value0.ptr = getelementptr inbounds float, ptr addrspace(1) %v.data, i64 %next.value0.index\n\
+           %next.value1.ptr = getelementptr inbounds float, ptr addrspace(1) %v.data, i64 %next.value1.index\n\
+           %next.value0 = load float, ptr addrspace(1) %next.value0.ptr, align 4\n\
+           %next.value1 = load float, ptr addrspace(1) %next.value1.ptr, align 4\n\
+           %weighted.sum = fmul float %running.sum, %previous.weight\n\
+           %next.sum = fadd float %weighted.sum, %current.weight\n\
+           %weighted.numerator0 = fmul float %numerator0, %previous.weight\n\
+           %weighted.current0 = fmul float %next.value0, %current.weight\n\
+           %next.numerator0 = fadd float %weighted.numerator0, %weighted.current0\n\
+           %weighted.numerator1 = fmul float %numerator1, %previous.weight\n\
+           %weighted.current1 = fmul float %next.value1, %current.weight\n\
+           %next.numerator1 = fadd float %weighted.numerator1, %weighted.current1\n\
+           %next.sum.bits = bitcast float %next.sum to i32\n\
+           %next.numerator0.bits = bitcast float %next.numerator0 to i32\n\
+           %next.numerator1.bits = bitcast float %next.numerator1 to i32\n\
+           %next.sum.exponent = and i32 %next.sum.bits, 2139095040\n\
+           %next.numerator0.exponent = and i32 %next.numerator0.bits, 2139095040\n\
+           %next.numerator1.exponent = and i32 %next.numerator1.bits, 2139095040\n\
+           %next.sum.finite = icmp ne i32 %next.sum.exponent, 2139095040\n\
+           %next.numerator0.finite = icmp ne i32 %next.numerator0.exponent, 2139095040\n\
+           %next.numerator1.finite = icmp ne i32 %next.numerator1.exponent, 2139095040\n\
+           %next.sum.positive = fcmp ogt float %next.sum, 0.000000e+00\n\
+           %recur.valid.0 = and i1 %weights.finite, %next.sum.finite\n\
+           %recur.valid.1 = and i1 %recur.valid.0, %next.sum.positive\n\
+           %recur.valid.2 = and i1 %recur.valid.1, %next.numerator0.finite\n\
+           %recur.valid = and i1 %recur.valid.2, %next.numerator1.finite\n\
+           br i1 %recur.valid, label %recur.ok, label %trap\n\n\
+         recur.ok:\n\
+           %next.key = add nuw i64 %key, 1\n\
+           br label %recur.cond\n\n\
+         finish:\n\
+           %output0 = fdiv float %numerator0, %running.sum\n\
+           %output1 = fdiv float %numerator1, %running.sum\n\
+           %output0.bits = bitcast float %output0 to i32\n\
+           %output1.bits = bitcast float %output1 to i32\n\
+           %output0.exponent = and i32 %output0.bits, 2139095040\n\
+           %output1.exponent = and i32 %output1.bits, 2139095040\n\
+           %output0.finite = icmp ne i32 %output0.exponent, 2139095040\n\
+           %output1.finite = icmp ne i32 %output1.exponent, 2139095040\n\
+           %outputs.finite = and i1 %output0.finite, %output1.finite\n\
+           br i1 %outputs.finite, label %store, label %trap\n\n\
+         store:\n\
+           %second = add nuw nsw i64 %first, 1\n\
+           %output0.ptr = getelementptr inbounds float, ptr addrspace(1) %output.data, i64 %first\n\
+           %output1.ptr = getelementptr inbounds float, ptr addrspace(1) %output.data, i64 %second\n\
+           store float %output0, ptr addrspace(1) %output0.ptr, align 4\n\
+           store float %output1, ptr addrspace(1) %output1.ptr, align 4\n\
+           ret void\n\n\
+         trap:\n\
+           call void @llvm.trap()\n\
+           ret void\n\
+         }\n\n\
+         attributes #0 = { nounwind \"amdgpu-flat-work-group-size\"=\"64,64\" \"target-cpu\"=\"gfx942\" \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\" }\n\
+         attributes #1 = { nounwind readnone speculatable willreturn }\n\n\
+         !0 = !{i32 64, i32 1, i32 1}\n\
+         !1 = !{!\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"write_only\", !\"none\"}\n\
+         !2 = !{!\"float*\", !\"ulong\", !\"float*\", !\"ulong\", !\"float*\", !\"ulong\", !\"float*\", !\"ulong\"}\n\
+         !3 = !{!\"const restrict\", !\"\", !\"const restrict\", !\"\", !\"const restrict\", !\"\", !\"restrict\", !\"\"}\n",
+    );
+    output
+}
+
+fn emit_flash_score(output: &mut String, prefix: &str, key: &str) {
+    use std::fmt::Write as _;
+
+    writeln!(output, "  %{prefix}.q.base = mul nuw i64 %query, 16").unwrap();
+    writeln!(output, "  %{prefix}.k.base = mul nuw i64 {key}, 16").unwrap();
+    let mut previous_dot = "0.000000e+00".to_owned();
+    let mut previous_valid = "true".to_owned();
+    for feature in 0..16 {
+        writeln!(
+            output,
+            "  %{prefix}.q.index.{feature} = add nuw i64 %{prefix}.q.base, {feature}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.k.index.{feature} = add nuw i64 %{prefix}.k.base, {feature}"
+        )
+        .unwrap();
+        writeln!(output, "  %{prefix}.q.ptr.{feature} = getelementptr inbounds float, ptr addrspace(1) %q.data, i64 %{prefix}.q.index.{feature}").unwrap();
+        writeln!(output, "  %{prefix}.k.ptr.{feature} = getelementptr inbounds float, ptr addrspace(1) %k.data, i64 %{prefix}.k.index.{feature}").unwrap();
+        writeln!(output, "  %{prefix}.q.{feature} = load float, ptr addrspace(1) %{prefix}.q.ptr.{feature}, align 4").unwrap();
+        writeln!(output, "  %{prefix}.k.{feature} = load float, ptr addrspace(1) %{prefix}.k.ptr.{feature}, align 4").unwrap();
+        writeln!(output, "  %{prefix}.product.{feature} = fmul float %{prefix}.q.{feature}, %{prefix}.k.{feature}").unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.product.bits.{feature} = bitcast float %{prefix}.product.{feature} to i32"
+        )
+        .unwrap();
+        writeln!(output, "  %{prefix}.product.exponent.{feature} = and i32 %{prefix}.product.bits.{feature}, 2139095040").unwrap();
+        writeln!(output, "  %{prefix}.product.finite.{feature} = icmp ne i32 %{prefix}.product.exponent.{feature}, 2139095040").unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.dot.{feature} = fadd float {previous_dot}, %{prefix}.product.{feature}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.dot.bits.{feature} = bitcast float %{prefix}.dot.{feature} to i32"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.dot.exponent.{feature} = and i32 %{prefix}.dot.bits.{feature}, 2139095040"
+        )
+        .unwrap();
+        writeln!(output, "  %{prefix}.dot.finite.{feature} = icmp ne i32 %{prefix}.dot.exponent.{feature}, 2139095040").unwrap();
+        writeln!(output, "  %{prefix}.step.finite.{feature} = and i1 %{prefix}.product.finite.{feature}, %{prefix}.dot.finite.{feature}").unwrap();
+        writeln!(output, "  %{prefix}.prefix.finite.{feature} = and i1 {previous_valid}, %{prefix}.step.finite.{feature}").unwrap();
+        previous_dot = format!("%{prefix}.dot.{feature}");
+        previous_valid = format!("%{prefix}.prefix.finite.{feature}");
+    }
+    writeln!(
+        output,
+        "  %{prefix}.score = fmul float {previous_dot}, 2.500000e-01"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %{prefix}.score.bits = bitcast float %{prefix}.score to i32"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %{prefix}.score.exponent = and i32 %{prefix}.score.bits, 2139095040"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %{prefix}.scaled.finite = icmp ne i32 %{prefix}.score.exponent, 2139095040"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %{prefix}.score.finite = and i1 {previous_valid}, %{prefix}.scaled.finite"
+    )
+    .unwrap();
+}
+
 fn ocml_link_imports(module: &Module) -> impl Iterator<Item = &'static str> + '_ {
     module.functions.iter().filter_map(|function| {
         let FloatOperation::F32Math {
@@ -647,6 +941,41 @@ pub(crate) fn bind_row_softmax_frontend_authority_v1(
         &mut module.llvm_ir,
         ".fe2o3.row-exp.v1",
         &exponential_boundary,
+    );
+    enforce_source_debug_text_bound(&module.llvm_ir)?;
+    Ok(module)
+}
+
+/// Binds the complete authenticated Flash transcript, its commitment, and the
+/// deliberately limited OCML boundary to the exact compiler module.
+pub(crate) fn bind_flash_attention_v1_authority(
+    mut module: InertCompilerModuleTextV1,
+    authority_transcript: &[u8],
+    authority: [u8; 32],
+    ocml_boundary: [u8; 32],
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    if authority_transcript.is_empty()
+        || authority_transcript.len() > 4096
+        || <[u8; 32]>::from(Sha256::digest(authority_transcript)) != authority
+    {
+        return Err(CompilerModuleConstructionError::FlashAttentionLowering(
+            "authority transcript is empty, oversized, or differs from its commitment".to_owned(),
+        ));
+    }
+    append_commitment_section(
+        &mut module.llvm_ir,
+        FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_SECTION_V1,
+        authority_transcript,
+    );
+    append_commitment_section(
+        &mut module.llvm_ir,
+        FLASH_ATTENTION_AUTHORITY_SECTION_V1,
+        &authority,
+    );
+    append_commitment_section(
+        &mut module.llvm_ir,
+        FLASH_ATTENTION_OCML_BOUNDARY_SECTION_V1,
+        &ocml_boundary,
     );
     enforce_source_debug_text_bound(&module.llvm_ir)?;
     Ok(module)

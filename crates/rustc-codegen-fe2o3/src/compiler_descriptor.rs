@@ -21,7 +21,8 @@ use fe2o3_kernel_descriptor::{
     SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, ValidationError,
 };
 use fe2o3_kernel_ir::{
-    BF16_F32_M16N16K16_CAPABILITY, MATRIX_CAPABILITY_NAMESPACE, Module, TargetCapability,
+    BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BlockId, Function, Kernel, LaunchDomain,
+    LaunchExtent, MATRIX_CAPABILITY_NAMESPACE, Module, Signature, TargetCapability, Terminator,
     WaveWidth, WorkgroupSize,
 };
 use reserved_fe2o3_symbols::{KernelBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1};
@@ -437,6 +438,108 @@ pub(crate) fn construct_row_softmax_v1_compiler_descriptor_source_v1(
             producer_version: "typed-row-softmax-gfx942-cov6-v1",
         },
     )
+}
+
+/// Constructs descriptor source only for the authenticated fixed Flash profile.
+/// The semantic sidecar is rechecked before projecting the freshly extracted
+/// rustc typed root onto the exact WG64/COV6 descriptor schema.
+pub(crate) fn construct_flash_attention_v1_compiler_descriptor_source_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    ir: &fe2o3_kernel_ir::FlashAttentionKernelIrV1,
+    profile: &fe2o3_kernel_ir::FlashAttentionProfileV1,
+) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
+    fe2o3_kernel_ir::verify_flash_attention_v1(ir, profile)
+        .map_err(|_| CompilerDescriptorError::NonCanonicalFlashAttentionProfile)?;
+    let [root] = typed_roots else {
+        return Err(CompilerDescriptorError::IncompleteTypedKernelClosure {
+            typed: typed_roots.len(),
+            total: 1,
+        });
+    };
+    let expected_kinds = [
+        DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
+        DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
+        DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
+        DescriptorArgumentKindV1::DisjointSlice(ScalarTypeV1::F32),
+    ];
+    let exact_root = root.logical_name == fe2o3_kernel_ir::FLASH_ATTENTION_V1_KERNEL_ID
+        && root.export_name == fe2o3_kernel_ir::FLASH_ATTENTION_V1_KERNEL_ID
+        && root.explicit_argument_bytes
+            == fe2o3_kernel_ir::FLASH_ATTENTION_V1_EXPLICIT_KERNARG_BYTES
+        && root.kernarg_alignment_bytes == 8
+        && root.arguments.len() == 4
+        && root
+            .arguments
+            .as_slice()
+            .iter()
+            .zip(expected_kinds)
+            .enumerate()
+            .all(|(index, (argument, kind))| {
+                argument.name == format!("arg{index}")
+                    && argument.kind == kind
+                    && argument.offset == (index as u32) * 16
+                    && argument.access
+                        == if index < 3 {
+                            AccessMode::ReadOnly
+                        } else {
+                            AccessMode::ReadWrite
+                        }
+            });
+    if !exact_root {
+        return Err(CompilerDescriptorError::FlashAttentionDescriptorMismatch(
+            "typed root/ABI/ownership",
+        ));
+    }
+
+    construct_compiler_descriptor_source_with_profile_v1(
+        envelope,
+        &flash_attention_descriptor_module_v1(),
+        compiler_module,
+        typed_roots,
+        DescriptorConstructionProfileV1 {
+            workgroup_x: 64,
+            max_grid_x: 1,
+            static_shared_memory_bytes: 0,
+            allow_exact_tiled_matrix: false,
+            allow_workgroup_memory: false,
+            producer_version: "typed-flash-attention-gfx942-cov6-v1",
+        },
+    )?
+    .ok_or(CompilerDescriptorError::FlashAttentionDescriptorMismatch(
+        "descriptor presence",
+    ))
+}
+
+fn flash_attention_descriptor_module_v1() -> Module {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.terminator = Some(Terminator::Return { values: Vec::new() });
+    let entry = Function::kernel_entry(
+        fe2o3_kernel_ir::FLASH_ATTENTION_V1_FUNCTION_ID,
+        Signature::new(Vec::new(), Vec::new()),
+        Vec::new(),
+        vec![block],
+    );
+    let mut kernel = Kernel::new(
+        fe2o3_kernel_ir::FLASH_ATTENTION_V1_KERNEL_ID,
+        fe2o3_kernel_ir::FLASH_ATTENTION_V1_FUNCTION_ID,
+        LaunchDomain::D1 {
+            x: LaunchExtent::Static(1),
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new(fe2o3_kernel_ir::FLASH_ATTENTION_V1_MODULE_ID);
+    module.required_capabilities = [
+        fe2o3_kernel_ir::gfx942_xnack_minus_target_capability(),
+        TargetCapability::Subgroups,
+        TargetCapability::WaveWidth(WaveWidth::Wave64),
+    ]
+    .into_iter()
+    .collect();
+    module.functions.push(entry);
+    module.kernels.push(kernel);
+    module
 }
 
 #[derive(Clone, Copy)]
@@ -1180,6 +1283,8 @@ pub(crate) enum CompilerDescriptorError {
     UnexpectedAttributedSourceKernel(String),
     TiledGemmLdsSlice1DescriptorMismatch(&'static str),
     NonCanonicalRowSoftmaxModule,
+    NonCanonicalFlashAttentionProfile,
+    FlashAttentionDescriptorMismatch(&'static str),
     UnsupportedCapability(String),
     Validation(ValidationError),
     Source(CompilerDescriptorSourceErrorV1),
@@ -1300,6 +1405,13 @@ impl fmt::Display for CompilerDescriptorError {
             ),
             Self::NonCanonicalRowSoftmaxModule => formatter.write_str(
                 "row-softmax descriptor construction requires the exact canonical row_softmax_v1 module",
+            ),
+            Self::NonCanonicalFlashAttentionProfile => formatter.write_str(
+                "FlashAttention descriptor construction requires the exact authenticated B1/H1/N8/D16 profile",
+            ),
+            Self::FlashAttentionDescriptorMismatch(field) => write!(
+                formatter,
+                "FlashAttention compiler descriptor has an internal {field} mismatch"
             ),
             Self::UnsupportedCapability(capability) => write!(
                 formatter,

@@ -1,11 +1,13 @@
 //! Preparation and attempt-scoped publication of inert Worker V2 compiler modules.
 
+use crate::collected_flash_attention_v1::FlashAttentionFinalizationInputsV1;
 use crate::collected_row_softmax_v1::AuthenticatedRowSoftmaxModuleV1;
 use crate::collected_scalar_gemm_v1::AuthenticatedScalarGemmModuleV1;
 use crate::collected_tiled_gemm_lds_slice1_v1::AuthenticatedLdsSlice1ModuleV1;
 use crate::collected_tiled_gemm_v1::AuthenticatedTiledGemmModuleV1;
 use crate::compiler_descriptor::{
     CompilerDescriptorError, TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
+    construct_flash_attention_v1_compiler_descriptor_source_v1,
     validate_tiled_gemm_lds_slice1_compiler_module_evidence_v1,
 };
 use crate::kernel_ir_codegen::{
@@ -47,6 +49,11 @@ const ROW_SOFTMAX_V1_DESCRIPTOR: &str = "row_softmax_v1.kd";
 pub(crate) const ROW_SOFTMAX_OCML_EXP_SYMBOL_V1: &str = "__ocml_exp_f32";
 const ROW_SOFTMAX_OCML_EXP_ABI_V1: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
 const ROW_SOFTMAX_OCML_EXP_EFFECTS_V1: &str = "none";
+const FLASH_ATTENTION_V1_DESCRIPTOR: &str = fe2o3_kernel_ir::FLASH_ATTENTION_V1_DESCRIPTOR_SYMBOL;
+pub(crate) const FLASH_ATTENTION_OCML_EXP_SYMBOL_V1: &str = "__ocml_exp_f32";
+const FLASH_ATTENTION_OCML_EXP_ABI_V1: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
+const FLASH_ATTENTION_OCML_EXP_EFFECTS_V1: &str = "none";
+const FLASH_ATTENTION_OCML_BOUNDARY_V1: &[u8] = b"fe2o3.flash-attention.ocml-exp-boundary.v1;provider-identity-and-closed-link-structure-only;no-exponential-law,approximation-error,IEEE-fp32,or-source-refinement-proof";
 
 /// Inert Worker V2 compiler-module handoff retained with the frontend authority
 /// that selected its canonical scalar GEMM Kernel IR.
@@ -131,6 +138,32 @@ pub(crate) struct PreparedRowSoftmaxV1WorkerHandoffV1 {
     frontend_authority_commitment: [u8; 32],
     exponential_boundary_commitment: [u8; 32],
     handoff: CompilerModuleHandoffV2,
+}
+
+/// Inert, exact Flash compiler handoff. Construction consumes the authenticated
+/// source/KIR value and grants no worker, link, artifact, load, or launch authority.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PreparedFlashAttentionV1WorkerHandoffV1 {
+    authority_transcript: Vec<u8>,
+    frontend_authority_commitment: [u8; 32],
+    ocml_boundary_commitment: [u8; 32],
+    descriptor_source_bytes: Vec<u8>,
+    expected_handoff_identity: CompilerModuleHandoffIdentityV2,
+    handoff: CompilerModuleHandoffV2,
+}
+
+impl PreparedFlashAttentionV1WorkerHandoffV1 {
+    pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
+        &self.frontend_authority_commitment
+    }
+
+    pub(crate) fn ocml_boundary_hex(&self) -> String {
+        hex(&self.ocml_boundary_commitment)
+    }
+
+    pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
+        &self.handoff
+    }
 }
 
 impl PreparedRowSoftmaxV1WorkerHandoffV1 {
@@ -266,6 +299,20 @@ pub(crate) fn publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
 }
 
 fn decode_tiled_gemm_lds_slice1_sections_v1(module: &str) -> Option<[Vec<u8>; 3]> {
+    decode_exact_compiler_sections_v1(
+        module,
+        &[
+            fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+            crate::kernel_ir_codegen::TILED_GEMM_LDS_SLICE1_AUTHORITY_SECTION_V1,
+            crate::kernel_ir_codegen::TILED_GEMM_LDS_SLICE1_RESOURCE_SECTION_V1,
+        ],
+    )
+}
+
+fn decode_exact_compiler_sections_v1<const N: usize>(
+    module: &str,
+    expected: &[&str; N],
+) -> Option<[Vec<u8>; N]> {
     let lines = module.lines().collect::<Vec<_>>();
     let declarations = lines
         .iter()
@@ -274,15 +321,10 @@ fn decode_tiled_gemm_lds_slice1_sections_v1(module: &str) -> Option<[Vec<u8>; 3]
             canonical_module_assembly_section_name(line).map(|name| (index, name))
         })
         .collect::<Vec<_>>();
-    let expected = [
-        fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V1,
-        crate::kernel_ir_codegen::TILED_GEMM_LDS_SLICE1_AUTHORITY_SECTION_V1,
-        crate::kernel_ir_codegen::TILED_GEMM_LDS_SLICE1_RESOURCE_SECTION_V1,
-    ];
     if declarations.len() != expected.len()
         || !declarations
             .iter()
-            .zip(expected)
+            .zip(expected.iter().copied())
             .all(|((_, actual), expected)| *actual == expected)
     {
         return None;
@@ -375,6 +417,51 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
         "[rustc-codegen-fe2o3] published row-softmax Worker V2 handoff bound to frontend authority {} and exponential boundary {}",
         hex(&frontend_authority_commitment),
         hex(&exponential_boundary_commitment),
+    );
+    Ok(receipt)
+}
+
+pub(crate) fn publish_prepared_flash_attention_v1_worker_handoff(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    prepared: PreparedFlashAttentionV1WorkerHandoffV1,
+) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
+    let module = std::str::from_utf8(prepared.handoff.module_bytes())
+        .map_err(|_| WorkerV2ProducerError::MissingFlashAttentionBindings)?;
+    let sections = decode_exact_compiler_sections_v1(
+        module,
+        &[
+            fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+            crate::kernel_ir_codegen::FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_SECTION_V1,
+            crate::kernel_ir_codegen::FLASH_ATTENTION_AUTHORITY_SECTION_V1,
+            crate::kernel_ir_codegen::FLASH_ATTENTION_OCML_BOUNDARY_SECTION_V1,
+        ],
+    )
+    .ok_or(WorkerV2ProducerError::MissingFlashAttentionBindings)?;
+    let exact = sections[0] == prepared.descriptor_source_bytes
+        && sections[1] == prepared.authority_transcript
+        && sections[2] == prepared.frontend_authority_commitment
+        && sections[3] == prepared.ocml_boundary_commitment
+        && <[u8; 32]>::from(Sha256::digest(&sections[1])) == prepared.frontend_authority_commitment
+        && prepared.handoff.identity() == prepared.expected_handoff_identity
+        && prepared.handoff.target().to_string()
+            == AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+        && prepared.handoff.code_object_version() == CodeObjectVersion::V6;
+    if !exact {
+        return Err(WorkerV2ProducerError::MissingFlashAttentionBindings);
+    }
+    let receipt = publish_compiler_module_handoff_v1(
+        output_dir,
+        producer,
+        attempt,
+        prepared.handoff.canonical_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Publication)?;
+    eprintln!(
+        "[rustc-codegen-fe2o3] published exact FlashAttention Worker V2 handoff bound to frontend authority {} and explicit OCML boundary {}",
+        hex(&prepared.frontend_authority_commitment),
+        hex(&prepared.ocml_boundary_commitment),
     );
     Ok(receipt)
 }
@@ -695,6 +782,154 @@ pub(crate) fn validate_exact_row_softmax_module_closure(
     Ok(())
 }
 
+pub(crate) fn construct_flash_attention_v1_compiler_envelope(
+    ocml_boundary_commitment: [u8; 32],
+) -> Result<CompilerFfiEnvelopeV1, CompilerFfiEnvelopeError> {
+    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        .expect("fixed FlashAttention target is valid");
+    let semantic_text = hex(&ocml_boundary_commitment);
+    let fields = DeviceFfiContractFieldsV1 {
+        direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
+        symbol: FLASH_ATTENTION_OCML_EXP_SYMBOL_V1,
+        calling_convention: "C",
+        code_object_version: 6,
+        target: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+        physical_abi: FLASH_ATTENTION_OCML_EXP_ABI_V1,
+        effects: FLASH_ATTENTION_OCML_EXP_EFFECTS_V1,
+        semantic_identity: &semantic_text,
+    };
+    let contract = CompilerFfiContractV1::new(
+        derive_device_ffi_contract_id_v1(fields),
+        DeviceFfiDirectionV1::Import,
+        CompilerFfiLinkRoleV1::RequiresExternalDefinition,
+        target,
+        CodeObjectVersion::V6,
+        CompilerFfiSourceOwnerV1::new(
+            "rustc_codegen_fe2o3",
+            "rustc_codegen_fe2o3::flash_attention_v1::__ocml_exp_f32",
+            [0x46; 16],
+            "__fe2o3_compiler_owned_flash_attention_ocml_exp_f32_v1",
+        )?,
+        FLASH_ATTENTION_OCML_EXP_SYMBOL_V1,
+        FLASH_ATTENTION_OCML_EXP_ABI_V1,
+        FLASH_ATTENTION_OCML_EXP_EFFECTS_V1,
+        ocml_boundary_commitment,
+    )?;
+    let mut builder = CompilerFfiEnvelopeBuilderV1::new(target, CodeObjectVersion::V6, 1)?;
+    builder.push(contract)?;
+    builder.finish()
+}
+
+/// Consumes exact Flash source/KIR authority into one closed compiler handoff.
+/// This performs no provider lookup, LLVM execution, linking, or artifact work.
+pub(crate) fn prepare_flash_attention_v1_worker_handoff(
+    inputs: FlashAttentionFinalizationInputsV1,
+    typed_roots: Vec<TypedDescriptorRootV1>,
+) -> Result<PreparedFlashAttentionV1WorkerHandoffV1, WorkerV2ProducerError> {
+    let ocml_boundary_commitment: [u8; 32] =
+        Sha256::digest(FLASH_ATTENTION_OCML_BOUNDARY_V1).into();
+    let required_transcript_fields = [
+        inputs.source_identity.as_slice(),
+        inputs.source_namespace.as_slice(),
+        inputs.compiler_crate_binding.as_slice(),
+        inputs.portable_mir_identity.as_slice(),
+        inputs.compiler_semantics_identity.as_slice(),
+        inputs.fn_abi_identity.as_slice(),
+        inputs.trusted_definitions_identity.as_slice(),
+        inputs.abi_identity.as_slice(),
+        inputs.effects_identity.as_slice(),
+        inputs.numerical_identity.as_slice(),
+        inputs.descriptor_identity.as_slice(),
+        inputs.canonical_ir_identity.as_slice(),
+    ];
+    if <[u8; 32]>::from(Sha256::digest(&inputs.authority_transcript))
+        != inputs.source_authority_identity
+        || !required_transcript_fields
+            .iter()
+            .all(|field| transcript_contains_field(&inputs.authority_transcript, field))
+    {
+        return Err(WorkerV2ProducerError::MissingFlashAttentionBindings);
+    }
+    let mut compiler_module =
+        crate::kernel_ir_codegen::construct_inert_flash_attention_v1_module_text(
+            &inputs.ir,
+            &inputs.profile,
+        )
+        .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let envelope = construct_flash_attention_v1_compiler_envelope(ocml_boundary_commitment)
+        .map_err(WorkerV2ProducerError::CompilerEnvelope)?;
+    validate_envelope_module_roles(&envelope, &compiler_module)?;
+    let descriptor_source = construct_flash_attention_v1_compiler_descriptor_source_v1(
+        &envelope,
+        &compiler_module,
+        &typed_roots,
+        &inputs.ir,
+        &inputs.profile,
+    )
+    .map_err(WorkerV2ProducerError::CompilerDescriptor)?;
+    let descriptor_source_bytes = descriptor_source.canonical_bytes().to_vec();
+    compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &descriptor_source)
+        .map_err(WorkerV2ProducerError::CompilerModule)?;
+    compiler_module = crate::kernel_ir_codegen::bind_flash_attention_v1_authority(
+        compiler_module,
+        &inputs.authority_transcript,
+        inputs.source_authority_identity,
+        ocml_boundary_commitment,
+    )
+    .map_err(WorkerV2ProducerError::CompilerModule)?;
+    validate_exact_flash_attention_module_closure(&compiler_module)?;
+    let symbol_manifest = CompilerModuleSymbolManifestV1::new([
+        (
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            fe2o3_kernel_ir::FLASH_ATTENTION_V1_KERNEL_ID,
+        ),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            FLASH_ATTENTION_V1_DESCRIPTOR,
+        ),
+        (
+            CompilerModuleSymbolRoleV1::UnresolvedExternalImport,
+            FLASH_ATTENTION_OCML_EXP_SYMBOL_V1,
+        ),
+    ])
+    .map_err(WorkerV2ProducerError::SymbolManifest)?;
+    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        .expect("fixed FlashAttention target is valid");
+    let handoff = CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        target,
+        CodeObjectVersion::V6,
+        envelope,
+        symbol_manifest,
+        compiler_module.llvm_ir().as_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Handoff)?;
+    let expected_handoff_identity = handoff.identity();
+    Ok(PreparedFlashAttentionV1WorkerHandoffV1 {
+        authority_transcript: inputs.authority_transcript,
+        frontend_authority_commitment: inputs.source_authority_identity,
+        ocml_boundary_commitment,
+        descriptor_source_bytes,
+        expected_handoff_identity,
+        handoff,
+    })
+}
+
+fn validate_exact_flash_attention_module_closure(
+    module: &InertCompilerModuleTextV1,
+) -> Result<(), WorkerV2ProducerError> {
+    let exact = module.kernel_entries() == [fe2o3_kernel_ir::FLASH_ATTENTION_V1_KERNEL_ID]
+        && module.device_definitions().is_empty()
+        && module.internal_helpers().is_empty()
+        && module.device_ffi_exports().is_empty()
+        && module.external_declarations() == [FLASH_ATTENTION_OCML_EXP_SYMBOL_V1]
+        && module.descriptor_source_identity().is_some();
+    if !exact {
+        return Err(WorkerV2ProducerError::FlashAttentionClosureMismatch);
+    }
+    Ok(())
+}
+
 /// Constructs and publishes one canonical, inert compiler-module handoff.
 ///
 /// The handoff remains coordination data. Publication proves possession of the cooperative build
@@ -1004,6 +1239,8 @@ pub(crate) enum WorkerV2ProducerError {
     MissingTiledGemmLdsSlice1Bindings,
     MissingRowSoftmaxBindings,
     RowSoftmaxClosureMismatch,
+    MissingFlashAttentionBindings,
+    FlashAttentionClosureMismatch,
     MissingExternalDeclaration(String),
     MissingCompilerDefinition(String),
     TargetCapabilities(CapabilityDerivationError),
@@ -1051,6 +1288,12 @@ impl fmt::Display for WorkerV2ProducerError {
             ),
             Self::RowSoftmaxClosureMismatch => formatter.write_str(
                 "row-softmax compiler-module symbol closure is not exactly one kernel, one descriptor, and the OCML exp import",
+            ),
+            Self::MissingFlashAttentionBindings => formatter.write_str(
+                "FlashAttention compiler-module handoff lost its exact source, KIR, descriptor, target, or OCML-boundary binding",
+            ),
+            Self::FlashAttentionClosureMismatch => formatter.write_str(
+                "FlashAttention compiler-module symbol closure is not exactly one kernel, one descriptor, and the OCML exp import",
             ),
             Self::MissingExternalDeclaration(symbol) => write!(
                 formatter,
@@ -1140,6 +1383,8 @@ impl Error for WorkerV2ProducerError {
             | Self::MissingTiledGemmLdsSlice1Bindings
             | Self::MissingRowSoftmaxBindings
             | Self::RowSoftmaxClosureMismatch
+            | Self::MissingFlashAttentionBindings
+            | Self::FlashAttentionClosureMismatch
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
             | Self::UnsupportedWaveMode { .. }
