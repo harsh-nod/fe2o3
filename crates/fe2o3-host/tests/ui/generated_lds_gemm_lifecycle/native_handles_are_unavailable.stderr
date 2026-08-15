@@ -1,0 +1,23 @@
+error[E0599]: no method named `native_executable_handle` found for reference `&LoadedExactLdsGemmSlice1V1<'_, '_, '_, A>` in the current scope
+ --> tests/ui/generated_lds_gemm_lifecycle/native_handles_are_unavailable.rs:9:30
+  |
+9 |     let _executable = loaded.native_executable_handle();
+  |                              ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&LoadedExactLdsGemmSlice1V1<'_, '_, '_, A>`
+
+error[E0599]: no method named `native_kernel_handle` found for reference `&LoadedExactLdsGemmSlice1V1<'_, '_, '_, A>` in the current scope
+  --> tests/ui/generated_lds_gemm_lifecycle/native_handles_are_unavailable.rs:10:26
+   |
+10 |     let _kernel = loaded.native_kernel_handle();
+   |                          ^^^^^^^^^^^^^^^^^^^^ method not found in `&LoadedExactLdsGemmSlice1V1<'_, '_, '_, A>`
+
+error[E0599]: no method named `native_executable_handle` found for reference `&CompletedExactLdsGemmSlice1V1<A>` in the current scope
+  --> tests/ui/generated_lds_gemm_lifecycle/native_handles_are_unavailable.rs:16:33
+   |
+16 |     let _executable = completed.native_executable_handle();
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&CompletedExactLdsGemmSlice1V1<A>`
+
+error[E0599]: no method named `native_kernel_handle` found for reference `&CompletedExactLdsGemmSlice1V1<A>` in the current scope
+  --> tests/ui/generated_lds_gemm_lifecycle/native_handles_are_unavailable.rs:17:29
+   |
+17 |     let _kernel = completed.native_kernel_handle();
+   |                             ^^^^^^^^^^^^^^^^^^^^ method not found in `&CompletedExactLdsGemmSlice1V1<A>`

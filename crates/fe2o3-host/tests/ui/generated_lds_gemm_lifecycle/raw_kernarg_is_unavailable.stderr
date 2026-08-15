@@ -1,0 +1,11 @@
+error[E0599]: no method named `raw_kernarg` found for reference `&JoinedExactLdsGemmSlice1V1<'_, '_, '_>` in the current scope
+ --> tests/ui/generated_lds_gemm_lifecycle/raw_kernarg_is_unavailable.rs:7:25
+  |
+7 |     let _bytes = joined.raw_kernarg();
+  |                         ^^^^^^^^^^^ method not found in `&JoinedExactLdsGemmSlice1V1<'_, '_, '_>`
+
+error[E0599]: no method named `kernarg_bytes` found for reference `&LoadedExactLdsGemmSlice1V1<'_, '_, '_, A>` in the current scope
+  --> tests/ui/generated_lds_gemm_lifecycle/raw_kernarg_is_unavailable.rs:13:25
+   |
+13 |     let _bytes = loaded.kernarg_bytes();
+   |                         ^^^^^^^^^^^^^ method not found in `&LoadedExactLdsGemmSlice1V1<'_, '_, '_, A>`

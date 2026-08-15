@@ -1,0 +1,5 @@
+error[E0599]: no method named `load_executable` found for struct `JoinedExactLdsGemmSlice1V1<'a, 'b, 'c>` in the current scope
+ --> tests/ui/generated_lds_gemm_lifecycle/load_executable_is_unavailable.rs:4:12
+  |
+4 |     joined.load_executable();
+  |            ^^^^^^^^^^^^^^^ method not found in `JoinedExactLdsGemmSlice1V1<'_, '_, '_>`

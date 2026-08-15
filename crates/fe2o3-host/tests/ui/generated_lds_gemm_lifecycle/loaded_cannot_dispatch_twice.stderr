@@ -1,0 +1,16 @@
+error[E0382]: use of moved value: `loaded`
+ --> tests/ui/generated_lds_gemm_lifecycle/loaded_cannot_dispatch_twice.rs:7:19
+  |
+4 |     loaded: LoadedExactLdsGemmSlice1V1<'a, 'b, 'c, A>,
+  |     ------ move occurs because `loaded` has type `LoadedExactLdsGemmSlice1V1<'_, '_, '_, A>`, which does not implement the `Copy` trait
+5 | ) {
+6 |     let _first = loaded.dispatch_and_wait();
+  |                         ------------------- `loaded` moved due to this method call
+7 |     let _second = loaded.dispatch_and_wait();
+  |                   ^^^^^^ value used here after move
+  |
+note: `LoadedExactLdsGemmSlice1V1::<'a, 'b, 'c, A>::dispatch_and_wait` takes ownership of the receiver `self`, which moves `loaded`
+ --> src/generated_lds_gemm_lifecycle.rs
+  |
+  |         self,
+  |         ^^^^

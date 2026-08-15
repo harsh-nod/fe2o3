@@ -1,0 +1,10 @@
+error[E0382]: use of moved value: `host`
+  --> tests/ui/generated_lds_gemm_lifecycle/host_request_cannot_enter_two_joins.rs:10:66
+   |
+ 7 |     host: GeneratedLdsGemmSlice1HostAdapterV1<'a, 'b, 'c>,
+   |     ---- move occurs because `host` has type `GeneratedLdsGemmSlice1HostAdapterV1<'_, '_, '_>`, which does not implement the `Copy` trait
+ 8 | ) {
+ 9 |     let _first = join_exact_lds_gemm_slice1_v1(first_artifact, host);
+   |                                                                ---- value moved here
+10 |     let _second = join_exact_lds_gemm_slice1_v1(second_artifact, host);
+   |                                                                  ^^^^ value used here after move
