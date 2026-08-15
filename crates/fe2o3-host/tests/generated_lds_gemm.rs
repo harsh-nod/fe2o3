@@ -192,18 +192,60 @@ fn public_prepare_copies_identities_and_releases_the_import_borrow() {
 }
 
 #[test]
-fn observed_target_is_exact_and_xnack_sensitive() {
-    assert_eq!(validate_observed_target_v1("gfx942:xnack-"), Ok(()));
+fn observed_target_admits_orthogonal_sramecc_states() {
+    for target in [
+        "gfx942:xnack-",
+        "gfx942:sramecc+:xnack-",
+        "gfx942:sramecc-:xnack-",
+        "gfx942:xnack-:sramecc+",
+        "gfx942:xnack-:sramecc-",
+    ] {
+        assert_eq!(
+            validate_observed_target_v1(target),
+            Ok(()),
+            "rejected {target}"
+        );
+    }
+}
+
+#[test]
+fn observed_target_rejects_incompatible_or_ambiguous_xnack() {
     for target in [
         "gfx942",
+        "gfx942:sramecc+",
+        "gfx942:sramecc-",
         "gfx942:xnack+",
-        "gfx942:sramecc+:xnack-",
+        "gfx942:sramecc+:xnack+",
+        "gfx942:sramecc-:xnack+",
+        "gfx942:xnack-:xnack+",
+        "gfx942:xnack-:xnack-",
         "gfx950:xnack-",
     ] {
         assert_eq!(
             validate_observed_target_v1(target),
             Err(GeneratedLdsGemmSlice1HostAdapterErrorV1::ObservedTargetMismatch),
             "accepted {target}"
+        );
+    }
+}
+
+#[test]
+fn malformed_observed_targets_fail_closed_without_panicking() {
+    for target in [
+        "",
+        "gfx942:",
+        "GFX942:xnack-",
+        "gfx942:xnack",
+        "gfx942:xnack=off",
+        "gfx942:sramecc:xnack-",
+        "gfx942:unknown-:xnack-",
+        "not-a-target",
+        "gfx942:xnack-\u{2603}",
+    ] {
+        assert_eq!(
+            validate_observed_target_v1(target),
+            Err(GeneratedLdsGemmSlice1HostAdapterErrorV1::ObservedTargetMismatch),
+            "accepted {target:?}"
         );
     }
 }

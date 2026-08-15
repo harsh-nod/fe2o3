@@ -5,6 +5,7 @@
 //! hidden arguments, or authorize/submit a launch.
 
 use crate::ObservedContext;
+use fe2o3_amd_target::AmdTargetId;
 use fe2o3_core::{DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut, DeviceCopy};
 use fe2o3_hsaco_finalize::{
     ExactLdsGemmBufferContractV1, ExactLdsGemmBufferRoleV1, ExactLdsGemmContractV1,
@@ -316,7 +317,11 @@ impl<'a, 'b, 'c> GeneratedLdsGemmSlice1HostAdapterV1<'a, 'b, 'c> {
 }
 
 fn validate_observed_target(target: &str) -> Result<(), GeneratedLdsGemmSlice1HostAdapterErrorV1> {
-    if target != SLICE1_TARGET {
+    let artifact = AmdTargetId::parse(SLICE1_TARGET)
+        .map_err(|_| GeneratedLdsGemmSlice1HostAdapterErrorV1::ObservedTargetMismatch)?;
+    let observed = AmdTargetId::parse(target)
+        .map_err(|_| GeneratedLdsGemmSlice1HostAdapterErrorV1::ObservedTargetMismatch)?;
+    if !artifact.is_compatible_with_observed(&observed) {
         return Err(GeneratedLdsGemmSlice1HostAdapterErrorV1::ObservedTargetMismatch);
     }
     Ok(())
