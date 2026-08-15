@@ -40,6 +40,7 @@ mod worker_v2_hsaco_finalization;
 mod worker_v2_hsaco_publication;
 mod workgroup_lds_reduction_v1_profile;
 mod workgroup_scoped_atomic_v1_profile;
+mod workgroup_sync_v1_artifact;
 mod workgroup_sync_v1_worker;
 
 pub use compiler_ffi_bridge::{
@@ -194,6 +195,10 @@ pub use worker_v2_hsaco_publication::{
     WorkerV2HsacoPublicationRouteV1, prepare_finalized_worker_v2_hsaco_publication_v1,
     prepare_worker_v2_hsaco_publication_v1, publish_prepared_finalized_worker_v2_hsaco_v1,
     publish_prepared_worker_v2_hsaco_v1,
+};
+pub use workgroup_sync_v1_artifact::{
+    FinalizedWorkgroupSyncHsacoIdentityV1, PreparedFinalizedWorkgroupSyncHsacoV1,
+    WorkgroupSyncFinalizationErrorV1, finalize_workgroup_sync_v1_worker_v2_hsaco_v1,
 };
 pub use workgroup_sync_v1_worker::{
     InspectedWorkgroupSyncWorkerV2HsacoV1, ValidatedWorkgroupSyncWorkerExchangeV1,
