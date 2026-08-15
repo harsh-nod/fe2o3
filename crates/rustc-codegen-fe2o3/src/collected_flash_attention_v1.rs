@@ -245,11 +245,29 @@ impl FlashAttentionFrontendReceiptV1 {
         validate_authority(&authority)?;
         verify_flash_attention_v1(&ir, &profile)
             .map_err(|error| CollectedFlashAttentionErrorV1::CanonicalIr(error.to_string()))?;
+        let authority_transcript = authority_transcript(&authority);
+        if sha256(&authority_transcript) != authority.authority_identity {
+            return Err(CollectedFlashAttentionErrorV1::ReceiptBinding(
+                "authority transcript",
+            ));
+        }
         Ok(AuthenticatedFlashAttentionV1 {
             ir,
             profile,
+            authority_transcript,
             source_authority_identity: authority.authority_identity,
             descriptor_identity: authority.descriptor_identity,
+            source_identity: authority.source_identity,
+            source_namespace: authority.source_namespace,
+            compiler_crate_binding: authority.compiler_crate_binding,
+            portable_mir_identity: authority.portable_mir_identity,
+            compiler_semantics_identity: authority.compiler_semantics_identity,
+            fn_abi_identity: authority.fn_abi_identity,
+            trusted_definitions_identity: authority.trusted_definitions_identity,
+            abi_identity: authority.abi_identity,
+            effects_identity: authority.effects_identity,
+            numerical_identity: authority.numerical_identity,
+            canonical_ir_identity: authority.canonical_ir_identity,
         })
     }
 }
@@ -258,8 +276,20 @@ impl FlashAttentionFrontendReceiptV1 {
 pub(crate) struct AuthenticatedFlashAttentionV1 {
     ir: FlashAttentionKernelIrV1,
     profile: FlashAttentionProfileV1,
+    authority_transcript: Vec<u8>,
     source_authority_identity: [u8; 32],
     descriptor_identity: [u8; 32],
+    source_identity: [u8; 32],
+    source_namespace: [u8; 32],
+    compiler_crate_binding: [u8; 32],
+    portable_mir_identity: [u8; 32],
+    compiler_semantics_identity: [u8; 32],
+    fn_abi_identity: [u8; 32],
+    trusted_definitions_identity: [u8; 32],
+    abi_identity: [u8; 32],
+    effects_identity: [u8; 32],
+    numerical_identity: [u8; 32],
+    canonical_ir_identity: [u8; 32],
 }
 
 impl AuthenticatedFlashAttentionV1 {
@@ -284,6 +314,49 @@ impl AuthenticatedFlashAttentionV1 {
     pub(crate) fn descriptor_hex(&self) -> String {
         encode_hex(&self.descriptor_identity)
     }
+
+    pub(crate) fn into_finalization_inputs(self) -> FlashAttentionFinalizationInputsV1 {
+        FlashAttentionFinalizationInputsV1 {
+            ir: self.ir,
+            profile: self.profile,
+            authority_transcript: self.authority_transcript,
+            source_authority_identity: self.source_authority_identity,
+            descriptor_identity: self.descriptor_identity,
+            source_identity: self.source_identity,
+            source_namespace: self.source_namespace,
+            compiler_crate_binding: self.compiler_crate_binding,
+            portable_mir_identity: self.portable_mir_identity,
+            compiler_semantics_identity: self.compiler_semantics_identity,
+            fn_abi_identity: self.fn_abi_identity,
+            trusted_definitions_identity: self.trusted_definitions_identity,
+            abi_identity: self.abi_identity,
+            effects_identity: self.effects_identity,
+            numerical_identity: self.numerical_identity,
+            canonical_ir_identity: self.canonical_ir_identity,
+        }
+    }
+}
+
+/// Linear compiler input derived only from the consumed exact-source receipt.
+/// It is inert and grants no LLVM, link, artifact, runtime, or launch authority.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FlashAttentionFinalizationInputsV1 {
+    pub(crate) ir: FlashAttentionKernelIrV1,
+    pub(crate) profile: FlashAttentionProfileV1,
+    pub(crate) authority_transcript: Vec<u8>,
+    pub(crate) source_authority_identity: [u8; 32],
+    pub(crate) descriptor_identity: [u8; 32],
+    pub(crate) source_identity: [u8; 32],
+    pub(crate) source_namespace: [u8; 32],
+    pub(crate) compiler_crate_binding: [u8; 32],
+    pub(crate) portable_mir_identity: [u8; 32],
+    pub(crate) compiler_semantics_identity: [u8; 32],
+    pub(crate) fn_abi_identity: [u8; 32],
+    pub(crate) trusted_definitions_identity: [u8; 32],
+    pub(crate) abi_identity: [u8; 32],
+    pub(crate) effects_identity: [u8; 32],
+    pub(crate) numerical_identity: [u8; 32],
+    pub(crate) canonical_ir_identity: [u8; 32],
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1292,29 +1365,36 @@ fn validate_authority(
 }
 
 fn authority_identity(authority: &FlashAttentionAuthorityV1) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    hash_field(&mut digest, AUTHORITY_DOMAIN_V1);
-    hash_field(&mut digest, &authority.source_identity);
-    hash_field(&mut digest, &authority.source_namespace);
-    hash_field(&mut digest, &authority.compiler_crate_binding);
-    hash_field(&mut digest, authority.target.as_bytes());
-    hash_field(&mut digest, &authority.code_object_version.to_le_bytes());
-    hash_field(&mut digest, authority.kernel_export.as_bytes());
-    hash_field(&mut digest, authority.root_instance_identity.as_bytes());
-    hash_field(&mut digest, &authority.portable_mir_identity);
-    hash_field(&mut digest, &authority.compiler_semantics_identity);
-    hash_field(&mut digest, &authority.fn_abi_identity);
-    hash_field(&mut digest, &authority.trusted_definitions_identity);
-    hash_field(&mut digest, &authority.frontend_contract_identity);
-    hash_field(&mut digest, &authority.abi_identity);
-    hash_field(&mut digest, &authority.effects_identity);
-    hash_field(&mut digest, &authority.source_launch_identity);
-    hash_field(&mut digest, &authority.profile_launch_identity);
-    hash_field(&mut digest, &authority.numerical_identity);
-    hash_field(&mut digest, &authority.descriptor_identity);
-    hash_field(&mut digest, &authority.canonical_ir_identity);
-    hash_field(&mut digest, &authority.correspondence_identity);
-    digest.finalize().into()
+    sha256(&authority_transcript(authority))
+}
+
+fn authority_transcript(authority: &FlashAttentionAuthorityV1) -> Vec<u8> {
+    let mut transcript = Vec::with_capacity(1024);
+    push_transcript_field(&mut transcript, AUTHORITY_DOMAIN_V1);
+    push_transcript_field(&mut transcript, &authority.source_identity);
+    push_transcript_field(&mut transcript, &authority.source_namespace);
+    push_transcript_field(&mut transcript, &authority.compiler_crate_binding);
+    push_transcript_field(&mut transcript, authority.target.as_bytes());
+    push_transcript_field(
+        &mut transcript,
+        &authority.code_object_version.to_le_bytes(),
+    );
+    push_transcript_field(&mut transcript, authority.kernel_export.as_bytes());
+    push_transcript_field(&mut transcript, authority.root_instance_identity.as_bytes());
+    push_transcript_field(&mut transcript, &authority.portable_mir_identity);
+    push_transcript_field(&mut transcript, &authority.compiler_semantics_identity);
+    push_transcript_field(&mut transcript, &authority.fn_abi_identity);
+    push_transcript_field(&mut transcript, &authority.trusted_definitions_identity);
+    push_transcript_field(&mut transcript, &authority.frontend_contract_identity);
+    push_transcript_field(&mut transcript, &authority.abi_identity);
+    push_transcript_field(&mut transcript, &authority.effects_identity);
+    push_transcript_field(&mut transcript, &authority.source_launch_identity);
+    push_transcript_field(&mut transcript, &authority.profile_launch_identity);
+    push_transcript_field(&mut transcript, &authority.numerical_identity);
+    push_transcript_field(&mut transcript, &authority.descriptor_identity);
+    push_transcript_field(&mut transcript, &authority.canonical_ir_identity);
+    push_transcript_field(&mut transcript, &authority.correspondence_identity);
+    transcript
 }
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -1329,6 +1409,11 @@ fn compiler_crate_binding() -> CrateBindingIdV1 {
 fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
+}
+
+fn push_transcript_field(transcript: &mut Vec<u8>, bytes: &[u8]) {
+    transcript.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    transcript.extend_from_slice(bytes);
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
