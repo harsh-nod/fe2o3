@@ -12,6 +12,7 @@
 pub mod contract;
 pub mod kernel;
 pub mod oracle;
+pub mod proof_model;
 pub mod source_identity;
 pub mod vectors;
 
@@ -22,6 +23,10 @@ pub use contract::{
     exact_launch_v1, logit_index_v1, route_id_v1, validate_profile_v1,
 };
 pub use oracle::{MoeOracleErrorV1, RoutingOutputsV1, moe_top2_oracle_v1};
+pub use proof_model::{
+    MODEL_ASSURANCE_V1, ModelViolationV1, SOURCE_MODEL_REFINEMENT_PROVED_V1,
+    validate_routing_model_v1,
+};
 pub use source_identity::{
     MOE_KERNEL_NAMESPACE_V1, MOE_KERNEL_SOURCE_SHA256_V1, MOE_PROFILE_IDENTITY_V1,
     SourceIdentityMismatchV1, validate_kernel_source_identity_v1,
