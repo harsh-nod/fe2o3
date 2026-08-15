@@ -1,9 +1,11 @@
 //! Closed semantic profiles for the ordinary workgroup synchronization sources.
 //!
 //! These profiles are reviewed semantic sidecars selected only after a compiler
-//! authenticates the exact attributed source and its complete reachable MIR.
-//! They are not generic lowering results or compiler-refinement proofs and grant
-//! no Worker V2, finalization, artifact, host, runtime, or execution authority.
+//! authenticates the exact attributed source, its complete reachable MIR modulo
+//! an identity-bound reviewed semantic-terminal manifest, and that manifest's
+//! providers. They are not generic lowering results, terminal-body refinement,
+//! or compiler-refinement proofs and grant no Worker V2, finalization, artifact,
+//! host, runtime, or execution authority.
 
 use std::error::Error;
 use std::fmt;
