@@ -12,6 +12,7 @@
 pub mod contract;
 pub mod kernel;
 pub mod oracle;
+pub mod proof_model;
 pub mod source_identity;
 pub mod vectors;
 
@@ -27,6 +28,12 @@ pub use contract::{
 pub use oracle::{
     ArithmeticStageV1, FlashAttentionOracleErrorV1, FlashAttentionOracleStateV1,
     flash_attention_oracle_v1,
+};
+pub use proof_model::{
+    AccessCoordinateV1, MODEL_ASSURANCE_V1, OnlineInvariantViolationV1, OnlineModelErrorV1,
+    OnlineStateV1, OwnershipViolationV1, SOURCE_MODEL_REFINEMENT_PROVED_V1, access_coordinate_v1,
+    exact_ownership_map_v1, online_trace_v1, validate_online_state_v1,
+    validate_output_ownership_v1,
 };
 pub use source_identity::{
     FLASH_ATTENTION_KERNEL_NAMESPACE_V1, FLASH_ATTENTION_KERNEL_SOURCE_SHA256_V1,

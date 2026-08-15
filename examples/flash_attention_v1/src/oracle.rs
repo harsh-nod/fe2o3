@@ -97,8 +97,8 @@ fn strict_f32_scores(
 > {
     let mut scores =
         [[0.0_f32; FLASH_ATTENTION_SEQUENCE_LENGTH_V1]; FLASH_ATTENTION_SEQUENCE_LENGTH_V1];
-    for query_row in 0..FLASH_ATTENTION_SEQUENCE_LENGTH_V1 {
-        for key_row in 0..=query_row {
+    for (query_row, score_row) in scores.iter_mut().enumerate() {
+        for (key_row, score_slot) in score_row.iter_mut().enumerate().take(query_row + 1) {
             let mut dot = 0.0_f32;
             for feature in 0..FLASH_ATTENTION_HEAD_DIMENSION_V1 {
                 let q_index = query_row * FLASH_ATTENTION_HEAD_DIMENSION_V1 + feature;
@@ -131,7 +131,7 @@ fn strict_f32_scores(
                     stage: ArithmeticStageV1::ScaledScore,
                 });
             }
-            scores[query_row][key_row] = score;
+            *score_slot = score;
         }
     }
     Ok(scores)
@@ -141,13 +141,13 @@ fn preflight_online_f32(
     scores: &[[f32; FLASH_ATTENTION_SEQUENCE_LENGTH_V1]; FLASH_ATTENTION_SEQUENCE_LENGTH_V1],
     v: &[f32],
 ) -> Result<(), FlashAttentionOracleErrorV1> {
-    for query_row in 0..FLASH_ATTENTION_SEQUENCE_LENGTH_V1 {
+    for (query_row, score_row) in scores.iter().enumerate() {
         for output_column in 0..FLASH_ATTENTION_HEAD_DIMENSION_V1 {
             let mut running_max = 0.0_f32;
             let mut running_sum = 0.0_f32;
             let mut numerator = 0.0_f32;
             for key_row in 0..=query_row {
-                let score = scores[query_row][key_row];
+                let score = score_row[key_row];
                 let value = v[key_row * FLASH_ATTENTION_HEAD_DIMENSION_V1 + output_column];
                 if key_row == 0 {
                     running_max = score;
@@ -241,8 +241,8 @@ pub fn flash_attention_oracle_v1(
     let mut row_denominators = [0.0_f64; FLASH_ATTENTION_SEQUENCE_LENGTH_V1];
     for query_row in 0..FLASH_ATTENTION_SEQUENCE_LENGTH_V1 {
         let mut scores = [0.0_f64; FLASH_ATTENTION_SEQUENCE_LENGTH_V1];
-        for key_row in 0..=query_row {
-            scores[key_row] = reference_score(q, k, query_row, key_row);
+        for (key_row, score) in scores.iter_mut().enumerate().take(query_row + 1) {
+            *score = reference_score(q, k, query_row, key_row);
         }
         let mut maximum = scores[0];
         for score in &scores[1..=query_row] {
@@ -250,18 +250,18 @@ pub fn flash_attention_oracle_v1(
         }
         let mut weights = [0.0_f64; FLASH_ATTENTION_SEQUENCE_LENGTH_V1];
         let mut denominator = 0.0_f64;
-        for key_row in 0..=query_row {
-            weights[key_row] = (scores[key_row] - maximum).exp();
-            denominator += weights[key_row];
+        for (key_row, weight) in weights.iter_mut().enumerate().take(query_row + 1) {
+            *weight = (scores[key_row] - maximum).exp();
+            denominator += *weight;
         }
 
         row_maxima[query_row] = maximum;
         row_denominators[query_row] = denominator;
         for output_column in 0..FLASH_ATTENTION_HEAD_DIMENSION_V1 {
             let mut numerator = 0.0_f64;
-            for key_row in 0..=query_row {
+            for (key_row, weight) in weights.iter().enumerate().take(query_row + 1) {
                 let value_index = key_row * FLASH_ATTENTION_HEAD_DIMENSION_V1 + output_column;
-                numerator += weights[key_row] * f64::from(v[value_index]);
+                numerator += *weight * f64::from(v[value_index]);
             }
             let value = (numerator / denominator) as f32;
             if !value.is_finite() {
