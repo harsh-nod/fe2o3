@@ -8,10 +8,11 @@ use crate::{
     BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
     Convergence, Fence, Function, FunctionBody, FunctionId, FunctionRole, IndexKind,
     InlineAssembly, InlineAssemblyTarget, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation,
-    Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, ModuleId,
-    Operation, OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase,
-    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    Kernel, KernelId, LaunchDomain, LaunchExtent, MatrixElement, MatrixLayout, MatrixLdsProfile,
+    MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MemoryAccess, MemoryOrdering,
+    Module, ModuleId, Operation, OperationKind, PointerType, ScalarType, Signature, SliceType,
+    SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef,
+    ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
     WorkgroupMemoryExtent, WorkgroupSize,
 };
 
@@ -25,6 +26,10 @@ pub const KERNEL_IR_VERSION_V2: u16 = 2;
 pub const KERNEL_IR_VERSION_V3: u16 = 3;
 /// Kernel IR V4 adds signed and unsigned 128-bit scalar carrier types.
 pub const KERNEL_IR_VERSION_V4: u16 = 4;
+/// Kernel IR V5 adds explicit bounded matrix operations.
+pub const KERNEL_IR_VERSION_V5: u16 = 5;
+/// Domain separator for identities derived from canonical Kernel IR V5 bytes.
+pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -218,6 +223,11 @@ pub fn encode_module_v4(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
     encode_module(module, KERNEL_IR_VERSION_V4)
 }
 
+/// Encodes a module in the bounded canonical kernel IR V5 wire format.
+pub fn encode_module_v5(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V5)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -272,6 +282,11 @@ pub fn decode_module_v3(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1, V2, V3, or V4 bytes using the latest bounded reader.
 pub fn decode_module_v4(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V4, true)
+}
+
+/// Decodes canonical V1 through V5 bytes using the latest bounded reader.
+pub fn decode_module_v5(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V5, true)
 }
 
 fn decode_module(
@@ -726,11 +741,10 @@ fn encode_operation_kind(
             writer.u8(20)?;
             encode_wave_operation(writer, wave)?;
         }
-        OperationKind::Matrix(_) => {
-            return Err(KernelIrEncodeError::UnsupportedInVersion {
-                version: writer.version,
-                feature: "matrix operation",
-            });
+        OperationKind::Matrix(matrix) => {
+            require_v5(writer, "matrix operation")?;
+            writer.u8(22)?;
+            encode_matrix_operation(writer, matrix)?;
         }
         OperationKind::InlineAssembly(assembly) => {
             require_v3(writer, "source-bound inline assembly")?;
@@ -812,6 +826,9 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
         }
         21 if reader.version >= KERNEL_IR_VERSION_V3 => {
             OperationKind::InlineAssembly(decode_inline_assembly(reader)?)
+        }
+        22 if reader.version >= KERNEL_IR_VERSION_V5 => {
+            OperationKind::Matrix(decode_matrix_operation(reader)?)
         }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
@@ -1393,6 +1410,154 @@ fn decode_wave_operation(reader: &mut Reader<'_>) -> Result<WaveOperation, Kerne
         width,
         active_lanes,
         convergence,
+    })
+}
+
+fn encode_matrix_operation(
+    writer: &mut Writer,
+    matrix: &MatrixOperation,
+) -> Result<(), KernelIrEncodeError> {
+    if matrix.frontend_binding.is_some() {
+        return Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature: "matrix frontend binding",
+        });
+    }
+    writer.u32(matrix.active_lanes)?;
+    encode_convergence(writer, matrix.convergence)?;
+    match &matrix.kind {
+        MatrixOperationKind::MultiplyAccumulate {
+            lhs,
+            rhs,
+            accumulator,
+            profile,
+        } => {
+            writer.u8(1)?;
+            encode_matrix_values(writer, lhs)?;
+            encode_matrix_values(writer, rhs)?;
+            encode_matrix_values(writer, accumulator)?;
+            encode_matrix_multiply_profile(writer, *profile)?;
+        }
+        MatrixOperationKind::LdsLoad { base, profile } => {
+            writer.u8(2)?;
+            writer.u32(base.0)?;
+            encode_matrix_lds_profile(writer, *profile)?;
+        }
+        MatrixOperationKind::LdsStore {
+            base,
+            values,
+            profile,
+        } => {
+            writer.u8(3)?;
+            writer.u32(base.0)?;
+            encode_matrix_values(writer, values)?;
+            encode_matrix_lds_profile(writer, *profile)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_matrix_operation(
+    reader: &mut Reader<'_>,
+) -> Result<MatrixOperation, KernelIrDecodeError> {
+    let active_lanes = reader.u32()?;
+    let convergence = decode_convergence(reader)?;
+    let kind = match reader.u8()? {
+        1 => MatrixOperationKind::MultiplyAccumulate {
+            lhs: decode_matrix_values(reader)?,
+            rhs: decode_matrix_values(reader)?,
+            accumulator: decode_matrix_values(reader)?,
+            profile: decode_matrix_multiply_profile(reader)?,
+        },
+        2 => MatrixOperationKind::LdsLoad {
+            base: ValueId(reader.u32()?),
+            profile: decode_matrix_lds_profile(reader)?,
+        },
+        3 => MatrixOperationKind::LdsStore {
+            base: ValueId(reader.u32()?),
+            values: decode_matrix_values(reader)?,
+            profile: decode_matrix_lds_profile(reader)?,
+        },
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "matrix operation",
+                tag,
+            });
+        }
+    };
+    Ok(MatrixOperation {
+        kind,
+        active_lanes,
+        convergence,
+        frontend_binding: None,
+    })
+}
+
+fn encode_matrix_values(
+    writer: &mut Writer,
+    values: &[ValueId; 4],
+) -> Result<(), KernelIrEncodeError> {
+    for value in values {
+        writer.u32(value.0)?;
+    }
+    Ok(())
+}
+
+fn decode_matrix_values(reader: &mut Reader<'_>) -> Result<[ValueId; 4], KernelIrDecodeError> {
+    let mut values = [ValueId(0); 4];
+    for value in &mut values {
+        *value = ValueId(reader.u32()?);
+    }
+    Ok(values)
+}
+
+fn encode_matrix_multiply_profile(
+    writer: &mut Writer,
+    profile: MatrixMultiplyProfile,
+) -> Result<(), KernelIrEncodeError> {
+    writer.u16(profile.m)?;
+    writer.u16(profile.n)?;
+    writer.u16(profile.k)?;
+    writer.u8(matrix_element_tag(profile.input))?;
+    writer.u8(matrix_element_tag(profile.accumulator))?;
+    writer.u8(wave_width_tag(profile.wave_width))
+}
+
+fn decode_matrix_multiply_profile(
+    reader: &mut Reader<'_>,
+) -> Result<MatrixMultiplyProfile, KernelIrDecodeError> {
+    Ok(MatrixMultiplyProfile {
+        m: reader.u16()?,
+        n: reader.u16()?,
+        k: reader.u16()?,
+        input: decode_matrix_element(reader.u8()?)?,
+        accumulator: decode_matrix_element(reader.u8()?)?,
+        wave_width: decode_wave_width(reader.u8()?)?,
+    })
+}
+
+fn encode_matrix_lds_profile(
+    writer: &mut Writer,
+    profile: MatrixLdsProfile,
+) -> Result<(), KernelIrEncodeError> {
+    writer.u16(profile.rows)?;
+    writer.u16(profile.columns)?;
+    writer.u8(matrix_element_tag(profile.element))?;
+    writer.u8(matrix_layout_tag(profile.layout))?;
+    writer.u8(profile.fragment_elements)?;
+    writer.u8(wave_width_tag(profile.wave_width))
+}
+
+fn decode_matrix_lds_profile(
+    reader: &mut Reader<'_>,
+) -> Result<MatrixLdsProfile, KernelIrDecodeError> {
+    Ok(MatrixLdsProfile {
+        rows: reader.u16()?,
+        columns: reader.u16()?,
+        element: decode_matrix_element(reader.u8()?)?,
+        layout: decode_matrix_layout(reader.u8()?)?,
+        fragment_elements: reader.u8()?,
+        wave_width: decode_wave_width(reader.u8()?)?,
     })
 }
 
@@ -1992,6 +2157,13 @@ enum_codec!(assembly_effect_tag, decode_assembly_effect, AssemblyEffect, "inline
     AssemblyEffect::Barrier => 6,
     AssemblyEffect::ControlFlow => 7,
 });
+enum_codec!(matrix_element_tag, decode_matrix_element, MatrixElement, "matrix element", {
+    MatrixElement::Bf16 => 1,
+    MatrixElement::F32 => 2,
+});
+enum_codec!(matrix_layout_tag, decode_matrix_layout, MatrixLayout, "matrix layout", {
+    MatrixLayout::RowMajorXor4 => 1,
+});
 
 fn require_v2(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V2 {
@@ -2006,6 +2178,17 @@ fn require_v2(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
 
 fn require_v3(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V3 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v5(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V5 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

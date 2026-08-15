@@ -9,11 +9,12 @@
 //! LDS, exact wave-width records, and typed canonical integer switches.
 //! [`encode_module_v3`] adds source-bound inline assembly without changing the
 //! frozen V1/V2 encodings. [`encode_module_v4`] adds 128-bit scalar carrier
-//! types without changing the frozen V1/V2/V3 encodings. Decoding establishes
-//! wire well-formedness only; consumers must call [`verify_module`] before
-//! relying on semantic invariants.
-//! V1/V2/V3/V4 reconstruct kernel-entry and import roles from their legacy records;
-//! they reject device-FFI exports because the frozen function records cannot
+//! types without changing the frozen V1/V2/V3 encodings. [`encode_module_v5`]
+//! adds explicit bounded matrix operations without changing the frozen V1-V4
+//! encodings. Decoding establishes wire well-formedness only; consumers must
+//! call [`verify_module`] before relying on semantic invariants. V1-V5
+//! reconstruct kernel-entry and import roles from their legacy records; they
+//! reject device-FFI exports because the frozen function records cannot
 //! distinguish those definitions from internal helpers.
 //!
 //! SemanticOperation is the versioned extension boundary for typed

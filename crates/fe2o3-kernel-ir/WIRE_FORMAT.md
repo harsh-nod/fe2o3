@@ -1,8 +1,13 @@
-# Kernel IR Wire Formats V1 and V2
+# Kernel IR Wire Formats V1 through V5
 
 This document freezes the canonical binary representations produced by
-`encode_module_v1` and `encode_module_v2`. `decode_module_v1` accepts only V1;
-`decode_module_v2` accepts canonical V1 and V2 bytes for migration safety.
+`encode_module_v1` through `encode_module_v5`. `decode_module_v1` accepts only
+V1; each later decoder accepts canonical bytes up to its own version for
+migration safety. Every encoder always emits exactly its named version.
+
+`KERNEL_IR_DOMAIN_V5`, the byte string `FE2O3/KERNEL-IR/V5\0`, is the public
+domain separator for identities derived from canonical V5 module bytes. It is
+not an additional wire prefix; the versioned header remains part of the bytes.
 
 ## Trust Boundary
 
@@ -42,7 +47,7 @@ The 20-byte header is:
 
 ```text
 byte[8] magic = "FE2O3KI\0"
-u16     version = 1 or 2
+u16     version = 1, 2, 3, 4, or 5
 u16     flags = 0
 u32     total_length_including_header
 u32     reserved = 0
@@ -121,7 +126,7 @@ WorkgroupSize = u32(x) || u32(y) || u32(z)
 
 Scalar tags follow declaration order: `Bool=1`, `I8=2`, `I16=3`, `I32=4`,
 `I64=5`, `U8=6`, `U16=7`, `U32=8`, `U64=9`, `Index=10`, `F16=11`,
-`Bf16=12`, `F32=13`, and `F64=14`.
+`Bf16=12`, `F32=13`, `F64=14`, `I128=15` (V4), and `U128=16` (V4).
 
 Address-space tags are `Private=1`, `Workgroup=2`, `Global=3`, `Constant=4`,
 and `Generic=5`. Access-mode tags are `ReadOnly=1` and `ReadWrite=2`.
@@ -150,13 +155,53 @@ and `Generic=5`. Access-mode tags are `ReadOnly=1` and `ReadWrite=2`.
 | 18 (V2) | `WorkgroupBarrier` | `WorkgroupBarrier` |
 | 19 (V2) | `WorkgroupMemory` | `WorkgroupMemory` |
 | 20 (V2) | `Wave` | `WaveOperation` |
+| 21 (V3) | `InlineAssembly` | `InlineAssembly` |
+| 22 (V5) | `Matrix` | `MatrixOperation` |
 
 `MemoryAccess` is `u8 address_space || u32 alignment || u8 volatile_boolean`.
+
+### V5 Matrix Operations
+
+V5 adds the following fixed-width matrix record. All four-value fragments are
+stored as four consecutive `ValueId` values in array order; they have no count
+field.
+
+```text
+MatrixOperation =
+    u32                 active_lanes
+    Convergence         convergence
+    MatrixOperationKind kind
+
+MatrixMultiplyProfile =
+    u16 m || u16 n || u16 k ||
+    u8 input_element || u8 accumulator_element || u8 wave_width
+
+MatrixLdsProfile =
+    u16 rows || u16 columns || u8 element || u8 layout ||
+    u8 fragment_elements || u8 wave_width
+```
+
+| Kind tag | Variant | Payload |
+|---:|---|---|
+| 1 | `MultiplyAccumulate` | `ValueId[4] lhs, ValueId[4] rhs, ValueId[4] accumulator, MatrixMultiplyProfile` |
+| 2 | `LdsLoad` | `ValueId base, MatrixLdsProfile` |
+| 3 | `LdsStore` | `ValueId base, ValueId[4] values, MatrixLdsProfile` |
+
+Matrix-element tags are `Bf16=1` and `F32=2`. The only matrix-layout tag is
+`RowMajorXor4=1`. Wave-width and convergence tags reuse the frozen V2 codecs.
+Numeric profile fields are wire data, not semantic validation: decoding a
+profile does not establish that a target supports it. `verify_module` remains
+responsible for that check.
+
+`MatrixOperation::frontend_binding` is intentionally not representable in V5.
+The encoder rejects any matrix operation carrying one instead of omitting the
+field silently. No source, compiler, lowering, worker, artifact, load, runtime,
+or hardware authority is introduced by this record.
 
 ### Semantic Memory Instance Identities
 
 Memory intrinsics are not representable in the frozen kernel module wire
-versions V1 through V3. Those encoders reject them. They do have an independent
+versions V1 through V5. Those encoders reject them. They do have an independent
 V1 semantic-instance identity used to bind a closed target-neutral obligation
 payload before a future module wire version can admit them.
 
@@ -407,17 +452,17 @@ members, and out-of-order set members are rejected. Decoding must consume the
 entire declared input, and re-encoding the decoded model must reproduce every
 byte exactly.
 
-Existing tags and field meanings must never be changed. V2 is additive: V1
-encoders reject V2-only model nodes, the V1 decoder rejects V2 headers, and the
-V2 decoder accepts both versions while enforcing the tags legal for the actual
-header version. The frozen V1 golden fixture is `tests/fixtures/full_v1.hex`;
-the independent V2 fixtures are `tests/fixtures/g4_sync_v2.hex` and
-`tests/fixtures/integer_switch_v2.hex`.
+Existing tags and field meanings must never be changed. Every version is
+additive: older encoders reject newer-only model nodes, older decoders reject
+newer headers, and later decoders accept earlier versions while enforcing the
+tags legal for the actual header version. V5 therefore cannot make operation
+tag 22 legal under a forged V1-V4 header. The frozen V1 golden fixture is
+`tests/fixtures/full_v1.hex`; the independent V2 fixtures are
+`tests/fixtures/g4_sync_v2.hex` and `tests/fixtures/integer_switch_v2.hex`.
 
 ## Separate Semantic Operation Schemas and Instances
 
-These formats are not module encodings and do not change V1, V2, or V3 module
-bytes.
+These formats are not module encodings and do not change V1-V5 module bytes.
 
 encode_semantic_operation_schema produces a fixed-width payload-blind dispatch
 key:
