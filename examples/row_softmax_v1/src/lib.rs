@@ -12,11 +12,17 @@
 //! or any property of an HSACO artifact.
 
 mod numerical_contract;
+mod verification_certificate;
 
 pub use numerical_contract::{
     GFX942_OCML_COMPARISON_POLICY_V1, HOST_ORACLE_EXPONENTIAL_V1, MAX_ROW_ELEMENTS_V1,
     RowSoftmaxOracleStateV1, SoftmaxComparisonErrorV1, SoftmaxComparisonPolicyV1,
     SoftmaxContractErrorV1, SoftmaxExponentialV1, compare_row_softmax_v1, row_softmax_oracle_v1,
+};
+pub use verification_certificate::{
+    ROW_SOFTMAX_VERIFICATION_MANIFEST_V1, RowSoftmaxVerificationCertificateV1,
+    RowSoftmaxVerificationManifestV1, RowSoftmaxVerificationMismatchV1,
+    VerificationEvidenceIdentityV1, validate_row_softmax_verification_manifest_v1,
 };
 
 /// Number of conceptual input and output elements in row-softmax V1.

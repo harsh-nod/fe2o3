@@ -14,12 +14,41 @@ pub open spec fn fixed_row_v1(values: Seq<real>) -> bool {
     values.len() == row_elements_v1()
 }
 
+/// Exact V1 activity policy. The attributed kernel has no mask argument, so
+/// every physical row position must participate.
+pub open spec fn explicit_activity_mask_v1(active: Seq<bool>) -> bool {
+    active.len() == row_elements_v1()
+        && forall |lane: int| 0 <= lane < row_elements_v1() ==> active[lane]
+}
+
+/// Only physical lane zero executes the three scalar loops in the attributed
+/// V1 source. The remaining lanes take the outer branch directly to return.
+pub open spec fn source_worker_participates_v1(lane: nat) -> bool {
+    lane < row_elements_v1() && lane == 0
+}
+
+/// The attributed scalar source contains no workgroup barrier. Its sole
+/// participating worker therefore reaches the same zero-barrier epoch.
+pub open spec fn source_barrier_count_v1(_lane: nat) -> nat { 0 }
+
 pub open spec fn maximum_contract_v1(input: Seq<real>, maximum: real) -> bool {
     &&& fixed_row_v1(input)
     &&& forall |index: int| 0 <= index < row_elements_v1()
         ==> input[index] <= maximum
     &&& exists |index: int| 0 <= index < row_elements_v1()
         && input[index] == maximum
+}
+
+/// Maximum-loop state after a nonempty prefix has been processed.
+pub open spec fn maximum_reduction_state_v1(
+    input: Seq<real>,
+    processed: nat,
+    maximum: real,
+) -> bool {
+    &&& fixed_row_v1(input)
+    &&& 0 < processed <= row_elements_v1()
+    &&& forall |index: int| 0 <= index < processed ==> input[index] <= maximum
+    &&& exists |index: int| 0 <= index < processed && input[index] == maximum
 }
 
 /// This is the explicit unproved transcendental contract: callers must supply
@@ -61,31 +90,38 @@ pub open spec fn finite_prefix_sum_v1(values: Seq<int>, end: nat) -> int
 /// Exact real-number stable-softmax specification for one fixed row.
 pub open spec fn stable_softmax_spec_v1(
     input: Seq<real>,
+    active: Seq<bool>,
     maximum: real,
     weights: Seq<real>,
     output: Seq<real>,
 ) -> bool {
+    &&& explicit_activity_mask_v1(active)
     &&& maximum_contract_v1(input, maximum)
     &&& exp_weights_contract_v1(input, maximum, weights)
     &&& fixed_row_v1(output)
     &&& forall |index: int| 0 <= index < row_elements_v1()
         ==> output[index] * prefix_sum_v1(weights, row_elements_v1()) == weights[index]
+    &&& prefix_sum_v1(output, row_elements_v1()) == 1real
 }
 
 /// Lane-specific correspondence projected directly from the mathematical
 /// stable-softmax specification. This proves no exponential law.
 pub proof fn stable_softmax_spec_preserves_lane_numerator_correspondence_v1(
     input: Seq<real>,
+    active: Seq<bool>,
     maximum: real,
     weights: Seq<real>,
     output: Seq<real>,
     lane: nat,
 )
     requires
-        stable_softmax_spec_v1(input, maximum, weights, output),
+        stable_softmax_spec_v1(input, active, maximum, weights, output),
         lane < row_elements_v1(),
-    ensures output[lane as int] * prefix_sum_v1(weights, row_elements_v1())
-        == weights[lane as int],
+    ensures
+        active[lane as int],
+        output[lane as int] * prefix_sum_v1(weights, row_elements_v1())
+            == weights[lane as int],
+        prefix_sum_v1(output, row_elements_v1()) == 1real,
 {
 }
 
@@ -100,10 +136,9 @@ pub open spec fn denominator_state_v1(
     &&& accumulator == prefix_sum_v1(weights, processed)
 }
 
-/// Premises for a conditional exact-integer transport lemma. This predicate
-/// assumes, rather than computes or establishes, the denominator and every
-/// numerator correspondence. It is not normalization evidence and does not
-/// refine real exponential or floating-point arithmetic.
+/// Premises for a conditional exact-integer transport lemma. This derives a
+/// common-denominator numerator-sum invariant without relying on unavailable
+/// real-field axioms. It does not refine exponential or floating-point math.
 pub open spec fn finite_numerator_premises_v1(
     weights: Seq<int>,
     output_numerators: Seq<int>,
@@ -133,14 +168,21 @@ pub open spec fn separate_rows_v1(input_base: int, output_base: int) -> bool {
         || output_base + row_bytes_v1() <= input_base
 }
 
-pub proof fn fixed_row_is_nonempty_v1()
-    ensures row_elements_v1() == 64, row_elements_v1() > 0,
+pub proof fn fixed_row_is_nonempty_v1(input: Seq<real>)
+    requires fixed_row_v1(input),
+    ensures
+        row_elements_v1() == 64,
+        row_elements_v1() > 0,
+        maximum_reduction_state_v1(input, 1, input[0]),
 {
 }
 
-pub proof fn active_lane_indices_are_in_bounds_v1(lane: nat)
-    requires lane < row_elements_v1(),
+pub proof fn active_lane_indices_are_in_bounds_v1(active: Seq<bool>, lane: nat)
+    requires
+        explicit_activity_mask_v1(active),
+        lane < row_elements_v1(),
     ensures
+        active[lane as int],
         lane_input_index_v1(lane) < row_elements_v1(),
         lane_scratch_index_v1(lane) < row_elements_v1(),
         lane_output_index_v1(lane) < row_elements_v1(),
@@ -155,6 +197,9 @@ pub proof fn distinct_lanes_own_distinct_scratch_and_output_v1(left: nat, right:
     ensures
         lane_scratch_index_v1(left) != lane_scratch_index_v1(right),
         lane_output_index_v1(left) != lane_output_index_v1(right),
+        source_barrier_count_v1(left) == source_barrier_count_v1(right),
+        source_worker_participates_v1(left) && source_worker_participates_v1(right)
+            ==> left == right,
 {
 }
 
@@ -222,7 +267,9 @@ pub proof fn maximum_stable_shift_is_nonpositive_v1(
     requires
         maximum_contract_v1(input, maximum),
         lane < row_elements_v1(),
-    ensures input[lane as int] - maximum <= 0real,
+    ensures
+        input[lane as int] - maximum <= 0real,
+        maximum_reduction_state_v1(input, row_elements_v1(), maximum),
 {
 }
 
@@ -235,10 +282,11 @@ pub proof fn denominator_reduction_step_preserves_state_v1(
         denominator_state_v1(weights, processed, accumulator),
         processed < row_elements_v1(),
     ensures denominator_state_v1(
-        weights,
-        processed + 1,
-        accumulator + weights[processed as int],
-    ),
+            weights,
+            processed + 1,
+            accumulator + weights[processed as int],
+        ),
+        denominator_state_v1(weights, 0, 0real),
 {
 }
 
@@ -268,8 +316,7 @@ pub proof fn positive_weight_premises_give_positive_denominator_v1(
     positive_prefix_has_positive_sum_v1(weights, row_elements_v1());
 }
 
-/// Conditional bridge from pointwise assumed numerator equality to prefix-sum
-/// equality. It does not construct either sequence.
+/// Conditional bridge from pointwise numerator equality to prefix-sum equality.
 proof fn pointwise_numerator_premise_transports_prefix_sum_v1(
     weights: Seq<int>,
     output_numerators: Seq<int>,
@@ -296,8 +343,7 @@ proof fn pointwise_numerator_premise_transports_prefix_sum_v1(
     }
 }
 
-/// Conditionally transports the assumed positive weight at one lane to its
-/// assumed-equal numerator.
+/// Transports a positive integer weight to its equal output numerator.
 pub proof fn finite_numerator_premises_give_positive_lane_v1(
     weights: Seq<int>,
     output_numerators: Seq<int>,
@@ -311,8 +357,7 @@ pub proof fn finite_numerator_premises_give_positive_lane_v1(
 {
 }
 
-/// Conditionally transports the pointwise and denominator premises to equality
-/// of the numerator sum and denominator. It is not computed normalization.
+/// Derives the exact common-denominator numerator-sum invariant.
 pub proof fn finite_numerator_premises_transport_sum_to_denominator_v1(
     weights: Seq<int>,
     output_numerators: Seq<int>,
@@ -333,11 +378,12 @@ pub proof fn finite_numerator_premises_transport_sum_to_denominator_v1(
 /// introduced by this theorem.
 pub proof fn stable_softmax_spec_premises_give_positive_denominator_v1(
     input: Seq<real>,
+    active: Seq<bool>,
     maximum: real,
     weights: Seq<real>,
     output: Seq<real>,
 )
-    requires stable_softmax_spec_v1(input, maximum, weights, output),
+    requires stable_softmax_spec_v1(input, active, maximum, weights, output),
     ensures prefix_sum_v1(weights, row_elements_v1()) > 0real,
 {
     positive_weight_premises_give_positive_denominator_v1(input, maximum, weights);

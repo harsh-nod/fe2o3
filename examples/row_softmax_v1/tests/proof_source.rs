@@ -7,6 +7,15 @@ const PROOF: &[u8] = include_bytes!("../verus/row_softmax_v1.rs");
 const DUPLICATE_WRITER: &[u8] = include_bytes!("../verus/negative/duplicate_writer.rs");
 const LANE_PLUS_ONE: &[u8] = include_bytes!("../verus/negative/lane_plus_one_out_of_bounds.rs");
 const WRONG_NUMERATOR: &[u8] = include_bytes!("../verus/negative/wrong_numerator_index.rs");
+const DIVERGENT_BARRIER: &[u8] =
+    include_bytes!("../verus/negative/missing_or_divergent_barrier.rs");
+const MASK_DRIFT: &[u8] = include_bytes!("../verus/negative/mask_drift.rs");
+const OWNERSHIP_COLLISION: &[u8] = include_bytes!("../verus/negative/ownership_collision.rs");
+const ZERO_DENOMINATOR: &[u8] = include_bytes!("../verus/negative/zero_denominator.rs");
+const SOURCE_IDENTITY_DRIFT: &[u8] = include_bytes!("../verus/negative/source_identity_drift.rs");
+const NUMERICAL_POLICY_DRIFT: &[u8] = include_bytes!("../verus/negative/numerical_policy_drift.rs");
+const SPECIALIZATION_WIDTH_DRIFT: &[u8] =
+    include_bytes!("../verus/negative/specialization_width_drift.rs");
 const ASSUME_DIRECT: &[u8] = include_bytes!("../verus/trust_exploits/assume_direct.rs");
 const ASSUME_QUALIFIED: &[u8] = include_bytes!("../verus/trust_exploits/assume_qualified.rs");
 const ASSUME_QUALIFIED_COMMENT: &[u8] =
@@ -34,8 +43,8 @@ fn proof_and_negative_mutations_have_exact_source_pins() {
         (
             "positive proof",
             PROOF,
-            11_143,
-            "61f1453d267a8e9183334dfe1ca37bcd69c92df4b55d56606907627c5691a9f9",
+            12_966,
+            "cacf81e02eb071cc29b1124811e911097fd62e7d29556dda8380418a631f5db5",
         ),
         (
             "duplicate writer",
@@ -54,6 +63,48 @@ fn proof_and_negative_mutations_have_exact_source_pins() {
             WRONG_NUMERATOR,
             2_145,
             "fd06e5e50e655c738583f8901889a9bc9e9cc8803594e1ff7f8450ae00e00c7e",
+        ),
+        (
+            "missing or divergent barrier",
+            DIVERGENT_BARRIER,
+            277,
+            "dcc5d576f8cd258c71e5501be3997f2ad86ca042d680270cc9c39327d84eba06",
+        ),
+        (
+            "mask drift",
+            MASK_DRIFT,
+            216,
+            "d2d3288691a6cac0c5374af2c13c76e6270b1011c2cf06cd41004a4f7d4c0658",
+        ),
+        (
+            "ownership collision",
+            OWNERSHIP_COLLISION,
+            256,
+            "26e7a24bf763bb6ae7ce907074d7f7c9be41e7be76161e1229d709a82adaaa75",
+        ),
+        (
+            "zero denominator",
+            ZERO_DENOMINATOR,
+            197,
+            "8530cc50fbba46a8215a7bb52b41789bb5cece618eaa1c80445fc9186aa6e619",
+        ),
+        (
+            "source identity drift",
+            SOURCE_IDENTITY_DRIFT,
+            252,
+            "244cb3fd032b74629397b06398efa98d1f0f5115cc88cf96d39fc1ddf2ee3c34",
+        ),
+        (
+            "numerical policy drift",
+            NUMERICAL_POLICY_DRIFT,
+            231,
+            "c294df63dc4bdbf619933edd3234b2b519e3cb00885c411cb6fcb816397ebb2a",
+        ),
+        (
+            "specialization width drift",
+            SPECIALIZATION_WIDTH_DRIFT,
+            193,
+            "7b0f570cdbe430f3634746447b6fed192cdf7ab8f94a9de2f5069c712b4748b8",
         ),
         (
             "direct assume_ exploit",
@@ -121,12 +172,43 @@ fn proof_names_all_layers_and_the_exp_allowlist() {
     }
     for marker in [
         "pub uninterp spec fn exp_real_v1",
+        "pub open spec fn explicit_activity_mask_v1",
+        "pub open spec fn source_worker_participates_v1",
+        "pub open spec fn source_barrier_count_v1",
+        "pub open spec fn maximum_reduction_state_v1",
         "pub open spec fn stable_softmax_spec_v1",
         "pub open spec fn denominator_state_v1",
         "pub open spec fn finite_numerator_premises_v1",
         "output[index] * prefix_sum_v1(weights, row_elements_v1()) == weights[index]",
+        "prefix_sum_v1(output, row_elements_v1()) == 1real",
     ] {
         assert!(proof.contains(marker), "missing contract marker {marker}");
+    }
+}
+
+#[test]
+fn every_named_formal_evidence_mutation_passes_the_scanner_before_verus_rejects_it() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let checker = manifest.join("check-proof-source.sh");
+    for fixture in [
+        "verus/negative/missing_or_divergent_barrier.rs",
+        "verus/negative/mask_drift.rs",
+        "verus/negative/ownership_collision.rs",
+        "verus/negative/zero_denominator.rs",
+        "verus/negative/source_identity_drift.rs",
+        "verus/negative/numerical_policy_drift.rs",
+        "verus/negative/specialization_width_drift.rs",
+    ] {
+        let output = Command::new(&checker)
+            .arg("--forbid-uninterp")
+            .arg(manifest.join(fixture))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "scanner rejected {fixture}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 
@@ -182,7 +264,10 @@ fn documentation_states_the_numeric_and_artifact_boundaries() {
         "`exp_real_v1` is uninterpreted",
         "to refine `f32`.",
         "address-set facts only",
-        "not compute or establish normalization.",
+        "not a proof of real division",
+        "formal evidence only",
+        "no compiler origin",
+        "no OCML/IEEE error bound",
         "ISA, HSACO, loading, launch",
         "same UID can modify and restore",
         "not authenticated execution",

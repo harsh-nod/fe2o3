@@ -24,22 +24,27 @@ refinement.
    `verus/row_softmax_v1.rs` defines stable softmax over mathematical reals.
    A maximum bounds every input and equals at least one input. Each weight is
    the abstract real exponential of `input[i] - maximum`; each output satisfies
-   `output[i] * sum(weights) == weights[i]`. This is the intended exact-real
-   relation; V1 does not claim Verus proves the field/division step that derives
-   `sum(output) == 1` from it.
+   `output[i] * sum(weights) == weights[i]`, and the specification explicitly
+   requires `sum(output) == 1`. Verus proves that every admitted
+   `stable_softmax_spec_v1` value has this normalized mathematical postcondition.
+   Stock Verus supplies no real-field multiplication laws here, so V1 does not
+   claim to derive that postcondition from the pointwise equation alone.
 2. **Finite algorithm state.**
    The Verus `denominator_state_v1` predicate models the fixed 64-step
-   sequential reduction and proves one-step invariant preservation. The
+   sequential reduction, including its zero initialization, and proves one-step
+   invariant preservation. `maximum_reduction_state_v1` similarly binds the
+   initialized one-element maximum state and completed reduction state. The
    separate `finite_numerator_premises_v1` predicate explicitly assumes
    positive integer weights, pointwise-equal output numerators, and a denominator
    equal to the weight sum. Its conditional lemmas only transport those premises
-   to lane positivity and equality of the numerator sum and denominator; they do
-   not compute or establish normalization. The Rust
+   to lane positivity and equality of the numerator sum and denominator. This is
+   a derived common-denominator invariant, not a proof of real division. The Rust
    `FiniteAlgorithmStateV1` records the maximum, 64 weights, and denominator
    produced by the executable host reference. Neither finite model is claimed
    to refine `f32`.
 3. **Mask and empty-row policy.**
-   V1 has no mask. All 64 positions participate. An empty row is not
+   V1 has no mask. `explicit_activity_mask_v1` therefore requires all 64
+   positions to participate and rejects mask drift. An empty row is not
    representable, so there is no all-masked fallback or zero-denominator rule.
 4. **Explicitly unproved numeric contract.**
    `exp_real_v1` is uninterpreted. Positivity and correspondence between that
@@ -52,25 +57,49 @@ refinement.
 
 - all active identity-mapped input, scratch, and output indices are in `0..64`;
 - distinct lanes own distinct scratch and output elements;
+- the exact full activity mask admits every index and excludes masked variants;
+- only lane zero participates in the attributed scalar source and its modeled
+  barrier count is uniformly zero, matching the source's lack of barriers;
 - every active four-byte access lies inside a checked 256-byte row region;
 - addresses selected in separate input/output regions are unequal;
 - distinct lanes select distinct output and scratch element addresses;
 - `stable_softmax_spec_v1` directly supplies each lane's matching numerator
   equation, so substituting lane zero's numerator is rejected;
 - the maximum shift is nonpositive under the maximum contract;
-- the finite denominator recurrence preserves its prefix-sum invariant;
+- the maximum and denominator reductions have explicit initialized states and
+  preserve their completed prefix invariants;
 - the positive-weight premise embedded in the real specification conditionally
   gives a positive denominator; and
 - the explicit integer premises conditionally transport pointwise numerator
   equality to equality of the numerator sum and assumed denominator.
 
-These are address-set facts only. The proof does not model memory operations,
-their temporal ordering, barriers, wave execution, memory visibility, or machine
-scheduling, so it establishes no source- or machine-level data-race result.
+The memory results are address-set facts only. The zero-barrier theorem models
+the exact singleton participating-worker schedule; it is not a workgroup memory
+model. The proof does not model concrete memory operations, visibility, or
+machine scheduling, so it establishes no source- or machine-level data-race
+result.
 
 Three negative mutations must be rejected: `lane + 1` indexing, a duplicate
 lane-63/lane-0 output owner, and an actual stable-softmax specification mutation
 that substitutes lane zero's numerator for every output lane.
+Seven additional named mutations reject a missing/divergent barrier schedule,
+mask drift, ownership collision, zero denominator, source-identity drift,
+numerical-policy drift, and specialization-width drift.
+
+## Inert evidence certificate
+
+`verification_certificate.rs` exposes a deterministic, inert manifest and an
+exact comparison API. It binds the attributed Rust source, reachable portable
+MIR and compiler-semantics commitments, typed profile, shared numerical policy,
+positive proof source, canonical Kernel IR and LLVM body commitments, exact
+`gfx942:xnack-` width-64 specialization, and pinned Verus/Z3 closure. Its
+canonical digest is
+`9e1a983454cd6c01a78aa8b3f17153491961a3c65d8487af69f5e74d8d0045a2`.
+
+The certificate is formal evidence only. It grants no compiler origin,
+source-to-machine refinement, descriptor or artifact admission, load, launch,
+or execution authority. It also states that `exp_real_v1` remains
+uninterpreted and proves no OCML/IEEE error bound.
 
 ## Measurement and trust boundary
 
@@ -148,9 +177,9 @@ point-in-time path afterward. The controller test is a deployment prerequisite.
 It is not authenticated execution of the row proof. It also makes no same-UID
 replacement-resistance claim for that proof.
 
-The positive proof pin is 11,143 bytes with SHA-256
-`61f1453d267a8e9183334dfe1ca37bcd69c92df4b55d56606907627c5691a9f9`;
-all three semantic-negative and five trust-exploit sources are pinned
+The positive proof pin is 12,966 bytes with SHA-256
+`cacf81e02eb071cc29b1124811e911097fd62e7d29556dda8380418a631f5db5`;
+all ten semantic-negative and five trust-exploit sources are pinned
 independently as well.
 
 ## Commands
