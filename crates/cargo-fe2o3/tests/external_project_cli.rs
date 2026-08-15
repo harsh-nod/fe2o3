@@ -157,7 +157,11 @@ impl ProjectFixture {
     }
 
     fn command(&self, args: &[OsString]) -> Command {
-        let mut command = cargo_fe2o3_command();
+        self.command_with_program(Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3")), args)
+    }
+
+    fn command_with_program(&self, program: &Path, args: &[OsString]) -> Command {
+        let mut command = cargo_fe2o3_command_with_program(program);
         command
             .args(args)
             .current_dir(&self.cwd)
@@ -252,7 +256,11 @@ fn temp_root() -> PathBuf {
 }
 
 fn cargo_fe2o3_command() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    cargo_fe2o3_command_with_program(Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3")))
+}
+
+fn cargo_fe2o3_command_with_program(program: &Path) -> Command {
+    let mut command = Command::new(program);
     command
         .env_remove("RUSTUP_HOME")
         .env_remove("RUSTUP_TOOLCHAIN")
@@ -262,8 +270,17 @@ fn cargo_fe2o3_command() -> Command {
         .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .env_remove("CARGO_TARGET_DIR");
+    scrub_test_harness_rustup_environment(&mut command);
     scrub_test_harness_dynamic_loader_environment(&mut command);
     command
+}
+
+fn scrub_test_harness_rustup_environment(command: &mut Command) {
+    for (name, _) in env::vars_os() {
+        if os_bytes(&name).starts_with(b"RUSTUP_") {
+            command.env_remove(name);
+        }
+    }
 }
 
 fn scrub_test_harness_dynamic_loader_environment(command: &mut Command) {
@@ -2993,19 +3010,24 @@ fn recursive_runner_configuration_fails_closed() {
 #[test]
 fn hardlink_to_cargo_fe2o3_is_rejected_as_a_recursive_runner() {
     let fixture = ProjectFixture::standalone();
-    let executable = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
-    let hardlink_directory = SameFilesystemFixture::beside(executable);
+    let shared_executable = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let hardlink_directory = SameFilesystemFixture::beside(shared_executable);
+    let executable = hardlink_directory.path().join("cargo-fe2o3-private");
+    fs::copy(shared_executable, &executable).expect("stage private recursive runner executable");
     let hardlink = hardlink_directory.path().join("cargo-fe2o3-hardlink");
-    fs::hard_link(executable, &hardlink).expect("create recursive runner hardlink");
-    let source = fs::metadata(executable).expect("inspect runner executable");
+    fs::hard_link(&executable, &hardlink).expect("create recursive runner hardlink");
+    let source = fs::metadata(&executable).expect("inspect runner executable");
     let alias = fs::metadata(&hardlink).expect("inspect runner hardlink");
     use std::os::unix::fs::MetadataExt;
     assert_eq!((source.dev(), source.ino()), (alias.dev(), alias.ino()));
     let runner = serde_json::json!([hardlink]);
-    let mut command = fixture.command(&[
-        OsString::from("run"),
-        OsString::from("--target=x86_64-unknown-linux-gnu"),
-    ]);
+    let mut command = fixture.command_with_program(
+        &executable,
+        &[
+            OsString::from("run"),
+            OsString::from("--target=x86_64-unknown-linux-gnu"),
+        ],
+    );
     command.env("FE2O3_TEST_CONFIG_RUNNER_JSON", runner.to_string());
 
     let output = command.output().expect("run hardlink runner rejection");
