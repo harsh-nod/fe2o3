@@ -27,6 +27,7 @@ mod persistent_freshness;
 mod plan;
 mod proof_capsule;
 mod result;
+mod row_softmax_certificate;
 mod scalar_gemm_hardware_evidence;
 mod scalar_gemm_proof;
 mod scalar_gemm_v1;
@@ -160,6 +161,13 @@ pub use proof_capsule::{
 };
 pub use result::{
     MAX_RESULT_BYTES, ProofResultV1, RecorderTermination, ResultError, parse_recorder_result,
+};
+pub use row_softmax_certificate::{
+    AuthenticatedRowSoftmaxVerificationCertificateIdentityV1,
+    AuthenticatedRowSoftmaxVerificationCertificateV1,
+    RowSoftmaxVerificationCertificateAuthenticationErrorV1,
+    RowSoftmaxVerificationCertificateObservationV1, RowSoftmaxVerificationFileObservationV1,
+    authenticate_row_softmax_verification_certificate_v1,
 };
 pub use scalar_gemm_hardware_evidence::{
     SCALAR_GEMM_COV6_IMPLICIT_KERNARG_BYTES_V1, SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1,
