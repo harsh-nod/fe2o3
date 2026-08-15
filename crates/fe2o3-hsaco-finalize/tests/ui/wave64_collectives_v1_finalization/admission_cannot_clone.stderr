@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `PreparedFinalizedWave64CollectivesV1HsacoV1` in the current scope
+ --> tests/ui/wave64_collectives_v1_finalization/admission_cannot_clone.rs:4:32
+  |
+4 |     let _duplicate = admission.clone();
+  |                                ^^^^^ method not found in `PreparedFinalizedWave64CollectivesV1HsacoV1`

@@ -1,0 +1,5 @@
+error[E0599]: no method named `load` found for struct `PreparedFinalizedWave64CollectivesV1HsacoV1` in the current scope
+ --> tests/ui/wave64_collectives_v1_finalization/load_is_unavailable.rs:4:15
+  |
+4 |     admission.load();
+  |               ^^^^ method not found in `PreparedFinalizedWave64CollectivesV1HsacoV1`
