@@ -17,6 +17,9 @@ use rustc_middle::ty::TyCtxt;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SessionRecognizedSemanticItem {
     TrustedDevice(TrustedDeviceItem),
+    FlashAttentionCompilerIntrinsic(
+        crate::collected_flash_attention_v1::FlashAttentionCompilerIntrinsicV1,
+    ),
     WorkgroupSyncCompilerIntrinsic(WorkgroupSyncCompilerIntrinsicV1),
 }
 
@@ -67,6 +70,7 @@ impl SessionRecognizedSemanticItem {
     pub(crate) fn canonical_path(self) -> &'static str {
         match self {
             Self::TrustedDevice(item) => item.canonical_path(),
+            Self::FlashAttentionCompilerIntrinsic(item) => item.canonical_path(),
             Self::WorkgroupSyncCompilerIntrinsic(item) => item.canonical_path(),
         }
     }
@@ -74,6 +78,9 @@ impl SessionRecognizedSemanticItem {
     pub(crate) fn trusted_device_item(self) -> TrustedDeviceItem {
         match self {
             Self::TrustedDevice(item) => item,
+            Self::FlashAttentionCompilerIntrinsic(_) => {
+                unreachable!("compiler-only FlashAttention terminals never enter generic lowering")
+            }
             Self::WorkgroupSyncCompilerIntrinsic(_) => {
                 unreachable!("compiler-only workgroup-sync terminals never enter generic lowering")
             }
@@ -89,6 +96,12 @@ impl SessionRecognizedSemanticItem {
 pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<SessionRecognizedSemanticItem> {
     trusted_device_items::classify(tcx, def_id)
         .map(SessionRecognizedSemanticItem::TrustedDevice)
+        .or_else(|| {
+            crate::collected_flash_attention_v1::classify_exact_flash_attention_compiler_intrinsic(
+                tcx, def_id,
+            )
+            .map(SessionRecognizedSemanticItem::FlashAttentionCompilerIntrinsic)
+        })
         .or_else(|| {
             crate::collected_workgroup_sync_v1::classify_exact_workgroup_sync_compiler_intrinsic(
                 tcx, def_id,

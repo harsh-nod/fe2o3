@@ -19,6 +19,7 @@ mod amdgpu_llvm;
 #[allow(dead_code)]
 mod closure_profile_v1;
 mod collected_executable_scalar_control_flow_v2;
+mod collected_flash_attention_v1;
 mod collected_row_softmax_v1;
 mod collected_scalar_gemm_v1;
 mod collected_tiled_gemm_lds_slice1_v1;
@@ -195,6 +196,7 @@ enum CodegenPipeline {
     KernelIrV1,
     KernelIrWorkerV2,
     CollectedExecutableScalarControlFlowV2,
+    CollectedFlashAttentionV1,
     CollectedRowSoftmaxV1,
     CollectedScalarGemmV1,
     CollectedTiledGemmV1,
@@ -262,6 +264,12 @@ impl PipelineSelection {
                 Self::Valid(CodegenPipeline::CollectedExecutableScalarControlFlowV2)
             }
             Some(value)
+                if value
+                    == collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1 =>
+            {
+                Self::Valid(CodegenPipeline::CollectedFlashAttentionV1)
+            }
+            Some(value)
                 if value == collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1 =>
             {
                 Self::Valid(CodegenPipeline::CollectedScalarGemmV1)
@@ -293,8 +301,9 @@ impl PipelineSelection {
                 Self::Valid(CodegenPipeline::CollectedScopedAtomicV1)
             }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
                 collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
                 collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                 collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
                 collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
@@ -513,6 +522,64 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                        )),
+                    }
+                } else if matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(CodegenPipeline::CollectedFlashAttentionV1)
+                ) {
+                    let admission = (|| -> Result<_, String> {
+                        let collection = collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+                            .map_err(|error| {
+                                format!("frontend record extraction failed: {error}")
+                            })?;
+                        collector::dump_device_functions(tcx, &collection.functions);
+                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty();
+                        let mut receipt =
+                            collected_flash_attention_v1::authenticate_collected_flash_attention_v1(
+                                tcx,
+                                &collection,
+                                &self.config.target,
+                                custom_llvm_pipeline,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        let root = receipt.root_instance_identity().to_owned();
+                        let portable_mir = receipt.portable_mir_hex();
+                        let authority = receipt.authority_hex();
+                        let authenticated = receipt.consume().map_err(|error| error.to_string())?;
+                        Ok((
+                            root,
+                            portable_mir,
+                            authority,
+                            authenticated.source_authority_hex(),
+                            authenticated.descriptor_hex(),
+                            authenticated.profile().grid,
+                            authenticated.semantic_summary(),
+                        ))
+                    })();
+                    match admission {
+                        Ok((
+                            root,
+                            portable_mir,
+                            authority,
+                            consumed_authority,
+                            descriptor,
+                            grid,
+                            (batches, heads, sequence, dimension, recurrence_steps),
+                        )) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed source authority {authority} (bound value {consumed_authority}) to select closed causal FlashAttention B{batches}/H{heads}/N{sequence}/D{dimension} semantic KIR with {recurrence_steps} ordered recurrence steps, exact grid {grid:?}, adjacent-pair output ownership, and descriptor/resource identity {descriptor}; reviewed source-to-profile correspondence only; no generic lowering, terminal-body refinement, compiler-refinement proof, LLVM lowering, Worker V2, finalizer, link, host, runtime, artifact, load, launch, Verus refinement, or hardware authority was entered",
+                            collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
+                        )),
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
+                            collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
                         )),
                     }
                 } else if matches!(
@@ -1332,6 +1399,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             CodegenPipeline::CollectedExecutableScalarControlFlowV2 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected executable scalar-control-flow V2 entered the legacy artifact transaction"
+                                        .to_owned(),
+                                })
+                            }
+                            CodegenPipeline::CollectedFlashAttentionV1 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: collected FlashAttention V1 entered the legacy artifact transaction"
                                         .to_owned(),
                                 })
                             }

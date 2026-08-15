@@ -2439,14 +2439,38 @@ impl<'tcx> DeviceCollector<'tcx> {
                 caller,
             ),
             TerminatorKind::Assert { unwind, .. }
-                if is_kernel_root
+                if (is_kernel_root
+                    || std::env::var_os(crate::CODEGEN_PIPELINE_ENV).as_deref()
+                        == Some(
+                            std::ffi::OsStr::new(
+                                crate::collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
+                            ),
+                        ))
                     && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
             {
-                // Root-kernel assertions are preserved by MIR import and
-                // lowered to explicit kernel-IR failure edges. This G4
-                // traversal grants no claim that later verification or launch
-                // admission discharges them. Helper and FFI-export assertions
-                // remain outside the closed graph.
+                // The exact FlashAttention profile authenticates helper bounds
+                // assertions in its complete portable-MIR closure. Other
+                // profiles retain the narrower root-only traversal policy.
+                Ok(())
+            }
+            TerminatorKind::Drop { place, unwind, .. }
+                if std::env::var_os(crate::CODEGEN_PIPELINE_ENV).as_deref()
+                    == Some(std::ffi::OsStr::new(
+                        crate::collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
+                    ))
+                    && !self
+                        .tcx
+                        .instantiate_and_normalize_erasing_regions(
+                            caller.args,
+                            TypingEnv::fully_monomorphized(),
+                            EarlyBinder::bind(place.ty(body, self.tcx).ty),
+                        )
+                        .needs_drop(self.tcx, TypingEnv::fully_monomorphized())
+                    && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
+            {
+                // `bool::then_some` introduces a drop edge for its Copy payload.
+                // The portable importer hashes the edge and target; values that
+                // require drop remain rejected.
                 Ok(())
             }
             TerminatorKind::Goto { .. }
@@ -2857,6 +2881,14 @@ impl<'tcx> DeviceCollector<'tcx> {
             self.tcx,
             resolved.def_id(),
         ) {
+            return Ok(());
+        }
+        if crate::collected_flash_attention_v1::classify_exact_flash_attention_compiler_intrinsic(
+            self.tcx,
+            resolved.def_id(),
+        )
+        .is_some()
+        {
             return Ok(());
         }
 
