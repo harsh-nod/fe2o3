@@ -92,8 +92,7 @@ pub fn tiled_gemm_lds_slice1(a: &[u16], b: &[u16], mut c: DisjointSlice<f32>) {
 
     // SAFETY: this exact call is admitted only for the authenticated Slice 1
     // source profile. It issues separate aligned 512-byte A and B LDS tiles.
-    let (mut a_lds, mut b_lds) =
-        unsafe { gfx942_lds_bf16_tile_pair_m16x16_v1() };
+    let (mut a_lds, mut b_lds) = unsafe { gfx942_lds_bf16_tile_pair_m16x16_v1() };
 
     // SAFETY: every lane owns four distinct XOR4 locations in each separate
     // tile. B's lane fragment is staged transposed as (column, depth).

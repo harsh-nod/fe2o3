@@ -96,9 +96,7 @@ fn fixed_source_contract_reaches_ir_and_still_fails_closed_before_llvm() {
     assert_eq!(LDS_SLICE1_OPERAND_ELEMENTS_V1, 256);
     assert_eq!(LDS_SLICE1_OPERAND_BYTES_V1, 512);
     assert_eq!(LDS_SLICE1_TOTAL_BYTES_V1, 1024);
-    assert!(std::hint::black_box(
-        LDS_SLICE1_SOURCE_TO_IR_SUPPORTED_V1
-    ));
+    assert!(std::hint::black_box(LDS_SLICE1_SOURCE_TO_IR_SUPPORTED_V1));
     assert!(!std::hint::black_box(
         LDS_SLICE1_SOURCE_LOWERING_SUPPORTED_V1
     ));
