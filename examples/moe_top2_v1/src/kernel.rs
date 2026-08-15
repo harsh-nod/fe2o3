@@ -39,12 +39,7 @@ fn select_top2_v1(logits: &[f32], token: usize) -> [u32; 2] {
     while expert < MOE_EXPERTS_V1 {
         let score = logits[token * MOE_EXPERTS_V1 + expert];
         if best == usize::MAX
-            || candidate_precedes_v1(
-                score,
-                expert,
-                logits[token * MOE_EXPERTS_V1 + best],
-                best,
-            )
+            || candidate_precedes_v1(score, expert, logits[token * MOE_EXPERTS_V1 + best], best)
         {
             second = best;
             best = expert;

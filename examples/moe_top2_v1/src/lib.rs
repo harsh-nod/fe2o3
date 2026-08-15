@@ -11,16 +11,19 @@
 
 pub mod contract;
 pub mod kernel;
+pub mod oracle;
 pub mod source_identity;
+pub mod vectors;
 
 pub use contract::{
-    DROP_ROUTE_V1, EXACT_PROFILE_V1, FINITE_LOGIT_POLICY_V1, LayoutV1,
-    MOE_EXPERT_CAPACITY_V1, MOE_EXPERTS_V1, MOE_LOGIT_ELEMENTS_V1, MOE_ROUTES_V1,
-    MOE_ROUTES_PER_TOKEN_V1, MOE_TOKENS_V1, MOE_WAVE_LANES_V1, MoeTop2ProfileV1,
-    OverflowPolicyV1, ProfileMismatchV1, TieBreakPolicyV1, exact_launch_v1,
-    logit_index_v1, route_id_v1, validate_profile_v1,
+    DROP_ROUTE_V1, EXACT_PROFILE_V1, FINITE_LOGIT_POLICY_V1, LayoutV1, MOE_EXPERT_CAPACITY_V1,
+    MOE_EXPERTS_V1, MOE_LOGIT_ELEMENTS_V1, MOE_ROUTES_PER_TOKEN_V1, MOE_ROUTES_V1, MOE_TOKENS_V1,
+    MOE_WAVE_LANES_V1, MoeTop2ProfileV1, OverflowPolicyV1, ProfileMismatchV1, TieBreakPolicyV1,
+    exact_launch_v1, logit_index_v1, route_id_v1, validate_profile_v1,
 };
+pub use oracle::{MoeOracleErrorV1, RoutingOutputsV1, moe_top2_oracle_v1};
 pub use source_identity::{
     MOE_KERNEL_NAMESPACE_V1, MOE_KERNEL_SOURCE_SHA256_V1, MOE_PROFILE_IDENTITY_V1,
     SourceIdentityMismatchV1, validate_kernel_source_identity_v1,
 };
+pub use vectors::{DeterministicVectorV1, deterministic_vectors_v1};

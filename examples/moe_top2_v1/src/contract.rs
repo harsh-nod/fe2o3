@@ -21,11 +21,9 @@ pub const DROP_ROUTE_V1: u32 = u32::MAX;
 pub const FINITE_LOGIT_POLICY_V1: &str =
     "all 32 f32 logits must be finite; NaN or infinity traps before any output write";
 /// Exact deterministic ordering rule.
-pub const TIE_BREAK_POLICY_V1: &str =
-    "higher logit first; equal logits prefer the lower expert id";
+pub const TIE_BREAK_POLICY_V1: &str = "higher logit first; equal logits prefer the lower expert id";
 /// Exact stable capacity rule.
-pub const OVERFLOW_POLICY_V1: &str =
-    "token-major then rank-major routes; first four requests per expert are accepted; later requests are dropped";
+pub const OVERFLOW_POLICY_V1: &str = "token-major then rank-major routes; first four requests per expert are accepted; later requests are dropped";
 /// Exact output initialization and tail rule.
 pub const TAIL_POLICY_V1: &str =
     "permutation tail and every dropped slot/inverse entry are u32::MAX; lanes 1..63 write nothing";
