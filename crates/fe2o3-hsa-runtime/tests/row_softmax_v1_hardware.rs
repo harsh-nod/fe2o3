@@ -19,6 +19,9 @@ use fe2o3_host::HsaLaunchGeometryV1;
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, ExplicitValueKind, ExplicitValueType, HiddenValueKind,
 };
+use fe2o3_row_softmax_v1::{
+    GFX942_OCML_COMPARISON_POLICY_V1, compare_row_softmax_v1, row_softmax_oracle_v1,
+};
 use sha2::{Digest, Sha256};
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
@@ -81,13 +84,6 @@ const OUTPUT_PREFIX: f32 = f32::from_bits(0x7fc0_d001);
 const OUTPUT_SUFFIX: f32 = f32::from_bits(0x7fc0_d002);
 #[cfg(feature = "hardware-test-hooks")]
 const OUTPUT_POISON: f32 = f32::from_bits(0x7fc0_d0ff);
-
-// This conservative evidence envelope covers ordinary FP32 reduction order and
-// approximate hardware exp for the finite corpus below. It is not a derived
-// device error model, a correctly-rounded-exp claim, or exact real equivalence.
-const SOFTMAX_ABSOLUTE_TOLERANCE: f32 = 3.0e-6;
-const SOFTMAX_RELATIVE_TOLERANCE: f32 = 3.0e-5;
-const SOFTMAX_SUM_TOLERANCE: f32 = 6.0e-5;
 
 type BoxError = Box<dyn std::error::Error>;
 
@@ -772,39 +768,15 @@ fn representative_inputs() -> Vec<[f32; ELEMENTS]> {
     ]
 }
 
-/// Computes stable softmax in f64 and rounds each result to f32.
-///
-/// V1 evidence deliberately admits only exactly 64 finite f32 inputs. NaN and
-/// either infinity are rejected rather than assigned kernel semantics. This
-/// host oracle is a numerical reference for a finite corpus, not a proof of
-/// exact real-number equivalence or correctly rounded device math.
-fn softmax_oracle(input: &[f32]) -> Result<Vec<f32>, BoxError> {
+fn shared_softmax_oracle(input: &[f32]) -> Result<Vec<f32>, BoxError> {
     require(
         input.len() == ELEMENTS,
         "Row Softmax V1 oracle requires exactly 64 elements",
     )?;
-    require(
-        input.iter().all(|value| value.is_finite()),
-        "Row Softmax V1 finite evidence policy rejects NaN and infinity",
-    )?;
-    let maximum = input
-        .iter()
-        .copied()
-        .map(f64::from)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let exponentials = input
-        .iter()
-        .map(|value| (f64::from(*value) - maximum).exp())
-        .collect::<Vec<_>>();
-    let sum = exponentials.iter().sum::<f64>();
-    require(
-        sum.is_finite() && sum > 0.0,
-        "Row Softmax V1 oracle normalization is not positive and finite",
-    )?;
-    Ok(exponentials
-        .into_iter()
-        .map(|value| (value / sum) as f32)
-        .collect())
+    let mut output = vec![0.0_f32; input.len()];
+    row_softmax_oracle_v1(input, None, &mut output)
+        .map_err(|error| format!("shared Row Softmax V1 oracle rejected the row: {error:?}"))?;
+    Ok(output)
 }
 
 fn guarded_f32(body: &[f32], prefix: f32, suffix: f32) -> Vec<f32> {
@@ -873,25 +845,14 @@ fn verify_softmax_body(actual: &[f32], expected: &[f32]) -> Result<(), BoxError>
         actual.len() == ELEMENTS && expected.len() == ELEMENTS,
         "Row Softmax V1 output has the wrong logical extent",
     )?;
-    for (index, (observed, reference)) in actual.iter().zip(expected).enumerate() {
+    for (index, observed) in actual.iter().enumerate() {
         require(
             observed.is_finite() && *observed >= 0.0 && *observed <= 1.0,
             format!("output[{index}] is not a finite probability: {observed}"),
         )?;
-        let error = (*observed - *reference).abs();
-        let limit = SOFTMAX_ABSOLUTE_TOLERANCE + SOFTMAX_RELATIVE_TOLERANCE * reference.abs();
-        require(
-            error <= limit,
-            format!(
-                "output[{index}] differs from the stable f64 oracle: observed={observed} \
-                 reference={reference} error={error} limit={limit}"
-            ),
-        )?;
     }
-    let sum = actual.iter().sum::<f32>();
-    require(
-        (sum - 1.0).abs() <= SOFTMAX_SUM_TOLERANCE,
-        format!("Row Softmax V1 output sum {sum} is outside the normalization tolerance"),
+    compare_row_softmax_v1(expected, actual, None, GFX942_OCML_COMPARISON_POLICY_V1).map_err(
+        |error| format!("shared gfx942 Row Softmax V1 policy rejected output: {error:?}").into(),
     )
 }
 
@@ -2297,7 +2258,7 @@ fn execute_one_row(
     kernel_symbol: &str,
 ) -> Result<(), BoxError> {
     for (case_index, input_body) in representative_inputs().into_iter().enumerate() {
-        let expected_output = softmax_oracle(&input_body)?;
+        let expected_output = shared_softmax_oracle(&input_body)?;
         let input_host = guarded_f32(&input_body, INPUT_PREFIX, INPUT_SUFFIX);
         let output_host = guarded_f32(&[OUTPUT_POISON; ELEMENTS], OUTPUT_PREFIX, OUTPUT_SUFFIX);
         let input = adapter.allocate_hardware_test_buffer(f32_bytes(&input_host))?;
@@ -2936,7 +2897,7 @@ mod tests {
             assert!(verify_guarded_input(&hostile, &input_body).is_err());
         }
 
-        let expected = softmax_oracle(&input_body).unwrap();
+        let expected = shared_softmax_oracle(&input_body).unwrap();
         let output = guarded_f32(&expected, OUTPUT_PREFIX, OUTPUT_SUFFIX);
         verify_guarded_output(&output, &expected).unwrap();
         for index in [0, output.len() - 1] {
@@ -2957,7 +2918,7 @@ mod tests {
         let inputs = representative_inputs();
         assert_eq!(inputs.len(), 8);
         for input in &inputs {
-            let expected = softmax_oracle(input).unwrap();
+            let expected = shared_softmax_oracle(input).unwrap();
             assert_eq!(expected.len(), ELEMENTS);
             assert!(
                 expected
@@ -2971,14 +2932,14 @@ mod tests {
         let ramp = representative_inputs()[1];
         let translated = ramp.map(|value| value + 1024.0);
         assert_eq!(
-            softmax_oracle(&ramp).unwrap(),
-            softmax_oracle(&translated).unwrap()
+            shared_softmax_oracle(&ramp).unwrap(),
+            shared_softmax_oracle(&translated).unwrap()
         );
 
-        let uniform = softmax_oracle(&[0.0; ELEMENTS]).unwrap();
+        let uniform = shared_softmax_oracle(&[0.0; ELEMENTS]).unwrap();
         assert!(uniform.iter().all(|value| *value == 1.0 / 64.0));
 
-        let extrema = softmax_oracle(&inputs[4]).unwrap();
+        let extrema = shared_softmax_oracle(&inputs[4]).unwrap();
         assert_eq!(extrema[3], 1.0);
         assert!(
             extrema
@@ -2987,32 +2948,129 @@ mod tests {
                 .all(|(index, value)| index == 3 || *value == 0.0)
         );
 
-        let subnormals = softmax_oracle(&inputs[5]).unwrap();
+        let subnormals = shared_softmax_oracle(&inputs[5]).unwrap();
         assert!(subnormals.iter().all(|value| *value == 1.0 / 64.0));
 
         let untranslated_large: [f32; ELEMENTS] =
             std::array::from_fn(|index| (index % 8) as f32 * 0.125);
         assert_eq!(
-            softmax_oracle(&inputs[7]).unwrap(),
-            softmax_oracle(&untranslated_large).unwrap()
+            shared_softmax_oracle(&inputs[7]).unwrap(),
+            shared_softmax_oracle(&untranslated_large).unwrap()
         );
     }
 
     #[test]
     fn oracle_and_output_policy_reject_nonfinite_or_malformed_values() {
-        assert!(softmax_oracle(&[0.0; ELEMENTS - 1]).is_err());
+        assert!(shared_softmax_oracle(&[0.0; ELEMENTS - 1]).is_err());
         for nonfinite in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let mut input = [0.0; ELEMENTS];
             input[31] = nonfinite;
-            assert!(softmax_oracle(&input).is_err());
+            assert!(shared_softmax_oracle(&input).is_err());
         }
 
-        let expected = softmax_oracle(&[0.0; ELEMENTS]).unwrap();
+        let expected = shared_softmax_oracle(&[0.0; ELEMENTS]).unwrap();
         let mut output = expected.clone();
         output[5] = f32::INFINITY;
         assert!(verify_softmax_body(&output, &expected).is_err());
         output[5] = -0.1;
         assert!(verify_softmax_body(&output, &expected).is_err());
+
+        let mut over_one = vec![0.0_f32; ELEMENTS];
+        over_one[0] = 1.0 + 1.0e-6;
+        assert!(
+            compare_row_softmax_v1(&over_one, &over_one, None, GFX942_OCML_COMPARISON_POLICY_V1,)
+                .is_ok()
+        );
+        assert!(verify_softmax_body(&over_one, &over_one).is_err());
+    }
+
+    #[test]
+    fn shared_policy_rejects_hostile_consumer_substitutions() {
+        let expected = shared_softmax_oracle(&[0.0; ELEMENTS]).unwrap();
+
+        let mut hostile_expected = expected.clone();
+        hostile_expected[7] += 0.01;
+        assert!(
+            compare_row_softmax_v1(
+                &hostile_expected,
+                &expected,
+                None,
+                GFX942_OCML_COMPARISON_POLICY_V1,
+            )
+            .is_err()
+        );
+
+        for invalid_tolerance in [f32::NAN, f32::INFINITY, -1.0] {
+            let mut absolute = GFX942_OCML_COMPARISON_POLICY_V1;
+            absolute.absolute_tolerance = invalid_tolerance;
+            assert!(compare_row_softmax_v1(&expected, &expected, None, absolute).is_err());
+
+            let mut relative = GFX942_OCML_COMPARISON_POLICY_V1;
+            relative.relative_tolerance = invalid_tolerance;
+            assert!(compare_row_softmax_v1(&expected, &expected, None, relative).is_err());
+
+            let mut sum = GFX942_OCML_COMPARISON_POLICY_V1;
+            sum.sum_tolerance = invalid_tolerance;
+            assert!(compare_row_softmax_v1(&expected, &expected, None, sum).is_err());
+        }
+
+        assert!(
+            compare_row_softmax_v1(
+                &expected,
+                &expected[..ELEMENTS - 1],
+                None,
+                GFX942_OCML_COMPARISON_POLICY_V1,
+            )
+            .is_err()
+        );
+        assert!(
+            compare_row_softmax_v1(
+                &expected,
+                &expected,
+                Some(&[true; ELEMENTS - 1]),
+                GFX942_OCML_COMPARISON_POLICY_V1,
+            )
+            .is_err()
+        );
+        let mut mask = [true; ELEMENTS];
+        mask[11] = false;
+        assert!(
+            compare_row_softmax_v1(
+                &expected,
+                &expected,
+                Some(&mask),
+                GFX942_OCML_COMPARISON_POLICY_V1,
+            )
+            .is_err()
+        );
+
+        for nonfinite in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut hostile_output = expected.clone();
+            hostile_output[19] = nonfinite;
+            assert!(
+                compare_row_softmax_v1(
+                    &expected,
+                    &hostile_output,
+                    None,
+                    GFX942_OCML_COMPARISON_POLICY_V1,
+                )
+                .is_err()
+            );
+        }
+
+        let sum_substitution = expected
+            .iter()
+            .map(|value| value + 2.0e-6)
+            .collect::<Vec<_>>();
+        assert!(
+            compare_row_softmax_v1(
+                &expected,
+                &sum_substitution,
+                None,
+                GFX942_OCML_COMPARISON_POLICY_V1,
+            )
+            .is_err()
+        );
     }
 
     #[test]
