@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -257,6 +258,115 @@ fn assert_rejected(result: &Output, label: &str) {
     );
 }
 
+fn authenticated_authority(stderr: &str) -> &str {
+    let suffix = stderr
+        .split_once("consumed sealed authority ")
+        .expect("authenticated authority marker")
+        .1;
+    let authority = suffix
+        .split_once(" (bound value ")
+        .expect("authenticated authority terminator")
+        .0;
+    assert_eq!(authority.len(), 64, "authority is not SHA-256 hex");
+    assert!(authority.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    authority
+}
+
+fn copy_relocated_workspace(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination).expect("create relocated workspace");
+    for file in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
+        std::fs::copy(source.join(file), destination.join(file))
+            .unwrap_or_else(|error| panic!("copy relocated {file}: {error}"));
+    }
+    copy_tree(&source.join("crates"), &destination.join("crates"));
+    copy_tree(&source.join("examples"), &destination.join("examples"));
+}
+
+fn copy_tree(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination)
+        .unwrap_or_else(|error| panic!("create {}: {error}", destination.display()));
+    for entry in std::fs::read_dir(source)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source.display()))
+    {
+        let entry = entry.expect("read source-tree entry");
+        let file_type = entry.file_type().expect("inspect source-tree entry");
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target)
+                .unwrap_or_else(|error| panic!("copy {}: {error}", entry.path().display()));
+        } else {
+            panic!(
+                "relocated workspace source is not a regular file: {}",
+                entry.path().display()
+            );
+        }
+    }
+}
+
+fn run_relocated_exact_profiles(workspace: &Path, target: &Path) -> Output {
+    let mut command = Command::new(env!("CARGO"));
+    command.current_dir(workspace).args(["test", "--locked"]);
+    if !cfg!(debug_assertions) {
+        command.arg("--release");
+    }
+    command
+        .args([
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--test",
+            "workgroup_sync_v1",
+            "--target-dir",
+        ])
+        .arg(target)
+        .args([
+            "exact_sources_authenticate_complete_profiles",
+            "--",
+            "--nocapture",
+        ])
+        .env("CARGO_TARGET_DIR", target)
+        .env("CARGO_INCREMENTAL", "0")
+        .env("FE2O3_WORKGROUP_SYNC_REPORT_AUTHORITY", "1")
+        .output()
+        .expect("run relocated exact-profile suite")
+}
+
+fn assert_relocated_success(label: &str, output: &Output) {
+    let text = command_text(output);
+    assert!(output.status.success(), "{label} failed:\n{text}");
+    let authorities = reported_authorities(output);
+    assert_eq!(
+        authorities.len(),
+        2,
+        "{label} omitted authority reports:\n{text}"
+    );
+    assert!(authorities.contains_key("exact-lds"));
+    assert!(authorities.contains_key("exact-atomic"));
+}
+
+fn reported_authorities(output: &Output) -> BTreeMap<String, String> {
+    command_text(output)
+        .lines()
+        .filter_map(|line| {
+            let marker = "WORKGROUP_SYNC_AUTHORITY ";
+            let report = line
+                .find(marker)
+                .map(|offset| &line[offset + marker.len()..])?;
+            let (label, identity) = report.split_once(' ')?;
+            Some((label.to_owned(), identity.trim().to_owned()))
+        })
+        .collect()
+}
+
+fn command_text(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 #[test]
 fn exact_sources_authenticate_complete_profiles() {
     let workspace = workspace();
@@ -288,7 +398,57 @@ fn exact_sources_authenticate_complete_profiles() {
         ] {
             assert!(stderr.contains(marker), "missing `{marker}`:\n{stderr}");
         }
+        if std::env::var_os("FE2O3_WORKGROUP_SYNC_REPORT_AUTHORITY").is_some() {
+            println!(
+                "WORKGROUP_SYNC_AUTHORITY {label} {}",
+                authenticated_authority(&stderr)
+            );
+        }
     }
+}
+
+#[test]
+fn exact_profile_authority_is_location_independent_and_source_bound() {
+    let workspace = workspace();
+    let output = TestOutput::new(&workspace);
+    let location_a = output.path.join("canonical-workspace-a");
+    let location_b = output.path.join("canonical-workspace-b");
+    copy_relocated_workspace(&workspace, &location_a);
+    copy_relocated_workspace(&workspace, &location_b);
+    let location_a = location_a
+        .canonicalize()
+        .expect("canonical relocated workspace A");
+    let location_b = location_b
+        .canonicalize()
+        .expect("canonical relocated workspace B");
+    assert_ne!(location_a, location_b);
+
+    let target_a = output.path.join("relocated-target-a");
+    let target_b = output.path.join("relocated-target-b");
+    let first = run_relocated_exact_profiles(&location_a, &target_a);
+    let second = run_relocated_exact_profiles(&location_b, &target_b);
+    assert_relocated_success("workspace A", &first);
+    assert_relocated_success("workspace B", &second);
+    assert_eq!(reported_authorities(&first), reported_authorities(&second));
+
+    let thread_source = location_b.join("crates/fe2o3-device/src/thread.rs");
+    let mut hostile_source =
+        std::fs::read_to_string(&thread_source).expect("read device thread source");
+    hostile_source.push_str("\n// hostile provider source substitution\n");
+    std::fs::write(&thread_source, hostile_source).expect("mutate relocated device source");
+    let hostile = run_relocated_exact_profiles(
+        &location_b,
+        &output.path.join("relocated-target-hostile-source"),
+    );
+    let hostile_text = command_text(&hostile);
+    assert!(
+        !hostile.status.success(),
+        "mutated provider source authenticated"
+    );
+    assert!(
+        hostile_text.contains("trusted-definition/semantic-terminal identity drifted"),
+        "mutated provider source did not fail at trusted identity:\n{hostile_text}"
+    );
 }
 
 #[test]
