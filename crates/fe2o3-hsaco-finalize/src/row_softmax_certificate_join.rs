@@ -162,6 +162,42 @@ impl PreparedProtectedRowSoftmaxV1AdmissionV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+
+    /// Supplies the retained finalized bytes to one reviewed runtime load.
+    ///
+    /// This is the narrow cross-crate bridge used by the protected host
+    /// lifecycle. It is not a raw-byte accessor: the bytes cannot be returned
+    /// from this method without violating the caller's unsafe contract, and
+    /// the admission remains retained by the caller for the complete loaded
+    /// lifecycle.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_hsaco_finalize::PreparedProtectedRowSoftmaxV1AdmissionV1;
+    /// fn leak(admission: &PreparedProtectedRowSoftmaxV1AdmissionV1) -> Vec<u8> {
+    ///     admission.load_exact_finalized_with_reviewed_runtime_v1(
+    ///         |bytes, _identity| bytes.to_vec(),
+    ///     )
+    /// }
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// `load` must synchronously load exactly the supplied bytes into the
+    /// reviewed runtime selected by the protected lifecycle. It must not copy,
+    /// retain, return, publish, or otherwise expose the byte slice, and it must
+    /// not unwind. Any returned native authority must remain owned by the
+    /// protected lifecycle until terminal unload.
+    #[doc(hidden)]
+    #[allow(unsafe_code)]
+    pub unsafe fn load_exact_finalized_with_reviewed_runtime_v1<R>(
+        &self,
+        load: impl FnOnce(&[u8], ContentIdentityV1) -> R,
+    ) -> R {
+        load(
+            self.finalized.exact_finalized_bytes(),
+            self.finalized.finalized_output_identity(),
+        )
+    }
 }
 
 /// Rejection before exact host authority can exist.

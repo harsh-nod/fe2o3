@@ -110,6 +110,24 @@ impl ProtectedRowSoftmaxV1HostTokenV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+
+    /// Crate-private bridge from the sealed token to one reviewed runtime load.
+    ///
+    /// # Safety
+    ///
+    /// The callback must satisfy the retained finalizer bridge's exact-load,
+    /// non-escape, no-unwind, and terminal-ownership contract.
+    pub(crate) unsafe fn load_exact_finalized_with_reviewed_runtime_v1<R>(
+        &self,
+        load: impl FnOnce(&[u8], ContentIdentityV1) -> R,
+    ) -> R {
+        // SAFETY: this crate-private wrapper transfers the complete contract
+        // to its caller; only the exact lifecycle invokes it.
+        unsafe {
+            self.admission
+                .load_exact_finalized_with_reviewed_runtime_v1(load)
+        }
+    }
 }
 
 /// Rejection before a protected exact-profile host token exists.
