@@ -2,7 +2,9 @@
 //!
 //! This is deliberately separate from `collected_tiled_gemm_v1`, whose
 //! four-argument register-only ABI and Worker V2 evidence remain unchanged.
-//! The receipt produced here stops at the exact verified LDS Kernel IR.
+//! The receipt produced here may prepare and publish an inert Worker V2 module
+//! bound to the exact verified LDS Kernel IR. It grants no worker, link, load,
+//! or launch authority.
 
 use std::error::Error;
 use std::fmt;
@@ -11,6 +13,12 @@ use fe2o3_artifacts::{
     AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
     Dimensions, Endianness, IdentityText, LaunchContract, Mutability as ArtifactMutability,
     PointerWidth, RustScalarElementTypeV1, TargetIdentity,
+};
+use fe2o3_compiler_ffi::{
+    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1, DeviceTargetV1,
+};
+use fe2o3_kernel_descriptor::{
+    AccessMode, AliasSemantics, BlockSizeV1, CapabilityV1, OwnershipSemantics,
 };
 use fe2o3_kernel_ir::{
     Module, TiledGemmLdsV1Profile, tiled_gemm_lds_v1_module, verify_tiled_gemm_lds_v1_module,
@@ -36,10 +44,13 @@ use crate::trusted_device_items::{self, TrustedDeviceItem};
 pub(crate) const LDS_SLICE1_KERNEL_EXPORT_V1: &str = "tiled_gemm_lds_slice1";
 pub(crate) const LDS_SLICE1_EXPLICIT_KERNARG_BYTES_V1: u64 = 48;
 pub(crate) const LDS_SLICE1_COMPLETE_KERNARG_BYTES_V1: u64 = 304;
+pub(crate) const LDS_SLICE1_CODE_OBJECT_VERSION_V1: u16 = 6;
 
 const AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.tiled-gemm-lds-slice1.authority.v1";
 const FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3.tiled-gemm-lds-slice1.rustc-fn-abi.v1";
 const TRUSTED_DEFINITIONS_DOMAIN_V1: &[u8] = b"fe2o3.tiled-gemm-lds-slice1.trusted-definitions.v1";
+const RESOURCE_TRANSCRIPT_DOMAIN_V1: &[u8] = b"fe2o3.tiled-gemm-lds-slice1.worker-v2-resources.v1";
+const CANONICAL_IR_DOMAIN_V1: &[u8] = b"fe2o3.tiled-gemm-lds-slice1.compiler-structural-ir.v1";
 const ABI_BINDING_V1: &[u8] = b"ptr64;size=48;align=8;a@0:16:8:slice-u16:shared-readonly:bfloat16-bit-carrier;b@16:16:8:slice-u16:shared-readonly:bfloat16-bit-carrier;c@32:16:8:slice-f32:exclusive-readwrite";
 const SOURCE_GEOMETRY_BINDING_V1: &[u8] = b"rank=1;block=exact(64,1,1);max-grid=(4294967295,1,1);user-static-shared=0;max-dynamic-shared=0";
 const DERIVED_RESOURCE_BINDING_V1: &[u8] = b"rank=1;block=exact(64,1,1);max-grid=(1,1,1);compiler-static-shared=1024;allocation-count=2;allocation-bytes=512;allocation-alignment=16;wave=64;cov=6";
@@ -86,6 +97,7 @@ const REQUIRED_TRUSTED_ITEMS_V1: [TrustedDeviceItem; 14] = [
 #[derive(Debug, Eq, PartialEq)]
 struct LdsSlice1AuthorityV1 {
     target: String,
+    code_object_version: u16,
     explicit_kernarg_bytes: u64,
     complete_kernarg_bytes: u64,
     root_instance_identity: String,
@@ -99,12 +111,17 @@ struct LdsSlice1AuthorityV1 {
     source_geometry_identity: [u8; 32],
     derived_resource_identity: [u8; 32],
     correspondence_identity: [u8; 32],
+    canonical_ir_identity: [u8; 32],
+    descriptor_source_identity: [u8; 32],
+    authority_commitment: [u8; 32],
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct LdsSlice1FrontendReceiptV1 {
     authority: Option<LdsSlice1AuthorityV1>,
     prepared_resources: Option<PreparedLdsSlice1ResourceMetadataV1>,
+    descriptor_source: Option<CompilerDescriptorSourceV1>,
+    compiler_module: Option<crate::kernel_ir_codegen::InertCompilerModuleTextV1>,
 }
 
 impl LdsSlice1FrontendReceiptV1 {
@@ -123,7 +140,15 @@ impl LdsSlice1FrontendReceiptV1 {
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(&authority_identity(self.authority()))
+        encode_hex(&self.authority().authority_commitment)
+    }
+
+    pub(crate) const fn authority_commitment(&self) -> &[u8; 32] {
+        &self
+            .authority
+            .as_ref()
+            .expect("unconsumed LDS Slice 1 authority")
+            .authority_commitment
     }
 
     pub(crate) fn consume(
@@ -137,6 +162,14 @@ impl LdsSlice1FrontendReceiptV1 {
             .prepared_resources
             .take()
             .ok_or(CollectedLdsSlice1ErrorV1::ReceiptAlreadyConsumed)?;
+        let descriptor_source = self
+            .descriptor_source
+            .take()
+            .ok_or(CollectedLdsSlice1ErrorV1::ReceiptAlreadyConsumed)?;
+        let compiler_module = self
+            .compiler_module
+            .take()
+            .ok_or(CollectedLdsSlice1ErrorV1::ReceiptAlreadyConsumed)?;
         validate_authority(&authority)?;
         let module = tiled_gemm_lds_v1_module();
         verify_tiled_gemm_lds_v1_module(
@@ -144,8 +177,29 @@ impl LdsSlice1FrontendReceiptV1 {
             &TiledGemmLdsV1Profile::exact_gfx942_xnack_minus_cov6(),
         )
         .map_err(|error| CollectedLdsSlice1ErrorV1::CanonicalIr(error.to_string()))?;
+        let canonical_ir_identity = canonical_ir_identity(&module)?;
+        if canonical_ir_identity != authority.canonical_ir_identity {
+            return Err(CollectedLdsSlice1ErrorV1::ReceiptBinding(
+                "canonical Kernel IR",
+            ));
+        }
+        if descriptor_source.identity().sha256() != &authority.descriptor_source_identity {
+            return Err(CollectedLdsSlice1ErrorV1::ReceiptBinding(
+                "compiler descriptor source",
+            ));
+        }
+        validate_descriptor_source(&descriptor_source)?;
         let resources = finalize_resource_metadata(prepared_resources, &module)?;
-        Ok(AuthenticatedLdsSlice1ModuleV1 { module, resources })
+        let resource_transcript = resource_transcript(&authority, &resources);
+        Ok(AuthenticatedLdsSlice1ModuleV1 {
+            module,
+            descriptor_source,
+            compiler_module,
+            resources,
+            source_authority_commitment: authority.authority_commitment,
+            canonical_ir_identity,
+            resource_transcript,
+        })
     }
 }
 
@@ -170,12 +224,38 @@ struct FinalLdsSlice1ResourceMetadataV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedLdsSlice1ModuleV1 {
     module: Module,
+    descriptor_source: CompilerDescriptorSourceV1,
+    compiler_module: crate::kernel_ir_codegen::InertCompilerModuleTextV1,
     resources: FinalLdsSlice1ResourceMetadataV1,
+    source_authority_commitment: [u8; 32],
+    canonical_ir_identity: [u8; 32],
+    resource_transcript: Vec<u8>,
 }
 
 impl AuthenticatedLdsSlice1ModuleV1 {
     pub(crate) fn module(&self) -> &Module {
         &self.module
+    }
+
+    pub(crate) const fn source_authority_commitment(&self) -> &[u8; 32] {
+        &self.source_authority_commitment
+    }
+
+    pub(crate) const fn canonical_ir_identity(&self) -> &[u8; 32] {
+        &self.canonical_ir_identity
+    }
+
+    pub(crate) fn descriptor_source(&self) -> &CompilerDescriptorSourceV1 {
+        &self.descriptor_source
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compiler_module(&self) -> &crate::kernel_ir_codegen::InertCompilerModuleTextV1 {
+        &self.compiler_module
+    }
+
+    pub(crate) fn resource_transcript(&self) -> &[u8] {
+        &self.resource_transcript
     }
 
     pub(crate) const fn source_static_shared_memory_bytes(&self) -> u32 {
@@ -197,6 +277,26 @@ impl AuthenticatedLdsSlice1ModuleV1 {
     pub(crate) const fn lds_alignment(&self) -> u32 {
         self.resources.lds_alignment
     }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Module,
+        CompilerDescriptorSourceV1,
+        crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+        [u8; 32],
+        [u8; 32],
+        Vec<u8>,
+    ) {
+        (
+            self.module,
+            self.descriptor_source,
+            self.compiler_module,
+            self.source_authority_commitment,
+            self.canonical_ir_identity,
+            self.resource_transcript,
+        )
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -217,6 +317,7 @@ pub(crate) enum CollectedLdsSlice1ErrorV1 {
     ReceiptAlreadyConsumed,
     ReceiptBinding(&'static str),
     CanonicalIr(String),
+    Descriptor(String),
 }
 
 impl fmt::Display for CollectedLdsSlice1ErrorV1 {
@@ -261,6 +362,12 @@ impl fmt::Display for CollectedLdsSlice1ErrorV1 {
                 write!(
                     formatter,
                     "canonical LDS Slice 1 Kernel IR rejected: {detail}"
+                )
+            }
+            Self::Descriptor(detail) => {
+                write!(
+                    formatter,
+                    "LDS Slice 1 compiler descriptor rejected: {detail}"
                 )
             }
         }
@@ -324,14 +431,61 @@ pub(crate) fn authenticate_collected_lds_slice1_v1<'tcx>(
             "root instance has a noncanonical generated identity `{root_instance_identity}`"
         )));
     }
+    let descriptor_roots = crate::compiler_descriptor::typed_descriptor_roots_from_collection(
+        tcx,
+        &collection.functions,
+    )
+    .map_err(|error| {
+        CollectedLdsSlice1ErrorV1::Descriptor(format!("typed source evidence rejected: {error}"))
+    })?;
+    let module = tiled_gemm_lds_v1_module();
+    verify_tiled_gemm_lds_v1_module(
+        &module,
+        &TiledGemmLdsV1Profile::exact_gfx942_xnack_minus_cov6(),
+    )
+    .map_err(|error| CollectedLdsSlice1ErrorV1::CanonicalIr(error.to_string()))?;
+    let canonical_ir_identity = canonical_ir_identity(&module)?;
+    let compiler_module =
+        crate::kernel_ir_codegen::construct_inert_tiled_gemm_lds_slice1_module_text(&module)
+            .map_err(|error| {
+                CollectedLdsSlice1ErrorV1::CanonicalIr(format!(
+                    "dedicated upstream-LLVM lowering rejected: {error}"
+                ))
+            })?;
+    let device_target =
+        DeviceTargetV1::parse(crate::collected_tiled_gemm_v1::EXACT_TILED_GEMM_TARGET_V1)
+            .expect("fixed LDS Slice 1 target is valid");
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(device_target, CodeObjectVersion::V6)
+            .map_err(|error| {
+                CollectedLdsSlice1ErrorV1::Descriptor(format!(
+                    "compiler envelope rejected: {error}"
+                ))
+            })?;
+    let descriptor_source =
+        crate::compiler_descriptor::construct_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
+            &envelope,
+            &module,
+            &compiler_module,
+            &descriptor_roots,
+        )
+        .map_err(|error| CollectedLdsSlice1ErrorV1::Descriptor(error.to_string()))?
+        .ok_or_else(|| {
+            CollectedLdsSlice1ErrorV1::Descriptor(
+                "exact compiler descriptor source is absent".to_owned(),
+            )
+        })?;
+    validate_descriptor_source(&descriptor_source)?;
+    let descriptor_source_identity = *descriptor_source.identity().sha256();
     let frontend_contract_identity = sha256(
         root.frontend_contract
             .as_ref()
             .expect("registration admission requires a frontend contract")
             .canonical_bytes(),
     );
-    let authority = LdsSlice1AuthorityV1 {
+    let mut authority = LdsSlice1AuthorityV1 {
         target: target.as_str().to_owned(),
+        code_object_version: LDS_SLICE1_CODE_OBJECT_VERSION_V1,
         explicit_kernarg_bytes: LDS_SLICE1_EXPLICIT_KERNARG_BYTES_V1,
         complete_kernarg_bytes: LDS_SLICE1_COMPLETE_KERNARG_BYTES_V1,
         root_instance_identity,
@@ -345,10 +499,16 @@ pub(crate) fn authenticate_collected_lds_slice1_v1<'tcx>(
         source_geometry_identity: sha256(SOURCE_GEOMETRY_BINDING_V1),
         derived_resource_identity: sha256(DERIVED_RESOURCE_BINDING_V1),
         correspondence_identity: sha256(CORRESPONDENCE_V1),
+        canonical_ir_identity,
+        descriptor_source_identity,
+        authority_commitment: [0; 32],
     };
+    authority.authority_commitment = authority_identity(&authority);
     Ok(LdsSlice1FrontendReceiptV1 {
         authority: Some(authority),
         prepared_resources: Some(prepared_resources),
+        descriptor_source: Some(descriptor_source),
+        compiler_module: Some(compiler_module),
     })
 }
 
@@ -774,10 +934,164 @@ fn finalize_resource_metadata(
     })
 }
 
+fn canonical_ir_identity(module: &Module) -> Result<[u8; 32], CollectedLdsSlice1ErrorV1> {
+    if module != &tiled_gemm_lds_v1_module() {
+        return Err(CollectedLdsSlice1ErrorV1::CanonicalIr(
+            "structural identity requested for a noncanonical module".to_owned(),
+        ));
+    }
+    let canonical = fe2o3_kernel_ir::encode_module_v5(module).map_err(|error| {
+        CollectedLdsSlice1ErrorV1::CanonicalIr(format!(
+            "canonical V5 Kernel IR encoding failed: {error}"
+        ))
+    })?;
+    let mut digest = Sha256::new();
+    hash_field(&mut digest, CANONICAL_IR_DOMAIN_V1);
+    hash_field(&mut digest, &canonical);
+    Ok(digest.finalize().into())
+}
+
+fn validate_descriptor_source(
+    source: &CompilerDescriptorSourceV1,
+) -> Result<(), CollectedLdsSlice1ErrorV1> {
+    let table = source.table();
+    if table.device_target().to_string()
+        != crate::collected_tiled_gemm_v1::EXACT_TILED_GEMM_TARGET_V1
+        || table.code_object_version() != CodeObjectVersion::V6
+        || table.kernels().len() != 1
+    {
+        return Err(CollectedLdsSlice1ErrorV1::Descriptor(
+            "target, COV6, or one-kernel closure drifted".to_owned(),
+        ));
+    }
+    let kernel = &table.kernels()[0];
+    if kernel.logical_name().as_str() != LDS_SLICE1_KERNEL_EXPORT_V1
+        || kernel.entry_name().as_str() != fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID
+        || kernel.descriptor_symbol().as_str()
+            != format!("{}.kd", fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID)
+    {
+        return Err(CollectedLdsSlice1ErrorV1::Descriptor(
+            "source logical name or canonical LLVM symbol closure drifted".to_owned(),
+        ));
+    }
+    let abi = kernel.abi_layout();
+    if abi.explicit_argument_size() != LDS_SLICE1_EXPLICIT_KERNARG_BYTES_V1 as u32
+        || abi.kernarg_segment_size() != LDS_SLICE1_COMPLETE_KERNARG_BYTES_V1 as u32
+        || abi.kernarg_segment_alignment() != 8
+    {
+        return Err(CollectedLdsSlice1ErrorV1::Descriptor(
+            "48/304-byte COV6 kernarg contract drifted".to_owned(),
+        ));
+    }
+    let launch = kernel.launch();
+    let BlockSizeV1::Exact(block) = launch.block_size() else {
+        return Err(CollectedLdsSlice1ErrorV1::Descriptor(
+            "workgroup size is not exact".to_owned(),
+        ));
+    };
+    let grid = launch.max_grid();
+    if launch.rank() != 1
+        || (block.x(), block.y(), block.z()) != (64, 1, 1)
+        || (grid.x(), grid.y(), grid.z()) != (1, 1, 1)
+        || launch.max_flat_workgroup_size() != 64
+        || launch.static_shared_memory_bytes()
+            != fe2o3_kernel_ir::TILED_GEMM_LDS_V1_STATIC_LDS_BYTES
+        || launch.max_dynamic_shared_memory_bytes() != 0
+    {
+        return Err(CollectedLdsSlice1ErrorV1::Descriptor(
+            "compiler descriptor is not exact WG64/grid1/1024-static-LDS".to_owned(),
+        ));
+    }
+    let capabilities = kernel
+        .capabilities()
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    let required_capabilities = [
+        CapabilityV1::Subgroup,
+        CapabilityV1::WorkgroupMemory,
+        CapabilityV1::MatrixMultiply,
+        CapabilityV1::AmdWave,
+        CapabilityV1::AmdMfma,
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+    if capabilities != required_capabilities {
+        return Err(CollectedLdsSlice1ErrorV1::Descriptor(
+            "subgroup/LDS/MFMA capability closure drifted".to_owned(),
+        ));
+    }
+    let [a, b, c] = kernel.arguments() else {
+        return Err(CollectedLdsSlice1ErrorV1::Descriptor(
+            "descriptor does not contain exactly A, B, and C".to_owned(),
+        ));
+    };
+    let inputs_exact = [a, b].into_iter().enumerate().all(|(index, argument)| {
+        argument.source_index() == index as u16
+            && argument.name().as_str() == format!("arg{index}")
+            && argument.ownership() == OwnershipSemantics::SharedBorrow
+            && argument.access() == AccessMode::ReadOnly
+            && argument.alias() == AliasSemantics::SharedReadOnly
+    });
+    if !inputs_exact
+        || c.source_index() != 2
+        || c.name().as_str() != "arg2"
+        || c.ownership() != OwnershipSemantics::UniqueBorrow
+        || c.access() != AccessMode::ReadWrite
+        || c.alias() != AliasSemantics::Exclusive
+    {
+        return Err(CollectedLdsSlice1ErrorV1::Descriptor(
+            "A/B shared-readonly or C exclusive-readwrite role drifted".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn resource_transcript(
+    authority: &LdsSlice1AuthorityV1,
+    resources: &FinalLdsSlice1ResourceMetadataV1,
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(320);
+    append_transcript_field(&mut bytes, RESOURCE_TRANSCRIPT_DOMAIN_V1);
+    append_transcript_field(&mut bytes, &authority.authority_commitment);
+    append_transcript_field(&mut bytes, authority.target.as_bytes());
+    append_transcript_field(&mut bytes, &authority.code_object_version.to_le_bytes());
+    append_transcript_field(&mut bytes, &authority.canonical_ir_identity);
+    append_transcript_field(&mut bytes, &authority.descriptor_source_identity);
+    append_transcript_field(&mut bytes, &[64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+    append_transcript_field(
+        &mut bytes,
+        &resources
+            .source_launch
+            .static_shared_memory_bytes()
+            .to_le_bytes(),
+    );
+    append_transcript_field(
+        &mut bytes,
+        &resources
+            .compiler_launch
+            .static_shared_memory_bytes()
+            .to_le_bytes(),
+    );
+    append_transcript_field(&mut bytes, &resources.lds_allocations.to_le_bytes());
+    append_transcript_field(
+        &mut bytes,
+        &resources.lds_bytes_per_allocation.to_le_bytes(),
+    );
+    append_transcript_field(&mut bytes, &resources.lds_alignment.to_le_bytes());
+    bytes
+}
+
+fn append_transcript_field(bytes: &mut Vec<u8>, field: &[u8]) {
+    bytes.extend_from_slice(&(field.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(field);
+}
+
 fn authority_identity(authority: &LdsSlice1AuthorityV1) -> [u8; 32] {
     let mut digest = Sha256::new();
     hash_field(&mut digest, AUTHORITY_DOMAIN_V1);
     hash_field(&mut digest, authority.target.as_bytes());
+    hash_field(&mut digest, &authority.code_object_version.to_le_bytes());
     hash_field(&mut digest, &authority.explicit_kernarg_bytes.to_le_bytes());
     hash_field(&mut digest, &authority.complete_kernarg_bytes.to_le_bytes());
     hash_field(&mut digest, authority.root_instance_identity.as_bytes());
@@ -791,12 +1105,16 @@ fn authority_identity(authority: &LdsSlice1AuthorityV1) -> [u8; 32] {
     hash_field(&mut digest, &authority.source_geometry_identity);
     hash_field(&mut digest, &authority.derived_resource_identity);
     hash_field(&mut digest, &authority.correspondence_identity);
+    hash_field(&mut digest, &authority.canonical_ir_identity);
+    hash_field(&mut digest, &authority.descriptor_source_identity);
     digest.finalize().into()
 }
 
 fn validate_authority(authority: &LdsSlice1AuthorityV1) -> Result<(), CollectedLdsSlice1ErrorV1> {
     let field = if authority.target != crate::collected_tiled_gemm_v1::EXACT_TILED_GEMM_TARGET_V1 {
         Some("target")
+    } else if authority.code_object_version != LDS_SLICE1_CODE_OBJECT_VERSION_V1 {
+        Some("code object version")
     } else if authority.explicit_kernarg_bytes != LDS_SLICE1_EXPLICIT_KERNARG_BYTES_V1
         || authority.complete_kernarg_bytes != LDS_SLICE1_COMPLETE_KERNARG_BYTES_V1
     {
@@ -829,6 +1147,13 @@ fn validate_authority(authority: &LdsSlice1AuthorityV1) -> Result<(), CollectedL
         Some("compiler-derived LDS resources")
     } else if authority.correspondence_identity != sha256(CORRESPONDENCE_V1) {
         Some("reviewed correspondence")
+    } else if authority.canonical_ir_identity != canonical_ir_identity(&tiled_gemm_lds_v1_module())?
+    {
+        Some("canonical Kernel IR")
+    } else if authority.descriptor_source_identity == [0; 32] {
+        Some("compiler descriptor source")
+    } else if authority.authority_commitment != authority_identity(authority) {
+        Some("source authority commitment")
     } else {
         None
     };
@@ -839,27 +1164,83 @@ fn validate_authority(authority: &LdsSlice1AuthorityV1) -> Result<(), CollectedL
 }
 
 #[cfg(test)]
+fn exact_authority_for_test() -> LdsSlice1AuthorityV1 {
+    let descriptor_source =
+        crate::compiler_descriptor::tiled_gemm_lds_slice1_descriptor_source_for_test();
+    let mut authority = LdsSlice1AuthorityV1 {
+        target: crate::collected_tiled_gemm_v1::EXACT_TILED_GEMM_TARGET_V1.to_owned(),
+        code_object_version: LDS_SLICE1_CODE_OBJECT_VERSION_V1,
+        explicit_kernarg_bytes: LDS_SLICE1_EXPLICIT_KERNARG_BYTES_V1,
+        complete_kernarg_bytes: LDS_SLICE1_COMPLETE_KERNARG_BYTES_V1,
+        root_instance_identity: format!("__fe2o3_host_kernel_v1_{}", "1".repeat(64)),
+        kernel_export: LDS_SLICE1_KERNEL_EXPORT_V1.to_owned(),
+        portable_mir_identity: PORTABLE_MIR_SEMANTIC_IDENTITY_V1,
+        compiler_semantics_identity:
+            crate::collected_tiled_gemm_v1::reviewed_compiler_semantics_identity(),
+        fn_abi_identity: RUSTC_FN_ABI_IDENTITY_V1,
+        trusted_definitions_identity: sha256(b"measured trusted definitions"),
+        frontend_contract_identity: sha256(EXACT_FRONTEND_CONTRACT_V1),
+        abi_binding_identity: sha256(ABI_BINDING_V1),
+        source_geometry_identity: sha256(SOURCE_GEOMETRY_BINDING_V1),
+        derived_resource_identity: sha256(DERIVED_RESOURCE_BINDING_V1),
+        correspondence_identity: sha256(CORRESPONDENCE_V1),
+        canonical_ir_identity: canonical_ir_identity(&tiled_gemm_lds_v1_module()).unwrap(),
+        descriptor_source_identity: *descriptor_source.identity().sha256(),
+        authority_commitment: [0; 32],
+    };
+    authority.authority_commitment = authority_identity(&authority);
+    authority
+}
+
+#[cfg(test)]
+pub(crate) fn exact_lds_slice1_frontend_receipt_for_test() -> LdsSlice1FrontendReceiptV1 {
+    let profile = TiledGemmLdsV1Profile::exact_gfx942_xnack_minus_cov6();
+    let compiler_module =
+        crate::kernel_ir_codegen::construct_inert_tiled_gemm_lds_slice1_module_text(
+            &tiled_gemm_lds_v1_module(),
+        )
+        .unwrap();
+    LdsSlice1FrontendReceiptV1 {
+        authority: Some(exact_authority_for_test()),
+        prepared_resources: Some(PreparedLdsSlice1ResourceMetadataV1 {
+            source_launch: exact_source_launch().unwrap(),
+            compiler_launch: exact_launch().unwrap(),
+            lds_allocations: profile.lds_allocations,
+            lds_bytes_per_allocation: profile.lds_bytes_per_allocation,
+            lds_alignment: profile.lds_alignment,
+        }),
+        descriptor_source: Some(
+            crate::compiler_descriptor::tiled_gemm_lds_slice1_descriptor_source_for_test(),
+        ),
+        compiler_module: Some(compiler_module),
+    }
+}
+
+fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+fn encode_hex(bytes: &[u8; 32]) -> String {
+    use fmt::Write as _;
+
+    let mut encoded = String::with_capacity(64);
+    for byte in bytes {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn exact_authority() -> LdsSlice1AuthorityV1 {
-        LdsSlice1AuthorityV1 {
-            target: crate::collected_tiled_gemm_v1::EXACT_TILED_GEMM_TARGET_V1.to_owned(),
-            explicit_kernarg_bytes: LDS_SLICE1_EXPLICIT_KERNARG_BYTES_V1,
-            complete_kernarg_bytes: LDS_SLICE1_COMPLETE_KERNARG_BYTES_V1,
-            root_instance_identity: format!("__fe2o3_host_kernel_v1_{}", "1".repeat(64)),
-            kernel_export: LDS_SLICE1_KERNEL_EXPORT_V1.to_owned(),
-            portable_mir_identity: PORTABLE_MIR_SEMANTIC_IDENTITY_V1,
-            compiler_semantics_identity:
-                crate::collected_tiled_gemm_v1::reviewed_compiler_semantics_identity(),
-            fn_abi_identity: RUSTC_FN_ABI_IDENTITY_V1,
-            trusted_definitions_identity: sha256(b"measured trusted definitions"),
-            frontend_contract_identity: sha256(EXACT_FRONTEND_CONTRACT_V1),
-            abi_binding_identity: sha256(ABI_BINDING_V1),
-            source_geometry_identity: sha256(SOURCE_GEOMETRY_BINDING_V1),
-            derived_resource_identity: sha256(DERIVED_RESOURCE_BINDING_V1),
-            correspondence_identity: sha256(CORRESPONDENCE_V1),
-        }
+        exact_authority_for_test()
     }
 
     #[test]
@@ -896,23 +1277,56 @@ mod tests {
             ))
         ));
     }
-}
 
-fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-}
+    #[test]
+    fn descriptor_resource_and_receipt_replay_mutations_fail_closed() {
+        let mut descriptor_substitution = exact_lds_slice1_frontend_receipt_for_test();
+        descriptor_substitution.descriptor_source =
+            Some(crate::compiler_descriptor::tiled_gemm_v1_descriptor_source_for_test());
+        assert!(matches!(
+            descriptor_substitution.consume(),
+            Err(CollectedLdsSlice1ErrorV1::ReceiptBinding(
+                "compiler descriptor source"
+            ))
+        ));
 
-fn sha256(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
-}
+        let mut compiler_module_substitution = exact_lds_slice1_frontend_receipt_for_test();
+        compiler_module_substitution.compiler_module = Some(
+            crate::kernel_ir_codegen::construct_inert_tiled_gemm_v1_module_text(
+                &fe2o3_kernel_ir::tiled_gemm_v1_module(),
+            )
+            .unwrap(),
+        );
+        let authenticated = compiler_module_substitution.consume().unwrap();
+        assert!(matches!(
+            crate::worker_v2_producer::prepare_tiled_gemm_lds_slice1_worker_handoff(
+                authenticated,
+            ),
+            Err(crate::worker_v2_producer::WorkerV2ProducerError::CompilerDescriptor(
+                crate::compiler_descriptor::CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch(
+                    "pre-section LLVM evidence"
+                )
+            ))
+        ));
 
-fn encode_hex(bytes: &[u8; 32]) -> String {
-    use fmt::Write as _;
+        let mut resource_drift = exact_lds_slice1_frontend_receipt_for_test();
+        resource_drift
+            .prepared_resources
+            .as_mut()
+            .unwrap()
+            .compiler_launch = exact_source_launch().unwrap();
+        assert!(matches!(
+            resource_drift.consume(),
+            Err(CollectedLdsSlice1ErrorV1::ReceiptBinding(
+                "compiler-derived LDS resources"
+            ))
+        ));
 
-    let mut encoded = String::with_capacity(64);
-    for byte in bytes {
-        let _ = write!(encoded, "{byte:02x}");
+        let mut replay = exact_lds_slice1_frontend_receipt_for_test();
+        replay.consume().expect("first receipt consumption");
+        assert!(matches!(
+            replay.consume(),
+            Err(CollectedLdsSlice1ErrorV1::ReceiptAlreadyConsumed)
+        ));
     }
-    encoded
 }

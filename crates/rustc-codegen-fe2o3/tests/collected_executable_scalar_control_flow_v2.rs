@@ -26,8 +26,8 @@ use fe2o3_compiler_ffi::{
     CompilerModuleSymbolRoleV1,
 };
 use fe2o3_kernel_descriptor::{
-    AccessMode, AliasSemantics, BlockSizeV1, OwnershipSemantics, PhysicalAbiComponentKind,
-    ScalarTypeV1,
+    AccessMode, AliasSemantics, BlockSizeV1, CapabilityV1, OwnershipSemantics,
+    PhysicalAbiComponentKind, ScalarTypeV1,
 };
 use reserved_fe2o3_symbols::{
     MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, derive_crate_binding_id_v1,
@@ -1848,6 +1848,92 @@ fn require_exact_row_descriptor_source(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+fn require_exact_lds_slice1_descriptor_source(bytes: &[u8]) -> Result<(), String> {
+    let source = CompilerDescriptorSourceV1::decode(bytes)
+        .map_err(|error| format!("decode LDS Slice 1 descriptor source: {error}"))?;
+    let table = source.table();
+    if table.device_target().to_string() != "gfx942:xnack-"
+        || table.code_object_version() != CodeObjectVersion::V6
+        || table.kernels().len() != 1
+    {
+        return Err("LDS descriptor target, COV, or kernel cardinality differs".to_owned());
+    }
+    let kernel = &table.kernels()[0];
+    if kernel.logical_name().as_str() != "tiled_gemm_lds_slice1"
+        || kernel.entry_name().as_str() != "tiled_gemm_lds_v1"
+        || kernel.descriptor_symbol().as_str() != "tiled_gemm_lds_v1.kd"
+    {
+        return Err("LDS descriptor source/canonical symbol join differs".to_owned());
+    }
+    let abi = kernel.abi_layout();
+    if abi.explicit_argument_size() != 48
+        || abi.kernarg_segment_size() != 304
+        || abi.kernarg_segment_alignment() != 8
+    {
+        return Err("LDS descriptor 48/304-byte COV6 ABI differs".to_owned());
+    }
+    let launch = kernel.launch();
+    let BlockSizeV1::Exact(block) = launch.block_size() else {
+        return Err("LDS descriptor block is not exact".to_owned());
+    };
+    let grid = launch.max_grid();
+    if launch.rank() != 1
+        || (block.x(), block.y(), block.z()) != (64, 1, 1)
+        || (grid.x(), grid.y(), grid.z()) != (1, 1, 1)
+        || launch.max_flat_workgroup_size() != 64
+        || launch.static_shared_memory_bytes() != 1024
+        || launch.max_dynamic_shared_memory_bytes() != 0
+    {
+        return Err("LDS descriptor is not exact WG64/grid1/static-LDS1024".to_owned());
+    }
+    for capability in [
+        CapabilityV1::Subgroup,
+        CapabilityV1::WorkgroupMemory,
+        CapabilityV1::MatrixMultiply,
+        CapabilityV1::AmdWave,
+        CapabilityV1::AmdMfma,
+    ] {
+        if !kernel.capabilities().contains(&capability) {
+            return Err(format!("LDS descriptor lacks {capability:?}"));
+        }
+    }
+    let [a, b, c] = kernel.arguments() else {
+        return Err("LDS descriptor does not contain exactly A/B/C".to_owned());
+    };
+    if a.access() != AccessMode::ReadOnly
+        || b.access() != AccessMode::ReadOnly
+        || c.access() != AccessMode::ReadWrite
+        || a.ownership() != OwnershipSemantics::SharedBorrow
+        || b.ownership() != OwnershipSemantics::SharedBorrow
+        || c.ownership() != OwnershipSemantics::UniqueBorrow
+        || c.alias() != AliasSemantics::Exclusive
+    {
+        return Err("LDS descriptor argument roles differ".to_owned());
+    }
+    Ok(())
+}
+
+fn decode_framed_fields(bytes: &[u8]) -> Result<Vec<&[u8]>, String> {
+    let mut fields = Vec::new();
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let length_bytes: [u8; 8] = remaining
+            .get(..8)
+            .ok_or_else(|| "resource transcript has a truncated field length".to_owned())?
+            .try_into()
+            .unwrap();
+        remaining = &remaining[8..];
+        let length = usize::try_from(u64::from_le_bytes(length_bytes))
+            .map_err(|_| "resource transcript field length exceeds usize".to_owned())?;
+        let field = remaining
+            .get(..length)
+            .ok_or_else(|| "resource transcript has a truncated field".to_owned())?;
+        fields.push(field);
+        remaining = &remaining[length..];
+    }
+    Ok(fields)
+}
+
 fn validate_exact_row_softmax_handoff<F>(bytes: &[u8], expected_authority: F) -> Result<(), String>
 where
     F: FnOnce(&[u8], &[u8]) -> Result<[u8; 32], String>,
@@ -3049,6 +3135,33 @@ fn assert_tiled_gemm_published_no_handoff(output: &TestOutputDir) {
     );
 }
 
+fn consume_tiled_gemm_handoff(
+    output: &TestOutputDir,
+    source: &str,
+    crate_name: &str,
+) -> CompilerModuleHandoffV2 {
+    let source_path = output.0.join("tiled-gemm-v1.rs");
+    let producer = ProducerIdentity::from_codegen(crate_name, Some(&source_path))
+        .expect("tiled GEMM handoff producer");
+    let attempt = begin_build_attempt(
+        &output.0.join("artifacts"),
+        &producer,
+        BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
+        BuildSession::from_bytes([
+            0x54, 0x47, 0x56, 0x31, 0x54, 0x47, 0x56, 0x31, 0x54, 0x47, 0x56, 0x31, 0x54, 0x47,
+            0x56, 0x31,
+        ]),
+    )
+    .expect("resume tiled GEMM handoff attempt");
+    let consumed =
+        consume_compiler_module_handoff_v1(&output.0.join("artifacts"), &producer, attempt)
+            .expect("consume exact tiled GEMM handoff");
+    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
+        .expect("decode exact tiled GEMM Worker V2 handoff");
+    assert_eq!(handoff.canonical_bytes(), consumed.bytes());
+    handoff
+}
+
 fn assert_scalar_gemm_published_no_handoff(output: &TestOutputDir) {
     assert!(
         !output.0.join("scalar-gemm-v1").exists(),
@@ -3791,7 +3904,7 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
 }
 
 #[test]
-fn tiled_gemm_lds_slice1_attributed_source_selects_only_verified_lds_ir() {
+fn tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_handoff() {
     let workspace = workspace();
     let backend = build_collection_backend(&workspace);
     assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("pub fn tiled_gemm_lds_slice1"));
@@ -3810,16 +3923,72 @@ fn tiled_gemm_lds_slice1_attributed_source_selects_only_verified_lds_ir() {
     );
     let exact_stderr = stderr(&exact);
     assert!(
-        !exact.status.success()
+        exact.status.success()
             && exact_stderr
-                .contains("selected verified canonical Kernel IR `fe2o3::tiled_gemm_lds_v1`")
+                .contains("selected canonical Kernel IR `fe2o3::tiled_gemm_lds_v1` identity")
+            && exact_stderr.contains("constructed compiler descriptor")
+            && exact_stderr.contains("0 user-supplied static shared-memory bytes")
             && exact_stderr.contains("1024 static LDS bytes")
-            && exact_stderr.contains("stopped at the source-correspondence boundary")
-            && exact_stderr.contains("not a compiler-refinement or protected-authority proof")
-            && !exact_stderr.contains("published tiled GEMM Worker V2 handoff"),
-        "attributed LDS source missed the exact source-correspondence boundary:\n{exact_stderr}"
+            && exact_stderr.contains("completed protected attempt-scoped Worker V2 publication")
+            && exact_stderr.contains("not compiler refinement")
+            && exact_stderr.contains("COMGR were not entered"),
+        "attributed LDS source missed the protected handoff boundary:\n{exact_stderr}"
     );
-    assert_tiled_gemm_published_no_handoff(&exact_output);
+    assert!(exact_output.0.join("tiled-gemm-v1").is_file());
+
+    let handoff = consume_tiled_gemm_handoff(
+        &exact_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "fe2o3_collected_tiled_gemm_lds_slice1_fixture",
+    );
+    assert_eq!(handoff.target().to_string(), "gfx942:xnack-");
+    assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
+    assert_eq!(
+        handoff
+            .symbol_manifest()
+            .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+            .collect::<Vec<_>>(),
+        ["tiled_gemm_lds_v1"]
+    );
+    assert_eq!(
+        handoff
+            .symbol_manifest()
+            .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
+            .collect::<Vec<_>>(),
+        ["tiled_gemm_lds_v1.kd"]
+    );
+    let module = std::str::from_utf8(handoff.module_bytes()).unwrap();
+    assert_eq!(
+        module
+            .matches("internal addrspace(3) global [256 x i16]")
+            .count(),
+        2
+    );
+    assert_eq!(module.matches("s_barrier").count(), 1);
+    assert_eq!(
+        module
+            .matches("call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(")
+            .count(),
+        1
+    );
+    let descriptor = decode_compiler_owned_module_section(module, ".fe2o3.kd.v1").unwrap();
+    require_exact_lds_slice1_descriptor_source(&descriptor).unwrap();
+    let authority =
+        decode_compiler_owned_module_section(module, ".fe2o3.tiled-lds-slice1-auth.v1").unwrap();
+    let resources =
+        decode_compiler_owned_module_section(module, ".fe2o3.tiled-lds-slice1-resources.v1")
+            .unwrap();
+    assert_eq!(authority.len(), 32);
+    let fields = decode_framed_fields(&resources).unwrap();
+    assert!(fields.contains(&b"gfx942:xnack-".as_slice()));
+    assert!(fields.contains(&0_u32.to_le_bytes().as_slice()));
+    assert!(fields.contains(&1024_u32.to_le_bytes().as_slice()));
+    assert!(fields.contains(&512_u32.to_le_bytes().as_slice()));
+    assert!(!handoff.authenticates_compiler_origin());
+    assert!(!handoff.grants_worker_authority());
+    assert!(!handoff.grants_link_authority());
+    assert!(!handoff.grants_load_authority());
+    assert!(!handoff.grants_launch_authority());
 }
 
 #[test]
@@ -3851,8 +4020,8 @@ fn tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir() {
         assert!(
             !compilation.status.success()
                 && stderr.contains("portable MIR identity mismatch")
-                && !stderr.contains("selected verified canonical Kernel IR")
-                && !stderr.contains("published tiled GEMM Worker V2 handoff"),
+                && !stderr.contains("selected canonical Kernel IR")
+                && !stderr.contains("published attributed LDS Slice 1 Worker V2 handoff"),
             "{name} mutation selected LDS authority:\n{stderr}"
         );
         assert_tiled_gemm_published_no_handoff(&output);
@@ -3878,15 +4047,33 @@ fn lookalike_lds_pair_v1<'workgroup>() -> (
         "gfx942:xnack-",
         &[],
     );
-    let stderr = stderr(&compilation);
+    let lookalike_stderr = stderr(&compilation);
     assert!(
         !compilation.status.success()
-            && stderr.contains("requires exactly one collected function and no helpers")
-            && !stderr.contains("selected verified canonical Kernel IR")
-            && !stderr.contains("published tiled GEMM Worker V2 handoff"),
-        "lookalike helper selected LDS authority:\n{stderr}"
+            && lookalike_stderr.contains("requires exactly one collected function and no helpers")
+            && !lookalike_stderr.contains("selected canonical Kernel IR")
+            && !lookalike_stderr.contains("published attributed LDS Slice 1 Worker V2 handoff"),
+        "lookalike helper selected LDS authority:\n{lookalike_stderr}"
     );
     assert_tiled_gemm_published_no_handoff(&output);
+
+    let wrong_target_output = TestOutputDir::new(&workspace);
+    let wrong_target = compile_tiled_gemm(
+        &workspace,
+        backend,
+        &wrong_target_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "gfx942:xnack+",
+        &[],
+    );
+    let wrong_target_stderr = stderr(&wrong_target);
+    assert!(
+        !wrong_target.status.success()
+            && wrong_target_stderr.contains("requires exact target `gfx942:xnack-`")
+            && !wrong_target_stderr.contains("published attributed LDS Slice 1 Worker V2 handoff"),
+        "wrong target published LDS Slice 1 authority:\n{wrong_target_stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&wrong_target_output);
 }
 
 #[test]
@@ -4416,12 +4603,17 @@ fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
     assert!(
         !external.status.success()
             && external_stderr
-                .contains("selected verified canonical Kernel IR `fe2o3::tiled_gemm_lds_v1`")
+                .contains("selected canonical Kernel IR `fe2o3::tiled_gemm_lds_v1` identity")
+            && external_stderr.contains("constructed compiler descriptor")
+            && external_stderr.contains("0 user-supplied static shared-memory bytes")
             && external_stderr.contains("1024 static LDS bytes")
-            && external_stderr.contains("stopped at the source-correspondence boundary")
-            && external_stderr.contains("not a compiler-refinement or protected-authority proof")
-            && !external_stderr.contains("published tiled GEMM Worker V2 handoff"),
-        "managed cargo-fe2o3 missed the attributed LDS source-correspondence boundary:\n{external_stderr}"
+            && external_stderr.contains(
+                "published attributed LDS Slice 1 Worker V2 handoff bound to source authority"
+            )
+            && external_stderr.contains("completed protected attempt-scoped Worker V2 publication")
+            && external_stderr.contains("build completed without an authorized device backend")
+            && external_stderr.contains("COMGR were not entered"),
+        "managed cargo-fe2o3 missed the attributed LDS protected handoff boundary:\n{external_stderr}"
     );
 }
 

@@ -29,6 +29,10 @@ const VECADD_KERNEL: &str = "vecadd";
 const WORKGROUP_X: u32 = 256;
 pub(crate) const TILED_GEMM_FRONTEND_TEST_LLVM_FILE: &str =
     "tiled_gemm_frontend_v1.imported.gfx942-xnack-.ll";
+pub(crate) const TILED_GEMM_LDS_SLICE1_AUTHORITY_SECTION_V1: &str =
+    ".fe2o3.tiled-lds-slice1-auth.v1";
+pub(crate) const TILED_GEMM_LDS_SLICE1_RESOURCE_SECTION_V1: &str =
+    ".fe2o3.tiled-lds-slice1-resources.v1";
 const REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256: [u8; 32] = [
     0x0a, 0x33, 0x13, 0x67, 0x53, 0x44, 0x43, 0x7b, 0xc7, 0xb8, 0x94, 0xad, 0x2f, 0x4d, 0xad, 0xb3,
     0x81, 0x07, 0xd9, 0x02, 0x96, 0xa9, 0x66, 0x5b, 0x76, 0x32, 0x34, 0xac, 0xd2, 0x40, 0x5a, 0xcc,
@@ -128,6 +132,7 @@ pub(crate) enum CompilerModuleConstructionError {
     SourceDebug(crate::source_debug::SourceDebugError),
     ScalarGemmLowering(String),
     TiledGemmLowering(String),
+    TiledGemmLdsSlice1Lowering(String),
     RowSoftmaxLowering(String),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
@@ -162,6 +167,9 @@ impl fmt::Display for CompilerModuleConstructionError {
             }
             Self::TiledGemmLowering(error) => {
                 write!(formatter, "exact tiled GEMM lowering rejected: {error}")
+            }
+            Self::TiledGemmLdsSlice1Lowering(error) => {
+                write!(formatter, "exact LDS Slice 1 lowering rejected: {error}")
             }
             Self::RowSoftmaxLowering(error) => {
                 write!(formatter, "exact row-softmax lowering rejected: {error}")
@@ -376,6 +384,39 @@ pub(crate) fn construct_inert_tiled_gemm_v1_module_text(
     })
 }
 
+/// Constructs only the reviewed gfx942:xnack-/COV6 LDS Slice 1 LLVM module.
+///
+/// The dedicated dialect entry point verifies the exact canonical graph and
+/// its two 512-byte static LDS allocations before returning inert LLVM text.
+pub(crate) fn construct_inert_tiled_gemm_lds_slice1_module_text(
+    module: &Module,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    enforce_compiler_module_bounds(module)?;
+    let llvm_ir = dialect_amdgcn::lower_tiled_gemm_lds_v1_to_gfx942_llvm_ir(
+        module,
+        fe2o3_kernel_ir::TiledGemmLdsV1Profile::exact_gfx942_xnack_minus_cov6(),
+    )
+    .map_err(|error| {
+        CompilerModuleConstructionError::TiledGemmLdsSlice1Lowering(error.to_string())
+    })?
+    .into_string();
+
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: vec![fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID.to_owned()],
+        device_definitions: Vec::new(),
+        internal_helpers: Vec::new(),
+        device_ffi_exports: Vec::new(),
+        external_declarations: Vec::new(),
+        descriptor_source_identity: None,
+        unbound_target_properties: [
+            UnboundCompilerModuleTargetPropertyV1::DataLayout,
+            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
+            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
+        ],
+    })
+}
+
 /// Lowers only the source-authenticated canonical row-softmax graph through
 /// the commitment-gated gfx942 row-softmax dialect profile.
 ///
@@ -545,6 +586,32 @@ pub(crate) fn bind_tiled_gemm_frontend_authority_v1(
         .push_str("\nmodule asm \".section .fe2o3.tiled-auth.v1,\\22\\22,@progbits\"\n");
     module.llvm_ir.push_str("module asm \".balign 8\"\n");
     append_module_asm_bytes(&mut module.llvm_ir, &authority);
+    enforce_source_debug_text_bound(&module.llvm_ir)?;
+    Ok(module)
+}
+
+/// Binds the consumed attributed-source authority and exact compiler resource
+/// transcript to the LDS Slice 1 Worker V2 module.
+pub(crate) fn bind_tiled_gemm_lds_slice1_authority_v1(
+    mut module: InertCompilerModuleTextV1,
+    authority: [u8; 32],
+    resource_transcript: &[u8],
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    if resource_transcript.is_empty() {
+        return Err(CompilerModuleConstructionError::TiledGemmLdsSlice1Lowering(
+            "resource transcript is empty".to_owned(),
+        ));
+    }
+    append_commitment_section(
+        &mut module.llvm_ir,
+        TILED_GEMM_LDS_SLICE1_AUTHORITY_SECTION_V1,
+        &authority,
+    );
+    append_commitment_section(
+        &mut module.llvm_ir,
+        TILED_GEMM_LDS_SLICE1_RESOURCE_SECTION_V1,
+        resource_transcript,
+    );
     enforce_source_debug_text_bound(&module.llvm_ir)?;
     Ok(module)
 }

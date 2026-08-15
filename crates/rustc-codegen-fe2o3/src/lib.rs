@@ -94,6 +94,16 @@ pub const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 pub const TILED_GEMM_FRONTEND_TEST_LLVM_DIR_ENV: &str =
     "FE2O3_TEST_RETAIN_TILED_GEMM_FRONTEND_LLVM_DIR";
 
+fn encode_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
+}
+
 pub struct Fe2o3CodegenBackend {
     config: BackendConfig,
     llvm_backend: Box<dyn CodegenBackend>,
@@ -638,7 +648,8 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             let root_instance_identity =
                                 receipt.root_instance_identity().to_owned();
                             let portable_mir = receipt.portable_mir_semantic_hex();
-                            let correspondence = receipt.authority_hex();
+                            let source_authority = receipt.authority_hex();
+                            let source_authority_commitment = *receipt.authority_commitment();
                             let authenticated =
                                 receipt.consume().map_err(|error| error.to_string())?;
                             if authenticated.module()
@@ -656,10 +667,41 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             let lds_allocations = authenticated.lds_allocations();
                             let lds_bytes_per_allocation = authenticated.lds_bytes_per_allocation();
                             let lds_alignment = authenticated.lds_alignment();
-                            return Err(format!(
-                                "authenticated attributed KernelEntry `{root_instance_identity}` export `{}` with measured portable MIR {portable_mir}, exact A:&[u16], B:&[u16], C:DisjointSlice<f32> ABI (48 explicit/304 complete COV6 kernarg bytes), exact WG64 source geometry with {source_static_shared} user-supplied static shared-memory bytes, and distinct typed compiler-final resource metadata requiring {lds_allocations} aligned {lds_bytes_per_allocation}-byte LDS allocations ({compiler_static_shared} static LDS bytes, alignment {lds_alignment}); consumed single-use source-correspondence receipt {correspondence} and selected verified canonical Kernel IR `fe2o3::tiled_gemm_lds_v1`; stopped at the source-correspondence boundary before descriptor construction, Worker V2 publication, LLVM lowering, linking, HSACO, load, or launch; this is bounded reviewed correspondence, not a compiler-refinement or protected-authority proof",
+                            let canonical_ir = encode_hex(authenticated.canonical_ir_identity());
+                            let descriptor =
+                                encode_hex(authenticated.descriptor_source().identity().sha256());
+                            let handoff =
+                                worker_v2_producer::prepare_tiled_gemm_lds_slice1_worker_handoff(
+                                    authenticated,
+                                )
+                                .map_err(|error| error.to_string())?;
+                            if handoff.source_authority_commitment() != &source_authority_commitment
+                                || encode_hex(handoff.canonical_ir_identity()) != canonical_ir
+                                || encode_hex(handoff.descriptor_source_identity()) != descriptor
+                                || handoff.resource_transcript().is_empty()
+                            {
+                                return Err(
+                                    "prepared LDS Slice 1 handoff lost an authenticated binding"
+                                        .to_owned(),
+                                );
+                            }
+                            let canonical_handoff_bytes = handoff.handoff().canonical_bytes().len();
+                            let llvm_bytes = handoff.handoff().module_bytes().len();
+                            let publication = worker_v2_producer::publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
+                                output_dir,
+                                &producer,
+                                attempt,
+                                handoff,
+                            )
+                            .map_err(|error| error.to_string())?;
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] authenticated attributed KernelEntry `{root_instance_identity}` export `{}` with measured portable MIR {portable_mir}, exact A:&[u16], B:&[u16], C:DisjointSlice<f32> ABI (48 explicit/304 complete COV6 kernarg bytes), exact WG64 source geometry with {source_static_shared} user-supplied static shared-memory bytes, and a distinct compiler descriptor requiring {lds_allocations} aligned {lds_bytes_per_allocation}-byte LDS allocations ({compiler_static_shared} static LDS bytes, alignment {lds_alignment}); consumed single-use source authority {source_authority}, selected canonical Kernel IR `fe2o3::tiled_gemm_lds_v1` identity {canonical_ir}, constructed compiler descriptor {descriptor}, reused `dialect_amdgcn::lower_tiled_gemm_lds_v1_to_gfx942_llvm_ir`, and completed protected attempt-scoped Worker V2 publication ({} canonical bytes, {} LLVM bytes, {} receipt bytes); source authentication to canonical IR remains bounded reviewed correspondence, not compiler refinement; worker execution, LLVM linking, code-object construction or inspection, HSACO, load, launch, runtime behavior, hardware results, and COMGR were not entered",
                                 collected_tiled_gemm_lds_slice1_v1::LDS_SLICE1_KERNEL_EXPORT_V1,
-                            ));
+                                canonical_handoff_bytes,
+                                llvm_bytes,
+                                publication.length(),
+                            );
+                            return Ok(None);
                         }
                         let mut receipt =
                             collected_tiled_gemm_v1::authenticate_collected_tiled_gemm_v1(
@@ -695,7 +737,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 output_dir, &producer, attempt, handoff,
                             )
                             .map_err(|error| error.to_string())?;
-                        Ok((
+                        Ok(Some((
                             root_instance_identity,
                             kernel_export,
                             portable_mir_semantic,
@@ -704,10 +746,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             canonical_handoff_bytes,
                             llvm_bytes,
                             publication.length(),
-                        ))
+                        )))
                     })();
                     match preparation {
-                        Ok((
+                        Ok(Some((
                             root_instance_identity,
                             kernel_export,
                             portable_mir_semantic,
@@ -716,7 +758,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             canonical_handoff_bytes,
                             llvm_bytes,
                             publication_bytes,
-                        )) => eprintln!(
+                        ))) => eprintln!(
                             "[rustc-codegen-fe2o3] {} consumed its single-use frontend receipt for exact collected KernelEntry `{}` export `{}` with reviewed path-independent portable MIR {}; exact ABI/roles A:&[u16] and B:&[u16] as bit-preserving BF16 carriers, C:&[f32], D:DisjointSlice<f32>; explicit kernarg {} bytes, complete COV6 kernarg {} bytes; exact one-wave 64x1x1 one-tile launch with no LDS; target {}; COV{}; compiler semantics {}; sealed frontend authority {}; selected canonical fe2o3::tiled_gemm_v1 and lowered it through dialect_amdgcn::lower_tiled_gemm_v1_to_gfx942_llvm_ir; published exact inert Worker V2 compiler-module handoff ({} canonical bytes, {} LLVM bytes, {} receipt bytes) with compiler descriptor and frontend-authority sections; source/MIR authentication to canonical-module selection is a bounded reviewed correspondence, not a compiler-refinement proof; Worker execution, final HSACO construction or inspection, load, launch, COMGR, and the separate 32/288-byte fragment probe were not entered",
                             collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
                             root_instance_identity,
@@ -732,6 +774,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             llvm_bytes,
                             publication_bytes,
                         ),
+                        Ok(None) => {}
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,

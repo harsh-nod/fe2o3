@@ -2,9 +2,11 @@
 
 use crate::collected_row_softmax_v1::AuthenticatedRowSoftmaxModuleV1;
 use crate::collected_scalar_gemm_v1::AuthenticatedScalarGemmModuleV1;
+use crate::collected_tiled_gemm_lds_slice1_v1::AuthenticatedLdsSlice1ModuleV1;
 use crate::collected_tiled_gemm_v1::AuthenticatedTiledGemmModuleV1;
 use crate::compiler_descriptor::{
     CompilerDescriptorError, TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
+    validate_tiled_gemm_lds_slice1_compiler_module_evidence_v1,
 };
 use crate::kernel_ir_codegen::{
     CompilerModuleConstructionError, InertCompilerModuleTextV1, bind_compiler_descriptor_source_v1,
@@ -18,9 +20,10 @@ use fe2o3_artifact_transaction::{
 use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1,
     CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
-    CompilerFfiSourceOwnerV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2,
-    CompilerModuleKindV1, CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
-    CompilerModuleSymbolRoleV1, DeviceTargetV1, decode_row_softmax_compiler_sections_v1,
+    CompilerFfiSourceOwnerV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2,
+    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestErrorV1,
+    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1, DeviceTargetV1,
+    decode_row_softmax_compiler_sections_v1,
 };
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
@@ -30,6 +33,7 @@ use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
     derive_device_ffi_contract_id_v1,
 };
+use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
@@ -38,6 +42,7 @@ use std::path::Path;
 const G1_WORKGROUP_X: u32 = 256;
 const SCALAR_GEMM_V1_DESCRIPTOR: &str = "scalar_gemm_v1.kd";
 const TILED_GEMM_V1_DESCRIPTOR: &str = "tiled_gemm_v1.kd";
+const TILED_GEMM_LDS_SLICE1_DESCRIPTOR: &str = "tiled_gemm_lds_v1.kd";
 const ROW_SOFTMAX_V1_DESCRIPTOR: &str = "row_softmax_v1.kd";
 pub(crate) const ROW_SOFTMAX_OCML_EXP_SYMBOL_V1: &str = "__ocml_exp_f32";
 const ROW_SOFTMAX_OCML_EXP_ABI_V1: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
@@ -75,6 +80,41 @@ pub(crate) struct PreparedTiledGemmV1WorkerHandoffV1 {
 impl PreparedTiledGemmV1WorkerHandoffV1 {
     pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
         &self.frontend_authority_commitment
+    }
+
+    pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
+        &self.handoff
+    }
+}
+
+/// Protected, inert Worker V2 handoff for the exact attributed LDS Slice 1
+/// source, canonical Kernel IR, descriptor, and compiler-derived resources.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PreparedTiledGemmLdsSlice1WorkerHandoffV1 {
+    source_authority_commitment: [u8; 32],
+    canonical_ir_identity: [u8; 32],
+    descriptor_source_identity: [u8; 32],
+    descriptor_source_bytes: Vec<u8>,
+    resource_transcript: Vec<u8>,
+    expected_handoff_identity: CompilerModuleHandoffIdentityV2,
+    handoff: CompilerModuleHandoffV2,
+}
+
+impl PreparedTiledGemmLdsSlice1WorkerHandoffV1 {
+    pub(crate) const fn source_authority_commitment(&self) -> &[u8; 32] {
+        &self.source_authority_commitment
+    }
+
+    pub(crate) const fn canonical_ir_identity(&self) -> &[u8; 32] {
+        &self.canonical_ir_identity
+    }
+
+    pub(crate) const fn descriptor_source_identity(&self) -> &[u8; 32] {
+        &self.descriptor_source_identity
+    }
+
+    pub(crate) fn resource_transcript(&self) -> &[u8] {
+        &self.resource_transcript
     }
 
     pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
@@ -182,6 +222,126 @@ pub(crate) fn publish_prepared_tiled_gemm_v1_worker_handoff(
         "[rustc-codegen-fe2o3] published tiled GEMM Worker V2 handoff bound to frontend authority {authority_hex}"
     );
     Ok(receipt)
+}
+
+pub(crate) fn publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    prepared: PreparedTiledGemmLdsSlice1WorkerHandoffV1,
+) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
+    let module = std::str::from_utf8(prepared.handoff.module_bytes())
+        .map_err(|_| WorkerV2ProducerError::MissingTiledGemmLdsSlice1Bindings)?;
+    let [descriptor, authority, resources] = decode_tiled_gemm_lds_slice1_sections_v1(module)
+        .ok_or(WorkerV2ProducerError::MissingTiledGemmLdsSlice1Bindings)?;
+    let descriptor_identity: [u8; 32] = Sha256::digest(&descriptor).into();
+    let exact_sections = descriptor == prepared.descriptor_source_bytes
+        && descriptor_identity == prepared.descriptor_source_identity
+        && authority == prepared.source_authority_commitment
+        && resources == prepared.resource_transcript
+        && transcript_contains_field(&resources, &prepared.source_authority_commitment)
+        && transcript_contains_field(&resources, &prepared.canonical_ir_identity)
+        && transcript_contains_field(&resources, &prepared.descriptor_source_identity);
+    if !exact_sections
+        || prepared.handoff.identity() != prepared.expected_handoff_identity
+        || prepared.handoff.target().to_string() != AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+        || prepared.handoff.code_object_version() != CodeObjectVersion::V6
+    {
+        return Err(WorkerV2ProducerError::MissingTiledGemmLdsSlice1Bindings);
+    }
+    let receipt = publish_compiler_module_handoff_v1(
+        output_dir,
+        producer,
+        attempt,
+        prepared.handoff.canonical_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Publication)?;
+    eprintln!(
+        "[rustc-codegen-fe2o3] published attributed LDS Slice 1 Worker V2 handoff bound to source authority {}, canonical Kernel IR {}, and compiler descriptor {}",
+        hex(&prepared.source_authority_commitment),
+        hex(&prepared.canonical_ir_identity),
+        hex(&prepared.descriptor_source_identity),
+    );
+    Ok(receipt)
+}
+
+fn decode_tiled_gemm_lds_slice1_sections_v1(module: &str) -> Option<[Vec<u8>; 3]> {
+    let lines = module.lines().collect::<Vec<_>>();
+    let declarations = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            canonical_module_assembly_section_name(line).map(|name| (index, name))
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+        crate::kernel_ir_codegen::TILED_GEMM_LDS_SLICE1_AUTHORITY_SECTION_V1,
+        crate::kernel_ir_codegen::TILED_GEMM_LDS_SLICE1_RESOURCE_SECTION_V1,
+    ];
+    if declarations.len() != expected.len()
+        || !declarations
+            .iter()
+            .zip(expected)
+            .all(|((_, actual), expected)| *actual == expected)
+    {
+        return None;
+    }
+    let mut decoded = std::array::from_fn(|_| Vec::new());
+    for (section, (start, _)) in declarations.iter().enumerate() {
+        if lines.get(start + 1) != Some(&"module asm \".balign 8\"") {
+            return None;
+        }
+        let end = declarations
+            .get(section + 1)
+            .map_or(lines.len(), |(index, _)| *index);
+        let byte_lines = lines.get(start + 2..end)?;
+        if byte_lines.is_empty() {
+            return None;
+        }
+        for line in byte_lines {
+            let values = line
+                .strip_prefix("module asm \".byte ")?
+                .strip_suffix('"')?;
+            let chunks = values.split(", ").collect::<Vec<_>>();
+            if chunks.is_empty() || chunks.len() > 16 {
+                return None;
+            }
+            for value in chunks {
+                let digits = value.strip_prefix("0x")?;
+                if digits.len() != 2
+                    || !digits
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return None;
+                }
+                decoded[section].push(u8::from_str_radix(digits, 16).ok()?);
+            }
+        }
+    }
+    Some(decoded)
+}
+
+fn canonical_module_assembly_section_name(line: &str) -> Option<&str> {
+    let suffix = line.strip_prefix("module asm \".section ")?;
+    let name = suffix.strip_suffix(",\\22\\22,@progbits\"")?;
+    (!name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')))
+    .then_some(name)
+}
+
+fn transcript_contains_field(transcript: &[u8], field: &[u8]) -> bool {
+    let mut framed = Vec::with_capacity(8 + field.len());
+    framed.extend_from_slice(&(field.len() as u64).to_le_bytes());
+    framed.extend_from_slice(field);
+    transcript
+        .windows(framed.len())
+        .filter(|candidate| *candidate == framed)
+        .count()
+        == 1
 }
 
 pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
@@ -340,6 +500,83 @@ pub(crate) fn prepare_tiled_gemm_v1_worker_handoff(
     .map_err(WorkerV2ProducerError::Handoff)?;
     Ok(PreparedTiledGemmV1WorkerHandoffV1 {
         frontend_authority_commitment,
+        handoff,
+    })
+}
+
+/// Consumes exact attributed-source authority and prepares the dedicated
+/// upstream-LLVM LDS Slice 1 Worker V2 handoff. No worker, linker, code-object
+/// builder, runtime, hardware, or COMGR path is entered.
+pub(crate) fn prepare_tiled_gemm_lds_slice1_worker_handoff(
+    authenticated: AuthenticatedLdsSlice1ModuleV1,
+) -> Result<PreparedTiledGemmLdsSlice1WorkerHandoffV1, WorkerV2ProducerError> {
+    let source_authority_commitment = *authenticated.source_authority_commitment();
+    let canonical_ir_identity = *authenticated.canonical_ir_identity();
+    let descriptor_source_identity = *authenticated.descriptor_source().identity().sha256();
+    let descriptor_source_bytes = authenticated.descriptor_source().canonical_bytes().to_vec();
+    let resource_transcript = authenticated.resource_transcript().to_vec();
+    let (
+        _module,
+        descriptor_source,
+        compiler_module,
+        retained_authority,
+        retained_ir,
+        retained_resources,
+    ) = authenticated.into_parts();
+    if retained_authority != source_authority_commitment
+        || retained_ir != canonical_ir_identity
+        || retained_resources != resource_transcript
+        || descriptor_source.identity().sha256() != &descriptor_source_identity
+    {
+        return Err(WorkerV2ProducerError::MissingTiledGemmLdsSlice1Bindings);
+    }
+    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        .expect("fixed LDS Slice 1 target is valid");
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .map_err(WorkerV2ProducerError::CompilerEnvelope)?;
+    validate_tiled_gemm_lds_slice1_compiler_module_evidence_v1(
+        &descriptor_source,
+        &envelope,
+        &compiler_module,
+    )
+    .map_err(WorkerV2ProducerError::CompilerDescriptor)?;
+    let compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &descriptor_source)
+        .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let compiler_module = crate::kernel_ir_codegen::bind_tiled_gemm_lds_slice1_authority_v1(
+        compiler_module,
+        source_authority_commitment,
+        &resource_transcript,
+    )
+    .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let symbol_manifest = CompilerModuleSymbolManifestV1::new([
+        (
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID,
+        ),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            TILED_GEMM_LDS_SLICE1_DESCRIPTOR,
+        ),
+    ])
+    .map_err(WorkerV2ProducerError::SymbolManifest)?;
+    let handoff = CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        target,
+        CodeObjectVersion::V6,
+        envelope,
+        symbol_manifest,
+        compiler_module.llvm_ir().as_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Handoff)?;
+    let expected_handoff_identity = handoff.identity();
+    Ok(PreparedTiledGemmLdsSlice1WorkerHandoffV1 {
+        source_authority_commitment,
+        canonical_ir_identity,
+        descriptor_source_identity,
+        descriptor_source_bytes,
+        resource_transcript,
+        expected_handoff_identity,
         handoff,
     })
 }
@@ -764,6 +1001,7 @@ pub(crate) enum WorkerV2ProducerError {
     MissingCompilerFfiEnvelope,
     MissingScalarFrontendAuthority,
     MissingTiledFrontendAuthority,
+    MissingTiledGemmLdsSlice1Bindings,
     MissingRowSoftmaxBindings,
     RowSoftmaxClosureMismatch,
     MissingExternalDeclaration(String),
@@ -804,6 +1042,9 @@ impl fmt::Display for WorkerV2ProducerError {
             ),
             Self::MissingTiledFrontendAuthority => formatter.write_str(
                 "tiled GEMM compiler-module handoff lost its embedded frontend authority",
+            ),
+            Self::MissingTiledGemmLdsSlice1Bindings => formatter.write_str(
+                "LDS Slice 1 compiler-module handoff lost its source, IR, descriptor, target, or resource binding",
             ),
             Self::MissingRowSoftmaxBindings => formatter.write_str(
                 "row-softmax compiler-module handoff lost its frontend or exponential-boundary binding",
@@ -896,6 +1137,7 @@ impl Error for WorkerV2ProducerError {
             | Self::MissingCompilerFfiEnvelope
             | Self::MissingScalarFrontendAuthority
             | Self::MissingTiledFrontendAuthority
+            | Self::MissingTiledGemmLdsSlice1Bindings
             | Self::MissingRowSoftmaxBindings
             | Self::RowSoftmaxClosureMismatch
             | Self::MissingExternalDeclaration(_)
@@ -915,15 +1157,17 @@ mod tests {
         exact_frontend_receipt_for_test as exact_row_frontend_receipt_for_test,
     };
     use crate::collected_scalar_gemm_v1::exact_frontend_receipt_for_test;
+    use crate::collected_tiled_gemm_lds_slice1_v1::exact_lds_slice1_frontend_receipt_for_test;
     use crate::collected_tiled_gemm_v1::exact_frontend_receipt_for_test as exact_tiled_frontend_receipt_for_test;
     use fe2o3_artifact_transaction::{
         BuildInvocation, BuildSession, CompilerModuleHandoffErrorV1 as PublicationError,
         begin_build_attempt, consume_compiler_module_handoff_v1,
     };
     use fe2o3_compiler_ffi::{
-        CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1,
-        CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, CompilerModuleHandoffV2, DeviceTargetV1,
-        ROW_SOFTMAX_AUTHORITY_SECTION_NAME_V1, ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1,
+        CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiContractV1,
+        CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
+        CompilerModuleHandoffV2, DeviceTargetV1, ROW_SOFTMAX_AUTHORITY_SECTION_NAME_V1,
+        ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1,
         ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1,
     };
     use fe2o3_hsaco_finalize::{
@@ -938,7 +1182,7 @@ mod tests {
     use reserved_fe2o3_symbols::{
         DeviceFfiContractFieldsV1, DeviceFfiDirectionV1, derive_device_ffi_contract_id_v1,
     };
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1106,6 +1350,240 @@ mod tests {
         assert!(!handoff.grants_link_authority());
         assert!(!handoff.grants_load_authority());
         assert!(!handoff.grants_launch_authority());
+    }
+
+    #[test]
+    fn consumed_attributed_lds_receipt_prepares_exact_bound_worker_v2_handoff() {
+        let mut receipt = exact_lds_slice1_frontend_receipt_for_test();
+        let expected_authority = *receipt.authority_commitment();
+        let authenticated = receipt.consume().expect("consume exact LDS receipt");
+        let expected_ir = *authenticated.canonical_ir_identity();
+        let expected_descriptor = *authenticated.descriptor_source().identity().sha256();
+        let expected_pre_section_llvm = authenticated
+            .compiler_module()
+            .llvm_ir()
+            .as_bytes()
+            .to_vec();
+        let prepared = prepare_tiled_gemm_lds_slice1_worker_handoff(authenticated)
+            .expect("prepare exact attributed LDS handoff");
+        let handoff = prepared.handoff();
+        let canonical = dialect_amdgcn::lower_tiled_gemm_lds_v1_to_gfx942_llvm_ir(
+            &fe2o3_kernel_ir::tiled_gemm_lds_v1_module(),
+            fe2o3_kernel_ir::TiledGemmLdsV1Profile::exact_gfx942_xnack_minus_cov6(),
+        )
+        .unwrap();
+
+        assert_eq!(prepared.source_authority_commitment(), &expected_authority);
+        assert_eq!(prepared.canonical_ir_identity(), &expected_ir);
+        assert_eq!(prepared.descriptor_source_identity(), &expected_descriptor);
+        assert_eq!(handoff.target(), target());
+        assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
+        assert!(
+            handoff
+                .module_bytes()
+                .starts_with(canonical.as_str().as_bytes())
+        );
+        assert!(
+            handoff
+                .module_bytes()
+                .starts_with(&expected_pre_section_llvm)
+        );
+        let module_text = std::str::from_utf8(handoff.module_bytes()).unwrap();
+        let [descriptor_bytes, authority, resources] =
+            decode_tiled_gemm_lds_slice1_sections_v1(module_text).unwrap();
+        assert_eq!(descriptor_bytes, prepared.descriptor_source_bytes);
+        assert_eq!(authority, expected_authority);
+        assert_eq!(resources, prepared.resource_transcript());
+        let descriptor = CompilerDescriptorSourceV1::decode(&descriptor_bytes).unwrap();
+        let kernel = &descriptor.table().kernels()[0];
+        assert_eq!(kernel.logical_name().as_str(), "tiled_gemm_lds_slice1");
+        assert_eq!(
+            kernel.entry_name().as_str(),
+            fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID
+        );
+        assert_eq!(kernel.launch().static_shared_memory_bytes(), 1024);
+        assert_eq!(
+            module_text
+                .matches("internal addrspace(3) global [256 x i16]")
+                .count(),
+            2
+        );
+        assert_eq!(module_text.matches("s_barrier").count(), 1);
+        assert_eq!(
+            module_text
+                .matches("call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+                .collect::<Vec<_>>(),
+            [fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID]
+        );
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
+                .collect::<Vec<_>>(),
+            [TILED_GEMM_LDS_SLICE1_DESCRIPTOR]
+        );
+        assert!(!handoff.authenticates_compiler_origin());
+        assert!(!handoff.grants_worker_authority());
+        assert!(!handoff.grants_link_authority());
+        assert!(!handoff.grants_load_authority());
+        assert!(!handoff.grants_launch_authority());
+    }
+
+    #[test]
+    fn attributed_lds_publication_is_single_use_and_rejects_binding_mutations() {
+        let producer = producer();
+        let directory = TestDirectory::new();
+        let attempt = begin_attempt(&directory.0, &producer);
+        let mut first_receipt = exact_lds_slice1_frontend_receipt_for_test();
+        let first =
+            prepare_tiled_gemm_lds_slice1_worker_handoff(first_receipt.consume().unwrap()).unwrap();
+        let expected_bytes = first.handoff().canonical_bytes().to_vec();
+        publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
+            &directory.0,
+            &producer,
+            attempt,
+            first,
+        )
+        .unwrap();
+
+        let mut replay_receipt = exact_lds_slice1_frontend_receipt_for_test();
+        let replay =
+            prepare_tiled_gemm_lds_slice1_worker_handoff(replay_receipt.consume().unwrap())
+                .unwrap();
+        assert!(matches!(
+            publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
+                &directory.0,
+                &producer,
+                attempt,
+                replay,
+            ),
+            Err(WorkerV2ProducerError::Publication(
+                PublicationError::AlreadyPublished
+            ))
+        ));
+        let consumed =
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
+        assert_eq!(consumed.bytes(), expected_bytes);
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt),
+            Err(PublicationError::AlreadyConsumed)
+        ));
+
+        let hostile_directory = TestDirectory::new();
+        let hostile_attempt = begin_attempt(&hostile_directory.0, &producer);
+        let mut hostile_receipt = exact_lds_slice1_frontend_receipt_for_test();
+        let mut hostile =
+            prepare_tiled_gemm_lds_slice1_worker_handoff(hostile_receipt.consume().unwrap())
+                .unwrap();
+        hostile.descriptor_source_bytes[0] ^= 1;
+        assert!(matches!(
+            publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
+                &hostile_directory.0,
+                &producer,
+                hostile_attempt,
+                hostile,
+            ),
+            Err(WorkerV2ProducerError::MissingTiledGemmLdsSlice1Bindings)
+        ));
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(&hostile_directory.0, &producer, hostile_attempt,),
+            Err(PublicationError::NotPublished)
+        ));
+
+        let substituted_directory = TestDirectory::new();
+        let substituted_attempt = begin_attempt(&substituted_directory.0, &producer);
+        let mut substituted_receipt = exact_lds_slice1_frontend_receipt_for_test();
+        let mut substituted =
+            prepare_tiled_gemm_lds_slice1_worker_handoff(substituted_receipt.consume().unwrap())
+                .unwrap();
+        let original = std::str::from_utf8(substituted.handoff.module_bytes()).unwrap();
+        let mutated_module = original.replacen(" = add i64 ", " = sub i64 ", 1);
+        assert_ne!(mutated_module, original);
+        substituted.handoff = CompilerModuleHandoffV2::new(
+            substituted.handoff.kind(),
+            substituted.handoff.target(),
+            substituted.handoff.code_object_version(),
+            substituted.handoff.envelope().clone(),
+            substituted.handoff.symbol_manifest().clone(),
+            mutated_module.as_bytes(),
+        )
+        .unwrap();
+        assert_ne!(
+            substituted.handoff.identity(),
+            substituted.expected_handoff_identity
+        );
+        assert!(matches!(
+            publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
+                &substituted_directory.0,
+                &producer,
+                substituted_attempt,
+                substituted,
+            ),
+            Err(WorkerV2ProducerError::MissingTiledGemmLdsSlice1Bindings)
+        ));
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(
+                &substituted_directory.0,
+                &producer,
+                substituted_attempt,
+            ),
+            Err(PublicationError::NotPublished)
+        ));
+
+        let manifest_directory = TestDirectory::new();
+        let manifest_attempt = begin_attempt(&manifest_directory.0, &producer);
+        let mut manifest_receipt = exact_lds_slice1_frontend_receipt_for_test();
+        let mut substituted_manifest =
+            prepare_tiled_gemm_lds_slice1_worker_handoff(manifest_receipt.consume().unwrap())
+                .unwrap();
+        let manifest = CompilerModuleSymbolManifestV1::new([
+            (
+                CompilerModuleSymbolRoleV1::KernelEntry,
+                fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID,
+            ),
+            (
+                CompilerModuleSymbolRoleV1::KernelDescriptor,
+                TILED_GEMM_LDS_SLICE1_DESCRIPTOR,
+            ),
+            (
+                CompilerModuleSymbolRoleV1::InternalHelper,
+                "__fe2o3_substituted_helper",
+            ),
+        ])
+        .unwrap();
+        substituted_manifest.handoff = CompilerModuleHandoffV2::new(
+            substituted_manifest.handoff.kind(),
+            substituted_manifest.handoff.target(),
+            substituted_manifest.handoff.code_object_version(),
+            substituted_manifest.handoff.envelope().clone(),
+            manifest,
+            substituted_manifest.handoff.module_bytes(),
+        )
+        .unwrap();
+        assert_ne!(
+            substituted_manifest.handoff.identity(),
+            substituted_manifest.expected_handoff_identity
+        );
+        assert!(matches!(
+            publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
+                &manifest_directory.0,
+                &producer,
+                manifest_attempt,
+                substituted_manifest,
+            ),
+            Err(WorkerV2ProducerError::MissingTiledGemmLdsSlice1Bindings)
+        ));
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(&manifest_directory.0, &producer, manifest_attempt,),
+            Err(PublicationError::NotPublished)
+        ));
     }
 
     #[test]

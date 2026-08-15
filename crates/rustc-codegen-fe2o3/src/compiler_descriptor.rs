@@ -13,11 +13,12 @@ use fe2o3_compiler_ffi::{
     CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1,
 };
 use fe2o3_kernel_descriptor::{
-    AccessMode, BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CapabilityV1,
-    CodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1,
-    DeviceLayoutRecordV1, DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1,
-    KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1,
-    ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, ValidationError,
+    AccessMode, AliasSemantics, BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest,
+    CapabilityV1, CodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1,
+    DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DimensionsV1, EvidenceDigest, EvidenceIdentity,
+    KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1,
+    OwnershipSemantics, PhysicalAbiComponentKind, ProducerIdentityV1, ScalarTypeV1,
+    SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, ValidationError,
 };
 use fe2o3_kernel_ir::{
     BF16_F32_M16N16K16_CAPABILITY, MATRIX_CAPABILITY_NAMESPACE, Module, TargetCapability,
@@ -315,7 +316,9 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
         DescriptorConstructionProfileV1 {
             workgroup_x: WORKGROUP_X,
             max_grid_x: u32::MAX,
+            static_shared_memory_bytes: 0,
             allow_exact_tiled_matrix: false,
+            allow_workgroup_memory: false,
             producer_version: "typed-general-gfx942-cov6-v1",
         },
     )
@@ -343,10 +346,68 @@ pub(crate) fn construct_tiled_gemm_v1_compiler_descriptor_source_v1(
         DescriptorConstructionProfileV1 {
             workgroup_x: fe2o3_kernel_ir::TILED_GEMM_V1_LANES,
             max_grid_x: 1,
+            static_shared_memory_bytes: 0,
             allow_exact_tiled_matrix: true,
+            allow_workgroup_memory: false,
             producer_version: "typed-tiled-gemm-gfx942-cov6-v1",
         },
     )
+}
+
+/// Constructs the exact source-corresponded LDS Slice 1 descriptor input.
+///
+/// The attributed Rust export and canonical Kernel IR entry intentionally have
+/// different names. Rustc authenticates the former before this function
+/// projects its already re-derived typed ABI onto the latter. The descriptor
+/// records the compiler-owned 1024-byte static LDS requirement; the attributed
+/// frontend contract remains a distinct zero-user-shared-memory record.
+pub(crate) fn construct_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    module: &Module,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
+    if module != &fe2o3_kernel_ir::tiled_gemm_lds_v1_module() {
+        return Err(CompilerDescriptorError::NonCanonicalTiledGemmLdsSlice1Module);
+    }
+    if compiler_module.descriptor_source_identity().is_some() {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("pre-section LLVM"),
+        );
+    }
+    let [source_root] = typed_roots else {
+        return Err(CompilerDescriptorError::IncompleteTypedKernelClosure {
+            typed: typed_roots.len(),
+            total: module.kernels.len(),
+        });
+    };
+    if source_root.logical_name
+        != crate::collected_tiled_gemm_lds_slice1_v1::LDS_SLICE1_KERNEL_EXPORT_V1
+        || source_root.export_name
+            != crate::collected_tiled_gemm_lds_slice1_v1::LDS_SLICE1_KERNEL_EXPORT_V1
+    {
+        return Err(CompilerDescriptorError::UnexpectedAttributedSourceKernel(
+            source_root.export_name.clone(),
+        ));
+    }
+
+    let mut projected_root = source_root.clone();
+    projected_root.export_name = fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID.to_owned();
+    let source = construct_compiler_descriptor_source_with_profile_v1(
+        envelope,
+        module,
+        compiler_module,
+        &[projected_root],
+        tiled_gemm_lds_slice1_descriptor_profile_v1(),
+    )?
+    .ok_or(CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("descriptor presence"))?;
+    validate_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
+        &source,
+        envelope,
+        compiler_module,
+        source_root,
+    )?;
+    Ok(Some(source))
 }
 
 /// Constructs the exact two-slice WG64 row-softmax descriptor source.
@@ -370,7 +431,9 @@ pub(crate) fn construct_row_softmax_v1_compiler_descriptor_source_v1(
         DescriptorConstructionProfileV1 {
             workgroup_x: crate::collected_row_softmax_v1::ROW_SOFTMAX_ELEMENTS_V1,
             max_grid_x: 1,
+            static_shared_memory_bytes: 0,
             allow_exact_tiled_matrix: false,
+            allow_workgroup_memory: false,
             producer_version: "typed-row-softmax-gfx942-cov6-v1",
         },
     )
@@ -380,8 +443,21 @@ pub(crate) fn construct_row_softmax_v1_compiler_descriptor_source_v1(
 struct DescriptorConstructionProfileV1 {
     workgroup_x: u32,
     max_grid_x: u32,
+    static_shared_memory_bytes: u32,
     allow_exact_tiled_matrix: bool,
+    allow_workgroup_memory: bool,
     producer_version: &'static str,
+}
+
+const fn tiled_gemm_lds_slice1_descriptor_profile_v1() -> DescriptorConstructionProfileV1 {
+    DescriptorConstructionProfileV1 {
+        workgroup_x: fe2o3_kernel_ir::TILED_GEMM_LDS_V1_LANES,
+        max_grid_x: 1,
+        static_shared_memory_bytes: fe2o3_kernel_ir::TILED_GEMM_LDS_V1_STATIC_LDS_BYTES,
+        allow_exact_tiled_matrix: true,
+        allow_workgroup_memory: true,
+        producer_version: "typed-tiled-gemm-lds-slice1-gfx942-cov6-v1",
+    }
 }
 
 fn construct_compiler_descriptor_source_with_profile_v1(
@@ -431,7 +507,11 @@ fn construct_compiler_descriptor_source_with_profile_v1(
         device_layouts.push(layout);
     }
 
-    let module_capabilities = descriptor_capabilities(module, profile.allow_exact_tiled_matrix)?;
+    let module_capabilities = descriptor_capabilities(
+        module,
+        profile.allow_exact_tiled_matrix,
+        profile.allow_workgroup_memory,
+    )?;
     let mut seen_exports = BTreeSet::new();
     let mut kernels = Vec::with_capacity(typed_roots.len());
     for root in typed_roots {
@@ -524,7 +604,7 @@ fn construct_compiler_descriptor_source_with_profile_v1(
                 BlockSizeV1::Exact(DimensionsV1::new(profile.workgroup_x, 1, 1)?),
                 DimensionsV1::new(profile.max_grid_x, 1, 1)?,
                 profile.workgroup_x,
-                0,
+                profile.static_shared_memory_bytes,
                 0,
             )?,
             arguments,
@@ -561,6 +641,296 @@ fn construct_compiler_descriptor_source_with_profile_v1(
         .map_err(CompilerDescriptorError::Source)
 }
 
+fn validate_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
+    source: &CompilerDescriptorSourceV1,
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    authenticated_root: &TypedDescriptorRootV1,
+) -> Result<(), CompilerDescriptorError> {
+    if compiler_module.descriptor_source_identity().is_some() {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("pre-section LLVM"),
+        );
+    }
+    let [kernel] = source.table().kernels() else {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("one-kernel closure"),
+        );
+    };
+    let table = source.table();
+    if table.device_target().to_string()
+        != crate::collected_tiled_gemm_v1::EXACT_TILED_GEMM_TARGET_V1
+        || table.code_object_version() != CodeObjectVersion::V6
+    {
+        return Err(CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("target/COV6"));
+    }
+    if *kernel.kernel_id().as_bytes() != authenticated_root.kernel_binding.as_bytes() {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("kernel binding"),
+        );
+    }
+    let canonical_entry = fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID;
+    if kernel.logical_name().as_str() != authenticated_root.logical_name
+        || kernel.entry_name().as_str() != canonical_entry
+        || kernel.descriptor_symbol().as_str() != format!("{canonical_entry}.kd")
+    {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("kernel projection"),
+        );
+    }
+
+    let abi = kernel.abi_layout();
+    let launch = kernel.launch();
+    if abi.explicit_argument_size() != 48
+        || abi.kernarg_segment_size() != 304
+        || abi.kernarg_segment_alignment() != 8
+        || launch.rank() != 1
+        || launch.block_size() != BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1)?)
+        || launch.max_grid() != DimensionsV1::new(1, 1, 1)?
+        || launch.max_flat_workgroup_size() != 64
+        || launch.static_shared_memory_bytes()
+            != fe2o3_kernel_ir::TILED_GEMM_LDS_V1_STATIC_LDS_BYTES
+        || launch.max_dynamic_shared_memory_bytes() != 0
+        || kernel.capabilities()
+            != [
+                CapabilityV1::Subgroup,
+                CapabilityV1::WorkgroupMemory,
+                CapabilityV1::MatrixMultiply,
+                CapabilityV1::AmdWave,
+                CapabilityV1::AmdMfma,
+            ]
+    {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch(
+                "ABI/launch/capability profile",
+            ),
+        );
+    }
+
+    let [a, b, c] = kernel.arguments() else {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("argument count"),
+        );
+    };
+    for (index, argument) in [a, b, c].into_iter().enumerate() {
+        let (source_descriptor, layout_descriptor, pointer_offset) = match index {
+            0 => (
+                SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::U16),
+                DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::U16),
+                0,
+            ),
+            1 => (
+                SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::U16),
+                DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::U16),
+                16,
+            ),
+            2 => (
+                SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32),
+                DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32),
+                32,
+            ),
+            _ => unreachable!("exact LDS Slice 1 descriptor has three arguments"),
+        };
+        let exact_source = table.type_records().iter().any(|record| {
+            record.identity() == argument.source_type() && record.descriptor() == &source_descriptor
+        });
+        let exact_layout = table.layout_records().iter().any(|record| {
+            record.identity() == argument.device_layout()
+                && record.descriptor() == &layout_descriptor
+        });
+        if argument.source_index() != index as u16 || !exact_source || !exact_layout {
+            return Err(
+                CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch(
+                    "argument source/layout provenance",
+                ),
+            );
+        }
+        let exact_role = if index < 2 {
+            argument.name().as_str() == format!("arg{index}")
+                && argument.access() == AccessMode::ReadOnly
+                && argument.ownership() == OwnershipSemantics::SharedBorrow
+                && argument.alias() == AliasSemantics::SharedReadOnly
+        } else {
+            argument.name().as_str() == "arg2"
+                && argument.access() == AccessMode::ReadWrite
+                && argument.ownership() == OwnershipSemantics::UniqueBorrow
+                && argument.alias() == AliasSemantics::Exclusive
+        };
+        if !exact_role {
+            return Err(
+                CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch(
+                    "argument name/access/ownership",
+                ),
+            );
+        }
+        if argument.physical_components().collect::<Vec<_>>()
+            != [
+                (
+                    PhysicalAbiComponentKind::GlobalPointer,
+                    pointer_offset,
+                    8,
+                    8,
+                ),
+                (
+                    PhysicalAbiComponentKind::SliceLengthU64,
+                    pointer_offset + 8,
+                    8,
+                    8,
+                ),
+            ]
+        {
+            return Err(
+                CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch(
+                    "argument physical ABI",
+                ),
+            );
+        }
+    }
+
+    if kernel.source_evidence()
+        != recompute_projected_source_evidence_v1(authenticated_root, canonical_entry)
+    {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("source evidence"),
+        );
+    }
+    if kernel.executable_ir_evidence()
+        != recompute_projected_ir_evidence_v1(
+            envelope,
+            compiler_module,
+            authenticated_root,
+            canonical_entry,
+        )
+    {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("executable IR evidence"),
+        );
+    }
+    Ok(())
+}
+
+/// Rechecks that the exact pre-section LLVM body is the body committed by the
+/// source-authenticated descriptor before Worker V2 sections are appended.
+pub(crate) fn validate_tiled_gemm_lds_slice1_compiler_module_evidence_v1(
+    source: &CompilerDescriptorSourceV1,
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+) -> Result<(), CompilerDescriptorError> {
+    if compiler_module.descriptor_source_identity().is_some()
+        || envelope.target().to_string()
+            != crate::collected_tiled_gemm_v1::EXACT_TILED_GEMM_TARGET_V1
+        || envelope.code_object_version() != CodeObjectVersion::V6
+    {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch(
+                "pre-section LLVM envelope",
+            ),
+        );
+    }
+    let [kernel] = source.table().kernels() else {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch(
+                "pre-section LLVM kernel closure",
+            ),
+        );
+    };
+    let expected = recompute_projected_ir_evidence_from_binding_v1(
+        envelope,
+        compiler_module,
+        kernel.kernel_id().as_bytes(),
+        fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID,
+    );
+    if kernel.executable_ir_evidence() != expected {
+        return Err(
+            CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch(
+                "pre-section LLVM evidence",
+            ),
+        );
+    }
+    Ok(())
+}
+
+fn recompute_projected_source_evidence_v1(
+    authenticated_root: &TypedDescriptorRootV1,
+    canonical_entry: &str,
+) -> BuildEvidenceV1 {
+    let binding = authenticated_root.kernel_binding.as_bytes();
+    let mut identity_frames = vec![
+        binding.as_slice(),
+        authenticated_root.logical_name.as_bytes(),
+        canonical_entry.as_bytes(),
+    ];
+    let identity_bytes = authenticated_root
+        .arguments
+        .as_slice()
+        .iter()
+        .map(|argument| type_identity_bytes(argument.layout.type_identity()))
+        .collect::<Vec<_>>();
+    for bytes in &identity_bytes {
+        identity_frames.push(bytes.as_slice());
+    }
+    let canonical_layouts = authenticated_root
+        .arguments
+        .as_slice()
+        .iter()
+        .map(|argument| argument.layout.canonical_bytes())
+        .collect::<Vec<_>>();
+    let digest_frames = canonical_layouts
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    BuildEvidenceV1::new(
+        EvidenceIdentity::from_opaque_bytes(domain_hash(
+            SOURCE_IDENTITY_DOMAIN_V1,
+            &identity_frames,
+        )),
+        EvidenceDigest::from_sha256_bytes(domain_hash(SOURCE_DIGEST_DOMAIN_V1, &digest_frames)),
+    )
+}
+
+fn recompute_projected_ir_evidence_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    authenticated_root: &TypedDescriptorRootV1,
+    canonical_entry: &str,
+) -> BuildEvidenceV1 {
+    recompute_projected_ir_evidence_from_binding_v1(
+        envelope,
+        compiler_module,
+        &authenticated_root.kernel_binding.as_bytes(),
+        canonical_entry,
+    )
+}
+
+fn recompute_projected_ir_evidence_from_binding_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    binding: &[u8; 32],
+    canonical_entry: &str,
+) -> BuildEvidenceV1 {
+    let envelope_identity = envelope.identity().as_bytes();
+    let target = envelope.target().to_string();
+    BuildEvidenceV1::new(
+        EvidenceIdentity::from_opaque_bytes(domain_hash(
+            IR_IDENTITY_DOMAIN_V1,
+            &[
+                binding.as_slice(),
+                envelope_identity.as_slice(),
+                target.as_bytes(),
+                canonical_entry.as_bytes(),
+            ],
+        )),
+        EvidenceDigest::from_sha256_bytes(domain_hash(
+            IR_DIGEST_DOMAIN_V1,
+            &[
+                envelope.canonical_bytes(),
+                compiler_module.llvm_ir().as_bytes(),
+                canonical_entry.as_bytes(),
+            ],
+        )),
+    )
+}
+
 fn descriptor_records(
     kind: DescriptorArgumentKindV1,
 ) -> (SourceTypeRecordV1, DeviceLayoutRecordV1) {
@@ -583,6 +953,7 @@ fn descriptor_records(
 fn descriptor_capabilities(
     module: &Module,
     allow_exact_tiled_matrix: bool,
+    allow_workgroup_memory: bool,
 ) -> Result<Vec<CapabilityV1>, CompilerDescriptorError> {
     let mut result = BTreeSet::new();
     let mut effective = module.effective_capabilities();
@@ -616,6 +987,11 @@ fn descriptor_capabilities(
             TargetCapability::WaveWidth(WaveWidth::Wave64) => {
                 result.insert(CapabilityV1::AmdWave);
             }
+            TargetCapability::WorkgroupMemory | TargetCapability::WorkgroupBarrier
+                if allow_workgroup_memory =>
+            {
+                result.insert(CapabilityV1::WorkgroupMemory);
+            }
             TargetCapability::BFloat16 if allow_exact_tiled_matrix => {
                 result.insert(CapabilityV1::MatrixMultiply);
             }
@@ -626,6 +1002,13 @@ fn descriptor_capabilities(
             {
                 result.insert(CapabilityV1::MatrixMultiply);
                 result.insert(CapabilityV1::AmdMfma);
+            }
+            TargetCapability::Extension { namespace, name }
+                if allow_workgroup_memory
+                    && namespace == MATRIX_CAPABILITY_NAMESPACE
+                    && name == fe2o3_kernel_ir::LDS_TILE_16X16_XOR4_CAPABILITY =>
+            {
+                result.insert(CapabilityV1::WorkgroupMemory);
             }
             unsupported => {
                 return Err(CompilerDescriptorError::UnsupportedCapability(format!(
@@ -793,6 +1176,9 @@ pub(crate) enum CompilerDescriptorError {
         expected_x: u32,
     },
     NonCanonicalTiledGemmModule,
+    NonCanonicalTiledGemmLdsSlice1Module,
+    UnexpectedAttributedSourceKernel(String),
+    TiledGemmLdsSlice1DescriptorMismatch(&'static str),
     NonCanonicalRowSoftmaxModule,
     UnsupportedCapability(String),
     Validation(ValidationError),
@@ -900,6 +1286,17 @@ impl fmt::Display for CompilerDescriptorError {
             ),
             Self::NonCanonicalTiledGemmModule => formatter.write_str(
                 "tiled GEMM descriptor construction requires the exact canonical tiled_gemm_v1 module",
+            ),
+            Self::NonCanonicalTiledGemmLdsSlice1Module => formatter.write_str(
+                "LDS Slice 1 descriptor construction requires the exact canonical tiled_gemm_lds_v1 module",
+            ),
+            Self::UnexpectedAttributedSourceKernel(kernel) => write!(
+                formatter,
+                "LDS Slice 1 descriptor construction requires the exact attributed source kernel, found `{kernel}`"
+            ),
+            Self::TiledGemmLdsSlice1DescriptorMismatch(field) => write!(
+                formatter,
+                "LDS Slice 1 compiler descriptor has an internal {field} mismatch"
             ),
             Self::NonCanonicalRowSoftmaxModule => formatter.write_str(
                 "row-softmax descriptor construction requires the exact canonical row_softmax_v1 module",
@@ -1134,6 +1531,118 @@ pub(crate) fn tiled_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorSo
         CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
             .unwrap();
     construct_tiled_gemm_v1_compiler_descriptor_source_v1(
+        &envelope,
+        &module,
+        &compiler_module,
+        &[root],
+    )
+    .unwrap()
+    .unwrap()
+}
+
+#[cfg(test)]
+fn tiled_gemm_lds_slice1_descriptor_inputs_for_test() -> (
+    CompilerFfiEnvelopeV1,
+    Module,
+    InertCompilerModuleTextV1,
+    TypedDescriptorRootV1,
+) {
+    use fe2o3_artifacts::{
+        PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+        RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
+        RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+    };
+    use reserved_fe2o3_symbols::GeneratedHostContractIdV3;
+
+    fn layout(kind: GeneralTypedArgumentKindV3) -> RustLayoutEvidenceV1 {
+        let (element, disjoint) = match kind {
+            GeneralTypedArgumentKindV3::SharedSlice(element) => (element, false),
+            GeneralTypedArgumentKindV3::DisjointSlice(element) => (element, true),
+            GeneralTypedArgumentKindV3::Scalar(_) => {
+                unreachable!("LDS Slice 1 profile has no scalar")
+            }
+        };
+        let shape = if disjoint {
+            RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D)
+        } else {
+            RustSourceTypeShapeV1::shared_slice(element)
+        };
+        RustLayoutEvidenceV1::new(
+            RustTypeEvidenceV1::new(shape),
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            16,
+            8,
+            vec![
+                RustPhysicalComponentV1::new(
+                    0,
+                    8,
+                    8,
+                    RustPhysicalComponentKindV1::Pointer {
+                        mutability: if disjoint {
+                            RustPointerMutabilityV1::Mut
+                        } else {
+                            RustPointerMutabilityV1::Const
+                        },
+                        pointee: element,
+                    },
+                )
+                .unwrap(),
+                RustPhysicalComponentV1::new(8, 8, 8, RustPhysicalComponentKindV1::Usize).unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    let kinds = [
+        GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::U16),
+        GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::U16),
+        GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
+    ];
+    let arguments = kinds
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| TypedDescriptorArgumentV1 {
+            name: format!("arg{index}"),
+            kind: descriptor_argument_kind(kind),
+            access: match kind {
+                GeneralTypedArgumentKindV3::SharedSlice(_) => AccessMode::ReadOnly,
+                GeneralTypedArgumentKindV3::DisjointSlice(_) => AccessMode::ReadWrite,
+                GeneralTypedArgumentKindV3::Scalar(_) => unreachable!(),
+            },
+            offset: (index as u32) * 16,
+            layout: layout(kind),
+        })
+        .collect::<Vec<_>>();
+    let source_name =
+        crate::collected_tiled_gemm_lds_slice1_v1::LDS_SLICE1_KERNEL_EXPORT_V1.to_owned();
+    let root = TypedDescriptorRootV1 {
+        logical_name: source_name.clone(),
+        export_name: source_name,
+        profile: TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+            generated_host_contract_identity: GeneratedHostContractIdV3::from_bytes([0x6c; 32]),
+        },
+        kernel_binding: KernelBindingIdV1::from_bytes([0x4c; 32]),
+        arguments: TypedArgumentListV1::new(arguments).unwrap(),
+        explicit_argument_bytes: 48,
+        kernarg_alignment_bytes: 8,
+    };
+    let module = fe2o3_kernel_ir::tiled_gemm_lds_v1_module();
+    let compiler_module =
+        crate::kernel_ir_codegen::construct_inert_tiled_gemm_lds_slice1_module_text(&module)
+            .unwrap();
+    let target = fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-").unwrap();
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .unwrap();
+    (envelope, module, compiler_module, root)
+}
+
+#[cfg(test)]
+pub(crate) fn tiled_gemm_lds_slice1_descriptor_source_for_test() -> CompilerDescriptorSourceV1 {
+    let (envelope, module, compiler_module, root) =
+        tiled_gemm_lds_slice1_descriptor_inputs_for_test();
+    construct_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
         &envelope,
         &module,
         &compiler_module,
@@ -1919,6 +2428,71 @@ mod tests {
             first.table().kernels()[0].executable_ir_evidence(),
             second.table().kernels()[0].executable_ir_evidence()
         );
+    }
+
+    #[test]
+    fn exact_lds_slice1_descriptor_projects_source_name_and_binds_static_resources() {
+        let source = tiled_gemm_lds_slice1_descriptor_source_for_test();
+        let table = source.table();
+        assert_eq!(table.device_target().to_string(), "gfx942:xnack-");
+        assert_eq!(table.code_object_version(), CodeObjectVersion::V6);
+        let [kernel] = table.kernels() else {
+            panic!("exact LDS descriptor must contain one kernel");
+        };
+        assert_eq!(kernel.logical_name().as_str(), "tiled_gemm_lds_slice1");
+        assert_eq!(kernel.entry_name().as_str(), "tiled_gemm_lds_v1");
+        assert_eq!(kernel.descriptor_symbol().as_str(), "tiled_gemm_lds_v1.kd");
+        assert_eq!(kernel.abi_layout().explicit_argument_size(), 48);
+        assert_eq!(kernel.abi_layout().kernarg_segment_size(), 304);
+        assert_eq!(kernel.abi_layout().kernarg_segment_alignment(), 8);
+        assert_eq!(
+            kernel.launch().block_size(),
+            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1).unwrap())
+        );
+        assert_eq!(
+            kernel.launch().max_grid(),
+            DimensionsV1::new(1, 1, 1).unwrap()
+        );
+        assert_eq!(kernel.launch().static_shared_memory_bytes(), 1024);
+        assert_eq!(kernel.launch().max_dynamic_shared_memory_bytes(), 0);
+        assert_eq!(
+            kernel.capabilities(),
+            &[
+                CapabilityV1::Subgroup,
+                CapabilityV1::WorkgroupMemory,
+                CapabilityV1::MatrixMultiply,
+                CapabilityV1::AmdWave,
+                CapabilityV1::AmdMfma,
+            ]
+        );
+        assert_eq!(
+            kernel
+                .arguments()
+                .iter()
+                .map(|argument| argument.name().as_str())
+                .collect::<Vec<_>>(),
+            ["arg0", "arg1", "arg2"]
+        );
+        assert_eq!(kernel.arguments()[0].access(), AccessMode::ReadOnly);
+        assert_eq!(kernel.arguments()[1].access(), AccessMode::ReadOnly);
+        assert_eq!(kernel.arguments()[2].access(), AccessMode::ReadWrite);
+
+        let (_, module, compiler_module, root) = tiled_gemm_lds_slice1_descriptor_inputs_for_test();
+        let wrong_target = DeviceTargetV1::parse("gfx942:xnack+").unwrap();
+        let wrong_envelope = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+            wrong_target,
+            CodeObjectVersion::V6,
+        )
+        .unwrap();
+        assert!(matches!(
+            construct_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
+                &wrong_envelope,
+                &module,
+                &compiler_module,
+                &[root],
+            ),
+            Err(CompilerDescriptorError::TiledGemmLdsSlice1DescriptorMismatch("target/COV6"))
+        ));
     }
 
     #[test]
