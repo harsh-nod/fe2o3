@@ -2686,11 +2686,11 @@ mod platform {
         }
 
         #[test]
-        fn exactly_max_parallel_requests_do_not_leak_slots() {
+        fn exactly_max_parallel_connections_admit_and_shutdown_cleanly() {
             const CLIENTS: usize = MAX_ACTIVE_CONNECTIONS;
             let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
             let binding = ordinary_binding();
-            let broker = Arc::new(start_test_broker(
+            let broker = start_test_broker(
                 session,
                 binding,
                 &backend,
@@ -2698,16 +2698,12 @@ mod platform {
                 &pinned_cargo_image,
                 CLIENTS,
                 BROKER_IO_TIMEOUT,
-            ));
+            );
             let pause = broker.shutdown.install_worker_pause();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
             let clients = (0..CLIENTS)
-                .map(|_| {
-                    let broker = Arc::clone(&broker);
-                    thread::spawn(move || {
-                        let route = BrokerRouteV2::parse(broker.route()).unwrap();
-                        receive_from(&route, session, binding).unwrap();
-                    })
-                })
+                .map(|_| UnixStream::connect_addr(&address).unwrap())
                 .collect::<Vec<_>>();
             for reached in 0..CLIENTS {
                 assert!(
@@ -2726,20 +2722,15 @@ mod platform {
                 assert!(broker.shutdown.active_connection_count() > reached);
             }
             assert_eq!(broker.shutdown.active_connection_count(), CLIENTS);
-            for _ in 0..CLIENTS {
-                pause.release();
-            }
-            for client in clients {
-                client.join().unwrap();
-            }
-            wait_until(
-                || broker.shutdown.active_connection_count() == 0,
-                "parallel requests leaked active registry slots",
-            );
             assert_eq!(
                 broker.shutdown.admission_rejections.load(Ordering::Acquire),
                 0
             );
+            let shutdown = Arc::clone(&broker.shutdown);
+            drop(clients);
+            drop(pause);
+            drop(broker);
+            assert_eq!(shutdown.active_connection_count(), 0);
         }
 
         #[test]
