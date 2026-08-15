@@ -1,0 +1,37 @@
+//! Quarantined until `#[kernel(typed)]` accepts explicit global pointer arguments.
+
+use fe2o3_device::atomic::{
+    AtomicU32, CORE_ATOMIC_DEFAULT_SCOPE, CoreAtomicDefaultScope, Ordering,
+};
+use fe2o3_device::{DeviceGlobalMutPtr, kernel, thread};
+
+const _: CoreAtomicDefaultScope = CoreAtomicDefaultScope::System;
+const _: CoreAtomicDefaultScope = CORE_ATOMIC_DEFAULT_SCOPE;
+
+/// Adds each eligible lane's value exactly once to one global atomic object.
+///
+/// `DeviceGlobalMutPtr` states the global address space. Ordinary Rust atomics
+/// map to system scope in fe2o3-device, and `Ordering::Relaxed` is explicit.
+/// Host admission guarantees that the exact mathematical sum fits in `u32`.
+#[kernel(
+    typed,
+    namespace = "409357ef99d9ec78c960cca0e21a4e153c60af522c1c4d726a9f23b5c7271b91",
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn scoped_atomic_add_u32_v1(
+    values: &[u32],
+    eligible: &[u32],
+    target: DeviceGlobalMutPtr<u32>,
+) {
+    let lane = thread::thread_idx_x() as usize;
+    if values.len() != 64 || eligible.len() != 64 || lane >= 64 {
+        fe2o3_device::trap();
+        return;
+    }
+    if eligible[lane] != 0 {
+        // SAFETY: profile admission requires one aligned live AtomicU32 object
+        // in coherent global memory, accessed atomically for the full launch.
+        let target = unsafe { AtomicU32::from_ptr(target.as_raw()) };
+        target.fetch_add(values[lane], Ordering::Relaxed);
+    }
+}
