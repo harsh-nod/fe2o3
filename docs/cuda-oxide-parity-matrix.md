@@ -410,8 +410,11 @@ The detailed dependencies and exit criteria are in
   inspected upstream-LLVM/COV6 lowering. The collector now authenticates the
   exact attributed Slice 1 root, reviewed MIR operation sequence, ABI, geometry,
   and compiler-derived LDS resources before selecting the canonical verified
-  IR. That bounded correspondence stops before descriptor construction, Worker
-  V2, LLVM, HSACO, load, or launch and is not a compiler-refinement proof. The
+  IR. An identity-bound Verus model adds 96 checked obligations for exact
+  extents, same-epoch LDS initialization, publish ordering, unique output
+  ownership, and source/IR identities, with four expected-rejection mutations.
+  That bounded correspondence stops before descriptor construction, Worker V2,
+  LLVM, HSACO, load, or launch and is not a compiler-refinement proof. The
   separately executed artifact is therefore not joined to the source receipt,
   so these additions do not change the Partial classifications.
 - Rows 65, 72, and 73: the gfx942 wave/LDS V2 slice lowers a logically masked

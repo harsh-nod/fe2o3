@@ -103,6 +103,15 @@ compiler-refinement proof or protected authority. The separately lowered and
 observed Slice 1 artifact below is therefore not yet joined to this source
 receipt.
 
+`verus/lds_tiled_slice1_source_refinement.rs` is a bounded, identity-bound
+source/model correspondence for this exact profile. Its 96 verified obligations
+cover exact source lengths, global bounds, same-epoch LDS initialization,
+publish ordering, unique output ownership, and pinned portable-MIR,
+correspondence, and canonical-module identities. Four negative fixtures reject
+a short input, read at the publish event, colliding output ownership, and
+portable-MIR identity drift. It does not establish rustc, LLVM, linking, or
+machine refinement and grants no descriptor, load, or launch authority.
+
 `verus/tiled_gemm_host_contract.rs` is an independent mathematical proof of
 the public contract on the repository's 64-bit host profile. Its 23 public
 proof functions discharge 73 verification obligations covering the exact

@@ -33,6 +33,10 @@ first four slices, but not the artifact-identity join required for promotion:
   512-byte LDS tiles before a single-use receipt selects the canonical Slice 1
   Kernel IR. Hostile barrier, index, and same-spelling-helper mutations fail
   before IR selection;
+- an identity-bound Verus source model checks 96 obligations for exact lengths,
+  same-epoch LDS initialization, publish-barrier ordering, unique output
+  ownership, and the portable-MIR/correspondence/canonical-module identities.
+  Four hostile source-model mutations fail at their intended obligations;
 - canonical Slice 1 Kernel IR has hostile verifier tests, a 93-obligation Verus
   model, dedicated upstream-LLVM lowering, final HSACO inspection, and an
   observational six-case MI300X run with allocation canaries;

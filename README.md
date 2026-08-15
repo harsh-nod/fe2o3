@@ -45,7 +45,10 @@ BF16/F32 algorithm. The compiler collector authenticates the exact attributed
 root, reviewed portable MIR operations and ABI, derives two distinct aligned
 512-byte LDS allocations, and consumes a single-use receipt to select the
 verified canonical Slice 1 Kernel IR. This is bounded source correspondence,
-not a general lowering or compiler-refinement proof.
+not a general lowering or compiler-refinement proof. A separate identity-bound
+Verus source model discharges 96 obligations for exact lengths, LDS
+initialization, publish ordering, and unique output ownership; four hostile
+length, barrier, ownership, and portable-MIR identity mutations are rejected.
 
 The canonical Slice 1 IR separately lowers through pinned upstream LLVM/LLD to
 a COV6 `gfx942:xnack-` WG64/wave64 HSACO with 1,024 bytes of static LDS, LDS
@@ -73,6 +76,9 @@ The active, non-overlapping work is tracked in issues
 [#90](https://github.com/harsh-nod/fe2o3/issues/90); tutorial and evidence-site
 updates are tracked in
 [fe2o3-kernels #1](https://github.com/harsh-nod/fe2o3-kernels/issues/1).
+The bounded Verus groundwork is in
+[#87](https://github.com/harsh-nod/fe2o3/issues/87); certificate consumption
+and extension to the later slices remain open there.
 
 The intended end state is:
 
