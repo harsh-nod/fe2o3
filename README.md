@@ -43,17 +43,24 @@ The next Wave64 and workgroup-synchronization slices now start from ordinary
 deterministic CPU oracles, hostile source tests, and bounded Verus models for a
 masked Wave64 reduction/scan and an LDS/barrier/scoped-atomic profile. The typed
 device ABI preserves mutable global address-space pointers and exposes a linear,
-compiler-only exact-LDS capability. These slices do not yet grant artifact or
-launch authority: authenticated rustc collection, Kernel IR selection,
-finalization, Worker V2 admission, and `gfx942` execution are tracked in
+compiler-only exact-LDS capability. The Wave64 compiler profile now authenticates
+the exact attributed source, FnAbi, trusted definitions, complete reachable MIR,
+mask semantics, ordered collectives, and output ownership before selecting a
+closed semantic Kernel IR sidecar. The workgroup-synchronization profile still
+stops at source/proof. Neither slice grants artifact or launch authority:
+remaining compiler work, finalization, Worker V2 admission, and `gfx942`
+execution are tracked in
 [#117](https://github.com/harsh-nod/fe2o3/issues/117) and
 [#118](https://github.com/harsh-nod/fe2o3/issues/118).
 
 The fixed 64-element row-softmax slice uses one shared numerical oracle and an
 inert deterministic certificate that binds its exact Rust source, reviewed MIR
 profile, Kernel IR and LLVM identities, numerical policy, and Verus/Z3 closure.
-The certificate is evidence, not authority: protected admission and exact
-MI300X execution remain open under
+An exact finalizer join now consumes that certificate with the direct LLVM/LLD
+worker exchange, OCML closure, artifact, descriptor, ABI, geometry, and resource
+identities into a sealed linear host token. The token exposes no artifact bytes,
+native handles, generic runtime, loading, or launch authority. Its private HSA
+lifecycle and exact MI300X execution remain open under
 [#120](https://github.com/harsh-nod/fe2o3/issues/120). The subsequent fixed
 FlashAttention and top-2 MoE vertical slices are tracked by
 [#122](https://github.com/harsh-nod/fe2o3/issues/122) through
