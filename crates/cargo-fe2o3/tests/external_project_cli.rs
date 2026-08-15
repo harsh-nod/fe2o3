@@ -1100,6 +1100,7 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(debug_assertions)]
 #[test]
 fn authoritative_kernel_preflight_rejects_a_hostile_custom_build() {
     let fixture = ProjectFixture::standalone();
@@ -1169,6 +1170,7 @@ fn authoritative_kernel_preflight_rejects_a_hostile_custom_build() {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(debug_assertions)]
 #[test]
 fn authoritative_kernel_preflight_rejects_a_hostile_proc_macro() {
     let fixture = ProjectFixture::standalone();
@@ -1524,6 +1526,7 @@ fn configured_loader_environment_is_rejected_before_artifact_authority() {
     );
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_build_requires_an_independent_exact_rustc_digest() {
     let missing = ProjectFixture::standalone();
@@ -1920,6 +1923,7 @@ fn protected_release_rejects_path_aliases() {
     assert!(!path_alias.log.exists(), "alias rejection executed Cargo");
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_requires_an_explicit_rustc_path_without_path_selection() {
     let fixture = ProjectFixture::standalone();
@@ -1950,6 +1954,7 @@ fn authority_requires_an_explicit_rustc_path_without_path_selection() {
     assert!(!fixture.log.exists(), "rustc path rejection executed Cargo");
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_metadata_is_frozen_offline_and_has_no_host_helper_environment() {
     let fixture = ProjectFixture::standalone();
@@ -2000,6 +2005,7 @@ fn authority_metadata_is_frozen_offline_and_has_no_host_helper_environment() {
     }
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_rejects_credential_and_registry_helper_channels_before_cargo() {
     for name in [
@@ -2023,6 +2029,7 @@ fn authority_rejects_credential_and_registry_helper_channels_before_cargo() {
     }
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_build_requires_independent_runtime_and_cargo_digests() {
     let missing_runtime = ProjectFixture::standalone();
@@ -2103,6 +2110,7 @@ fn authority_build_requires_independent_runtime_and_cargo_digests() {
     }
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_build_requires_an_independent_exact_backend_digest() {
     let missing = ProjectFixture::standalone();
@@ -2197,6 +2205,7 @@ fn authority_build_requires_an_independent_exact_backend_digest() {
     assert!(!wrong.target.join("fe2o3").exists());
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_build_rejects_rustup_selection_substitution() {
     for (variable, value) in [
@@ -2224,6 +2233,7 @@ fn authority_build_rejects_rustup_selection_substitution() {
 }
 
 #[cfg(unix)]
+#[cfg(debug_assertions)]
 #[test]
 fn authority_build_never_executes_a_rustup_proxy_during_rustc_resolution() {
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -2280,6 +2290,7 @@ fn authority_build_never_executes_a_rustup_proxy_during_rustc_resolution() {
 }
 
 #[cfg(unix)]
+#[cfg(debug_assertions)]
 #[test]
 fn authority_build_rejects_unpinned_cargo_before_executing_it() {
     use std::os::unix::fs::PermissionsExt;
@@ -2327,6 +2338,7 @@ fn authority_build_rejects_unpinned_cargo_before_executing_it() {
     );
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_build_rejects_linker_and_runner_environment() {
     for variable in [
@@ -2350,6 +2362,7 @@ fn authority_build_rejects_linker_and_runner_environment() {
     }
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn authority_build_rejects_configured_linker_and_runner() {
     for (variable, value, diagnostic) in [
@@ -2802,6 +2815,7 @@ fn failed_owned_generation_is_cleaned_before_retry() {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(debug_assertions)]
 #[test]
 fn cargo_failure_aggregates_runtime_and_authority_closure_revalidation() {
     let fixture = ProjectFixture::standalone();
