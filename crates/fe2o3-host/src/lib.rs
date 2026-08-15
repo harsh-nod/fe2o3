@@ -9,6 +9,7 @@ mod generated_lds_gemm;
 mod generated_lds_gemm_lifecycle;
 #[cfg(test)]
 mod generated_lds_gemm_lifecycle_tests;
+mod generated_row_softmax_v1;
 mod generated_scalar_gemm_v1;
 mod generated_vecadd;
 mod generated_worker_v2_vecadd;
@@ -17,6 +18,7 @@ mod hsa_executable_lifecycle;
 mod launch_kernel_v2_bridge;
 mod loaded_kernel;
 mod prepared_launch;
+mod protected_row_softmax_v1_lifecycle;
 mod published_direct_link;
 mod published_hsaco_inspection;
 mod recovered_worker_v2_admission;
@@ -124,6 +126,11 @@ pub use generated_lds_gemm_lifecycle::{
     join_exact_lds_gemm_slice1_v1,
 };
 #[doc(hidden)]
+pub use generated_row_softmax_v1::{
+    GeneratedProtectedRowSoftmaxV1HostAdapterErrorV1, GeneratedProtectedRowSoftmaxV1HostAdapterV1,
+    ProtectedRowSoftmaxV1BufferRoleV1,
+};
+#[doc(hidden)]
 pub use generated_scalar_gemm_v1::{
     CompilerGeneratedScalarGemmV1Arguments, GeneratedScalarGemmV1ArgumentBinding,
     GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
@@ -186,6 +193,13 @@ pub use prepared_launch::{
     ArgumentAdmittedLaunch, CheckedDimensions, DeviceIdentity, KernelBrand, LaunchAxis,
     LaunchDimension, ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch,
     PreparedResources, UntrustedKernelDeclaration, UntrustedLaunchRequest,
+};
+pub use protected_row_softmax_v1_lifecycle::{
+    CompletedProtectedRowSoftmaxV1, JoinedProtectedRowSoftmaxV1, LoadedProtectedRowSoftmaxV1,
+    ProtectedRowSoftmaxV1DispatchErrorV1, ProtectedRowSoftmaxV1JoinErrorV1,
+    ProtectedRowSoftmaxV1KernelResourceObservationV1, ProtectedRowSoftmaxV1LoadErrorV1,
+    ProtectedRowSoftmaxV1UnloadIdentityV1, ReviewedProtectedRowSoftmaxV1RuntimeAdapterV1,
+    UnloadedProtectedRowSoftmaxV1, join_protected_row_softmax_v1,
 };
 pub use published_direct_link::{
     PublishedDirectLinkAdmissionError, ValidatedPublishedDirectLinkSelectionV1,

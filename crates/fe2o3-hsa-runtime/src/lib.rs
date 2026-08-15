@@ -5,6 +5,7 @@ mod dispatch;
 mod environment;
 mod lds_gemm_resource_observation;
 mod lifecycle;
+mod row_softmax_resource_observation;
 mod sys;
 
 #[cfg(feature = "hardware-test-hooks")]
