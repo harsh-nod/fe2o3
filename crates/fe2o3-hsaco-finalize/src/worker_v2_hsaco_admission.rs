@@ -67,6 +67,7 @@ pub(crate) enum WorkerV2RawLaunchDiagnosticProfileV1 {
     TiledGemmV1,
     RowSoftmaxV1,
     Wave64CollectivesV1,
+    WorkgroupSyncV1,
 }
 
 impl WorkerV2RawLaunchContractV1 {
@@ -89,6 +90,12 @@ impl WorkerV2RawLaunchContractV1 {
     };
 
     pub(crate) const WAVE64_COLLECTIVES_V1: Self = Self {
+        required_workgroup_size: [64, 1, 1],
+        max_flat_workgroup_size: 64,
+        wavefront_size: REQUIRED_WAVEFRONT_SIZE,
+    };
+
+    pub(crate) const WORKGROUP_SYNC_V1: Self = Self {
         required_workgroup_size: [64, 1, 1],
         max_flat_workgroup_size: 64,
         wavefront_size: REQUIRED_WAVEFRONT_SIZE,
@@ -412,6 +419,26 @@ pub enum WorkerV2RawHsacoInspectionError {
         actual: u32,
         expected: u32,
     },
+    WorkgroupSyncV1RequiredWorkgroupSizeMismatch {
+        kernel: String,
+        actual: Option<[u32; 3]>,
+        expected: [u32; 3],
+    },
+    WorkgroupSyncV1MaxFlatWorkgroupSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
+    WorkgroupSyncV1MetadataWavefrontSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
+    WorkgroupSyncV1DescriptorWavefrontSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
 }
 
 impl fmt::Display for WorkerV2RawHsacoInspectionError {
@@ -568,6 +595,38 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
             } => write!(
                 formatter,
                 "Wave64 collectives V1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
+            ),
+            Self::WorkgroupSyncV1RequiredWorkgroupSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "workgroup-sync V1 kernel {kernel} requires {actual:?}, expected {expected:?}"
+            ),
+            Self::WorkgroupSyncV1MaxFlatWorkgroupSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "workgroup-sync V1 kernel {kernel} max flat workgroup is {actual}, expected {expected}"
+            ),
+            Self::WorkgroupSyncV1MetadataWavefrontSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "workgroup-sync V1 kernel {kernel} metadata wavefront is {actual}, expected {expected}"
+            ),
+            Self::WorkgroupSyncV1DescriptorWavefrontSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "workgroup-sync V1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
             ),
         }
     }
@@ -783,6 +842,13 @@ fn required_workgroup_size_mismatch(
                 expected: launch.required_workgroup_size(),
             }
         }
+        WorkerV2RawLaunchDiagnosticProfileV1::WorkgroupSyncV1 => {
+            WorkerV2RawHsacoInspectionError::WorkgroupSyncV1RequiredWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.required_workgroup_size(),
+            }
+        }
     }
 }
 
@@ -815,6 +881,13 @@ fn max_flat_workgroup_size_mismatch(
         }
         WorkerV2RawLaunchDiagnosticProfileV1::Wave64CollectivesV1 => {
             WorkerV2RawHsacoInspectionError::Wave64CollectivesV1MaxFlatWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.max_flat_workgroup_size(),
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::WorkgroupSyncV1 => {
+            WorkerV2RawHsacoInspectionError::WorkgroupSyncV1MaxFlatWorkgroupSizeMismatch {
                 kernel: kernel.to_owned(),
                 actual,
                 expected: launch.max_flat_workgroup_size(),
@@ -857,6 +930,13 @@ fn metadata_wavefront_size_mismatch(
                 expected: launch.wavefront_size(),
             }
         }
+        WorkerV2RawLaunchDiagnosticProfileV1::WorkgroupSyncV1 => {
+            WorkerV2RawHsacoInspectionError::WorkgroupSyncV1MetadataWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.wavefront_size(),
+            }
+        }
     }
 }
 
@@ -889,6 +969,13 @@ fn descriptor_wavefront_size_mismatch(
         }
         WorkerV2RawLaunchDiagnosticProfileV1::Wave64CollectivesV1 => {
             WorkerV2RawHsacoInspectionError::Wave64CollectivesV1DescriptorWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.wavefront_size(),
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::WorkgroupSyncV1 => {
+            WorkerV2RawHsacoInspectionError::WorkgroupSyncV1DescriptorWavefrontSizeMismatch {
                 kernel: kernel.to_owned(),
                 actual,
                 expected: launch.wavefront_size(),

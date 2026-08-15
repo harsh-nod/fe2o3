@@ -38,6 +38,9 @@ mod worker_protocol_v2;
 mod worker_v2_hsaco_admission;
 mod worker_v2_hsaco_finalization;
 mod worker_v2_hsaco_publication;
+mod workgroup_lds_reduction_v1_profile;
+mod workgroup_scoped_atomic_v1_profile;
+mod workgroup_sync_v1_worker;
 
 pub use compiler_ffi_bridge::{
     ExpectedFinalDefinedSymbolsClaimIdentityV1, ExpectedFinalDefinedSymbolsClaimV1,
@@ -191,6 +194,13 @@ pub use worker_v2_hsaco_publication::{
     WorkerV2HsacoPublicationRouteV1, prepare_finalized_worker_v2_hsaco_publication_v1,
     prepare_worker_v2_hsaco_publication_v1, publish_prepared_finalized_worker_v2_hsaco_v1,
     publish_prepared_worker_v2_hsaco_v1,
+};
+pub use workgroup_sync_v1_worker::{
+    InspectedWorkgroupSyncWorkerV2HsacoV1, ValidatedWorkgroupSyncWorkerExchangeV1,
+    WorkgroupSyncCompilerPinsV1, WorkgroupSyncDirectWorkerExpectationV1,
+    WorkgroupSyncDirectWorkerPinsV1, WorkgroupSyncProfileKindV1, WorkgroupSyncWorkerErrorV1,
+    WorkgroupSyncWorkerExchangeIdentityV1, construct_inert_workgroup_sync_v1_compiler_handoff_v1,
+    inspect_workgroup_sync_v1_worker_v2_hsaco_v1, validate_workgroup_sync_v1_worker_exchange_v1,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.
