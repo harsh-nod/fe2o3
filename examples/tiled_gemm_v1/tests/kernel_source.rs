@@ -55,34 +55,6 @@ fn calls(function: &syn::ItemFn) -> BodyCalls {
     calls
 }
 
-fn byte_array_constant(syntax: &syn::File, name: &str) -> Vec<u8> {
-    let expression = syntax
-        .items
-        .iter()
-        .find_map(|item| match item {
-            syn::Item::Const(item) if item.ident == name => Some(item.expr.as_ref()),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing constant `{name}`"));
-    let syn::Expr::Reference(reference) = expression else {
-        panic!("`{name}` is not a referenced byte array");
-    };
-    let syn::Expr::Array(array) = reference.expr.as_ref() else {
-        panic!("`{name}` is not a referenced byte array");
-    };
-    array
-        .elems
-        .iter()
-        .map(|element| match element {
-            syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Int(value),
-                ..
-            }) => value.base10_parse().expect("frontend byte fits u8"),
-            _ => panic!("`{name}` contains a non-integer byte"),
-        })
-        .collect()
-}
-
 #[test]
 fn attributed_kernel_and_generated_marker_compile_with_the_exact_abi() {
     type KernelFn = fn(&[u16], &[u16], DisjointSlice<f32>);
@@ -158,7 +130,9 @@ fn executable_function_body_contains_the_slice1_algorithm() {
     let attribute = attribute.tokens.to_string();
     assert!(attribute.contains("typed"));
     assert!(attribute.contains("67100a64733dabbac624aac230d3ca79ccea4cc307c45ee64d41f3362bc16bbb"));
-    assert!(!attribute.contains("launch"));
+    assert!(attribute.contains("launch"));
+    assert!(attribute.contains("required = [64 , 1 , 1]"));
+    assert!(attribute.contains("max = [64 , 1 , 1]"));
 
     let calls = calls(kernel);
     for required in [
@@ -203,17 +177,13 @@ fn executable_function_body_contains_the_slice1_algorithm() {
 }
 
 #[test]
-fn wg64_frontend_sidecar_is_exact_source_data() {
+fn wg64_frontend_contract_is_macro_owned_without_a_handwritten_sidecar() {
     let syntax = syn::parse_file(SOURCE).expect("kernel source parses as Rust");
-    assert_eq!(
-        byte_array_constant(&syntax, "LDS_SLICE1_FRONTEND_CONTRACT_V1"),
-        [
-            70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0,
-            0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-        ]
-    );
-    assert!(syntax.items.iter().any(|item| {
+    assert!(!syntax.items.iter().any(|item| {
         matches!(item, syn::Item::Static(item) if item.ident == "__fe2o3_kernel_frontend_contract_v1_tiled_gemm_lds_slice1")
+    }));
+    assert!(!syntax.items.iter().any(|item| {
+        matches!(item, syn::Item::Const(item) if item.ident == "LDS_SLICE1_FRONTEND_CONTRACT_V1")
     }));
 }
 

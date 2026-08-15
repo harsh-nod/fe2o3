@@ -214,7 +214,8 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
 ///
 /// V1 launch declarations use `launch(required = [x, y, z], max = [x, y, z],
 /// min_workgroups_per_compute_unit = n)`. Each dimension is nonzero and the
-/// product is at most 1024. The occupancy field requires `max`.
+/// product is at most 1024. Exact typed profiles require `required`; `max` may
+/// be omitted or identical. The occupancy field requires `max`.
 ///
 /// Target assembly must be declared with `unsafe_asm(target = "gfx942",
 /// operands(...), options(...), effects(...))` on an `unsafe fn`. The
@@ -354,6 +355,7 @@ const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
 const MAX_WORKGROUP_THREADS_V1: u64 = 1_024;
 const MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1: u16 = 64;
 const GENERAL_TYPED_DEFAULT_BLOCK_V1: [u32; 3] = [256, 1, 1];
+const GENERAL_TYPED_WAVE64_BLOCK_V1: [u32; 3] = [64, 1, 1];
 const GENERAL_TYPED_POINTER_SIZE_V1: u64 = 8;
 const GENERAL_TYPED_POINTER_ALIGNMENT_V1: u32 = 8;
 const GENERAL_TYPED_SLICE_SIZE_V1: u64 = 16;
@@ -1010,8 +1012,14 @@ fn expand_legacy_kernel_with_imports(
     let frontend_registration = encode_kernel_frontend_contract_v1(&options).map(|bytes| {
         let registration_ident =
             format_ident!("{KERNEL_FRONTEND_REGISTRATION_PREFIX_V1}{original_name}");
+        let bytes_ident =
+            format_ident!("__fe2o3_kernel_frontend_contract_bytes_v1_{original_name}");
         let bytes = bytes.iter();
         quote! {
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            const #bytes_ident: &'static [u8] = &[#(#bytes),*];
+
             #[doc(hidden)]
             #[allow(non_upper_case_globals)]
             #[used]
@@ -1027,7 +1035,7 @@ fn expand_legacy_kernel_with_imports(
                 #KERNEL_FRONTEND_REGISTRATION_VERSION_V1,
                 #KERNEL_FRONTEND_REGISTRATION_KIND_V1,
                 #marker_value,
-                &[#(#bytes),*],
+                #bytes_ident,
                 #internal_ident,
             );
         }
@@ -1281,8 +1289,14 @@ fn expand_general_typed_kernel_with_imports(
     let frontend_registration = encode_kernel_frontend_contract_v1(&options).map(|bytes| {
         let registration_ident =
             format_ident!("{KERNEL_FRONTEND_REGISTRATION_PREFIX_V1}{original_name}");
+        let bytes_ident =
+            format_ident!("__fe2o3_kernel_frontend_contract_bytes_v1_{original_name}");
         let bytes = bytes.iter();
         quote! {
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            const #bytes_ident: &'static [u8] = &[#(#bytes),*];
+
             #[doc(hidden)]
             #[allow(non_upper_case_globals)]
             #[used]
@@ -1298,7 +1312,7 @@ fn expand_general_typed_kernel_with_imports(
                 #KERNEL_FRONTEND_REGISTRATION_VERSION_V1,
                 #KERNEL_FRONTEND_REGISTRATION_KIND_V1,
                 #marker_value,
-                &[#(#bytes),*],
+                #bytes_ident,
                 #internal_ident,
             );
         }
@@ -1568,7 +1582,7 @@ fn validate_typed_kernel_signature(input: &ItemFn) -> syn::Result<()> {
 
 fn validate_typed_kernel_profile_v1(input: &ItemFn, options: &KernelOptions) -> syn::Result<()> {
     match validate_typed_kernel_signature(input) {
-        Ok(()) => Ok(()),
+        Ok(()) => validate_fixed_wg256_launch_v1(options.launch.as_ref(), &input.sig),
         Err(exact_error) => {
             if validate_general_typed_signature_shape_v1(input, options).is_err() {
                 Err(exact_error)
@@ -2351,14 +2365,24 @@ fn model_general_typed_signature_v1(
         .enumerate()
         .map(|(index, argument)| parse_general_typed_argument_v1(argument, index + 1))
         .collect::<syn::Result<Vec<_>>>()?;
-    let exact_argument_names = if exact_scalar_gemm_v1(input, &arguments) {
+    let scalar_gemm_v1 = exact_scalar_gemm_v1(input, &arguments);
+    let alpha_zeta_cov6 = exact_alpha_zeta_cov6_role_v1(input, &arguments);
+    let exact_argument_names = if scalar_gemm_v1 {
         Some(SCALAR_GEMM_V1_ARGUMENT_NAMES)
     } else {
-        exact_alpha_zeta_cov6_role_v1(input, &arguments)
-            .map(AlphaZetaCov6MacroRoleV1::argument_names)
+        alpha_zeta_cov6.map(AlphaZetaCov6MacroRoleV1::argument_names)
     };
     let abi = general_typed_abi_v1(&arguments, exact_argument_names, &input.sig)?;
     let launch = general_typed_launch_v1(options.launch.as_ref(), &input.sig)?;
+    if (scalar_gemm_v1 || alpha_zeta_cov6.is_some())
+        && launch.block_size()
+            != BlockSize::Exact(general_typed_dimensions_v1(GENERAL_TYPED_DEFAULT_BLOCK_V1))
+    {
+        return Err(syn::Error::new_spanned(
+            &input.sig,
+            "the alpha/zeta and scalar_gemm_v1 typed profiles require an exact 256x1x1 launch contract",
+        ));
+    }
     let logical_name = input.sig.ident.to_string();
     let generated_host_contract_identity = derive_generated_host_contract_identity_v1(
         MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
@@ -2751,38 +2775,63 @@ fn general_typed_launch_v1(
     launch: Option<&ParsedLaunchBoundsV1>,
     span: impl quote::ToTokens,
 ) -> syn::Result<LaunchContract> {
-    match launch {
-        None => {}
-        Some(launch) => {
-            if launch.min_workgroups_per_compute_unit.is_some() {
-                return Err(syn::Error::new_spanned(
-                    &span,
-                    "general typed V1 supports only an exact 256x1x1 launch contract",
-                ));
-            }
-            match (launch.required, launch.maximum) {
-                (Some(required), Some(maximum)) if required != maximum => {
-                    return Err(syn::Error::new_spanned(
-                        &span,
-                        "general typed V1 supports only an exact 256x1x1 launch contract",
-                    ));
-                }
-                (Some(required), _) if required == GENERAL_TYPED_DEFAULT_BLOCK_V1 => {}
-                (Some(_), _) | (None, Some(_)) => {
-                    return Err(syn::Error::new_spanned(
-                        &span,
-                        "general typed V1 supports only an exact 256x1x1 launch contract",
-                    ));
-                }
-                (None, None) => unreachable!("launch parser requires one dimension bound"),
-            }
-        }
-    }
-    let block_size = BlockSize::Exact(general_typed_dimensions_v1(GENERAL_TYPED_DEFAULT_BLOCK_V1));
+    let exact_block = match launch {
+        None => GENERAL_TYPED_DEFAULT_BLOCK_V1,
+        Some(launch) => exact_general_typed_block_v1(launch, &span)?,
+    };
+    let block_size = BlockSize::Exact(general_typed_dimensions_v1(exact_block));
     let max_grid = Dimensions::new(u32::MAX, 1, 1).expect("the fixed V1 maximum grid is valid");
     LaunchContract::new(1, block_size, max_grid, 0, 0).map_err(|error| {
         syn::Error::new_spanned(span, format!("invalid general typed V1 launch: {error}"))
     })
+}
+
+fn exact_general_typed_block_v1(
+    launch: &ParsedLaunchBoundsV1,
+    span: impl quote::ToTokens,
+) -> syn::Result<[u32; 3]> {
+    if launch.min_workgroups_per_compute_unit.is_some() {
+        return Err(syn::Error::new_spanned(
+            span,
+            "general typed V1 does not support launch occupancy constraints",
+        ));
+    }
+    let Some(required) = launch.required else {
+        return Err(syn::Error::new_spanned(
+            span,
+            "general typed V1 explicit launch requires required dimensions",
+        ));
+    };
+    if launch.maximum.is_some_and(|maximum| required != maximum) {
+        return Err(syn::Error::new_spanned(
+            span,
+            "general typed V1 explicit launch requires identical required and max dimensions",
+        ));
+    }
+    if required != GENERAL_TYPED_DEFAULT_BLOCK_V1 && required != GENERAL_TYPED_WAVE64_BLOCK_V1 {
+        return Err(syn::Error::new_spanned(
+            span,
+            "general typed V1 supports only exact 64x1x1 or 256x1x1 launch dimensions",
+        ));
+    }
+    Ok(required)
+}
+
+fn validate_fixed_wg256_launch_v1(
+    launch: Option<&ParsedLaunchBoundsV1>,
+    span: impl quote::ToTokens,
+) -> syn::Result<()> {
+    let Some(launch) = launch else {
+        return Ok(());
+    };
+    let exact = exact_general_typed_block_v1(launch, &span)?;
+    if exact != GENERAL_TYPED_DEFAULT_BLOCK_V1 {
+        return Err(syn::Error::new_spanned(
+            span,
+            "the typed vecadd V2 profile requires an exact 256x1x1 launch contract",
+        ));
+    }
+    Ok(())
 }
 
 fn general_typed_dimensions_v1(dimensions: [u32; 3]) -> Dimensions {
@@ -5120,6 +5169,206 @@ mod tests {
     }
 
     #[test]
+    fn general_typed_wg64_expansion_binds_host_identity_and_sidecar_to_renamed_body() {
+        let input: ItemFn = parse_quote! {
+            pub fn lds_slice(a: &[u16], b: &[u16], output: DisjointSlice<f32>) {
+                let _ = (a, b, output);
+            }
+        };
+        let options = parse_kernel_options(quote!(
+            typed,
+            launch(required = [64, 1, 1], max = [64, 1, 1])
+        ))
+        .unwrap();
+        let default_options = parse_kernel_options(quote!(typed)).unwrap();
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["wg64-expansion"]);
+        let kernel_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            "lds_slice",
+            "lds_slice",
+        );
+        let model =
+            model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes()).unwrap();
+        let default_model =
+            model_general_typed_signature_v1(&input, &default_options, kernel_binding.as_bytes())
+                .unwrap();
+        assert_eq!(
+            model.launch.block_size(),
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap())
+        );
+        assert_ne!(
+            model.generated_host_contract_identity, default_model.generated_host_contract_identity,
+            "the generated host identity must bind the exact workgroup"
+        );
+
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let expansion = expand_kernel_with_imports(
+            input,
+            options,
+            &device_import,
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap();
+        let syntax: syn::File = syn::parse2(expansion).unwrap();
+        let internal_name = format!("__fe2o3_host_kernel_v1_{}", kernel_binding.to_hex());
+        assert!(
+            syntax.items.iter().any(
+                |item| matches!(item, Item::Fn(function) if function.sig.ident == internal_name)
+            )
+        );
+
+        let registration = syntax
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Static(item) if item.ident == "__fe2o3_kernel_registration_lds_slice" => {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .expect("generated kernel registration");
+        let Expr::Tuple(registration) = registration.expr.as_ref() else {
+            panic!("kernel registration is not a tuple");
+        };
+        assert_eq!(
+            registration.elems[9].to_token_stream().to_string(),
+            internal_name
+        );
+
+        let frontend = syntax
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Static(item)
+                    if item.ident == "__fe2o3_kernel_frontend_contract_v1_lds_slice" =>
+                {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .expect("generated frontend registration");
+        let Expr::Tuple(frontend) = frontend.expr.as_ref() else {
+            panic!("frontend registration is not a tuple");
+        };
+        assert_eq!(
+            frontend.elems[5].to_token_stream().to_string(),
+            internal_name
+        );
+        let bytes_name = "__fe2o3_kernel_frontend_contract_bytes_v1_lds_slice";
+        assert_eq!(frontend.elems[4].to_token_stream().to_string(), bytes_name);
+        let bytes = syntax
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Const(item) if item.ident == bytes_name => Some(item),
+                _ => None,
+            })
+            .expect("generated frontend byte-slice constant");
+        let Expr::Reference(bytes) = bytes.expr.as_ref() else {
+            panic!("frontend bytes are not referenced");
+        };
+        let Expr::Array(bytes) = bytes.expr.as_ref() else {
+            panic!("frontend bytes are not an array");
+        };
+        let bytes = bytes
+            .elems
+            .iter()
+            .map(|byte| match byte {
+                Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Int(byte),
+                    ..
+                }) => byte.base10_parse::<u8>().unwrap(),
+                _ => panic!("frontend contract contains a non-byte expression"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bytes,
+            [
+                70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64,
+                0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+            ]
+        );
+    }
+
+    #[test]
+    fn required_only_exact_launches_preserve_wg64_and_wg256_compatibility() {
+        let input: ItemFn = parse_quote! {
+            pub fn general(input: &[u16], output: DisjointSlice<f32>) {
+                let _ = (input, output);
+            }
+        };
+        for dimensions in [[64_u32, 1, 1], [256_u32, 1, 1]] {
+            let x = dimensions[0];
+            let options = parse_kernel_options(
+                syn::parse_str::<syn::MetaList>(&format!("launch(required = [{x}, 1, 1])"))
+                    .unwrap()
+                    .to_token_stream(),
+            )
+            .unwrap();
+            let model = model_general_typed_signature_v1(&input, &options, [0x63; 32]).unwrap();
+            assert_eq!(
+                model.launch.block_size(),
+                BlockSize::Exact(fe2o3_artifacts::Dimensions::new(dimensions[0], 1, 1).unwrap())
+            );
+            let bytes = super::encode_kernel_frontend_contract_v1(&options).unwrap();
+            assert_eq!(&bytes[20..22], &1_u16.to_le_bytes());
+            assert_eq!(&bytes[24..28], &dimensions[0].to_le_bytes());
+            assert_eq!(&bytes[36..48], &[0; 12]);
+        }
+
+        let vecadd: ItemFn = parse_quote! {
+            pub fn vecadd(a: &[f32], b: &[f32], output: DisjointSlice<f32>) {
+                let _ = (a, b, output);
+            }
+        };
+        let wg256_required_only =
+            parse_kernel_options(quote!(typed, launch(required = [256, 1, 1]))).unwrap();
+        validate_typed_kernel_profile_v1(&vecadd, &wg256_required_only).unwrap();
+
+        let alpha: ItemFn = parse_quote! {
+            pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
+                let _ = (scale, input, output);
+            }
+        };
+        model_general_typed_signature_v1(&alpha, &wg256_required_only, [0x64; 32]).unwrap();
+    }
+
+    #[test]
+    fn fixed_typed_profiles_reject_wg64_without_falling_back() {
+        let options = parse_kernel_options(quote!(
+            typed,
+            launch(required = [64, 1, 1], max = [64, 1, 1])
+        ))
+        .unwrap();
+        let vecadd: ItemFn = parse_quote! {
+            pub fn vecadd(a: &[f32], b: &[f32], output: DisjointSlice<f32>) {
+                let _ = (a, b, output);
+            }
+        };
+        assert!(
+            validate_typed_kernel_profile_v1(&vecadd, &options)
+                .unwrap_err()
+                .to_string()
+                .contains("typed vecadd V2 profile requires an exact 256x1x1")
+        );
+
+        let alpha: ItemFn = parse_quote! {
+            pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
+                let _ = (scale, input, output);
+            }
+        };
+        assert!(
+            model_general_typed_signature_v1(&alpha, &options, [0x64; 32])
+                .unwrap_err()
+                .to_string()
+                .contains("alpha/zeta and scalar_gemm_v1 typed profiles require")
+        );
+    }
+
+    #[test]
     fn general_typed_model_constructs_nontrivial_abi_under_fixed_launch() {
         let input: ItemFn = parse_quote!(
             pub fn beta(
@@ -5459,8 +5708,16 @@ mod tests {
         );
         for options in [
             parse_kernel_options(quote!(typed, launch(max = [256, 1, 1]))).unwrap(),
-            parse_kernel_options(quote!(typed, launch(required = [128, 2, 1]))).unwrap(),
-            parse_kernel_options(quote!(typed, launch(required = [128, 1, 1]))).unwrap(),
+            parse_kernel_options(quote!(
+                typed,
+                launch(required = [32, 2, 1], max = [32, 2, 1])
+            ))
+            .unwrap(),
+            parse_kernel_options(quote!(
+                typed,
+                launch(required = [128, 1, 1], max = [128, 1, 1])
+            ))
+            .unwrap(),
             parse_kernel_options(quote!(
                 typed,
                 launch(required = [64, 1, 1], max = [128, 1, 1])
@@ -5474,11 +5731,7 @@ mod tests {
         ] {
             let error = model_general_typed_signature_v1(&input, &options, [0x91; 32])
                 .expect_err("unsupported launch contract must fail closed");
-            assert!(
-                error
-                    .to_string()
-                    .contains("supports only an exact 256x1x1 launch contract")
-            );
+            assert!(error.to_string().contains("general typed V1"));
         }
     }
 

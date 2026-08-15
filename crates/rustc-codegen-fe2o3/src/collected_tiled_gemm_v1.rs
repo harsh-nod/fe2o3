@@ -679,15 +679,12 @@ fn require_layout(root: &CollectedFunction<'_>) -> Result<(), CollectedTiledGemm
             _ => unreachable!(),
         }
     }
-    // General typed V3 currently transports rustc layout evidence under its
-    // legacy 256-thread generated-host contract. It is not the execution
-    // launch authority for this profile. The separately authenticated source
-    // frontend contract below is the exact WG64 launch policy committed into
-    // the receipt and portable-MIR identity.
+    // The generated V3 host contract and the independently authenticated
+    // frontend declaration must bind the same exact WG64 policy.
     let transport_launch = contract.launch();
     if transport_launch.rank() != 1
         || transport_launch.block_size()
-            != BlockSize::Exact(Dimensions::new(256, 1, 1).map_err(|error| {
+            != BlockSize::Exact(Dimensions::new(64, 1, 1).map_err(|error| {
                 layout_mismatch(format!("invalid fixed workgroup dimensions: {error}"))
             })?)
         || transport_launch.max_grid()
@@ -698,7 +695,7 @@ fn require_layout(root: &CollectedFunction<'_>) -> Result<(), CollectedTiledGemm
         || transport_launch.max_dynamic_shared_memory_bytes() != 0
     {
         return Err(layout_mismatch(
-            "general V3 layout transport contract drifted from its exact 256x1x1 profile",
+            "general V3 host contract drifted from its exact 64x1x1 profile",
         ));
     }
     let frontend = root

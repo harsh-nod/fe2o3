@@ -1,4 +1,6 @@
-use fe2o3_artifacts::{TypeIdentity, derive_generated_host_contract_identity_v1};
+use fe2o3_artifacts::{
+    BlockSize, Dimensions, LaunchContract, TypeIdentity, derive_generated_host_contract_identity_v1,
+};
 use fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL;
 use fe2o3_rustc_front::{
     ASSEMBLY_OPERAND_ADDRESS_V1, ASSEMBLY_OPERAND_IMMEDIATE_V1, ASSEMBLY_OPERAND_SGPR_V1,
@@ -655,11 +657,14 @@ fn kernel_roots<'tcx>(
             Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
                 generated_host_contract_identity,
             }) => {
+                let launch =
+                    general_typed_launch_v3(root.frontend_contract.as_ref(), &registration_path)?;
                 let contract = crate::rust_type_layout_v3::extract_general_typed_kernel_v3(
                     tcx,
                     root.target,
                     &root.logical_name,
                     &root.export_name,
+                    &launch,
                 )
                 .map_err(|error| {
                     RegistrationError::new(
@@ -706,6 +711,61 @@ fn kernel_roots<'tcx>(
         }
     }
     Ok(roots)
+}
+
+fn general_typed_launch_v3(
+    frontend: Option<&AuthenticatedKernelFrontendContractV1>,
+    registration_path: &str,
+) -> Result<LaunchContract, RegistrationError> {
+    const DEFAULT: [u32; 3] = [256, 1, 1];
+    const WAVE64: [u32; 3] = [64, 1, 1];
+
+    let dimensions = match frontend.and_then(|frontend| frontend.contract().launch()) {
+        None => DEFAULT,
+        Some(launch) => {
+            if launch.min_workgroups_per_compute_unit().is_some() {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "general typed V3 does not support launch occupancy constraints",
+                ));
+            }
+            let Some(required) = launch.required() else {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "general typed V3 explicit launch requires required dimensions",
+                ));
+            };
+            let required = required.as_array();
+            if launch
+                .maximum()
+                .is_some_and(|maximum| required != maximum.as_array())
+            {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "general typed V3 explicit launch requires identical required and maximum dimensions",
+                ));
+            }
+            if required != DEFAULT && required != WAVE64 {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "general typed V3 supports only exact 64x1x1 or 256x1x1 launch dimensions",
+                ));
+            }
+            required
+        }
+    };
+    LaunchContract::new(
+        1,
+        BlockSize::Exact(
+            Dimensions::new(dimensions[0], dimensions[1], dimensions[2])
+                .map_err(|error| RegistrationError::new(registration_path, error.to_string()))?,
+        ),
+        Dimensions::new(u32::MAX, 1, 1)
+            .map_err(|error| RegistrationError::new(registration_path, error.to_string()))?,
+        0,
+        0,
+    )
+    .map_err(|error| RegistrationError::new(registration_path, error.to_string()))
 }
 
 fn encode_lower_hex(bytes: &[u8]) -> String {
@@ -3116,17 +3176,19 @@ mod tests {
     use super::{
         AuthenticatedKernelFrontendContractV1, KernelRoot, ObservedInlineAssemblyV1,
         RegistrationError, RegistrationRecord, TypedArgumentListError, TypedArgumentListV1,
-        TypedKernelProfile, reconcile_frontend_contract,
+        TypedKernelProfile, general_typed_launch_v3, reconcile_frontend_contract,
         validate_registration_records as validate_records,
     };
     use fe2o3_artifacts::{
-        DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, TypeIdentity,
+        BlockSize, DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, Dimensions,
+        TypeIdentity,
     };
     use fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL;
     use fe2o3_rustc_front::{
         ASSEMBLY_OPERAND_SGPR_V1, ASSEMBLY_OPTION_NOMEM_V1, ASSEMBLY_OPTION_NOSTACK_V1,
-        ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, FrontendUnsafeAssemblyDeclarationV1,
-        FrontendUnsafeAssemblyTargetV1, KernelFrontendContractV1,
+        ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, FrontendLaunchBoundsV1,
+        FrontendUnsafeAssemblyDeclarationV1, FrontendUnsafeAssemblyTargetV1,
+        FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
     };
     use reserved_fe2o3_symbols::{
         GeneratedHostContractIdV3, KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
@@ -3646,6 +3708,57 @@ mod tests {
     fn kernel_prefix_spoof_without_registration_is_not_a_root() {
         let roots = validate_registration_records::<u8>(Vec::new()).unwrap();
         assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn general_typed_launch_accepts_required_only_exact_profiles_and_rejects_ambiguity() {
+        let authenticated =
+            |required: Option<[u32; 3]>, maximum: Option<[u32; 3]>, occupancy: Option<u16>| {
+                let launch = FrontendLaunchBoundsV1::new(
+                    required.map(|value| FrontendWorkgroupDimensionsV1::new(value).unwrap()),
+                    maximum.map(|value| FrontendWorkgroupDimensionsV1::new(value).unwrap()),
+                    occupancy,
+                )
+                .unwrap();
+                AuthenticatedKernelFrontendContractV1::for_test(
+                    KernelFrontendContractV1::new(Some(launch), None).unwrap(),
+                )
+            };
+
+        let default = general_typed_launch_v3(None, "registration").unwrap();
+        assert_eq!(
+            default.block_size(),
+            BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap())
+        );
+        for dimensions in [[64, 1, 1], [256, 1, 1]] {
+            let frontend = authenticated(Some(dimensions), None, None);
+            let launch = general_typed_launch_v3(Some(&frontend), "registration").unwrap();
+            assert_eq!(
+                launch.block_size(),
+                BlockSize::Exact(
+                    Dimensions::new(dimensions[0], dimensions[1], dimensions[2]).unwrap()
+                )
+            );
+
+            let frontend = authenticated(Some(dimensions), Some(dimensions), None);
+            let launch = general_typed_launch_v3(Some(&frontend), "registration").unwrap();
+            assert_eq!(
+                launch.block_size(),
+                BlockSize::Exact(
+                    Dimensions::new(dimensions[0], dimensions[1], dimensions[2]).unwrap()
+                )
+            );
+        }
+
+        for frontend in [
+            authenticated(None, Some([64, 1, 1]), None),
+            authenticated(Some([64, 1, 1]), Some([256, 1, 1]), None),
+            authenticated(Some([256, 1, 1]), Some([256, 1, 1]), Some(2)),
+            authenticated(Some([32, 2, 1]), None, None),
+            authenticated(Some([128, 1, 1]), None, None),
+        ] {
+            assert!(general_typed_launch_v3(Some(&frontend), "registration").is_err());
+        }
     }
 
     #[test]

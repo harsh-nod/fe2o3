@@ -3603,6 +3603,10 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
     }
     let workspace = workspace();
     let backend = build_backend(&workspace);
+    assert!(TILED_GEMM_FIXTURE.contains("launch(required = [64, 1, 1], max = [64, 1, 1])"));
+    assert!(
+        !TILED_GEMM_FIXTURE.contains("static __fe2o3_kernel_frontend_contract_v1_tiled_gemm_v1")
+    );
 
     let exact_output = TestOutputDir::new(&workspace);
     let exact = compile_tiled_gemm(
@@ -3654,8 +3658,8 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
 
     let lookalike_source = TILED_GEMM_FIXTURE
         .replacen(
-            "const FRONTEND_CONTRACT: &[u8] = &[",
-            "fn lookalike_fragment(bits: [u16; 4]) -> Bf16MfmaFragment {\n    Bf16MfmaFragment::from_bits(bits)\n}\n\nconst FRONTEND_CONTRACT: &[u8] = &[",
+            "#[kernel(",
+            "fn lookalike_fragment(bits: [u16; 4]) -> Bf16MfmaFragment {\n    Bf16MfmaFragment::from_bits(bits)\n}\n\n#[kernel(",
             1,
         )
         .replacen("Bf16MfmaFragment::from_bits([", "lookalike_fragment([", 1);

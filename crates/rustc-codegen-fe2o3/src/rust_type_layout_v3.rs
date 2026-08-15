@@ -24,7 +24,8 @@ const INDEX_1D_DIAGNOSTIC_ITEM: &str = "fe2o3_device_thread_index_1d";
 const POINTER_BYTES: u64 = 8;
 const POINTER_ALIGNMENT: u32 = 8;
 const SLICE_BYTES: u64 = 16;
-const WORKGROUP_X: u32 = 256;
+const DEFAULT_WORKGROUP: [u32; 3] = [256, 1, 1];
+const WAVE64_WORKGROUP: [u32; 3] = [64, 1, 1];
 
 const ALPHA_ARGUMENT_KINDS: [GeneralTypedArgumentKindV3; 3] = [
     GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::F32),
@@ -130,6 +131,7 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
     instance: Instance<'tcx>,
     logical_name: &str,
     export_name: &str,
+    launch: &LaunchContract,
 ) -> Result<GeneralTypedKernelContractV3, GeneralTypedExtractError> {
     if !matches!(instance.def, InstanceKind::Item(_)) {
         return Err(GeneralTypedExtractError::new(format!(
@@ -193,24 +195,47 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
     for (index, ty) in signature.inputs().iter().copied().enumerate() {
         arguments.push(extract_argument(tcx, &layout_cx, ty, trusted_index, index)?);
     }
+    validate_general_typed_launch_v3(logical_name, export_name, &arguments, launch)?;
     let abi = build_abi(logical_name, export_name, &arguments)?;
-    let launch = LaunchContract::new(
-        1,
-        BlockSize::Exact(
-            Dimensions::new(WORKGROUP_X, 1, 1)
-                .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?,
-        ),
-        Dimensions::new(u32::MAX, 1, 1)
-            .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?,
-        0,
-        0,
-    )
-    .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?;
     Ok(GeneralTypedKernelContractV3 {
         arguments,
         abi,
-        launch,
+        launch: launch.clone(),
     })
+}
+
+fn validate_general_typed_launch_v3(
+    logical_name: &str,
+    export_name: &str,
+    arguments: &[GeneralTypedArgumentV3],
+    launch: &LaunchContract,
+) -> Result<(), GeneralTypedExtractError> {
+    let BlockSize::Exact(dimensions) = launch.block_size() else {
+        return Err(GeneralTypedExtractError::new(
+            "general typed V3 requires an exact workgroup",
+        ));
+    };
+    let dimensions = [dimensions.x(), dimensions.y(), dimensions.z()];
+    if launch.rank() != 1
+        || (dimensions != DEFAULT_WORKGROUP && dimensions != WAVE64_WORKGROUP)
+        || launch.max_grid()
+            != Dimensions::new(u32::MAX, 1, 1)
+                .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?
+        || launch.static_shared_memory_bytes() != 0
+        || launch.max_dynamic_shared_memory_bytes() != 0
+    {
+        return Err(GeneralTypedExtractError::new(
+            "general typed V3 supports only exact 64x1x1 or 256x1x1 launch contracts",
+        ));
+    }
+    if exact_argument_names(logical_name, export_name, arguments).is_some()
+        && dimensions != DEFAULT_WORKGROUP
+    {
+        return Err(GeneralTypedExtractError::new(
+            "the alpha/zeta and scalar_gemm_v1 V3 profiles require exact 256x1x1 launch",
+        ));
+    }
+    Ok(())
 }
 
 fn extract_argument<'tcx>(
@@ -465,22 +490,7 @@ fn build_abi(
     export_name: &str,
     arguments: &[GeneralTypedArgumentV3],
 ) -> Result<AbiLayout, GeneralTypedExtractError> {
-    let argument_kinds = arguments
-        .iter()
-        .map(|argument| argument.kind())
-        .collect::<Vec<_>>();
-    let exact_names = match (logical_name, export_name) {
-        ("alpha", "alpha") if argument_kinds == ALPHA_ARGUMENT_KINDS => {
-            Some(ALPHA_ARGUMENT_NAMES.as_slice())
-        }
-        ("zeta", "zeta") if argument_kinds == ZETA_ARGUMENT_KINDS => {
-            Some(ZETA_ARGUMENT_NAMES.as_slice())
-        }
-        ("scalar_gemm_v1", "scalar_gemm_v1") if argument_kinds == SCALAR_GEMM_V1_ARGUMENT_KINDS => {
-            Some(SCALAR_GEMM_V1_ARGUMENT_NAMES.as_slice())
-        }
-        _ => None,
-    };
+    let exact_names = exact_argument_names(logical_name, export_name, arguments);
     let mut offset = 0_u64;
     let mut layout_alignment = 1_u32;
     let mut fields = Vec::with_capacity(arguments.len());
@@ -501,6 +511,29 @@ fn build_abi(
     AbiLayout::new(size, layout_alignment, PointerWidth::Bits64, fields).map_err(|error| {
         GeneralTypedExtractError::new(format!("invalid general typed ABI: {error}"))
     })
+}
+
+fn exact_argument_names(
+    logical_name: &str,
+    export_name: &str,
+    arguments: &[GeneralTypedArgumentV3],
+) -> Option<&'static [&'static str]> {
+    let argument_kinds = arguments
+        .iter()
+        .map(|argument| argument.kind())
+        .collect::<Vec<_>>();
+    match (logical_name, export_name) {
+        ("alpha", "alpha") if argument_kinds == ALPHA_ARGUMENT_KINDS => {
+            Some(ALPHA_ARGUMENT_NAMES.as_slice())
+        }
+        ("zeta", "zeta") if argument_kinds == ZETA_ARGUMENT_KINDS => {
+            Some(ZETA_ARGUMENT_NAMES.as_slice())
+        }
+        ("scalar_gemm_v1", "scalar_gemm_v1") if argument_kinds == SCALAR_GEMM_V1_ARGUMENT_KINDS => {
+            Some(SCALAR_GEMM_V1_ARGUMENT_NAMES.as_slice())
+        }
+        _ => None,
+    }
 }
 
 fn build_abi_field(

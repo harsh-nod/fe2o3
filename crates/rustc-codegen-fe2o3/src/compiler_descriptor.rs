@@ -155,13 +155,6 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
                     TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
                         generated_host_contract_identity,
                     } => {
-                        let contract = extract_general_typed_kernel_v3(
-                            tcx,
-                            function.instance,
-                            &logical_name,
-                            &function.export_name,
-                        )
-                        .map_err(CompilerDescriptorError::GeneralRustLayout)?;
                         let retained_contract = function
                             .general_typed_contract
                             .as_ref()
@@ -169,6 +162,14 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
                                 kernel: function.export_name.clone(),
                                 field: "general rustc contract",
                             })?;
+                        let contract = extract_general_typed_kernel_v3(
+                            tcx,
+                            function.instance,
+                            &logical_name,
+                            &function.export_name,
+                            retained_contract.launch(),
+                        )
+                        .map_err(CompilerDescriptorError::GeneralRustLayout)?;
                         if retained_contract != &contract {
                             return Err(CompilerDescriptorError::RetainedGeneralContractMismatch(
                                 function.export_name.clone(),

@@ -41,14 +41,6 @@ pub const LDS_SLICE1_SOURCE_BLOCKERS_V1: [&str; 4] = [
     "the collected tiled GEMM path admits only the direct-global no-LDS canonical graph",
 ];
 
-// The general typed macro currently transports rustc ABI evidence under a
-// legacy WG256 host contract. This separately collected source contract is the
-// exact WG64 policy; neither declaration grants executable or launch authority.
-const LDS_SLICE1_FRONTEND_CONTRACT_V1: &[u8] = &[
-    70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 1,
-    0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-];
-
 /// Computes one fixed `16x16x16` BF16 GEMM tile through XOR4-staged LDS.
 ///
 /// `a` and `b` must each contain exactly 256 row-major BF16 bit patterns and
@@ -63,7 +55,8 @@ const LDS_SLICE1_FRONTEND_CONTRACT_V1: &[u8] = &[
 /// boundary before any output is written.
 #[kernel(
     typed,
-    namespace = "67100a64733dabbac624aac230d3ca79ccea4cc307c45ee64d41f3362bc16bbb"
+    namespace = "67100a64733dabbac624aac230d3ca79ccea4cc307c45ee64d41f3362bc16bbb",
+    launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn tiled_gemm_lds_slice1(a: &[u16], b: &[u16], mut c: DisjointSlice<f32>) {
     let lane_index = thread::index_1d().get();
@@ -149,23 +142,3 @@ fn acquire_bf16_lds_tiles_v1<'workgroup>() -> (
 ) {
     panic!("{LDS_SLICE1_SOURCE_BLOCKER_V1}")
 }
-
-#[doc(hidden)]
-#[allow(non_upper_case_globals)]
-#[allow(clippy::type_complexity)]
-#[used]
-static __fe2o3_kernel_frontend_contract_v1_tiled_gemm_lds_slice1: (
-    u64,
-    u16,
-    u16,
-    &str,
-    &[u8],
-    fn(&[u16], &[u16], DisjointSlice<f32>),
-) = (
-    u64::from_le_bytes(*b"FE2O3KFA"),
-    1,
-    1,
-    "tiled_gemm_lds_slice1",
-    LDS_SLICE1_FRONTEND_CONTRACT_V1,
-    <__fe2o3_kernel_marker_tiled_gemm_lds_slice1 as fe2o3_device::KernelMarkerV1>::FUNCTION,
-);

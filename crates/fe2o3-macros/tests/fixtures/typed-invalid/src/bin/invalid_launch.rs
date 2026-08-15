@@ -20,9 +20,44 @@ pub fn general_maximum_only(value: u32) {
     let _ = value;
 }
 
-#[kernel(typed, launch(required = [128, 1, 1]))]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [128, 1, 1])
+)]
+pub fn general_mismatched_exact_bounds(value: u32) {
+    let _ = value;
+}
+
+#[kernel(
+    typed,
+    launch(required = [32, 2, 1], max = [32, 2, 1])
+)]
+pub fn general_wrong_dimensions(value: u32) {
+    let _ = value;
+}
+
+#[kernel(
+    typed,
+    launch(required = [128, 1, 1], max = [128, 1, 1])
+)]
 pub fn general_wrong_block(value: u32) {
     let _ = value;
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
+    let _ = (scale, input, output);
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn vecadd_wrong_launch(a: &[f32], b: &[f32], output: DisjointSlice<f32>) {
+    let _ = (a, b, output);
 }
 
 fn main() {}

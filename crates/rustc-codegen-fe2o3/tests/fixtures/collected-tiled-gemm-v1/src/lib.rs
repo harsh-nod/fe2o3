@@ -4,14 +4,10 @@ use fe2o3_device::{
     Bf16MfmaFragment, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, kernel, thread,
 };
 
-const FRONTEND_CONTRACT: &[u8] = &[
-    70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0,
-    0, 1, 0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-];
-
 #[kernel(
     typed,
-    namespace = "7eb5edda86f1edd9b886a256243b601b8a58c48b28ac8b72ba9eb5554cdb01a8"
+    namespace = "7eb5edda86f1edd9b886a256243b601b8a58c48b28ac8b72ba9eb5554cdb01a8",
+    launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn tiled_gemm_v1(a: &[u16], b: &[u16], c: &[f32], mut d: DisjointSlice<f32>) {
     let lane = thread::index_1d().get();
@@ -54,20 +50,3 @@ pub fn tiled_gemm_v1(a: &[u16], b: &[u16], c: &[f32], mut d: DisjointSlice<f32>)
         *output = result[3];
     }
 }
-
-#[used]
-static __fe2o3_kernel_frontend_contract_v1_tiled_gemm_v1: (
-    u64,
-    u16,
-    u16,
-    &'static str,
-    &'static [u8],
-    fn(&[u16], &[u16], &[f32], DisjointSlice<f32>),
-) = (
-    0x4146_4b33_4f32_4546,
-    1,
-    1,
-    "tiled_gemm_v1",
-    FRONTEND_CONTRACT,
-    <__fe2o3_kernel_marker_tiled_gemm_v1 as fe2o3_device::KernelMarkerV1>::FUNCTION,
-);
