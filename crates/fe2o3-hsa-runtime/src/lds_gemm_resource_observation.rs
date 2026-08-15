@@ -4,14 +4,13 @@ use fe2o3_core::ContextIdentity;
 use fe2o3_host::{ExactLdsGemmKernelResourceObservationV1, ReviewedExactLdsGemmRuntimeAdapterV1};
 
 const INVALID_RESOURCE_BINDING: &str = "exact LDS GEMM kernel resource binding";
-const INVALID_RESOURCE_OBSERVATION: &str = "exact LDS GEMM kernel resource observation";
 
 // SAFETY: the production adapter retains the exact GpuContext used to select
 // its HSA agent. Executable and kernel identities are derived when those
 // private native objects are created, and the queried resource values remain
 // stored in the private kernel token until that token is consumed.
 unsafe impl ReviewedExactLdsGemmRuntimeAdapterV1 for ReviewedHsaRuntimeAdapterV1 {
-    fn context_identity_v1(&self) -> ContextIdentity {
+    unsafe fn context_identity_v1(&mut self) -> ContextIdentity {
         self.core
             ._context
             .as_ref()
@@ -57,13 +56,12 @@ fn observe_exact_lds_gemm_kernel_resources(
         return Err(invalid_binding());
     }
 
-    ExactLdsGemmKernelResourceObservationV1::new(
+    Ok(ExactLdsGemmKernelResourceObservationV1::new(
         state.identity,
         kernel.identity,
-        u64::from(kernel.group_segment_size),
-        u64::from(kernel.private_segment_size),
-    )
-    .map_err(|_| HsaRuntimeAdapterError::InvalidExecutableObservation(INVALID_RESOURCE_OBSERVATION))
+        kernel.group_segment_size,
+        kernel.private_segment_size,
+    ))
 }
 
 fn invalid_binding() -> HsaRuntimeAdapterError {

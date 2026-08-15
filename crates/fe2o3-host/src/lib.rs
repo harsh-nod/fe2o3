@@ -6,6 +6,7 @@ mod cooperative_launch;
 mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
 mod generated_lds_gemm;
+mod generated_lds_gemm_lifecycle;
 mod generated_scalar_gemm_v1;
 mod generated_vecadd;
 mod generated_worker_v2_vecadd;
@@ -111,6 +112,13 @@ pub use generated_argument_plan::{
 #[doc(hidden)]
 pub use generated_lds_gemm::{
     GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
+};
+pub use generated_lds_gemm_lifecycle::{
+    CompletedExactLdsGemmSlice1V1, ExactLdsGemmKernelResourceObservationV1,
+    ExactLdsGemmSlice1DispatchErrorV1, ExactLdsGemmSlice1JoinErrorV1,
+    ExactLdsGemmSlice1LoadErrorV1, ExactLdsGemmUnloadIdentityV1, JoinedExactLdsGemmSlice1V1,
+    LoadedExactLdsGemmSlice1V1, ReviewedExactLdsGemmRuntimeAdapterV1, UnloadedExactLdsGemmSlice1V1,
+    join_exact_lds_gemm_slice1_v1,
 };
 #[doc(hidden)]
 pub use generated_scalar_gemm_v1::{
