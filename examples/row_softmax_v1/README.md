@@ -7,6 +7,19 @@ compiler/runtime slice.
 
 ## Contract layers
 
+The executable crate also exposes `row_softmax_oracle_v1` and
+`compare_row_softmax_v1` as the shared bounded numerical contract for future
+source and hardware profiles. The oracle supports explicit activity masks for
+rows of 1 through 4,096 finite physical inputs, rejects all-masked rows and all
+non-finite inputs before mutating output, converts finite signed-zero and
+subnormal inputs exactly into its stable `f64` calculation, permits output
+underflow when rounding to `f32`, and emits canonical positive zero for masked
+outputs. The API names the pinned-host Rust `f64::exp` reference and the
+authenticated device `__ocml_exp_f32` implementation separately. The reviewed gfx942 OCML comparison policy
+separates per-output absolute/relative/ULP limits from an independent output-sum
+limit. It is a finite comparison policy, not a proof of OCML error or IEEE
+refinement.
+
 1. **Real mathematical specification.**
    `verus/row_softmax_v1.rs` defines stable softmax over mathematical reals.
    A maximum bounds every input and equals at least one input. Each weight is
