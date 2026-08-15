@@ -17,6 +17,7 @@ pub mod inputs;
 pub mod kernel;
 pub mod kernel_face;
 pub mod layout;
+pub mod numerical_contract;
 pub mod oracle;
 
 pub use contract::{
