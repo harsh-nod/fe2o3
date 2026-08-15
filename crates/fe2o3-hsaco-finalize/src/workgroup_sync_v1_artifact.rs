@@ -73,6 +73,23 @@ impl PreparedFinalizedWorkgroupSyncHsacoV1 {
         self.finalized.canonical_digest()
     }
 
+    /// Borrows exact bytes only at the reviewed typed workgroup-sync runtime boundary.
+    ///
+    /// This doc-hidden SPI is not extraction, publication, load, or generic
+    /// launch authority. The typed lifecycle must retain this receipt and all
+    /// exact arguments until synchronous completion.
+    ///
+    /// # Safety
+    ///
+    /// The caller must use the bytes only for the exact profile identified by
+    /// this receipt, may not copy or expose them, and must retain `self` through
+    /// the complete reviewed load/dispatch transition.
+    #[doc(hidden)]
+    #[allow(unsafe_code)]
+    pub unsafe fn exact_finalized_bytes_for_reviewed_workgroup_sync_runtime_v1(&self) -> &[u8] {
+        self.finalized.exact_finalized_bytes()
+    }
+
     pub const fn exact_source_kir_profile_was_checked(&self) -> bool {
         true
     }

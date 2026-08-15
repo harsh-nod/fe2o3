@@ -19,6 +19,9 @@ mod generated_wave64_collectives_v1_lifecycle_tests;
 mod generated_worker_v2_vecadd;
 mod generated_workgroup_lds_reduction_v1;
 mod generated_workgroup_scoped_atomic_v1;
+mod generated_workgroup_sync_v1_lifecycle;
+#[cfg(test)]
+mod generated_workgroup_sync_v1_lifecycle_tests;
 mod gfx942_ocml;
 mod hsa_executable_lifecycle;
 mod launch_kernel_v2_bridge;
@@ -103,6 +106,7 @@ pub use cooperative_launch::{
     CooperativeResidencyAdmission,
 };
 pub use fe2o3_core::{KernelParams, LaunchConfig};
+pub use fe2o3_hsaco_finalize::WorkgroupSyncProfileKindV1;
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 #[doc(hidden)]
 pub use generated_alpha_zeta_cov6::{
@@ -175,6 +179,16 @@ pub use generated_workgroup_scoped_atomic_v1::{
     GeneratedWorkgroupScopedAtomicV1HostAdapterErrorV1,
     GeneratedWorkgroupScopedAtomicV1HostAdapterV1, WorkgroupScopedAtomicBufferRoleV1,
     WorkgroupScopedAtomicEffectV1,
+};
+pub use generated_workgroup_sync_v1_lifecycle::{
+    CompletedWorkgroupLdsReductionV1, CompletedWorkgroupScopedAtomicV1,
+    JoinedWorkgroupLdsReductionV1, JoinedWorkgroupScopedAtomicV1, LoadedWorkgroupLdsReductionV1,
+    LoadedWorkgroupScopedAtomicV1, ReviewedWorkgroupSyncRuntimeAdapterV1,
+    UnloadedWorkgroupLdsReductionV1, UnloadedWorkgroupScopedAtomicV1, WorkgroupSyncDispatchErrorV1,
+    WorkgroupSyncImplicitKernargObservationV1, WorkgroupSyncJoinErrorV1,
+    WorkgroupSyncKernelResourceObservationV1, WorkgroupSyncLifecycleIdentityV1,
+    WorkgroupSyncLoadErrorV1, WorkgroupSyncUnloadIdentityV1, join_workgroup_lds_reduction_v1,
+    join_workgroup_scoped_atomic_v1,
 };
 pub use gfx942_ocml::{
     GFX942_OCML_SIN_F32_CODE_OBJECT_VERSION_V1, GFX942_OCML_SIN_F32_DEVICE_ABI_V1,
