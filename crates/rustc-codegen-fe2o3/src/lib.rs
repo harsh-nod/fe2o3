@@ -23,6 +23,7 @@ mod collected_row_softmax_v1;
 mod collected_scalar_gemm_v1;
 mod collected_tiled_gemm_lds_slice1_v1;
 mod collected_tiled_gemm_v1;
+mod collected_wave64_collectives_v1;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
@@ -196,6 +197,7 @@ enum CodegenPipeline {
     CollectedRowSoftmaxV1,
     CollectedScalarGemmV1,
     CollectedTiledGemmV1,
+    CollectedWave64CollectivesV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -271,12 +273,19 @@ impl PipelineSelection {
             {
                 Self::Valid(CodegenPipeline::CollectedTiledGemmV1)
             }
+            Some(value)
+                if value
+                    == collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1 =>
+            {
+                Self::Valid(CodegenPipeline::CollectedWave64CollectivesV1)
+            }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
                 collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                 collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                 collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
                 collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
+                collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1,
             )),
         }
     }
@@ -489,6 +498,72 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                        )),
+                    }
+                } else if matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(CodegenPipeline::CollectedWave64CollectivesV1)
+                ) {
+                    let admission = (|| -> Result<_, String> {
+                        let collection = collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let frontend_record =
+                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+                                .map_err(|error| {
+                                    format!("frontend record extraction failed: {error}")
+                                })?;
+                        if self.config.verbose {
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] validated Wave64 collectives frontend record: {} function(s), {} canonical byte(s)",
+                                frontend_record.unit().functions().len(),
+                                frontend_record.canonical_bytes().len()
+                            );
+                        }
+                        collector::dump_device_functions(tcx, &collection.functions);
+                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty();
+                        let mut receipt = collected_wave64_collectives_v1::authenticate_collected_wave64_collectives_v1(
+                            tcx,
+                            &collection,
+                            &self.config.target,
+                            custom_llvm_pipeline,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let root = receipt.root_instance_identity().to_owned();
+                        let portable_mir = receipt.portable_mir_hex();
+                        let authority = receipt.authority_hex();
+                        let authenticated = receipt.consume().map_err(|error| error.to_string())?;
+                        let semantic_summary = authenticated.semantic_summary();
+                        Ok((
+                            root,
+                            portable_mir,
+                            authority,
+                            authenticated.source_authority_hex(),
+                            authenticated.descriptor_hex(),
+                            authenticated.profile().grid,
+                            semantic_summary,
+                        ))
+                    })();
+                    match admission {
+                        Ok((
+                            root,
+                            portable_mir,
+                            authority,
+                            consumed_authority,
+                            descriptor,
+                            grid,
+                            (collectives, outputs),
+                        )) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} authenticated exact source bytes and Phase A fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, and complete reachable portable-MIR closure {portable_mir}; consumed sealed source authority {authority} (bound value {consumed_authority}) to select the closed semantic Wave64 profile with {collectives} ordered collectives, {outputs} lane-owned outputs, exact grid {grid:?}, and descriptor identity {descriptor}; reviewed source-to-profile correspondence only; no compiler-refinement proof, generic-IR substitution, LLVM lowering, Worker V2, finalizer, link, host, runtime, artifact, load, launch, or hardware authority was entered",
+                            collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1,
+                        )),
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
+                            collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1,
                         )),
                     }
                 } else if matches!(
@@ -1190,6 +1265,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             CodegenPipeline::CollectedTiledGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected tiled GEMM V1 entered the legacy artifact transaction"
+                                        .to_owned(),
+                                })
+                            }
+                            CodegenPipeline::CollectedWave64CollectivesV1 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: collected Wave64 collectives V1 entered the legacy artifact transaction"
                                         .to_owned(),
                                 })
                             }

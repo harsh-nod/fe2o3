@@ -41,6 +41,7 @@ mod tiled_gemm_lds_v1;
 mod tiled_gemm_v1;
 mod types;
 mod verify;
+mod wave64_collectives_v1;
 mod wire;
 
 pub use control_flow::*;
@@ -72,4 +73,5 @@ pub use tiled_gemm_lds_v1::*;
 pub use tiled_gemm_v1::*;
 pub use types::*;
 pub use verify::*;
+pub use wave64_collectives_v1::*;
 pub use wire::*;
