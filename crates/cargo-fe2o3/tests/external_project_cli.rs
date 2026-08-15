@@ -1239,14 +1239,26 @@ fn effective_cargo_configuration_changes_generation_identity() {
         "FE2O3_TEST_BUILD_CONFIG_JSON",
         r#"{"rustflags":["--cfg","first"]}"#,
     );
-    assert!(first.output().unwrap().status.success());
+    let first_output = first.output().expect("run first configured build");
+    assert!(
+        first_output.status.success(),
+        "first configured build failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first_output.stdout),
+        String::from_utf8_lossy(&first_output.stderr),
+    );
 
     let mut second = fixture.command(&[OsString::from("build")]);
     second.env(
         "FE2O3_TEST_BUILD_CONFIG_JSON",
         r#"{"rustflags":["--cfg","second"]}"#,
     );
-    assert!(second.output().unwrap().status.success());
+    let second_output = second.output().expect("run second configured build");
+    assert!(
+        second_output.status.success(),
+        "second configured build failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second_output.stdout),
+        String::from_utf8_lossy(&second_output.stderr),
+    );
 
     let records = fixture.invocations();
     assert_ne!(records[1].managed_rustc_args, records[3].managed_rustc_args);
@@ -3013,7 +3025,19 @@ fn hardlink_to_cargo_fe2o3_is_rejected_as_a_recursive_runner() {
     let shared_executable = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     let hardlink_directory = SameFilesystemFixture::beside(shared_executable);
     let executable = hardlink_directory.path().join("cargo-fe2o3-private");
-    fs::copy(shared_executable, &executable).expect("stage private recursive runner executable");
+    let staging = hardlink_directory
+        .path()
+        .join("cargo-fe2o3-private.staging");
+    fs::copy(shared_executable, &staging).expect("stage private recursive runner executable");
+    let staged = OpenOptions::new()
+        .write(true)
+        .open(&staging)
+        .expect("open staged recursive runner executable");
+    staged
+        .sync_all()
+        .expect("sync staged recursive runner executable");
+    drop(staged);
+    fs::rename(&staging, &executable).expect("publish private recursive runner executable");
     let hardlink = hardlink_directory.path().join("cargo-fe2o3-hardlink");
     fs::hard_link(&executable, &hardlink).expect("create recursive runner hardlink");
     let source = fs::metadata(&executable).expect("inspect runner executable");
