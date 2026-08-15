@@ -651,21 +651,41 @@ fn validate_pointer_argument(
         ArgumentAccess::ReadWrite
     };
     let expected_pointee_alignment = if role < 2 { 2 } else { 4 };
+    let expected_restrict = role == 2;
     if argument.name.as_deref() != Some(&format!("arg{role}.data"))
         || argument.offset != (role as u64) * 16
         || argument.size != 8
-        || argument.alignment != Some(8)
         || argument.value_kind != ExplicitValueKind::GlobalBuffer
-        || argument.value_type != Some(expected_type)
         || argument.address_space != Some(ArgumentAddressSpace::Global)
-        || argument.access != Some(expected_access)
-        || argument.actual_access != Some(expected_access)
-        || argument.pointee_alignment != Some(expected_pointee_alignment)
-        || argument.is_const != Some(role < 2)
-        || argument.is_restrict != Some(true)
     {
         return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
             "explicit pointer ABI",
+        ));
+    }
+    // Upstream LLVM may omit these schema-level annotations. Source type,
+    // access, alignment, and alias facts remain bound by the exact canonical
+    // LLVM body and descriptor; emitted metadata may agree or narrow access,
+    // but it may not contradict those sources.
+    if argument.alignment.is_some_and(|value| value != 8)
+        || argument
+            .value_type
+            .is_some_and(|value| value != expected_type)
+        || argument
+            .access
+            .is_some_and(|value| value != expected_access)
+        || argument
+            .actual_access
+            .is_some_and(|value| !actual_access_is_subset(expected_access, value))
+        || argument
+            .pointee_alignment
+            .is_some_and(|value| value != expected_pointee_alignment)
+        || argument.is_const.is_some_and(|value| value != (role < 2))
+        || argument
+            .is_restrict
+            .is_some_and(|value| value != expected_restrict)
+    {
+        return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
+            "explicit pointer annotations",
         ));
     }
     Ok(())
@@ -678,21 +698,43 @@ fn validate_length_argument(
     if argument.name.as_deref() != Some(&format!("arg{role}.len"))
         || argument.offset != (role as u64) * 16 + 8
         || argument.size != 8
-        || argument.alignment != Some(8)
         || argument.value_kind != ExplicitValueKind::ByValue
-        || argument.value_type != Some(ExplicitValueType::U64)
         || argument.address_space.is_some()
         || argument.access.is_some()
         || argument.actual_access.is_some()
         || argument.pointee_alignment.is_some()
-        || argument.is_const.is_some()
-        || argument.is_restrict.is_some()
     {
         return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
             "explicit length ABI",
         ));
     }
+    // `.align`, deprecated `.value_type`, and false qualifiers are optional
+    // upstream metadata. The exact canonical LLVM body and descriptor bind
+    // the source facts even when LLVM does not synthesize physical metadata.
+    if argument.alignment.is_some_and(|value| value != 8)
+        || argument
+            .value_type
+            .is_some_and(|value| value != ExplicitValueType::U64)
+        || argument.is_const == Some(true)
+        || argument.is_restrict == Some(true)
+    {
+        return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
+            "explicit length annotations",
+        ));
+    }
     Ok(())
+}
+
+fn actual_access_is_subset(contract: ArgumentAccess, actual: ArgumentAccess) -> bool {
+    matches!(
+        (contract, actual),
+        (ArgumentAccess::ReadOnly, ArgumentAccess::ReadOnly)
+            | (ArgumentAccess::WriteOnly, ArgumentAccess::WriteOnly)
+            | (
+                ArgumentAccess::ReadWrite,
+                ArgumentAccess::ReadOnly | ArgumentAccess::WriteOnly | ArgumentAccess::ReadWrite
+            )
+    )
 }
 
 fn validate_exact_symbol_closure(bytes: &[u8]) -> Result<(), ExactLdsGemmFinalizationErrorV1> {
@@ -986,7 +1028,7 @@ pub(crate) fn exact_observed_artifact_shape_for_test() -> ObservedArtifactShapeV
             actual_access: Some(access),
             pointee_alignment: Some(pointee_alignment),
             is_const: Some(is_const),
-            is_restrict: Some(true),
+            is_restrict: Some(role == 2),
         });
         arguments.push(ObservedArgumentShapeV1 {
             name: Some(format!("arg{role}.len")),

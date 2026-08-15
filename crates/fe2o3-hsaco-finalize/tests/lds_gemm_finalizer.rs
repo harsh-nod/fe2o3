@@ -76,7 +76,9 @@ mod hsaco_fixture {
 }
 
 use std::{
-    env, fs,
+    env,
+    fmt::Write as _,
+    fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -85,7 +87,9 @@ use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
     consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
 };
-use fe2o3_hsaco::CodeObjectVersion as InspectedCodeObjectVersion;
+use fe2o3_hsaco::{
+    ArgumentAccess, CodeObjectVersion as InspectedCodeObjectVersion, ExplicitValueType,
+};
 use lds_gemm_finalizer::{
     ExactLdsGemmFinalizationErrorV1 as LocalFinalizationError, ObservedArtifactShapeV1,
     exact_observed_artifact_shape_for_test,
@@ -133,6 +137,14 @@ fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
 
 fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn hex_digest(bytes: &[u8; 32]) -> String {
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").expect("writing a digest to String cannot fail");
+    }
+    output
 }
 
 #[test]
@@ -189,10 +201,7 @@ fn exact_slice1_artifact_shape_is_the_only_admitted_shape() {
     }
 }
 
-fn assert_required_optional_none_is_rejected(
-    label: &str,
-    mutate: impl FnOnce(&mut ObservedArtifactShapeV1),
-) {
+fn assert_shape_rejected(label: &str, mutate: impl FnOnce(&mut ObservedArtifactShapeV1)) {
     let mut observed = exact_observed_artifact_shape_for_test();
     mutate(&mut observed);
     assert!(
@@ -200,65 +209,226 @@ fn assert_required_optional_none_is_rejected(
             validate_observed_artifact_shape(&observed),
             Err(LocalFinalizationError::ArtifactShape(_))
         ),
-        "missing required exact-profile field was admitted: {label}"
+        "hostile exact-profile shape was admitted: {label}"
     );
 }
 
+fn assert_shape_admitted(label: &str, mutate: impl FnOnce(&mut ObservedArtifactShapeV1)) {
+    let mut observed = exact_observed_artifact_shape_for_test();
+    mutate(&mut observed);
+    if let Err(error) = validate_observed_artifact_shape(&observed) {
+        panic!("compatible exact-profile shape was rejected ({label}): {error}");
+    }
+}
+
 #[test]
-fn exact_slice1_artifact_shape_rejects_every_missing_required_optional_field() {
-    assert_required_optional_none_is_rejected("required workgroup size", |observed| {
+fn exact_slice1_physically_required_optional_metadata_rejects_absence() {
+    assert_shape_rejected("required workgroup size", |observed| {
         observed.required_workgroup_size = None;
     });
-    assert_required_optional_none_is_rejected("implicit argument offset", |observed| {
+    assert_shape_rejected("implicit argument offset", |observed| {
         observed.implicit_argument_offset = None;
     });
-    assert_required_optional_none_is_rejected("SGPR spill count", |observed| {
+    assert_shape_rejected("SGPR spill count", |observed| {
         observed.sgpr_spill_count = None;
     });
-    assert_required_optional_none_is_rejected("VGPR spill count", |observed| {
+    assert_shape_rejected("VGPR spill count", |observed| {
         observed.vgpr_spill_count = None;
     });
 
     for role in 0..3 {
         let pointer = role * 2;
-        assert_required_optional_none_is_rejected("pointer name", |observed| {
+        assert_shape_rejected(&format!("pointer {role} name"), |observed| {
             observed.explicit_arguments[pointer].name = None;
         });
-        assert_required_optional_none_is_rejected("pointer alignment", |observed| {
-            observed.explicit_arguments[pointer].alignment = None;
-        });
-        assert_required_optional_none_is_rejected("pointer value type", |observed| {
-            observed.explicit_arguments[pointer].value_type = None;
-        });
-        assert_required_optional_none_is_rejected("pointer address space", |observed| {
+        assert_shape_rejected(&format!("pointer {role} address space"), |observed| {
             observed.explicit_arguments[pointer].address_space = None;
-        });
-        assert_required_optional_none_is_rejected("pointer access", |observed| {
-            observed.explicit_arguments[pointer].access = None;
-        });
-        assert_required_optional_none_is_rejected("pointer actual access", |observed| {
-            observed.explicit_arguments[pointer].actual_access = None;
-        });
-        assert_required_optional_none_is_rejected("pointer pointee alignment", |observed| {
-            observed.explicit_arguments[pointer].pointee_alignment = None;
-        });
-        assert_required_optional_none_is_rejected("pointer const qualifier", |observed| {
-            observed.explicit_arguments[pointer].is_const = None;
-        });
-        assert_required_optional_none_is_rejected("pointer restrict qualifier", |observed| {
-            observed.explicit_arguments[pointer].is_restrict = None;
         });
 
         let length = pointer + 1;
-        assert_required_optional_none_is_rejected("length name", |observed| {
+        assert_shape_rejected(&format!("length {role} name"), |observed| {
             observed.explicit_arguments[length].name = None;
         });
-        assert_required_optional_none_is_rejected("length alignment", |observed| {
+    }
+}
+
+#[test]
+fn exact_slice1_upstream_optional_argument_metadata_may_be_absent() {
+    for role in 0..3 {
+        let pointer = role * 2;
+        assert_shape_admitted(&format!("pointer {role} alignment absent"), |observed| {
+            observed.explicit_arguments[pointer].alignment = None;
+        });
+        assert_shape_admitted(&format!("pointer {role} value type absent"), |observed| {
+            observed.explicit_arguments[pointer].value_type = None;
+        });
+        assert_shape_admitted(&format!("pointer {role} access absent"), |observed| {
+            observed.explicit_arguments[pointer].access = None;
+        });
+        assert_shape_admitted(
+            &format!("pointer {role} actual access absent"),
+            |observed| {
+                observed.explicit_arguments[pointer].actual_access = None;
+            },
+        );
+        assert_shape_admitted(
+            &format!("pointer {role} pointee alignment absent"),
+            |observed| {
+                observed.explicit_arguments[pointer].pointee_alignment = None;
+            },
+        );
+        assert_shape_admitted(
+            &format!("pointer {role} const qualifier absent"),
+            |observed| {
+                observed.explicit_arguments[pointer].is_const = None;
+            },
+        );
+        assert_shape_admitted(
+            &format!("pointer {role} restrict qualifier absent"),
+            |observed| {
+                observed.explicit_arguments[pointer].is_restrict = None;
+            },
+        );
+
+        let length = pointer + 1;
+        assert_shape_admitted(&format!("length {role} alignment absent"), |observed| {
             observed.explicit_arguments[length].alignment = None;
         });
-        assert_required_optional_none_is_rejected("length value type", |observed| {
+        assert_shape_admitted(&format!("length {role} value type absent"), |observed| {
             observed.explicit_arguments[length].value_type = None;
         });
+        assert_shape_admitted(&format!("length {role} access absent"), |observed| {
+            observed.explicit_arguments[length].access = None;
+        });
+        assert_shape_admitted(&format!("length {role} actual access absent"), |observed| {
+            observed.explicit_arguments[length].actual_access = None;
+        });
+        assert_shape_admitted(
+            &format!("length {role} pointee alignment absent"),
+            |observed| {
+                observed.explicit_arguments[length].pointee_alignment = None;
+            },
+        );
+        assert_shape_admitted(
+            &format!("length {role} const qualifier absent"),
+            |observed| {
+                observed.explicit_arguments[length].is_const = None;
+            },
+        );
+        assert_shape_admitted(
+            &format!("length {role} restrict qualifier absent"),
+            |observed| {
+                observed.explicit_arguments[length].is_restrict = None;
+            },
+        );
+    }
+}
+
+#[test]
+fn exact_slice1_upstream_optional_hostile_some_values_are_rejected() {
+    const ACCESS_VARIANTS: [ArgumentAccess; 3] = [
+        ArgumentAccess::ReadOnly,
+        ArgumentAccess::WriteOnly,
+        ArgumentAccess::ReadWrite,
+    ];
+
+    for role in 0..3 {
+        let pointer = role * 2;
+        let expected_access = if role < 2 {
+            ArgumentAccess::ReadOnly
+        } else {
+            ArgumentAccess::ReadWrite
+        };
+        let hostile_type = if role < 2 {
+            ExplicitValueType::F32
+        } else {
+            ExplicitValueType::U16
+        };
+        let hostile_pointee_alignment = if role < 2 { 4 } else { 2 };
+
+        assert_shape_rejected(&format!("pointer {role} alignment"), |observed| {
+            observed.explicit_arguments[pointer].alignment = Some(16);
+        });
+        assert_shape_rejected(&format!("pointer {role} value type"), |observed| {
+            observed.explicit_arguments[pointer].value_type = Some(hostile_type);
+        });
+        for access in ACCESS_VARIANTS {
+            if access != expected_access {
+                assert_shape_rejected(
+                    &format!("pointer {role} contract access {access:?}"),
+                    |observed| {
+                        observed.explicit_arguments[pointer].access = Some(access);
+                    },
+                );
+            }
+        }
+        for actual_access in ACCESS_VARIANTS {
+            if role < 2 && actual_access != ArgumentAccess::ReadOnly {
+                assert_shape_rejected(
+                    &format!("pointer {role} actual access {actual_access:?}"),
+                    |observed| {
+                        observed.explicit_arguments[pointer].actual_access = Some(actual_access);
+                    },
+                );
+            } else {
+                assert_shape_admitted(
+                    &format!("pointer {role} narrowed actual access {actual_access:?}"),
+                    |observed| {
+                        observed.explicit_arguments[pointer].actual_access = Some(actual_access);
+                    },
+                );
+            }
+        }
+        assert_shape_rejected(&format!("pointer {role} pointee alignment"), |observed| {
+            observed.explicit_arguments[pointer].pointee_alignment =
+                Some(hostile_pointee_alignment);
+        });
+        assert_shape_rejected(&format!("pointer {role} const qualifier"), |observed| {
+            observed.explicit_arguments[pointer].is_const = Some(role >= 2);
+        });
+        assert_shape_rejected(&format!("pointer {role} restrict qualifier"), |observed| {
+            observed.explicit_arguments[pointer].is_restrict = Some(role < 2);
+        });
+
+        let length = pointer + 1;
+        assert_shape_rejected(&format!("length {role} alignment"), |observed| {
+            observed.explicit_arguments[length].alignment = Some(4);
+        });
+        assert_shape_rejected(&format!("length {role} value type"), |observed| {
+            observed.explicit_arguments[length].value_type = Some(ExplicitValueType::I64);
+        });
+        for access in ACCESS_VARIANTS {
+            assert_shape_rejected(&format!("length {role} access {access:?}"), |observed| {
+                observed.explicit_arguments[length].access = Some(access);
+            });
+            assert_shape_rejected(
+                &format!("length {role} actual access {access:?}"),
+                |observed| {
+                    observed.explicit_arguments[length].actual_access = Some(access);
+                },
+            );
+        }
+        assert_shape_rejected(&format!("length {role} pointee alignment"), |observed| {
+            observed.explicit_arguments[length].pointee_alignment = Some(8);
+        });
+        assert_shape_rejected(&format!("length {role} const qualifier"), |observed| {
+            observed.explicit_arguments[length].is_const = Some(true);
+        });
+        assert_shape_rejected(&format!("length {role} restrict qualifier"), |observed| {
+            observed.explicit_arguments[length].is_restrict = Some(true);
+        });
+        assert_shape_admitted(
+            &format!("length {role} explicit false const qualifier"),
+            |observed| {
+                observed.explicit_arguments[length].is_const = Some(false);
+            },
+        );
+        assert_shape_admitted(
+            &format!("length {role} explicit false restrict qualifier"),
+            |observed| {
+                observed.explicit_arguments[length].is_restrict = Some(false);
+            },
+        );
     }
 }
 
@@ -398,4 +568,9 @@ fn measured_worker_produces_a_deterministic_inert_slice1_cov6_receipt() {
         receipts.push((receipt.identity(), receipt.finalized_output_identity()));
     }
     assert_eq!(receipts[0], receipts[1]);
+    println!(
+        "measured Slice1 receipt identity: {}",
+        hex_digest(receipts[0].0.as_bytes())
+    );
+    println!("measured Slice1 finalized output: {}", receipts[0].1);
 }
