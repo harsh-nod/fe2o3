@@ -362,6 +362,18 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             ),
         ),
         (
+            "abi-mutability",
+            mutation(
+                SOURCE,
+                "pub fn flash_attention_causal_f32_b1_h1_n8_d16_v1(\n    q: &[f32]",
+                "pub fn flash_attention_causal_f32_b1_h1_n8_d16_v1(\n    q: &mut [f32]",
+            ),
+        ),
+        (
+            "abi-output-type",
+            mutation(SOURCE, "mut output: DisjointSlice<f32>", "output: &[f32]"),
+        ),
+        (
             "finite-input",
             mutation(
                 SOURCE,
