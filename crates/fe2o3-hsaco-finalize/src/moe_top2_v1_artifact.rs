@@ -102,6 +102,26 @@ impl PreparedFinalizedMoeTop2V1HsacoV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+
+    /// Borrows the retained artifact only at the reviewed exact MoE runtime boundary.
+    ///
+    /// # Safety
+    ///
+    /// `consume` must pass the bytes directly to the exact T8/E4/K2/C4
+    /// reviewed runtime adapter. It must not copy, persist, publish, return,
+    /// reinterpret, or expose the bytes or derive generic load authority from
+    /// them. The receipt must remain retained through load validation.
+    #[doc(hidden)]
+    #[allow(unsafe_code)]
+    pub unsafe fn with_exact_finalized_bytes_for_reviewed_moe_top2_runtime_v1<T>(
+        &self,
+        consume: impl FnOnce(&[u8], ContentIdentityV1) -> T,
+    ) -> T {
+        consume(
+            self.finalized.exact_finalized_bytes(),
+            self.finalized.finalized_output_identity(),
+        )
+    }
 }
 
 #[derive(Debug)]
