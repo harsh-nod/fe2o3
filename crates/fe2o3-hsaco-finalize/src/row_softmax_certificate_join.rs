@@ -21,7 +21,7 @@ const TARGET: &str = "gfx942:xnack-";
 const COMPILER_PROFILE: &str = "fe2o3.manifest-derived-scalar-slice.v1";
 const KERNEL_IR_PROFILE: &str = "fe2o3::row_softmax_v1;fixed-row-64;wg64;cov6";
 const OCML_EXP_F32: &str = "__ocml_exp_f32";
-const SOURCE_SHA256: &str = "9551d13970d1e6d577a6b058eb3ef9b389a2bb20544e6977291379b3f68b866c";
+const SOURCE_SHA256: &str = "c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4";
 const PORTABLE_MIR_SHA256: &str =
     "cb10b6fac6475435e45a6f9166739c9e26bae17031105791abf3f440b004d4dd";
 const COMPILER_SEMANTICS_SHA256: &str =

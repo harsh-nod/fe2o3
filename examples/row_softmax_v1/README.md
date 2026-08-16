@@ -112,7 +112,7 @@ MIR and compiler-semantics commitments, typed profile, shared numerical policy,
 positive proof source, canonical Kernel IR and LLVM body commitments, exact
 `gfx942:xnack-` width-64 specialization, and pinned Verus/Z3 closure. Its
 canonical digest is
-`9e1a983454cd6c01a78aa8b3f17153491961a3c65d8487af69f5e74d8d0045a2`.
+`a3fc8703661c15cbc279db2735b847ed89671183a8328835f3a419afeb521ef2`.
 
 The certificate is formal evidence only. It grants no compiler origin,
 source-to-machine refinement, descriptor or artifact admission, load, launch,
