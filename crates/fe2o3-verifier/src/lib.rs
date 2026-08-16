@@ -22,6 +22,7 @@ mod control_flow_binding;
 mod executor;
 mod flash_attention_memory_v1;
 mod model;
+mod moe_expert_compact_plan_v1;
 mod moe_routing_memory_v1;
 mod monomorphization_dead_binding;
 mod multi_kernel_proof;
@@ -120,6 +121,7 @@ pub use model::{
     MeasuredToolIdentity, ModelError, ProofOutcome, ProofProperty, ProofRequestV1,
     ProofTargetIdentity, Text, TrustedItem, VerificationModelIdentity,
 };
+pub use moe_expert_compact_plan_v1::*;
 pub use moe_routing_memory_v1::*;
 pub use monomorphization_dead_binding::{
     MONOMORPHIZATION_DEAD_BINDING_DOMAIN_V1, MONOMORPHIZATION_DEAD_BINDING_VERSION_V1,
