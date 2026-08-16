@@ -19,6 +19,43 @@ NEGATIVE_MANIFEST = (
     / "crates/fe2o3-verifier/verus/moe_expert_compact_plan_v1/NEGATIVE_SHA256"
 )
 README = ROOT / "README.md"
+TESTING = ROOT / "docs/testing.md"
+ROADMAP = ROOT / "docs/implementation-roadmap-v2.md"
+EXAMPLE = ROOT / "examples/moe_expert_v1/README.md"
+V2_BRIDGE = ROOT / "crates/fe2o3-host/src/moe_routing_expert_bridge_v2.rs"
+V2_ADAPTER = ROOT / "crates/fe2o3-host/src/generated_moe_expert_v2.rs"
+V2_UI = ROOT / "crates/fe2o3-host/tests/ui/generated_moe_expert_v2"
+
+V2_CHECKPOINT = "10e5f90ece1937aaee77492e8e4e4742863d013b"
+V2_UNIT_UI_COMMANDS = [
+    "cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests",
+    "cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests",
+    "cargo test --locked -p fe2o3-host --test generated_moe_expert_v2_ui",
+]
+V2_UI_FIXTURES = {
+    "batch_identity_cannot_clone.rs",
+    "batch_identity_fields_are_private.rs",
+    "checked_inputs_cannot_clone.rs",
+    "checked_inputs_cannot_construct.rs",
+    "checked_inputs_fields_are_private.rs",
+    "checked_readback_cannot_clone.rs",
+    "checked_readback_cannot_construct.rs",
+    "checked_readback_fields_are_private.rs",
+    "completed_bridge_cannot_clone.rs",
+    "completed_bridge_has_no_authority.rs",
+    "completed_v1_api_is_absent.rs",
+    "hardware_namespace_test_issuer_is_not_public.rs",
+    "provenance_cannot_clone.rs",
+    "provenance_fields_are_private.rs",
+    "provenance_use_after_move.rs",
+    "raw_weight_view_cannot_enter_v2.rs",
+    "synthetic_cannot_convert_to_provenance.rs",
+    "synthetic_cannot_enter_check.rs",
+    "test_issuer_is_not_public.rs",
+    "v1_bridge_cannot_enter_v2.rs",
+    "v1_test_issuer_is_not_public.rs",
+    "weight_binding_fields_are_private.rs",
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -43,6 +80,11 @@ def main() -> None:
     source = CANONICAL_SOURCE.read_text(encoding="utf-8")
     proof_test = PROOF_TEST.read_text(encoding="utf-8")
     readme = README.read_text(encoding="utf-8")
+    testing = TESTING.read_text(encoding="utf-8")
+    roadmap = ROADMAP.read_text(encoding="utf-8")
+    example = EXAMPLE.read_text(encoding="utf-8")
+    v2_bridge = V2_BRIDGE.read_text(encoding="utf-8")
+    v2_adapter = V2_ADAPTER.read_text(encoding="utf-8")
 
     source_entries = re.findall(r'canonical\.push\(\s*"([^"]+)"', source)
     doc_entries = re.findall(r"^\|\s*\d+\s*\|\s*`([^`]+)`\s*\|", doc, re.MULTILINE)
@@ -69,6 +111,79 @@ def main() -> None:
     ]:
         require(marker in doc, f"missing required boundary text: {marker}")
 
+    for marker in [
+        "pub struct MoeRoutingExpertBatchIdentityV2",
+        "pub struct MoeRoutingCompletionReadbackProvenanceV2",
+        "pub struct CheckedMoeCompletedRoutingReadbackV2",
+        "pub struct CheckedMoeCompletedRoutingExpertInputsV2",
+        "pub struct MoeExpertWeightArtifactBindingV2",
+        "pub struct MoeCompletedRoutingExpertBridgeV2",
+        "completion_readback_order_identity",
+        "This function is publicly callable but constructively unreachable",
+        "There is no public constructor, no feature-gated issuer",
+    ]:
+        require(marker in v2_bridge, f"V2 bridge contract drifted: {marker}")
+    for marker in [
+        "pub struct GeneratedMoeExpertV2HostAdapterV2",
+        "pub const fn has_production_issuer",
+        "pub const fn grants_artifact_authority",
+        "pub const fn grants_copy_authority",
+        "pub const fn grants_load_authority",
+        "pub const fn grants_dispatch_authority",
+        "MoeExpertV2BufferRoleV2::ALL",
+    ]:
+        require(marker in v2_adapter, f"V2 adapter contract drifted: {marker}")
+    for method in [
+        "has_production_issuer",
+        "grants_artifact_authority",
+        "grants_copy_authority",
+        "grants_load_authority",
+        "grants_dispatch_authority",
+    ]:
+        pattern = rf"pub const fn {method}\([^)]*\)[^{{]*\{{\s*false\s*\}}"
+        require(
+            re.search(pattern, v2_adapter, re.DOTALL) is not None,
+            f"V2 adapter no-authority result drifted: {method}",
+        )
+
+    actual_ui_fixtures = {path.name for path in V2_UI.glob("*.rs")}
+    require(
+        actual_ui_fixtures == V2_UI_FIXTURES,
+        "V2 compile-fail fixture inventory drifted",
+    )
+
+    for command in V2_UNIT_UI_COMMANDS:
+        for name, text in [
+            ("bounded MoE evidence", doc),
+            ("testing guide", testing),
+            ("MoE example", example),
+        ]:
+            require(command in text, f"missing V2 command in {name}: {command}")
+
+    for name, text, marker in [
+        ("README", readme, "V1 evidence only"),
+        ("bounded MoE evidence", doc, "there is no V2 GPU observation"),
+        ("testing guide", testing, "V1-only upload/readback observation"),
+        ("implementation roadmap", roadmap, "V1 evidence only"),
+        ("MoE example", example, "not V2 evidence"),
+    ]:
+        require(
+            re.search(r"constructively\s+unreachable", text) is not None,
+            f"{name} omits V2 reachability boundary",
+        )
+        require(marker in text, f"{name} merges V1 hardware evidence into V2")
+        require(
+            re.search(
+                r"no\s+artifact,\s+copy,\s+load,\s+or\s+dispatch\s+authority",
+                text,
+            )
+            is not None,
+            f"{name} omits V2 no-authority boundary",
+        )
+
+    require(V2_CHECKPOINT in doc, "bounded MoE evidence has stale V2 checkpoint")
+    require(V2_CHECKPOINT in roadmap, "implementation roadmap has stale V2 checkpoint")
+
     require(
         "`0 Complete / 82 Partial / 0 Missing / 12 N/A` normative rows" in readme,
         "README normative parity totals changed",
@@ -80,9 +195,9 @@ def main() -> None:
 
     owned_markdown = [
         README,
-        ROOT / "examples/moe_expert_v1/README.md",
-        ROOT / "docs/implementation-roadmap-v2.md",
-        ROOT / "docs/testing.md",
+        EXAMPLE,
+        ROADMAP,
+        TESTING,
         DOC,
     ]
     for markdown in owned_markdown:
