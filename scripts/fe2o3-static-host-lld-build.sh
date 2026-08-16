@@ -33,8 +33,8 @@ readonly PINNED_ROOTS_SHA256='39f369a8cfca14e9e6fd2a14a66c1d308e9c89e492de04fd7a
 readonly PINNED_ROOTS_LENGTH='1998'
 readonly PINNED_RUNTIME_SHA256='3f70263ff19198bf5a79fc9352157752e374923746cbfb05210907ee4b5517ef'
 readonly PINNED_RUNTIME_LENGTH='1806'
-readonly PINNED_CTEST_POLICY_SHA256='79ea8ec39c37b49ffeff2d1a6756084be9914147b74fe9c7d9a04982a3cd3c36'
-readonly PINNED_CTEST_POLICY_LENGTH='4457'
+readonly PINNED_CTEST_POLICY_SHA256='911f9279a6c974de3492a0aad176871a59c7590770072530c8cf2d0b314b70b8'
+readonly PINNED_CTEST_POLICY_LENGTH='4963'
 
 readonly CMAKE='/usr/bin/cmake'
 readonly NINJA='/usr/bin/ninja'
@@ -1033,7 +1033,7 @@ configure_retain_command=(
   "$RAW_TRACE_GLOBAL_BYTE_BOUND"
 )
 ctest_policy_command=(
-  /usr/bin/bash "$ctest_policy" "$tool_source" "$build_dir"
+  /usr/bin/dash "$ctest_policy" "$tool_source" "$build_dir"
   "$ctest_policy_status"
 )
 object_command=(
