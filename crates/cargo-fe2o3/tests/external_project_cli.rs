@@ -64,6 +64,21 @@ impl Drop for ReapedChild {
     }
 }
 
+#[cfg(unix)]
+fn output_retrying_text_file_busy(command: &mut Command, context: &str) -> Output {
+    let mut attempts = 0;
+    loop {
+        match command.output() {
+            Ok(output) => return output,
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 7 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("{context}: {error}"),
+        }
+    }
+}
+
 struct ProjectFixture {
     root: PathBuf,
     workspace: PathBuf,
@@ -986,9 +1001,8 @@ fn substituted_multithreaded_image_cannot_replay_wrapper_from_non_leader_thread(
         .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER");
 
-    let output = command
-        .output()
-        .expect("run multithreaded wrapper replay probe");
+    let output =
+        output_retrying_text_file_busy(&mut command, "run multithreaded wrapper replay probe");
     assert!(
         output.status.success(),
         "stdout:\n{}\nstderr:\n{}",
@@ -3534,19 +3548,7 @@ fn hardlink_to_cargo_fe2o3_is_rejected_as_a_recursive_runner() {
     );
     command.env("FE2O3_TEST_CONFIG_RUNNER_JSON", runner.to_string());
 
-    let output = {
-        let mut attempts = 0;
-        loop {
-            match command.output() {
-                Ok(output) => break output,
-                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 7 => {
-                    attempts += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                Err(error) => panic!("run hardlink runner rejection: {error}"),
-            }
-        }
-    };
+    let output = output_retrying_text_file_busy(&mut command, "run hardlink runner rejection");
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("recursive cargo-fe2o3"),
