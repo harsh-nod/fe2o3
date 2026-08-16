@@ -284,7 +284,7 @@ impl MoeTop2FrontendReceiptV1 {
             .structural_record
             .take()
             .ok_or(CollectedMoeTop2ErrorV1::ReceiptAlreadyConsumed)?;
-        validate_authority(&authority)?;
+        let _validated_authority = validated_authority::validate_authority(&authority)?;
         verify_moe_top2_v1(&ir, &profile)
             .map_err(|error| CollectedMoeTop2ErrorV1::CanonicalIr(error.to_string()))?;
         let (kernel_ir_identity, profile_identity) =
@@ -576,7 +576,7 @@ pub(crate) fn authenticate_collected_moe_top2_v1<'tcx>(
         authority_identity: [0; 32],
     };
     authority.authority_identity = authority_identity(&authority);
-    validate_authority(&authority)?;
+    let validated_authority = validated_authority::validate_authority(&authority)?;
     let structural_inputs = seal_authenticated_live_inputs_v2(
         &source,
         &fn_abi,
@@ -584,7 +584,7 @@ pub(crate) fn authenticate_collected_moe_top2_v1<'tcx>(
         portable_mir_identity,
         &ir,
         &profile,
-        &authority,
+        validated_authority,
     )
     .map_err(|error| CollectedMoeTop2ErrorV1::SourceKirStructuralRecord(error.to_string()))?;
     let structural_record = produce_checked_moe_source_kir_structural_record_v2(structural_inputs)
@@ -1471,56 +1471,72 @@ fn exact_profile_launch() -> Result<LaunchContract, CollectedMoeTop2ErrorV1> {
     .map_err(|error| CollectedMoeTop2ErrorV1::Layout(error.to_string()))
 }
 
-fn validate_authority(authority: &MoeTop2AuthorityV1) -> Result<(), CollectedMoeTop2ErrorV1> {
-    let field = if authority.source_identity != MOE_TOP2_V1_SOURCE_SHA256 {
-        Some("source bytes")
-    } else if authority.source_namespace != MOE_TOP2_V1_NAMESPACE {
-        Some("source namespace")
-    } else if authority.compiler_crate_binding != compiler_crate_binding().as_bytes() {
-        Some("wrapper-derived compiler crate binding")
-    } else if authority.target != EXACT_MOE_TOP2_TARGET_V1 {
-        Some("target")
-    } else if authority.code_object_version != MOE_TOP2_CODE_OBJECT_VERSION_V1 {
-        Some("code object version")
-    } else if authority.kernel_export != MOE_TOP2_V1_KERNEL_ID {
-        Some("kernel export")
-    } else if authority.root_instance_identity != REVIEWED_ROOT_INSTANCE_IDENTITY {
-        Some("root instance identity")
-    } else if authority.portable_mir_identity != PORTABLE_MIR_CLOSURE_IDENTITY_V1 {
-        Some("complete reachable MIR closure")
-    } else if authority.fn_abi_identity != RUSTC_FN_ABI_IDENTITY_V1 {
-        Some("rustc FnAbi")
-    } else if authority.compiler_semantics_identity != COMPILER_SEMANTICS_IDENTITY_V1
-        || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V3
-    {
-        Some("compiler/trusted definition closure")
-    } else if authority.frontend_contract_identity != sha256(EXACT_FRONTEND_CONTRACT_V1) {
-        Some("frontend contract")
-    } else if authority.abi_identity != sha256(ABI_BINDING_V1) {
-        Some("ABI")
-    } else if authority.effects_identity != sha256(EFFECT_BINDING_V1) {
-        Some("effects")
-    } else if authority.source_launch_identity != sha256(SOURCE_LAUNCH_BINDING_V1)
-        || authority.profile_launch_identity != sha256(PROFILE_LAUNCH_BINDING_V1)
-    {
-        Some("source/profile launch")
-    } else if authority.routing_identity != sha256(ROUTING_BINDING_V1) {
-        Some("closed deterministic routing semantics")
-    } else if authority.descriptor_identity != sha256(DESCRIPTOR_BINDING_V1) {
-        Some("descriptor")
-    } else if authority.canonical_ir_identity != sha256(CANONICAL_IR_BINDING_V1) {
-        Some("canonical semantic IR")
-    } else if authority.correspondence_identity != sha256(CORRESPONDENCE_BINDING_V1) {
-        Some("reviewed correspondence boundary")
-    } else if authority.authority_identity != authority_identity(authority) {
-        Some("authority commitment")
-    } else {
-        None
-    };
-    if let Some(field) = field {
-        return Err(CollectedMoeTop2ErrorV1::ReceiptBinding(field));
+mod validated_authority {
+    use super::*;
+
+    pub(super) struct ValidatedMoeTop2AuthorityV1<'a> {
+        authority: &'a MoeTop2AuthorityV1,
     }
-    Ok(())
+
+    impl<'a> ValidatedMoeTop2AuthorityV1<'a> {
+        pub(super) const fn authority(&self) -> &'a MoeTop2AuthorityV1 {
+            self.authority
+        }
+    }
+
+    pub(super) fn validate_authority(
+        authority: &MoeTop2AuthorityV1,
+    ) -> Result<ValidatedMoeTop2AuthorityV1<'_>, CollectedMoeTop2ErrorV1> {
+        let field = if authority.source_identity != MOE_TOP2_V1_SOURCE_SHA256 {
+            Some("source bytes")
+        } else if authority.source_namespace != MOE_TOP2_V1_NAMESPACE {
+            Some("source namespace")
+        } else if authority.compiler_crate_binding != compiler_crate_binding().as_bytes() {
+            Some("wrapper-derived compiler crate binding")
+        } else if authority.target != EXACT_MOE_TOP2_TARGET_V1 {
+            Some("target")
+        } else if authority.code_object_version != MOE_TOP2_CODE_OBJECT_VERSION_V1 {
+            Some("code object version")
+        } else if authority.kernel_export != MOE_TOP2_V1_KERNEL_ID {
+            Some("kernel export")
+        } else if authority.root_instance_identity != REVIEWED_ROOT_INSTANCE_IDENTITY {
+            Some("root instance identity")
+        } else if authority.portable_mir_identity != PORTABLE_MIR_CLOSURE_IDENTITY_V1 {
+            Some("complete reachable MIR closure")
+        } else if authority.fn_abi_identity != RUSTC_FN_ABI_IDENTITY_V1 {
+            Some("rustc FnAbi")
+        } else if authority.compiler_semantics_identity != COMPILER_SEMANTICS_IDENTITY_V1
+            || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V3
+        {
+            Some("compiler/trusted definition closure")
+        } else if authority.frontend_contract_identity != sha256(EXACT_FRONTEND_CONTRACT_V1) {
+            Some("frontend contract")
+        } else if authority.abi_identity != sha256(ABI_BINDING_V1) {
+            Some("ABI")
+        } else if authority.effects_identity != sha256(EFFECT_BINDING_V1) {
+            Some("effects")
+        } else if authority.source_launch_identity != sha256(SOURCE_LAUNCH_BINDING_V1)
+            || authority.profile_launch_identity != sha256(PROFILE_LAUNCH_BINDING_V1)
+        {
+            Some("source/profile launch")
+        } else if authority.routing_identity != sha256(ROUTING_BINDING_V1) {
+            Some("closed deterministic routing semantics")
+        } else if authority.descriptor_identity != sha256(DESCRIPTOR_BINDING_V1) {
+            Some("descriptor")
+        } else if authority.canonical_ir_identity != sha256(CANONICAL_IR_BINDING_V1) {
+            Some("canonical semantic IR")
+        } else if authority.correspondence_identity != sha256(CORRESPONDENCE_BINDING_V1) {
+            Some("reviewed correspondence boundary")
+        } else if authority.authority_identity != authority_identity(authority) {
+            Some("authority commitment")
+        } else {
+            None
+        };
+        if let Some(field) = field {
+            return Err(CollectedMoeTop2ErrorV1::ReceiptBinding(field));
+        }
+        Ok(ValidatedMoeTop2AuthorityV1 { authority })
+    }
 }
 
 fn authority_identity(authority: &MoeTop2AuthorityV1) -> [u8; 32] {
@@ -1604,8 +1620,10 @@ fn exact_authority_for_test() -> MoeTop2AuthorityV1 {
 #[cfg(test)]
 pub(crate) fn exact_frontend_receipt_for_test() -> MoeTop2FrontendReceiptV1 {
     let authority = exact_authority_for_test();
+    let validated_authority = validated_authority::validate_authority(&authority)
+        .expect("synthetic exact authority validates");
     let structural_record =
-        moe_top2_source_kir_correspondence::checked_record_for_test_authority(&authority);
+        moe_top2_source_kir_correspondence::checked_record_for_test_authority(validated_authority);
     MoeTop2FrontendReceiptV1 {
         authority: Some(authority),
         ir: Some(moe_top2_v1_kernel_ir()),
@@ -1699,6 +1717,23 @@ mod tests {
             mutate(&mut header);
             assert_ne!(fn_abi_header_commitment(header), baseline);
         }
+
+        let mut rehashed_but_invalid = exact_authority_for_test();
+        rehashed_but_invalid.fn_abi_identity[0] ^= 1;
+        rehashed_but_invalid.authority_identity = authority_identity(&rehashed_but_invalid);
+        assert_ne!(rehashed_but_invalid.authority_identity, [0; 32]);
+        assert!(matches!(
+            validated_authority::validate_authority(&rehashed_but_invalid),
+            Err(CollectedMoeTop2ErrorV1::ReceiptBinding("rustc FnAbi"))
+        ));
+
+        let exact = exact_authority_for_test();
+        let validated = validated_authority::validate_authority(&exact)
+            .expect("exact authority produces the opaque validation token");
+        assert_eq!(
+            validated.authority().authority_identity,
+            exact.authority_identity
+        );
 
         let mutations: Vec<fn(&mut MoeTop2AuthorityV1)> = vec![
             |value| value.source_identity[0] ^= 1,

@@ -20,7 +20,8 @@ use fe2o3_kernel_ir::{
 };
 use sha2::{Digest as _, Sha256};
 
-use super::{MoeTop2AuthorityV1, ObservedMoeTop2FnAbiV1, RustcLoadedMoeTop2SourceV2};
+use super::validated_authority::ValidatedMoeTop2AuthorityV1;
+use super::{ObservedMoeTop2FnAbiV1, RustcLoadedMoeTop2SourceV2};
 use crate::mir_import::{
     MirBinaryOp, MirFunctionKind, MirModule, MirOperandRef, MirPlaceRef, MirProjectionElem,
     MirRvalueKind, MirStatementKind, MirTerminatorKind,
@@ -157,7 +158,7 @@ pub(super) struct SealedLiveMoeStructuralInputsV2<'a> {
     portable_mir_identity: [u8; 32],
     ir: &'a MoeTop2KernelIrV1,
     profile: &'a MoeTop2ProfileV1,
-    authority: &'a MoeTop2AuthorityV1,
+    validated_authority: ValidatedMoeTop2AuthorityV1<'a>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -375,8 +376,9 @@ pub(super) fn seal_authenticated_live_inputs_v2<'a>(
     portable_mir_identity: [u8; 32],
     ir: &'a MoeTop2KernelIrV1,
     profile: &'a MoeTop2ProfileV1,
-    authority: &'a MoeTop2AuthorityV1,
+    validated_authority: ValidatedMoeTop2AuthorityV1<'a>,
 ) -> Result<SealedLiveMoeStructuralInputsV2<'a>, MoeSourceKirProducerErrorV2> {
+    let authority = validated_authority.authority();
     if source.identity != authority.source_identity
         || fn_abi.identity != fn_abi.structural_projection.identity
         || fn_abi.identity != authority.fn_abi_identity
@@ -392,13 +394,14 @@ pub(super) fn seal_authenticated_live_inputs_v2<'a>(
         portable_mir_identity,
         ir,
         profile,
-        authority,
+        validated_authority,
     })
 }
 
 pub(super) fn produce_checked_moe_source_kir_structural_record_v2(
     sealed: SealedLiveMoeStructuralInputsV2<'_>,
 ) -> Result<CheckedMoeSourceKirStructuralRecordV2, MoeSourceKirProducerErrorV2> {
+    let authority = sealed.validated_authority.authority();
     let inputs = StructuralClassifierCandidateV2 {
         source: sealed.source.contents.as_bytes().to_vec(),
         source_identity: sealed.source.identity,
@@ -406,10 +409,10 @@ pub(super) fn produce_checked_moe_source_kir_structural_record_v2(
         portable_mir: summarize_portable_mir(sealed.portable_mir, sealed.portable_mir_identity)?,
         canonical: canonical_kernel_profile(sealed.ir, sealed.profile),
         same_session: SameSessionBindingV2 {
-            compiler_semantics_identity: sealed.authority.compiler_semantics_identity,
-            trusted_definitions_identity: sealed.authority.trusted_definitions_identity,
-            root_instance_identity: sealed.authority.root_instance_identity.clone(),
-            source_authority_identity: sealed.authority.authority_identity,
+            compiler_semantics_identity: authority.compiler_semantics_identity,
+            trusted_definitions_identity: authority.trusted_definitions_identity,
+            root_instance_identity: authority.root_instance_identity.clone(),
+            source_authority_identity: authority.authority_identity,
         },
     };
     check_structural_inputs(inputs)
@@ -1469,8 +1472,9 @@ fn candidate_inputs_for_test() -> StructuralClassifierCandidateV2 {
 
 #[cfg(test)]
 pub(super) fn checked_record_for_test_authority(
-    authority: &MoeTop2AuthorityV1,
+    validated_authority: ValidatedMoeTop2AuthorityV1<'_>,
 ) -> CheckedMoeSourceKirStructuralRecordV2 {
+    let authority = validated_authority.authority();
     let mut candidate = candidate_inputs_for_test();
     candidate.same_session = SameSessionBindingV2 {
         compiler_semantics_identity: authority.compiler_semantics_identity,
@@ -1694,7 +1698,9 @@ mod tests {
     #[test]
     fn checked_record_is_explicitly_inert() {
         let authority = super::super::exact_authority_for_test();
-        let checked = checked_record_for_test_authority(&authority);
+        let validated_authority = super::super::validated_authority::validate_authority(&authority)
+            .expect("synthetic exact authority validates");
+        let checked = checked_record_for_test_authority(validated_authority);
         assert!(!checked.proves_source_to_kir_semantic_refinement());
         assert!(!checked.proves_llvm_or_isa_refinement());
         assert!(!checked.proves_logical_to_machine_address_refinement());

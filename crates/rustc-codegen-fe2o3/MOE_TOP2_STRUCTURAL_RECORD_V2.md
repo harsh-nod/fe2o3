@@ -7,8 +7,12 @@ or candidate schema and proves no source-to-Kernel-IR semantic refinement.
 ## Sealed Live Inputs
 
 The producer is a child module of the MoE rustc admission module. Its only live
-entry point accepts an opaque witness whose fields are private. Only the parent
-admission path can construct that witness, after it has authenticated:
+entry point accepts an opaque witness whose fields are private. The sealer also
+requires an opaque `ValidatedMoeTop2AuthorityV1` by value. That token's field is
+private to a separate validation submodule, and only `validate_authority` can
+construct it after checking the complete authority predicate. A raw or merely
+nonzero `MoeTop2AuthorityV1` cannot satisfy the sealer's type. The parent
+admission path obtains the token only after it has authenticated:
 
 - source contents retained in rustc's loaded `SourceFile` and their SHA-256
   identity, without reopening the source path;
