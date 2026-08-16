@@ -325,6 +325,7 @@ impl From<PinExecutableError> for BindingWrapperError {
 
 pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
     reject_dynamic_loader_environment()?;
+    normalize_unprotected_validation_loader_environment();
     let expected_rustc_sha256 = expected_rustc_sha256()?;
     reject_uninspectable_rustc_args(&argv)?;
     if crate::non_production_reproduction::enabled() {
@@ -674,12 +675,19 @@ fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
     let authority_sensitive = std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
         || std::env::var_os(crate::worker_v2::WORKER_V2_CONFIG_ENV).is_some();
+    let unprotected_validation = cfg!(debug_assertions)
+        && std::env::var_os(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref()
+            == Some(OsStr::new("1"));
     for (name, value) in std::env::vars_os() {
         if crate::is_dynamic_loader_injection_environment_name(&name) {
-            // Cargo itself adds LD_LIBRARY_PATH for ordinary rustc wrappers. It is not forwarded:
-            // configure_managed_rustc_loader replaces it with the retained fd 193 path. Authority
-            // profiles reject it because their protected launcher contract is fail-closed.
-            if name == OsStr::new("LD_LIBRARY_PATH") && !authority_sensitive {
+            // The exact fd path is installed by the admitted parent after retaining the pinned
+            // rustc library tree on fd 193. Cargo may add an ambient loader path for ordinary
+            // wrappers; it is never admitted for an authority-sensitive invocation.
+            if is_managed_rustc_loader_environment(&name, &value)
+                || (unprotected_validation
+                    && is_cargo_augmented_validation_loader_environment(&name, &value))
+                || (name == OsStr::new("LD_LIBRARY_PATH") && !authority_sensitive)
+            {
                 continue;
             }
             return Err(BindingWrapperError::BuildObservation(format!(
@@ -688,6 +696,34 @@ fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
         }
     }
     Ok(())
+}
+
+fn is_managed_rustc_loader_environment(name: &OsStr, value: &OsStr) -> bool {
+    name == OsStr::new("LD_LIBRARY_PATH") && value == OsStr::new("/proc/self/fd/193")
+}
+
+fn is_cargo_augmented_validation_loader_environment(name: &OsStr, value: &OsStr) -> bool {
+    name == OsStr::new("LD_LIBRARY_PATH")
+        && std::env::split_paths(value).last().as_deref() == Some(Path::new("/proc/self/fd/193"))
+}
+
+fn normalize_unprotected_validation_loader_environment() {
+    if !cfg!(debug_assertions)
+        || std::env::var_os(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref()
+            != Some(OsStr::new("1"))
+    {
+        return;
+    }
+    let Some(value) = std::env::var_os("LD_LIBRARY_PATH") else {
+        return;
+    };
+    if is_cargo_augmented_validation_loader_environment(OsStr::new("LD_LIBRARY_PATH"), &value) {
+        // This process is an explicitly non-production validation wrapper and has not started
+        // worker threads. The mutable Cargo prefix has already affected this exec, so removing it
+        // cannot create an authority claim. The pinned-rustc command installs fd 193 again after
+        // the inherited environment has been validated.
+        unsafe { std::env::remove_var("LD_LIBRARY_PATH") };
+    }
 }
 
 fn configure_managed_rustc_loader(command: &mut Command) {
@@ -3965,6 +4001,32 @@ mod tests {
 
         assert!(result.is_none());
         assert_eq!(format!("{command:?}"), before);
+    }
+
+    #[test]
+    fn only_the_retained_rustc_loader_directory_is_managed() {
+        assert!(super::is_managed_rustc_loader_environment(
+            OsStr::new("LD_LIBRARY_PATH"),
+            OsStr::new("/proc/self/fd/193")
+        ));
+        for (name, value) in [
+            ("LD_LIBRARY_PATH", "/toolchain/lib"),
+            ("LD_LIBRARY_PATH", "/proc/self/fd/192"),
+            ("LD_PRELOAD", "/proc/self/fd/193"),
+        ] {
+            assert!(!super::is_managed_rustc_loader_environment(
+                OsStr::new(name),
+                OsStr::new(value)
+            ));
+        }
+        assert!(super::is_cargo_augmented_validation_loader_environment(
+            OsStr::new("LD_LIBRARY_PATH"),
+            OsStr::new("/mutable/target/debug/deps:/proc/self/fd/193")
+        ));
+        assert!(!super::is_cargo_augmented_validation_loader_environment(
+            OsStr::new("LD_LIBRARY_PATH"),
+            OsStr::new("/proc/self/fd/193:/mutable/target/debug/deps")
+        ));
     }
 
     #[test]

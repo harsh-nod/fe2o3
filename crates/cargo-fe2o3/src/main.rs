@@ -708,6 +708,10 @@ fn run_cargo_with_backend(
     remove_dynamic_loader_environment(cargo.as_command_mut());
     context.pinned_rustc.assert_lib_tree_unmutated()?;
     configure_pinned_rustc_child(cargo.as_command_mut(), &context.pinned_rustc)?;
+    cargo.as_command_mut().env(
+        "LD_LIBRARY_PATH",
+        format!("/proc/self/fd/{RUSTC_LIBRARY_CHILD_FD}"),
+    );
     match context.worker_v2_identity {
         Some(identity) => {
             cargo
