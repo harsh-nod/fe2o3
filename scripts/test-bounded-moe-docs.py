@@ -21,6 +21,7 @@ NEGATIVE_MANIFEST = (
 README = ROOT / "README.md"
 TESTING = ROOT / "docs/testing.md"
 ROADMAP = ROOT / "docs/implementation-roadmap-v2.md"
+EVIDENCE_RECORD = ROOT / "docs/evidence-record-v1.md"
 EXAMPLE = ROOT / "examples/moe_expert_v1/README.md"
 V2_BRIDGE = ROOT / "crates/fe2o3-host/src/moe_routing_expert_bridge_v2.rs"
 V2_ADAPTER = ROOT / "crates/fe2o3-host/src/generated_moe_expert_v2.rs"
@@ -91,6 +92,7 @@ def main() -> None:
     readme = README.read_text(encoding="utf-8")
     testing = TESTING.read_text(encoding="utf-8")
     roadmap = ROADMAP.read_text(encoding="utf-8")
+    evidence_record = EVIDENCE_RECORD.read_text(encoding="utf-8")
     example = EXAMPLE.read_text(encoding="utf-8")
     v2_bridge = V2_BRIDGE.read_text(encoding="utf-8")
     v2_adapter = V2_ADAPTER.read_text(encoding="utf-8")
@@ -221,6 +223,21 @@ def main() -> None:
 
     require(V2_CHECKPOINT in doc, "bounded MoE evidence has stale V2 checkpoint")
     require(V2_CHECKPOINT in roadmap, "implementation roadmap has stale V2 checkpoint")
+    require(
+        "not the current integration checkpoint" in roadmap,
+        "roadmap conflates the bounded MoE V2 and current integration checkpoints",
+    )
+
+    for name, text in [
+        ("README", readme),
+        ("testing guide", testing),
+        ("evidence record", evidence_record),
+        ("implementation roadmap", roadmap),
+    ]:
+        require(
+            "subsequent manifest-only Commit B" in text,
+            f"{name} does not preserve the Commit A/B release boundary",
+        )
 
     require(
         "`0 Complete / 82 Partial / 0 Missing / 12 N/A` normative rows" in readme,

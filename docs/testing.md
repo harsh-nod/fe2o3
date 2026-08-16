@@ -76,9 +76,12 @@ does not opt in to ignored GPU execution tests.
 
 ## Row-softmax V1 LLVM 22 release gate
 
-The row release is a separate host-specific compiler/code-object lane. Review
-the committed manifest out of band, then invoke the gate twice with the same
-reviewed digest and four distinct paths that do not exist:
+The row release is a separate host-specific compiler/code-object lane. At
+implementation Commit A, the manifest path below is deliberately absent. Only
+a subsequent manifest-only Commit B directly above A may add it and pin A's
+exact commit and tree. A compliant B's committed manifest must be reviewed out
+of band, then tested by invoking the gate twice with the same reviewed digest
+and four distinct paths that do not exist:
 
 ```text
 export REVIEWED_ROW_SOFTMAX_MANIFEST_SHA256=<independently-reviewed-sha256>

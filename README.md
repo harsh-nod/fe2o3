@@ -62,17 +62,20 @@ identities into a sealed linear host token. A fixed `gfx942:xnack-`, width-64,
 unmasked typed HSA path, guarded buffers, CPU comparison, and 25-pin terminal
 receipt are implemented behind that join.
 
-The row profile also has a host-specific compiler/code-object release gate. A
-manifest-only commit directly above the implementation selects an independently
-reviewed SHA-256, pinned upstream LLVM 22.1.8 source and package closure,
-in-process LLD, the exact OCML/device-library closure, Cargo/rustc and their
-offline source/sysroot closures, runtime DSOs, Worker and layout-probe ELFs, and
-the retained HSACO. Both C++ and Rust require the measured metadata exactly,
-including four explicit and nineteen hidden arguments, presence or absence of
+The row profile also has a host-specific compiler/code-object release gate. By
+protocol, implementation Commit A contains the gate but deliberately contains
+no release manifest. Only a subsequent manifest-only Commit B directly above A
+may select an independently reviewed SHA-256, pinned upstream LLVM 22.1.8
+source and package closure, in-process LLD, the exact OCML/device-library
+closure, Cargo/rustc and their offline source/sysroot closures, runtime DSOs,
+Worker and layout-probe ELFs, and the retained HSACO. Both C++ and Rust require
+the measured metadata exactly, including four explicit and nineteen hidden
+arguments, presence or absence of
 optional fields, register/spill values, resources, symbols, and target. Release
-evidence requires two runs from distinct fresh build and Cargo directories with
-the same caller-supplied manifest digest and byte-identical outputs. This is
-operator-selected reviewed integrity, not origin authentication or GPU evidence.
+evidence can be claimed only when a compliant B and two runs from distinct fresh
+build and Cargo directories reproduce the same caller-supplied manifest digest
+and byte-identical outputs. That combination establishes only operator-selected
+reviewed integrity, not origin authentication or GPU evidence.
 
 The typed runtime path remains unreachable from the
 production authority command: real MI300X `authority release build` crosses the

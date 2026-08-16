@@ -2,7 +2,13 @@
 
 Status: execution plan for parallel implementation.
 
-Implementation checkpoint: `10e5f90ece1937aaee77492e8e4e4742863d013b`.
+Implementation checkpoint: this document belongs to pre-manifest implementation
+Commit A. A's final commit and tree identities are intentionally recorded only
+by a subsequent manifest-only Commit B, avoiding a self-reference in A.
+
+The bounded MoE V2 checkpoint remains
+`10e5f90ece1937aaee77492e8e4e4742863d013b`; it identifies that scoped
+fail-closed host boundary, not the current integration checkpoint.
 
 This roadmap turns [architecture-v2.md](architecture-v2.md),
 [verification-model.md](verification-model.md), the
@@ -71,11 +77,12 @@ not permanent immutability.
 The fixed width-64 row-softmax compiler lane now has a two-commit release
 protocol. Implementation Commit A contains the source-to-LLVM profile, direct
 upstream LLVM target emission, in-process LLD linking, C++ and Rust post-link
-inspection, hostile parser/metadata tests, and a fail-closed gate. Manifest-only
-Commit B pins Commit A and its tree plus the complete host-specific LLVM,
-device-library, Cargo/rustc, source, sysroot, runtime-DSO, Worker, probe, and
-HSACO identities. The caller must supply an independently reviewed manifest
-digest; the checkout supplies no default.
+inspection, hostile parser/metadata tests, and a fail-closed gate, but
+deliberately no release manifest. Only a subsequent manifest-only Commit B may
+pin Commit A and its tree plus the complete host-specific LLVM, device-library,
+Cargo/rustc, source, sysroot, runtime-DSO, Worker, probe, and HSACO identities.
+Every compliant B requires the caller to supply an independently reviewed
+manifest digest; the checkout supplies no default.
 
 The measured LLVM 22.1.8 contract is exact: one `gfx942:xnack-` COV6 kernel,
 workgroup `[64, 1, 1]`, wave64, zero group/private segments, a 288-byte kernarg,
