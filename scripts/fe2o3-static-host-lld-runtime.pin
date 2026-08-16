@@ -1,0 +1,16 @@
+FORMAT=fe2o3-static-host-lld-runtime-pin-v1
+TARGET=x86_64-linux-gnu-ubuntu-24.04
+F	crt1.o	/usr/lib/x86_64-linux-gnu/crt1.o	644	1792	5cfb30db1d2c92a9a818f6c015ad7fcd6519afaa1b88148e831504fe6e299479
+F	crti.o	/usr/lib/x86_64-linux-gnu/crti.o	644	1192	077ccb6c68db1794da3ee262c4a16a3c6f8e902845dd0829110ad4b7065e5aa3
+F	crtbeginT.o	/usr/lib/gcc/x86_64-linux-gnu/13/crtbeginT.o	644	2968	42171a80795909e1a0743f71c60b503ff2951ed40bf94cae9ca55c324a8cc26a
+F	crtend.o	/usr/lib/gcc/x86_64-linux-gnu/13/crtend.o	644	1168	9c8b2caad195193301ef072895dc89bea1d23371d4c19accd821debe27773063
+F	crtn.o	/usr/lib/x86_64-linux-gnu/crtn.o	644	760	a2266079f95b84ccc2162ebbf279bcd78858a748aa1882e0bdb912316c76a58f
+F	libstdc++.a	/usr/lib/gcc/x86_64-linux-gnu/13/libstdc++.a	644	6583910	1f5a271fb1917b827ddcc3f65be5bf9bb4ab86be8de6acb6566aa638e92f602c
+F	libgcc.a	/usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a	644	3093656	d9376c55f97863a4e5fbb6c6beca2591b319bf786f3a7ca56da8964c5662171f
+F	libgcc_eh.a	/usr/lib/gcc/x86_64-linux-gnu/13/libgcc_eh.a	644	66708	f853cbbf842ff8714cc8dd986e2fd5bb309d34d490b0707203223ee4d52c76bc
+F	libc.a	/usr/lib/x86_64-linux-gnu/libc.a	644	6135688	d2a01bdb5e0443c6213f96f7ed90dd13006cc6913ee1cd306de7456def86ff2f
+F	libm.a	/usr/lib/x86_64-linux-gnu/libm.a	644	132	420cd3c406f6f8c12deb3d1291146e9c091ee015a7c39eaf2237f01e80d6f0ae
+F	libm-2.39.a	/usr/lib/x86_64-linux-gnu/libm-2.39.a	644	2607988	07f819a1dde208fd783513a9cc5d4df87ecfd7cd93b748079db73a5967333a4e
+F	libmvec.a	/usr/lib/x86_64-linux-gnu/libmvec.a	644	1830076	a775c33f9d7a18c547a111467b7f855340da8a38e454adb5e869f11ca4036abf
+F	libdl.a	/usr/lib/x86_64-linux-gnu/libdl.a	644	8	f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5
+F	librt.a	/usr/lib/x86_64-linux-gnu/librt.a	644	8	f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5

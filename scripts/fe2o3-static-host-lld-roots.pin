@@ -1,0 +1,19 @@
+FORMAT=fe2o3-static-host-lld-root-pin-v1
+TARGET=x86_64-linux-gnu-ubuntu-24.04
+R	llvm-package	LLVM_PACKAGE_ROOT	370453	9fd05be73e256a486613ae8fdec914d38eb5a9533a3be77047e0b8dfbf1df134
+R	llvm-source-llvm	LLVM_SOURCE_LLVM_INCLUDE	252629	1c5ef8880d608b220476813c118ca7a39185c74efb7312b293369d5a0955d4b6
+R	llvm-source-lld	LLVM_SOURCE_LLD_INCLUDE	1788	f057baac9305a2661f8571f618102c9a48624b524b4bce554bc220eaedda7454
+R	llvm-source-cmake	LLVM_SOURCE_LLVM_CMAKE_MODULES	3664	dc285752b74f4b1234dc49ec06d79a3ed84c678c000ab4a365141c4104f5428f
+R	cmake-modules	/usr/share/cmake-3.28	373333	ba442c1ef64cfe15e044518f72a9cd270b2c60fa01d82ce648403d9d6aba3ed8
+R	system-include	/usr/include	2729315	c6a65189566893ce1a9788ebc8bd36d5a73edb5598e366fa9a1a91240a0ab7fc
+R	llvm-system-include	/usr/lib/llvm-18/include	133597	f26b56c804924ee9d557e3c817bc4ca7398ec1d9c2299f58b37e80ea7038fad4
+R	clang-system-include	/usr/lib/llvm-18/lib/clang/18/include	24344	b7eae9f5e3c42bec87773ef47e8008cfc4c9b363e92505d294b43ba6b3bdaa50
+R	gcc-builtin-include	/usr/lib/gcc/x86_64-linux-gnu/13/include	13210	0dc33ad5fd75a8e862797391a2b93fef774f4dcaac8c66fb76f5df4c5e0d4bf7
+N	gcc-search	/usr/lib/gcc/x86_64-linux-gnu/13	26932	83536ed0f543dc62c949aa62aa4ede26e6eadeeb4df66b32df914e0d13388bd5
+N	gcc-libexec-search	/usr/libexec/gcc/x86_64-linux-gnu/13	784	d2ee69fddcf198e8df013bd152f0c11204ea54c923cd0047aedba7d71f9c00b0
+N	usr-bin-search	/usr/bin	114366	3fd0b3e5daa14f12bf519a000faae2b6d64782952b95d638b529ed8704332f6b
+N	local-include-search	/usr/local/include	77	38e61cf54a7dff555fd36ab962bb41b4273d5d1971dff6eda52302ec350a0cb6
+N	alternatives-search	/etc/alternatives	8614	32e568b93218d4abd9a865c17b43b165cc9ab269af12e192650d96e971571f52
+N	cmake-doc-search	/usr/share/doc/cmake-data	346	39c61ce537c349527ebedc59ff315c0c0231190d36395fb283eb5c1b655ee507
+N	lib32-search	/usr/lib32	29285	3b9f4167a9677e1a6e8bcd14f47349115b1e400feecd74f8014265f93494dd9e
+N	lib64-search	/usr/lib64	137	9be440cbc4dfb2b01c9e69c1b2172592531e6b0d46818fc0449d057d2b09d3c8
