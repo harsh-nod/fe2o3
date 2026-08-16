@@ -1,4 +1,4 @@
-//! One-shot HSA lifecycle for the exact MoeTop2 V1 profile.
+//! One-shot HSA lifecycle for exact deterministic MoE routing T8/E4/K2/C4 V1.
 
 use crate::{
     GeneratedMoeTop2V1HostAdapterV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
@@ -639,11 +639,19 @@ impl UnloadedMoeTop2V1 {
         true
     }
 
-    pub const fn proves_causal_execution(&self) -> bool {
+    pub const fn proves_deterministic_routing_semantics(&self) -> bool {
         false
     }
 
     pub const fn proves_compiler_refinement(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_gpu_routing_results(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_expert_gemm_or_combine(&self) -> bool {
         false
     }
 
