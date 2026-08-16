@@ -289,6 +289,26 @@ impl FinalizedFlashAttentionV1ReceiptV1 {
     pub const fn proves_no_comgr_linkage(&self) -> bool {
         false
     }
+
+    /// Borrows the exact retained artifact only at the reviewed Flash runtime boundary.
+    ///
+    /// # Safety
+    ///
+    /// `consume` must pass the bytes directly to the exact B1/H1/N8/D16
+    /// reviewed runtime adapter. It must not copy, persist, publish, return,
+    /// reinterpret, or expose the bytes or derive generic load authority from
+    /// them. The receipt must remain retained through load validation.
+    #[doc(hidden)]
+    #[allow(unsafe_code)]
+    pub unsafe fn with_exact_finalized_bytes_for_reviewed_flash_runtime_v1<T>(
+        &self,
+        consume: impl FnOnce(&[u8], ContentIdentityV1) -> T,
+    ) -> T {
+        consume(
+            self.finalized.exact_finalized_bytes(),
+            self.finalized.finalized_output_identity(),
+        )
+    }
 }
 
 #[derive(Debug)]
