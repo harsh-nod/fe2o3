@@ -100,6 +100,27 @@ dispatch, or expert GPU execution. The expert ABI remains manually pinned, and
 preparation still ends at a denial-only execution boundary. No expert GPU
 result, performance claim, or parity promotion is made.
 
+The typed MoE V2 host boundary through `10e5f90ec` closes only the mechanical
+joins that V1 deliberately omitted. Move-only private capabilities bind one
+exact request/batch identity to routing request and logits identities, token
+activations, caller route-weight policy, and the model expert-weight artifact.
+A separate lifecycle transcript binds the exact dispatch, completion, full
+readback, completion-before-readback order, profile, payload, context, and
+stream. Checked inputs then bind the concrete route weights and exact packed
+activation layout; upload checks four jointly retained destinations, and the
+generated adapter checks the weight-artifact binding plus all eight typed
+regions, non-aliasing, access roles, target, context, and fixed ABI mechanics.
+
+Those V2 types have private fields, are linear at each authority transition,
+and have compile-fail coverage against construction, cloning, conversion, test
+issuer access, and authority extraction. There is no production issuer for the
+completion/readback provenance or expert-weight artifact binding, so safe
+production code cannot reach V2 upload or preparation: the success path is
+constructively unreachable. The boundary grants no artifact, copy, load, or
+dispatch authority and proves neither routing nor expert semantics. The
+`gfx942` upload/readback observation above is V1 evidence only; there has been
+no V2 GPU observation and no parity promotion.
+
 The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
 the checked host contract with bounded production-directed LDS slices. An
 ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`

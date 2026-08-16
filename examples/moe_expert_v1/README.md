@@ -64,12 +64,21 @@ inert compact-copy plan from the retained offsets. Expert preparation then
 terminates at `deny_moe_expert_execution_v1`; no copy plan, kernel load, or
 dispatch can begin through the safe API.
 
-The remaining boundary is unchanged: the expert kernels lack authenticated
-MIR-to-Kernel-IR profiles, compiler-derived ABI, upstream LLVM/LLD finalization,
-an authenticated router-completion/readback receipt, route-weight and packed-
-activation joins, typed runtime authority, protected `gfx942` execution,
-source/model-to-machine refinement, generalized memory safety or race freedom,
-and numerical correctness. No expert GPU result or parity promotion is claimed.
+The typed V2 follow-on binds exact request/batch identity, dispatch completion
+and readback order, route-weight policy, packed activations, model weight
+artifact identity, lifecycle context/stream, typed regions, and fixed ABI
+mechanics through private move-only stages. Its checked upload retains packed
+activations, offsets, inverse, and route weights together; its generated adapter
+requires the matching weight binding and checks all eight region extents,
+access roles, contexts, alignments, and alias pairs.
+
+Those V2 mechanics do not create an executable path. There is no production
+issuer for completion/readback provenance or the expert-weight binding, making
+safe upload and preparation constructively unreachable. V2 grants no artifact,
+copy, load, or dispatch authority and proves no routing/expert semantics,
+source-to-machine refinement, generalized memory safety or race freedom, or
+numerical correctness. The V1 `gfx942` offsets/inverse upload-readback test is
+not V2 evidence; no V2 GPU observation or parity promotion is claimed.
 
 Run the focused non-hardware checks from the repository root:
 
@@ -80,4 +89,7 @@ cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
 cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v1::tests
+cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests
+cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests
+cargo test --locked -p fe2o3-host --test generated_moe_expert_v2_ui
 ```

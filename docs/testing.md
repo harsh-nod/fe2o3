@@ -129,6 +129,32 @@ plan, dispatch either expert kernel, or promote parity. See
 [Bounded MoE V1 evidence](bounded-moe-v1.md) for the exact field and trust
 boundaries.
 
+## `10e5f90ec` typed MoE V2 fail-closed boundary
+
+Run the V2 unit and compile-fail suites separately so their evidence classes
+remain visible:
+
+```text
+cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests
+cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests
+cargo test --locked -p fe2o3-host --test generated_moe_expert_v2_ui
+```
+
+The bridge tests mutate the exact request/batch identities, lifecycle
+completion/readback transcript and ordering, concrete route-weight and packed-
+activation join, and upload length/context/stream/alias facts. The adapter tests
+cover the eight typed regions, access roles, ABI packing, target, alignment,
+extent, and every alias pair. The 22 UI fixtures reject construction, field
+access, cloning, use after move, synthetic and V1 substitution, raw weight
+views, public test issuers, and copy/load/dispatch authority extraction.
+
+Passing these commands is unit and Rust type-system evidence only. No
+production component issues the completion/readback provenance or the
+expert-weight artifact binding, so the V2 success path remains constructively
+unreachable in safe production code. V2 grants no artifact, copy, load, or
+dispatch authority and has no GPU observation. The preceding `gfx942` command
+is a V1-only upload/readback observation and must not be attributed to V2.
+
 ## `90b6fe3` multi-kernel checkpoint
 
 The checkpoint at

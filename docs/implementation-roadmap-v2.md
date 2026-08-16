@@ -2,7 +2,7 @@
 
 Status: execution plan for parallel implementation.
 
-Implementation checkpoint: `1281f97487adfd4af32687b7705ba46e5c11152b`.
+Implementation checkpoint: `10e5f90ece1937aaee77492e8e4e4742863d013b`.
 
 This roadmap turns [architecture-v2.md](architecture-v2.md),
 [verification-model.md](verification-model.md), the
@@ -184,7 +184,46 @@ not production proof-authenticated safe
 dispatch, no parity row is promoted solely by this checkpoint,
 repository-wide CUDA-Oxide parity is not claimed, and Complete remains `0`.
 
-## Bounded MoE V1 checkpoint: `1281f9748`
+## Typed MoE V2 fail-closed checkpoint: `10e5f90ec`
+
+The implementation through
+`10e5f90ece1937aaee77492e8e4e4742863d013b` adds a production-shaped but
+constructively unreachable host boundary for the fixed `T8/E4/K2/C4/I16/O16`
+MoE slice:
+
+- one private move-only request/batch capability binds exact routing-request,
+  logits, token-activation, caller route-weight-policy, and model expert-weight
+  artifact identities;
+- one private move-only completion/readback capability binds the exact request,
+  context and stream, dispatch, completion and readback events,
+  completion-before-readback order, profile, and complete payload;
+- checked inputs join concrete finite nonnegative per-token route weights and
+  the exact zero-padded packed-activation layout to that completed readback;
+- the completed upload validates the exact lifecycle stream/context, all four
+  destination extents and allocation identities, and every alias pair while
+  retaining typed activation, offsets, inverse, and route-weight regions;
+- a separate private weight binding ties one typed weight region to the model
+  artifact and request/batch transcript; and
+- the generated adapter validates all eight typed region ranges, alignments,
+  contexts, access roles and alias pairs, then forms only the fixed four-GEMM
+  and one-combine ABI records.
+
+The corresponding unit tests exercise identity, transcript, ordering, packing,
+region, context/stream, and ABI mutations. Twenty-two compile-fail fixtures
+enforce private fields, move-only stages, issuer isolation, V1/synthetic/raw-
+weight rejection, and absence of copy/load/dispatch authority. No production
+or feature-gated issuer can construct the completion/readback provenance, and
+the artifact pipeline cannot construct the expert-weight binding. Safe
+production code therefore cannot reach V2 upload or preparation.
+
+This is host API and type-system evidence, not routing or expert semantics,
+compiler/finalizer authority, memory-safety or race-freedom proof, numerical
+correctness, or source-to-machine refinement. The V1 `gfx942` offsets/inverse
+upload-readback observation remains V1 evidence only; V2 has no hardware run
+and grants no artifact, copy, load, or dispatch authority. No parity row is
+promoted.
+
+## Historical bounded MoE V1 checkpoint: `1281f9748`
 
 The implementation through
 `1281f97487adfd4af32687b7705ba46e5c11152b` closes three structural and

@@ -158,6 +158,44 @@ completion and readback, bind route weights and packed activations, execute the
 compact materialization plan, and then establish expert artifact and runtime
 authority.
 
+## Typed MoE V2 fail-closed boundary
+
+The implementation through
+`10e5f90ece1937aaee77492e8e4e4742863d013b` adds a production-shaped typed
+boundary without making the expert path executable. Its exact request/batch
+identity commits the routing request, logits source, token activations, caller
+route-weight policy, and model expert-weight artifact. Its lifecycle transcript
+separately commits dispatch and readback context/stream identity, dispatch,
+completion and readback event identities, the completion-before-readback order,
+the fixed profile, the complete routing payload, and the shared request/batch.
+The typed identity encoding is process-local and pinned to the current Rust
+toolchain; it is not a durable cross-toolchain serialization or semantic proof.
+
+The checked-input join consumes completed readback and validates the concrete
+route weights, token-activation identity, and exact zero-padded packed activation
+layout. The completed upload requires the lifecycle's exact context and stream,
+checks all four destination lengths and allocation identities, rejects every
+alias pair, and retains typed activation, offsets, inverse, and route-weight
+regions together. The generated adapter additionally requires a weight-device-
+region binding to the model artifact named by the same request/batch, validates
+all eight region lengths, ranges, alignment, contexts, access roles, and alias
+pairs, and constructs only the fixed four-GEMM/one-combine ABI records.
+
+Every capability that crosses a lifecycle stage has private fields and is
+move-only. The UI suite rejects direct construction, field access, cloning,
+reuse after move, synthetic conversion, V1 substitution, raw-weight
+substitution, public test-issuer access, and attempts to extract authority.
+There is no public or feature-gated production issuer for completion/readback
+provenance, and the artifact pipeline cannot issue the required expert-weight
+binding. V2 upload and adapter preparation are therefore constructively
+unreachable from safe production code.
+
+V2 grants no artifact, copy, load, or dispatch authority and proves no routing
+or expert semantics, memory safety, race freedom, numerical correctness, or
+source-to-machine refinement. The V1 `gfx942` test described above observed only
+caller-supplied offsets/inverse upload and readback through V1. It did not use
+V2, and there is no V2 GPU observation or parity promotion.
+
 ## Reproduce the bounded checks
 
 Run from the repository root with the pinned Rust toolchain:
@@ -170,6 +208,9 @@ VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
 cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v1::tests
 cargo test --locked -p fe2o3-host --test generated_moe_expert_v1_ui
+cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests
+cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests
+cargo test --locked -p fe2o3-host --test generated_moe_expert_v2_ui
 cargo test --locked -p fe2o3-host \
   --test moe_expert_v1_upload_hardware --no-run
 cargo test --locked --manifest-path examples/moe_expert_v1/Cargo.toml
@@ -184,5 +225,6 @@ cargo test --locked -p fe2o3-host \
   -- --ignored --exact --nocapture
 ```
 
-Passing the last command proves only the caller-supplied offsets/inverse
-upload-readback and denial behavior described above.
+Passing the last command proves only the V1 caller-supplied offsets/inverse
+upload-readback and denial behavior described above. It supplies no V2 hardware
+evidence.
