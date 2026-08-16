@@ -15,6 +15,126 @@ sha256_file() {
   /usr/bin/sha256sum -- "$1" | /usr/bin/cut -d ' ' -f 1
 }
 
+manifest_value() {
+  local manifest=$1 key=$2 line value='' count=0
+  while IFS= read -r line; do
+    if [[ "$line" == "$key="* ]]; then
+      value=${line#*=}
+      ((count += 1))
+    fi
+  done <"$manifest"
+  [[ $count -eq 1 && -n "$value" ]] ||
+    die "$manifest does not contain exactly one nonempty $key row"
+  printf '%s\n' "$value"
+}
+
+normalize_admitted_inputs() {
+  local input=$1 output=$2 report=$3 build_location=$4 artifact_location=$5
+  local line kind label path extra normalized_path suffix
+  local format_rows=0 status_rows=0 data_rows=0 source_rows=0 build_rows=0
+  local artifact_rows=0 build_id_rows=0 prenormalized_build_rows=0
+
+  [[ -f "$input" && ! -L "$input" && ! -e "$output" && ! -L "$output" &&
+    ! -e "$report" && ! -L "$report" ]] ||
+    die 'admitted-input normalization paths are not fresh regular files'
+  : >"$output"
+  while IFS= read -r line; do
+    IFS=$'\t' read -r kind label path extra <<<"$line"
+    case "$kind" in
+      FORMAT=fe2o3-static-host-lld-admitted-input-set-v1)
+        [[ -z "$label$path$extra" ]] || die 'admitted-input format row has fields'
+        ((format_rows += 1))
+        printf '%s\n' "$line" >>"$output"
+        ;;
+      STATUS=measured-observational-admission)
+        [[ -z "$label$path$extra" ]] || die 'admitted-input status row has fields'
+        ((status_rows += 1))
+        printf '%s\n' "$line" >>"$output"
+        ;;
+      F|K|N|R)
+        [[ -n "$label" && -n "$path" && -z "$extra" &&
+          "$label" =~ ^[A-Za-z0-9._+-]+$ &&
+          "$path" != *$'\n'* && "$path" != *$'\r'* ]] ||
+          die 'admitted-input set has a noncanonical data row'
+        normalized_path=$path
+        if [[ "$label" == llvm-build-id ]]; then
+          [[ "$kind" == F && "$path" == "$llvm_build_id_file" ]] ||
+            die 'LLVM build-ID admission does not name the supplied exact file'
+          normalized_path=\$LLVM_BUILD_ID_FILE
+          ((build_id_rows += 1))
+        elif [[ "$path" == "$build_location" ]]; then
+          normalized_path=\$BUILD_LOCATION
+          ((build_rows += 1))
+        elif [[ "$path" == "$build_location/"* ]]; then
+          suffix=${path#"$build_location"/}
+          normalized_path="\$BUILD_LOCATION/$suffix"
+          ((build_rows += 1))
+        elif [[ "$path" == "$artifact_location" ]]; then
+          normalized_path=\$ARTIFACT_LOCATION
+          ((artifact_rows += 1))
+        elif [[ "$path" == "$artifact_location/"* ]]; then
+          suffix=${path#"$artifact_location"/}
+          normalized_path="\$ARTIFACT_LOCATION/$suffix"
+          ((artifact_rows += 1))
+        elif [[ "$path" == "$source_root" ]]; then
+          normalized_path=\$SOURCE_ROOT
+          ((source_rows += 1))
+        elif [[ "$path" == "$source_root/"* ]]; then
+          suffix=${path#"$source_root"/}
+          normalized_path="\$SOURCE_ROOT/$suffix"
+          ((source_rows += 1))
+        elif [[ "$path" == \$BUILD || "$path" == \$BUILD/* ]]; then
+          ((prenormalized_build_rows += 1))
+        fi
+        printf '%s\t%s\t%s\n' "$kind" "$label" "$normalized_path" >>"$output"
+        ((data_rows += 1))
+        ;;
+      *) die "admitted-input set has an unknown row: $kind" ;;
+    esac
+  done <"$input"
+  [[ $format_rows -eq 1 && $status_rows -eq 1 && $data_rows -gt 0 ]] ||
+    die 'admitted-input set has noncanonical headers or no data'
+  {
+    printf 'FORMAT=fe2o3-static-host-lld-input-normalization-v1\n'
+    printf 'STATUS=only-approved-location-substitutions\n'
+    printf 'SOURCE_ROOT_SUBSTITUTIONS=%s\n' "$source_rows"
+    printf 'BUILD_LOCATION_SUBSTITUTIONS=%s\n' "$build_rows"
+    printf 'ARTIFACT_LOCATION_SUBSTITUTIONS=%s\n' "$artifact_rows"
+    printf 'LLVM_BUILD_ID_FILE_SUBSTITUTIONS=%s\n' "$build_id_rows"
+    printf 'PRENORMALIZED_BUILD_ROWS=%s\n' "$prenormalized_build_rows"
+    printf 'DATA_ROWS=%s\n' "$data_rows"
+  } >"$report"
+  /usr/bin/chmod 0444 "$output" "$report"
+}
+
+assert_run_evidence() {
+  local artifact_root=$1 artifact_manifest build_evidence tool digest length
+  artifact_manifest="$artifact_root/fe2o3-host-lld.artifact-manifest.txt"
+  build_evidence="$artifact_root/fe2o3-host-lld.build-evidence-manifest.txt"
+  tool="$artifact_root/fe2o3-host-lld"
+  [[ -f "$artifact_manifest" && ! -L "$artifact_manifest" &&
+    -f "$build_evidence" && ! -L "$build_evidence" ]] ||
+    die 'a fresh build omitted its separate evidence manifests'
+  digest=$(sha256_file "$tool")
+  length=$(/usr/bin/stat -Lc '%s' -- "$tool")
+  [[ $(manifest_value "$artifact_manifest" FORMAT) == fe2o3-host-lld-artifact-v1 &&
+    $(manifest_value "$artifact_manifest" TOOL_SHA256) == "$digest" &&
+    $(manifest_value "$artifact_manifest" TOOL_LENGTH) == "$length" &&
+    $(manifest_value "$artifact_manifest" TOOL_MODE) == 555 &&
+    $(manifest_value "$artifact_manifest" AUTHORITY) == none &&
+    $(manifest_value "$artifact_manifest" GPU_LINKER) == unchanged &&
+    $(manifest_value "$artifact_manifest" COMGR) == absent ]] ||
+    die 'a fresh build artifact manifest is not internally exact'
+  [[ $(manifest_value "$build_evidence" GUARD_SELF_TEST) == passed &&
+    $(manifest_value "$build_evidence" PROTOCOL_CTEST_REGISTRATION) == \
+      verified-canonical-exactly-once &&
+    $(manifest_value "$build_evidence" PROTOCOL_CTEST_EXECUTION) == \
+      not-executed-inside-guarded-build-closure ]] ||
+    die 'a fresh build evidence manifest has incorrect test semantics'
+  ! /usr/bin/grep -q '^TEST_STATUS=' "$build_evidence" ||
+    die 'a fresh build evidence manifest retained the ambiguous test claim'
+}
+
 assert_static_elf() {
   local executable=$1 prefix=$2
   local readelf_report="$work_root/$prefix.readelf"
@@ -81,13 +201,50 @@ readonly work_identity
   "$work_root/artifact-b" "$llvm_source" "$llvm_root" \
   "$llvm_build_id_file" "$llvm_closure_manifest"
 
-for artifact in fe2o3-host-lld fe2o3-host-lld.artifact-manifest.txt \
-    fe2o3-host-lld.identity.txt fe2o3-host-lld.source-manifest.txt \
+for artifact in fe2o3-host-lld fe2o3-host-lld.identity.txt \
+    fe2o3-host-lld.source-manifest.txt \
     fe2o3-host-lld.static-runtime-manifest.txt fe2o3-host-lld.readelf.txt \
-    fe2o3-host-lld.dynamic.txt; do
+    fe2o3-host-lld.dynamic.txt fe2o3-host-lld.build-inputs.pin \
+    fe2o3-host-lld.roots.pin fe2o3-host-lld.tool-source.pin \
+    fe2o3-host-lld.build-bootstrap.sh \
+    fe2o3-host-lld.build-guard-source.cpp \
+    fe2o3-host-lld.trace-check-source.cpp \
+    fe2o3-host-lld.tmp-redirect-source.cpp; do
   /usr/bin/cmp -s -- "$work_root/artifact-a/$artifact" \
     "$work_root/artifact-b/$artifact" ||
     die "two fresh repeated builds differ for $artifact"
+done
+
+assert_run_evidence "$work_root/artifact-a"
+assert_run_evidence "$work_root/artifact-b"
+
+for phase in configure object link; do
+  normalized_a="$work_root/$phase.inputs.semantic-a.txt"
+  normalized_b="$work_root/$phase.inputs.semantic-b.txt"
+  report_a="$work_root/$phase.inputs.normalization-a.txt"
+  report_b="$work_root/$phase.inputs.normalization-b.txt"
+  normalize_admitted_inputs \
+    "$work_root/artifact-a/fe2o3-host-lld.$phase.inputs.txt" \
+    "$normalized_a" "$report_a" "$work_root/build-a" "$work_root/artifact-a"
+  normalize_admitted_inputs \
+    "$work_root/artifact-b/fe2o3-host-lld.$phase.inputs.txt" \
+    "$normalized_b" "$report_b" "$work_root/build-b" "$work_root/artifact-b"
+  /usr/bin/cmp -s -- "$normalized_a" "$normalized_b" ||
+    die "fresh $phase admitted-input identities differ semantically"
+  /usr/bin/cmp -s -- "$report_a" "$report_b" ||
+    die "fresh $phase inputs require different location substitutions"
+  source_substitutions=$(manifest_value "$report_a" SOURCE_ROOT_SUBSTITUTIONS)
+  build_id_substitutions=$(manifest_value \
+    "$report_a" LLVM_BUILD_ID_FILE_SUBSTITUTIONS)
+  [[ "$source_substitutions" =~ ^[1-9][0-9]*$ ]] ||
+    die "$phase inputs did not prove source-root normalization"
+  if [[ "$phase" == configure ]]; then
+    [[ "$build_id_substitutions" == 1 ]] ||
+      die 'configure inputs did not prove the exact build-ID location substitution'
+  else
+    [[ "$build_id_substitutions" == 0 ]] ||
+      die "$phase inputs unexpectedly admitted the LLVM build-ID file"
+  fi
 done
 
 tool_a="$work_root/artifact-a/fe2o3-host-lld"
@@ -149,7 +306,13 @@ done
 printf 'static host LLD release tests passed\n'
 printf 'tool_sha256=%s\n' "$tool_sha256"
 printf 'tool_length=%s\n' "$tool_length"
-printf 'artifact_manifest_sha256=%s\n' "$(sha256_file "$manifest")"
+printf 'artifact_a_manifest_sha256=%s\n' "$(sha256_file "$manifest")"
+printf 'artifact_b_manifest_sha256=%s\n' \
+  "$(sha256_file "$work_root/artifact-b/fe2o3-host-lld.artifact-manifest.txt")"
+printf 'evidence_a=%s\n' \
+  "$work_root/artifact-a/fe2o3-host-lld.build-evidence-manifest.txt"
+printf 'evidence_b=%s\n' \
+  "$work_root/artifact-b/fe2o3-host-lld.build-evidence-manifest.txt"
 printf 'secure_a_trace=%s\n' "$work_root/secure-a"
 printf 'secure_b_trace=%s\n' "$work_root/secure-b"
 printf 'work_root=%s\n' "$work_root"
