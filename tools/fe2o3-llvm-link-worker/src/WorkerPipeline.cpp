@@ -2139,6 +2139,7 @@ Error reduceBuiltinProviderClosure(Module &Linked,
       return pipelineError(Twine("gfx942 OCML import remained unresolved: ") +
                            Import);
     FunctionValue->setVisibility(GlobalValue::DefaultVisibility);
+    FunctionValue->setDSOLocal(true);
   }
 
   internalizeModule(Linked, [&Preserved](const GlobalValue &Value) {
@@ -5070,6 +5071,7 @@ nativeLink(ArrayRef<std::vector<uint8_t>> Objects, const Request &RequestValue,
 
   std::vector<std::string> OwnedArguments = {"ld.lld",
                                              "--shared",
+                                             "-Bsymbolic",
                                              "--no-undefined",
                                              "--export-dynamic",
                                              "--build-id=none",

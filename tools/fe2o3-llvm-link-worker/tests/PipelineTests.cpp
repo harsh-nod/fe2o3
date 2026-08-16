@@ -260,13 +260,17 @@ std::vector<uint8_t> makeFloatConsumerBitcode(StringRef Entry, StringRef Import,
                                   CodeObjectVersion);
 }
 
-std::vector<uint8_t> makeOcmlKernelBitcode() {
+std::vector<uint8_t>
+makeOcmlKernelBitcode(StringRef Import = "__ocml_sin_f32",
+                      uint8_t CodeObjectVersion = 5,
+                      bool TwoCalls = false) {
   LLVMContext Context;
   Module ModuleValue("gfx942-ocml-sin-kernel", Context);
   std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
   ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
   ModuleValue.setDataLayout(Machine->createDataLayout());
-  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 500);
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version",
+                            CodeObjectVersion * 100);
 
   Type *F32 = Type::getFloatTy(Context);
   PointerType *GlobalF32 = PointerType::get(Context, 1);
@@ -296,8 +300,8 @@ std::vector<uint8_t> makeOcmlKernelBitcode() {
 
   FunctionCallee WorkitemId = ModuleValue.getOrInsertFunction(
       "llvm.amdgcn.workitem.id.x", FunctionType::get(I32, false));
-  FunctionCallee Sin = ModuleValue.getOrInsertFunction(
-      "__ocml_sin_f32", FunctionType::get(F32, {F32}, false));
+  FunctionCallee Ocml = ModuleValue.getOrInsertFunction(
+      Import, FunctionType::get(F32, {F32}, false));
 
   BasicBlock *Entry = BasicBlock::Create(Context, "entry", Kernel);
   BasicBlock *Active = BasicBlock::Create(Context, "active", Kernel);
@@ -311,7 +315,11 @@ std::vector<uint8_t> makeOcmlKernelBitcode() {
   Value *InputElement = Builder.CreateInBoundsGEP(F32, Input, Index);
   Value *OutputElement = Builder.CreateInBoundsGEP(F32, Output, Index);
   Value *InputValue = Builder.CreateLoad(F32, InputElement);
-  Value *Result = Builder.CreateCall(Sin, {InputValue});
+  Value *Result = Builder.CreateCall(Ocml, {InputValue});
+  if (TwoCalls) {
+    Value *Second = Builder.CreateCall(Ocml, {Result});
+    Result = Builder.CreateFAdd(Result, Second);
+  }
   Builder.CreateStore(Result, OutputElement);
   Builder.CreateBr(Exit);
 
@@ -1806,12 +1814,16 @@ Request makeOcmlRequest(StringRef Import = "__ocml_sin_f32",
                        {Import.str(), "ocml_entry"}, CodeObjectVersion);
 }
 
-Request makeOcmlKernelRequest() {
+Request makeOcmlKernelRequest(StringRef Import = "__ocml_sin_f32",
+                              uint8_t CodeObjectVersion = 5,
+                              bool TwoCalls = false) {
   return makeV2Request(
-      makeInput(InputKind::LlvmBitcode, makeOcmlKernelBitcode()), {},
-      {"__ocml_sin_f32"}, {"fe2o3_gfx942_ocml_sin_f32_v1"},
-      {"__ocml_sin_f32", "fe2o3_gfx942_ocml_sin_f32_v1",
-       "fe2o3_gfx942_ocml_sin_f32_v1.kd"});
+      makeInput(InputKind::LlvmBitcode,
+                makeOcmlKernelBitcode(Import, CodeObjectVersion, TwoCalls)),
+      {}, {Import.str()}, {"fe2o3_gfx942_ocml_sin_f32_v1"},
+      {Import.str(), "fe2o3_gfx942_ocml_sin_f32_v1",
+       "fe2o3_gfx942_ocml_sin_f32_v1.kd"},
+      CodeObjectVersion);
 }
 void testSyntheticOcmlPipeline() {
   SyntheticDeviceLibraryDirectory ValidDirectory;
@@ -2080,6 +2092,12 @@ std::optional<std::vector<uint8_t>> testMeasuredOcmlPipeline() {
               Cov6Exp.DeviceLibraryProvider->ImportSymbols ==
                   std::vector<std::string>({"__ocml_exp_f32"}),
           "measured COV6 OCML link omitted structured provider evidence");
+  Request Cov6Kernel = makeOcmlKernelRequest("__ocml_exp_f32", 6, true);
+  Cov6Kernel.Target = "gfx942:xnack-";
+  Cov6Kernel.LinkOptions.Optimization = OptimizationLevel::O0;
+  runSuccess(Cov6Kernel,
+             {"__ocml_exp_f32", "fe2o3_gfx942_ocml_sin_f32_v1",
+              "fe2o3_gfx942_ocml_sin_f32_v1.kd"});
 
   const std::array<StringRef, 7> AllSupported = {
       "__ocml_cos_f32",   "__ocml_exp2_f32", "__ocml_exp_f32",
