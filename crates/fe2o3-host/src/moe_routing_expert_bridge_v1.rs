@@ -176,6 +176,10 @@ impl fmt::Debug for CheckedMoeHostObservedRoutingOutputV1 {
 }
 
 impl CheckedMoeHostObservedRoutingOutputV1 {
+    pub(crate) const fn top2_experts(&self) -> [u32; ROUTES] {
+        self.payload.top2_experts
+    }
+
     pub const fn admitted_counts(&self) -> [u32; EXPERTS] {
         self.payload.admitted_counts
     }
