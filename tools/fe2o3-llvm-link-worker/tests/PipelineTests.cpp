@@ -881,20 +881,19 @@ std::string loadIntegratedWorkgroupSyncBody(StringRef Filename) {
       .str();
 }
 
-std::vector<uint8_t> makeExactWorkgroupSyncTextIr(
-    ExactWorkgroupSyncProfileForTesting Profile) {
+std::vector<uint8_t>
+makeExactWorkgroupSyncTextIr(ExactWorkgroupSyncProfileForTesting Profile) {
   StringRef Filename =
       Profile == ExactWorkgroupSyncProfileForTesting::LdsReduction
           ? "workgroup_lds_reduction_v1_profile.rs"
           : "workgroup_scoped_atomic_v1_profile.rs";
   std::string Body = loadIntegratedWorkgroupSyncBody(Filename);
   std::array<uint8_t, 64> Descriptor{};
-  Descriptor.fill(Profile ==
-                          ExactWorkgroupSyncProfileForTesting::LdsReduction
+  Descriptor.fill(Profile == ExactWorkgroupSyncProfileForTesting::LdsReduction
                       ? 0xd1
                       : 0xa7);
-  auto Result = makeExactWorkgroupSyncCompilerInputForTesting(
-      Body, Descriptor, Profile);
+  auto Result =
+      makeExactWorkgroupSyncCompilerInputForTesting(Body, Descriptor, Profile);
   if (!Result)
     fail(toString(Result.takeError()));
   return std::move(*Result);
@@ -2125,25 +2124,23 @@ void testExactWorkgroupSyncProfiles() {
   };
   auto SymbolsFor = [](Profile ProfileValue) {
     return ProfileValue == Profile::LdsReduction
-               ? std::vector<std::string>{
-                     "lds_publish_read_reduce_i32_v1",
-                     "lds_publish_read_reduce_i32_v1.kd"}
+               ? std::vector<std::string>{"lds_publish_read_reduce_i32_v1",
+                                          "lds_publish_read_reduce_i32_v1.kd"}
                : std::vector<std::string>{"scoped_atomic_add_u32_v1",
                                           "scoped_atomic_add_u32_v1.kd"};
   };
   auto MakeRequest = [&](Profile ProfileValue) {
     std::vector<std::string> Symbols = SymbolsFor(ProfileValue);
-    Request Result = makeV2Request(
-        makeInput(InputKind::LlvmTextIr,
-                  makeExactWorkgroupSyncTextIr(ProfileValue)),
-        {}, {}, {}, Symbols, 6);
+    Request Result =
+        makeV2Request(makeInput(InputKind::LlvmTextIr,
+                                makeExactWorkgroupSyncTextIr(ProfileValue)),
+                      {}, {}, {}, Symbols, 6);
     Result.Target = "gfx942:xnack-";
     Result.LinkOptions = {OptimizationLevel::O2, true, true};
     return Result;
   };
   auto RequireCompilerFailure = [](ArrayRef<uint8_t> Bytes,
-                                   Profile ProfileValue,
-                                   StringRef Diagnostic) {
+                                   Profile ProfileValue, StringRef Diagnostic) {
     Error Failure =
         validateExactWorkgroupSyncCompilerInputForTesting(Bytes, ProfileValue);
     require(static_cast<bool>(Failure),
@@ -2177,26 +2174,22 @@ void testExactWorkgroupSyncProfiles() {
         replaceExactText(Body, (Twine(LayoutLine) + "\n").str(), ""),
         ProfileValue, "module envelope");
     RequireModuleFailure(
-        replaceExactText(
-            Body, CanonicalLayout,
-            "e-m:e-p:64:64-i64:64-f80:128-n8:16:32:64-S128"),
+        replaceExactText(Body, CanonicalLayout,
+                         "e-m:e-p:64:64-i64:64-f80:128-n8:16:32:64-S128"),
         ProfileValue, "module envelope");
     RequireModuleFailure(
-        replaceExactText(Body, "p7:160:256:256:32",
-                         "p7:160:256:256:64"),
+        replaceExactText(Body, "p7:160:256:256:32", "p7:160:256:256:64"),
         ProfileValue, "module envelope");
     StringRef ReorderedTail(CanonicalLayout);
     require(ReorderedTail.consume_front("e-m:e-"),
             "canonical workgroup-sync data layout prefix drifted");
-    std::string ReorderedLayout =
-        (Twine("e-") + ReorderedTail + "-m:e").str();
+    std::string ReorderedLayout = (Twine("e-") + ReorderedTail + "-m:e").str();
     RequireModuleFailure(
-        replaceExactText(Body, CanonicalLayout, ReorderedLayout),
-        ProfileValue, "module envelope");
-    RequireModuleFailure(replaceExactText(Body, "-G1-", "-G2-"),
-                         ProfileValue, "module envelope");
-    std::vector<uint8_t> Compiler =
-        makeExactWorkgroupSyncTextIr(ProfileValue);
+        replaceExactText(Body, CanonicalLayout, ReorderedLayout), ProfileValue,
+        "module envelope");
+    RequireModuleFailure(replaceExactText(Body, "-G1-", "-G2-"), ProfileValue,
+                         "module envelope");
+    std::vector<uint8_t> Compiler = makeExactWorkgroupSyncTextIr(ProfileValue);
     if (Error Failure = validateExactWorkgroupSyncCompilerInputForTesting(
             Compiler, ProfileValue))
       fail(toString(std::move(Failure)));
@@ -2213,14 +2206,14 @@ void testExactWorkgroupSyncProfiles() {
           ".fnabi.v1", ".semantics.v1", ".terminals.v3", ".abi.v1",
           ".effects.v1", ".resources.v1", ".kir.v1"}) {
       std::vector<uint8_t> WrongIdentity = Compiler;
-      mutateExactCompilerSectionIdentity(
-          WrongIdentity, (Twine(Prefix) + Suffix).str());
+      mutateExactCompilerSectionIdentity(WrongIdentity,
+                                         (Twine(Prefix) + Suffix).str());
       RequireCompilerFailure(WrongIdentity, ProfileValue,
                              "source/KIR/profile identity");
     }
     std::vector<uint8_t> WrongLayoutIdentity = Compiler;
-    mutateExactCompilerSectionIdentity(
-        WrongLayoutIdentity, (Twine(Prefix) + ".layout.v1").str());
+    mutateExactCompilerSectionIdentity(WrongLayoutIdentity,
+                                       (Twine(Prefix) + ".layout.v1").str());
     RequireCompilerFailure(WrongLayoutIdentity, ProfileValue,
                            "target-machine data-layout identity");
 
@@ -2273,8 +2266,7 @@ void testExactWorkgroupSyncProfiles() {
     requireInspectionFailure(WrongCall, Exact, "reason=machine_call");
 
     std::vector<uint8_t> WrongOpcode = First.LinkedOutput->Bytes;
-    static constexpr std::array<uint8_t, 4> SNopZero = {0x00, 0xbf, 0x80,
-                                                        0xbf};
+    static constexpr std::array<uint8_t, 4> SNopZero = {0x00, 0xbf, 0x80, 0xbf};
     overwriteStaticSymbolPrefix(WrongOpcode, SymbolList.front(), SNopZero);
     requireInspectionFailure(WrongOpcode, Exact, "reason=machine_");
 
@@ -2335,8 +2327,7 @@ void testExactWorkgroupSyncProfiles() {
                        "fence syncscope(\"workgroup\") seq_cst"),
       Profile::LdsReduction, "fence ordering");
   RequireModuleFailure(
-      replaceExactText(LdsBody, "  call void @llvm.amdgcn.s.barrier()\n",
-                       ""),
+      replaceExactText(LdsBody, "  call void @llvm.amdgcn.s.barrier()\n", ""),
       Profile::LdsReduction, "allocation/epoch/barrier");
   std::string WrongExtent =
       replaceExactText(LdsBody, "[0 x i32]", "[64 x i32]");
@@ -2357,25 +2348,203 @@ void testExactWorkgroupSyncProfiles() {
   RequireModuleFailure(
       replaceExactText(AtomicBody, "atomicrmw add", "atomicrmw xor"),
       Profile::ScopedAtomic, "operation/order/scope/address space");
-  RequireModuleFailure(
-      replaceExactText(AtomicBody, "%value monotonic, align 4",
-                       "%value acquire, align 4"),
-      Profile::ScopedAtomic, "operation/order/scope/address space");
+  RequireModuleFailure(replaceExactText(AtomicBody, "%value monotonic, align 4",
+                                        "%value acquire, align 4"),
+                       Profile::ScopedAtomic,
+                       "operation/order/scope/address space");
   RequireModuleFailure(
       replaceExactText(AtomicBody, "%value monotonic, align 4",
                        "%value syncscope(\"agent\") monotonic, align 4"),
       Profile::ScopedAtomic, "operation/order/scope/address space");
   std::string WrongAtomicSpace = replaceExactText(
       AtomicBody, "to ptr addrspace(1)", "to ptr addrspace(3)");
-  WrongAtomicSpace = replaceExactText(
-      WrongAtomicSpace, "atomicrmw add ptr addrspace(1)",
-      "atomicrmw add ptr addrspace(3)");
+  WrongAtomicSpace =
+      replaceExactText(WrongAtomicSpace, "atomicrmw add ptr addrspace(1)",
+                       "atomicrmw add ptr addrspace(3)");
   RequireModuleFailure(WrongAtomicSpace, Profile::ScopedAtomic,
                        "pointer conversion");
+  RequireModuleFailure(replaceExactText(AtomicBody, "%value monotonic, align 4",
+                                        "%value monotonic, align 8"),
+                       Profile::ScopedAtomic,
+                       "operation/order/scope/address space");
+}
+
+void testExactMoeTop2V1Profile() {
+  const char *FixturePath = std::getenv("FE2O3_TEST_MOE_TOP2_LLVM");
+  if (!FixturePath)
+    return;
+  auto BufferOrError = MemoryBuffer::getFile(FixturePath, false, false);
+  if (!BufferOrError)
+    fail(BufferOrError.getError().message());
+  StringRef Fixture = (*BufferOrError)->getBuffer();
+  std::vector<uint8_t> Compiler(Fixture.bytes_begin(), Fixture.bytes_end());
+  if (Error Failure = validateExactMoeTop2V1CompilerInputForTesting(Compiler))
+    fail(toString(std::move(Failure)));
+  if (Error Failure = validateExactMoeTop2V1ModuleForTesting(Fixture))
+    fail(toString(std::move(Failure)));
+
+  auto RequireCompilerFailure = [](ArrayRef<uint8_t> Bytes,
+                                   StringRef Diagnostic) {
+    Error Failure = validateExactMoeTop2V1CompilerInputForTesting(Bytes);
+    require(static_cast<bool>(Failure),
+            "hostile exact MoE compiler input was accepted");
+    std::string Message = toString(std::move(Failure));
+    require(StringRef(Message).contains(Diagnostic),
+            "exact MoE compiler input failed for the wrong reason");
+  };
+  auto RequireModuleFailure = [](StringRef Text, StringRef Diagnostic) {
+    Error Failure = validateExactMoeTop2V1ModuleForTesting(Text);
+    require(static_cast<bool>(Failure),
+            "hostile exact MoE LLVM module was accepted");
+    std::string Message = toString(std::move(Failure));
+    require(StringRef(Message).contains(Diagnostic),
+            "exact MoE LLVM module failed for the wrong reason");
+  };
+  auto CanonicalLayoutOrError = exactWorkgroupSyncDataLayoutForTesting();
+  if (!CanonicalLayoutOrError)
+    fail(toString(CanonicalLayoutOrError.takeError()));
+  const std::string CanonicalLayout = std::move(*CanonicalLayoutOrError);
+  const std::string LayoutLine =
+      (Twine("target datalayout = \"") + CanonicalLayout + "\"\n").str();
+  RequireModuleFailure(replaceExactText(Fixture, LayoutLine, ""),
+                       "module envelope");
   RequireModuleFailure(
-      replaceExactText(AtomicBody, "%value monotonic, align 4",
-                       "%value monotonic, align 8"),
-      Profile::ScopedAtomic, "operation/order/scope/address space");
+      replaceExactText(Fixture, CanonicalLayout,
+                       "e-m:e-p:64:64-i64:64-f80:128-n8:16:32:64-S128"),
+      "module envelope");
+  RequireModuleFailure(
+      replaceExactText(Fixture, "p7:160:256:256:32", "p7:160:256:256:64"),
+      "module envelope");
+  StringRef ReorderedTail(CanonicalLayout);
+  require(ReorderedTail.consume_front("e-m:e-"),
+          "canonical MoE data layout prefix drifted");
+  RequireModuleFailure(
+      replaceExactText(Fixture, CanonicalLayout,
+                       (Twine("e-") + ReorderedTail + "-m:e").str()),
+      "module envelope");
+  RequireModuleFailure(replaceExactText(Fixture, "-G1-", "-G2-"),
+                       "module envelope");
+
+  std::vector<uint8_t> WrongBody = Compiler;
+  WrongBody.front() ^= 1;
+  RequireCompilerFailure(WrongBody, "body identity");
+  for (StringRef Section :
+       {".fe2o3.moe.source.v1", ".fe2o3.moe.namespace.v1",
+        ".fe2o3.moe.crate.v1", ".fe2o3.moe.authority.v1", ".fe2o3.moe.mir.v1",
+        ".fe2o3.moe.fnabi.v1", ".fe2o3.moe.compiler.v1",
+        ".fe2o3.moe.terminals.v3", ".fe2o3.moe.abi.v1", ".fe2o3.moe.effects.v1",
+        ".fe2o3.moe.profile.v1", ".fe2o3.moe.routing.v1", ".fe2o3.moe.kir.v1",
+        ".fe2o3.moe.descriptor.v1", ".fe2o3.moe.provider.v1"}) {
+    std::vector<uint8_t> WrongIdentity = Compiler;
+    mutateExactCompilerSectionIdentity(WrongIdentity, Section);
+    RequireCompilerFailure(WrongIdentity,
+                           "source/KIR/compiler/profile identity");
+  }
+  std::vector<uint8_t> WrongLayoutIdentity = Compiler;
+  mutateExactCompilerSectionIdentity(WrongLayoutIdentity,
+                                     ".fe2o3.moe.layout.v1");
+  RequireCompilerFailure(WrongLayoutIdentity,
+                         "target-machine data-layout identity");
+
+  const std::vector<std::string> SymbolList = {
+      "moe_top2_route_f32_t8_e4_k2_c4_v1",
+      "moe_top2_route_f32_t8_e4_k2_c4_v1.kd"};
+  const std::set<std::string> Symbols(SymbolList.begin(), SymbolList.end());
+  Request Exact = makeV2Request(makeInput(InputKind::LlvmTextIr, Compiler), {},
+                                {}, {}, SymbolList, 6);
+  Exact.Target = "gfx942:xnack-";
+  Exact.LinkOptions = {OptimizationLevel::O2, true, true};
+  Response First = runSuccess(Exact, Symbols);
+  Response Replay = runSuccess(Exact, Symbols);
+  require(First.LinkedOutput->Bytes == Replay.LinkedOutput->Bytes &&
+              First.LinkedOutput->Digest == Replay.LinkedOutput->Digest,
+          "exact MoE direct LLVM/LLD output is not reproducible");
+  requireDiagnostic(First, "moe_top2_t8_e4_k2_c4_v1_profile status=ok");
+  if (const char *OutputPath = std::getenv("FE2O3_TEST_MOE_TOP2_HSACO"))
+    writeOutput(OutputPath, First.LinkedOutput->Bytes);
+
+  Request WrongTarget = Exact;
+  WrongTarget.Target = "gfx942:xnack+";
+  requireFailure(WrongTarget, Stage::InputValidation);
+  Request WrongCov = Exact;
+  WrongCov.CodeObjectVersion = 5;
+  requireFailure(WrongCov, Stage::InputValidation);
+  Request WrongOptions = Exact;
+  WrongOptions.LinkOptions.Optimization = OptimizationLevel::O1;
+  requireFailure(WrongOptions, Stage::InputValidation);
+  Request WrongImports = Exact;
+  WrongImports.ImportSymbols = {"host_dependency"};
+  requireFailure(WrongImports, Stage::InputValidation);
+  Request WrongProvider = Exact;
+  WrongProvider.ExternalProviders.push_back(Exact.CompilerModule);
+  WrongProvider.Inputs.push_back(Exact.CompilerModule);
+  requireFailure(WrongProvider, Stage::InputValidation);
+  Request WrongExports = Exact;
+  WrongExports.ExportSymbols = {SymbolList.front()};
+  requireFailure(WrongExports, Stage::InputValidation);
+  Request WrongFinalSymbols = Exact;
+  WrongFinalSymbols.FinalSymbols.pop_back();
+  requireFailure(WrongFinalSymbols, Stage::InputValidation);
+  Request WrongWorker = Exact;
+  WrongWorker.WorkerBuildIdentity.push_back('x');
+  requireFailure(WrongWorker, Stage::Toolchain);
+  Request WrongLlvm = Exact;
+  WrongLlvm.LlvmBuildIdentity.push_back('x');
+  requireFailure(WrongLlvm, Stage::Toolchain);
+
+  std::vector<uint8_t> WrongDescriptor = First.LinkedOutput->Bytes;
+  mutateNamedSectionByte(WrongDescriptor, ".fe2o3.kd.v1");
+  requireInspectionFailure(WrongDescriptor, Exact,
+                           "reason=descriptor_section_identity");
+  std::vector<uint8_t> WrongCall = First.LinkedOutput->Bytes;
+  static constexpr std::array<uint8_t, 4> SwapPcCall = {0x02, 0x1e, 0x80, 0xbe};
+  overwriteStaticSymbolPrefix(WrongCall, SymbolList.front(), SwapPcCall);
+  requireInspectionFailure(WrongCall, Exact, "reason=machine_call");
+  std::vector<uint8_t> WrongOpcode = First.LinkedOutput->Bytes;
+  static constexpr std::array<uint8_t, 4> SNopZero = {0x00, 0xbf, 0x80, 0xbf};
+  overwriteStaticSymbolPrefix(WrongOpcode, SymbolList.front(), SNopZero);
+  requireInspectionFailure(WrongOpcode, Exact, "reason=machine_identity");
+
+  std::vector<uint8_t> WrongWorkgroup = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWorkgroup, ".reqd_workgroup_size", 64, 32);
+  requireInspectionFailure(WrongWorkgroup, Exact,
+                           "kernel_contract_reqd_workgroup_size");
+  std::vector<uint8_t> WrongKernarg = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongKernarg, ".kernarg_segment_size", 0x80, 0x81);
+  requireInspectionFailure(WrongKernarg, Exact,
+                           "kernel_contract_kernarg_segment_size");
+  std::vector<uint8_t> WrongWave = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave, ".wavefront_size", 64, 32);
+  requireInspectionFailure(WrongWave, Exact, "kernel_contract_wavefront_size");
+  std::vector<uint8_t> WrongGroup = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongGroup, ".group_segment_fixed_size", 0, 1);
+  requireInspectionFailure(WrongGroup, Exact,
+                           "kernel_contract_group_segment_fixed_size");
+  std::vector<uint8_t> WrongPrivate = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongPrivate, ".private_segment_fixed_size", 0, 1);
+  requireInspectionFailure(WrongPrivate, Exact,
+                           "kernel_contract_private_segment_fixed_size");
+
+  std::vector<uint8_t> WrongUndefined = First.LinkedOutput->Bytes;
+  makeDynamicSymbolUndefined(WrongUndefined, SymbolList.front());
+  requireInspectionFailure(WrongUndefined, Exact,
+                           "post_link.check=unresolved status=failed");
+  std::vector<uint8_t> Relocation = First.LinkedOutput->Bytes;
+  makeStaticSymbolTableRelocationSection(Relocation);
+  Error RelocationFailure =
+      validateExactMoeTop2V1ElfClosureForTesting(Relocation);
+  require(static_cast<bool>(RelocationFailure) &&
+              StringRef(toString(std::move(RelocationFailure)))
+                  .contains("residual_relocation_section"),
+          "exact MoE relocation was accepted or misdiagnosed");
+  std::vector<uint8_t> Dependency = First.LinkedOutput->Bytes;
+  makeDynamicDependency(Dependency);
+  Error DependencyFailure =
+      validateExactMoeTop2V1ElfClosureForTesting(Dependency);
+  require(static_cast<bool>(DependencyFailure) &&
+              StringRef(toString(std::move(DependencyFailure)))
+                  .contains("dynamic_dependency"),
+          "exact MoE dependency was accepted or misdiagnosed");
 }
 
 void testLldExitPolicy(int ExitCode) {
@@ -2409,6 +2578,7 @@ int main(int ArgumentCount, char **Arguments) {
   testLldExitPolicy(1);
   testSyntheticOcmlPipeline();
   testExactWorkgroupSyncProfiles();
+  testExactMoeTop2V1Profile();
   std::optional<std::vector<uint8_t>> MeasuredOcmlOutput =
       testMeasuredOcmlPipeline();
 
