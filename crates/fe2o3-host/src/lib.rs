@@ -11,6 +11,7 @@ mod generated_lds_gemm;
 mod generated_lds_gemm_lifecycle;
 #[cfg(test)]
 mod generated_lds_gemm_lifecycle_tests;
+mod generated_moe_top2_v1;
 mod generated_row_softmax_v1;
 mod generated_scalar_gemm_v1;
 mod generated_vecadd;
@@ -28,6 +29,7 @@ mod gfx942_ocml;
 mod hsa_executable_lifecycle;
 mod launch_kernel_v2_bridge;
 mod loaded_kernel;
+mod moe_top2_v1_lifecycle;
 mod prepared_launch;
 mod protected_row_softmax_v1_lifecycle;
 mod published_direct_link;
@@ -147,6 +149,10 @@ pub use generated_lds_gemm_lifecycle::{
     LoadedExactLdsGemmSlice1V1, ReviewedExactLdsGemmRuntimeAdapterV1, UnloadedExactLdsGemmSlice1V1,
     join_exact_lds_gemm_slice1_v1,
 };
+pub use generated_moe_top2_v1::{
+    GeneratedMoeTop2V1HostAdapterErrorV1, GeneratedMoeTop2V1HostAdapterV1, MoeTop2V1BufferAccessV1,
+    MoeTop2V1BufferRoleV1,
+};
 #[doc(hidden)]
 pub use generated_row_softmax_v1::{
     GeneratedProtectedRowSoftmaxV1HostAdapterErrorV1, GeneratedProtectedRowSoftmaxV1HostAdapterV1,
@@ -240,6 +246,12 @@ pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
 pub use loaded_kernel::{
     LoadedArgumentAdmittedLaunch, LoadedKernel, LoadedKernelMatchError, LoadedLaunchError,
     LoadedPreparedLaunch,
+};
+pub use moe_top2_v1_lifecycle::{
+    CompletedMoeTop2V1, JoinedMoeTop2V1, LoadedMoeTop2V1, MoeTop2V1DispatchErrorV1,
+    MoeTop2V1JoinErrorV1, MoeTop2V1KernelResourceObservationV1, MoeTop2V1LoadErrorV1,
+    MoeTop2V1UnloadIdentityV1, ReviewedMoeTop2V1RuntimeAdapterV1, UnloadedMoeTop2V1,
+    join_moe_top2_v1,
 };
 pub use prepared_launch::{
     ArgumentAdmittedLaunch, CheckedDimensions, DeviceIdentity, KernelBrand, LaunchAxis,

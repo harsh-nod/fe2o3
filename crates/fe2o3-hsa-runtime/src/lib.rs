@@ -6,6 +6,7 @@ mod environment;
 mod flash_attention_resource_observation;
 mod lds_gemm_resource_observation;
 mod lifecycle;
+mod moe_top2_resource_observation;
 mod row_softmax_resource_observation;
 mod sys;
 mod wave64_collectives_resource_observation;
