@@ -119,9 +119,15 @@ common_args() {
 
 run_queue() {
   local archive="$1"
+  run_queue_with_lock_root "${archive}" "${LOCK_ROOT}"
+}
+
+run_queue_with_lock_root() {
+  local archive="$1"
+  local lock_root="$2"
   local -a args=()
   mapfile -t args < <(common_args "${archive}")
-  "${QUEUE}" run "${args[@]}" --manifest queues/queue.tsv --signing-key "${PRIVATE_KEY}" --key-id test-attestor --test-mode --lock-root "${LOCK_ROOT}"
+  "${QUEUE}" run "${args[@]}" --manifest queues/queue.tsv --signing-key "${PRIVATE_KEY}" --key-id test-attestor --test-mode --lock-root "${lock_root}"
 }
 
 wait_for_paths() {
@@ -145,11 +151,12 @@ PY
 
 run_queue_after_release() {
   local archive="$1"
-  local ready="$2"
-  local release="$3"
+  local lock_root="$2"
+  local ready="$3"
+  local release="$4"
   : >"${ready}"
   wait_for_paths 'queue contention release' "${release}"
-  run_queue "${archive}"
+  run_queue_with_lock_root "${archive}" "${lock_root}"
 }
 
 wait_for_queue_pair() {
@@ -190,6 +197,27 @@ assert_serialized_trace() {
     printf 'serialization trace repeated one queue: %s\n' "${first}" >&2
     return 1
   }
+}
+
+assert_overlapping_trace() {
+  local trace="$1"
+  local -a events=()
+  local first
+  local second
+  mapfile -t events <"${trace}"
+  ((${#events[@]} == 4)) || {
+    printf 'overlap-control trace has %s events instead of 4\n' "${#events[@]}" >&2
+    printf '%s\n' "${events[@]}" >&2
+    return 1
+  }
+  [[ "${events[0]}" == enter$'\t'* ]]
+  [[ "${events[1]}" == enter$'\t'* ]]
+  first="${events[0]#enter$'\t'}"
+  second="${events[1]#enter$'\t'}"
+  [[ "${first}" != "${second}" ]]
+  [[ "${events[2]}" == exit$'\t'"${first}" || "${events[2]}" == exit$'\t'"${second}" ]]
+  [[ "${events[3]}" == exit$'\t'"${first}" || "${events[3]}" == exit$'\t'"${second}" ]]
+  [[ "${events[2]}" != "${events[3]}" ]]
 }
 
 mutate_hardware_result() {
@@ -239,6 +267,12 @@ set -Eeuo pipefail
 probe_root="${FE2O3_EVIDENCE_ARCHIVE_ROOT%/*}/serialization-probe"
 archive_name="${FE2O3_EVIDENCE_ARCHIVE_ROOT##*/}"
 printf 'enter\t%s\n' "${archive_name}" >>"${probe_root}/trace.tsv"
+: >"${probe_root}/${archive_name}.entered"
+if [[ "${archive_name}" == unlocked-* ]]; then
+  while [[ ! -f "${probe_root}/unlocked-a.entered" || ! -f "${probe_root}/unlocked-b.entered" ]]; do
+    "${FE2O3_EVIDENCE_SLEEP}" 0.005
+  done
+fi
 "${FE2O3_EVIDENCE_SLEEP}" 0.25
 printf 'exit\t%s\n' "${archive_name}" >>"${probe_root}/trace.tsv"
 artifact="${FE2O3_EVIDENCE_ARTIFACTS#*=}"
@@ -440,14 +474,17 @@ ARCHIVE_B="${TEST_ROOT}/archive-b"
 mkdir -p "${ARCHIVE_A}" "${ARCHIVE_B}"
 prepare_archive "${ARCHIVE_A}" concurrent-a
 prepare_archive "${ARCHIVE_B}" concurrent-b
+rm -f "${SERIALIZATION_PROBE}"/*.entered
 : >"${SERIALIZATION_TRACE}"
 readonly CONCURRENT_READY_A="${TEST_ROOT}/concurrent-a.ready"
 readonly CONCURRENT_READY_B="${TEST_ROOT}/concurrent-b.ready"
 readonly CONCURRENT_RELEASE="${TEST_ROOT}/concurrent.release"
-run_queue_after_release "${ARCHIVE_A}" "${CONCURRENT_READY_A}" "${CONCURRENT_RELEASE}" \
+run_queue_after_release "${ARCHIVE_A}" "${LOCK_ROOT}" \
+  "${CONCURRENT_READY_A}" "${CONCURRENT_RELEASE}" \
   >"${TEST_ROOT}/concurrent-a.out" 2>&1 &
 pid_a=$!
-run_queue_after_release "${ARCHIVE_B}" "${CONCURRENT_READY_B}" "${CONCURRENT_RELEASE}" \
+run_queue_after_release "${ARCHIVE_B}" "${LOCK_ROOT}" \
+  "${CONCURRENT_READY_B}" "${CONCURRENT_RELEASE}" \
   >"${TEST_ROOT}/concurrent-b.out" 2>&1 &
 pid_b=$!
 wait_for_paths 'queue contenders' "${CONCURRENT_READY_A}" "${CONCURRENT_READY_B}"
@@ -457,6 +494,40 @@ wait_for_queue_pair "${pid_a}" "${pid_b}" \
 assert_serialized_trace "${SERIALIZATION_TRACE}"
 [[ -f "${ARCHIVE_A}/results/hardware.tsv" ]]
 [[ -f "${ARCHIVE_B}/results/hardware.tsv" ]]
+
+# The trace oracle must observe overlap when the same synchronized pair is
+# deliberately run under distinct test locks.
+UNLOCKED_ARCHIVE_A="${TEST_ROOT}/unlocked-a"
+UNLOCKED_ARCHIVE_B="${TEST_ROOT}/unlocked-b"
+UNLOCKED_LOCK_A="${TEST_ROOT}/unlocked-lock-a"
+UNLOCKED_LOCK_B="${TEST_ROOT}/unlocked-lock-b"
+mkdir -p "${UNLOCKED_ARCHIVE_A}" "${UNLOCKED_ARCHIVE_B}" \
+  "${UNLOCKED_LOCK_A}" "${UNLOCKED_LOCK_B}"
+chmod 700 "${UNLOCKED_LOCK_A}" "${UNLOCKED_LOCK_B}"
+: >"${UNLOCKED_LOCK_A}/mi300x-gfx942-evidence.lock"
+: >"${UNLOCKED_LOCK_B}/mi300x-gfx942-evidence.lock"
+chmod 600 "${UNLOCKED_LOCK_A}/mi300x-gfx942-evidence.lock" \
+  "${UNLOCKED_LOCK_B}/mi300x-gfx942-evidence.lock"
+prepare_archive "${UNLOCKED_ARCHIVE_A}" unlocked-a
+prepare_archive "${UNLOCKED_ARCHIVE_B}" unlocked-b
+rm -f "${SERIALIZATION_PROBE}"/*.entered
+: >"${SERIALIZATION_TRACE}"
+readonly UNLOCKED_READY_A="${TEST_ROOT}/unlocked-a.ready"
+readonly UNLOCKED_READY_B="${TEST_ROOT}/unlocked-b.ready"
+readonly UNLOCKED_RELEASE="${TEST_ROOT}/unlocked.release"
+run_queue_after_release "${UNLOCKED_ARCHIVE_A}" "${UNLOCKED_LOCK_A}" \
+  "${UNLOCKED_READY_A}" "${UNLOCKED_RELEASE}" \
+  >"${TEST_ROOT}/unlocked-a.out" 2>&1 &
+pid_a=$!
+run_queue_after_release "${UNLOCKED_ARCHIVE_B}" "${UNLOCKED_LOCK_B}" \
+  "${UNLOCKED_READY_B}" "${UNLOCKED_RELEASE}" \
+  >"${TEST_ROOT}/unlocked-b.out" 2>&1 &
+pid_b=$!
+wait_for_paths 'unlocked queue contenders' "${UNLOCKED_READY_A}" "${UNLOCKED_READY_B}"
+: >"${UNLOCKED_RELEASE}"
+wait_for_queue_pair "${pid_a}" "${pid_b}" \
+  "${TEST_ROOT}/unlocked-a.out" "${TEST_ROOT}/unlocked-b.out"
+assert_overlapping_trace "${SERIALIZATION_TRACE}"
 
 # A modified queue signature is rejected.
 cp "${ARCHIVE}/queues/queue.tsv" "${ARCHIVE}/queues/signature-mutated.tsv"
