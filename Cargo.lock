@@ -501,6 +501,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-broker-authority-service"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "fe2o3-build-authority"
 version = "0.1.0"
 dependencies = [

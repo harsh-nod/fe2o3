@@ -9,6 +9,7 @@ members = [
     "crates/fe2o3-completion",
     "crates/fe2o3-compiler-ffi",
     "crates/fe2o3-artifacts",
+    "crates/fe2o3-broker-authority-service",
     "crates/fe2o3-contracts",
     "crates/fe2o3-core",
     "crates/fe2o3-core/tests/renamed-dependency",
