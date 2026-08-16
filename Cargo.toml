@@ -19,6 +19,7 @@ members = [
     "crates/fe2o3-hsaco-finalize",
     "crates/fe2o3-hsa-runtime",
     "crates/fe2o3-host",
+    "crates/fe2o3-host-link-closure",
     "crates/fe2o3-kernel-descriptor",
     "crates/fe2o3-kernel-analysis",
     "crates/fe2o3-kernel-ir",

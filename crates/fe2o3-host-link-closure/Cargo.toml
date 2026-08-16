@@ -1,0 +1,19 @@
+[package]
+name = "fe2o3-host-link-closure"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Authenticated descriptor-backed host-link execution closure for fe2o3"
+
+[dependencies]
+object = { version = "0.39.1", default-features = false, features = ["archive", "elf", "read_core"] }
+rustix = { workspace = true, features = ["pipe", "process", "rand", "runtime"] }
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile = "=3.21.0"
+
+[lints.rust]
+unsafe_code = "deny"
