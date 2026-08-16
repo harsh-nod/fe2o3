@@ -143,6 +143,87 @@ fn inspects_bounded_physical_kernel_metadata() {
 }
 
 #[test]
+fn preserves_public_kernel_metadata_declaration_presence() {
+    let mut present = valid_kernel("k", "k.kd");
+    as_map_mut(&mut present).extend([
+        (Value::from(".language"), Value::from("OpenCL C")),
+        (
+            Value::from(".language_version"),
+            Value::Array(vec![Value::from(2), Value::from(0)]),
+        ),
+        (Value::from(".kind"), Value::from("normal")),
+        (Value::from(".uniform_work_group_size"), Value::from(0)),
+        (Value::from(".uses_dynamic_stack"), Value::from(false)),
+        (
+            Value::from(".workgroup_size_hint"),
+            Value::Array(vec![Value::from(64), Value::from(1), Value::from(1)]),
+        ),
+        (Value::from(".vec_type_hint"), Value::from("float")),
+    ]);
+    let present = inspect(&hsaco(
+        &encode(&metadata((1, 2), vec![present])),
+        4,
+        &[b"AMDGPU\0"],
+    ))
+    .unwrap();
+    let present = &present.kernels()[0];
+
+    assert_eq!(present.source_language(), Some("OpenCL C"));
+    assert_eq!(present.source_language_version(), Some([2, 0]));
+    assert_eq!(present.kind(), KernelKind::Normal);
+    assert!(present.kind_was_emitted());
+    assert_eq!(present.uniform_work_group_size_declaration(), Some(false));
+    assert!(!present.uniform_work_group_size());
+    assert_eq!(present.uses_dynamic_stack_declaration(), Some(false));
+    assert!(!present.uses_dynamic_stack());
+    assert!(present.workgroup_size_hint_was_emitted());
+    assert!(present.vector_type_hint_was_emitted());
+    assert!(present.arguments_were_emitted());
+    assert_eq!(present.sgpr_count(), 14);
+    assert_eq!(present.vgpr_count(), 7);
+    assert_eq!(present.agpr_count(), Some(3));
+    assert_eq!(present.sgpr_spill_count(), Some(2));
+    assert_eq!(present.vgpr_spill_count(), Some(4));
+
+    let mut absent = valid_kernel("k", "k.kd");
+    set_field(&mut absent, ".kernarg_segment_size", Value::from(0));
+    for field in [
+        ".args",
+        ".agpr_count",
+        ".sgpr_spill_count",
+        ".vgpr_spill_count",
+    ] {
+        remove_field(&mut absent, field);
+    }
+    let absent = inspect(&hsaco(
+        &encode(&metadata((1, 2), vec![absent])),
+        4,
+        &[b"AMDGPU\0"],
+    ))
+    .unwrap();
+    let absent = &absent.kernels()[0];
+
+    assert_eq!(absent.source_language(), None);
+    assert_eq!(absent.source_language_version(), None);
+    assert_eq!(absent.kind(), KernelKind::Normal);
+    assert!(!absent.kind_was_emitted());
+    assert_eq!(absent.uniform_work_group_size_declaration(), None);
+    assert!(!absent.uniform_work_group_size());
+    assert_eq!(absent.uses_dynamic_stack_declaration(), None);
+    assert!(!absent.uses_dynamic_stack());
+    assert!(!absent.workgroup_size_hint_was_emitted());
+    assert!(!absent.vector_type_hint_was_emitted());
+    assert!(!absent.arguments_were_emitted());
+    assert!(absent.explicit_arguments().is_empty());
+    assert!(absent.hidden_arguments().is_empty());
+    assert_eq!(absent.sgpr_count(), 14);
+    assert_eq!(absent.vgpr_count(), 7);
+    assert_eq!(absent.agpr_count(), None);
+    assert_eq!(absent.sgpr_spill_count(), None);
+    assert_eq!(absent.vgpr_spill_count(), None);
+}
+
+#[test]
 fn supports_code_object_v4_v5_and_v6_metadata_versions() {
     for (abi, version, expected) in [
         (2, (1, 1), CodeObjectVersion::V4),

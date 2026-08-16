@@ -1018,6 +1018,140 @@ fn row_softmax_rejects_every_metadata_field_absent_from_measured_llvm22_output()
 }
 
 #[test]
+fn row_softmax_rejects_source_and_register_metadata_drift() {
+    #[derive(Clone, Copy)]
+    enum ExpectedFailure {
+        ArtifactProfile(&'static str),
+        DescriptorBinding(&'static str),
+    }
+
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    let substitutions = [
+        (
+            FixtureOptions {
+                source_language: None,
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("source metadata"),
+        ),
+        (
+            FixtureOptions {
+                source_language: Some("HIP"),
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("source metadata"),
+        ),
+        (
+            FixtureOptions {
+                source_language_version: None,
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("source metadata"),
+        ),
+        (
+            FixtureOptions {
+                source_language_version: Some([2, 1]),
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("source metadata"),
+        ),
+        (
+            FixtureOptions {
+                sgpr_count: 41,
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("register metadata"),
+        ),
+        (
+            FixtureOptions {
+                vgpr_count: 87,
+                ..row_softmax_options()
+            },
+            ExpectedFailure::DescriptorBinding(".vgpr_count"),
+        ),
+        (
+            FixtureOptions {
+                agpr_count: None,
+                ..row_softmax_options()
+            },
+            ExpectedFailure::DescriptorBinding(".agpr_count"),
+        ),
+        (
+            FixtureOptions {
+                agpr_count: Some(43),
+                ..row_softmax_options()
+            },
+            ExpectedFailure::DescriptorBinding(".vgpr_count"),
+        ),
+        (
+            FixtureOptions {
+                sgpr_spill_count: None,
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("register metadata"),
+        ),
+        (
+            FixtureOptions {
+                sgpr_spill_count: Some(43),
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("register metadata"),
+        ),
+        (
+            FixtureOptions {
+                vgpr_spill_count: None,
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("register metadata"),
+        ),
+        (
+            FixtureOptions {
+                vgpr_spill_count: Some(27),
+                ..row_softmax_options()
+            },
+            ExpectedFailure::ArtifactProfile("register metadata"),
+        ),
+    ];
+
+    for (index, (options, expected_failure)) in substitutions.into_iter().enumerate() {
+        let fixture = fixture_with_descriptor_table(options, Some(&table));
+        let error = inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+            evidence_for(
+                fixture.bytes,
+                "gfx942:xnack-",
+                0x20_u8.wrapping_add(u8::try_from(index).unwrap()),
+                0x40_u8.wrapping_add(u8::try_from(index).unwrap()),
+                "row_softmax_v1",
+                "row_softmax_v1.kd",
+            ),
+            row_softmax_expectation(),
+        )
+        .unwrap_err();
+        match expected_failure {
+            ExpectedFailure::ArtifactProfile(expected_field) => assert!(
+                matches!(
+                    &error,
+                    RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(actual)
+                        if *actual == expected_field
+                ),
+                "substitution {index} expected artifact field {expected_field}, found {error:?}",
+            ),
+            ExpectedFailure::DescriptorBinding(expected_field) => assert!(
+                matches!(
+                    &error,
+                    RowSoftmaxV1StructuralArtifactErrorV1::RawInspection(
+                        WorkerV2RawHsacoInspectionError::HsacoBinding(
+                            fe2o3_hsaco::KernelBindingError::MetadataMismatch(actual)
+                        )
+                    ) if *actual == expected_field
+                ),
+                "substitution {index} expected binding field {expected_field}, found {error:?}",
+            ),
+        }
+    }
+}
+
+#[test]
 fn row_softmax_rejects_each_exact_llvm22_hidden_argument_drift() {
     const HIDDEN: [(u64, u64, &str); 19] = [
         (0, 4, "hidden_block_count_x"),
