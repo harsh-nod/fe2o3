@@ -73,6 +73,8 @@ const ROW_METADATA_DOMAIN: &[u8] = b"fe2o3.row-softmax.cargo-metadata-observatio
 const ROW_PROVIDER_DOMAIN: &[u8] = b"FE2O3/ROW-SOFTMAX-PROVIDER-AUTHORITY/V1\0";
 const ROW_PROVIDER_SOURCE_DOMAIN: &[u8] = b"FE2O3/ROW-SOFTMAX-PROVIDER-SOURCE-IDENTITY/V1\0";
 const CARGO_METADATA_TRANSCRIPT_DOMAIN: &[u8] = b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
+const RUSTC_RUNTIME_IDENTITY_DOMAIN: &[u8] = b"fe2o3-rustc-executable-runtime-identity-v1\0";
+const COMPILER_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identity-v1\0";
 const ROW_PROVIDER_PATHS: [&[u8]; 8] = [
     b"fe2o3_device::DisjointSlice",
     b"fe2o3_device::ThreadIndex",
@@ -117,6 +119,7 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
 static COLLECTION_BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
+static AUTHORITY_TOOLCHAIN: OnceLock<AuthorityToolchain> = OnceLock::new();
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
 static USER_MOUNT_NAMESPACE: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -136,6 +139,14 @@ struct PinnedBrokerExecutable {
     mode: u32,
     len: u64,
     sha256: [u8; 32],
+}
+
+struct AuthorityToolchain {
+    cargo: PathBuf,
+    cargo_sha256: [u8; 32],
+    rustc: PathBuf,
+    rustc_sha256: [u8; 32],
+    rustc_runtime_sha256: [u8; 32],
 }
 
 impl PinnedBrokerExecutable {
@@ -1505,6 +1516,7 @@ fn independently_expected_row_exp_boundary() -> [u8; 32] {
     digest.finalize().into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn independently_expected_cargo_row_authority(
     crate_name: &str,
     ordered_metadata: &[String],
@@ -1512,6 +1524,7 @@ fn independently_expected_cargo_row_authority(
     transcript: &[u8],
     attempt: &BuildAttempt,
     workspace: &Path,
+    cargo_target: &Path,
     broker: &PinnedBrokerExecutable,
 ) -> Result<[u8; 32], String> {
     let [generated_metadata, reviewed_metadata] = ordered_metadata else {
@@ -1621,11 +1634,39 @@ fn independently_expected_cargo_row_authority(
     decoder.expect(attempt.session().as_bytes())?;
     decoder.expect(attempt.invocation().as_bytes())?;
     decoder.expect(&expected_metadata_transcript)?;
+    decoder.expect(&independently_expected_compiler_closure(cargo_target)?)?;
     decoder.expect(&broker.sha256()?)?;
     if !decoder.finished() {
         return Err("authority transcript has trailing fields".to_owned());
     }
     Ok(Sha256::digest(transcript).into())
+}
+
+fn independently_expected_compiler_closure(cargo_target: &Path) -> Result<[u8; 32], String> {
+    let backend = cargo_target.join("debug/librustc_codegen_fe2o3.so");
+    if !backend.is_file() {
+        return Err("test-owned authority backend is absent".to_owned());
+    }
+    independently_expected_compiler_closure_for_backend(sha256_path(&backend))
+}
+
+fn independently_expected_compiler_closure_for_backend(
+    backend_sha256: [u8; 32],
+) -> Result<[u8; 32], String> {
+    let toolchain = AUTHORITY_TOOLCHAIN
+        .get()
+        .ok_or_else(|| "authority-validation toolchain was not initialized".to_owned())?;
+    let mut rustc_identity = Sha256::new();
+    rustc_identity.update(RUSTC_RUNTIME_IDENTITY_DOMAIN);
+    rustc_identity.update(toolchain.rustc_sha256);
+    rustc_identity.update(toolchain.rustc_runtime_sha256);
+
+    let mut closure = Sha256::new();
+    closure.update(COMPILER_CLOSURE_IDENTITY_DOMAIN);
+    closure.update(toolchain.cargo_sha256);
+    closure.update(rustc_identity.finalize());
+    closure.update(backend_sha256);
+    Ok(closure.finalize().into())
 }
 
 struct AuthorityTranscriptDecoder<'a> {
@@ -2379,6 +2420,13 @@ fn compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env(
+            "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1",
+            encode_lower_hex(
+                &independently_expected_compiler_closure_for_backend(backend.sha256)
+                    .expect("derive the forged command's exact compiler closure"),
+            ),
+        )
+        .env(
             "FE2O3_HSACO_DIR",
             fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_PATH_V1,
         )
@@ -2673,6 +2721,7 @@ fn observe_and_validate_external_row_handoff(
                 transcript,
                 &observation.attempt,
                 workspace,
+                &cargo_target,
                 broker,
             )
         });
@@ -2774,6 +2823,7 @@ fn compile_external_row_softmax_crate(
         ),
     )
     .expect("write external row-softmax manifest");
+    generate_external_lockfile(&manifest);
 
     let mut rustflags = format!(
         "-Coverflow-checks=off -Cmetadata=fe2o3-row-softmax-v1-reviewed --remap-path-prefix={}=/fe2o3-reviewed-workspace/row-softmax-v1.rs",
@@ -2783,26 +2833,25 @@ fn compile_external_row_softmax_crate(
         rustflags.push(' ');
         rustflags.push_str(flag);
     }
-    let mut command = Command::new(env!("CARGO"));
+    let broker = build_and_pin_broker(workspace, cargo_target, false);
+    let mut command = broker
+        .command()
+        .expect("verify test-owned cargo-fe2o3 before launch");
     command
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "--manifest-path",
-        ])
+        .args(["build", "--manifest-path"])
         .arg(&manifest)
-        .env("CARGO_TARGET_DIR", cargo_target)
+        .args(["--target-dir"])
+        .arg(cargo_target)
+        .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("FE2O3_TARGET", spec.target)
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"))
         .env("RUSTFLAGS", rustflags);
+    configure_unprotected_row_authority_validation(&mut command, cargo_target);
+    scrub_test_dynamic_loader_environment(&mut command);
     let compiled = run_bounded(
         &mut command,
         BACKEND_BUILD_TIMEOUT,
@@ -2831,23 +2880,20 @@ fn compile_clean_external_row_softmax_crate(
     )
 }
 
-fn build_and_pin_handoff_broker(
+fn build_and_pin_broker(
     workspace: &Path,
     cargo_target: &Path,
+    handoff_observation: bool,
 ) -> Arc<PinnedBrokerExecutable> {
     let mut command = Command::new(env!("CARGO"));
     command
         .current_dir(workspace)
-        .args([
-            "build",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--features",
-            "compiler-handoff-observation-test-only",
-            "--bin",
-            "cargo-fe2o3",
-        ])
+        .args(["build", "--locked", "-p", "cargo-fe2o3"]);
+    if handoff_observation {
+        command.args(["--features", "compiler-handoff-observation-test-only"]);
+    }
+    command
+        .args(["--bin", "cargo-fe2o3"])
         .env("CARGO_TARGET_DIR", cargo_target)
         .env_remove("CARGO_INCREMENTAL")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
@@ -2867,7 +2913,185 @@ fn build_and_pin_handoff_broker(
     let broker = cargo_target.join("debug/cargo-fe2o3");
     std::fs::set_permissions(&broker, std::fs::Permissions::from_mode(0o500))
         .expect("make the test-owned cargo-fe2o3 object non-writable before pinning");
-    Arc::new(PinnedBrokerExecutable::open(&broker).expect("pin the exact built cargo-fe2o3 object"))
+    let broker = Arc::new(
+        PinnedBrokerExecutable::open(&broker).expect("pin the exact built cargo-fe2o3 object"),
+    );
+
+    let mut backend_command = Command::new(env!("CARGO"));
+    backend_command
+        .current_dir(workspace)
+        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .env("CARGO_TARGET_DIR", cargo_target)
+        .env(
+            "FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1",
+            encode_lower_hex(
+                &broker
+                    .sha256()
+                    .expect("verify broker before binding the backend build"),
+            ),
+        )
+        .env_remove("CARGO_INCREMENTAL")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTFLAGS");
+    let backend = run_bounded(
+        &mut backend_command,
+        BACKEND_BUILD_TIMEOUT,
+        "build test backend bound to the pinned cargo-fe2o3 object",
+    )
+    .expect("build broker-bound test backend within deadline");
+    assert!(
+        backend.status.success(),
+        "failed to build broker-bound test backend:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&backend.stdout),
+        String::from_utf8_lossy(&backend.stderr),
+    );
+    broker
+}
+
+fn build_and_pin_handoff_broker(
+    workspace: &Path,
+    cargo_target: &Path,
+) -> Arc<PinnedBrokerExecutable> {
+    build_and_pin_broker(workspace, cargo_target, true)
+}
+
+fn scrub_test_dynamic_loader_environment(command: &mut Command) {
+    for (name, _) in std::env::vars_os() {
+        let bytes = name.as_bytes();
+        if bytes.starts_with(b"LD_") || bytes.starts_with(b"DYLD_") || bytes == b"GLIBC_TUNABLES" {
+            command.env_remove(name);
+        }
+    }
+}
+
+fn generate_external_lockfile(manifest: &Path) {
+    let generated = run_bounded(
+        Command::new(env!("CARGO"))
+            .args(["generate-lockfile", "--offline", "--manifest-path"])
+            .arg(manifest),
+        BACKEND_BUILD_TIMEOUT,
+        "generate external source-validation lockfile",
+    )
+    .expect("generate external source-validation lockfile within deadline");
+    assert!(
+        generated.status.success(),
+        "failed to generate external source-validation lockfile:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&generated.stdout),
+        String::from_utf8_lossy(&generated.stderr),
+    );
+}
+
+fn configure_unprotected_row_authority_validation(command: &mut Command, cargo_target: &Path) {
+    let toolchain = AUTHORITY_TOOLCHAIN.get_or_init(|| {
+        let cargo = std::fs::canonicalize(env!("CARGO")).expect("canonical Cargo executable");
+        let rustc = std::fs::canonicalize(
+            cargo
+                .parent()
+                .expect("Cargo executable has a bin directory")
+                .join("rustc"),
+        )
+        .expect("canonical rustc executable beside Cargo");
+        let rustc_runtime = rustc
+            .parent()
+            .and_then(Path::parent)
+            .expect("rustc executable has a toolchain root")
+            .join("lib");
+        AuthorityToolchain {
+            cargo_sha256: sha256_path(&cargo),
+            rustc_sha256: sha256_path(&rustc),
+            rustc_runtime_sha256: runtime_tree_sha256(&rustc_runtime),
+            cargo,
+            rustc,
+        }
+    });
+    let backend = cargo_target.join("debug/librustc_codegen_fe2o3.so");
+    assert!(backend.is_file(), "test-owned authority backend is absent");
+    command
+        .env("CARGO", &toolchain.cargo)
+        .env("FE2O3_BACKEND", &backend)
+        .env(
+            "FE2O3_AUTHORITY_CARGO_SHA256_V1",
+            encode_lower_hex(&toolchain.cargo_sha256),
+        )
+        .env("FE2O3_AUTHORITY_RUSTC_PATH_V1", &toolchain.rustc)
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+            encode_lower_hex(&toolchain.rustc_sha256),
+        )
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
+            encode_lower_hex(&toolchain.rustc_runtime_sha256),
+        )
+        .env(
+            "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+            encode_lower_hex(&sha256_path(&backend)),
+        )
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        );
+    for (name, _) in std::env::vars_os() {
+        if name.as_bytes().starts_with(b"RUSTUP_") {
+            command.env_remove(name);
+        }
+    }
+    for name in [
+        "RUSTC",
+        "CARGO_BUILD_RUSTC",
+        "RUSTC_WRAPPER",
+        "CARGO_BUILD_RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+    ] {
+        command.env_remove(name);
+    }
+}
+
+fn sha256_path(path: &Path) -> [u8; 32] {
+    Sha256::digest(std::fs::read(path).expect("read authority-validation tool")).into()
+}
+
+fn runtime_tree_sha256(root: &Path) -> [u8; 32] {
+    fn hash_field(hash: &mut Sha256, value: &[u8]) {
+        hash.update((value.len() as u64).to_le_bytes());
+        hash.update(value);
+    }
+
+    fn hash_directory(hash: &mut Sha256, directory: &Path) {
+        let mut entries = std::fs::read_dir(directory)
+            .expect("read rustc runtime tree")
+            .map(|entry| entry.expect("read rustc runtime entry"))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            left.file_name()
+                .as_bytes()
+                .cmp(right.file_name().as_bytes())
+        });
+        hash.update(b"directory\0");
+        for entry in entries {
+            hash_field(hash, entry.file_name().as_bytes());
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path).expect("inspect rustc runtime entry");
+            if metadata.is_file() {
+                let bytes = std::fs::read(&path).expect("read rustc runtime entry");
+                hash.update(b"file\0");
+                hash.update((metadata.mode() & 0o7777).to_le_bytes());
+                hash.update((bytes.len() as u64).to_le_bytes());
+                hash.update(bytes);
+            } else if metadata.is_dir() {
+                hash.update(b"subdirectory\0");
+                hash.update((metadata.mode() & 0o7777).to_le_bytes());
+                hash_directory(hash, &path);
+            } else {
+                panic!("unsupported rustc runtime entry {path:?}");
+            }
+        }
+        hash.update(b"end-directory\0");
+    }
+
+    let mut hash = Sha256::new();
+    hash.update(b"fe2o3-rustc-runtime-tree-v1\0");
+    hash_directory(&mut hash, root);
+    hash.finalize().into()
 }
 
 fn substitute_handoff_broker_path(cargo_target: &Path, broker: &PinnedBrokerExecutable) -> PathBuf {
@@ -2949,6 +3173,7 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
         ),
     )
     .expect("write external row-softmax manifest");
+    generate_external_lockfile(&manifest);
     let observation_directory = output.0.join("handoff-observation");
     let mut observation_builder = std::fs::DirBuilder::new();
     observation_builder.mode(0o700);
@@ -2986,7 +3211,9 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
         .current_dir(workspace)
         .args(["build", "--manifest-path"])
         .arg(&manifest)
-        .env("CARGO_TARGET_DIR", cargo_target)
+        .args(["--target-dir"])
+        .arg(cargo_target)
+        .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("FE2O3_TARGET", "gfx942:xnack-")
@@ -2995,6 +3222,8 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
         .env(HANDOFF_OBSERVATION_DIRECTORY_ENV, &observation_directory)
         .env(HANDOFF_OBSERVATION_CRATE_ENV, &expected_crate_name)
         .env("RUSTFLAGS", rustflags);
+    configure_unprotected_row_authority_validation(&mut command, cargo_target);
+    scrub_test_dynamic_loader_environment(&mut command);
     let compiled = run_bounded(
         &mut command,
         BACKEND_BUILD_TIMEOUT,
@@ -4454,8 +4683,8 @@ fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
                 && external_stderr.contains("consumed its private single-use frontend receipt")
                 && external_stderr
                     .contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
-                && external_stderr
-                    .contains("stopped at the fail-closed source-authenticated boundary")
+                && external_stderr.contains("published an inert Worker V2 compiler-module handoff")
+                && external_stderr.contains("build completed without an authorized device backend")
                 && !external_stderr.contains("root instance must have")
                 && !external_stderr.contains("portable MIR identity mismatch")
                 && !external_stderr.contains("rustc FnAbi identity mismatch"),
@@ -4478,10 +4707,9 @@ fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
         assert_row_softmax_published_nothing(&output);
 
         if roots.len() == 1 {
-            let managed_backend = pin_backend(
-                &cargo_target.join(".fe2o3-backend-build-v1/debug/librustc_codegen_fe2o3.so"),
-            )
-            .expect("pin the backend built with cargo-fe2o3 broker identity");
+            let managed_backend =
+                pin_backend(&cargo_target.join("debug/librustc_codegen_fe2o3.so"))
+                    .expect("pin the backend built with cargo-fe2o3 broker identity");
             let forged_output = TestOutputDir::new(&workspace);
             let forged = compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
                 &workspace,
@@ -4520,25 +4748,22 @@ fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
         "-Coverflow-checks=off -Cmetadata=fe2o3-tiled-gemm-v1-reviewed --remap-path-prefix={}=/fe2o3-reviewed-workspace/tiled-gemm-v1.rs",
         source.display()
     );
-    let mut command = Command::new(env!("CARGO"));
+    let cargo_output = TestOutputDir::new(&workspace);
+    let broker = build_and_pin_broker(&workspace, &cargo_output.0.join("cargo-target"), false);
+    let mut command = broker
+        .command()
+        .expect("verify test-owned cargo-fe2o3 before tiled launch");
     command
         .current_dir(&workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "--locked",
-            "--manifest-path",
-        ])
+        .args(["build", "--locked", "--manifest-path"])
         .arg(&manifest)
+        .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_CODEGEN_PIPELINE", TILED_GEMM_PIPELINE)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
+    scrub_test_dynamic_loader_environment(&mut command);
     let external = run_bounded(
         &mut command,
         BACKEND_BUILD_TIMEOUT,
@@ -4574,25 +4799,22 @@ fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
         "-Coverflow-checks=off -Cmetadata=fe2o3-tiled-gemm-v1-reviewed --remap-path-prefix={}=/fe2o3-reviewed-workspace/tiled-gemm-v1.rs",
         source.display()
     );
-    let mut command = Command::new(env!("CARGO"));
+    let cargo_output = TestOutputDir::new(&workspace);
+    let broker = build_and_pin_broker(&workspace, &cargo_output.0.join("cargo-target"), false);
+    let mut command = broker
+        .command()
+        .expect("verify test-owned cargo-fe2o3 before LDS launch");
     command
         .current_dir(&workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "--locked",
-            "--manifest-path",
-        ])
+        .args(["build", "--locked", "--manifest-path"])
         .arg(&manifest)
+        .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_CODEGEN_PIPELINE", TILED_GEMM_PIPELINE)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
+    scrub_test_dynamic_loader_environment(&mut command);
     let external = run_bounded(
         &mut command,
         BACKEND_BUILD_TIMEOUT,
