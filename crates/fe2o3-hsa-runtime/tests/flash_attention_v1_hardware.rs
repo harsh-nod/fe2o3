@@ -30,10 +30,10 @@ fn strict_dot(left: &[f32], right: &[f32]) -> Result<f32, BoxError> {
             left.is_finite() && right.is_finite(),
             "non-finite dot input",
         )?;
-        sum = (sum + left * right) as f32;
+        sum = sum + left * right;
         require(sum.is_finite(), "non-finite dot intermediate")?;
     }
-    let scaled = (sum * SCALE) as f32;
+    let scaled = sum * SCALE;
     require(scaled.is_finite(), "non-finite scaled score")?;
     Ok(scaled)
 }
@@ -71,10 +71,10 @@ fn flash_attention_oracle(
                 previous_weight.is_finite() && current_weight.is_finite(),
                 "non-finite exponential",
             )?;
-            denominator = (denominator * previous_weight + current_weight) as f32;
+            denominator = denominator * previous_weight + current_weight;
             for component in 0..DIM {
                 numerator[component] =
-                    (numerator[component] * previous_weight + v[component] * current_weight) as f32;
+                    numerator[component] * previous_weight + v[component] * current_weight;
             }
             maximum = next_maximum;
         }
@@ -83,7 +83,7 @@ fn flash_attention_oracle(
             "invalid denominator",
         )?;
         for component in 0..DIM {
-            let result = (numerator[component] / denominator) as f32;
+            let result = numerator[component] / denominator;
             require(result.is_finite(), "non-finite output")?;
             output[query_row * DIM + component] = result;
         }
