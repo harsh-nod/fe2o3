@@ -3215,13 +3215,18 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
   if (MetadataBlob.empty())
     return pipelineError("linked output has an empty AMDGPU metadata note");
   msgpack::Document Document;
-  if (!Document.readFromBlob(MetadataBlob, false))
+  if (!Document.readFromBlob(MetadataBlob, true))
     return pipelineError("linked output has malformed AMDGPU metadata");
+  auto &TopLevelObjects = Document.getRoot().getArray();
+  if (TopLevelObjects.size() != 1)
+    return pipelineError(
+        "linked output AMDGPU metadata has trailing top-level objects");
+  msgpack::DocNode &MetadataRoot = TopLevelObjects[0];
   AMDGPU::HSAMD::V3::MetadataVerifier Verifier(true);
-  if (!Verifier.verify(Document.getRoot()))
+  if (!Verifier.verify(MetadataRoot))
     return pipelineError("linked output has invalid AMDGPU metadata schema");
 
-  auto &Root = Document.getRoot().getMap();
+  auto &Root = MetadataRoot.getMap();
   if (Policy != MetadataValidationPolicy::Generic) {
     if (Error E = validateExactMetadataKeys(Root, exactMetadataCheck(Policy)))
       return E;
@@ -3343,7 +3348,20 @@ inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue,
   if (!Sections)
     return Sections.takeError();
 
-  std::vector<StringRef> MetadataBlobs;
+  std::optional<StringRef> MetadataBlob;
+  auto RecordMetadataBlob = [&](StringRef Candidate) -> Error {
+    if (!MetadataBlob) {
+      MetadataBlob = Candidate;
+      return Error::success();
+    }
+    const bool SamePhysicalDescriptor =
+        MetadataBlob->data() == Candidate.data() &&
+        MetadataBlob->size() == Candidate.size();
+    if (!SamePhysicalDescriptor && *MetadataBlob != Candidate)
+      return pipelineError(
+          "linked output has conflicting AMDGPU metadata notes");
+    return Error::success();
+  };
   for (const ELF64LE::Shdr &Section : *Sections) {
     if (Section.sh_type != ELF::SHT_NOTE)
       continue;
@@ -3355,22 +3373,43 @@ inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue,
       if (Section.sh_addralign != 4)
         return pipelineError(
             "AMDGPU metadata note has a noncanonical alignment");
-      MetadataBlobs.push_back(Note.getDescAsStringRef(Section.sh_addralign));
+      if (Error E =
+              RecordMetadataBlob(Note.getDescAsStringRef(Section.sh_addralign)))
+        return E;
+    }
+    if (NoteError)
+      return NoteError;
+  }
+
+  auto ProgramHeaders = File.program_headers();
+  if (!ProgramHeaders)
+    return ProgramHeaders.takeError();
+  for (const ELF64LE::Phdr &ProgramHeader : *ProgramHeaders) {
+    if (ProgramHeader.p_type != ELF::PT_NOTE)
+      continue;
+    Error NoteError = Error::success();
+    for (const ELF64LE::Note Note : File.notes(ProgramHeader, NoteError)) {
+      if (Note.getName() != "AMDGPU" ||
+          Note.getType() != ELF::NT_AMDGPU_METADATA)
+        continue;
+      const size_t Alignment =
+          std::max<size_t>(ProgramHeader.p_align, size_t{4});
+      if (Error E = RecordMetadataBlob(Note.getDescAsStringRef(Alignment)))
+        return E;
     }
     if (NoteError)
       return NoteError;
   }
 
   MetadataContract Result;
-  if (MetadataBlobs.empty())
+  if (!MetadataBlob)
     return Result;
   Result.Present = true;
   std::set<std::string> Names;
   std::set<std::string> Symbols;
-  for (StringRef MetadataBlob : MetadataBlobs)
-    if (Error E =
-            appendMetadataBlob(MetadataBlob, Result, Names, Symbols, Policy))
-      return E;
+  if (Error E =
+          appendMetadataBlob(*MetadataBlob, Result, Names, Symbols, Policy))
+    return E;
   llvm::sort(Result.Kernels, [](const KernelLaunchContract &Left,
                                 const KernelLaunchContract &Right) {
     return std::tie(Left.Name, Left.Symbol) <

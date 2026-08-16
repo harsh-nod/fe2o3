@@ -1510,6 +1510,111 @@ void replaceMetadataByte(std::vector<uint8_t> &Bytes, StringRef Key,
   *Value = Replacement;
 }
 
+void hideMetadataNoteSection(std::vector<uint8_t> &Bytes) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<mutation>"));
+  if (!ObjectOrError)
+    fail(toString(ObjectOrError.takeError()));
+  auto *Object = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
+  require(Object != nullptr, "metadata mutation fixture is not ELF64LE");
+  const ELFFile<ELF64LE> &File = Object->getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    fail(toString(Sections.takeError()));
+
+  uint64_t SectionTable = read64(Bytes, 40);
+  uint16_t SectionEntrySize = read16(Bytes, 58);
+  size_t Matches = 0;
+  for (size_t Index = 0; Index != Sections->size(); ++Index) {
+    const ELF64LE::Shdr &Section = (*Sections)[Index];
+    if (Section.sh_type != ELF::SHT_NOTE)
+      continue;
+    Error NoteError = Error::success();
+    bool HasMetadata = false;
+    for (const ELF64LE::Note Note : File.notes(Section, NoteError))
+      HasMetadata |= Note.getName() == "AMDGPU" &&
+                     Note.getType() == ELF::NT_AMDGPU_METADATA;
+    if (NoteError)
+      fail(toString(std::move(NoteError)));
+    if (!HasMetadata)
+      continue;
+    ++Matches;
+    write32(Bytes, SectionTable + Index * SectionEntrySize + 4,
+            ELF::SHT_PROGBITS);
+  }
+  require(Matches == 1, "fixture did not contain one metadata note section");
+}
+
+void redirectMetadataProgramHeaderToCopy(std::vector<uint8_t> &Bytes,
+                                         bool MakeConflicting) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<mutation>"));
+  if (!ObjectOrError)
+    fail(toString(ObjectOrError.takeError()));
+  auto *Object = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
+  require(Object != nullptr, "metadata mutation fixture is not ELF64LE");
+  const ELFFile<ELF64LE> &File = Object->getELFFile();
+  auto ProgramHeaders = File.program_headers();
+  if (!ProgramHeaders)
+    fail(toString(ProgramHeaders.takeError()));
+
+  size_t MetadataProgramHeader = ProgramHeaders->size();
+  uint64_t SegmentOffset = 0;
+  uint64_t SegmentSize = 0;
+  uint64_t SegmentAlignment = 0;
+  for (size_t Index = 0; Index != ProgramHeaders->size(); ++Index) {
+    const ELF64LE::Phdr &ProgramHeader = (*ProgramHeaders)[Index];
+    if (ProgramHeader.p_type != ELF::PT_NOTE)
+      continue;
+    Error NoteError = Error::success();
+    bool HasMetadata = false;
+    for (const ELF64LE::Note Note : File.notes(ProgramHeader, NoteError))
+      HasMetadata |= Note.getName() == "AMDGPU" &&
+                     Note.getType() == ELF::NT_AMDGPU_METADATA;
+    if (NoteError)
+      fail(toString(std::move(NoteError)));
+    if (!HasMetadata)
+      continue;
+    require(MetadataProgramHeader == ProgramHeaders->size(),
+            "fixture has multiple metadata PT_NOTE segments");
+    MetadataProgramHeader = Index;
+    SegmentOffset = ProgramHeader.p_offset;
+    SegmentSize = ProgramHeader.p_filesz;
+    SegmentAlignment = std::max<uint64_t>(ProgramHeader.p_align, 4);
+  }
+  require(MetadataProgramHeader != ProgramHeaders->size(),
+          "fixture has no metadata PT_NOTE segment");
+  require(SegmentAlignment == 4 || SegmentAlignment == 8,
+          "fixture metadata PT_NOTE has an unsupported alignment");
+  require(SegmentOffset <= Bytes.size() &&
+              SegmentSize <= Bytes.size() - SegmentOffset,
+          "fixture metadata PT_NOTE is out of bounds");
+
+  std::vector<uint8_t> Segment(Bytes.begin() + SegmentOffset,
+                               Bytes.begin() + SegmentOffset + SegmentSize);
+  if (MakeConflicting)
+    replaceMetadataText(Segment, "amdgcn-amd-amdhsa--gfx942:xnack-",
+                        "amdgcn-amd-amdhsa--gfx942:xnack+");
+  size_t NewOffset = Bytes.size();
+  size_t Remainder = NewOffset % SegmentAlignment;
+  if (Remainder != 0) {
+    NewOffset += SegmentAlignment - Remainder;
+    Bytes.resize(NewOffset, 0);
+  }
+  Bytes.insert(Bytes.end(), Segment.begin(), Segment.end());
+
+  uint64_t ProgramHeaderTable = read64(Bytes, 32);
+  uint16_t ProgramHeaderEntrySize = read16(Bytes, 54);
+  require(ProgramHeaderEntrySize >= sizeof(ELF64LE::Phdr),
+          "fixture has a short program header");
+  write64(Bytes,
+          ProgramHeaderTable + MetadataProgramHeader * ProgramHeaderEntrySize +
+              8,
+          NewOffset);
+}
+
 struct ArgumentMetadataOverride {
   std::optional<size_t> Index;
   StringRef Field;
@@ -2433,6 +2538,15 @@ void testExactRowSoftmaxV1Profile() {
 
   requireExactRowMetadataSuccess(makeExactRowSoftmaxV1MetadataBlob(),
                                  "measured LLVM 22.1.8 metadata");
+
+  std::string TrailingObject = makeExactRowSoftmaxV1MetadataBlob();
+  TrailingObject.push_back(static_cast<char>(0xc0));
+  requireExactRowMetadataFailure(TrailingObject,
+                                 "metadata has trailing top-level objects");
+  std::string TrailingMalformedBytes = makeExactRowSoftmaxV1MetadataBlob();
+  TrailingMalformedBytes.push_back(static_cast<char>(0xd9));
+  requireExactRowMetadataFailure(TrailingMalformedBytes,
+                                 "malformed AMDGPU metadata");
 
   for (StringRef Field : {
            StringRef(".args"),
@@ -4198,6 +4312,30 @@ int main(int ArgumentCount, char **Arguments) {
       PublicationResponse.LinkedOutput->Bytes, PublicationKernel);
   if (!PublicationInspection)
     fail(toString(PublicationInspection.takeError()));
+
+  std::vector<uint8_t> ProgramHeaderOnlyMetadata =
+      PublicationResponse.LinkedOutput->Bytes;
+  hideMetadataNoteSection(ProgramHeaderOnlyMetadata);
+  auto ProgramHeaderOnlyInspection = inspectLinkedOutputForPublication(
+      ProgramHeaderOnlyMetadata, PublicationKernel);
+  if (!ProgramHeaderOnlyInspection)
+    fail(toString(ProgramHeaderOnlyInspection.takeError()));
+
+  std::vector<uint8_t> ByteIdenticalMetadataViews =
+      PublicationResponse.LinkedOutput->Bytes;
+  redirectMetadataProgramHeaderToCopy(ByteIdenticalMetadataViews, false);
+  auto ByteIdenticalInspection = inspectLinkedOutputForPublication(
+      ByteIdenticalMetadataViews, PublicationKernel);
+  if (!ByteIdenticalInspection)
+    fail(toString(ByteIdenticalInspection.takeError()));
+
+  std::vector<uint8_t> ConflictingMetadataViews =
+      PublicationResponse.LinkedOutput->Bytes;
+  redirectMetadataProgramHeaderToCopy(ConflictingMetadataViews, true);
+  requireInspectionFailure(ConflictingMetadataViews, PublicationKernel,
+                           "post_link.check=metadata status=failed reason="
+                           "linked%20output%20has%20conflicting%20AMDGPU%20"
+                           "metadata%20notes");
 
   Request DescriptorOmitted = PublicationKernel;
   DescriptorOmitted.ExpectedDefinedSymbols = {"publication_kernel"};
