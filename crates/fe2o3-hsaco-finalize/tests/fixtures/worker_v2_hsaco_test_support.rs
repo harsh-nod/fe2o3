@@ -39,6 +39,9 @@ struct FixtureOptions<'a> {
     pointee_alignment: u64,
     optional_hidden_argument: Option<(u64, u64, &'a str)>,
     second_optional_hidden_argument: Option<(u64, u64, &'a str)>,
+    include_exact_row_llvm22_hidden_arguments: bool,
+    omitted_hidden_argument: Option<usize>,
+    hidden_argument_override: Option<(usize, u64, u64, &'a str)>,
     include_required_workgroup_size: bool,
     max_workgroups: [Option<u32>; 3],
     cluster_dims: Option<[u32; 3]>,
@@ -72,6 +75,9 @@ impl FixtureOptions<'static> {
             pointee_alignment: 4,
             optional_hidden_argument: None,
             second_optional_hidden_argument: None,
+            include_exact_row_llvm22_hidden_arguments: false,
+            omitted_hidden_argument: None,
+            hidden_argument_override: None,
             include_required_workgroup_size: true,
             max_workgroups: [None; 3],
             cluster_dims: None,
@@ -434,9 +440,25 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
             })
             .collect(),
     };
-    arguments.extend(v5_hidden_arguments(explicit_bytes));
+    let mut hidden_arguments = v5_hidden_arguments(explicit_bytes);
+    if options.include_exact_row_llvm22_hidden_arguments {
+        hidden_arguments.extend(
+            [
+                (80, 8, "hidden_hostcall_buffer"),
+                (88, 8, "hidden_multigrid_sync_arg"),
+                (96, 8, "hidden_heap_v1"),
+                (104, 8, "hidden_default_queue"),
+                (112, 8, "hidden_completion_action"),
+                (200, 8, "hidden_queue_ptr"),
+            ]
+            .into_iter()
+            .map(|(offset, size, kind)| {
+                argument(None, explicit_bytes + offset, size, kind, None)
+            }),
+        );
+    }
     if let Some((relative_offset, size, kind)) = options.optional_hidden_argument {
-        arguments.push(argument(
+        hidden_arguments.push(argument(
             None,
             explicit_bytes + relative_offset,
             size,
@@ -445,7 +467,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         ));
     }
     if let Some((relative_offset, size, kind)) = options.second_optional_hidden_argument {
-        arguments.push(argument(
+        hidden_arguments.push(argument(
             None,
             explicit_bytes + relative_offset,
             size,
@@ -454,7 +476,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         ));
     }
     if options.include_dynamic_lds_size {
-        arguments.push(argument(
+        hidden_arguments.push(argument(
             None,
             explicit_bytes + 120,
             4,
@@ -462,6 +484,19 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
             None,
         ));
     }
+    if let Some((index, relative_offset, size, kind)) = options.hidden_argument_override {
+        hidden_arguments[index] = argument(
+            None,
+            explicit_bytes + relative_offset,
+            size,
+            kind,
+            None,
+        );
+    }
+    if let Some(index) = options.omitted_hidden_argument {
+        hidden_arguments.remove(index);
+    }
+    arguments.extend(hidden_arguments);
     let mut kernel = vec![
         (Value::from(".name"), Value::from(options.entry)),
         (Value::from(".symbol"), Value::from(options.descriptor)),

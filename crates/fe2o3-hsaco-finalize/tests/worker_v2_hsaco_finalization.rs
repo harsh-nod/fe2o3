@@ -582,7 +582,7 @@ fn structural_row_softmax_v1_finalizes_as_two_f32_slices_and_288_bytes() {
     assert_eq!(kernel.name(), "row_softmax_v1");
     assert_eq!(kernel.symbol(), "row_softmax_v1.kd");
     assert_eq!(kernel.required_workgroup_size(), Some([64, 1, 1]));
-    assert_eq!(kernel.max_workgroups(), [Some(1), Some(1), Some(1)]);
+    assert_eq!(kernel.max_workgroups(), [None; 3]);
     assert_eq!(kernel.cluster_dims(), None);
     assert_eq!(kernel.kind(), fe2o3_hsaco::KernelKind::Normal);
     assert!(!kernel.uses_dynamic_stack());
@@ -592,7 +592,7 @@ fn structural_row_softmax_v1_finalizes_as_two_f32_slices_and_288_bytes() {
     assert_eq!(kernel.implicit_argument_offset(), Some(32));
     assert_eq!(kernel.implicit_argument_size(), 256);
     assert_eq!(kernel.explicit_arguments().len(), 4);
-    assert_eq!(kernel.hidden_arguments().len(), 13);
+    assert_eq!(kernel.hidden_arguments().len(), 19);
     assert!(
         kernel
             .hidden_arguments()
@@ -688,7 +688,7 @@ fn row_softmax_rejects_workgroup_wave_grid_and_tiled_abi_substitution() {
             ..row_softmax_options()
         },
         FixtureOptions {
-            max_workgroups: [None; 3],
+            max_workgroups: [Some(1), Some(1), Some(1)],
             ..row_softmax_options()
         },
         FixtureOptions {
@@ -876,13 +876,74 @@ fn row_softmax_rejects_lifecycle_cluster_stack_and_hidden_launch_substitutions()
             row_softmax_expectation(),
         )
         .unwrap_err();
-        assert!(
-            matches!(
-                &error,
-                RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(actual) if *actual == field
-            ),
-            "substitution {index} expected {field}, found {error:?}"
-        );
+        if field != "hidden argument profile" {
+            assert!(
+                matches!(
+                    &error,
+                    RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(actual) if *actual == field
+                ),
+                "substitution {index} expected {field}, found {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn row_softmax_rejects_each_exact_llvm22_hidden_argument_drift() {
+    const HIDDEN: [(u64, u64, &str); 19] = [
+        (0, 4, "hidden_block_count_x"),
+        (4, 4, "hidden_block_count_y"),
+        (8, 4, "hidden_block_count_z"),
+        (12, 2, "hidden_group_size_x"),
+        (14, 2, "hidden_group_size_y"),
+        (16, 2, "hidden_group_size_z"),
+        (18, 2, "hidden_remainder_x"),
+        (20, 2, "hidden_remainder_y"),
+        (22, 2, "hidden_remainder_z"),
+        (40, 8, "hidden_global_offset_x"),
+        (48, 8, "hidden_global_offset_y"),
+        (56, 8, "hidden_global_offset_z"),
+        (64, 2, "hidden_grid_dims"),
+        (80, 8, "hidden_hostcall_buffer"),
+        (88, 8, "hidden_multigrid_sync_arg"),
+        (96, 8, "hidden_heap_v1"),
+        (104, 8, "hidden_default_queue"),
+        (112, 8, "hidden_completion_action"),
+        (200, 8, "hidden_queue_ptr"),
+    ];
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    for (index, (offset, size, kind)) in HIDDEN.into_iter().enumerate() {
+        for options in [
+            FixtureOptions {
+                omitted_hidden_argument: Some(index),
+                ..row_softmax_options()
+            },
+            FixtureOptions {
+                hidden_argument_override: Some((index, offset, size + 1, kind)),
+                ..row_softmax_options()
+            },
+            FixtureOptions {
+                hidden_argument_override: Some((index, offset, size, "hidden_none")),
+                ..row_softmax_options()
+            },
+        ] {
+            let fixture = fixture_with_descriptor_table(options, Some(&table));
+            assert!(
+                inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+                    evidence_for(
+                        fixture.bytes,
+                        "gfx942:xnack-",
+                        0xc1,
+                        0xd1,
+                        "row_softmax_v1",
+                        "row_softmax_v1.kd",
+                    ),
+                    row_softmax_expectation(),
+                )
+                .is_err(),
+                "hidden argument {index} accepted a hostile mutation",
+            );
+        }
     }
 }
 
@@ -990,7 +1051,8 @@ fn row_softmax_options() -> FixtureOptions<'static> {
         required_workgroup_size: [64, 1, 1],
         max_flat_workgroup_size: 64,
         include_explicit_argument_alignments: true,
-        max_workgroups: [Some(1), Some(1), Some(1)],
+        include_exact_row_llvm22_hidden_arguments: true,
+        max_workgroups: [None; 3],
         abi: FixtureAbi::RowSoftmaxV1,
         ..FixtureOptions::valid()
     }

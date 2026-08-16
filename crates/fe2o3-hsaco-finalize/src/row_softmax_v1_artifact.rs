@@ -383,7 +383,10 @@ fn validate_exact_artifact_metadata(
             "workgroup metadata",
         ));
     }
-    if kernel.max_workgroups() != ROW_SOFTMAX_V1_MAX_GRID_SIZE.map(Some) {
+    // LLVM 22.1.8 does not serialize max-num-workgroups for this kernel. The
+    // one-block launch limit remains an independently admitted descriptor
+    // fact; accepting synthesized metadata here would misstate the HSACO.
+    if kernel.max_workgroups() != [None; 3] {
         return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
             "maximum grid metadata",
         ));
@@ -454,7 +457,10 @@ fn validate_exact_artifact_metadata(
 fn validate_exact_hidden_arguments(
     kernel: &fe2o3_hsaco::InspectedKernel,
 ) -> Result<(), RowSoftmaxV1StructuralArtifactErrorV1> {
-    const REQUIRED: [(u64, u64, HiddenValueKind); 13] = [
+    // Exact COV6 suffix emitted by the pinned upstream LLVM 22.1.8
+    // TargetMachine. The final six fields are physical ABI inputs, not source,
+    // compiler-origin, publication, load, or launch authority.
+    const REQUIRED: [(u64, u64, HiddenValueKind); 19] = [
         (0, 4, HiddenValueKind::BlockCountX),
         (4, 4, HiddenValueKind::BlockCountY),
         (8, 4, HiddenValueKind::BlockCountZ),
@@ -468,6 +474,12 @@ fn validate_exact_hidden_arguments(
         (48, 8, HiddenValueKind::GlobalOffsetY),
         (56, 8, HiddenValueKind::GlobalOffsetZ),
         (64, 2, HiddenValueKind::GridDimensions),
+        (80, 8, HiddenValueKind::HostcallBuffer),
+        (88, 8, HiddenValueKind::MultigridSyncArgument),
+        (96, 8, HiddenValueKind::HeapV1),
+        (104, 8, HiddenValueKind::DefaultQueue),
+        (112, 8, HiddenValueKind::CompletionAction),
+        (200, 8, HiddenValueKind::QueuePointer),
     ];
     let hidden = kernel.hidden_arguments();
     if hidden.len() != REQUIRED.len() {
