@@ -3534,7 +3534,19 @@ fn hardlink_to_cargo_fe2o3_is_rejected_as_a_recursive_runner() {
     );
     command.env("FE2O3_TEST_CONFIG_RUNNER_JSON", runner.to_string());
 
-    let output = command.output().expect("run hardlink runner rejection");
+    let output = {
+        let mut attempts = 0;
+        loop {
+            match command.output() {
+                Ok(output) => break output,
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 7 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("run hardlink runner rejection: {error}"),
+            }
+        }
+    };
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("recursive cargo-fe2o3"),
