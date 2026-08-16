@@ -312,6 +312,7 @@ fn write_config(directory: &TestDirectory, selects_invocation: bool) -> PathBuf 
     write_config_with_output(directory, selects_invocation, None)
 }
 
+#[cfg(debug_assertions)]
 fn write_s09_config(directory: &TestDirectory) -> PathBuf {
     let path = write_config_with_output_and_cov(directory, true, None, 6, false);
     let mut value: JsonValue = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
