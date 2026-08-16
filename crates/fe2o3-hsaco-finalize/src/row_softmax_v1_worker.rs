@@ -41,6 +41,9 @@ use crate::{
 };
 
 const TARGET: &str = "gfx942:xnack-";
+/// Exact reviewed upstream LLVM build admitted by the protected row-softmax profile.
+pub const ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1: &str =
+    "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
 const OCML_EXP_F32: &str = "__ocml_exp_f32";
 const MEASURED_OCML_PROVIDER_FILE_COUNT: usize = 4;
 const OCML_PROVIDER_IDENTITY: &str = "gfx942-ocml-v1";
@@ -117,6 +120,9 @@ impl RowSoftmaxV1DirectWorkerPinsV1 {
         }
         validate_build_identity_pin(worker_build_identity, "worker build identity pin")?;
         validate_build_identity_pin(llvm_build_identity, "LLVM build identity pin")?;
+        if llvm_build_identity != ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1 {
+            return Err(profile_mismatch("upstream LLVM 22.1.8 build identity pin"));
+        }
         Ok(Self {
             executable,
             worker_build_identity_sha256: Sha256::digest(worker_build_identity.as_bytes()).into(),
@@ -1121,7 +1127,7 @@ entry:
         RowSoftmaxV1DirectWorkerPinsV1::new(
             ContentIdentityV1::from_parts([0x22; 32], 4096),
             "fe2o3-direct-llvm-lld-worker-v2-row",
-            "upstream-llvm-22-row",
+            ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
             RowSoftmaxV1OcmlProviderPinsV1::new(
                 PROVIDER_DIGESTS,
                 calculate_test_identity(PROVIDER_MANIFEST_DOMAIN, &provider),
@@ -1229,7 +1235,7 @@ entry:
     ) -> WorkerRequestV2 {
         WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
             request_id: [request_id; 32],
-            llvm_build_identity: "upstream-llvm-22-row".to_owned(),
+            llvm_build_identity: ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1.to_owned(),
             worker_build_identity: "fe2o3-direct-llvm-lld-worker-v2-row".to_owned(),
             worker_executable: ContentIdentityV1::from_parts([0x22; 32], 4096),
             target,
@@ -1282,7 +1288,7 @@ entry:
         let handoff = exact_handoff();
         let legacy = WorkerRequestV1::new(
             [0x6a; 32],
-            "upstream-llvm-22-row",
+            ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
             descriptor_target(),
             CodeObjectVersion::V6,
             WorkerOptionsV1::new(WorkerOptimizationLevelV1::O0, true, true),
@@ -2144,7 +2150,7 @@ entry:
         let fake_worker = RowSoftmaxV1DirectWorkerPinsV1::new(
             ContentIdentityV1::from_parts([0x77; 32], 4096),
             "untrusted-protocol-compatible-worker",
-            "untrusted-llvm-build",
+            ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
             exact_worker_pins().provider(),
         )
         .unwrap();
@@ -2259,7 +2265,7 @@ entry:
             RowSoftmaxV1DirectWorkerPinsV1::new(
                 ContentIdentityV1::from_parts([0; 32], 4096),
                 "worker",
-                "llvm",
+                ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
                 provider,
             )
             .is_err()
@@ -2268,7 +2274,7 @@ entry:
             RowSoftmaxV1DirectWorkerPinsV1::new(
                 ContentIdentityV1::from_parts([0x22; 32], 4096),
                 "",
-                "llvm",
+                ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
                 provider,
             )
             .is_err()
@@ -2282,6 +2288,32 @@ entry:
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn row_softmax_worker_rejects_rocm_llvm_identity_drift() {
+        let provider = exact_worker_pins().provider();
+        assert!(
+            RowSoftmaxV1DirectWorkerPinsV1::new(
+                ContentIdentityV1::from_parts([0x22; 32], 4096),
+                "fe2o3-direct-llvm-lld-worker-v2-row",
+                ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
+                provider,
+            )
+            .is_ok()
+        );
+        let rocm_drift = RowSoftmaxV1DirectWorkerPinsV1::new(
+            ContentIdentityV1::from_parts([0x22; 32], 4096),
+            "fe2o3-direct-llvm-lld-worker-v2-row",
+            "7.2.4",
+            provider,
+        );
+        assert!(matches!(
+            rocm_drift,
+            Err(RowSoftmaxV1DirectWorkerErrorV1::ProfileMismatch(
+                "upstream LLVM 22.1.8 build identity pin"
+            ))
+        ));
     }
 
     #[test]

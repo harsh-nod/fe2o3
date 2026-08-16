@@ -1267,6 +1267,7 @@ fn valid_selector_text(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_hsaco_finalize::ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1;
     use serde_json::json;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1347,6 +1348,8 @@ mod tests {
         value["candidate_output_max_bytes"] = json!(fe2o3_hsaco::MAX_HSACO_BYTES);
         value["link_options"][1]["value"] = json!("0");
         value["providers"] = json!([]);
+        value["worker"]["llvm_build_identity"] =
+            json!(ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1);
         let definitions = (1_u8..=ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT as u8)
             .map(|value| hex(&[value; 16]))
             .collect::<Vec<_>>();

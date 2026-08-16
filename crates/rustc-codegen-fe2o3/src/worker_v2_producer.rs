@@ -1681,7 +1681,8 @@ mod tests {
         ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1,
     };
     use fe2o3_hsaco_finalize::{
-        ContentIdentityV1, RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
+        ContentIdentityV1, ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
+        RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
         RowSoftmaxV1OcmlProviderPinsV1,
     };
     use fe2o3_kernel_ir::ScalarGemmTargetRequirementsV1;
@@ -2189,7 +2190,7 @@ mod tests {
         let worker = RowSoftmaxV1DirectWorkerPinsV1::new(
             ContentIdentityV1::from_parts([0x46; 32], 1),
             "row-softmax-production-compatibility-test-worker",
-            "upstream-llvm-production-compatibility-test",
+            ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
             provider,
         )
         .unwrap();
