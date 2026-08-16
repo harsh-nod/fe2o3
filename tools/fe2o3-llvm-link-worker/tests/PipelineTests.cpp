@@ -889,6 +889,31 @@ std::string loadIntegratedWorkgroupSyncBody(StringRef Filename) {
       .str();
 }
 
+std::string loadExactRowSoftmaxV1Body() {
+  SmallString<256> FixturePath(__FILE__);
+  sys::path::remove_filename(FixturePath);
+  sys::path::append(FixturePath, "fixtures", "row-softmax-v1-llvm22-body.ll");
+  auto Fixture = MemoryBuffer::getFile(FixturePath);
+  if (!Fixture)
+    fail((Twine("cannot read exact row-softmax fixture: ") +
+          Fixture.getError().message())
+             .str());
+  return (*Fixture)->getBuffer().str();
+}
+
+std::vector<uint8_t> makeExactRowSoftmaxV1TextIr() {
+  std::string Body = loadExactRowSoftmaxV1Body();
+  std::array<uint8_t, 64> Descriptor{};
+  Descriptor.fill(0x52);
+  constexpr StringLiteral Transcript =
+      "row-softmax-cpp-profile-authority-test-v1";
+  auto Result = makeExactRowSoftmaxV1CompilerInputForTesting(
+      Body, Descriptor, arrayRefFromStringRef(Transcript));
+  if (!Result)
+    fail(toString(Result.takeError()));
+  return std::move(*Result);
+}
+
 std::vector<uint8_t>
 makeExactWorkgroupSyncTextIr(ExactWorkgroupSyncProfileForTesting Profile) {
   StringRef Filename =
@@ -2126,6 +2151,238 @@ std::optional<std::vector<uint8_t>> testMeasuredOcmlPipeline() {
   return KernelLinked.LinkedOutput->Bytes;
 }
 
+void testExactRowSoftmaxV1Profile() {
+  const std::vector<std::string> Symbols = {"__ocml_exp_f32", "row_softmax_v1",
+                                            "row_softmax_v1.kd"};
+  auto MakeRequest = [&](std::vector<uint8_t> CompilerBytes,
+                         std::vector<std::string> RequestSymbols = {}) {
+    if (RequestSymbols.empty())
+      RequestSymbols = Symbols;
+    Request Result = makeV2Request(
+        makeInput(InputKind::LlvmTextIr, std::move(CompilerBytes)), {},
+        {"__ocml_exp_f32"}, {}, RequestSymbols, 6);
+    Result.Target = "gfx942:xnack-";
+    Result.LinkOptions = {OptimizationLevel::O0, true, true};
+    return Result;
+  };
+  auto RequireCompilerFailure = [](ArrayRef<uint8_t> Bytes,
+                                   StringRef Diagnostic) {
+    Error Failure = validateExactRowSoftmaxV1CompilerInputForTesting(Bytes);
+    require(static_cast<bool>(Failure),
+            "hostile exact row-softmax compiler input was accepted");
+    std::string Message = toString(std::move(Failure));
+    if (!StringRef(Message).contains(Diagnostic)) {
+      errs() << "unexpected row-softmax compiler diagnostic: " << Message
+             << '\n';
+      fail("row-softmax compiler input failed for the wrong reason");
+    }
+  };
+  auto MutateCompilerText = [](ArrayRef<uint8_t> Bytes, StringRef Expected,
+                               StringRef Replacement) {
+    StringRef Text(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+    std::string Mutated = replaceExactText(Text, Expected, Replacement);
+    return std::vector<uint8_t>(Mutated.begin(), Mutated.end());
+  };
+
+  std::vector<uint8_t> Compiler = makeExactRowSoftmaxV1TextIr();
+  if (Error Failure =
+          validateExactRowSoftmaxV1CompilerInputForTesting(Compiler))
+    fail(toString(std::move(Failure)));
+
+  std::vector<uint8_t> WrongBody = Compiler;
+  WrongBody.front() ^= 1;
+  RequireCompilerFailure(WrongBody, "body identity");
+
+  StringRef CompilerText(reinterpret_cast<const char *>(Compiler.data()),
+                         Compiler.size());
+  size_t FirstSection = CompilerText.find("\nmodule asm \".section ");
+  require(FirstSection != StringRef::npos,
+          "exact row-softmax fixture has no compiler sections");
+  std::vector<uint8_t> MissingMarkers(Compiler.begin(),
+                                      Compiler.begin() + FirstSection);
+  RequireCompilerFailure(MissingMarkers, "missing bound sections");
+
+  std::vector<uint8_t> MissingAuthority =
+      MutateCompilerText(Compiler, ".fe2o3.row-softmax-auth.v1",
+                         ".fe2o3.row-softmax-auth.missing");
+  RequireCompilerFailure(MissingAuthority, "section order differs");
+
+  std::string DuplicateText = CompilerText.str();
+  size_t Transcript =
+      DuplicateText.find("module asm \".section "
+                         ".fe2o3.row-softmax-authority-transcript.v1");
+  require(Transcript != std::string::npos,
+          "exact row-softmax fixture has no authority transcript marker");
+  DuplicateText.insert(
+      Transcript,
+      "module asm \".section "
+      ".fe2o3.row-softmax-authority-transcript.v1,\\22\\22,@progbits\"\n"
+      "module asm \".balign 8\"\n"
+      "module asm \".byte 0x01\"\n\n");
+  RequireCompilerFailure(
+      std::vector<uint8_t>(DuplicateText.begin(), DuplicateText.end()),
+      "section order differs");
+
+  std::string ReorderedText = CompilerText.str();
+  constexpr StringLiteral TranscriptName =
+      ".fe2o3.row-softmax-authority-transcript.v1";
+  constexpr StringLiteral AuthorityName = ".fe2o3.row-softmax-auth.v1";
+  constexpr StringLiteral TemporaryName =
+      ".fe2o3.row-softmax-temporary-authority-name.v1";
+  ReorderedText =
+      replaceExactText(ReorderedText, TranscriptName, TemporaryName);
+  ReorderedText =
+      replaceExactText(ReorderedText, AuthorityName, TranscriptName);
+  ReorderedText = replaceExactText(ReorderedText, TemporaryName, AuthorityName);
+  RequireCompilerFailure(
+      std::vector<uint8_t>(ReorderedText.begin(), ReorderedText.end()),
+      "section order differs");
+
+  std::vector<uint8_t> ConflictingMarker =
+      MutateCompilerText(Compiler, ".fe2o3.row-exp.v1", ".fe2o3.row-exp.v2");
+  RequireCompilerFailure(ConflictingMarker, "section order differs");
+
+  std::vector<uint8_t> WrongAuthority = Compiler;
+  mutateExactCompilerSectionIdentity(WrongAuthority,
+                                     ".fe2o3.row-softmax-auth.v1");
+  RequireCompilerFailure(WrongAuthority, "authenticated authority");
+  std::vector<uint8_t> WrongExp = Compiler;
+  mutateExactCompilerSectionIdentity(WrongExp, ".fe2o3.row-exp.v1");
+  RequireCompilerFailure(WrongExp, "exponential boundary identity");
+
+  Request Exact = MakeRequest(Compiler);
+  Request WrongTarget = Exact;
+  WrongTarget.Target = "gfx942:xnack+";
+  requireFailure(WrongTarget, Stage::InputValidation);
+  Request WrongCov = Exact;
+  WrongCov.CodeObjectVersion = 5;
+  requireFailure(WrongCov, Stage::InputValidation);
+  Request WrongOptions = Exact;
+  WrongOptions.LinkOptions.Optimization = OptimizationLevel::O2;
+  requireFailure(WrongOptions, Stage::InputValidation);
+  Request WrongImport = Exact;
+  WrongImport.ImportSymbols = {"__ocml_log_f32"};
+  requireFailure(WrongImport, Stage::InputValidation);
+  Request WrongExport = Exact;
+  WrongExport.ExportSymbols = {"row_softmax_v1"};
+  requireFailure(WrongExport, Stage::InputValidation);
+  Request WrongFinal = Exact;
+  WrongFinal.FinalSymbols.pop_back();
+  requireFailure(WrongFinal, Stage::InputValidation);
+
+  Request CrossProfile = MakeRequest(makeExactWave64CollectivesV1TextIr());
+  Response CrossProfileFailure =
+      requireFailure(CrossProfile, Stage::InputValidation);
+  requireDiagnostic(CrossProfileFailure,
+                    "row-softmax V1 compiler module body identity");
+
+  std::vector<uint8_t> Workgroup256 =
+      MutateCompilerText(Compiler, "!0 = !{i32 64, i32 1, i32 1}",
+                         "!0 = !{i32 256, i32 1, i32 1}");
+  requireFailure(MakeRequest(std::move(Workgroup256)), Stage::InputValidation);
+  std::vector<uint8_t> WrongWaveInput =
+      MutateCompilerText(Compiler, "-wavefrontsize32,+wavefrontsize64",
+                         "+wavefrontsize32,-wavefrontsize64");
+  requireFailure(MakeRequest(std::move(WrongWaveInput)),
+                 Stage::InputValidation);
+
+  std::vector<uint8_t> SpoofedCompiler = MutateCompilerText(
+      Compiler, "@row_softmax_v1(", "@row_softmax_v1_spoof(");
+  Request Spoofed = MakeRequest(
+      std::move(SpoofedCompiler),
+      {"__ocml_exp_f32", "row_softmax_v1_spoof", "row_softmax_v1_spoof.kd"});
+  Response SpoofedFailure = requireFailure(Spoofed, Stage::InputValidation);
+  requireDiagnostic(SpoofedFailure,
+                    "row-softmax V1 symbols or compiler markers");
+
+  auto Policy = measuredGfx942DeviceLibraryPolicy();
+  if (!Policy) {
+    consumeError(Policy.takeError());
+    return;
+  }
+  Response First =
+      runSuccess(Exact, std::set<std::string>(Symbols.begin(), Symbols.end()));
+  require(First.DeviceLibraryProvider.has_value() &&
+              First.DeviceLibraryProvider->ImportSymbols ==
+                  std::vector<std::string>{"__ocml_exp_f32"},
+          "exact row-softmax output omitted closed OCML provider evidence");
+
+  std::vector<uint8_t> WrongDescriptor = First.LinkedOutput->Bytes;
+  mutateNamedSectionByte(WrongDescriptor, ".fe2o3.kd.v1");
+  requireInspectionFailure(WrongDescriptor, Exact,
+                           "reason=descriptor_section_identity");
+  std::vector<uint8_t> WrongWorkgroup = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWorkgroup, ".reqd_workgroup_size", 64, 32);
+  requireInspectionFailure(WrongWorkgroup, Exact,
+                           "kernel_contract_reqd_workgroup_size");
+  std::vector<uint8_t> WrongWave = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave, ".wavefront_size", 64, 32);
+  requireInspectionFailure(WrongWave, Exact, "kernel_contract_wavefront_size");
+  std::vector<uint8_t> WrongKernarg = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongKernarg, ".kernarg_segment_size", 0x20, 0x21);
+  requireInspectionFailure(WrongKernarg, Exact,
+                           "kernel_contract_kernarg_segment_size");
+  std::vector<uint8_t> WrongKernargAlign = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongKernargAlign, ".kernarg_segment_align", 8, 16);
+  requireInspectionFailure(WrongKernargAlign, Exact,
+                           "kernel_contract_kernarg_segment_align");
+  std::vector<uint8_t> WrongMaxWorkgroup = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongMaxWorkgroup, ".max_flat_workgroup_size", 64, 32);
+  requireInspectionFailure(
+      WrongMaxWorkgroup, Exact,
+      "required%20workgroup%20size%20exceeds%20its%20maximum");
+  std::vector<uint8_t> WrongGroup = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongGroup, ".group_segment_fixed_size", 0, 1);
+  requireInspectionFailure(WrongGroup, Exact,
+                           "kernel_contract_group_segment_fixed_size");
+  std::vector<uint8_t> WrongPrivate = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongPrivate, ".private_segment_fixed_size", 0, 1);
+  requireInspectionFailure(WrongPrivate, Exact,
+                           "kernel_contract_private_segment_fixed_size");
+  std::vector<uint8_t> WrongSgpr = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongSgpr, ".sgpr_spill_count", 44, 45);
+  requireInspectionFailure(WrongSgpr, Exact,
+                           "kernel_contract_sgpr_spill_count");
+  std::vector<uint8_t> WrongVgpr = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongVgpr, ".vgpr_spill_count", 28, 29);
+  requireInspectionFailure(WrongVgpr, Exact,
+                           "kernel_contract_vgpr_spill_count");
+  std::vector<uint8_t> WrongDynamicStack = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongDynamicStack, ".uses_dynamic_stack", 0xc2, 0xc3);
+  requireInspectionFailure(WrongDynamicStack, Exact,
+                           "kernel_contract_uses_dynamic_stack");
+
+  std::vector<uint8_t> Relocation = First.LinkedOutput->Bytes;
+  makeStaticSymbolTableRelocationSection(Relocation);
+  Error RelocationFailure =
+      validateExactRowSoftmaxV1ElfClosureForTesting(Relocation);
+  require(static_cast<bool>(RelocationFailure) &&
+              StringRef(toString(std::move(RelocationFailure)))
+                  .contains("residual_relocation_section"),
+          "exact row-softmax relocation was accepted or misdiagnosed");
+  std::vector<uint8_t> Dependency = First.LinkedOutput->Bytes;
+  makeDynamicDependency(Dependency);
+  Error DependencyFailure =
+      validateExactRowSoftmaxV1ElfClosureForTesting(Dependency);
+  require(static_cast<bool>(DependencyFailure) &&
+              StringRef(toString(std::move(DependencyFailure)))
+                  .contains("dynamic_dependency"),
+          "exact row-softmax dependency was accepted or misdiagnosed");
+
+  Request Legacy = makeOcmlKernelRequest("__ocml_exp_f32", 6, true);
+  Legacy.Target = "gfx942:xnack-";
+  Legacy.LinkOptions.Optimization = OptimizationLevel::O0;
+  Response LegacyResponse =
+      runSuccess(Legacy, {"__ocml_exp_f32", "fe2o3_gfx942_ocml_sin_f32_v1",
+                          "fe2o3_gfx942_ocml_sin_f32_v1.kd"});
+  require(!llvm::any_of(
+              LegacyResponse.Diagnostics,
+              [](const std::string &Diagnostic) {
+                return StringRef(Diagnostic).contains("row_softmax_v1_profile");
+              }),
+          "legacy G1 request was substituted into the row-softmax profile");
+}
+
 void testExactWorkgroupSyncProfiles() {
   using Profile = ExactWorkgroupSyncProfileForTesting;
   const std::array Profiles = {Profile::LdsReduction, Profile::ScopedAtomic};
@@ -2609,11 +2866,17 @@ int main(int ArgumentCount, char **Arguments) {
     testExactFlashAttentionLlvmBuildIdentity();
     return 0;
   }
+  if (ArgumentCount == 2 &&
+      StringRef(Arguments[1]) == "--exact-row-softmax-only") {
+    testExactRowSoftmaxV1Profile();
+    return 0;
+  }
   require(ArgumentCount == 1 || ArgumentCount == 2 || ArgumentCount == 4 ||
               ArgumentCount == 5,
           "usage: fe2o3-worker-pipeline-tests "
           "[OUTPUT.hsaco [INPUT.bc INPUT.o [OCML_OUTPUT.hsaco]]]");
 
+  testExactRowSoftmaxV1Profile();
   fe2o3::worker::detail::enforceReusableLldResult({0, true});
   fe2o3::worker::detail::enforceReusableLldResult({1, true});
   testLldExitPolicy(0);

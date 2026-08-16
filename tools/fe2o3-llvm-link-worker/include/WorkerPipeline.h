@@ -24,6 +24,14 @@ llvm::Error validateExactFlashAttentionV1LlvmBuildIdentityForTesting(
     llvm::StringRef Identity);
 
 llvm::Expected<std::vector<uint8_t>>
+makeExactRowSoftmaxV1CompilerInputForTesting(
+    llvm::StringRef CanonicalBody, llvm::ArrayRef<uint8_t> Descriptor,
+    llvm::ArrayRef<uint8_t> AuthorityTranscript);
+
+llvm::Error
+validateExactRowSoftmaxV1CompilerInputForTesting(llvm::ArrayRef<uint8_t> Bytes);
+
+llvm::Expected<std::vector<uint8_t>>
 makeExactWorkgroupSyncCompilerInputForTesting(
     llvm::StringRef CanonicalBody, llvm::ArrayRef<uint8_t> Descriptor,
     ExactWorkgroupSyncProfileForTesting Profile);
@@ -46,6 +54,9 @@ llvm::Error validateGenericMetadataForTesting(llvm::StringRef MetadataBlob);
 
 llvm::Error
 validateExactLdsGemmSlice1ElfClosureForTesting(llvm::ArrayRef<uint8_t> Bytes);
+
+llvm::Error
+validateExactRowSoftmaxV1ElfClosureForTesting(llvm::ArrayRef<uint8_t> Bytes);
 
 llvm::Error validateExactWave64CollectivesV1ElfClosureForTesting(
     llvm::ArrayRef<uint8_t> Bytes);

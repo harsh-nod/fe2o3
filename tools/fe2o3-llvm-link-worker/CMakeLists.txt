@@ -211,6 +211,8 @@ target_link_libraries(fe2o3-llvm-link-worker PRIVATE fe2o3_worker_pipeline
 
 include(CTest)
 if(BUILD_TESTING)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/row-softmax-v1-llvm22-body.ll")
   add_executable(fe2o3-worker-codec-tests tests/CodecTests.cpp)
   target_compile_definitions(fe2o3-worker-codec-tests PRIVATE
     FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"

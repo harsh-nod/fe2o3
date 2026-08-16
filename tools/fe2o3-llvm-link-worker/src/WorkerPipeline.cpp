@@ -140,6 +140,7 @@ struct TargetParts {
 
 enum class PostLinkProfile {
   LegacyGfx942G1,
+  ExactRowSoftmaxV1,
   ExactLdsGemmSlice1,
   ExactWave64CollectivesV1,
   ExactFlashAttentionV1,
@@ -150,6 +151,7 @@ enum class PostLinkProfile {
 
 enum class MetadataValidationPolicy {
   Generic,
+  ExactRowSoftmaxV1,
   ExactLdsGemmSlice1,
   ExactWave64CollectivesV1,
   ExactFlashAttentionV1,
@@ -160,6 +162,12 @@ enum class MetadataValidationPolicy {
 
 constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
 constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
+constexpr StringLiteral ExactRowSoftmaxV1Entry = "row_softmax_v1";
+constexpr StringLiteral ExactRowSoftmaxV1Descriptor = "row_softmax_v1.kd";
+constexpr StringLiteral ExactRowSoftmaxV1OcmlExp = "__ocml_exp_f32";
+constexpr StringLiteral ExactRowSoftmaxV1Check = "row_softmax_v1_profile";
+constexpr StringLiteral ExactRowSoftmaxV1PublishedLlvmBuildIdentity =
+    "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
 constexpr StringLiteral ExactWave64CollectivesV1Entry = "wave64_collectives_v1";
 constexpr StringLiteral ExactWave64CollectivesV1Descriptor =
     "wave64_collectives_v1.kd";
@@ -189,6 +197,25 @@ constexpr StringLiteral ExactLdsGemmSlice1ProducerDataLayout =
     "p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-"
     "v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-"
     "v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+constexpr StringLiteral ExactRowSoftmaxV1ProducerDataLayout =
+    "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-"
+    "p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-"
+    "i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-"
+    "v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+
+constexpr StringLiteral ExactRowDescriptorSection = ".fe2o3.kd.v1";
+constexpr StringLiteral ExactRowTranscriptSection =
+    ".fe2o3.row-softmax-authority-transcript.v1";
+constexpr StringLiteral ExactRowAuthoritySection = ".fe2o3.row-softmax-auth.v1";
+constexpr StringLiteral ExactRowExpBoundarySection = ".fe2o3.row-exp.v1";
+constexpr std::array<uint8_t, 32> ExactRowBodySha256 = {
+    0xd4, 0x8d, 0x33, 0x20, 0xc2, 0x86, 0xc6, 0xda, 0x22, 0x53, 0xa1,
+    0x04, 0x38, 0x60, 0x89, 0xe3, 0x89, 0x64, 0x8f, 0x42, 0x60, 0xf2,
+    0xe7, 0xef, 0xda, 0x21, 0x26, 0x9f, 0xef, 0x95, 0x1c, 0x2c};
+constexpr std::array<uint8_t, 32> ExactRowExpBoundaryIdentity = {
+    0xc0, 0x55, 0xb0, 0xa1, 0x34, 0x51, 0x90, 0x5b, 0xaa, 0x0d, 0xd4,
+    0x8e, 0x8f, 0x8b, 0xd3, 0x5c, 0x92, 0x8f, 0xe1, 0x79, 0xc6, 0xc3,
+    0xfa, 0xa1, 0xfb, 0x9d, 0xc2, 0x75, 0x6e, 0xd2, 0x75, 0x28};
 
 constexpr StringLiteral ExactWave64DescriptorSection = ".fe2o3.kd.v1";
 constexpr StringLiteral ExactWave64AuthoritySection = ".fe2o3.wave64-auth.v1";
@@ -389,6 +416,13 @@ bool isExactLdsGemmSlice1SymbolSet(ArrayRef<std::string> Symbols) {
                                ExactLdsGemmSlice1Descriptor.str()};
 }
 
+bool isExactRowSoftmaxV1SymbolSet(ArrayRef<std::string> Symbols) {
+  return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
+         std::set<std::string>{ExactRowSoftmaxV1Entry.str(),
+                               ExactRowSoftmaxV1Descriptor.str(),
+                               ExactRowSoftmaxV1OcmlExp.str()};
+}
+
 bool isExactWave64CollectivesV1SymbolSet(ArrayRef<std::string> Symbols) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{ExactWave64CollectivesV1Entry.str(),
@@ -438,6 +472,33 @@ bool isExactLdsGemmSlice1RequestCandidate(const Request &RequestValue) {
 bool isClosedExactLdsGemmSlice1Request(const Request &RequestValue) {
   return isExactLdsGemmSlice1RequestCandidate(RequestValue) &&
          RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
+         RequestValue.LinkOptions.StripDebug &&
+         RequestValue.LinkOptions.VerifyEach;
+}
+
+bool isExactRowSoftmaxV1RequestCandidate(const Request &RequestValue) {
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes == RequestValue.CompilerModule.Bytes;
+  return RequestValue.Protocol == ProtocolVersion::V2 &&
+         RequestValue.Target == "gfx942:xnack-" &&
+         RequestValue.CodeObjectVersion == 6 && CompilerInputMatches &&
+         RequestValue.ExternalProviders.empty() &&
+         RequestValue.ImportSymbols ==
+             std::vector<std::string>{ExactRowSoftmaxV1OcmlExp.str()} &&
+         RequestValue.ExportSymbols.empty() &&
+         isExactRowSoftmaxV1SymbolSet(RequestValue.RequiredSymbols) &&
+         isExactRowSoftmaxV1SymbolSet(RequestValue.ExpectedDefinedSymbols) &&
+         isExactRowSoftmaxV1SymbolSet(RequestValue.FinalSymbols);
+}
+
+bool isClosedExactRowSoftmaxV1Request(const Request &RequestValue) {
+  return isExactRowSoftmaxV1RequestCandidate(RequestValue) &&
+         RequestValue.LinkOptions.Optimization == OptimizationLevel::O0 &&
          RequestValue.LinkOptions.StripDebug &&
          RequestValue.LinkOptions.VerifyEach;
 }
@@ -590,6 +651,31 @@ bool mentionsExactFlashAttentionV1(const Request &RequestValue) {
          NamesFlash(RequestValue.FinalSymbols);
 }
 
+bool containsExactRowSoftmaxV1CompilerMarker(const Request &RequestValue) {
+  if (RequestValue.CompilerModule.Kind != InputKind::LlvmTextIr)
+    return false;
+  StringRef Text(
+      reinterpret_cast<const char *>(RequestValue.CompilerModule.Bytes.data()),
+      RequestValue.CompilerModule.Bytes.size());
+  return Text.contains("module asm \".section .fe2o3.row-softmax-") ||
+         Text.contains("module asm \".section .fe2o3.row-exp.");
+}
+
+bool mentionsExactRowSoftmaxV1(const Request &RequestValue) {
+  auto NamesRow = [](ArrayRef<std::string> Symbols) {
+    return llvm::any_of(Symbols, [](StringRef Symbol) {
+      return Symbol == ExactRowSoftmaxV1Entry ||
+             Symbol == ExactRowSoftmaxV1Descriptor;
+    });
+  };
+  return NamesRow(RequestValue.RequiredSymbols) ||
+         NamesRow(RequestValue.ExpectedDefinedSymbols) ||
+         NamesRow(RequestValue.ImportSymbols) ||
+         NamesRow(RequestValue.ExportSymbols) ||
+         NamesRow(RequestValue.FinalSymbols) ||
+         containsExactRowSoftmaxV1CompilerMarker(RequestValue);
+}
+
 bool mentionsExactWorkgroupSync(const Request &RequestValue) {
   auto Mentions = [&](ArrayRef<std::string> Symbols) {
     return llvm::any_of(Symbols, [](StringRef Symbol) {
@@ -623,6 +709,15 @@ bool mentionsExactMoeTop2V1(const Request &RequestValue) {
 Expected<PostLinkProfile>
 selectPostLinkProfile(const Request &RequestValue,
                       const std::set<std::string> &ExpectedSymbols) {
+  const std::set<std::string> ExactRowSymbols = {
+      ExactRowSoftmaxV1Entry.str(), ExactRowSoftmaxV1Descriptor.str(),
+      ExactRowSoftmaxV1OcmlExp.str()};
+  if (ExpectedSymbols == ExactRowSymbols) {
+    if (!isClosedExactRowSoftmaxV1Request(RequestValue))
+      return pipelineError("exact row-softmax V1 symbols require the closed "
+                           "Worker V2 profile");
+    return PostLinkProfile::ExactRowSoftmaxV1;
+  }
   const std::set<std::string> ExactLdsSymbols = {
       ExactLdsGemmSlice1Entry.str(), ExactLdsGemmSlice1Descriptor.str()};
   if (ExpectedSymbols == ExactLdsSymbols) {
@@ -807,6 +902,112 @@ Error validateExactWave64CompilerInput(StringRef Text) {
       return pipelineError(
           "exact Wave64 compiler/KIR profile identity does not match");
   return Error::success();
+}
+
+Expected<std::array<std::vector<uint8_t>, 4>>
+parseExactRowSoftmaxV1CompilerSections(StringRef Text) {
+  constexpr StringLiteral Marker = "\nmodule asm \".section ";
+  size_t BodyEnd = Text.find(Marker);
+  if (BodyEnd == StringRef::npos)
+    return pipelineError(
+        "exact row-softmax V1 compiler module is missing bound sections");
+  if (SHA256::hash(arrayRefFromStringRef(Text.take_front(BodyEnd))) !=
+      ExactRowBodySha256)
+    return pipelineError(
+        "exact row-softmax V1 compiler module body identity does not match");
+
+  static constexpr std::array Sections = {
+      ExactRowDescriptorSection, ExactRowTranscriptSection,
+      ExactRowAuthoritySection, ExactRowExpBoundarySection};
+  SmallVector<StringRef, 256> Lines;
+  Text.drop_front(BodyEnd + 1).split(Lines, '\n', -1, true);
+  std::array<std::vector<uint8_t>, Sections.size()> Result;
+  size_t LineIndex = 0;
+  for (size_t SectionIndex = 0; SectionIndex != Sections.size();
+       ++SectionIndex) {
+    if (SectionIndex != 0 && LineIndex != Lines.size() &&
+        Lines[LineIndex].empty())
+      ++LineIndex;
+    std::string ExpectedHeader =
+        (Twine("module asm \".section ") + Sections[SectionIndex] +
+         ",\\22\\22,@progbits\"")
+            .str();
+    if (LineIndex == Lines.size() || Lines[LineIndex] != ExpectedHeader)
+      return pipelineError(
+          Twine("exact row-softmax V1 compiler section order differs at ") +
+          Twine(SectionIndex));
+    ++LineIndex;
+    if (LineIndex == Lines.size() ||
+        Lines[LineIndex] != "module asm \".balign 8\"")
+      return pipelineError(
+          "exact row-softmax V1 compiler section alignment does not match");
+    ++LineIndex;
+
+    constexpr StringLiteral BytePrefix = "module asm \".byte ";
+    while (LineIndex != Lines.size() &&
+           Lines[LineIndex].starts_with(BytePrefix)) {
+      StringRef Line = Lines[LineIndex++];
+      if (!Line.ends_with("\""))
+        return pipelineError(
+            "exact row-softmax V1 compiler byte record is malformed");
+      SmallVector<StringRef, 16> Atoms;
+      Line.drop_front(BytePrefix.size())
+          .drop_back()
+          .split(Atoms, ',', -1, false);
+      if (Atoms.empty() || Atoms.size() > 16)
+        return pipelineError(
+            "exact row-softmax V1 compiler byte record is noncanonical");
+      for (StringRef Atom : Atoms) {
+        Atom = Atom.trim();
+        if (!Atom.consume_front("0x") || Atom.size() != 2)
+          return pipelineError(
+              "exact row-softmax V1 compiler byte atom is malformed");
+        uint8_t Byte = 0;
+        if (Atom.getAsInteger(16, Byte))
+          return pipelineError(
+              "exact row-softmax V1 compiler byte atom is malformed");
+        Result[SectionIndex].push_back(Byte);
+      }
+    }
+    if (Result[SectionIndex].empty())
+      return pipelineError("exact row-softmax V1 compiler section is empty");
+  }
+  if (LineIndex != Lines.size() &&
+      !(LineIndex + 1 == Lines.size() && Lines[LineIndex].empty()))
+    return pipelineError(
+        "exact row-softmax V1 compiler module has trailing assembly");
+  return Result;
+}
+
+Error validateExactRowSoftmaxV1CompilerInput(StringRef Text,
+                                             const DataLayout &Layout) {
+  if (Layout.getStringRepresentation() != ExactRowSoftmaxV1ProducerDataLayout)
+    return pipelineError(
+        "exact row-softmax V1 worker target-machine layout does not match");
+  auto Sections = parseExactRowSoftmaxV1CompilerSections(Text);
+  if (!Sections)
+    return Sections.takeError();
+  if ((*Sections)[0].size() > 64 * 1024 || (*Sections)[1].size() > 4096)
+    return pipelineError(
+        "exact row-softmax V1 descriptor or authority transcript is oversized");
+  std::array<uint8_t, 32> TranscriptIdentity = SHA256::hash((*Sections)[1]);
+  if ((*Sections)[2].size() != 32 ||
+      ArrayRef(TranscriptIdentity) != ArrayRef((*Sections)[2]))
+    return pipelineError(
+        "exact row-softmax V1 authenticated authority does not match");
+  if (ArrayRef((*Sections)[3]) != ArrayRef(ExactRowExpBoundaryIdentity))
+    return pipelineError(
+        "exact row-softmax V1 exponential boundary identity does not match");
+  return Error::success();
+}
+
+Error validateExactRowSoftmaxV1LlvmBuildIdentity(StringRef Identity) {
+  if (Identity == ExactRowSoftmaxV1PublishedLlvmBuildIdentity)
+    return Error::success();
+  return pipelineError(
+      Twine("exact row-softmax V1 requires LLVM build identity '") +
+      ExactRowSoftmaxV1PublishedLlvmBuildIdentity + "', worker measured '" +
+      Identity + "'");
 }
 
 Expected<std::array<std::vector<uint8_t>, 4>>
@@ -2001,6 +2202,11 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   StringRef Bytes(reinterpret_cast<const char *>(InputValue.Bytes.data()),
                   InputValue.Bytes.size());
   if (!MeasuredBuiltinProvider &&
+      isClosedExactRowSoftmaxV1Request(RequestValue))
+    if (Error E = validateExactRowSoftmaxV1CompilerInput(
+            Bytes, Machine.createDataLayout()))
+      return E;
+  if (!MeasuredBuiltinProvider &&
       isClosedExactWave64CollectivesV1Request(RequestValue))
     if (Error E = validateExactWave64CompilerInput(Bytes))
       return E;
@@ -2793,7 +2999,8 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
       return E;
     auto Language = Kernel.find(".language");
     auto LanguageVersion = Kernel.find(".language_version");
-    if (Check == "flash_attention_v1_profile") {
+    if (Check == "flash_attention_v1_profile" ||
+        Check == ExactRowSoftmaxV1Check) {
       if (Language == Kernel.end() || !Language->second.isString() ||
           Language->second.getString() != "OpenCL C" ||
           LanguageVersion == Kernel.end() ||
@@ -2832,6 +3039,8 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
 
 StringRef exactMetadataCheck(MetadataValidationPolicy Policy) {
   switch (Policy) {
+  case MetadataValidationPolicy::ExactRowSoftmaxV1:
+    return ExactRowSoftmaxV1Check;
   case MetadataValidationPolicy::ExactLdsGemmSlice1:
     return "lds_gemm_slice1_profile";
   case MetadataValidationPolicy::ExactWave64CollectivesV1:
@@ -3178,6 +3387,11 @@ Error validateExactElfClosure(const ELFObjectFile<ELF64LE> &ObjectValue,
 Error validateExactLdsGemmSlice1ElfClosure(
     const ELFObjectFile<ELF64LE> &ObjectValue) {
   return validateExactElfClosure(ObjectValue, "lds_gemm_slice1_profile");
+}
+
+Error validateExactRowSoftmaxV1ElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  return validateExactElfClosure(ObjectValue, ExactRowSoftmaxV1Check);
 }
 
 Error validateExactWave64CollectivesV1ElfClosure(
@@ -3658,6 +3872,45 @@ Error validateExactWave64DescriptorBinding(
   return Error::success();
 }
 
+Error validateExactRowSoftmaxV1DescriptorBinding(
+    const ELFObjectFile<ELF64LE> &ObjectValue, const Request &RequestValue) {
+  StringRef CompilerBytes(
+      reinterpret_cast<const char *>(RequestValue.CompilerModule.Bytes.data()),
+      RequestValue.CompilerModule.Bytes.size());
+  auto InputSections = parseExactRowSoftmaxV1CompilerSections(CompilerBytes);
+  if (!InputSections)
+    return postLinkError(ExactRowSoftmaxV1Check,
+                         errorToDiagnostic(InputSections.takeError()));
+  ArrayRef<uint8_t> ExpectedDescriptor = (*InputSections)[0];
+
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    if (*Name != ExactRowDescriptorSection)
+      continue;
+    ++Matches;
+    if (Section.sh_type != ELF::SHT_PROGBITS || Section.sh_addralign != 8)
+      return postLinkError(ExactRowSoftmaxV1Check,
+                           "descriptor_section_envelope");
+    auto Contents = File.getSectionContents(Section);
+    if (!Contents)
+      return Contents.takeError();
+    if (*Contents != ExpectedDescriptor)
+      return postLinkError(ExactRowSoftmaxV1Check,
+                           "descriptor_section_identity");
+  }
+  if (Matches != 1)
+    return postLinkError(ExactRowSoftmaxV1Check,
+                         "descriptor_section_cardinality");
+  return Error::success();
+}
+
 Error validateExactWorkgroupSyncDescriptorBinding(
     const ELFObjectFile<ELF64LE> &ObjectValue, const Request &RequestValue,
     const ExactWorkgroupSyncProfile &Profile) {
@@ -3768,6 +4021,44 @@ Error validateExactMoeTop2V1DescriptorBinding(
   }
   if (Matches != 1)
     return postLinkError(ExactMoeTop2V1Check, "descriptor_section_cardinality");
+  return Error::success();
+}
+
+Error validateExactRowSoftmaxV1Metadata(const MetadataContract &Metadata) {
+  static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  auto Mismatch = [](StringRef Field) {
+    return postLinkError(ExactRowSoftmaxV1Check,
+                         (Twine("kernel_contract_") + Field).str());
+  };
+  if (Metadata.Kernels.size() != 1)
+    return postLinkError(ExactRowSoftmaxV1Check, "kernel_cardinality");
+  const KernelLaunchContract &Kernel = Metadata.Kernels.front();
+  if (Kernel.Name != ExactRowSoftmaxV1Entry ||
+      Kernel.Symbol != ExactRowSoftmaxV1Descriptor)
+    return Mismatch("symbols");
+  if (!Kernel.RequiredWorkgroupSize ||
+      *Kernel.RequiredWorkgroupSize != Workgroup)
+    return Mismatch("reqd_workgroup_size");
+  if (Kernel.MaxFlatWorkgroupSize != 64)
+    return Mismatch("max_flat_workgroup_size");
+  if (Kernel.WavefrontSize != 64)
+    return Mismatch("wavefront_size");
+  if (Kernel.KernargSegmentSize != 288)
+    return Mismatch("kernarg_segment_size");
+  if (Kernel.KernargSegmentAlign != 8)
+    return Mismatch("kernarg_segment_align");
+  if (Kernel.GroupSegmentFixedSize != 0)
+    return Mismatch("group_segment_fixed_size");
+  if (Kernel.PrivateSegmentFixedSize != 0)
+    return Mismatch("private_segment_fixed_size");
+  if (!Kernel.SgprSpillCount || *Kernel.SgprSpillCount != 44)
+    return Mismatch("sgpr_spill_count");
+  if (!Kernel.VgprSpillCount || *Kernel.VgprSpillCount != 28)
+    return Mismatch("vgpr_spill_count");
+  if (Kernel.UsesDynamicStack && *Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack");
+  if (Kernel.UniformWorkgroupSize && *Kernel.UniformWorkgroupSize)
+    return Mismatch("uniform_work_group_size");
   return Error::success();
 }
 
@@ -4737,6 +5028,19 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   auto Profile = selectPostLinkProfile(RequestValue, ExpectedSymbols);
   if (!Profile)
     return postLinkError("profile", errorToDiagnostic(Profile.takeError()));
+  if (*Profile == PostLinkProfile::ExactRowSoftmaxV1) {
+    if (Error E = validateExactRowSoftmaxV1ElfClosure(*ConcreteElf))
+      return E;
+    if (Error E = validateExactRowSoftmaxV1DescriptorBinding(*ConcreteElf,
+                                                             RequestValue))
+      return E;
+    if (StaticPublicDefinitions != ExpectedSymbols)
+      return pipelineError(
+          Twine("post_link.check=") + ExactRowSoftmaxV1Check +
+          " status=failed reason=static_symbol_closure expected=" +
+          diagnosticList(ExpectedSymbols) +
+          " actual=" + diagnosticList(StaticPublicDefinitions));
+  }
   if (*Profile == PostLinkProfile::ExactLdsGemmSlice1 ||
       *Profile == PostLinkProfile::ExactWave64CollectivesV1) {
     const bool IsWave64 = *Profile == PostLinkProfile::ExactWave64CollectivesV1;
@@ -4810,7 +5114,9 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
           " actual=" + diagnosticList(StaticPublicDefinitions));
   }
   MetadataValidationPolicy MetadataPolicy = MetadataValidationPolicy::Generic;
-  if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
+  if (*Profile == PostLinkProfile::ExactRowSoftmaxV1)
+    MetadataPolicy = MetadataValidationPolicy::ExactRowSoftmaxV1;
+  else if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     MetadataPolicy = MetadataValidationPolicy::ExactLdsGemmSlice1;
   else if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
     MetadataPolicy = MetadataValidationPolicy::ExactWave64CollectivesV1;
@@ -4881,6 +5187,9 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   }
   if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     if (Error E = validateExactLdsGemmSlice1Metadata(*Metadata))
+      return E;
+  if (*Profile == PostLinkProfile::ExactRowSoftmaxV1)
+    if (Error E = validateExactRowSoftmaxV1Metadata(*Metadata))
       return E;
   if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
     if (Error E = validateExactWave64CollectivesV1Metadata(*Metadata))
@@ -5124,6 +5433,63 @@ Error validateExactFlashAttentionV1LlvmBuildIdentityForTesting(
   return validateExactFlashAttentionLlvmBuildIdentity(Identity);
 }
 
+Expected<std::vector<uint8_t>> makeExactRowSoftmaxV1CompilerInputForTesting(
+    StringRef CanonicalBody, ArrayRef<uint8_t> Descriptor,
+    ArrayRef<uint8_t> AuthorityTranscript) {
+  if (SHA256::hash(arrayRefFromStringRef(CanonicalBody)) != ExactRowBodySha256)
+    return pipelineError("test fixture row-softmax body identity mismatch");
+  if (Descriptor.empty() || Descriptor.size() > 64 * 1024)
+    return pipelineError("test fixture row-softmax descriptor is invalid");
+  if (AuthorityTranscript.empty() || AuthorityTranscript.size() > 4096)
+    return pipelineError(
+        "test fixture row-softmax authority transcript is invalid");
+
+  std::string Result = CanonicalBody.str();
+  auto AppendSection = [&](StringRef Name, ArrayRef<uint8_t> Bytes) {
+    std::string Header = (Twine("\nmodule asm \".section ") + Name +
+                          ",\\22\\22,@progbits\"\n"
+                          "module asm \".balign 8\"\n")
+                             .str();
+    Result.append(Header);
+    static constexpr char Hex[] = "0123456789abcdef";
+    for (size_t Offset = 0; Offset < Bytes.size(); Offset += 16) {
+      std::string Line = "module asm \".byte ";
+      size_t End = std::min(Bytes.size(), Offset + 16);
+      for (size_t Index = Offset; Index != End; ++Index) {
+        if (Index != Offset)
+          Line.append(", ");
+        Line.append("0x");
+        Line.push_back(Hex[Bytes[Index] >> 4]);
+        Line.push_back(Hex[Bytes[Index] & 0x0f]);
+      }
+      Line.append("\"\n");
+      Result.append(Line);
+    }
+  };
+  AppendSection(ExactRowDescriptorSection, Descriptor);
+  AppendSection(ExactRowTranscriptSection, AuthorityTranscript);
+  std::array<uint8_t, 32> Authority = SHA256::hash(AuthorityTranscript);
+  AppendSection(ExactRowAuthoritySection, Authority);
+  AppendSection(ExactRowExpBoundarySection, ExactRowExpBoundaryIdentity);
+
+  auto Layout = DataLayout::parse(ExactRowSoftmaxV1ProducerDataLayout);
+  if (!Layout)
+    return Layout.takeError();
+  if (Error E = validateExactRowSoftmaxV1CompilerInput(Result, *Layout))
+    return E;
+  return std::vector<uint8_t>(Result.begin(), Result.end());
+}
+
+Error validateExactRowSoftmaxV1CompilerInputForTesting(
+    ArrayRef<uint8_t> Bytes) {
+  auto Layout = DataLayout::parse(ExactRowSoftmaxV1ProducerDataLayout);
+  if (!Layout)
+    return Layout.takeError();
+  return validateExactRowSoftmaxV1CompilerInput(
+      StringRef(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()),
+      *Layout);
+}
+
 Expected<std::string> exactWorkgroupSyncDataLayoutForTesting() {
   Request RequestValue;
   RequestValue.Target = "gfx942:xnack-";
@@ -5169,7 +5535,7 @@ Expected<std::vector<uint8_t>> makeExactWorkgroupSyncCompilerInputForTesting(
                              .str();
     llvm::append_range(Result, arrayRefFromStringRef(Header));
     static constexpr char Hex[] = "0123456789abcdef";
-    for (size_t Offset = 0; Offset != Bytes.size(); Offset += 16) {
+    for (size_t Offset = 0; Offset < Bytes.size(); Offset += 16) {
       std::string Line = "module asm \".byte ";
       size_t End = std::min(Bytes.size(), Offset + 16);
       for (size_t Index = Offset; Index != End; ++Index) {
@@ -5354,6 +5720,18 @@ Error validateExactLdsGemmSlice1ElfClosureForTesting(ArrayRef<uint8_t> Bytes) {
   return validateExactLdsGemmSlice1ElfClosure(*Elf);
 }
 
+Error validateExactRowSoftmaxV1ElfClosureForTesting(ArrayRef<uint8_t> Bytes) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<test-output>"));
+  if (!ObjectOrError)
+    return ObjectOrError.takeError();
+  auto *Elf = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
+  if (!Elf)
+    return pipelineError("test output is not ELF64LE");
+  return validateExactRowSoftmaxV1ElfClosure(*Elf);
+}
+
 Error validateExactWave64CollectivesV1ElfClosureForTesting(
     ArrayRef<uint8_t> Bytes) {
   StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
@@ -5439,6 +5817,14 @@ Response executeImpl(const Request &RequestValue,
     return failure(RequestValue, Stage::InputValidation,
                    {"exact Wave64 collectives symbols require the closed "
                     "Worker V2 profile"});
+  if (mentionsExactRowSoftmaxV1(RequestValue) &&
+      !isClosedExactRowSoftmaxV1Request(RequestValue))
+    return failure(RequestValue, Stage::InputValidation,
+                   {"exact row-softmax V1 symbols or compiler markers require "
+                    "the closed Worker V2 profile"});
+  if (isClosedExactRowSoftmaxV1Request(RequestValue))
+    if (Error E = validateExactRowSoftmaxV1LlvmBuildIdentity(LlvmBuildIdentity))
+      return failure(RequestValue, Stage::Toolchain, std::move(E));
   if (mentionsExactFlashAttentionV1(RequestValue) &&
       !isClosedExactFlashAttentionV1Request(RequestValue))
     return failure(RequestValue, Stage::InputValidation,
