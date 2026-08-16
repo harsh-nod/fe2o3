@@ -68,6 +68,10 @@ Configuration requires explicit matching LLVM and LLD CMake package paths, an
 exact LLVM package version, and a build-ID file whose contents equal the
 expected build ID:
 
+The exact FlashAttention V1 machine pin has a separate
+[reproducibility record](FLASH_ATTENTION_REPRODUCIBILITY.md) covering the
+accepted ROCm LLVM identity and the rejected upstream LLVM drift.
+
 ```sh
 cmake -S tools/fe2o3-llvm-link-worker -B build/llvm-link-worker \
   -DLLVM_DIR=/pinned/llvm/lib/cmake/llvm \
