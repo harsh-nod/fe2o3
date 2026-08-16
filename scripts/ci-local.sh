@@ -47,6 +47,7 @@ Commands:
   check           Check every workspace target, including example binaries
   test            Run unit tests that do not link or load the HIP runtime
   workspace-test  Run every workspace test target; may require ROCm libraries
+  rustc-codegen-test  Run backend library and integration tests without dylib replacement
   backend         Build the rustc codegen backend dylib
   authority-launcher  Run bounded protected build-authority launcher tests
   rustc-trampoline    Run non-integrated static rustc trampoline tests
@@ -192,10 +193,29 @@ run_tests() {
 }
 
 run_rustc_codegen_tests() {
-  # This package emits both an rlib and an unversioned dylib. Keep its tests in
-  # one Cargo process so another workspace build cannot replace that dylib.
-  run_step rustc-codegen-tests \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --all-targets
+  local test_directory="${REPO_ROOT}/crates/${RUSTC_CODEGEN_TEST_PACKAGE}/tests"
+  local -a test_sources
+  local test_source test_target
+
+  mapfile -t test_sources < <(
+    printf '%s\n' "${test_directory}"/*.rs | LC_ALL=C sort
+  )
+  if ((${#test_sources[@]} == 0)) || [[ ! -f "${test_sources[0]}" ]]; then
+    printf 'no integration test targets found in %s\n' "${test_directory}" >&2
+    return 2
+  fi
+
+  # Cargo can emit a test rlib and an unversioned backend dylib with different
+  # Rust symbol hashes during one --all-targets build. Run each target only
+  # after Cargo has produced the exact dylib against which it was linked.
+  run_step rustc-codegen-lib-tests \
+    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
+  for test_source in "${test_sources[@]}"; do
+    test_target="$(basename -- "${test_source}" .rs)"
+    run_step "rustc-codegen-test-${test_target}" \
+      cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
+        --test "${test_target}"
+  done
 }
 
 run_workspace_tests() {
@@ -429,6 +449,7 @@ main() {
     check) run_check ;;
     test) run_tests ;;
     workspace-test) run_workspace_tests ;;
+    rustc-codegen-test) run_rustc_codegen_tests ;;
     backend) run_backend_build ;;
     authority-launcher) run_authority_launcher_tests ;;
     rustc-trampoline) run_rustc_trampoline_tests ;;

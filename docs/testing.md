@@ -58,17 +58,18 @@ This is equivalent to the following required process boundary:
 
 ```text
 cargo test --locked --workspace --all-targets --exclude rustc-codegen-fe2o3
-cargo test --locked -p rustc-codegen-fe2o3 --all-targets
+scripts/ci-local.sh rustc-codegen-test
 ```
 
-`rustc-codegen-fe2o3` has `crate-type = ["rlib", "dylib"]`. A single Cargo
-workspace test process can build more than one backend variant while integration
-tests link the unversioned `librustc_codegen_fe2o3.so`. A later variant can
-replace that file and leave an integration-test binary expecting Rust symbols
-from the earlier variant. The failure then appears as an undefined dynamic
-symbol even though the test passes by itself. Keeping the backend package in a
-separate Cargo process prevents the artifact collision without changing compiler
-or crate behavior.
+`rustc-codegen-fe2o3` has `crate-type = ["rlib", "dylib"]`. An `--all-targets`
+Cargo process can build more than one backend variant while integration tests
+link the unversioned `librustc_codegen_fe2o3.so`. A later variant can replace
+that file and leave an integration-test binary expecting Rust symbols from the
+earlier variant. The failure then appears as an undefined dynamic symbol even
+though the test passes by itself. The repository command runs the library test
+target and every integration target in deterministic separate Cargo
+invocations. Each test therefore executes against the exact dylib produced for
+its link, without changing compiler or crate behavior.
 
 The comprehensive lane may link ROCm libraries through workspace packages. It
 does not opt in to ignored GPU execution tests.
@@ -86,7 +87,7 @@ cargo test --locked -p fe2o3-artifacts
 cargo test --locked -p fe2o3-verifier
 cargo test --locked -p fe2o3-host
 cargo test --locked -p fe2o3-hsa-runtime
-cargo test --locked -p rustc-codegen-fe2o3 --all-targets
+scripts/ci-local.sh rustc-codegen-test
 ```
 
 These tests cover deterministic root/helper import, exact internal-helper call

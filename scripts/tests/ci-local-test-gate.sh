@@ -201,16 +201,26 @@ assert_equals() {
 
 run_tests
 cpu_command="$(step_command cpu-tests)"
-backend_command="$(step_command rustc-codegen-tests)"
 if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
   printf 'generic CPU tests mixed %s into the shared Cargo process\n' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}" >&2
   exit 1
 fi
 assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --all-targets" \
-  "${backend_command}" \
-  'generic backend test command changed'
+  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
+  "$(step_command rustc-codegen-lib-tests)" \
+  'generic backend library test command changed'
+assert_equals \
+  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
+  "$(step_command rustc-codegen-test-g2_layout)" \
+  'generic backend integration tests are not target-isolated'
+for backend_command in "${STEP_COMMANDS[@]}"; do
+  if [[ "${backend_command}" == *"-p ${RUSTC_CODEGEN_TEST_PACKAGE}"* ]] &&
+    [[ "${backend_command}" == *"--all-targets"* ]]; then
+    printf 'backend tests still use the ABI-unstable --all-targets build\n' >&2
+    exit 1
+  fi
+done
 
 STEP_NAMES=()
 STEP_COMMANDS=()
@@ -220,9 +230,13 @@ assert_equals \
   "$(step_command workspace-tests)" \
   'full workspace test command must exclude the backend'
 assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --all-targets" \
-  "$(step_command rustc-codegen-tests)" \
-  'full workspace backend test command changed'
+  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
+  "$(step_command rustc-codegen-lib-tests)" \
+  'full workspace backend library test command changed'
+assert_equals \
+  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
+  "$(step_command rustc-codegen-test-g2_layout)" \
+  'full workspace backend integration tests are not target-isolated'
 
 STEP_NAMES=()
 STEP_COMMANDS=()
