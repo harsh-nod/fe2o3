@@ -88,24 +88,27 @@ authentication. The diagnostic run executed the Worker zero times and reached
 no artifact admission, GPU loading or dispatch, or `/dev/kfd` or `/dev/dri`
 access; COMGR opens were zero.
 
-The candidate's dynamically linked host `rust-lld` left its loader and system
-DSOs, CRTs, archives and objects, search roots, and forwarded Cargo target
-artifacts outside the authenticated closure; `env_clear` does not close that
-boundary. The selected `W0/P0` design is a dedicated, genuinely static
-`fe2o3-host-lld` built from the pinned upstream LLVM/LLD archives. A
-descriptor-backed `HostLinkClosureV1` must seal every link input, eliminate
-unresolved `-L`/`-l` lookup, bind the complete argument vector and output
-policy, and revalidate the closure before and after linking. Retaining dynamic
-`rust-lld` is rejected; in-process host LLD remains a later simplification.
-Broker executable identity and artifact handoff are dependent milestones after
-that boundary is accepted.
-The direct GPU link path remains pinned upstream LLVM 22 with in-process
-`lld::lldMain`, without COMGR or a shell GPU linker. The rejected diagnostic is
-not signed or protected evidence, parity or GPU evidence, a memory-safety or
-race-freedom proof, or source-to-machine refinement. This fixed-profile
-production blocker remains tracked under
-[#120](https://github.com/harsh-nod/fe2o3/issues/120). The subsequent fixed
-FlashAttention and top-2 MoE vertical slices are tracked by
+W0/P0 is now accepted as a bounded host-link prerequisite. Its dedicated,
+genuinely static `fe2o3-host-lld` is built from pinned upstream LLVM/LLD
+archives. `HostLinkClosureV1` supplies descriptor-sealed inputs, launches the
+exact approved executable with `execveat`, and returns a receiver-owned sealed
+output. Landlock enforces the filesystem boundary, while seccomp denies network
+and descriptor-transfer operations. Two fresh MI300X builds produced the same
+85,597,472-byte tool with SHA-256
+`7c1a7429e93896393eb743ed54ead78ec6d492e3ed887183e67737b3872d7bf9`.
+The registered secure-protocol CTest and a real `HostLinkClosureV1` link slice
+also passed in separate executions.
+
+This build evidence is measured/no-authority. W0 provides no protected
+publication, broker or durable artifact handoff, runtime, load, launch, or GPU
+evidence. It proves neither memory safety nor race freedom and provides no
+source-to-machine or Verus-to-machine refinement. W1/P0 Broker V4 is the next
+production blocker. The parity counts remain `0/82/0/12` normative,
+`0/15/0` supplemental, and `0/97/0/12` combined. The direct GPU link path
+remains separate and pinned to upstream LLVM 22 with in-process `lld::lldMain`,
+without COMGR or a shell GPU linker. The fixed row-softmax production slice
+remains tracked under [#120](https://github.com/harsh-nod/fe2o3/issues/120).
+The subsequent fixed FlashAttention and top-2 MoE vertical slices are tracked by
 [#122](https://github.com/harsh-nod/fe2o3/issues/122) through
 [#125](https://github.com/harsh-nod/fe2o3/issues/125).
 

@@ -95,7 +95,8 @@ profile. Release acceptance requires two fresh replays with identical outputs.
 This closes a reproducible compiler/code-object checkpoint only. It is not
 origin authentication, source-to-machine or Verus refinement, a memory-safety
 or race-freedom proof, protected runtime authority, or a GPU result. The
-production host-link-closure blocker and parity status remain unchanged.
+separately accepted W0 boundary below does not upgrade this checkpoint or the
+parity status.
 
 ## Rejected W0-B static-wrapper diagnostic
 
@@ -123,6 +124,29 @@ not a substitute for authenticating and revalidating those inputs. The retained
 run is diagnostic only: it is not signed, protected, or archived evidence; it
 does not support parity, GPU, memory-safety, race-freedom, or source-to-machine
 refinement claims.
+
+## Accepted W0/P0 bounded host-link boundary
+
+W0/P0 provides a descriptor-sealed static host-link boundary using
+`fe2o3-host-lld` built from pinned upstream LLVM/LLD archives.
+`HostLinkClosureV1` resolves and seals the admitted link inputs, binds the link
+plan, launches the exact approved executable with `execveat`, and transfers the
+result through a receiver-owned sealed output. Landlock enforces the filesystem
+boundary, and seccomp denies network and descriptor-transfer operations.
+
+Two fresh guarded MI300X builds produced the same 85,597,472-byte static tool
+with SHA-256
+`7c1a7429e93896393eb743ed54ead78ec6d492e3ed887183e67737b3872d7bf9`.
+The registered `fe2o3-host-lld-secure-protocol-v2` CTest passed in a separate
+execution, and a separate real `HostLinkClosureV1` slice linked through that
+static tool successfully.
+
+The build records are measured/no-authority evidence. W0 grants no protected
+publication, broker or durable artifact handoff, runtime, load, launch, or GPU
+authority or evidence. It is not a memory-safety or race-freedom proof and does
+not establish source-to-machine or Verus-to-machine refinement. It closes a
+prerequisite without promoting any cuda-oxide parity row. W1/P0 Broker V4 is the
+next production blocker.
 
 ## Implemented Checkpoint: `90b6fe3`
 
@@ -318,28 +342,20 @@ These milestones are sequential authority gates. Work inside one milestone can
 be parallelized, but a later gate must not manufacture evidence that assumes an
 earlier authority transition.
 
-1. **W0/P0: complete authenticated host-link closure.** Build a dedicated,
-   genuinely static `fe2o3-host-lld` from the pinned upstream LLVM/LLD static
-   archives. Its ELF profile must prove that it has no runtime loader or shared-
-   library dependencies. Feed it only a sealed descriptor-backed
-   `HostLinkClosureV1` that resolves every CRT, archive, object, `rlib`, DSO,
-   supported linker script, response-file expansion, search root, and forwarded
-   Cargo artifact before execution; remove unresolved `-L` and `-l` lookup from
-   the final argument vector. Revalidate every input, root journal, argument,
-   output policy, and staged output before and after linking. Reject thin
-   archives, plugins, arbitrary scripts, ambient build-script libraries, and
-   every substitution window in the first profile. Retaining dynamic
-   `rust-lld` is rejected; in-process host LLD remains a later simplification
-   after this protocol is stable. A fresh MI300X run must cross the host link
-   without allowing mutable unauthenticated bytes to influence the output. Keep
-   the GPU code-object path separate: pinned upstream LLVM 22 and in-process
-   `lld::lldMain`, with no COMGR or shell GPU linker.
-2. **W1/P0: broker executable identity.** Only after W0 is independently
-   accepted, derive the `cargo-fe2o3` broker identity from the accepted command
-   and host-link closure. Bind it to the release request and reject replacement,
-   path aliasing, stale identity, wrong invocation, and validation/exec races.
-   Crossing this gate grants no artifact, runtime, load, launch, or GPU
-   authority.
+1. **Accepted W0/P0: bounded authenticated host-link closure.** The dedicated
+   static `fe2o3-host-lld`, descriptor-sealed `HostLinkClosureV1`, exact
+   `execveat` launch, receiver-owned sealed output, and Landlock/seccomp boundary
+   have passed the bounded evidence described above. Keep the GPU code-object
+   path separate: pinned upstream LLVM 22 and in-process `lld::lldMain`, with no
+   COMGR or shell GPU linker. W0 remains measured/no-authority and grants no
+   publication, runtime, load, launch, or GPU authority.
+2. **Next blocker W1/P0: Broker V4 executable identity and handoff.** Derive the
+   `cargo-fe2o3` broker identity from the accepted command and host-link closure,
+   bind the release request and completed host-link transcript, and consume the
+   admitted output through one-shot authority transitions. Reject replacement,
+   path aliasing, stale identity, replay, wrong invocation, and validation/exec
+   races. Protected durable publication remains a dependent gate. Crossing W1
+   alone grants no runtime, load, launch, or GPU authority.
 3. **Implemented foundation: durable publication-lease reacquisition
    (`5ec6f6f`).** A canonical inert published claim and an API revalidate its
    receipt, complete plan, exact files,

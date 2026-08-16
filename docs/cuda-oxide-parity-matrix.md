@@ -38,6 +38,15 @@ worker to publish one inspected HSACO containing both entries. The worker uses
 LLVM and LLD library APIs directly and does not use COMGR or command-line
 linking.
 
+Manual G1/W0 scope note: the accepted descriptor-sealed static host-link
+boundary is a prerequisite for later production authority, not evidence that
+completes a cuda-oxide feature row. It promotes no row and does not alter the
+authoritative TSV or generated dashboard. Counts remain `0/82/0/12` normative,
+`0/15/0` supplemental, and `0/97/0/12` combined. Its measured/no-authority
+build evidence grants no protected publication, broker or durable handoff,
+runtime, load, launch, or GPU evidence, memory-safety or race-freedom proof, or
+source-to-machine or Verus-to-machine refinement.
+
 The existing V1 artifact wire format now has a strict `gfx942` profile with two
 canonically ordered entries over one digest-validated native payload. Each
 entry has a separate proof binding over its kernel, ABI, effects, launch,
