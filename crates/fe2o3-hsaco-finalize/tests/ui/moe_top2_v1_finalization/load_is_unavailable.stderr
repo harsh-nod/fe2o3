@@ -1,0 +1,5 @@
+error[E0599]: no method named `load` found for struct `PreparedFinalizedMoeTop2V1HsacoV1` in the current scope
+ --> tests/ui/moe_top2_v1_finalization/load_is_unavailable.rs:4:13
+  |
+4 |     receipt.load();
+  |             ^^^^ method not found in `PreparedFinalizedMoeTop2V1HsacoV1`

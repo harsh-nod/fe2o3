@@ -1,0 +1,5 @@
+error[E0599]: no method named `bytes` found for reference `&PreparedFinalizedMoeTop2V1HsacoV1` in the current scope
+ --> tests/ui/moe_top2_v1_finalization/bytes_are_unavailable.rs:4:21
+  |
+4 |     let _ = receipt.bytes();
+  |                     ^^^^^ method not found in `&PreparedFinalizedMoeTop2V1HsacoV1`
