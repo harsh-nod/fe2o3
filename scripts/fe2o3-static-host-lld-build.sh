@@ -33,6 +33,8 @@ readonly PINNED_ROOTS_SHA256='39f369a8cfca14e9e6fd2a14a66c1d308e9c89e492de04fd7a
 readonly PINNED_ROOTS_LENGTH='1998'
 readonly PINNED_RUNTIME_SHA256='3f70263ff19198bf5a79fc9352157752e374923746cbfb05210907ee4b5517ef'
 readonly PINNED_RUNTIME_LENGTH='1806'
+readonly PINNED_CTEST_POLICY_SHA256='79ea8ec39c37b49ffeff2d1a6756084be9914147b74fe9c7d9a04982a3cd3c36'
+readonly PINNED_CTEST_POLICY_LENGTH='4457'
 
 readonly CMAKE='/usr/bin/cmake'
 readonly NINJA='/usr/bin/ninja'
@@ -579,6 +581,7 @@ readonly script_dir="$source_root/scripts"
 readonly build_script="$script_dir/fe2o3-static-host-lld-build.sh"
 readonly guard_source="$script_dir/fe2o3-static-host-lld-build-guard.cpp"
 readonly guard_test="$script_dir/fe2o3-static-host-lld-build-guard-test.sh"
+readonly ctest_policy="$script_dir/fe2o3-static-host-lld-ctest-policy.sh"
 readonly bootstrap_helper="$script_dir/fe2o3-static-host-lld-build-bootstrap.sh"
 readonly trace_check_source="$script_dir/fe2o3-static-host-lld-build-trace-check.cpp"
 readonly tmp_redirect_source="$script_dir/fe2o3-static-host-lld-tmp-redirect.cpp"
@@ -600,6 +603,8 @@ verify_file "$guard_source" "$PINNED_GUARD_SOURCE_SHA256" \
   "$PINNED_GUARD_SOURCE_LENGTH" 'build guard source' 644
 verify_file "$guard_test" "$PINNED_GUARD_TEST_SHA256" \
   "$PINNED_GUARD_TEST_LENGTH" 'build guard test' 755
+verify_file "$ctest_policy" "$PINNED_CTEST_POLICY_SHA256" \
+  "$PINNED_CTEST_POLICY_LENGTH" 'CTest policy helper' 755
 verify_file "$bootstrap_helper" "$PINNED_BOOTSTRAP_HELPER_SHA256" \
   "$PINNED_BOOTSTRAP_HELPER_LENGTH" 'bootstrap measurement helper' 644
 verify_file "$trace_check_source" "$PINNED_TRACE_CHECK_SOURCE_SHA256" \
@@ -665,6 +670,9 @@ fe2o3_bootstrap_retain_file guard-source "$guard_source" \
   die "$FE2O3_BOOTSTRAP_ERROR"
 fe2o3_bootstrap_retain_file guard-test "$guard_test" "$PINNED_GUARD_TEST_SHA256" \
   "$PINNED_GUARD_TEST_LENGTH" 755 || die "$FE2O3_BOOTSTRAP_ERROR"
+fe2o3_bootstrap_retain_file ctest-policy "$ctest_policy" \
+  "$PINNED_CTEST_POLICY_SHA256" "$PINNED_CTEST_POLICY_LENGTH" 755 ||
+  die "$FE2O3_BOOTSTRAP_ERROR"
 fe2o3_bootstrap_retain_file bootstrap-helper "$bootstrap_helper" \
   "$PINNED_BOOTSTRAP_HELPER_SHA256" "$PINNED_BOOTSTRAP_HELPER_LENGTH" 644 ||
   die "$FE2O3_BOOTSTRAP_ERROR"
@@ -698,6 +706,7 @@ declare -a absence_root_paths=()
 append_retained_guard_file build-script "$build_script"
 append_retained_guard_file guard-source "$guard_source"
 append_retained_guard_file guard-test "$guard_test"
+append_retained_guard_file ctest-policy "$ctest_policy"
 append_retained_guard_file bootstrap-helper "$bootstrap_helper"
 append_retained_guard_file trace-check-source "$trace_check_source"
 append_retained_guard_file tool-source-pin "$tool_source_pin"
@@ -778,6 +787,7 @@ readonly tmp_redirect_dynamic="$build_dir/fe2o3-tmp-redirect.dynamic.txt"
 readonly guard_readelf="$build_dir/fe2o3-build-guard.readelf.txt"
 readonly guard_dynamic="$build_dir/fe2o3-build-guard.dynamic.txt"
 readonly guard_status="$build_dir/fe2o3-build-guard.status.txt"
+readonly ctest_policy_status="$build_dir/fe2o3-host-lld.ctest-policy-status.txt"
 readonly trace_check_bootstrap_prefix="$build_dir/trace-check-bootstrap.raw"
 readonly guard_bootstrap_prefix="$build_dir/guard-bootstrap.raw"
 readonly tmp_redirect_bootstrap_prefix="$build_dir/tmp-redirect-bootstrap.raw"
@@ -1022,6 +1032,10 @@ configure_retain_command=(
   "$raw_trace_retention_ledger" configure "$RAW_TRACE_GLOBAL_FILE_BOUND"
   "$RAW_TRACE_GLOBAL_BYTE_BOUND"
 )
+ctest_policy_command=(
+  /usr/bin/bash "$ctest_policy" "$tool_source" "$build_dir"
+  "$ctest_policy_status"
+)
 object_command=(
   "$STRACE" "${trace_options[@]}" -o "$object_trace_prefix" --
   "${object_inner[@]}"
@@ -1056,6 +1070,7 @@ link_retain_command=(
 )
 readonly configure_inner object_inner link_inner
 readonly configure_command configure_check_command configure_retain_command
+readonly ctest_policy_command
 readonly object_command object_check_command object_retain_command
 readonly link_command link_check_command link_retain_command
 
@@ -1100,6 +1115,7 @@ env -i HOME=/nonexistent LC_ALL=C LANG=C TZ=UTC SOURCE_DATE_EPOCH=0 \
   --command "${#configure_command[@]}" "${configure_command[@]}" \
   --command "${#configure_check_command[@]}" "${configure_check_command[@]}" \
   --command "${#configure_retain_command[@]}" "${configure_retain_command[@]}" \
+  --command "${#ctest_policy_command[@]}" "${ctest_policy_command[@]}" \
   --command "${#object_command[@]}" "${object_command[@]}" \
   --command "${#object_check_command[@]}" "${object_check_command[@]}" \
   --command "${#object_retain_command[@]}" "${object_retain_command[@]}" \
@@ -1171,60 +1187,13 @@ directory_identity_matches "$build_dir" "$build_identity" ||
 directory_identity_matches "$artifact_dir" "$artifact_identity" ||
   die 'artifact directory identity changed during compilation'
 
-readonly cmake_cache="$build_dir/CMakeCache.txt"
-readonly ctest_test_file="$build_dir/CTestTestfile.cmake"
-readonly cmake_lists="$tool_source/CMakeLists.txt"
-[[ -f "$cmake_cache" && ! -L "$cmake_cache" ]] ||
-  die 'guarded configure omitted its CMake cache'
-[[ -f "$ctest_test_file" && ! -L "$ctest_test_file" ]] ||
-  die 'guarded configure omitted its CTest registration'
-build_testing_rows=$("$AWK" '/^BUILD_TESTING:/ { count += 1 }
-  END { print count + 0 }' "$cmake_cache")
-# shellcheck disable=SC2016
-build_testing_on_rows=$("$AWK" '$0 == "BUILD_TESTING:BOOL=ON" { count += 1 }
-  END { print count + 0 }' "$cmake_cache")
-readonly build_testing_rows build_testing_on_rows
-[[ "$build_testing_rows" == 1 && "$build_testing_on_rows" == 1 ]] ||
-  die 'guarded configure did not retain exactly one enabled test cache row'
-! /usr/bin/grep -Eq '^(MEMORYCHECK_COMMAND|COVERAGE_COMMAND)[^:]*:' \
-  "$cmake_cache" || die 'guarded configure retained an optional CTest cache key'
-ctest_add_test_rows=$("$AWK" '/^add_test\(/ { count += 1 }
-  END { print count + 0 }' "$ctest_test_file")
-ctest_property_rows=$("$AWK" '/^set_tests_properties\(/ { count += 1 }
-  END { print count + 0 }' "$ctest_test_file")
-# shellcheck disable=SC2016
-cmake_add_test_line=$("$AWK" \
-  '$0 == "  add_test(NAME fe2o3-host-lld-secure-protocol-v2" { print NR }' \
-  "$cmake_lists")
-readonly ctest_add_test_rows ctest_property_rows cmake_add_test_line
-[[ "$ctest_add_test_rows" == 1 && "$ctest_property_rows" == 1 &&
-  "$cmake_add_test_line" =~ ^[1-9][0-9]*$ ]] ||
-  die 'guarded configure emitted a noncanonical test registration count'
-printf -v expected_ctest_add_test \
-  'add_test([=[fe2o3-host-lld-secure-protocol-v2]=] "/usr/bin/bash" "%s/tests/ctest_secure_protocol.sh" "%s" "%s/fe2o3-host-lld" "%s")' \
-  "$tool_source" "$tool_source" "$build_dir" "$build_dir"
-printf -v expected_ctest_properties \
-  'set_tests_properties([=[fe2o3-host-lld-secure-protocol-v2]=] PROPERTIES  LABELS "host-link;security;protocol-v2" TIMEOUT "900" _BACKTRACE_TRIPLES "%s;%s;add_test;%s;0;")' \
-  "$cmake_lists" "$cmake_add_test_line" "$cmake_lists"
-readonly expected_ctest_add_test expected_ctest_properties
-# shellcheck disable=SC2016
-[[ $("$AWK" -v expected="$expected_ctest_add_test" \
-    '$0 == expected { count += 1 } END { print count + 0 }' \
-    "$ctest_test_file") == 1 ]] ||
-  die 'guarded configure changed the secure protocol test command'
-# shellcheck disable=SC2016
-[[ $("$AWK" -v expected="$expected_ctest_properties" \
-    '$0 == expected { count += 1 } END { print count + 0 }' \
-    "$ctest_test_file") == 1 ]] ||
-  die 'guarded configure changed the secure protocol test properties'
-configure_trace_files=("$configure_trace_prefix".*)
-readonly configure_trace_files
-[[ -f ${configure_trace_files[0]} ]] ||
-  die 'guarded configure omitted its raw traces'
-! /usr/bin/grep -Eq \
-  '"/proc/meminfo"|"/[^" ]*/(purify|valgrind|boundscheck|drmemory|cuda-memcheck|compute-sanitizer)"|"/[^" ]*/gcov"|"/[^" ]*/[^/" ]*gcov-[^/" ]*"' \
-  "${configure_trace_files[@]}" ||
-  die 'guarded configure performed optional CTest tool discovery'
+readonly expected_ctest_policy_status=$'FORMAT=fe2o3-static-host-lld-ctest-policy-v1\nSTATUS=passed\nBUILD_TESTING=enabled-exactly-once\nTEST_REGISTRATION=canonical-exactly-once\nOPTIONAL_CTEST_CACHE_KEYS=absent\nOPTIONAL_CTEST_DISCOVERY=absent\nPROTOCOL_CTEST_EXECUTION=not-executed-by-policy-check\nTERMINAL=fe2o3-static-host-lld-ctest-policy-v1-end'
+[[ -f "$ctest_policy_status" && ! -L "$ctest_policy_status" &&
+  $(/usr/bin/stat -Lc '%a' -- "$ctest_policy_status") == 600 &&
+  $(<"$ctest_policy_status") == "$expected_ctest_policy_status" ]] ||
+  die 'guarded configure did not retain a canonical CTest policy status'
+verify_file "$ctest_policy" "$PINNED_CTEST_POLICY_SHA256" \
+  "$PINNED_CTEST_POLICY_LENGTH" 'CTest policy helper after guarded build' 755
 
 readonly built_tool="$build_dir/fe2o3-host-lld"
 readonly artifact_tool="$artifact_dir/fe2o3-host-lld"
@@ -1331,6 +1300,8 @@ readonly retained_roots="$artifact_dir/fe2o3-host-lld.roots.pin"
 readonly retained_guard_readelf="$artifact_dir/fe2o3-host-lld.build-guard.readelf.txt"
 readonly retained_guard_dynamic="$artifact_dir/fe2o3-host-lld.build-guard.dynamic.txt"
 readonly retained_guard_test="$artifact_dir/fe2o3-host-lld.build-guard-test.txt"
+readonly retained_ctest_policy="$artifact_dir/fe2o3-host-lld.ctest-policy.sh"
+readonly retained_ctest_policy_status="$artifact_dir/fe2o3-host-lld.ctest-policy-status.txt"
 readonly retained_guard_elf="$artifact_dir/fe2o3-host-lld.build-guard"
 readonly retained_trace_elf="$artifact_dir/fe2o3-host-lld.trace-check"
 readonly retained_build_script="$artifact_dir/fe2o3-host-lld.build-script.sh"
@@ -1360,6 +1331,9 @@ verify_file "$retained_guard_status" "$guard_status_sha256" \
 /usr/bin/install --mode=0444 -- "$guard_readelf" "$retained_guard_readelf"
 /usr/bin/install --mode=0444 -- "$guard_dynamic" "$retained_guard_dynamic"
 /usr/bin/install --mode=0444 -- "$guard_test_stdout" "$retained_guard_test"
+/usr/bin/install --mode=0444 -- "$ctest_policy" "$retained_ctest_policy"
+/usr/bin/install --mode=0444 -- "$ctest_policy_status" \
+  "$retained_ctest_policy_status"
 /usr/bin/install --mode=0555 -- "$guard_executable" "$retained_guard_elf"
 /usr/bin/install --mode=0555 -- "$trace_check_executable" "$retained_trace_elf"
 /usr/bin/install --mode=0444 -- "$build_script" "$retained_build_script"
@@ -1657,6 +1631,8 @@ readonly build_evidence_manifest="$artifact_dir/fe2o3-host-lld.build-evidence-ma
   printf 'TOOL_SOURCE_PINNED_ROOT_LENGTH=%s\n' "$TOOL_SOURCE_ROOT_LENGTH"
   emit_evidence_file BUILD_SCRIPT "$retained_build_script"
   emit_evidence_file BOOTSTRAP_HELPER "$retained_bootstrap_helper"
+  emit_evidence_file CTEST_POLICY_HELPER "$retained_ctest_policy"
+  emit_evidence_file CTEST_POLICY_STATUS "$retained_ctest_policy_status"
   emit_evidence_file BOOTSTRAP_MANIFEST "$retained_bootstrap_manifest"
   emit_evidence_file TOOL_SOURCE_PIN "$retained_tool_source_pin"
   printf 'ROOT_PIN_SHA256=%s\n' "$(sha256_file "$retained_roots")"
@@ -1684,6 +1660,7 @@ readonly build_evidence_manifest="$artifact_dir/fe2o3-host-lld.build-evidence-ma
   printf 'GUARD_OVERFLOW=absent\n'
   printf 'GUARD_SELF_TEST_SHA256=%s\n' "$(sha256_file "$retained_guard_test")"
   printf 'GUARD_SELF_TEST=passed\n'
+  printf 'CTEST_POLICY=passed-inside-guarded-build-closure\n'
   printf 'LANDLOCK_FILESYSTEM_ENFORCEMENT=passed\n'
   printf 'LANDLOCK_ABI=4\n'
   printf 'LANDLOCK_HANDLED_FS_RIGHTS=0x7fff\n'
@@ -1798,6 +1775,7 @@ readonly build_evidence_manifest="$artifact_dir/fe2o3-host-lld.build-evidence-ma
   "$dynamic_output" "$runtime_manifest" "$source_manifest" "$identity_stderr" \
   "$retained_guard_status" "$retained_build_inputs" "$retained_roots" \
   "$retained_guard_readelf" "$retained_guard_dynamic" "$retained_guard_test" \
+  "$retained_ctest_policy" "$retained_ctest_policy_status" \
   "$build_evidence_manifest"
 
 directory_identity_matches "$artifact_dir" "$artifact_identity" ||
@@ -1808,6 +1786,8 @@ declare -A expected_artifacts=(
   [fe2o3-host-lld.build-evidence-manifest.txt]=444
   [fe2o3-host-lld.build-guard-status.txt]=444
   [fe2o3-host-lld.build-guard-test.txt]=444
+  [fe2o3-host-lld.ctest-policy.sh]=444
+  [fe2o3-host-lld.ctest-policy-status.txt]=444
   [fe2o3-host-lld.build-guard]=555
   [fe2o3-host-lld.build-guard-source.cpp]=444
   [fe2o3-host-lld.build-guard.dynamic.txt]=444
