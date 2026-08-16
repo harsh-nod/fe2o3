@@ -3,6 +3,7 @@
 mod api;
 mod dispatch;
 mod environment;
+mod flash_attention_resource_observation;
 mod lds_gemm_resource_observation;
 mod lifecycle;
 mod row_softmax_resource_observation;
