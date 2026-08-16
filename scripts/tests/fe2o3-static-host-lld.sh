@@ -207,6 +207,8 @@ for artifact in fe2o3-host-lld fe2o3-host-lld.identity.txt \
     fe2o3-host-lld.dynamic.txt fe2o3-host-lld.build-inputs.pin \
     fe2o3-host-lld.roots.pin fe2o3-host-lld.tool-source.pin \
     fe2o3-host-lld.build-bootstrap.sh \
+    fe2o3-host-lld.ctest-policy.sh \
+    fe2o3-host-lld.ctest-policy-status.txt \
     fe2o3-host-lld.build-guard-source.cpp \
     fe2o3-host-lld.trace-check-source.cpp \
     fe2o3-host-lld.tmp-redirect-source.cpp; do
