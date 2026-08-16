@@ -539,8 +539,12 @@ impl UnloadedFlashAttentionV1 {
         self.unload_identity
     }
 
-    pub const fn proves_causal_execution(&self) -> bool {
+    pub const fn dispatched_exact_structural_profile(&self) -> bool {
         true
+    }
+
+    pub const fn proves_causal_execution(&self) -> bool {
+        false
     }
 
     pub const fn proves_compiler_refinement(&self) -> bool {
