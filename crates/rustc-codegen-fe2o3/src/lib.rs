@@ -39,7 +39,6 @@ mod kernel_ir_lowering;
 mod mir_import;
 #[allow(dead_code)]
 mod mir_import_v2;
-mod moe_top2_source_kir_correspondence;
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod record_lowering;

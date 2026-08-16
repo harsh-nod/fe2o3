@@ -1,10 +1,13 @@
 //! Private producer for an exact MoE source/FnAbi/MIR/KIR structural record.
 //!
-//! The record is produced only inside the already authenticated rustc path. It
-//! mechanically serializes the observed `FnAbi`, a whole-module portable-MIR
-//! summary, and every field of the already validated MoE KIR and profile. It
-//! is diagnostic structural evidence, not a MIR-to-KIR simulation or a
-//! semantic refinement proof, and it grants no downstream authority.
+//! This child module is reachable only from the MoE rustc admission module.
+//! Its producer accepts an opaque witness sealed after that path computes its
+//! final authority. It serializes an opaque exact `FnAbi` identity plus a
+//! bounded structural projection, a whole-module portable-MIR summary, and
+//! aggregate canonical entries that collectively encode every current field
+//! of the already validated MoE KIR and profile. It is diagnostic structural
+//! evidence, not a MIR-to-KIR simulation or semantic refinement proof, and it
+//! grants no downstream authority.
 
 use std::error::Error;
 use std::fmt;
@@ -17,6 +20,7 @@ use fe2o3_kernel_ir::{
 };
 use sha2::{Digest as _, Sha256};
 
+use super::{MoeTop2AuthorityV1, ObservedMoeTop2FnAbiV1, RustcLoadedMoeTop2SourceV2};
 use crate::mir_import::{
     MirBinaryOp, MirFunctionKind, MirModule, MirOperandRef, MirPlaceRef, MirProjectionElem,
     MirRvalueKind, MirStatementKind, MirTerminatorKind,
@@ -46,27 +50,48 @@ const FN_ABI_IDENTITY: [u8; 32] = [
 // Filled from the exact live rustc admission. The text is deliberately
 // readable: reviewers can see every checked structural input without
 // reverse-engineering the final record digest.
-pub(crate) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = "schema=moe-top2-private-structural-v2;source=b77016caa0c3708e420e583712e65e4e6428db7b4feafd8d0a1d4bdc475ef6ff;fnabi=f796180c590cd84125921f2aaeb85ab13ef1b5c0502c1b1316bf9a2114fd30f6:rust=1:variadic=0:fixed=8:unwind=1:ignored=1:result=0:args=[16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0];mir=934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13:functions=6:roots=1:helpers=5:blocks=120:statements=222:terminators=120:edges=142:imports=0:root-args=8:root-locals=171:assignments=220:calls=27:indexed=36:repeats=8:binops=0x0000ec05;kir=bdf19330357f898eb0267372e4115b33e4b60902c94b5b3b6e358f5703ee7eb0;profile=deedd95c97b7bc3f146798f468c5eee6934a870d319fe441c6f0ec01f6a6afd8;abi=f0abdc459360d1760e22c62f77830472ae9a3e151b5ec7323d56c5298dc87365;effects=4f7a7d0996535ee75ff22216c776666526caa93106a49c2e8cfb4956cb0f7716;routing=dc93201e71d4ba820f52bb44833f4592383b2023f67089a4cc1b73aae14f051b";
+pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
+    "schema=moe-top2-private-structural-v2;",
+    "source=b77016caa0c3708e420e583712e65e4e6428db7b4feafd8d0a1d4bdc475ef6ff;",
+    "fnabi=f796180c590cd84125921f2aaeb85ab13ef1b5c0502c1b1316bf9a2114fd30f6:",
+    "rust=1:variadic=0:fixed=8:unwind=1:ignored=1:result=0:",
+    "args=[16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,",
+    "16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0];",
+    "mir=934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13:",
+    "functions=6:roots=1:helpers=5:blocks=120:statements=222:terminators=120:",
+    "edges=142:imports=0:root-args=8:root-locals=171:assignments=220:calls=27:",
+    "indexed=36:repeats=8:binops=0x0000ec05;",
+    "kir=bdf19330357f898eb0267372e4115b33e4b60902c94b5b3b6e358f5703ee7eb0;",
+    "profile=deedd95c97b7bc3f146798f468c5eee6934a870d319fe441c6f0ec01f6a6afd8;",
+    "abi=f0abdc459360d1760e22c62f77830472ae9a3e151b5ec7323d56c5298dc87365;",
+    "effects=4f7a7d0996535ee75ff22216c776666526caa93106a49c2e8cfb4956cb0f7716;",
+    "routing=dc93201e71d4ba820f52bb44833f4592383b2023f67089a4cc1b73aae14f051b;",
+    "compiler=4950c225e0cdbdce4e1230166984949970290dedc19e8dc4cd31f865f1625a4a;",
+    "trusted=3dbbe3ec9d58a7c285a14159294051498378f291525d8445113b17aab9b0e08b;",
+    "root=kernel::__fe2o3_host_kernel_v1_",
+    "0d0504325353eb74b0c9ace47560290e2278a7cd7c20e3b1c6c70f4a7e37b1ab;",
+    "authority=0ecec41db62eae781429526170aa60a73437f4cd8261b7e4d34ffe62309ad6e9",
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MoeSourceKirFnAbiArgumentV1 {
-    pub(crate) size: u16,
-    pub(crate) alignment: u16,
-    pub(crate) pair_mode: bool,
-    pub(crate) first_pointee_bytes: u32,
-    pub(crate) second_pointee_bytes: u32,
+pub(super) struct MoeFnAbiArgumentStructuralProjectionV2 {
+    pub(super) size: u16,
+    pub(super) alignment: u16,
+    pub(super) pair_mode: bool,
+    pub(super) first_pointee_bytes: u32,
+    pub(super) second_pointee_bytes: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MoeSourceKirFnAbiV1 {
-    pub(crate) identity: [u8; 32],
-    pub(crate) rust_calling_convention: bool,
-    pub(crate) c_variadic: bool,
-    pub(crate) fixed_count: u8,
-    pub(crate) can_unwind: bool,
-    pub(crate) result_ignored: bool,
-    pub(crate) result_size: u16,
-    pub(crate) arguments: [MoeSourceKirFnAbiArgumentV1; 8],
+pub(super) struct MoeFnAbiStructuralProjectionV2 {
+    pub(super) identity: [u8; 32],
+    pub(super) rust_calling_convention: bool,
+    pub(super) c_variadic: bool,
+    pub(super) fixed_count: u8,
+    pub(super) can_unwind: bool,
+    pub(super) result_ignored: bool,
+    pub(super) result_size: u16,
+    pub(super) arguments: [MoeFnAbiArgumentStructuralProjectionV2; 8],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +126,14 @@ struct CanonicalFieldV2 {
     value: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SameSessionBindingV2 {
+    compiler_semantics_identity: [u8; 32],
+    trusted_definitions_identity: [u8; 32],
+    root_instance_identity: String,
+    source_authority_identity: [u8; 32],
+}
+
 const MEMBER_KERNEL_IR: u8 = 1 << 0;
 const MEMBER_PROFILE: u8 = 1 << 1;
 const MEMBER_ABI: u8 = 1 << 2;
@@ -108,98 +141,130 @@ const MEMBER_EFFECTS: u8 = 1 << 3;
 const MEMBER_ROUTING: u8 = 1 << 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct StructuralInputsV2 {
+struct StructuralClassifierCandidateV2 {
     source: Vec<u8>,
     source_identity: [u8; 32],
-    fn_abi: MoeSourceKirFnAbiV1,
+    fn_abi: MoeFnAbiStructuralProjectionV2,
     portable_mir: PortableMirSummaryV2,
     canonical: CanonicalKernelProfileV2,
+    same_session: SameSessionBindingV2,
+}
+
+pub(super) struct SealedLiveMoeStructuralInputsV2<'a> {
+    source: &'a RustcLoadedMoeTop2SourceV2,
+    fn_abi: &'a ObservedMoeTop2FnAbiV1,
+    portable_mir: &'a MirModule,
+    portable_mir_identity: [u8; 32],
+    ir: &'a MoeTop2KernelIrV1,
+    profile: &'a MoeTop2ProfileV1,
+    authority: &'a MoeTop2AuthorityV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CheckedMoeSourceKirStructuralRecordV2 {
+pub(super) struct CheckedMoeSourceKirStructuralRecordV2 {
     identity: [u8; 32],
     source_identity: [u8; 32],
     fn_abi_identity: [u8; 32],
     portable_mir_identity: [u8; 32],
     kernel_ir_identity: [u8; 32],
     profile_identity: [u8; 32],
+    compiler_semantics_identity: [u8; 32],
+    trusted_definitions_identity: [u8; 32],
+    root_instance_identity: String,
+    source_authority_identity: [u8; 32],
     snapshot: String,
 }
 
 impl CheckedMoeSourceKirStructuralRecordV2 {
-    pub(crate) const fn identity(&self) -> [u8; 32] {
+    pub(super) const fn identity(&self) -> [u8; 32] {
         self.identity
     }
 
-    pub(crate) const fn source_identity(&self) -> [u8; 32] {
+    pub(super) const fn source_identity(&self) -> [u8; 32] {
         self.source_identity
     }
 
-    pub(crate) const fn fn_abi_identity(&self) -> [u8; 32] {
+    pub(super) const fn fn_abi_identity(&self) -> [u8; 32] {
         self.fn_abi_identity
     }
 
-    pub(crate) const fn portable_mir_identity(&self) -> [u8; 32] {
+    pub(super) const fn portable_mir_identity(&self) -> [u8; 32] {
         self.portable_mir_identity
     }
 
-    pub(crate) const fn kernel_ir_identity(&self) -> [u8; 32] {
+    pub(super) const fn kernel_ir_identity(&self) -> [u8; 32] {
         self.kernel_ir_identity
     }
 
-    pub(crate) const fn profile_identity(&self) -> [u8; 32] {
+    pub(super) const fn profile_identity(&self) -> [u8; 32] {
         self.profile_identity
     }
 
-    pub(crate) fn snapshot(&self) -> &str {
+    pub(super) const fn compiler_semantics_identity(&self) -> [u8; 32] {
+        self.compiler_semantics_identity
+    }
+
+    pub(super) const fn trusted_definitions_identity(&self) -> [u8; 32] {
+        self.trusted_definitions_identity
+    }
+
+    pub(super) fn root_instance_identity(&self) -> &str {
+        &self.root_instance_identity
+    }
+
+    pub(super) const fn source_authority_identity(&self) -> [u8; 32] {
+        self.source_authority_identity
+    }
+
+    pub(super) fn snapshot(&self) -> &str {
         &self.snapshot
     }
 
-    pub(crate) const fn proves_source_to_kir_semantic_refinement(&self) -> bool {
+    pub(super) const fn proves_source_to_kir_semantic_refinement(&self) -> bool {
         false
     }
 
-    pub(crate) const fn proves_llvm_or_isa_refinement(&self) -> bool {
+    pub(super) const fn proves_llvm_or_isa_refinement(&self) -> bool {
         false
     }
 
-    pub(crate) const fn proves_logical_to_machine_address_refinement(&self) -> bool {
+    pub(super) const fn proves_logical_to_machine_address_refinement(&self) -> bool {
         false
     }
 
-    pub(crate) const fn proves_ieee_fp32_or_ocml_semantics(&self) -> bool {
+    pub(super) const fn proves_ieee_fp32_or_ocml_semantics(&self) -> bool {
         false
     }
 
-    pub(crate) const fn proves_generalized_memory_safety_or_race_freedom(&self) -> bool {
+    pub(super) const fn proves_generalized_memory_safety_or_race_freedom(&self) -> bool {
         false
     }
 
-    pub(crate) const fn proves_gpu_execution(&self) -> bool {
+    pub(super) const fn proves_gpu_execution(&self) -> bool {
         false
     }
 
-    pub(crate) const fn grants_artifact_authority(&self) -> bool {
+    pub(super) const fn grants_artifact_authority(&self) -> bool {
         false
     }
 
-    pub(crate) const fn grants_load_authority(&self) -> bool {
+    pub(super) const fn grants_load_authority(&self) -> bool {
         false
     }
 
-    pub(crate) const fn grants_launch_authority(&self) -> bool {
+    pub(super) const fn grants_launch_authority(&self) -> bool {
         false
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum MoeSourceKirProducerErrorV2 {
+pub(super) enum MoeSourceKirProducerErrorV2 {
     MissingKernelRoot,
     CountOverflow(&'static str),
     Source,
     FnAbi,
     PortableMir,
+    SameSession,
     SnapshotMismatch { actual: String },
 }
 
@@ -220,6 +285,9 @@ impl fmt::Display for MoeSourceKirProducerErrorV2 {
             Self::PortableMir => {
                 formatter.write_str("authenticated portable-MIR observation drifted")
             }
+            Self::SameSession => {
+                formatter.write_str("structural inputs do not share the admitted rustc authority")
+            }
             Self::SnapshotMismatch { actual } => write!(
                 formatter,
                 "live structural snapshot differs from its reviewed pin; observed {actual}"
@@ -230,26 +298,54 @@ impl fmt::Display for MoeSourceKirProducerErrorV2 {
 
 impl Error for MoeSourceKirProducerErrorV2 {}
 
-pub(crate) fn produce_checked_moe_source_kir_structural_record_v2(
-    source: &[u8],
-    source_identity: [u8; 32],
-    fn_abi: MoeSourceKirFnAbiV1,
-    portable_mir: &MirModule,
+pub(super) fn seal_authenticated_live_inputs_v2<'a>(
+    source: &'a RustcLoadedMoeTop2SourceV2,
+    fn_abi: &'a ObservedMoeTop2FnAbiV1,
+    portable_mir: &'a MirModule,
     portable_mir_identity: [u8; 32],
-    ir: &MoeTop2KernelIrV1,
-    profile: &MoeTop2ProfileV1,
-) -> Result<CheckedMoeSourceKirStructuralRecordV2, MoeSourceKirProducerErrorV2> {
-    let inputs = StructuralInputsV2 {
-        source: source.to_vec(),
-        source_identity,
+    ir: &'a MoeTop2KernelIrV1,
+    profile: &'a MoeTop2ProfileV1,
+    authority: &'a MoeTop2AuthorityV1,
+) -> Result<SealedLiveMoeStructuralInputsV2<'a>, MoeSourceKirProducerErrorV2> {
+    if source.identity != authority.source_identity
+        || fn_abi.identity != fn_abi.structural_projection.identity
+        || fn_abi.identity != authority.fn_abi_identity
+        || portable_mir_identity != authority.portable_mir_identity
+        || authority.authority_identity == [0; 32]
+    {
+        return Err(MoeSourceKirProducerErrorV2::SameSession);
+    }
+    Ok(SealedLiveMoeStructuralInputsV2 {
+        source,
         fn_abi,
-        portable_mir: summarize_portable_mir(portable_mir, portable_mir_identity)?,
-        canonical: canonical_kernel_profile(ir, profile),
+        portable_mir,
+        portable_mir_identity,
+        ir,
+        profile,
+        authority,
+    })
+}
+
+pub(super) fn produce_checked_moe_source_kir_structural_record_v2(
+    sealed: SealedLiveMoeStructuralInputsV2<'_>,
+) -> Result<CheckedMoeSourceKirStructuralRecordV2, MoeSourceKirProducerErrorV2> {
+    let inputs = StructuralClassifierCandidateV2 {
+        source: sealed.source.contents.as_bytes().to_vec(),
+        source_identity: sealed.source.identity,
+        fn_abi: sealed.fn_abi.structural_projection,
+        portable_mir: summarize_portable_mir(sealed.portable_mir, sealed.portable_mir_identity)?,
+        canonical: canonical_kernel_profile(sealed.ir, sealed.profile),
+        same_session: SameSessionBindingV2 {
+            compiler_semantics_identity: sealed.authority.compiler_semantics_identity,
+            trusted_definitions_identity: sealed.authority.trusted_definitions_identity,
+            root_instance_identity: sealed.authority.root_instance_identity.clone(),
+            source_authority_identity: sealed.authority.authority_identity,
+        },
     };
     check_structural_inputs(inputs)
 }
 
-pub(crate) fn canonical_kernel_profile_identities_v2(
+pub(super) fn canonical_kernel_profile_identities_v2(
     ir: &MoeTop2KernelIrV1,
     profile: &MoeTop2ProfileV1,
 ) -> ([u8; 32], [u8; 32]) {
@@ -261,7 +357,7 @@ pub(crate) fn canonical_kernel_profile_identities_v2(
 }
 
 fn check_structural_inputs(
-    inputs: StructuralInputsV2,
+    inputs: StructuralClassifierCandidateV2,
 ) -> Result<CheckedMoeSourceKirStructuralRecordV2, MoeSourceKirProducerErrorV2> {
     let actual_source_identity: [u8; 32] = Sha256::digest(&inputs.source).into();
     if inputs.source.is_empty()
@@ -277,6 +373,13 @@ fn check_structural_inputs(
     if !portable_mir_is_bounded(&inputs.portable_mir) {
         return Err(MoeSourceKirProducerErrorV2::PortableMir);
     }
+    if inputs.same_session.compiler_semantics_identity == [0; 32]
+        || inputs.same_session.trusted_definitions_identity == [0; 32]
+        || inputs.same_session.root_instance_identity.is_empty()
+        || inputs.same_session.source_authority_identity == [0; 32]
+    {
+        return Err(MoeSourceKirProducerErrorV2::SameSession);
+    }
 
     let snapshot = snapshot_text(&inputs);
     if snapshot != MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2 {
@@ -285,12 +388,14 @@ fn check_structural_inputs(
 
     let fn_abi_bytes = canonical_fn_abi(&inputs.fn_abi);
     let mir_bytes = canonical_portable_mir(&inputs.portable_mir);
+    let same_session_bytes = canonical_same_session(&inputs.same_session);
     let mut record = CanonicalWriter::new(RECORD_DOMAIN_V2);
     record.field(&inputs.source);
     record.field(&inputs.source_identity);
     record.field(&fn_abi_bytes);
     record.field(&mir_bytes);
     record.field(&inputs.canonical.canonical_table());
+    record.field(&same_session_bytes);
 
     Ok(CheckedMoeSourceKirStructuralRecordV2 {
         identity: sha256(&record.finish()),
@@ -301,11 +406,15 @@ fn check_structural_inputs(
             .canonical
             .identity(KERNEL_IR_DOMAIN_V2, MEMBER_KERNEL_IR),
         profile_identity: inputs.canonical.identity(PROFILE_DOMAIN_V2, MEMBER_PROFILE),
+        compiler_semantics_identity: inputs.same_session.compiler_semantics_identity,
+        trusted_definitions_identity: inputs.same_session.trusted_definitions_identity,
+        root_instance_identity: inputs.same_session.root_instance_identity,
+        source_authority_identity: inputs.same_session.source_authority_identity,
         snapshot,
     })
 }
 
-fn fn_abi_is_exact(abi: &MoeSourceKirFnAbiV1) -> bool {
+fn fn_abi_is_exact(abi: &MoeFnAbiStructuralProjectionV2) -> bool {
     abi.identity == FN_ABI_IDENTITY
         && abi.rust_calling_convention
         && !abi.c_variadic
@@ -770,7 +879,7 @@ fn encode_target_capability(target: &TargetCapability) -> Vec<u8> {
     output.finish()
 }
 
-fn snapshot_text(inputs: &StructuralInputsV2) -> String {
+fn snapshot_text(inputs: &StructuralClassifierCandidateV2) -> String {
     let mir = inputs.portable_mir;
     let abi = inputs.fn_abi;
     let argument_text = abi
@@ -789,7 +898,7 @@ fn snapshot_text(inputs: &StructuralInputsV2) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "schema=moe-top2-private-structural-v2;source={};fnabi={}:rust={}:variadic={}:fixed={}:unwind={}:ignored={}:result={}:args=[{}];mir={}:functions={}:roots={}:helpers={}:blocks={}:statements={}:terminators={}:edges={}:imports={}:root-args={}:root-locals={}:assignments={}:calls={}:indexed={}:repeats={}:binops=0x{:08x};kir={};profile={};abi={};effects={};routing={}",
+        "schema=moe-top2-private-structural-v2;source={};fnabi={}:rust={}:variadic={}:fixed={}:unwind={}:ignored={}:result={}:args=[{}];mir={}:functions={}:roots={}:helpers={}:blocks={}:statements={}:terminators={}:edges={}:imports={}:root-args={}:root-locals={}:assignments={}:calls={}:indexed={}:repeats={}:binops=0x{:08x};kir={};profile={};abi={};effects={};routing={};compiler={};trusted={};root={};authority={}",
         hex(&inputs.source_identity),
         hex(&abi.identity),
         u8::from(abi.rust_calling_convention),
@@ -828,10 +937,14 @@ fn snapshot_text(inputs: &StructuralInputsV2) -> String {
         hex(&inputs
             .canonical
             .identity(ROUTING_PROJECTION_DOMAIN_V2, MEMBER_ROUTING),),
+        hex(&inputs.same_session.compiler_semantics_identity),
+        hex(&inputs.same_session.trusted_definitions_identity),
+        inputs.same_session.root_instance_identity,
+        hex(&inputs.same_session.source_authority_identity),
     )
 }
 
-fn canonical_fn_abi(abi: &MoeSourceKirFnAbiV1) -> Vec<u8> {
+fn canonical_fn_abi(abi: &MoeFnAbiStructuralProjectionV2) -> Vec<u8> {
     let mut output = CanonicalWriter::new(b"fe2o3.moe-top2.observed-fnabi.v2\0");
     output.field(&abi.identity);
     output.boolean(abi.rust_calling_convention);
@@ -848,6 +961,15 @@ fn canonical_fn_abi(abi: &MoeSourceKirFnAbiV1) -> Vec<u8> {
         output.u32(argument.first_pointee_bytes);
         output.u32(argument.second_pointee_bytes);
     }
+    output.finish()
+}
+
+fn canonical_same_session(binding: &SameSessionBindingV2) -> Vec<u8> {
+    let mut output = CanonicalWriter::new(b"fe2o3.moe-top2.same-rustc-authority.v2\0");
+    output.field(&binding.compiler_semantics_identity);
+    output.field(&binding.trusted_definitions_identity);
+    output.text(&binding.root_instance_identity);
+    output.field(&binding.source_authority_identity);
     output.finish()
 }
 
@@ -1148,14 +1270,15 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-fn candidate_inputs_for_test() -> StructuralInputsV2 {
+fn candidate_inputs_for_test() -> StructuralClassifierCandidateV2 {
+    let authority = super::exact_authority_for_test();
     let source = include_bytes!("../../../examples/moe_top2_v1/src/kernel.rs").to_vec();
     let ir = fe2o3_kernel_ir::moe_top2_v1_kernel_ir();
     let profile = MoeTop2ProfileV1::exact_gfx942_xnack_minus_cov6();
-    StructuralInputsV2 {
+    StructuralClassifierCandidateV2 {
         source,
         source_identity: SOURCE_IDENTITY,
-        fn_abi: MoeSourceKirFnAbiV1 {
+        fn_abi: MoeFnAbiStructuralProjectionV2 {
             identity: FN_ABI_IDENTITY,
             rust_calling_convention: true,
             c_variadic: false,
@@ -1163,7 +1286,7 @@ fn candidate_inputs_for_test() -> StructuralInputsV2 {
             can_unwind: true,
             result_ignored: true,
             result_size: 0,
-            arguments: [MoeSourceKirFnAbiArgumentV1 {
+            arguments: [MoeFnAbiArgumentStructuralProjectionV2 {
                 size: 16,
                 alignment: 8,
                 pair_mode: true,
@@ -1190,12 +1313,27 @@ fn candidate_inputs_for_test() -> StructuralInputsV2 {
             binary_operation_mask: 0x0000_ec05,
         },
         canonical: canonical_kernel_profile(&ir, &profile),
+        same_session: SameSessionBindingV2 {
+            compiler_semantics_identity: authority.compiler_semantics_identity,
+            trusted_definitions_identity: authority.trusted_definitions_identity,
+            root_instance_identity: authority.root_instance_identity,
+            source_authority_identity: authority.authority_identity,
+        },
     }
 }
 
 #[cfg(test)]
-pub(crate) fn candidate_structural_record_for_test() -> CheckedMoeSourceKirStructuralRecordV2 {
-    check_structural_inputs(candidate_inputs_for_test())
+pub(super) fn checked_record_for_test_authority(
+    authority: &MoeTop2AuthorityV1,
+) -> CheckedMoeSourceKirStructuralRecordV2 {
+    let mut candidate = candidate_inputs_for_test();
+    candidate.same_session = SameSessionBindingV2 {
+        compiler_semantics_identity: authority.compiler_semantics_identity,
+        trusted_definitions_identity: authority.trusted_definitions_identity,
+        root_instance_identity: authority.root_instance_identity.clone(),
+        source_authority_identity: authority.authority_identity,
+    };
+    check_structural_inputs(candidate)
         .expect("pinned synthetic structural input matches the live summary")
 }
 
@@ -1251,7 +1389,7 @@ mod tests {
 
     #[test]
     fn classifier_rejects_mutations_after_earlier_admission_gates() {
-        let mutations: [fn(&mut StructuralInputsV2); 13] = [
+        let mutations: [fn(&mut StructuralClassifierCandidateV2); 13] = [
             |inputs| inputs.fn_abi.arguments[0].alignment = 4,
             |inputs| inputs.portable_mir.function_count += 1,
             |inputs| inputs.portable_mir.block_count += 1,
@@ -1327,7 +1465,8 @@ mod tests {
 
     #[test]
     fn checked_record_is_explicitly_inert() {
-        let checked = candidate_structural_record_for_test();
+        let authority = super::super::exact_authority_for_test();
+        let checked = checked_record_for_test_authority(&authority);
         assert!(!checked.proves_source_to_kir_semantic_refinement());
         assert!(!checked.proves_llvm_or_isa_refinement());
         assert!(!checked.proves_logical_to_machine_address_refinement());
