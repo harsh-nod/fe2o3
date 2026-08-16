@@ -206,7 +206,10 @@ constexpr StringLiteral ExactRowSoftmaxV1ProducerDataLayout =
 constexpr StringLiteral ExactRowDescriptorSection = ".fe2o3.kd.v1";
 constexpr StringLiteral ExactRowTranscriptSection =
     ".fe2o3.row-softmax-authority-transcript.v1";
-constexpr StringLiteral ExactRowAuthoritySection = ".fe2o3.row-softmax-auth.v1";
+// The section spelling is a legacy producer ABI. Its bytes are only the
+// SHA-256 digest used to check transcript consistency inside this worker.
+constexpr StringLiteral ExactRowTranscriptDigestSection =
+    ".fe2o3.row-softmax-auth.v1";
 constexpr StringLiteral ExactRowExpBoundarySection = ".fe2o3.row-exp.v1";
 constexpr std::array<uint8_t, 32> ExactRowBodySha256 = {
     0xd4, 0x8d, 0x33, 0x20, 0xc2, 0x86, 0xc6, 0xda, 0x22, 0x53, 0xa1,
@@ -918,16 +921,13 @@ parseExactRowSoftmaxV1CompilerSections(StringRef Text) {
 
   static constexpr std::array Sections = {
       ExactRowDescriptorSection, ExactRowTranscriptSection,
-      ExactRowAuthoritySection, ExactRowExpBoundarySection};
+      ExactRowTranscriptDigestSection, ExactRowExpBoundarySection};
   SmallVector<StringRef, 256> Lines;
   Text.drop_front(BodyEnd + 1).split(Lines, '\n', -1, true);
   std::array<std::vector<uint8_t>, Sections.size()> Result;
   size_t LineIndex = 0;
   for (size_t SectionIndex = 0; SectionIndex != Sections.size();
        ++SectionIndex) {
-    if (SectionIndex != 0 && LineIndex != Lines.size() &&
-        Lines[LineIndex].empty())
-      ++LineIndex;
     std::string ExpectedHeader =
         (Twine("module asm \".section ") + Sections[SectionIndex] +
          ",\\22\\22,@progbits\"")
@@ -944,36 +944,54 @@ parseExactRowSoftmaxV1CompilerSections(StringRef Text) {
     ++LineIndex;
 
     constexpr StringLiteral BytePrefix = "module asm \".byte ";
+    SmallVector<size_t, 16> RecordWidths;
     while (LineIndex != Lines.size() &&
            Lines[LineIndex].starts_with(BytePrefix)) {
       StringRef Line = Lines[LineIndex++];
       if (!Line.ends_with("\""))
         return pipelineError(
             "exact row-softmax V1 compiler byte record is malformed");
-      SmallVector<StringRef, 16> Atoms;
-      Line.drop_front(BytePrefix.size())
-          .drop_back()
-          .split(Atoms, ',', -1, false);
-      if (Atoms.empty() || Atoms.size() > 16)
-        return pipelineError(
-            "exact row-softmax V1 compiler byte record is noncanonical");
-      for (StringRef Atom : Atoms) {
-        Atom = Atom.trim();
-        if (!Atom.consume_front("0x") || Atom.size() != 2)
+      StringRef Payload = Line.drop_front(BytePrefix.size()).drop_back();
+      size_t RecordWidth = 0;
+      while (!Payload.empty()) {
+        if (Payload.size() < 4 || Payload[0] != '0' || Payload[1] != 'x' ||
+            !llvm::isHexDigit(Payload[2]) || !llvm::isHexDigit(Payload[3]) ||
+            llvm::isUpper(Payload[2]) || llvm::isUpper(Payload[3]))
           return pipelineError(
               "exact row-softmax V1 compiler byte atom is malformed");
+        StringRef Atom = Payload.take_front(4).drop_front(2);
         uint8_t Byte = 0;
         if (Atom.getAsInteger(16, Byte))
           return pipelineError(
               "exact row-softmax V1 compiler byte atom is malformed");
         Result[SectionIndex].push_back(Byte);
+        ++RecordWidth;
+        Payload = Payload.drop_front(4);
+        if (Payload.empty())
+          break;
+        if (!Payload.consume_front(", "))
+          return pipelineError(
+              "exact row-softmax V1 compiler byte separator is noncanonical");
+        if (Payload.empty())
+          return pipelineError(
+              "exact row-softmax V1 compiler byte separator is noncanonical");
+        if (RecordWidth == 16)
+          return pipelineError(
+              "exact row-softmax V1 compiler byte record is noncanonical");
       }
+      if (RecordWidth == 0 || RecordWidth > 16)
+        return pipelineError(
+            "exact row-softmax V1 compiler byte record is noncanonical");
+      RecordWidths.push_back(RecordWidth);
     }
     if (Result[SectionIndex].empty())
       return pipelineError("exact row-softmax V1 compiler section is empty");
+    for (size_t Index = 0; Index + 1 < RecordWidths.size(); ++Index)
+      if (RecordWidths[Index] != 16)
+        return pipelineError(
+            "exact row-softmax V1 compiler byte chunking is noncanonical");
   }
-  if (LineIndex != Lines.size() &&
-      !(LineIndex + 1 == Lines.size() && Lines[LineIndex].empty()))
+  if (LineIndex + 1 != Lines.size() || !Lines[LineIndex].empty())
     return pipelineError(
         "exact row-softmax V1 compiler module has trailing assembly");
   return Result;
@@ -989,12 +1007,12 @@ Error validateExactRowSoftmaxV1CompilerInput(StringRef Text,
     return Sections.takeError();
   if ((*Sections)[0].size() > 64 * 1024 || (*Sections)[1].size() > 4096)
     return pipelineError(
-        "exact row-softmax V1 descriptor or authority transcript is oversized");
+        "exact row-softmax V1 descriptor or transcript is oversized");
   std::array<uint8_t, 32> TranscriptIdentity = SHA256::hash((*Sections)[1]);
   if ((*Sections)[2].size() != 32 ||
       ArrayRef(TranscriptIdentity) != ArrayRef((*Sections)[2]))
     return pipelineError(
-        "exact row-softmax V1 authenticated authority does not match");
+        "exact row-softmax V1 transcript digest is inconsistent");
   if (ArrayRef((*Sections)[3]) != ArrayRef(ExactRowExpBoundaryIdentity))
     return pipelineError(
         "exact row-softmax V1 exponential boundary identity does not match");
@@ -2848,9 +2866,13 @@ struct KernelLaunchContract {
   uint64_t WavefrontSize;
   uint64_t MaxFlatWorkgroupSize;
   std::optional<std::array<uint64_t, 3>> RequiredWorkgroupSize;
+  uint64_t SgprCount;
+  uint64_t VgprCount;
+  std::optional<uint64_t> AgprCount;
   std::optional<uint64_t> SgprSpillCount;
   std::optional<uint64_t> VgprSpillCount;
   std::optional<bool> UsesDynamicStack;
+  std::optional<bool> WorkgroupProcessorMode;
   std::optional<bool> UniformWorkgroupSize;
   std::optional<std::vector<KernelArgumentContract>> Arguments;
 };
@@ -3233,6 +3255,15 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
     auto RequiredWorkgroup = metadataWorkgroupSize(Kernel);
     if (!RequiredWorkgroup)
       return RequiredWorkgroup.takeError();
+    auto SgprCount = metadataUnsigned(Kernel, ".sgpr_count");
+    if (!SgprCount)
+      return SgprCount.takeError();
+    auto VgprCount = metadataUnsigned(Kernel, ".vgpr_count");
+    if (!VgprCount)
+      return VgprCount.takeError();
+    auto AgprCount = metadataOptionalUnsigned(Kernel, ".agpr_count");
+    if (!AgprCount)
+      return AgprCount.takeError();
     auto SgprSpillCount = metadataOptionalUnsigned(Kernel, ".sgpr_spill_count");
     if (!SgprSpillCount)
       return SgprSpillCount.takeError();
@@ -3243,6 +3274,10 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
         metadataOptionalBoolean(Kernel, ".uses_dynamic_stack");
     if (!UsesDynamicStack)
       return UsesDynamicStack.takeError();
+    auto WorkgroupProcessorMode =
+        metadataOptionalBoolean(Kernel, ".workgroup_processor_mode");
+    if (!WorkgroupProcessorMode)
+      return WorkgroupProcessorMode.takeError();
     auto UniformWorkgroupSize =
         metadataOptionalBoolean(Kernel, ".uniform_work_group_size");
     if (!UniformWorkgroupSize)
@@ -3278,8 +3313,9 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
     Result.Kernels.push_back(
         {Name->str(), Symbol->str(), *KernargSize, *GroupSize, *PrivateSize,
          *KernargAlign, *Wavefront, *MaxWorkgroup, *RequiredWorkgroup,
-         *SgprSpillCount, *VgprSpillCount, *UsesDynamicStack,
-         *UniformWorkgroupSize, std::move(*Arguments)});
+         *SgprCount, *VgprCount, *AgprCount, *SgprSpillCount, *VgprSpillCount,
+         *UsesDynamicStack, *WorkgroupProcessorMode, *UniformWorkgroupSize,
+         std::move(*Arguments)});
   }
   return Error::success();
 }
@@ -3895,7 +3931,8 @@ Error validateExactRowSoftmaxV1DescriptorBinding(
     if (*Name != ExactRowDescriptorSection)
       continue;
     ++Matches;
-    if (Section.sh_type != ELF::SHT_PROGBITS || Section.sh_addralign != 8)
+    if (Section.sh_type != ELF::SHT_PROGBITS || Section.sh_flags != 0 ||
+        Section.sh_addralign != 8)
       return postLinkError(ExactRowSoftmaxV1Check,
                            "descriptor_section_envelope");
     auto Contents = File.getSectionContents(Section);
@@ -4026,6 +4063,32 @@ Error validateExactMoeTop2V1DescriptorBinding(
 
 Error validateExactRowSoftmaxV1Metadata(const MetadataContract &Metadata) {
   static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 19> Hidden = {{
+      {32, 4, "hidden_block_count_x"},
+      {36, 4, "hidden_block_count_y"},
+      {40, 4, "hidden_block_count_z"},
+      {44, 2, "hidden_group_size_x"},
+      {46, 2, "hidden_group_size_y"},
+      {48, 2, "hidden_group_size_z"},
+      {50, 2, "hidden_remainder_x"},
+      {52, 2, "hidden_remainder_y"},
+      {54, 2, "hidden_remainder_z"},
+      {72, 8, "hidden_global_offset_x"},
+      {80, 8, "hidden_global_offset_y"},
+      {88, 8, "hidden_global_offset_z"},
+      {96, 2, "hidden_grid_dims"},
+      {112, 8, "hidden_hostcall_buffer"},
+      {120, 8, "hidden_multigrid_sync_arg"},
+      {128, 8, "hidden_heap_v1"},
+      {136, 8, "hidden_default_queue"},
+      {144, 8, "hidden_completion_action"},
+      {232, 8, "hidden_queue_ptr"},
+  }};
   auto Mismatch = [](StringRef Field) {
     return postLinkError(ExactRowSoftmaxV1Check,
                          (Twine("kernel_contract_") + Field).str());
@@ -4051,14 +4114,57 @@ Error validateExactRowSoftmaxV1Metadata(const MetadataContract &Metadata) {
     return Mismatch("group_segment_fixed_size");
   if (Kernel.PrivateSegmentFixedSize != 0)
     return Mismatch("private_segment_fixed_size");
+  if (Kernel.SgprCount != 42)
+    return Mismatch("sgpr_count");
+  if (Kernel.VgprCount != 88)
+    return Mismatch("vgpr_count");
+  if (!Kernel.AgprCount || *Kernel.AgprCount != 44)
+    return Mismatch("agpr_count");
   if (!Kernel.SgprSpillCount || *Kernel.SgprSpillCount != 44)
     return Mismatch("sgpr_spill_count");
   if (!Kernel.VgprSpillCount || *Kernel.VgprSpillCount != 28)
     return Mismatch("vgpr_spill_count");
-  if (Kernel.UsesDynamicStack && *Kernel.UsesDynamicStack)
+  if (!Kernel.UsesDynamicStack || *Kernel.UsesDynamicStack)
     return Mismatch("uses_dynamic_stack");
+  if (Kernel.WorkgroupProcessorMode)
+    return Mismatch("workgroup_processor_mode");
   if (Kernel.UniformWorkgroupSize && *Kernel.UniformWorkgroupSize)
     return Mismatch("uniform_work_group_size");
+
+  if (!Kernel.Arguments || Kernel.Arguments->size() != 4 + Hidden.size())
+    return Mismatch("args");
+  const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
+  static constexpr std::array<StringLiteral, 2> PointerNames = {"arg0.data",
+                                                                "arg1.data"};
+  static constexpr std::array<StringLiteral, 2> LengthNames = {"arg0.len",
+                                                               "arg1.len"};
+  for (size_t Slice = 0; Slice != 2; ++Slice) {
+    size_t PointerIndex = Slice * 2;
+    const KernelArgumentContract &Pointer = Arguments[PointerIndex];
+    if (!Pointer.Name || *Pointer.Name != PointerNames[Slice] ||
+        Pointer.Offset != Slice * 16 || Pointer.Size != 8 ||
+        Pointer.ValueKind != "global_buffer" || !Pointer.AddressSpace ||
+        *Pointer.AddressSpace != "global" ||
+        (Pointer.Align && *Pointer.Align != 8) ||
+        (Pointer.ValueType && *Pointer.ValueType != "f32"))
+      return Mismatch((Twine("arg") + Twine(PointerIndex) + "_pointer").str());
+
+    const KernelArgumentContract &Length = Arguments[PointerIndex + 1];
+    if (!Length.Name || *Length.Name != LengthNames[Slice] ||
+        Length.Offset != Slice * 16 + 8 || Length.Size != 8 ||
+        Length.ValueKind != "by_value" ||
+        (Length.Align && *Length.Align != 8) ||
+        (Length.ValueType && *Length.ValueType != "u64"))
+      return Mismatch(
+          (Twine("arg") + Twine(PointerIndex + 1) + "_length").str());
+  }
+  for (size_t Index = 0; Index != Hidden.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[4 + Index];
+    const HiddenArgumentShape &Expected = Hidden[Index];
+    if (Argument.Offset != Expected.Offset || Argument.Size != Expected.Size ||
+        Argument.ValueKind != Expected.ValueKind)
+      return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
+  }
   return Error::success();
 }
 
@@ -5230,6 +5336,17 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
         "workgroup=[64,1,1] kernarg_size=304 kernarg_align=8 "
         "group_size=1024 private_size=0 wavefront_size=64 spills=0 "
         "dynamic_stack=false");
+  if (*Profile == PostLinkProfile::ExactRowSoftmaxV1)
+    Diagnostics.push_back(
+        (Twine("post_link.check=row_softmax_v1_profile status=ok ") +
+         "profile_identity=row-softmax-v1-gfx942-cov6-llvm22-v1 " +
+         "llvm_build_identity=" + ExactRowSoftmaxV1PublishedLlvmBuildIdentity +
+         " llvm_layout=" + diagnosticAtom(ExactRowSoftmaxV1ProducerDataLayout) +
+         " abi_checks=exact "
+         "descriptor_checks=section-envelope-and-byte-identity "
+         "transcript=sha256-consistency-only "
+         "descriptor_source_authentication=outside-worker-complete")
+            .str());
   if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
     Diagnostics.push_back(
         "post_link.check=wave64_collectives_v1_profile status=ok "
@@ -5433,23 +5550,27 @@ Error validateExactFlashAttentionV1LlvmBuildIdentityForTesting(
   return validateExactFlashAttentionLlvmBuildIdentity(Identity);
 }
 
-Expected<std::vector<uint8_t>> makeExactRowSoftmaxV1CompilerInputForTesting(
-    StringRef CanonicalBody, ArrayRef<uint8_t> Descriptor,
-    ArrayRef<uint8_t> AuthorityTranscript) {
+Expected<std::vector<uint8_t>>
+makeExactRowSoftmaxV1CompilerInputForTesting(StringRef CanonicalBody,
+                                             ArrayRef<uint8_t> Descriptor,
+                                             ArrayRef<uint8_t> Transcript) {
   if (SHA256::hash(arrayRefFromStringRef(CanonicalBody)) != ExactRowBodySha256)
     return pipelineError("test fixture row-softmax body identity mismatch");
   if (Descriptor.empty() || Descriptor.size() > 64 * 1024)
     return pipelineError("test fixture row-softmax descriptor is invalid");
-  if (AuthorityTranscript.empty() || AuthorityTranscript.size() > 4096)
-    return pipelineError(
-        "test fixture row-softmax authority transcript is invalid");
+  if (Transcript.empty() || Transcript.size() > 4096)
+    return pipelineError("test fixture row-softmax transcript is invalid");
 
   std::string Result = CanonicalBody.str();
+  bool FirstSection = true;
   auto AppendSection = [&](StringRef Name, ArrayRef<uint8_t> Bytes) {
-    std::string Header = (Twine("\nmodule asm \".section ") + Name +
+    std::string Header = (Twine(FirstSection ? "\nmodule asm \".section "
+                                             : "module asm \".section ") +
+                          Name +
                           ",\\22\\22,@progbits\"\n"
                           "module asm \".balign 8\"\n")
                              .str();
+    FirstSection = false;
     Result.append(Header);
     static constexpr char Hex[] = "0123456789abcdef";
     for (size_t Offset = 0; Offset < Bytes.size(); Offset += 16) {
@@ -5467,9 +5588,9 @@ Expected<std::vector<uint8_t>> makeExactRowSoftmaxV1CompilerInputForTesting(
     }
   };
   AppendSection(ExactRowDescriptorSection, Descriptor);
-  AppendSection(ExactRowTranscriptSection, AuthorityTranscript);
-  std::array<uint8_t, 32> Authority = SHA256::hash(AuthorityTranscript);
-  AppendSection(ExactRowAuthoritySection, Authority);
+  AppendSection(ExactRowTranscriptSection, Transcript);
+  std::array<uint8_t, 32> TranscriptDigest = SHA256::hash(Transcript);
+  AppendSection(ExactRowTranscriptDigestSection, TranscriptDigest);
   AppendSection(ExactRowExpBoundarySection, ExactRowExpBoundaryIdentity);
 
   auto Layout = DataLayout::parse(ExactRowSoftmaxV1ProducerDataLayout);
@@ -5675,6 +5796,26 @@ Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {
            std::tie(Right.Name, Right.Symbol);
   });
   return validateExactLdsGemmSlice1Metadata(Metadata);
+}
+
+Error validateExactRowSoftmaxV1MetadataForTesting(StringRef MetadataBlob) {
+  MetadataContract Metadata;
+  Metadata.Present = true;
+  std::set<std::string> Names;
+  std::set<std::string> Symbols;
+  if (Error E = appendMetadataBlob(MetadataBlob, Metadata, Names, Symbols,
+                                   MetadataValidationPolicy::ExactRowSoftmaxV1))
+    return E;
+  if (!Metadata.Target ||
+      *Metadata.Target != "amdgcn-amd-amdhsa--gfx942:xnack-")
+    return postLinkError(ExactRowSoftmaxV1Check,
+                         "kernel_contract_metadata_target");
+  llvm::sort(Metadata.Kernels, [](const KernelLaunchContract &Left,
+                                  const KernelLaunchContract &Right) {
+    return std::tie(Left.Name, Left.Symbol) <
+           std::tie(Right.Name, Right.Symbol);
+  });
+  return validateExactRowSoftmaxV1Metadata(Metadata);
 }
 
 Error validateExactWave64CollectivesV1MetadataForTesting(

@@ -26,10 +26,13 @@ llvm::Error validateExactFlashAttentionV1LlvmBuildIdentityForTesting(
 llvm::Expected<std::vector<uint8_t>>
 makeExactRowSoftmaxV1CompilerInputForTesting(
     llvm::StringRef CanonicalBody, llvm::ArrayRef<uint8_t> Descriptor,
-    llvm::ArrayRef<uint8_t> AuthorityTranscript);
+    llvm::ArrayRef<uint8_t> Transcript);
 
 llvm::Error
 validateExactRowSoftmaxV1CompilerInputForTesting(llvm::ArrayRef<uint8_t> Bytes);
+
+llvm::Error
+validateExactRowSoftmaxV1MetadataForTesting(llvm::StringRef MetadataBlob);
 
 llvm::Expected<std::vector<uint8_t>>
 makeExactWorkgroupSyncCompilerInputForTesting(
