@@ -7,6 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Value, json};
@@ -30,6 +31,7 @@ const OCML_BASENAMES: [&str; 4] = [
 ];
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+static RUSTC_RUNTIME_SHA256: OnceLock<String> = OnceLock::new();
 
 struct TestDirectory {
     path: PathBuf,
@@ -183,7 +185,9 @@ fn fixture_directory() -> PathBuf {
 fn protected_command(action: &str, target_dir: &Path, target: &str) -> Command {
     let cargo = required_path(CARGO_ENV);
     let rustc = required_path(RUSTC_ENV);
-    let rustc_runtime_sha256 = rustc_runtime_sha256(&rustc);
+    let rustc_runtime_sha256 = RUSTC_RUNTIME_SHA256
+        .get_or_init(|| rustc_runtime_sha256(&rustc))
+        .clone();
     let backend = required_path(BACKEND_ENV);
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
