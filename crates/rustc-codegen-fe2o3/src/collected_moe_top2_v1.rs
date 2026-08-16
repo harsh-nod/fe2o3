@@ -901,9 +901,7 @@ fn require_fn_abi<'tcx>(
         CheckedMoeTop2FnAbiHeaderV2 {
             calling_convention: FN_ABI_CALLING_CONVENTION_RUST_V2,
             c_variadic: abi.c_variadic,
-            fixed_count: u64::try_from(abi.fixed_count).map_err(|_| {
-                CollectedMoeTop2ErrorV1::Abi("FnAbi fixed count overflowed u64".into())
-            })?,
+            fixed_count: u64::from(abi.fixed_count),
             argument_count: u64::try_from(abi.args.len()).map_err(|_| {
                 CollectedMoeTop2ErrorV1::Abi("FnAbi argument count overflowed u64".into())
             })?,
