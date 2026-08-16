@@ -29,13 +29,13 @@ const PAYLOAD_DOMAIN: &[u8] = b"FE2O3/MOE/ROUTING-EXPERT/HOST-OBSERVED-SNAPSHOT/
 /// opaque checked witness used by expert preparation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MoeRoutingOutputCandidateV1 {
-    pub(crate) top2_experts: [u32; ROUTES],
-    pub(crate) requested_counts: [u32; EXPERTS],
-    pub(crate) admitted_counts: [u32; EXPERTS],
-    pub(crate) expert_offsets: [u32; EXPERT_OFFSETS],
-    pub(crate) route_slots: [u32; ROUTES],
-    pub(crate) permutation: [u32; ROUTES],
-    pub(crate) inverse: [u32; ROUTES],
+    top2_experts: [u32; ROUTES],
+    requested_counts: [u32; EXPERTS],
+    admitted_counts: [u32; EXPERTS],
+    expert_offsets: [u32; EXPERT_OFFSETS],
+    route_slots: [u32; ROUTES],
+    permutation: [u32; ROUTES],
+    inverse: [u32; ROUTES],
 }
 
 impl MoeRoutingOutputCandidateV1 {
@@ -176,10 +176,6 @@ impl fmt::Debug for CheckedMoeHostObservedRoutingOutputV1 {
 }
 
 impl CheckedMoeHostObservedRoutingOutputV1 {
-    pub(crate) const fn top2_experts(&self) -> [u32; ROUTES] {
-        self.payload.top2_experts
-    }
-
     pub const fn admitted_counts(&self) -> [u32; EXPERTS] {
         self.payload.admitted_counts
     }

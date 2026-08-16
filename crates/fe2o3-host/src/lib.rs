@@ -12,6 +12,7 @@ mod generated_lds_gemm_lifecycle;
 #[cfg(test)]
 mod generated_lds_gemm_lifecycle_tests;
 mod generated_moe_expert_v1;
+mod generated_moe_expert_v2;
 mod generated_moe_top2_v1;
 mod generated_row_softmax_v1;
 mod generated_scalar_gemm_v1;
@@ -155,9 +156,12 @@ pub use generated_lds_gemm_lifecycle::{
 };
 pub use generated_moe_expert_v1::{
     GeneratedMoeExpertV1HostAdapterErrorV1, GeneratedMoeExpertV1HostAdapterV1,
-    GeneratedMoeExpertV2HostAdapterErrorV2, GeneratedMoeExpertV2HostAdapterV2,
     MoeExpertCompactCopyV1, MoeExpertCompactPackPlanErrorV1, MoeExpertCompactPackPlanV1,
     MoeExpertV1BufferAccessV1, MoeExpertV1BufferRoleV1,
+};
+pub use generated_moe_expert_v2::{
+    GeneratedMoeExpertV2HostAdapterErrorV2, GeneratedMoeExpertV2HostAdapterV2,
+    MoeExpertV2BufferAccessV2, MoeExpertV2BufferRoleV2,
 };
 pub use generated_moe_top2_v1::{
     GeneratedMoeTop2V1HostAdapterErrorV1, GeneratedMoeTop2V1HostAdapterV1, MoeTop2V1BufferAccessV1,
@@ -270,8 +274,8 @@ pub use moe_routing_expert_bridge_v2::{
     MoeCompletedRoutingExpertUploadRoleV2, MoeExpertInputCandidateV2, MoeExpertInputJoinErrorV2,
     MoeExpertWeightArtifactBindingV2, MoeRoutingCompletionReadbackErrorV2,
     MoeRoutingCompletionReadbackProvenanceV2, MoeRoutingExpertBatchIdentityV2,
-    bind_completed_moe_routing_expert_inputs_v2, check_completed_moe_routing_readback_v2,
-    upload_completed_moe_routing_expert_bridge_v2,
+    MoeRoutingOutputCandidateV2, bind_completed_moe_routing_expert_inputs_v2,
+    check_completed_moe_routing_readback_v2, upload_completed_moe_routing_expert_bridge_v2,
 };
 pub use moe_top2_v1_lifecycle::{
     CompletedMoeTop2V1, JoinedMoeTop2V1, LoadedMoeTop2V1, MoeTop2V1DispatchErrorV1,

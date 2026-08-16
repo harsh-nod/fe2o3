@@ -73,24 +73,28 @@ reclassified as completed GPU evidence.
 
 The production-shaped completed contract is versioned separately as V2:
 
-1. `MoeRoutingExpertBatchIdentityV2` is an opaque, move-only request identity.
+1. `MoeRoutingOutputCandidateV2` owns the complete untrusted routing shape. It
+   converts through the unchanged public V1 candidate constructor and checker;
+   V2 neither accesses nor widens any V1 field.
+2. `MoeRoutingExpertBatchIdentityV2` is an opaque, move-only request identity.
    It commits routing-request identity, logits identity, exact token
    activations, caller route-weight policy, and model/expert-weight artifact
    identity.
-2. `MoeRoutingCompletionReadbackProvenanceV2` retains exact typed dispatch and
+3. `MoeRoutingCompletionReadbackProvenanceV2` retains exact typed dispatch and
    readback `ContextIdentity` and `StreamIdentity` values, dispatch identity,
    completion event identity, readback operation and event identities, an
    explicit completion-before-readback ordering identity, exact profile, the
    complete seven-field observation mask, and routing-payload digest.
-3. `check_completed_moe_routing_readback_v2` consumes that provenance and
+4. `check_completed_moe_routing_readback_v2` consumes that provenance and
    rejects context, stream, profile, event, ordering, batch, payload, partial
    observation, and transcript substitutions before V1 routing consistency is
    considered.
-4. `bind_completed_moe_routing_expert_inputs_v2` requires the token activation
+5. `bind_completed_moe_routing_expert_inputs_v2` requires the token activation
    and route-weight policy digests from the shared batch and verifies the exact
    zero-padded expert-major activation layout. Route weights remain caller
    policy inputs; they are not authenticated router outputs.
-5. `GeneratedMoeExpertV2HostAdapterV2` accepts only the completed V2 bridge and
+6. `GeneratedMoeExpertV2HostAdapterV2` lives in its own V2 module and accepts
+   only the completed V2 bridge and
    `MoeExpertWeightArtifactBindingV2`. It cannot accept a raw expert-weight
    device view, preventing unrelated weights from being attached after routing.
 

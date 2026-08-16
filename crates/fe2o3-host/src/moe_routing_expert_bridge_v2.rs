@@ -8,7 +8,6 @@
 use crate::{
     CheckedMoeHostObservedRoutingOutputV1, MoeExpertCompactPackPlanV1, MoeRoutingOutputCandidateV1,
     MoeRoutingOutputConsistencyErrorV1, check_host_observed_moe_routing_output_v1,
-    generated_moe_expert_v1::{EXPERT_OFFSETS, EXPERTS, ROUTES},
 };
 use fe2o3_core::{
     BorrowedDeviceOperation, ContextIdentity, DeviceBuffer, DeviceBufferIdentity,
@@ -22,10 +21,18 @@ use std::{
     ops::Range,
 };
 
-const TOKENS: usize = 8;
-const TOP_K: usize = 2;
+pub(crate) const TOKENS: usize = 8;
+pub(crate) const EXPERTS: usize = 4;
+pub(crate) const TOP_K: usize = 2;
+pub(crate) const ROUTES: usize = TOKENS * TOP_K;
+pub(crate) const EXPERT_OFFSETS: usize = EXPERTS + 1;
+pub(crate) const TILE_ELEMENTS: usize = 256;
+pub(crate) const OUTPUT_WIDTH: usize = 16;
+pub(crate) const EXPERT_OUTPUT_ELEMENTS: usize = EXPERTS * TILE_ELEMENTS;
+pub(crate) const COMPACT_OUTPUT_ELEMENTS: usize = ROUTES * OUTPUT_WIDTH;
+pub(crate) const COMBINED_OUTPUT_ELEMENTS: usize = TOKENS * OUTPUT_WIDTH;
 const TOKEN_ACTIVATION_ELEMENTS: usize = TOKENS * 16;
-const PACKED_ACTIVATION_ELEMENTS: usize = EXPERTS * 256;
+const PACKED_ACTIVATION_ELEMENTS: usize = EXPERTS * TILE_ELEMENTS;
 const COMPLETE_ROUTING_OBSERVATION_MASK: u16 = 0x7f;
 const EXACT_PROFILE: &[u8] = b"T8/E4/K2/C4/I16/O16/gfx942:xnack-/wave64/COV6";
 const BATCH_DOMAIN: &[u8] = b"FE2O3/MOE/ROUTING-EXPERT/REQUEST-BATCH/V2\0";
@@ -34,6 +41,57 @@ const ACTIVATIONS_DOMAIN: &[u8] = b"FE2O3/MOE/TOKEN-ACTIVATIONS/BF16/V2\0";
 const ROUTE_WEIGHT_POLICY_DOMAIN: &[u8] = b"FE2O3/MOE/ROUTE-WEIGHT-POLICY/F32/V2\0";
 const EXPERT_INPUT_DOMAIN: &[u8] = b"FE2O3/MOE/ROUTING-EXPERT/INPUT-JOIN/V2\0";
 const WEIGHT_BINDING_DOMAIN: &[u8] = b"FE2O3/MOE/EXPERT-WEIGHT-ARTIFACT-BINDING/V2\0";
+
+/// Untrusted complete routing output for the exact V2 profile.
+///
+/// V2 owns this data shape so the V1 module remains completely isolated. The
+/// candidate is converted through the unchanged public V1 constructor and
+/// checker before it can enter any completed V2 witness.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MoeRoutingOutputCandidateV2 {
+    top2_experts: [u32; ROUTES],
+    requested_counts: [u32; EXPERTS],
+    admitted_counts: [u32; EXPERTS],
+    expert_offsets: [u32; EXPERT_OFFSETS],
+    route_slots: [u32; ROUTES],
+    permutation: [u32; ROUTES],
+    inverse: [u32; ROUTES],
+}
+
+impl MoeRoutingOutputCandidateV2 {
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        top2_experts: [u32; ROUTES],
+        requested_counts: [u32; EXPERTS],
+        admitted_counts: [u32; EXPERTS],
+        expert_offsets: [u32; EXPERT_OFFSETS],
+        route_slots: [u32; ROUTES],
+        permutation: [u32; ROUTES],
+        inverse: [u32; ROUTES],
+    ) -> Self {
+        Self {
+            top2_experts,
+            requested_counts,
+            admitted_counts,
+            expert_offsets,
+            route_slots,
+            permutation,
+            inverse,
+        }
+    }
+
+    const fn as_v1(self) -> MoeRoutingOutputCandidateV1 {
+        MoeRoutingOutputCandidateV1::new(
+            self.top2_experts,
+            self.requested_counts,
+            self.admitted_counts,
+            self.expert_offsets,
+            self.route_slots,
+            self.permutation,
+            self.inverse,
+        )
+    }
+}
 
 fn put_field(digest: &mut Sha256, name: &[u8], value: &[u8]) {
     digest.update((name.len() as u64).to_le_bytes());
@@ -498,6 +556,7 @@ fn validate_lifecycle_facts<C: Copy + Eq + Hash, S: Copy + Eq + Hash>(
 #[must_use = "the completed readback must be joined to exact expert inputs"]
 pub struct CheckedMoeCompletedRoutingReadbackV2 {
     checked: CheckedMoeHostObservedRoutingOutputV1,
+    routing: MoeRoutingOutputCandidateV2,
     batch: MoeRoutingExpertBatchIdentityV2,
     dispatch_context: ContextIdentity,
     dispatch_stream: StreamIdentity,
@@ -534,10 +593,10 @@ impl CheckedMoeCompletedRoutingReadbackV2 {
 /// issuance is intentionally absent.
 pub fn check_completed_moe_routing_readback_v2(
     provenance: MoeRoutingCompletionReadbackProvenanceV2,
-    candidate: MoeRoutingOutputCandidateV1,
+    candidate: MoeRoutingOutputCandidateV2,
 ) -> Result<CheckedMoeCompletedRoutingReadbackV2, MoeRoutingCompletionReadbackErrorV2> {
     validate_batch_identity(&provenance.batch)?;
-    let checked = check_host_observed_moe_routing_output_v1(candidate)
+    let checked = check_host_observed_moe_routing_output_v1(candidate.as_v1())
         .map_err(MoeRoutingCompletionReadbackErrorV2::Routing)?;
     let facts = provenance.facts();
     validate_lifecycle_facts(
@@ -547,6 +606,7 @@ pub fn check_completed_moe_routing_readback_v2(
     )?;
     Ok(CheckedMoeCompletedRoutingReadbackV2 {
         checked,
+        routing: candidate,
         batch: provenance.batch,
         dispatch_context: provenance.dispatch_context,
         dispatch_stream: provenance.dispatch_stream,
@@ -673,6 +733,7 @@ impl CheckedMoeCompletedRoutingExpertInputsV2 {
 
 fn validate_and_pack_expert_inputs(
     checked: &CheckedMoeHostObservedRoutingOutputV1,
+    routing: &MoeRoutingOutputCandidateV2,
     expected_token_activations_identity: [u8; 32],
     expected_route_weight_policy_identity: [u8; 32],
     candidate: &MoeExpertInputCandidateV2,
@@ -706,13 +767,12 @@ fn validate_and_pack_expert_inputs(
     }
 
     let mut expected = [0_u16; PACKED_ACTIVATION_ELEMENTS];
-    let top2_experts = checked.top2_experts();
     let expert_offsets = checked.expert_offsets();
     let permutation = checked.permutation();
     let accepted = expert_offsets[EXPERTS] as usize;
     for (slot, route) in permutation.iter().copied().enumerate().take(accepted) {
         let route = route as usize;
-        let expert = top2_experts[route] as usize;
+        let expert = routing.top2_experts[route] as usize;
         let expert_row = slot - expert_offsets[expert] as usize;
         let token = route / TOP_K;
         let source = token * 16;
@@ -743,6 +803,7 @@ pub fn bind_completed_moe_routing_expert_inputs_v2(
 ) -> Result<CheckedMoeCompletedRoutingExpertInputsV2, MoeExpertInputJoinErrorV2> {
     validate_and_pack_expert_inputs(
         &readback.checked,
+        &readback.routing,
         readback.batch.token_activations_identity,
         readback.batch.route_weight_policy_identity,
         &candidate,
@@ -1183,8 +1244,8 @@ mod tests {
         Sha256::digest(label).into()
     }
 
-    fn reference_candidate() -> MoeRoutingOutputCandidateV1 {
-        MoeRoutingOutputCandidateV1::new(
+    fn reference_candidate() -> MoeRoutingOutputCandidateV2 {
+        MoeRoutingOutputCandidateV2::new(
             [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
             [8, 8, 0, 0],
             [4, 4, 0, 0],
@@ -1246,10 +1307,21 @@ mod tests {
         )
     }
 
-    fn exact_inputs(checked: &CheckedMoeHostObservedRoutingOutputV1) -> MoeExpertInputCandidateV2 {
+    fn checked_reference() -> (
+        MoeRoutingOutputCandidateV2,
+        CheckedMoeHostObservedRoutingOutputV1,
+    ) {
+        let routing = reference_candidate();
+        let checked = check_host_observed_moe_routing_output_v1(routing.as_v1()).unwrap();
+        (routing, checked)
+    }
+
+    fn exact_inputs(
+        routing: &MoeRoutingOutputCandidateV2,
+        checked: &CheckedMoeHostObservedRoutingOutputV1,
+    ) -> MoeExpertInputCandidateV2 {
         let token_activations = std::array::from_fn(|index| (index + 1) as u16);
         let mut packed = [0_u16; PACKED_ACTIVATION_ELEMENTS];
-        let top2 = checked.top2_experts();
         let offsets = checked.expert_offsets();
         let permutation = checked.permutation();
         for (slot, route) in permutation
@@ -1259,7 +1331,7 @@ mod tests {
             .take(offsets[EXPERTS] as usize)
         {
             let route = route as usize;
-            let expert = top2[route] as usize;
+            let expert = routing.top2_experts[route] as usize;
             let row = slot - offsets[expert] as usize;
             let token = route / TOP_K;
             packed[expert * 256 + row * 16..expert * 256 + row * 16 + 16]
@@ -1321,8 +1393,8 @@ mod tests {
 
     #[test]
     fn private_synthetic_facts_cover_the_complete_pinned_toolchain_transcript() {
-        let checked = check_host_observed_moe_routing_output_v1(reference_candidate()).unwrap();
-        let inputs = exact_inputs(&checked);
+        let (routing, checked) = checked_reference();
+        let inputs = exact_inputs(&routing, &checked);
         let batch = test_only_batch(&inputs);
         assert!(validate_batch_identity(&batch).is_ok());
         let facts = synthetic_facts(
@@ -1381,8 +1453,8 @@ mod tests {
 
     #[test]
     fn lifecycle_rejects_cross_domain_partial_payload_and_identity_substitution() {
-        let checked = check_host_observed_moe_routing_output_v1(reference_candidate()).unwrap();
-        let inputs = exact_inputs(&checked);
+        let (routing, checked) = checked_reference();
+        let inputs = exact_inputs(&routing, &checked);
         let batch = test_only_batch(&inputs);
         let facts = synthetic_facts(
             7_u64,
@@ -1481,8 +1553,8 @@ mod tests {
     #[test]
     fn every_routing_array_drift_fails_before_a_completed_readback_can_issue() {
         let candidate = reference_candidate();
-        let checked = check_host_observed_moe_routing_output_v1(candidate).unwrap();
-        let exact_inputs = exact_inputs(&checked);
+        let checked = check_host_observed_moe_routing_output_v1(candidate.as_v1()).unwrap();
+        let exact_inputs = exact_inputs(&candidate, &checked);
         let batch = test_only_batch(&exact_inputs);
         let facts = synthetic_facts(
             7_u64,
@@ -1490,7 +1562,7 @@ mod tests {
             batch.transcript_sha256,
             checked.payload_sha256(),
         );
-        let mutations: &[fn(&mut MoeRoutingOutputCandidateV1)] = &[
+        let mutations: &[fn(&mut MoeRoutingOutputCandidateV2)] = &[
             |value| value.top2_experts[0] ^= 1,
             |value| value.requested_counts[0] ^= 1,
             |value| value.admitted_counts[0] ^= 1,
@@ -1502,7 +1574,7 @@ mod tests {
         for mutate in mutations {
             let mut drifted = candidate;
             mutate(&mut drifted);
-            match check_host_observed_moe_routing_output_v1(drifted) {
+            match check_host_observed_moe_routing_output_v1(drifted.as_v1()) {
                 Err(_) => {}
                 Ok(drifted) => assert_eq!(
                     validate_lifecycle_facts(
@@ -1518,8 +1590,8 @@ mod tests {
 
     #[test]
     fn request_batch_rejects_every_identity_and_transcript_mutation() {
-        let checked = check_host_observed_moe_routing_output_v1(reference_candidate()).unwrap();
-        let inputs = exact_inputs(&checked);
+        let (routing, checked) = checked_reference();
+        let inputs = exact_inputs(&routing, &checked);
         let mutations: &[fn(&mut MoeRoutingExpertBatchIdentityV2)] = &[
             |value| value.routing_request_identity[0] ^= 1,
             |value| value.routing_logits_identity[0] ^= 1,
@@ -1540,13 +1612,19 @@ mod tests {
 
     #[test]
     fn expert_inputs_reject_policy_activation_and_packing_drift() {
-        let checked = check_host_observed_moe_routing_output_v1(reference_candidate()).unwrap();
-        let exact = exact_inputs(&checked);
+        let (routing, checked) = checked_reference();
+        let exact = exact_inputs(&routing, &checked);
         let token_identity = token_activations_identity(&exact.token_activations);
         let weight_identity = route_weight_policy_identity(&exact.route_weights);
         assert!(
-            validate_and_pack_expert_inputs(&checked, token_identity, weight_identity, &exact)
-                .is_ok()
+            validate_and_pack_expert_inputs(
+                &checked,
+                &routing,
+                token_identity,
+                weight_identity,
+                &exact
+            )
+            .is_ok()
         );
 
         let mut invalid_weight = exact;
@@ -1554,6 +1632,7 @@ mod tests {
         assert_eq!(
             validate_and_pack_expert_inputs(
                 &checked,
+                &routing,
                 token_identity,
                 weight_identity,
                 &invalid_weight
@@ -1563,12 +1642,19 @@ mod tests {
         let mut wrong_pair = exact;
         wrong_pair.route_weights[0] = 0.25;
         assert_eq!(
-            validate_and_pack_expert_inputs(&checked, token_identity, weight_identity, &wrong_pair),
+            validate_and_pack_expert_inputs(
+                &checked,
+                &routing,
+                token_identity,
+                weight_identity,
+                &wrong_pair
+            ),
             Err(MoeExpertInputJoinErrorV2::RouteWeightPair { token: 0 })
         );
         assert_eq!(
             validate_and_pack_expert_inputs(
                 &checked,
+                &routing,
                 token_identity,
                 identity(b"wrong-policy"),
                 &exact
@@ -1578,6 +1664,7 @@ mod tests {
         assert_eq!(
             validate_and_pack_expert_inputs(
                 &checked,
+                &routing,
                 identity(b"wrong-activations"),
                 weight_identity,
                 &exact
@@ -1589,6 +1676,7 @@ mod tests {
         assert_eq!(
             validate_and_pack_expert_inputs(
                 &checked,
+                &routing,
                 token_identity,
                 weight_identity,
                 &invalid_bf16
@@ -1602,7 +1690,13 @@ mod tests {
             let mut drifted = exact;
             drifted.packed_activation_tiles[index] ^= 1;
             assert!(matches!(
-                validate_and_pack_expert_inputs(&checked, token_identity, weight_identity, &drifted),
+                validate_and_pack_expert_inputs(
+                    &checked,
+                    &routing,
+                    token_identity,
+                    weight_identity,
+                    &drifted
+                ),
                 Err(MoeExpertInputJoinErrorV2::PackedActivation { index: actual, .. }) if actual == index
             ));
         }
