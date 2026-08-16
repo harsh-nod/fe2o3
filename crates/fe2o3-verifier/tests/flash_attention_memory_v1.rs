@@ -3,7 +3,9 @@ use fe2o3_verifier::{
     FlashAttentionLogicalAccessV1, FlashAttentionMemoryBufferV1,
     FlashAttentionMemoryContractErrorV1, FlashAttentionMemoryEffectKindV1,
     FlashAttentionMemoryIdentitiesV1, FlashAttentionMemoryPhaseV1, FlashAttentionMemoryRegionsV1,
-    check_flash_attention_memory_contract_v1, validate_flash_attention_logical_access_v1,
+    FlashAttentionMemoryVerusJoinErrorV1, FlashAttentionMemoryVerusObservationV1,
+    check_flash_attention_memory_contract_v1, join_flash_attention_memory_verus_v1,
+    validate_flash_attention_logical_access_v1,
 };
 
 fn regions() -> FlashAttentionMemoryRegionsV1 {
@@ -40,9 +42,11 @@ fn exact_fixed_domain_is_bounded_ordered_and_single_writer() {
         regions(),
     )
     .unwrap();
-    assert!(checked.proves_fixed_source_index_bounds());
-    assert!(checked.proves_fixed_source_output_race_freedom());
+    assert!(checked.exhaustively_checks_fixed_source_index_bounds());
+    assert!(checked.exhaustively_checks_fixed_source_output_disjointness());
+    assert!(!checked.has_identity_bound_verus_receipt());
     assert!(!checked.proves_compiler_refinement());
+    assert!(!checked.proves_isa_refinement());
     assert!(!checked.proves_logical_to_machine_address_refinement());
     assert!(!checked.proves_machine_memory_safety());
     assert!(!checked.proves_generalized_race_freedom());
@@ -196,4 +200,71 @@ fn output_mapping_mutations_fail_closed() {
         }),
         Err(FlashAttentionMemoryContractErrorV1::OutputOwnership)
     );
+}
+
+#[test]
+fn exact_verus_observation_upgrades_only_the_fixed_source_claims() {
+    let checked = check_flash_attention_memory_contract_v1(
+        FlashAttentionMemoryIdentitiesV1::exact(),
+        regions(),
+    )
+    .unwrap();
+    let proved = join_flash_attention_memory_verus_v1(
+        checked,
+        FlashAttentionMemoryVerusObservationV1::exact(),
+    )
+    .unwrap();
+
+    assert!(proved.has_identity_bound_verus_receipt());
+    assert!(proved.proves_fixed_source_index_bounds_under_contract_preconditions());
+    assert!(proved.proves_fixed_source_output_disjointness());
+    assert!(!proved.proves_compiler_refinement());
+    assert!(!proved.proves_isa_refinement());
+    assert!(!proved.proves_logical_to_machine_address_refinement());
+    assert!(!proved.proves_machine_memory_safety());
+    assert!(!proved.proves_generalized_race_freedom());
+    assert!(!proved.proves_gpu_execution());
+}
+
+#[test]
+fn every_verus_receipt_identity_axis_fails_closed() {
+    let checked = check_flash_attention_memory_contract_v1(
+        FlashAttentionMemoryIdentitiesV1::exact(),
+        regions(),
+    )
+    .unwrap();
+    for mutate in 0..6 {
+        let mut observation = FlashAttentionMemoryVerusObservationV1::exact();
+        let expected = match mutate {
+            0 => {
+                observation.proof_source[0] ^= 1;
+                FlashAttentionMemoryVerusJoinErrorV1::ProofSource
+            }
+            1 => {
+                observation.artifact[0] ^= 1;
+                FlashAttentionMemoryVerusJoinErrorV1::Artifact
+            }
+            2 => {
+                observation.analyzer_profile[0] ^= 1;
+                FlashAttentionMemoryVerusJoinErrorV1::AnalyzerProfile
+            }
+            3 => {
+                observation.verus_executable[0] ^= 1;
+                FlashAttentionMemoryVerusJoinErrorV1::VerusExecutable
+            }
+            4 => {
+                observation.verus_closure_manifest[0] ^= 1;
+                FlashAttentionMemoryVerusJoinErrorV1::VerusClosure
+            }
+            5 => {
+                observation.transcript[0] ^= 1;
+                FlashAttentionMemoryVerusJoinErrorV1::Transcript
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            join_flash_attention_memory_verus_v1(checked, observation),
+            Err(expected)
+        );
+    }
 }
