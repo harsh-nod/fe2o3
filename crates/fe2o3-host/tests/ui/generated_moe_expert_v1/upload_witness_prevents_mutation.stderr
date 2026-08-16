@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `*buffer` as mutable more than once at a time
+ --> tests/ui/generated_moe_expert_v1/upload_witness_prevents_mutation.rs:6:19
+  |
+5 |     let witness = upload_moe_expert_offsets_v1(stream, buffer, [0, 4, 8, 12, 16]).unwrap();
+  |                                                        ------ first mutable borrow occurs here
+6 |     let mutable = buffer.view_mut(..).unwrap();
+  |                   ^^^^^^ second mutable borrow occurs here
+7 |     drop((witness, mutable));
+  |           ------- first borrow later used here

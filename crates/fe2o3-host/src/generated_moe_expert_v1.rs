@@ -415,8 +415,8 @@ pub struct GeneratedMoeExpertV1HostAdapterV1<
 > {
     observed: ObservedContext,
     offsets_upload: MoeExpertOffsetsUploadWitnessV1<'offsets>,
-    gemm_kernargs: [GemmExplicitKernargV1; EXPERTS],
-    combine_kernarg: CombineExplicitKernargV1,
+    _gemm_kernargs: [GemmExplicitKernargV1; EXPERTS],
+    _combine_kernarg: CombineExplicitKernargV1,
     _activation_tiles: DeviceBufferView<'activations, u16>,
     _expert_weights: DeviceBufferView<'weights, u16>,
     _inverse_routing: DeviceBufferView<'inverse, u32>,
@@ -501,8 +501,8 @@ impl<
         Ok(Self {
             observed: observed.clone(),
             offsets_upload: expert_offsets,
-            gemm_kernargs: prepared.gemm,
-            combine_kernarg: prepared.combine,
+            _gemm_kernargs: prepared.gemm,
+            _combine_kernarg: prepared.combine,
             _activation_tiles: activation_tiles,
             _expert_weights: expert_weights,
             _inverse_routing: inverse_routing,
@@ -555,6 +555,10 @@ impl<
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+    /// No relation between offsets, inverse routing, and packed rows is checked.
+    pub const fn has_routing_consistency_witness(&self) -> bool {
+        false
+    }
     pub const fn elements_for(&self, role: MoeExpertV1BufferRoleV1) -> usize {
         role.elements()
     }
@@ -572,20 +576,6 @@ impl<
 
     pub const fn expert_offsets_payload_sha256(&self) -> [u8; 32] {
         self.offsets_upload.payload_sha256
-    }
-
-    pub(crate) const fn gemm_kernarg_bytes_v1(
-        &self,
-        expert: usize,
-    ) -> Option<&[u8; GEMM_EXPLICIT_KERNARG_BYTES]> {
-        if expert < EXPERTS {
-            Some(&self.gemm_kernargs[expert].bytes)
-        } else {
-            None
-        }
-    }
-    pub(crate) const fn combine_kernarg_bytes_v1(&self) -> &[u8; COMBINE_EXPLICIT_KERNARG_BYTES] {
-        &self.combine_kernarg.bytes
     }
 }
 

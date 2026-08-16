@@ -1,0 +1,5 @@
+error[E0599]: no method named `dispatch` found for struct `MoeExpertExecutionDeniedV1<B>` in the current scope
+ --> tests/ui/generated_moe_expert_v1/denial_has_no_dispatch.rs:4:12
+  |
+4 |     denied.dispatch();
+  |            ^^^^^^^^ method not found in `MoeExpertExecutionDeniedV1<B>`

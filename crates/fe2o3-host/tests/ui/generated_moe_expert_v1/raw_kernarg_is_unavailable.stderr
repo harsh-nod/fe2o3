@@ -1,0 +1,11 @@
+error[E0599]: no method named `gemm_kernarg_bytes_v1` found for reference `&GeneratedMoeExpertV1HostAdapterV1<'_, '_, '_, '_, '_, '_, '_, '_>` in the current scope
+ --> tests/ui/generated_moe_expert_v1/raw_kernarg_is_unavailable.rs:4:18
+  |
+4 |     let _ = host.gemm_kernarg_bytes_v1(0);
+  |                  ^^^^^^^^^^^^^^^^^^^^^ method not found in `&GeneratedMoeExpertV1HostAdapterV1<'_, '_, '_, '_, '_, '_, '_, '_>`
+
+error[E0599]: no method named `combine_kernarg_bytes_v1` found for reference `&GeneratedMoeExpertV1HostAdapterV1<'_, '_, '_, '_, '_, '_, '_, '_>` in the current scope
+ --> tests/ui/generated_moe_expert_v1/raw_kernarg_is_unavailable.rs:5:18
+  |
+5 |     let _ = host.combine_kernarg_bytes_v1();
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&GeneratedMoeExpertV1HostAdapterV1<'_, '_, '_, '_, '_, '_, '_, '_>`
