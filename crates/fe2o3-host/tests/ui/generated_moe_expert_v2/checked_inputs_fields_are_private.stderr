@@ -1,0 +1,5 @@
+error[E0616]: field `input_transcript_sha256` of struct `CheckedMoeCompletedRoutingExpertInputsV2` is private
+ --> tests/ui/generated_moe_expert_v2/checked_inputs_fields_are_private.rs:4:19
+  |
+4 |     let _ = value.input_transcript_sha256;
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^ private field

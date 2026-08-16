@@ -1,0 +1,13 @@
+error[E0451]: fields `readback`, `route_weights`, `packed_activation_tiles` and `input_transcript_sha256` of struct `CheckedMoeCompletedRoutingExpertInputsV2` are private
+  --> tests/ui/generated_moe_expert_v2/checked_inputs_cannot_construct.rs:9:9
+   |
+ 8 |     CheckedMoeCompletedRoutingExpertInputsV2 {
+   |     ---------------------------------------- in this type
+ 9 |         readback: value(),
+   |         ^^^^^^^^ private field
+10 |         route_weights: [0.5; 16],
+   |         ^^^^^^^^^^^^^ private field
+11 |         packed_activation_tiles: [0; 1024],
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ private field
+12 |         input_transcript_sha256: [0; 32],
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ private field
