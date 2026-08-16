@@ -11,6 +11,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::moe_top2_source_kir_correspondence::{
     CheckedMoeSourceKirStructuralRecordV2, MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2,
@@ -34,6 +35,7 @@ use rustc_abi::{CanonAbi, ExternAbi};
 use rustc_hir::{Mutability, Safety};
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{FloatTy, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
+use rustc_span::SourceFile;
 use rustc_target::callconv::{ArgAttributes, ArgExtension, PassMode};
 use sha2::{Digest as _, Sha256};
 
@@ -199,9 +201,9 @@ struct MoeTop2AuthorityV1 {
     authority_identity: [u8; 32],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ObservedMoeTop2SourceV1 {
-    bytes: Vec<u8>,
+#[derive(Debug, Eq, PartialEq)]
+struct RustcLoadedMoeTop2SourceV2 {
+    contents: Arc<String>,
     identity: [u8; 32],
 }
 
@@ -521,7 +523,7 @@ pub(crate) fn authenticate_collected_moe_top2_v1<'tcx>(
         .map_err(|error| CollectedMoeTop2ErrorV1::CanonicalIr(error.to_string()))?;
     let structural_record =
         crate::moe_top2_source_kir_correspondence::produce_checked_moe_source_kir_structural_record_v2(
-            &source.bytes,
+            source.contents.as_bytes(),
             source.identity,
             fn_abi.evidence,
             &imported,
@@ -639,21 +641,25 @@ fn require_registration(root: &CollectedFunction<'_>) -> Result<(), CollectedMoe
 fn observe_source_identity(
     tcx: TyCtxt<'_>,
     root: &CollectedFunction<'_>,
-) -> Result<ObservedMoeTop2SourceV1, CollectedMoeTop2ErrorV1> {
-    let file_name = tcx
+) -> Result<RustcLoadedMoeTop2SourceV2, CollectedMoeTop2ErrorV1> {
+    let source_file = tcx
         .sess
         .source_map()
-        .span_to_filename(tcx.def_span(root.instance.def_id()))
-        .prefer_local_unconditionally()
-        .to_string_lossy()
-        .into_owned();
-    let bytes = std::fs::read(&file_name).map_err(|error| {
-        CollectedMoeTop2ErrorV1::Admission(format!(
-            "source file `{file_name}` is unavailable for exact-byte authentication: {error}"
-        ))
+        .lookup_source_file(tcx.def_span(root.instance.def_id()).lo());
+    rustc_loaded_source_witness(&source_file)
+}
+
+fn rustc_loaded_source_witness(
+    source_file: &SourceFile,
+) -> Result<RustcLoadedMoeTop2SourceV2, CollectedMoeTop2ErrorV1> {
+    let contents = source_file.src.as_ref().cloned().ok_or_else(|| {
+        CollectedMoeTop2ErrorV1::Admission(
+            "kernel root source was not retained in rustc's loaded SourceFile".into(),
+        )
     })?;
     let namespace_declaration = format!("namespace = \"{}\"", encode_hex(&MOE_TOP2_V1_NAMESPACE));
-    if bytes
+    if contents
+        .as_bytes()
         .windows(namespace_declaration.len())
         .filter(|window| *window == namespace_declaration.as_bytes())
         .count()
@@ -663,15 +669,15 @@ fn observe_source_identity(
             "exact source must contain the unique reviewed Phase A namespace declaration".into(),
         ));
     }
-    let actual = sha256(&bytes);
+    let actual = sha256(contents.as_bytes());
     if actual != MOE_TOP2_V1_SOURCE_SHA256 {
         return Err(CollectedMoeTop2ErrorV1::SourceIdentity {
             expected: MOE_TOP2_V1_SOURCE_SHA256,
             actual,
         });
     }
-    Ok(ObservedMoeTop2SourceV1 {
-        bytes,
+    Ok(RustcLoadedMoeTop2SourceV2 {
+        contents,
         identity: actual,
     })
 }
@@ -1547,9 +1553,36 @@ pub(crate) fn exact_frontend_receipt_for_test() -> MoeTop2FrontendReceiptV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustc_span::source_map::{FilePathMapping, SourceMap};
+
+    use crate::test_temp_dir::TestTempDir;
 
     fn receipt() -> MoeTop2FrontendReceiptV1 {
         exact_frontend_receipt_for_test()
+    }
+
+    #[test]
+    fn rustc_loaded_source_witness_does_not_reopen_replaced_path() {
+        let directory = TestTempDir::create("fe2o3-moe-rustc-source-witness");
+        let path = directory.path().join("kernel.rs");
+        let exact = include_str!("../../../examples/moe_top2_v1/src/kernel.rs");
+        std::fs::write(&path, exact).expect("write exact source before rustc load");
+
+        let source_map = SourceMap::new(FilePathMapping::empty());
+        let loaded = source_map
+            .load_file(&path)
+            .expect("load exact source into rustc SourceMap");
+        std::fs::write(&path, "// hostile replacement after parse-time load\n")
+            .expect("replace backing source path");
+
+        let witness = rustc_loaded_source_witness(&loaded)
+            .expect("authenticate rustc-loaded parse-time source");
+        assert_eq!(witness.contents.as_str(), exact);
+        assert_eq!(witness.identity, MOE_TOP2_V1_SOURCE_SHA256);
+        assert_ne!(
+            std::fs::read(&path).expect("read replaced backing source"),
+            witness.contents.as_bytes()
+        );
     }
 
     #[test]
