@@ -802,13 +802,13 @@ fn require_layout(root: &CollectedFunction<'_>) -> Result<(), CollectedRowSoftma
         }
     }
 
-    // General V3 still transports layout under its legacy WG256 contract. The
-    // exact WG64 execution requirement is the independently authenticated
-    // frontend contract and launch binding below.
+    // The General V3 transport and frontend contract must bind the same exact
+    // WG64 launch; accepting a legacy default here would split the generated
+    // host identity from the compiler-authenticated execution contract.
     let transport_launch = contract.launch();
     if transport_launch.rank() != 1
         || transport_launch.block_size()
-            != BlockSize::Exact(Dimensions::new(256, 1, 1).map_err(|error| {
+            != BlockSize::Exact(Dimensions::new(64, 1, 1).map_err(|error| {
                 layout_mismatch(format!("invalid transport workgroup dimensions: {error}"))
             })?)
         || transport_launch.max_grid()
@@ -819,7 +819,7 @@ fn require_layout(root: &CollectedFunction<'_>) -> Result<(), CollectedRowSoftma
         || transport_launch.max_dynamic_shared_memory_bytes() != 0
     {
         return Err(layout_mismatch(
-            "general V3 layout transport contract drifted from its exact 256x1x1 profile",
+            "general V3 layout transport contract drifted from its exact 64x1x1 profile",
         ));
     }
     let frontend = root
