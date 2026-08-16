@@ -124,6 +124,74 @@ run_queue() {
   "${QUEUE}" run "${args[@]}" --manifest queues/queue.tsv --signing-key "${PRIVATE_KEY}" --key-id test-attestor --test-mode --lock-root "${LOCK_ROOT}"
 }
 
+wait_for_paths() {
+  local description="$1"
+  shift
+  python3 - "${description}" "$@" <<'PY'
+import pathlib
+import sys
+import time
+
+description = sys.argv[1]
+paths = [pathlib.Path(value) for value in sys.argv[2:]]
+deadline = time.monotonic() + 10
+while not all(path.exists() for path in paths):
+    if time.monotonic() >= deadline:
+        missing = ", ".join(str(path) for path in paths if not path.exists())
+        raise SystemExit(f"timed out waiting for {description}: {missing}")
+    time.sleep(0.005)
+PY
+}
+
+run_queue_after_release() {
+  local archive="$1"
+  local ready="$2"
+  local release="$3"
+  : >"${ready}"
+  wait_for_paths 'queue contention release' "${release}"
+  run_queue "${archive}"
+}
+
+wait_for_queue_pair() {
+  local pid_a="$1"
+  local pid_b="$2"
+  local output_a="$3"
+  local output_b="$4"
+  local status_a=0
+  local status_b=0
+  wait "${pid_a}" || status_a=$?
+  wait "${pid_b}" || status_b=$?
+  if ((status_a != 0 || status_b != 0)); then
+    printf 'concurrent queue pair failed: status_a=%s status_b=%s\n' \
+      "${status_a}" "${status_b}" >&2
+    cat "${output_a}" "${output_b}" >&2
+    return 1
+  fi
+}
+
+assert_serialized_trace() {
+  local trace="$1"
+  local -a events=()
+  local first
+  local second
+  mapfile -t events <"${trace}"
+  ((${#events[@]} == 4)) || {
+    printf 'serialization trace has %s events instead of 4\n' "${#events[@]}" >&2
+    printf '%s\n' "${events[@]}" >&2
+    return 1
+  }
+  [[ "${events[0]}" == enter$'\t'* ]]
+  first="${events[0]#enter$'\t'}"
+  [[ "${events[1]}" == exit$'\t'"${first}" ]]
+  [[ "${events[2]}" == enter$'\t'* ]]
+  second="${events[2]#enter$'\t'}"
+  [[ "${events[3]}" == exit$'\t'"${second}" ]]
+  [[ "${first}" != "${second}" ]] || {
+    printf 'serialization trace repeated one queue: %s\n' "${first}" >&2
+    return 1
+  }
+}
+
 mutate_hardware_result() {
   local name="$1"
   local old="$2"
@@ -168,7 +236,11 @@ mkdir -p "${REPO}/scripts"
 cat >"${REPO}/scripts/hardware-queue-fixture.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+probe_root="${FE2O3_EVIDENCE_ARCHIVE_ROOT%/*}/serialization-probe"
+archive_name="${FE2O3_EVIDENCE_ARCHIVE_ROOT##*/}"
+printf 'enter\t%s\n' "${archive_name}" >>"${probe_root}/trace.tsv"
 "${FE2O3_EVIDENCE_SLEEP}" 0.25
+printf 'exit\t%s\n' "${archive_name}" >>"${probe_root}/trace.tsv"
 artifact="${FE2O3_EVIDENCE_ARTIFACTS#*=}"
 {
   printf 'test-only serialized hardware fixture\n'
@@ -189,10 +261,13 @@ SOURCE_TREE="$(git -C "${REPO}" rev-parse 'HEAD^{tree}')"
 readonly SOURCE_TREE
 git -C "${REPO}" checkout -q --detach
 
-mkdir -p "${TRUSTED}/keys" "${LOCK_ROOT}"
+readonly SERIALIZATION_PROBE="${TEST_ROOT}/serialization-probe"
+readonly SERIALIZATION_TRACE="${SERIALIZATION_PROBE}/trace.tsv"
+mkdir -p "${TRUSTED}/keys" "${LOCK_ROOT}" "${SERIALIZATION_PROBE}"
 chmod 700 "${LOCK_ROOT}"
 : >"${LOCK_ROOT}/mi300x-gfx942-evidence.lock"
 chmod 600 "${LOCK_ROOT}/mi300x-gfx942-evidence.lock"
+: >"${SERIALIZATION_TRACE}"
 cp "${TEST_DIR}/fixtures/evidence-test-attestor-public.pem" "${TRUSTED}/keys/attestor.pem"
 {
   printf 'parity_trust_policy_schema_version\t2\n'
@@ -365,18 +440,21 @@ ARCHIVE_B="${TEST_ROOT}/archive-b"
 mkdir -p "${ARCHIVE_A}" "${ARCHIVE_B}"
 prepare_archive "${ARCHIVE_A}" concurrent-a
 prepare_archive "${ARCHIVE_B}" concurrent-b
-start_ns="$(date +%s%N)"
-run_queue "${ARCHIVE_A}" >"${TEST_ROOT}/concurrent-a.out" 2>&1 &
+: >"${SERIALIZATION_TRACE}"
+readonly CONCURRENT_READY_A="${TEST_ROOT}/concurrent-a.ready"
+readonly CONCURRENT_READY_B="${TEST_ROOT}/concurrent-b.ready"
+readonly CONCURRENT_RELEASE="${TEST_ROOT}/concurrent.release"
+run_queue_after_release "${ARCHIVE_A}" "${CONCURRENT_READY_A}" "${CONCURRENT_RELEASE}" \
+  >"${TEST_ROOT}/concurrent-a.out" 2>&1 &
 pid_a=$!
-run_queue "${ARCHIVE_B}" >"${TEST_ROOT}/concurrent-b.out" 2>&1 &
+run_queue_after_release "${ARCHIVE_B}" "${CONCURRENT_READY_B}" "${CONCURRENT_RELEASE}" \
+  >"${TEST_ROOT}/concurrent-b.out" 2>&1 &
 pid_b=$!
-wait "${pid_a}"
-wait "${pid_b}"
-elapsed_ms="$((( $(date +%s%N) - start_ns ) / 1000000))"
-((elapsed_ms >= 400)) || {
-  printf 'MI300X queue executions overlapped: %sms\n' "${elapsed_ms}" >&2
-  exit 1
-}
+wait_for_paths 'queue contenders' "${CONCURRENT_READY_A}" "${CONCURRENT_READY_B}"
+: >"${CONCURRENT_RELEASE}"
+wait_for_queue_pair "${pid_a}" "${pid_b}" \
+  "${TEST_ROOT}/concurrent-a.out" "${TEST_ROOT}/concurrent-b.out"
+assert_serialized_trace "${SERIALIZATION_TRACE}"
 [[ -f "${ARCHIVE_A}/results/hardware.tsv" ]]
 [[ -f "${ARCHIVE_B}/results/hardware.tsv" ]]
 
