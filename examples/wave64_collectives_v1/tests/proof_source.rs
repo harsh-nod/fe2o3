@@ -2,11 +2,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const PROOF: &str = include_str!("../verus/wave64_collectives_v1.rs");
+const REFINEMENT_PROOF: &str = include_str!("../verus/wave64_source_kir_refinement_v1.rs");
 const ACTIVE_EXCLUSION_WRONG: &str = include_str!("../verus/negative/active_exclusion_wrong.rs");
 const BOUNDS_WRONG: &str = include_str!("../verus/negative/bounds_wrong.rs");
 const OWNERSHIP_WRONG: &str = include_str!("../verus/negative/ownership_wrong.rs");
 const REDUCTION_WRONG: &str = include_str!("../verus/negative/reduction_wrong.rs");
 const SCAN_RECURRENCE_WRONG: &str = include_str!("../verus/negative/scan_recurrence_wrong.rs");
+const SOURCE_KIR_IDENTITY_WRONG: &str =
+    include_str!("../verus/negative/source_kir_identity_wrong.rs");
+const SOURCE_KIR_CONTRIBUTOR_WRONG: &str =
+    include_str!("../verus/negative/source_kir_contributor_wrong.rs");
+const SOURCE_KIR_OWNER_WRONG: &str = include_str!("../verus/negative/source_kir_owner_wrong.rs");
 const RUNNER: &str = include_str!("../run-verus.sh");
 const SCANNER: &str = include_str!("../check-proof-source.py");
 const README: &str = include_str!("../README.md");
@@ -34,6 +40,28 @@ fn proof_names_every_phase_a_obligation() {
 }
 
 #[test]
+fn refinement_proof_binds_identity_profile_mask_values_and_ownership() {
+    for marker in [
+        "pub open spec fn attributed_source_identity_v1",
+        "word0: 0x01ac1365b0fdfe91",
+        "pub open spec fn kernel_ir_schema_identity_v1",
+        "word0: 0x382fcf4c8733e55d",
+        "pub open spec fn exact_source_model_to_kernel_ir_profile_v1",
+        "target_gfx942_xnack_minus",
+        "pub proof fn source_and_kernel_ir_contributors_are_equal_v1",
+        "pub proof fn source_and_kernel_ir_prefix_values_are_equal_v1",
+        "pub proof fn source_and_kernel_ir_ownership_is_identical_and_injective_v1",
+        "pub proof fn exact_masked_reduction_and_scans_refine_semantic_kernel_ir_v1",
+        "pub proof fn refinement_boundary_grants_no_adjacent_authority_v1",
+    ] {
+        assert!(
+            REFINEMENT_PROOF.contains(marker),
+            "missing refinement obligation {marker}"
+        );
+    }
+}
+
+#[test]
 fn expected_negatives_mutate_each_requested_property() {
     for (source, marker) in [
         (
@@ -49,6 +77,18 @@ fn expected_negatives_mutate_each_requested_property() {
         (
             SCAN_RECURRENCE_WRONG,
             "mutated_inclusive_obeys_recurrence_v1",
+        ),
+        (
+            SOURCE_KIR_IDENTITY_WRONG,
+            "mutated_kernel_ir_schema_identity_is_exact_v1",
+        ),
+        (
+            SOURCE_KIR_CONTRIBUTOR_WRONG,
+            "mutated_exclusive_excludes_its_output_lane_v1",
+        ),
+        (
+            SOURCE_KIR_OWNER_WRONG,
+            "mutated_kernel_ir_ownership_is_injective_v1",
         ),
     ] {
         assert!(source.contains(marker), "missing negative fixture {marker}");
@@ -99,6 +139,8 @@ fn runner_pins_identity_closure_and_expected_failures() {
         "verify-verus-closure.sh",
         "env -i",
         "verification results:: 12 verified, 0 errors",
+        "verification results:: 10 verified, 0 errors",
+        "identity-bound Wave64 source-model-to-Kernel-IR refinement verified",
         "expected-negative proof unexpectedly verified",
         "FE2O3_WAVE64_COLLECTIVES_V1_VERUS_OK",
     ] {
@@ -115,15 +157,19 @@ fn runner_pins_identity_closure_and_expected_failures() {
 }
 
 #[test]
-fn documentation_keeps_phase_a_boundaries_explicit() {
+fn documentation_keeps_refinement_and_execution_boundaries_explicit() {
     for marker in [
-        "source/oracle/formal-evidence phase",
-        "not compiler authentication",
-        "not source-to-machine correspondence",
-        "not artifact admission",
-        "not hardware execution",
+        "Source-model-to-Kernel-IR refinement",
+        "01ac1365b0fdfe91cdc8f7cf6a14ae5acbea41528103ec3de5fe6d895261625e",
+        "382fcf4c8733e55dcacaf8b25691a270a9adcf68912a679c6ea848fee62f84be",
+        "does not prove source-to-model correspondence",
+        "does not prove compiler causality",
+        "does not prove LLVM/ISA refinement",
+        "grants no protected-execution authority",
+        "does not establish generalized safety",
+        "cannot promote a parity row",
         "No COMGR",
-        "no shell linker",
+        "in-process LLD library API",
     ] {
         assert!(
             README.contains(marker),

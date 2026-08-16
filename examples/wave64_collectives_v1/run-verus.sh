@@ -3,6 +3,7 @@ set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 proof="$script_dir/verus/wave64_collectives_v1.rs"
+refinement_proof="$script_dir/verus/wave64_source_kir_refinement_v1.rs"
 negative_dir="$script_dir/verus/negative"
 source_checker="$script_dir/check-proof-source.py"
 version_file="$script_dir/verus/VERUS_VERSION"
@@ -15,7 +16,7 @@ if [ "$#" -ne 0 ]; then
     exit 2
 fi
 
-"$source_checker" "$proof" "$negative_dir"/*.rs
+"$source_checker" "$proof" "$refinement_proof" "$negative_dir"/*.rs
 
 expected_version=$(sed -n '1p' "$version_file")
 expected_sha256=$(sed -n '1p' "$sha256_file")
@@ -106,12 +107,29 @@ if ! grep -Fq 'verification results:: 12 verified, 0 errors' "$positive_log"; th
 fi
 cat "$positive_log"
 
+refinement_log="$tmp_dir/source-kir-refinement-positive.log"
+if ! run_verus "$refinement_proof" >"$refinement_log" 2>&1; then
+    printf 'FAIL: positive Wave64 source-model-to-Kernel-IR proof did not verify\n' >&2
+    cat "$refinement_log" >&2
+    exit 1
+fi
+if ! grep -Fq 'verification results:: 10 verified, 0 errors' "$refinement_log"; then
+    printf 'FAIL: source-model-to-Kernel-IR proof emitted an unexpected verification summary\n' >&2
+    cat "$refinement_log" >&2
+    exit 1
+fi
+cat "$refinement_log"
+printf 'PASS: identity-bound Wave64 source-model-to-Kernel-IR refinement verified\n'
+
 for negative in \
     active_exclusion_wrong \
     bounds_wrong \
     ownership_wrong \
     reduction_wrong \
-    scan_recurrence_wrong
+    scan_recurrence_wrong \
+    source_kir_identity_wrong \
+    source_kir_contributor_wrong \
+    source_kir_owner_wrong
 do
     source="$negative_dir/$negative.rs"
     log="$tmp_dir/$negative.log"
