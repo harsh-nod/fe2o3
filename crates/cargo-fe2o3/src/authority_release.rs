@@ -43,6 +43,10 @@ const MAX_ENVIRONMENT_ENTRIES: usize = 4096;
 const MAX_FIELD_BYTES: usize = 1024 * 1024;
 const MAX_PROC_STAT_BYTES: usize = 4096;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+// A debug launcher can require well over 30 seconds to remeasure a production rustc lib tree.
+// This window ends before the launcher grants the fresh attempt; the grant/accept exchange keeps
+// the shorter handshake deadline below.
+const CHILD_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CONTRACT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V1\0";
 const GRANT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V1\0";
 const ACCEPT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V1\0";
@@ -662,6 +666,9 @@ fn parent_handshake(
     contract: &ReleaseContract,
     contract_identity: [u8; 32],
 ) -> Result<(), String> {
+    control
+        .set_read_timeout(Some(CHILD_VALIDATION_TIMEOUT))
+        .map_err(|error| format!("cannot bound protected release child validation: {error}"))?;
     let mut ready = [0_u8; READY_BYTES];
     control
         .read_exact(&mut ready)
@@ -682,6 +689,7 @@ fn parent_handshake(
         return Err("protected release child executable image differs".to_owned());
     }
     let grant = grant_identity(contract, &contract_identity, pid, start_ticks);
+    configure_timeouts(control)?;
     let mut frame = Vec::with_capacity(GRANT_BYTES);
     frame.extend_from_slice(GRANT_MAGIC);
     frame.extend_from_slice(&contract.attempt);
