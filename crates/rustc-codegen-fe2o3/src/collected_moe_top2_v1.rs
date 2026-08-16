@@ -12,6 +12,10 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::moe_top2_source_kir_correspondence::{
+    CheckedMoeSourceKirStructuralRecordV2, MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2,
+    MoeSourceKirFnAbiArgumentV1, MoeSourceKirFnAbiV1, canonical_kernel_profile_identities_v2,
+};
 use fe2o3_artifacts::{
     AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
     Dimensions, Endianness, IdentityText, LaunchContract, Mutability as ArtifactMutability,
@@ -195,11 +199,24 @@ struct MoeTop2AuthorityV1 {
     authority_identity: [u8; 32],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ObservedMoeTop2SourceV1 {
+    bytes: Vec<u8>,
+    identity: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ObservedMoeTop2FnAbiV1 {
+    identity: [u8; 32],
+    evidence: MoeSourceKirFnAbiV1,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct MoeTop2FrontendReceiptV1 {
     authority: Option<MoeTop2AuthorityV1>,
     ir: Option<MoeTop2KernelIrV1>,
     profile: Option<MoeTop2ProfileV1>,
+    structural_record: Option<CheckedMoeSourceKirStructuralRecordV2>,
 }
 
 impl MoeTop2FrontendReceiptV1 {
@@ -219,6 +236,16 @@ impl MoeTop2FrontendReceiptV1 {
         encode_hex(&self.authority().authority_identity)
     }
 
+    pub(crate) fn structural_record_hex(&self) -> String {
+        encode_hex(
+            &self
+                .structural_record
+                .as_ref()
+                .expect("unconsumed MoeTop2 structural record")
+                .identity(),
+        )
+    }
+
     pub(crate) fn consume(&mut self) -> Result<AuthenticatedMoeTop2V1, CollectedMoeTop2ErrorV1> {
         let authority = self
             .authority
@@ -232,9 +259,35 @@ impl MoeTop2FrontendReceiptV1 {
             .profile
             .take()
             .ok_or(CollectedMoeTop2ErrorV1::ReceiptAlreadyConsumed)?;
+        let structural_record = self
+            .structural_record
+            .take()
+            .ok_or(CollectedMoeTop2ErrorV1::ReceiptAlreadyConsumed)?;
         validate_authority(&authority)?;
         verify_moe_top2_v1(&ir, &profile)
             .map_err(|error| CollectedMoeTop2ErrorV1::CanonicalIr(error.to_string()))?;
+        let (kernel_ir_identity, profile_identity) =
+            canonical_kernel_profile_identities_v2(&ir, &profile);
+        if structural_record.source_identity() != authority.source_identity
+            || structural_record.fn_abi_identity() != authority.fn_abi_identity
+            || structural_record.portable_mir_identity() != authority.portable_mir_identity
+            || structural_record.kernel_ir_identity() != kernel_ir_identity
+            || structural_record.profile_identity() != profile_identity
+            || structural_record.snapshot() != MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2
+            || structural_record.proves_source_to_kir_semantic_refinement()
+            || structural_record.proves_llvm_or_isa_refinement()
+            || structural_record.proves_logical_to_machine_address_refinement()
+            || structural_record.proves_ieee_fp32_or_ocml_semantics()
+            || structural_record.proves_generalized_memory_safety_or_race_freedom()
+            || structural_record.proves_gpu_execution()
+            || structural_record.grants_artifact_authority()
+            || structural_record.grants_load_authority()
+            || structural_record.grants_launch_authority()
+        {
+            return Err(CollectedMoeTop2ErrorV1::ReceiptBinding(
+                "inert private source/FnAbi/MIR/KIR structural record",
+            ));
+        }
         Ok(AuthenticatedMoeTop2V1 {
             ir,
             profile,
@@ -355,6 +408,7 @@ pub(crate) enum CollectedMoeTop2ErrorV1 {
     },
     TrustedDefinitions(String),
     CanonicalIr(String),
+    SourceKirStructuralRecord(String),
     ReceiptAlreadyConsumed,
     ReceiptBinding(&'static str),
 }
@@ -400,6 +454,10 @@ impl fmt::Display for CollectedMoeTop2ErrorV1 {
                     "MoeTop2 canonical semantic IR rejected: {detail}"
                 )
             }
+            Self::SourceKirStructuralRecord(detail) => write!(
+                formatter,
+                "MoeTop2 source/FnAbi/MIR/KIR structural record failed: {detail}"
+            ),
             Self::ReceiptAlreadyConsumed => {
                 formatter.write_str("MoeTop2 frontend receipt was already consumed")
             }
@@ -423,10 +481,10 @@ pub(crate) fn authenticate_collected_moe_top2_v1<'tcx>(
     let compiler_semantics_identity = require_compiler_semantics(&observe_compiler_semantics(tcx))?;
     let root = exact_root(&collection.functions)?;
     require_registration(root)?;
-    let source_identity = observe_source_identity(tcx, root)?;
+    let source = observe_source_identity(tcx, root)?;
     require_signature(tcx, root.instance)?;
     require_layout(root)?;
-    let fn_abi_identity = require_fn_abi(tcx, root.instance)?;
+    let fn_abi = require_fn_abi(tcx, root.instance)?;
     let trusted_definitions_identity = trusted_definitions_and_terminals_identity(tcx, collection)?;
     let target_identity = exact_target_identity()?;
     let profile_launch = exact_profile_launch()?;
@@ -461,6 +519,17 @@ pub(crate) fn authenticate_collected_moe_top2_v1<'tcx>(
     let profile = MoeTop2ProfileV1::exact_gfx942_xnack_minus_cov6();
     verify_moe_top2_v1(&ir, &profile)
         .map_err(|error| CollectedMoeTop2ErrorV1::CanonicalIr(error.to_string()))?;
+    let structural_record =
+        crate::moe_top2_source_kir_correspondence::produce_checked_moe_source_kir_structural_record_v2(
+            &source.bytes,
+            source.identity,
+            fn_abi.evidence,
+            &imported,
+            portable_mir_identity,
+            &ir,
+            &profile,
+        )
+        .map_err(|error| CollectedMoeTop2ErrorV1::SourceKirStructuralRecord(error.to_string()))?;
     let frontend_contract_identity = sha256(
         root.frontend_contract
             .as_ref()
@@ -468,7 +537,7 @@ pub(crate) fn authenticate_collected_moe_top2_v1<'tcx>(
             .canonical_bytes(),
     );
     let mut authority = MoeTop2AuthorityV1 {
-        source_identity,
+        source_identity: source.identity,
         source_namespace: MOE_TOP2_V1_NAMESPACE,
         compiler_crate_binding: compiler_crate_binding().as_bytes(),
         target: target.as_str().to_owned(),
@@ -477,7 +546,7 @@ pub(crate) fn authenticate_collected_moe_top2_v1<'tcx>(
         root_instance_identity,
         portable_mir_identity,
         compiler_semantics_identity,
-        fn_abi_identity,
+        fn_abi_identity: fn_abi.identity,
         trusted_definitions_identity,
         frontend_contract_identity,
         abi_identity: sha256(ABI_BINDING_V1),
@@ -495,6 +564,7 @@ pub(crate) fn authenticate_collected_moe_top2_v1<'tcx>(
         authority: Some(authority),
         ir: Some(ir),
         profile: Some(profile),
+        structural_record: Some(structural_record),
     })
 }
 
@@ -569,7 +639,7 @@ fn require_registration(root: &CollectedFunction<'_>) -> Result<(), CollectedMoe
 fn observe_source_identity(
     tcx: TyCtxt<'_>,
     root: &CollectedFunction<'_>,
-) -> Result<[u8; 32], CollectedMoeTop2ErrorV1> {
+) -> Result<ObservedMoeTop2SourceV1, CollectedMoeTop2ErrorV1> {
     let file_name = tcx
         .sess
         .source_map()
@@ -600,7 +670,10 @@ fn observe_source_identity(
             actual,
         });
     }
-    Ok(actual)
+    Ok(ObservedMoeTop2SourceV1 {
+        bytes,
+        identity: actual,
+    })
 }
 
 fn require_signature<'tcx>(
@@ -770,7 +843,7 @@ fn require_layout(root: &CollectedFunction<'_>) -> Result<(), CollectedMoeTop2Er
 fn require_fn_abi<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: rustc_middle::ty::Instance<'tcx>,
-) -> Result<[u8; 32], CollectedMoeTop2ErrorV1> {
+) -> Result<ObservedMoeTop2FnAbiV1, CollectedMoeTop2ErrorV1> {
     let query = TypingEnv::fully_monomorphized()
         .as_query_input((instance, rustc_middle::ty::List::empty()));
     let abi = tcx
@@ -792,6 +865,13 @@ fn require_fn_abi<'tcx>(
     hash_field(&mut digest, &[u8::from(abi.c_variadic)]);
     hash_field(&mut digest, &abi.fixed_count.to_le_bytes());
     hash_field(&mut digest, &[u8::from(abi.can_unwind)]);
+    let mut arguments = [MoeSourceKirFnAbiArgumentV1 {
+        size: 0,
+        alignment: 0,
+        pair_mode: false,
+        first_pointee_bytes: 0,
+        second_pointee_bytes: 0,
+    }; 8];
     for (index, argument) in abi.args.iter().enumerate() {
         let expected_size = 16;
         if argument.layout.size.bytes() != expected_size || argument.layout.align.abi.bytes() != 8 {
@@ -809,6 +889,33 @@ fn require_fn_abi<'tcx>(
                 hash_field(&mut digest, &[2]);
                 hash_arg_attributes(&mut digest, first);
                 hash_arg_attributes(&mut digest, second);
+                arguments[index] = MoeSourceKirFnAbiArgumentV1 {
+                    size: u16::try_from(argument.layout.size.bytes()).map_err(|_| {
+                        CollectedMoeTop2ErrorV1::Abi(format!(
+                            "FnAbi argument {index} size overflowed u16"
+                        ))
+                    })?,
+                    alignment: u16::try_from(argument.layout.align.abi.bytes()).map_err(|_| {
+                        CollectedMoeTop2ErrorV1::Abi(format!(
+                            "FnAbi argument {index} alignment overflowed u16"
+                        ))
+                    })?,
+                    pair_mode: true,
+                    first_pointee_bytes: u32::try_from(first.pointee_size.bytes()).map_err(
+                        |_| {
+                            CollectedMoeTop2ErrorV1::Abi(format!(
+                                "FnAbi argument {index} first pointee size overflowed u32"
+                            ))
+                        },
+                    )?,
+                    second_pointee_bytes: u32::try_from(second.pointee_size.bytes()).map_err(
+                        |_| {
+                            CollectedMoeTop2ErrorV1::Abi(format!(
+                                "FnAbi argument {index} second pointee size overflowed u32"
+                            ))
+                        },
+                    )?,
+                };
             }
             _ => {
                 return Err(CollectedMoeTop2ErrorV1::Abi(format!(
@@ -824,7 +931,23 @@ fn require_fn_abi<'tcx>(
             actual,
         });
     }
-    Ok(actual)
+    Ok(ObservedMoeTop2FnAbiV1 {
+        identity: actual,
+        evidence: MoeSourceKirFnAbiV1 {
+            identity: actual,
+            rust_calling_convention: abi.conv == CanonAbi::Rust,
+            c_variadic: abi.c_variadic,
+            fixed_count: u8::try_from(abi.fixed_count).map_err(|_| {
+                CollectedMoeTop2ErrorV1::Abi("FnAbi fixed count overflowed u8".into())
+            })?,
+            can_unwind: abi.can_unwind,
+            result_ignored: matches!(abi.ret.mode, PassMode::Ignore),
+            result_size: u16::try_from(abi.ret.layout.size.bytes()).map_err(|_| {
+                CollectedMoeTop2ErrorV1::Abi("FnAbi result size overflowed u16".into())
+            })?,
+            arguments,
+        },
+    })
 }
 
 fn hash_arg_attributes(digest: &mut Sha256, attributes: ArgAttributes) {
@@ -1415,6 +1538,9 @@ pub(crate) fn exact_frontend_receipt_for_test() -> MoeTop2FrontendReceiptV1 {
         authority: Some(authority),
         ir: Some(moe_top2_v1_kernel_ir()),
         profile: Some(MoeTop2ProfileV1::exact_gfx942_xnack_minus_cov6()),
+        structural_record: Some(
+            crate::moe_top2_source_kir_correspondence::candidate_structural_record_for_test(),
+        ),
     }
 }
 

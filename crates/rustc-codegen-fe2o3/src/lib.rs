@@ -39,6 +39,7 @@ mod kernel_ir_lowering;
 mod mir_import;
 #[allow(dead_code)]
 mod mir_import_v2;
+mod moe_top2_source_kir_correspondence;
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod record_lowering;
@@ -666,6 +667,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         let root = receipt.root_instance_identity().to_owned();
                         let portable_mir = receipt.portable_mir_hex();
                         let authority = receipt.authority_hex();
+                        let structural_record = receipt.structural_record_hex();
                         let authenticated = receipt.consume().map_err(|error| error.to_string())?;
                         let grid = authenticated.profile().grid;
                         let semantic_summary = authenticated.semantic_summary();
@@ -686,6 +688,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             root,
                             portable_mir,
                             authority,
+                            structural_record,
                             consumed_authority,
                             descriptor,
                             kir,
@@ -701,6 +704,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             root,
                             portable_mir,
                             authority,
+                            structural_record,
                             consumed_authority,
                             descriptor,
                             kir,
@@ -710,7 +714,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             llvm_bytes,
                             publication_bytes,
                         )) => eprintln!(
-                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed source authority {authority} (bound value {consumed_authority}) to select closed deterministic finite-input MoE top-2 T{tokens}/E{experts}/K{top_k}/C{capacity} semantic KIR {kir} with {routing_steps} ordered routing steps, exact grid {grid:?}, lane-zero exclusive output ownership, stable-prefix capacity dropping, permutation/inverse and sentinel-tail semantics, and descriptor/resource identity {descriptor}; published an inert Worker V2 compiler-module handoff ({canonical_handoff_bytes} canonical bytes, {llvm_bytes} LLVM bytes, {publication_bytes} receipt bytes) for one explicit kernel, five private helpers, no providers/imports, canonical target-machine layout identity, exact COV6 ABI/resources/effects, and no COMGR or subprocess linker; reviewed source-to-profile correspondence only; no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, worker execution, finalizer, link result, artifact, host, runtime, load, launch, GPU, or hardware authority was entered",
+                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; checked private producer-derived structural source/FnAbi/MIR/KIR record {structural_record}, explicitly not semantic refinement; consumed sealed source authority {authority} (bound value {consumed_authority}) to select closed deterministic finite-input MoE top-2 T{tokens}/E{experts}/K{top_k}/C{capacity} semantic KIR {kir} with {routing_steps} ordered routing steps, exact grid {grid:?}, lane-zero exclusive output ownership, stable-prefix capacity dropping, permutation/inverse and sentinel-tail semantics, and descriptor/resource identity {descriptor}; published an inert Worker V2 compiler-module handoff ({canonical_handoff_bytes} canonical bytes, {llvm_bytes} LLVM bytes, {publication_bytes} receipt bytes) for one explicit kernel, five private helpers, no providers/imports, canonical target-machine layout identity, exact COV6 ABI/resources/effects, and no COMGR or subprocess linker; whole-module MIR diagnostics and a single canonical KIR/profile field table do not prove semantic MIR-to-KIR correspondence; no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, worker execution, finalizer, link result, artifact, host, runtime, load, launch, GPU, or hardware authority was entered",
                             collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
                         ),
                         Err(error) => tcx.dcx().fatal(format!(
