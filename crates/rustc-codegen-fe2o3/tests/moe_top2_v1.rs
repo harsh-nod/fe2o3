@@ -3,6 +3,15 @@ use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use fe2o3_artifact_transaction::{
+    BuildAttempt, BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+    consume_compiler_module_handoff_v1,
+};
+use fe2o3_compiler_ffi::{
+    CodeObjectVersion, CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolRoleV1,
+};
+use sha2::{Digest as _, Sha256};
+
 const PIPELINE: &str = "collected-moe-top2-v1";
 const CRATE_NAME: &str = "fe2o3_collected_moe_top2_v1_fixture";
 const REVIEWED_METADATA: &str = "fe2o3-moe-top2-v1-reviewed";
@@ -19,6 +28,13 @@ static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
 
 struct TestOutput {
     path: PathBuf,
+}
+
+struct CompileResult {
+    process: Output,
+    producer: ProducerIdentity,
+    attempt: BuildAttempt,
+    artifact_dir: PathBuf,
 }
 
 impl TestOutput {
@@ -127,13 +143,49 @@ fn build_frontend_dependencies(workspace: &Path) -> Result<(), String> {
         .clone()
 }
 
+fn begin_fixture_attempt(
+    crate_root: &Path,
+    artifact_dir: &Path,
+    source: &str,
+    profile: CompilerProfile<'_>,
+) -> (ProducerIdentity, BuildAttempt) {
+    let producer = ProducerIdentity::from_codegen(profile.crate_name, Some(crate_root))
+        .expect("construct exact MoE top-2 fixture producer");
+    let mut invocation = Sha256::new();
+    for field in [
+        b"FE2O3/MOE-TOP2-V1/TEST-INVOCATION/V1\0".as_slice(),
+        source.as_bytes(),
+        profile.target.as_bytes(),
+        profile.crate_name.as_bytes(),
+        profile.metadata.as_bytes(),
+        profile.crate_binding.as_bytes(),
+        profile.cargo_metadata_observation.as_bytes(),
+        profile.source_remap.as_bytes(),
+        profile.workspace_remap.as_bytes(),
+        profile.mir_enable_passes.as_bytes(),
+        artifact_dir.as_os_str().as_encoded_bytes(),
+        &[u8::from(profile.overflow_checks)],
+    ] {
+        invocation.update((field.len() as u64).to_le_bytes());
+        invocation.update(field);
+    }
+    let attempt = begin_build_attempt(
+        artifact_dir,
+        &producer,
+        BuildInvocation::from_bytes(invocation.finalize().into()),
+        BuildSession::from_bytes(*b"FE2O3-MOE-TOP2V1"),
+    )
+    .expect("begin exact MoE top-2 managed fixture attempt");
+    (producer, attempt)
+}
+
 fn compile(
     workspace: &Path,
     output: &TestOutput,
     label: &str,
     source: &str,
     profile: CompilerProfile<'_>,
-) -> Output {
+) -> CompileResult {
     build_frontend_dependencies(workspace).expect("build MoE top-2 frontend dependencies");
     let backend_target = cargo_target(workspace).join(profile_name());
     let frontend_target = frontend_target(workspace).join("debug");
@@ -164,10 +216,11 @@ fn compile(
     .expect("write path-only MoE top-2 fixture root");
     let artifact_dir = output.path.join(format!("{label}-artifacts"));
     std::fs::create_dir_all(&artifact_dir).expect("create empty artifact directory");
+    let (producer, attempt) = begin_fixture_attempt(&crate_root, &artifact_dir, source, profile);
     let fixture_manifest =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-moe-top2-v1");
 
-    Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+    let process = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
         .current_dir(workspace)
         .arg(&crate_root)
         .arg(format!(
@@ -204,10 +257,17 @@ fn compile(
             profile.cargo_metadata_observation,
         )
         .env("FE2O3_HSACO_DIR", &artifact_dir)
+        .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
         .env("FE2O3_TARGET", profile.target)
         .env("FE2O3_CODEGEN_PIPELINE", PIPELINE)
         .output()
-        .expect("run MoE top-2 compiler fixture")
+        .expect("run MoE top-2 compiler fixture");
+    CompileResult {
+        process,
+        producer,
+        attempt,
+        artifact_dir,
+    }
 }
 
 fn mutation(source: &str, old: &str, new: &str) -> String {
@@ -315,22 +375,25 @@ fn exact_phase_a_source_authenticates_complete_moe_top2_profile() {
         SOURCE,
         CompilerProfile::default(),
     );
-    let stderr = String::from_utf8_lossy(&result.stderr);
+    let stderr = String::from_utf8_lossy(&result.process.stderr);
     assert!(
         stderr.contains("authenticated exact attributed source bytes"),
         "exact admission failed:\n{stderr}"
     );
     assert!(
-        !result.status.success(),
-        "admission-only pipeline emitted code"
+        result.process.status.success(),
+        "exact handoff failed:\n{stderr}"
     );
     for marker in [
         "exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest",
         "complete reachable portable-MIR closure modulo those identity-bound terminals 934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13",
-        "closed deterministic finite-input MoE top-2 T8/E4/K2/C4 semantic KIR with 10 ordered routing steps",
+        "closed deterministic finite-input MoE top-2 T8/E4/K2/C4 semantic KIR",
+        "with 10 ordered routing steps",
         "lane-zero exclusive output ownership",
         "stable-prefix capacity dropping, permutation/inverse and sentinel-tail semantics",
-        "no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, LLVM lowering, Worker V2, finalizer, link, host, runtime, artifact, load, launch, GPU, or hardware authority",
+        "published an inert Worker V2 compiler-module handoff",
+        "one explicit kernel, five private helpers, no providers/imports, canonical target-machine layout identity, exact COV6 ABI/resources/effects",
+        "no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, worker execution, finalizer, link result, artifact, host, runtime, load, launch, GPU, or hardware authority",
     ] {
         assert!(stderr.contains(marker), "missing `{marker}`:\n{stderr}");
     }
@@ -344,13 +407,42 @@ fn exact_phase_a_source_authenticates_complete_moe_top2_profile() {
             .0;
         println!("MOE_TOP2_AUTHORITY {authority}");
     }
+    let consumed =
+        consume_compiler_module_handoff_v1(&result.artifact_dir, &result.producer, result.attempt)
+            .expect("consume exact MoE top-2 compiler handoff once");
+    assert_eq!(consumed.attempt(), result.attempt);
+    assert!(!consumed.grants_compiler_authority());
+    assert!(!consumed.grants_link_authority());
+    assert!(!consumed.grants_load_authority());
+    assert!(!consumed.grants_launch_authority());
+    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
+        .expect("decode exact canonical MoE top-2 Worker V2 handoff");
+    assert_eq!(handoff.canonical_bytes(), consumed.bytes());
+    assert_eq!(handoff.kind(), CompilerModuleKindV1::LlvmTextIr);
     assert_eq!(
-        std::fs::read_dir(output.path.join("exact-artifacts"))
-            .expect("read admission-only artifact directory")
-            .count(),
-        0,
-        "admission-only pipeline published an artifact"
+        handoff.target().as_amd_target_id().to_string(),
+        "gfx942:xnack-"
     );
+    assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
+    assert_eq!(
+        handoff
+            .symbol_manifest()
+            .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+            .collect::<Vec<_>>(),
+        ["moe_top2_route_f32_t8_e4_k2_c4_v1"]
+    );
+    assert_eq!(
+        handoff
+            .symbol_manifest()
+            .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
+            .collect::<Vec<_>>(),
+        ["moe_top2_route_f32_t8_e4_k2_c4_v1.kd"]
+    );
+    assert!(!handoff.authenticates_compiler_origin());
+    assert!(!handoff.grants_worker_authority());
+    assert!(!handoff.grants_link_authority());
+    assert!(!handoff.grants_load_authority());
+    assert!(!handoff.grants_launch_authority());
 }
 
 #[test]
@@ -539,7 +631,7 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             &source,
             CompilerProfile::default(),
         );
-        assert_rejected(&result, label);
+        assert_rejected(&result.process, label);
     }
 
     let profiles = [
@@ -609,7 +701,7 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
     ];
     for (label, profile) in profiles {
         let result = compile(&workspace, &output, label, SOURCE, profile);
-        assert_rejected(&result, label);
+        assert_rejected(&result.process, label);
     }
 }
 
