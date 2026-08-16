@@ -76,20 +76,29 @@ FlashAttention and top-2 MoE vertical slices are tracked by
 [#125](https://github.com/harsh-nod/fe2o3/issues/125).
 
 The exact [MoE expert-compute source slice](examples/moe_expert_v1/README.md)
-now extends the fixed T8/E4/K2/C4 router with two ordinary attributed Rust
-kernels: one host-selected `16x16x16` BF16/F32 expert GEMM and one deterministic
-top-2 weighted combine. Its executable CPU schedule compacts accepted routes,
-runs exactly four zero-padded expert tiles, inverse-packs compact output, and
-combines in route-rank order. A separate direct oracle checks active and padded
-expert rows, compact outputs, dropped routes, final token outputs, unchanged
-inputs, and adjacent canaries. The pinned Verus model verifies 15 fixed logical
-index, padding, ownership, inverse-slot, and phase-order obligations and rejects
-six named mutations. This is source, CPU schedule/oracle, and bounded logical
-proof evidence only. The expert kernels do not yet have authenticated compiler
-profiles, direct finalization, typed HSA dispatch, protected gfx942 execution,
-MFMA numerical refinement, machine memory-safety evidence, generalized race
-freedom, or source/model-to-machine refinement. No expert GPU result or
-performance claim is made.
+extends the fixed T8/E4/K2/C4 router with two ordinary attributed Rust kernels:
+one host-selected `16x16x16` BF16/F32 expert GEMM and one deterministic top-2
+weighted combine. Its executable CPU schedule and independent oracle still
+provide source/CPU evidence, while the original pinned Verus model verifies 15
+logical expert-memory obligations and rejects six named mutations.
+
+The [bounded MoE V1 checkpoint](docs/bounded-moe-v1.md) adds three separate,
+narrower joins. The router's rustc admission now emits a private same-session
+structural diagnostic over rustc-loaded source, the complete checked `FnAbi`
+identity and bounded projection, full imported-MIR diagnostics, and a canonical
+31-entry KIR/profile table. A separate inert `E4/C4/routes16/width16/tile256`
+compact-plan model verifies 19 Verus obligations, rejects seven mutations, and
+is differentially checked across all 625 valid count vectors. Neither is a
+MIR-to-KIR refinement proof or an authority-bearing proof receipt.
+
+On the host, a checked bridge validates internal consistency across one
+caller-supplied top-2/counts/offsets/slots/permutation/inverse snapshot, uploads
+offsets and inverse together, and retains both device regions. An opt-in
+`gfx942` test reads those two uploaded arrays back. It does not authenticate a
+router run, freshness, logits/tie selection, route weights, packed activations,
+dispatch, or expert GPU execution. The expert ABI remains manually pinned, and
+preparation still ends at a denial-only execution boundary. No expert GPU
+result, performance claim, or parity promotion is made.
 
 The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
 the checked host contract with bounded production-directed LDS slices. An

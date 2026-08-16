@@ -2,7 +2,7 @@
 
 Status: execution plan for parallel implementation.
 
-Implementation checkpoint: `f6efb26057952483bd88e5cd9ff786b5bff6d265`.
+Implementation checkpoint: `1281f97487adfd4af32687b7705ba46e5c11152b`.
 
 This roadmap turns [architecture-v2.md](architecture-v2.md),
 [verification-model.md](verification-model.md), the
@@ -183,6 +183,37 @@ machine-code effect evidence, or bound Verus result exists. Therefore this is
 not production proof-authenticated safe
 dispatch, no parity row is promoted solely by this checkpoint,
 repository-wide CUDA-Oxide parity is not claimed, and Complete remains `0`.
+
+## Bounded MoE V1 checkpoint: `1281f9748`
+
+The implementation through
+`1281f97487adfd4af32687b7705ba46e5c11152b` closes three structural and
+host-consistency gaps for the exact `T8/E4/K2/C4` slice without crossing an
+execution-authority boundary:
+
+- the top-2 router rustc admission now derives a private same-session
+  structural record from source retained in rustc's loaded `SourceFile`, a
+  complete checked `FnAbi` identity with a bounded readable projection, the
+  full imported portable-MIR module and complete-module diagnostics, and one
+  ordered 31-entry encoding of every current KIR/profile field;
+- an exact `E4/C4/routes16/width16/tile256` Verus model discharges 19 compact-
+  plan obligations, rejects seven named mutations, and has a Rust differential
+  check over all 625 capacity-bounded expert-count vectors; and
+- a host-observed routing bridge checks the internally consistent relation
+  among caller-supplied top-2 IDs, requested/admitted counts, offsets, slots,
+  permutation, and inverse. It uploads offsets and inverse together and retains
+  both exact device regions; an opt-in `gfx942` test reads those uploaded arrays
+  back before exercising the denial boundary.
+
+The rustc record is diagnostic and inert, not MIR-to-KIR semantic refinement.
+The compact proof is not bound to host code, runtime copies, machine addresses,
+or an authenticated proof receipt. The host bridge has no freshness or
+authenticated router provenance and does not connect logits/tie selection,
+route weights, or packed activations. The expert ABI remains manually pinned,
+and safe preparation exposes no copy, load, dispatch, completion, or expert GPU
+execution operation. See [Bounded MoE V1 evidence](bounded-moe-v1.md) for the
+canonical field table, exact commands, and remaining authority gates. No parity
+row is promoted by this checkpoint.
 
 ## Ordered Critical Milestones After `f6efb26`
 

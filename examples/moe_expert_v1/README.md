@@ -37,8 +37,47 @@ VERUS=/absolute/path/to/pinned/verus examples/moe_expert_v1/run-verus.sh
 
 `src/kernel.rs` contains ordinary attributed Rust `#[kernel]` definitions for
 the expert GEMM and deterministic combine. It contains no `macro_rules!`
-kernel facade. These are exact source definitions only: authenticated
-MIR-to-Kernel-IR profiles, upstream LLVM/LLD finalization, typed host/runtime
-authority, protected gfx942 execution, source/model-to-machine refinement,
-generalized memory safety or race freedom, and numerical correctness remain
-open and must fail closed.
+kernel facade.
+
+## Integrated bounded bridge
+
+The repository's [bounded MoE V1 checkpoint](../../docs/bounded-moe-v1.md) adds
+support around this crate without turning these expert kernels into an
+executable GPU path:
+
+- the router compiler profile produces a private, inert same-session structural
+  record from rustc-loaded source, the complete checked `FnAbi` identity and
+  bounded projection, full imported-MIR diagnostics, and the canonical
+  KIR/profile table; it is not a MIR-to-KIR refinement proof;
+- a separate exact `E4/C4/routes16/width16/tile256` compact-plan model verifies
+  19 Verus obligations, rejects seven negative mutations, and passes all 625
+  valid count vectors; it is not bound to this host implementation, runtime
+  copies, or machine addresses; and
+- a host-observed bridge checks the internal relation among caller-supplied
+  top-2 IDs, counts, offsets, slots, permutation, and inverse, then uploads and
+  retains offsets plus inverse together. Its `gfx942` test reads those uploaded
+  arrays back but does not execute or authenticate the router.
+
+The host adapter manually pins the exact eight-region expert ABI and checks
+their typed lengths, access, context, target, and non-aliasing. It derives an
+inert compact-copy plan from the retained offsets. Expert preparation then
+terminates at `deny_moe_expert_execution_v1`; no copy plan, kernel load, or
+dispatch can begin through the safe API.
+
+The remaining boundary is unchanged: the expert kernels lack authenticated
+MIR-to-Kernel-IR profiles, compiler-derived ABI, upstream LLVM/LLD finalization,
+an authenticated router-completion/readback receipt, route-weight and packed-
+activation joins, typed runtime authority, protected `gfx942` execution,
+source/model-to-machine refinement, generalized memory safety or race freedom,
+and numerical correctness. No expert GPU result or parity promotion is claimed.
+
+Run the focused non-hardware checks from the repository root:
+
+```sh
+python3 scripts/test-bounded-moe-docs.py
+cargo test --locked --manifest-path examples/moe_expert_v1/Cargo.toml
+cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
+VERUS=/absolute/path/to/pinned/verus \
+  ./scripts/test-moe-expert-compact-plan-verus.sh
+cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v1::tests
+```

@@ -74,6 +74,61 @@ its link, without changing compiler or crate behavior.
 The comprehensive lane may link ROCm libraries through workspace packages. It
 does not opt in to ignored GPU execution tests.
 
+## `1281f9748` bounded MoE checkpoint
+
+The following commands reproduce the source/unit, compiler structural,
+compact-plan proof, host-consistency, UI, and compile-only hardware boundaries
+landed through `1281f97487adfd4af32687b7705ba46e5c11152b`:
+
+```text
+python3 scripts/test-bounded-moe-docs.py
+cargo test --locked --manifest-path examples/moe_expert_v1/Cargo.toml
+cargo test --locked -p rustc-codegen-fe2o3 --test moe_top2_v1
+cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
+VERUS=/absolute/path/to/pinned/verus \
+  ./scripts/test-moe-expert-compact-plan-verus.sh
+cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v1::tests
+cargo test --locked -p fe2o3-host --test generated_moe_expert_v1_ui
+cargo test --locked -p fe2o3-host \
+  --test moe_expert_v1_upload_hardware --no-run
+```
+
+The rustc test runs live exact admission plus hostile source/profile and
+relocated-workspace cases. The private record binds rustc-loaded source, the
+complete checked `FnAbi` identity and bounded projection, the full imported-MIR
+diagnostic, same-session authority, and the canonical KIR/profile table. It is
+diagnostic and inert, not MIR-to-KIR semantic refinement or downstream
+authority.
+
+The Verus runner requires the digest-pinned `0.2026.08.02.b677dd5` executable
+and its pinned release closure. It fails rather than skips when the executable,
+closure, 19-obligation transcript, or any of the seven negative mutations
+drifts. The Rust verifier test also enumerates all 625 valid count vectors.
+Those proof values are not bound to the host implementation, runtime copies,
+machine addresses, or an authenticated proof receipt.
+
+The host tests cover the internal relation of caller-supplied top-2 IDs,
+counts, offsets, slots, permutation, and inverse; retained offsets-plus-inverse
+upload; exact typed region/alias checks; and denial-only expert preparation.
+They do not establish freshness, router provenance, logits/tie correctness,
+route weights, packed activations, dispatch, or expert GPU execution.
+
+The opt-in hardware test requires a `gfx942:xnack-` HIP device:
+
+```text
+cargo test --locked -p fe2o3-host \
+  --test moe_expert_v1_upload_hardware \
+  gfx942_routing_bridge_upload_readback_and_denial_are_exact \
+  -- --ignored --exact --nocapture
+```
+
+It uploads the caller-supplied offsets and inverse arrays, reads those two
+destinations back, prepares the manually pinned expert host ABI, and confirms
+execution remains denied. It does not run the router, execute the compact copy
+plan, dispatch either expert kernel, or promote parity. See
+[Bounded MoE V1 evidence](bounded-moe-v1.md) for the exact field and trust
+boundaries.
+
 ## `90b6fe3` multi-kernel checkpoint
 
 The checkpoint at
