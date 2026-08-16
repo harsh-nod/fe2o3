@@ -1,0 +1,9 @@
+error[E0133]: call to unsafe function `FinalizedFlashAttentionV1ReceiptV1::with_exact_finalized_bytes_for_reviewed_flash_runtime_v1` is unsafe and requires unsafe block
+ --> tests/ui/generated_flash_attention_v1/safe_finalized_bytes_require_unsafe.rs:4:5
+  |
+4 | /     receipt.with_exact_finalized_bytes_for_reviewed_flash_runtime_v1(|bytes, _identity| {
+5 | |         let _ = bytes;
+6 | |     });
+  | |______^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior
