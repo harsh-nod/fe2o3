@@ -3739,15 +3739,44 @@ mod tests {
         ));
     }
 
+    fn require_row_softmax_layout_probe(release_gate: bool, configured: bool) -> bool {
+        assert!(
+            !release_gate || configured,
+            "row-softmax release gate requires FE2O3_TEST_ROW_SOFTMAX_LLVM22_LAYOUT_PROBE",
+        );
+        configured
+    }
+
+    #[test]
+    fn row_softmax_release_gate_fails_closed_without_layout_probe() {
+        assert!(!require_row_softmax_layout_probe(false, false));
+        assert!(
+            std::panic::catch_unwind(|| require_row_softmax_layout_probe(true, false)).is_err()
+        );
+    }
+
     #[test]
     fn configured_upstream_llvm22_target_machine_matches_reviewed_row_softmax_layout() {
         const PROBE_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_LLVM22_LAYOUT_PROBE";
+        let release_gate = match std::env::var("FE2O3_ROW_SOFTMAX_RELEASE_GATE") {
+            Ok(value) => {
+                assert_eq!(
+                    value, "1",
+                    "FE2O3_ROW_SOFTMAX_RELEASE_GATE must be exactly 1 when present",
+                );
+                true
+            }
+            Err(std::env::VarError::NotPresent) => false,
+            Err(error) => panic!("read FE2O3_ROW_SOFTMAX_RELEASE_GATE: {error}"),
+        };
         let Some(probe) = std::env::var_os(PROBE_ENV) else {
+            require_row_softmax_layout_probe(release_gate, false);
             eprintln!(
                 "skipping configured upstream LLVM layout observation: {PROBE_ENV} is absent"
             );
             return;
         };
+        require_row_softmax_layout_probe(release_gate, true);
         let output = std::process::Command::new(&probe)
             .output()
             .unwrap_or_else(|error| {
