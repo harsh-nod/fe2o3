@@ -1,9 +1,11 @@
-use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fe2o3_artifacts::DigestAlgorithm;
+
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -17,48 +19,6 @@ fn workspace() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("canonical workspace")
-}
-
-fn cargo_target_root(workspace: &Path) -> PathBuf {
-    match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(path) if Path::new(&path).is_absolute() => PathBuf::from(path),
-        Some(path) => workspace.join(path),
-        None => workspace.join("target"),
-    }
-}
-
-fn scrub_test_dynamic_loader_environment(command: &mut Command) {
-    for (name, _) in std::env::vars_os() {
-        let bytes = name.as_bytes();
-        if bytes.starts_with(b"LD_") || bytes.starts_with(b"DYLD_") || bytes == b"GLIBC_TUNABLES" {
-            command.env_remove(name);
-        }
-    }
-}
-
-fn cargo_fe2o3(workspace: &Path) -> &'static Path {
-    static BINARY: OnceLock<PathBuf> = OnceLock::new();
-    BINARY
-        .get_or_init(|| {
-            let mut command = Command::new(env!("CARGO"));
-            command.current_dir(workspace).args([
-                "build",
-                "--locked",
-                "-p",
-                "cargo-fe2o3",
-                "--bin",
-                "cargo-fe2o3",
-            ]);
-            scrub_test_dynamic_loader_environment(&mut command);
-            let output = command.output().expect("build cargo-fe2o3 test binary");
-            assert!(
-                output.status.success(),
-                "cargo-fe2o3 build failed:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            cargo_target_root(workspace).join("debug/cargo-fe2o3")
-        })
-        .as_path()
 }
 
 struct WorkerV2MissingEnvelope(PathBuf);
@@ -97,7 +57,7 @@ impl Drop for WorkerV2MissingEnvelope {
 
 fn backend_build(workspace: &Path, target: &str) -> Output {
     let config = WorkerV2MissingEnvelope::new(workspace);
-    let mut command = Command::new(cargo_fe2o3(workspace));
+    let mut command = cargo_fe2o3::non_production_command(workspace);
     command
         .current_dir(workspace)
         .args([
@@ -109,12 +69,7 @@ fn backend_build(workspace: &Path, target: &str) -> Output {
         ])
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
-        .env(
-            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
-            "1",
-        )
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0);
-    scrub_test_dynamic_loader_environment(&mut command);
     command
         .output()
         .expect("run gfx942 wave/LDS compiler fixture")

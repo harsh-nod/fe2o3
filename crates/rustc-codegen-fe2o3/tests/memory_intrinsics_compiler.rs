@@ -1,8 +1,11 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fe2o3_artifacts::DigestAlgorithm;
+
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -56,18 +59,9 @@ impl Drop for WorkerV2MissingEnvelope {
 
 fn backend_build(workspace: &Path, target: &str) -> Output {
     let config = WorkerV2MissingEnvelope::new(workspace);
-    Command::new(env!("CARGO"))
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "-p",
-            "fe2o3-memory-v1-compiler-fixture",
-        ])
+        .args(["build", "-p", "fe2o3-memory-v1-compiler-fixture"])
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
