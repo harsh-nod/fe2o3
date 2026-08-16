@@ -12,12 +12,12 @@ that the routing kernel ran, that its output completed, or that device bytes
 were read back. It grants no compiler, artifact, HSA copy, load, dispatch, or
 GPU authority.
 
-## Linear boundary
+## Checked boundary
 
 1. `MoeRoutingOutputCandidateV1` contains caller-supplied router-shaped bytes.
    It is data, not evidence.
 2. `check_host_observed_moe_routing_output_v1` validates the complete fixed
-   relation and returns an opaque, non-`Clone` checked witness.
+   internal relation and returns an opaque, non-`Clone` checked witness.
 3. `upload_checked_moe_routing_expert_bridge_v1` consumes that witness and
    synchronously uploads both its offsets and inverse arrays.
 4. The returned bridge retains immutable views of both exact device regions.
@@ -25,12 +25,15 @@ GPU authority.
    has no separate inverse-routing argument.
 5. Expert preparation still terminates at `deny_moe_expert_execution_v1`.
 
-Safe callers cannot splice checked arrays, replay a checked witness, or mutate
-either uploaded destination while the retained bridge is alive.
+Safe callers cannot splice arrays within a checked witness or mutate either
+uploaded destination while the retained bridge is alive. This is not replay or
+freshness protection: callers can reconstruct and recheck an equivalent public
+candidate. A future authority-bearing bridge must obtain freshness from an
+opaque router-completion/readback receipt.
 
 ## Checked relation
 
-The checker validates:
+Conditioned on the caller-supplied top-2 expert IDs, the checker validates:
 
 - two distinct in-range experts for each of eight tokens;
 - exact requested counts and `min(requested, 4)` admitted counts;
@@ -59,4 +62,5 @@ device-memory rollback.
 External mutation through unsafe native APIs remains outside the safe Rust
 contract. A future end-to-end bridge must add authenticated router completion
 and typed device-to-host observation before these bytes can be attributed to a
-GPU routing execution.
+GPU routing execution. It must also bind top-2 selection to logits and tie
+policy, and connect route weights and packed activation construction.

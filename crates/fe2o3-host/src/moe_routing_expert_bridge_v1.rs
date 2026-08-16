@@ -149,12 +149,13 @@ impl fmt::Display for MoeRoutingOutputConsistencyErrorV1 {
 
 impl Error for MoeRoutingOutputConsistencyErrorV1 {}
 
-/// Opaque, linear witness for one internally consistent host payload.
+/// Opaque witness for one internally consistent host payload.
 ///
 /// This witness authenticates no producer. In particular, it is not evidence
 /// of router dispatch, completion, device readback, compiler output, or GPU
 /// execution. Its private fields prevent safe callers from splicing arrays
-/// after validation.
+/// after validation. It carries no freshness: callers can reconstruct and
+/// recheck equivalent public candidates.
 #[must_use = "the checked routing snapshot must be consumed as one payload"]
 pub struct CheckedMoeHostObservedRoutingOutputV1 {
     payload: MoeRoutingOutputCandidateV1,
@@ -212,7 +213,10 @@ impl CheckedMoeHostObservedRoutingOutputV1 {
     }
 }
 
-/// Checks every exact routing relation over one untrusted host payload.
+/// Checks the fixed internal routing relations over one untrusted host payload.
+///
+/// The check is conditioned on caller-supplied top-2 expert IDs. It does not
+/// validate those IDs against logits or bind route weights or packed activations.
 pub fn check_host_observed_moe_routing_output_v1(
     candidate: MoeRoutingOutputCandidateV1,
 ) -> Result<CheckedMoeHostObservedRoutingOutputV1, MoeRoutingOutputConsistencyErrorV1> {

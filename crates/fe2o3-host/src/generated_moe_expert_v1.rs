@@ -413,7 +413,7 @@ impl<
     /// Offsets and inverse routing came from one CPU-checked host snapshot.
     ///
     /// This does not authenticate router execution or device readback.
-    pub const fn has_routing_consistency_witness(&self) -> bool {
+    pub const fn has_host_snapshot_internal_consistency_witness(&self) -> bool {
         true
     }
     pub const fn elements_for(&self, role: MoeExpertV1BufferRoleV1) -> usize {

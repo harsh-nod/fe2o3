@@ -70,7 +70,7 @@ fn gfx942_routing_bridge_upload_readback_and_denial_are_exact()
     assert_eq!(binding.compact_pack_plan().accepted_routes(), 16);
     assert_eq!(binding.compact_pack_plan().defined_tail_elements(), 0);
     assert!(!binding.compact_pack_plan().grants_copy_authority());
-    assert!(binding.has_routing_consistency_witness());
+    assert!(binding.has_host_snapshot_internal_consistency_witness());
     assert!(!binding.grants_artifact_authority());
     assert!(!binding.grants_launch_authority());
 
