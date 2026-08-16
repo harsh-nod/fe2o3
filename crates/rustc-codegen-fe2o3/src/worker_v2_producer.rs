@@ -1665,6 +1665,9 @@ mod tests {
             sections[15],
             Sha256::digest(crate::moe_top2_v1_codegen::EMPTY_PROVIDER_CLOSURE_V1).as_slice()
         );
+        if let Some(path) = std::env::var_os("FE2O3_TEST_RETAIN_MOE_TOP2_LLVM") {
+            std::fs::write(path, handoff.module_bytes()).unwrap();
+        }
     }
     use fe2o3_artifact_transaction::{
         BuildInvocation, BuildSession, CompilerModuleHandoffErrorV1 as PublicationError,

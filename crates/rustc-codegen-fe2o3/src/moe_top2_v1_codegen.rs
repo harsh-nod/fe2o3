@@ -215,7 +215,7 @@ shape:
   %shape.ok = and i1 %shape01, %shape23
   br i1 %shape.ok, label %finite.loop, label %trap
 finite.loop:
-  %finite.index = phi i32 [ 0, %shape ], [ %finite.next, %finite.loop ]
+  %finite.index = phi i32 [ 0, %shape ], [ %finite.next, %finite.continue ]
   %finite.index64 = zext i32 %finite.index to i64
   %finite.ptr = getelementptr inbounds float, ptr addrspace(1) %logits.data, i64 %finite.index64
   %finite.value = load float, ptr addrspace(1) %finite.ptr, align 4
