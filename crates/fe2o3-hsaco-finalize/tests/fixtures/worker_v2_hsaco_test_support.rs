@@ -23,6 +23,7 @@ enum FixtureAbi {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum FixtureMetadataValue<'a> {
     String(&'a str),
     Unsigned(u64),

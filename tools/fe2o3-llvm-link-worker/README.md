@@ -83,29 +83,37 @@ cmake --build build/llvm-link-worker
 ctest --test-dir build/llvm-link-worker --output-on-failure
 ```
 
-The row-softmax V1 release gate is separately invokable and fail closed. It
-requires the configured LLVM 22 `TargetMachine` layout probe, exact Worker and
-LLVM build identities, `BUILD_TESTING`, and the measured four-file gfx942 OCML
-closure. Missing prerequisites are errors under the gate even though ordinary
-unconfigured Rust tests remain skippable. On `mi300x`, the reviewed invocation
-is:
+The row-softmax V1 release gate is separately invokable and fail closed. An
+operator must select the committed canonical manifest by both absolute path and
+an out-of-band reviewed SHA-256. The gate accepts no checkout-derived default.
+It verifies that clean manifest-only Commit B is directly based on the pinned
+implementation Commit A, then configures fresh, nonexistent build and Cargo
+target directories itself. The manifest pins the LLVM source/tree and complete
+package closure, nightly-2026-04-03 Cargo and rustc binaries, Worker and probe
+ELFs, `Cargo.lock`, the exact vendored offline crate-source closure, the rustc
+sysroot closure, probe output, runtime DSO/provider closure, and real HSACO.
+This is host-specific operator-selected integrity, not origin authentication.
+On `mi300x`, the invocation is:
 
 ```sh
-cmake -S tools/fe2o3-llvm-link-worker \
-  -B /home/harsh/row-layout-worker-release-gate -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_TESTING=ON \
-  -DFE2O3_ROW_SOFTMAX_RELEASE_GATE=ON \
-  -DLLVM_DIR=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/llvm-build-v5/lib/cmake/llvm \
-  -DLLD_DIR=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/llvm-build-v5/lib/cmake/lld \
-  -DFE2O3_PINNED_LLVM_VERSION=22.1.8 \
-  -DFE2O3_EXPECTED_LLVM_BUILD_ID=upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1 \
-  -DFE2O3_LLVM_BUILD_ID_FILE=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/evidence-v5/upstream-llvm-build-id.txt \
-  -DFE2O3_GFX942_DEVICE_LIB_DIR=/opt/rocm-7.2.4/lib/llvm/lib/clang/22/lib/amdgcn/bitcode
+export REVIEWED_ROW_SOFTMAX_MANIFEST_SHA256=<operator-selected-sha256>
+MANIFEST_PATH="$PWD/tools/fe2o3-llvm-link-worker/row-softmax-v1-release-manifest.txt" \
+EXPECTED_MANIFEST_SHA256="$REVIEWED_ROW_SOFTMAX_MANIFEST_SHA256" \
 tools/fe2o3-llvm-link-worker/run-row-softmax-v1-release-gate.sh \
-  /home/harsh/row-layout-worker-release-gate \
-  /home/harsh/row-layout-release-cargo-target
+  /home/harsh/row-layout-worker-release-gate-fresh \
+  /home/harsh/row-layout-release-cargo-target-fresh
 ```
+
+Both output paths must not exist. Do not calculate
+`REVIEWED_ROW_SOFTMAX_MANIFEST_SHA256` from the checkout being admitted. The
+manifest selects
+`/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo`
+and its sibling `rustc` by exact path, content digest, length, and version. Cargo
+runs with a cleared environment, a fresh generated `CARGO_HOME`, `--locked`,
+`--offline`, and only the manifest-pinned vendored sources. Release evidence
+requires two invocations with distinct fresh build and target paths against the
+same externally selected manifest hash; both must reproduce the pinned Worker,
+probe, probe-output, and HSACO identities.
 
 The exact row diagnostic records the pinned LLVM identity/layout, exact ABI
 and descriptor section checks, and SHA-256 transcript consistency. The legacy
@@ -113,13 +121,16 @@ and descriptor section checks, and SHA-256 transcript consistency. The legacy
 authenticated Worker authority. Attempt-scoped descriptor-source
 authentication remains outside Worker `Complete` and is required downstream.
 
-CMake prints a `fe2o3-worker-v1-sha256-*` response measurement derived from
+CMake prints a `fe2o3-worker-v1-sha256-*` build claim derived from
 the worker sources, LLVM version/build ID, C++ compiler identity, language
 level, and fixed exception/RTTI settings. The request names the raw LLVM build
 ID; V2 additionally names the expected worker measurement and pinned executable
-content identity. Responses use the same version as their request and bind the
-complete request identity. Unknown versions, V1/V2 mixing, and malformed V2
-requests fail without downgrade.
+content identity. The manifest supplies that executable content identity to the
+Rust admission test; the executable under test does not establish its own
+expected digest. V3's unkeyed SHA-256 establishes response integrity and
+transcript consistency, not origin authentication. Responses use the same
+version as their request and bind the complete request identity. Unknown
+versions, V1/V2 mixing, and malformed V2 requests fail without downgrade.
 
 LLD's library API is path-oriented. The worker therefore materializes exact
 validated bytes in a private temporary directory, supplies only those paths to

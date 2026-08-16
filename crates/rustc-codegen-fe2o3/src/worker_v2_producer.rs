@@ -1767,9 +1767,37 @@ mod tests {
         true
     }
 
+    fn parse_manifest_sha256(value: &str) -> [u8; 32] {
+        assert_eq!(value.len(), 64, "manifest SHA-256 must contain 64 digits");
+        let mut digest = [0_u8; 32];
+        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+            let digit = |byte: u8| match byte {
+                b'0'..=b'9' => byte - b'0',
+                b'a'..=b'f' => byte - b'a' + 10,
+                _ => panic!("manifest SHA-256 must use lowercase hexadecimal"),
+            };
+            digest[index] = (digit(pair[0]) << 4) | digit(pair[1]);
+        }
+        digest
+    }
+
+    fn parse_manifest_length(value: &str) -> u64 {
+        assert!(
+            value == "0" || !value.starts_with('0'),
+            "manifest byte length is not canonical",
+        );
+        value.parse().expect("manifest byte length is not u64")
+    }
+
     #[test]
     fn row_softmax_release_gate_fails_closed_on_missing_or_partial_worker_configuration() {
-        let required = ["worker", "worker-build-id", "llvm-build-id"];
+        let required = [
+            "worker",
+            "worker-build-id",
+            "llvm-build-id",
+            "worker-sha256",
+            "worker-length",
+        ];
         assert!(!require_row_softmax_release_configuration(
             false, 0, &required
         ));
@@ -1785,6 +1813,23 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn row_softmax_release_manifest_measurement_is_canonical() {
+        assert_eq!(parse_manifest_sha256(&"ab".repeat(32)), [0xab; 32]);
+        assert_eq!(parse_manifest_length("42375992"), 42_375_992);
+        for malformed in [
+            "AB".repeat(32),
+            "ab".repeat(31),
+            format!("g{}", "0".repeat(63)),
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| parse_manifest_sha256(&malformed)).is_err(),
+                "accepted malformed manifest SHA-256 {malformed}",
+            );
+        }
+        assert!(std::panic::catch_unwind(|| parse_manifest_length("01")).is_err());
     }
 
     #[test]
@@ -2785,7 +2830,15 @@ mod tests {
         const WORKER_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_WORKER";
         const WORKER_BUILD_ID_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_WORKER_BUILD_ID";
         const LLVM_BUILD_ID_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_LLVM_BUILD_ID";
-        const CONFIGURATION: [&str; 3] = [WORKER_ENV, WORKER_BUILD_ID_ENV, LLVM_BUILD_ID_ENV];
+        const WORKER_SHA256_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_WORKER_SHA256";
+        const WORKER_LENGTH_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_WORKER_LENGTH";
+        const CONFIGURATION: [&str; 5] = [
+            WORKER_ENV,
+            WORKER_BUILD_ID_ENV,
+            LLVM_BUILD_ID_ENV,
+            WORKER_SHA256_ENV,
+            WORKER_LENGTH_ENV,
+        ];
         let configured = CONFIGURATION
             .iter()
             .filter(|name| std::env::var_os(name).is_some())
@@ -2800,9 +2853,10 @@ mod tests {
         }
 
         let worker_path = PathBuf::from(std::env::var_os(WORKER_ENV).unwrap());
-        let worker_bytes = fs::read(&worker_path).expect("read configured upstream worker");
+        let worker_digest = parse_manifest_sha256(&std::env::var(WORKER_SHA256_ENV).unwrap());
+        let worker_length = parse_manifest_length(&std::env::var(WORKER_LENGTH_ENV).unwrap());
         let measurement = WorkerMeasurementV1::new(
-            ContentIdentityV1::calculate(&worker_bytes),
+            ContentIdentityV1::from_parts(worker_digest, worker_length),
             std::env::var(WORKER_BUILD_ID_ENV).unwrap(),
             std::env::var(LLVM_BUILD_ID_ENV).unwrap(),
         )

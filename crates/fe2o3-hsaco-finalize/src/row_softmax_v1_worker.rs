@@ -469,7 +469,8 @@ impl Error for RowSoftmaxV1DirectWorkerErrorV1 {
     }
 }
 
-/// Validates both authenticated V3 exchanges, the handoff, OCML import, and provider evidence.
+/// Validates V3 response integrity and transcript consistency, the handoff, OCML import, and
+/// provider evidence.
 pub fn validate_row_softmax_v1_direct_worker_exchange_v1(
     source: &InertFirstBuildWorkerV2EvidenceV1,
     expected: RowSoftmaxV1DirectWorkerExpectationV1,
@@ -646,10 +647,10 @@ fn validate_matching_responses(
         .ok_or_else(|| profile_mismatch("replay structured OCML provider evidence"))?;
     let bootstrap_identity = bootstrap
         .response_identity()
-        .ok_or_else(|| profile_mismatch("bootstrap authenticated response identity"))?;
+        .ok_or_else(|| profile_mismatch("bootstrap response-integrity identity"))?;
     let replay_identity = replay
         .response_identity()
-        .ok_or_else(|| profile_mismatch("replay authenticated response identity"))?;
+        .ok_or_else(|| profile_mismatch("replay response-integrity identity"))?;
     if bootstrap_provider != replay_provider {
         return Err(profile_mismatch(
             "bootstrap/replay ordered OCML provider closure",
@@ -872,7 +873,7 @@ fn validate_response(
         .ok_or_else(|| profile_mismatch("structured OCML provider evidence"))?;
     validate_provider_evidence(provider, expected.worker.provider)?;
     if response.response_identity().is_none() {
-        return Err(profile_mismatch("authenticated provider response identity"));
+        return Err(profile_mismatch("provider response-integrity identity"));
     }
     if response.diagnostics().len() != SUCCESS_DIAGNOSTICS.len()
         || response

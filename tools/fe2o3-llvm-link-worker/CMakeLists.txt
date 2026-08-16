@@ -111,6 +111,33 @@ if(FE2O3_ROW_SOFTMAX_RELEASE_GATE AND
   message(FATAL_ERROR
     "row-softmax release gate requires the measured gfx942 OCML closure")
 endif()
+if(FE2O3_ROW_SOFTMAX_RELEASE_GATE)
+  foreach(FE2O3_REQUIRED_RELEASE_VARIABLE IN ITEMS
+      FE2O3_EXPECTED_GFX942_DEVICE_LIB_CANONICAL_DIR
+      FE2O3_EXPECTED_GFX942_OCML_SHA256
+      FE2O3_EXPECTED_GFX942_ISA_SHA256
+      FE2O3_EXPECTED_GFX942_UNSAFE_MATH_SHA256
+      FE2O3_EXPECTED_GFX942_FINITE_ONLY_SHA256
+      FE2O3_EXPECTED_WORKER_BUILD_ID)
+    if(NOT DEFINED ${FE2O3_REQUIRED_RELEASE_VARIABLE} OR
+       "${${FE2O3_REQUIRED_RELEASE_VARIABLE}}" STREQUAL "")
+      message(FATAL_ERROR
+        "${FE2O3_REQUIRED_RELEASE_VARIABLE} is required by the release gate")
+    endif()
+  endforeach()
+  if(NOT FE2O3_GFX942_DEVICE_LIB_DIR STREQUAL
+     FE2O3_EXPECTED_GFX942_DEVICE_LIB_CANONICAL_DIR)
+    message(FATAL_ERROR
+      "gfx942 provider path differs from the reviewed canonical directory")
+  endif()
+  foreach(FE2O3_PROVIDER_DIGEST IN ITEMS OCML ISA UNSAFE_MATH FINITE_ONLY)
+    if(NOT FE2O3_GFX942_${FE2O3_PROVIDER_DIGEST}_SHA256 STREQUAL
+       FE2O3_EXPECTED_GFX942_${FE2O3_PROVIDER_DIGEST}_SHA256)
+      message(FATAL_ERROR
+        "gfx942 ${FE2O3_PROVIDER_DIGEST} digest differs from the reviewed value")
+    endif()
+  endforeach()
+endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-llvm-build-id.txt"
   "${FE2O3_MEASURED_LLVM_BUILD_ID}\n")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-gfx942-ocml-provider.txt"
@@ -183,6 +210,11 @@ string(SHA256 FE2O3_WORKER_MEASUREMENT_SHA256
 set(FE2O3_WORKER_MEASUREMENT
   "fe2o3-worker-v1-sha256-${FE2O3_WORKER_MEASUREMENT_SHA256}")
 message(STATUS "fe2o3 worker asserted build claim: ${FE2O3_WORKER_MEASUREMENT}")
+if(FE2O3_ROW_SOFTMAX_RELEASE_GATE AND
+   NOT FE2O3_WORKER_MEASUREMENT STREQUAL FE2O3_EXPECTED_WORKER_BUILD_ID)
+  message(FATAL_ERROR
+    "worker build claim differs from the operator-selected reviewed manifest")
+endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-worker-build-id.txt"
   "${FE2O3_WORKER_MEASUREMENT}\n")
 
