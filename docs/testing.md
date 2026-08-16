@@ -74,6 +74,38 @@ its link, without changing compiler or crate behavior.
 The comprehensive lane may link ROCm libraries through workspace packages. It
 does not opt in to ignored GPU execution tests.
 
+## Row-softmax V1 LLVM 22 release gate
+
+The row release is a separate host-specific compiler/code-object lane. Review
+the committed manifest out of band, then invoke the gate twice with the same
+reviewed digest and four distinct paths that do not exist:
+
+```text
+export REVIEWED_ROW_SOFTMAX_MANIFEST_SHA256=<independently-reviewed-sha256>
+MANIFEST_PATH="$PWD/tools/fe2o3-llvm-link-worker/row-softmax-v1-release-manifest.txt" \
+EXPECTED_MANIFEST_SHA256="$REVIEWED_ROW_SOFTMAX_MANIFEST_SHA256" \
+tools/fe2o3-llvm-link-worker/run-row-softmax-v1-release-gate.sh \
+  /absolute/new/row-cmake-run1 /absolute/new/row-cargo-run1
+MANIFEST_PATH="$PWD/tools/fe2o3-llvm-link-worker/row-softmax-v1-release-manifest.txt" \
+EXPECTED_MANIFEST_SHA256="$REVIEWED_ROW_SOFTMAX_MANIFEST_SHA256" \
+tools/fe2o3-llvm-link-worker/run-row-softmax-v1-release-gate.sh \
+  /absolute/new/row-cmake-run2 /absolute/new/row-cargo-run2
+```
+
+The gate requires a clean manifest-only commit directly above its pinned
+implementation parent. It rehashes the LLVM source/package, LLD, device
+libraries, Cargo vendor tree, rustc sysroot, build tools, runtime DSOs, Worker,
+probe, probe output, and real retained HSACO before and after use. Focused CTest
+and Rust suites verify the exact four-explicit plus nineteen-hidden-argument
+LLVM 22 metadata profile and reject field, note-view, MessagePack, identity, and
+artifact substitutions. Both runs must reproduce the manifest's exact output
+digests and lengths.
+
+Passing this lane establishes operator-selected reviewed integrity for one
+host-specific compiler/code-object profile. It does not authenticate origin,
+run the GPU, establish source/Verus-to-machine refinement, prove memory safety
+or race freedom, or grant publication, load, launch, or parity authority.
+
 ## `1281f9748` bounded MoE checkpoint
 
 The following commands reproduce the source/unit, compiler structural,

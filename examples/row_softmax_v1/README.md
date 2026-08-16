@@ -200,6 +200,28 @@ The positive proof pin is 12,966 bytes with SHA-256
 all ten semantic-negative and five trust-exploit sources are pinned
 independently as well.
 
+## Compiler/code-object release gate
+
+The repository-level row profile compiles this fixed kernel with pinned upstream
+LLVM 22.1.8 target-machine APIs and links through in-process LLD. C++ and Rust
+independently require the exact emitted COV6 metadata, including four explicit
+slice fields, nineteen hidden arguments, register/spill values, resources,
+symbols, and optional-field presence or absence. The C++ envelope inspector also
+reconciles section and program-header metadata notes and rejects trailing
+MessagePack objects or conflicting descriptors.
+
+A manifest-only commit directly above the implementation pins all source,
+toolchain, device-library, runtime, Worker, probe, and HSACO identities. The
+release command requires a caller-supplied independently reviewed manifest
+digest and two invocations with distinct, nonexistent build and Cargo target
+directories. See the exact commands in [the testing guide](../../docs/testing.md#row-softmax-v1-llvm-22-release-gate).
+
+This gate produces compiler/code-object integrity evidence only. It does not
+authenticate origin, execute the GPU, connect the Verus model to emitted
+instructions, prove concrete memory safety or race freedom, or grant artifact,
+load, launch, or parity authority. The production static binding-wrapper gap
+remains.
+
 ## Commands
 
 ```text

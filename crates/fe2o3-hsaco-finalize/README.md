@@ -202,18 +202,25 @@ or launch authority.
 `inspect_row_softmax_v1_structural_worker_v2_hsaco_v1` is a separate sealed
 Worker V2 specialization for `row_softmax_v1`. It requires COV6,
 `gfx942:xnack-`, wave64, required workgroup `[64, 1, 1]`, maximum flat
-workgroup 64, explicit maximum-workgroup metadata `[1, 1, 1]`, zero LDS, exact
-entry and descriptor symbols, and one unfinalized canonical descriptor table.
+workgroup 64, absent max-num-workgroups metadata, zero LDS and private segment,
+exact entry and descriptor symbols, and one unfinalized canonical descriptor
+table.
 The bound executable entry must be a real function symbol in an executable
 mapping, but its instruction bytes are not interpreted.
 
-The kernel kind must be Normal, dynamic stack use is forbidden, and COV6
-cluster dimensions must either be absent or exactly `[1, 1, 1]`, matching the
-fixed maximum grid. The hidden-argument list must be exactly the mandatory
-COV6 block-count, group-size, remainder, global-offset, and grid-dimension
-tuple. Optional hidden records fail closed, including dynamic-LDS size,
-multigrid synchronization, and queue-pointer records that would alter launch
-requirements.
+The measured upstream LLVM 22.1.8 metadata must omit the kernel-kind field while
+decoding to Normal, emit `uses_dynamic_stack=false`, and omit uniform-workgroup,
+cluster, workgroup-processor, gfx revision, enqueue, workgroup-size-hint, and
+vector-type-hint fields. Source language must be exactly OpenCL C 2.0. SGPR,
+VGPR, AGPR, SGPR-spill, and VGPR-spill fields must be present with the measured
+values `42`, `88`, `44`, `44`, and `28`.
+
+The argument array must be present and contain exactly four explicit fields
+followed by nineteen COV6 hidden fields. The hidden sequence is block counts,
+group sizes, remainders, global offsets, grid dimensions, hostcall buffer,
+multigrid synchronization, heap V1, default queue, completion action, and queue
+pointer at the exact LLVM-emitted offsets and sizes. Missing, reordered,
+duplicated, qualified, or additional arguments fail closed.
 
 Metadata and the canonical descriptor must agree on two F32 slice pairs:
 `input: &[f32]` and `output: DisjointSlice<f32>`, with pointer/length fields at
@@ -235,6 +242,12 @@ compiler origin and grants no publication, HSA load, or launch authority.
 upstream LLVM/LLD Worker V2 lineage and canonical descriptor finalizer. It adds
 no COMGR path and independently repeats the exact structural checks after
 digest finalization.
+
+The separate row release gate binds this profile to a manifest-only commit and
+requires two fresh builds against one caller-supplied reviewed manifest digest.
+That is host-specific compiler/code-object integrity evidence. It is not origin
+authentication, GPU execution, source-to-machine refinement, or runtime
+authority.
 
 Both inspected and finalized profile values retain their generic Worker V2
 lineage privately. They cannot be converted into generic prepared-finalization

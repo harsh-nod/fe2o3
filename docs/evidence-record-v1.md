@@ -145,6 +145,20 @@ malformed, non-executable, or inconsistent options fail before any shard runs.
 The compile shard records compilation and Worker V2 publication only; it is not
 hardware execution evidence.
 
+The fixed row-softmax LLVM 22 release gate is a distinct, stricter
+compiler/code-object reproducibility lane. It is not silently folded into
+`GFX942-COMPILE`: its committed manifest pins a clean implementation parent,
+the complete upstream LLVM/LLD and device-library inputs, Cargo/rustc and their
+offline closures, runtime DSOs, Worker/probe outputs, and the real retained
+HSACO. An operator supplies the reviewed manifest digest from outside the
+checkout, and release evidence requires two fresh replays with identical
+outputs. See [testing.md](testing.md#row-softmax-v1-llvm-22-release-gate).
+
+This manifest and its unkeyed SHA-256 values provide operator-selected
+integrity, not a signature, origin authentication, machine attestation, GPU
+execution, or parity-promotion authority. A separately archived command-result
+record is still required before the lane can be cited by a parity row.
+
 The gfx942 hardware lane requires the exact vecadd HSACO to be a regular,
 non-symlink file inside the archive. Its size and digest are bound as a record
 artifact, while its absolute path is recorded in the command environment:

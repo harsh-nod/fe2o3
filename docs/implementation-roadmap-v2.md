@@ -66,6 +66,30 @@ Parallel work is effective only after these contracts have golden fixtures:
 Freeze means backward-compatible evolution through explicit version changes,
 not permanent immutability.
 
+## Row-softmax LLVM 22 release checkpoint
+
+The fixed width-64 row-softmax compiler lane now has a two-commit release
+protocol. Implementation Commit A contains the source-to-LLVM profile, direct
+upstream LLVM target emission, in-process LLD linking, C++ and Rust post-link
+inspection, hostile parser/metadata tests, and a fail-closed gate. Manifest-only
+Commit B pins Commit A and its tree plus the complete host-specific LLVM,
+device-library, Cargo/rustc, source, sysroot, runtime-DSO, Worker, probe, and
+HSACO identities. The caller must supply an independently reviewed manifest
+digest; the checkout supplies no default.
+
+The measured LLVM 22.1.8 contract is exact: one `gfx942:xnack-` COV6 kernel,
+workgroup `[64, 1, 1]`, wave64, zero group/private segments, a 288-byte kernarg,
+four explicit slice fields, nineteen hidden arguments, exact register/spill
+counts, and exact optional-field presence or absence. C++ reconciles `SHT_NOTE`
+and `PT_NOTE` metadata views, rejects conflicting descriptors, and consumes one
+complete MessagePack object. Rust independently inspects the same emitted
+profile. Release acceptance requires two fresh replays with identical outputs.
+
+This closes a reproducible compiler/code-object checkpoint only. It is not
+origin authentication, source-to-machine or Verus refinement, a memory-safety
+or race-freedom proof, protected runtime authority, or a GPU result. The static
+binding-wrapper blocker and parity status remain unchanged.
+
 ## Implemented Checkpoint: `90b6fe3`
 
 The `90b6fe3` checkpoint establishes a bounded `gfx942` multi-kernel spine:

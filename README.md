@@ -60,16 +60,30 @@ An exact finalizer join now consumes that certificate with the direct LLVM/LLD
 worker exchange, OCML closure, artifact, descriptor, ABI, geometry, and resource
 identities into a sealed linear host token. A fixed `gfx942:xnack-`, width-64,
 unmasked typed HSA path, guarded buffers, CPU comparison, and 25-pin terminal
-receipt are implemented behind that join. They are not reachable from the
+receipt are implemented behind that join.
+
+The row profile also has a host-specific compiler/code-object release gate. A
+manifest-only commit directly above the implementation selects an independently
+reviewed SHA-256, pinned upstream LLVM 22.1.8 source and package closure,
+in-process LLD, the exact OCML/device-library closure, Cargo/rustc and their
+offline source/sysroot closures, runtime DSOs, Worker and layout-probe ELFs, and
+the retained HSACO. Both C++ and Rust require the measured metadata exactly,
+including four explicit and nineteen hidden arguments, presence or absence of
+optional fields, register/spill values, resources, symbols, and target. Release
+evidence requires two runs from distinct fresh build and Cargo directories with
+the same caller-supplied manifest digest and byte-identical outputs. This is
+operator-selected reviewed integrity, not origin authentication or GPU evidence.
+
+The typed runtime path remains unreachable from the
 production authority command: real MI300X `authority release build` crosses the
 reviewed launcher and frozen Cargo closure, then stops at `stage=binding-wrapper`.
 Cargo mutates the dynamic-loader environment before invoking the Rust workspace
 wrapper; admitting its mutable target deps directory is forbidden, while the
 current dynamic wrapper cannot load `librustc_driver` after loader variables are
 cleared. The command therefore fails closed until an integrated static binding
-wrapper exists. No protected compiler, finalizer, artifact, runtime, or GPU
-authority is claimed, and source tests are not Verus or refinement proof. This
-fixed-profile production blocker remains tracked under
+wrapper exists. The release gate grants no production compiler, artifact,
+runtime, load, launch, or GPU authority, and source tests are not Verus or
+refinement proof. This fixed-profile production blocker remains tracked under
 [#120](https://github.com/harsh-nod/fe2o3/issues/120). The subsequent fixed
 FlashAttention and top-2 MoE vertical slices are tracked by
 [#122](https://github.com/harsh-nod/fe2o3/issues/122) through
