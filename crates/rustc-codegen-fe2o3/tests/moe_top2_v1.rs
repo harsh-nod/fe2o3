@@ -285,8 +285,9 @@ fn assert_rejected(result: &Output, label: &str) {
         "hostile case `{label}` consumed authenticated authority:\n{output}"
     );
     assert!(
-        !output.contains("checked private producer-derived structural source/FnAbi/MIR/KIR record")
-            && !output.contains(STRUCTURAL_CORRESPONDENCE),
+        !output.contains(
+            "checked private same-session producer-derived structural source/FnAbi/MIR/KIR record"
+        ) && !output.contains(STRUCTURAL_CORRESPONDENCE),
         "hostile case `{label}` emitted the accepted structural record:\n{output}"
     );
 }
@@ -397,7 +398,7 @@ fn live_rustc_admission_emits_pinned_structural_record() {
     );
     let stderr = String::from_utf8_lossy(&result.process.stderr);
     assert!(
-        stderr.contains("authenticated exact attributed source bytes"),
+        stderr.contains("authenticated rustc-loaded exact attributed source contents"),
         "exact admission failed:\n{stderr}"
     );
     assert!(
@@ -405,11 +406,11 @@ fn live_rustc_admission_emits_pinned_structural_record() {
         "exact handoff failed:\n{stderr}"
     );
     for marker in [
-        "exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest",
+        "opaque exact rustc FnAbi identity plus bounded structural projection, location-independent V3 trusted definitions and reviewed semantic-terminal manifest",
         "complete reachable portable-MIR closure modulo those identity-bound terminals 934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13",
-        "checked private producer-derived structural source/FnAbi/MIR/KIR record",
+        "checked private same-session producer-derived structural source/FnAbi/MIR/KIR record",
         "explicitly not semantic refinement",
-        "whole-module MIR diagnostics and a single canonical KIR/profile field table do not prove semantic MIR-to-KIR correspondence",
+        "whole-module MIR diagnostics and ordered aggregate canonical KIR/profile entries collectively encoding all current fields do not prove semantic MIR-to-KIR correspondence",
         "closed deterministic finite-input MoE top-2 T8/E4/K2/C4 semantic KIR",
         "with 10 ordered routing steps",
         "lane-zero exclusive output ownership",
@@ -421,7 +422,9 @@ fn live_rustc_admission_emits_pinned_structural_record() {
         assert!(stderr.contains(marker), "missing `{marker}`:\n{stderr}");
     }
     let correspondence = stderr
-        .split_once("checked private producer-derived structural source/FnAbi/MIR/KIR record ")
+        .split_once(
+            "checked private same-session producer-derived structural source/FnAbi/MIR/KIR record ",
+        )
         .expect("structural correspondence marker")
         .1
         .split_once(", explicitly not semantic refinement")
@@ -429,17 +432,24 @@ fn live_rustc_admission_emits_pinned_structural_record() {
         .0;
     assert_eq!(correspondence, STRUCTURAL_CORRESPONDENCE);
     assert!(correspondence.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let authority_suffix = stderr
+        .split_once("consumed sealed source authority ")
+        .expect("authenticated authority marker")
+        .1;
+    let (authority, bound_suffix) = authority_suffix
+        .split_once(" (bound value ")
+        .expect("authenticated authority binding marker");
+    let bound_authority = bound_suffix
+        .split_once(')')
+        .expect("authenticated authority binding terminator")
+        .0;
+    assert_eq!(authority, bound_authority);
+    assert_eq!(authority.len(), 64);
+    assert!(authority.bytes().all(|byte| byte.is_ascii_hexdigit()));
     if std::env::var_os("FE2O3_MOE_TOP2_REPORT_CORRESPONDENCE").is_some() {
         println!("MOE_TOP2_STRUCTURAL_CORRESPONDENCE {correspondence}");
     }
     if std::env::var_os("FE2O3_MOE_TOP2_REPORT_AUTHORITY").is_some() {
-        let authority = stderr
-            .split_once("consumed sealed source authority ")
-            .expect("authenticated authority marker")
-            .1
-            .split_once(" (bound value ")
-            .expect("authenticated authority terminator")
-            .0;
         println!("MOE_TOP2_AUTHORITY {authority}");
     }
     let consumed =
@@ -789,9 +799,9 @@ fn authority_is_location_independent_and_provider_source_bound() {
         "provider substitution did not fail at trusted identity:\n{hostile_text}"
     );
     assert!(
-        !hostile_text
-            .contains("checked private producer-derived structural source/FnAbi/MIR/KIR record")
-            && !hostile_text.contains(STRUCTURAL_CORRESPONDENCE),
+        !hostile_text.contains(
+            "checked private same-session producer-derived structural source/FnAbi/MIR/KIR record"
+        ) && !hostile_text.contains(STRUCTURAL_CORRESPONDENCE),
         "provider substitution emitted an accepted structural record:\n{hostile_text}"
     );
 }

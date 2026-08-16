@@ -265,7 +265,39 @@ pub(super) enum MoeSourceKirProducerErrorV2 {
     FnAbi,
     PortableMir,
     SameSession,
+    Canonical(CanonicalClassifierErrorV2),
     SnapshotMismatch { actual: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum CanonicalClassifierErrorV2 {
+    DuplicateField {
+        name: &'static str,
+    },
+    MissingField {
+        name: &'static str,
+    },
+    UnexpectedField {
+        name: &'static str,
+    },
+    FieldName {
+        index: usize,
+        expected: &'static str,
+        actual: &'static str,
+    },
+    FieldOrder {
+        name: &'static str,
+        expected_index: usize,
+        actual_index: usize,
+    },
+    Membership {
+        name: &'static str,
+        expected: u8,
+        actual: u8,
+    },
+    Value {
+        name: &'static str,
+    },
 }
 
 impl fmt::Display for MoeSourceKirProducerErrorV2 {
@@ -288,6 +320,7 @@ impl fmt::Display for MoeSourceKirProducerErrorV2 {
             Self::SameSession => {
                 formatter.write_str("structural inputs do not share the admitted rustc authority")
             }
+            Self::Canonical(error) => write!(formatter, "canonical classifier rejected: {error}"),
             Self::SnapshotMismatch { actual } => write!(
                 formatter,
                 "live structural snapshot differs from its reviewed pin; observed {actual}"
@@ -297,6 +330,43 @@ impl fmt::Display for MoeSourceKirProducerErrorV2 {
 }
 
 impl Error for MoeSourceKirProducerErrorV2 {}
+
+impl fmt::Display for CanonicalClassifierErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateField { name } => write!(formatter, "duplicate field `{name}`"),
+            Self::MissingField { name } => write!(formatter, "missing field `{name}`"),
+            Self::UnexpectedField { name } => write!(formatter, "unexpected field `{name}`"),
+            Self::FieldName {
+                index,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "field {index} name drifted: expected `{expected}`, found `{actual}`"
+            ),
+            Self::FieldOrder {
+                name,
+                expected_index,
+                actual_index,
+            } => write!(
+                formatter,
+                "field `{name}` moved from {expected_index} to {actual_index}"
+            ),
+            Self::Membership {
+                name,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "field `{name}` membership drifted: expected {expected:#04x}, found {actual:#04x}"
+            ),
+            Self::Value { name } => write!(formatter, "field `{name}` value drifted"),
+        }
+    }
+}
+
+impl Error for CanonicalClassifierErrorV2 {}
 
 pub(super) fn seal_authenticated_live_inputs_v2<'a>(
     source: &'a RustcLoadedMoeTop2SourceV2,
@@ -380,6 +450,7 @@ fn check_structural_inputs(
     {
         return Err(MoeSourceKirProducerErrorV2::SameSession);
     }
+    classify_canonical_fields(&inputs.canonical).map_err(MoeSourceKirProducerErrorV2::Canonical)?;
 
     let snapshot = snapshot_text(&inputs);
     if snapshot != MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2 {
@@ -412,6 +483,80 @@ fn check_structural_inputs(
         source_authority_identity: inputs.same_session.source_authority_identity,
         snapshot,
     })
+}
+
+fn classify_canonical_fields(
+    actual: &CanonicalKernelProfileV2,
+) -> Result<(), CanonicalClassifierErrorV2> {
+    let expected = canonical_kernel_profile(
+        &fe2o3_kernel_ir::moe_top2_v1_kernel_ir(),
+        &MoeTop2ProfileV1::exact_gfx942_xnack_minus_cov6(),
+    );
+
+    for (index, field) in actual.fields.iter().enumerate() {
+        if actual.fields[..index]
+            .iter()
+            .any(|earlier| earlier.name == field.name)
+        {
+            return Err(CanonicalClassifierErrorV2::DuplicateField { name: field.name });
+        }
+    }
+    if actual.fields.len() < expected.fields.len()
+        && let Some(field) = expected.fields.iter().find(|expected_field| {
+            !actual
+                .fields
+                .iter()
+                .any(|actual_field| actual_field.name == expected_field.name)
+        })
+    {
+        return Err(CanonicalClassifierErrorV2::MissingField { name: field.name });
+    }
+    if actual.fields.len() > expected.fields.len()
+        && let Some(field) = actual.fields.iter().find(|actual_field| {
+            !expected
+                .fields
+                .iter()
+                .any(|expected_field| expected_field.name == actual_field.name)
+        })
+    {
+        return Err(CanonicalClassifierErrorV2::UnexpectedField { name: field.name });
+    }
+
+    for (index, (expected_field, actual_field)) in
+        expected.fields.iter().zip(&actual.fields).enumerate()
+    {
+        if actual_field.name != expected_field.name {
+            if let Some(expected_index) = expected
+                .fields
+                .iter()
+                .position(|field| field.name == actual_field.name)
+            {
+                return Err(CanonicalClassifierErrorV2::FieldOrder {
+                    name: actual_field.name,
+                    expected_index,
+                    actual_index: index,
+                });
+            }
+            return Err(CanonicalClassifierErrorV2::FieldName {
+                index,
+                expected: expected_field.name,
+                actual: actual_field.name,
+            });
+        }
+        if actual_field.memberships != expected_field.memberships {
+            return Err(CanonicalClassifierErrorV2::Membership {
+                name: actual_field.name,
+                expected: expected_field.memberships,
+                actual: actual_field.memberships,
+            });
+        }
+        if actual_field.value != expected_field.value {
+            return Err(CanonicalClassifierErrorV2::Value {
+                name: actual_field.name,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn fn_abi_is_exact(abi: &MoeFnAbiStructuralProjectionV2) -> bool {
@@ -1368,7 +1513,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_table_contains_each_actual_field_once() {
+    fn aggregate_canonical_entries_cover_all_current_kir_and_profile_fields() {
         let inputs = candidate_inputs_for_test();
         assert_eq!(inputs.canonical.fields.len(), 31);
         let unique_names = inputs
@@ -1388,62 +1533,120 @@ mod tests {
     }
 
     #[test]
-    fn classifier_rejects_mutations_after_earlier_admission_gates() {
-        let mutations: [fn(&mut StructuralClassifierCandidateV2); 13] = [
-            |inputs| inputs.fn_abi.arguments[0].alignment = 4,
-            |inputs| inputs.portable_mir.function_count += 1,
-            |inputs| inputs.portable_mir.block_count += 1,
-            |inputs| inputs.portable_mir.statement_count += 1,
-            |inputs| inputs.portable_mir.edge_count += 1,
-            |inputs| inputs.portable_mir.assignment_count += 1,
-            |inputs| inputs.portable_mir.call_count += 1,
-            |inputs| inputs.portable_mir.indexed_place_count += 1,
-            |inputs| inputs.canonical.fields[0].value.push(0),
-            |inputs| inputs.canonical.fields[12].value.push(0),
-            |inputs| {
-                let field = inputs
-                    .canonical
-                    .fields
-                    .iter_mut()
-                    .find(|field| field.memberships & MEMBER_ABI != 0)
-                    .unwrap();
-                field.value.push(0);
-            },
-            |inputs| {
-                let field = inputs
-                    .canonical
-                    .fields
-                    .iter_mut()
-                    .find(|field| field.memberships & MEMBER_EFFECTS != 0)
-                    .unwrap();
-                field.value.push(0);
-            },
-            |inputs| {
-                let field = inputs
-                    .canonical
-                    .fields
-                    .iter_mut()
-                    .find(|field| field.memberships & MEMBER_ROUTING != 0)
-                    .unwrap();
-                field.value.push(0);
-            },
-        ];
-        for mutate in mutations {
-            let mut inputs = candidate_inputs_for_test();
-            mutate(&mut inputs);
-            assert!(check_structural_inputs(inputs).is_err());
-        }
+    fn canonical_classifier_reports_exact_schema_mutation_surfaces() {
+        let mut renamed = candidate_inputs_for_test().canonical;
+        renamed.fields[0].name = "kir.renamed-module-id";
+        assert_eq!(
+            classify_canonical_fields(&renamed),
+            Err(CanonicalClassifierErrorV2::FieldName {
+                index: 0,
+                expected: "kir.module-id",
+                actual: "kir.renamed-module-id",
+            })
+        );
 
+        let mut reordered = candidate_inputs_for_test().canonical;
+        reordered.fields.swap(0, 1);
+        assert_eq!(
+            classify_canonical_fields(&reordered),
+            Err(CanonicalClassifierErrorV2::FieldOrder {
+                name: "kir.function-id",
+                expected_index: 1,
+                actual_index: 0,
+            })
+        );
+
+        let mut removed = candidate_inputs_for_test().canonical;
+        removed.fields.remove(5);
+        assert_eq!(
+            classify_canonical_fields(&removed),
+            Err(CanonicalClassifierErrorV2::MissingField { name: "kir.layout" })
+        );
+
+        let mut duplicated = candidate_inputs_for_test().canonical;
+        duplicated.fields.push(duplicated.fields[4].clone());
+        assert_eq!(
+            classify_canonical_fields(&duplicated),
+            Err(CanonicalClassifierErrorV2::DuplicateField { name: "kir.shape" })
+        );
+
+        let mut unexpected = candidate_inputs_for_test().canonical;
+        unexpected.fields.push(CanonicalFieldV2 {
+            name: "profile.unexpected",
+            memberships: MEMBER_PROFILE,
+            value: vec![0],
+        });
+        assert_eq!(
+            classify_canonical_fields(&unexpected),
+            Err(CanonicalClassifierErrorV2::UnexpectedField {
+                name: "profile.unexpected",
+            })
+        );
+
+        let mut membership = candidate_inputs_for_test().canonical;
+        membership.fields[0].memberships |= MEMBER_PROFILE;
+        assert_eq!(
+            classify_canonical_fields(&membership),
+            Err(CanonicalClassifierErrorV2::Membership {
+                name: "kir.module-id",
+                expected: MEMBER_KERNEL_IR,
+                actual: MEMBER_KERNEL_IR | MEMBER_PROFILE,
+            })
+        );
+
+        let mut value = candidate_inputs_for_test().canonical;
+        value.fields[0].value.push(0);
+        assert_eq!(
+            classify_canonical_fields(&value),
+            Err(CanonicalClassifierErrorV2::Value {
+                name: "kir.module-id",
+            })
+        );
+    }
+
+    #[test]
+    fn every_aggregate_entry_has_exact_membership_and_value_failures() {
         let field_count = candidate_inputs_for_test().canonical.fields.len();
         for index in 0..field_count {
-            let mut value_mutation = candidate_inputs_for_test();
-            value_mutation.canonical.fields[index].value.push(0);
-            assert!(check_structural_inputs(value_mutation).is_err());
+            let mut value_mutation = candidate_inputs_for_test().canonical;
+            let name = value_mutation.fields[index].name;
+            value_mutation.fields[index].value.push(0);
+            assert_eq!(
+                classify_canonical_fields(&value_mutation),
+                Err(CanonicalClassifierErrorV2::Value { name })
+            );
 
-            let mut membership_mutation = candidate_inputs_for_test();
-            membership_mutation.canonical.fields[index].memberships ^= MEMBER_KERNEL_IR;
-            assert!(check_structural_inputs(membership_mutation).is_err());
+            let mut membership_mutation = candidate_inputs_for_test().canonical;
+            let expected = membership_mutation.fields[index].memberships;
+            membership_mutation.fields[index].memberships ^= MEMBER_KERNEL_IR;
+            assert_eq!(
+                classify_canonical_fields(&membership_mutation),
+                Err(CanonicalClassifierErrorV2::Membership {
+                    name,
+                    expected,
+                    actual: expected ^ MEMBER_KERNEL_IR,
+                })
+            );
         }
+    }
+
+    #[test]
+    fn bounded_post_admission_drift_reaches_the_snapshot_surface() {
+        let mut candidate = candidate_inputs_for_test();
+        candidate.portable_mir.assignment_count += 1;
+        let actual = snapshot_text(&candidate);
+        assert_eq!(
+            check_structural_inputs(candidate),
+            Err(MoeSourceKirProducerErrorV2::SnapshotMismatch { actual })
+        );
+
+        let mut candidate = candidate_inputs_for_test();
+        candidate.same_session.compiler_semantics_identity[0] ^= 1;
+        let actual = snapshot_text(&candidate);
+        assert_eq!(
+            check_structural_inputs(candidate),
+            Err(MoeSourceKirProducerErrorV2::SnapshotMismatch { actual })
+        );
     }
 
     #[test]
@@ -1460,6 +1663,31 @@ mod tests {
         assert_eq!(
             check_structural_inputs(imported),
             Err(MoeSourceKirProducerErrorV2::PortableMir)
+        );
+
+        let mut fn_abi = candidate_inputs_for_test();
+        fn_abi.fn_abi.arguments[0].alignment = 4;
+        assert_eq!(
+            check_structural_inputs(fn_abi),
+            Err(MoeSourceKirProducerErrorV2::FnAbi)
+        );
+
+        let mut same_session = candidate_inputs_for_test();
+        same_session.same_session.source_authority_identity = [0; 32];
+        assert_eq!(
+            check_structural_inputs(same_session),
+            Err(MoeSourceKirProducerErrorV2::SameSession)
+        );
+
+        let mut canonical = candidate_inputs_for_test();
+        canonical.canonical.fields[0].value.push(0);
+        assert_eq!(
+            check_structural_inputs(canonical),
+            Err(MoeSourceKirProducerErrorV2::Canonical(
+                CanonicalClassifierErrorV2::Value {
+                    name: "kir.module-id",
+                }
+            ))
         );
     }
 

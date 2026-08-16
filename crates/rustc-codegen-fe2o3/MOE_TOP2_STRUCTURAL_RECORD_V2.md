@@ -1,50 +1,80 @@
 # Exact MoE Top-2 Private Structural Record V2
 
-This increment adds a private, inert structural record to the successful
-`collected-moe-top2-v1` rustc admission. It does not add a public verifier API
-and does not prove source-to-Kernel-IR semantic refinement.
+This increment adds a private, inert whole-module diagnostic record to the
+successful `collected-moe-top2-v1` rustc admission. It adds no public verifier
+or candidate schema and proves no source-to-Kernel-IR semantic refinement.
 
-## Live Inputs
+## Sealed Live Inputs
 
-The producer runs inside `rustc-codegen-fe2o3` after the existing exact source,
-compiler-session, trusted-definition, `FnAbi`, portable-MIR, KIR, and profile
-checks. One live admission supplies:
+The producer is a child module of the MoE rustc admission module. Its only live
+entry point accepts an opaque witness whose fields are private. Only the parent
+admission path can construct that witness, after it has authenticated:
 
-- the authenticated source bytes and their SHA-256 identity;
-- the rustc-derived `FnAbi` identity and all eight observed pair-mode argument
-  records;
-- the admitted portable-MIR identity and a bounded whole-module diagnostic
-  summary;
+- source contents retained in rustc's loaded `SourceFile` and their SHA-256
+  identity, without reopening the source path;
+- compiler semantics, trusted definitions, and the exact root instance;
+- the rustc-derived opaque exact `FnAbi` identity and a bounded structural
+  projection of the checked header, result, and eight pair-mode arguments;
+- the admitted complete portable-MIR module and its semantic identity; and
 - the already validated `MoeTop2KernelIrV1` and `MoeTop2ProfileV1` values.
+
+The `FnAbi` projection is not a complete representation of rustc's `FnAbi`.
+The opaque identity commits the exact fields checked by the existing admission;
+the projection makes only the bounded structural subset readable in this
+diagnostic.
 
 The portable-MIR summary counts functions, roots, helpers, blocks, statements,
 terminators, CFG edges, external imports, root arguments and locals,
 assignments, calls, indexed places, repeated values, and observed binary
-operator kinds. The summary is computed over the complete imported module.
-These counts are diagnostics pinned to the exact live admission, not semantic
-routing evidence.
+operator kinds over the complete imported module. These are pinned diagnostics,
+not routing semantics or refinement evidence.
 
-## Canonical Fields
+## Acyclic Session Binding
 
-The validated KIR and profile are encoded into one ordered private field table.
-Each actual field is serialized once with a unique field name and projection
-membership bits. The full KIR, full profile, ABI, effects, and routing
-identities are domain-separated hashes over selected entries from that same
-table. None of those identities is copied from a precomputed KIR constant.
+Construction is deliberately one-way:
 
-The final record digest frames the raw source bytes, source identity, complete
-observed `FnAbi`, whole-module MIR summary, and the canonical field table. Every
-checked structural input is therefore committed by the record. A readable
-snapshot beside the implementation pins all observed fields and all five
-derived identities. That pin is filled only from a successful live rustc
-admission and is covered by exact positive, hostile, and relocation tests.
+1. The rustc admission validates source, session semantics, trusted definitions,
+   root instance, `FnAbi`, MIR, KIR, and profile.
+2. It constructs and hashes the final source authority without referring to the
+   structural record.
+3. It seals the authenticated values together with compiler semantics identity,
+   trusted definitions identity, root instance identity, and final source
+   authority identity.
+4. The private producer derives a record that commits those bindings.
+5. Receipt consumption validates the authority first, then requires every
+   record binding to equal that consumed authority.
+
+The record points to the completed authority; the authority does not point back
+to the record. There is therefore no digest cycle, and a detached source,
+`FnAbi`, MIR identity, or compiler session cannot be supplied to the producer.
+
+## Canonical Entries
+
+The validated KIR and profile are encoded into 31 ordered aggregate entries.
+Those entries collectively serialize every current field of
+`MoeTop2KernelIrV1`, `MoeTop2ProfileV1`, and their current nested descriptors,
+resources, arrays, and policy records. An aggregate entry may contain several
+leaf fields; this is not a claim of one table entry per leaf.
+
+Each entry has a unique name, membership bits, and a canonical value. The KIR,
+profile, ABI projection, effects projection, and routing projection identities
+are domain-separated hashes over selected entries from that table. The private
+classifier rejects exact name, order, removal, duplication, membership, and
+value drift before snapshot comparison.
+
+The final record digest frames the rustc-loaded source contents and identity,
+the FnAbi identity and structural projection, every whole-module MIR summary
+field, the complete aggregate canonical table, and every same-session binding.
+A readable snapshot beside the implementation was mechanically captured from a
+successful live rustc admission. Focused tests mutate the internal classifier
+candidate; no caller-constructible provenance object is exposed.
 
 ## Boundary
 
-This record establishes that one authenticated compiler session observed the
-pinned source, `FnAbi`, portable-MIR identity and diagnostics, then selected the
-pinned validated KIR/profile field table. It does not establish that MIR values
-and effects simulate the KIR routing state machine.
+This record establishes only that one authenticated rustc admission observed
+the pinned structural inputs and selected the pinned validated KIR/profile
+encoding in the same source-authority session. It does not establish that MIR
+values or effects simulate the KIR routing state machine.
 
 The first unproved boundary remains a mechanically checked value- and
 effect-preserving simulation from the authenticated portable-MIR CFG to the
@@ -52,5 +82,5 @@ exact MoE KIR, including failure paths, loops, indexing, FP32 comparisons,
 writes, and ordered routing transitions. Issue #106 remains open.
 
 The record grants no Worker V2, LLVM, ISA, artifact, load, launch, runtime, GPU,
-or hardware authority. It proves no IEEE FP32 or OCML semantics, logical-to-
-machine addressing, generalized memory safety, or race freedom.
+or hardware authority. It proves no IEEE FP32 or OCML semantics,
+logical-to-machine addressing, generalized memory safety, or race freedom.
