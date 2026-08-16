@@ -24,7 +24,10 @@ ROADMAP = ROOT / "docs/implementation-roadmap-v2.md"
 EXAMPLE = ROOT / "examples/moe_expert_v1/README.md"
 V2_BRIDGE = ROOT / "crates/fe2o3-host/src/moe_routing_expert_bridge_v2.rs"
 V2_ADAPTER = ROOT / "crates/fe2o3-host/src/generated_moe_expert_v2.rs"
-V2_UI = ROOT / "crates/fe2o3-host/tests/ui/generated_moe_expert_v2"
+V2_UI_COMMON = ROOT / "crates/fe2o3-host/tests/ui/generated_moe_expert_v2"
+V2_UI_HARDWARE_HOOKS = (
+    ROOT / "crates/fe2o3-host/tests/ui/generated_moe_expert_v2_hardware_hooks"
+)
 
 V2_CHECKPOINT = "10e5f90ece1937aaee77492e8e4e4742863d013b"
 V2_UNIT_UI_COMMANDS = [
@@ -35,7 +38,7 @@ V2_UI_COMMAND_LINES = [
     "cargo test --locked -p fe2o3-host --features hardware-test-hooks \\",
     "--test generated_moe_expert_v2_ui",
 ]
-V2_UI_FIXTURES = {
+V2_UI_COMMON_FIXTURES = {
     "batch_identity_cannot_clone.rs",
     "batch_identity_fields_are_private.rs",
     "checked_inputs_cannot_clone.rs",
@@ -47,7 +50,6 @@ V2_UI_FIXTURES = {
     "completed_bridge_cannot_clone.rs",
     "completed_bridge_has_no_authority.rs",
     "completed_v1_api_is_absent.rs",
-    "hardware_namespace_test_issuer_is_not_public.rs",
     "provenance_cannot_clone.rs",
     "provenance_fields_are_private.rs",
     "provenance_use_after_move.rs",
@@ -58,6 +60,9 @@ V2_UI_FIXTURES = {
     "v1_bridge_cannot_enter_v2.rs",
     "v1_test_issuer_is_not_public.rs",
     "weight_binding_fields_are_private.rs",
+}
+V2_UI_HARDWARE_HOOK_FIXTURES = {
+    "hardware_namespace_test_issuer_is_not_public.rs",
 }
 
 
@@ -149,10 +154,17 @@ def main() -> None:
             f"V2 adapter no-authority result drifted: {method}",
         )
 
-    actual_ui_fixtures = {path.name for path in V2_UI.glob("*.rs")}
+    actual_ui_fixtures = {path.name for path in V2_UI_COMMON.glob("*.rs")}
     require(
-        actual_ui_fixtures == V2_UI_FIXTURES,
-        "V2 compile-fail fixture inventory drifted",
+        actual_ui_fixtures == V2_UI_COMMON_FIXTURES,
+        "common V2 compile-fail fixture inventory drifted",
+    )
+    actual_hardware_hook_fixtures = {
+        path.name for path in V2_UI_HARDWARE_HOOKS.glob("*.rs")
+    }
+    require(
+        actual_hardware_hook_fixtures == V2_UI_HARDWARE_HOOK_FIXTURES,
+        "hardware-hook V2 compile-fail fixture inventory drifted",
     )
 
     for command in V2_UNIT_UI_COMMANDS:
