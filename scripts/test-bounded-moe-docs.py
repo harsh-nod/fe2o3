@@ -30,7 +30,10 @@ V2_CHECKPOINT = "10e5f90ece1937aaee77492e8e4e4742863d013b"
 V2_UNIT_UI_COMMANDS = [
     "cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests",
     "cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests",
-    "cargo test --locked -p fe2o3-host --test generated_moe_expert_v2_ui",
+]
+V2_UI_COMMAND_LINES = [
+    "cargo test --locked -p fe2o3-host --features hardware-test-hooks \\",
+    "--test generated_moe_expert_v2_ui",
 ]
 V2_UI_FIXTURES = {
     "batch_identity_cannot_clone.rs",
@@ -159,6 +162,16 @@ def main() -> None:
             ("MoE example", example),
         ]:
             require(command in text, f"missing V2 command in {name}: {command}")
+    for command_line in V2_UI_COMMAND_LINES:
+        for name, text in [
+            ("bounded MoE evidence", doc),
+            ("testing guide", testing),
+            ("MoE example", example),
+        ]:
+            require(
+                command_line in text,
+                f"missing feature-complete V2 UI command in {name}: {command_line}",
+            )
 
     for name, text, marker in [
         ("README", readme, "V1 evidence only"),

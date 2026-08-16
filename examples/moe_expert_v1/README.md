@@ -91,5 +91,6 @@ VERUS=/absolute/path/to/pinned/verus \
 cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v1::tests
 cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests
 cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests
-cargo test --locked -p fe2o3-host --test generated_moe_expert_v2_ui
+cargo test --locked -p fe2o3-host --features hardware-test-hooks \
+  --test generated_moe_expert_v2_ui
 ```
