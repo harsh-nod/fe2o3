@@ -11,6 +11,7 @@ mod generated_lds_gemm;
 mod generated_lds_gemm_lifecycle;
 #[cfg(test)]
 mod generated_lds_gemm_lifecycle_tests;
+mod generated_moe_expert_v1;
 mod generated_moe_top2_v1;
 mod generated_row_softmax_v1;
 mod generated_scalar_gemm_v1;
@@ -148,6 +149,10 @@ pub use generated_lds_gemm_lifecycle::{
     ExactLdsGemmSlice1LoadErrorV1, ExactLdsGemmUnloadIdentityV1, JoinedExactLdsGemmSlice1V1,
     LoadedExactLdsGemmSlice1V1, ReviewedExactLdsGemmRuntimeAdapterV1, UnloadedExactLdsGemmSlice1V1,
     join_exact_lds_gemm_slice1_v1,
+};
+pub use generated_moe_expert_v1::{
+    GeneratedMoeExpertV1HostAdapterErrorV1, GeneratedMoeExpertV1HostAdapterV1,
+    MoeExpertV1BufferAccessV1, MoeExpertV1BufferRoleV1,
 };
 pub use generated_moe_top2_v1::{
     GeneratedMoeTop2V1HostAdapterErrorV1, GeneratedMoeTop2V1HostAdapterV1, MoeTop2V1BufferAccessV1,
