@@ -20,6 +20,9 @@ validateExactLdsGemmSlice1MetadataForTesting(llvm::StringRef MetadataBlob);
 llvm::Error validateExactWave64CollectivesV1CompilerInputForTesting(
     llvm::ArrayRef<uint8_t> Bytes);
 
+llvm::Error validateExactFlashAttentionV1LlvmBuildIdentityForTesting(
+    llvm::StringRef Identity);
+
 llvm::Expected<std::vector<uint8_t>>
 makeExactWorkgroupSyncCompilerInputForTesting(
     llvm::StringRef CanonicalBody, llvm::ArrayRef<uint8_t> Descriptor,

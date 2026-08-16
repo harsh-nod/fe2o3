@@ -64,10 +64,11 @@ const EXACT_OCML_EXP_BOUNDARY_SHA256: [u8; 32] = [
     0xdb, 0x91, 0x96, 0x57, 0x5c, 0xcc, 0xcc, 0xd8, 0x03, 0x53, 0xf5, 0xed, 0x04, 0xbc, 0x42, 0x5b,
     0x64, 0x34, 0x4a, 0x42, 0x07, 0x09, 0x79, 0x3e, 0xe8, 0x37, 0x79, 0xad, 0xd2, 0x1e, 0x47, 0x60,
 ];
-const SUCCESS_DIAGNOSTICS: [&str; 7] = [
+const SUCCESS_DIAGNOSTICS: [&str; 8] = [
     "device_library.check=identity status=ok provider=gfx942-ocml-v1 roots=[__ocml_exp_f32] files=4",
     "post_link.check=exports status=ok symbols=[__ocml_exp_f32,flash_attention_causal_f32_b1_h1_n8_d16_v1,flash_attention_causal_f32_b1_h1_n8_d16_v1.kd]",
     "post_link.check=flash_attention_v1_profile status=ok shape=B1,H1,N8,D16 causal=true recurrence=online_strict_f32 workgroup=[64,1,1] retained_grid=[1,1,1] explicit_kernarg_size=64 kernarg_size=320 kernarg_align=8 group_size=0 private_size=0 wavefront_size=64 calls=0 spills=0 dynamic_stack=false descriptor_binding=byte_exact ocml_provider=measured_structural_only rust_descriptor_admission=required",
+    "post_link.check=flash_attention_v1_reproducibility status=ok llvm_build_identity=upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1 input_ir_sha256=cdbcfb2e9ab688ddc3275e632a88f05d510e3a799799fc8952e6180e074de09b linked_bitcode_sha256=46c7e4d163fd3e5dee25a694e1d60ec65f4df7fd68477c718730af3dd657f2f5 optimized_bitcode_sha256=1a9a39aeae72fd91276354dc0216de3b370ce0540a745ab2b66cc1c06de3eff6 object_sha256=1be71b56456b132b28f651b60653e4febfbb6c2047e846ee913582637b84f387 raw_hsaco_sha256=e4a5a7fff7272063c30877d3d5ad13defc523d27b26792c9197fceea27e061e2",
     "post_link.check=metadata status=ok kernels=1 target=amdgcn-amd-amdhsa--gfx942%3Axnack-",
     "post_link.check=target status=ok arch=gfx942 code_object_version=6 e_flags=0x64c",
     "post_link.check=unresolved status=ok symbols=[]",

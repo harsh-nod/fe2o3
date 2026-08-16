@@ -12,6 +12,7 @@
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfo.h"
@@ -167,6 +168,8 @@ constexpr StringLiteral ExactFlashAttentionV1Entry =
 constexpr StringLiteral ExactFlashAttentionV1Descriptor =
     "flash_attention_causal_f32_b1_h1_n8_d16_v1.kd";
 constexpr StringLiteral ExactFlashAttentionV1OcmlExp = "__ocml_exp_f32";
+constexpr StringLiteral ExactFlashAttentionV1PublishedLlvmBuildIdentity =
+    "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
 constexpr StringLiteral ExactWorkgroupLdsReductionV1Entry =
     "lds_publish_read_reduce_i32_v1";
 constexpr StringLiteral ExactWorkgroupLdsReductionV1Descriptor =
@@ -213,9 +216,9 @@ constexpr std::array<uint8_t, 32> ExactFlashOcmlBoundarySha256 = {
     0xed, 0x04, 0xbc, 0x42, 0x5b, 0x64, 0x34, 0x4a, 0x42, 0x07, 0x09,
     0x79, 0x3e, 0xe8, 0x37, 0x79, 0xad, 0xd2, 0x1e, 0x47, 0x60};
 constexpr std::array<uint8_t, 32> ExactFlashMachineSha256 = {
-    0x60, 0xe0, 0x92, 0x78, 0xe2, 0x90, 0x1a, 0x18, 0x67, 0xa5, 0xa1,
-    0x87, 0x61, 0x4a, 0x4d, 0x33, 0xf1, 0x2a, 0x45, 0xa7, 0x33, 0xe2,
-    0x66, 0xbf, 0x35, 0xb2, 0x69, 0x3b, 0x85, 0x97, 0x5d, 0x65};
+    0xd2, 0xaa, 0x57, 0xc0, 0xf4, 0x68, 0xf5, 0x74, 0xf4, 0x4a, 0x9f,
+    0xea, 0x06, 0xbb, 0xb8, 0xe9, 0x8a, 0xa9, 0xb6, 0x0b, 0xb2, 0xd9,
+    0x30, 0x3c, 0xc4, 0xd8, 0xb6, 0xca, 0xf0, 0xcf, 0xca, 0x54};
 constexpr std::array<uint8_t, 32> ExactWave64BodySha256 = {
     0xe3, 0x90, 0x1d, 0x41, 0xc7, 0x20, 0xcf, 0x9d, 0xdd, 0x7e, 0xd0,
     0x1f, 0xbc, 0x48, 0x77, 0x93, 0x1d, 0x42, 0x08, 0x08, 0x11, 0x44,
@@ -896,6 +899,16 @@ Error validateExactFlashAttentionCompilerInput(StringRef Text) {
     return pipelineError(
         "exact FlashAttention OCML boundary identity does not match");
   return Error::success();
+}
+
+Error validateExactFlashAttentionLlvmBuildIdentity(StringRef Identity) {
+  if (Identity == ExactFlashAttentionV1PublishedLlvmBuildIdentity)
+    return Error::success();
+  return pipelineError(
+      Twine("exact FlashAttention V1 published machine identity requires LLVM "
+            "build identity '") +
+      ExactFlashAttentionV1PublishedLlvmBuildIdentity +
+      "', worker measured '" + Identity + "'");
 }
 
 Expected<std::array<std::vector<uint8_t>, 13>>
@@ -2308,6 +2321,14 @@ std::string digestHex(ArrayRef<uint8_t> Digest) {
     Result.push_back(Hex[Byte & 0x0f]);
   }
   return Result;
+}
+
+std::array<uint8_t, 32> bitcodeIdentity(const Module &ModuleValue) {
+  SmallVector<char, 0> Bitcode;
+  raw_svector_ostream Stream(Bitcode);
+  WriteBitcodeToFile(ModuleValue, Stream, true);
+  return SHA256::hash(ArrayRef(
+      reinterpret_cast<const uint8_t *>(Bitcode.data()), Bitcode.size()));
 }
 
 std::string diagnosticList(const std::set<std::string> &Values) {
@@ -5096,6 +5117,11 @@ Error validateExactWave64CollectivesV1CompilerInputForTesting(
       StringRef(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 }
 
+Error validateExactFlashAttentionV1LlvmBuildIdentityForTesting(
+    StringRef Identity) {
+  return validateExactFlashAttentionLlvmBuildIdentity(Identity);
+}
+
 Expected<std::string> exactWorkgroupSyncDataLayoutForTesting() {
   Request RequestValue;
   RequestValue.Target = "gfx942:xnack-";
@@ -5416,6 +5442,10 @@ Response executeImpl(const Request &RequestValue,
     return failure(RequestValue, Stage::InputValidation,
                    {"exact FlashAttention V1 symbols require the closed "
                     "Worker V2 profile"});
+  if (isClosedExactFlashAttentionV1Request(RequestValue))
+    if (Error E =
+            validateExactFlashAttentionLlvmBuildIdentity(LlvmBuildIdentity))
+      return failure(RequestValue, Stage::Toolchain, std::move(E));
   if (mentionsExactWorkgroupSync(RequestValue)) {
     const ExactWorkgroupSyncProfile *Profile =
         exactWorkgroupSyncProfile(RequestValue);
@@ -5505,6 +5535,9 @@ Response executeImpl(const Request &RequestValue,
       linkBitcode(RequestValue, BuiltinProviders, Context, *Machine);
   if (!LinkedModule)
     return failure(RequestValue, Stage::BitcodeLink, LinkedModule.takeError());
+  std::optional<std::array<uint8_t, 32>> FlashLinkedBitcodeIdentity;
+  if (isClosedExactFlashAttentionV1Request(RequestValue) && *LinkedModule)
+    FlashLinkedBitcodeIdentity = bitcodeIdentity(**LinkedModule);
 
   Module Reference("fe2o3-target-reference", Context);
   if (Error E = setAndCheckModuleContract(Reference, RequestValue, *Machine))
@@ -5523,6 +5556,8 @@ Response executeImpl(const Request &RequestValue,
 
   std::vector<std::vector<uint8_t>> Objects;
   std::vector<ElfContract> ObjectContracts;
+  std::optional<std::array<uint8_t, 32>> FlashOptimizedBitcodeIdentity;
+  std::optional<std::array<uint8_t, 32>> FlashObjectIdentity;
   for (const Input &InputValue : RequestValue.Inputs) {
     if (InputValue.Kind != InputKind::AmdGpuRelocatable)
       continue;
@@ -5540,6 +5575,8 @@ Response executeImpl(const Request &RequestValue,
   if (*LinkedModule) {
     if (Error E = optimizeModule(**LinkedModule, RequestValue, *Machine))
       return failure(RequestValue, Stage::Optimization, std::move(E));
+    if (isClosedExactFlashAttentionV1Request(RequestValue))
+      FlashOptimizedBitcodeIdentity = bitcodeIdentity(**LinkedModule);
     auto GeneratedObject = emitObject(**LinkedModule, *Machine);
     if (!GeneratedObject)
       return failure(RequestValue, Stage::Codegen, GeneratedObject.takeError());
@@ -5553,6 +5590,8 @@ Response executeImpl(const Request &RequestValue,
             RequestValue, Contract->RequiredImports,
             "optimized relocatable object", false))
       return failure(RequestValue, Stage::Codegen, std::move(E));
+    if (isClosedExactFlashAttentionV1Request(RequestValue))
+      FlashObjectIdentity = SHA256::hash(*GeneratedObject);
     Objects.push_back(std::move(*GeneratedObject));
     ObjectContracts.push_back(std::move(*Contract));
   }
@@ -5589,6 +5628,25 @@ Response executeImpl(const Request &RequestValue,
                    PublicationDiagnostics.takeError());
   LinkDiagnostics.insert(LinkDiagnostics.end(), PublicationDiagnostics->begin(),
                          PublicationDiagnostics->end());
+
+  if (isClosedExactFlashAttentionV1Request(RequestValue)) {
+    if (!FlashLinkedBitcodeIdentity || !FlashOptimizedBitcodeIdentity ||
+        !FlashObjectIdentity)
+      return failure(RequestValue, Stage::OutputInspection,
+                     {"exact FlashAttention V1 reproducibility identities are "
+                      "incomplete"});
+    LinkDiagnostics.push_back(
+        (Twine("post_link.check=flash_attention_v1_reproducibility status=ok ") +
+         "llvm_build_identity=" + diagnosticAtom(LlvmBuildIdentity) +
+         " input_ir_sha256=" +
+         digestHex(SHA256::hash(RequestValue.CompilerModule.Bytes)) +
+         " linked_bitcode_sha256=" + digestHex(*FlashLinkedBitcodeIdentity) +
+         " optimized_bitcode_sha256=" +
+         digestHex(*FlashOptimizedBitcodeIdentity) + " object_sha256=" +
+         digestHex(*FlashObjectIdentity) + " raw_hsaco_sha256=" +
+         digestHex(SHA256::hash(*LinkedBytes)))
+            .str());
+  }
 
   Output ResultOutput{SHA256::hash(*LinkedBytes), std::move(*LinkedBytes)};
   Response Result{

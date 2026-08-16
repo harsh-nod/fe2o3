@@ -2564,6 +2564,25 @@ void testLldExitPolicy(int ExitCode) {
           "non-reusable LLD result did not preserve its exit code");
 }
 
+void testExactFlashAttentionLlvmBuildIdentity() {
+  constexpr StringLiteral UpstreamIdentity =
+      "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
+  Error Accepted =
+      validateExactFlashAttentionV1LlvmBuildIdentityForTesting(UpstreamIdentity);
+  require(!Accepted, "published Flash LLVM identity was rejected");
+
+  Error Drift =
+      validateExactFlashAttentionV1LlvmBuildIdentityForTesting("7.2.4");
+  require(static_cast<bool>(Drift),
+          "unpublished Flash LLVM identity was accepted");
+  require(
+      toString(std::move(Drift)) ==
+          "exact FlashAttention V1 published machine identity requires LLVM "
+          "build identity '" + UpstreamIdentity.str() +
+          "', worker measured '7.2.4'",
+      "Flash LLVM identity drift was misdiagnosed");
+}
+
 } // namespace
 
 int main(int ArgumentCount, char **Arguments) {
@@ -2576,6 +2595,7 @@ int main(int ArgumentCount, char **Arguments) {
   fe2o3::worker::detail::enforceReusableLldResult({1, true});
   testLldExitPolicy(0);
   testLldExitPolicy(1);
+  testExactFlashAttentionLlvmBuildIdentity();
   testSyntheticOcmlPipeline();
   testExactWorkgroupSyncProfiles();
   testExactMoeTop2V1Profile();

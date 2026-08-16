@@ -1,7 +1,9 @@
 #![cfg(target_os = "linux")]
 
 use std::{
-    env, fs,
+    env,
+    fmt::Write as _,
+    fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -25,6 +27,8 @@ const WORKER_ENV: &str = "FE2O3_FLASH_ATTENTION_V1_WORKER";
 const WORKER_BUILD_ID_ENV: &str = "FE2O3_FLASH_ATTENTION_V1_WORKER_BUILD_ID";
 const LLVM_BUILD_ID_ENV: &str = "FE2O3_FLASH_ATTENTION_V1_LLVM_BUILD_ID";
 const HANDOFF_ENV: &str = "FE2O3_FLASH_ATTENTION_V1_HANDOFF";
+const RAW_OUTPUT_ENV: &str = "FE2O3_FLASH_ATTENTION_V1_RAW_OUTPUT";
+const TRANSCRIPT_OUTPUT_ENV: &str = "FE2O3_FLASH_ATTENTION_V1_TRANSCRIPT_OUTPUT";
 const OCML_FILE_SHA256: [&str; 4] = [
     "cfe97fe9ee29379f522e5f20ae55aae1cdb96eb41d6aa250ea11c4941c54e019",
     "580d540cc738c0f9554c8710575bbc9b51ebacdcbc29aa0074ed05d3691dea1d",
@@ -76,7 +80,7 @@ fn worker_pins(
         OCML_FILE_SHA256.map(sha256),
         sha256(OCML_MANIFEST_SHA256),
     )
-    .expect("independently pinned ROCm 7.2.4 OCML closure");
+    .expect("independently digest-pinned OCML closure");
     FlashAttentionV1WorkerPinsV1::new(
         executable,
         worker_build_identity,
@@ -130,8 +134,46 @@ fn produce(
     worker: &PinnedWorkerV1,
     handoff: &CompilerModuleHandoffV2,
     expectation: FlashAttentionV1FinalizationExpectationV1,
+    raw_output: Option<&Path>,
+    transcript_output: Option<&Path>,
 ) -> FinalizedFlashAttentionV1ReceiptV1 {
-    finalize_flash_attention_v1_worker_v2_hsaco_v1(execute(worker, handoff), expectation)
+    let evidence = execute(worker, handoff);
+    if let Some(path) = raw_output {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .expect("create private raw FlashAttention output");
+        std::io::Write::write_all(&mut file, evidence.output_bytes())
+            .expect("write raw FlashAttention output");
+    }
+    if let Some(path) = transcript_output {
+        let response = evidence.exact_replay().response();
+        let mut transcript = String::new();
+        writeln!(
+            transcript,
+            "llvm_build_identity={}",
+            evidence.worker_measurement().llvm_build_identity()
+        )
+        .expect("write LLVM identity to transcript");
+        writeln!(
+            transcript,
+            "worker_build_identity={}",
+            response.worker_build_identity()
+        )
+        .expect("write worker identity to transcript");
+        for diagnostic in response.diagnostics() {
+            writeln!(transcript, "{diagnostic}").expect("write worker diagnostic to transcript");
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .expect("create private FlashAttention transcript");
+        std::io::Write::write_all(&mut file, transcript.as_bytes())
+            .expect("write FlashAttention transcript");
+    }
+    finalize_flash_attention_v1_worker_v2_hsaco_v1(evidence, expectation)
         .expect("opaque exact FlashAttention finalization")
 }
 
@@ -210,8 +252,16 @@ fn real_worker_produces_reproducible_opaque_flash_attention_v1_receipt() {
         "OCML provider substitution retained finalization authority"
     );
 
-    let first = produce(&worker, &handoff, expectation.clone());
-    let second = produce(&worker, &handoff, expectation);
+    let raw_output = env::var_os(RAW_OUTPUT_ENV).map(PathBuf::from);
+    let transcript_output = env::var_os(TRANSCRIPT_OUTPUT_ENV).map(PathBuf::from);
+    let first = produce(
+        &worker,
+        &handoff,
+        expectation.clone(),
+        raw_output.as_deref(),
+        transcript_output.as_deref(),
+    );
+    let second = produce(&worker, &handoff, expectation, None, None);
     assert_eq!(first.target().to_string(), "gfx942:xnack-");
     assert_eq!(first.code_object_version(), CodeObjectVersion::V6);
     assert_eq!(
