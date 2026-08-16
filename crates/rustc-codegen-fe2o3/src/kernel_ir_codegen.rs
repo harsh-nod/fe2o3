@@ -684,7 +684,7 @@ fn canonical_flash_attention_v1_llvm() -> String {
          attributes #0 = { nounwind \"amdgpu-flat-work-group-size\"=\"64,64\" \"target-cpu\"=\"gfx942\" \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\" }\n\
          attributes #1 = { nounwind readnone speculatable willreturn }\n\n\
          !0 = !{i32 64, i32 1, i32 1}\n\
-         !1 = !{!\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"write_only\", !\"none\"}\n\
+         !1 = !{!\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"read_write\", !\"none\"}\n\
          !2 = !{!\"float*\", !\"ulong\", !\"float*\", !\"ulong\", !\"float*\", !\"ulong\", !\"float*\", !\"ulong\"}\n\
          !3 = !{!\"const\", !\"\", !\"const\", !\"\", !\"const\", !\"\", !\"restrict\", !\"\"}\n",
     );
