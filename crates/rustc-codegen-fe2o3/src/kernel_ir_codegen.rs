@@ -34,10 +34,33 @@ pub(crate) const TILED_GEMM_LDS_SLICE1_AUTHORITY_SECTION_V1: &str =
 pub(crate) const TILED_GEMM_LDS_SLICE1_RESOURCE_SECTION_V1: &str =
     ".fe2o3.tiled-lds-slice1-resources.v1";
 pub(crate) const MOE_TOP2_SECTION_PREFIX_V1: &str = ".fe2o3.moe";
-const REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256: [u8; 32] = [
+const REVIEWED_ROW_SOFTMAX_LEGACY_LLVM_SHA256: [u8; 32] = [
     0x0a, 0x33, 0x13, 0x67, 0x53, 0x44, 0x43, 0x7b, 0xc7, 0xb8, 0x94, 0xad, 0x2f, 0x4d, 0xad, 0xb3,
     0x81, 0x07, 0xd9, 0x02, 0x96, 0xa9, 0x66, 0x5b, 0x76, 0x32, 0x34, 0xac, 0xd2, 0x40, 0x5a, 0xcc,
 ];
+const REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256: [u8; 32] = [
+    0xd4, 0x8d, 0x33, 0x20, 0xc2, 0x86, 0xc6, 0xda, 0x22, 0x53, 0xa1, 0x04, 0x38, 0x60, 0x89, 0xe3,
+    0x89, 0x64, 0x8f, 0x42, 0x60, 0xf2, 0xe7, 0xef, 0xda, 0x21, 0x26, 0x9f, 0xef, 0x95, 0x1c, 0x2c,
+];
+const ROW_SOFTMAX_UPSTREAM_LLVM_BUILD_IDENTITY_V1: &str =
+    "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
+const ROW_SOFTMAX_UPSTREAM_LLVM_TARGET_TRIPLE_V1: &str = "amdgcn-amd-amdhsa";
+/// Reviewed observation from the exact upstream LLVM build named above.
+///
+/// The value was measured by initializing LLVM's AMDGPU target, looking up
+/// `amdgcn` for `amdgcn-amd-amdhsa`, and calling `createTargetMachine` with
+/// CPU `gfx942`, features `-xnack`, `Reloc::PIC_`, `CodeModel::Small`, and
+/// `CodeGenOptLevel::None`. It is the exact string returned by
+/// `TargetMachine::createDataLayout().getStringRepresentation()` in that
+/// configuration. The test fixture
+/// `tests/fixtures/row-softmax-llvm22-target-layout.cpp` repeats that API
+/// observation against a configured upstream build.
+///
+/// The Rust producer does not load or query LLVM. It binds this reviewed
+/// constant only after authenticating the complete legacy lowering digest;
+/// Worker V2 independently compares the submitted layout with the live target
+/// machine before OCML import or native linking.
+pub(crate) const ROW_SOFTMAX_UPSTREAM_LLVM_DATA_LAYOUT_V1: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 pub(crate) const FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_SECTION_V1: &str =
     ".fe2o3.flash-attention-authority-transcript.v1";
 pub(crate) const FLASH_ATTENTION_AUTHORITY_SECTION_V1: &str = ".fe2o3.flash-attention-auth.v1";
@@ -64,7 +87,8 @@ const MAX_COMPILER_MODULE_TYPE_DEPTH: usize = 8;
 ///
 /// This value is not LLVM bitcode, a link result, a code object, compiler provenance, or load
 /// authority. The Worker V2 producer may place its exact text in an attempt-scoped handoff after
-/// checking the compiler FFI roles; target properties remain absent from the LLVM text itself.
+/// checking the compiler FFI roles. A reviewed target header may be present for parser/target-machine
+/// compatibility, but it grants no target-machine or final-artifact authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InertCompilerModuleTextV1 {
     llvm_ir: String,
@@ -83,6 +107,23 @@ pub(crate) enum UnboundCompilerModuleTargetPropertyV1 {
     DataLayout,
     TargetProcessor,
     CodeObjectVersion,
+}
+
+/// Private binding of the reviewed LLVM 22.1.8 measurement. This is not a
+/// dynamic LLVM query, and no caller-supplied layout text enters the value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RowSoftmaxReviewedLlvmLayoutMeasurementV1 {
+    llvm_build_identity: &'static str,
+    target_triple: &'static str,
+    data_layout: &'static str,
+}
+
+fn reviewed_row_softmax_upstream_llvm_layout_v1() -> RowSoftmaxReviewedLlvmLayoutMeasurementV1 {
+    RowSoftmaxReviewedLlvmLayoutMeasurementV1 {
+        llvm_build_identity: ROW_SOFTMAX_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
+        target_triple: ROW_SOFTMAX_UPSTREAM_LLVM_TARGET_TRIPLE_V1,
+        data_layout: ROW_SOFTMAX_UPSTREAM_LLVM_DATA_LAYOUT_V1,
+    }
 }
 
 #[allow(dead_code)]
@@ -447,16 +488,23 @@ pub(crate) fn construct_inert_row_softmax_v1_module_text(
     }
     let row_profile = dialect_amdgcn::authenticate_gfx942_row_softmax_lowering_profile_v1(module)
         .map_err(CompilerModuleConstructionError::Lowering)?;
-    let llvm_ir =
+    let legacy_llvm_ir =
         dialect_amdgcn::lower_authenticated_row_softmax_module_to_gfx942_xnack_minus_llvm_ir_v1(
             module,
             &row_profile,
         )
         .map_err(CompilerModuleConstructionError::Lowering)?;
-    if <[u8; 32]>::from(Sha256::digest(llvm_ir.as_bytes())) != REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256 {
+    let llvm_ir = bind_reviewed_row_softmax_upstream_llvm_layout_v1(
+        legacy_llvm_ir,
+        reviewed_row_softmax_upstream_llvm_layout_v1(),
+    )?;
+    let actual_llvm_sha256 = <[u8; 32]>::from(Sha256::digest(llvm_ir.as_bytes()));
+    if actual_llvm_sha256 != REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256 {
         return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
-            "authenticated gfx942 LLVM digest differs from the reviewed row_softmax_v1 lowering"
-                .to_owned(),
+            format!(
+                "LLVM 22.1.8 layout-bound gfx942 digest differs from the reviewed row_softmax_v1 lowering: expected {:02x?}, found {actual_llvm_sha256:02x?}",
+                REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256,
+            ),
         ));
     }
     let declaration = "declare float @__ocml_exp_f32(float)";
@@ -487,6 +535,89 @@ pub(crate) fn construct_inert_row_softmax_v1_module_text(
             UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
         ],
     })
+}
+
+fn bind_reviewed_row_softmax_upstream_llvm_layout_v1(
+    legacy_llvm_ir: String,
+    measurement: RowSoftmaxReviewedLlvmLayoutMeasurementV1,
+) -> Result<String, CompilerModuleConstructionError> {
+    if <[u8; 32]>::from(Sha256::digest(legacy_llvm_ir.as_bytes()))
+        != REVIEWED_ROW_SOFTMAX_LEGACY_LLVM_SHA256
+    {
+        return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
+            "pre-layout row-softmax LLVM differs from the reviewed complete legacy lowering"
+                .to_owned(),
+        ));
+    }
+    if measurement.llvm_build_identity != ROW_SOFTMAX_UPSTREAM_LLVM_BUILD_IDENTITY_V1
+        || measurement.target_triple != ROW_SOFTMAX_UPSTREAM_LLVM_TARGET_TRIPLE_V1
+        || measurement.data_layout != ROW_SOFTMAX_UPSTREAM_LLVM_DATA_LAYOUT_V1
+    {
+        return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
+            "row-softmax LLVM layout binding is not the reviewed LLVM 22.1.8 target-machine measurement"
+                .to_owned(),
+        ));
+    }
+
+    let legacy_triple = format!("target triple = \"{}\"\n", measurement.target_triple);
+    let legacy_layout = format!(
+        "target datalayout = \"{}\"\n",
+        dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT,
+    );
+    let mut lines = legacy_llvm_ir.split_inclusive('\n');
+    if lines.next() != Some(legacy_triple.as_str())
+        || lines.next() != Some(legacy_layout.as_str())
+        || lines.next() != Some("\n")
+    {
+        return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
+            "reviewed pre-layout row-softmax LLVM target header is missing or reordered".to_owned(),
+        ));
+    }
+    let body = lines.collect::<String>();
+    if legacy_llvm_ir.matches("target triple =").count() != 1
+        || legacy_llvm_ir.matches("target datalayout =").count() != 1
+    {
+        return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
+            "reviewed pre-layout row-softmax LLVM target header is duplicated".to_owned(),
+        ));
+    }
+
+    let mut bound = String::with_capacity(
+        legacy_llvm_ir.len()
+            + measurement
+                .data_layout
+                .len()
+                .saturating_sub(dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT.len()),
+    );
+    bound.push_str(&legacy_triple);
+    bound.push_str("target datalayout = \"");
+    bound.push_str(measurement.data_layout);
+    bound.push_str("\"\n\n");
+    bound.push_str(&body);
+    validate_row_softmax_upstream_llvm_layout_v1(&bound, measurement)
+        .map_err(|detail| CompilerModuleConstructionError::RowSoftmaxLowering(detail.to_owned()))?;
+    Ok(bound)
+}
+
+fn validate_row_softmax_upstream_llvm_layout_v1(
+    llvm_ir: &str,
+    measurement: RowSoftmaxReviewedLlvmLayoutMeasurementV1,
+) -> Result<(), &'static str> {
+    let expected_triple = format!("target triple = \"{}\"\n", measurement.target_triple);
+    let expected_layout = format!("target datalayout = \"{}\"\n", measurement.data_layout);
+    let mut lines = llvm_ir.split_inclusive('\n');
+    if lines.next() != Some(expected_triple.as_str())
+        || lines.next() != Some(expected_layout.as_str())
+        || lines.next() != Some("\n")
+    {
+        return Err("row-softmax LLVM 22.1.8 target-machine layout header is missing or reordered");
+    }
+    if llvm_ir.matches("target triple =").count() != 1
+        || llvm_ir.matches("target datalayout =").count() != 1
+    {
+        return Err("row-softmax LLVM 22.1.8 target-machine layout header is duplicated");
+    }
+    Ok(())
 }
 
 /// Constructs the sole LLVM module admitted by the authenticated fixed-shape
@@ -3465,9 +3596,25 @@ mod tests {
                 &profile,
             )
             .unwrap();
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(dedicated.as_bytes())),
+            REVIEWED_ROW_SOFTMAX_LEGACY_LLVM_SHA256,
+        );
+        let layout_measurement = reviewed_row_softmax_upstream_llvm_layout_v1();
+        assert_eq!(
+            layout_measurement.llvm_build_identity,
+            fe2o3_hsaco_finalize::ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
+        );
+        assert!(
+            validate_row_softmax_upstream_llvm_layout_v1(&dedicated, layout_measurement).is_err(),
+            "legacy producer layout must not satisfy the reviewed LLVM 22.1.8 measurement",
+        );
+        let expected =
+            bind_reviewed_row_softmax_upstream_llvm_layout_v1(dedicated, layout_measurement)
+                .unwrap();
         let first = construct_inert_row_softmax_v1_module_text(&module).unwrap();
         let second = construct_inert_row_softmax_v1_module_text(&module).unwrap();
-        assert_eq!(dedicated, first.llvm_ir());
+        assert_eq!(expected, first.llvm_ir());
         assert_eq!(
             <[u8; 32]>::from(Sha256::digest(first.llvm_ir().as_bytes())),
             REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256,
@@ -3534,6 +3681,102 @@ mod tests {
             construct_inert_row_softmax_v1_module_text(&renamed),
             Err(CompilerModuleConstructionError::RowSoftmaxLowering(_))
         ));
+    }
+
+    #[test]
+    fn row_softmax_upstream_layout_header_rejects_stale_missing_duplicate_and_reordered_fields() {
+        let module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
+        let profile =
+            dialect_amdgcn::authenticate_gfx942_row_softmax_lowering_profile_v1(&module).unwrap();
+        let legacy =
+            dialect_amdgcn::lower_authenticated_row_softmax_module_to_gfx942_xnack_minus_llvm_ir_v1(
+                &module,
+                &profile,
+            )
+            .unwrap();
+        let measurement = reviewed_row_softmax_upstream_llvm_layout_v1();
+        let exact =
+            bind_reviewed_row_softmax_upstream_llvm_layout_v1(legacy.clone(), measurement).unwrap();
+        validate_row_softmax_upstream_llvm_layout_v1(&exact, measurement).unwrap();
+
+        let exact_layout_line = format!(
+            "target datalayout = \"{}\"\n",
+            ROW_SOFTMAX_UPSTREAM_LLVM_DATA_LAYOUT_V1,
+        );
+        let stale_layout_line = format!(
+            "target datalayout = \"{}\"\n",
+            dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT,
+        );
+        let triple_line = format!(
+            "target triple = \"{}\"\n",
+            ROW_SOFTMAX_UPSTREAM_LLVM_TARGET_TRIPLE_V1,
+        );
+        let stale = exact.replacen(&exact_layout_line, &stale_layout_line, 1);
+        let missing = exact.replacen(&exact_layout_line, "", 1);
+        let duplicate = exact.replacen(
+            &exact_layout_line,
+            &format!("{exact_layout_line}{exact_layout_line}"),
+            1,
+        );
+        let reordered = exact.replacen(
+            &format!("{triple_line}{exact_layout_line}"),
+            &format!("{exact_layout_line}{triple_line}"),
+            1,
+        );
+        for hostile in [stale, missing, duplicate, reordered] {
+            assert!(
+                validate_row_softmax_upstream_llvm_layout_v1(&hostile, measurement).is_err(),
+                "hostile row-softmax target header was admitted",
+            );
+        }
+
+        let mut unreviewed_legacy = legacy;
+        unreviewed_legacy.push('\n');
+        assert!(matches!(
+            bind_reviewed_row_softmax_upstream_llvm_layout_v1(unreviewed_legacy, measurement),
+            Err(CompilerModuleConstructionError::RowSoftmaxLowering(detail))
+                if detail.contains("complete legacy lowering")
+        ));
+    }
+
+    #[test]
+    fn configured_upstream_llvm22_target_machine_matches_reviewed_row_softmax_layout() {
+        const PROBE_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_LLVM22_LAYOUT_PROBE";
+        let Some(probe) = std::env::var_os(PROBE_ENV) else {
+            eprintln!(
+                "skipping configured upstream LLVM layout observation: {PROBE_ENV} is absent"
+            );
+            return;
+        };
+        let output = std::process::Command::new(&probe)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("execute configured upstream LLVM layout probe: {error}")
+            });
+        assert!(
+            output.status.success(),
+            "configured upstream LLVM layout probe failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "configured upstream LLVM layout probe wrote stderr: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("layout probe stdout is UTF-8"),
+            format!(
+                "llvm-build-identity={ROW_SOFTMAX_UPSTREAM_LLVM_BUILD_IDENTITY_V1}\n\
+                 target-triple={ROW_SOFTMAX_UPSTREAM_LLVM_TARGET_TRIPLE_V1}\n\
+                 target-cpu=gfx942\n\
+                 target-features=-xnack\n\
+                 relocation-model=pic\n\
+                 code-model=small\n\
+                 codegen-opt-level=none\n\
+                 data-layout={ROW_SOFTMAX_UPSTREAM_LLVM_DATA_LAYOUT_V1}\n"
+            ),
+            "reviewed Rust constant differs from the configured upstream LLVM TargetMachine observation",
+        );
     }
 
     #[test]

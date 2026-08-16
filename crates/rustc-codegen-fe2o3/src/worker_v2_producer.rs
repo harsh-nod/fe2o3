@@ -1681,9 +1681,11 @@ mod tests {
         ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1,
     };
     use fe2o3_hsaco_finalize::{
-        ContentIdentityV1, ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
-        RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
-        RowSoftmaxV1OcmlProviderPinsV1,
+        ContentIdentityV1, LinkOptionV1, PinnedWorkerV1,
+        ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1, RowSoftmaxV1DirectWorkerExpectationV1,
+        RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1, WorkerExecutionLimitsV1,
+        WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerStageV1,
+        execute_reproducible_first_build_worker_v2,
     };
     use fe2o3_kernel_ir::ScalarGemmTargetRequirementsV1;
     use fe2o3_kernel_ir::{
@@ -2107,6 +2109,10 @@ mod tests {
             .expect("prepare exact row-softmax handoff");
         let handoff = prepared.handoff();
         let module_text = std::str::from_utf8(handoff.module_bytes()).unwrap();
+        assert!(module_text.starts_with(&format!(
+            "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\n",
+            crate::kernel_ir_codegen::ROW_SOFTMAX_UPSTREAM_LLVM_DATA_LAYOUT_V1,
+        )));
 
         assert_eq!(
             prepared.frontend_authority_commitment(),
@@ -2202,6 +2208,9 @@ mod tests {
             worker,
         )
         .expect("production rustc row handoff is admitted by the direct worker profile");
+        if let Some(path) = std::env::var_os("FE2O3_TEST_RETAIN_ROW_SOFTMAX_LLVM") {
+            fs::write(path, handoff.module_bytes()).expect("retain exact row-softmax LLVM module");
+        }
     }
 
     #[test]
@@ -2710,6 +2719,94 @@ mod tests {
             std::str::from_utf8(handoff.module_bytes())
                 .unwrap()
                 .contains("\"target-cpu\"=\"gfx942\"")
+        );
+    }
+
+    #[test]
+    fn configured_upstream_worker_v2_accepts_layout_bound_row_softmax_through_native_link() {
+        const WORKER_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_WORKER";
+        const WORKER_BUILD_ID_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_WORKER_BUILD_ID";
+        const LLVM_BUILD_ID_ENV: &str = "FE2O3_TEST_ROW_SOFTMAX_LLVM_BUILD_ID";
+        const CONFIGURATION: [&str; 3] = [WORKER_ENV, WORKER_BUILD_ID_ENV, LLVM_BUILD_ID_ENV];
+        let configured = CONFIGURATION
+            .iter()
+            .filter(|name| std::env::var_os(name).is_some())
+            .count();
+        if configured == 0 {
+            eprintln!(
+                "skipping configured row-softmax Worker V2 execution: {} are absent",
+                CONFIGURATION.join(", "),
+            );
+            return;
+        }
+        assert_eq!(
+            configured,
+            CONFIGURATION.len(),
+            "partial configured row-softmax Worker V2 environment is forbidden",
+        );
+
+        let worker_path = PathBuf::from(std::env::var_os(WORKER_ENV).unwrap());
+        let worker_bytes = fs::read(&worker_path).expect("read configured upstream worker");
+        let measurement = WorkerMeasurementV1::new(
+            ContentIdentityV1::calculate(&worker_bytes),
+            std::env::var(WORKER_BUILD_ID_ENV).unwrap(),
+            std::env::var(LLVM_BUILD_ID_ENV).unwrap(),
+        )
+        .expect("construct configured upstream worker measurement");
+        assert_eq!(
+            measurement.llvm_build_identity(),
+            ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
+        );
+        let worker = PinnedWorkerV1::open(&worker_path, measurement)
+            .expect("open measured upstream Worker V2 executable");
+
+        let directory = TestDirectory::new();
+        let producer = producer();
+        let attempt = begin_attempt(&directory.0, &producer);
+        let mut receipt = exact_row_frontend_receipt_for_test();
+        let prepared = prepare_row_softmax_v1_worker_handoff(receipt.consume().unwrap()).unwrap();
+        publish_prepared_row_softmax_v1_worker_handoff(&directory.0, &producer, attempt, prepared)
+            .expect("publish exact row-softmax producer handoff");
+        let consumed = consume_compiler_module_handoff_v1(&directory.0, &producer, attempt)
+            .expect("consume exact row-softmax producer handoff");
+        let options = [
+            ("code-object-version", "6"),
+            ("opt-level", "0"),
+            ("strip-debug", "true"),
+            ("verify-each", "true"),
+        ]
+        .into_iter()
+        .map(|(name, value)| LinkOptionV1::new(name, value).unwrap())
+        .collect();
+        let evidence = execute_reproducible_first_build_worker_v2(
+            consumed,
+            &worker,
+            Vec::new(),
+            options,
+            WorkerOutputConstraintsV1::new(fe2o3_hsaco::MAX_HSACO_BYTES as u64).unwrap(),
+            WorkerExecutionLimitsV1::default(),
+        )
+        .expect("real upstream Worker V2 row-softmax OCML/native-link execution");
+
+        const OCML_DIAGNOSTIC: &str = "device_library.check=identity status=ok provider=gfx942-ocml-v1 roots=[__ocml_exp_f32] files=4";
+        for execution in [evidence.bootstrap(), evidence.exact_replay()] {
+            assert_eq!(execution.response().stage(), WorkerStageV1::Complete);
+            assert!(
+                execution
+                    .response()
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic == OCML_DIAGNOSTIC),
+                "completed Worker V2 execution omitted measured OCML evidence: {:?}",
+                execution.response().diagnostics(),
+            );
+        }
+        let inspected = fe2o3_hsaco::inspect(evidence.output_bytes())
+            .expect("inspect real row-softmax Worker V2 output");
+        assert_eq!(inspected.target().to_string(), "gfx942:xnack-");
+        assert_eq!(
+            inspected.code_object_version(),
+            fe2o3_hsaco::CodeObjectVersion::V6,
         );
     }
 
