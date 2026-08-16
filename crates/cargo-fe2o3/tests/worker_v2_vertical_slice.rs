@@ -1654,7 +1654,9 @@ fn public_ack_completion_does_not_replace_private_host_currentness_authority() {
 
 #[test]
 fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
-    let directory = TestDirectory::new();
+    // Process-tree probes run inside the bounded ACK window. Keep them from
+    // competing with the other static application fixtures on hosted runners.
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
@@ -1786,7 +1788,8 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
 
 #[test]
 fn application_seccomp_rejects_static_and_dynamic_exec_replacement() {
-    let directory = TestDirectory::new();
+    // The four exec probes share the same bounded application handoff window.
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
