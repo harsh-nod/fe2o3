@@ -23,9 +23,6 @@ use fe2o3_kernel_descriptor::{
 use fe2o3_kernel_ir::{
     Module, TiledGemmLdsV1Profile, tiled_gemm_lds_v1_module, verify_tiled_gemm_lds_v1_module,
 };
-use reserved_fe2o3_symbols::{
-    CrateBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, derive_kernel_binding_id_v1,
-};
 use rustc_abi::{CanonAbi, ExternAbi};
 use rustc_hir::{Mutability, Safety};
 use rustc_middle::ty::{FloatTy, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
@@ -55,8 +52,6 @@ const ABI_BINDING_V1: &[u8] = b"ptr64;size=48;align=8;a@0:16:8:slice-u16:shared-
 const SOURCE_GEOMETRY_BINDING_V1: &[u8] = b"rank=1;block=exact(64,1,1);max-grid=(4294967295,1,1);user-static-shared=0;max-dynamic-shared=0";
 const DERIVED_RESOURCE_BINDING_V1: &[u8] = b"rank=1;block=exact(64,1,1);max-grid=(1,1,1);compiler-static-shared=1024;allocation-count=2;allocation-bytes=512;allocation-alignment=16;wave=64;cov=6";
 const CORRESPONDENCE_V1: &[u8] = b"exact attributed tiled_gemm_lds_slice1 portable-MIR selects fe2o3::tiled_gemm_lds_v1;two distinct aligned BF16 LDS tiles;XOR4 stage-barrier-read;bounded reviewed correspondence only;not a compiler-refinement proof";
-const SOURCE_NAMESPACE_V1: &str =
-    "c09558e16157fec495e78bc32a23b082213fa4a6ddabe48445a54cb3de591295";
 const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
     70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 1,
     0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
@@ -102,6 +97,7 @@ struct LdsSlice1AuthorityV1 {
     complete_kernarg_bytes: u64,
     root_instance_identity: String,
     kernel_export: String,
+    kernel_binding_identity: [u8; 32],
     portable_mir_identity: [u8; 32],
     compiler_semantics_identity: [u8; 32],
     fn_abi_identity: [u8; 32],
@@ -394,7 +390,7 @@ pub(crate) fn authenticate_collected_lds_slice1_v1<'tcx>(
         .map_err(|error| CollectedLdsSlice1ErrorV1::Admission(error.to_string()))?;
     let root = exact_collected_root(&collection.functions)
         .map_err(|error| CollectedLdsSlice1ErrorV1::Admission(error.to_string()))?;
-    require_registration(root)?;
+    let kernel_binding_identity = require_registration(root)?;
     require_signature(tcx, root.instance)?;
     require_layout(root)?;
     let fn_abi_identity = require_fn_abi(tcx, root.instance)?;
@@ -490,6 +486,7 @@ pub(crate) fn authenticate_collected_lds_slice1_v1<'tcx>(
         complete_kernarg_bytes: LDS_SLICE1_COMPLETE_KERNARG_BYTES_V1,
         root_instance_identity,
         kernel_export: root.export_name.clone(),
+        kernel_binding_identity,
         portable_mir_identity,
         compiler_semantics_identity,
         fn_abi_identity,
@@ -514,29 +511,24 @@ pub(crate) fn authenticate_collected_lds_slice1_v1<'tcx>(
 
 fn require_registration(
     root: &crate::collector::CollectedFunction<'_>,
-) -> Result<(), CollectedLdsSlice1ErrorV1> {
-    let namespace = CrateBindingIdV1::from_hex(SOURCE_NAMESPACE_V1)
-        .expect("reviewed Slice 1 namespace is canonical");
-    let expected_binding = derive_kernel_binding_id_v1(
-        namespace,
-        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-        LDS_SLICE1_KERNEL_EXPORT_V1,
-        LDS_SLICE1_KERNEL_EXPORT_V1,
-    );
+) -> Result<[u8; 32], CollectedLdsSlice1ErrorV1> {
     if root.export_name != LDS_SLICE1_KERNEL_EXPORT_V1
         || root.logical_name.as_deref() != Some(LDS_SLICE1_KERNEL_EXPORT_V1)
         || !matches!(
             root.typed_profile,
             Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. })
         )
-        || root.kernel_binding != Some(expected_binding)
+        || root.kernel_binding.is_none()
         || root.frontend_contract.is_none()
     {
         return Err(CollectedLdsSlice1ErrorV1::Admission(
             "expected the unique attributed General V3 tiled_gemm_lds_slice1 root with its reviewed namespace binding".into(),
         ));
     }
-    Ok(())
+    Ok(root
+        .kernel_binding
+        .expect("registration admission requires a kernel binding")
+        .as_bytes())
 }
 
 fn require_signature<'tcx>(
@@ -1096,6 +1088,7 @@ fn authority_identity(authority: &LdsSlice1AuthorityV1) -> [u8; 32] {
     hash_field(&mut digest, &authority.complete_kernarg_bytes.to_le_bytes());
     hash_field(&mut digest, authority.root_instance_identity.as_bytes());
     hash_field(&mut digest, authority.kernel_export.as_bytes());
+    hash_field(&mut digest, &authority.kernel_binding_identity);
     hash_field(&mut digest, &authority.portable_mir_identity);
     hash_field(&mut digest, &authority.compiler_semantics_identity);
     hash_field(&mut digest, &authority.fn_abi_identity);
@@ -1121,6 +1114,8 @@ fn validate_authority(authority: &LdsSlice1AuthorityV1) -> Result<(), CollectedL
         Some("kernarg sizes")
     } else if authority.kernel_export != LDS_SLICE1_KERNEL_EXPORT_V1 {
         Some("kernel export")
+    } else if authority.kernel_binding_identity == [0; 32] {
+        Some("kernel binding")
     } else if !is_kernel_root_build_identity(&authority.root_instance_identity) {
         Some("root instance")
     } else if authority.portable_mir_identity != PORTABLE_MIR_SEMANTIC_IDENTITY_V1 {
@@ -1174,6 +1169,7 @@ fn exact_authority_for_test() -> LdsSlice1AuthorityV1 {
         complete_kernarg_bytes: LDS_SLICE1_COMPLETE_KERNARG_BYTES_V1,
         root_instance_identity: format!("__fe2o3_host_kernel_v1_{}", "1".repeat(64)),
         kernel_export: LDS_SLICE1_KERNEL_EXPORT_V1.to_owned(),
+        kernel_binding_identity: [0x42; 32],
         portable_mir_identity: PORTABLE_MIR_SEMANTIC_IDENTITY_V1,
         compiler_semantics_identity:
             crate::collected_tiled_gemm_v1::reviewed_compiler_semantics_identity(),
@@ -1274,6 +1270,22 @@ mod tests {
             validate_authority(&compiler_mismatch),
             Err(CollectedLdsSlice1ErrorV1::ReceiptBinding(
                 "compiler semantics"
+            ))
+        ));
+
+        let mut missing_binding = exact_authority();
+        missing_binding.kernel_binding_identity = [0; 32];
+        assert!(matches!(
+            validate_authority(&missing_binding),
+            Err(CollectedLdsSlice1ErrorV1::ReceiptBinding("kernel binding"))
+        ));
+
+        let mut substituted_binding = exact_authority();
+        substituted_binding.kernel_binding_identity[0] ^= 1;
+        assert!(matches!(
+            validate_authority(&substituted_binding),
+            Err(CollectedLdsSlice1ErrorV1::ReceiptBinding(
+                "source authority commitment"
             ))
         ));
     }
