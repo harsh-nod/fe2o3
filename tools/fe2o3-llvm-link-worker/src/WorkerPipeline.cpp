@@ -143,7 +143,8 @@ enum class PostLinkProfile {
   ExactWave64CollectivesV1,
   ExactFlashAttentionV1,
   ExactWorkgroupLdsReductionV1,
-  ExactScopedAtomicV1
+  ExactScopedAtomicV1,
+  ExactMoeTop2V1
 };
 
 enum class MetadataValidationPolicy {
@@ -152,7 +153,8 @@ enum class MetadataValidationPolicy {
   ExactWave64CollectivesV1,
   ExactFlashAttentionV1,
   ExactWorkgroupLdsReductionV1,
-  ExactScopedAtomicV1
+  ExactScopedAtomicV1,
+  ExactMoeTop2V1
 };
 
 constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
@@ -174,6 +176,11 @@ constexpr StringLiteral ExactWorkgroupLdsReductionV1Scratch =
 constexpr StringLiteral ExactScopedAtomicV1Entry = "scoped_atomic_add_u32_v1";
 constexpr StringLiteral ExactScopedAtomicV1Descriptor =
     "scoped_atomic_add_u32_v1.kd";
+constexpr StringLiteral ExactMoeTop2V1Entry =
+    "moe_top2_route_f32_t8_e4_k2_c4_v1";
+constexpr StringLiteral ExactMoeTop2V1Descriptor =
+    "moe_top2_route_f32_t8_e4_k2_c4_v1.kd";
+constexpr StringLiteral ExactMoeTop2V1Check = "moe_top2_t8_e4_k2_c4_v1_profile";
 constexpr StringLiteral ExactLdsGemmSlice1ProducerDataLayout =
     "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-"
     "p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-"
@@ -331,6 +338,48 @@ constexpr ExactWorkgroupSyncProfile ExactScopedAtomicV1 = {
      0xb1, 0xb6, 0xb1, 0xb9, 0xc3, 0xde, 0x10, 0x11, 0x47, 0x51},
     "scoped_atomic_v1_profile"};
 
+constexpr StringLiteral ExactMoeTop2V1BodySha256 =
+    "b703e4b9bf89f77887b6c1578475b0a556851e7235342efd5247acf999ca3b39";
+constexpr StringLiteral ExactMoeTop2V1MachineSha256 =
+    "4728028b85cc3ff407190de6a70b9c844437e9f92fc587e0614940be898346cf";
+constexpr std::array<StringLiteral, 16> ExactMoeTop2V1Sections = {
+    ".fe2o3.moe.source.v1",   ".fe2o3.moe.namespace.v1",
+    ".fe2o3.moe.crate.v1",    ".fe2o3.moe.authority.v1",
+    ".fe2o3.moe.mir.v1",      ".fe2o3.moe.fnabi.v1",
+    ".fe2o3.moe.compiler.v1", ".fe2o3.moe.terminals.v3",
+    ".fe2o3.moe.abi.v1",      ".fe2o3.moe.effects.v1",
+    ".fe2o3.moe.profile.v1",  ".fe2o3.moe.routing.v1",
+    ".fe2o3.moe.kir.v1",      ".fe2o3.moe.descriptor.v1",
+    ".fe2o3.moe.provider.v1", ".fe2o3.moe.layout.v1"};
+constexpr std::array<StringLiteral, 15> ExactMoeTop2V1Identities = {
+    "b77016caa0c3708e420e583712e65e4e6428db7b4feafd8d0a1d4bdc475ef6ff",
+    "4180ef61545684e646bd5227333e7514d22a2d379d7d657397df4d41f7a192d1",
+    "fce826d20b8f2e4eca29180a2d9fc34949b51a07841dd7f79258625fc6a9f296",
+    "0ecec41db62eae781429526170aa60a73437f4cd8261b7e4d34ffe62309ad6e9",
+    "934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13",
+    "f796180c590cd84125921f2aaeb85ab13ef1b5c0502c1b1316bf9a2114fd30f6",
+    "4950c225e0cdbdce4e1230166984949970290dedc19e8dc4cd31f865f1625a4a",
+    "3dbbe3ec9d58a7c285a14159294051498378f291525d8445113b17aab9b0e08b",
+    "4c225cf47613b98e7baca366167bfa4c27ae43ec47433b49d1df5a1d960fb4aa",
+    "496368f70c211b001417fb904622971d008ca24442beaef3e4c6c175b4f5f6ba",
+    "100bc49f34627485a959b7201a238bbf8421df800d7f1028bbfff6bd8c51edd1",
+    "a94a13c1ad0ac1498e1c6cc63416dc1cda2f7c14c5e4c1c422e354820fc09315",
+    "3dfa5db91762403106e7d3a1581700b1d03282f5dd15727761e5cc42c63731b2",
+    "7852334c9d38cd4544c535377650554344e8e59de2dc822f4f2492dfea998743",
+    "9a0e923eef32bce3ef2de4663fc4d395cfd2179c55dd586180d9c25faa377536"};
+
+bool bytesMatchLowerHex(ArrayRef<uint8_t> Bytes, StringRef Hex) {
+  if (Hex.size() != Bytes.size() * 2)
+    return false;
+  for (size_t Index = 0; Index != Bytes.size(); ++Index) {
+    uint8_t Parsed = 0;
+    if (Hex.slice(Index * 2, Index * 2 + 2).getAsInteger(16, Parsed) ||
+        Parsed != Bytes[Index])
+      return false;
+  }
+  return true;
+}
+
 bool isExactLdsGemmSlice1SymbolSet(ArrayRef<std::string> Symbols) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{ExactLdsGemmSlice1Entry.str(),
@@ -355,6 +404,12 @@ bool isExactWorkgroupSyncSymbolSet(
     const ExactWorkgroupSyncProfile &Profile) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{Profile.Entry.str(), Profile.Descriptor.str()};
+}
+
+bool isExactMoeTop2V1SymbolSet(ArrayRef<std::string> Symbols) {
+  return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
+         std::set<std::string>{ExactMoeTop2V1Entry.str(),
+                               ExactMoeTop2V1Descriptor.str()};
 }
 
 bool isExactLdsGemmSlice1RequestCandidate(const Request &RequestValue) {
@@ -445,7 +500,8 @@ bool isExactWorkgroupSyncRequestCandidate(
       RequestValue.Inputs.size() == 1 &&
       RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
       RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
-      RequestValue.Inputs.front().Digest == RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
       RequestValue.Inputs.front().Bytes == RequestValue.CompilerModule.Bytes;
   return RequestValue.Protocol == ProtocolVersion::V2 &&
          RequestValue.Target == "gfx942:xnack-" &&
@@ -462,6 +518,32 @@ bool isExactWorkgroupSyncRequestCandidate(
 bool isClosedExactWorkgroupSyncRequest(
     const Request &RequestValue, const ExactWorkgroupSyncProfile &Profile) {
   return isExactWorkgroupSyncRequestCandidate(RequestValue, Profile) &&
+         RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
+         RequestValue.LinkOptions.StripDebug &&
+         RequestValue.LinkOptions.VerifyEach;
+}
+
+bool isExactMoeTop2V1RequestCandidate(const Request &RequestValue) {
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes == RequestValue.CompilerModule.Bytes;
+  return RequestValue.Protocol == ProtocolVersion::V2 &&
+         RequestValue.Target == "gfx942:xnack-" &&
+         RequestValue.CodeObjectVersion == 6 && CompilerInputMatches &&
+         RequestValue.ExternalProviders.empty() &&
+         RequestValue.ImportSymbols.empty() &&
+         RequestValue.ExportSymbols.empty() &&
+         isExactMoeTop2V1SymbolSet(RequestValue.RequiredSymbols) &&
+         isExactMoeTop2V1SymbolSet(RequestValue.ExpectedDefinedSymbols) &&
+         isExactMoeTop2V1SymbolSet(RequestValue.FinalSymbols);
+}
+
+bool isClosedExactMoeTop2V1Request(const Request &RequestValue) {
+  return isExactMoeTop2V1RequestCandidate(RequestValue) &&
          RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
          RequestValue.LinkOptions.StripDebug &&
          RequestValue.LinkOptions.VerifyEach;
@@ -521,6 +603,20 @@ bool mentionsExactWorkgroupSync(const Request &RequestValue) {
          Mentions(RequestValue.FinalSymbols);
 }
 
+bool mentionsExactMoeTop2V1(const Request &RequestValue) {
+  auto Mentions = [](ArrayRef<std::string> Symbols) {
+    return llvm::any_of(Symbols, [](StringRef Symbol) {
+      return Symbol == ExactMoeTop2V1Entry ||
+             Symbol == ExactMoeTop2V1Descriptor;
+    });
+  };
+  return Mentions(RequestValue.RequiredSymbols) ||
+         Mentions(RequestValue.ExpectedDefinedSymbols) ||
+         Mentions(RequestValue.ImportSymbols) ||
+         Mentions(RequestValue.ExportSymbols) ||
+         Mentions(RequestValue.FinalSymbols);
+}
+
 Expected<PostLinkProfile>
 selectPostLinkProfile(const Request &RequestValue,
                       const std::set<std::string> &ExpectedSymbols) {
@@ -563,6 +659,14 @@ selectPostLinkProfile(const Request &RequestValue,
       return pipelineError(Twine("exact ") + Profile->Check +
                            " symbols require the closed Worker V2 profile");
     return Kind;
+  }
+  const std::set<std::string> ExactMoeSymbols = {
+      ExactMoeTop2V1Entry.str(), ExactMoeTop2V1Descriptor.str()};
+  if (ExpectedSymbols == ExactMoeSymbols) {
+    if (!isClosedExactMoeTop2V1Request(RequestValue))
+      return pipelineError(
+          "exact MoE top-2 symbols require the closed Worker V2 profile");
+    return PostLinkProfile::ExactMoeTop2V1;
   }
   return PostLinkProfile::LegacyGfx942G1;
 }
@@ -908,9 +1012,246 @@ Error validateExactWorkgroupSyncCompilerInput(
   return Error::success();
 }
 
-Error validateExactWorkgroupSyncModule(
-    const Module &ModuleValue, const ExactWorkgroupSyncProfile &Profile,
-    const DataLayout &ExpectedLayout) {
+Expected<std::array<std::vector<uint8_t>, 17>>
+parseExactMoeTop2V1CompilerSections(StringRef Text) {
+  constexpr StringLiteral Marker = "\nmodule asm \".section ";
+  size_t BodyEnd = Text.find(Marker);
+  if (BodyEnd == StringRef::npos)
+    return pipelineError(
+        "exact MoE top-2 compiler module is missing identity sections");
+  if (!bytesMatchLowerHex(
+          SHA256::hash(arrayRefFromStringRef(Text.take_front(BodyEnd))),
+          ExactMoeTop2V1BodySha256))
+    return pipelineError(
+        "exact MoE top-2 compiler module body identity does not match");
+
+  std::array<std::string, 17> Sections;
+  Sections[0] = ExactWave64DescriptorSection.str();
+  for (size_t Index = 0; Index != ExactMoeTop2V1Sections.size(); ++Index)
+    Sections[Index + 1] = ExactMoeTop2V1Sections[Index].str();
+  SmallVector<StringRef, 224> Lines;
+  Text.drop_front(BodyEnd + 1).split(Lines, '\n', -1, true);
+  std::array<std::vector<uint8_t>, Sections.size()> Result;
+  size_t LineIndex = 0;
+  for (size_t SectionIndex = 0; SectionIndex != Sections.size();
+       ++SectionIndex) {
+    if (SectionIndex != 0 && LineIndex != Lines.size() &&
+        Lines[LineIndex].empty())
+      ++LineIndex;
+    std::string ExpectedHeader =
+        (Twine("module asm \".section ") + Sections[SectionIndex] +
+         ",\\22\\22,@progbits\"")
+            .str();
+    if (LineIndex == Lines.size() || Lines[LineIndex] != ExpectedHeader)
+      return pipelineError(
+          Twine("exact MoE top-2 compiler module section order does not "
+                "match at ") +
+          Twine(SectionIndex));
+    ++LineIndex;
+    if (LineIndex == Lines.size() ||
+        Lines[LineIndex] != "module asm \".balign 8\"")
+      return pipelineError(
+          "exact MoE top-2 compiler module section alignment does not match");
+    ++LineIndex;
+
+    constexpr StringLiteral BytePrefix = "module asm \".byte ";
+    while (LineIndex != Lines.size() &&
+           Lines[LineIndex].starts_with(BytePrefix)) {
+      StringRef Line = Lines[LineIndex++];
+      if (!Line.ends_with("\""))
+        return pipelineError(
+            "exact MoE top-2 compiler module byte record is malformed");
+      SmallVector<StringRef, 16> ByteAtoms;
+      Line.drop_front(BytePrefix.size())
+          .drop_back()
+          .split(ByteAtoms, ',', -1, false);
+      if (ByteAtoms.empty() || ByteAtoms.size() > 16)
+        return pipelineError(
+            "exact MoE top-2 compiler module byte record is noncanonical");
+      for (StringRef Atom : ByteAtoms) {
+        Atom = Atom.trim();
+        if (!Atom.consume_front("0x") || Atom.size() != 2)
+          return pipelineError(
+              "exact MoE top-2 compiler module byte atom is malformed");
+        uint8_t Byte = 0;
+        if (Atom.getAsInteger(16, Byte))
+          return pipelineError(
+              "exact MoE top-2 compiler module byte atom is malformed");
+        Result[SectionIndex].push_back(Byte);
+      }
+    }
+    if (Result[SectionIndex].empty())
+      return pipelineError("exact MoE top-2 compiler module section is empty");
+  }
+  if (LineIndex != Lines.size() &&
+      !(LineIndex + 1 == Lines.size() && Lines[LineIndex].empty()))
+    return pipelineError(
+        "exact MoE top-2 compiler module has trailing assembly");
+  return Result;
+}
+
+Error validateExactMoeTop2V1CompilerInput(StringRef Text,
+                                          const DataLayout &ExpectedLayout) {
+  auto Sections = parseExactMoeTop2V1CompilerSections(Text);
+  if (!Sections)
+    return Sections.takeError();
+  if ((*Sections)[0].size() > 64 * 1024)
+    return pipelineError(
+        "exact MoE top-2 compiler descriptor section is too large");
+  for (size_t Index = 0; Index != ExactMoeTop2V1Identities.size(); ++Index)
+    if (!bytesMatchLowerHex((*Sections)[Index + 1],
+                            ExactMoeTop2V1Identities[Index]))
+      return pipelineError(
+          "exact MoE top-2 source/KIR/compiler/profile identity does not "
+          "match");
+  std::array<uint8_t, 32> ExpectedLayoutIdentity = SHA256::hash(
+      arrayRefFromStringRef(ExpectedLayout.getStringRepresentation()));
+  if (ArrayRef((*Sections).back()) != ArrayRef(ExpectedLayoutIdentity))
+    return pipelineError(
+        "exact MoE top-2 target-machine data-layout identity does not match");
+  return Error::success();
+}
+
+Error validateExactMoeTop2V1Module(const Module &ModuleValue,
+                                   const DataLayout &ExpectedLayout) {
+  if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
+      ModuleValue.getDataLayoutStr() !=
+          ExpectedLayout.getStringRepresentation() ||
+      ModuleValue.global_begin() != ModuleValue.global_end())
+    return pipelineError("exact MoE top-2 LLVM module envelope does not match");
+
+  static constexpr std::array<StringLiteral, 5> HelperNames = {
+      "__fe2o3_moe_select_expert_v1", "__fe2o3_moe_requested_count_v1",
+      "__fe2o3_moe_admitted_count_v1", "__fe2o3_moe_expert_offset_v1",
+      "__fe2o3_moe_route_slot_v1"};
+  const std::set<std::string> ExpectedHelpers = {
+      HelperNames[0].str(), HelperNames[1].str(), HelperNames[2].str(),
+      HelperNames[3].str(), HelperNames[4].str()};
+  const std::set<std::string> ExpectedDeclarations = {
+      "llvm.amdgcn.workitem.id.x", "llvm.trap"};
+  std::set<std::string> Helpers;
+  std::set<std::string> Declarations;
+  const Function *Kernel = nullptr;
+  for (const Function &FunctionValue : ModuleValue) {
+    if (FunctionValue.isDeclaration()) {
+      Declarations.insert(FunctionValue.getName().str());
+      continue;
+    }
+    if (FunctionValue.getName() == ExactMoeTop2V1Entry) {
+      if (Kernel)
+        return pipelineError(
+            "exact MoE top-2 LLVM kernel cardinality does not match");
+      Kernel = &FunctionValue;
+      continue;
+    }
+    if (!FunctionValue.hasInternalLinkage() ||
+        !FunctionValue.hasFnAttribute(Attribute::AlwaysInline) ||
+        !FunctionValue.onlyReadsMemory())
+      return pipelineError(
+          "exact MoE top-2 LLVM helper attributes do not match");
+    Helpers.insert(FunctionValue.getName().str());
+  }
+  if (!Kernel || Helpers != ExpectedHelpers ||
+      Declarations != ExpectedDeclarations ||
+      Kernel->getCallingConv() != CallingConv::AMDGPU_KERNEL ||
+      !Kernel->getReturnType()->isVoidTy() || Kernel->isVarArg() ||
+      Kernel->arg_size() != 16)
+    return pipelineError(
+        "exact MoE top-2 LLVM function closure does not match");
+
+  static constexpr std::array<StringLiteral, 16> ArgumentNames = {
+      "logits.data",      "logits.len",      "top2.data",     "top2.len",
+      "requested.data",   "requested.len",   "admitted.data", "admitted.len",
+      "offsets.data",     "offsets.len",     "slots.data",    "slots.len",
+      "permutation.data", "permutation.len", "inverse.data",  "inverse.len"};
+  size_t ArgumentIndex = 0;
+  for (const Argument &ArgumentValue : Kernel->args()) {
+    Type *TypeValue = ArgumentValue.getType();
+    bool IsPointer = ArgumentIndex % 2 == 0;
+    if (ArgumentValue.getName() != ArgumentNames[ArgumentIndex] ||
+        (IsPointer ? !TypeValue->isPointerTy() ||
+                         TypeValue->getPointerAddressSpace() != 1
+                   : !TypeValue->isIntegerTy(64)))
+      return pipelineError("exact MoE top-2 LLVM argument ABI does not match");
+    ++ArgumentIndex;
+  }
+  if (Kernel->getFnAttribute("target-cpu").getValueAsString() != "gfx942" ||
+      Kernel->getFnAttribute("target-features").getValueAsString() !=
+          "-wavefrontsize32,+wavefrontsize64,-xnack" ||
+      Kernel->getFnAttribute("amdgpu-flat-work-group-size")
+              .getValueAsString() != "64,64")
+    return pipelineError("exact MoE top-2 LLVM target attributes do not match");
+  MDNode *Workgroup = Kernel->getMetadata("reqd_work_group_size");
+  static constexpr std::array<uint64_t, 3> WorkgroupShape = {64, 1, 1};
+  if (!Workgroup || Workgroup->getNumOperands() != WorkgroupShape.size())
+    return pipelineError(
+        "exact MoE top-2 LLVM workgroup metadata does not match");
+  for (size_t Index = 0; Index != WorkgroupShape.size(); ++Index) {
+    auto *Value =
+        mdconst::dyn_extract<ConstantInt>(Workgroup->getOperand(Index));
+    if (!Value || Value->getZExtValue() != WorkgroupShape[Index])
+      return pipelineError(
+          "exact MoE top-2 LLVM workgroup metadata does not match");
+  }
+
+  size_t Loads = 0;
+  size_t Stores = 0;
+  size_t OrderedFloatComparisons = 0;
+  size_t WorkitemIds = 0;
+  size_t Traps = 0;
+  for (const Function &FunctionValue : ModuleValue) {
+    if (FunctionValue.isDeclaration())
+      continue;
+    for (const Instruction &InstructionValue : instructions(FunctionValue)) {
+      if (isa<AllocaInst, FenceInst, AtomicRMWInst, AtomicCmpXchgInst>(
+              InstructionValue))
+        return pipelineError(
+            "exact MoE top-2 LLVM forbidden memory effect is present");
+      if (const auto *Load = dyn_cast<LoadInst>(&InstructionValue)) {
+        if (Load->getPointerAddressSpace() != 1 || Load->isAtomic() ||
+            Load->getAlign() != Align(4))
+          return pipelineError(
+              "exact MoE top-2 LLVM load effect does not match");
+        ++Loads;
+      }
+      if (const auto *Store = dyn_cast<StoreInst>(&InstructionValue)) {
+        if (Store->getPointerAddressSpace() != 1 || Store->isAtomic() ||
+            Store->getAlign() != Align(4))
+          return pipelineError(
+              "exact MoE top-2 LLVM store effect does not match");
+        ++Stores;
+      }
+      if (const auto *Compare = dyn_cast<FCmpInst>(&InstructionValue)) {
+        if (Compare->getPredicate() != CmpInst::FCMP_OGT)
+          return pipelineError(
+              "exact MoE top-2 LLVM floating comparison does not match");
+        ++OrderedFloatComparisons;
+      }
+      const auto *Call = dyn_cast<CallBase>(&InstructionValue);
+      if (!Call)
+        continue;
+      const Function *Callee = Call->getCalledFunction();
+      if (!Callee)
+        return pipelineError("exact MoE top-2 LLVM has an indirect call");
+      StringRef Name = Callee->getName();
+      if (Name == "llvm.amdgcn.workitem.id.x")
+        ++WorkitemIds;
+      else if (Name == "llvm.trap")
+        ++Traps;
+      else if (!ExpectedHelpers.contains(Name.str()))
+        return pipelineError(
+            "exact MoE top-2 LLVM call closure does not match");
+    }
+  }
+  if (Loads != 5 || Stores != 7 || OrderedFloatComparisons != 6 ||
+      WorkitemIds != 1 || Traps != 1)
+    return pipelineError("exact MoE top-2 LLVM effect closure does not match");
+  return Error::success();
+}
+
+Error validateExactWorkgroupSyncModule(const Module &ModuleValue,
+                                       const ExactWorkgroupSyncProfile &Profile,
+                                       const DataLayout &ExpectedLayout) {
   if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
       ModuleValue.getDataLayoutStr() !=
           ExpectedLayout.getStringRepresentation())
@@ -962,8 +1303,8 @@ Error validateExactWorkgroupSyncModule(
         (AddressSpaces[ArgumentIndex] == 1
              ? !TypeValue->isPointerTy() ||
                    TypeValue->getPointerAddressSpace() != 1
-             : IsLdsEpoch ? !TypeValue->isIntegerTy(32)
-                          : !TypeValue->isIntegerTy(64)))
+         : IsLdsEpoch ? !TypeValue->isIntegerTy(32)
+                      : !TypeValue->isIntegerTy(64)))
       return pipelineError(
           "exact workgroup-sync LLVM argument ABI does not match");
     ++ArgumentIndex;
@@ -1103,8 +1444,7 @@ Error validateExactWorkgroupSyncModule(
              LdsStores != 0 || WorkgroupReleaseFences != 0 ||
              WorkgroupAcquireFences != 0 || AtomicAdds != 1 ||
              GlobalIntToPointers != 1) {
-    return pipelineError(
-        "exact scoped-atomic effect closure does not match");
+    return pipelineError("exact scoped-atomic effect closure does not match");
   }
   return Error::success();
 }
@@ -1661,6 +2001,10 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
       if (Error E = validateExactWorkgroupSyncCompilerInput(
               Bytes, *Profile, Machine.createDataLayout()))
         return E;
+  if (isClosedExactMoeTop2V1Request(RequestValue))
+    if (Error E = validateExactMoeTop2V1CompilerInput(
+            Bytes, Machine.createDataLayout()))
+      return E;
   DataLayout ExpectedLayout = Machine.createDataLayout();
   bool AcceptedLayout = false;
   ParserCallbacks Callbacks([&](StringRef TripleValue, StringRef Layout) {
@@ -1717,6 +2061,9 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (!MeasuredBuiltinProvider &&
       isClosedExactFlashAttentionV1Request(RequestValue))
     if (Error E = validateExactFlashAttentionModule(**Parsed))
+      return E;
+  if (isClosedExactMoeTop2V1Request(RequestValue))
+    if (Error E = validateExactMoeTop2V1Module(**Parsed, ExpectedLayout))
       return E;
   if (!MeasuredBuiltinProvider)
     if (const ExactWorkgroupSyncProfile *Profile =
@@ -2473,6 +2820,8 @@ StringRef exactMetadataCheck(MetadataValidationPolicy Policy) {
     return ExactWorkgroupLdsReductionV1.Check;
   case MetadataValidationPolicy::ExactScopedAtomicV1:
     return ExactScopedAtomicV1.Check;
+  case MetadataValidationPolicy::ExactMoeTop2V1:
+    return ExactMoeTop2V1Check;
   case MetadataValidationPolicy::Generic:
     break;
   }
@@ -2825,6 +3174,11 @@ Error validateExactWorkgroupSyncElfClosure(
   return validateExactElfClosure(ObjectValue, Profile.Check);
 }
 
+Error validateExactMoeTop2V1ElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  return validateExactElfClosure(ObjectValue, ExactMoeTop2V1Check);
+}
+
 struct Wave64CallScanner {
   std::unique_ptr<MCRegisterInfo> Registers;
   std::unique_ptr<MCAsmInfo> AsmInfo;
@@ -3095,8 +3449,7 @@ Error validateExactWorkgroupSyncMachine(
 
   auto Scanner = createWave64CallScanner();
   if (!Scanner)
-    return postLinkError(Profile.Check,
-                         errorToDiagnostic(Scanner.takeError()));
+    return postLinkError(Profile.Check, errorToDiagnostic(Scanner.takeError()));
   uint64_t Offset = 0;
   size_t InstructionCount = 0;
   size_t BarrierCount = 0;
@@ -3139,10 +3492,9 @@ Error validateExactWorkgroupSyncMachine(
     if (BarrierCount != 0 || LdsReadCount != 32 || LdsWriteCount != 1 ||
         AtomicAddCount != 0) {
       std::string Reason =
-          (Twine("machine_lds_barrier_effect_barriers_") +
-           Twine(BarrierCount) + "_reads_" + Twine(LdsReadCount) +
-           "_writes_" + Twine(LdsWriteCount) + "_atomics_" +
-           Twine(AtomicAddCount))
+          (Twine("machine_lds_barrier_effect_barriers_") + Twine(BarrierCount) +
+           "_reads_" + Twine(LdsReadCount) + "_writes_" + Twine(LdsWriteCount) +
+           "_atomics_" + Twine(AtomicAddCount))
               .str();
       return postLinkError(Profile.Check, Reason);
     }
@@ -3150,6 +3502,98 @@ Error validateExactWorkgroupSyncMachine(
              AtomicAddCount != 1) {
     return postLinkError(Profile.Check, "machine_atomic_effect");
   }
+  return Error::success();
+}
+
+Error validateExactMoeTop2V1Machine(const ELFObjectFile<ELF64LE> &ObjectValue) {
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto SectionsOrError = File.sections();
+  if (!SectionsOrError)
+    return SectionsOrError.takeError();
+  ArrayRef<ELF64LE::Shdr> Sections = *SectionsOrError;
+  ArrayRef<uint8_t> KernelBytes;
+  uint64_t KernelAddress = 0;
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Table : Sections) {
+    if (Table.sh_type != ELF::SHT_SYMTAB)
+      continue;
+    auto Symbols = File.symbols(&Table);
+    if (!Symbols)
+      return Symbols.takeError();
+    auto Strings = File.getStringTableForSymtab(Table, Sections);
+    if (!Strings)
+      return Strings.takeError();
+    for (const ELF64LE::Sym &Symbol : *Symbols) {
+      auto Name = Symbol.getName(*Strings);
+      if (!Name)
+        return Name.takeError();
+      if (*Name != ExactMoeTop2V1Entry)
+        continue;
+      ++Matches;
+      if (Symbol.getType() != ELF::STT_FUNC || Symbol.st_size == 0 ||
+          Symbol.st_shndx == ELF::SHN_XINDEX ||
+          Symbol.st_shndx >= Sections.size())
+        return postLinkError(ExactMoeTop2V1Check, "machine_entry_symbol");
+      const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
+      if ((Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) !=
+              (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR) ||
+          Symbol.st_value < Section.sh_addr)
+        return postLinkError(ExactMoeTop2V1Check, "machine_entry_section");
+      uint64_t Offset = Symbol.st_value - Section.sh_addr;
+      if (Offset > Section.sh_size || Symbol.st_size > Section.sh_size - Offset)
+        return postLinkError(ExactMoeTop2V1Check, "machine_entry_range");
+      auto Contents = File.getSectionContents(Section);
+      if (!Contents)
+        return Contents.takeError();
+      KernelBytes = Contents->slice(Offset, Symbol.st_size);
+      KernelAddress = Symbol.st_value;
+    }
+  }
+  if (Matches != 1)
+    return postLinkError(ExactMoeTop2V1Check, "machine_entry_cardinality");
+
+  auto Scanner = createWave64CallScanner();
+  if (!Scanner)
+    return postLinkError(ExactMoeTop2V1Check,
+                         errorToDiagnostic(Scanner.takeError()));
+  uint64_t Offset = 0;
+  size_t InstructionCount = 0;
+  size_t MemoryLoads = 0;
+  size_t MemoryStores = 0;
+  while (Offset < KernelBytes.size()) {
+    if (llvm::all_of(KernelBytes.drop_front(Offset),
+                     [](uint8_t Byte) { return Byte == 0; }))
+      break;
+    MCInst Instruction;
+    uint64_t Size = 0;
+    auto Status = Scanner->Disassembler->getInstruction(
+        Instruction, Size, KernelBytes.drop_front(Offset),
+        KernelAddress + Offset, nulls());
+    if (Status != MCDisassembler::Success || Size == 0 ||
+        Size > KernelBytes.size() - Offset)
+      return postLinkError(ExactMoeTop2V1Check, "machine_instruction_decode");
+    const MCInstrDesc &Descriptor =
+        Scanner->Instructions->get(Instruction.getOpcode());
+    if (Descriptor.isCall())
+      return postLinkError(ExactMoeTop2V1Check, "machine_call");
+    StringRef Opcode = Scanner->Instructions->getName(Instruction.getOpcode());
+    if (Opcode.contains("DS_") || Opcode.contains("BARRIER") ||
+        Opcode.contains("ATOMIC") || Opcode.contains("SCRATCH"))
+      return postLinkError(ExactMoeTop2V1Check,
+                           "machine_forbidden_memory_effect");
+    MemoryLoads += Descriptor.mayLoad();
+    MemoryStores += Descriptor.mayStore();
+    Offset += Size;
+    if (++InstructionCount > 1024 * 1024)
+      return postLinkError(ExactMoeTop2V1Check, "machine_instruction_bound");
+  }
+  if (InstructionCount == 0 || MemoryLoads == 0 || MemoryStores == 0)
+    return postLinkError(ExactMoeTop2V1Check, "machine_effect_shape");
+  std::array<uint8_t, 32> MachineIdentity = SHA256::hash(KernelBytes);
+  if (!bytesMatchLowerHex(MachineIdentity, ExactMoeTop2V1MachineSha256))
+    return postLinkError(
+        ExactMoeTop2V1Check,
+        (Twine("machine_identity_") + digestHex(MachineIdentity)).str());
   return Error::success();
 }
 
@@ -3266,6 +3710,42 @@ Error validateExactFlashAttentionDescriptorBinding(
   if (Matches != 1)
     return postLinkError("flash_attention_v1_profile",
                          "descriptor_section_cardinality");
+  return Error::success();
+}
+
+Error validateExactMoeTop2V1DescriptorBinding(
+    const ELFObjectFile<ELF64LE> &ObjectValue, const Request &RequestValue) {
+  StringRef CompilerBytes(
+      reinterpret_cast<const char *>(RequestValue.CompilerModule.Bytes.data()),
+      RequestValue.CompilerModule.Bytes.size());
+  auto InputSections = parseExactMoeTop2V1CompilerSections(CompilerBytes);
+  if (!InputSections)
+    return postLinkError(ExactMoeTop2V1Check,
+                         errorToDiagnostic(InputSections.takeError()));
+  ArrayRef<uint8_t> ExpectedDescriptor = (*InputSections)[0];
+
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    if (*Name != ExactWave64DescriptorSection)
+      continue;
+    ++Matches;
+    if (Section.sh_type != ELF::SHT_PROGBITS || Section.sh_addralign != 8)
+      return postLinkError(ExactMoeTop2V1Check, "descriptor_section_envelope");
+    auto Contents = File.getSectionContents(Section);
+    if (!Contents)
+      return Contents.takeError();
+    if (*Contents != ExpectedDescriptor)
+      return postLinkError(ExactMoeTop2V1Check, "descriptor_section_identity");
+  }
+  if (Matches != 1)
+    return postLinkError(ExactMoeTop2V1Check, "descriptor_section_cardinality");
   return Error::success();
 }
 
@@ -3843,8 +4323,8 @@ Error validateExactWorkgroupSyncMetadata(
       {200, 8, "hidden_queue_ptr"},
   }};
   auto Mismatch = [&](StringRef Field) {
-    return postLinkError(
-        Profile.Check, (Twine("kernel_contract_") + Field).str());
+    return postLinkError(Profile.Check,
+                         (Twine("kernel_contract_") + Field).str());
   };
   if (Metadata.Kernels.size() != 1)
     return postLinkError(Profile.Check, "kernel_cardinality");
@@ -3884,23 +4364,21 @@ Error validateExactWorkgroupSyncMetadata(
                              StringRef TypeName, StringRef ValueType,
                              StringRef Access, bool Restrict) -> Error {
     const KernelArgumentContract &Argument = Arguments[Index];
-    if (!Argument.Name || *Argument.Name != Name ||
-        Argument.Offset != Offset || Argument.Size != 8 ||
-        !Argument.TypeName || *Argument.TypeName != TypeName ||
+    if (!Argument.Name || *Argument.Name != Name || Argument.Offset != Offset ||
+        Argument.Size != 8 || !Argument.TypeName ||
+        *Argument.TypeName != TypeName ||
         (Argument.Align && *Argument.Align != 8) ||
         Argument.ValueKind != "global_buffer" ||
         (Argument.ValueType && *Argument.ValueType != ValueType) ||
         !Argument.AddressSpace || *Argument.AddressSpace != "global" ||
         !Argument.Access || *Argument.Access != Access ||
         (Argument.ActualAccess &&
-         (Access == "read_write"
-              ? *Argument.ActualAccess != "read_write" &&
-                    *Argument.ActualAccess != "write_only"
-              : *Argument.ActualAccess != Access)) ||
+         (Access == "read_write" ? *Argument.ActualAccess != "read_write" &&
+                                       *Argument.ActualAccess != "write_only"
+                                 : *Argument.ActualAccess != Access)) ||
         (Argument.PointeeAlign && *Argument.PointeeAlign != 4) ||
-        (Access == "read_only"
-             ? !Argument.IsConst || !*Argument.IsConst
-             : Argument.IsConst && *Argument.IsConst) ||
+        (Access == "read_only" ? !Argument.IsConst || !*Argument.IsConst
+                               : Argument.IsConst && *Argument.IsConst) ||
         (Restrict ? !Argument.IsRestrict || !*Argument.IsRestrict
                   : Argument.IsRestrict && *Argument.IsRestrict) ||
         (Argument.IsVolatile && *Argument.IsVolatile) ||
@@ -3912,9 +4390,9 @@ Error validateExactWorkgroupSyncMetadata(
                             uint64_t Size, StringRef TypeName,
                             StringRef ValueType) -> Error {
     const KernelArgumentContract &Argument = Arguments[Index];
-    if (!Argument.Name || *Argument.Name != Name ||
-        Argument.Offset != Offset || Argument.Size != Size ||
-        !Argument.TypeName || *Argument.TypeName != TypeName ||
+    if (!Argument.Name || *Argument.Name != Name || Argument.Offset != Offset ||
+        Argument.Size != Size || !Argument.TypeName ||
+        *Argument.TypeName != TypeName ||
         (Argument.Align && *Argument.Align != Size) ||
         Argument.ValueKind != "by_value" ||
         (Argument.ValueType && *Argument.ValueType != ValueType) ||
@@ -3927,16 +4405,12 @@ Error validateExactWorkgroupSyncMetadata(
     return Error::success();
   };
 
-  if (Error E = ValidatePointer(0, "values.data", 0,
-                                Profile.Kind ==
-                                        ExactWorkgroupSyncKind::LdsReduction
-                                    ? "int*"
-                                    : "uint*",
-                                Profile.Kind ==
-                                        ExactWorkgroupSyncKind::LdsReduction
-                                    ? "i32"
-                                    : "u32",
-                                "read_only", false))
+  if (Error E = ValidatePointer(
+          0, "values.data", 0,
+          Profile.Kind == ExactWorkgroupSyncKind::LdsReduction ? "int*"
+                                                               : "uint*",
+          Profile.Kind == ExactWorkgroupSyncKind::LdsReduction ? "i32" : "u32",
+          "read_only", false))
     return E;
   if (Error E = ValidateScalar(1, "values.len", 8, 8, "ulong", "u64"))
     return E;
@@ -3952,11 +4426,9 @@ Error validateExactWorkgroupSyncMetadata(
     if (Error E = ValidatePointer(2, "eligible.data", 16, "uint*", "u32",
                                   "read_only", false))
       return E;
-    if (Error E =
-            ValidateScalar(3, "eligible.len", 24, 8, "ulong", "u64"))
+    if (Error E = ValidateScalar(3, "eligible.len", 24, 8, "ulong", "u64"))
       return E;
-    if (Error E = ValidateScalar(4, "target.address", 32, 8, "ulong",
-                                 "u64"))
+    if (Error E = ValidateScalar(4, "target.address", 32, 8, "ulong", "u64"))
       return E;
   }
 
@@ -3995,6 +4467,161 @@ Error validateExactWorkgroupSyncMetadata(
           ? DynamicLdsArguments != 1
           : DynamicLdsArguments != 0)
     return Mismatch("hidden_dynamic_lds_size");
+  return Error::success();
+}
+
+Error validateExactMoeTop2V1Metadata(const MetadataContract &Metadata) {
+  static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 13> RequiredHidden = {{
+      {0, 4, "hidden_block_count_x"},
+      {4, 4, "hidden_block_count_y"},
+      {8, 4, "hidden_block_count_z"},
+      {12, 2, "hidden_group_size_x"},
+      {14, 2, "hidden_group_size_y"},
+      {16, 2, "hidden_group_size_z"},
+      {18, 2, "hidden_remainder_x"},
+      {20, 2, "hidden_remainder_y"},
+      {22, 2, "hidden_remainder_z"},
+      {40, 8, "hidden_global_offset_x"},
+      {48, 8, "hidden_global_offset_y"},
+      {56, 8, "hidden_global_offset_z"},
+      {64, 2, "hidden_grid_dims"},
+  }};
+  static constexpr std::array<HiddenArgumentShape, 10> OptionalHidden = {{
+      {72, 8, "hidden_printf_buffer"},
+      {80, 8, "hidden_hostcall_buffer"},
+      {88, 8, "hidden_multigrid_sync_arg"},
+      {96, 8, "hidden_heap_v1"},
+      {104, 8, "hidden_default_queue"},
+      {112, 8, "hidden_completion_action"},
+      {120, 4, "hidden_dynamic_lds_size"},
+      {192, 4, "hidden_private_base"},
+      {196, 4, "hidden_shared_base"},
+      {200, 8, "hidden_queue_ptr"},
+  }};
+  auto Mismatch = [](StringRef Field) {
+    return postLinkError(ExactMoeTop2V1Check,
+                         (Twine("kernel_contract_") + Field).str());
+  };
+  if (Metadata.Kernels.size() != 1)
+    return postLinkError(ExactMoeTop2V1Check, "kernel_cardinality");
+  const KernelLaunchContract &Kernel = Metadata.Kernels.front();
+  if (Kernel.Name != ExactMoeTop2V1Entry ||
+      Kernel.Symbol != ExactMoeTop2V1Descriptor)
+    return Mismatch("symbols");
+  if (!Kernel.RequiredWorkgroupSize ||
+      *Kernel.RequiredWorkgroupSize != Workgroup)
+    return Mismatch("reqd_workgroup_size");
+  if (Kernel.MaxFlatWorkgroupSize != 64)
+    return Mismatch("max_flat_workgroup_size");
+  if (Kernel.WavefrontSize != 64)
+    return Mismatch("wavefront_size");
+  if (Kernel.KernargSegmentSize != 384)
+    return Mismatch("kernarg_segment_size");
+  if (Kernel.KernargSegmentAlign != 8)
+    return Mismatch("kernarg_segment_align");
+  if (Kernel.GroupSegmentFixedSize != 0)
+    return Mismatch("group_segment_fixed_size");
+  if (Kernel.PrivateSegmentFixedSize != 0)
+    return Mismatch("private_segment_fixed_size");
+  if (!Kernel.SgprSpillCount || *Kernel.SgprSpillCount != 0)
+    return Mismatch("sgpr_spill_count");
+  if (!Kernel.VgprSpillCount || *Kernel.VgprSpillCount != 0)
+    return Mismatch("vgpr_spill_count");
+  if (!Kernel.UsesDynamicStack || *Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack");
+  if (Kernel.UniformWorkgroupSize && *Kernel.UniformWorkgroupSize)
+    return Mismatch("uniform_work_group_size");
+  if (!Kernel.Arguments)
+    return Mismatch("args_missing");
+  const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
+  if (Arguments.size() < 16 + RequiredHidden.size())
+    return Mismatch("args_cardinality");
+
+  static constexpr std::array<StringLiteral, 8> PointerNames = {
+      "logits.data",  "top2.data",  "requested.data",   "admitted.data",
+      "offsets.data", "slots.data", "permutation.data", "inverse.data"};
+  static constexpr std::array<StringLiteral, 8> LengthNames = {
+      "logits.len",  "top2.len",  "requested.len",   "admitted.len",
+      "offsets.len", "slots.len", "permutation.len", "inverse.len"};
+  for (size_t Role = 0; Role != PointerNames.size(); ++Role) {
+    size_t PointerIndex = Role * 2;
+    const KernelArgumentContract &Pointer = Arguments[PointerIndex];
+    bool IsInput = Role == 0;
+    StringRef TypeName = IsInput ? "float*" : "uint*";
+    StringRef ValueType = IsInput ? "f32" : "u32";
+    StringRef Access = IsInput ? "read_only" : "read_write";
+    if (!Pointer.Name || *Pointer.Name != PointerNames[Role] ||
+        Pointer.Offset != PointerIndex * 8 || Pointer.Size != 8 ||
+        !Pointer.TypeName || *Pointer.TypeName != TypeName ||
+        (Pointer.Align && *Pointer.Align != 8) ||
+        Pointer.ValueKind != "global_buffer" ||
+        (Pointer.ValueType && *Pointer.ValueType != ValueType) ||
+        !Pointer.AddressSpace || *Pointer.AddressSpace != "global" ||
+        !Pointer.Access || *Pointer.Access != Access ||
+        (Pointer.ActualAccess &&
+         (IsInput ? *Pointer.ActualAccess != "read_only"
+                  : *Pointer.ActualAccess != "read_write" &&
+                        *Pointer.ActualAccess != "write_only")) ||
+        (Pointer.PointeeAlign && *Pointer.PointeeAlign != 4) ||
+        (IsInput ? !Pointer.IsConst || !*Pointer.IsConst
+                 : Pointer.IsConst && *Pointer.IsConst) ||
+        (IsInput ? Pointer.IsRestrict && *Pointer.IsRestrict
+                 : !Pointer.IsRestrict || !*Pointer.IsRestrict) ||
+        (Pointer.IsVolatile && *Pointer.IsVolatile) ||
+        (Pointer.IsPipe && *Pointer.IsPipe))
+      return Mismatch((Twine("arg") + Twine(PointerIndex) + "_pointer").str());
+
+    const KernelArgumentContract &Length = Arguments[PointerIndex + 1];
+    if (!Length.Name || *Length.Name != LengthNames[Role] ||
+        Length.Offset != (PointerIndex + 1) * 8 || Length.Size != 8 ||
+        !Length.TypeName || *Length.TypeName != "ulong" ||
+        (Length.Align && *Length.Align != 8) ||
+        Length.ValueKind != "by_value" ||
+        (Length.ValueType && *Length.ValueType != "u64") ||
+        Length.AddressSpace || Length.Access || Length.ActualAccess ||
+        Length.PointeeAlign || (Length.IsConst && *Length.IsConst) ||
+        (Length.IsRestrict && *Length.IsRestrict) ||
+        (Length.IsVolatile && *Length.IsVolatile) ||
+        (Length.IsPipe && *Length.IsPipe))
+      return Mismatch(
+          (Twine("arg") + Twine(PointerIndex + 1) + "_length").str());
+  }
+
+  constexpr size_t HiddenBaseIndex = 16;
+  constexpr uint64_t HiddenBase = 128;
+  auto ValidateHidden = [&](const KernelArgumentContract &Argument,
+                            const HiddenArgumentShape &Expected) {
+    return !Argument.Name && !Argument.TypeName &&
+           Argument.Offset == HiddenBase + Expected.Offset &&
+           Argument.Size == Expected.Size &&
+           Argument.ValueKind == Expected.ValueKind && !Argument.Align &&
+           !Argument.ValueType && !Argument.AddressSpace && !Argument.Access &&
+           !Argument.ActualAccess && !Argument.PointeeAlign &&
+           !Argument.IsConst && !Argument.IsRestrict && !Argument.IsVolatile &&
+           !Argument.IsPipe;
+  };
+  for (size_t Index = 0; Index != RequiredHidden.size(); ++Index)
+    if (!ValidateHidden(Arguments[HiddenBaseIndex + Index],
+                        RequiredHidden[Index]))
+      return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
+  for (size_t Index = HiddenBaseIndex + RequiredHidden.size();
+       Index != Arguments.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto Expected = llvm::find_if(OptionalHidden, [&](const auto &Shape) {
+      return Argument.Offset == HiddenBase + Shape.Offset;
+    });
+    if (Expected == OptionalHidden.end() ||
+        Expected->ValueKind == "hidden_dynamic_lds_size" ||
+        !ValidateHidden(Argument, *Expected))
+      return Mismatch(
+          (Twine("hidden_arg") + Twine(Index - HiddenBaseIndex)).str());
+  }
   return Error::success();
 }
 
@@ -4114,9 +4741,8 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   }
   if (const ExactWorkgroupSyncProfile *WorkgroupProfile =
           postLinkWorkgroupSyncProfile(*Profile)) {
-    if (Error E =
-            validateExactWorkgroupSyncElfClosure(*ConcreteElf,
-                                                 *WorkgroupProfile))
+    if (Error E = validateExactWorkgroupSyncElfClosure(*ConcreteElf,
+                                                       *WorkgroupProfile))
       return E;
     if (Error E =
             validateExactWorkgroupSyncMachine(*ConcreteElf, *WorkgroupProfile))
@@ -4146,6 +4772,21 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
           diagnosticList(ExpectedSymbols) +
           " actual=" + diagnosticList(StaticPublicDefinitions));
   }
+  if (*Profile == PostLinkProfile::ExactMoeTop2V1) {
+    if (Error E = validateExactMoeTop2V1ElfClosure(*ConcreteElf))
+      return E;
+    if (Error E = validateExactMoeTop2V1Machine(*ConcreteElf))
+      return E;
+    if (Error E =
+            validateExactMoeTop2V1DescriptorBinding(*ConcreteElf, RequestValue))
+      return E;
+    if (StaticPublicDefinitions != ExpectedSymbols)
+      return pipelineError(
+          Twine("post_link.check=") + ExactMoeTop2V1Check +
+          " status=failed reason=static_symbol_closure expected=" +
+          diagnosticList(ExpectedSymbols) +
+          " actual=" + diagnosticList(StaticPublicDefinitions));
+  }
   MetadataValidationPolicy MetadataPolicy = MetadataValidationPolicy::Generic;
   if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     MetadataPolicy = MetadataValidationPolicy::ExactLdsGemmSlice1;
@@ -4157,6 +4798,8 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
     MetadataPolicy = MetadataValidationPolicy::ExactWorkgroupLdsReductionV1;
   else if (*Profile == PostLinkProfile::ExactScopedAtomicV1)
     MetadataPolicy = MetadataValidationPolicy::ExactScopedAtomicV1;
+  else if (*Profile == PostLinkProfile::ExactMoeTop2V1)
+    MetadataPolicy = MetadataValidationPolicy::ExactMoeTop2V1;
   auto Metadata = inspectMetadata(*ConcreteElf, MetadataPolicy);
   if (!Metadata)
     return postLinkError("metadata", errorToDiagnostic(Metadata.takeError()));
@@ -4228,6 +4871,9 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
     if (Error E =
             validateExactWorkgroupSyncMetadata(*Metadata, *WorkgroupProfile))
       return E;
+  if (*Profile == PostLinkProfile::ExactMoeTop2V1)
+    if (Error E = validateExactMoeTop2V1Metadata(*Metadata))
+      return E;
 
   std::vector<std::string> Diagnostics;
   Diagnostics.push_back(
@@ -4289,6 +4935,15 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
         "ordering=relaxed scope=system address_space=global calls=0 "
         "spills=0 dynamic_stack=false descriptor_binding=byte_exact "
         "rust_descriptor_admission=required");
+  if (*Profile == PostLinkProfile::ExactMoeTop2V1)
+    Diagnostics.push_back(
+        "post_link.check=moe_top2_t8_e4_k2_c4_v1_profile status=ok "
+        "tokens=8 experts=4 top_k=2 capacity=4 workgroup=[64,1,1] "
+        "retained_grid=[1,1,1] explicit_kernarg_size=128 "
+        "kernarg_size=384 kernarg_align=8 group_size=0 private_size=0 "
+        "wavefront_size=64 calls=0 atomics=0 lds_bytes=0 spills=0 "
+        "dynamic_stack=false provider_closure=none "
+        "descriptor_binding=byte_exact rust_descriptor_admission=required");
   for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
     std::string Required = "absent";
     if (Kernel.RequiredWorkgroupSize)
@@ -4451,16 +5106,14 @@ Expected<std::string> exactWorkgroupSyncDataLayoutForTesting() {
   return (*Machine)->createDataLayout().getStringRepresentation();
 }
 
-Expected<std::vector<uint8_t>>
-makeExactWorkgroupSyncCompilerInputForTesting(
+Expected<std::vector<uint8_t>> makeExactWorkgroupSyncCompilerInputForTesting(
     StringRef CanonicalBody, ArrayRef<uint8_t> Descriptor,
     ExactWorkgroupSyncProfileForTesting ProfileKind) {
   const ExactWorkgroupSyncProfile &Profile =
       ProfileKind == ExactWorkgroupSyncProfileForTesting::LdsReduction
           ? ExactWorkgroupLdsReductionV1
           : ExactScopedAtomicV1;
-  if (SHA256::hash(arrayRefFromStringRef(CanonicalBody)) !=
-      Profile.BodySha256)
+  if (SHA256::hash(arrayRefFromStringRef(CanonicalBody)) != Profile.BodySha256)
     return pipelineError("test fixture workgroup-sync body identity mismatch");
   if (Descriptor.empty() || Descriptor.size() > 64 * 1024)
     return pipelineError("test fixture workgroup-sync descriptor is invalid");
@@ -4523,8 +5176,7 @@ makeExactWorkgroupSyncCompilerInputForTesting(
 }
 
 Error validateExactWorkgroupSyncCompilerInputForTesting(
-    ArrayRef<uint8_t> Bytes,
-    ExactWorkgroupSyncProfileForTesting ProfileKind) {
+    ArrayRef<uint8_t> Bytes, ExactWorkgroupSyncProfileForTesting ProfileKind) {
   const ExactWorkgroupSyncProfile &Profile =
       ProfileKind == ExactWorkgroupSyncProfileForTesting::LdsReduction
           ? ExactWorkgroupLdsReductionV1
@@ -4566,8 +5218,48 @@ Error validateExactWorkgroupSyncModuleForTesting(
   auto ParsedLayout = llvm::DataLayout::parse(*DataLayout);
   if (!ParsedLayout)
     return ParsedLayout.takeError();
-  return validateExactWorkgroupSyncModule(*ModuleValue, Profile,
-                                          *ParsedLayout);
+  return validateExactWorkgroupSyncModule(*ModuleValue, Profile, *ParsedLayout);
+}
+
+Error validateExactMoeTop2V1CompilerInputForTesting(ArrayRef<uint8_t> Bytes) {
+  auto DataLayout = exactWorkgroupSyncDataLayoutForTesting();
+  if (!DataLayout)
+    return DataLayout.takeError();
+  auto ParsedLayout = llvm::DataLayout::parse(*DataLayout);
+  if (!ParsedLayout)
+    return ParsedLayout.takeError();
+  return validateExactMoeTop2V1CompilerInput(
+      StringRef(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()),
+      *ParsedLayout);
+}
+
+Error validateExactMoeTop2V1ModuleForTesting(StringRef Text) {
+  LLVMContext Context;
+  SMDiagnostic Diagnostic;
+  auto Buffer = MemoryBuffer::getMemBufferCopy(Text, "<test-moe-module>");
+  std::unique_ptr<Module> ModuleValue =
+      parseAssembly(Buffer->getMemBufferRef(), Diagnostic, Context);
+  if (!ModuleValue) {
+    std::string Message;
+    raw_string_ostream Stream(Message);
+    Diagnostic.print("fe2o3-moe-test", Stream, false, false);
+    Stream.flush();
+    return pipelineError(Message);
+  }
+  std::string VerificationMessage;
+  raw_string_ostream VerificationStream(VerificationMessage);
+  if (verifyModule(*ModuleValue, &VerificationStream)) {
+    VerificationStream.flush();
+    return pipelineError(Twine("test MoE top-2 module verification failed: ") +
+                         VerificationMessage);
+  }
+  auto DataLayout = exactWorkgroupSyncDataLayoutForTesting();
+  if (!DataLayout)
+    return DataLayout.takeError();
+  auto ParsedLayout = llvm::DataLayout::parse(*DataLayout);
+  if (!ParsedLayout)
+    return ParsedLayout.takeError();
+  return validateExactMoeTop2V1Module(*ModuleValue, *ParsedLayout);
 }
 
 Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {
@@ -4648,8 +5340,7 @@ Error validateExactWave64CollectivesV1ElfClosureForTesting(
 }
 
 Error validateExactWorkgroupSyncElfClosureForTesting(
-    ArrayRef<uint8_t> Bytes,
-    ExactWorkgroupSyncProfileForTesting ProfileKind) {
+    ArrayRef<uint8_t> Bytes, ExactWorkgroupSyncProfileForTesting ProfileKind) {
   StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
   auto ObjectOrError =
       ObjectFile::createObjectFile(MemoryBufferRef(Data, "<test-output>"));
@@ -4663,6 +5354,18 @@ Error validateExactWorkgroupSyncElfClosureForTesting(
           ? ExactWorkgroupLdsReductionV1
           : ExactScopedAtomicV1;
   return validateExactWorkgroupSyncElfClosure(*Elf, Profile);
+}
+
+Error validateExactMoeTop2V1ElfClosureForTesting(ArrayRef<uint8_t> Bytes) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<test-output>"));
+  if (!ObjectOrError)
+    return ObjectOrError.takeError();
+  auto *Elf = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
+  if (!Elf)
+    return pipelineError("test output is not ELF64LE");
+  return validateExactMoeTop2V1ElfClosure(*Elf);
 }
 
 Expected<std::vector<std::string>>
@@ -4721,6 +5424,11 @@ Response executeImpl(const Request &RequestValue,
                      {"exact workgroup-sync symbols require one closed Worker "
                       "V2 profile"});
   }
+  if (mentionsExactMoeTop2V1(RequestValue) &&
+      !isClosedExactMoeTop2V1Request(RequestValue))
+    return failure(
+        RequestValue, Stage::InputValidation,
+        {"exact MoE top-2 symbols require the closed Worker V2 profile"});
 
   auto MachineOrError = createMachine(RequestValue);
   if (!MachineOrError)

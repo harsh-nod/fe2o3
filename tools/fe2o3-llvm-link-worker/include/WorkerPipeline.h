@@ -6,10 +6,7 @@
 
 namespace fe2o3::worker {
 
-enum class ExactWorkgroupSyncProfileForTesting {
-  LdsReduction,
-  ScopedAtomic
-};
+enum class ExactWorkgroupSyncProfileForTesting { LdsReduction, ScopedAtomic };
 
 llvm::Expected<std::string> exactWorkgroupSyncDataLayoutForTesting();
 
@@ -29,11 +26,15 @@ makeExactWorkgroupSyncCompilerInputForTesting(
     ExactWorkgroupSyncProfileForTesting Profile);
 
 llvm::Error validateExactWorkgroupSyncCompilerInputForTesting(
-    llvm::ArrayRef<uint8_t> Bytes,
-    ExactWorkgroupSyncProfileForTesting Profile);
+    llvm::ArrayRef<uint8_t> Bytes, ExactWorkgroupSyncProfileForTesting Profile);
 
 llvm::Error validateExactWorkgroupSyncModuleForTesting(
     llvm::StringRef Text, ExactWorkgroupSyncProfileForTesting Profile);
+
+llvm::Error
+validateExactMoeTop2V1CompilerInputForTesting(llvm::ArrayRef<uint8_t> Bytes);
+
+llvm::Error validateExactMoeTop2V1ModuleForTesting(llvm::StringRef Text);
 
 llvm::Error validateExactWave64CollectivesV1MetadataForTesting(
     llvm::StringRef MetadataBlob);
@@ -47,8 +48,10 @@ llvm::Error validateExactWave64CollectivesV1ElfClosureForTesting(
     llvm::ArrayRef<uint8_t> Bytes);
 
 llvm::Error validateExactWorkgroupSyncElfClosureForTesting(
-    llvm::ArrayRef<uint8_t> Bytes,
-    ExactWorkgroupSyncProfileForTesting Profile);
+    llvm::ArrayRef<uint8_t> Bytes, ExactWorkgroupSyncProfileForTesting Profile);
+
+llvm::Error
+validateExactMoeTop2V1ElfClosureForTesting(llvm::ArrayRef<uint8_t> Bytes);
 
 Response execute(const Request &RequestValue);
 
