@@ -967,6 +967,8 @@ append_retained_guard_file trace-allowlist "$trace_allowlist"
 
 configure_inner=(
   "$CMAKE" --debug-trycompile -S "$tool_source" -B "$build_dir" -G Ninja
+  -DBUILD_TESTING:BOOL=ON
+  -DMEMORYCHECK_COMMAND:FILEPATH= -DCOVERAGE_COMMAND:FILEPATH=
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="$NINJA"
   -DCMAKE_CXX_COMPILER="$CXX"
   -DCMAKE_CXX_FLAGS=-save-temps=obj
@@ -1156,6 +1158,29 @@ directory_identity_matches "$build_dir" "$build_identity" ||
   die 'build directory identity changed during compilation'
 directory_identity_matches "$artifact_dir" "$artifact_identity" ||
   die 'artifact directory identity changed during compilation'
+
+readonly cmake_cache="$build_dir/CMakeCache.txt"
+readonly ctest_test_file="$build_dir/CTestTestfile.cmake"
+[[ -f "$cmake_cache" && ! -L "$cmake_cache" ]] ||
+  die 'guarded configure omitted its CMake cache'
+[[ -f "$ctest_test_file" && ! -L "$ctest_test_file" ]] ||
+  die 'guarded configure omitted its CTest registration'
+/usr/bin/grep -Fxq 'BUILD_TESTING:BOOL=ON' "$cmake_cache" ||
+  die 'guarded configure disabled tests'
+/usr/bin/grep -Fxq 'MEMORYCHECK_COMMAND:FILEPATH=' "$cmake_cache" ||
+  die 'guarded configure enabled ambient memory-check discovery'
+/usr/bin/grep -Fxq 'COVERAGE_COMMAND:FILEPATH=' "$cmake_cache" ||
+  die 'guarded configure enabled ambient coverage-tool discovery'
+/usr/bin/grep -Fq 'fe2o3-host-lld-secure-protocol-v2' "$ctest_test_file" ||
+  die 'guarded configure omitted the secure protocol test'
+configure_trace_files=("$configure_trace_prefix".*)
+readonly configure_trace_files
+[[ -f ${configure_trace_files[0]} ]] ||
+  die 'guarded configure omitted its raw traces'
+! /usr/bin/grep -Eq \
+  '"/proc/meminfo"|"/[^" ]*/(purify|valgrind|boundscheck|drmemory|cuda-memcheck|compute-sanitizer|gcov)"' \
+  "${configure_trace_files[@]}" ||
+  die 'guarded configure performed optional CTest tool discovery'
 
 readonly built_tool="$build_dir/fe2o3-host-lld"
 readonly artifact_tool="$artifact_dir/fe2o3-host-lld"
