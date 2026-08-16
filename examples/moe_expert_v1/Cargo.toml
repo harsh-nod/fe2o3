@@ -1,0 +1,25 @@
+[package]
+name = "fe2o3-moe-expert-v1"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/fe2o3-gpu/fe2o3"
+rust-version = "1.94"
+publish = false
+
+# This bounded source/proof package remains standalone until exact compiler,
+# finalizer, host, runtime, and protected-execution authority are implemented.
+[workspace]
+
+[dependencies]
+fe2o3-device = { path = "../../crates/fe2o3-device" }
+fe2o3-host = { path = "../../crates/fe2o3-host" }
+fe2o3-moe-top2-v1 = { path = "../moe_top2_v1" }
+
+[dev-dependencies]
+sha2 = "0.10"
+syn = { version = "2", features = ["full", "visit"] }
+
+[lib]
+name = "fe2o3_moe_expert_v1"
+path = "src/lib.rs"
