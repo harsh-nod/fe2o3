@@ -3,22 +3,33 @@
 //! The binding retains immutable activation tiles, expert weights, routing
 //! offsets/inverse data, and route weights plus unique expert, compact, and
 //! combined outputs. It exposes neither device addresses nor packed kernarg
-//! bytes and carries no compiler, finalizer, load, or launch authority.
+//! bytes and carries no compiler, finalizer, load, copy, or launch authority.
+//!
+//! This is a host-supplied-offset binding slice, not an end-to-end GPU MoE
+//! pipeline. The offsets are not consistency-joined to inverse routing or
+//! packed activation rows. Its kernarg ABI is manually pinned to the reviewed
+//! source profile and is not compiler-derived.
 
 use crate::ObservedContext;
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_core::{
-    DeviceBufferIdentity, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut, DeviceCopy,
+    BorrowedDeviceOperation, ContextIdentity, DeviceBuffer, DeviceBufferIdentity,
+    DeviceBufferRangeError, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut, DeviceCopy,
+    PinnedHostBuffer, Stream, StreamIdentity,
 };
+use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fmt,
     mem::{align_of, size_of},
+    ops::Range,
 };
 
 pub(crate) const TARGET: &str = "gfx942:xnack-";
 pub(crate) const EXPERTS: usize = 4;
 pub(crate) const TILE_ELEMENTS: usize = 256;
+pub(crate) const EXPERT_CAPACITY: usize = 4;
+pub(crate) const OUTPUT_WIDTH: usize = 16;
 pub(crate) const ROUTES: usize = 16;
 pub(crate) const EXPERT_OFFSETS: usize = 5;
 pub(crate) const COMPACT_OUTPUT_ELEMENTS: usize = 256;
@@ -104,6 +115,270 @@ pub enum MoeExpertV1BufferAccessV1 {
     UniqueReadWrite,
 }
 
+/// One bounded device-to-device copy from a padded expert tile into slot order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MoeExpertCompactCopyV1 {
+    expert: u8,
+    source_element_offset: usize,
+    compact_element_offset: usize,
+    elements: usize,
+}
+
+impl MoeExpertCompactCopyV1 {
+    pub const fn expert(self) -> u8 {
+        self.expert
+    }
+
+    pub const fn source_element_offset(self) -> usize {
+        self.source_element_offset
+    }
+
+    pub const fn compact_element_offset(self) -> usize {
+        self.compact_element_offset
+    }
+
+    pub const fn elements(self) -> usize {
+        self.elements
+    }
+
+    pub const fn admitted_rows(self) -> usize {
+        self.elements / OUTPUT_WIDTH
+    }
+}
+
+/// Inert exact compact-materialization plan derived from retained routing offsets.
+///
+/// A future runtime must zero all 256 compact-output elements before executing
+/// these four ordered device-to-device copies. Zero-length expert segments are
+/// retained in the plan and publish no copy operation. This descriptor grants
+/// no HSA copy, load, or dispatch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MoeExpertCompactPackPlanV1 {
+    expert_offsets: [u32; EXPERT_OFFSETS],
+    copies: [MoeExpertCompactCopyV1; EXPERTS],
+}
+
+impl MoeExpertCompactPackPlanV1 {
+    pub fn from_expert_offsets(
+        expert_offsets: [u32; EXPERT_OFFSETS],
+    ) -> Result<Self, MoeExpertCompactPackPlanErrorV1> {
+        if expert_offsets[0] != 0 {
+            return Err(MoeExpertCompactPackPlanErrorV1::FirstOffset);
+        }
+        let mut copies = [MoeExpertCompactCopyV1 {
+            expert: 0,
+            source_element_offset: 0,
+            compact_element_offset: 0,
+            elements: 0,
+        }; EXPERTS];
+        for expert in 0..EXPERTS {
+            let start = expert_offsets[expert] as usize;
+            let end = expert_offsets[expert + 1] as usize;
+            if start > end || end > ROUTES {
+                return Err(MoeExpertCompactPackPlanErrorV1::OffsetOrder { expert });
+            }
+            let admitted_rows = end - start;
+            if admitted_rows > EXPERT_CAPACITY {
+                return Err(MoeExpertCompactPackPlanErrorV1::Capacity {
+                    expert,
+                    admitted_rows,
+                });
+            }
+            copies[expert] = MoeExpertCompactCopyV1 {
+                expert: expert as u8,
+                source_element_offset: expert * TILE_ELEMENTS,
+                compact_element_offset: start * OUTPUT_WIDTH,
+                elements: admitted_rows * OUTPUT_WIDTH,
+            };
+        }
+        Ok(Self {
+            expert_offsets,
+            copies,
+        })
+    }
+
+    pub const fn expert_offsets(self) -> [u32; EXPERT_OFFSETS] {
+        self.expert_offsets
+    }
+
+    pub const fn copies(self) -> [MoeExpertCompactCopyV1; EXPERTS] {
+        self.copies
+    }
+
+    /// The complete compact allocation is initialized to +0 before copies.
+    pub const fn zero_fill_elements(self) -> usize {
+        COMPACT_OUTPUT_ELEMENTS
+    }
+
+    pub const fn accepted_routes(self) -> usize {
+        self.expert_offsets[EXPERTS] as usize
+    }
+
+    pub const fn defined_tail_elements(self) -> usize {
+        COMPACT_OUTPUT_ELEMENTS - self.accepted_routes() * OUTPUT_WIDTH
+    }
+
+    pub const fn grants_copy_authority(self) -> bool {
+        false
+    }
+}
+
+/// Invalid host snapshot of the exact routing offset buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum MoeExpertCompactPackPlanErrorV1 {
+    FirstOffset,
+    OffsetOrder { expert: usize },
+    Capacity { expert: usize, admitted_rows: usize },
+}
+
+impl fmt::Display for MoeExpertCompactPackPlanErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid MoE expert compact pack plan: {self:?}")
+    }
+}
+
+impl Error for MoeExpertCompactPackPlanErrorV1 {}
+
+/// Completion-bound proof that exact routing offsets were uploaded to one region.
+///
+/// The witness owns an immutable view of the destination after synchronous HIP
+/// completion. Safe code therefore cannot mutate or free that allocation while
+/// the witness is retained. The SHA-256 value covers only the domain-separated
+/// offset payload; context, stream, allocation identity, and the full
+/// five-element region are recorded as separate witness fields. It is not
+/// compiler, finalizer, HSA-copy, or launch authority.
+///
+/// The offsets are not checked for consistency with inverse routing or packed
+/// activation rows. The digest is not a signed receipt or an independent
+/// readback of device memory. Concurrent mutation through external unsafe
+/// native APIs is outside this safe contract.
+#[must_use = "the validated MoE offset upload retains an immutable device lease"]
+pub struct MoeExpertOffsetsUploadWitnessV1<'allocation> {
+    view: DeviceBufferView<'allocation, u32>,
+    expert_offsets: [u32; EXPERT_OFFSETS],
+    compact_pack: MoeExpertCompactPackPlanV1,
+    payload_sha256: [u8; 32],
+    context_identity: ContextIdentity,
+    stream_identity: StreamIdentity,
+}
+
+impl fmt::Debug for MoeExpertOffsetsUploadWitnessV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MoeExpertOffsetsUploadWitnessV1")
+            .field("expert_offsets", &self.expert_offsets)
+            .field("payload_sha256", &self.payload_sha256)
+            .field("context_identity", &self.context_identity)
+            .field("stream_identity", &self.stream_identity)
+            .field("allocation_identity", &self.view.allocation_identity())
+            .field("region_byte_range", &self.view.region_byte_range())
+            .finish_non_exhaustive()
+    }
+}
+
+impl MoeExpertOffsetsUploadWitnessV1<'_> {
+    pub const fn expert_offsets(&self) -> [u32; EXPERT_OFFSETS] {
+        self.expert_offsets
+    }
+
+    pub const fn payload_sha256(&self) -> [u8; 32] {
+        self.payload_sha256
+    }
+
+    pub const fn context_identity(&self) -> ContextIdentity {
+        self.context_identity
+    }
+
+    pub const fn stream_identity(&self) -> StreamIdentity {
+        self.stream_identity
+    }
+
+    pub fn allocation_identity(&self) -> DeviceBufferIdentity {
+        self.view.allocation_identity()
+    }
+
+    pub fn region_byte_range(&self) -> Range<usize> {
+        self.view.region_byte_range()
+    }
+
+    pub const fn upload_completed(&self) -> bool {
+        true
+    }
+
+    pub const fn grants_copy_authority(&self) -> bool {
+        false
+    }
+
+    fn view(&self) -> &DeviceBufferView<'_, u32> {
+        &self.view
+    }
+}
+
+/// Synchronously uploads and retains the sole admitted expert-offset region.
+pub fn upload_moe_expert_offsets_v1<'allocation>(
+    stream: &Stream,
+    destination: &'allocation mut DeviceBuffer<u32>,
+    expert_offsets: [u32; EXPERT_OFFSETS],
+) -> Result<MoeExpertOffsetsUploadWitnessV1<'allocation>, MoeExpertOffsetsUploadErrorV1> {
+    let compact_pack = MoeExpertCompactPackPlanV1::from_expert_offsets(expert_offsets)
+        .map_err(MoeExpertOffsetsUploadErrorV1::CompactPackPlan)?;
+    if destination.len() != EXPERT_OFFSETS {
+        return Err(MoeExpertOffsetsUploadErrorV1::Length {
+            expected: EXPERT_OFFSETS,
+            actual: destination.len(),
+        });
+    }
+    if destination.context().identity() != stream.context().identity() {
+        return Err(MoeExpertOffsetsUploadErrorV1::Context);
+    }
+
+    let source = PinnedHostBuffer::from_slice(destination.context(), &expert_offsets)
+        .map_err(MoeExpertOffsetsUploadErrorV1::PinnedSource)?;
+    BorrowedDeviceOperation::copy_to_device(stream, &source, destination, |_| ())
+        .map_err(MoeExpertOffsetsUploadErrorV1::Upload)?;
+    let view = destination
+        .view(..)
+        .map_err(MoeExpertOffsetsUploadErrorV1::Region)?;
+    Ok(MoeExpertOffsetsUploadWitnessV1 {
+        view,
+        expert_offsets,
+        compact_pack,
+        payload_sha256: expert_offsets_sha256(expert_offsets),
+        context_identity: stream.context().identity(),
+        stream_identity: stream.identity(),
+    })
+}
+
+fn expert_offsets_sha256(expert_offsets: [u32; EXPERT_OFFSETS]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"FE2O3/MOE-EXPERT/OFFSETS-UPLOAD/V1\0");
+    for offset in expert_offsets {
+        digest.update(offset.to_le_bytes());
+    }
+    digest.finalize().into()
+}
+
+/// Rejection before an immutable expert-offset upload witness is issued.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum MoeExpertOffsetsUploadErrorV1 {
+    CompactPackPlan(MoeExpertCompactPackPlanErrorV1),
+    Length { expected: usize, actual: usize },
+    Context,
+    PinnedSource(fe2o3_core::Error),
+    Upload(fe2o3_core::Error),
+    Region(DeviceBufferRangeError),
+}
+
+impl fmt::Display for MoeExpertOffsetsUploadErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "MoE expert offset upload rejected: {self:?}")
+    }
+}
+
+impl Error for MoeExpertOffsetsUploadErrorV1 {}
+
 #[repr(C, align(8))]
 struct GemmExplicitKernargV1 {
     bytes: [u8; GEMM_EXPLICIT_KERNARG_BYTES],
@@ -127,7 +402,7 @@ const _: () = assert!(align_of::<CombineExplicitKernargV1>() == KERNARG_ALIGNMEN
 ///     let _ = value.clone();
 /// }
 /// ```
-#[must_use = "the MoE expert binding must be explicitly released or enter an authorized lifecycle"]
+#[must_use = "the MoE expert binding retains all eight admitted device regions"]
 pub struct GeneratedMoeExpertV1HostAdapterV1<
     'activations,
     'weights,
@@ -139,11 +414,11 @@ pub struct GeneratedMoeExpertV1HostAdapterV1<
     'combined_output,
 > {
     observed: ObservedContext,
+    offsets_upload: MoeExpertOffsetsUploadWitnessV1<'offsets>,
     gemm_kernargs: [GemmExplicitKernargV1; EXPERTS],
     combine_kernarg: CombineExplicitKernargV1,
     _activation_tiles: DeviceBufferView<'activations, u16>,
     _expert_weights: DeviceBufferView<'weights, u16>,
-    _expert_offsets: DeviceBufferView<'offsets, u32>,
     _inverse_routing: DeviceBufferView<'inverse, u32>,
     _route_weights: DeviceBufferView<'route_weights, f32>,
     _expert_output_tiles: DeviceBufferViewMut<'expert_output, f32>,
@@ -190,7 +465,7 @@ impl<
         observed: &ObservedContext,
         activation_tiles: DeviceBufferView<'activations, u16>,
         expert_weights: DeviceBufferView<'weights, u16>,
-        expert_offsets: DeviceBufferView<'offsets, u32>,
+        expert_offsets: MoeExpertOffsetsUploadWitnessV1<'offsets>,
         inverse_routing: DeviceBufferView<'inverse, u32>,
         route_weights: DeviceBufferView<'route_weights, f32>,
         expert_output_tiles: DeviceBufferViewMut<'expert_output, f32>,
@@ -201,7 +476,7 @@ impl<
         let contexts = [
             activation_tiles.context(),
             expert_weights.context(),
-            expert_offsets.context(),
+            expert_offsets.view().context(),
             inverse_routing.context(),
             route_weights.context(),
             expert_output_tiles.context(),
@@ -216,7 +491,7 @@ impl<
         let prepared = prepare_regions([
             RegionFacts::from_region(&activation_tiles),
             RegionFacts::from_region(&expert_weights),
-            RegionFacts::from_region(&expert_offsets),
+            RegionFacts::from_region(expert_offsets.view()),
             RegionFacts::from_region(&inverse_routing),
             RegionFacts::from_region(&route_weights),
             RegionFacts::from_region(&expert_output_tiles),
@@ -225,11 +500,11 @@ impl<
         ])?;
         Ok(Self {
             observed: observed.clone(),
+            offsets_upload: expert_offsets,
             gemm_kernargs: prepared.gemm,
             combine_kernarg: prepared.combine,
             _activation_tiles: activation_tiles,
             _expert_weights: expert_weights,
-            _expert_offsets: expert_offsets,
             _inverse_routing: inverse_routing,
             _route_weights: route_weights,
             _expert_output_tiles: expert_output_tiles,
@@ -238,8 +513,8 @@ impl<
         })
     }
 
-    pub const fn target(&self) -> &'static str {
-        TARGET
+    pub fn target(&self) -> &str {
+        self.observed.device().target()
     }
     pub const fn profile(&self) -> [usize; 6] {
         [8, 4, 2, 4, 16, 16]
@@ -287,9 +562,18 @@ impl<
         access_for_role(role)
     }
 
-    pub(crate) const fn observed_context_v1(&self) -> &ObservedContext {
-        &self.observed
+    /// Returns inert compact-plan arithmetic for the host-supplied offsets.
+    ///
+    /// The plan is not consistency-joined to inverse routing or packed
+    /// activations and grants no HSA copy or dispatch authority.
+    pub const fn compact_pack_plan(&self) -> MoeExpertCompactPackPlanV1 {
+        self.offsets_upload.compact_pack
     }
+
+    pub const fn expert_offsets_payload_sha256(&self) -> [u8; 32] {
+        self.offsets_upload.payload_sha256
+    }
+
     pub(crate) const fn gemm_kernarg_bytes_v1(
         &self,
         expert: usize,
@@ -693,5 +977,74 @@ mod tests {
         for target in ["gfx942:xnack+", "gfx942", "gfx1100"] {
             assert!(validate_observed_target(target).is_err(), "{target}");
         }
+    }
+
+    #[test]
+    fn compact_pack_zero_fills_then_copies_only_admitted_rows() {
+        let plan = MoeExpertCompactPackPlanV1::from_expert_offsets([0, 4, 4, 7, 9]).unwrap();
+        assert_eq!(plan.zero_fill_elements(), 256);
+        assert_eq!(plan.accepted_routes(), 9);
+        assert_eq!(plan.defined_tail_elements(), 112);
+        assert_eq!(
+            plan.copies(),
+            [
+                MoeExpertCompactCopyV1 {
+                    expert: 0,
+                    source_element_offset: 0,
+                    compact_element_offset: 0,
+                    elements: 64,
+                },
+                MoeExpertCompactCopyV1 {
+                    expert: 1,
+                    source_element_offset: 256,
+                    compact_element_offset: 64,
+                    elements: 0,
+                },
+                MoeExpertCompactCopyV1 {
+                    expert: 2,
+                    source_element_offset: 512,
+                    compact_element_offset: 64,
+                    elements: 48,
+                },
+                MoeExpertCompactCopyV1 {
+                    expert: 3,
+                    source_element_offset: 768,
+                    compact_element_offset: 112,
+                    elements: 32,
+                },
+            ]
+        );
+        assert!(!plan.grants_copy_authority());
+    }
+
+    #[test]
+    fn compact_pack_rejects_offset_capacity_and_route_bound_mutations() {
+        for offsets in [
+            [1, 1, 1, 1, 1],
+            [0, 4, 3, 3, 3],
+            [0, 5, 5, 5, 5],
+            [0, 4, 8, 12, 17],
+        ] {
+            assert!(
+                MoeExpertCompactPackPlanV1::from_expert_offsets(offsets).is_err(),
+                "{offsets:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn offset_upload_digest_is_domain_separated_and_byte_exact() {
+        assert_eq!(
+            expert_offsets_sha256([0, 4, 4, 7, 9]),
+            [
+                0x7d, 0x85, 0x71, 0x74, 0x4e, 0x08, 0x42, 0xc6, 0xf1, 0x20, 0x8a, 0x18, 0x4f, 0xde,
+                0x3c, 0x97, 0xe1, 0x6e, 0x6c, 0xfd, 0x66, 0xc9, 0x98, 0xce, 0xf6, 0xe6, 0xdd, 0x58,
+                0xc9, 0x79, 0xba, 0x60,
+            ]
+        );
+        assert_ne!(
+            expert_offsets_sha256([0, 4, 4, 7, 9]),
+            expert_offsets_sha256([0, 4, 5, 7, 9])
+        );
     }
 }
