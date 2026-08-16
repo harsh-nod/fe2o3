@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `MoeRoutingCompletionReadbackProvenanceV2: From<SyntheticEvidence>` is not satisfied
+ --> tests/ui/generated_moe_expert_v2/synthetic_cannot_convert_to_provenance.rs:6:11
+  |
+6 |     value.into()
+  |           ^^^^ the trait `From<SyntheticEvidence>` is not implemented for `MoeRoutingCompletionReadbackProvenanceV2`
+  |
+  = note: required for `SyntheticEvidence` to implement `Into<MoeRoutingCompletionReadbackProvenanceV2>`

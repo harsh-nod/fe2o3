@@ -1,0 +1,5 @@
+error[E0616]: field `weight_view` of struct `MoeExpertWeightArtifactBindingV2` is private
+ --> tests/ui/generated_moe_expert_v2/weight_binding_fields_are_private.rs:4:19
+  |
+4 |     let _ = value.weight_view;
+  |                   ^^^^^^^^^^^ private field

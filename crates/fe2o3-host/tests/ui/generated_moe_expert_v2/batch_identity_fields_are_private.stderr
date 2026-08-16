@@ -1,0 +1,5 @@
+error[E0616]: field `routing_request_identity` of struct `MoeRoutingExpertBatchIdentityV2` is private
+ --> tests/ui/generated_moe_expert_v2/batch_identity_fields_are_private.rs:4:19
+  |
+4 |     let _ = value.routing_request_identity;
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^ private field

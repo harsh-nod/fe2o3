@@ -1479,6 +1479,44 @@ mod tests {
     }
 
     #[test]
+    fn every_routing_array_drift_fails_before_a_completed_readback_can_issue() {
+        let candidate = reference_candidate();
+        let checked = check_host_observed_moe_routing_output_v1(candidate).unwrap();
+        let exact_inputs = exact_inputs(&checked);
+        let batch = test_only_batch(&exact_inputs);
+        let facts = synthetic_facts(
+            7_u64,
+            11_u64,
+            batch.transcript_sha256,
+            checked.payload_sha256(),
+        );
+        let mutations: &[fn(&mut MoeRoutingOutputCandidateV1)] = &[
+            |value| value.top2_experts[0] ^= 1,
+            |value| value.requested_counts[0] ^= 1,
+            |value| value.admitted_counts[0] ^= 1,
+            |value| value.expert_offsets[1] ^= 1,
+            |value| value.route_slots[0] ^= 1,
+            |value| value.permutation[0] ^= 1,
+            |value| value.inverse[0] ^= 1,
+        ];
+        for mutate in mutations {
+            let mut drifted = candidate;
+            mutate(&mut drifted);
+            match check_host_observed_moe_routing_output_v1(drifted) {
+                Err(_) => {}
+                Ok(drifted) => assert_eq!(
+                    validate_lifecycle_facts(
+                        &facts,
+                        batch.transcript_sha256,
+                        drifted.payload_sha256()
+                    ),
+                    Err(MoeRoutingCompletionReadbackErrorV2::PayloadMismatch)
+                ),
+            }
+        }
+    }
+
+    #[test]
     fn request_batch_rejects_every_identity_and_transcript_mutation() {
         let checked = check_host_observed_moe_routing_output_v1(reference_candidate()).unwrap();
         let inputs = exact_inputs(&checked);
