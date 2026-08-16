@@ -439,9 +439,8 @@ bool isExactFlashAttentionV1SymbolSet(ArrayRef<std::string> Symbols) {
                                ExactFlashAttentionV1OcmlExp.str()};
 }
 
-bool isExactWorkgroupSyncSymbolSet(
-    ArrayRef<std::string> Symbols,
-    const ExactWorkgroupSyncProfile &Profile) {
+bool isExactWorkgroupSyncSymbolSet(ArrayRef<std::string> Symbols,
+                                   const ExactWorkgroupSyncProfile &Profile) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{Profile.Entry.str(), Profile.Descriptor.str()};
 }
@@ -1126,8 +1125,8 @@ Error validateExactFlashAttentionLlvmBuildIdentity(StringRef Identity) {
   return pipelineError(
       Twine("exact FlashAttention V1 published machine identity requires LLVM "
             "build identity '") +
-      ExactFlashAttentionV1PublishedLlvmBuildIdentity +
-      "', worker measured '" + Identity + "'");
+      ExactFlashAttentionV1PublishedLlvmBuildIdentity + "', worker measured '" +
+      Identity + "'");
 }
 
 Expected<std::array<std::vector<uint8_t>, 13>>
@@ -3009,6 +3008,22 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
 
   if (Error E = rejectUnknownExactMetadataKeys(Root, RootKeys, "root", Check))
     return E;
+  if (Check == ExactRowSoftmaxV1Check) {
+    auto Version = Root.find("amdhsa.version");
+    auto Target = Root.find("amdhsa.target");
+    if (Version == Root.end() || !Version->second.isArray() ||
+        Version->second.getArray().size() != 2)
+      return postLinkError(Check, "kernel_contract_metadata_version");
+    size_t Index = 0;
+    for (msgpack::DocNode &Node : Version->second.getArray()) {
+      const uint64_t Expected = Index++ == 0 ? 1 : 2;
+      if (Node.getKind() != msgpack::Type::UInt || Node.getUInt() != Expected)
+        return postLinkError(Check, "kernel_contract_metadata_version");
+    }
+    if (Target == Root.end() || !Target->second.isString() ||
+        Target->second.getString() != "amdgcn-amd-amdhsa--gfx942:xnack-")
+      return postLinkError(Check, "kernel_contract_target");
+  }
   auto Kernels = Root.find("amdhsa.kernels");
   if (Kernels == Root.end() || !Kernels->second.isArray())
     return Error::success();
@@ -4093,6 +4108,12 @@ Error validateExactRowSoftmaxV1Metadata(const MetadataContract &Metadata) {
     return postLinkError(ExactRowSoftmaxV1Check,
                          (Twine("kernel_contract_") + Field).str());
   };
+  auto HasOptionalArgumentField = [](const KernelArgumentContract &Argument) {
+    return Argument.TypeName || Argument.Align || Argument.ValueType ||
+           Argument.Access || Argument.ActualAccess || Argument.PointeeAlign ||
+           Argument.IsConst || Argument.IsRestrict || Argument.IsVolatile ||
+           Argument.IsPipe;
+  };
   if (Metadata.Kernels.size() != 1)
     return postLinkError(ExactRowSoftmaxV1Check, "kernel_cardinality");
   const KernelLaunchContract &Kernel = Metadata.Kernels.front();
@@ -4128,7 +4149,7 @@ Error validateExactRowSoftmaxV1Metadata(const MetadataContract &Metadata) {
     return Mismatch("uses_dynamic_stack");
   if (Kernel.WorkgroupProcessorMode)
     return Mismatch("workgroup_processor_mode");
-  if (Kernel.UniformWorkgroupSize && *Kernel.UniformWorkgroupSize)
+  if (Kernel.UniformWorkgroupSize)
     return Mismatch("uniform_work_group_size");
 
   if (!Kernel.Arguments || Kernel.Arguments->size() != 4 + Hidden.size())
@@ -4144,17 +4165,14 @@ Error validateExactRowSoftmaxV1Metadata(const MetadataContract &Metadata) {
     if (!Pointer.Name || *Pointer.Name != PointerNames[Slice] ||
         Pointer.Offset != Slice * 16 || Pointer.Size != 8 ||
         Pointer.ValueKind != "global_buffer" || !Pointer.AddressSpace ||
-        *Pointer.AddressSpace != "global" ||
-        (Pointer.Align && *Pointer.Align != 8) ||
-        (Pointer.ValueType && *Pointer.ValueType != "f32"))
+        *Pointer.AddressSpace != "global" || HasOptionalArgumentField(Pointer))
       return Mismatch((Twine("arg") + Twine(PointerIndex) + "_pointer").str());
 
     const KernelArgumentContract &Length = Arguments[PointerIndex + 1];
     if (!Length.Name || *Length.Name != LengthNames[Slice] ||
         Length.Offset != Slice * 16 + 8 || Length.Size != 8 ||
-        Length.ValueKind != "by_value" ||
-        (Length.Align && *Length.Align != 8) ||
-        (Length.ValueType && *Length.ValueType != "u64"))
+        Length.ValueKind != "by_value" || Length.AddressSpace ||
+        HasOptionalArgumentField(Length))
       return Mismatch(
           (Twine("arg") + Twine(PointerIndex + 1) + "_length").str());
   }
@@ -4162,7 +4180,8 @@ Error validateExactRowSoftmaxV1Metadata(const MetadataContract &Metadata) {
     const KernelArgumentContract &Argument = Arguments[4 + Index];
     const HiddenArgumentShape &Expected = Hidden[Index];
     if (Argument.Offset != Expected.Offset || Argument.Size != Expected.Size ||
-        Argument.ValueKind != Expected.ValueKind)
+        Argument.ValueKind != Expected.ValueKind || Argument.Name ||
+        Argument.AddressSpace || HasOptionalArgumentField(Argument))
       return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
   }
   return Error::success();
@@ -5495,16 +5514,12 @@ nativeLink(ArrayRef<std::vector<uint8_t>> Objects, const Request &RequestValue,
   SmallString<160> OutputPath(Directory);
   sys::path::append(OutputPath, "linked.hsaco");
 
-  std::vector<std::string> OwnedArguments = {"ld.lld",
-                                             "--shared",
-                                             "-Bsymbolic",
-                                             "--no-undefined",
-                                             "--export-dynamic",
-                                             "--build-id=none",
-                                             "--nostdlib",
-                                             "--no-dependent-libraries",
-                                             "--fatal-warnings",
-                                             "--threads=1"};
+  std::vector<std::string> OwnedArguments = {
+      "ld.lld",           "--shared",
+      "-Bsymbolic",       "--no-undefined",
+      "--export-dynamic", "--build-id=none",
+      "--nostdlib",       "--no-dependent-libraries",
+      "--fatal-warnings", "--threads=1"};
   if (RequestValue.LinkOptions.StripDebug)
     OwnedArguments.push_back("--strip-debug");
   for (const std::string &Name : RequestValue.ExpectedDefinedSymbols)
@@ -6165,15 +6180,16 @@ Response executeImpl(const Request &RequestValue,
                      {"exact FlashAttention V1 reproducibility identities are "
                       "incomplete"});
     LinkDiagnostics.push_back(
-        (Twine("post_link.check=flash_attention_v1_reproducibility status=ok ") +
+        (Twine(
+             "post_link.check=flash_attention_v1_reproducibility status=ok ") +
          "llvm_build_identity=" + diagnosticAtom(LlvmBuildIdentity) +
          " input_ir_sha256=" +
          digestHex(SHA256::hash(RequestValue.CompilerModule.Bytes)) +
          " linked_bitcode_sha256=" + digestHex(*FlashLinkedBitcodeIdentity) +
          " optimized_bitcode_sha256=" +
-         digestHex(*FlashOptimizedBitcodeIdentity) + " object_sha256=" +
-         digestHex(*FlashObjectIdentity) + " raw_hsaco_sha256=" +
-         digestHex(SHA256::hash(*LinkedBytes)))
+         digestHex(*FlashOptimizedBitcodeIdentity) +
+         " object_sha256=" + digestHex(*FlashObjectIdentity) +
+         " raw_hsaco_sha256=" + digestHex(SHA256::hash(*LinkedBytes)))
             .str());
   }
 

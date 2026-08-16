@@ -731,22 +731,27 @@ fn row_softmax_rejects_capability_target_symbol_and_descriptor_substitution() {
     for capabilities in [vec![], vec![CapabilityV1::Subgroup, CapabilityV1::AmdWave]] {
         let table = row_softmax_descriptor_table(capabilities);
         let fixture = fixture_with_descriptor_table(row_softmax_options(), Some(&table));
-        assert!(matches!(
-            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
-                evidence_for(
-                    fixture.bytes,
-                    "gfx942:xnack-",
-                    0xa6,
-                    0xb6,
-                    "row_softmax_v1",
-                    "row_softmax_v1.kd",
-                ),
-                row_softmax_expectation(),
+        let error = inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+            evidence_for(
+                fixture.bytes,
+                "gfx942:xnack-",
+                0xa6,
+                0xb6,
+                "row_softmax_v1",
+                "row_softmax_v1.kd",
             ),
-            Err(RowSoftmaxV1StructuralArtifactErrorV1::DescriptorPolicy(
-                RowSoftmaxV1StructuralDescriptorErrorV1::CapabilityProvenance
-            ))
-        ));
+            row_softmax_expectation(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                RowSoftmaxV1StructuralArtifactErrorV1::DescriptorPolicy(
+                    RowSoftmaxV1StructuralDescriptorErrorV1::CapabilityProvenance
+                )
+            ),
+            "unexpected capability-substitution error: {error:?}"
+        );
     }
 
     let table = row_softmax_descriptor_table(row_softmax_capabilities());
@@ -783,35 +788,29 @@ fn row_softmax_rejects_capability_target_symbol_and_descriptor_substitution() {
 }
 
 #[test]
-fn row_softmax_accepts_only_absent_or_exact_unit_cluster_dimensions() {
+fn row_softmax_rejects_even_unit_cluster_dimensions_absent_from_llvm22_output() {
     let table = row_softmax_descriptor_table(row_softmax_capabilities());
-    for (cluster_dims, invocation, semantic) in [(None, 0xa8, 0xb8), (Some([1, 1, 1]), 0xa9, 0xb9)]
-    {
-        let fixture = fixture_with_descriptor_table(
-            FixtureOptions {
-                cluster_dims,
-                ..row_softmax_options()
-            },
-            Some(&table),
-        );
-        assert_eq!(
-            fe2o3_hsaco::inspect(&fixture.bytes).unwrap().kernels()[0].cluster_dims(),
-            cluster_dims
-        );
-        let inspected = inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+    let fixture = fixture_with_descriptor_table(
+        FixtureOptions {
+            cluster_dims: Some([1, 1, 1]),
+            ..row_softmax_options()
+        },
+        Some(&table),
+    );
+    assert!(
+        inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
             evidence_for(
                 fixture.bytes,
                 "gfx942:xnack-",
-                invocation,
-                semantic,
+                0xa9,
+                0xb9,
                 "row_softmax_v1",
                 "row_softmax_v1.kd",
             ),
             row_softmax_expectation(),
         )
-        .unwrap();
-        finalize_row_softmax_v1_structural_worker_v2_hsaco_v1(inspected).unwrap();
-    }
+        .is_err()
+    );
 }
 
 #[test]
@@ -834,10 +833,10 @@ fn row_softmax_rejects_lifecycle_cluster_stack_and_hidden_launch_substitutions()
         ),
         (
             FixtureOptions {
-                uses_dynamic_stack: true,
+                uses_dynamic_stack: Some(true),
                 ..row_softmax_options()
             },
-            "dynamic stack",
+            "dynamic stack declaration",
         ),
         (
             FixtureOptions {
@@ -885,6 +884,136 @@ fn row_softmax_rejects_lifecycle_cluster_stack_and_hidden_launch_substitutions()
                 "substitution {index} expected {field}, found {error:?}"
             );
         }
+    }
+}
+
+#[test]
+fn row_softmax_rejects_every_metadata_field_absent_from_measured_llvm22_output() {
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    let kernel_substitutions = [
+        FixtureOptions {
+            kernel_kind: Some("normal"),
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            uses_dynamic_stack: None,
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            uniform_work_group_size: Some(0),
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            workgroup_processor_mode: Some(false),
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            gfx1250_revision: Some("B0"),
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            device_enqueue_symbol: Some("queue_entry"),
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            include_workgroup_size_hint: true,
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            include_vector_type_hint: true,
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            include_printf_metadata: true,
+            ..row_softmax_options()
+        },
+    ];
+    for (index, options) in kernel_substitutions.into_iter().enumerate() {
+        let fixture = fixture_with_descriptor_table(options, Some(&table));
+        assert!(
+            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+                evidence_for(
+                    fixture.bytes,
+                    "gfx942:xnack-",
+                    0xd0_u8.wrapping_add(u8::try_from(index).unwrap()),
+                    0xe0_u8.wrapping_add(u8::try_from(index).unwrap()),
+                    "row_softmax_v1",
+                    "row_softmax_v1.kd",
+                ),
+                row_softmax_expectation(),
+            )
+            .is_err(),
+            "kernel substitution {index} was accepted",
+        );
+    }
+
+    let optional_argument_fields = [
+        (".type_name", FixtureMetadataValue::String("float*")),
+        (".align", FixtureMetadataValue::Unsigned(8)),
+        (".value_type", FixtureMetadataValue::String("f32")),
+        (".access", FixtureMetadataValue::String("read_only")),
+        (".actual_access", FixtureMetadataValue::String("read_only")),
+        (".pointee_align", FixtureMetadataValue::Unsigned(4)),
+        (".is_const", FixtureMetadataValue::Boolean(false)),
+        (".is_restrict", FixtureMetadataValue::Boolean(false)),
+        (".is_volatile", FixtureMetadataValue::Boolean(false)),
+        (".is_pipe", FixtureMetadataValue::Boolean(false)),
+    ];
+    // One pointer, one by-value length, and one hidden argument exercise every
+    // parser/finalizer field class without rebuilding 23 equivalent ELF files.
+    for argument_index in [0, 1, 4] {
+        for (field, value) in optional_argument_fields {
+            let fixture = fixture_with_descriptor_table(
+                FixtureOptions {
+                    argument_extra: Some((argument_index, field, value)),
+                    ..row_softmax_options()
+                },
+                Some(&table),
+            );
+            assert!(
+                inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+                    evidence_for(
+                        fixture.bytes,
+                        "gfx942:xnack-",
+                        0xf0,
+                        0xf1,
+                        "row_softmax_v1",
+                        "row_softmax_v1.kd",
+                    ),
+                    row_softmax_expectation(),
+                )
+                .is_err(),
+                "argument {argument_index} accepted optional field {field}",
+            );
+        }
+    }
+    for (argument_index, field, value) in [
+        (1, ".address_space", FixtureMetadataValue::String("global")),
+        (4, ".name", FixtureMetadataValue::String("hidden")),
+        (4, ".address_space", FixtureMetadataValue::String("global")),
+    ] {
+        let fixture = fixture_with_descriptor_table(
+            FixtureOptions {
+                argument_extra: Some((argument_index, field, value)),
+                ..row_softmax_options()
+            },
+            Some(&table),
+        );
+        assert!(
+            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+                evidence_for(
+                    fixture.bytes,
+                    "gfx942:xnack-",
+                    0xf2,
+                    0xf3,
+                    "row_softmax_v1",
+                    "row_softmax_v1.kd",
+                ),
+                row_softmax_expectation(),
+            )
+            .is_err(),
+            "argument {argument_index} accepted optional field {field}",
+        );
     }
 }
 
@@ -1050,9 +1179,17 @@ fn row_softmax_options() -> FixtureOptions<'static> {
         descriptor: "row_softmax_v1.kd",
         required_workgroup_size: [64, 1, 1],
         max_flat_workgroup_size: 64,
-        include_explicit_argument_alignments: true,
+        include_explicit_argument_alignments: false,
         include_exact_row_llvm22_hidden_arguments: true,
         max_workgroups: [None; 3],
+        uses_dynamic_stack: Some(false),
+        source_language: Some("OpenCL C"),
+        source_language_version: Some([2, 0]),
+        sgpr_count: 42,
+        vgpr_count: 88,
+        agpr_count: Some(44),
+        sgpr_spill_count: Some(44),
+        vgpr_spill_count: Some(28),
         abi: FixtureAbi::RowSoftmaxV1,
         ..FixtureOptions::valid()
     }

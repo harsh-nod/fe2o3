@@ -132,7 +132,15 @@ fn parse_kernel(
 ) -> Result<InspectedKernel, InspectionError> {
     let map = expect_map(value, "kernel")?;
     validate_kernel_keys(map, code_object_version)?;
-    validate_unpreserved_kernel_fields(map)?;
+    let source_language = optional_string(map, ".language")?.map(Box::<str>::from);
+    let source_language_version = get(map, ".language_version")
+        .map(|value| read_u32_pair(value, ".language_version"))
+        .transpose()?;
+    let workgroup_size_hint_was_emitted = get(map, ".workgroup_size_hint").is_some();
+    if let Some(value) = get(map, ".workgroup_size_hint") {
+        validate_integer_array(value, ".workgroup_size_hint", Some(3))?;
+    }
+    let vector_type_hint_was_emitted = optional_string(map, ".vec_type_hint")?.is_some();
 
     let name = parse_entry_name(required(map, ".name")?, ".name")?;
     let symbol = parse_entry_name(required(map, ".symbol")?, ".symbol")?;
@@ -184,28 +192,31 @@ fn parse_kernel(
         parse_max_workgroups_axis(map, ".max_num_workgroups_z", ".max_num_work_groups_z")?,
     ];
     let cluster_dims = parse_cluster_dims(map)?;
-    let kind = match optional_string(map, ".kind")? {
+    let serialized_kind = optional_string(map, ".kind")?;
+    let kind = match serialized_kind {
         None | Some("normal") => KernelKind::Normal,
         Some("init") => KernelKind::Init,
         Some("fini") => KernelKind::Fini,
         Some(_) => return Err(InspectionError::InvalidFieldValue(".kind")),
     };
     let uniform_work_group_size = match optional_u64(map, ".uniform_work_group_size")? {
-        None | Some(0) => false,
-        Some(1) => true,
+        None => None,
+        Some(0) => Some(false),
+        Some(1) => Some(true),
         Some(_) => {
             return Err(InspectionError::InvalidFieldValue(
                 ".uniform_work_group_size",
             ));
         }
     };
-    let uses_dynamic_stack = optional_boolean(map, ".uses_dynamic_stack")?.unwrap_or(false);
+    let uses_dynamic_stack = optional_boolean(map, ".uses_dynamic_stack")?;
     let workgroup_processor_mode = optional_boolean_or_flag(map, ".workgroup_processor_mode")?;
     let gfx1250_revision = parse_gfx1250_revision(map, target)?;
     let device_enqueue_symbol = optional_string(map, ".device_enqueue_symbol")?
         .map(|symbol| parse_entry_name_text(symbol, ".device_enqueue_symbol"))
         .transpose()?;
 
+    let arguments_were_emitted = get(map, ".args").is_some();
     let argument_values = match get(map, ".args") {
         Some(value) => expect_array(value, ".args")?,
         None => &[],
@@ -238,11 +249,17 @@ fn parse_kernel(
         max_workgroups,
         cluster_dims,
         kind,
+        kind_was_emitted: serialized_kind.is_some(),
         uniform_work_group_size,
         uses_dynamic_stack,
         workgroup_processor_mode,
         gfx1250_revision,
         device_enqueue_symbol,
+        source_language,
+        source_language_version,
+        workgroup_size_hint_was_emitted,
+        vector_type_hint_was_emitted,
+        arguments_were_emitted,
         implicit_argument_offset,
         implicit_argument_size,
         explicit_arguments,
@@ -454,24 +471,6 @@ fn validate_kernel_keys(
     Ok(())
 }
 
-fn validate_unpreserved_kernel_fields(map: &[MapEntry<'_>]) -> Result<(), InspectionError> {
-    // Source-language and optimization hints do not describe executable
-    // resource use or launch behavior, so inspection syntax-checks but does
-    // not retain them as authority-bearing evidence.
-    optional_string(map, ".language")?;
-    optional_string(map, ".vec_type_hint")?;
-    for field in [".language_version", ".workgroup_size_hint"] {
-        if let Some(value) = get(map, field) {
-            validate_integer_array(
-                value,
-                field,
-                Some(if field == ".language_version" { 2 } else { 3 }),
-            )?;
-        }
-    }
-    Ok(())
-}
-
 fn parse_gfx1250_revision(
     map: &[MapEntry<'_>],
     target: AmdTargetId,
@@ -563,6 +562,14 @@ fn read_u32_triplet(
         read_u32(&values[1], field)?,
         read_u32(&values[2], field)?,
     ])
+}
+
+fn read_u32_pair(value: &ValueRef<'_>, field: &'static str) -> Result<[u32; 2], InspectionError> {
+    let values = expect_array(value, field)?;
+    if values.len() != 2 {
+        return Err(InspectionError::InvalidFieldValue(field));
+    }
+    Ok([read_u32(&values[0], field)?, read_u32(&values[1], field)?])
 }
 
 fn flat_product(dims: [u32; 3], field: &'static str) -> Result<u64, InspectionError> {

@@ -5,13 +5,13 @@ use std::{error::Error, fmt};
 use fe2o3_artifact_transaction::BuildAttempt;
 use fe2o3_hsaco::{
     ArgumentAddressSpace, CodeObjectVersion as InspectedCodeObjectVersion, ExplicitValueKind,
-    ExplicitValueType, HiddenValueKind, InspectedHsaco, KernelKind,
+    HiddenValueKind, InspectedHsaco, KernelKind,
 };
 use fe2o3_kernel_descriptor::{
     AdmittedRowSoftmaxV1StructuralDescriptorV1, CodeObjectVersion,
     ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL, ROW_SOFTMAX_V1_ENTRY_NAME,
     ROW_SOFTMAX_V1_EXPLICIT_KERNARG_BYTES, ROW_SOFTMAX_V1_IMPLICIT_KERNARG_BYTES,
-    ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE, ROW_SOFTMAX_V1_MAX_GRID_SIZE, ROW_SOFTMAX_V1_TARGET,
+    ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE, ROW_SOFTMAX_V1_TARGET,
     ROW_SOFTMAX_V1_TOTAL_KERNARG_BYTES, ROW_SOFTMAX_V1_WORKGROUP_SIZE,
     RowSoftmaxV1StructuralDescriptorErrorV1, RowSoftmaxV1StructuralDescriptorExpectationV1,
     admit_row_softmax_v1_structural_descriptor_v1,
@@ -343,6 +343,11 @@ fn validate_exact_artifact_metadata(
             "target",
         ));
     }
+    if hsaco.has_printf_metadata() {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "printf metadata",
+        ));
+    }
     let [kernel] = hsaco.kernels() else {
         return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
             "kernel closure",
@@ -358,22 +363,41 @@ fn validate_exact_artifact_metadata(
             "descriptor symbol",
         ));
     }
-    if kernel.kind() != KernelKind::Normal {
+    if kernel.kind() != KernelKind::Normal || kernel.kind_was_emitted() {
         return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
             "kernel kind",
         ));
     }
-    if kernel
-        .cluster_dims()
-        .is_some_and(|dimensions| dimensions != ROW_SOFTMAX_V1_MAX_GRID_SIZE)
-    {
+    if kernel.cluster_dims().is_some() {
         return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
             "cluster dimensions",
         ));
     }
-    if kernel.uses_dynamic_stack() {
+    if kernel.uses_dynamic_stack_declaration() != Some(false) {
         return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
-            "dynamic stack",
+            "dynamic stack declaration",
+        ));
+    }
+    if kernel.uniform_work_group_size_declaration().is_some() {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "uniform workgroup declaration",
+        ));
+    }
+    if kernel.workgroup_processor_mode().is_some()
+        || kernel.gfx1250_revision().is_some()
+        || kernel.device_enqueue_symbol().is_some()
+    {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "optional execution metadata",
+        ));
+    }
+    if kernel.source_language() != Some("OpenCL C")
+        || kernel.source_language_version() != Some([2, 0])
+        || kernel.workgroup_size_hint_was_emitted()
+        || kernel.vector_type_hint_was_emitted()
+    {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "source metadata",
         ));
     }
     if kernel.required_workgroup_size() != Some(ROW_SOFTMAX_V1_WORKGROUP_SIZE)
@@ -406,6 +430,16 @@ fn validate_exact_artifact_metadata(
             "private segment",
         ));
     }
+    if kernel.sgpr_count() != 42
+        || kernel.vgpr_count() != 88
+        || kernel.agpr_count() != Some(44)
+        || kernel.sgpr_spill_count() != Some(44)
+        || kernel.vgpr_spill_count() != Some(28)
+    {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "register metadata",
+        ));
+    }
     if kernel.kernarg_segment_size() != u64::from(ROW_SOFTMAX_V1_TOTAL_KERNARG_BYTES)
         || kernel.kernarg_segment_alignment() != 8
         || kernel.implicit_argument_offset()
@@ -416,7 +450,7 @@ fn validate_exact_artifact_metadata(
             "kernarg span",
         ));
     }
-    if kernel.explicit_arguments().len() != 4 {
+    if !kernel.arguments_were_emitted() || kernel.explicit_arguments().len() != 4 {
         return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
             "explicit argument count",
         ));
@@ -431,20 +465,21 @@ fn validate_exact_artifact_metadata(
         if pointer.name() != Some(pointer_name.as_str())
             || pointer.offset() != base
             || pointer.size() != 8
-            || pointer.alignment().is_some_and(|actual| actual != 8)
+            || pointer.type_name().is_some()
+            || pointer.alignment().is_some()
             || pointer.value_kind() != ExplicitValueKind::GlobalBuffer
-            || pointer
-                .value_type()
-                .is_some_and(|actual| actual != ExplicitValueType::F32)
+            || pointer.value_type().is_some()
             || pointer.address_space() != Some(ArgumentAddressSpace::Global)
+            || has_optional_explicit_qualifier(pointer)
             || length.name() != Some(length_name.as_str())
             || length.offset() != base + 8
             || length.size() != 8
-            || length.alignment().is_some_and(|actual| actual != 8)
+            || length.type_name().is_some()
+            || length.alignment().is_some()
             || length.value_kind() != ExplicitValueKind::ByValue
-            || length
-                .value_type()
-                .is_some_and(|actual| actual != ExplicitValueType::U64)
+            || length.value_type().is_some()
+            || length.address_space().is_some()
+            || has_optional_explicit_qualifier(length)
         {
             return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
                 "explicit slice argument layout",
@@ -452,6 +487,16 @@ fn validate_exact_artifact_metadata(
         }
     }
     Ok(())
+}
+
+fn has_optional_explicit_qualifier(argument: &fe2o3_hsaco::ExplicitArgument) -> bool {
+    argument.access().is_some()
+        || argument.actual_access().is_some()
+        || argument.pointee_alignment().is_some()
+        || argument.is_const().is_some()
+        || argument.is_restrict().is_some()
+        || argument.is_volatile().is_some()
+        || argument.is_pipe().is_some()
 }
 
 fn validate_exact_hidden_arguments(

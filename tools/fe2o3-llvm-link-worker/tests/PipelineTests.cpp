@@ -260,10 +260,9 @@ std::vector<uint8_t> makeFloatConsumerBitcode(StringRef Entry, StringRef Import,
                                   CodeObjectVersion);
 }
 
-std::vector<uint8_t>
-makeOcmlKernelBitcode(StringRef Import = "__ocml_sin_f32",
-                      uint8_t CodeObjectVersion = 5,
-                      bool TwoCalls = false) {
+std::vector<uint8_t> makeOcmlKernelBitcode(StringRef Import = "__ocml_sin_f32",
+                                           uint8_t CodeObjectVersion = 5,
+                                           bool TwoCalls = false) {
   LLVMContext Context;
   Module ModuleValue("gfx942-ocml-sin-kernel", Context);
   std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
@@ -1766,12 +1765,21 @@ struct RowMetadataFixtureOptions {
   StringRef OmittedKernelField;
   StringRef KernelUnsignedOverrideField;
   uint64_t KernelUnsignedOverrideValue = 0;
+  StringRef KernelStringOverrideField;
+  StringRef KernelStringOverrideValue;
+  std::array<uint64_t, 3> RequiredWorkgroup = {64, 1, 1};
+  std::array<uint64_t, 2> LanguageVersion = {2, 0};
+  bool UsesDynamicStack = false;
   std::optional<bool> WorkgroupProcessorMode;
+  std::optional<bool> UniformWorkgroupSize;
   std::optional<size_t> OmittedArgument;
   StringRef OmittedArgumentField;
   ArgumentMetadataOverride Override;
   std::optional<std::pair<size_t, size_t>> SwappedArguments;
-  bool IncludeCompatibleExplicitOptionals = false;
+  StringRef UnknownRootKey;
+  StringRef UnknownKernelKey;
+  std::optional<size_t> UnknownArgument;
+  StringRef UnknownArgumentKey;
 };
 
 std::string makeExactRowSoftmaxV1MetadataBlob(
@@ -1786,6 +1794,8 @@ std::string makeExactRowSoftmaxV1MetadataBlob(
   Version.push_back(Document.getNode(uint64_t(2)));
   Root["amdhsa.version"] = Version;
   Root["amdhsa.target"] = StringNode("amdgcn-amd-amdhsa--gfx942:xnack-");
+  if (!Options.UnknownRootKey.empty())
+    Root[Options.UnknownRootKey] = Document.getNode(uint64_t(1));
 
   auto Kernels = Document.getArrayNode();
   auto Kernel = Document.getMapNode();
@@ -1797,8 +1807,11 @@ std::string makeExactRowSoftmaxV1MetadataBlob(
     Kernel[Name] = Document.getNode(Value);
   };
   auto KernelString = [&](StringRef Name, StringRef Value) {
-    if (Options.OmittedKernelField != Name)
+    if (Options.OmittedKernelField != Name) {
+      if (Options.KernelStringOverrideField == Name)
+        Value = Options.KernelStringOverrideValue;
       Kernel[Name] = StringNode(Value);
+    }
   };
   KernelString(".name", "row_softmax_v1");
   KernelString(".symbol", "row_softmax_v1.kd");
@@ -1814,23 +1827,28 @@ std::string makeExactRowSoftmaxV1MetadataBlob(
   KernelUnsigned(".sgpr_spill_count", 44);
   KernelUnsigned(".vgpr_spill_count", 28);
   if (Options.OmittedKernelField != ".uses_dynamic_stack")
-    Kernel[".uses_dynamic_stack"] = Document.getNode(false);
+    Kernel[".uses_dynamic_stack"] = Document.getNode(Options.UsesDynamicStack);
   if (Options.WorkgroupProcessorMode)
     Kernel[".workgroup_processor_mode"] =
         Document.getNode(*Options.WorkgroupProcessorMode);
+  if (Options.UniformWorkgroupSize)
+    Kernel[".uniform_work_group_size"] =
+        Document.getNode(*Options.UniformWorkgroupSize);
   if (Options.OmittedKernelField != ".reqd_workgroup_size") {
     auto Workgroup = Document.getArrayNode();
-    for (uint64_t Dimension : std::array<uint64_t, 3>{64, 1, 1})
+    for (uint64_t Dimension : Options.RequiredWorkgroup)
       Workgroup.push_back(Document.getNode(Dimension));
     Kernel[".reqd_workgroup_size"] = Workgroup;
   }
   KernelString(".language", "OpenCL C");
   if (Options.OmittedKernelField != ".language_version") {
     auto LanguageVersion = Document.getArrayNode();
-    LanguageVersion.push_back(Document.getNode(uint64_t(2)));
-    LanguageVersion.push_back(Document.getNode(uint64_t(0)));
+    for (uint64_t Component : Options.LanguageVersion)
+      LanguageVersion.push_back(Document.getNode(Component));
     Kernel[".language_version"] = LanguageVersion;
   }
+  if (!Options.UnknownKernelKey.empty())
+    Kernel[Options.UnknownKernelKey] = Document.getNode(uint64_t(1));
 
   if (Options.OmittedKernelField != ".args") {
     auto Arguments = Document.getArrayNode();
@@ -1848,18 +1866,22 @@ std::string makeExactRowSoftmaxV1MetadataBlob(
         Map[Name] = Document.getNode(Value);
     };
     auto ApplyOverride = [&](msgpack::MapDocNode &Map, size_t Index) {
-      if (Options.Override.Index != Index)
-        return;
-      if (Options.Override.StringValue)
-        Map[Options.Override.Field] = StringNode(*Options.Override.StringValue);
-      else if (Options.Override.UnsignedValue)
-        Map[Options.Override.Field] =
-            Document.getNode(*Options.Override.UnsignedValue);
-      else if (Options.Override.BooleanValue)
-        Map[Options.Override.Field] =
-            Document.getNode(*Options.Override.BooleanValue);
-      else
-        fail("row argument metadata override has no value");
+      if (Options.Override.Index == Index) {
+        if (Options.Override.StringValue)
+          Map[Options.Override.Field] =
+              StringNode(*Options.Override.StringValue);
+        else if (Options.Override.UnsignedValue)
+          Map[Options.Override.Field] =
+              Document.getNode(*Options.Override.UnsignedValue);
+        else if (Options.Override.BooleanValue)
+          Map[Options.Override.Field] =
+              Document.getNode(*Options.Override.BooleanValue);
+        else
+          fail("row argument metadata override has no value");
+      }
+      if (Options.UnknownArgument == Index &&
+          !Options.UnknownArgumentKey.empty())
+        Map[Options.UnknownArgumentKey] = Document.getNode(uint64_t(1));
     };
     for (size_t Slice = 0; Slice != 2; ++Slice) {
       size_t PointerIndex = Slice * 2;
@@ -1870,10 +1892,6 @@ std::string makeExactRowSoftmaxV1MetadataBlob(
       AddUnsigned(Pointer, PointerIndex, ".size", 8);
       AddString(Pointer, PointerIndex, ".value_kind", "global_buffer");
       AddString(Pointer, PointerIndex, ".address_space", "global");
-      if (Options.IncludeCompatibleExplicitOptionals) {
-        AddUnsigned(Pointer, PointerIndex, ".align", 8);
-        AddString(Pointer, PointerIndex, ".value_type", "f32");
-      }
       ApplyOverride(Pointer, PointerIndex);
       ArgumentNodes.push_back(Pointer);
 
@@ -1884,10 +1902,6 @@ std::string makeExactRowSoftmaxV1MetadataBlob(
       AddUnsigned(Length, LengthIndex, ".offset", Slice * 16 + 8);
       AddUnsigned(Length, LengthIndex, ".size", 8);
       AddString(Length, LengthIndex, ".value_kind", "by_value");
-      if (Options.IncludeCompatibleExplicitOptionals) {
-        AddUnsigned(Length, LengthIndex, ".align", 8);
-        AddString(Length, LengthIndex, ".value_type", "u64");
-      }
       ApplyOverride(Length, LengthIndex);
       ArgumentNodes.push_back(Length);
     }
@@ -2354,9 +2368,8 @@ std::optional<std::vector<uint8_t>> testMeasuredOcmlPipeline() {
   Request Cov6Kernel = makeOcmlKernelRequest("__ocml_exp_f32", 6, true);
   Cov6Kernel.Target = "gfx942:xnack-";
   Cov6Kernel.LinkOptions.Optimization = OptimizationLevel::O0;
-  runSuccess(Cov6Kernel,
-             {"__ocml_exp_f32", "fe2o3_gfx942_ocml_sin_f32_v1",
-              "fe2o3_gfx942_ocml_sin_f32_v1.kd"});
+  runSuccess(Cov6Kernel, {"__ocml_exp_f32", "fe2o3_gfx942_ocml_sin_f32_v1",
+                          "fe2o3_gfx942_ocml_sin_f32_v1.kd"});
 
   const std::array<StringRef, 7> AllSupported = {
       "__ocml_cos_f32",   "__ocml_exp2_f32", "__ocml_exp_f32",
@@ -2420,11 +2433,6 @@ void testExactRowSoftmaxV1Profile() {
 
   requireExactRowMetadataSuccess(makeExactRowSoftmaxV1MetadataBlob(),
                                  "measured LLVM 22.1.8 metadata");
-  RowMetadataFixtureOptions CompatibleExplicitOptionals;
-  CompatibleExplicitOptionals.IncludeCompatibleExplicitOptionals = true;
-  requireExactRowMetadataSuccess(
-      makeExactRowSoftmaxV1MetadataBlob(CompatibleExplicitOptionals),
-      "finalizer-compatible explicit alignments and value types");
 
   for (StringRef Field : {
            StringRef(".args"),
@@ -2466,9 +2474,52 @@ void testExactRowSoftmaxV1Profile() {
     Options.KernelUnsignedOverrideValue = Value;
     requireExactRowMetadataFailure(makeExactRowSoftmaxV1MetadataBlob(Options));
   }
+  for (const auto &[Field, Value] :
+       std::array<std::pair<StringRef, StringRef>, 3>{
+           {{".name", "wrong_softmax"},
+            {".symbol", "wrong_softmax.kd"},
+            {".language", "HIP C++"}}}) {
+    RowMetadataFixtureOptions Options;
+    Options.KernelStringOverrideField = Field;
+    Options.KernelStringOverrideValue = Value;
+    requireExactRowMetadataFailure(makeExactRowSoftmaxV1MetadataBlob(Options));
+  }
+  for (std::array<uint64_t, 3> Workgroup :
+       {std::array<uint64_t, 3>{32, 1, 1}, std::array<uint64_t, 3>{64, 2, 1}}) {
+    RowMetadataFixtureOptions Options;
+    Options.RequiredWorkgroup = Workgroup;
+    requireExactRowMetadataFailure(makeExactRowSoftmaxV1MetadataBlob(Options));
+  }
+  RowMetadataFixtureOptions WrongLanguageVersion;
+  WrongLanguageVersion.LanguageVersion = {1, 0};
+  requireExactRowMetadataFailure(
+      makeExactRowSoftmaxV1MetadataBlob(WrongLanguageVersion));
+  RowMetadataFixtureOptions DynamicStack;
+  DynamicStack.UsesDynamicStack = true;
+  requireExactRowMetadataFailure(
+      makeExactRowSoftmaxV1MetadataBlob(DynamicStack));
   for (bool Mode : {false, true}) {
     RowMetadataFixtureOptions Options;
     Options.WorkgroupProcessorMode = Mode;
+    requireExactRowMetadataFailure(makeExactRowSoftmaxV1MetadataBlob(Options));
+    Options.WorkgroupProcessorMode.reset();
+    Options.UniformWorkgroupSize = Mode;
+    requireExactRowMetadataFailure(makeExactRowSoftmaxV1MetadataBlob(Options));
+  }
+  for (const auto &[Scope, Key] :
+       std::array<std::pair<StringRef, StringRef>, 3>{
+           {{"root", "amdhsa.printf"},
+            {"kernel", ".kind"},
+            {"argument", ".unknown"}}}) {
+    RowMetadataFixtureOptions Options;
+    if (Scope == "root")
+      Options.UnknownRootKey = Key;
+    else if (Scope == "kernel")
+      Options.UnknownKernelKey = Key;
+    else {
+      Options.UnknownArgument = 0;
+      Options.UnknownArgumentKey = Key;
+    }
     requireExactRowMetadataFailure(makeExactRowSoftmaxV1MetadataBlob(Options));
   }
 
@@ -2495,10 +2546,20 @@ void testExactRowSoftmaxV1Profile() {
         makeExactRowSoftmaxV1MetadataBlob(MissingAddress));
     for (ArgumentMetadataOverride Override : {
              stringOverride(Index, ".name", "wrong.data"),
+             unsignedOverride(Index, ".offset", 4),
+             unsignedOverride(Index, ".size", 4),
              stringOverride(Index, ".value_kind", "by_value"),
              stringOverride(Index, ".address_space", "local"),
+             stringOverride(Index, ".type_name", "float*"),
              unsignedOverride(Index, ".align", 16),
-             stringOverride(Index, ".value_type", "f64"),
+             stringOverride(Index, ".value_type", "f32"),
+             stringOverride(Index, ".access", "read_only"),
+             stringOverride(Index, ".actual_access", "read_only"),
+             unsignedOverride(Index, ".pointee_align", 4),
+             booleanOverride(Index, ".is_const", false),
+             booleanOverride(Index, ".is_restrict", false),
+             booleanOverride(Index, ".is_volatile", false),
+             booleanOverride(Index, ".is_pipe", false),
          }) {
       RowMetadataFixtureOptions Options;
       Options.Override = Override;
@@ -2509,9 +2570,20 @@ void testExactRowSoftmaxV1Profile() {
   for (size_t Index : {size_t(1), size_t(3)}) {
     for (ArgumentMetadataOverride Override : {
              stringOverride(Index, ".name", "wrong.len"),
+             unsignedOverride(Index, ".offset", 4),
+             unsignedOverride(Index, ".size", 4),
              stringOverride(Index, ".value_kind", "global_buffer"),
+             stringOverride(Index, ".type_name", "ulong"),
              unsignedOverride(Index, ".align", 16),
-             stringOverride(Index, ".value_type", "i64"),
+             stringOverride(Index, ".value_type", "u64"),
+             stringOverride(Index, ".address_space", "global"),
+             stringOverride(Index, ".access", "read_only"),
+             stringOverride(Index, ".actual_access", "read_only"),
+             unsignedOverride(Index, ".pointee_align", 8),
+             booleanOverride(Index, ".is_const", false),
+             booleanOverride(Index, ".is_restrict", false),
+             booleanOverride(Index, ".is_volatile", false),
+             booleanOverride(Index, ".is_pipe", false),
          }) {
       RowMetadataFixtureOptions Options;
       Options.Override = Override;
@@ -2524,6 +2596,18 @@ void testExactRowSoftmaxV1Profile() {
              unsignedOverride(Index, ".offset", 280 + Index),
              unsignedOverride(Index, ".size", 1),
              stringOverride(Index, ".value_kind", "hidden_none"),
+             stringOverride(Index, ".name", "hidden"),
+             stringOverride(Index, ".type_name", "ulong"),
+             unsignedOverride(Index, ".align", 8),
+             stringOverride(Index, ".value_type", "u64"),
+             stringOverride(Index, ".address_space", "global"),
+             stringOverride(Index, ".access", "read_only"),
+             stringOverride(Index, ".actual_access", "read_only"),
+             unsignedOverride(Index, ".pointee_align", 8),
+             booleanOverride(Index, ".is_const", false),
+             booleanOverride(Index, ".is_restrict", false),
+             booleanOverride(Index, ".is_volatile", false),
+             booleanOverride(Index, ".is_pipe", false),
          }) {
       RowMetadataFixtureOptions Options;
       Options.Override = Override;
@@ -3236,8 +3320,8 @@ void testLldExitPolicy(int ExitCode) {
 void testExactFlashAttentionLlvmBuildIdentity() {
   constexpr StringLiteral UpstreamIdentity =
       "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
-  Error Accepted =
-      validateExactFlashAttentionV1LlvmBuildIdentityForTesting(UpstreamIdentity);
+  Error Accepted = validateExactFlashAttentionV1LlvmBuildIdentityForTesting(
+      UpstreamIdentity);
   require(!Accepted, "published Flash LLVM identity was rejected");
 
   Error Drift =
@@ -3247,8 +3331,8 @@ void testExactFlashAttentionLlvmBuildIdentity() {
   require(
       toString(std::move(Drift)) ==
           "exact FlashAttention V1 published machine identity requires LLVM "
-          "build identity '" + UpstreamIdentity.str() +
-          "', worker measured '7.2.4'",
+          "build identity '" +
+              UpstreamIdentity.str() + "', worker measured '7.2.4'",
       "Flash LLVM identity drift was misdiagnosed");
 }
 

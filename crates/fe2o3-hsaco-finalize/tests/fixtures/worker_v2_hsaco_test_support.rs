@@ -23,6 +23,13 @@ enum FixtureAbi {
 }
 
 #[derive(Clone, Copy)]
+enum FixtureMetadataValue<'a> {
+    String(&'a str),
+    Unsigned(u64),
+    Boolean(bool),
+}
+
+#[derive(Clone, Copy)]
 struct FixtureOptions<'a> {
     target: &'a str,
     code_object_version: u8,
@@ -42,11 +49,26 @@ struct FixtureOptions<'a> {
     include_exact_row_llvm22_hidden_arguments: bool,
     omitted_hidden_argument: Option<usize>,
     hidden_argument_override: Option<(usize, u64, u64, &'a str)>,
+    argument_extra: Option<(usize, &'a str, FixtureMetadataValue<'a>)>,
     include_required_workgroup_size: bool,
     max_workgroups: [Option<u32>; 3],
     cluster_dims: Option<[u32; 3]>,
     kernel_kind: Option<&'a str>,
-    uses_dynamic_stack: bool,
+    uses_dynamic_stack: Option<bool>,
+    uniform_work_group_size: Option<u64>,
+    workgroup_processor_mode: Option<bool>,
+    gfx1250_revision: Option<&'a str>,
+    device_enqueue_symbol: Option<&'a str>,
+    source_language: Option<&'a str>,
+    source_language_version: Option<[u32; 2]>,
+    include_workgroup_size_hint: bool,
+    include_vector_type_hint: bool,
+    include_printf_metadata: bool,
+    sgpr_count: u16,
+    vgpr_count: u16,
+    agpr_count: Option<u32>,
+    sgpr_spill_count: Option<u32>,
+    vgpr_spill_count: Option<u32>,
     include_dynamic_lds_size: bool,
     duplicate_max_workgroups_x: bool,
     malformed_max_workgroups_x: bool,
@@ -78,11 +100,26 @@ impl FixtureOptions<'static> {
             include_exact_row_llvm22_hidden_arguments: false,
             omitted_hidden_argument: None,
             hidden_argument_override: None,
+            argument_extra: None,
             include_required_workgroup_size: true,
             max_workgroups: [None; 3],
             cluster_dims: None,
             kernel_kind: None,
-            uses_dynamic_stack: false,
+            uses_dynamic_stack: None,
+            uniform_work_group_size: None,
+            workgroup_processor_mode: None,
+            gfx1250_revision: None,
+            device_enqueue_symbol: None,
+            source_language: None,
+            source_language_version: None,
+            include_workgroup_size_hint: false,
+            include_vector_type_hint: false,
+            include_printf_metadata: false,
+            sgpr_count: 14,
+            vgpr_count: 11,
+            agpr_count: Some(3),
+            sgpr_spill_count: Some(2),
+            vgpr_spill_count: Some(4),
             include_dynamic_lds_size: false,
             duplicate_max_workgroups_x: false,
             malformed_max_workgroups_x: false,
@@ -199,18 +236,24 @@ fn fixture_with_descriptor_table(
         descriptor_offset + 16,
         i64::try_from(entry_address - descriptor_offset as u64).unwrap(),
     );
-    write_u32(&mut bytes, descriptor_offset + 44, 1);
-    write_u32(&mut bytes, descriptor_offset + 48, 0x00af_0081);
+    let (compute_pgm_rsrc3, compute_pgm_rsrc1, compute_pgm_rsrc2) =
+        if options.abi == FixtureAbi::RowSoftmaxV1 {
+            (10, 0x00af_014a, 0x0390)
+        } else {
+            (1, 0x00af_0081, 0x1390)
+        };
+    write_u32(&mut bytes, descriptor_offset + 44, compute_pgm_rsrc3);
+    write_u32(&mut bytes, descriptor_offset + 48, compute_pgm_rsrc1);
     write_u32(
         &mut bytes,
         descriptor_offset + 52,
-        0x1390 | u32::from(options.uses_dynamic_stack),
+        compute_pgm_rsrc2 | u32::from(options.uses_dynamic_stack.unwrap_or(false)),
     );
     let mut kernel_code_properties = 0x001e;
     if options.descriptor_wavefront_size == 32 {
         kernel_code_properties |= 1 << 10;
     }
-    if options.uses_dynamic_stack {
+    if options.uses_dynamic_stack.unwrap_or(false) {
         kernel_code_properties |= 1 << 11;
     }
     write_u16(
@@ -421,20 +464,23 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
                 } else {
                     index * 16
                 };
-                let alignment = options.include_explicit_argument_alignments.then_some(8);
                 [
-                    typed_explicit_pointer_argument(
-                        &format!("arg{index}.data"),
+                    explicit_pointer_argument(
+                        Some(&format!("arg{index}.data")),
                         base,
-                        alignment,
-                        "f32",
+                        8,
+                        options.include_explicit_argument_alignments.then_some(8),
+                        "global_buffer",
+                        Some("global"),
+                        None,
                     ),
-                    typed_explicit_argument(
-                        &format!("arg{index}.len"),
+                    explicit_argument(
+                        Some(&format!("arg{index}.len")),
                         base + 8,
                         8,
-                        alignment,
-                        "u64",
+                        options.include_explicit_argument_alignments.then_some(8),
+                        "by_value",
+                        None,
                     ),
                 ]
             })
@@ -497,6 +543,17 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         hidden_arguments.remove(index);
     }
     arguments.extend(hidden_arguments);
+    if let Some((index, field, value)) = options.argument_extra {
+        let Value::Map(fields) = &mut arguments[index] else {
+            unreachable!("argument fixtures are maps")
+        };
+        let value = match value {
+            FixtureMetadataValue::String(value) => Value::from(value),
+            FixtureMetadataValue::Unsigned(value) => Value::from(value),
+            FixtureMetadataValue::Boolean(value) => Value::from(value),
+        };
+        fields.push((Value::from(field), value));
+    }
     let mut kernel = vec![
         (Value::from(".name"), Value::from(options.entry)),
         (Value::from(".symbol"), Value::from(options.descriptor)),
@@ -515,16 +572,22 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
             Value::from(".wavefront_size"),
             Value::from(options.wavefront_size),
         ),
-        (Value::from(".sgpr_count"), Value::from(14)),
-        (Value::from(".vgpr_count"), Value::from(11)),
-        (Value::from(".agpr_count"), Value::from(3)),
-        (Value::from(".sgpr_spill_count"), Value::from(2)),
-        (Value::from(".vgpr_spill_count"), Value::from(4)),
+        (Value::from(".sgpr_count"), Value::from(options.sgpr_count)),
+        (Value::from(".vgpr_count"), Value::from(options.vgpr_count)),
         (
             Value::from(".max_flat_workgroup_size"),
             Value::from(options.max_flat_workgroup_size),
         ),
     ];
+    for (field, value) in [
+        (".agpr_count", options.agpr_count),
+        (".sgpr_spill_count", options.sgpr_spill_count),
+        (".vgpr_spill_count", options.vgpr_spill_count),
+    ] {
+        if let Some(value) = value {
+            kernel.push((Value::from(field), Value::from(value)));
+        }
+    }
     if options.include_required_workgroup_size {
         kernel.push((
             Value::from(".reqd_workgroup_size"),
@@ -555,8 +618,53 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     if let Some(kind) = options.kernel_kind {
         kernel.push((Value::from(".kind"), Value::from(kind)));
     }
-    if options.uses_dynamic_stack {
-        kernel.push((Value::from(".uses_dynamic_stack"), Value::from(true)));
+    if let Some(uses_dynamic_stack) = options.uses_dynamic_stack {
+        kernel.push((
+            Value::from(".uses_dynamic_stack"),
+            Value::from(uses_dynamic_stack),
+        ));
+    }
+    if let Some(uniform_work_group_size) = options.uniform_work_group_size {
+        kernel.push((
+            Value::from(".uniform_work_group_size"),
+            Value::from(uniform_work_group_size),
+        ));
+    }
+    if let Some(workgroup_processor_mode) = options.workgroup_processor_mode {
+        kernel.push((
+            Value::from(".workgroup_processor_mode"),
+            Value::from(workgroup_processor_mode),
+        ));
+    }
+    if let Some(gfx1250_revision) = options.gfx1250_revision {
+        kernel.push((
+            Value::from(".gfx1250_revision"),
+            Value::from(gfx1250_revision),
+        ));
+    }
+    if let Some(device_enqueue_symbol) = options.device_enqueue_symbol {
+        kernel.push((
+            Value::from(".device_enqueue_symbol"),
+            Value::from(device_enqueue_symbol),
+        ));
+    }
+    if let Some(source_language) = options.source_language {
+        kernel.push((Value::from(".language"), Value::from(source_language)));
+    }
+    if let Some(source_language_version) = options.source_language_version {
+        kernel.push((
+            Value::from(".language_version"),
+            Value::Array(source_language_version.into_iter().map(Value::from).collect()),
+        ));
+    }
+    if options.include_workgroup_size_hint {
+        kernel.push((
+            Value::from(".workgroup_size_hint"),
+            Value::Array(vec![Value::from(64), Value::from(1), Value::from(1)]),
+        ));
+    }
+    if options.include_vector_type_hint {
+        kernel.push((Value::from(".vec_type_hint"), Value::from("float")));
     }
     if options.duplicate_max_workgroups_x {
         kernel.push((Value::from(".max_num_workgroups_x"), Value::from(1)));
@@ -569,7 +677,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         ));
     }
     let kernel = Value::Map(kernel);
-    let root = Value::Map(vec![
+    let mut root = vec![
         (
             Value::from("amdhsa.version"),
             Value::Array(vec![Value::from(1), Value::from(2)]),
@@ -579,7 +687,11 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
             Value::from(format!("amdgcn-amd-amdhsa--{}", options.target)),
         ),
         (Value::from("amdhsa.kernels"), Value::Array(vec![kernel])),
-    ]);
+    ];
+    if options.include_printf_metadata {
+        root.push((Value::from("amdhsa.printf"), Value::Array(Vec::new())));
+    }
+    let root = Value::Map(root);
     let mut encoded = Vec::new();
     write_value(&mut encoded, &root).unwrap();
     encoded

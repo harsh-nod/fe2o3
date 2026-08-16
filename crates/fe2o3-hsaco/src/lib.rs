@@ -330,11 +330,17 @@ pub struct InspectedKernel {
     pub(crate) max_workgroups: [Option<u32>; 3],
     pub(crate) cluster_dims: Option<[u32; 3]>,
     pub(crate) kind: KernelKind,
-    pub(crate) uniform_work_group_size: bool,
-    pub(crate) uses_dynamic_stack: bool,
+    pub(crate) kind_was_emitted: bool,
+    pub(crate) uniform_work_group_size: Option<bool>,
+    pub(crate) uses_dynamic_stack: Option<bool>,
     pub(crate) workgroup_processor_mode: Option<bool>,
     pub(crate) gfx1250_revision: Option<Gfx1250Revision>,
     pub(crate) device_enqueue_symbol: Option<Box<str>>,
+    pub(crate) source_language: Option<Box<str>>,
+    pub(crate) source_language_version: Option<[u32; 2]>,
+    pub(crate) workgroup_size_hint_was_emitted: bool,
+    pub(crate) vector_type_hint_was_emitted: bool,
+    pub(crate) arguments_were_emitted: bool,
     pub(crate) implicit_argument_offset: Option<u64>,
     pub(crate) implicit_argument_size: u64,
     pub(crate) explicit_arguments: Vec<ExplicitArgument>,
@@ -427,13 +433,34 @@ impl InspectedKernel {
         self.kind
     }
 
+    /// Returns whether `.kind` was serialized instead of taking the normal default.
+    pub const fn kind_was_emitted(&self) -> bool {
+        self.kind_was_emitted
+    }
+
     /// Returns whether every workgroup must have uniform dimensions.
     pub const fn uniform_work_group_size(&self) -> bool {
+        match self.uniform_work_group_size {
+            Some(value) => value,
+            None => false,
+        }
+    }
+
+    /// Returns the serialized uniform-workgroup declaration, preserving absence.
+    pub const fn uniform_work_group_size_declaration(&self) -> Option<bool> {
         self.uniform_work_group_size
     }
 
     /// Returns whether the kernel uses a dynamically sized stack.
     pub const fn uses_dynamic_stack(&self) -> bool {
+        match self.uses_dynamic_stack {
+            Some(value) => value,
+            None => false,
+        }
+    }
+
+    /// Returns the serialized dynamic-stack declaration, preserving absence.
+    pub const fn uses_dynamic_stack_declaration(&self) -> Option<bool> {
         self.uses_dynamic_stack
     }
 
@@ -450,6 +477,31 @@ impl InspectedKernel {
     /// Returns the optional device-enqueue symbol.
     pub fn device_enqueue_symbol(&self) -> Option<&str> {
         self.device_enqueue_symbol.as_deref()
+    }
+
+    /// Returns the serialized source-language declaration, preserving absence.
+    pub fn source_language(&self) -> Option<&str> {
+        self.source_language.as_deref()
+    }
+
+    /// Returns the serialized source-language version, preserving absence.
+    pub const fn source_language_version(&self) -> Option<[u32; 2]> {
+        self.source_language_version
+    }
+
+    /// Returns whether a source workgroup-size hint was serialized.
+    pub const fn workgroup_size_hint_was_emitted(&self) -> bool {
+        self.workgroup_size_hint_was_emitted
+    }
+
+    /// Returns whether a source vector-type hint was serialized.
+    pub const fn vector_type_hint_was_emitted(&self) -> bool {
+        self.vector_type_hint_was_emitted
+    }
+
+    /// Returns whether the kernel argument array was serialized.
+    pub const fn arguments_were_emitted(&self) -> bool {
+        self.arguments_were_emitted
     }
 
     /// Returns the start of the compiler-declared implicit argument span.
