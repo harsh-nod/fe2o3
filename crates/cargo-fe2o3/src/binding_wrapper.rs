@@ -2179,13 +2179,13 @@ struct RowSoftmaxReleaseContext {
 
 enum ManagedWorkerV2 {
     Fresh {
-        config: PreparedWorkerV2Config,
+        config: Box<PreparedWorkerV2Config>,
         envelope_inputs: Option<WorkerV2EnvelopeInputsV1>,
         resume: WorkerV2ResumeStoreV1,
     },
     Recovery {
         resume: WorkerV2ResumeStoreV1,
-        state: ResumeMarkerStateV1,
+        state: Box<ResumeMarkerStateV1>,
     },
 }
 
@@ -2339,7 +2339,13 @@ fn prepare_managed_attempt(
                     ResumeMarkerErrorV1::StaleInvocation,
                 ));
             }
-            (attempt, Some(ManagedWorkerV2::Recovery { resume, state }))
+            (
+                attempt,
+                Some(ManagedWorkerV2::Recovery {
+                    resume,
+                    state: Box::new(state),
+                }),
+            )
         } else {
             let envelope_inputs = config
                 .load_envelope_inputs()
@@ -2349,7 +2355,7 @@ fn prepare_managed_attempt(
             (
                 attempt,
                 Some(ManagedWorkerV2::Fresh {
-                    config,
+                    config: Box::new(config),
                     envelope_inputs,
                     resume,
                 }),
@@ -2402,7 +2408,7 @@ fn complete_managed_attempt(mut managed: ManagedAttempt) -> Result<(), BindingWr
                     &resume,
                 ),
                 ManagedWorkerV2::Recovery { resume, state } => {
-                    complete_recovered_worker_v2(&managed, &resume, state)
+                    complete_recovered_worker_v2(&managed, &resume, *state)
                 }
             };
         }

@@ -486,14 +486,16 @@ fn cargo_with_backend_result(
         })
         .transpose()?;
     let mut context = BackendRunContext::prepare(
-        project,
+        BackendRunPreparation {
+            project,
+            worker_v2,
+            pinned_cargo,
+            pinned_rustc,
+            authority_backend,
+            authorized_closure,
+            protected_release_action,
+        },
         args,
-        worker_v2,
-        pinned_cargo,
-        pinned_rustc,
-        authority_backend,
-        authorized_closure,
-        protected_release_action,
     )?;
     if let Some(admission) = protected_release {
         context.binding_wrapper = admission.binding_wrapper_path();
@@ -555,17 +557,27 @@ struct BackendRunContext {
     protected_release_action: Option<ProtectedReleaseAction>,
 }
 
+struct BackendRunPreparation {
+    project: project::CargoProject,
+    worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
+    pinned_cargo: pinned_executable::PinnedExecutable,
+    pinned_rustc: PinnedRustc,
+    authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,
+    authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
+    protected_release_action: Option<ProtectedReleaseAction>,
+}
+
 impl BackendRunContext {
-    fn prepare(
-        project: project::CargoProject,
-        args: &[OsString],
-        worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
-        pinned_cargo: pinned_executable::PinnedExecutable,
-        pinned_rustc: PinnedRustc,
-        authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,
-        authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
-        protected_release_action: Option<ProtectedReleaseAction>,
-    ) -> Result<Self, String> {
+    fn prepare(preparation: BackendRunPreparation, args: &[OsString]) -> Result<Self, String> {
+        let BackendRunPreparation {
+            project,
+            worker_v2,
+            pinned_cargo,
+            pinned_rustc,
+            authority_backend,
+            authorized_closure,
+            protected_release_action,
+        } = preparation;
         let target = amd_gpu_target();
         let target_dir = project.open_or_create_target()?;
         pinned_rustc.assert_lib_tree_unmutated()?;
