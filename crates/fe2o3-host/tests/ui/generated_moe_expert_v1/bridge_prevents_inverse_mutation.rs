@@ -11,7 +11,7 @@ fn mutate(
 ) {
     let bridge =
         upload_checked_moe_routing_expert_bridge_v1(stream, offsets, inverse, checked).unwrap();
-    let mutable = offsets.view_mut(..).unwrap();
+    let mutable = inverse.view_mut(..).unwrap();
     drop((bridge, mutable));
 }
 

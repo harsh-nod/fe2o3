@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `*inverse` as mutable more than once at a time
+  --> tests/ui/generated_moe_expert_v1/bridge_prevents_inverse_mutation.rs:14:19
+   |
+13 |         upload_checked_moe_routing_expert_bridge_v1(stream, offsets, inverse, checked).unwrap();
+   |                                                                      ------- first mutable borrow occurs here
+14 |     let mutable = inverse.view_mut(..).unwrap();
+   |                   ^^^^^^^ second mutable borrow occurs here
+15 |     drop((bridge, mutable));
+   |           ------ first borrow later used here

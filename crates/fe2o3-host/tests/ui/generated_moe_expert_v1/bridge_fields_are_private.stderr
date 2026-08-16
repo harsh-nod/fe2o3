@@ -1,0 +1,17 @@
+error[E0616]: field `checked` of struct `MoeHostObservedRoutingExpertBridgeV1` is private
+ --> tests/ui/generated_moe_expert_v1/bridge_fields_are_private.rs:4:20
+  |
+4 |     let _ = bridge.checked;
+  |                    ^^^^^^^ private field
+
+error[E0616]: field `offsets_view` of struct `MoeHostObservedRoutingExpertBridgeV1` is private
+ --> tests/ui/generated_moe_expert_v1/bridge_fields_are_private.rs:5:20
+  |
+5 |     let _ = bridge.offsets_view;
+  |                    ^^^^^^^^^^^^ private field
+
+error[E0616]: field `inverse_view` of struct `MoeHostObservedRoutingExpertBridgeV1` is private
+ --> tests/ui/generated_moe_expert_v1/bridge_fields_are_private.rs:6:20
+  |
+6 |     let _ = bridge.inverse_view;
+  |                    ^^^^^^^^^^^^ private field
