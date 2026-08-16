@@ -12,6 +12,14 @@ active expert rows back into routing-slot order, and combines each token's two
 route rows in rank order. Dropped routes contribute zero without
 renormalization.
 
+`src/pipeline.rs` is an executable host schedule for that exact plan.
+`src/oracle.rs` is independent: it evaluates accepted routes directly in
+route-ID order instead of replaying the compaction and per-tile loops. Tests
+compare every active and padded expert output, every inverse-permuted compact
+row, every route-order weight contribution, and every final token output. They
+cover empty experts, capacity drops, lower-expert ties, balanced and patterned
+data, input immutability, and adjacent canaries.
+
 `src/kernel.rs` contains ordinary attributed Rust `#[kernel]` definitions for
 the expert GEMM and deterministic combine. It contains no `macro_rules!`
 kernel facade. These are exact source definitions only: authenticated

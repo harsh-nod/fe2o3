@@ -12,5 +12,12 @@
 
 pub mod contract;
 pub mod kernel;
+pub mod oracle;
+pub mod pipeline;
 
 pub use contract::*;
+pub use oracle::{MoeExpertOracleV1, moe_expert_independent_oracle_v1};
+pub use pipeline::{
+    ExpertDispatchV1, MoeExpertExecutionV1, MoeExpertInputErrorV1,
+    run_host_scheduled_moe_experts_v1,
+};

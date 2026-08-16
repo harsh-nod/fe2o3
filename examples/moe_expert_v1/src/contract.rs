@@ -34,6 +34,9 @@ pub const MOE_EXPERT_COMBINE_GRID_V1: [u32; 3] = [2, 1, 1];
 pub const MOE_ROUTE_WEIGHT_POLICY_V1: &str = "caller supplies 16 finite nonnegative f32 weights in token-major rank-minor route-ID order; each token pair sums exactly to 1.0; dropped routes contribute zero without renormalization";
 /// Exact host scheduling rule.
 pub const MOE_EXPERT_SCHEDULE_POLICY_V1: &str = "compact accepted routes into zero-padded per-expert 16x16 BF16 tiles; launch four independent exact 16x16x16 GEMMs; inverse-permute compact rows; combine in rank order";
+/// Exact finite BF16 input policy for activations and expert matrices.
+pub const MOE_EXPERT_BF16_POLICY_V1: &str =
+    "all token activations and expert weights must be finite BF16 values";
 /// Whether compiler-authenticated source-to-IR lowering exists.
 pub const MOE_EXPERT_SOURCE_TO_IR_SUPPORTED_V1: bool = false;
 /// Whether exact LLVM/finalizer/runtime support exists.
