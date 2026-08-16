@@ -36,3 +36,30 @@ This evidence is not an IEEE-754 `f32` refinement, a refinement of
 `src/kernel.rs`, a compiler or machine-code refinement, a GPU memory-safety or
 data-race proof, or a GPU execution result. Those joins require later evidence;
 the integer model alone cannot establish them.
+
+## Bounded memory/effect proof
+
+`verus/moe_top2_memory_v1.rs` independently models the fixed logical memory
+effects of the same `T8/E4/K2/C4` source profile. Its pinned Verus run verifies
+16 obligations over the exact eight-buffer ABI: `logits: f32[32]` is read-only,
+while `top2_experts: u32[16]`, `requested_counts: u32[4]`,
+`admitted_counts: u32[4]`, `expert_offsets: u32[5]`, `route_slots: u32[16]`,
+`permutation: u32[16]`, and `inverse: u32[16]` are bounded outputs.
+
+The obligations cover exact extents, logical address bounds, pairwise region
+disjointness, lane-zero write ownership, absence of duplicate logical write
+owners, stable routing-phase order, and bounded expert, route, slot,
+permutation, and inverse values including the drop sentinel. Eight independently
+pinned memory mutations must fail their named postconditions.
+
+Run this second proof with the same exact pinned Verus closure:
+
+```sh
+VERUS=/absolute/path/to/pinned/verus examples/moe_top2_v1/run-memory-verus.sh
+```
+
+This is a finite logical-source proof. Its expected-evidence descriptor is
+copyable and inert and authenticates nothing. It does not mint or join an
+`AuthenticatedVerusExecutionReceiptV2`, prove source/compiler/KIR/LLVM/ISA or
+logical-address refinement, grant artifact authority, establish generalized
+machine memory safety or GPU race freedom, or report GPU execution.
