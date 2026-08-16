@@ -20,6 +20,7 @@ mod authenticated_proof_binding;
 mod authenticated_verus_execution_v2;
 mod control_flow_binding;
 mod executor;
+mod flash_attention_memory_v1;
 mod model;
 mod monomorphization_dead_binding;
 mod multi_kernel_proof;
@@ -111,6 +112,7 @@ pub use executor::{
     ExecutionError, ExecutionErrorKind, ExecutionLimits, ExecutionPath, ExecutionStage,
     ExecutionSuccess, MAX_CAPTURE_BYTES, OutputStream, ProcessOutput, execute_recorder,
 };
+pub use flash_attention_memory_v1::*;
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,
