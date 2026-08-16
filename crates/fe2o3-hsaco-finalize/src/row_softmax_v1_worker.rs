@@ -53,10 +53,29 @@ const OCML_PROVIDER_BASENAMES: [&str; MEASURED_OCML_PROVIDER_FILE_COUNT] = [
     "oclc_unsafe_math_off.bc",
     "oclc_finite_only_off.bc",
 ];
-const SUCCESS_DIAGNOSTICS: [&str; 6] = [
+/// Exact Worker Complete diagnostic for the structural row profile.
+///
+/// This records transcript digest consistency and exact structural checks. It
+/// explicitly does not authenticate descriptor source provenance; that remains
+/// a downstream, attempt-scoped admission boundary.
+pub const ROW_SOFTMAX_V1_WORKER_COMPLETE_DIAGNOSTIC_V1: &str = concat!(
+    "post_link.check=row_softmax_v1_profile status=ok ",
+    "profile_identity=row-softmax-v1-gfx942-cov6-llvm22-v1 ",
+    "llvm_build_identity=upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1 ",
+    "llvm_layout=e-m%3Ae-p%3A64%3A64-p1%3A64%3A64-p2%3A32%3A32-p3%3A32%3A32-",
+    "p4%3A64%3A64-p5%3A32%3A32-p6%3A32%3A32-p7%3A160%3A256%3A256%3A32-",
+    "p8%3A128%3A128%3A128%3A48-p9%3A192%3A256%3A256%3A32-i64%3A64-",
+    "v16%3A16-v24%3A32-v32%3A32-v48%3A64-v96%3A128-v192%3A256-",
+    "v256%3A256-v512%3A512-v1024%3A1024-v2048%3A2048-n32%3A64-S32-A5-G1-ni%3A7%3A8%3A9 ",
+    "abi_checks=exact descriptor_checks=section-envelope-and-byte-identity ",
+    "transcript=sha256-consistency-only ",
+    "descriptor_source_authentication=outside-worker-complete",
+);
+const SUCCESS_DIAGNOSTICS: [&str; 7] = [
     "device_library.check=identity status=ok provider=gfx942-ocml-v1 roots=[__ocml_exp_f32] files=4",
     "post_link.check=exports status=ok symbols=[__ocml_exp_f32,row_softmax_v1,row_softmax_v1.kd]",
     "post_link.check=metadata status=ok kernels=1 target=amdgcn-amd-amdhsa--gfx942%3Axnack-",
+    ROW_SOFTMAX_V1_WORKER_COMPLETE_DIAGNOSTIC_V1,
     "post_link.check=target status=ok arch=gfx942 code_object_version=6 e_flags=0x64c",
     "post_link.check=unresolved status=ok symbols=[]",
     "post_link.kernel name=row_softmax_v1 symbol=row_softmax_v1.kd kernarg_size=288 group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=64 reqd_workgroup_size=[64,1,1]",
@@ -2067,6 +2086,12 @@ entry:
             diagnostics[0] = diagnostic;
             assert!(validate(&handoff, &request, expected, &diagnostics).is_err());
         }
+        let mut diagnostics = success_diagnostics();
+        diagnostics[3] = "post_link.check=row_softmax_v1_profile status=ok profile_identity=row-softmax-v1-gfx942-cov6-llvm22-v1 descriptor_source_authentication=inside-worker-complete";
+        assert!(
+            validate(&handoff, &request, expected, &diagnostics).is_err(),
+            "accepted a row diagnostic that moved descriptor-source authentication into Worker Complete",
+        );
     }
 
     #[test]

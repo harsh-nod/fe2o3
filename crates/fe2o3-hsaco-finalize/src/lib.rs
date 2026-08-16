@@ -148,10 +148,10 @@ pub use row_softmax_v1_artifact::{
 };
 pub use row_softmax_v1_worker::{
     InspectedRowSoftmaxV1DirectWorkerHsacoV1, ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
-    RowSoftmaxV1DirectWorkerErrorV1, RowSoftmaxV1DirectWorkerExchangeIdentityV1,
-    RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
-    RowSoftmaxV1OcmlProviderPinsV1, ValidatedRowSoftmaxV1DirectWorkerExchangeV1,
-    inspect_row_softmax_v1_direct_worker_hsaco_v1,
+    ROW_SOFTMAX_V1_WORKER_COMPLETE_DIAGNOSTIC_V1, RowSoftmaxV1DirectWorkerErrorV1,
+    RowSoftmaxV1DirectWorkerExchangeIdentityV1, RowSoftmaxV1DirectWorkerExpectationV1,
+    RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1,
+    ValidatedRowSoftmaxV1DirectWorkerExchangeV1, inspect_row_softmax_v1_direct_worker_hsaco_v1,
     validate_row_softmax_v1_direct_worker_exchange_v1,
 };
 pub use scalar_gemm_v1_worker::{
