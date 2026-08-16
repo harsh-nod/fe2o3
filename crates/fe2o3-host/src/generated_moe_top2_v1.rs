@@ -80,7 +80,7 @@ impl MoeTop2V1BufferRoleV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MoeTop2V1BufferAccessV1 {
     SharedReadOnly,
-    UniqueWriteOnly,
+    UniqueReadWrite,
 }
 
 #[repr(C, align(8))]
@@ -235,10 +235,7 @@ impl<'logits, 'top2, 'requested, 'admitted, 'offsets, 'slots, 'permutation, 'inv
     }
 
     pub const fn access_for(&self, role: MoeTop2V1BufferRoleV1) -> MoeTop2V1BufferAccessV1 {
-        match role {
-            MoeTop2V1BufferRoleV1::Logits => MoeTop2V1BufferAccessV1::SharedReadOnly,
-            _ => MoeTop2V1BufferAccessV1::UniqueWriteOnly,
-        }
+        access_for_role(role)
     }
 
     pub(crate) const fn observed_context_v1(&self) -> &ObservedContext {
@@ -246,6 +243,13 @@ impl<'logits, 'top2, 'requested, 'admitted, 'offsets, 'slots, 'permutation, 'inv
     }
     pub(crate) const fn explicit_kernarg_bytes_v1(&self) -> &[u8; EXPLICIT_KERNARG_BYTES] {
         &self.explicit_kernarg.bytes
+    }
+}
+
+const fn access_for_role(role: MoeTop2V1BufferRoleV1) -> MoeTop2V1BufferAccessV1 {
+    match role {
+        MoeTop2V1BufferRoleV1::Logits => MoeTop2V1BufferAccessV1::SharedReadOnly,
+        _ => MoeTop2V1BufferAccessV1::UniqueReadWrite,
     }
 }
 
@@ -527,6 +531,20 @@ mod tests {
                     })
                 );
             }
+        }
+    }
+
+    #[test]
+    fn access_roles_match_the_pinned_descriptor() {
+        assert_eq!(
+            access_for_role(MoeTop2V1BufferRoleV1::Logits),
+            MoeTop2V1BufferAccessV1::SharedReadOnly
+        );
+        for role in MoeTop2V1BufferRoleV1::ALL.into_iter().skip(1) {
+            assert_eq!(
+                access_for_role(role),
+                MoeTop2V1BufferAccessV1::UniqueReadWrite
+            );
         }
     }
 
