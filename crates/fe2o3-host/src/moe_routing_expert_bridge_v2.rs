@@ -1240,6 +1240,11 @@ impl Error for MoeCompletedRoutingExpertUploadErrorV2 {
 mod tests {
     use super::*;
 
+    type LifecycleMutation = (
+        fn(&mut LifecycleFactsV2<u64, u64>),
+        MoeRoutingCompletionReadbackErrorV2,
+    );
+
     fn identity(label: &[u8]) -> [u8; 32] {
         Sha256::digest(label).into()
     }
@@ -1483,10 +1488,7 @@ mod tests {
             ),
             Err(MoeRoutingCompletionReadbackErrorV2::CrossStream)
         );
-        let zero_mutations: &[(
-            fn(&mut LifecycleFactsV2<u64, u64>),
-            MoeRoutingCompletionReadbackErrorV2,
-        )] = &[
+        let zero_mutations: &[LifecycleMutation] = &[
             (
                 |value| value.dispatch_identity.0 = [0; 16],
                 MoeRoutingCompletionReadbackErrorV2::DispatchIdentity,
