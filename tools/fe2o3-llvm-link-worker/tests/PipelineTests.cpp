@@ -2586,6 +2586,11 @@ void testExactFlashAttentionLlvmBuildIdentity() {
 } // namespace
 
 int main(int ArgumentCount, char **Arguments) {
+  if (ArgumentCount == 2 &&
+      StringRef(Arguments[1]) == "--exact-flash-llvm-identity-only") {
+    testExactFlashAttentionLlvmBuildIdentity();
+    return 0;
+  }
   require(ArgumentCount == 1 || ArgumentCount == 2 || ArgumentCount == 4 ||
               ArgumentCount == 5,
           "usage: fe2o3-worker-pipeline-tests "
