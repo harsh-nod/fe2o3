@@ -3,8 +3,7 @@ use fe2o3_verifier::{
     FlashAttentionLogicalAccessV1, FlashAttentionMemoryBufferV1,
     FlashAttentionMemoryContractErrorV1, FlashAttentionMemoryEffectKindV1,
     FlashAttentionMemoryIdentitiesV1, FlashAttentionMemoryPhaseV1, FlashAttentionMemoryRegionsV1,
-    FlashAttentionMemoryVerusJoinErrorV1, FlashAttentionMemoryVerusObservationV1,
-    check_flash_attention_memory_contract_v1, join_flash_attention_memory_verus_v1,
+    FlashAttentionMemoryVerusExpectedEvidenceV1, check_flash_attention_memory_contract_v1,
     validate_flash_attention_logical_access_v1,
 };
 
@@ -203,68 +202,40 @@ fn output_mapping_mutations_fail_closed() {
 }
 
 #[test]
-fn exact_verus_observation_upgrades_only_the_fixed_source_claims() {
+fn expected_verus_evidence_is_inert_and_does_not_upgrade_the_checker() {
     let checked = check_flash_attention_memory_contract_v1(
         FlashAttentionMemoryIdentitiesV1::exact(),
         regions(),
     )
     .unwrap();
-    let proved = join_flash_attention_memory_verus_v1(
-        checked,
-        FlashAttentionMemoryVerusObservationV1::exact(),
-    )
-    .unwrap();
+    let expected = FlashAttentionMemoryVerusExpectedEvidenceV1::exact();
 
-    assert!(proved.has_identity_bound_verus_receipt());
-    assert!(proved.proves_fixed_source_index_bounds_under_contract_preconditions());
-    assert!(proved.proves_fixed_source_output_disjointness());
-    assert!(!proved.proves_compiler_refinement());
-    assert!(!proved.proves_isa_refinement());
-    assert!(!proved.proves_logical_to_machine_address_refinement());
-    assert!(!proved.proves_machine_memory_safety());
-    assert!(!proved.proves_generalized_race_freedom());
-    assert!(!proved.proves_gpu_execution());
+    assert_ne!(expected.proof_source, [0; 32]);
+    assert_ne!(expected.published_machine_body, [0; 32]);
+    assert_ne!(expected.analyzer_profile, [0; 32]);
+    assert!(!checked.has_identity_bound_verus_receipt());
+    assert!(!checked.proves_compiler_refinement());
+    assert!(!checked.proves_isa_refinement());
+    assert!(!checked.proves_logical_to_machine_address_refinement());
+    assert!(!checked.proves_machine_memory_safety());
+    assert!(!checked.proves_generalized_race_freedom());
+    assert!(!checked.proves_gpu_execution());
 }
 
 #[test]
-fn every_verus_receipt_identity_axis_fails_closed() {
-    let checked = check_flash_attention_memory_contract_v1(
-        FlashAttentionMemoryIdentitiesV1::exact(),
-        regions(),
-    )
-    .unwrap();
+fn expected_verus_evidence_substitutions_do_not_equal_the_exact_descriptor() {
+    let exact = FlashAttentionMemoryVerusExpectedEvidenceV1::exact();
     for mutate in 0..6 {
-        let mut observation = FlashAttentionMemoryVerusObservationV1::exact();
-        let expected = match mutate {
-            0 => {
-                observation.proof_source[0] ^= 1;
-                FlashAttentionMemoryVerusJoinErrorV1::ProofSource
-            }
-            1 => {
-                observation.artifact[0] ^= 1;
-                FlashAttentionMemoryVerusJoinErrorV1::Artifact
-            }
-            2 => {
-                observation.analyzer_profile[0] ^= 1;
-                FlashAttentionMemoryVerusJoinErrorV1::AnalyzerProfile
-            }
-            3 => {
-                observation.verus_executable[0] ^= 1;
-                FlashAttentionMemoryVerusJoinErrorV1::VerusExecutable
-            }
-            4 => {
-                observation.verus_closure_manifest[0] ^= 1;
-                FlashAttentionMemoryVerusJoinErrorV1::VerusClosure
-            }
-            5 => {
-                observation.transcript[0] ^= 1;
-                FlashAttentionMemoryVerusJoinErrorV1::Transcript
-            }
+        let mut changed = exact;
+        match mutate {
+            0 => changed.proof_source[0] ^= 1,
+            1 => changed.published_machine_body[0] ^= 1,
+            2 => changed.analyzer_profile[0] ^= 1,
+            3 => changed.verus_executable[0] ^= 1,
+            4 => changed.verus_closure_manifest[0] ^= 1,
+            5 => changed.transcript[0] ^= 1,
             _ => unreachable!(),
-        };
-        assert_eq!(
-            join_flash_attention_memory_verus_v1(checked, observation),
-            Err(expected)
-        );
+        }
+        assert_ne!(changed, exact);
     }
 }

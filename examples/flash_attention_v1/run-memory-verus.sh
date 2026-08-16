@@ -187,7 +187,7 @@ check_digest "$expected_proof" "$proof"
 check_digest "$expected_closure" "$closure_manifest"
 (cd "$script_dir/verus" && "$sha256_path" -c MEMORY_NEGATIVE_SHA256 >/dev/null)
 "$closure_checker" "$verus_root" "$closure_manifest" >/dev/null
-transcript='FE2O3_FLASH_ATTENTION_MEMORY_V1_VERUS_OK mutations=9 obligations=13'
+transcript='FE2O3_FLASH_ATTENTION_MEMORY_V1_VERUS_OK mutations=8 obligations=13'
 actual_transcript=$(printf '%s' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: canonical proof transcript identity drifted\n' >&2

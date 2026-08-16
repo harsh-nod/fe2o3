@@ -53,11 +53,12 @@ pub open spec fn effect_identity_v1() -> Seq<u64> {
     ]
 }
 
-/// Exact finalized gfx942 payload measured from the pinned upstream LLVM build.
-pub open spec fn artifact_identity_v1() -> Seq<u64> {
+/// Published G4 exact machine-body expectation. This proof does not claim that
+/// the current upstream LLVM build reproduced it or bind a finalized payload.
+pub open spec fn published_machine_body_identity_v1() -> Seq<u64> {
     seq![
-        0xf4b3af45a48151fbu64, 0x2e24fea004a77d21u64,
-        0x9f64944ea155c276u64, 0x710de05b25ad9651u64,
+        0x60e09278e2901a18u64, 0x67a5a187614a4d33u64,
+        0xf12a45a733e266bfu64, 0x35b2693b85975d65u64,
     ]
 }
 
@@ -72,7 +73,7 @@ pub open spec fn analyzer_profile_identity_v1() -> Seq<u64> {
 pub open spec fn exact_evidence_identities_v1(
     source: Seq<u64>, profile: Seq<u64>, kernel_ir: Seq<u64>,
     descriptor: Seq<u64>, launch: Seq<u64>, effect: Seq<u64>,
-    artifact: Seq<u64>, analyzer_profile: Seq<u64>,
+    published_machine_body: Seq<u64>, analyzer_profile: Seq<u64>,
 ) -> bool {
     source == source_identity_v1()
         && profile == profile_identity_v1()
@@ -80,7 +81,7 @@ pub open spec fn exact_evidence_identities_v1(
         && descriptor == descriptor_identity_v1()
         && launch == launch_identity_v1()
         && effect == effect_identity_v1()
-        && artifact == artifact_identity_v1()
+        && published_machine_body == published_machine_body_identity_v1()
         && analyzer_profile == analyzer_profile_identity_v1()
 }
 
@@ -88,7 +89,7 @@ pub proof fn exact_evidence_identities_are_admitted_v1()
     ensures exact_evidence_identities_v1(
         source_identity_v1(), profile_identity_v1(), kernel_ir_identity_v1(),
         descriptor_identity_v1(), launch_identity_v1(), effect_identity_v1(),
-        artifact_identity_v1(), analyzer_profile_identity_v1(),
+        published_machine_body_identity_v1(), analyzer_profile_identity_v1(),
     ),
 {
 }

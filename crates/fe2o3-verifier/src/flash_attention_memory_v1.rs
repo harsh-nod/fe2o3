@@ -1,10 +1,10 @@
 //! Exact logical memory/effect contract for causal FlashAttention B1/H1/N8/D16.
 //!
-//! The first-stage API is an exhaustive checker for the fixed source model,
-//! not proof evidence. Only `join_flash_attention_memory_verus_v1` attaches the
-//! separately executed, identity-bound Verus receipt. Neither stage connects
-//! logical indices to LLVM or ISA addresses or grants publication, load,
-//! launch, or execution authority.
+//! This API is an exhaustive checker for the fixed source model, not proof
+//! evidence. The Verus values below are inert expected-evidence descriptors;
+//! only the separate non-`Clone` authenticated-execution boundary can produce
+//! an execution receipt. Nothing here connects logical indices to LLVM or ISA
+//! addresses or grants publication, load, launch, or execution authority.
 
 use core::fmt;
 
@@ -41,20 +41,20 @@ pub const FLASH_ATTENTION_MEMORY_EFFECTS_IDENTITY_V1: [u8; 32] = [
     0x91, 0x2c, 0xc5, 0xb5, 0x6b, 0xf8, 0x03, 0xbf, 0xce, 0x4e, 0x47, 0x43, 0x6f, 0x72, 0x61, 0x72,
 ];
 pub const FLASH_ATTENTION_MEMORY_VERUS_PROOF_IDENTITY_V1: [u8; 32] = [
-    0x29, 0x8a, 0x8d, 0x19, 0x9e, 0xf5, 0x7b, 0xa6, 0x58, 0x1d, 0x82, 0xea, 0x10, 0xb1, 0x1e, 0xe6,
-    0x18, 0x9e, 0x53, 0x0c, 0xce, 0x8f, 0x5e, 0x0c, 0x0e, 0x69, 0x97, 0x3e, 0x89, 0x23, 0x8e, 0x6f,
+    0xcc, 0xb3, 0x65, 0xd1, 0xf2, 0x3c, 0x8c, 0xcd, 0x57, 0x58, 0xa5, 0x45, 0x31, 0x45, 0x6c, 0x11,
+    0x88, 0x65, 0x2e, 0x43, 0xe9, 0x8b, 0x2d, 0xe7, 0x76, 0x39, 0x6f, 0xba, 0x91, 0xa6, 0xe3, 0xdc,
 ];
-pub const FLASH_ATTENTION_MEMORY_ARTIFACT_IDENTITY_V1: [u8; 32] = [
-    0xf4, 0xb3, 0xaf, 0x45, 0xa4, 0x81, 0x51, 0xfb, 0x2e, 0x24, 0xfe, 0xa0, 0x04, 0xa7, 0x7d, 0x21,
-    0x9f, 0x64, 0x94, 0x4e, 0xa1, 0x55, 0xc2, 0x76, 0x71, 0x0d, 0xe0, 0x5b, 0x25, 0xad, 0x96, 0x51,
+pub const FLASH_ATTENTION_MEMORY_PUBLISHED_MACHINE_BODY_IDENTITY_V1: [u8; 32] = [
+    0x60, 0xe0, 0x92, 0x78, 0xe2, 0x90, 0x1a, 0x18, 0x67, 0xa5, 0xa1, 0x87, 0x61, 0x4a, 0x4d, 0x33,
+    0xf1, 0x2a, 0x45, 0xa7, 0x33, 0xe2, 0x66, 0xbf, 0x35, 0xb2, 0x69, 0x3b, 0x85, 0x97, 0x5d, 0x65,
 ];
 pub const FLASH_ATTENTION_MEMORY_ANALYZER_PROFILE_IDENTITY_V1: [u8; 32] = [
     0xa4, 0xec, 0x22, 0x4c, 0x4c, 0xd4, 0x22, 0xa7, 0xf5, 0x5a, 0x26, 0xa0, 0xea, 0x7a, 0xc6, 0xf1,
     0x35, 0x0d, 0xe9, 0xb2, 0xff, 0x0a, 0x02, 0xc8, 0xfc, 0x88, 0xce, 0x9b, 0xa1, 0xd2, 0x12, 0xb8,
 ];
 pub const FLASH_ATTENTION_MEMORY_VERUS_TRANSCRIPT_IDENTITY_V1: [u8; 32] = [
-    0x6f, 0xd2, 0xd8, 0x17, 0x84, 0xa6, 0x42, 0xbe, 0x8b, 0x2a, 0x6b, 0xf1, 0x98, 0x5f, 0xf9, 0x9c,
-    0x02, 0xe4, 0x6d, 0x72, 0x81, 0x6a, 0xa5, 0x29, 0x42, 0x13, 0x02, 0x21, 0x88, 0x73, 0x27, 0x06,
+    0xb7, 0x2d, 0x9e, 0xc9, 0x43, 0x25, 0xfc, 0x13, 0x4a, 0xbe, 0x7f, 0x1a, 0xa0, 0xf1, 0xbb, 0x43,
+    0x4f, 0x2d, 0x14, 0x88, 0x28, 0x07, 0x49, 0x7e, 0xad, 0xb4, 0x3c, 0x27, 0x46, 0xf3, 0x69, 0xf5,
 ];
 pub const FLASH_ATTENTION_MEMORY_VERUS_EXECUTABLE_IDENTITY_V1: [u8; 32] = [
     0xd9, 0x75, 0x01, 0xa8, 0x83, 0x93, 0x1d, 0x1d, 0x17, 0x3b, 0x1b, 0xf4, 0xb6, 0xcf, 0x4d, 0x97,
@@ -166,141 +166,39 @@ impl std::error::Error for FlashAttentionMemoryContractErrorV1 {}
 /// Inert exhaustive-check result for the complete fixed source model.
 ///
 /// Its `exhaustively_checks_*` methods report checker coverage only. They are
-/// intentionally not named `proves_*`; proof claims live on the joined Verus
-/// receipt type below.
+/// intentionally not named `proves_*`; no proof receipt can be manufactured
+/// from this type or the expected-evidence descriptor below.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CheckedFlashAttentionMemoryContractV1 {
     identities: FlashAttentionMemoryIdentitiesV1,
 }
 
-/// Measurements emitted by the fail-closed `run-memory-verus.sh` boundary.
+/// Inert expectations checked by the fail-closed `run-memory-verus.sh` test.
 ///
-/// This record authenticates exact inputs and a canonical successful result;
-/// it is not an authenticated operating-system runtime-closure observation.
+/// This copyable descriptor authenticates nothing and confers no proof claim.
+/// It is input for tests and for a future consumer of the private-construction,
+/// non-`Clone` `AuthenticatedVerusExecutionReceiptV2` boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FlashAttentionMemoryVerusObservationV1 {
+pub struct FlashAttentionMemoryVerusExpectedEvidenceV1 {
     pub proof_source: [u8; 32],
-    pub artifact: [u8; 32],
+    pub published_machine_body: [u8; 32],
     pub analyzer_profile: [u8; 32],
     pub verus_executable: [u8; 32],
     pub verus_closure_manifest: [u8; 32],
     pub transcript: [u8; 32],
 }
 
-impl FlashAttentionMemoryVerusObservationV1 {
+impl FlashAttentionMemoryVerusExpectedEvidenceV1 {
     pub const fn exact() -> Self {
         Self {
             proof_source: FLASH_ATTENTION_MEMORY_VERUS_PROOF_IDENTITY_V1,
-            artifact: FLASH_ATTENTION_MEMORY_ARTIFACT_IDENTITY_V1,
+            published_machine_body: FLASH_ATTENTION_MEMORY_PUBLISHED_MACHINE_BODY_IDENTITY_V1,
             analyzer_profile: FLASH_ATTENTION_MEMORY_ANALYZER_PROFILE_IDENTITY_V1,
             verus_executable: FLASH_ATTENTION_MEMORY_VERUS_EXECUTABLE_IDENTITY_V1,
             verus_closure_manifest: FLASH_ATTENTION_MEMORY_VERUS_CLOSURE_IDENTITY_V1,
             transcript: FLASH_ATTENTION_MEMORY_VERUS_TRANSCRIPT_IDENTITY_V1,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FlashAttentionMemoryVerusJoinErrorV1 {
-    ProofSource,
-    Artifact,
-    AnalyzerProfile,
-    VerusExecutable,
-    VerusClosure,
-    Transcript,
-}
-
-impl fmt::Display for FlashAttentionMemoryVerusJoinErrorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "invalid exact FlashAttention Verus receipt: {self:?}"
-        )
-    }
-}
-
-impl std::error::Error for FlashAttentionMemoryVerusJoinErrorV1 {}
-
-/// Exact source-level proof receipt, joined to the exhaustive source checker.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProvedFlashAttentionMemoryContractV1 {
-    checked: CheckedFlashAttentionMemoryContractV1,
-    observation: FlashAttentionMemoryVerusObservationV1,
-}
-
-impl ProvedFlashAttentionMemoryContractV1 {
-    pub const fn checked_source_model(self) -> CheckedFlashAttentionMemoryContractV1 {
-        self.checked
-    }
-
-    pub const fn observation(self) -> FlashAttentionMemoryVerusObservationV1 {
-        self.observation
-    }
-
-    pub const fn has_identity_bound_verus_receipt(self) -> bool {
-        true
-    }
-
-    pub const fn proves_fixed_source_index_bounds_under_contract_preconditions(self) -> bool {
-        true
-    }
-
-    pub const fn proves_fixed_source_output_disjointness(self) -> bool {
-        true
-    }
-
-    pub const fn proves_compiler_refinement(self) -> bool {
-        false
-    }
-
-    pub const fn proves_isa_refinement(self) -> bool {
-        false
-    }
-
-    pub const fn proves_logical_to_machine_address_refinement(self) -> bool {
-        false
-    }
-
-    pub const fn proves_machine_memory_safety(self) -> bool {
-        false
-    }
-
-    pub const fn proves_generalized_race_freedom(self) -> bool {
-        false
-    }
-
-    pub const fn proves_gpu_execution(self) -> bool {
-        false
-    }
-}
-
-pub fn join_flash_attention_memory_verus_v1(
-    checked: CheckedFlashAttentionMemoryContractV1,
-    observation: FlashAttentionMemoryVerusObservationV1,
-) -> Result<ProvedFlashAttentionMemoryContractV1, FlashAttentionMemoryVerusJoinErrorV1> {
-    let exact = FlashAttentionMemoryVerusObservationV1::exact();
-    if observation.proof_source != exact.proof_source {
-        return Err(FlashAttentionMemoryVerusJoinErrorV1::ProofSource);
-    }
-    if observation.artifact != exact.artifact {
-        return Err(FlashAttentionMemoryVerusJoinErrorV1::Artifact);
-    }
-    if observation.analyzer_profile != exact.analyzer_profile {
-        return Err(FlashAttentionMemoryVerusJoinErrorV1::AnalyzerProfile);
-    }
-    if observation.verus_executable != exact.verus_executable {
-        return Err(FlashAttentionMemoryVerusJoinErrorV1::VerusExecutable);
-    }
-    if observation.verus_closure_manifest != exact.verus_closure_manifest {
-        return Err(FlashAttentionMemoryVerusJoinErrorV1::VerusClosure);
-    }
-    if observation.transcript != exact.transcript {
-        return Err(FlashAttentionMemoryVerusJoinErrorV1::Transcript);
-    }
-    Ok(ProvedFlashAttentionMemoryContractV1 {
-        checked,
-        observation,
-    })
 }
 
 impl CheckedFlashAttentionMemoryContractV1 {
