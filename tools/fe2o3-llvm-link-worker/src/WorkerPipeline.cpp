@@ -141,6 +141,7 @@ enum class PostLinkProfile {
   LegacyGfx942G1,
   ExactLdsGemmSlice1,
   ExactWave64CollectivesV1,
+  ExactFlashAttentionV1,
   ExactWorkgroupLdsReductionV1,
   ExactScopedAtomicV1
 };
@@ -149,6 +150,7 @@ enum class MetadataValidationPolicy {
   Generic,
   ExactLdsGemmSlice1,
   ExactWave64CollectivesV1,
+  ExactFlashAttentionV1,
   ExactWorkgroupLdsReductionV1,
   ExactScopedAtomicV1
 };
@@ -158,6 +160,11 @@ constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
 constexpr StringLiteral ExactWave64CollectivesV1Entry = "wave64_collectives_v1";
 constexpr StringLiteral ExactWave64CollectivesV1Descriptor =
     "wave64_collectives_v1.kd";
+constexpr StringLiteral ExactFlashAttentionV1Entry =
+    "flash_attention_causal_f32_b1_h1_n8_d16_v1";
+constexpr StringLiteral ExactFlashAttentionV1Descriptor =
+    "flash_attention_causal_f32_b1_h1_n8_d16_v1.kd";
+constexpr StringLiteral ExactFlashAttentionV1OcmlExp = "__ocml_exp_f32";
 constexpr StringLiteral ExactWorkgroupLdsReductionV1Entry =
     "lds_publish_read_reduce_i32_v1";
 constexpr StringLiteral ExactWorkgroupLdsReductionV1Descriptor =
@@ -179,6 +186,29 @@ constexpr StringLiteral ExactWave64MirSection = ".fe2o3.wave64-mir.v1";
 constexpr StringLiteral ExactWave64KirSection = ".fe2o3.wave64-kir.v1";
 constexpr StringLiteral ExactWave64ProfileSection =
     ".fe2o3.wave64-descriptor.v1";
+constexpr StringLiteral ExactFlashDescriptorSection = ".fe2o3.kd.v1";
+constexpr StringLiteral ExactFlashTranscriptSection =
+    ".fe2o3.flash-attention-authority-transcript.v1";
+constexpr StringLiteral ExactFlashAuthoritySection =
+    ".fe2o3.flash-attention-auth.v1";
+constexpr StringLiteral ExactFlashOcmlBoundarySection =
+    ".fe2o3.flash-attention-ocml-exp.v1";
+constexpr std::array<uint8_t, 32> ExactFlashBodySha256 = {
+    0x44, 0xee, 0xbf, 0x70, 0x89, 0xda, 0xb9, 0x54, 0xbf, 0x25, 0xc8,
+    0x6e, 0xfa, 0x1d, 0x92, 0xda, 0xd4, 0xa2, 0xb8, 0x1b, 0x47, 0xeb,
+    0x7b, 0x08, 0xf1, 0xe4, 0x49, 0xd1, 0xd0, 0x9a, 0xee, 0xad};
+constexpr std::array<uint8_t, 32> ExactFlashAuthoritySha256 = {
+    0x4c, 0xde, 0x34, 0xc0, 0x5c, 0xaa, 0xa8, 0x8b, 0x74, 0xc8, 0x42,
+    0x65, 0x1b, 0x08, 0x11, 0x46, 0x87, 0x1c, 0xeb, 0xdb, 0x46, 0x24,
+    0xf1, 0xa6, 0xb6, 0xea, 0x9a, 0x36, 0x4f, 0xa3, 0xd0, 0xd0};
+constexpr std::array<uint8_t, 32> ExactFlashOcmlBoundarySha256 = {
+    0xdb, 0x91, 0x96, 0x57, 0x5c, 0xcc, 0xcc, 0xd8, 0x03, 0x53, 0xf5,
+    0xed, 0x04, 0xbc, 0x42, 0x5b, 0x64, 0x34, 0x4a, 0x42, 0x07, 0x09,
+    0x79, 0x3e, 0xe8, 0x37, 0x79, 0xad, 0xd2, 0x1e, 0x47, 0x60};
+constexpr std::array<uint8_t, 32> ExactFlashMachineSha256 = {
+    0x60, 0xe0, 0x92, 0x78, 0xe2, 0x90, 0x1a, 0x18, 0x67, 0xa5, 0xa1,
+    0x87, 0x61, 0x4a, 0x4d, 0x33, 0xf1, 0x2a, 0x45, 0xa7, 0x33, 0xe2,
+    0x66, 0xbf, 0x35, 0xb2, 0x69, 0x3b, 0x85, 0x97, 0x5d, 0x65};
 constexpr std::array<uint8_t, 32> ExactWave64BodySha256 = {
     0xe3, 0x90, 0x1d, 0x41, 0xc7, 0x20, 0xcf, 0x9d, 0xdd, 0x7e, 0xd0,
     0x1f, 0xbc, 0x48, 0x77, 0x93, 0x1d, 0x42, 0x08, 0x08, 0x11, 0x44,
@@ -313,6 +343,13 @@ bool isExactWave64CollectivesV1SymbolSet(ArrayRef<std::string> Symbols) {
                                ExactWave64CollectivesV1Descriptor.str()};
 }
 
+bool isExactFlashAttentionV1SymbolSet(ArrayRef<std::string> Symbols) {
+  return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
+         std::set<std::string>{ExactFlashAttentionV1Entry.str(),
+                               ExactFlashAttentionV1Descriptor.str(),
+                               ExactFlashAttentionV1OcmlExp.str()};
+}
+
 bool isExactWorkgroupSyncSymbolSet(
     ArrayRef<std::string> Symbols,
     const ExactWorkgroupSyncProfile &Profile) {
@@ -374,6 +411,34 @@ bool isClosedExactWave64CollectivesV1Request(const Request &RequestValue) {
          RequestValue.LinkOptions.VerifyEach;
 }
 
+bool isExactFlashAttentionV1RequestCandidate(const Request &RequestValue) {
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes == RequestValue.CompilerModule.Bytes;
+  return RequestValue.Protocol == ProtocolVersion::V2 &&
+         RequestValue.Target == "gfx942:xnack-" &&
+         RequestValue.CodeObjectVersion == 6 && CompilerInputMatches &&
+         RequestValue.ExternalProviders.empty() &&
+         RequestValue.ImportSymbols ==
+             std::vector<std::string>{ExactFlashAttentionV1OcmlExp.str()} &&
+         RequestValue.ExportSymbols.empty() &&
+         isExactFlashAttentionV1SymbolSet(RequestValue.RequiredSymbols) &&
+         isExactFlashAttentionV1SymbolSet(
+             RequestValue.ExpectedDefinedSymbols) &&
+         isExactFlashAttentionV1SymbolSet(RequestValue.FinalSymbols);
+}
+
+bool isClosedExactFlashAttentionV1Request(const Request &RequestValue) {
+  return isExactFlashAttentionV1RequestCandidate(RequestValue) &&
+         RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
+         RequestValue.LinkOptions.StripDebug &&
+         RequestValue.LinkOptions.VerifyEach;
+}
+
 bool isExactWorkgroupSyncRequestCandidate(
     const Request &RequestValue, const ExactWorkgroupSyncProfile &Profile) {
   bool CompilerInputMatches =
@@ -426,6 +491,20 @@ bool mentionsExactWave64CollectivesV1(const Request &RequestValue) {
          namesExactWave64CollectivesV1(RequestValue.FinalSymbols);
 }
 
+bool mentionsExactFlashAttentionV1(const Request &RequestValue) {
+  auto NamesFlash = [](ArrayRef<std::string> Symbols) {
+    return llvm::any_of(Symbols, [](StringRef Symbol) {
+      return Symbol == ExactFlashAttentionV1Entry ||
+             Symbol == ExactFlashAttentionV1Descriptor;
+    });
+  };
+  return NamesFlash(RequestValue.RequiredSymbols) ||
+         NamesFlash(RequestValue.ExpectedDefinedSymbols) ||
+         NamesFlash(RequestValue.ImportSymbols) ||
+         NamesFlash(RequestValue.ExportSymbols) ||
+         NamesFlash(RequestValue.FinalSymbols);
+}
+
 bool mentionsExactWorkgroupSync(const Request &RequestValue) {
   auto Mentions = [&](ArrayRef<std::string> Symbols) {
     return llvm::any_of(Symbols, [](StringRef Symbol) {
@@ -461,6 +540,15 @@ selectPostLinkProfile(const Request &RequestValue,
       return pipelineError("exact Wave64 collectives symbols require the "
                            "closed Worker V2 profile");
     return PostLinkProfile::ExactWave64CollectivesV1;
+  }
+  const std::set<std::string> ExactFlashSymbols = {
+      ExactFlashAttentionV1Entry.str(), ExactFlashAttentionV1Descriptor.str(),
+      ExactFlashAttentionV1OcmlExp.str()};
+  if (ExpectedSymbols == ExactFlashSymbols) {
+    if (!isClosedExactFlashAttentionV1Request(RequestValue))
+      return pipelineError("exact FlashAttention V1 symbols require the "
+                           "closed Worker V2 profile");
+    return PostLinkProfile::ExactFlashAttentionV1;
   }
   for (const auto &[Profile, Kind] :
        {std::pair{&ExactWorkgroupLdsReductionV1,
@@ -611,6 +699,98 @@ Error validateExactWave64CompilerInput(StringRef Text) {
     if (ArrayRef((*Sections)[Index + 2]) != ArrayRef(ExpectedIdentities[Index]))
       return pipelineError(
           "exact Wave64 compiler/KIR profile identity does not match");
+  return Error::success();
+}
+
+Expected<std::array<std::vector<uint8_t>, 4>>
+parseExactFlashAttentionCompilerSections(StringRef Text) {
+  constexpr StringLiteral Marker = "\nmodule asm \".section ";
+  size_t BodyEnd = Text.find(Marker);
+  if (BodyEnd == StringRef::npos)
+    return pipelineError(
+        "exact FlashAttention compiler module is missing bound sections");
+  if (SHA256::hash(arrayRefFromStringRef(Text.take_front(BodyEnd))) !=
+      ExactFlashBodySha256)
+    return pipelineError(
+        "exact FlashAttention compiler module body identity does not match");
+
+  static constexpr std::array Sections = {
+      ExactFlashDescriptorSection, ExactFlashTranscriptSection,
+      ExactFlashAuthoritySection, ExactFlashOcmlBoundarySection};
+  SmallVector<StringRef, 256> Lines;
+  Text.drop_front(BodyEnd + 1).split(Lines, '\n', -1, true);
+  std::array<std::vector<uint8_t>, Sections.size()> Result;
+  size_t LineIndex = 0;
+  for (size_t SectionIndex = 0; SectionIndex != Sections.size();
+       ++SectionIndex) {
+    if (SectionIndex != 0 && LineIndex != Lines.size() &&
+        Lines[LineIndex].empty())
+      ++LineIndex;
+    std::string ExpectedHeader =
+        (Twine("module asm \".section ") + Sections[SectionIndex] +
+         ",\\22\\22,@progbits\"")
+            .str();
+    if (LineIndex == Lines.size() || Lines[LineIndex] != ExpectedHeader)
+      return pipelineError(
+          Twine("exact FlashAttention compiler section order differs at ") +
+          Twine(SectionIndex));
+    ++LineIndex;
+    if (LineIndex == Lines.size() ||
+        Lines[LineIndex] != "module asm \".balign 8\"")
+      return pipelineError(
+          "exact FlashAttention compiler section alignment does not match");
+    ++LineIndex;
+
+    constexpr StringLiteral BytePrefix = "module asm \".byte ";
+    while (LineIndex != Lines.size() &&
+           Lines[LineIndex].starts_with(BytePrefix)) {
+      StringRef Line = Lines[LineIndex++];
+      if (!Line.ends_with("\""))
+        return pipelineError(
+            "exact FlashAttention compiler byte record is malformed");
+      SmallVector<StringRef, 16> Atoms;
+      Line.drop_front(BytePrefix.size())
+          .drop_back()
+          .split(Atoms, ',', -1, false);
+      if (Atoms.empty() || Atoms.size() > 16)
+        return pipelineError(
+            "exact FlashAttention compiler byte record is noncanonical");
+      for (StringRef Atom : Atoms) {
+        Atom = Atom.trim();
+        if (!Atom.consume_front("0x") || Atom.size() != 2)
+          return pipelineError(
+              "exact FlashAttention compiler byte atom is malformed");
+        uint8_t Byte = 0;
+        if (Atom.getAsInteger(16, Byte))
+          return pipelineError(
+              "exact FlashAttention compiler byte atom is malformed");
+        Result[SectionIndex].push_back(Byte);
+      }
+    }
+    if (Result[SectionIndex].empty())
+      return pipelineError("exact FlashAttention compiler section is empty");
+  }
+  if (LineIndex != Lines.size() &&
+      !(LineIndex + 1 == Lines.size() && Lines[LineIndex].empty()))
+    return pipelineError(
+        "exact FlashAttention compiler module has trailing assembly");
+  return Result;
+}
+
+Error validateExactFlashAttentionCompilerInput(StringRef Text) {
+  auto Sections = parseExactFlashAttentionCompilerSections(Text);
+  if (!Sections)
+    return Sections.takeError();
+  if ((*Sections)[0].size() > 64 * 1024 || (*Sections)[1].size() > 4096)
+    return pipelineError(
+        "exact FlashAttention descriptor or authority transcript is oversized");
+  if (ArrayRef((*Sections)[2]) != ArrayRef(ExactFlashAuthoritySha256) ||
+      SHA256::hash((*Sections)[1]) != ExactFlashAuthoritySha256)
+    return pipelineError(
+        "exact FlashAttention authenticated authority does not match");
+  if (ArrayRef((*Sections)[3]) != ArrayRef(ExactFlashOcmlBoundarySha256))
+    return pipelineError(
+        "exact FlashAttention OCML boundary identity does not match");
   return Error::success();
 }
 
@@ -1047,6 +1227,147 @@ Error validateExactWave64CollectivesModule(const Module &ModuleValue) {
   return Error::success();
 }
 
+Error validateExactFlashAttentionModule(const Module &ModuleValue) {
+  if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
+      ModuleValue.getDataLayoutStr() != ExactLdsGemmSlice1ProducerDataLayout ||
+      ModuleValue.global_begin() != ModuleValue.global_end())
+    return pipelineError(
+        "exact FlashAttention LLVM module envelope does not match");
+
+  const Function *Kernel = nullptr;
+  std::set<std::string> Declarations;
+  for (const Function &FunctionValue : ModuleValue) {
+    if (FunctionValue.isDeclaration()) {
+      Declarations.insert(FunctionValue.getName().str());
+      continue;
+    }
+    if (Kernel)
+      return pipelineError(
+          "exact FlashAttention LLVM module has multiple definitions");
+    Kernel = &FunctionValue;
+  }
+  const std::set<std::string> ExpectedDeclarations = {
+      "__ocml_exp_f32", "llvm.amdgcn.workitem.id.x", "llvm.trap"};
+  if (!Kernel || Kernel->getName() != ExactFlashAttentionV1Entry ||
+      Kernel->getCallingConv() != CallingConv::AMDGPU_KERNEL ||
+      !Kernel->getReturnType()->isVoidTy() || Kernel->isVarArg() ||
+      Kernel->arg_size() != 8 || Declarations != ExpectedDeclarations)
+    return pipelineError(
+        "exact FlashAttention LLVM function closure does not match");
+
+  static constexpr std::array<unsigned, 8> AddressSpaces = {1, 0, 1, 0,
+                                                            1, 0, 1, 0};
+  static constexpr std::array<StringLiteral, 8> ArgumentNames = {
+      "q.data", "q.len", "k.data",      "k.len",
+      "v.data", "v.len", "output.data", "output.len"};
+  size_t ArgumentIndex = 0;
+  for (const Argument &ArgumentValue : Kernel->args()) {
+    Type *ArgumentType = ArgumentValue.getType();
+    if (ArgumentValue.getName() != ArgumentNames[ArgumentIndex] ||
+        (AddressSpaces[ArgumentIndex] == 0
+             ? !ArgumentType->isIntegerTy(64)
+             : !ArgumentType->isPointerTy() ||
+                   ArgumentType->getPointerAddressSpace() !=
+                       AddressSpaces[ArgumentIndex]))
+      return pipelineError(
+          "exact FlashAttention LLVM argument ABI does not match");
+    ++ArgumentIndex;
+  }
+  if (!Kernel->getArg(6)->hasAttribute(Attribute::NoAlias) ||
+      Kernel->getArg(0)->hasAttribute(Attribute::NoAlias) ||
+      Kernel->getArg(2)->hasAttribute(Attribute::NoAlias) ||
+      Kernel->getArg(4)->hasAttribute(Attribute::NoAlias))
+    return pipelineError(
+        "exact FlashAttention LLVM alias policy does not match");
+
+  if (Kernel->getFnAttribute("target-cpu").getValueAsString() != "gfx942" ||
+      Kernel->getFnAttribute("target-features").getValueAsString() !=
+          "-wavefrontsize32,+wavefrontsize64,-xnack" ||
+      Kernel->getFnAttribute("amdgpu-flat-work-group-size")
+              .getValueAsString() != "64,64" ||
+      Kernel->getFnAttribute("fp-contract").getValueAsString() != "off")
+    return pipelineError(
+        "exact FlashAttention LLVM target attributes do not match");
+  MDNode *Workgroup = Kernel->getMetadata("reqd_work_group_size");
+  static constexpr std::array<uint64_t, 3> WorkgroupShape = {64, 1, 1};
+  if (!Workgroup || Workgroup->getNumOperands() != WorkgroupShape.size())
+    return pipelineError(
+        "exact FlashAttention LLVM workgroup metadata does not match");
+  for (size_t Index = 0; Index != WorkgroupShape.size(); ++Index) {
+    auto *Value =
+        mdconst::dyn_extract<ConstantInt>(Workgroup->getOperand(Index));
+    if (!Value || Value->getZExtValue() != WorkgroupShape[Index])
+      return pipelineError(
+          "exact FlashAttention LLVM workgroup metadata does not match");
+  }
+
+  size_t FAdds = 0, FMuls = 0, FSubs = 0, FDivs = 0;
+  size_t Loads = 0, Stores = 0, WorkitemIds = 0, Traps = 0, Exps = 0;
+  for (const Instruction &InstructionValue : instructions(*Kernel)) {
+    switch (InstructionValue.getOpcode()) {
+    case Instruction::FAdd:
+      ++FAdds;
+      break;
+    case Instruction::FMul:
+      ++FMuls;
+      break;
+    case Instruction::FSub:
+      ++FSubs;
+      break;
+    case Instruction::FDiv:
+      ++FDivs;
+      break;
+    default:
+      break;
+    }
+    if (const auto *FloatOperation =
+            dyn_cast<FPMathOperator>(&InstructionValue))
+      if (FloatOperation->getFastMathFlags().any())
+        return pipelineError(
+            "exact FlashAttention LLVM floating-point policy does not match");
+    if (const auto *Load = dyn_cast<LoadInst>(&InstructionValue)) {
+      ++Loads;
+      if (!Load->getType()->isFloatTy() || Load->getAlign() != Align(4) ||
+          Load->getPointerAddressSpace() != 1 || Load->isAtomic())
+        return pipelineError(
+            "exact FlashAttention LLVM load effect does not match");
+    }
+    if (const auto *Store = dyn_cast<StoreInst>(&InstructionValue)) {
+      ++Stores;
+      if (!Store->getValueOperand()->getType()->isFloatTy() ||
+          Store->getAlign() != Align(4) ||
+          Store->getPointerAddressSpace() != 1 || Store->isAtomic())
+        return pipelineError(
+            "exact FlashAttention LLVM store effect does not match");
+    }
+    if (isa<AtomicRMWInst, AtomicCmpXchgInst, FenceInst, AllocaInst>(
+            InstructionValue))
+      return pipelineError(
+          "exact FlashAttention LLVM contains a forbidden memory effect");
+    const auto *Call = dyn_cast<CallBase>(&InstructionValue);
+    if (!Call)
+      continue;
+    const Function *Callee = Call->getCalledFunction();
+    if (!Callee)
+      return pipelineError(
+          "exact FlashAttention LLVM contains an indirect call");
+    if (Callee->getName() == "llvm.amdgcn.workitem.id.x")
+      ++WorkitemIds;
+    else if (Callee->getName() == "llvm.trap")
+      ++Traps;
+    else if (Callee->getName() == ExactFlashAttentionV1OcmlExp)
+      ++Exps;
+    else
+      return pipelineError(
+          "exact FlashAttention LLVM call closure does not match");
+  }
+  if (FAdds != 35 || FMuls != 39 || FSubs != 2 || FDivs != 2 || Loads != 71 ||
+      Stores != 2 || WorkitemIds != 1 || Traps != 1 || Exps != 2)
+    return pipelineError(
+        "exact FlashAttention LLVM operation closure does not match");
+  return Error::success();
+}
+
 uint32_t expectedGfx942Flags(const TargetParts &Parts) {
   uint32_t Flags = ELF::EF_AMDGPU_MACH_AMDGCN_GFX942;
   Flags |= Parts.Xnack ? (*Parts.Xnack ? ELF::EF_AMDGPU_FEATURE_XNACK_ON_V4
@@ -1207,7 +1528,9 @@ Error setAndCheckModuleContract(Module &ModuleValue,
     return pipelineError("bitcode target triple does not match AMDHSA");
   bool ExactProducerLayout =
       (isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
-       isExactWave64CollectivesV1RequestCandidate(RequestValue)) &&
+       isExactWave64CollectivesV1RequestCandidate(RequestValue) ||
+       isExactFlashAttentionV1RequestCandidate(RequestValue) ||
+       exactWorkgroupSyncProfile(RequestValue) != nullptr) &&
       ModuleValue.getDataLayoutStr() == ExactLdsGemmSlice1ProducerDataLayout;
   if (!ModuleValue.getDataLayoutStr().empty() &&
       ModuleValue.getDataLayout() != Machine.createDataLayout() &&
@@ -1324,14 +1647,20 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
     return pipelineError(Twine(InputName) + " is not an LLVM module");
   StringRef Bytes(reinterpret_cast<const char *>(InputValue.Bytes.data()),
                   InputValue.Bytes.size());
-  if (isClosedExactWave64CollectivesV1Request(RequestValue))
+  if (!MeasuredBuiltinProvider &&
+      isClosedExactWave64CollectivesV1Request(RequestValue))
     if (Error E = validateExactWave64CompilerInput(Bytes))
       return E;
-  if (const ExactWorkgroupSyncProfile *Profile =
-          exactWorkgroupSyncProfile(RequestValue))
-    if (Error E = validateExactWorkgroupSyncCompilerInput(
-            Bytes, *Profile, Machine.createDataLayout()))
+  if (!MeasuredBuiltinProvider &&
+      isClosedExactFlashAttentionV1Request(RequestValue))
+    if (Error E = validateExactFlashAttentionCompilerInput(Bytes))
       return E;
+  if (!MeasuredBuiltinProvider)
+    if (const ExactWorkgroupSyncProfile *Profile =
+            exactWorkgroupSyncProfile(RequestValue))
+      if (Error E = validateExactWorkgroupSyncCompilerInput(
+              Bytes, *Profile, Machine.createDataLayout()))
+        return E;
   DataLayout ExpectedLayout = Machine.createDataLayout();
   bool AcceptedLayout = false;
   ParserCallbacks Callbacks([&](StringRef TripleValue, StringRef Layout) {
@@ -1369,7 +1698,9 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
         ObservedLayout.empty() ||
         TextModule->getDataLayout() == ExpectedLayout ||
         ((isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
-          isExactWave64CollectivesV1RequestCandidate(RequestValue)) &&
+          isExactWave64CollectivesV1RequestCandidate(RequestValue) ||
+          isExactFlashAttentionV1RequestCandidate(RequestValue) ||
+          exactWorkgroupSyncProfile(RequestValue) != nullptr) &&
          ObservedLayout == ExactLdsGemmSlice1ProducerDataLayout);
     return TextModule;
   }();
@@ -1379,14 +1710,20 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (!AcceptedLayout)
     return pipelineError(
         "LLVM module data layout does not match target machine");
-  if (isClosedExactWave64CollectivesV1Request(RequestValue))
+  if (!MeasuredBuiltinProvider &&
+      isClosedExactWave64CollectivesV1Request(RequestValue))
     if (Error E = validateExactWave64CollectivesModule(**Parsed))
       return E;
-  if (const ExactWorkgroupSyncProfile *Profile =
-          exactWorkgroupSyncProfile(RequestValue))
-    if (Error E = validateExactWorkgroupSyncModule(
-            **Parsed, *Profile, ExpectedLayout))
+  if (!MeasuredBuiltinProvider &&
+      isClosedExactFlashAttentionV1Request(RequestValue))
+    if (Error E = validateExactFlashAttentionModule(**Parsed))
       return E;
+  if (!MeasuredBuiltinProvider)
+    if (const ExactWorkgroupSyncProfile *Profile =
+            exactWorkgroupSyncProfile(RequestValue))
+      if (Error E = validateExactWorkgroupSyncModule(**Parsed, *Profile,
+                                                     ExpectedLayout))
+        return E;
   if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine,
                                           MeasuredBuiltinProvider))
     return E;
@@ -2060,7 +2397,9 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
       StringLiteral(".max_flat_workgroup_size"),
       StringLiteral(".sgpr_spill_count"),
       StringLiteral(".vgpr_spill_count"),
-      StringLiteral(".uniform_work_group_size")};
+      StringLiteral(".uniform_work_group_size"),
+      StringLiteral(".language"),
+      StringLiteral(".language_version")};
   static constexpr std::array ArgumentKeys = {
       StringLiteral(".name"),          StringLiteral(".type_name"),
       StringLiteral(".offset"),        StringLiteral(".size"),
@@ -2083,6 +2422,31 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
     if (Error E =
             rejectUnknownExactMetadataKeys(Kernel, KernelKeys, "kernel", Check))
       return E;
+    auto Language = Kernel.find(".language");
+    auto LanguageVersion = Kernel.find(".language_version");
+    if (Check == "flash_attention_v1_profile") {
+      if (Language == Kernel.end() || !Language->second.isString() ||
+          Language->second.getString() != "OpenCL C" ||
+          LanguageVersion == Kernel.end() ||
+          !LanguageVersion->second.isArray() ||
+          LanguageVersion->second.getArray().size() != 2)
+        return postLinkError(Check, "kernel_contract_language");
+      std::array<uint64_t, 2> ExpectedVersion = {2, 0};
+      size_t VersionIndex = 0;
+      for (msgpack::DocNode &Node : LanguageVersion->second.getArray()) {
+        uint64_t Value = 0;
+        if (Node.getKind() == msgpack::Type::UInt)
+          Value = Node.getUInt();
+        else if (Node.getKind() == msgpack::Type::Int && Node.getInt() >= 0)
+          Value = static_cast<uint64_t>(Node.getInt());
+        else
+          return postLinkError(Check, "kernel_contract_language_version");
+        if (Value != ExpectedVersion[VersionIndex++])
+          return postLinkError(Check, "kernel_contract_language_version");
+      }
+    } else if (Language != Kernel.end() || LanguageVersion != Kernel.end()) {
+      return postLinkError(Check, "kernel_contract_unexpected_language");
+    }
     auto Arguments = Kernel.find(".args");
     if (Arguments == Kernel.end() || !Arguments->second.isArray())
       continue;
@@ -2103,6 +2467,8 @@ StringRef exactMetadataCheck(MetadataValidationPolicy Policy) {
     return "lds_gemm_slice1_profile";
   case MetadataValidationPolicy::ExactWave64CollectivesV1:
     return "wave64_collectives_v1_profile";
+  case MetadataValidationPolicy::ExactFlashAttentionV1:
+    return "flash_attention_v1_profile";
   case MetadataValidationPolicy::ExactWorkgroupLdsReductionV1:
     return ExactWorkgroupLdsReductionV1.Check;
   case MetadataValidationPolicy::ExactScopedAtomicV1:
@@ -2448,6 +2814,11 @@ Error validateExactWave64CollectivesV1ElfClosure(
   return validateExactElfClosure(ObjectValue, "wave64_collectives_v1_profile");
 }
 
+Error validateExactFlashAttentionV1ElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  return validateExactElfClosure(ObjectValue, "flash_attention_v1_profile");
+}
+
 Error validateExactWorkgroupSyncElfClosure(
     const ELFObjectFile<ELF64LE> &ObjectValue,
     const ExactWorkgroupSyncProfile &Profile) {
@@ -2584,6 +2955,92 @@ Error validateExactWave64NoMachineCalls(
   if (InstructionCount == 0)
     return postLinkError("wave64_collectives_v1_profile",
                          "machine_instruction_empty");
+  return Error::success();
+}
+
+Error validateExactFlashAttentionMachine(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  constexpr StringLiteral Check = "flash_attention_v1_profile";
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto SectionsOrError = File.sections();
+  if (!SectionsOrError)
+    return SectionsOrError.takeError();
+  ArrayRef<ELF64LE::Shdr> Sections = *SectionsOrError;
+  ArrayRef<uint8_t> KernelBytes;
+  uint64_t KernelAddress = 0;
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Table : Sections) {
+    if (Table.sh_type != ELF::SHT_SYMTAB)
+      continue;
+    auto Symbols = File.symbols(&Table);
+    if (!Symbols)
+      return Symbols.takeError();
+    auto Strings = File.getStringTableForSymtab(Table, Sections);
+    if (!Strings)
+      return Strings.takeError();
+    for (const ELF64LE::Sym &Symbol : *Symbols) {
+      auto Name = Symbol.getName(*Strings);
+      if (!Name)
+        return Name.takeError();
+      if (*Name != ExactFlashAttentionV1Entry)
+        continue;
+      ++Matches;
+      if (Symbol.getType() != ELF::STT_FUNC || Symbol.st_size == 0 ||
+          Symbol.st_shndx == ELF::SHN_XINDEX ||
+          Symbol.st_shndx >= Sections.size())
+        return postLinkError(Check, "machine_entry_symbol");
+      const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
+      if ((Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) !=
+              (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR) ||
+          Symbol.st_value < Section.sh_addr)
+        return postLinkError(Check, "machine_entry_section");
+      uint64_t Offset = Symbol.st_value - Section.sh_addr;
+      if (Offset > Section.sh_size || Symbol.st_size > Section.sh_size - Offset)
+        return postLinkError(Check, "machine_entry_range");
+      auto Contents = File.getSectionContents(Section);
+      if (!Contents)
+        return Contents.takeError();
+      KernelBytes = Contents->slice(Offset, Symbol.st_size);
+      KernelAddress = Symbol.st_value;
+    }
+  }
+  if (Matches != 1)
+    return postLinkError(Check, "machine_entry_cardinality");
+  if (SHA256::hash(KernelBytes) != ExactFlashMachineSha256)
+    return postLinkError(Check, "machine_identity");
+
+  auto Scanner = createWave64CallScanner();
+  if (!Scanner)
+    return postLinkError(Check, errorToDiagnostic(Scanner.takeError()));
+  uint64_t Offset = 0;
+  size_t InstructionCount = 0;
+  while (Offset < KernelBytes.size()) {
+    if (llvm::all_of(KernelBytes.drop_front(Offset),
+                     [](uint8_t Byte) { return Byte == 0; }))
+      break;
+    MCInst Instruction;
+    uint64_t Size = 0;
+    auto Status = Scanner->Disassembler->getInstruction(
+        Instruction, Size, KernelBytes.drop_front(Offset),
+        KernelAddress + Offset, nulls());
+    if (Status != MCDisassembler::Success || Size == 0 ||
+        Size > KernelBytes.size() - Offset)
+      return postLinkError(Check, "machine_instruction_decode");
+    const MCInstrDesc &Descriptor =
+        Scanner->Instructions->get(Instruction.getOpcode());
+    if (Descriptor.isCall())
+      return postLinkError(Check, "machine_call");
+    StringRef Opcode = Scanner->Instructions->getName(Instruction.getOpcode());
+    if (Opcode.starts_with("DS_") || Opcode.starts_with("FLAT_") ||
+        Opcode.starts_with("TBUFFER_") || Opcode.starts_with("IMAGE_") ||
+        Opcode.starts_with("SCRATCH_") || Opcode.contains("ATOMIC"))
+      return postLinkError(Check, "machine_forbidden_opcode");
+    Offset += Size;
+    if (++InstructionCount > 1024 * 1024)
+      return postLinkError(Check, "machine_instruction_bound");
+  }
+  if (Offset != KernelBytes.size() || InstructionCount != 482)
+    return postLinkError(Check, "machine_instruction_identity");
   return Error::success();
 }
 
@@ -2770,6 +3227,45 @@ Error validateExactWorkgroupSyncDescriptorBinding(
   }
   if (Matches != 1)
     return postLinkError(Profile.Check, "descriptor_section_cardinality");
+  return Error::success();
+}
+
+Error validateExactFlashAttentionDescriptorBinding(
+    const ELFObjectFile<ELF64LE> &ObjectValue, const Request &RequestValue) {
+  StringRef CompilerBytes(
+      reinterpret_cast<const char *>(RequestValue.CompilerModule.Bytes.data()),
+      RequestValue.CompilerModule.Bytes.size());
+  auto InputSections = parseExactFlashAttentionCompilerSections(CompilerBytes);
+  if (!InputSections)
+    return postLinkError("flash_attention_v1_profile",
+                         errorToDiagnostic(InputSections.takeError()));
+  ArrayRef<uint8_t> ExpectedDescriptor = (*InputSections)[0];
+
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    if (*Name != ExactFlashDescriptorSection)
+      continue;
+    ++Matches;
+    if (Section.sh_type != ELF::SHT_PROGBITS || Section.sh_addralign != 8)
+      return postLinkError("flash_attention_v1_profile",
+                           "descriptor_section_envelope");
+    auto Contents = File.getSectionContents(Section);
+    if (!Contents)
+      return Contents.takeError();
+    if (*Contents != ExpectedDescriptor)
+      return postLinkError("flash_attention_v1_profile",
+                           "descriptor_section_identity");
+  }
+  if (Matches != 1)
+    return postLinkError("flash_attention_v1_profile",
+                         "descriptor_section_cardinality");
   return Error::success();
 }
 
@@ -3161,6 +3657,155 @@ Error validateExactWave64CollectivesV1Metadata(
   return Error::success();
 }
 
+Error validateExactFlashAttentionV1Metadata(const MetadataContract &Metadata) {
+  constexpr StringLiteral Check = "flash_attention_v1_profile";
+  static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 13> RequiredHidden = {{
+      {0, 4, "hidden_block_count_x"},
+      {4, 4, "hidden_block_count_y"},
+      {8, 4, "hidden_block_count_z"},
+      {12, 2, "hidden_group_size_x"},
+      {14, 2, "hidden_group_size_y"},
+      {16, 2, "hidden_group_size_z"},
+      {18, 2, "hidden_remainder_x"},
+      {20, 2, "hidden_remainder_y"},
+      {22, 2, "hidden_remainder_z"},
+      {40, 8, "hidden_global_offset_x"},
+      {48, 8, "hidden_global_offset_y"},
+      {56, 8, "hidden_global_offset_z"},
+      {64, 2, "hidden_grid_dims"},
+  }};
+  static constexpr std::array<HiddenArgumentShape, 10> OptionalHidden = {{
+      {72, 8, "hidden_printf_buffer"},
+      {80, 8, "hidden_hostcall_buffer"},
+      {88, 8, "hidden_multigrid_sync_arg"},
+      {96, 8, "hidden_heap_v1"},
+      {104, 8, "hidden_default_queue"},
+      {112, 8, "hidden_completion_action"},
+      {120, 4, "hidden_dynamic_lds_size"},
+      {192, 4, "hidden_private_base"},
+      {196, 4, "hidden_shared_base"},
+      {200, 8, "hidden_queue_ptr"},
+  }};
+  auto Mismatch = [&](StringRef Field) {
+    return postLinkError(Check, (Twine("kernel_contract_") + Field).str());
+  };
+  if (Metadata.Kernels.size() != 1)
+    return postLinkError(Check, "kernel_cardinality");
+  const KernelLaunchContract &Kernel = Metadata.Kernels.front();
+  if (Kernel.Name != ExactFlashAttentionV1Entry ||
+      Kernel.Symbol != ExactFlashAttentionV1Descriptor)
+    return Mismatch("symbols");
+  if (!Kernel.RequiredWorkgroupSize ||
+      *Kernel.RequiredWorkgroupSize != Workgroup)
+    return Mismatch("reqd_workgroup_size");
+  if (Kernel.MaxFlatWorkgroupSize != 64)
+    return Mismatch("max_flat_workgroup_size");
+  if (Kernel.WavefrontSize != 64)
+    return Mismatch("wavefront_size");
+  if (Kernel.KernargSegmentSize != 320)
+    return Mismatch("kernarg_segment_size");
+  if (Kernel.KernargSegmentAlign != 8)
+    return Mismatch("kernarg_segment_align");
+  if (Kernel.GroupSegmentFixedSize != 0)
+    return Mismatch("group_segment_fixed_size");
+  if (Kernel.PrivateSegmentFixedSize != 0)
+    return Mismatch("private_segment_fixed_size");
+  if (!Kernel.SgprSpillCount || *Kernel.SgprSpillCount != 0)
+    return Mismatch("sgpr_spill_count");
+  if (!Kernel.VgprSpillCount || *Kernel.VgprSpillCount != 0)
+    return Mismatch("vgpr_spill_count");
+  if (!Kernel.UsesDynamicStack || *Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack");
+  if (!Kernel.Arguments)
+    return Mismatch("args_missing");
+  const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
+  if (Arguments.size() < 8 + RequiredHidden.size())
+    return Mismatch("args_cardinality");
+
+  static constexpr std::array<StringLiteral, 8> Names = {
+      "q.data", "q.len", "k.data",      "k.len",
+      "v.data", "v.len", "output.data", "output.len"};
+  for (size_t Index = 0; Index != Names.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto Failure = [&](StringRef Field) {
+      return Mismatch((Twine("arg") + Twine(Index) + "_" + Field).str());
+    };
+    if (!Argument.Name || *Argument.Name != Names[Index])
+      return Failure("name");
+    if (Argument.Offset != Index * 8 || Argument.Size != 8)
+      return Failure("layout");
+    if (!Argument.TypeName)
+      return Failure("type_name");
+    const bool IsPointer = Index % 2 == 0;
+    if (!IsPointer) {
+      if (*Argument.TypeName != "ulong" || Argument.ValueKind != "by_value" ||
+          (Argument.ValueType && *Argument.ValueType != "u64") ||
+          Argument.AddressSpace || Argument.Access || Argument.ActualAccess ||
+          Argument.PointeeAlign || (Argument.IsConst && *Argument.IsConst) ||
+          (Argument.IsRestrict && *Argument.IsRestrict) ||
+          (Argument.IsVolatile && *Argument.IsVolatile) ||
+          (Argument.IsPipe && *Argument.IsPipe))
+        return Failure("length_contract");
+      continue;
+    }
+    const bool IsOutput = Index == 6;
+    StringRef Access = IsOutput ? "read_write" : "read_only";
+    if (*Argument.TypeName != "float*" ||
+        Argument.ValueKind != "global_buffer" ||
+        (Argument.ValueType && *Argument.ValueType != "f32") ||
+        !Argument.AddressSpace || *Argument.AddressSpace != "global" ||
+        !Argument.Access || *Argument.Access != Access ||
+        (IsOutput
+             ? (!Argument.ActualAccess ||
+                *Argument.ActualAccess != "write_only")
+             : Argument.ActualAccess && *Argument.ActualAccess != Access) ||
+        (Argument.PointeeAlign && *Argument.PointeeAlign != 4) ||
+        (IsOutput ? (!Argument.IsRestrict || !*Argument.IsRestrict)
+                  : (Argument.IsRestrict && *Argument.IsRestrict)) ||
+        (IsOutput ? (Argument.IsConst && *Argument.IsConst)
+                  : (!Argument.IsConst || !*Argument.IsConst)) ||
+        (Argument.IsVolatile && *Argument.IsVolatile) ||
+        (Argument.IsPipe && *Argument.IsPipe))
+      return Failure("pointer_contract");
+  }
+
+  constexpr size_t HiddenBaseIndex = 8;
+  constexpr uint64_t HiddenBase = 64;
+  auto ValidateHidden = [&](const KernelArgumentContract &Argument,
+                            const HiddenArgumentShape &Expected) {
+    return !Argument.Name && !Argument.TypeName &&
+           Argument.Offset == HiddenBase + Expected.Offset &&
+           Argument.Size == Expected.Size &&
+           Argument.ValueKind == Expected.ValueKind && !Argument.Align &&
+           !Argument.ValueType && !Argument.AddressSpace && !Argument.Access &&
+           !Argument.ActualAccess && !Argument.PointeeAlign &&
+           !Argument.IsConst && !Argument.IsRestrict && !Argument.IsVolatile &&
+           !Argument.IsPipe;
+  };
+  for (size_t Index = 0; Index != RequiredHidden.size(); ++Index)
+    if (!ValidateHidden(Arguments[HiddenBaseIndex + Index],
+                        RequiredHidden[Index]))
+      return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
+  for (size_t Index = HiddenBaseIndex + RequiredHidden.size();
+       Index != Arguments.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto Expected = llvm::find_if(OptionalHidden, [&](const auto &Shape) {
+      return Argument.Offset == HiddenBase + Shape.Offset;
+    });
+    if (Expected == OptionalHidden.end() ||
+        !ValidateHidden(Argument, *Expected))
+      return Mismatch(
+          (Twine("hidden_arg") + Twine(Index - HiddenBaseIndex)).str());
+  }
+  return Error::success();
+}
+
 Error validateExactWorkgroupSyncMetadata(
     const MetadataContract &Metadata,
     const ExactWorkgroupSyncProfile &Profile) {
@@ -3486,11 +4131,28 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
           diagnosticList(ExpectedSymbols) +
           " actual=" + diagnosticList(StaticPublicDefinitions));
   }
+  if (*Profile == PostLinkProfile::ExactFlashAttentionV1) {
+    if (Error E = validateExactFlashAttentionV1ElfClosure(*ConcreteElf))
+      return E;
+    if (Error E = validateExactFlashAttentionMachine(*ConcreteElf))
+      return E;
+    if (Error E = validateExactFlashAttentionDescriptorBinding(*ConcreteElf,
+                                                               RequestValue))
+      return E;
+    if (StaticPublicDefinitions != ExpectedSymbols)
+      return pipelineError(
+          Twine("post_link.check=flash_attention_v1_profile status=failed "
+                "reason=static_symbol_closure expected=") +
+          diagnosticList(ExpectedSymbols) +
+          " actual=" + diagnosticList(StaticPublicDefinitions));
+  }
   MetadataValidationPolicy MetadataPolicy = MetadataValidationPolicy::Generic;
   if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     MetadataPolicy = MetadataValidationPolicy::ExactLdsGemmSlice1;
   else if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
     MetadataPolicy = MetadataValidationPolicy::ExactWave64CollectivesV1;
+  else if (*Profile == PostLinkProfile::ExactFlashAttentionV1)
+    MetadataPolicy = MetadataValidationPolicy::ExactFlashAttentionV1;
   else if (*Profile == PostLinkProfile::ExactWorkgroupLdsReductionV1)
     MetadataPolicy = MetadataValidationPolicy::ExactWorkgroupLdsReductionV1;
   else if (*Profile == PostLinkProfile::ExactScopedAtomicV1)
@@ -3558,6 +4220,9 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
     if (Error E = validateExactWave64CollectivesV1Metadata(*Metadata))
       return E;
+  if (*Profile == PostLinkProfile::ExactFlashAttentionV1)
+    if (Error E = validateExactFlashAttentionV1Metadata(*Metadata))
+      return E;
   if (const ExactWorkgroupSyncProfile *WorkgroupProfile =
           postLinkWorkgroupSyncProfile(*Profile))
     if (Error E =
@@ -3595,6 +4260,16 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
         "kernarg_size=328 kernarg_align=8 group_size=0 private_size=0 "
         "wavefront_size=64 calls=0 spills=0 dynamic_stack=false "
         "descriptor_binding=byte_exact rust_descriptor_admission=required");
+  if (*Profile == PostLinkProfile::ExactFlashAttentionV1)
+    Diagnostics.push_back(
+        "post_link.check=flash_attention_v1_profile status=ok "
+        "shape=B1,H1,N8,D16 causal=true recurrence=online_strict_f32 "
+        "workgroup=[64,1,1] retained_grid=[1,1,1] "
+        "explicit_kernarg_size=64 kernarg_size=320 kernarg_align=8 "
+        "group_size=0 private_size=0 wavefront_size=64 calls=0 spills=0 "
+        "dynamic_stack=false descriptor_binding=byte_exact "
+        "ocml_provider=measured_structural_only "
+        "rust_descriptor_admission=required");
   if (*Profile == PostLinkProfile::ExactWorkgroupLdsReductionV1)
     Diagnostics.push_back(
         "post_link.check=workgroup_lds_reduction_v1_profile status=ok "
@@ -4032,6 +4707,11 @@ Response executeImpl(const Request &RequestValue,
       !isClosedExactWave64CollectivesV1Request(RequestValue))
     return failure(RequestValue, Stage::InputValidation,
                    {"exact Wave64 collectives symbols require the closed "
+                    "Worker V2 profile"});
+  if (mentionsExactFlashAttentionV1(RequestValue) &&
+      !isClosedExactFlashAttentionV1Request(RequestValue))
+    return failure(RequestValue, Stage::InputValidation,
+                   {"exact FlashAttention V1 symbols require the closed "
                     "Worker V2 profile"});
   if (mentionsExactWorkgroupSync(RequestValue)) {
     const ExactWorkgroupSyncProfile *Profile =
