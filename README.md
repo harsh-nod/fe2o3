@@ -75,6 +75,22 @@ FlashAttention and top-2 MoE vertical slices are tracked by
 [#122](https://github.com/harsh-nod/fe2o3/issues/122) through
 [#125](https://github.com/harsh-nod/fe2o3/issues/125).
 
+The exact [MoE expert-compute source slice](examples/moe_expert_v1/README.md)
+now extends the fixed T8/E4/K2/C4 router with two ordinary attributed Rust
+kernels: one host-selected `16x16x16` BF16/F32 expert GEMM and one deterministic
+top-2 weighted combine. Its executable CPU schedule compacts accepted routes,
+runs exactly four zero-padded expert tiles, inverse-packs compact output, and
+combines in route-rank order. A separate direct oracle checks active and padded
+expert rows, compact outputs, dropped routes, final token outputs, unchanged
+inputs, and adjacent canaries. The pinned Verus model verifies 15 fixed logical
+index, padding, ownership, inverse-slot, and phase-order obligations and rejects
+six named mutations. This is source, CPU schedule/oracle, and bounded logical
+proof evidence only. The expert kernels do not yet have authenticated compiler
+profiles, direct finalization, typed HSA dispatch, protected gfx942 execution,
+MFMA numerical refinement, machine memory-safety evidence, generalized race
+freedom, or source/model-to-machine refinement. No expert GPU result or
+performance claim is made.
+
 The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
 the checked host contract with bounded production-directed LDS slices. An
 ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`
