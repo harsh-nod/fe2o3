@@ -20,6 +20,7 @@ use fe2o3_kernel_descriptor::{
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
+mod flash_attention_v1_finalizer;
 mod lds_gemm_finalizer;
 mod lds_gemm_profile_registry;
 mod link_plan;
@@ -81,6 +82,12 @@ pub use fe2o3_compiler_ffi::{
 pub use first_build_worker_v2::{
     FirstBuildWorkerV2Error, FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
     execute_reproducible_first_build_worker_v2,
+};
+pub use flash_attention_v1_finalizer::{
+    FinalizedFlashAttentionV1ReceiptV1, FlashAttentionV1FinalizationErrorV1,
+    FlashAttentionV1FinalizationExpectationV1, FlashAttentionV1FinalizationReceiptIdentityV1,
+    FlashAttentionV1OcmlProviderPinsV1, FlashAttentionV1WorkerPinsV1,
+    finalize_flash_attention_v1_worker_v2_hsaco_v1,
 };
 pub use lds_gemm_finalizer::{
     ExactLdsGemmFinalizationErrorV1, FinalizedExactLdsGemmHsacoIdentityV1,
