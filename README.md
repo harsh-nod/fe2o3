@@ -58,9 +58,18 @@ inert deterministic certificate that binds its exact Rust source, reviewed MIR
 profile, Kernel IR and LLVM identities, numerical policy, and Verus/Z3 closure.
 An exact finalizer join now consumes that certificate with the direct LLVM/LLD
 worker exchange, OCML closure, artifact, descriptor, ABI, geometry, and resource
-identities into a sealed linear host token. The token exposes no artifact bytes,
-native handles, generic runtime, loading, or launch authority. Its private HSA
-lifecycle and exact MI300X execution remain open under
+identities into a sealed linear host token. A fixed `gfx942:xnack-`, width-64,
+unmasked typed HSA path, guarded buffers, CPU comparison, and 25-pin terminal
+receipt are implemented behind that join. They are not reachable from the
+production authority command: real MI300X `authority release build` crosses the
+reviewed launcher and frozen Cargo closure, then stops at `stage=binding-wrapper`.
+Cargo mutates the dynamic-loader environment before invoking the Rust workspace
+wrapper; admitting its mutable target deps directory is forbidden, while the
+current dynamic wrapper cannot load `librustc_driver` after loader variables are
+cleared. The command therefore fails closed until an integrated static binding
+wrapper exists. No protected compiler, finalizer, artifact, runtime, or GPU
+authority is claimed, and source tests are not Verus or refinement proof. This
+fixed-profile production blocker remains tracked under
 [#120](https://github.com/harsh-nod/fe2o3/issues/120). The subsequent fixed
 FlashAttention and top-2 MoE vertical slices are tracked by
 [#122](https://github.com/harsh-nod/fe2o3/issues/122) through

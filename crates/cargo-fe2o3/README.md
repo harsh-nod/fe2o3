@@ -47,6 +47,16 @@ boundary into pinned Cargo and the existing transactional test backend, but
 its publication evidence carries only that fixture's existing downstream test
 authority. The release contract makes no stronger claims.
 
+The fixed row-softmax production action currently stops after this admitted
+launcher/handoff at `stage=binding-wrapper`. Its direct Rust workspace wrapper
+is dynamically linked to `librustc_driver`, but production clears loader
+variables and must reject Cargo's mutable target deps directory when Cargo
+prepares the wrapper environment. The non-integrated C trampoline is not an
+authority path, and no debug normalization is used. An exact static binding
+wrapper must be integrated and admitted before row-softmax can enter Cargo and
+the backend. Consequently the staged 25-pin finalizer/runtime path has no
+production compiler, artifact, launch, or GPU authority.
+
 ## External Cargo projects
 
 `cargo fe2o3 build` and `cargo fe2o3 run` operate from standalone Cargo

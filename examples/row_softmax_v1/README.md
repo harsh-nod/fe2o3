@@ -1,9 +1,27 @@
 # Row-softmax V1 formal contract
 
 This standalone example specifies one **unmasked, nonempty row of exactly 64
-conceptual `f32` values** and a separate 64-element output. It is a source-level
-formal model and finite host reference, not a GPU kernel or a production
-compiler/runtime slice.
+conceptual `f32` values** and a separate 64-element output. Its proved claims
+remain a source-level formal model and finite host reference, not a production
+compiler/runtime or machine-code refinement result.
+
+`production_release.rs` additionally stages the exact `gfx942:xnack-`, width-64
+typed HSA lifecycle with immutable guarded input, guarded output, CPU-oracle
+comparison, and fixed normal/equal/dominant workloads. Masked, exceptional,
+wrong-shape, wrong-policy, provider-drift, worker-artifact, and target variants
+have explicit prelaunch rejection stages. The compiler/finalizer join uses the
+direct upstream LLVM/LLD worker and an exact OCML closure; it uses neither COMGR
+nor a shell linker. These mechanics do not extend the formal proof above and do
+not generalize to other widths, shapes, masks, targets, or numerical profiles.
+
+This staged path is not production-reachable. A real MI300X protected attempt
+crosses launcher/handoff and frozen Cargo closure, but a dynamic Rust workspace
+wrapper cannot retain compiler authority: production cannot admit Cargo's
+mutable loader path, and after loader variables are cleared the wrapper cannot
+load `librustc_driver`. `cargo fe2o3 authority release run` therefore fails
+closed at `stage=binding-wrapper` pending integrated static-wrapper support. No
+compiler-origin, proof-validity, artifact-safety, runtime, or GPU-execution
+authority is minted by this slice.
 
 ## Contract layers
 
