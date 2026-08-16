@@ -25,8 +25,9 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_ffi::{CompilerModuleHandoffV2, decode_row_softmax_compiler_sections_v1};
 use fe2o3_hsaco_finalize::{
-    RowSoftmaxV1AuthorityPolicyV1, RowSoftmaxV1CompilerClosurePolicyV1,
-    RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1ProviderManifestV1,
+    ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, RowSoftmaxV1AuthorityPolicyV1,
+    RowSoftmaxV1CompilerClosurePolicyV1, RowSoftmaxV1DirectWorkerExpectationV1,
+    RowSoftmaxV1ProviderManifestV1, derive_row_softmax_v1_provider_source_identity_v1,
     inspect_worker_v2_raw_hsaco_v1,
 };
 use fe2o3_process_identity::{
@@ -77,6 +78,9 @@ const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+const ROW_SOFTMAX_V1_PROVISION_VALUE: &str = "row-softmax-v1-provision";
+const ROW_SOFTMAX_V1_RUN_VALUE: &str = "row-softmax-v1-run";
+const ROW_SOFTMAX_V1_PROVISION_PREFIX: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_OBSERVATION=";
 const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
 const WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2";
 const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
@@ -396,9 +400,11 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let compiler_capabilities = CompilerCapabilities::from_environment(capability_binding)?;
             let current_dir =
                 std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
-            let managed = if worker_v2.as_ref().is_some_and(|config| {
-                !config.selects(compile.crate_name(), compile.source_path(), &current_dir)
-            }) {
+            let provisioning_selected = row_softmax_provisioning_selected(&compile);
+            let managed = if (row_softmax_provisioning_requested() && !provisioning_selected)
+                || worker_v2.as_ref().is_some_and(|config| {
+                    !config.selects(compile.crate_name(), compile.source_path(), &current_dir)
+                }) {
                 None
             } else {
                 Some(prepare_managed_attempt(
@@ -2161,6 +2167,7 @@ struct ManagedAttempt {
     compile_environment_profile: Option<WorkerV2CompileEnvironmentProfileV1>,
     worker_v2: Option<ManagedWorkerV2>,
     row_softmax_release: Option<RowSoftmaxReleaseContext>,
+    row_softmax_provision: bool,
     #[cfg(feature = "compiler-handoff-observation-test-only")]
     compiler_handoff_observation: Option<crate::compiler_handoff_observation::Request>,
 }
@@ -2291,13 +2298,14 @@ fn prepare_managed_attempt(
     } else {
         derive_build_attempt_input(compile.argv(), worker_v2.as_ref(), current_dir)
     };
+    let release_action = std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV);
+    let row_softmax_provision =
+        release_action.as_deref() == Some(OsStr::new(ROW_SOFTMAX_V1_PROVISION_VALUE));
     let row_softmax_release = worker_v2
         .as_ref()
         .and_then(PreparedWorkerV2Config::row_softmax_v1)
         .map(|row| {
-            if std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV).as_deref()
-                != Some(OsStr::new("row-softmax-v1-run"))
-            {
+            if release_action.as_deref() != Some(OsStr::new(ROW_SOFTMAX_V1_RUN_VALUE)) {
                 return Err(BindingWrapperError::BuildObservation(
                     "row-softmax production pin contract requires cargo fe2o3 authority release run"
                         .to_owned(),
@@ -2308,9 +2316,12 @@ fn prepare_managed_attempt(
             Ok((row.provider(), workload))
         })
         .transpose()?;
-    if row_softmax_release.is_none()
-        && std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV).is_some()
-    {
+    if row_softmax_provision && worker_v2.is_some() {
+        return Err(BindingWrapperError::BuildObservation(
+            "row-softmax provider provisioning rejects a Worker V2 configuration".to_owned(),
+        ));
+    }
+    if row_softmax_release.is_none() && release_action.is_some() && !row_softmax_provision {
         return Err(BindingWrapperError::BuildObservation(
             "protected row-softmax release action has no exact row pin contract".to_owned(),
         ));
@@ -2367,6 +2378,7 @@ fn prepare_managed_attempt(
         compile_environment_profile,
         worker_v2,
         row_softmax_release,
+        row_softmax_provision,
         #[cfg(feature = "compiler-handoff-observation-test-only")]
         compiler_handoff_observation,
     })
@@ -2374,6 +2386,9 @@ fn prepare_managed_attempt(
 
 fn complete_managed_attempt(mut managed: ManagedAttempt) -> Result<(), BindingWrapperError> {
     let completion = (|| -> Result<(), CompletionFailure> {
+        if managed.row_softmax_provision {
+            return complete_row_softmax_v1_provision(&managed);
+        }
         if let Some(worker_v2) = managed.worker_v2.take() {
             return match worker_v2 {
                 ManagedWorkerV2::Fresh {
@@ -2412,6 +2427,157 @@ fn complete_managed_attempt(mut managed: ManagedAttempt) -> Result<(), BindingWr
             })
         }
     }
+}
+
+fn row_softmax_provisioning_requested() -> bool {
+    std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV).as_deref()
+        == Some(OsStr::new(ROW_SOFTMAX_V1_PROVISION_VALUE))
+}
+
+fn row_softmax_provisioning_selected(compile: &RustcCompileInvocationV2<'_>) -> bool {
+    compile.crate_name() == "fe2o3_collected_row_softmax_v1_fixture"
+        && compile.source_path() == Path::new("src/lib.rs")
+}
+
+fn complete_row_softmax_v1_provision(managed: &ManagedAttempt) -> Result<(), CompletionFailure> {
+    let consumed =
+        consume_compiler_module_handoff_v1(&managed.output_dir, &managed.producer, managed.attempt)
+            .map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "stage=compiler-handoff: provider provisioning could not consume the exact handoff: {error}"
+                ))
+            })?;
+    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes()).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "stage=compiler-handoff: provider provisioning could not decode the exact handoff: {error}"
+        ))
+    })?;
+    let sections =
+        decode_row_softmax_compiler_sections_v1(handoff.module_bytes()).map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "stage=compiler-handoff: provider provisioning rejected compiler sections: {error}"
+            ))
+        })?;
+    if Sha256::digest(sections.authority_transcript()).as_slice() != sections.authority() {
+        return Err(CompletionFailure::Uncommitted(
+            "stage=compiler-handoff: provider provisioning rejected the frontend-authority commitment"
+                .to_owned(),
+        ));
+    }
+    let observation = row_softmax_provider_observation_json(sections.authority_transcript())
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "stage=provider-provision: provider provisioning rejected the authority transcript: {error}"
+            ))
+        })?;
+    eprintln!("{ROW_SOFTMAX_V1_PROVISION_PREFIX}{observation}");
+    eprintln!(
+        "cargo fe2o3: row-softmax provider observation is non-authoritative; no worker, artifact, runtime, or GPU authority was minted"
+    );
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "stage=attempt-completion: provider provisioning could not finish the exact attempt: {error}"
+        ))
+    })
+}
+
+fn row_softmax_provider_observation_json(transcript: &[u8]) -> Result<String, String> {
+    let fields = decode_framed_row_softmax_authority_fields(transcript)?;
+    if fields.len() != 49 || fields[21] != b"fe2o3_device" {
+        return Err("authority transcript field closure differs".to_owned());
+    }
+    let stable_crate_id = u64::from_le_bytes(
+        fields[22]
+            .try_into()
+            .map_err(|_| "provider stable crate ID has the wrong width".to_owned())?,
+    );
+    let crate_hash: [u8; 16] = fields[23]
+        .try_into()
+        .map_err(|_| "provider crate hash has the wrong width".to_owned())?;
+    let definition_identities: [[u8; 16]; ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT] = fields[26..34]
+        .iter()
+        .map(|field| {
+            (*field)
+                .try_into()
+                .map_err(|_| "provider definition identity has the wrong width".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| "provider definition identity count differs".to_owned())?;
+    let source_identities: [[u8; 32]; ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT] = fields[34..42]
+        .iter()
+        .map(|field| {
+            (*field)
+                .try_into()
+                .map_err(|_| "provider source identity has the wrong width".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| "provider source identity count differs".to_owned())?;
+    let expected_sources = [
+        provider_source_identity("lib.rs", include_bytes!("../../fe2o3-device/src/lib.rs"))?,
+        provider_source_identity(
+            "thread.rs",
+            include_bytes!("../../fe2o3-device/src/thread.rs"),
+        )?,
+        provider_source_identity("math.rs", include_bytes!("../../fe2o3-device/src/math.rs"))?,
+    ];
+    let expected_mapping = [
+        expected_sources[0],
+        expected_sources[1],
+        expected_sources[1],
+        expected_sources[1],
+        expected_sources[0],
+        expected_sources[2],
+        expected_sources[2],
+        expected_sources[2],
+    ];
+    if source_identities != expected_mapping {
+        return Err("provider source identities differ from the reviewed source files".to_owned());
+    }
+    RowSoftmaxV1ProviderManifestV1::new(
+        stable_crate_id,
+        crate_hash,
+        definition_identities,
+        source_identities,
+    )
+    .map_err(|error| error.to_string())?;
+    serde_json::to_string(&serde_json::json!({
+        "provider_crate_hash": hex(&crate_hash),
+        "provider_definition_identities": definition_identities.map(|identity| hex(&identity)),
+        "provider_source_identities": source_identities.map(|identity| hex(&identity)),
+        "provider_stable_crate_id": stable_crate_id,
+    }))
+    .map_err(|error| format!("cannot encode canonical provider observation: {error}"))
+}
+
+fn provider_source_identity(relative_path: &str, source: &[u8]) -> Result<[u8; 32], String> {
+    derive_row_softmax_v1_provider_source_identity_v1(relative_path, source)
+        .map_err(|error| error.to_string())
+}
+
+fn decode_framed_row_softmax_authority_fields(transcript: &[u8]) -> Result<Vec<&[u8]>, String> {
+    if transcript.is_empty() || transcript.len() > 4096 {
+        return Err("authority transcript length is invalid".to_owned());
+    }
+    let mut fields = Vec::new();
+    let mut remaining = transcript;
+    while !remaining.is_empty() {
+        let length_bytes: [u8; 8] = remaining
+            .get(..8)
+            .ok_or_else(|| "authority transcript has a truncated field length".to_owned())?
+            .try_into()
+            .expect("checked field length");
+        remaining = &remaining[8..];
+        let length = usize::try_from(u64::from_le_bytes(length_bytes))
+            .map_err(|_| "authority transcript field length exceeds usize".to_owned())?;
+        let field = remaining
+            .get(..length)
+            .ok_or_else(|| "authority transcript has a truncated field".to_owned())?;
+        fields.push(field);
+        remaining = &remaining[length..];
+    }
+    Ok(fields)
 }
 
 fn complete_fresh_worker_v2(
@@ -3142,6 +3308,7 @@ mod tests {
         os_bytes, prepared_rustc_command_sha256, process_start_time_ticks,
         reject_authority_linker_arguments, reject_uninspectable_rustc_args,
         resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
+        row_softmax_provider_observation_json,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_executable::PinnedExecutable;
@@ -3181,6 +3348,78 @@ mod tests {
         let mut command = Command::new("/proc/self/fd/9");
         append_prepared_rustc_arguments(&mut command, &args(forwarded), &managed).unwrap();
         command
+    }
+
+    fn row_softmax_provider_transcript() -> Vec<u8> {
+        let mut fields = vec![vec![0xa5]; 49];
+        fields[21] = b"fe2o3_device".to_vec();
+        fields[22] = 7_u64.to_le_bytes().to_vec();
+        fields[23] = vec![0x41; 16];
+        for (index, field) in fields[26..34].iter_mut().enumerate() {
+            *field = vec![u8::try_from(index + 1).unwrap(); 16];
+        }
+        let source = |name, bytes| {
+            super::provider_source_identity(name, bytes)
+                .unwrap()
+                .to_vec()
+        };
+        let lib = source("lib.rs", include_bytes!("../../fe2o3-device/src/lib.rs"));
+        let thread = source(
+            "thread.rs",
+            include_bytes!("../../fe2o3-device/src/thread.rs"),
+        );
+        let math = source("math.rs", include_bytes!("../../fe2o3-device/src/math.rs"));
+        for (field, identity) in fields[34..42]
+            .iter_mut()
+            .zip([&lib, &thread, &thread, &thread, &lib, &math, &math, &math])
+        {
+            *field = identity.clone();
+        }
+        let mut transcript = Vec::new();
+        for field in fields {
+            transcript.extend_from_slice(&(field.len() as u64).to_le_bytes());
+            transcript.extend_from_slice(&field);
+        }
+        transcript
+    }
+
+    #[test]
+    fn row_softmax_provisioning_observes_exact_reviewed_provider_sources() {
+        let transcript = row_softmax_provider_transcript();
+        let json = row_softmax_provider_observation_json(&transcript).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["provider_stable_crate_id"], 7);
+        assert_eq!(
+            value["provider_definition_identities"]
+                .as_array()
+                .unwrap()
+                .len(),
+            8
+        );
+        assert_eq!(
+            value["provider_source_identities"]
+                .as_array()
+                .unwrap()
+                .len(),
+            8
+        );
+
+        let mut fields = super::decode_framed_row_softmax_authority_fields(&transcript)
+            .unwrap()
+            .into_iter()
+            .map(<[u8]>::to_vec)
+            .collect::<Vec<_>>();
+        fields[34][0] ^= 1;
+        let mut hostile = Vec::new();
+        for field in fields {
+            hostile.extend_from_slice(&(field.len() as u64).to_le_bytes());
+            hostile.extend_from_slice(&field);
+        }
+        assert!(
+            row_softmax_provider_observation_json(&hostile)
+                .unwrap_err()
+                .contains("reviewed source files")
+        );
     }
 
     #[test]

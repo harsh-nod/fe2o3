@@ -84,6 +84,21 @@ const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
     "RUSTC_WORKSPACE_WRAPPER",
 ];
 
+#[derive(Clone, Copy)]
+enum ProtectedReleaseAction {
+    RowSoftmaxProvision,
+    RowSoftmaxRun,
+}
+
+impl ProtectedReleaseAction {
+    const fn environment_value(self) -> &'static str {
+        match self {
+            Self::RowSoftmaxProvision => "row-softmax-v1-provision",
+            Self::RowSoftmaxRun => "row-softmax-v1-run",
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let raw_args = env::args_os().skip(1).collect::<Vec<_>>();
     if raw_args
@@ -266,7 +281,7 @@ fn doctor() -> ExitCode {
 }
 
 fn cargo_with_backend(command: &str, args: &[OsString]) -> ExitCode {
-    match cargo_with_backend_result(command, args, None, false) {
+    match cargo_with_backend_result(command, args, None, None) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -287,11 +302,19 @@ fn cargo_with_protected_release(
         eprintln!("protected authority release child requires build or run");
         return ExitCode::FAILURE;
     }
-    let row_softmax_run = command == "run"
-        && env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
-            == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE));
-    let cargo_command = if row_softmax_run { "build" } else { command };
-    match cargo_with_backend_result(cargo_command, &args[1..], Some(&admission), row_softmax_run) {
+    let row_softmax = env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
+        == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE));
+    let action = match (command, row_softmax) {
+        ("build", true) => Some(ProtectedReleaseAction::RowSoftmaxProvision),
+        ("run", true) => Some(ProtectedReleaseAction::RowSoftmaxRun),
+        _ => None,
+    };
+    let cargo_command = if matches!(action, Some(ProtectedReleaseAction::RowSoftmaxRun)) {
+        "build"
+    } else {
+        command
+    };
+    match cargo_with_backend_result(cargo_command, &args[1..], Some(&admission), action) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -323,7 +346,7 @@ fn smoke(args: &[String]) -> ExitCode {
     for package in packages {
         eprintln!("cargo fe2o3 smoke: running {package}");
         let args = [OsString::from("-p"), OsString::from(package)];
-        if let Err(error) = cargo_with_backend_result("run", &args, None, false) {
+        if let Err(error) = cargo_with_backend_result("run", &args, None, None) {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
@@ -336,7 +359,7 @@ fn cargo_with_backend_result(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
-    protected_release_row_softmax_run: bool,
+    protected_release_action: Option<ProtectedReleaseAction>,
 ) -> Result<(), String> {
     if authority_sensitive_request_selected() {
         reject_dynamic_loader_environment()?;
@@ -345,17 +368,22 @@ fn cargo_with_backend_result(
     reject_preexisting_compiler_environment()?;
     let worker_v2 =
         worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup().map_err(|error| {
-            if protected_release_row_softmax_run {
+            if matches!(
+                protected_release_action,
+                Some(ProtectedReleaseAction::RowSoftmaxRun)
+            ) {
                 format!("stage=worker-artifact: Worker V2 setup failed: {error}")
             } else {
                 format!("Worker V2 setup failed: {error}")
             }
         })?;
-    if protected_release_row_softmax_run
-        && worker_v2
-            .as_ref()
-            .and_then(worker_v2::PreparedWorkerV2Config::row_softmax_v1)
-            .is_none()
+    if matches!(
+        protected_release_action,
+        Some(ProtectedReleaseAction::RowSoftmaxRun)
+    ) && worker_v2
+        .as_ref()
+        .and_then(worker_v2::PreparedWorkerV2Config::row_softmax_v1)
+        .is_none()
     {
         return Err(
             "cargo fe2o3 authority release run requires an exact row_softmax_v1 Worker V2 pin contract"
@@ -465,7 +493,7 @@ fn cargo_with_backend_result(
         pinned_rustc,
         authority_backend,
         authorized_closure,
-        protected_release_row_softmax_run,
+        protected_release_action,
     )?;
     if let Some(admission) = protected_release {
         context.binding_wrapper = admission.binding_wrapper_path();
@@ -524,7 +552,7 @@ struct BackendRunContext {
     build_session: fe2o3_artifact_transaction::BuildSession,
     requires_locked_closure: bool,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
-    protected_release_row_softmax_run: bool,
+    protected_release_action: Option<ProtectedReleaseAction>,
 }
 
 impl BackendRunContext {
@@ -536,7 +564,7 @@ impl BackendRunContext {
         pinned_rustc: PinnedRustc,
         authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,
         authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
-        protected_release_row_softmax_run: bool,
+        protected_release_action: Option<ProtectedReleaseAction>,
     ) -> Result<Self, String> {
         let target = amd_gpu_target();
         let target_dir = project.open_or_create_target()?;
@@ -603,7 +631,7 @@ impl BackendRunContext {
             build_session,
             requires_locked_closure: authorized_closure.is_some(),
             authorized_closure,
-            protected_release_row_softmax_run,
+            protected_release_action,
         })
     }
 }
@@ -729,10 +757,10 @@ fn run_cargo_with_backend(
             hex_encode(&context.compiler_closure_sha256),
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
-    if context.protected_release_row_softmax_run {
+    if let Some(action) = context.protected_release_action {
         cargo
             .as_command_mut()
-            .env(PROTECTED_RELEASE_ACTION_ENV, "row-softmax-v1-run");
+            .env(PROTECTED_RELEASE_ACTION_ENV, action.environment_value());
     } else {
         cargo
             .as_command_mut()
