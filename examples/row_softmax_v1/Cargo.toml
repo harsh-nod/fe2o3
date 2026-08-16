@@ -17,6 +17,7 @@ protected-hardware = [
     "dep:fe2o3-hsaco",
     "dep:fe2o3-hsaco-finalize",
     "dep:fe2o3-verifier",
+    "dep:sha2",
 ]
 
 [dependencies]
@@ -28,13 +29,11 @@ fe2o3-hsa-runtime = { path = "../../crates/fe2o3-hsa-runtime", optional = true }
 fe2o3-hsaco = { path = "../../crates/fe2o3-hsaco", optional = true }
 fe2o3-hsaco-finalize = { path = "../../crates/fe2o3-hsaco-finalize", optional = true }
 fe2o3-verifier = { path = "../../crates/fe2o3-verifier", optional = true }
+sha2 = { version = "0.11.0", optional = true }
 
 # Keep this proof example independently testable until a row-softmax compiler
 # and runtime vertical slice exists.
 [workspace]
-
-[dev-dependencies]
-sha2 = "0.11.0"
 
 [lib]
 name = "fe2o3_row_softmax_v1"
