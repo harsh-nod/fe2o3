@@ -1,3 +1,5 @@
+use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -5,7 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+    consume_compiler_module_handoff_v1,
 };
+use fe2o3_compiler_ffi::CompilerModuleHandoffV2;
 use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-flash-attention-v1";
@@ -18,6 +22,8 @@ const CARGO_METADATA_OBSERVATION: &str =
 const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/flash-attention-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/flash_attention_v1/src/kernel.rs");
+const HANDOFF_OUTPUT_ENV: &str = "FE2O3_FLASH_ATTENTION_HANDOFF_OUTPUT";
+const MODULE_OUTPUT_ENV: &str = "FE2O3_FLASH_ATTENTION_MODULE_OUTPUT";
 
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
@@ -173,7 +179,7 @@ fn compile(
     let fixture_manifest =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-flash-attention-v1");
 
-    Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+    let result = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
         .current_dir(workspace)
         .arg(&crate_root)
         .arg(format!(
@@ -212,7 +218,36 @@ fn compile(
         .env("FE2O3_TARGET", profile.target)
         .env("FE2O3_CODEGEN_PIPELINE", PIPELINE)
         .output()
-        .expect("run FlashAttention compiler fixture")
+        .expect("run FlashAttention compiler fixture");
+    if result.status.success()
+        && let Some(destination) = std::env::var_os(HANDOFF_OUTPUT_ENV)
+    {
+        let consumed = consume_compiler_module_handoff_v1(&artifact_dir, &producer, attempt)
+            .expect("consume exact FlashAttention compiler handoff");
+        let decoded = CompilerModuleHandoffV2::decode(consumed.bytes())
+            .expect("decode exact FlashAttention compiler handoff");
+        assert_eq!(decoded.canonical_bytes(), consumed.bytes());
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(destination)
+            .expect("create private FlashAttention handoff output");
+        file.write_all(consumed.bytes())
+            .expect("write exact FlashAttention handoff output");
+        if let Some(module_destination) = std::env::var_os(MODULE_OUTPUT_ENV) {
+            let mut module_file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(module_destination)
+                .expect("create private FlashAttention LLVM output");
+            module_file
+                .write_all(decoded.module_bytes())
+                .expect("write exact FlashAttention LLVM output");
+        }
+    }
+    result
 }
 
 fn mutation(source: &str, old: &str, new: &str) -> String {
