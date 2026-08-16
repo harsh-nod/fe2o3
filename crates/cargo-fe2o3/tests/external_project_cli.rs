@@ -79,6 +79,24 @@ fn output_retrying_text_file_busy(command: &mut Command, context: &str) -> Outpu
     }
 }
 
+#[cfg(target_os = "linux")]
+fn close_nonstdio_descriptors_before_exec(command: &mut Command) {
+    // SAFETY: close_range is one direct syscall in the post-fork child. Standard I/O has already
+    // been installed at 0/1/2, and this fixture intentionally admits no other descriptor.
+    unsafe {
+        command.pre_exec(|| close_descriptor_range(3, u32::MAX));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn close_descriptor_range(first: u32, last: u32) -> std::io::Result<()> {
+    // SAFETY: direct close_range has no userspace state and this helper runs only in pre_exec.
+    if unsafe { libc::syscall(libc::SYS_close_range, first, last, 0_u32) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 struct ProjectFixture {
     root: PathBuf,
     workspace: PathBuf,
@@ -249,10 +267,17 @@ impl ProjectFixture {
         command
     }
 
+    #[cfg(target_os = "linux")]
+    fn isolated_protected_release_command(&self, action: &str) -> Command {
+        let mut command = self.protected_release_command(action);
+        close_nonstdio_descriptors_before_exec(&mut command);
+        command
+    }
+
     fn protected_release_build_command(&self) -> Command {
         let cargo = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-release-cargo-fixture"));
         let rustc = release_rustc_fixture_executable(&self.root);
-        let mut command = self.protected_release_command("build");
+        let mut command = self.isolated_protected_release_command("build");
         command
             .env("CARGO", cargo)
             .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", file_sha256(cargo))
@@ -1605,7 +1630,7 @@ fn authority_release_fails_before_executing_cargo_without_a_protected_launcher()
 fn protected_release_probe_mints_only_a_real_launcher_handoff() {
     let fixture = ProjectFixture::standalone();
     let output = fixture
-        .protected_release_command("probe")
+        .isolated_protected_release_command("probe")
         .output()
         .expect("run protected release handoff probe");
     assert!(
@@ -1816,6 +1841,8 @@ fn protected_release_rejects_unexpected_inherited_descriptor() {
             if libc::dup3(source, 42, 0) != 42 {
                 return Err(std::io::Error::last_os_error());
             }
+            close_descriptor_range(3, 41)?;
+            close_descriptor_range(43, u32::MAX)?;
             Ok(())
         });
     }
@@ -1838,6 +1865,7 @@ fn protected_release_rejects_inherited_descriptor_enumeration_directory() {
     // SAFETY: open, dup3, and close are async-signal-safe.
     unsafe {
         command.pre_exec(|| {
+            close_descriptor_range(3, u32::MAX)?;
             let source = libc::open(
                 c"/proc/self/fd".as_ptr(),
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
@@ -1883,7 +1911,7 @@ fn protected_release_rejects_preloads_and_selector_injection() {
         ),
     ] {
         let fixture = ProjectFixture::standalone();
-        let mut command = fixture.protected_release_command("probe");
+        let mut command = fixture.isolated_protected_release_command("probe");
         command.env(name, value);
         let output = command.output().expect("run release injection probe");
         assert!(!output.status.success(), "{name}");
@@ -1900,7 +1928,7 @@ fn protected_release_rejects_preloads_and_selector_injection() {
 #[test]
 fn protected_release_rejects_unexpected_inherited_environment() {
     let fixture = ProjectFixture::standalone();
-    let mut command = fixture.protected_release_command("probe");
+    let mut command = fixture.isolated_protected_release_command("probe");
     command.env("UNEXPECTED_RELEASE_STATE", "hostile");
     let output = command.output().expect("run inherited environment probe");
     assert!(!output.status.success());
@@ -1925,7 +1953,7 @@ fn protected_release_rejects_path_aliases() {
     let alias = path_alias.root.join("cargo-alias");
     symlink(env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"), &alias)
         .expect("create Cargo path alias");
-    let mut command = path_alias.protected_release_command("probe");
+    let mut command = path_alias.isolated_protected_release_command("probe");
     command.env("CARGO", alias);
     let output = command.output().expect("run path alias probe");
     assert!(!output.status.success());
