@@ -309,6 +309,12 @@ fn cargo_with_protected_release(
         ("run", true) => Some(ProtectedReleaseAction::RowSoftmaxRun),
         _ => None,
     };
+    if action.is_some() {
+        eprintln!(
+            "stage=binding-wrapper: gfx942 row-softmax production release requires an integrated static binding wrapper; Cargo mutates the dynamic-loader environment before invoking a Rust workspace wrapper, so the dynamic wrapper cannot hold compiler authority"
+        );
+        return ExitCode::FAILURE;
+    }
     let cargo_command = if matches!(action, Some(ProtectedReleaseAction::RowSoftmaxRun)) {
         "build"
     } else {
