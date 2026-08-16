@@ -83,6 +83,36 @@ cmake --build build/llvm-link-worker
 ctest --test-dir build/llvm-link-worker --output-on-failure
 ```
 
+The row-softmax V1 release gate is separately invokable and fail closed. It
+requires the configured LLVM 22 `TargetMachine` layout probe, exact Worker and
+LLVM build identities, `BUILD_TESTING`, and the measured four-file gfx942 OCML
+closure. Missing prerequisites are errors under the gate even though ordinary
+unconfigured Rust tests remain skippable. On `mi300x`, the reviewed invocation
+is:
+
+```sh
+cmake -S tools/fe2o3-llvm-link-worker \
+  -B /home/harsh/row-layout-worker-release-gate -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON \
+  -DFE2O3_ROW_SOFTMAX_RELEASE_GATE=ON \
+  -DLLVM_DIR=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/llvm-build-v5/lib/cmake/llvm \
+  -DLLD_DIR=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/llvm-build-v5/lib/cmake/lld \
+  -DFE2O3_PINNED_LLVM_VERSION=22.1.8 \
+  -DFE2O3_EXPECTED_LLVM_BUILD_ID=upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1 \
+  -DFE2O3_LLVM_BUILD_ID_FILE=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/evidence-v5/upstream-llvm-build-id.txt \
+  -DFE2O3_GFX942_DEVICE_LIB_DIR=/opt/rocm-7.2.4/lib/llvm/lib/clang/22/lib/amdgcn/bitcode
+tools/fe2o3-llvm-link-worker/run-row-softmax-v1-release-gate.sh \
+  /home/harsh/row-layout-worker-release-gate \
+  /home/harsh/row-layout-release-cargo-target
+```
+
+The exact row diagnostic records the pinned LLVM identity/layout, exact ABI
+and descriptor section checks, and SHA-256 transcript consistency. The legacy
+`.fe2o3.row-softmax-auth.v1` section name does not make that digest an
+authenticated Worker authority. Attempt-scoped descriptor-source
+authentication remains outside Worker `Complete` and is required downstream.
+
 CMake prints a `fe2o3-worker-v1-sha256-*` response measurement derived from
 the worker sources, LLVM version/build ID, C++ compiler identity, language
 level, and fixed exception/RTTI settings. The request names the raw LLVM build
