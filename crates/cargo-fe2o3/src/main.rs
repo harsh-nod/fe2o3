@@ -367,7 +367,7 @@ fn cargo_with_backend_result(
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
     protected_release_action: Option<ProtectedReleaseAction>,
 ) -> Result<(), String> {
-    if authority_sensitive_request_selected() {
+    if authority_sensitive_request_selected(protected_release.is_some()) {
         reject_dynamic_loader_environment()?;
     }
     scrub_process_dynamic_loader_environment();
@@ -396,8 +396,8 @@ fn cargo_with_backend_result(
                 .to_owned(),
         );
     }
-    let requires_authorized_closure = env::var("FE2O3_CODEGEN_PIPELINE").as_deref()
-        == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
+    let requires_authorized_closure = protected_release.is_some()
+        || env::var("FE2O3_CODEGEN_PIPELINE").as_deref() == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
         || worker_v2
             .as_ref()
             .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
@@ -509,8 +509,9 @@ fn cargo_with_backend_result(
     run_cargo_with_backend(&mut context, command, args, protected_release)
 }
 
-fn authority_sensitive_request_selected() -> bool {
-    env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
+fn authority_sensitive_request_selected(protected_release: bool) -> bool {
+    protected_release
+        || env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
         == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
         // A Worker V2 manifest can select the source-debug authority profile. Treat the
         // unparsed selection as authority-sensitive so mutable manifest contents cannot

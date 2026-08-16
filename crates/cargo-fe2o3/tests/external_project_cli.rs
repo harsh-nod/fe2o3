@@ -232,7 +232,7 @@ impl ProjectFixture {
                 "FE2O3_AUTHORITY_RUSTC_PATH_V1",
                 rustc_fixture_executable(&self.root),
             )
-            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_CODEGEN_PIPELINE", "protected-release-fixture-v1")
             .env(
                 "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
                 authority_rustc_sha256(&self.root),
