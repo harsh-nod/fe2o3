@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, hint::black_box};
 
 use fe2o3_moe_expert_v1::{
     EXACT_MOE_EXPERT_PROFILE_V1, MOE_EXPERT_COMBINE_GRID_V1, MOE_EXPERT_EXECUTION_SUPPORTED_V1,
@@ -64,7 +64,7 @@ fn exact_profile_and_route_weight_order_are_explicit() {
 
 #[test]
 fn source_authority_remains_fail_closed() {
-    assert!(!MOE_EXPERT_SOURCE_TO_IR_SUPPORTED_V1);
-    assert!(!MOE_EXPERT_EXECUTION_SUPPORTED_V1);
+    assert!(!black_box(MOE_EXPERT_SOURCE_TO_IR_SUPPORTED_V1));
+    assert!(!black_box(MOE_EXPERT_EXECUTION_SUPPORTED_V1));
     assert!(MOE_EXPERT_SOURCE_BLOCKER_V1.contains("no authenticated MIR-to-Kernel-IR"));
 }

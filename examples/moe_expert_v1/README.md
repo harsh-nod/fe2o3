@@ -20,6 +20,21 @@ row, every route-order weight contribution, and every final token output. They
 cover empty experts, capacity drops, lower-expert ties, balanced and patterned
 data, input immutability, and adjacent canaries.
 
+`verus/moe_expert_memory_v1.rs` is a fixed logical-source model for exact
+index bounds, inverse-slot admission, zero-padding separation, disjoint expert,
+compact, and combined write owners, and host phase order. The pinned runner
+verifies 15 obligations and requires six named mutations to fail at their
+postconditions. Its expected evidence is copyable and inert and cannot mint or
+join an authenticated receipt. It proves no Rust-source, MIR, Kernel-IR,
+LLVM/ISA, logical-address, artifact, machine-memory, generalized race-freedom,
+numerical, or GPU-execution result.
+
+Run it with the pinned release closure:
+
+```sh
+VERUS=/absolute/path/to/pinned/verus examples/moe_expert_v1/run-verus.sh
+```
+
 `src/kernel.rs` contains ordinary attributed Rust `#[kernel]` definitions for
 the expert GEMM and deterministic combine. It contains no `macro_rules!`
 kernel facade. These are exact source definitions only: authenticated

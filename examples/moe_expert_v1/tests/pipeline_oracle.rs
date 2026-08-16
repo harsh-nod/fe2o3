@@ -116,7 +116,7 @@ fn capacity_drops_empty_experts_padding_inverse_weights_and_all_outputs_match() 
     let logits = equal_logits();
     let routing = route(&logits);
     assert_eq!(routing.admitted_counts, [4, 4, 0, 0]);
-    assert!(routing.inverse.iter().any(|slot| *slot == DROP_ROUTE_V1));
+    assert!(routing.inverse.contains(&DROP_ROUTE_V1));
     assert_execution_matches_oracle(&logits);
 }
 
@@ -250,17 +250,19 @@ fn exact_index_maps_cover_only_the_fixed_extents() {
 
 #[test]
 fn expected_proof_values_are_copyable_and_inert() {
-    let expected = MoeExpertExpectedEvidenceV1 {
-        proof_source: [1; 32],
-        kernel_source: [2; 32],
-        transcript: [3; 32],
-    };
+    let expected = MoeExpertExpectedEvidenceV1::exact();
     let copied = expected;
     assert_eq!(copied, expected);
     assert!(!expected.authenticates_anything());
     assert!(!expected.proves_source_to_machine_refinement());
     assert!(!expected.proves_generalized_race_freedom());
     assert!(!expected.proves_protected_gpu_execution());
+    assert_ne!(expected.proof_source, [0; 32]);
+    assert_ne!(expected.kernel_source, [0; 32]);
+    assert_ne!(expected.verus_executable, [0; 32]);
+    assert_ne!(expected.verus_closure_manifest, [0; 32]);
+    assert_ne!(expected.negative_manifest, [0; 32]);
+    assert_ne!(expected.transcript, [0; 32]);
     assert_eq!(MOE_ROUTES_PER_TOKEN_V1, 2);
     assert_eq!(MOE_EXPERT_INPUT_WIDTH_V1, 16);
     assert_eq!(MOE_COMBINED_OUTPUT_ELEMENTS_V1, 128);
