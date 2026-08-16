@@ -91,10 +91,14 @@ access; COMGR opens were zero.
 The candidate's dynamically linked host `rust-lld` left its loader and system
 DSOs, CRTs, archives and objects, search roots, and forwarded Cargo target
 artifacts outside the authenticated closure; `env_clear` does not close that
-boundary. The next `W0/P0` milestone must accept exactly one complete design:
-a descriptor-backed full host-link closure with before/after revalidation, a
-genuinely static host linker, or in-process host LLD. Broker executable identity
-and artifact handoff are dependent milestones after that boundary is accepted.
+boundary. The selected `W0/P0` design is a dedicated, genuinely static
+`fe2o3-host-lld` built from the pinned upstream LLVM/LLD archives. A
+descriptor-backed `HostLinkClosureV1` must seal every link input, eliminate
+unresolved `-L`/`-l` lookup, bind the complete argument vector and output
+policy, and revalidate the closure before and after linking. Retaining dynamic
+`rust-lld` is rejected; in-process host LLD remains a later simplification.
+Broker executable identity and artifact handoff are dependent milestones after
+that boundary is accepted.
 The direct GPU link path remains pinned upstream LLVM 22 with in-process
 `lld::lldMain`, without COMGR or a shell GPU linker. The rejected diagnostic is
 not signed or protected evidence, parity or GPU evidence, a memory-safety or

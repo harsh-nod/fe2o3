@@ -318,19 +318,22 @@ These milestones are sequential authority gates. Work inside one milestone can
 be parallelized, but a later gate must not manufacture evidence that assumes an
 earlier authority transition.
 
-1. **W0/P0: complete authenticated host-link closure.** Select and implement
-   exactly one complete design: (a) a descriptor-backed closure that enumerates
-   the host linker's loader, DSOs, CRTs, archives and objects, search roots, and
-   forwarded Cargo target artifacts and revalidates every input before and
-   after linking; (b) a genuinely static host linker whose executable format
-   proves it has no runtime loader or shared-library dependencies; or (c)
-   in-process host LLD with its complete library and input closure pinned. The
-   common gate rejects executable, loader, DSO, CRT, archive, object, search-root,
-   response-file, and forwarded-artifact substitution, including replacement
-   between validation and consumption. A fresh MI300X run must cross the host
-   link without allowing mutable unauthenticated bytes to influence the output.
-   Keep the GPU code-object path separate: pinned upstream LLVM 22 and
-   in-process `lld::lldMain`, with no COMGR or shell GPU linker.
+1. **W0/P0: complete authenticated host-link closure.** Build a dedicated,
+   genuinely static `fe2o3-host-lld` from the pinned upstream LLVM/LLD static
+   archives. Its ELF profile must prove that it has no runtime loader or shared-
+   library dependencies. Feed it only a sealed descriptor-backed
+   `HostLinkClosureV1` that resolves every CRT, archive, object, `rlib`, DSO,
+   supported linker script, response-file expansion, search root, and forwarded
+   Cargo artifact before execution; remove unresolved `-L` and `-l` lookup from
+   the final argument vector. Revalidate every input, root journal, argument,
+   output policy, and staged output before and after linking. Reject thin
+   archives, plugins, arbitrary scripts, ambient build-script libraries, and
+   every substitution window in the first profile. Retaining dynamic
+   `rust-lld` is rejected; in-process host LLD remains a later simplification
+   after this protocol is stable. A fresh MI300X run must cross the host link
+   without allowing mutable unauthenticated bytes to influence the output. Keep
+   the GPU code-object path separate: pinned upstream LLVM 22 and in-process
+   `lld::lldMain`, with no COMGR or shell GPU linker.
 2. **W1/P0: broker executable identity.** Only after W0 is independently
    accepted, derive the `cargo-fe2o3` broker identity from the accepted command
    and host-link closure. Bind it to the release request and reject replacement,
