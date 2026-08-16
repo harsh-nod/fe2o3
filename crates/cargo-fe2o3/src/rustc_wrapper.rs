@@ -1,7 +1,9 @@
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
+use std::io::ErrorKind;
 use std::process::{Command, ExitStatus, Stdio};
+use std::time::Duration;
 
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, RustcPassthroughInvocationV2,
@@ -78,11 +80,26 @@ fn plan(argv: &[OsString]) -> Result<WrapperPlan<'_>, WrapperError> {
 fn run_passthrough(
     invocation: RustcPassthroughInvocationV2<'_>,
 ) -> Result<ExitStatus, WrapperError> {
-    Command::new(invocation.executable())
-        .args(invocation.forwarded_args())
-        .stdin(Stdio::null())
-        .status()
-        .map_err(WrapperError::Spawn)
+    const EXECUTABLE_BUSY_RETRIES: usize = 8;
+
+    let mut retry_delay = Duration::from_millis(1);
+    for attempt in 0..=EXECUTABLE_BUSY_RETRIES {
+        let result = Command::new(invocation.executable())
+            .args(invocation.forwarded_args())
+            .stdin(Stdio::null())
+            .status();
+        match result {
+            Err(error)
+                if error.kind() == ErrorKind::ExecutableFileBusy
+                    && attempt < EXECUTABLE_BUSY_RETRIES =>
+            {
+                std::thread::sleep(retry_delay);
+                retry_delay *= 2;
+            }
+            result => return result.map_err(WrapperError::Spawn),
+        }
+    }
+    unreachable!("bounded passthrough retry loop always returns")
 }
 
 pub(crate) fn exit_code(status: ExitStatus) -> i32 {

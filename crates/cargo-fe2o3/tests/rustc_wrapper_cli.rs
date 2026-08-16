@@ -192,6 +192,56 @@ fn passthrough_preserves_a_non_utf8_executable_path() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn passthrough_retries_a_transiently_busy_executable() {
+    use std::fs::OpenOptions;
+
+    let (root, rustc) = fake_rustc("exit 0");
+    let writer = OpenOptions::new().write(true).open(&rustc).unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(writer);
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fe2o3-rustc-wrapper"))
+        .arg(&rustc)
+        .arg("--version")
+        .output()
+        .expect("run wrapper");
+    release.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn passthrough_fails_after_bounded_retries_for_a_busy_executable() {
+    use std::fs::OpenOptions;
+
+    let (root, rustc) = fake_rustc("exit 0");
+    let writer = OpenOptions::new().write(true).open(&rustc).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_fe2o3-rustc-wrapper"))
+        .arg(&rustc)
+        .arg("--version")
+        .output()
+        .expect("run wrapper");
+    drop(writer);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("os error 26"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn rustc_path() -> PathBuf {
     env::var_os("RUSTC")
         .map(PathBuf::from)
