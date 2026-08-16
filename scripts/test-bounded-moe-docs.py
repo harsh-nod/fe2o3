@@ -28,6 +28,7 @@ V2_UI_COMMON = ROOT / "crates/fe2o3-host/tests/ui/generated_moe_expert_v2"
 V2_UI_HARDWARE_HOOKS = (
     ROOT / "crates/fe2o3-host/tests/ui/generated_moe_expert_v2_hardware_hooks"
 )
+CI_LOCAL = ROOT / "scripts/ci-local.sh"
 
 V2_CHECKPOINT = "10e5f90ece1937aaee77492e8e4e4742863d013b"
 V2_UNIT_UI_COMMANDS = [
@@ -93,6 +94,18 @@ def main() -> None:
     example = EXAMPLE.read_text(encoding="utf-8")
     v2_bridge = V2_BRIDGE.read_text(encoding="utf-8")
     v2_adapter = V2_ADAPTER.read_text(encoding="utf-8")
+    ci_local = CI_LOCAL.read_text(encoding="utf-8")
+
+    generic_match = re.search(r"run_generic\(\) \{\n(?P<body>.*?)\n\}", ci_local, re.DOTALL)
+    require(generic_match is not None, "generic CI function is absent")
+    generic_docs_command = (
+        "  run_step bounded-moe-docs \\\n"
+        "    python3 scripts/test-bounded-moe-docs.py"
+    )
+    require(
+        generic_match.group("body").count(generic_docs_command) == 1,
+        "generic CI must run the exact bounded MoE documentation command once",
+    )
 
     source_entries = re.findall(r'canonical\.push\(\s*"([^"]+)"', source)
     doc_entries = re.findall(r"^\|\s*\d+\s*\|\s*`([^`]+)`\s*\|", doc, re.MULTILINE)

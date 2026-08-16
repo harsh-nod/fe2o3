@@ -273,6 +273,8 @@ run_parity_matrix_checks() {
 run_generic() {
   run_step example-manifest \
     cargo run --quiet --locked -p cargo-fe2o3 -- examples check
+  run_step bounded-moe-docs \
+    python3 scripts/test-bounded-moe-docs.py
   run_parity_matrix_checks
   run_format
   run_check
