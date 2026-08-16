@@ -22,6 +22,8 @@ const CARGO_METADATA_OBSERVATION: &str =
 const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/moe_top2_v1/src/kernel.rs");
+const STRUCTURAL_CORRESPONDENCE: &str =
+    "f46197a5e2c88bb78b28849ba081c05345b775eb8e5e5df01d8dc5ad4a95e597";
 
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
@@ -276,11 +278,16 @@ fn mutation(source: &str, old: &str, new: &str) -> String {
 }
 
 fn assert_rejected(result: &Output, label: &str) {
-    let stderr = String::from_utf8_lossy(&result.stderr);
+    let output = command_text(result);
     assert!(!result.status.success(), "hostile case `{label}` compiled");
     assert!(
-        !stderr.contains("consumed sealed source authority"),
-        "hostile case `{label}` consumed authenticated authority:\n{stderr}"
+        !output.contains("consumed sealed source authority"),
+        "hostile case `{label}` consumed authenticated authority:\n{output}"
+    );
+    assert!(
+        !output.contains("checked private producer-derived structural source/FnAbi/MIR/KIR record")
+            && !output.contains(STRUCTURAL_CORRESPONDENCE),
+        "hostile case `{label}` emitted the accepted structural record:\n{output}"
     );
 }
 
@@ -333,13 +340,14 @@ fn run_relocated_exact(workspace: &Path, target: &Path) -> Output {
         ])
         .arg(target)
         .args([
-            "exact_phase_a_source_authenticates_complete_moe_top2_profile",
+            "live_rustc_admission_emits_pinned_structural_record",
             "--",
             "--nocapture",
         ])
         .env("CARGO_TARGET_DIR", target)
         .env("CARGO_INCREMENTAL", "0")
         .env("FE2O3_MOE_TOP2_REPORT_AUTHORITY", "1")
+        .env("FE2O3_MOE_TOP2_REPORT_CORRESPONDENCE", "1")
         .output()
         .expect("run relocated exact MoE top-2 profile")
 }
@@ -364,8 +372,20 @@ fn authenticated_authority(output: &Output) -> String {
     authority.to_owned()
 }
 
+fn authenticated_structural_record(output: &Output) -> String {
+    let text = command_text(output);
+    let suffix = text
+        .split_once("MOE_TOP2_STRUCTURAL_CORRESPONDENCE ")
+        .unwrap_or_else(|| panic!("missing structural record marker:\n{text}"))
+        .1;
+    let record = suffix.lines().next().expect("record terminator").trim();
+    assert_eq!(record, STRUCTURAL_CORRESPONDENCE);
+    assert!(record.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    record.to_owned()
+}
+
 #[test]
-fn exact_phase_a_source_authenticates_complete_moe_top2_profile() {
+fn live_rustc_admission_emits_pinned_structural_record() {
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let result = compile(
@@ -387,6 +407,9 @@ fn exact_phase_a_source_authenticates_complete_moe_top2_profile() {
     for marker in [
         "exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest",
         "complete reachable portable-MIR closure modulo those identity-bound terminals 934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13",
+        "checked private producer-derived structural source/FnAbi/MIR/KIR record",
+        "explicitly not semantic refinement",
+        "whole-module MIR diagnostics and a single canonical KIR/profile field table do not prove semantic MIR-to-KIR correspondence",
         "closed deterministic finite-input MoE top-2 T8/E4/K2/C4 semantic KIR",
         "with 10 ordered routing steps",
         "lane-zero exclusive output ownership",
@@ -396,6 +419,18 @@ fn exact_phase_a_source_authenticates_complete_moe_top2_profile() {
         "no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, worker execution, finalizer, link result, artifact, host, runtime, load, launch, GPU, or hardware authority",
     ] {
         assert!(stderr.contains(marker), "missing `{marker}`:\n{stderr}");
+    }
+    let correspondence = stderr
+        .split_once("checked private producer-derived structural source/FnAbi/MIR/KIR record ")
+        .expect("structural correspondence marker")
+        .1
+        .split_once(", explicitly not semantic refinement")
+        .expect("structural correspondence terminator")
+        .0;
+    assert_eq!(correspondence, STRUCTURAL_CORRESPONDENCE);
+    assert!(correspondence.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if std::env::var_os("FE2O3_MOE_TOP2_REPORT_CORRESPONDENCE").is_some() {
+        println!("MOE_TOP2_STRUCTURAL_CORRESPONDENCE {correspondence}");
     }
     if std::env::var_os("FE2O3_MOE_TOP2_REPORT_AUTHORITY").is_some() {
         let authority = stderr
@@ -733,6 +768,10 @@ fn authority_is_location_independent_and_provider_source_bound() {
         authenticated_authority(&first),
         authenticated_authority(&second)
     );
+    assert_eq!(
+        authenticated_structural_record(&first),
+        authenticated_structural_record(&second)
+    );
 
     let thread_source = location_b.join("crates/fe2o3-device/src/thread.rs");
     let mut hostile_source =
@@ -748,5 +787,11 @@ fn authority_is_location_independent_and_provider_source_bound() {
     assert!(
         hostile_text.contains("trusted-definition/semantic-terminal identity drifted"),
         "provider substitution did not fail at trusted identity:\n{hostile_text}"
+    );
+    assert!(
+        !hostile_text
+            .contains("checked private producer-derived structural source/FnAbi/MIR/KIR record")
+            && !hostile_text.contains(STRUCTURAL_CORRESPONDENCE),
+        "provider substitution emitted an accepted structural record:\n{hostile_text}"
     );
 }

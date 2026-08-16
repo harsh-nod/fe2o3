@@ -1230,6 +1230,26 @@ mod tests {
     }
 
     #[test]
+    fn canonical_table_contains_each_actual_field_once() {
+        let inputs = candidate_inputs_for_test();
+        assert_eq!(inputs.canonical.fields.len(), 31);
+        let unique_names = inputs
+            .canonical
+            .fields
+            .iter()
+            .map(|field| field.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique_names.len(), inputs.canonical.fields.len());
+        assert!(
+            inputs
+                .canonical
+                .fields
+                .iter()
+                .all(|field| field.memberships != 0)
+        );
+    }
+
+    #[test]
     fn classifier_rejects_mutations_after_earlier_admission_gates() {
         let mutations: [fn(&mut StructuralInputsV2); 13] = [
             |inputs| inputs.fn_abi.arguments[0].alignment = 4,
@@ -1274,6 +1294,17 @@ mod tests {
             let mut inputs = candidate_inputs_for_test();
             mutate(&mut inputs);
             assert!(check_structural_inputs(inputs).is_err());
+        }
+
+        let field_count = candidate_inputs_for_test().canonical.fields.len();
+        for index in 0..field_count {
+            let mut value_mutation = candidate_inputs_for_test();
+            value_mutation.canonical.fields[index].value.push(0);
+            assert!(check_structural_inputs(value_mutation).is_err());
+
+            let mut membership_mutation = candidate_inputs_for_test();
+            membership_mutation.canonical.fields[index].memberships ^= MEMBER_KERNEL_IR;
+            assert!(check_structural_inputs(membership_mutation).is_err());
         }
     }
 
