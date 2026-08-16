@@ -3,7 +3,8 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,7 +14,6 @@ use sha2::{Digest, Sha256};
 
 const CARGO_ENV: &str = "FE2O3_G3_ROW_SOFTMAX_V1_CARGO";
 const RUSTC_ENV: &str = "FE2O3_G3_ROW_SOFTMAX_V1_RUSTC";
-const RUSTC_RUNTIME_SHA256_ENV: &str = "FE2O3_G3_ROW_SOFTMAX_V1_RUSTC_RUNTIME_SHA256";
 const BACKEND_ENV: &str = "FE2O3_G3_ROW_SOFTMAX_V1_BACKEND";
 const WORKER_ENV: &str = "FE2O3_G3_ROW_SOFTMAX_V1_WORKER";
 const WORKER_BUILD_ID_ENV: &str = "FE2O3_G3_ROW_SOFTMAX_V1_WORKER_BUILD_ID";
@@ -80,19 +80,6 @@ fn required_path(name: &str) -> PathBuf {
     fs::canonicalize(&path).unwrap_or_else(|error| panic!("cannot resolve {name}: {error}"))
 }
 
-fn required_sha256(name: &str) -> String {
-    let value =
-        env::var(name).unwrap_or_else(|_| panic!("required no-skip input {name} is absent"));
-    assert!(
-        value.len() == 64
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-        "{name} must be a lowercase SHA-256 digest"
-    );
-    value
-}
-
 fn required_text(name: &str) -> String {
     let value =
         env::var(name).unwrap_or_else(|_| panic!("required no-skip input {name} is absent"));
@@ -112,6 +99,75 @@ fn file_sha256(path: &Path) -> String {
     hex(&Sha256::digest(bytes))
 }
 
+fn rustc_runtime_sha256(rustc: &Path) -> String {
+    fn hash_field(hash: &mut Sha256, value: &[u8]) {
+        hash.update((value.len() as u64).to_le_bytes());
+        hash.update(value);
+    }
+
+    fn hash_directory(hash: &mut Sha256, directory: &Path) {
+        let mut entries = fs::read_dir(directory)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "cannot read rustc runtime directory {}: {error}",
+                    directory.display()
+                )
+            })
+            .map(|entry| entry.expect("read rustc runtime entry"))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            left.file_name()
+                .as_bytes()
+                .cmp(right.file_name().as_bytes())
+        });
+        hash.update(b"directory\0");
+        for entry in entries {
+            hash_field(hash, entry.file_name().as_bytes());
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).unwrap_or_else(|error| {
+                panic!(
+                    "cannot inspect rustc runtime entry {}: {error}",
+                    path.display()
+                )
+            });
+            if metadata.is_file() {
+                let bytes = fs::read(&path).unwrap_or_else(|error| {
+                    panic!(
+                        "cannot read rustc runtime entry {}: {error}",
+                        path.display()
+                    )
+                });
+                hash.update(b"file\0");
+                hash.update((metadata.mode() & 0o7777).to_le_bytes());
+                hash.update((bytes.len() as u64).to_le_bytes());
+                hash.update(bytes);
+            } else if metadata.is_dir() {
+                hash.update(b"subdirectory\0");
+                hash.update((metadata.mode() & 0o7777).to_le_bytes());
+                hash_directory(hash, &path);
+            } else {
+                panic!("unsupported rustc runtime entry {}", path.display());
+            }
+        }
+        hash.update(b"end-directory\0");
+    }
+
+    let lib = rustc
+        .parent()
+        .and_then(Path::parent)
+        .expect("rustc path is beneath the toolchain root")
+        .join("lib");
+    assert!(
+        lib.is_dir(),
+        "rustc runtime directory is absent: {}",
+        lib.display()
+    );
+    let mut hash = Sha256::new();
+    hash.update(b"fe2o3-rustc-runtime-tree-v1\0");
+    hash_directory(&mut hash, &lib);
+    hex(&hash.finalize())
+}
+
 fn fixture_manifest() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
     fs::canonicalize(manifest).expect("resolve attributed row-softmax fixture")
@@ -127,6 +183,7 @@ fn fixture_directory() -> PathBuf {
 fn protected_command(action: &str, target_dir: &Path, target: &str) -> Command {
     let cargo = required_path(CARGO_ENV);
     let rustc = required_path(RUSTC_ENV);
+    let rustc_runtime_sha256 = rustc_runtime_sha256(&rustc);
     let backend = required_path(BACKEND_ENV);
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
@@ -146,7 +203,7 @@ fn protected_command(action: &str, target_dir: &Path, target: &str) -> Command {
         .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", file_sha256(&rustc))
         .env(
             "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
-            required_sha256(RUSTC_RUNTIME_SHA256_ENV),
+            rustc_runtime_sha256,
         )
         .env("FE2O3_BACKEND", &backend)
         .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", file_sha256(&backend))
