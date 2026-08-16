@@ -109,10 +109,11 @@ verify_tree_closure() {
 }
 
 generate_runtime_provider_manifest() {
-  local worker=$1 requested_provider=$2 canonical_provider=$3 output=$4 scratch=$5
-  local ldd_output="$scratch/worker.ldd"
-  local dso_paths="$scratch/worker.dso-paths"
-  env -i LC_ALL=C LANG=C PATH=/usr/bin:/bin /usr/bin/ldd "$worker" >"$ldd_output"
+  local worker_path=$1 requested_provider_dir=$2 canonical_provider_dir=$3
+  local output_path=$4 scratch_dir=$5
+  local ldd_output="$scratch_dir/worker.ldd"
+  local dso_paths="$scratch_dir/worker.dso-paths"
+  env -i LC_ALL=C LANG=C PATH=/usr/bin:/bin /usr/bin/ldd "$worker_path" >"$ldd_output"
   : >"$dso_paths"
   while IFS= read -r line; do
     local path=''
@@ -128,11 +129,11 @@ generate_runtime_provider_manifest() {
   LC_ALL=C /usr/bin/sort -u -o "$dso_paths" "$dso_paths"
   {
     printf 'fe2o3-row-softmax-runtime-provider-v1\n'
-    printf 'provider-requested=%s\n' "$requested_provider"
-    printf 'provider-canonical=%s\n' "$canonical_provider"
+    printf 'provider-requested=%s\n' "$requested_provider_dir"
+    printf 'provider-canonical=%s\n' "$canonical_provider_dir"
     local provider_file canonical_file
     for provider_file in "${PROVIDER_FILES[@]}"; do
-      canonical_file=$(/usr/bin/readlink -f -- "$requested_provider/$provider_file")
+      canonical_file=$(/usr/bin/readlink -f -- "$requested_provider_dir/$provider_file")
       printf 'P\t%s\t%s\t%s\n' "$canonical_file" \
         "$(file_length "$canonical_file")" "$(sha256_file "$canonical_file")"
     done
@@ -142,23 +143,23 @@ generate_runtime_provider_manifest() {
       printf 'D\t%s\t%s\t%s\n' "$dso" "$(file_length "$dso")" \
         "$(sha256_file "$dso")"
     done <"$dso_paths"
-  } >"$output"
+  } >"$output_path"
 }
 
 verify_cmake_source() {
-  local cache=$1 expected_source=$2
-  /usr/bin/grep -Fqx "CMAKE_HOME_DIRECTORY:INTERNAL=$expected_source" "$cache"
+  local cache_path=$1 expected_source=$2
+  /usr/bin/grep -Fqx "CMAKE_HOME_DIRECTORY:INTERNAL=$expected_source" "$cache_path"
 }
 
 verify_source_state() {
-  local git=$1 repo_root=$2 implementation_commit=$3 implementation_tree=$4
+  local git_bin=$1 source_root=$2 implementation_commit=$3 implementation_tree=$4
   [[ -z $(env -i HOME="$HOME" LC_ALL=C PATH=/usr/bin:/bin \
-    "$git" -C "$repo_root" status --porcelain=v1 --untracked-files=all) ]] ||
+    "$git_bin" -C "$source_root" status --porcelain=v1 --untracked-files=all) ]] ||
     die "release source checkout is not clean"
   local committed_tree parent commit_count
-  committed_tree=$("$git" -C "$repo_root" rev-parse "${implementation_commit}^{tree}")
-  parent=$("$git" -C "$repo_root" rev-parse HEAD^)
-  commit_count=$("$git" -C "$repo_root" rev-list --count "$implementation_commit..HEAD")
+  committed_tree=$("$git_bin" -C "$source_root" rev-parse "${implementation_commit}^{tree}")
+  parent=$("$git_bin" -C "$source_root" rev-parse HEAD^)
+  commit_count=$("$git_bin" -C "$source_root" rev-list --count "$implementation_commit..HEAD")
   [[ "$committed_tree" == "$implementation_tree" ]] ||
     die "implementation tree pin does not match its commit"
   [[ "$parent" == "$implementation_commit" ]] ||
@@ -166,7 +167,7 @@ verify_source_state() {
   [[ "$commit_count" == 1 ]] ||
     die "release checkout contains commits beyond manifest-only Commit B"
   local changed
-  changed=$("$git" -C "$repo_root" diff --name-only "$implementation_commit..HEAD")
+  changed=$("$git_bin" -C "$source_root" diff --name-only "$implementation_commit..HEAD")
   [[ "$changed" == "$MANIFEST_REPOSITORY_PATH" ]] ||
     die "Commit B differs from Commit A by more than the release manifest"
 }
