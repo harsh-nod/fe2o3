@@ -98,6 +98,11 @@ fn all_six_negative_sources_are_pinned_and_executed() {
 #[test]
 fn expected_values_are_exact_but_explicitly_inert() {
     let expected = MoeExpertExpectedEvidenceV1::exact();
+    let expected_verus: String = expected
+        .verus_executable
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     assert_eq!(sha256(PROOF).as_bytes(), PROOF_SHA256.as_bytes());
     assert_eq!(
         expected.proof_source.as_slice(),
@@ -111,6 +116,7 @@ fn expected_values_are_exact_but_explicitly_inert() {
         expected.verus_closure_manifest.as_slice(),
         Sha256::digest(CLOSURE_MANIFEST).as_slice()
     );
+    assert_eq!(expected_verus, include_str!("../verus/VERUS_SHA256").trim());
     assert_eq!(
         expected.negative_manifest.as_slice(),
         Sha256::digest(NEGATIVE_MANIFEST).as_slice()
