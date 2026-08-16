@@ -968,7 +968,6 @@ append_retained_guard_file trace-allowlist "$trace_allowlist"
 configure_inner=(
   "$CMAKE" --debug-trycompile -S "$tool_source" -B "$build_dir" -G Ninja
   -DBUILD_TESTING:BOOL=ON
-  -DMEMORYCHECK_COMMAND:FILEPATH= -DCOVERAGE_COMMAND:FILEPATH=
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="$NINJA"
   -DCMAKE_CXX_COMPILER="$CXX"
   -DCMAKE_CXX_FLAGS=-save-temps=obj
@@ -1167,10 +1166,6 @@ readonly ctest_test_file="$build_dir/CTestTestfile.cmake"
   die 'guarded configure omitted its CTest registration'
 /usr/bin/grep -Fxq 'BUILD_TESTING:BOOL=ON' "$cmake_cache" ||
   die 'guarded configure disabled tests'
-/usr/bin/grep -Fxq 'MEMORYCHECK_COMMAND:FILEPATH=' "$cmake_cache" ||
-  die 'guarded configure enabled ambient memory-check discovery'
-/usr/bin/grep -Fxq 'COVERAGE_COMMAND:FILEPATH=' "$cmake_cache" ||
-  die 'guarded configure enabled ambient coverage-tool discovery'
 /usr/bin/grep -Fq 'fe2o3-host-lld-secure-protocol-v2' "$ctest_test_file" ||
   die 'guarded configure omitted the secure protocol test'
 configure_trace_files=("$configure_trace_prefix".*)

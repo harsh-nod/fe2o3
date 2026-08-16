@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(fe2o3_host_lld LANGUAGES CXX)
 
-include(CTest)
+option(BUILD_TESTING "Build the fe2o3 host LLD tests" ON)
+if(BUILD_TESTING)
+  enable_testing()
+endif()
 
 foreach(required IN ITEMS
     LLVM_DIR LLD_DIR FE2O3_LLVM_PACKAGE_ROOT FE2O3_LLVM_BUILD_ID_FILE
