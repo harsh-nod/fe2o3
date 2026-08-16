@@ -1,0 +1,5 @@
+error[E0599]: no method named `exact_finalized_bytes` found for reference `&FinalizedFlashAttentionV1ReceiptV1` in the current scope
+ --> tests/ui/flash_attention_v1_finalization/receipt_bytes_are_unavailable.rs:4:26
+  |
+4 |     let _bytes = receipt.exact_finalized_bytes();
+  |                          ^^^^^^^^^^^^^^^^^^^^^ method not found in `&FinalizedFlashAttentionV1ReceiptV1`
