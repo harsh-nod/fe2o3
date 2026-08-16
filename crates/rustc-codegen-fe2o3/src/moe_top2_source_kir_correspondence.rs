@@ -43,8 +43,8 @@ const PORTABLE_MIR_IDENTITY: [u8; 32] = [
     0xe1, 0x5d, 0xd6, 0x83, 0x76, 0xdc, 0xe4, 0x77, 0xd1, 0x76, 0x8e, 0x29, 0x36, 0xb4, 0xfc, 0x13,
 ];
 const FN_ABI_IDENTITY: [u8; 32] = [
-    0xf7, 0x96, 0x18, 0x0c, 0x59, 0x0c, 0xd8, 0x41, 0x25, 0x92, 0x1f, 0x2a, 0xae, 0xb8, 0x5a, 0xb1,
-    0x3e, 0xf1, 0xb5, 0xc0, 0x50, 0x2c, 0x1b, 0x13, 0x16, 0xbf, 0x9a, 0x21, 0x14, 0xfd, 0x30, 0xf6,
+    0xdd, 0xc0, 0x17, 0x2c, 0xfc, 0x37, 0x01, 0x6c, 0x86, 0xbe, 0x2b, 0x57, 0x9c, 0x4c, 0x98, 0xb1,
+    0x4f, 0x82, 0x3d, 0xd9, 0x37, 0x18, 0x16, 0xb6, 0x64, 0x8f, 0x1b, 0x8b, 0xd0, 0x61, 0xbd, 0x88,
 ];
 
 // Filled from the exact live rustc admission. The text is deliberately
@@ -53,7 +53,7 @@ const FN_ABI_IDENTITY: [u8; 32] = [
 pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
     "schema=moe-top2-private-structural-v2;",
     "source=b77016caa0c3708e420e583712e65e4e6428db7b4feafd8d0a1d4bdc475ef6ff;",
-    "fnabi=f796180c590cd84125921f2aaeb85ab13ef1b5c0502c1b1316bf9a2114fd30f6:",
+    "fnabi=ddc0172cfc37016c86be2b579c4c98b14f823dd9371816b6648f1b8bd061bd88:",
     "rust=1:variadic=0:fixed=8:unwind=1:ignored=1:result=0:",
     "args=[16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,",
     "16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0];",
@@ -70,7 +70,7 @@ pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
     "trusted=3dbbe3ec9d58a7c285a14159294051498378f291525d8445113b17aab9b0e08b;",
     "root=kernel::__fe2o3_host_kernel_v1_",
     "0d0504325353eb74b0c9ace47560290e2278a7cd7c20e3b1c6c70f4a7e37b1ab;",
-    "authority=0ecec41db62eae781429526170aa60a73437f4cd8261b7e4d34ffe62309ad6e9",
+    "authority=796a0c1a358d17670a018ceb35db92fa472e4aa43e0b366dc037ab098d6207d4",
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

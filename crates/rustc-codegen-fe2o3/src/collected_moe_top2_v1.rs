@@ -71,6 +71,8 @@ const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.compiler-semantics.
 const TRUSTED_DEFINITIONS_DOMAIN_V3: &[u8] = b"fe2o3.moe-top2.trusted-definitions-and-terminals.v3";
 const AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.source-authority.v1";
 const FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.rustc-fn-abi.v1";
+const FN_ABI_CALLING_CONVENTION_RUST_V2: u8 = 0;
+const FN_ABI_RETURN_MODE_IGNORE_V2: u8 = 0;
 const ABI_BINDING_V1: &[u8] = b"ptr64;size=128;align=8;logits@0:16:8:slice-f32:shared-readonly;top2@16:16:8:disjoint-u32:exclusive-readwrite;requested@32:16:8:disjoint-u32:exclusive-readwrite;admitted@48:16:8:disjoint-u32:exclusive-readwrite;offsets@64:16:8:disjoint-u32:exclusive-readwrite;slots@80:16:8:disjoint-u32:exclusive-readwrite;permutation@96:16:8:disjoint-u32:exclusive-readwrite;inverse@112:16:8:disjoint-u32:exclusive-readwrite";
 const EFFECT_BINDING_V1: &[u8] = b"logits:shared-readonly-f32x32;seven-disjoint-u32-outputs:exclusive;lane0-owns-every-output-element-once;lanes1..63-write-none;all-shape-and-finite-input-failures-trap-before-any-output-write";
 const SOURCE_LAUNCH_BINDING_V1: &[u8] =
@@ -93,8 +95,8 @@ const PORTABLE_MIR_CLOSURE_IDENTITY_V1: [u8; 32] = [
     0xe1, 0x5d, 0xd6, 0x83, 0x76, 0xdc, 0xe4, 0x77, 0xd1, 0x76, 0x8e, 0x29, 0x36, 0xb4, 0xfc, 0x13,
 ];
 const RUSTC_FN_ABI_IDENTITY_V1: [u8; 32] = [
-    0xf7, 0x96, 0x18, 0x0c, 0x59, 0x0c, 0xd8, 0x41, 0x25, 0x92, 0x1f, 0x2a, 0xae, 0xb8, 0x5a, 0xb1,
-    0x3e, 0xf1, 0xb5, 0xc0, 0x50, 0x2c, 0x1b, 0x13, 0x16, 0xbf, 0x9a, 0x21, 0x14, 0xfd, 0x30, 0xf6,
+    0xdd, 0xc0, 0x17, 0x2c, 0xfc, 0x37, 0x01, 0x6c, 0x86, 0xbe, 0x2b, 0x57, 0x9c, 0x4c, 0x98, 0xb1,
+    0x4f, 0x82, 0x3d, 0xd9, 0x37, 0x18, 0x16, 0xb6, 0x64, 0x8f, 0x1b, 0x8b, 0xd0, 0x61, 0xbd, 0x88,
 ];
 const COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
     0x49, 0x50, 0xc2, 0x25, 0xe0, 0xcd, 0xbd, 0xce, 0x4e, 0x12, 0x30, 0x16, 0x69, 0x84, 0x94, 0x99,
@@ -216,6 +218,18 @@ struct RustcLoadedMoeTop2SourceV2 {
 struct ObservedMoeTop2FnAbiV1 {
     identity: [u8; 32],
     structural_projection: MoeFnAbiStructuralProjectionV2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CheckedMoeTop2FnAbiHeaderV2 {
+    calling_convention: u8,
+    c_variadic: bool,
+    fixed_count: u64,
+    argument_count: u64,
+    can_unwind: bool,
+    return_mode: u8,
+    return_size: u64,
+    return_alignment: u64,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -874,6 +888,7 @@ fn require_fn_abi<'tcx>(
         || abi.args.len() != 8
         || !matches!(abi.ret.mode, PassMode::Ignore)
         || abi.ret.layout.size.bytes() != 0
+        || abi.ret.layout.align.abi.bytes() != 1
     {
         return Err(CollectedMoeTop2ErrorV1::Abi(format!(
             "FnAbi header must be Rust(args=8)->unit, found {abi:?}"
@@ -881,9 +896,23 @@ fn require_fn_abi<'tcx>(
     }
     let mut digest = Sha256::new();
     hash_field(&mut digest, FN_ABI_DOMAIN_V1);
-    hash_field(&mut digest, &[u8::from(abi.c_variadic)]);
-    hash_field(&mut digest, &abi.fixed_count.to_le_bytes());
-    hash_field(&mut digest, &[u8::from(abi.can_unwind)]);
+    hash_checked_fn_abi_header(
+        &mut digest,
+        CheckedMoeTop2FnAbiHeaderV2 {
+            calling_convention: FN_ABI_CALLING_CONVENTION_RUST_V2,
+            c_variadic: abi.c_variadic,
+            fixed_count: u64::try_from(abi.fixed_count).map_err(|_| {
+                CollectedMoeTop2ErrorV1::Abi("FnAbi fixed count overflowed u64".into())
+            })?,
+            argument_count: u64::try_from(abi.args.len()).map_err(|_| {
+                CollectedMoeTop2ErrorV1::Abi("FnAbi argument count overflowed u64".into())
+            })?,
+            can_unwind: abi.can_unwind,
+            return_mode: FN_ABI_RETURN_MODE_IGNORE_V2,
+            return_size: abi.ret.layout.size.bytes(),
+            return_alignment: abi.ret.layout.align.abi.bytes(),
+        },
+    );
     let mut arguments = [MoeFnAbiArgumentStructuralProjectionV2 {
         size: 0,
         alignment: 0,
@@ -952,8 +981,11 @@ fn require_fn_abi<'tcx>(
     }
     Ok(ObservedMoeTop2FnAbiV1 {
         identity: actual,
-        // The digest commits the exact checked rustc FnAbi. These fields are a
-        // bounded readable projection, not a complete representation of FnAbi.
+        // The digest commits calling convention, variadic/fixed/actual counts,
+        // unwind, ignored-return mode, return size/alignment, and each argument's
+        // size/alignment, pair mode, and both components' regular bits,
+        // extension, pointee size, and optional pointee alignment. This value
+        // remains a bounded projection, not a complete FnAbi model.
         structural_projection: MoeFnAbiStructuralProjectionV2 {
             identity: actual,
             rust_calling_convention: abi.conv == CanonAbi::Rust,
@@ -969,6 +1001,17 @@ fn require_fn_abi<'tcx>(
             arguments,
         },
     })
+}
+
+fn hash_checked_fn_abi_header(digest: &mut Sha256, header: CheckedMoeTop2FnAbiHeaderV2) {
+    hash_field(digest, &[header.calling_convention]);
+    hash_field(digest, &[u8::from(header.c_variadic)]);
+    hash_field(digest, &header.fixed_count.to_le_bytes());
+    hash_field(digest, &header.argument_count.to_le_bytes());
+    hash_field(digest, &[u8::from(header.can_unwind)]);
+    hash_field(digest, &[header.return_mode]);
+    hash_field(digest, &header.return_size.to_le_bytes());
+    hash_field(digest, &header.return_alignment.to_le_bytes());
 }
 
 fn hash_arg_attributes(digest: &mut Sha256, attributes: ArgAttributes) {
@@ -1582,6 +1625,26 @@ mod tests {
         exact_frontend_receipt_for_test()
     }
 
+    fn exact_fn_abi_header() -> CheckedMoeTop2FnAbiHeaderV2 {
+        CheckedMoeTop2FnAbiHeaderV2 {
+            calling_convention: FN_ABI_CALLING_CONVENTION_RUST_V2,
+            c_variadic: false,
+            fixed_count: 8,
+            argument_count: 8,
+            can_unwind: true,
+            return_mode: FN_ABI_RETURN_MODE_IGNORE_V2,
+            return_size: 0,
+            return_alignment: 1,
+        }
+    }
+
+    fn fn_abi_header_commitment(header: CheckedMoeTop2FnAbiHeaderV2) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        hash_field(&mut digest, FN_ABI_DOMAIN_V1);
+        hash_checked_fn_abi_header(&mut digest, header);
+        digest.finalize().into()
+    }
+
     #[test]
     fn rustc_loaded_source_witness_does_not_reopen_replaced_path() {
         let directory = TestTempDir::create("fe2o3-moe-rustc-source-witness");
@@ -1619,7 +1682,24 @@ mod tests {
     }
 
     #[test]
-    fn authority_mutations_fail_closed() {
+    fn authority_and_checked_fn_abi_header_mutations_fail_closed() {
+        let baseline = fn_abi_header_commitment(exact_fn_abi_header());
+        let header_mutations: [fn(&mut CheckedMoeTop2FnAbiHeaderV2); 8] = [
+            |value| value.calling_convention ^= 1,
+            |value| value.c_variadic = true,
+            |value| value.fixed_count += 1,
+            |value| value.argument_count += 1,
+            |value| value.can_unwind = false,
+            |value| value.return_mode ^= 1,
+            |value| value.return_size += 1,
+            |value| value.return_alignment += 1,
+        ];
+        for mutate in header_mutations {
+            let mut header = exact_fn_abi_header();
+            mutate(&mut header);
+            assert_ne!(fn_abi_header_commitment(header), baseline);
+        }
+
         let mutations: Vec<fn(&mut MoeTop2AuthorityV1)> = vec![
             |value| value.source_identity[0] ^= 1,
             |value| value.source_namespace[0] ^= 1,

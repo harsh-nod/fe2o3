@@ -13,15 +13,19 @@ admission path can construct that witness, after it has authenticated:
 - source contents retained in rustc's loaded `SourceFile` and their SHA-256
   identity, without reopening the source path;
 - compiler semantics, trusted definitions, and the exact root instance;
-- the rustc-derived opaque exact `FnAbi` identity and a bounded structural
+- the rustc-derived opaque checked `FnAbi` identity and a bounded structural
   projection of the checked header, result, and eight pair-mode arguments;
 - the admitted complete portable-MIR module and its semantic identity; and
 - the already validated `MoeTop2KernelIrV1` and `MoeTop2ProfileV1` values.
 
 The `FnAbi` projection is not a complete representation of rustc's `FnAbi`.
-The opaque identity commits the exact fields checked by the existing admission;
-the projection makes only the bounded structural subset readable in this
-diagnostic.
+The opaque identity commits the checked Rust calling-convention discriminator,
+variadic flag, fixed and actual argument counts, unwind flag, ignored-return
+mode discriminator, return size and ABI alignment, and, for every argument,
+layout size/alignment, pair-mode discriminator, and both components' complete
+checked regular-attribute bits, extension, pointee size, and optional pointee
+alignment. The projection makes only a bounded structural subset readable in
+this diagnostic.
 
 The portable-MIR summary counts functions, roots, helpers, blocks, statements,
 terminators, CFG edges, external imports, root arguments and locals,
