@@ -381,7 +381,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[test]
-#[ignore = "requires exact upstream-LLVM worker/compiler pins and a local gfx942:xnack- MI300X"]
+#[ignore = "blocked until the static production binding wrapper is integrated"]
 fn exact_gfx942_authority_release_run_covers_positive_and_hostile_profiles() {
     let directory = TestDirectory::new();
 
@@ -475,4 +475,27 @@ fn exact_gfx942_authority_release_run_covers_positive_and_hostile_profiles() {
         release(&target, &directory.path.join("target-target"), "gfx1100"),
         "requires FE2O3_TARGET=gfx942:xnack-",
     );
+}
+
+#[test]
+#[ignore = "requires exact production compiler pins on Linux"]
+fn exact_gfx942_authority_release_stops_at_static_binding_wrapper_boundary() {
+    let target = env::temp_dir().join(format!(
+        "cargo-fe2o3-row-softmax-binding-boundary-{}-{}",
+        std::process::id(),
+        NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+    ));
+    let output = protected_command("build", &target, "gfx942:xnack-")
+        .output()
+        .expect("execute protected row-softmax binding boundary");
+    let _ = fs::remove_dir_all(&target);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "unexpected success: {stderr}");
+    assert!(stderr.contains("stage=binding-wrapper"), "{stderr}");
+    assert!(
+        stderr.contains("integrated static binding wrapper"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(PROVIDER_OBSERVATION), "{stderr}");
+    assert!(!stderr.contains(SUCCESS), "{stderr}");
 }
