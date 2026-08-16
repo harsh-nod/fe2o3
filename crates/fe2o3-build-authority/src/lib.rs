@@ -3,13 +3,17 @@
 #![doc = r#"
 Canonical formats shared by the protected fe2o3 build-authority boundary.
 
-This crate defines inert policy data and content identities. Parsing a policy
-does not establish process identity, isolation, freshness, or publication
-authority. The only profile accepted by Policy V1 is the non-authoritative
-standalone foundation profile, and it carries no publication rights.
+This crate defines inert policy data, content identities, wire frames, and
+transcript validators. Parsing or validating them does not establish process
+identity, isolation, freshness, replay exclusion, execution authority, or
+publication authority. Broker V4 is explicitly `AUTHORITY=none`; production
+authority requires a broker-owned durable replay registry and session capability.
+The only profile accepted by Policy V1 is the non-authoritative standalone
+foundation profile, and it carries no publication rights.
 "#]
 
 mod broker_v3;
+mod broker_v4;
 mod cargo_environment_v1;
 mod compiler_closure;
 mod policy_v1;
@@ -25,6 +29,23 @@ pub use broker_v3::{
     POST_EXEC_V3_PAYLOAD_LEN, PREPARE_V3_PAYLOAD_LEN, PROCESS_IDENTITY_V3_WIRE_LEN, PostExecV3,
     PrepareV3, ProcessIdentityV3, decode_broker_frame_v3, decode_capability_binding_v3,
     encode_broker_frame_v3,
+};
+pub use broker_v4::{
+    BROKER_V4_AUTHORITY, BROKER_V4_BINDING_IDENTITY_DOMAIN, BROKER_V4_BINDING_OFFSET,
+    BROKER_V4_BINDING_WIRE_LEN, BROKER_V4_HEADER_LEN, BROKER_V4_MAGIC, BROKER_V4_PROCESS_OFFSET,
+    BROKER_V4_VERSION, BrokerAuthorityV4, BrokerFrameKindV4, BrokerFrameV4, BrokerIdentityFieldV4,
+    BrokerProtocolErrorV4, BrokerReplayRegistryV4, BrokerSessionClaimV4, BrokerStateErrorV4,
+    BrokerTargetV4, BrokerTranscriptFieldV4, BrokerTranscriptValidatorV4,
+    BrokerValidationRejectedV4, CapabilityBindingV4, CompletedBrokerTranscriptV4,
+    GrantedHostLinkTranscriptV4, HOST_LINK_CLOSURE_OFFSET_V4,
+    HOST_LINK_COMMIT_DURABLE_PLAN_OFFSET_V4, HOST_LINK_COMMIT_OUTPUT_LENGTH_OFFSET_V4,
+    HOST_LINK_COMMIT_OUTPUT_MODE_OFFSET_V4, HOST_LINK_COMMIT_OUTPUT_SHA256_OFFSET_V4,
+    HOST_LINK_COMMIT_RESERVED_OFFSET_V4, HOST_LINK_COMMIT_V4_PAYLOAD_LEN,
+    HOST_LINK_GRANT_OFFSET_V4, HOST_LINK_GRANT_V4_PAYLOAD_LEN, HOST_LINK_OUTPUT_MODE_V4,
+    HOST_LINK_PLAN_OFFSET_V4, HOST_LINK_PREPARE_V4_PAYLOAD_LEN, HOST_LINK_REQUEST_OFFSET_V4,
+    HostLinkCommitV4, HostLinkGrantV4, HostLinkPrepareV4, PROCESS_IDENTITY_V4_WIRE_LEN,
+    PreparedHostLinkTranscriptV4, ProcessIdentityV4, decode_broker_frame_v4,
+    decode_capability_binding_v4, encode_broker_frame_v4,
 };
 pub use cargo_environment_v1::{
     AUTHORITY_CARGO_ENVIRONMENT_ENTRY_COUNT_V1, AUTHORITY_CARGO_ENVIRONMENT_HEADER_LEN_V1,
