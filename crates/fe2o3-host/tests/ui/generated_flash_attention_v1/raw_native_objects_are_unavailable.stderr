@@ -1,0 +1,11 @@
+error[E0599]: no method named `executable_object` found for reference `&JoinedFlashAttentionV1<'_, '_, '_, '_>` in the current scope
+ --> tests/ui/generated_flash_attention_v1/raw_native_objects_are_unavailable.rs:4:30
+  |
+4 |     let _executable = joined.executable_object();
+  |                              ^^^^^^^^^^^^^^^^^ method not found in `&JoinedFlashAttentionV1<'_, '_, '_, '_>`
+
+error[E0599]: no method named `kernel_object` found for reference `&JoinedFlashAttentionV1<'_, '_, '_, '_>` in the current scope
+ --> tests/ui/generated_flash_attention_v1/raw_native_objects_are_unavailable.rs:5:26
+  |
+5 |     let _kernel = joined.kernel_object();
+  |                          ^^^^^^^^^^^^^ method not found in `&JoinedFlashAttentionV1<'_, '_, '_, '_>`

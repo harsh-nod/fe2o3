@@ -1,0 +1,10 @@
+error[E0624]: method `explicit_kernarg_bytes_v1` is private
+ --> tests/ui/generated_flash_attention_v1/raw_kernarg_is_unavailable.rs:4:23
+  |
+4 |     let _bytes = host.explicit_kernarg_bytes_v1();
+  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/generated_flash_attention_v1.rs
+  |
+  |     pub(crate) const fn explicit_kernarg_bytes_v1(&self) -> &[u8; EXPLICIT_KERNARG_BYTES] {
+  |     ------------------------------------------------------------------------------------- private method defined here

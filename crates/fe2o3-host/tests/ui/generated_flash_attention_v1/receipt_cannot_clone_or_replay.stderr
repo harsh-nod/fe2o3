@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `FinalizedFlashAttentionV1ReceiptV1` in the current scope
+ --> tests/ui/generated_flash_attention_v1/receipt_cannot_clone_or_replay.rs:4:25
+  |
+4 |     let _copy = receipt.clone();
+  |                         ^^^^^ method not found in `FinalizedFlashAttentionV1ReceiptV1`

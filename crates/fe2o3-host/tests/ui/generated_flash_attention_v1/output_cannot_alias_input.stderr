@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `*buffer` as mutable because it is also borrowed as immutable
+ --> tests/ui/generated_flash_attention_v1/output_cannot_alias_input.rs:5:18
+  |
+4 |     let query = buffer.view(..128).unwrap();
+  |                 ------ immutable borrow occurs here
+5 |     let output = buffer.view_mut(..128).unwrap();
+  |                  ^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+6 |     drop((query, output));
+  |           ----- immutable borrow later used here
