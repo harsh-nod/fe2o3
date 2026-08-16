@@ -10,6 +10,10 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
+use crate::production_release::{
+    AdmittedRowSoftmaxV1WorkloadV1, admit_row_softmax_v1_source_tested_artifact_v1,
+    execute_row_softmax_v1_production_workload_v1, preflight_row_softmax_v1_workload_v1,
+};
 use fe2o3_artifact_transaction::{
     AttemptScopedHsacoPublicationErrorV1, BackendPublicationReceiptV1,
     BrokeredInvocationCapabilityClaimV1, BuildAttempt, BuildInvocation, BuildSession, EmitError,
@@ -19,7 +23,12 @@ use fe2o3_artifact_transaction::{
     publish_exact_hsaco_evidence_for_attempt_v1, read_backend_publication_receipt_v1,
     recover_published_hsaco_claim_for_attempt_v1,
 };
-use fe2o3_hsaco_finalize::inspect_worker_v2_raw_hsaco_v1;
+use fe2o3_compiler_ffi::{CompilerModuleHandoffV2, decode_row_softmax_compiler_sections_v1};
+use fe2o3_hsaco_finalize::{
+    RowSoftmaxV1AuthorityPolicyV1, RowSoftmaxV1CompilerClosurePolicyV1,
+    RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1ProviderManifestV1,
+    inspect_worker_v2_raw_hsaco_v1,
+};
 use fe2o3_process_identity::{
     LinuxObjectIdentityV3, ParentPreparedProcessConsistencyV3, PinnedWorkingDirectoryV3,
     parent_prepared_process_consistency_digest_v3,
@@ -398,6 +407,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     &current_dir,
                     compiler_capabilities.output_dir(),
                     &managed_rustc_args,
+                    &compiler_capabilities,
                 )?)
             };
             (
@@ -2081,6 +2091,58 @@ impl CompilerCapabilities {
             .prepare(claim)
             .map_err(BindingWrapperError::CapabilityBroker)
     }
+
+    fn row_softmax_authority_policy(
+        &self,
+        attempt: BuildAttempt,
+        provider: RowSoftmaxV1ProviderManifestV1,
+    ) -> Result<RowSoftmaxV1AuthorityPolicyV1, BindingWrapperError> {
+        let cargo = self.pinned_cargo_image_sha256.ok_or_else(|| {
+            BindingWrapperError::BuildObservation(
+                "row-softmax release has no broker-authenticated Cargo image".to_owned(),
+            )
+        })?;
+        let rustc = self.binding.rustc_executable_sha256();
+        let backend = self.backend_sha256();
+        let runtime = measure_inherited_rustc_runtime_tree()?;
+        let compiler = RowSoftmaxV1CompilerClosurePolicyV1::new(cargo, rustc, runtime, backend)
+            .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?;
+        if compiler.identity_sha256() != self.compiler_closure_sha256()
+            || crate::compiler_toolchain::compiler_closure_sha256_v1(
+                &cargo, &rustc, &runtime, &backend,
+            ) != self.compiler_closure_sha256()
+        {
+            return Err(BindingWrapperError::BuildObservation(
+                "row-softmax measured compiler inputs differ from the broker-authenticated closure"
+                    .to_owned(),
+            ));
+        }
+        let broker = measure_build_executable("/proc/self/exe", "cargo-fe2o3 broker image")?;
+        RowSoftmaxV1AuthorityPolicyV1::new(provider, attempt, broker, compiler)
+            .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))
+    }
+}
+
+fn measure_inherited_rustc_runtime_tree() -> Result<[u8; 32], BindingWrapperError> {
+    // SAFETY: the fixed descriptor is inherited from the authenticated Cargo boundary and is
+    // borrowed only long enough to create a close-on-exec duplicate.
+    let inherited = unsafe { BorrowedFd::borrow_raw(RUSTC_LIBRARY_CHILD_FD) };
+    let duplicate = rustix::io::fcntl_dupfd_cloexec(inherited, 200).map_err(|error| {
+        BindingWrapperError::BuildObservation(format!(
+            "cannot duplicate retained rustc runtime-tree descriptor: {error}"
+        ))
+    })?;
+    let directory = PinnedDirectory::from_transferred_file(
+        File::from(duplicate),
+        "row-softmax retained rustc runtime tree",
+    )
+    .map_err(BindingWrapperError::BuildObservation)?;
+    let runtime = crate::rustc_lib_tree::PinnedRustcLibTree::pin(directory)
+        .map_err(BindingWrapperError::BuildObservation)?;
+    runtime
+        .revalidate()
+        .map_err(BindingWrapperError::BuildObservation)?;
+    Ok(*runtime.sha256())
 }
 
 fn managed_build_session() -> Result<BuildSession, BindingWrapperError> {
@@ -2098,8 +2160,14 @@ struct ManagedAttempt {
     protected_source_path: Option<PathBuf>,
     compile_environment_profile: Option<WorkerV2CompileEnvironmentProfileV1>,
     worker_v2: Option<ManagedWorkerV2>,
+    row_softmax_release: Option<RowSoftmaxReleaseContext>,
     #[cfg(feature = "compiler-handoff-observation-test-only")]
     compiler_handoff_observation: Option<crate::compiler_handoff_observation::Request>,
+}
+
+struct RowSoftmaxReleaseContext {
+    authority: RowSoftmaxV1AuthorityPolicyV1,
+    workload: Option<AdmittedRowSoftmaxV1WorkloadV1>,
 }
 
 enum ManagedWorkerV2 {
@@ -2179,6 +2247,7 @@ fn prepare_managed_attempt(
     current_dir: &std::path::Path,
     output_dir: &Path,
     managed_rustc_args: &[OsString],
+    compiler_capabilities: &CompilerCapabilities,
 ) -> Result<ManagedAttempt, BindingWrapperError> {
     #[cfg(feature = "compiler-handoff-observation-test-only")]
     let compiler_handoff_observation = {
@@ -2222,6 +2291,30 @@ fn prepare_managed_attempt(
     } else {
         derive_build_attempt_input(compile.argv(), worker_v2.as_ref(), current_dir)
     };
+    let row_softmax_release = worker_v2
+        .as_ref()
+        .and_then(PreparedWorkerV2Config::row_softmax_v1)
+        .map(|row| {
+            if std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV).as_deref()
+                != Some(OsStr::new("row-softmax-v1-run"))
+            {
+                return Err(BindingWrapperError::BuildObservation(
+                    "row-softmax production pin contract requires cargo fe2o3 authority release run"
+                        .to_owned(),
+                ));
+            }
+            let workload = preflight_row_softmax_v1_workload_v1(row.workload())
+                .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?;
+            Ok((row.provider(), workload))
+        })
+        .transpose()?;
+    if row_softmax_release.is_none()
+        && std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV).is_some()
+    {
+        return Err(BindingWrapperError::BuildObservation(
+            "protected row-softmax release action has no exact row pin contract".to_owned(),
+        ));
+    }
     let (attempt, worker_v2) = if let Some(config) = worker_v2 {
         let resume = WorkerV2ResumeStoreV1::open(output_dir, &producer)
             .map_err(BindingWrapperError::WorkerV2Restart)?;
@@ -2256,6 +2349,16 @@ fn prepare_managed_attempt(
             .map_err(BindingWrapperError::Artifact)?;
         (attempt, None)
     };
+    let row_softmax_release = row_softmax_release
+        .map(|(provider, workload)| {
+            compiler_capabilities
+                .row_softmax_authority_policy(attempt, provider)
+                .map(|authority| RowSoftmaxReleaseContext {
+                    authority,
+                    workload: Some(workload),
+                })
+        })
+        .transpose()?;
     Ok(ManagedAttempt {
         output_dir: output_dir.to_path_buf(),
         producer,
@@ -2263,22 +2366,28 @@ fn prepare_managed_attempt(
         protected_source_path,
         compile_environment_profile,
         worker_v2,
+        row_softmax_release,
         #[cfg(feature = "compiler-handoff-observation-test-only")]
         compiler_handoff_observation,
     })
 }
 
-fn complete_managed_attempt(managed: ManagedAttempt) -> Result<(), BindingWrapperError> {
+fn complete_managed_attempt(mut managed: ManagedAttempt) -> Result<(), BindingWrapperError> {
     let completion = (|| -> Result<(), CompletionFailure> {
-        if let Some(worker_v2) = managed.worker_v2.as_ref() {
+        if let Some(worker_v2) = managed.worker_v2.take() {
             return match worker_v2 {
                 ManagedWorkerV2::Fresh {
                     config,
                     envelope_inputs,
                     resume,
-                } => complete_fresh_worker_v2(&managed, config, envelope_inputs.as_ref(), resume),
+                } => complete_fresh_worker_v2(
+                    &mut managed,
+                    &config,
+                    envelope_inputs.as_ref(),
+                    &resume,
+                ),
                 ManagedWorkerV2::Recovery { resume, state } => {
-                    complete_recovered_worker_v2(&managed, resume, *state)
+                    complete_recovered_worker_v2(&managed, &resume, state)
                 }
             };
         }
@@ -2306,7 +2415,7 @@ fn complete_managed_attempt(managed: ManagedAttempt) -> Result<(), BindingWrappe
 }
 
 fn complete_fresh_worker_v2(
-    managed: &ManagedAttempt,
+    managed: &mut ManagedAttempt,
     worker_v2: &PreparedWorkerV2Config,
     envelope_inputs: Option<&WorkerV2EnvelopeInputsV1>,
     resume: &WorkerV2ResumeStoreV1,
@@ -2320,6 +2429,9 @@ fn complete_fresh_worker_v2(
                     "compiler-module handoff consumption failed: {error}"
                 ))
             })?;
+    if managed.row_softmax_release.is_some() {
+        return complete_row_softmax_v1_release(managed, worker_v2, consumed);
+    }
     let evidence = worker_v2.execute(consumed).map_err(|error| {
         CompletionFailure::Uncommitted(format!("reproducible Worker V2 execution failed: {error}"))
     })?;
@@ -2349,6 +2461,86 @@ fn complete_fresh_worker_v2(
         &worker_v2_request_identity,
     )?;
     publish_finish_and_clear(managed, resume, persisted.publication, persisted.intent)
+}
+
+fn complete_row_softmax_v1_release(
+    managed: &mut ManagedAttempt,
+    worker_v2: &PreparedWorkerV2Config,
+    consumed: fe2o3_artifact_transaction::ConsumedCompilerModuleHandoffV1,
+) -> Result<(), CompletionFailure> {
+    let release = managed
+        .row_softmax_release
+        .as_mut()
+        .expect("row-softmax completion has release context");
+    let workload = release
+        .workload
+        .take()
+        .expect("row-softmax workload is consumed exactly once");
+    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes()).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "stage=compiler-handoff: row-softmax handoff decode failed: {error}"
+        ))
+    })?;
+    let worker_pins = worker_v2.row_softmax_v1_worker_pins().map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "stage=worker-policy: row-softmax worker pin contract failed: {error}"
+        ))
+    })?;
+    let frontend_authority = *decode_row_softmax_compiler_sections_v1(handoff.module_bytes())
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "stage=compiler-handoff: row-softmax authority sections failed: {error}"
+            ))
+        })?
+        .authority();
+    let expectation = RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+        &handoff,
+        *handoff.identity().sha256(),
+        frontend_authority,
+        release.authority,
+        worker_pins,
+    )
+    .map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "stage=authority-policy: row-softmax compiler/provider policy rejected before worker execution: {error}"
+        ))
+    })?;
+    let evidence = worker_v2.execute(consumed).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "stage=llvm-finalizer: reproducible direct Worker V2 execution failed: {error}"
+        ))
+    })?;
+    let token =
+        admit_row_softmax_v1_source_tested_artifact_v1(evidence, expectation).map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "stage=artifact-admission: row-softmax artifact was rejected before launch: {error}"
+            ))
+        })?;
+    let receipt =
+        execute_row_softmax_v1_production_workload_v1(token, workload).map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "stage=typed-launch: row-softmax production execution failed: {error}"
+            ))
+        })?;
+    if receipt.unload_identity() == &[0; 32]
+        || receipt.proves_masked_execution()
+        || receipt.proves_verus_refinement()
+    {
+        return Err(CompletionFailure::Uncommitted(
+            "stage=terminal-receipt: row-softmax receipt is empty or overclaims authority"
+                .to_owned(),
+        ));
+    }
+    eprintln!(
+        "FE2O3_PROTECTED_ROW_SOFTMAX_V1_OK case={:?} width=64 mask=unmasked target=gfx942:xnack- pins=25 source_tested=true verus_refinement=false unload={}",
+        receipt.case(),
+        hex(receipt.unload_identity())
+    );
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "stage=attempt-completion: row-softmax build-attempt completion failed: {error}"
+        ))
+    })
 }
 
 fn write_non_production_reproduction_record(

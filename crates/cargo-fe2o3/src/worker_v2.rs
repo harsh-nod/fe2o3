@@ -8,12 +8,17 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::production_release::{
+    ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1, RowSoftmaxV1ReleaseWorkloadV1,
+};
 use fe2o3_artifact_transaction::ConsumedCompilerModuleHandoffV1;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1, LinkOptionV1,
-    LinkPlanError, MAX_LINK_INPUTS, PinnedWorkerV1, WorkerExecutionError, WorkerExecutionLimitsV1,
-    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
-    WorkerProtocolError, execute_reproducible_first_build_worker_v2,
+    LinkPlanError, MAX_LINK_INPUTS, PinnedWorkerV1, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
+    RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
+    WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
+    WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    execute_reproducible_first_build_worker_v2,
 };
 use fe2o3_worker_v2_bundle::{MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, WorkerV2EnvelopeInputsV1};
 use rustix::fs::{FileType, Mode, OFlags, fstat, open};
@@ -29,6 +34,7 @@ pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
+const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
 const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
 const S09_ALPHA_DEBUG_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
@@ -86,6 +92,18 @@ const PROVIDER_KEYS: &[&str] = &["byte_len", "kind", "path", "sha256"];
 const OPTION_KEYS: &[&str] = &["name", "value"];
 const LIMIT_KEYS: &[&str] = &["stderr_bytes", "stdout_bytes", "timeout_ms"];
 const UNIT_KEYS: &[&str] = &["crate_name", "source", "working_directory"];
+const ROW_SOFTMAX_V1_KEYS: &[&str] = &[
+    "case",
+    "comparison_policy",
+    "mask",
+    "ocml_file_sha256",
+    "ocml_manifest_sha256",
+    "provider_crate_hash",
+    "provider_definition_identities",
+    "provider_source_identities",
+    "provider_stable_crate_id",
+    "row_elements",
+];
 const REQUIRED_OPTIONS: &[(&str, &[&str])] = &[
     ("code-object-version", &["4", "5", "6"]),
     ("opt-level", &["0", "1", "2", "3"]),
@@ -129,7 +147,32 @@ pub(crate) struct PreparedWorkerV2Config {
     candidate_output: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
+    row_softmax_v1: Option<PreparedRowSoftmaxV1Config>,
     units: Vec<ConfiguredUnit>,
+}
+
+pub(crate) struct PreparedRowSoftmaxV1Config {
+    provider: RowSoftmaxV1ProviderManifestV1,
+    ocml: RowSoftmaxV1OcmlProviderPinsV1,
+    case: ExactRowSoftmaxV1CaseV1,
+    row_elements: u32,
+    mask: RowSoftmaxV1MaskProfileV1,
+    comparison_policy: String,
+}
+
+impl PreparedRowSoftmaxV1Config {
+    pub(crate) const fn provider(&self) -> RowSoftmaxV1ProviderManifestV1 {
+        self.provider
+    }
+
+    pub(crate) fn workload(&self) -> RowSoftmaxV1ReleaseWorkloadV1<'_> {
+        RowSoftmaxV1ReleaseWorkloadV1 {
+            case: self.case,
+            row_elements: self.row_elements,
+            mask: self.mask,
+            comparison_policy: &self.comparison_policy,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -155,6 +198,7 @@ pub(crate) enum WorkerV2SourceDebugProfileV1 {
 enum WorkerV2PipelineV1 {
     General,
     ScalarGemmV1,
+    RowSoftmaxV1,
 }
 
 impl WorkerV2PipelineV1 {
@@ -163,6 +207,8 @@ impl WorkerV2PipelineV1 {
             Some(Self::General)
         } else if value == SCALAR_GEMM_V1_PIPELINE {
             Some(Self::ScalarGemmV1)
+        } else if value == ROW_SOFTMAX_V1_PIPELINE {
+            Some(Self::RowSoftmaxV1)
         } else {
             None
         }
@@ -172,6 +218,7 @@ impl WorkerV2PipelineV1 {
         match self {
             Self::General => WORKER_V2_PIPELINE,
             Self::ScalarGemmV1 => SCALAR_GEMM_V1_PIPELINE,
+            Self::RowSoftmaxV1 => ROW_SOFTMAX_V1_PIPELINE,
         }
     }
 }
@@ -221,6 +268,7 @@ impl PreparedWorkerV2Config {
         let selected = pipeline.and_then(WorkerV2PipelineV1::from_environment_value);
         match (selected, config_path) {
             (None, None) => Ok(None),
+            (Some(WorkerV2PipelineV1::RowSoftmaxV1), None) => Ok(None),
             (None, Some(_)) => Err(WorkerV2ConfigError::UnexpectedConfiguration),
             (Some(_), None) => Err(WorkerV2ConfigError::MissingConfiguration),
             (Some(_), Some(path)) if path.is_empty() => {
@@ -275,6 +323,15 @@ impl PreparedWorkerV2Config {
         let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
         let units = parse_units(required_value(root, "units", "configuration")?)?;
         let (envelope_mode, envelope_inputs) = parse_envelope_inputs(root)?;
+        let row_softmax_v1 = parse_row_softmax_v1(
+            root,
+            pipeline,
+            &providers,
+            &link_options,
+            source_debug_profile,
+            envelope_mode,
+            &candidate_output,
+        )?;
 
         let identity = transitive_identity(
             pipeline,
@@ -294,6 +351,7 @@ impl PreparedWorkerV2Config {
             candidate_output,
             limits,
             source_debug_profile,
+            row_softmax_v1,
             units,
         })
     }
@@ -312,7 +370,32 @@ impl PreparedWorkerV2Config {
 
     pub(crate) const fn requires_expected_identity(&self) -> bool {
         self.source_debug_profile.is_some()
-            || matches!(self.pipeline, WorkerV2PipelineV1::ScalarGemmV1)
+            || matches!(
+                self.pipeline,
+                WorkerV2PipelineV1::ScalarGemmV1 | WorkerV2PipelineV1::RowSoftmaxV1
+            )
+    }
+
+    pub(crate) const fn row_softmax_v1(&self) -> Option<&PreparedRowSoftmaxV1Config> {
+        self.row_softmax_v1.as_ref()
+    }
+
+    pub(crate) fn row_softmax_v1_worker_pins(
+        &self,
+    ) -> Result<RowSoftmaxV1DirectWorkerPinsV1, WorkerV2ConfigError> {
+        let row = self.row_softmax_v1.as_ref().ok_or_else(|| {
+            WorkerV2ConfigError::Invalid(
+                "row-softmax worker pins requested from a different pipeline".to_owned(),
+            )
+        })?;
+        let measurement = self.worker.measurement();
+        RowSoftmaxV1DirectWorkerPinsV1::new(
+            measurement.executable(),
+            measurement.worker_build_identity(),
+            measurement.llvm_build_identity(),
+            row.ocml,
+        )
+        .map_err(|error| WorkerV2ConfigError::Invalid(error.to_string()))
     }
 
     pub(crate) fn compile_environment_profile(
@@ -328,6 +411,8 @@ impl PreparedWorkerV2Config {
             Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0)
         } else if self.pipeline == WorkerV2PipelineV1::ScalarGemmV1 {
             Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
+        } else if self.pipeline == WorkerV2PipelineV1::RowSoftmaxV1 {
+            Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
         } else {
             None
         }
@@ -411,6 +496,134 @@ impl PreparedWorkerV2Config {
             self.limits,
         )
     }
+}
+
+fn parse_row_softmax_v1(
+    root: &Map<String, Value>,
+    pipeline: WorkerV2PipelineV1,
+    providers: &[WorkerInputV1],
+    options: &[LinkOptionV1],
+    source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
+    envelope_mode: WorkerV2EnvelopeModeV1,
+    candidate_output: &WorkerOutputConstraintsV1,
+) -> Result<Option<PreparedRowSoftmaxV1Config>, WorkerV2ConfigError> {
+    let Some(value) = root.get("row_softmax_v1") else {
+        if pipeline == WorkerV2PipelineV1::RowSoftmaxV1 {
+            return Err(WorkerV2ConfigError::Invalid(
+                "row-softmax Worker V2 configuration requires row_softmax_v1 policy pins"
+                    .to_owned(),
+            ));
+        }
+        return Ok(None);
+    };
+    if pipeline != WorkerV2PipelineV1::RowSoftmaxV1 {
+        return Err(WorkerV2ConfigError::Invalid(
+            "row_softmax_v1 policy pins are valid only for collected-row-softmax-v1".to_owned(),
+        ));
+    }
+    if !providers.is_empty() {
+        return Err(WorkerV2ConfigError::Invalid(
+            "row-softmax direct worker rejects request-side link providers".to_owned(),
+        ));
+    }
+    if source_debug_profile.is_some() || envelope_mode != WorkerV2EnvelopeModeV1::NonAuthoritative {
+        return Err(WorkerV2ConfigError::Invalid(
+            "row-softmax production policy rejects source-debug and generic load envelopes"
+                .to_owned(),
+        ));
+    }
+    let required_option = |name: &str, value: &str| {
+        options
+            .iter()
+            .any(|option| option.name() == name && option.value() == value)
+    };
+    if !required_option("code-object-version", "6")
+        || !required_option("opt-level", "0")
+        || !required_option("strip-debug", "true")
+        || !required_option("verify-each", "true")
+    {
+        return Err(WorkerV2ConfigError::Invalid(
+            "row-softmax production policy requires COV6, O0, stripped debug, and verify-each"
+                .to_owned(),
+        ));
+    }
+    if candidate_output.max_bytes() != fe2o3_hsaco::MAX_HSACO_BYTES as u64 {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "row-softmax candidate_output_max_bytes must be exactly {}",
+            fe2o3_hsaco::MAX_HSACO_BYTES
+        )));
+    }
+
+    let object = exact_object(value, ROW_SOFTMAX_V1_KEYS, "row_softmax_v1")?;
+    let case = match required_string(object, "case", "row_softmax_v1")? {
+        "normal" => ExactRowSoftmaxV1CaseV1::Normal,
+        "equal" => ExactRowSoftmaxV1CaseV1::Equal,
+        "dominant" => ExactRowSoftmaxV1CaseV1::Dominant,
+        "exceptional" => ExactRowSoftmaxV1CaseV1::Exceptional,
+        other => {
+            return Err(WorkerV2ConfigError::Invalid(format!(
+                "row_softmax_v1.case has unsupported value {other:?}"
+            )));
+        }
+    };
+    let mask = match required_string(object, "mask", "row_softmax_v1")? {
+        "unmasked" => RowSoftmaxV1MaskProfileV1::Unmasked,
+        "alternating" => RowSoftmaxV1MaskProfileV1::Alternating,
+        other => {
+            return Err(WorkerV2ConfigError::Invalid(format!(
+                "row_softmax_v1.mask has unsupported value {other:?}"
+            )));
+        }
+    };
+    let row_elements = u32::try_from(required_u64(object, "row_elements", "row_softmax_v1")?)
+        .map_err(|_| {
+            WorkerV2ConfigError::Invalid("row_softmax_v1.row_elements exceeds u32".to_owned())
+        })?;
+    let comparison_policy = required_string(object, "comparison_policy", "row_softmax_v1")?;
+    if comparison_policy.is_empty()
+        || comparison_policy.len() > 128
+        || !comparison_policy.is_ascii()
+    {
+        return Err(WorkerV2ConfigError::Invalid(
+            "row_softmax_v1.comparison_policy is not bounded ASCII".to_owned(),
+        ));
+    }
+    let provider = RowSoftmaxV1ProviderManifestV1::new(
+        required_u64(object, "provider_stable_crate_id", "row_softmax_v1")?,
+        decode_fixed_hex(
+            required_string(object, "provider_crate_hash", "row_softmax_v1")?,
+            "row_softmax_v1.provider_crate_hash",
+        )?,
+        decode_identity_array::<ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, 16>(
+            required_value(object, "provider_definition_identities", "row_softmax_v1")?,
+            "row_softmax_v1.provider_definition_identities",
+        )?,
+        decode_identity_array::<ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, 32>(
+            required_value(object, "provider_source_identities", "row_softmax_v1")?,
+            "row_softmax_v1.provider_source_identities",
+        )?,
+    )
+    .map_err(|error| WorkerV2ConfigError::Invalid(error.to_string()))?;
+    let ocml_files = decode_identity_array::<4, 32>(
+        required_value(object, "ocml_file_sha256", "row_softmax_v1")?,
+        "row_softmax_v1.ocml_file_sha256",
+    )?;
+    let ocml = RowSoftmaxV1OcmlProviderPinsV1::new(
+        ocml_files,
+        decode_fixed_hex(
+            required_string(object, "ocml_manifest_sha256", "row_softmax_v1")?,
+            "row_softmax_v1.ocml_manifest_sha256",
+        )?,
+    )
+    .map_err(|error| WorkerV2ConfigError::Invalid(error.to_string()))?;
+    Ok(Some(PreparedRowSoftmaxV1Config {
+        provider,
+        ocml,
+        case,
+        row_elements,
+        mask,
+        comparison_policy: comparison_policy.to_owned(),
+    }))
 }
 
 fn parse_envelope_inputs(
@@ -570,7 +783,7 @@ impl fmt::Display for WorkerV2ConfigError {
             ),
             Self::UnexpectedConfiguration => write!(
                 formatter,
-                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={WORKER_V2_PIPELINE} or {SCALAR_GEMM_V1_PIPELINE}"
+                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, or {ROW_SOFTMAX_V1_PIPELINE}"
             ),
             Self::Io { kind, path, error } => {
                 write!(
@@ -815,15 +1028,15 @@ fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, WorkerV2Confi
         WorkerV2ConfigError::Invalid("configuration must be an object".to_owned())
     })?;
     let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-    let keys_without_debug = keys
+    let profile_neutral_keys = keys
         .iter()
         .copied()
-        .filter(|key| *key != "source_debug_profile")
+        .filter(|key| !matches!(*key, "source_debug_profile" | "row_softmax_v1"))
         .collect::<Vec<_>>();
-    if keys_without_debug != ROOT_KEYS
-        && keys_without_debug != ROOT_KEYS_WITH_ENVELOPE_MODE
-        && keys_without_debug != ROOT_KEYS_WITH_ENVELOPE_INPUTS
-        && keys_without_debug != ROOT_KEYS_WITH_ENVELOPE
+    if profile_neutral_keys != ROOT_KEYS
+        && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE_MODE
+        && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE_INPUTS
+        && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE
     {
         return Err(WorkerV2ConfigError::Invalid(format!(
             "configuration contains unknown or duplicate configuration fields; found {keys:?}"
@@ -993,6 +1206,49 @@ fn decode_sha256(value: &str, context: &str) -> Result<[u8; 32], WorkerV2ConfigE
     Ok(bytes)
 }
 
+fn decode_fixed_hex<const N: usize>(
+    value: &str,
+    context: &str,
+) -> Result<[u8; N], WorkerV2ConfigError> {
+    if value.len() != N * 2
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "{context} must be exactly {} lowercase hexadecimal digits",
+            N * 2
+        )));
+    }
+    let mut bytes = [0_u8; N];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        bytes[index] = (hex_value(pair[0]) << 4) | hex_value(pair[1]);
+    }
+    Ok(bytes)
+}
+
+fn decode_identity_array<const COUNT: usize, const WIDTH: usize>(
+    value: &Value,
+    context: &str,
+) -> Result<[[u8; WIDTH]; COUNT], WorkerV2ConfigError> {
+    let values = value
+        .as_array()
+        .filter(|values| values.len() == COUNT)
+        .ok_or_else(|| {
+            WorkerV2ConfigError::Invalid(format!(
+                "{context} must contain exactly {COUNT} hexadecimal identities"
+            ))
+        })?;
+    let mut result = [[0_u8; WIDTH]; COUNT];
+    for (index, value) in values.iter().enumerate() {
+        let value = value.as_str().ok_or_else(|| {
+            WorkerV2ConfigError::Invalid(format!("{context}[{index}] must be a string"))
+        })?;
+        result[index] = decode_fixed_hex(value, &format!("{context}[{index}]"))?;
+    }
+    Ok(result)
+}
+
 fn hex_value(byte: u8) -> u8 {
     match byte {
         b'0'..=b'9' => byte - b'0',
@@ -1085,6 +1341,38 @@ mod tests {
         path
     }
 
+    fn row_softmax_manifest(directory: &TestDirectory) -> PathBuf {
+        let generic = manifest(directory);
+        let mut value: Value = serde_json::from_slice(&fs::read(&generic).unwrap()).unwrap();
+        value["candidate_output_max_bytes"] = json!(fe2o3_hsaco::MAX_HSACO_BYTES);
+        value["link_options"][1]["value"] = json!("0");
+        value["providers"] = json!([]);
+        let definitions = (1_u8..=ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT as u8)
+            .map(|value| hex(&[value; 16]))
+            .collect::<Vec<_>>();
+        let sources = [1_u8, 2, 2, 2, 1, 3, 3, 3].map(|value| hex(&[value; 32]));
+        value["row_softmax_v1"] = json!({
+            "case": "normal",
+            "comparison_policy": crate::production_release::ROW_SOFTMAX_V1_PRODUCTION_POLICY,
+            "mask": "unmasked",
+            "ocml_file_sha256": [
+                hex(&[0x31; 32]),
+                hex(&[0x32; 32]),
+                hex(&[0x33; 32]),
+                hex(&[0x34; 32])
+            ],
+            "ocml_manifest_sha256": hex(&[0x35; 32]),
+            "provider_crate_hash": hex(&[0x21; 16]),
+            "provider_definition_identities": definitions,
+            "provider_source_identities": sources,
+            "provider_stable_crate_id": 7,
+            "row_elements": 64
+        });
+        let path = directory.0.join("row-softmax-config.json");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        path
+    }
+
     #[test]
     fn requires_configuration_exactly_for_the_worker_v2_pipeline() {
         assert!(
@@ -1100,9 +1388,82 @@ mod tests {
             PreparedWorkerV2Config::from_selection(Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)), None),
             Err(WorkerV2ConfigError::MissingConfiguration)
         ));
+        assert!(
+            PreparedWorkerV2Config::from_selection(Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)), None)
+                .unwrap()
+                .is_none()
+        );
         assert!(matches!(
             PreparedWorkerV2Config::from_selection(None, Some(OsStr::new("/config"))),
             Err(WorkerV2ConfigError::UnexpectedConfiguration)
+        ));
+    }
+
+    #[test]
+    fn row_softmax_manifest_binds_exact_provider_ocml_and_workload_policy() {
+        let directory = TestDirectory::new();
+        let path = row_softmax_manifest(&directory);
+        let config = PreparedWorkerV2Config::from_manifest_for_pipeline(
+            &path,
+            WorkerV2PipelineV1::RowSoftmaxV1,
+        )
+        .unwrap();
+        assert!(config.requires_expected_identity());
+        assert!(config.providers.is_empty());
+        assert!(config.row_softmax_v1().is_some());
+        assert!(config.row_softmax_v1_worker_pins().is_ok());
+        let workload = config.row_softmax_v1().unwrap().workload();
+        assert_eq!(workload.row_elements, 64);
+        assert_eq!(workload.mask, RowSoftmaxV1MaskProfileV1::Unmasked);
+        assert_eq!(
+            workload.comparison_policy,
+            crate::production_release::ROW_SOFTMAX_V1_PRODUCTION_POLICY
+        );
+
+        let first_identity = config.identity();
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["row_softmax_v1"]["ocml_manifest_sha256"] = json!(hex(&[0x36; 32]));
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let changed = PreparedWorkerV2Config::from_manifest_for_pipeline(
+            &path,
+            WorkerV2PipelineV1::RowSoftmaxV1,
+        )
+        .unwrap();
+        assert_ne!(first_identity, changed.identity());
+    }
+
+    #[test]
+    fn row_softmax_manifest_rejects_request_side_provider_and_wrong_finalizer_options() {
+        let directory = TestDirectory::new();
+        let path = row_softmax_manifest(&directory);
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["providers"] = json!([{
+            "byte_len": 8,
+            "kind": "llvm-bitcode",
+            "path": directory.0.join("provider.o"),
+            "sha256": hex(ContentIdentityV1::calculate(b"provider").sha256())
+        }]);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest_for_pipeline(
+                &path,
+                WorkerV2PipelineV1::RowSoftmaxV1
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("request-side link providers")
+        ));
+
+        let path = row_softmax_manifest(&directory);
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["link_options"][0]["value"] = json!("5");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest_for_pipeline(
+                &path,
+                WorkerV2PipelineV1::RowSoftmaxV1
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("requires COV6")
         ));
     }
 

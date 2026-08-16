@@ -17,16 +17,24 @@ mod inert_rustc_invocation_capture;
 mod inspect;
 mod non_production_reproduction;
 #[allow(dead_code)]
+#[path = "../../../examples/row_softmax_v1/src/numerical_contract.rs"]
+mod numerical_contract;
+#[allow(dead_code)]
 #[path = "rustc_wrapper/pinned_codegen_backend.rs"]
 mod pinned_codegen_backend;
 #[path = "rustc_wrapper/pinned_executable.rs"]
 mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
+#[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
+mod production_release;
 mod project;
 #[path = "rustc_runtime.rs"]
 mod rustc_lib_tree;
 mod tool_commands;
+#[allow(dead_code)]
+#[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
+mod verification_certificate;
 mod worker_v2;
 mod worker_v2_artifact_container;
 mod worker_v2_restart;
@@ -58,6 +66,7 @@ const AUTHORITY_BACKEND_SHA256_ENV: &str = "FE2O3_AUTHORITY_BACKEND_SHA256_V1";
 const NON_PRODUCTION_AUTHORITY_VALIDATION_ENV: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
 const AUTHORITY_BEARING_ROW_PIPELINE: &str = "collected-row-softmax-v1";
+pub(crate) const PROTECTED_RELEASE_ACTION_ENV: &str = "FE2O3_PROTECTED_RELEASE_ACTION_V1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
@@ -257,7 +266,7 @@ fn doctor() -> ExitCode {
 }
 
 fn cargo_with_backend(command: &str, args: &[OsString]) -> ExitCode {
-    match cargo_with_backend_result(command, args, None) {
+    match cargo_with_backend_result(command, args, None, false) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -278,7 +287,11 @@ fn cargo_with_protected_release(
         eprintln!("protected authority release child requires build or run");
         return ExitCode::FAILURE;
     }
-    match cargo_with_backend_result(command, &args[1..], Some(&admission)) {
+    let row_softmax_run = command == "run"
+        && env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
+            == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE));
+    let cargo_command = if row_softmax_run { "build" } else { command };
+    match cargo_with_backend_result(cargo_command, &args[1..], Some(&admission), row_softmax_run) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -310,7 +323,7 @@ fn smoke(args: &[String]) -> ExitCode {
     for package in packages {
         eprintln!("cargo fe2o3 smoke: running {package}");
         let args = [OsString::from("-p"), OsString::from(package)];
-        if let Err(error) = cargo_with_backend_result("run", &args, None) {
+        if let Err(error) = cargo_with_backend_result("run", &args, None, false) {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
@@ -323,6 +336,7 @@ fn cargo_with_backend_result(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    protected_release_row_softmax_run: bool,
 ) -> Result<(), String> {
     if authority_sensitive_request_selected() {
         reject_dynamic_loader_environment()?;
@@ -331,6 +345,17 @@ fn cargo_with_backend_result(
     reject_preexisting_compiler_environment()?;
     let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
         .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
+    if protected_release_row_softmax_run
+        && worker_v2
+            .as_ref()
+            .and_then(worker_v2::PreparedWorkerV2Config::row_softmax_v1)
+            .is_none()
+    {
+        return Err(
+            "cargo fe2o3 authority release run requires an exact row_softmax_v1 Worker V2 pin contract"
+                .to_owned(),
+        );
+    }
     let requires_authorized_closure = env::var("FE2O3_CODEGEN_PIPELINE").as_deref()
         == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
         || worker_v2
@@ -434,6 +459,7 @@ fn cargo_with_backend_result(
         pinned_rustc,
         authority_backend,
         authorized_closure,
+        protected_release_row_softmax_run,
     )?;
     if let Some(admission) = protected_release {
         context.binding_wrapper = admission.binding_wrapper_path();
@@ -492,6 +518,7 @@ struct BackendRunContext {
     build_session: fe2o3_artifact_transaction::BuildSession,
     requires_locked_closure: bool,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
+    protected_release_row_softmax_run: bool,
 }
 
 impl BackendRunContext {
@@ -503,6 +530,7 @@ impl BackendRunContext {
         pinned_rustc: PinnedRustc,
         authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,
         authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
+        protected_release_row_softmax_run: bool,
     ) -> Result<Self, String> {
         let target = amd_gpu_target();
         let target_dir = project.open_or_create_target()?;
@@ -569,6 +597,7 @@ impl BackendRunContext {
             build_session,
             requires_locked_closure: authorized_closure.is_some(),
             authorized_closure,
+            protected_release_row_softmax_run,
         })
     }
 }
@@ -694,6 +723,15 @@ fn run_cargo_with_backend(
             hex_encode(&context.compiler_closure_sha256),
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
+    if context.protected_release_row_softmax_run {
+        cargo
+            .as_command_mut()
+            .env(PROTECTED_RELEASE_ACTION_ENV, "row-softmax-v1-run");
+    } else {
+        cargo
+            .as_command_mut()
+            .env_remove(PROTECTED_RELEASE_ACTION_ENV);
+    }
     if context.requires_locked_closure {
         // Authority builds do not admit unpinned C tools, ROCm headers, or native libraries.
         cargo.as_command_mut().env("FE2O3_HIP_SYS_DISABLE", "1");
