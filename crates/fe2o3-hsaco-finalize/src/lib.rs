@@ -24,6 +24,8 @@ mod flash_attention_v1_finalizer;
 mod lds_gemm_finalizer;
 mod lds_gemm_profile_registry;
 mod link_plan;
+mod moe_top2_v1_artifact;
+mod moe_top2_v1_worker;
 mod request_construction;
 mod row_softmax_authority;
 mod row_softmax_certificate_join;
@@ -105,6 +107,16 @@ pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+pub use moe_top2_v1_artifact::{
+    FinalizedMoeTop2V1HsacoIdentityV1, MoeTop2V1FinalizationErrorV1,
+    PreparedFinalizedMoeTop2V1HsacoV1, finalize_moe_top2_v1_worker_v2_hsaco_v1,
+};
+pub use moe_top2_v1_worker::{
+    InspectedMoeTop2V1WorkerV2HsacoV1, MoeTop2V1CompilerPinsV1, MoeTop2V1DirectWorkerExpectationV1,
+    MoeTop2V1DirectWorkerPinsV1, MoeTop2V1WorkerErrorV1, MoeTop2V1WorkerExchangeIdentityV1,
+    ValidatedMoeTop2V1WorkerExchangeV1, inspect_moe_top2_v1_worker_v2_hsaco_v1,
+    validate_moe_top2_v1_worker_exchange_v1,
 };
 pub use request_construction::{
     CompilerHandoffWorkerRequestV2, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,

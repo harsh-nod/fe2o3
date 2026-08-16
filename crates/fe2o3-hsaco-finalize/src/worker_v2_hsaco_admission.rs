@@ -69,6 +69,7 @@ pub(crate) enum WorkerV2RawLaunchDiagnosticProfileV1 {
     FlashAttentionV1,
     Wave64CollectivesV1,
     WorkgroupSyncV1,
+    MoeTop2V1,
 }
 
 impl WorkerV2RawLaunchContractV1 {
@@ -103,6 +104,12 @@ impl WorkerV2RawLaunchContractV1 {
     };
 
     pub(crate) const WORKGROUP_SYNC_V1: Self = Self {
+        required_workgroup_size: [64, 1, 1],
+        max_flat_workgroup_size: 64,
+        wavefront_size: REQUIRED_WAVEFRONT_SIZE,
+    };
+
+    pub(crate) const MOE_TOP2_V1: Self = Self {
         required_workgroup_size: [64, 1, 1],
         max_flat_workgroup_size: 64,
         wavefront_size: REQUIRED_WAVEFRONT_SIZE,
@@ -915,6 +922,12 @@ fn required_workgroup_size_mismatch(
                 expected: launch.required_workgroup_size(),
             }
         }
+        WorkerV2RawLaunchDiagnosticProfileV1::MoeTop2V1 => {
+            WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+            }
+        }
     }
 }
 
@@ -964,6 +977,12 @@ fn max_flat_workgroup_size_mismatch(
                 kernel: kernel.to_owned(),
                 actual,
                 expected: launch.max_flat_workgroup_size(),
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::MoeTop2V1 => {
+            WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
             }
         }
     }
@@ -1017,6 +1036,12 @@ fn metadata_wavefront_size_mismatch(
                 expected: launch.wavefront_size(),
             }
         }
+        WorkerV2RawLaunchDiagnosticProfileV1::MoeTop2V1 => {
+            WorkerV2RawHsacoInspectionError::MetadataWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+            }
+        }
     }
 }
 
@@ -1066,6 +1091,12 @@ fn descriptor_wavefront_size_mismatch(
                 kernel: kernel.to_owned(),
                 actual,
                 expected: launch.wavefront_size(),
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::MoeTop2V1 => {
+            WorkerV2RawHsacoInspectionError::DescriptorWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
             }
         }
     }
