@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 mod descriptor_source;
 mod external_device_library_manifest;
 mod external_device_library_provider_set;
+mod flash_attention_sections;
 mod module_handoff;
 mod module_handoff_v2;
 mod row_softmax_sections;
@@ -44,6 +45,14 @@ pub use external_device_library_provider_set::{
     ExternalDeviceLibraryProviderSetErrorV1, ExternalDeviceLibraryProviderSetValidationV1,
     ExternalDeviceLibraryProviderV1, MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CLOSURE_BYTES_V1,
     MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CONTENT_BYTES_V1,
+};
+pub use flash_attention_sections::{
+    DecodedFlashAttentionCompilerSectionsV1, FLASH_ATTENTION_AUTHORITY_BYTES_V1,
+    FLASH_ATTENTION_AUTHORITY_SECTION_NAME_V1,
+    FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1,
+    FLASH_ATTENTION_OCML_EXP_BOUNDARY_BYTES_V1, FLASH_ATTENTION_OCML_EXP_BOUNDARY_SECTION_NAME_V1,
+    FlashAttentionCompilerSectionsErrorV1, MAX_FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_BYTES_V1,
+    decode_flash_attention_compiler_sections_v1,
 };
 pub use module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,
