@@ -240,6 +240,19 @@ write_expected_identity_report() {
     printf 'result_protocol=%s\n' "$PINNED_RESULT_PROTOCOL"
     printf 'result_socket_fd=%s\n' "$PINNED_RESULT_SOCKET_FD"
     printf 'output_staging=%s\n' "$PINNED_OUTPUT_STAGING"
+    printf 'result_copy=receiver-owned-memfd-v1\n'
+    printf 'max_argument_count=4096\n'
+    printf 'max_argument_bytes=4096\n'
+    printf 'max_total_argument_bytes=1048576\n'
+    printf 'max_input_count=2048\n'
+    printf 'max_input_bytes=268435456\n'
+    printf 'max_total_input_bytes=2147483648\n'
+    printf 'max_output_bytes=536870912\n'
+    printf 'max_address_space_bytes=4294967296\n'
+    printf 'max_archive_members=262144\n'
+    printf 'max_cpu_seconds=60\n'
+    printf 'dependent_libraries=forbidden\n'
+    printf 'signal_state=linux-x86_64-kernel-1-64-main-v2\n'
     printf 'llvm_version=%s\n' "$PINNED_LLVM_VERSION"
     printf 'llvm_build_identity=%s\n' "$PINNED_LLVM_BUILD_ID"
     printf 'llvm_source_commit=%s\n' "$PINNED_LLVM_SOURCE_COMMIT"
@@ -1160,20 +1173,56 @@ directory_identity_matches "$artifact_dir" "$artifact_identity" ||
 
 readonly cmake_cache="$build_dir/CMakeCache.txt"
 readonly ctest_test_file="$build_dir/CTestTestfile.cmake"
+readonly cmake_lists="$tool_source/CMakeLists.txt"
 [[ -f "$cmake_cache" && ! -L "$cmake_cache" ]] ||
   die 'guarded configure omitted its CMake cache'
 [[ -f "$ctest_test_file" && ! -L "$ctest_test_file" ]] ||
   die 'guarded configure omitted its CTest registration'
-/usr/bin/grep -Fxq 'BUILD_TESTING:BOOL=ON' "$cmake_cache" ||
-  die 'guarded configure disabled tests'
-/usr/bin/grep -Fq 'fe2o3-host-lld-secure-protocol-v2' "$ctest_test_file" ||
-  die 'guarded configure omitted the secure protocol test'
+build_testing_rows=$("$AWK" '/^BUILD_TESTING:/ { count += 1 }
+  END { print count + 0 }' "$cmake_cache")
+# shellcheck disable=SC2016
+build_testing_on_rows=$("$AWK" '$0 == "BUILD_TESTING:BOOL=ON" { count += 1 }
+  END { print count + 0 }' "$cmake_cache")
+readonly build_testing_rows build_testing_on_rows
+[[ "$build_testing_rows" == 1 && "$build_testing_on_rows" == 1 ]] ||
+  die 'guarded configure did not retain exactly one enabled test cache row'
+! /usr/bin/grep -Eq '^(MEMORYCHECK_COMMAND|COVERAGE_COMMAND)[^:]*:' \
+  "$cmake_cache" || die 'guarded configure retained an optional CTest cache key'
+ctest_add_test_rows=$("$AWK" '/^add_test\(/ { count += 1 }
+  END { print count + 0 }' "$ctest_test_file")
+ctest_property_rows=$("$AWK" '/^set_tests_properties\(/ { count += 1 }
+  END { print count + 0 }' "$ctest_test_file")
+# shellcheck disable=SC2016
+cmake_add_test_line=$("$AWK" \
+  '$0 == "  add_test(NAME fe2o3-host-lld-secure-protocol-v2" { print NR }' \
+  "$cmake_lists")
+readonly ctest_add_test_rows ctest_property_rows cmake_add_test_line
+[[ "$ctest_add_test_rows" == 1 && "$ctest_property_rows" == 1 &&
+  "$cmake_add_test_line" =~ ^[1-9][0-9]*$ ]] ||
+  die 'guarded configure emitted a noncanonical test registration count'
+printf -v expected_ctest_add_test \
+  'add_test([=[fe2o3-host-lld-secure-protocol-v2]=] "/usr/bin/bash" "%s/tests/ctest_secure_protocol.sh" "%s" "%s/fe2o3-host-lld" "%s")' \
+  "$tool_source" "$tool_source" "$build_dir" "$build_dir"
+printf -v expected_ctest_properties \
+  'set_tests_properties([=[fe2o3-host-lld-secure-protocol-v2]=] PROPERTIES  LABELS "host-link;security;protocol-v2" TIMEOUT "900" _BACKTRACE_TRIPLES "%s;%s;add_test;%s;0;")' \
+  "$cmake_lists" "$cmake_add_test_line" "$cmake_lists"
+readonly expected_ctest_add_test expected_ctest_properties
+# shellcheck disable=SC2016
+[[ $("$AWK" -v expected="$expected_ctest_add_test" \
+    '$0 == expected { count += 1 } END { print count + 0 }' \
+    "$ctest_test_file") == 1 ]] ||
+  die 'guarded configure changed the secure protocol test command'
+# shellcheck disable=SC2016
+[[ $("$AWK" -v expected="$expected_ctest_properties" \
+    '$0 == expected { count += 1 } END { print count + 0 }' \
+    "$ctest_test_file") == 1 ]] ||
+  die 'guarded configure changed the secure protocol test properties'
 configure_trace_files=("$configure_trace_prefix".*)
 readonly configure_trace_files
 [[ -f ${configure_trace_files[0]} ]] ||
   die 'guarded configure omitted its raw traces'
 ! /usr/bin/grep -Eq \
-  '"/proc/meminfo"|"/[^" ]*/(purify|valgrind|boundscheck|drmemory|cuda-memcheck|compute-sanitizer|gcov)"' \
+  '"/proc/meminfo"|"/[^" ]*/(purify|valgrind|boundscheck|drmemory|cuda-memcheck|compute-sanitizer)"|"/[^" ]*/gcov"|"/[^" ]*/[^/" ]*gcov-[^/" ]*"' \
   "${configure_trace_files[@]}" ||
   die 'guarded configure performed optional CTest tool discovery'
 

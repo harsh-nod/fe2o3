@@ -2,9 +2,6 @@ cmake_minimum_required(VERSION 3.20)
 project(fe2o3_host_lld LANGUAGES CXX)
 
 option(BUILD_TESTING "Build the fe2o3 host LLD tests" ON)
-if(BUILD_TESTING)
-  enable_testing()
-endif()
 
 foreach(required IN ITEMS
     LLVM_DIR LLD_DIR FE2O3_LLVM_PACKAGE_ROOT FE2O3_LLVM_BUILD_ID_FILE
@@ -125,6 +122,7 @@ install(TARGETS fe2o3-host-lld RUNTIME DESTINATION bin
               WORLD_READ WORLD_EXECUTE)
 
 if(BUILD_TESTING)
+  enable_testing()
   add_test(NAME fe2o3-host-lld-secure-protocol-v2
     COMMAND /usr/bin/bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/ctest_secure_protocol.sh"
