@@ -77,16 +77,29 @@ build and Cargo directories reproduce the same caller-supplied manifest digest
 and byte-identical outputs. That combination establishes only operator-selected
 reviewed integrity, not origin authentication or GPU evidence.
 
-The typed runtime path remains unreachable from the
-production authority command: real MI300X `authority release build` crosses the
-reviewed launcher and frozen Cargo closure, then stops at `stage=binding-wrapper`.
-Cargo mutates the dynamic-loader environment before invoking the Rust workspace
-wrapper; admitting its mutable target deps directory is forbidden, while the
-current dynamic wrapper cannot load `librustc_driver` after loader variables are
-cleared. The command therefore fails closed until an integrated static binding
-wrapper exists. The release gate grants no production compiler, artifact,
-runtime, load, launch, or GPU authority, and source tests are not Verus or
-refinement proof. This fixed-profile production blocker remains tracked under
+The typed runtime path remains unreachable from the production authority
+command. Candidate `2e5ad53bcb20f2a46e91128a42e838d918d61581` (tree
+`892f014381cd3e34f81cb05df3b9bbda4a412478`) is rejected and is not integrated
+or accepted. On MI300X it passed structural and hostile static-wrapper probes,
+crossed `stage=binding-wrapper`, authenticated Cargo and pinned rustc, loaded
+the backend, and collected the kernel. It then failed closed before the release
+main phase because `cargo-fe2o3` had no executable identity for broker
+authentication. The diagnostic run executed the Worker zero times and reached
+no artifact admission, GPU loading or dispatch, or `/dev/kfd` or `/dev/dri`
+access; COMGR opens were zero.
+
+The candidate's dynamically linked host `rust-lld` left its loader and system
+DSOs, CRTs, archives and objects, search roots, and forwarded Cargo target
+artifacts outside the authenticated closure; `env_clear` does not close that
+boundary. The next `W0/P0` milestone must accept exactly one complete design:
+a descriptor-backed full host-link closure with before/after revalidation, a
+genuinely static host linker, or in-process host LLD. Broker executable identity
+and artifact handoff are dependent milestones after that boundary is accepted.
+The direct GPU link path remains pinned upstream LLVM 22 with in-process
+`lld::lldMain`, without COMGR or a shell GPU linker. The rejected diagnostic is
+not signed or protected evidence, parity or GPU evidence, a memory-safety or
+race-freedom proof, or source-to-machine refinement. This fixed-profile
+production blocker remains tracked under
 [#120](https://github.com/harsh-nod/fe2o3/issues/120). The subsequent fixed
 FlashAttention and top-2 MoE vertical slices are tracked by
 [#122](https://github.com/harsh-nod/fe2o3/issues/122) through

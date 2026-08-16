@@ -94,8 +94,35 @@ profile. Release acceptance requires two fresh replays with identical outputs.
 
 This closes a reproducible compiler/code-object checkpoint only. It is not
 origin authentication, source-to-machine or Verus refinement, a memory-safety
-or race-freedom proof, protected runtime authority, or a GPU result. The static
-binding-wrapper blocker and parity status remain unchanged.
+or race-freedom proof, protected runtime authority, or a GPU result. The
+production host-link-closure blocker and parity status remain unchanged.
+
+## Rejected W0-B static-wrapper diagnostic
+
+Candidate `2e5ad53bcb20f2a46e91128a42e838d918d61581` (tree
+`892f014381cd3e34f81cb05df3b9bbda4a412478`) is rejected. It is not integrated,
+public, or accepted. Its MI300X run passed structural and hostile
+static-wrapper probes, reached `stage=binding-wrapper`, authenticated Cargo and
+pinned rustc, loaded the backend, and collected the kernel. It then failed
+closed before the release main phase with:
+
+```text
+backend has no cargo-fe2o3 executable identity for broker authentication
+```
+
+The Worker executed zero times. The run reached no artifact admission, GPU
+loading or dispatch, or `/dev/kfd` or `/dev/dri` access, and opened COMGR zero
+times. The direct GPU link path remains pinned upstream LLVM 22 plus in-process
+`lld::lldMain`; it does not use COMGR or a shell GPU linker.
+
+Code and security review found that the candidate invokes a dynamically linked
+host `rust-lld` while authenticating only the executable. Its dynamic loader and
+system DSOs, CRTs, archives and objects, search roots, and forwarded Cargo target
+artifacts remain outside the authenticated closure. Clearing the environment is
+not a substitute for authenticating and revalidating those inputs. The retained
+run is diagnostic only: it is not signed, protected, or archived evidence; it
+does not support parity, GPU, memory-safety, race-freedom, or source-to-machine
+refinement claims.
 
 ## Implemented Checkpoint: `90b6fe3`
 
@@ -285,37 +312,58 @@ execution operation. See [Bounded MoE V1 evidence](bounded-moe-v1.md) for the
 canonical field table, exact commands, and remaining authority gates. No parity
 row is promoted by this checkpoint.
 
-## Ordered Critical Milestones After `f6efb26`
+## Ordered Critical Milestones
 
 These milestones are sequential authority gates. Work inside one milestone can
 be parallelized, but a later gate must not manufacture evidence that assumes an
 earlier authority transition.
 
-1. **Implemented foundation: durable publication-lease reacquisition
+1. **W0/P0: complete authenticated host-link closure.** Select and implement
+   exactly one complete design: (a) a descriptor-backed closure that enumerates
+   the host linker's loader, DSOs, CRTs, archives and objects, search roots, and
+   forwarded Cargo target artifacts and revalidates every input before and
+   after linking; (b) a genuinely static host linker whose executable format
+   proves it has no runtime loader or shared-library dependencies; or (c)
+   in-process host LLD with its complete library and input closure pinned. The
+   common gate rejects executable, loader, DSO, CRT, archive, object, search-root,
+   response-file, and forwarded-artifact substitution, including replacement
+   between validation and consumption. A fresh MI300X run must cross the host
+   link without allowing mutable unauthenticated bytes to influence the output.
+   Keep the GPU code-object path separate: pinned upstream LLVM 22 and
+   in-process `lld::lldMain`, with no COMGR or shell GPU linker.
+2. **W1/P0: broker executable identity.** Only after W0 is independently
+   accepted, derive the `cargo-fe2o3` broker identity from the accepted command
+   and host-link closure. Bind it to the release request and reject replacement,
+   path aliasing, stale identity, wrong invocation, and validation/exec races.
+   Crossing this gate grants no artifact, runtime, load, launch, or GPU
+   authority.
+3. **Implemented foundation: durable publication-lease reacquisition
    (`5ec6f6f`).** A canonical inert published claim and an API revalidate its
    receipt, complete plan, exact files,
    current generation, path identity, and lock before returning a fresh
    non-clone lease. Reject stale generations, mutation, replacement, and lock
    contention.
-2. **Implemented foundation: sealed finalizer intent and raw/final snapshots
+4. **Implemented foundation: sealed finalizer intent and raw/final snapshots
    (`15ac976`).** Publication-plan derivation is sealed behind
    `fe2o3-hsaco-finalize`; Cargo's duplicate domain hashes are removed, and
    exact raw and finalized snapshots survive crash recovery and migration.
-3. **Implemented foundation: canonical Worker V2 load envelope (`a949518`,
+5. **Implemented foundation: canonical Worker V2 load envelope (`a949518`,
    `7b01057`).** The bounded shared wire type retains the artifact container,
    bundle/proof index, direct-link evidence, descriptor
    lineage, raw HSACO, finalized payload identity, and published claim. A lease
    is process-local authority and must never be serialized.
-4. **Production Cargo envelope publication.** Promote the adapter out of
-   `cfg(test)`, assemble only from sealed inputs, and durably publish the
-   envelope before clearing restart state or completing the build attempt.
-5. **Recovered host admission and application handoff.** Decode the envelope,
+6. **W2/P0: production Cargo envelope publication and artifact handoff.** Only
+   after W0 and W1 are accepted, promote the adapter out of `cfg(test)`, assemble
+   only from sealed inputs, and durably publish the envelope before clearing
+   restart state or completing the build attempt. The handoff carries a pinned,
+   read-only descriptor; it does not convert transport into authority.
+7. **Recovered host admission and application handoff.** Decode the envelope,
    reacquire a fresh lease, and re-run bundle, lineage, raw/final semantic,
    physical ABI, currentness, and marker checks. Pass only a read-only pinned
    descriptor to the application; it is transport, not authority. Exit by
    running the generated-safe MI300X matrix without an external-HSACO handoff,
    retaining the explicit fake-authenticator label.
-6. **Machine-code effect validation tied to evidence.** Add a bounded validator
+8. **Machine-code effect validation tied to evidence.** Add a bounded validator
    for finalized entry points and their closed call graphs. Record accepted
    global reads/writes and address derivations against compiler ABI/effects,
    reject indirect/unknown calls and effect expansion, and bind the result to
@@ -323,22 +371,22 @@ earlier authority transition.
    Admission must consume this evidence; a changed instruction byte, descriptor,
    effect, call edge, or analyzer identity must invalidate it. Hardware success
    remains an independent evidence class.
-7. **Verus proofs and proof-artifact binding.** Prove alpha/zeta bounds, address
+9. **Verus proofs and proof-artifact binding.** Prove alpha/zeta bounds, address
    overflow freedom, initialization, injective writes/race freedom, and
    functional postconditions. Bind source and dependency identity, ABI/effects,
    launch contract, Verus/solver identity, proof result, machine-code evidence,
    and finalized payload in the artifact. Add rejected mutations and stale proof
    replay tests, then make proof-required admission fail closed.
-8. **Production prerequisite authentication.** Implement
+10. **Production prerequisite authentication.** Implement
    `WorkerV2PrerequisiteAuthenticatorV1` only from reviewed immutable compiler,
    Verus/solver, proof-to-executable, Rust-layout, and machine-effect records.
    Every digest, identity, mutation, and stale-replay edge must fail closed.
-9. **Split mutable views.** Add a safe `split_at_mut`-style operation that yields
+11. **Split mutable views.** Add a safe `split_at_mut`-style operation that yields
    simultaneous non-overlapping mutable views of one allocation while retaining
    parent identity and exact allocation-relative intervals. Test overlap,
    overflow, lifetime escape, rejoin/drop order, packing, and in-flight alias
    rejection; finish with a same-allocation split-view MI300X kernel.
-10. **Feature and architecture breadth.** Generalize beyond exact alpha/zeta only
+12. **Feature and architecture breadth.** Generalize beyond exact alpha/zeta only
    after the preceding authority/evidence gates: additional signatures and Rust
    semantics, core AMD operations, async/runtime behavior, then `gfx1151` and
    `gfx950` compile and hardware lanes. Every capability needs target gating,
