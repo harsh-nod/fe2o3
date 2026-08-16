@@ -30,7 +30,7 @@ fn strict_dot(left: &[f32], right: &[f32]) -> Result<f32, BoxError> {
             left.is_finite() && right.is_finite(),
             "non-finite dot input",
         )?;
-        sum = sum + left * right;
+        sum += left * right;
         require(sum.is_finite(), "non-finite dot intermediate")?;
     }
     let scaled = sum * SCALE;
