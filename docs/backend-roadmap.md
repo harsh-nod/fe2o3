@@ -4,6 +4,12 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 
 ## Implemented In This Scaffold
 
+This inventory includes the historical elementwise MVP. The
+production-directed architecture now uses an isolated worker backed by one
+pinned upstream LLVM build: LLVM target-machine APIs emit relocatable objects
+and in-process LLD library APIs link HSACO. That path uses neither COMGR nor
+shell invocations of `clang`, `llc`, or `ld.lld`.
+
 - Project naming and reserved symbol namespace use `fe2o3`.
 - `dialect-mir` defines the local `mir.*` operation/type naming seam that the
   MIR import scaffold can later back with Pliron operations.
@@ -53,7 +59,13 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
     expression kernels using read-only slice operands, scalar operands, one
     mutable output slice, in-place reads from that output slice, float literal
     constants, unary negation, and leaf-only copy stores.
-  - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
+  - the historical `legacy-v1` `.ll -> .o -> .hsaco` sidecar path using ROCm
+    command-line clang and `ld.lld`; this is compatibility history, not the
+    production-directed finalizer.
+- The production-directed direct LLVM/LLD worker parses and links modules,
+  optimizes, emits relocatable ELF through pinned upstream LLVM target-machine
+  APIs, and links HSACO through in-process LLD library APIs. It does not use
+  COMGR or a command-line compiler or linker.
 - `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` selects the first integrated G1 path:
   imported device MIR is translated to canonical kernel IR, verified, strictly
   legalized for the exact 1D `fill` shape, lowered by `dialect-amdgcn`, and

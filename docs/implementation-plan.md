@@ -48,11 +48,21 @@ rustc frontend: parse, typecheck, MIR, monomorphization
      AMDGPU lowering -> LLVM IR for amdgcn-amd-amdhsa
         |
         v
-     ROCm clang/ld.lld -> HSACO
+     pinned upstream LLVM target-machine APIs -> relocatable ELF
+        |
+        v
+     in-process LLD library APIs -> HSACO
         |
         v
      embedded path or sidecar artifact loaded by fe2o3-core
 ```
+
+The production-directed device finalizer runs in the isolated LLVM worker and
+uses one pinned upstream LLVM build for parsing, linking, optimization, target-
+machine code generation, and native LLD linking. It does not use COMGR and does
+not shell out to `clang`, `llc`, or `ld.lld`. Early elementwise prototypes used
+ROCm command-line clang and `ld.lld`; references to that path below are
+historical compatibility notes, not the target architecture.
 
 The initial runtime uses HIP's module API:
 
@@ -126,7 +136,9 @@ Required LLVM IR properties:
 - CPU: `FE2O3_TARGET` such as `gfx1100`, `gfx90a`, or `gfx942`
 - kernel calling convention: `amdgpu_kernel`
 - global buffer pointers in global address space where practical
-- HSACO linked with ROCm `ld.lld -shared`
+- relocatable ELF emitted by pinned upstream LLVM target-machine APIs
+- HSACO linked through in-process LLD library APIs from the same pinned build
+- no COMGR or command-line compiler/linker in the production-directed path
 
 ## Milestones
 
@@ -271,10 +283,15 @@ Acceptance:
 
 ### M4: HSACO Generation
 
-Status: MVP implemented for elementwise sidecar artifacts.
+Status: historical command-line MVP implemented for elementwise sidecar
+artifacts; superseded by the production-directed direct LLVM/LLD worker.
 
-- Generated LLVM IR is compiled to an object with ROCm clang.
-- The object is linked to HSACO with `ld.lld -shared`.
+- The historical `legacy-v1` sidecar path compiled generated LLVM IR with ROCm
+  command-line clang and linked with command-line `ld.lld -shared`.
+- The current production-directed path parses and links modules, optimizes,
+  emits the relocatable object with pinned upstream LLVM target-machine APIs,
+  and links HSACO through in-process LLD library APIs in the isolated worker.
+- The current path uses neither COMGR nor shell compiler/linker invocations.
 - The artifact is written under `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
   `target/fe2o3`.
 - Direct backend invocations that compile kernels must set `FE2O3_HSACO_DIR`.
