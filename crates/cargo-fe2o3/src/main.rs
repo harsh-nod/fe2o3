@@ -343,8 +343,14 @@ fn cargo_with_backend_result(
     }
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
-    let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
-        .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
+    let worker_v2 =
+        worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup().map_err(|error| {
+            if protected_release_row_softmax_run {
+                format!("stage=worker-artifact: Worker V2 setup failed: {error}")
+            } else {
+                format!("Worker V2 setup failed: {error}")
+            }
+        })?;
     if protected_release_row_softmax_run
         && worker_v2
             .as_ref()
