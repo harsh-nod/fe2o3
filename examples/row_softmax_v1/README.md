@@ -210,10 +210,11 @@ symbols, and optional-field presence or absence. The C++ envelope inspector also
 reconciles section and program-header metadata notes and rejects trailing
 MessagePack objects or conflicting descriptors.
 
-A manifest-only commit directly above the implementation pins all source,
-toolchain, device-library, runtime, Worker, probe, and HSACO identities. The
-release command requires a caller-supplied independently reviewed manifest
-digest and two invocations with distinct, nonexistent build and Cargo target
+At implementation Commit A, the release manifest is deliberately absent. Only
+a subsequent manifest-only Commit B directly above A may pin all source,
+toolchain, device-library, runtime, Worker, probe, and HSACO identities. A
+compliant B requires a caller-supplied independently reviewed manifest digest
+and two release invocations with distinct, nonexistent build and Cargo target
 directories. See the exact commands in [the testing guide](../../docs/testing.md#row-softmax-v1-llvm-22-release-gate).
 
 This gate produces compiler/code-object integrity evidence only. It does not

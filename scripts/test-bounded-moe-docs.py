@@ -23,6 +23,8 @@ TESTING = ROOT / "docs/testing.md"
 ROADMAP = ROOT / "docs/implementation-roadmap-v2.md"
 EVIDENCE_RECORD = ROOT / "docs/evidence-record-v1.md"
 EXAMPLE = ROOT / "examples/moe_expert_v1/README.md"
+ROW_EXAMPLE = ROOT / "examples/row_softmax_v1/README.md"
+LLVM_LINK_WORKER_README = ROOT / "tools/fe2o3-llvm-link-worker/README.md"
 V2_BRIDGE = ROOT / "crates/fe2o3-host/src/moe_routing_expert_bridge_v2.rs"
 V2_ADAPTER = ROOT / "crates/fe2o3-host/src/generated_moe_expert_v2.rs"
 V2_UI_COMMON = ROOT / "crates/fe2o3-host/tests/ui/generated_moe_expert_v2"
@@ -94,6 +96,8 @@ def main() -> None:
     roadmap = ROADMAP.read_text(encoding="utf-8")
     evidence_record = EVIDENCE_RECORD.read_text(encoding="utf-8")
     example = EXAMPLE.read_text(encoding="utf-8")
+    row_example = ROW_EXAMPLE.read_text(encoding="utf-8")
+    llvm_link_worker_readme = LLVM_LINK_WORKER_README.read_text(encoding="utf-8")
     v2_bridge = V2_BRIDGE.read_text(encoding="utf-8")
     v2_adapter = V2_ADAPTER.read_text(encoding="utf-8")
     ci_local = CI_LOCAL.read_text(encoding="utf-8")
@@ -233,6 +237,8 @@ def main() -> None:
         ("testing guide", testing),
         ("evidence record", evidence_record),
         ("implementation roadmap", roadmap),
+        ("row-softmax example", row_example),
+        ("LLVM link worker README", llvm_link_worker_readme),
     ]:
         require(
             "subsequent manifest-only Commit B" in text,

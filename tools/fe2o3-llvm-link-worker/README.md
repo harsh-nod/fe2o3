@@ -83,17 +83,18 @@ cmake --build build/llvm-link-worker
 ctest --test-dir build/llvm-link-worker --output-on-failure
 ```
 
-The row-softmax V1 release gate is separately invokable and fail closed. An
-operator must select the committed canonical manifest by both absolute path and
-an out-of-band reviewed SHA-256. The gate accepts no checkout-derived default.
-It verifies that clean manifest-only Commit B is directly based on the pinned
-implementation Commit A, then configures fresh, nonexistent build and Cargo
-target directories itself. The manifest pins the LLVM source/tree and complete
-package closure, nightly-2026-04-03 Cargo and rustc binaries, Worker and probe
-ELFs, `Cargo.lock`, the exact vendored offline crate-source closure, the rustc
-sysroot closure, probe output, runtime DSO/provider closure, and real HSACO.
-This is host-specific operator-selected integrity, not origin authentication.
-On `mi300x`, the invocation is:
+The row-softmax V1 release gate is separately invokable and fail closed. At
+implementation Commit A, the canonical manifest is deliberately absent. Only a
+subsequent manifest-only Commit B directly above A may provide it. An operator
+invoking B must select that committed manifest by both absolute path and an
+out-of-band reviewed SHA-256; the gate accepts no checkout-derived default. It
+verifies that B is directly based on the pinned A, then configures fresh,
+nonexistent build and Cargo target directories itself. The manifest pins the
+LLVM source/tree and complete package closure, nightly-2026-04-03 Cargo and
+rustc binaries, Worker and probe ELFs, `Cargo.lock`, the exact vendored offline
+crate-source closure, the rustc sysroot closure, probe output, runtime
+DSO/provider closure, and real HSACO. This is host-specific operator-selected
+integrity, not origin authentication. On `mi300x`, the invocation is:
 
 ```sh
 export REVIEWED_ROW_SOFTMAX_MANIFEST_SHA256=<operator-selected-sha256>
