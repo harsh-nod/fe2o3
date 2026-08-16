@@ -1791,7 +1791,8 @@ readonly build_evidence_manifest="$artifact_dir/fe2o3-host-lld.build-evidence-ma
   printf 'FINAL_OUTPUT_STAGING=%s\n' "$identity_output_staging"
   printf 'IDENTITY_CONTRACT_SELF_TEST=passed\n'
   printf 'ARTIFACT_MANIFEST_SHA256=%s\n' "$(sha256_file "$artifact_manifest")"
-  printf 'TEST_STATUS=passed\n'
+  printf 'PROTOCOL_CTEST_REGISTRATION=verified-canonical-exactly-once\n'
+  printf 'PROTOCOL_CTEST_EXECUTION=not-executed-inside-guarded-build-closure\n'
 } >"$build_evidence_manifest"
 /usr/bin/chmod 0444 "$artifact_manifest" "$identity_output" "$readelf_output" \
   "$dynamic_output" "$runtime_manifest" "$source_manifest" "$identity_stderr" \
