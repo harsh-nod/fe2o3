@@ -1682,10 +1682,16 @@ mod tests {
     };
     use fe2o3_hsaco_finalize::{
         ContentIdentityV1, LinkOptionV1, PinnedWorkerV1,
-        ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1, RowSoftmaxV1DirectWorkerExpectationV1,
+        ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
+        ROW_SOFTMAX_V1_WORKER_COMPLETE_DIAGNOSTIC_V1, RowSoftmaxV1DirectWorkerExpectationV1,
         RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1, WorkerExecutionLimitsV1,
         WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerStageV1,
         execute_reproducible_first_build_worker_v2,
+        finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
+        inspect_row_softmax_v1_structural_worker_v2_hsaco_v1,
+    };
+    use fe2o3_kernel_descriptor::{
+        RowSoftmaxV1StructuralDescriptorExpectationV1, decode_device_descriptor_table_v1,
     };
     use fe2o3_kernel_ir::ScalarGemmTargetRequirementsV1;
     use fe2o3_kernel_ir::{
@@ -1727,6 +1733,58 @@ mod tests {
 
     fn target() -> DeviceTargetV1 {
         DeviceTargetV1::parse("gfx942:xnack-").unwrap()
+    }
+
+    fn row_softmax_release_gate_requested() -> bool {
+        const RELEASE_GATE_ENV: &str = "FE2O3_ROW_SOFTMAX_RELEASE_GATE";
+        match std::env::var(RELEASE_GATE_ENV) {
+            Ok(value) => {
+                assert_eq!(
+                    value, "1",
+                    "{RELEASE_GATE_ENV} must be exactly 1 when present",
+                );
+                true
+            }
+            Err(std::env::VarError::NotPresent) => false,
+            Err(error) => panic!("read {RELEASE_GATE_ENV}: {error}"),
+        }
+    }
+
+    fn require_row_softmax_release_configuration(
+        release_gate: bool,
+        configured: usize,
+        required: &[&str],
+    ) -> bool {
+        if configured == 0 && !release_gate {
+            return false;
+        }
+        assert_eq!(
+            configured,
+            required.len(),
+            "row-softmax release gate requires all configuration variables: {}",
+            required.join(", "),
+        );
+        true
+    }
+
+    #[test]
+    fn row_softmax_release_gate_fails_closed_on_missing_or_partial_worker_configuration() {
+        let required = ["worker", "worker-build-id", "llvm-build-id"];
+        assert!(!require_row_softmax_release_configuration(
+            false, 0, &required
+        ));
+        assert!(
+            std::panic::catch_unwind(|| {
+                require_row_softmax_release_configuration(true, 0, &required)
+            })
+            .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                require_row_softmax_release_configuration(true, 2, &required)
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -2732,18 +2790,14 @@ mod tests {
             .iter()
             .filter(|name| std::env::var_os(name).is_some())
             .count();
-        if configured == 0 {
+        let release_gate = row_softmax_release_gate_requested();
+        if !require_row_softmax_release_configuration(release_gate, configured, &CONFIGURATION) {
             eprintln!(
                 "skipping configured row-softmax Worker V2 execution: {} are absent",
                 CONFIGURATION.join(", "),
             );
             return;
         }
-        assert_eq!(
-            configured,
-            CONFIGURATION.len(),
-            "partial configured row-softmax Worker V2 environment is forbidden",
-        );
 
         let worker_path = PathBuf::from(std::env::var_os(WORKER_ENV).unwrap());
         let worker_bytes = fs::read(&worker_path).expect("read configured upstream worker");
@@ -2765,6 +2819,19 @@ mod tests {
         let attempt = begin_attempt(&directory.0, &producer);
         let mut receipt = exact_row_frontend_receipt_for_test();
         let prepared = prepare_row_softmax_v1_worker_handoff(receipt.consume().unwrap()).unwrap();
+        let compiler_sections =
+            decode_row_softmax_compiler_sections_v1(prepared.handoff().module_bytes()).unwrap();
+        let descriptor_table =
+            decode_device_descriptor_table_v1(compiler_sections.descriptor()).unwrap();
+        let [descriptor_kernel] = descriptor_table.kernels() else {
+            panic!("exact row-softmax compiler descriptor is not singular");
+        };
+        let descriptor_expectation = RowSoftmaxV1StructuralDescriptorExpectationV1::new(
+            descriptor_kernel.kernel_id(),
+            descriptor_kernel.source_evidence(),
+            descriptor_kernel.executable_ir_evidence(),
+        )
+        .unwrap();
         publish_prepared_row_softmax_v1_worker_handoff(&directory.0, &producer, attempt, prepared)
             .expect("publish exact row-softmax producer handoff");
         let consumed = consume_compiler_module_handoff_v1(&directory.0, &producer, attempt)
@@ -2800,6 +2867,13 @@ mod tests {
                 "completed Worker V2 execution omitted measured OCML evidence: {:?}",
                 execution.response().diagnostics(),
             );
+            assert!(
+                execution.response().diagnostics().iter().any(|diagnostic| {
+                    diagnostic == ROW_SOFTMAX_V1_WORKER_COMPLETE_DIAGNOSTIC_V1
+                }),
+                "completed Worker V2 execution omitted the exact row structural diagnostic: {:?}",
+                execution.response().diagnostics(),
+            );
         }
         let inspected = fe2o3_hsaco::inspect(evidence.output_bytes())
             .expect("inspect real row-softmax Worker V2 output");
@@ -2808,6 +2882,14 @@ mod tests {
             inspected.code_object_version(),
             fe2o3_hsaco::CodeObjectVersion::V6,
         );
+        if let Some(path) = std::env::var_os("FE2O3_TEST_RETAIN_ROW_SOFTMAX_HSACO") {
+            fs::write(path, evidence.output_bytes()).expect("retain real row-softmax HSACO");
+        }
+        let structural =
+            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(evidence, descriptor_expectation)
+                .expect("structurally admit exact real row-softmax Worker output");
+        finalize_row_softmax_v1_structural_worker_v2_hsaco_v1(structural)
+            .expect("finalize exact real row-softmax Worker output");
     }
 
     #[test]
