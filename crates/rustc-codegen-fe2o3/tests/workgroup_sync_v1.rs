@@ -19,6 +19,7 @@ const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const LDS_SOURCE: &str = include_str!("../../../examples/workgroup_sync_v1/src/kernel.rs");
 const ATOMIC_SOURCE: &str =
     include_str!("../../../examples/workgroup_sync_v1/src/scoped_atomic.rs");
+const REPORT_AUTHORITY_ENV: &str = "FE2O3_WORKGROUP_SYNC_REPORT_AUTHORITY";
 
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
@@ -98,6 +99,29 @@ impl Drop for TestOutput {
     }
 }
 
+struct CleanCargoTarget {
+    path: PathBuf,
+}
+
+impl CleanCargoTarget {
+    fn new(workspace: &Path, label: &str) -> Self {
+        let path = cargo_target(workspace).join(format!(
+            "workgroup-sync-v1-clean-{label}-{}",
+            std::process::id()
+        ));
+        if path.exists() {
+            std::fs::remove_dir_all(&path).expect("remove stale clean workgroup-sync target");
+        }
+        Self { path }
+    }
+}
+
+impl Drop for CleanCargoTarget {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CompilerProfile<'a> {
     target: &'a str,
@@ -158,11 +182,16 @@ fn build_frontend_dependencies(workspace: &Path) -> Result<(), String> {
                 "-p",
                 "fe2o3-host",
             ]);
+            let mut rustflags = std::env::var_os("RUSTFLAGS").unwrap_or_default();
+            if !rustflags.is_empty() {
+                rustflags.push(" ");
+            }
+            rustflags.push("-Zalways-encode-mir");
             command
                 .arg("--target-dir")
                 .arg(frontend_target(workspace))
                 .env("CARGO_INCREMENTAL", "0")
-                .env("RUSTFLAGS", "-Zalways-encode-mir");
+                .env("RUSTFLAGS", rustflags);
             let output = command.output().map_err(|error| error.to_string())?;
             if output.status.success() {
                 Ok(())
@@ -272,6 +301,28 @@ fn authenticated_authority(stderr: &str) -> &str {
     authority
 }
 
+fn admitted_closure(stderr: &str) -> String {
+    let marker = "complete reachable portable-MIR closure modulo those identity-bound terminals ";
+    let identity: String = stderr
+        .split_once(marker)
+        .unwrap_or_else(|| panic!("missing admitted closure marker:\n{stderr}"))
+        .1
+        .chars()
+        .take_while(char::is_ascii_hexdigit)
+        .take(64)
+        .collect();
+    assert_eq!(identity.len(), 64, "closure identity is not SHA-256 hex");
+    identity
+}
+
+fn internal_helper_exports(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("  [internal-helper] "))
+        .map(str::to_owned)
+        .collect()
+}
+
 fn copy_relocated_workspace(source: &Path, destination: &Path) {
     std::fs::create_dir_all(destination).expect("create relocated workspace");
     for file in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
@@ -321,13 +372,14 @@ fn run_relocated_exact_profiles(workspace: &Path, target: &Path) -> Output {
         ])
         .arg(target)
         .args([
-            "exact_sources_authenticate_complete_profiles",
+            "source_authenticates_complete_profile",
             "--",
             "--nocapture",
+            "--test-threads=1",
         ])
         .env("CARGO_TARGET_DIR", target)
         .env("CARGO_INCREMENTAL", "0")
-        .env("FE2O3_WORKGROUP_SYNC_REPORT_AUTHORITY", "1")
+        .env(REPORT_AUTHORITY_ENV, "1")
         .output()
         .expect("run relocated exact-profile suite")
 }
@@ -357,6 +409,86 @@ fn reported_authorities(output: &Output) -> BTreeMap<String, String> {
             Some((label.to_owned(), identity.trim().to_owned()))
         })
         .collect()
+}
+
+fn reported_closures(output: &Output) -> BTreeMap<String, String> {
+    command_text(output)
+        .lines()
+        .filter_map(|line| {
+            let marker = "WORKGROUP_SYNC_CLOSURE ";
+            let report = line
+                .find(marker)
+                .map(|offset| &line[offset + marker.len()..])?;
+            let (label, identity) = report.split_once(' ')?;
+            Some((label.to_owned(), identity.trim().to_owned()))
+        })
+        .collect()
+}
+
+fn reported_helpers(output: &Output) -> BTreeMap<String, Vec<String>> {
+    let mut helpers = BTreeMap::<String, Vec<String>>::new();
+    for line in command_text(output).lines() {
+        let marker = "WORKGROUP_SYNC_HELPER ";
+        let Some(report) = line
+            .find(marker)
+            .map(|offset| &line[offset + marker.len()..])
+        else {
+            continue;
+        };
+        let Some((label, export)) = report.split_once(' ') else {
+            continue;
+        };
+        helpers
+            .entry(label.to_owned())
+            .or_default()
+            .push(export.trim().to_owned());
+    }
+    helpers
+}
+
+fn run_clean_exact_profiles(
+    workspace: &Path,
+    target: &CleanCargoTarget,
+    incremental: Option<&str>,
+    rustflags: Option<&str>,
+) -> Output {
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace)
+        .args([
+            "test",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--test",
+            "workgroup_sync_v1",
+            "source_authenticates_complete_profile",
+            "--",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("CARGO_TARGET_DIR", &target.path)
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(REPORT_AUTHORITY_ENV, "1");
+    match incremental {
+        Some(value) => {
+            command.env("CARGO_INCREMENTAL", value);
+        }
+        None => {
+            command.env_remove("CARGO_INCREMENTAL");
+        }
+    }
+    match rustflags {
+        Some(value) => {
+            command.env("RUSTFLAGS", value);
+        }
+        None => {
+            command.env_remove("RUSTFLAGS");
+        }
+    }
+    command
+        .output()
+        .expect("run clean workgroup-sync exact fixtures")
 }
 
 fn command_text(output: &Output) -> String {
@@ -393,12 +525,95 @@ fn assert_exact_profile_authenticates(kind: ProfileKind, source: &str, label: &s
     ] {
         assert!(stderr.contains(marker), "missing `{marker}`:\n{stderr}");
     }
-    if std::env::var_os("FE2O3_WORKGROUP_SYNC_REPORT_AUTHORITY").is_some() {
+    if std::env::var_os(REPORT_AUTHORITY_ENV).is_some() {
+        println!(
+            "WORKGROUP_SYNC_CLOSURE {label} {}",
+            admitted_closure(&stderr)
+        );
+        for helper in internal_helper_exports(&stderr) {
+            println!("WORKGROUP_SYNC_HELPER {label} {helper}");
+        }
         println!(
             "WORKGROUP_SYNC_AUTHORITY {label} {}",
             authenticated_authority(&stderr)
         );
     }
+}
+
+#[test]
+fn clean_build_modes_admit_the_same_workgroup_sync_closures() {
+    let workspace = workspace();
+    let default_target = CleanCargoTarget::new(&workspace, "incremental-default");
+    let disabled_target = CleanCargoTarget::new(&workspace, "incremental-disabled");
+    let metadata_target = CleanCargoTarget::new(&workspace, "provider-metadata-varied");
+
+    let default = run_clean_exact_profiles(&workspace, &default_target, None, None);
+    let default_text = command_text(&default);
+    assert!(
+        default.status.success(),
+        "clean default-incremental workgroup-sync run failed:\n{default_text}"
+    );
+
+    let disabled = run_clean_exact_profiles(&workspace, &disabled_target, Some("0"), None);
+    let disabled_text = command_text(&disabled);
+    assert!(
+        disabled.status.success(),
+        "clean CARGO_INCREMENTAL=0 workgroup-sync run failed:\n{disabled_text}"
+    );
+
+    assert_eq!(
+        reported_authorities(&default),
+        reported_authorities(&disabled),
+        "nonsemantic Cargo incremental mode changed the sealed authorities"
+    );
+    assert_eq!(
+        reported_closures(&default),
+        reported_closures(&disabled),
+        "nonsemantic Cargo incremental mode changed the admitted MIR closures"
+    );
+
+    let metadata = run_clean_exact_profiles(
+        &workspace,
+        &metadata_target,
+        None,
+        Some("-Cmetadata=fe2o3-provider-disambiguator-regression"),
+    );
+    let metadata_text = command_text(&metadata);
+    assert!(
+        metadata.status.success(),
+        "clean provider-metadata-varied workgroup-sync run failed:\n{metadata_text}"
+    );
+    assert_eq!(
+        reported_authorities(&default),
+        reported_authorities(&metadata),
+        "nonsemantic provider crate metadata changed the sealed authorities"
+    );
+    assert_eq!(
+        reported_closures(&default),
+        reported_closures(&metadata),
+        "nonsemantic provider crate metadata changed the admitted MIR closures"
+    );
+
+    let default_helpers = reported_helpers(&default);
+    let metadata_helpers = reported_helpers(&metadata);
+    assert_eq!(
+        default_helpers.keys().collect::<Vec<_>>(),
+        metadata_helpers.keys().collect::<Vec<_>>(),
+        "provider metadata variation changed the helper-report profile set"
+    );
+    assert!(
+        default_helpers.values().all(|helpers| !helpers.is_empty()),
+        "clean exact profiles omitted internal helper exports"
+    );
+    assert_eq!(
+        default_helpers.values().map(Vec::len).collect::<Vec<_>>(),
+        metadata_helpers.values().map(Vec::len).collect::<Vec<_>>(),
+        "provider metadata variation changed helper-closure cardinality"
+    );
+    assert_ne!(
+        default_helpers, metadata_helpers,
+        "provider metadata variation did not change rustc export disambiguators"
+    );
 }
 
 #[test]
