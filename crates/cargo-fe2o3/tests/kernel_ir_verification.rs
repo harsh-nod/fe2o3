@@ -1,7 +1,27 @@
+use std::env;
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Command, Output};
 
+fn clean_package(workspace: &Path, package: &str) {
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let output = Command::new(cargo)
+        .current_dir(workspace)
+        .args(["clean", "-p", package])
+        .output()
+        .expect("clean the example package");
+    assert!(
+        output.status.success(),
+        "failed to clean {package}:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn build(workspace: &Path, package: &str, verify: bool) -> Output {
+    // The verification opt-in is consumed by the rustc backend, so Cargo does
+    // not include it in the package fingerprint. Force the selected example
+    // through rustc whenever this test changes verification modes.
+    clean_package(workspace, package);
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
         .current_dir(workspace)
