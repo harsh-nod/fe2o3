@@ -76,6 +76,10 @@ impl VerticalFixturePermit {
         state.exclusive = true;
         Self(VerticalFixturePermitKind::Exclusive)
     }
+
+    const fn is_exclusive(&self) -> bool {
+        matches!(self.0, VerticalFixturePermitKind::Exclusive)
+    }
 }
 
 impl Drop for VerticalFixturePermit {
@@ -127,6 +131,10 @@ impl TestDirectory {
         ));
         fs::create_dir(&path).unwrap();
         Self(path, Mutex::new(None), permit)
+    }
+
+    fn has_exclusive_permit(&self) -> bool {
+        self.2.is_exclusive()
     }
 }
 
@@ -758,6 +766,11 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     use std::os::unix::fs::MetadataExt;
+
+    assert!(
+        directory.has_exclusive_permit(),
+        "production-deadline application handoff fixtures require an exclusive process lane"
+    );
 
     let artifact = artifact_dir(directory);
     let metadata = fs::metadata(&artifact).unwrap();
@@ -1448,7 +1461,7 @@ fn required_cov6_production_wrapper_publishes_a_canonical_envelope() {
 
 #[test]
 fn canonical_envelope_is_consumed_through_descriptor_protocol_completion() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
@@ -1589,7 +1602,7 @@ fn application_handoff_close_range_blocks_unrelated_inheritable_descriptors() {
     use std::os::unix::process::CommandExt;
 
     const PROBE_FD: i32 = 199;
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
@@ -1628,7 +1641,7 @@ fn application_handoff_close_range_blocks_unrelated_inheritable_descriptors() {
 
 #[test]
 fn public_ack_completion_does_not_replace_private_host_currentness_authority() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
@@ -1700,7 +1713,7 @@ fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
 #[test]
 fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
@@ -1963,7 +1976,7 @@ fn required_cov6_fault_matrix_recovers_every_committed_boundary() {
 #[test]
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
 fn required_cov6_production_wrapper_recovers_after_published_crash() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let interrupted = run_wrapper_with_options(
         &directory,
@@ -2049,7 +2062,7 @@ fn repeated_required_envelope_temp_crashes_are_bounded_and_recover() {
 
 #[test]
 fn application_handoff_rejects_child_protocol_substitution_and_omission() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
@@ -2103,7 +2116,7 @@ fn application_handoff_rejects_child_protocol_substitution_and_omission() {
 fn application_handoff_rejects_symlink_and_generation_path_replacement() {
     use std::os::unix::fs::symlink;
 
-    let symlink_directory = TestDirectory::new();
+    let symlink_directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&symlink_directory);
     let published = run_wrapper_with_options(
         &symlink_directory,
@@ -2123,8 +2136,9 @@ fn application_handoff_rejects_symlink_and_generation_path_replacement() {
         &symlink_directory.0.join("symlinked-report.json"),
     );
     assert!(!symlinked.status.success(), "symlinked envelope passed");
+    drop(symlink_directory);
 
-    let replaced_directory = TestDirectory::new();
+    let replaced_directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&replaced_directory);
     let published = run_wrapper_with_options(
         &replaced_directory,
@@ -2156,7 +2170,7 @@ fn application_handoff_rejects_symlink_and_generation_path_replacement() {
 
 #[test]
 fn application_handoff_rejects_truncated_and_extended_envelopes() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
@@ -2182,7 +2196,7 @@ fn application_handoff_rejects_truncated_and_extended_envelopes() {
 
 #[test]
 fn application_handoff_rejects_stale_envelope_after_publication_turnover() {
-    let directory = TestDirectory::new();
+    let directory = TestDirectory::new_exclusive();
     let first = required_alpha_zeta_publication_fixture_with_seed(&directory, 0);
     let published =
         run_wrapper_with_options(&directory, &first.config, "publish-valid", first.cov6, None);
