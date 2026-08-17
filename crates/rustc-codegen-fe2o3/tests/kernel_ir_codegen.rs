@@ -443,6 +443,19 @@ fn build_codegen_backend(workspace: &Path) -> PathBuf {
     cargo_target_root(workspace).join("debug/librustc_codegen_fe2o3.so")
 }
 
+fn clean_package(workspace: &Path, package: &str) {
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace)
+        .args(["clean", "-p", package])
+        .output()
+        .expect("clean the example package");
+    assert!(
+        output.status.success(),
+        "failed to clean {package}:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn worker_v2_source() -> String {
     let fields = reserved_fe2o3_symbols::DeviceFfiContractFieldsV1 {
         direction: reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1,
@@ -965,6 +978,11 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     }
 
     assert_vecadd_publication(&workspace, "build", false);
+    // The pipeline selector is consumed by the rustc backend and is not part
+    // of Cargo's package fingerprint. The preceding ROCm gate stages may have
+    // compiled `copy` through the legacy pipeline, so force this negative case
+    // back through rustc before asserting selected-pipeline rejection.
+    clean_package(&workspace, "fe2o3-copy");
     let copy_artifacts = artifact_paths(&workspace, "copy");
     preseed(&copy_artifacts);
     let unsupported = backend(&workspace, "build", "fe2o3-copy", Some("kernel-ir-v1"));
