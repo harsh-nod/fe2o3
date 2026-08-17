@@ -111,6 +111,20 @@ fn build_codegen_backend(workspace: &Path) -> PathBuf {
     workspace.join("target/debug/librustc_codegen_fe2o3.so")
 }
 
+fn initialize_owned_artifact_directory(workspace: &Path) {
+    let (package, kernel) = GENUINE_CASES[0];
+    let accepted = backend_build(workspace, package);
+    let stderr = String::from_utf8_lossy(&accepted.stderr);
+    assert!(
+        accepted.status.success(),
+        "failed to initialize an owned artifact directory with `{package}`:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("emitted {kernel}")),
+        "artifact-directory initializer did not emit `{kernel}`:\n{stderr}"
+    );
+}
+
 #[test]
 fn local_marker_adversary_clears_generic_frontend_compilation() {
     let _lock = backend_test_lock();
@@ -182,9 +196,9 @@ fn rejected_lookalikes_remove_preseeded_artifacts_atomically() {
     let _lock = backend_test_lock();
     let workspace = workspace();
     let artifact_dir = workspace.join("target/fe2o3");
-    std::fs::create_dir_all(&artifact_dir).expect("create artifact directory");
 
     for &(package, kernel, expected) in REJECTED_CASES {
+        initialize_owned_artifact_directory(&workspace);
         let artifacts = ["ll", "o", "hsaco"]
             .map(|extension| artifact_dir.join(format!("{kernel}.{extension}")));
         for artifact in &artifacts {
