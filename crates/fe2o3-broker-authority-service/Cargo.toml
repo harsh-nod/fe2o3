@@ -13,4 +13,5 @@ libc.workspace = true
 rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
+serde = "=1.0.229"
 tempfile = "=3.21.0"

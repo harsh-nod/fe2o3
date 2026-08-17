@@ -1,19 +1,32 @@
 //! Protected-service admission foundation for future broker authority.
 //!
 //! This crate is deliberately inert: [`BROKER_AUTHORITY_SERVICE_AUTHORITY_V1`] is `"none"`.
-//! Admission retains a supervisor-supplied directory file description and a connected, unnamed
-//! Unix `SOCK_SEQPACKET` peer. Both descriptors must have `FD_CLOEXEC`. The linked directory must
-//! be owned by the service's effective UID with mode `0700`. Linux `SO_PEERCRED` must exactly match
-//! the supervisor-supplied expected client PID, UID, and GID, and that UID must differ from the
-//! service UID. This split assumes a protected supervisor launches the service under a dedicated
-//! UID and passes both descriptors and the expected connection-time client identity.
+//! Admission retains a supervisor-supplied directory file description, a connected unnamed Unix
+//! `SOCK_SEQPACKET` peer, and an opaque client pidfd identity. Every descriptor must have
+//! `FD_CLOEXEC`. The linked directory must be owned by the service's effective UID with mode
+//! `0700`. Linux `SO_PEERCRED` must exactly match the PID, UID, and GID carried by the pidfd-bound
+//! expected identity, and that UID must differ from the service UID. This split assumes a protected
+//! supervisor launches the service under a dedicated UID and passes all three descriptors.
 //!
-//! `SO_PEERCRED` is a connection-time credential snapshot. It does not prove that the named PID is
-//! still live, that the PID has not been reused, or that the client exclusively owns its endpoint.
-//! Admission itself does not resolve a path, but it cannot attest how the supervisor acquired the
-//! directory descriptor before transfer. No replay registry, reservation, commit, host-link,
-//! publication, load, or launch operation is exposed. Anti-rollback state, live process identity,
-//! exclusive endpoint ownership, and atomic admitted-output publication remain future work.
+//! The held pidfd removes numeric-PID reuse ambiguity for the retained process identity and is
+//! polled for point-in-time liveness. `waitid(P_PIDFD, WNOWAIT)` supplements polling for waitable
+//! children and never reaps. Exact PID binding first requests the 64-byte `PIDFD_GET_INFO` v0 ABI.
+//! Only `ENOTTY` or `EINVAL` from that exact request dispatches to a fail-closed, 4096-byte
+//! `/proc/self/fdinfo/<fd>` inspection. `EINVAL` covers Linux 6.12, whose pidfd ioctl rejects a
+//! nonzero argument before checking an unknown command; the errno alone never admits a descriptor.
+//! The fallback must independently find exactly one `Pid:` and one octal `flags:` field in a
+//! kernel procfs record and rejects `PIDFD_THREAD == O_EXCL`. It also verifies that `/proc/self`
+//! and `/proc/<getpid>` are the same process entry in the selected procfs mount; this is a
+//! consistent numeric-self mapping, not proof that the mount represents the caller's active PID
+//! namespace. A compatible procfs mount is therefore required whenever the v0 ioctl does not
+//! succeed.
+//!
+//! Liveness is inherently transient: the client can exit immediately after a successful check.
+//! `SO_PEERCRED` remains a connection-time credential snapshot, and neither it nor a pidfd proves
+//! exclusive ownership of the peer endpoint. Admission cannot attest how the supervisor acquired
+//! any descriptor before transfer. No replay registry, reservation, commit, host-link,
+//! publication, load, or launch operation is exposed. Anti-rollback state, exclusive endpoint
+//! ownership, and atomic admitted-output publication remain future work.
 //!
 //! The admission object is neither `Clone` nor `Copy`:
 //!
@@ -31,6 +44,39 @@
 //! require_copy::<ProtectedBrokerServiceAdmissionV1>();
 //! ```
 //!
+//! The live-client token is also move-only, has no raw descriptor API, and implements no Serde
+//! serialization trait:
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::LiveClientPidfdIdentityV1;
+//!
+//! fn require_clone<T: Clone>() {}
+//! require_clone::<LiveClientPidfdIdentityV1>();
+//! ```
+//!
+//! ```compile_fail
+//! use std::os::fd::AsFd;
+//! use fe2o3_broker_authority_service::LiveClientPidfdIdentityV1;
+//!
+//! fn require_as_fd<T: AsFd>() {}
+//! require_as_fd::<LiveClientPidfdIdentityV1>();
+//! ```
+//!
+//! ```compile_fail
+//! use std::os::fd::IntoRawFd;
+//! use fe2o3_broker_authority_service::LiveClientPidfdIdentityV1;
+//!
+//! fn require_into_raw_fd<T: IntoRawFd>() {}
+//! require_into_raw_fd::<LiveClientPidfdIdentityV1>();
+//! ```
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::LiveClientPidfdIdentityV1;
+//!
+//! fn require_serialize<T: serde::Serialize>() {}
+//! require_serialize::<LiveClientPidfdIdentityV1>();
+//! ```
+//!
 #[cfg(not(target_os = "linux"))]
 compile_error!(
     "fe2o3-broker-authority-service requires Linux descriptor and SO_PEERCRED semantics"
@@ -42,7 +88,7 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
     AdmissionErrorKindV1, BrokerAuthorityServiceAdmissionErrorV1, ExpectedClientProcessIdentityV1,
-    ProtectedBrokerServiceAdmissionV1,
+    LiveClientPidfdIdentityV1, ProtectedBrokerServiceAdmissionV1,
 };
 
 /// This foundation grants no execution, persistence, publication, or launch authority.
