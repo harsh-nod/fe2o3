@@ -580,6 +580,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-external-anchor-protocol"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-fill"
 version = "0.1.0"
 dependencies = [
