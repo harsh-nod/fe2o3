@@ -127,28 +127,29 @@ shell invocations of `clang`, `llc`, or `ld.lld`.
   `pipeline`, and `vecadd-f64` have run successfully on `gfx1201` using TheRock
   ROCm `7.13.0a20260509`.
 
-## Next Compiler Milestones
+## Remaining Compiler Milestones
 
-1. Extend the integrated `kernel-ir-v1` path from fill to vecadd and then every
-   current example, preserving strict rejection and transactional cleanup,
-   before making it the default and removing the temporary elementwise
-   recognizer.
+1. Extend the integrated structured path beyond the implemented exact fill,
+   vecadd, alpha/zeta, and advanced `gfx942` profiles to every current example,
+   preserving strict rejection and transactional cleanup before making it the
+   default and removing the temporary elementwise recognizer.
 2. Move the remaining legacy `ElementwiseShape` output/source discovery off raw
    rustc MIR and onto
    the record-derived access/expression sketches.
-3. Replace device stubs in `fe2o3-device` with lowering rules:
+3. Broaden the existing bounded device-operation lowering rules:
    - `thread::thread_idx_*` -> `llvm.amdgcn.workitem.id.*`
    - `thread::block_idx_*` -> `llvm.amdgcn.workgroup.id.*`
    - `sync::syncthreads` -> `llvm.amdgcn.s.barrier`
    - `block_dim_*` and grid dimensions -> dispatch packet reads
-4. Define the device kernel ABI explicitly:
+4. Generalize the explicit device kernel ABI beyond the reviewed exact
+   profiles:
    - Rust slices lower to pointer plus `usize` length.
    - `DisjointSlice<T>` lowers to mutable pointer plus `usize` length.
    - Plain scalars pass by value.
-5. Generalize artifact placement beyond sidecar files in
-   `target/fe2o3`.
-6. Add a repeatable hardware test target for the generated host binary plus
-   HSACO path.
+5. Generalize bundle embedding and artifact placement beyond the reviewed
+   exact profiles and legacy sidecars in `target/fe2o3`.
+6. Broaden the repeatable protected hardware gates beyond the current exact
+   target and kernel profiles.
 
 ## Runtime ABI Assumption
 

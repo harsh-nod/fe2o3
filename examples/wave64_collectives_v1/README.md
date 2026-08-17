@@ -138,10 +138,12 @@ It grants no artifact authority and grants no protected-execution authority.
 It does not establish generalized safety, including memory safety or race
 freedom, and cannot promote a parity row by itself.
 
-Separate public issue #117 evidence authenticates the exact source and reachable
-MIR, selects this canonical KIR/profile, finalizes through direct upstream LLVM
-and the in-process LLD library API, and records one protected gfx942 observation.
-Those independently bounded receipts are not silently joined into this proof.
-The configured finalizer test remains ignored with `requires the measured
-direct LLVM/LLD worker built for gfx942`. No COMGR path or shell invocation of
-`clang`, `llc`, or `ld.lld` is introduced here.
+Public issue #117 contains a historical protected `gfx942` observation for an
+earlier exact receipt and a later compiler/finalizer checkpoint that records no
+protected GPU result. The current configured finalizer test remains ignored
+with `requires the measured direct LLVM/LLD worker built for gfx942`; the
+current protected hardware test is separately ignored with `requires all exact
+build pins and one isolated MI300X gfx942:xnack- device`. These independently
+bounded and differently timed receipts are not silently joined into this proof.
+No COMGR path or shell invocation of `clang`, `llc`, or `ld.lld` is introduced
+here.

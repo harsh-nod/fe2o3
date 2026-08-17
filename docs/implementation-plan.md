@@ -447,9 +447,11 @@ calls can break GPU synchronization semantics.
 - Wavefront semantics are not CUDA warp semantics; do not expose CUDA-shaped
   APIs without AMD-specific naming and behavior.
 
-## Immediate Next Task
+## Historical First-Lowering Task
 
-Grow the MIR import scaffold into the first real lowering path:
+The following was the immediate bootstrap task. Exact fill and vecadd structured
+paths and several later bounded profiles are now implemented; current work is
+tracked in the [implementation roadmap](implementation-roadmap-v2.md).
 
 1. Move the current elementwise shape analysis from raw rustc MIR onto the
    record-driven lowering plan one piece at a time. The plan now carries typed

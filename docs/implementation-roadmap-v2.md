@@ -240,9 +240,9 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
 - Cargo can deterministically assemble an exact alpha/zeta
   `ArtifactContainerV1` candidate from finalized COV6, descriptor, attempt,
   plan, and receipt evidence. It retains lineage absent from the V1 wire and
-  deliberately grants no current-publication, load, or launch authority. This
-  Cargo adapter remains inert, has no container/serialization accessor, and is
-  compiled only for tests; and
+  deliberately grants no current-publication, load, or launch authority. At
+  this checkpoint the Cargo adapter remained inert, had no
+  container/serialization accessor, and was compiled only for tests; and
 - the genuine Worker V2 integration publishes exactly alpha and zeta in one
   inspected COV6 HSACO and exports the bytes through a create-new evidence
   boundary. The resulting `gfx942` payload has SHA-256
@@ -259,14 +259,15 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
 This checkpoint supplies exact-digest source, compiler, direct LLVM/LLD,
 COV6, raw hardware, and generated-safe runtime-composition evidence. Both
 harnesses still inject the exported HSACO, and the safe harness uses an
-explicitly fake authenticator. Canonical durable lease reacquisition, sealed
-finalizer intent, a bounded Worker V2 envelope carrying the reacquirable claim,
-and one-history persistent multi-kernel proof admission now exist as composed
-foundations. Cargo does not publish the envelope, and no recovered host
-admission path or application bundle handoff exists. The Cargo artifact adapter
-remains test-only, and no production `WorkerV2PrerequisiteAuthenticatorV1`,
-machine-code effect evidence, or bound Verus result exists. Therefore this is
-not production proof-authenticated safe
+explicitly fake authenticator. Follow-on work now provides canonical durable
+lease reacquisition, sealed finalizer intent, a bounded Worker V2 envelope,
+Cargo publication and reconstruction of that inert envelope, cooperative
+descriptor handoff, recovered inert host admission, and one-history persistent
+multi-kernel proof admission. Bounded alpha/zeta proof records and physical
+machine-effect records also exist. The handoff is not protected production
+authority, the records are not production-bound to compiler origin and the
+exact payload, and no production `WorkerV2PrerequisiteAuthenticatorV1` exists.
+Therefore this is not production proof-authenticated safe
 dispatch, no parity row is promoted solely by this checkpoint,
 repository-wide CUDA-Oxide parity is not claimed, and Complete remains `0`.
 
@@ -375,40 +376,35 @@ earlier authority transition.
    bundle/proof index, direct-link evidence, descriptor
    lineage, raw HSACO, finalized payload identity, and published claim. A lease
    is process-local authority and must never be serialized.
-6. **W2/P0: production Cargo envelope publication and artifact handoff.** Only
-   after W0 and W1 are accepted, promote the adapter out of `cfg(test)`, assemble
-   only from sealed inputs, and durably publish the envelope before clearing
-   restart state or completing the build attempt. The handoff carries a pinned,
-   read-only descriptor; it does not convert transport into authority.
-7. **Recovered host admission and application handoff.** Decode the envelope,
-   reacquire a fresh lease, and re-run bundle, lineage, raw/final semantic,
-   physical ABI, currentness, and marker checks. Pass only a read-only pinned
-   descriptor to the application; it is transport, not authority. Exit by
-   running the generated-safe MI300X matrix without an external-HSACO handoff,
-   retaining the explicit fake-authenticator label.
-8. **Machine-code effect validation tied to evidence.** Add a bounded validator
-   for finalized entry points and their closed call graphs. Record accepted
-   global reads/writes and address derivations against compiler ABI/effects,
-   reject indirect/unknown calls and effect expansion, and bind the result to
-   kernel identity, analyzer/toolchain identity, and exact payload digest.
-   Admission must consume this evidence; a changed instruction byte, descriptor,
-   effect, call edge, or analyzer identity must invalidate it. Hardware success
-   remains an independent evidence class.
-9. **Verus proofs and proof-artifact binding.** Prove alpha/zeta bounds, address
-   overflow freedom, initialization, injective writes/race freedom, and
-   functional postconditions. Bind source and dependency identity, ABI/effects,
-   launch contract, Verus/solver identity, proof result, machine-code evidence,
-   and finalized payload in the artifact. Add rejected mutations and stale proof
-   replay tests, then make proof-required admission fail closed.
+6. **Implemented inert W2/P0 foundation: Cargo envelope publication.** The
+   adapter is compiled outside tests and durably publishes and reconstructs the
+   canonical envelope from sealed lineage before completing the build attempt.
+   This was implemented ahead of W1 authority and deliberately grants none.
+7. **Implemented inert foundation: recovered host admission and cooperative
+   application handoff.** The host reacquires a fresh lease and rechecks the
+   envelope, lineage, semantic and physical ABI, currentness, and marker facts.
+   Cargo transfers only pinned read-only descriptors. A protected production
+   handoff and generated-safe MI300X replay without external HSACO injection
+   remain open.
+8. **Implemented bounded foundation: physical machine effects.** Canonical
+   records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
+   closed call graph and physical memory sites. Production admission must still
+   authenticate extraction from each final payload and bind it to compiler ABI
+   and effect evidence. Hardware success remains an independent evidence class.
+9. **Implemented bounded foundation: alpha/zeta source proofs and proof
+   records.** Mechanical source-model proofs, negative mutations, freshness,
+   and executable-evidence records exist. They do not give Rust source an
+   operational semantics, establish compiler/machine refinement, or bind
+   production proof authority to the final payload.
 10. **Production prerequisite authentication.** Implement
    `WorkerV2PrerequisiteAuthenticatorV1` only from reviewed immutable compiler,
    Verus/solver, proof-to-executable, Rust-layout, and machine-effect records.
    Every digest, identity, mutation, and stale-replay edge must fail closed.
-11. **Split mutable views.** Add a safe `split_at_mut`-style operation that yields
-   simultaneous non-overlapping mutable views of one allocation while retaining
-   parent identity and exact allocation-relative intervals. Test overlap,
-   overflow, lifetime escape, rejoin/drop order, packing, and in-flight alias
-   rejection; finish with a same-allocation split-view MI300X kernel.
+11. **Implemented API foundation: split mutable views.** Safe two-way and
+   guarded three-way splits yield simultaneous non-overlapping mutable views
+   while retaining parent identity and exact allocation-relative intervals.
+   Unit and compile-fail coverage exists; mechanical Verus correspondence and
+   general same-allocation MI300X execution remain open.
 12. **Feature and architecture breadth.** Generalize beyond exact alpha/zeta only
    after the preceding authority/evidence gates: additional signatures and Rust
    semantics, core AMD operations, async/runtime behavior, then `gfx1151` and
@@ -418,10 +414,12 @@ earlier authority transition.
 
 ### Parallel delivery shape
 
-The claim, finalizer-intent, envelope-schema, and persistent proof-set
-foundations landed independently and are now composed. Cargo envelope
-publication and recovered host admission can proceed in parallel against the
-frozen wire and claim APIs. Application handoff is their integration gate.
+The claim, finalizer-intent, envelope-schema, persistent proof-set, Cargo
+publication, cooperative handoff, and recovered-host foundations landed
+independently and are now composed as an inert path. Protected application
+handoff, production prerequisite authentication, and proof/effect admission are
+the remaining authority integration gates and can progress in parallel against
+the frozen wire and claim APIs.
 
 The production authenticator must not be implemented from today's descriptive
 digests. Its independent evidence lanes are:
@@ -632,13 +630,14 @@ prerequisite authenticator and test-only witnesses.
 
 Durable publication, finalized-bundle admission, currentness lease
 revalidation, the authenticated load state machine, generated alpha/zeta safe
-dispatch SPI, the reviewed runtime adapter, durable lease reacquisition, and a
-canonical Worker V2 load envelope already exist. Still missing are production
-Cargo publication and application handoff, recovered host admission, and a
-production `WorkerV2PrerequisiteAuthenticatorV1`. Machine-code effects and
-Verus proofs are not bound to the artifact, and safe split mutable views over
-one allocation are not implemented. These are the ordered critical milestones
-above; feature and architecture breadth follows them.
+dispatch SPI, the reviewed runtime adapter, durable lease reacquisition, Cargo
+publication of the canonical Worker V2 load envelope, cooperative descriptor
+handoff, recovered inert host admission, and safe split mutable views already
+exist. Still missing are a protected production application handoff and a
+production `WorkerV2PrerequisiteAuthenticatorV1`. Bounded machine-effect and
+Verus proof records are not production-bound to compiler origin and the exact
+artifact. These are the ordered critical milestones above; feature and
+architecture breadth follows them.
 
 The compiler ABI descriptor is the integration boundary. Runtime code may
 compare an untrusted manifest with a compiler-generated descriptor, but it may

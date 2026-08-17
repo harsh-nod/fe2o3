@@ -41,7 +41,7 @@ source path still stops before an authenticated HSACO. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
-The next Wave64 and workgroup-synchronization slices now start from ordinary
+The Wave64 and workgroup-synchronization slices now start from ordinary
 `#[kernel(typed)]` Rust sources rather than explanatory pseudocode. They include
 deterministic CPU oracles, hostile source tests, and bounded Verus models for a
 masked Wave64 reduction/scan and an LDS/barrier/scoped-atomic profile. The typed
@@ -49,10 +49,14 @@ device ABI preserves mutable global address-space pointers and exposes a linear,
 compiler-only exact-LDS capability. The Wave64 compiler profile now authenticates
 the exact attributed source, FnAbi, trusted definitions, complete reachable MIR,
 mask semantics, ordered collectives, and output ownership before selecting a
-closed semantic Kernel IR sidecar. The workgroup-synchronization profile still
-stops at source/proof. Neither slice grants artifact or launch authority:
-remaining compiler work, finalization, Worker V2 admission, and `gfx942`
-execution are tracked in
+closed semantic Kernel IR sidecar. The two workgroup profiles likewise
+authenticate their exact source, ABI, trusted provider terminals, and complete
+reachable MIR closures before selecting closed semantic profiles. Separate
+configured finalizer tests use the pinned upstream LLVM target-machine and
+in-process LLD worker, and separately scoped protected `gfx942` hardware lanes
+exist. Those lanes remain ignored behind exact measured prerequisites and do
+not establish source-to-machine refinement, production artifact or launch
+authority, or generalized memory/race safety. Their evidence is tracked in
 [#117](https://github.com/harsh-nod/fe2o3/issues/117) and
 [#118](https://github.com/harsh-nod/fe2o3/issues/118).
 
@@ -239,7 +243,7 @@ rustc frontend and MIR
         +--> fe2o3 device backend -> AMDGPU LLVM IR -> HSACO
                                                 |
                                                 v
-                                     HIP module load/launch
+                                  typed HSA / HIP load/launch
 ```
 
 ## Architecture
@@ -255,10 +259,14 @@ boundaries:
 - Artifact model: `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
   `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`, and
   `fe2o3-worker-v2-bundle`.
-- Runtime: `fe2o3-core`, `fe2o3-completion`, `fe2o3-host`, and
-  `fe2o3-hip-sys`.
+- Runtime: `fe2o3-core`, `fe2o3-completion`, `fe2o3-host`,
+  `fe2o3-hsa-runtime`, and `fe2o3-hip-sys`.
 - Build coordination: `cargo-fe2o3`, `fe2o3-rustc-invocation`, and the
-  `fe2o3-rustc-wrapper` binary.
+  `fe2o3-rustc-wrapper`, direct LLVM/LLD worker, and static host-link worker.
+- Build and evidence authority: `fe2o3-build-authority`,
+  `fe2o3-host-link-closure`, `fe2o3-broker-authority-service`,
+  `fe2o3-external-anchor-protocol`, `fe2o3-process-identity`, and
+  `fe2o3-protected-publisher`.
 - Verification: `fe2o3-contracts`, the bounded `fe2o3-verifier` driver model,
   `examples/verus_vecadd`, and proof records in `fe2o3-artifacts`.
 - Test and release evidence: `fe2o3-differential`, the Cargo inspection/tool
@@ -542,14 +550,15 @@ turn the foundations below into end-to-end features.
   and negative Verus harnesses. `fe2o3-verifier` canonicalizes bounded tool,
   policy, invocation, and result records, has a bounded shell-free process
   executor, and can convert validated results into descriptive proof records.
-  Bounded canonical `gfx942` machine-effect evidence additionally computes call
-  closure and straight-line memory effects from caller-supplied mechanics,
-  requiring explicit complete bounds for recursion and rejecting indirect calls,
-  control flow, malformed identities, and resource-limit violations. It does not
-  extract effects from LLVM IR or HSACO and does not prove that supplied
-  mechanics correspond to the executable. The verifier
-  still has no reviewed Verus adapter, authenticated binary measurement,
-  compiler or machine-code refinement, or runtime authority.
+  Bounded canonical `gfx942` machine-effect evidence can compute call closure
+  and straight-line effects from caller-supplied mechanics, requiring explicit
+  complete bounds and rejecting indirect calls, unsupported control flow,
+  malformed identities, and resource-limit violations. A separate worker path
+  uses LLVM Object and MC APIs to extract a closed, exact alpha/zeta physical
+  profile from supplied finalized HSACO bytes. Neither path is authenticated
+  into each production payload or proves compiler, source, or Verus refinement.
+  The verifier still has no reviewed production Verus adapter, authenticated
+  proof-to-executable join, or runtime authority.
 - G6/G7 includes canonical multi-input AMDGPU link plans and a standalone
   direct LLVM/LLD worker with bounded Rust/C++ protocols. Device FFI macros and
   compiler validation bind import/export symbols, physical ABI, address spaces,
@@ -665,9 +674,12 @@ turn the foundations below into end-to-end features.
   descriptor lineage, per-kernel proof records, raw HSACO, finalized payload,
   and canonical reacquirable publication claim. Cargo validates transport,
   canonical encoding, identities, and restart closure; it does not authenticate
-  the supplied compiler, proof, or machine-effect claims. The envelope and the
-  recovered host descriptor remain authority-free, and the application runner
-  still receives no production handoff to a pinned bundle descriptor.
+  the supplied compiler, proof, or machine-effect claims. A bounded cooperative
+  application handoff now transfers pinned envelope and artifact-directory
+  descriptors while Cargo retains a fresh current-publication lease, and the
+  host revalidates both before returning an inert descriptor. This is not a
+  protected production handoff and grants no prerequisite, load, or launch
+  authority.
 
   Separately, only fake/test implementations of
   `WorkerV2PrerequisiteAuthenticatorV1` exist, so compiler, Verus/proof, Rust
@@ -680,12 +692,15 @@ turn the foundations below into end-to-end features.
   Verus proof of that split and its allocation-relative region theorem remains
   open.
 - The generated contract identity authenticates compiler declarations and the
-  exact payload bytes. Caller-supplied straight-line `gfx942` machine-effect
-  evidence can be canonicalized and checked, but it is not an LLVM/HSACO
-  extractor and does not prove correspondence to every executable memory
-  access. The fixed lowering, Kernel IR checks, host alias admission, and tests
-  provide separate defenses, but general illegal-access and race freedom still
-  require authenticated analysis and Verus/compiler-refinement evidence.
+  exact payload bytes. A dedicated worker can extract a bounded physical
+  machine-effect profile from supplied exact `gfx942` alpha/zeta HSACO bytes,
+  and caller-supplied records can be canonicalized and checked. The production
+  authority chain does not yet authenticate that extraction for each finalized
+  payload, and neither mechanism proves correspondence to every executable
+  memory access. The fixed lowering, Kernel IR checks, host alias admission,
+  and tests provide separate defenses, but general illegal-access and race
+  freedom still require authenticated analysis and Verus/compiler-refinement
+  evidence.
   Trusted rustc diagnostic-item classification also remains part of the
   compiler TCB.
 - The generated vecadd API has synchronous launch and a scoped asynchronous
@@ -701,7 +716,8 @@ turn the foundations below into end-to-end features.
   ordinary Rust function, compiler, ROCm, driver, or machine-code refinement.
   Verus proof identity/refinement is not authenticated into the generated
   vecadd artifact or required by its safe loader and launch API. The exact
-  alpha/zeta bodies have no mechanical Verus proofs and no authenticated
+  alpha/zeta source models have mechanical Verus proofs and bounded proof-record
+  schemas, but no reviewed Rust-semantics refinement or authenticated
   source-to-Kernel-IR-to-machine-code refinement.
 - The fail-closed rustc wrapper classifies and preserves approved bootstrap
   invocations, and the external Cargo path now composes compile-shaped managed
