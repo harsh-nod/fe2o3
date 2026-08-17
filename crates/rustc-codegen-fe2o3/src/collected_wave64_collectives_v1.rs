@@ -73,11 +73,13 @@ const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
     0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
 ];
 
-// Filled from the pinned compiler fixture after path-independent portable-MIR
-// import. Any reachable body, call target, type, or operation drift changes it.
+// Filled from the pinned compiler fixture after V3 portable-MIR import. V3
+// uses structured semantic instances, excluding rustc's nonsemantic crate
+// disambiguators while binding every reachable body, monomorphization, call
+// target, semantically complete type/value, and operation.
 const PORTABLE_MIR_CLOSURE_IDENTITY_V1: [u8; 32] = [
-    0x9b, 0xfb, 0x30, 0x50, 0x89, 0x75, 0x1c, 0xe7, 0x59, 0x32, 0x27, 0x06, 0x97, 0x68, 0xd5, 0xe7,
-    0xa9, 0x83, 0x60, 0xb7, 0xde, 0xd8, 0x90, 0xf8, 0xb2, 0x13, 0xa0, 0xd9, 0x5d, 0x15, 0x8e, 0x7a,
+    0x33, 0x71, 0x21, 0x6d, 0xb9, 0x73, 0x65, 0x9f, 0x99, 0x01, 0xad, 0x59, 0x78, 0x95, 0xa7, 0x79,
+    0xfb, 0x99, 0x93, 0x5b, 0xf8, 0xd3, 0x8a, 0x64, 0xbc, 0xe7, 0x5b, 0xa0, 0xb9, 0xb6, 0xaf, 0xf2,
 ];
 const RUSTC_FN_ABI_IDENTITY_V1: [u8; 32] = [
     0xfa, 0x8c, 0xfc, 0xa7, 0x9d, 0x34, 0x7f, 0x48, 0x86, 0x0e, 0xae, 0xd4, 0x26, 0x51, 0xa5, 0x29,
@@ -328,7 +330,7 @@ pub(crate) fn authenticate_collected_wave64_collectives_v1<'tcx>(
     let imported = crate::mir_import::import_collection(tcx, collection)
         .map_err(|error| CollectedWave64CollectivesErrorV1::PortableMir(error.to_string()))?;
     let portable_mir_identity = imported
-        .portable_semantic_digest_v2(crate::mir_import::MirSemanticAdmissionInputsV2::new(
+        .portable_semantic_digest_v3(crate::mir_import::MirSemanticAdmissionInputsV3::new(
             WAVE64_COLLECTIVES_V1_KERNEL_ID,
             &target_identity,
             contract.abi(),

@@ -22,8 +22,9 @@ mod semantic_lowering;
 use crate::AmdGpuTarget;
 use crate::mir_import::{
     MirBinaryOp, MirBlock, MirCallee, MirConstant, MirFunction, MirFunctionKind, MirKernelProfile,
-    MirModule, MirOperandRef, MirPlaceRef, MirProjectionElem, MirRvalueKind, MirSourceLocation,
-    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
+    MirModule, MirOperandRef, MirPlaceRef, MirProjectionElem, MirReferenceSemantics, MirRvalueKind,
+    MirSemanticInstanceIdentity, MirSourceLocation, MirStatement, MirStatementKind, MirTerminator,
+    MirTerminatorKind, MirTypeShape, MirUnaryOp,
 };
 use crate::trusted_device_items::{TrustedDeviceItem, TrustedHalfOperation};
 use dialect_amdgcn::{DeviceMathDiagnosticItem, recognized_device_math_operation};
@@ -299,7 +300,7 @@ fn translate_and_verify_with_targets(
             }
         };
         if let Some(previous) = internal_definitions.insert(
-            function.rust_path.clone(),
+            function.semantic_instance_v1(),
             InternalDefinitionContract {
                 export_name: function.export_name.clone(),
                 signature,
@@ -309,7 +310,7 @@ fn translate_and_verify_with_targets(
                 TranslationDiagnosticCode::MalformedMir,
                 TranslationLocation::function(function),
                 format!(
-                    "internal definition path `{}` resolves to both `{}` and `{}`",
+                    "internal semantic instance `{}` resolves to both `{}` and `{}`",
                     function.rust_path, previous.export_name, function.export_name
                 ),
             ));
@@ -586,7 +587,8 @@ enum LocalBinding {
 struct FunctionLowerer<'function, 'declarations> {
     function: &'function MirFunction,
     declarations: &'declarations mut BTreeMap<String, Signature>,
-    internal_definitions: &'declarations BTreeMap<String, InternalDefinitionContract>,
+    internal_definitions:
+        &'declarations BTreeMap<MirSemanticInstanceIdentity, InternalDefinitionContract>,
     locals: BTreeMap<usize, LocalBinding>,
     value_types: BTreeMap<ValueId, Type>,
     trusted_thread_indices: BTreeSet<ValueId>,
@@ -607,7 +609,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     fn new(
         function: &'function MirFunction,
         declarations: &'declarations mut BTreeMap<String, Signature>,
-        internal_definitions: &'declarations BTreeMap<String, InternalDefinitionContract>,
+        internal_definitions: &'declarations BTreeMap<
+            MirSemanticInstanceIdentity,
+            InternalDefinitionContract,
+        >,
         workgroup_size: Option<WorkgroupSize>,
         float_target: Option<Gfx942FloatTarget>,
         collective_target: Option<Gfx942WaveLdsTargetV2>,
@@ -967,9 +972,15 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         match statement.kind {
             MirStatementKind::StorageLive
             | MirStatementKind::StorageDead
-            | MirStatementKind::Retag
             | MirStatementKind::Coverage
             | MirStatementKind::Nop => return Ok(()),
+            MirStatementKind::Retag => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedStatement,
+                    location,
+                    "legacy payload-free retag MIR is not lowerable because its retag kind and place are absent",
+                ));
+            }
             MirStatementKind::CopyNonOverlapping => {
                 return Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedStatement,
@@ -1016,6 +1027,33 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
 
         match rvalue {
             MirRvalueKind::Ref => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedRvalue,
+                    location,
+                    "legacy payload-free reference MIR is not lowerable because its borrow kind is absent",
+                ));
+            }
+            MirRvalueKind::Reference(borrow_kind) => {
+                let semantics = borrow_kind.reference_semantics_v3().ok_or_else(|| {
+                    diagnostic(
+                        TranslationDiagnosticCode::UnsupportedRvalue,
+                        location.clone(),
+                        format!(
+                            "reference borrow kind {borrow_kind:?} is not lowerable because Kernel IR does not preserve its alias semantics"
+                        ),
+                    )
+                })?;
+                let expected_mutable = semantics == MirReferenceSemantics::Mutable;
+                if !matches!(
+                    self.imported_local_shape(destination.local),
+                    Some(MirTypeShape::Reference { mutable, .. }) if *mutable == expected_mutable
+                ) {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        "reference borrow kind does not match the destination reference mutability preserved by Kernel IR",
+                    ));
+                }
                 let [MirOperandRef::Place(place)] = statement.operands.as_slice() else {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::MalformedMir,
@@ -1572,7 +1610,23 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
 
         let trusted_item = callee.trusted_item();
         let external_import = callee.external_import_evidence();
-        let internal_definition = self.internal_definitions.get(callee.identity()).cloned();
+        let internal_identity = match callee.semantic_instance_identity() {
+            Some(Ok(identity)) => Some(identity),
+            Some(Err(detail)) => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedCall,
+                    location,
+                    format!(
+                        "callee `{}` has no structured semantic instance identity: {detail}",
+                        callee.identity()
+                    ),
+                ));
+            }
+            None => None,
+        };
+        let internal_definition = internal_identity
+            .and_then(|identity| self.internal_definitions.get(identity))
+            .cloned();
         let mut call_identity = callee.identity().to_string();
         let result_types = if let Some(import) = external_import {
             if !import.effects().is_none() {
@@ -3082,10 +3136,11 @@ fn lower_constant(constant: &MirConstant) -> Option<Constant> {
         MirConstant::I32(value) => Some(Constant::I32(*value)),
         MirConstant::U32(value) => Some(Constant::U32(*value)),
         MirConstant::I64(value) | MirConstant::ISize(value) => Some(Constant::I64(*value)),
+        MirConstant::U64(value) => Some(Constant::U64(*value)),
         MirConstant::USize(value) => Some(Constant::Index(*value)),
         MirConstant::F32Bits(value) => Some(Constant::F32Bits(*value)),
         MirConstant::F64Bits(value) => Some(Constant::F64Bits(*value)),
-        MirConstant::Unevaluated => None,
+        MirConstant::ZeroSized | MirConstant::Unevaluated => None,
     }
 }
 
@@ -3363,6 +3418,7 @@ mod tests {
                     kind: MirType::I32,
                     rust: "u32".to_string(),
                     shape: MirTypeShape::U32,
+                    semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                 },
                 literal: MirConstant::U32(4),
                 value: "4_u32".to_string(),
@@ -3510,6 +3566,7 @@ mod tests {
                     kind: MirType::I32,
                     rust: "i32".to_string(),
                     shape: MirTypeShape::I32,
+                    semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                 },
                 literal: MirConstant::I32(7),
                 value: "7_i32".to_string(),
@@ -3671,6 +3728,7 @@ mod tests {
         };
         let module = MirModule {
             functions: vec![MirFunction {
+                semantic_instance: None,
                 export_name: "borrowed_index".to_string(),
                 rust_path: "tests::borrowed_index".to_string(),
                 kind: MirFunctionKind::KernelEntry,
@@ -3707,7 +3765,12 @@ mod tests {
                     },
                     MirBlock {
                         index: 1,
-                        statements: vec![assign(0, 2, vec![operand(1)], MirRvalueKind::Ref)],
+                        statements: vec![assign(
+                            0,
+                            2,
+                            vec![operand(1)],
+                            MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::Shared),
+                        )],
                         terminator: Some(terminator(MirTerminatorKind::Call {
                             callee: Some(MirCallee::trusted_for_test(
                                 TrustedDeviceItem::ThreadIndexGet,
@@ -3738,6 +3801,137 @@ mod tests {
             get.signature,
             Signature::new(vec![Type::INDEX], vec![Type::INDEX])
         );
+    }
+
+    #[test]
+    fn thread_index_get_accepts_the_default_mutable_receiver_mir_form() {
+        let fixture = borrowed_index_fixture(
+            MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::MutableDefault),
+            true,
+        );
+        translate_and_verify(&fixture).expect("default mutable receiver should lower");
+    }
+
+    #[test]
+    fn thread_index_get_accepts_the_two_phase_mutable_receiver_mir_form() {
+        let fixture = borrowed_index_fixture(
+            MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::MutableTwoPhase),
+            true,
+        );
+        translate_and_verify(&fixture).expect("two-phase mutable receiver should lower");
+    }
+
+    #[test]
+    fn lowering_rejects_legacy_reference_and_retag_forms() {
+        let legacy_reference = borrowed_index_fixture(MirRvalueKind::Ref, false);
+        let error = translate_and_verify(&legacy_reference).unwrap_err();
+        assert!(error.contains(TranslationDiagnosticCode::UnsupportedRvalue));
+        assert!(error.to_string().contains("payload-free reference"));
+
+        let mut legacy_retag = borrowed_index_fixture(
+            MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::Shared),
+            false,
+        );
+        legacy_retag.functions[0].blocks[1].statements.insert(
+            0,
+            MirStatement {
+                index: 0,
+                kind: MirStatementKind::Retag,
+                destination: None,
+                operands: Vec::new(),
+                rvalue: None,
+                semantic_rvalue_type: None,
+                operation: None,
+                source: Some(source()),
+            },
+        );
+        let error = translate_and_verify(&legacy_retag).unwrap_err();
+        assert!(error.contains(TranslationDiagnosticCode::UnsupportedStatement));
+        assert!(error.to_string().contains("payload-free retag"));
+    }
+
+    #[test]
+    fn lowering_rejects_reference_alias_kinds_not_preserved_by_kernel_ir() {
+        for kind in [
+            crate::mir_import::MirBorrowKind::FakeDeep,
+            crate::mir_import::MirBorrowKind::FakeShallow,
+            crate::mir_import::MirBorrowKind::MutableClosureCapture,
+        ] {
+            let fixture = borrowed_index_fixture(MirRvalueKind::Reference(kind), true);
+            let error = translate_and_verify(&fixture).unwrap_err();
+            assert!(
+                error.contains(TranslationDiagnosticCode::UnsupportedRvalue),
+                "{kind:?}: {error}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not preserve its alias semantics")
+            );
+        }
+    }
+
+    fn borrowed_index_fixture(rvalue: MirRvalueKind, mutable: bool) -> MirModule {
+        let index_shape = MirTypeShape::Adt {
+            identity: TrustedDeviceItem::ThreadIndex.canonical_path().to_string(),
+        };
+        MirModule {
+            functions: vec![MirFunction {
+                semantic_instance: None,
+                export_name: "borrowed_index_fixture".to_string(),
+                rust_path: "tests::borrowed_index_fixture".to_string(),
+                kind: MirFunctionKind::KernelEntry,
+                typed_profile: None,
+                frontend_contract: None,
+                matrix_frontend_abi: None,
+                arg_count: 0,
+                local_count: 4,
+                locals: vec![
+                    local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                    local(1, MirLocalRole::Temp, index_shape.clone()),
+                    local(
+                        2,
+                        MirLocalRole::Temp,
+                        MirTypeShape::Reference {
+                            pointee: Box::new(index_shape),
+                            mutable,
+                        },
+                    ),
+                    local(3, MirLocalRole::Temp, MirTypeShape::USize),
+                ],
+                blocks: vec![
+                    MirBlock {
+                        index: 0,
+                        statements: Vec::new(),
+                        terminator: Some(terminator(MirTerminatorKind::Call {
+                            callee: Some(MirCallee::trusted_for_test(
+                                TrustedDeviceItem::ThreadIndex1d,
+                            )),
+                            target: Some(1),
+                            destination: Some(place(1)),
+                            operands: Vec::new(),
+                        })),
+                    },
+                    MirBlock {
+                        index: 1,
+                        statements: vec![assign(0, 2, vec![operand(1)], rvalue)],
+                        terminator: Some(terminator(MirTerminatorKind::Call {
+                            callee: Some(MirCallee::trusted_for_test(
+                                TrustedDeviceItem::ThreadIndexGet,
+                            )),
+                            target: Some(2),
+                            destination: Some(place(3)),
+                            operands: vec![operand(2)],
+                        })),
+                    },
+                    MirBlock {
+                        index: 2,
+                        statements: Vec::new(),
+                        terminator: Some(terminator(MirTerminatorKind::Return)),
+                    },
+                ],
+            }],
+        }
     }
 
     #[test]
@@ -3830,6 +4024,48 @@ mod tests {
     }
 
     #[test]
+    fn collected_internal_helpers_resolve_distinct_monomorphizations() {
+        let path = "tests::generic_helper";
+        let first_identity = MirSemanticInstanceIdentity::monomorphization_for_test(path, 1);
+        let second_identity = MirSemanticInstanceIdentity::monomorphization_for_test(path, 2);
+        let mut fixture = helper_call_fixture(
+            MirCallee::untrusted_semantic_for_test(path, first_identity.clone()),
+            &[MirTypeShape::U32],
+        );
+        fixture.functions[0].locals[2] = local(2, MirLocalRole::Temp, MirTypeShape::U32);
+        let mut first =
+            u32_definition("generic_helper_u32", MirFunctionKind::InternalHelper, false);
+        first.rust_path = path.to_owned();
+        first.semantic_instance = Some(first_identity);
+        let mut second =
+            u32_definition("generic_helper_i32", MirFunctionKind::InternalHelper, false);
+        second.rust_path = path.to_owned();
+        second.semantic_instance = Some(second_identity);
+        fixture.functions.extend([second, first]);
+
+        let module =
+            translate_and_verify(&fixture).expect("monomorphized helper call should lower");
+        let kernel = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == "tests::helper_call")
+            .expect("kernel definition");
+        let calls = kernel
+            .body
+            .as_ref()
+            .expect("kernel body")
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter_map(|operation| match &operation.kind {
+                OperationKind::Call { callee, .. } => Some(callee.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls, ["generic_helper_u32"]);
+    }
+
+    #[test]
     fn two_kernels_share_one_collected_internal_helper() {
         let mut fixture = helper_call_fixture(
             MirCallee::untrusted_for_test("tests::shared_helper"),
@@ -3903,7 +4139,7 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_internal_definition_paths_are_rejected() {
+    fn duplicate_internal_semantic_instances_are_rejected() {
         let mut alpha = u32_definition("helper_alpha", MirFunctionKind::InternalHelper, false);
         alpha.rust_path = "tests::ambiguous_helper".to_string();
         let mut beta = u32_definition("helper_beta", MirFunctionKind::InternalHelper, false);
@@ -3912,12 +4148,12 @@ mod tests {
         let errors = translate_and_verify(&MirModule {
             functions: vec![alpha, beta],
         })
-        .expect_err("ambiguous source path must fail closed");
+        .expect_err("duplicate semantic instance must fail closed");
         assert!(errors.contains(TranslationDiagnosticCode::MalformedMir));
         assert!(errors.diagnostics().iter().any(|diagnostic| {
             diagnostic
                 .message
-                .contains("internal definition path `tests::ambiguous_helper`")
+                .contains("internal semantic instance `tests::ambiguous_helper`")
         }));
     }
 
@@ -4036,6 +4272,7 @@ mod tests {
             destination: None,
             operands: vec![operand(1), operand(2), operand(1)],
             rvalue: None,
+            semantic_rvalue_type: None,
             operation: None,
             source: None,
         }];
@@ -4087,6 +4324,7 @@ mod tests {
             MirOperandRef::Place(MirPlaceRef {
                 local: 1,
                 projection: vec![MirProjectionElem::Deref],
+                semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
             });
 
         let errors = translate_and_verify(&fixture).expect_err("projection must fail");
@@ -4119,6 +4357,7 @@ mod tests {
 
         MirModule {
             functions: vec![MirFunction {
+                semantic_instance: None,
                 export_name: "half_operation".to_string(),
                 rust_path: "tests::half_operation".to_string(),
                 kind: MirFunctionKind::KernelEntry,
@@ -4181,7 +4420,12 @@ mod tests {
         blocks.push(MirBlock {
             index: 1,
             statements: if construct_capability {
-                vec![assign(0, 2, vec![operand(1)], MirRvalueKind::Ref)]
+                vec![assign(
+                    0,
+                    2,
+                    vec![operand(1)],
+                    MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::Shared),
+                )]
             } else {
                 Vec::new()
             },
@@ -4204,6 +4448,7 @@ mod tests {
 
         MirModule {
             functions: vec![MirFunction {
+                semantic_instance: None,
                 export_name: "strict_math".to_string(),
                 rust_path: "tests::strict_math".to_string(),
                 kind: MirFunctionKind::KernelEntry,
@@ -4236,6 +4481,7 @@ mod tests {
                 kind: MirType::F32,
                 rust: "f32".to_string(),
                 shape: MirTypeShape::F32,
+                semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
             },
             literal: MirConstant::F32Bits(value.to_bits()),
             value: format!("{value:?}_f32"),
@@ -4245,6 +4491,7 @@ mod tests {
     fn scalar_fixture() -> MirModule {
         MirModule {
             functions: vec![MirFunction {
+                semantic_instance: None,
                 export_name: "scalar".to_string(),
                 rust_path: "tests::scalar".to_string(),
                 kind: MirFunctionKind::KernelEntry,
@@ -4300,6 +4547,7 @@ mod tests {
                 MirProjectionElem::Deref,
                 MirProjectionElem::Index { local: 3 },
             ],
+            semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
         };
         let mut load = assign(
             1,
@@ -4314,12 +4562,14 @@ mod tests {
             destination: Some(indexed(2)),
             operands: vec![operand(5)],
             rvalue: Some(MirRvalueKind::Use),
+            semantic_rvalue_type: None,
             operation: Some("store".to_string()),
             source: Some(source()),
         };
 
         MirModule {
             functions: vec![MirFunction {
+                semantic_instance: None,
                 export_name: "memory".to_string(),
                 rust_path: "tests::memory".to_string(),
                 kind: MirFunctionKind::KernelEntry,
@@ -4340,6 +4590,8 @@ mod tests {
                                 element: Box::new(MirTypeShape::F32),
                                 mutable: false,
                             },
+                            semantic_identity:
+                                crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                         },
                     },
                     MirLocal {
@@ -4351,6 +4603,8 @@ mod tests {
                             shape: MirTypeShape::DisjointSlice {
                                 element: Box::new(MirTypeShape::F32),
                             },
+                            semantic_identity:
+                                crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                         },
                     },
                     local(3, MirLocalRole::Arg, MirTypeShape::USize),
@@ -4393,6 +4647,7 @@ mod tests {
 
         MirModule {
             functions: vec![MirFunction {
+                semantic_instance: None,
                 export_name: "helper_call".to_string(),
                 rust_path: "tests::helper_call".to_string(),
                 kind: MirFunctionKind::KernelEntry,
@@ -4440,6 +4695,7 @@ mod tests {
             (1..=arg_count).map(|index| local(index, MirLocalRole::Arg, MirTypeShape::U32)),
         );
         MirFunction {
+            semantic_instance: None,
             export_name: name.to_string(),
             rust_path: format!("tests::{name}"),
             kind,
@@ -4459,6 +4715,7 @@ mod tests {
 
     fn empty_kernel_with_contract(contract: KernelFrontendContractV1) -> MirFunction {
         MirFunction {
+            semantic_instance: None,
             export_name: "kernel".to_owned(),
             rust_path: "tests::kernel".to_owned(),
             kind: MirFunctionKind::KernelEntry,
@@ -4507,6 +4764,7 @@ mod tests {
                 kind,
                 rust: rust.to_string(),
                 shape,
+                semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
             },
         }
     }
@@ -4523,6 +4781,7 @@ mod tests {
             destination: Some(place(destination)),
             operands,
             rvalue: Some(rvalue),
+            semantic_rvalue_type: None,
             operation: Some("structured".to_string()),
             source: Some(source()),
         }
@@ -4543,6 +4802,7 @@ mod tests {
         MirPlaceRef {
             local,
             projection: Vec::new(),
+            semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
         }
     }
 

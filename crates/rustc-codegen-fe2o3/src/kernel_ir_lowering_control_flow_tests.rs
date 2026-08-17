@@ -167,6 +167,7 @@ fn unauthenticated_enum_aggregate_remains_rejected() {
 fn loop_fixture() -> MirModule {
     MirModule {
         functions: vec![MirFunction {
+            semantic_instance: None,
             export_name: "bounded_loop".to_owned(),
             rust_path: "tests::bounded_loop".to_owned(),
             kind: MirFunctionKind::KernelEntry,
@@ -248,6 +249,7 @@ fn enum_fixture() -> MirModule {
     };
     MirModule {
         functions: vec![MirFunction {
+            semantic_instance: None,
             export_name: "enum_match".to_owned(),
             rust_path: "tests::enum_match".to_owned(),
             kind: MirFunctionKind::KernelEntry,
@@ -320,6 +322,7 @@ fn local(index: usize, role: MirLocalRole, shape: MirTypeShape) -> MirLocal {
             kind,
             rust: rust.to_owned(),
             shape,
+            semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
         },
     }
 }
@@ -336,6 +339,7 @@ fn assign(
         destination: Some(place(destination)),
         operands,
         rvalue: Some(rvalue),
+        semantic_rvalue_type: None,
         operation: Some("structured".to_owned()),
         source: Some(source()),
     }
@@ -351,6 +355,7 @@ fn u32_constant(value: u32) -> MirOperandRef {
             kind: MirType::I32,
             rust: "u32".to_owned(),
             shape: MirTypeShape::U32,
+            semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
         },
         literal: MirConstant::U32(value),
         value: value.to_string(),
@@ -361,6 +366,7 @@ fn place(local: usize) -> MirPlaceRef {
     MirPlaceRef {
         local,
         projection: Vec::new(),
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     }
 }
 

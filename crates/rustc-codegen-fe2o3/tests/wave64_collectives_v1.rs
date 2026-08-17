@@ -13,6 +13,7 @@ const CARGO_METADATA_OBSERVATION: &str =
 const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/wave64-collectives-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/wave64_collectives_v1/src/kernel.rs");
+const REPORT_AUTHORITY_ENV: &str = "FE2O3_WAVE64_REPORT_AUTHORITY";
 
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
@@ -37,6 +38,29 @@ impl TestOutput {
 }
 
 impl Drop for TestOutput {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+struct CleanCargoTarget {
+    path: PathBuf,
+}
+
+impl CleanCargoTarget {
+    fn new(workspace: &Path, label: &str) -> Self {
+        let path = cargo_target(workspace).join(format!(
+            "wave64-collectives-v1-clean-{label}-{}",
+            std::process::id()
+        ));
+        if path.exists() {
+            std::fs::remove_dir_all(&path).expect("remove stale clean Wave64 target");
+        }
+        Self { path }
+    }
+}
+
+impl Drop for CleanCargoTarget {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
@@ -198,6 +222,137 @@ fn assert_rejected(result: &Output, label: &str) {
     );
 }
 
+fn run_clean_exact(
+    workspace: &Path,
+    target: &CleanCargoTarget,
+    incremental: Option<&str>,
+    rustflags: Option<&str>,
+) -> Output {
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace)
+        .args([
+            "test",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--test",
+            "wave64_collectives_v1",
+            "exact_phase_a_source_authenticates_complete_wave64_profile",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("CARGO_TARGET_DIR", &target.path)
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(REPORT_AUTHORITY_ENV, "1");
+    match incremental {
+        Some(value) => {
+            command.env("CARGO_INCREMENTAL", value);
+        }
+        None => {
+            command.env_remove("CARGO_INCREMENTAL");
+        }
+    }
+    match rustflags {
+        Some(value) => {
+            command.env("RUSTFLAGS", value);
+        }
+        None => {
+            command.env_remove("RUSTFLAGS");
+        }
+    }
+    command.output().expect("run clean Wave64 exact fixture")
+}
+
+fn command_text(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn admitted_closure(text: &str) -> String {
+    let marker = "complete reachable portable-MIR closure ";
+    text.split_once(marker)
+        .unwrap_or_else(|| panic!("missing admitted closure marker:\n{text}"))
+        .1
+        .chars()
+        .take_while(char::is_ascii_hexdigit)
+        .take(64)
+        .collect()
+}
+
+fn internal_helper_exports(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("  [internal-helper] "))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn clean_build_modes_admit_the_same_wave64_closure() {
+    let workspace = workspace();
+    let default_target = CleanCargoTarget::new(&workspace, "incremental-default");
+    let disabled_target = CleanCargoTarget::new(&workspace, "incremental-disabled");
+    let metadata_target = CleanCargoTarget::new(&workspace, "provider-metadata-varied");
+
+    let default = run_clean_exact(&workspace, &default_target, None, None);
+    let default_text = command_text(&default);
+    assert!(
+        default.status.success(),
+        "clean default-incremental Wave64 run failed:\n{default_text}"
+    );
+
+    let disabled = run_clean_exact(&workspace, &disabled_target, Some("0"), None);
+    let disabled_text = command_text(&disabled);
+    assert!(
+        disabled.status.success(),
+        "clean CARGO_INCREMENTAL=0 Wave64 run failed:\n{disabled_text}"
+    );
+
+    assert_eq!(
+        admitted_closure(&default_text),
+        admitted_closure(&disabled_text),
+        "nonsemantic Cargo incremental mode changed the admitted MIR closure"
+    );
+
+    let metadata = run_clean_exact(
+        &workspace,
+        &metadata_target,
+        None,
+        Some("-Cmetadata=fe2o3-provider-disambiguator-regression"),
+    );
+    let metadata_text = command_text(&metadata);
+    assert!(
+        metadata.status.success(),
+        "clean provider-metadata-varied Wave64 run failed:\n{metadata_text}"
+    );
+    assert_eq!(
+        admitted_closure(&default_text),
+        admitted_closure(&metadata_text),
+        "nonsemantic provider crate metadata changed the admitted MIR closure"
+    );
+    let default_helpers = internal_helper_exports(&default_text);
+    let metadata_helpers = internal_helper_exports(&metadata_text);
+    assert_eq!(
+        default_helpers.len(),
+        2,
+        "unexpected default helper closure"
+    );
+    assert_eq!(
+        metadata_helpers.len(),
+        2,
+        "unexpected varied helper closure"
+    );
+    assert_ne!(
+        default_helpers, metadata_helpers,
+        "provider metadata variation did not change the rustc export disambiguator"
+    );
+}
+
 #[test]
 fn exact_phase_a_source_authenticates_complete_wave64_profile() {
     let workspace = workspace();
@@ -210,6 +365,9 @@ fn exact_phase_a_source_authenticates_complete_wave64_profile() {
         CompilerProfile::default(),
     );
     let stderr = String::from_utf8_lossy(&result.stderr);
+    if std::env::var_os(REPORT_AUTHORITY_ENV).is_some() {
+        eprint!("{stderr}");
+    }
     assert!(
         !result.status.success(),
         "admission-only pipeline unexpectedly emitted code"
@@ -217,7 +375,7 @@ fn exact_phase_a_source_authenticates_complete_wave64_profile() {
     for marker in [
         "authenticated exact source bytes",
         "Phase A fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root",
-        "complete reachable portable-MIR closure 9bfb305089751ce7593227069768d5e7a98360b7ded890f8b213a0d95d158e7a",
+        "complete reachable portable-MIR closure 3371216db973659f9901ad597895a779fb99935bf8d38a64bce75ba0b9b6aff2",
         "3 ordered collectives, 3 lane-owned outputs",
         "exact grid [1, 1, 1]",
         "reviewed source-to-profile correspondence only",

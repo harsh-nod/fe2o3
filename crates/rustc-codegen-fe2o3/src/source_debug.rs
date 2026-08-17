@@ -953,7 +953,7 @@ pub(crate) fn validate_alpha_mir_body(
 
     let exact = bb0.statements.is_empty()
         && exact_call(&bb0.terminator, TrustedDeviceItem::ThreadIndex1d, 1, 4, &[])
-        && matches!(bb1.statements.as_slice(), [statement] if exact_assign(statement, 0, (6, &[]), &[(4, &[])], MirRvalueKind::Ref))
+        && matches!(bb1.statements.as_slice(), [statement] if exact_assign(statement, 0, (6, &[]), &[(4, &[])], MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::Shared)))
         && exact_call(
             &bb1.terminator,
             TrustedDeviceItem::ThreadIndexGet,
@@ -961,7 +961,7 @@ pub(crate) fn validate_alpha_mir_body(
             5,
             &[(6, &[])],
         )
-        && matches!(bb2.statements.as_slice(), [statement] if exact_assign(statement, 0, (8, &[]), &[(3, &[])], MirRvalueKind::Ref))
+        && matches!(bb2.statements.as_slice(), [statement] if exact_assign(statement, 0, (8, &[]), &[(3, &[])], MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::MutableDefault)))
         && exact_call(
             &bb2.terminator,
             TrustedDeviceItem::DisjointSliceGetMut,

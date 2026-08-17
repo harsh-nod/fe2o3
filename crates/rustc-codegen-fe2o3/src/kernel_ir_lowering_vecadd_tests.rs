@@ -205,6 +205,7 @@ fn global_slice(access: AccessMode) -> Type {
 fn vecadd_fixture() -> MirModule {
     MirModule {
         functions: vec![MirFunction {
+            semantic_instance: None,
             export_name: "vecadd".to_string(),
             rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
             kind: MirFunctionKind::KernelEntry,
@@ -340,7 +341,7 @@ fn vecadd_fixture() -> MirModule {
                         0,
                         place(6),
                         vec![operand(3)],
-                        MirRvalueKind::Ref,
+                        MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::MutableDefault),
                         "ref",
                     )],
                     call(get_mut(), vec![operand(6), operand(4)], 5, 2),
@@ -380,6 +381,8 @@ fn vecadd_fixture() -> MirModule {
                                 MirProjectionElem::Downcast { variant: 1 },
                                 MirProjectionElem::Field(0),
                             ],
+                            semantic_identity:
+                                crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                         })],
                         MirRvalueKind::Use,
                         "use",
@@ -460,6 +463,8 @@ fn vecadd_fixture() -> MirModule {
                             MirPlaceRef {
                                 local: 8,
                                 projection: vec![MirProjectionElem::Deref],
+                                semantic_identity:
+                                    crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                             },
                             vec![operand(9), operand(13)],
                             MirRvalueKind::Binary(MirBinaryOp::Add),
@@ -489,6 +494,7 @@ fn local(
             kind,
             rust: rust.to_string(),
             shape,
+            semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
         },
     }
 }
@@ -530,6 +536,7 @@ fn assign(
         destination: Some(destination),
         operands,
         rvalue: Some(rvalue),
+        semantic_rvalue_type: None,
         operation: Some(operation.to_string()),
         source: Some(source(index + 6, 9)),
     }
@@ -565,6 +572,7 @@ fn place(local: usize) -> MirPlaceRef {
     MirPlaceRef {
         local,
         projection: Vec::new(),
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     }
 }
 
@@ -579,6 +587,7 @@ fn indexed_operand(local: usize, index: usize) -> MirOperandRef {
             MirProjectionElem::Deref,
             MirProjectionElem::Index { local: index },
         ],
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     })
 }
 

@@ -146,7 +146,7 @@ fn matrix_frontend_rejects_malformed_reference_propagation_and_receiver_places()
     });
     assert_matrix_error(
         mutable_destination,
-        "DeviceMatrix autoref requires an unprojected DeviceMatrix source and exact unprojected &DeviceMatrix destination",
+        "reference borrow kind does not match the destination reference mutability preserved by Kernel IR",
     );
 
     let mut projected_destination = matrix_frontend_function();
@@ -474,6 +474,7 @@ fn matrix_frontend_function_with_workgroup(workgroup_x: u32) -> MirFunction {
     );
     let matrix = matrix_shape(TrustedDeviceItem::DeviceMatrix);
     MirFunction {
+        semantic_instance: None,
         export_name: "tiled_gemm_frontend_v1".to_string(),
         rust_path: "tests::tiled_gemm_frontend_v1".to_string(),
         kind: MirFunctionKind::KernelEntry,
@@ -525,7 +526,12 @@ fn matrix_frontend_function_with_workgroup(workgroup_x: u32) -> MirFunction {
             ),
             block(
                 1,
-                vec![assign(0, place(5), vec![operand(4)], MirRvalueKind::Ref)],
+                vec![assign(
+                    0,
+                    place(5),
+                    vec![operand(4)],
+                    MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::Shared),
+                )],
                 call(
                     TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
                     vec![operand(5), operand(1), operand(2), operand(3)],
@@ -684,6 +690,7 @@ fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
     wrong_store.blocks[5].statements[1].destination = Some(MirPlaceRef {
         local: 8,
         projection: vec![MirProjectionElem::Deref],
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     });
     assert!(
         crate::source_debug::validate_alpha_mir_body(&wrong_store, &sealed_owner.rust_path)
@@ -772,6 +779,7 @@ fn alpha_multiply_may_write_the_guarded_payload_directly() {
     arithmetic[1].destination = Some(MirPlaceRef {
         local: 8,
         projection: vec![MirProjectionElem::Deref],
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     });
     arithmetic.remove(2);
 
@@ -1490,6 +1498,7 @@ fn s09_alpha(rust_path: &str) -> MirFunction {
         local(13, MirLocalRole::Temp, MirTypeShape::Bool),
     ];
     MirFunction {
+        semantic_instance: None,
         export_name: "alpha".to_owned(),
         rust_path: rust_path.to_owned(),
         kind: MirFunctionKind::KernelEntry,
@@ -1505,12 +1514,22 @@ fn s09_alpha(rust_path: &str) -> MirFunction {
             ),
             block(
                 1,
-                vec![assign(0, place(6), vec![operand(4)], MirRvalueKind::Ref)],
+                vec![assign(
+                    0,
+                    place(6),
+                    vec![operand(4)],
+                    MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::Shared),
+                )],
                 call(TrustedDeviceItem::ThreadIndexGet, vec![operand(6)], 5, 2),
             ),
             block(
                 2,
-                vec![assign(0, place(8), vec![operand(3)], MirRvalueKind::Ref)],
+                vec![assign(
+                    0,
+                    place(8),
+                    vec![operand(3)],
+                    MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::MutableDefault),
+                )],
                 call(
                     TrustedDeviceItem::DisjointSliceGetMut,
                     vec![operand(8), operand(4)],
@@ -1553,6 +1572,8 @@ fn s09_alpha(rust_path: &str) -> MirFunction {
                                 MirProjectionElem::Downcast { variant: 1 },
                                 MirProjectionElem::Field(0),
                             ],
+                            semantic_identity:
+                                crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                         })],
                         MirRvalueKind::Use,
                     ),
@@ -1584,6 +1605,8 @@ fn s09_alpha(rust_path: &str) -> MirFunction {
                         MirPlaceRef {
                             local: 10,
                             projection: vec![MirProjectionElem::Deref],
+                            semantic_identity:
+                                crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                         },
                         vec![operand(11), operand(1)],
                         MirRvalueKind::Binary(MirBinaryOp::Mul),
@@ -1731,6 +1754,7 @@ fn kernel(
     locals.sort_by_key(|local| local.index);
 
     MirFunction {
+        semantic_instance: None,
         export_name: name.to_string(),
         rust_path: format!("tests::{name}"),
         kind: MirFunctionKind::KernelEntry,
@@ -1750,7 +1774,7 @@ fn kernel(
                     0,
                     place(output_ref),
                     vec![operand(output_local)],
-                    MirRvalueKind::Ref,
+                    MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::MutableDefault),
                 )],
                 call(
                     TrustedDeviceItem::DisjointSliceGetMut,
@@ -1793,6 +1817,8 @@ fn kernel(
                             MirProjectionElem::Downcast { variant: 1 },
                             MirProjectionElem::Field(0),
                         ],
+                        semantic_identity:
+                            crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
                     })],
                     MirRvalueKind::Use,
                 )],
@@ -1865,6 +1891,7 @@ fn assign(
         destination: Some(destination),
         operands,
         rvalue: Some(rvalue),
+        semantic_rvalue_type: None,
         operation: None,
         source: None,
     }
@@ -1876,6 +1903,7 @@ fn store(index: usize, pointer_local: usize, value_local: usize) -> MirStatement
         MirPlaceRef {
             local: pointer_local,
             projection: vec![MirProjectionElem::Deref],
+            semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
         },
         vec![operand(value_local)],
         MirRvalueKind::Use,
@@ -1889,6 +1917,7 @@ fn indexed(slice_local: usize, index_local: usize) -> MirOperandRef {
             MirProjectionElem::Deref,
             MirProjectionElem::Index { local: index_local },
         ],
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     })
 }
 
@@ -1900,6 +1929,7 @@ fn place(local: usize) -> MirPlaceRef {
     MirPlaceRef {
         local,
         projection: Vec::new(),
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     }
 }
 
@@ -1936,6 +1966,7 @@ fn imported(shape: MirTypeShape) -> MirImportedType {
         kind,
         rust: rust.to_string(),
         shape,
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     }
 }
 

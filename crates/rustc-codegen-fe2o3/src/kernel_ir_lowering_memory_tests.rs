@@ -210,6 +210,7 @@ fn memory_v1_rejects_a_copy_whose_slice_identity_overlaps() {
 fn memory_module() -> MirModule {
     MirModule {
         functions: vec![MirFunction {
+            semantic_instance: None,
             export_name: "memory_v1".to_owned(),
             rust_path: "tests::memory_v1".to_owned(),
             kind: MirFunctionKind::KernelEntry,
@@ -321,7 +322,10 @@ fn assign_ref(index: usize, destination: usize, source: usize) -> MirStatement {
         kind: MirStatementKind::Assign,
         destination: Some(place(destination)),
         operands: vec![operand(source)],
-        rvalue: Some(MirRvalueKind::Ref),
+        rvalue: Some(MirRvalueKind::Reference(
+            crate::mir_import::MirBorrowKind::MutableDefault,
+        )),
+        semantic_rvalue_type: None,
         operation: None,
         source: None,
     }
@@ -334,6 +338,7 @@ fn assign_use(index: usize, destination: usize, source: usize) -> MirStatement {
         destination: Some(place(destination)),
         operands: vec![operand(source)],
         rvalue: Some(MirRvalueKind::Use),
+        semantic_rvalue_type: None,
         operation: None,
         source: None,
     }
@@ -347,6 +352,7 @@ fn place(local: usize) -> MirPlaceRef {
     MirPlaceRef {
         local,
         projection: Vec::new(),
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     }
 }
 
@@ -374,6 +380,7 @@ fn imported(shape: MirTypeShape) -> MirImportedType {
         kind,
         rust: rust.to_owned(),
         shape,
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     }
 }
 

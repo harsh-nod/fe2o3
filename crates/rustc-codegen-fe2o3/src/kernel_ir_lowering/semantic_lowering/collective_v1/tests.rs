@@ -318,6 +318,7 @@ fn collective_module(
     };
     MirModule {
         functions: vec![MirFunction {
+            semantic_instance: None,
             export_name: "collective_v1".to_owned(),
             rust_path: "tests::collective_v1".to_owned(),
             kind: MirFunctionKind::KernelEntry,
@@ -358,6 +359,7 @@ fn collective_module(
 fn barrier_module() -> MirModule {
     MirModule {
         functions: vec![MirFunction {
+            semantic_instance: None,
             export_name: "barrier_v1".to_owned(),
             rust_path: "tests::barrier_v1".to_owned(),
             kind: MirFunctionKind::KernelEntry,
@@ -402,6 +404,7 @@ fn wave_lds_v1_module(with_scratch: bool) -> MirModule {
     };
     MirModule {
         functions: vec![MirFunction {
+            semantic_instance: None,
             export_name: "gfx942_wave_lds_v1".to_owned(),
             rust_path: "tests::gfx942_wave_lds_v1".to_owned(),
             kind: MirFunctionKind::KernelEntry,
@@ -503,6 +506,7 @@ fn place(local: usize) -> MirPlaceRef {
     MirPlaceRef {
         local,
         projection: Vec::new(),
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     }
 }
 
@@ -534,5 +538,6 @@ fn imported(shape: MirTypeShape) -> MirImportedType {
         kind,
         rust: rust.to_owned(),
         shape,
+        semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
     }
 }
