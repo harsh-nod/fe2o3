@@ -85,8 +85,8 @@ a parser error or an unrelated failure does not count as a successful negative.
 
 ## General typed two-kernel slice
 
-`src/two_kernel_bodies.rs` adds two ordinary-Rust/shared macro bodies for the
-planned general typed vertical slice:
+`src/two_kernel_bodies.rs` adds two ordinary-Rust/shared macro bodies used as
+source models for the bounded general typed two-kernel slice:
 
 - `alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>)` computes
   `output[i] = scale * input[i]`; and
@@ -107,8 +107,7 @@ allocation, byte-region, permission, and identity-index lemmas from
   `usize::MAX`;
 - input capabilities are initialized shared reads;
 - the owned output element is initialized by the exclusive write;
-- different active thread identities own disjoint output regions and therefore
-  cannot race; and
+- different active thread identities have disjoint modeled output regions; and
 - the resulting element and frame equal the exact bounded mathematical alpha
   or zeta expression.
 
@@ -118,9 +117,12 @@ NaNs, infinities, signed zero, contraction, and operation order, remains an
 authenticated compiler/backend refinement obligation.
 
 The exact `gfx942:xnack-` identity belongs to the sealed review capsule and its
-artifact join, not to these CPU/shared bodies. A separate compiler-refinement
-step must still connect a real GPU kernel source, lowered IR, HSACO, and machine
-execution to this model.
+artifact join, not to these CPU/shared bodies. Separate exact attributed
+alpha/zeta kernel profiles have compiler-derived ABI, Kernel IR, Worker V2, and
+bounded artifact/runtime evidence. None of that evidence proves that those
+kernels refine these shared bodies or this Verus model, and the ignored
+hardware lanes do not turn this proof into machine-code, memory/race-safety, or
+GPU-execution evidence.
 
 The input-initialization premise and four-byte address-representability result
 are named explicitly in `alpha_input_initialization_assumptions`,

@@ -129,6 +129,10 @@ The reviewed structural relation does not prove semantic source-to-model
 refinement. The source-model-to-Kernel-IR relation starts from that unproven
 model boundary.
 It does not prove compiler causality.
+The exact collected compiler path authenticates the source and complete
+reachable portable-MIR closure and selects the closed Wave64 profile. That
+authentication and reviewed profile selection do not prove semantic compiler
+refinement.
 It does not prove LLVM/ISA refinement.
 It grants no artifact authority and grants no protected-execution authority.
 It does not establish generalized safety, including memory safety or race
@@ -138,4 +142,6 @@ Separate public issue #117 evidence authenticates the exact source and reachable
 MIR, selects this canonical KIR/profile, finalizes through direct upstream LLVM
 and the in-process LLD library API, and records one protected gfx942 observation.
 Those independently bounded receipts are not silently joined into this proof.
-No COMGR path or shell linker is introduced here.
+The configured finalizer test remains ignored with `requires the measured
+direct LLVM/LLD worker built for gfx942`. No COMGR path or shell invocation of
+`clang`, `llc`, or `ld.lld` is introduced here.

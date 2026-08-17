@@ -4,11 +4,21 @@ This standalone crate contains ordinary attributed Rust `#[kernel]` source for
 one fixed `T8/E4/K2/C4` deterministic router, plus host-side oracle and
 proof-facing executable contracts.
 
-The source is real but is not yet compiler-authorized. In particular, the
-bounded staging and exclusive-scan structure has no exact authenticated
-MIR-to-Kernel-IR profile. This crate therefore claims no artifact, launch,
-hardware result, or protected evidence. Later vertical-slice phases must fail
-closed until those authorities are implemented.
+The bounded compiler profile authenticates the exact attributed source, kernel
+root and `FnAbi`, reviewed provider-terminal manifest, and complete reachable
+portable-MIR closure. It checks a private same-session structural
+source/ABI/MIR/KIR record, explicitly not semantic refinement, selects the
+closed deterministic routing Kernel IR profile, and publishes an inert COV6
+Worker V2 handoff containing one kernel and five private helpers.
+
+A configured finalizer test is ignored with the exact prerequisite
+`requires the compiler-produced module and measured direct LLVM/LLD worker`.
+It uses the pinned upstream LLVM target-machine and in-process LLD worker to
+produce reproducible opaque raw and finalized identities, without granting
+publication, load, launch, or hardware authority. The hardware gate remains
+ignored with `requires the production static wrapper, exact measured pins,
+protected linear receipt injection, and MI300X` and deliberately fails closed
+before HSA load until that wrapper can deliver the linear receipt in-process.
 
 ## Machine-checked mathematical model
 
@@ -32,10 +42,10 @@ the exact kernel bytes, the exact proof bytes, the fixed profile and model
 schema identities, and every expected-negative source before verification.
 Substitution at any of those boundaries fails closed.
 
-This evidence is not an IEEE-754 `f32` refinement, a refinement of
+This proof evidence is not an IEEE-754 `f32` refinement, a refinement of
 `src/kernel.rs`, a compiler or machine-code refinement, a GPU memory-safety or
-data-race proof, or a GPU execution result. Those joins require later evidence;
-the integer model alone cannot establish them.
+data-race proof, or a GPU execution result. The compiler and finalizer evidence
+above does not establish those joins either.
 
 ## Bounded memory/effect proof
 

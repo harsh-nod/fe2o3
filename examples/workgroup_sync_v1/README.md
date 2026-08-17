@@ -14,10 +14,10 @@ so the device's wrapping tree computes the exact mathematical sum.
 
 The source now requests `DynamicLds::<i32>::exact_from_compiler::<64>` and
 consumes that linear capability directly into collective scratch. It cannot
-substitute a host/global raw pointer or expose the LDS pointer. A later compiler
-phase must authenticate this exact source profile and lower the recognized
-constructor to one aligned, epoch-branded workgroup allocation shared by all
-lanes.
+substitute a host/global raw pointer or expose the LDS pointer. The exact
+collected compiler profile authenticates this source and its complete reachable
+portable-MIR closure, then selects the closed semantic profile containing one
+aligned, epoch-branded workgroup allocation shared by all lanes.
 
 ## Scoped atomic add
 
@@ -43,11 +43,27 @@ address space, ordering, scope, target, eligibility, overflow, and substituted
 outputs. Verus models initialization, convergence, epoch reuse, ownership,
 exact integer sums, and atomic eligibility, with expected-negative mutations.
 
-Both kernels are now ordinary attributed Rust modules with source-level typed
-ABI and LDS capabilities. This phase does **not** provide compiler profile authentication
-for either exact profile, source-to-IR, IR-to-machine correspondence, artifact admission,
-protected loading, or MI300X execution evidence. Those are later phases. The
-package uses no COMGR and no shell linker.
+Both kernels are ordinary attributed Rust modules with source-level typed ABI
+and LDS capabilities. Their two exact collected compiler profiles authenticate
+the source, kernel root and `FnAbi`, frozen provider-terminal manifest, and
+complete reachable portable-MIR closure, then select the corresponding closed
+semantic Kernel IR profile. That is reviewed source-to-profile and
+source-to-terminal correspondence, not generic lowering or a compiler-
+refinement proof; the collected compiler paths stop before LLVM and Worker V2.
+Exact compiler profile authentication therefore exists, but it does not prove
+source-to-IR semantics or IR-to-machine correspondence. The artifact admission
+and MI300X execution evidence remain separate bounded lanes.
+
+A separate configured finalizer test is ignored with the exact prerequisite
+`requires the measured direct LLVM/LLD worker built for gfx942`. It constructs
+the bounded inert handoffs and uses the pinned upstream LLVM target-machine and
+in-process LLD worker to produce both reproducible opaque COV6 admissions. The
+two protected hardware tests are ignored with `requires measured direct
+LLVM/LLD worker pins and gfx942:xnack-`. These independently bounded test lanes
+do not prove source-to-machine correspondence, generalized memory or race
+safety, or general GPU support. The production-directed finalizer uses no COMGR
+and no shell linker; specifically, it does not shell out to `clang`, `llc`, or
+`ld.lld`.
 
 ## Validation
 

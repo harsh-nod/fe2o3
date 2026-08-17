@@ -5,10 +5,22 @@ one fixed causal `B1/H1/N8/D16` FP32 profile, an independent two-pass host
 oracle, executable proof-facing contracts, and a real machine-checked
 mathematical model.
 
-The source is real but is not yet compiler-authorized. It has no authenticated
-MIR-to-Kernel-IR profile, direct LLVM/LLD code object, typed HSA lifecycle, or
-protected gfx942 execution evidence. Those later phases must fail closed until
-their identities and joins exist.
+The bounded compiler profile authenticates the exact attributed source, kernel
+root and `FnAbi`, reviewed provider-terminal manifest, and complete reachable
+portable-MIR closure. It consumes that source authority to select the closed
+causal Kernel IR profile and publishes an inert COV6/Wave64/WG64 Worker V2
+handoff with an unresolved `__ocml_exp_f32` import. This is reviewed
+source-to-profile correspondence, not a terminal-body or compiler-refinement
+proof.
+
+A configured finalizer test is ignored with the exact prerequisite
+`requires the measured direct LLVM/LLD worker built for gfx942`. It consumes a
+compiler handoff and uses the pinned upstream LLVM target-machine and in-process
+LLD worker to produce a reproducible opaque finalization receipt; it grants no
+publication, load, launch, or hardware authority. The hardware gate remains
+ignored with `requires the production static wrapper, exact measured pins,
+protected linear receipt injection, and MI300X` and deliberately fails closed
+before load until that wrapper can deliver the linear receipt in-process.
 
 ## Machine-checked mathematical model
 
@@ -41,7 +53,8 @@ aggregate frame-rescaling relations used by the online recurrence. Verus proves
 the causal recurrence and rational correspondence conditional on those explicit
 premises; it proves no exponential law.
 
-This evidence is not an IEEE-754 `f32` or OCML numerical refinement, a
+This proof evidence is not an IEEE-754 `f32` or OCML numerical refinement, a
 refinement of `src/kernel.rs`, a compiler/Kernel-IR/LLVM/ISA refinement, a
 machine-safety proof, a GPU data-race-freedom proof, or a GPU execution result.
-Each of those joins remains a separate milestone.
+The compiler and finalizer evidence above does not supply those missing joins
+either.
