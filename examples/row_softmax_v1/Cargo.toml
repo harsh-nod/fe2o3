@@ -12,31 +12,29 @@ protected-hardware = [
     "dep:fe2o3-artifact-transaction",
     "dep:fe2o3-compiler-ffi",
     "dep:fe2o3-core",
-    "dep:fe2o3-host",
     "dep:fe2o3-hsa-runtime",
     "dep:fe2o3-hsaco",
     "dep:fe2o3-hsaco-finalize",
     "dep:fe2o3-verifier",
-    "dep:sha2",
 ]
 
 [dependencies]
 fe2o3-artifact-transaction = { path = "../../crates/fe2o3-artifact-transaction", optional = true }
 fe2o3-compiler-ffi = { path = "../../crates/fe2o3-compiler-ffi", optional = true }
 fe2o3-core = { path = "../../crates/fe2o3-core", optional = true }
-fe2o3-host = { path = "../../crates/fe2o3-host", optional = true }
+fe2o3-device = { path = "../../crates/fe2o3-device" }
+fe2o3-host = { path = "../../crates/fe2o3-host" }
 fe2o3-hsa-runtime = { path = "../../crates/fe2o3-hsa-runtime", optional = true }
 fe2o3-hsaco = { path = "../../crates/fe2o3-hsaco", optional = true }
 fe2o3-hsaco-finalize = { path = "../../crates/fe2o3-hsaco-finalize", optional = true }
 fe2o3-verifier = { path = "../../crates/fe2o3-verifier", optional = true }
-sha2 = { version = "0.11.0", optional = true }
+quote = "1"
+sha2 = "0.11.0"
+syn = { version = "2", features = ["full"] }
 
 # Keep this proof example independently testable until a row-softmax compiler
 # and runtime vertical slice exists.
 [workspace]
-
-[dev-dependencies]
-sha2 = "0.11.0"
 
 [lib]
 name = "fe2o3_row_softmax_v1"

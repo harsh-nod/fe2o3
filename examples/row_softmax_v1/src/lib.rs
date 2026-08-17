@@ -1,4 +1,5 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+#![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
 //! Fixed-width row-softmax V1 host model and proof-facing contract.
@@ -11,10 +12,26 @@
 //! IEEE-754 arithmetic, an exponential implementation, compiler refinement,
 //! or any property of an HSACO artifact.
 
+// The canonical GPU source needs exactly the two reviewed compiler/device
+// intrinsics visible in kernel.rs. Unsafe remains denied everywhere else.
+#[allow(missing_docs, unsafe_code)]
+pub mod kernel;
 mod numerical_contract;
 #[cfg(feature = "protected-hardware")]
 mod production_release;
+mod source_model_correspondence;
 mod verification_certificate;
+
+pub use source_model_correspondence::{
+    REVIEWED_ROW_SOFTMAX_SOURCE_BOUNDARY_V1, ReviewedRowSoftmaxAlgorithmV1,
+    RowSoftmaxAbstractOperationV1, RowSoftmaxAbstractTraceV1, RowSoftmaxPhaseV1,
+    RowSoftmaxSourceBindingV1, RowSoftmaxSourceContentIdentitiesV1,
+    RowSoftmaxSourceCorrespondenceErrorV1, RowSoftmaxSourceCorrespondenceReceiptV1,
+    RowSoftmaxSourceStructureErrorV1, bind_row_softmax_source_content_to_outer_commit_v1,
+    collect_reviewed_row_softmax_algorithm_v1, exact_row_softmax_source_content_identities_v1,
+    interpret_reviewed_row_softmax_source_v1, reviewed_row_softmax_abstract_model_v1,
+    verify_reviewed_row_softmax_source_correspondence_v1,
+};
 
 pub use numerical_contract::{
     GFX942_OCML_COMPARISON_POLICY_V1, HOST_ORACLE_EXPONENTIAL_V1, MAX_ROW_ELEMENTS_V1,

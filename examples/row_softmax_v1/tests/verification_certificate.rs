@@ -4,9 +4,7 @@ use fe2o3_row_softmax_v1::{
 };
 use sha2::{Digest, Sha256};
 
-const ATTRIBUTED_SOURCE: &[u8] = include_bytes!(
-    "../../../crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs"
-);
+const ATTRIBUTED_SOURCE: &[u8] = include_bytes!("../src/kernel.rs");
 const NUMERICAL_POLICY: &[u8] = include_bytes!("../src/numerical_contract.rs");
 const PROOF_SOURCE: &[u8] = include_bytes!("../verus/row_softmax_v1.rs");
 const VERUS_CLOSURE_MANIFEST: &[u8] = include_bytes!("../verus/VERUS_CLOSURE_MANIFEST");
@@ -36,6 +34,8 @@ fn reviewed_manifest_matches_every_repository_evidence_input() {
     assert_identity(manifest.proof_source, PROOF_SOURCE);
     assert_identity(manifest.verus_closure_manifest, VERUS_CLOSURE_MANIFEST);
     assert_identity(manifest.verus_trust_vocabulary, VERUS_TRUST_VOCABULARY);
+    assert_eq!(manifest.input_elements, 64);
+    assert_eq!(manifest.output_elements, 64);
 
     for marker in [
         "const PORTABLE_MIR_SEMANTIC_IDENTITY: [u8; 32]",
@@ -66,6 +66,11 @@ fn exact_manifest_yields_only_an_inert_deterministic_certificate() {
     let second = validate_row_softmax_verification_manifest_v1(first.manifest()).unwrap();
     assert_eq!(first, second);
     assert_eq!(first.manifest(), ROW_SOFTMAX_VERIFICATION_MANIFEST_V1);
+
+    let canonical = std::str::from_utf8(first.canonical_manifest_bytes()).unwrap();
+    assert!(canonical.contains("lineage-source=e874da2083c2a1eb192048ea5f88a053c28d0ee2|crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4"));
+    assert!(!canonical.contains("base-commit="));
+    assert!(canonical.contains("input-elements=64|output-elements=64"));
 
     let digest = sha256(first.canonical_manifest_bytes());
     println!("FE2O3_ROW_SOFTMAX_V1_CERTIFICATE_SHA256={digest}");
@@ -154,6 +159,20 @@ fn correspondence_profile_target_and_width_substitutions_fail_closed() {
         Err(RowSoftmaxVerificationMismatchV1::Specialization)
     );
 
+    let mut input_length = exact;
+    input_length.input_elements = 63;
+    assert_eq!(
+        validate_row_softmax_verification_manifest_v1(input_length),
+        Err(RowSoftmaxVerificationMismatchV1::Specialization)
+    );
+
+    let mut output_length = exact;
+    output_length.output_elements = 65;
+    assert_eq!(
+        validate_row_softmax_verification_manifest_v1(output_length),
+        Err(RowSoftmaxVerificationMismatchV1::Specialization)
+    );
+
     let mut mask = exact;
     mask.activity_mask = "masked";
     assert_eq!(
@@ -170,6 +189,7 @@ fn certificate_never_claims_origin_refinement_or_numeric_error_evidence() {
     let boundary = certificate.manifest().evidence_boundary;
     for marker in [
         "inert formal evidence only",
+        "exact input/output lengths are authenticated preconditions, not observed runtime facts",
         "exp_real_v1 remains uninterpreted",
         "no OCML/IEEE error bound",
         "no compiler origin",

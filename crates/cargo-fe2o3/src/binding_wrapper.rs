@@ -78,6 +78,7 @@ const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+const CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1: &str = "FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1";
 const ROW_SOFTMAX_V1_PROVISION_VALUE: &str = "row-softmax-v1-provision";
 const ROW_SOFTMAX_V1_RUN_VALUE: &str = "row-softmax-v1-run";
 const ROW_SOFTMAX_V1_PROVISION_PREFIX: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_OBSERVATION=";
@@ -674,6 +675,22 @@ fn configure_build_observation_environment(
     command: &mut Command,
     observation: Option<CompileBuildObservationV2>,
 ) {
+    #[cfg(feature = "compiler-handoff-observation-test-only")]
+    let metadata_mutation = std::env::var_os(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1);
+    #[cfg(not(feature = "compiler-handoff-observation-test-only"))]
+    let metadata_mutation: Option<OsString> = None;
+    configure_build_observation_environment_with_test_mutation(
+        command,
+        observation,
+        metadata_mutation.as_deref(),
+    );
+}
+
+fn configure_build_observation_environment_with_test_mutation(
+    command: &mut Command,
+    observation: Option<CompileBuildObservationV2>,
+    metadata_mutation: Option<&OsStr>,
+) {
     if let Some(observation) = observation {
         command.env(CRATE_BINDING_ID_ENV_V1, observation.crate_binding.to_hex());
         // This digest is an exact build observation, not a semantic admission identity.
@@ -684,6 +701,14 @@ fn configure_build_observation_environment(
     } else {
         command.env_remove(CRATE_BINDING_ID_ENV_V1);
         command.env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2);
+    }
+    match metadata_mutation {
+        Some(mutation) => {
+            command.env(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, mutation);
+        }
+        None => {
+            command.env_remove(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1);
+        }
     }
 }
 
@@ -1612,6 +1637,7 @@ fn managed_s09_child_environment(name: &OsStr) -> bool {
             | b"FE2O3_HSACO_DIR"
             | b"FE2O3_BUILD_ATTEMPT_V1"
             | b"FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2"
+            | b"FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1"
             | b"FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2"
             | b"FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2"
             | b"FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2"
@@ -3297,15 +3323,17 @@ mod tests {
     use super::{
         BindingWrapperError, BuildExecutableSnapshot,
         CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
-        CompileBuildObservationV2, CompleteReviewedChildEnvironmentV2,
-        DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2,
-        LinuxObjectIdentityV3, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
+        CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, CompileBuildObservationV2,
+        CompleteReviewedChildEnvironmentV2, DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+        LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
+        OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
         ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1, ROW_SOFTMAX_V1_PIPELINE,
         WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
         WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, append_prepared_rustc_arguments,
         canonicalize_rustc_metadata, configure_build_observation_environment,
+        configure_build_observation_environment_with_test_mutation,
         configure_worker_build_observation_environment, decode_managed_rustc_args,
         derive_build_attempt_input_with_config_identity, is_cargo_stdin_probe,
         materialize_reviewed_child_environment, materialize_row_softmax_v1_child_environment,
@@ -3336,6 +3364,7 @@ mod tests {
     };
     use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
     use sha2::Digest;
+    use std::collections::BTreeMap;
     use std::ffi::{OsStr, OsString};
     use std::fs;
     #[cfg(target_os = "linux")]
@@ -3550,6 +3579,7 @@ mod tests {
                     CARGO_METADATA_BUILD_OBSERVATION_ENV_V2.to_owned(),
                     Some(observation.cargo_metadata_digest_hex()),
                 ),
+                (CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1.to_owned(), None),
                 (
                     CRATE_BINDING_ID_ENV_V1.to_owned(),
                     Some(observation.crate_binding.to_hex()),
@@ -3571,8 +3601,45 @@ mod tests {
                     OsString::from(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2),
                     None
                 ),
+                (
+                    OsString::from(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1),
+                    None
+                ),
                 (OsString::from(CRATE_BINDING_ID_ENV_V1), None),
             ]
+        );
+    }
+
+    #[test]
+    fn metadata_mutation_hook_preserves_the_genuine_provider_observation() {
+        let observation = CompileBuildObservationV2::from_ordered_metadata(
+            "row_softmax",
+            &[
+                "0123456789abcdef".to_owned(),
+                "fe2o3-row-softmax-v1-reviewed".to_owned(),
+            ],
+        )
+        .expect("canonical row-softmax metadata observation");
+        let mut command = Command::new("rustc");
+        configure_build_observation_environment_with_test_mutation(
+            &mut command,
+            Some(observation),
+            Some(OsStr::new("omit")),
+        );
+        let environment = command
+            .get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            environment.get(OsStr::new(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)),
+            Some(&Some(OsString::from(
+                observation.cargo_metadata_digest_hex()
+            )))
+        );
+        assert_eq!(
+            environment.get(OsStr::new(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1)),
+            Some(&Some(OsString::from("omit")))
         );
     }
 

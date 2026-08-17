@@ -269,10 +269,8 @@ fn certificate()
     let manifest = inert.canonical_manifest_bytes();
     let evidence = [
         Some(RowSoftmaxVerificationFileObservationV1::new(
-            "crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs",
-            include_bytes!(
-                "../../../crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs"
-            ),
+            "examples/row_softmax_v1/src/kernel.rs",
+            include_bytes!("../src/kernel.rs"),
         )),
         Some(RowSoftmaxVerificationFileObservationV1::new(
             "examples/row_softmax_v1/src/numerical_contract.rs",

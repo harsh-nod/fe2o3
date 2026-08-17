@@ -5,6 +5,39 @@ conceptual `f32` values** and a separate 64-element output. Its proved claims
 remain a source-level formal model and finite host reference, not a production
 compiler/runtime or machine-code refinement result.
 
+## Canonical ordinary kernel source
+
+`src/kernel.rs` is the sole authored `#[kernel]` Rust source for this profile.
+It is ordinary attributed Rust: it contains no `macro_rules!`, `include!`,
+`include_str!`, generated body, or explanatory substitute. The compiler fixture
+is now only a path-dependent re-export facade, while the direct codegen harness
+reads and compiles this exact example-owned file. The move preserved the exact
+1,289 source bytes and SHA-256
+`c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4`,
+so the reviewed portable-MIR, Kernel IR, and LLVM commitments were not changed.
+The manifest records the exact predecessor location at public commit `e874da208`
+as a lineage source; it does not claim the new example path existed there.
+
+`source_model_correspondence.rs` adds a bounded exact-AST gate and compares all
+64 physical-lane schedules with an independently encoded abstract operation
+model. It checks lane-zero-only participation, maximum/denominator/output loop
+order, all 192 indexed input reads, 128 abstract exponential calls, 64
+lane-zero-owned output writes, and zero barriers under authenticated exact
+64-element input and output preconditions. It does not observe that a runtime
+launch satisfied those preconditions. Fifteen hostile source
+mutations alter calls, operands, loop bounds, ownership, arithmetic, launch, or
+control-flow syntax and must fail admission. Exact source, abstract-model,
+Verus-model, and memory-precondition contents are transcript-bound to a
+caller-selected outer commit;
+the repository test separately checks that the current commit contains those
+bytes.
+
+This is reviewed structural evidence, not Rust operational semantics or a
+source-to-model refinement proof. In particular, `exp_f32`, IEEE-754 behavior,
+OCML implementation/error, compiler causality, LLVM/ISA correspondence, GPU
+execution, generalized memory safety, and race freedom remain unproved. The
+receipt is inert and cannot promote a parity row.
+
 `production_release.rs` additionally stages the exact `gfx942:xnack-`, width-64
 typed HSA lifecycle with immutable guarded input, guarded output, CPU-oracle
 comparison, and fixed normal/equal/dominant workloads. Masked, exceptional,
@@ -110,9 +143,10 @@ numerical-policy drift, and specialization-width drift.
 exact comparison API. It binds the attributed Rust source, reachable portable
 MIR and compiler-semantics commitments, typed profile, shared numerical policy,
 positive proof source, canonical Kernel IR and LLVM body commitments, exact
-`gfx942:xnack-` width-64 specialization, and pinned Verus/Z3 closure. Its
+`gfx942:xnack-` width-64 specialization, exact 64-element input/output
+preconditions, and pinned Verus/Z3 closure. Its
 canonical digest is
-`5b83efdc0780fa8aa316794371760f1be5ad593256f0e727024e0486bff01898`.
+`8a133c4d58294fe648b1e34aec5c08c0cf24860ea57f0eded84fd8132da377bf`.
 
 The certificate is formal evidence only. It grants no compiler origin,
 source-to-machine refinement, descriptor or artifact admission, load, launch,

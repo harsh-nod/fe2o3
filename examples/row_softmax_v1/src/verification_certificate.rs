@@ -46,6 +46,10 @@ pub struct RowSoftmaxVerificationManifestV1 {
     pub target: &'static str,
     /// Exact fixed row width.
     pub row_elements: u32,
+    /// Exact input-slice length required by the reviewed operation trace.
+    pub input_elements: u32,
+    /// Exact disjoint output-slice length required by the reviewed operation trace.
+    pub output_elements: u32,
     /// Exact activity-mask policy of the attributed source.
     pub activity_mask: &'static str,
     /// Exact worker/barrier schedule modeled by the proof.
@@ -101,7 +105,7 @@ pub struct RowSoftmaxVerificationCertificateV1 {
 }
 
 const ATTRIBUTED_SOURCE_V1: VerificationEvidenceIdentityV1 = VerificationEvidenceIdentityV1 {
-    relative_path: "crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs",
+    relative_path: "examples/row_softmax_v1/src/kernel.rs",
     byte_len: 1_289,
     sha256: "c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4",
 };
@@ -147,6 +151,8 @@ pub const ROW_SOFTMAX_VERIFICATION_MANIFEST_V1: RowSoftmaxVerificationManifestV1
         kernel_ir_profile: "fe2o3::row_softmax_v1;fixed-row-64;wg64;cov6",
         target: "gfx942:xnack-",
         row_elements: 64,
+        input_elements: 64,
+        output_elements: 64,
         activity_mask: "unmasked: all 64 physical positions active",
         worker_schedule: "lane0-only;three-ordered-loops;zero-workgroup-barriers",
         verus_version: "0.2026.08.02.b677dd5",
@@ -154,13 +160,13 @@ pub const ROW_SOFTMAX_VERIFICATION_MANIFEST_V1: RowSoftmaxVerificationManifestV1
         solver_executable_sha256: "e583c4186a45e72411fa2cb2048401eed03f0f8e5f24694676a8f6271a50b765",
         verus_closure_manifest: VERUS_CLOSURE_MANIFEST_V1,
         verus_trust_vocabulary: VERUS_TRUST_VOCABULARY_V1,
-        evidence_boundary: "inert formal evidence only;exp_real_v1 remains uninterpreted;no OCML/IEEE error bound;no compiler origin;no source-to-machine refinement;no artifact or execution authority",
+        evidence_boundary: "inert formal evidence only;exact input/output lengths are authenticated preconditions, not observed runtime facts;exp_real_v1 remains uninterpreted;no OCML/IEEE error bound;no compiler origin;no source-to-machine refinement;no artifact or execution authority",
     };
 
-const CANONICAL_MANIFEST_BYTES_V1: &[u8] = b"FE2O3-ROW-SOFTMAX-VERIFICATION-V1\nbase-commit=0eae3bb633864bfd75aaa8ed76b8ae0b4e1014e1\nattributed-source=crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4\nportable-mir=cb10b6fac6475435e45a6f9166739c9e26bae17031105791abf3f440b004d4dd\ncompiler-semantics=3132d86d229a3977ed9c5283c241c4f6c85aff23c1d177fb0d23c0743279f0a4\ncompiler-profile=fe2o3.manifest-derived-scalar-slice.v1|rustc-1.96.0-nightly|55e86c996809902e8bbad512cfb4d2c18be446d9|llvm-22.1.2\nnumerical-policy=examples/row_softmax_v1/src/numerical_contract.rs|9450|367b11f440d884cc1ecafd3b88fbf209c819acae09c21177718fd720fe9b18ad\nproof=examples/row_softmax_v1/verus/row_softmax_v1.rs|12966|cacf81e02eb071cc29b1124811e911097fd62e7d29556dda8380418a631f5db5\nkernel-ir=fe2o3::row_softmax_v1;fixed-row-64;wg64;cov6|1e1b14c6842ffd09103eb55eb39b1bcae9c0da81597fed6186767562337230e6\nllvm-body=d48d3320c286c6da2253a104386089e389648f4260f2e7efda21269fef951c2c\ntarget=gfx942:xnack-|row-elements=64|activity=unmasked-all-64|worker=lane0-only-three-loops-zero-barriers\nverus=0.2026.08.02.b677dd5|ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd\nsolver-z3=e583c4186a45e72411fa2cb2048401eed03f0f8e5f24694676a8f6271a50b765\nverus-closure=examples/row_softmax_v1/verus/VERUS_CLOSURE_MANIFEST|591|d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019\ntrust-vocabulary=examples/row_softmax_v1/verus/VERUS_TRUST_VOCABULARY|6572|54457b1030c88f7598a0a948563a0abd551a431e0f97b7ff33242f56f194ad7d\nboundary=inert;exp-uninterpreted;no-ocml-ieee-bound;no-compiler-origin;no-source-machine-refinement;no-execution-authority\n";
+const CANONICAL_MANIFEST_BYTES_V1: &[u8] = b"FE2O3-ROW-SOFTMAX-VERIFICATION-V1\nlineage-source=e874da2083c2a1eb192048ea5f88a053c28d0ee2|crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4\nattributed-source=examples/row_softmax_v1/src/kernel.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4\nportable-mir=cb10b6fac6475435e45a6f9166739c9e26bae17031105791abf3f440b004d4dd\ncompiler-semantics=3132d86d229a3977ed9c5283c241c4f6c85aff23c1d177fb0d23c0743279f0a4\ncompiler-profile=fe2o3.manifest-derived-scalar-slice.v1|rustc-1.96.0-nightly|55e86c996809902e8bbad512cfb4d2c18be446d9|llvm-22.1.2\nnumerical-policy=examples/row_softmax_v1/src/numerical_contract.rs|9450|367b11f440d884cc1ecafd3b88fbf209c819acae09c21177718fd720fe9b18ad\nproof=examples/row_softmax_v1/verus/row_softmax_v1.rs|12966|cacf81e02eb071cc29b1124811e911097fd62e7d29556dda8380418a631f5db5\nkernel-ir=fe2o3::row_softmax_v1;fixed-row-64;wg64;cov6|1e1b14c6842ffd09103eb55eb39b1bcae9c0da81597fed6186767562337230e6\nllvm-body=d48d3320c286c6da2253a104386089e389648f4260f2e7efda21269fef951c2c\ntarget=gfx942:xnack-|row-elements=64|input-elements=64|output-elements=64|activity=unmasked-all-64|worker=lane0-only-three-loops-zero-barriers\nverus=0.2026.08.02.b677dd5|ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd\nsolver-z3=e583c4186a45e72411fa2cb2048401eed03f0f8e5f24694676a8f6271a50b765\nverus-closure=examples/row_softmax_v1/verus/VERUS_CLOSURE_MANIFEST|591|d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019\ntrust-vocabulary=examples/row_softmax_v1/verus/VERUS_TRUST_VOCABULARY|6572|54457b1030c88f7598a0a948563a0abd551a431e0f97b7ff33242f56f194ad7d\nboundary=inert;exact-input-output-lengths-are-authenticated-preconditions-not-observed-runtime-facts;exp-uninterpreted;no-ocml-ieee-bound;no-compiler-origin;no-source-machine-refinement;no-execution-authority\n";
 
 const CANONICAL_MANIFEST_SHA256_V1: &str =
-    "5b83efdc0780fa8aa316794371760f1be5ad593256f0e727024e0486bff01898";
+    "8a133c4d58294fe648b1e34aec5c08c0cf24860ea57f0eded84fd8132da377bf";
 
 /// Compares an independently observed manifest with the reviewed identities.
 pub fn validate_row_softmax_verification_manifest_v1(
@@ -197,6 +203,8 @@ pub fn validate_row_softmax_verification_manifest_v1(
         return Err(RowSoftmaxVerificationMismatchV1::Target);
     }
     if observed.row_elements != expected.row_elements
+        || observed.input_elements != expected.input_elements
+        || observed.output_elements != expected.output_elements
         || observed.activity_mask != expected.activity_mask
         || observed.worker_schedule != expected.worker_schedule
     {

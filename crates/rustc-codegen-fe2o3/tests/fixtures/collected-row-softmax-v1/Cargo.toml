@@ -7,5 +7,6 @@ publish = false
 [dependencies]
 fe2o3-device = { path = "../../../../fe2o3-device" }
 fe2o3-host = { path = "../../../../fe2o3-host" }
+fe2o3-row-softmax-v1 = { path = "../../../../../examples/row_softmax_v1" }
 
 [workspace]

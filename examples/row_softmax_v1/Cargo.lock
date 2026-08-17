@@ -253,12 +253,15 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-compiler-ffi",
  "fe2o3-core",
+ "fe2o3-device",
  "fe2o3-host",
  "fe2o3-hsa-runtime",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-verifier",
+ "quote",
  "sha2",
+ "syn 2.0.119",
 ]
 
 [[package]]

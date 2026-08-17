@@ -44,7 +44,7 @@ const TILED_GEMM_FIXTURE: &str = include_str!("fixtures/collected-tiled-gemm-v1/
 const TILED_GEMM_LDS_SLICE1_FIXTURE: &str =
     include_str!("../../../examples/tiled_gemm_v1/src/kernel.rs");
 const ROW_SOFTMAX_PIPELINE: &str = "collected-row-softmax-v1";
-const ROW_SOFTMAX_FIXTURE: &str = include_str!("fixtures/collected-row-softmax-v1/src/lib.rs");
+const ROW_SOFTMAX_FIXTURE: &str = include_str!("../../../examples/row_softmax_v1/src/kernel.rs");
 // Reviewed independently from the handoff identity and section payloads. This
 // binds every byte of the canonical LLVM lowering before compiler-owned data.
 const EXPECTED_ROW_LLVM_BODY_SHA256: [u8; 32] = [
@@ -105,6 +105,7 @@ const HANDOFF_OBSERVATION_ACK_MAGIC: &[u8] = b"FE2O3-CARGO-WRAPPER-HANDOFF-OBSER
 const HANDOFF_OBSERVATION_DIRECTORY_ENV: &str =
     "FE2O3_COMPILER_HANDOFF_OBSERVATION_DIRECTORY_TEST_ONLY_V1";
 const HANDOFF_OBSERVATION_CRATE_ENV: &str = "FE2O3_COMPILER_HANDOFF_OBSERVATION_CRATE_TEST_ONLY_V1";
+const CARGO_METADATA_MUTATION_TEST_ONLY_ENV: &str = "FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1";
 const BROKER_PATH_SUBSTITUTION_MARKER: &str = "fe2o3-test-hostile-broker-path-substitution";
 const MAX_HANDOFF_OBSERVATION_BYTES: usize = 32 * 1024;
 const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
@@ -1653,9 +1654,7 @@ fn independently_expected_compiler_closure(cargo_target: &Path) -> Result<[u8; 3
 fn independently_expected_compiler_closure_for_backend(
     backend_sha256: [u8; 32],
 ) -> Result<[u8; 32], String> {
-    let toolchain = AUTHORITY_TOOLCHAIN
-        .get()
-        .ok_or_else(|| "authority-validation toolchain was not initialized".to_owned())?;
+    let toolchain = authority_toolchain();
     let mut rustc_identity = Sha256::new();
     rustc_identity.update(RUSTC_RUNTIME_IDENTITY_DOMAIN);
     rustc_identity.update(toolchain.rustc_sha256);
@@ -2302,6 +2301,13 @@ fn compile_row_softmax_with_device(
             "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
             cargo_metadata_observation,
         )
+        .env(
+            "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1",
+            encode_lower_hex(
+                &independently_expected_compiler_closure_for_backend(backend.sha256)
+                    .expect("derive the row-softmax command's exact compiler closure"),
+            ),
+        )
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
@@ -2808,6 +2814,17 @@ fn compile_external_row_softmax_crate(
     cargo_target: &Path,
     spec: ExternalRowSoftmaxSpec<'_>,
 ) -> (Output, TestOutputDir) {
+    let broker = build_and_pin_broker(workspace, cargo_target, false);
+    compile_external_row_softmax_crate_with_broker(workspace, cargo_target, spec, &broker, None)
+}
+
+fn compile_external_row_softmax_crate_with_broker(
+    workspace: &Path,
+    cargo_target: &Path,
+    spec: ExternalRowSoftmaxSpec<'_>,
+    broker: &PinnedBrokerExecutable,
+    metadata_mutation: Option<&str>,
+) -> (Output, TestOutputDir) {
     let output = TestOutputDir::new(workspace);
     let crate_root = output.0.join(spec.package_name);
     let source_directory = crate_root.join("src");
@@ -2833,7 +2850,6 @@ fn compile_external_row_softmax_crate(
         rustflags.push(' ');
         rustflags.push_str(flag);
     }
-    let broker = build_and_pin_broker(workspace, cargo_target, false);
     let mut command = broker
         .command()
         .expect("verify test-owned cargo-fe2o3 before launch");
@@ -2850,6 +2866,14 @@ fn compile_external_row_softmax_crate(
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"))
         .env("RUSTFLAGS", rustflags);
+    match metadata_mutation {
+        Some(mutation) => {
+            command.env(CARGO_METADATA_MUTATION_TEST_ONLY_ENV, mutation);
+        }
+        None => {
+            command.env_remove(CARGO_METADATA_MUTATION_TEST_ONLY_ENV);
+        }
+    }
     configure_unprotected_row_authority_validation(&mut command, cargo_target);
     scrub_test_dynamic_loader_environment(&mut command);
     let compiled = run_bounded(
@@ -2920,7 +2944,11 @@ fn build_and_pin_broker(
     let mut backend_command = Command::new(env!("CARGO"));
     backend_command
         .current_dir(workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"]);
+    if handoff_observation {
+        backend_command.args(["--features", "row-softmax-metadata-mutation-test-only"]);
+    }
+    backend_command
         .env("CARGO_TARGET_DIR", cargo_target)
         .env(
             "FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1",
@@ -2981,8 +3009,8 @@ fn generate_external_lockfile(manifest: &Path) {
     );
 }
 
-fn configure_unprotected_row_authority_validation(command: &mut Command, cargo_target: &Path) {
-    let toolchain = AUTHORITY_TOOLCHAIN.get_or_init(|| {
+fn authority_toolchain() -> &'static AuthorityToolchain {
+    AUTHORITY_TOOLCHAIN.get_or_init(|| {
         let cargo = std::fs::canonicalize(env!("CARGO")).expect("canonical Cargo executable");
         let rustc = std::fs::canonicalize(
             cargo
@@ -3003,7 +3031,11 @@ fn configure_unprotected_row_authority_validation(command: &mut Command, cargo_t
             cargo,
             rustc,
         }
-    });
+    })
+}
+
+fn configure_unprotected_row_authority_validation(command: &mut Command, cargo_target: &Path) {
+    let toolchain = authority_toolchain();
     let backend = cargo_target.join("debug/librustc_codegen_fe2o3.so");
     assert!(backend.is_file(), "test-owned authority backend is absent");
     command
@@ -4554,35 +4586,11 @@ fn row_softmax_requires_managed_wrapper_argv_and_exact_metadata_transcript() {
         "direct rustc minted row-softmax authority:\n{direct_stderr}"
     );
 
-    let fabricated_output = TestOutputDir::new(&workspace);
-    let fabricated = compile_row_softmax_with_device(
+    let missing_tail_output = TestOutputDir::new(&workspace);
+    let missing_tail = compile_row_softmax_with_device(
         &workspace,
         backend,
-        &fabricated_output,
-        ROW_SOFTMAX_FIXTURE,
-        "gfx942:xnack-",
-        "3a4d867f29d87610",
-        &[],
-        &device,
-        &host,
-        true,
-        "0000000000000000000000000000000000000000000000000000000000000000",
-    );
-    let fabricated_stderr = stderr(&fabricated);
-    assert!(
-        !fabricated.status.success()
-            && fabricated_stderr.contains("managed wrapper Cargo metadata transcript")
-            && fabricated_stderr.contains("does not match rustc's ordered -Cmetadata values")
-            && !fabricated_stderr.contains("selected canonical Kernel IR module"),
-        "fabricated wrapper observation minted row-softmax authority:\n{fabricated_stderr}"
-    );
-    assert_row_softmax_published_nothing(&fabricated_output);
-
-    let forged_attempt_output = TestOutputDir::new(&workspace);
-    let forged_attempt = compile_row_softmax_with_device(
-        &workspace,
-        backend,
-        &forged_attempt_output,
+        &missing_tail_output,
         ROW_SOFTMAX_FIXTURE,
         "gfx942:xnack-",
         "3a4d867f29d87610",
@@ -4592,14 +4600,73 @@ fn row_softmax_requires_managed_wrapper_argv_and_exact_metadata_transcript() {
         true,
         "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
     );
-    let forged_attempt_stderr = stderr(&forged_attempt);
+    let missing_tail_stderr = stderr(&missing_tail);
     assert!(
-        !forged_attempt.status.success()
-            && forged_attempt_stderr.contains("managed wrapper effective rustc argv")
-            && !forged_attempt_stderr.contains("selected canonical Kernel IR module"),
-        "direct rustc with a valid-looking attempt and exact metadata minted row-softmax authority:\n{forged_attempt_stderr}"
+        !missing_tail.status.success()
+            && missing_tail_stderr.contains(
+                "managed wrapper effective rustc argv omitted or changed its exact managed tail"
+            )
+            && !missing_tail_stderr.contains("selected canonical Kernel IR module"),
+        "direct rustc without the managed tail minted row-softmax authority:\n{missing_tail_stderr}"
     );
-    assert_row_softmax_published_nothing(&forged_attempt_output);
+    assert_row_softmax_published_nothing(&missing_tail_output);
+
+    let managed_output = TestOutputDir::new(&workspace);
+    let managed_target = managed_output.0.join("cargo-target");
+    let broker = build_and_pin_handoff_broker(&workspace, &managed_target);
+    let device_root = workspace.join("crates/fe2o3-device");
+    let host_root = workspace.join("crates/fe2o3-host");
+    for (name, mutation, expected) in [
+        (
+            "fe2o3-row-softmax-metadata-omitted",
+            Some("omit"),
+            "managed wrapper omitted FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+        ),
+        (
+            "fe2o3-row-softmax-metadata-substituted",
+            Some("substitute"),
+            "managed wrapper Cargo metadata transcript does not match rustc's ordered -Cmetadata values",
+        ),
+        (
+            "fe2o3-row-softmax-managed-exact",
+            None,
+            "selected canonical Kernel IR module `fe2o3::row_softmax_v1`",
+        ),
+    ] {
+        let (managed, output) = compile_external_row_softmax_crate_with_broker(
+            &workspace,
+            &managed_target,
+            ExternalRowSoftmaxSpec {
+                package_name: name,
+                source: ROW_SOFTMAX_FIXTURE,
+                target: "gfx942:xnack-",
+                extra_rustflags: &[],
+                device_root: &device_root,
+                host_root: &host_root,
+            },
+            &broker,
+            mutation,
+        );
+        let managed_stderr = stderr(&managed);
+        assert!(
+            !managed.status.success() && managed_stderr.contains(expected),
+            "managed wrapper case {name} missed {expected:?}:\n{managed_stderr}"
+        );
+        if mutation.is_some() {
+            assert!(
+                !managed_stderr.contains("selected canonical Kernel IR module"),
+                "metadata mutation reached canonical IR selection:\n{managed_stderr}"
+            );
+        } else {
+            assert!(
+                managed_stderr.contains("published an inert Worker V2 compiler-module handoff")
+                    && managed_stderr
+                        .contains("build completed without an authorized device backend"),
+                "exact managed fixture missed its positive checkpoints:\n{managed_stderr}"
+            );
+        }
+        assert_row_softmax_published_nothing(&output);
+    }
 }
 
 #[test]

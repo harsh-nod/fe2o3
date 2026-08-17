@@ -15,7 +15,7 @@ const MAX_CANONICAL_MANIFEST_BYTES_V1: usize = 8 * 1024;
 const MAX_EVIDENCE_FILE_BYTES_V1: usize = 1024 * 1024;
 
 const CANONICAL_MANIFEST_SHA256_V1: &str =
-    "5b83efdc0780fa8aa316794371760f1be5ad593256f0e727024e0486bff01898";
+    "8a133c4d58294fe648b1e34aec5c08c0cf24860ea57f0eded84fd8132da377bf";
 const PORTABLE_MIR_SHA256_V1: &str =
     "cb10b6fac6475435e45a6f9166739c9e26bae17031105791abf3f440b004d4dd";
 const COMPILER_SEMANTICS_SHA256_V1: &str =
@@ -30,8 +30,8 @@ const SOLVER_EXECUTABLE_SHA256_V1: &str =
     "e583c4186a45e72411fa2cb2048401eed03f0f8e5f24694676a8f6271a50b765";
 
 const CANONICAL_MANIFEST_BYTES_V1: &[u8] = b"FE2O3-ROW-SOFTMAX-VERIFICATION-V1
-base-commit=0eae3bb633864bfd75aaa8ed76b8ae0b4e1014e1
-attributed-source=crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4
+lineage-source=e874da2083c2a1eb192048ea5f88a053c28d0ee2|crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4
+attributed-source=examples/row_softmax_v1/src/kernel.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4
 portable-mir=cb10b6fac6475435e45a6f9166739c9e26bae17031105791abf3f440b004d4dd
 compiler-semantics=3132d86d229a3977ed9c5283c241c4f6c85aff23c1d177fb0d23c0743279f0a4
 compiler-profile=fe2o3.manifest-derived-scalar-slice.v1|rustc-1.96.0-nightly|55e86c996809902e8bbad512cfb4d2c18be446d9|llvm-22.1.2
@@ -39,17 +39,17 @@ numerical-policy=examples/row_softmax_v1/src/numerical_contract.rs|9450|367b11f4
 proof=examples/row_softmax_v1/verus/row_softmax_v1.rs|12966|cacf81e02eb071cc29b1124811e911097fd62e7d29556dda8380418a631f5db5
 kernel-ir=fe2o3::row_softmax_v1;fixed-row-64;wg64;cov6|1e1b14c6842ffd09103eb55eb39b1bcae9c0da81597fed6186767562337230e6
 llvm-body=d48d3320c286c6da2253a104386089e389648f4260f2e7efda21269fef951c2c
-target=gfx942:xnack-|row-elements=64|activity=unmasked-all-64|worker=lane0-only-three-loops-zero-barriers
+target=gfx942:xnack-|row-elements=64|input-elements=64|output-elements=64|activity=unmasked-all-64|worker=lane0-only-three-loops-zero-barriers
 verus=0.2026.08.02.b677dd5|ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd
 solver-z3=e583c4186a45e72411fa2cb2048401eed03f0f8e5f24694676a8f6271a50b765
 verus-closure=examples/row_softmax_v1/verus/VERUS_CLOSURE_MANIFEST|591|d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019
 trust-vocabulary=examples/row_softmax_v1/verus/VERUS_TRUST_VOCABULARY|6572|54457b1030c88f7598a0a948563a0abd551a431e0f97b7ff33242f56f194ad7d
-boundary=inert;exp-uninterpreted;no-ocml-ieee-bound;no-compiler-origin;no-source-machine-refinement;no-execution-authority
+boundary=inert;exact-input-output-lengths-are-authenticated-preconditions-not-observed-runtime-facts;exp-uninterpreted;no-ocml-ieee-bound;no-compiler-origin;no-source-machine-refinement;no-execution-authority
 ";
 
 const EVIDENCE_SPECS_V1: [EvidenceSpecV1; 5] = [
     EvidenceSpecV1 {
-        path: "crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs",
+        path: "examples/row_softmax_v1/src/kernel.rs",
         byte_len: 1_289,
         sha256: "c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4",
     },
@@ -175,6 +175,26 @@ impl AuthenticatedRowSoftmaxVerificationCertificateV1 {
 
     pub const fn row_elements(&self) -> u32 {
         64
+    }
+
+    /// Exact input length authenticated as a precondition by this certificate.
+    pub const fn required_input_elements(&self) -> u32 {
+        64
+    }
+
+    /// Exact output length authenticated as a precondition by this certificate.
+    pub const fn required_output_elements(&self) -> u32 {
+        64
+    }
+
+    /// The canonical manifest includes both exact memory-length preconditions.
+    pub const fn authenticates_exact_memory_preconditions(&self) -> bool {
+        true
+    }
+
+    /// Authentication does not observe the slices supplied to a runtime launch.
+    pub const fn proves_runtime_memory_preconditions(&self) -> bool {
+        false
     }
 
     pub const fn compiler_profile(&self) -> &'static str {
@@ -391,9 +411,7 @@ fn hex_nibble(value: u8) -> u8 {
 mod tests {
     use super::*;
 
-    const SOURCE: &[u8] = include_bytes!(
-        "../../rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs"
-    );
+    const SOURCE: &[u8] = include_bytes!("../../../examples/row_softmax_v1/src/kernel.rs");
     const NUMERICAL_POLICY: &[u8] =
         include_bytes!("../../../examples/row_softmax_v1/src/numerical_contract.rs");
     const PROOF: &[u8] = include_bytes!("../../../examples/row_softmax_v1/verus/row_softmax_v1.rs");
@@ -430,10 +448,14 @@ mod tests {
         assert_eq!(first.identity(), second.identity());
         assert_eq!(
             first.identity().as_bytes(),
-            &pinned_sha256("4af43f4a2c5c66ee7d5a9f549902d481268a8dabd0200bf93908ecad34a4622b")
+            &pinned_sha256("47dd165ad5dc3afe8469f96d485a78e21599829daa86ead1b06aa69b2577f2dc")
         );
         assert_eq!(first.target(), "gfx942:xnack-");
         assert_eq!(first.row_elements(), 64);
+        assert_eq!(first.required_input_elements(), 64);
+        assert_eq!(first.required_output_elements(), 64);
+        assert!(first.authenticates_exact_memory_preconditions());
+        assert!(!first.proves_runtime_memory_preconditions());
         assert!(!first.authenticates_compiler_origin());
         assert!(!first.proves_ocml_or_ieee_error_bound());
         assert!(!first.proves_source_to_machine_refinement());

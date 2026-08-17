@@ -68,6 +68,8 @@ const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.compiler-semanti
 const CARGO_METADATA_OBSERVATION_DOMAIN_V1: &[u8] =
     b"fe2o3.row-softmax.cargo-metadata-observation.v1";
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+#[cfg(feature = "row-softmax-metadata-mutation-test-only")]
+const CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1: &str = "FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
@@ -1038,7 +1040,7 @@ fn require_managed_build_authority(
     attempt: fe2o3_artifact_transaction::BuildAttempt,
     metadata: &CargoMetadataBuildObservationV1,
 ) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
-    let observed = decode_lower_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)
+    let observed = observed_metadata_transcript_for_managed_authority()
         .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
     let compiler_closure =
         require_nonzero_lower_sha256_environment(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1)
@@ -1053,6 +1055,38 @@ fn require_managed_build_authority(
         observed_invocation,
         broker_executable,
     )
+}
+
+fn observed_metadata_transcript_for_managed_authority() -> Result<[u8; 32], String> {
+    let genuine = decode_lower_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
+    #[cfg(feature = "row-softmax-metadata-mutation-test-only")]
+    {
+        apply_metadata_mutation_test_only(
+            genuine,
+            std::env::var_os(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1).as_deref(),
+        )
+    }
+    #[cfg(not(feature = "row-softmax-metadata-mutation-test-only"))]
+    {
+        Ok(genuine)
+    }
+}
+
+#[cfg(feature = "row-softmax-metadata-mutation-test-only")]
+fn apply_metadata_mutation_test_only(
+    genuine: [u8; 32],
+    mutation: Option<&OsStr>,
+) -> Result<[u8; 32], String> {
+    match mutation {
+        None => Ok(genuine),
+        Some(value) if value == OsStr::new("omit") => Err(format!(
+            "managed wrapper omitted {CARGO_METADATA_BUILD_OBSERVATION_ENV_V2}"
+        )),
+        Some(value) if value == OsStr::new("substitute") => Ok([0x01; 32]),
+        Some(value) => Err(format!(
+            "managed wrapper supplied invalid test-only metadata mutation {value:?}"
+        )),
+    }
 }
 
 fn admit_managed_build_authority(
@@ -2653,6 +2687,9 @@ mod tests {
             <[u8; 32]>::from(oracle.finalize())
         );
 
+        let missing_tail = argv[..argv.len() - 4].to_vec();
+        assert!(validate_managed_wrapper_effective_rustc_argv(&missing_tail).is_err());
+
         let mut malformed_generation = argv.clone();
         malformed_generation[argv.len() - 2] =
             OsString::from("fe2o3_codegen_generation=\"ABCDEF\"");
@@ -2702,6 +2739,15 @@ mod tests {
             )
             .is_ok()
         );
+        let metadata_mismatch = admit_managed_build_authority(
+            attempt, &metadata, [0x99; 32], [0x77; 32], [0x44; 32], [0x66; 32],
+        )
+        .expect_err("substituted metadata transcript must fail");
+        assert!(matches!(
+            metadata_mismatch,
+            CollectedRowSoftmaxErrorV1::CompilerSemantics { detail }
+                if detail.contains("Cargo metadata transcript does not match")
+        ));
         let mismatch = admit_managed_build_authority(
             attempt, &metadata, transcript, [0x77; 32], [0x55; 32], [0x66; 32],
         )
@@ -2711,6 +2757,26 @@ mod tests {
             CollectedRowSoftmaxErrorV1::CompilerSemantics { detail }
                 if detail.contains("effective rustc argv does not match build attempt invocation")
         ));
+    }
+
+    #[cfg(feature = "row-softmax-metadata-mutation-test-only")]
+    #[test]
+    fn metadata_mutation_is_deferred_until_managed_authority_admission() {
+        let genuine = [0x5a; 32];
+        assert_eq!(
+            apply_metadata_mutation_test_only(genuine, None),
+            Ok(genuine)
+        );
+        assert_eq!(
+            apply_metadata_mutation_test_only(genuine, Some(OsStr::new("substitute"))),
+            Ok([0x01; 32])
+        );
+        assert_eq!(
+            apply_metadata_mutation_test_only(genuine, Some(OsStr::new("omit"))),
+            Err(format!(
+                "managed wrapper omitted {CARGO_METADATA_BUILD_OBSERVATION_ENV_V2}"
+            ))
+        );
     }
 
     #[test]
