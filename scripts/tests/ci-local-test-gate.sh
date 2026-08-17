@@ -363,6 +363,31 @@ assert_step_count rustc-codegen-lib-tests 1 \
 
 STEP_NAMES=()
 STEP_COMMANDS=()
+load_example_packages() {
+  local destination_name="$2"
+  local -n destination="${destination_name}"
+  destination=(fe2o3-add-inplace)
+}
+run_rocm_compile
+assert_equals \
+  'cargo clean -p fe2o3-add-inplace' \
+  "$(step_command rocm-clean-fe2o3-add-inplace)" \
+  'ROCm compile did not invalidate the example host fingerprint'
+assert_equals \
+  'cargo run --locked -p cargo-fe2o3 -- build -p fe2o3-add-inplace' \
+  "$(step_command rocm-build-fe2o3-add-inplace)" \
+  'ROCm compile example build command changed'
+assert_equals \
+  'cargo run --quiet --locked -p cargo-fe2o3 -- examples check-artifacts fe2o3-add-inplace' \
+  "$(step_command rocm-artifacts-fe2o3-add-inplace)" \
+  'ROCm compile example artifact check changed'
+assert_equals \
+  'rocm-clean-fe2o3-add-inplace rocm-build-fe2o3-add-inplace rocm-artifacts-fe2o3-add-inplace' \
+  "$(printf '%s\n' "${STEP_NAMES[@]}" | rg '^rocm-(clean|build|artifacts)-fe2o3-add-inplace$' | paste -sd ' ' -)" \
+  'ROCm compile did not clean, build, and inspect the example in order'
+
+STEP_NAMES=()
+STEP_COMMANDS=()
 main parity-evidence
 assert_equals \
   "bash scripts/tests/parity-row-evidence.sh" \

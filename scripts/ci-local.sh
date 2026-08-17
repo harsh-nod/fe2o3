@@ -395,6 +395,11 @@ run_rocm_compile() {
 
   local package
   for package in "${example_packages[@]}"; do
+    # cargo-fe2o3 rotates its device-artifact generation when codegen
+    # semantics change. Rebuild each example so Cargo cannot reuse a host
+    # package fingerprint that predates the new generation.
+    run_step "rocm-clean-${package}" \
+      cargo clean -p "${package}"
     run_step "rocm-build-${package}" \
       cargo run --locked -p cargo-fe2o3 -- build -p "${package}"
     run_step "rocm-artifacts-${package}" \
