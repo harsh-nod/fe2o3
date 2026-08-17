@@ -981,6 +981,13 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     "legacy payload-free retag MIR is not lowerable because its retag kind and place are absent",
                 ));
             }
+            MirStatementKind::Assume => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedStatement,
+                    location,
+                    "rustc assume MIR is semantically imported but direct Kernel IR lowering remains disabled",
+                ));
+            }
             MirStatementKind::CopyNonOverlapping => {
                 return Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedStatement,
@@ -3140,7 +3147,10 @@ fn lower_constant(constant: &MirConstant) -> Option<Constant> {
         MirConstant::USize(value) => Some(Constant::Index(*value)),
         MirConstant::F32Bits(value) => Some(Constant::F32Bits(*value)),
         MirConstant::F64Bits(value) => Some(Constant::F64Bits(*value)),
-        MirConstant::ZeroSized | MirConstant::Unevaluated => None,
+        MirConstant::ZeroSized
+        | MirConstant::StructuredValue(_)
+        | MirConstant::ImportFailed(_)
+        | MirConstant::Unevaluated => None,
     }
 }
 

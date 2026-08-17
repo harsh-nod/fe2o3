@@ -20,13 +20,15 @@ use reserved_fe2o3_symbols::{
     parse_device_ffi_effects_v1, parse_device_ffi_physical_abi_v1,
     validate_device_ffi_effect_abi_v1,
 };
-use rustc_abi::{CanonAbi, Reg, RegKind};
+use rustc_abi::{CanonAbi, Reg, RegKind, Size};
 use rustc_hir::def_id::LOCAL_CRATE;
+use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::{
     AggregateKind, BasicBlock, BinOp, Body, BorrowKind, CastKind, ConstOperand, ConstValue,
     FakeBorrowKind, Local, MutBorrowKind, NonDivergingIntrinsic, Operand, Place, ProjectionElem,
-    Rvalue, SourceInfo, StatementKind, TerminatorKind, UnOp,
+    RawPtrKind, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnOp,
 };
+use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{
     self, AliasTyKind, ConstKind, FloatTy, GenericArgKind, Instance, InstanceKind, IntTy,
     Mutability, ReifyReason, Ty, TyCtxt, TyKind, TypingEnv, UintTy, ValTreeKind,
@@ -44,6 +46,7 @@ const PORTABLE_MIR_SEMANTIC_DOMAIN_V2: &[u8] = b"fe2o3.portable-mir-semantic.v2\
 const PORTABLE_MIR_SEMANTIC_DOMAIN_V3: &[u8] = b"fe2o3.portable-mir-semantic.v3\0";
 #[allow(dead_code)]
 const MAX_PORTABLE_MIR_TYPE_DEPTH_V2: usize = 64;
+const MAX_PORTABLE_MIR_CONSTANT_BYTES_V3: usize = 1 << 20;
 
 /// Stable policy inputs for one kernel's portable executable-MIR identity.
 ///
@@ -1131,7 +1134,9 @@ pub enum MirStatementKind {
     StorageLive,
     StorageDead,
     SetDiscriminant,
+    #[allow(dead_code)]
     Intrinsic,
+    Assume,
     CopyNonOverlapping,
     Retag,
     Coverage,
@@ -1194,6 +1199,8 @@ pub enum MirConstant {
     F32Bits(u32),
     F64Bits(u64),
     ZeroSized,
+    StructuredValue(Vec<u8>),
+    ImportFailed(String),
     Unevaluated,
 }
 
@@ -1435,7 +1442,9 @@ pub enum MirRvalueKind {
     #[allow(dead_code)]
     Ref,
     Reference(MirBorrowKind),
+    #[allow(dead_code)]
     RawPointer,
+    SemanticRawPointer(MirRawPointerKind),
     Cast,
     SemanticCast(MirCastKind),
     Binary(MirBinaryOp),
@@ -1449,6 +1458,13 @@ pub enum MirRvalueKind {
     /// A rustc-authenticated construction of a payload-free enum variant.
     FieldlessEnumVariant(i64),
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirRawPointerKind {
+    Mutable,
+    Const,
+    FakeForPointerMetadata,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3616,6 +3632,7 @@ fn validate_portable_statement_v3(
         MirStatementKind::Assign
         | MirStatementKind::StorageLive
         | MirStatementKind::StorageDead
+        | MirStatementKind::Assume
         | MirStatementKind::CopyNonOverlapping
         | MirStatementKind::Coverage
         | MirStatementKind::Nop => None,
@@ -3629,6 +3646,16 @@ fn validate_portable_statement_v3(
         return Err(portable_v3_incomplete(
             function,
             "assignment lacks its destination or rvalue",
+        ));
+    }
+    if statement.kind == MirStatementKind::Assume
+        && (statement.destination.is_some()
+            || statement.operands.len() != 1
+            || statement.rvalue.is_some())
+    {
+        return Err(portable_v3_incomplete(
+            function,
+            "assume statement does not carry exactly one condition operand",
         ));
     }
     if let Some(destination) = &statement.destination {
@@ -3683,14 +3710,32 @@ fn validate_portable_operand_v3(
         MirOperandRef::Place(place) => validate_portable_place_v3(function, place),
         MirOperandRef::Constant { ty, literal, value } => {
             validate_portable_type_v3(function, ty, 0)?;
-            if *literal == MirConstant::Unevaluated {
-                return Err(portable_v3_incomplete(
-                    function,
-                    format!(
-                        "constant `{value}` of type `{}` uses the lossy unevaluated compatibility sentinel",
-                        ty.rust
-                    ),
-                ));
+            match literal {
+                MirConstant::Unevaluated => {
+                    return Err(portable_v3_incomplete(
+                        function,
+                        format!(
+                            "constant `{value}` of type `{}` uses the lossy unevaluated compatibility sentinel",
+                            ty.rust
+                        ),
+                    ));
+                }
+                MirConstant::StructuredValue(identity)
+                    if identity.is_empty()
+                        || identity.len() > MAX_PORTABLE_MIR_CONSTANT_BYTES_V3 =>
+                {
+                    return Err(portable_v3_incomplete(
+                        function,
+                        "structured constant identity is empty or exceeds its byte bound",
+                    ));
+                }
+                MirConstant::ImportFailed(detail) => {
+                    return Err(portable_v3_incomplete(
+                        function,
+                        format!("structured constant import failed: {detail}"),
+                    ));
+                }
+                _ => {}
             }
             Ok(())
         }
@@ -3719,6 +3764,7 @@ fn validate_portable_rvalue_v3(
         }
         MirRvalueKind::Use
         | MirRvalueKind::Reference(_)
+        | MirRvalueKind::SemanticRawPointer(_)
         | MirRvalueKind::Binary(_)
         | MirRvalueKind::Unary(_)
         | MirRvalueKind::Discriminant => None,
@@ -4336,6 +4382,10 @@ impl PortableMirSemanticEncoderV2 {
             MirStatementKind::StorageDead => 2,
             MirStatementKind::SetDiscriminant => 3,
             MirStatementKind::Intrinsic => 4,
+            MirStatementKind::Assume => match self.version {
+                PortableMirSemanticVersion::V2 => 4,
+                PortableMirSemanticVersion::V3 => 10,
+            },
             MirStatementKind::CopyNonOverlapping => 5,
             MirStatementKind::Retag => 6,
             MirStatementKind::Coverage => 7,
@@ -4343,8 +4393,15 @@ impl PortableMirSemanticEncoderV2 {
             MirStatementKind::Other => 9,
         });
         self.optional_place(statement.destination.as_ref())?;
-        self.len(statement.operands.len())?;
-        for operand in &statement.operands {
+        let operands = if self.version == PortableMirSemanticVersion::V2
+            && statement.kind == MirStatementKind::Assume
+        {
+            &[][..]
+        } else {
+            statement.operands.as_slice()
+        };
+        self.len(operands.len())?;
+        for operand in operands {
             self.operand(operand)?;
         }
         match statement.rvalue {
@@ -4431,13 +4488,13 @@ impl PortableMirSemanticEncoderV2 {
             MirOperandRef::Constant { ty, literal, .. } => {
                 self.tag(1);
                 self.imported_type(ty, 0)?;
-                self.constant(literal);
+                self.constant(literal)?;
             }
         }
         Ok(())
     }
 
-    fn constant(&mut self, constant: &MirConstant) {
+    fn constant(&mut self, constant: &MirConstant) -> Result<(), MirImportError> {
         match constant {
             MirConstant::Bool(value) => {
                 self.tag(0);
@@ -4482,8 +4539,24 @@ impl PortableMirSemanticEncoderV2 {
                 PortableMirSemanticVersion::V2 => 8,
                 PortableMirSemanticVersion::V3 => 9,
             }),
+            MirConstant::StructuredValue(identity) => match self.version {
+                PortableMirSemanticVersion::V2 => self.tag(8),
+                PortableMirSemanticVersion::V3 => {
+                    self.tag(11);
+                    self.bytes(identity)?;
+                }
+            },
+            MirConstant::ImportFailed(detail) => match self.version {
+                PortableMirSemanticVersion::V2 => self.tag(8),
+                PortableMirSemanticVersion::V3 => {
+                    return Err(MirImportError::new(format!(
+                        "portable MIR V3 constant import failed: {detail}"
+                    )));
+                }
+            },
             MirConstant::Unevaluated => self.tag(8),
         }
+        Ok(())
     }
 
     fn rvalue(&mut self, rvalue: MirRvalueKind) -> Result<(), MirImportError> {
@@ -4506,6 +4579,17 @@ impl PortableMirSemanticEncoderV2 {
                 }
             },
             MirRvalueKind::RawPointer => self.tag(3),
+            MirRvalueKind::SemanticRawPointer(kind) => match self.version {
+                PortableMirSemanticVersion::V2 => self.tag(3),
+                PortableMirSemanticVersion::V3 => {
+                    self.tag(14);
+                    self.tag(match kind {
+                        MirRawPointerKind::Mutable => 0,
+                        MirRawPointerKind::Const => 1,
+                        MirRawPointerKind::FakeForPointerMetadata => 2,
+                    });
+                }
+            },
             MirRvalueKind::Cast => self.tag(4),
             MirRvalueKind::SemanticCast(kind) => match self.version {
                 PortableMirSemanticVersion::V2 => self.tag(4),
@@ -4827,6 +4911,7 @@ impl MirStatement {
             | MirStatementKind::StorageDead
             | MirStatementKind::SetDiscriminant
             | MirStatementKind::Intrinsic
+            | MirStatementKind::Assume
             | MirStatementKind::CopyNonOverlapping
             | MirStatementKind::Retag
             | MirStatementKind::Coverage
@@ -4884,6 +4969,7 @@ impl MirStatementKind {
             Self::StorageDead => "storage_dead",
             Self::SetDiscriminant => "set_discriminant",
             Self::Intrinsic => "intrinsic",
+            Self::Assume => "assume",
             Self::CopyNonOverlapping => "copy_nonoverlapping",
             Self::Retag => "retag",
             Self::Coverage => "coverage",
@@ -5323,8 +5409,8 @@ fn statement_kind(kind: &StatementKind<'_>) -> MirStatementKind {
         StatementKind::StorageDead(_) => MirStatementKind::StorageDead,
         StatementKind::SetDiscriminant { .. } => MirStatementKind::SetDiscriminant,
         StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+            NonDivergingIntrinsic::Assume(_) => MirStatementKind::Assume,
             NonDivergingIntrinsic::CopyNonOverlapping(_) => MirStatementKind::CopyNonOverlapping,
-            _ => MirStatementKind::Intrinsic,
         },
         StatementKind::Retag(_, _) => MirStatementKind::Retag,
         StatementKind::Coverage(_) => MirStatementKind::Coverage,
@@ -5366,12 +5452,14 @@ fn statement_operands<'tcx>(
             rvalue_operands(tcx, instance, body, rvalue)
         }
         StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+            NonDivergingIntrinsic::Assume(condition) => {
+                vec![import_operand(tcx, instance, body, condition)]
+            }
             NonDivergingIntrinsic::CopyNonOverlapping(copy) => vec![
                 import_operand(tcx, instance, body, &copy.src),
                 import_operand(tcx, instance, body, &copy.dst),
                 import_operand(tcx, instance, body, &copy.count),
             ],
-            _ => Vec::new(),
         },
         _ => Vec::new(),
     }
@@ -5477,7 +5565,9 @@ fn import_rvalue_kind<'tcx>(tcx: TyCtxt<'tcx>, rvalue: &Rvalue<'tcx>) -> MirRval
         Rvalue::Ref(_, borrow_kind, _) => {
             MirRvalueKind::Reference(import_borrow_kind(*borrow_kind))
         }
-        Rvalue::RawPtr(_, _) => MirRvalueKind::RawPointer,
+        Rvalue::RawPtr(kind, _) => {
+            MirRvalueKind::SemanticRawPointer(import_raw_pointer_kind(*kind))
+        }
         Rvalue::Cast(kind, _, _) => {
             import_cast_kind(*kind).map_or(MirRvalueKind::Cast, MirRvalueKind::SemanticCast)
         }
@@ -5499,6 +5589,14 @@ fn import_rvalue_kind<'tcx>(tcx: TyCtxt<'tcx>, rvalue: &Rvalue<'tcx>) -> MirRval
             )
         }
         _ => MirRvalueKind::Other,
+    }
+}
+
+fn import_raw_pointer_kind(kind: RawPtrKind) -> MirRawPointerKind {
+    match kind {
+        RawPtrKind::Mut => MirRawPointerKind::Mutable,
+        RawPtrKind::Const => MirRawPointerKind::Const,
+        RawPtrKind::FakeForPtrMetadata => MirRawPointerKind::FakeForPointerMetadata,
     }
 }
 
@@ -5581,12 +5679,16 @@ fn import_operand<'tcx>(
 
     MirOperandRef::Constant {
         ty: import_type(tcx, instance, constant.const_.ty()),
-        literal: import_constant(tcx, constant),
+        literal: import_constant(tcx, instance, constant),
         value: constant_value_label(tcx, constant),
     }
 }
 
-fn import_constant<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> MirConstant {
+fn import_constant<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    constant: &ConstOperand<'tcx>,
+) -> MirConstant {
     if matches!(
         constant.const_,
         rustc_middle::mir::Const::Val(ConstValue::ZeroSized, _)
@@ -5594,55 +5696,132 @@ fn import_constant<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Mi
         return MirConstant::ZeroSized;
     }
     let typing_env = TypingEnv::fully_monomorphized();
-    match constant.const_.ty().kind() {
+    let scalar = match constant.const_.ty().kind() {
         TyKind::Uint(UintTy::Usize) => constant
             .const_
             .try_eval_target_usize(tcx, typing_env)
-            .map(MirConstant::USize)
-            .unwrap_or(MirConstant::Unevaluated),
+            .map(MirConstant::USize),
         TyKind::Int(IntTy::Isize) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
-            .map(|value| MirConstant::ISize(value.to_target_isize(tcx)))
-            .unwrap_or(MirConstant::Unevaluated),
+            .map(|value| MirConstant::ISize(value.to_target_isize(tcx))),
         TyKind::Bool => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
             .and_then(|value| value.try_to_bool().ok())
-            .map(MirConstant::Bool)
-            .unwrap_or(MirConstant::Unevaluated),
+            .map(MirConstant::Bool),
         TyKind::Int(IntTy::I32) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
-            .map(|value| MirConstant::I32(value.to_i32()))
-            .unwrap_or(MirConstant::Unevaluated),
+            .map(|value| MirConstant::I32(value.to_i32())),
         TyKind::Uint(UintTy::U32) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
-            .map(|value| MirConstant::U32(value.to_u32()))
-            .unwrap_or(MirConstant::Unevaluated),
+            .map(|value| MirConstant::U32(value.to_u32())),
         TyKind::Int(IntTy::I64) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
-            .map(|value| MirConstant::I64(value.to_i64()))
-            .unwrap_or(MirConstant::Unevaluated),
+            .map(|value| MirConstant::I64(value.to_i64())),
         TyKind::Uint(UintTy::U64) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
-            .map(|value| MirConstant::U64(value.to_u64()))
-            .unwrap_or(MirConstant::Unevaluated),
+            .map(|value| MirConstant::U64(value.to_u64())),
         TyKind::Float(FloatTy::F32) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
-            .map(|value| MirConstant::F32Bits(value.to_u32()))
-            .unwrap_or(MirConstant::Unevaluated),
+            .map(|value| MirConstant::F32Bits(value.to_u32())),
         TyKind::Float(FloatTy::F64) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
-            .map(|value| MirConstant::F64Bits(value.to_u64()))
-            .unwrap_or(MirConstant::Unevaluated),
-        _ => MirConstant::Unevaluated,
+            .map(|value| MirConstant::F64Bits(value.to_u64())),
+        _ => None,
+    };
+    if let Some(scalar) = scalar {
+        return scalar;
     }
+    match import_structured_constant_value(tcx, instance, constant) {
+        Ok(identity) => MirConstant::StructuredValue(identity),
+        Err(detail) => MirConstant::ImportFailed(detail),
+    }
+}
+
+fn import_structured_constant_value<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    constant: &ConstOperand<'tcx>,
+) -> Result<Vec<u8>, String> {
+    let (ty, type_evidence) =
+        MirSemanticTypeEvidence::from_body_type(tcx, instance, constant.const_.ty());
+    let MirSemanticTypeEvidence::Structured(type_identity) = type_evidence else {
+        return Err("constant type has no structured semantic identity".to_owned());
+    };
+    let layout_cx = LayoutCx::new(tcx, TypingEnv::fully_monomorphized());
+    let layout = layout_cx
+        .layout_of(ty)
+        .map_err(|error| format!("constant type layout failed: {error}"))?;
+    let size = layout.size.bytes_usize();
+    if size > MAX_PORTABLE_MIR_CONSTANT_BYTES_V3 / 2 {
+        return Err("constant value exceeds the V3 structured byte bound".to_owned());
+    }
+    let value = constant
+        .const_
+        .eval(tcx, TypingEnv::fully_monomorphized(), constant.span)
+        .map_err(|error| format!("constant evaluation failed: {error:?}"))?;
+
+    let mut encoder = SemanticInstanceEncoder::default();
+    encoder.tag(0);
+    encoder.usize(type_identity.0.len())?;
+    encoder.bytes.extend_from_slice(&type_identity.0);
+    encoder.usize(size)?;
+    match value {
+        ConstValue::ZeroSized => encoder.tag(0),
+        ConstValue::Scalar(value) => {
+            encoder.tag(1);
+            let bits = value
+                .try_to_scalar_int()
+                .map_err(|_| "scalar constant carries pointer provenance".to_owned())?
+                .to_bits(layout.size);
+            encoder.u128(bits);
+        }
+        ConstValue::Slice { .. } => {
+            return Err("slice constant carries pointer provenance".to_owned());
+        }
+        ConstValue::Indirect { alloc_id, offset } => {
+            encoder.tag(2);
+            let GlobalAlloc::Memory(allocation) = tcx.global_alloc(alloc_id) else {
+                return Err("indirect constant does not use immutable memory".to_owned());
+            };
+            let allocation = allocation.inner();
+            let start = offset.bytes_usize();
+            let end = start
+                .checked_add(size)
+                .ok_or_else(|| "indirect constant range overflowed".to_owned())?;
+            if end > allocation.len() {
+                return Err("indirect constant range is outside its allocation".to_owned());
+            }
+            let pointer_width = tcx.data_layout.pointer_size().bytes_usize();
+            if allocation.provenance().ptrs().iter().any(|(at, _)| {
+                let pointer_start = at.bytes_usize();
+                let pointer_end = pointer_start.saturating_add(pointer_width);
+                pointer_start < end && pointer_end > start
+            }) {
+                return Err("indirect constant contains pointer provenance".to_owned());
+            }
+            let raw = allocation.inspect_with_uninit_and_ptr_outside_interpreter(start..end);
+            for (index, byte) in raw.iter().copied().enumerate() {
+                let initialized = allocation.init_mask().get(Size::from_bytes(start + index));
+                encoder.boolean(initialized);
+                if initialized {
+                    encoder.tag(byte);
+                }
+            }
+        }
+    }
+    let identity = encoder.finish();
+    if identity.len() > MAX_PORTABLE_MIR_CONSTANT_BYTES_V3 {
+        return Err("structured constant identity exceeds its V3 byte bound".to_owned());
+    }
+    Ok(identity)
 }
 
 fn constant_value_label<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> String {
@@ -6803,6 +6982,31 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
         portable_digest_v3_result(&unknown_constant, &environment)
             .expect_err("V3 rejects an unevaluated constant");
 
+        let mut structured_a = portable_semantic_module();
+        let MirOperandRef::Constant { literal, .. } =
+            &mut structured_a.functions[0].blocks[0].statements[0].operands[1]
+        else {
+            panic!("fixture constant operand");
+        };
+        *literal = MirConstant::StructuredValue(vec![0xa1, 0x01]);
+        let mut structured_b = structured_a.clone();
+        let MirOperandRef::Constant { literal, .. } =
+            &mut structured_b.functions[0].blocks[0].statements[0].operands[1]
+        else {
+            panic!("fixture constant operand");
+        };
+        *literal = MirConstant::StructuredValue(vec![0xa1, 0x02]);
+        assert_eq!(
+            portable_digest(&structured_a, &environment),
+            portable_digest(&structured_b, &environment),
+            "V2 retains its historical unevaluated aggregate encoding"
+        );
+        assert_ne!(
+            portable_digest_v3(&structured_a, &environment),
+            portable_digest_v3(&structured_b, &environment),
+            "V3 must bind structured aggregate constant values"
+        );
+
         let mut u64_one = portable_semantic_module();
         let MirOperandRef::Constant { ty, literal, .. } =
             &mut u64_one.functions[0].blocks[0].statements[0].operands[1]
@@ -6844,6 +7048,14 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
                 MirRvalueKind::SemanticCast(MirCastKind::IntToFloat),
             ),
             (
+                MirRvalueKind::SemanticRawPointer(MirRawPointerKind::Const),
+                MirRvalueKind::SemanticRawPointer(MirRawPointerKind::Mutable),
+            ),
+            (
+                MirRvalueKind::SemanticRawPointer(MirRawPointerKind::Mutable),
+                MirRvalueKind::SemanticRawPointer(MirRawPointerKind::FakeForPointerMetadata),
+            ),
+            (
                 MirRvalueKind::AdtAggregate {
                     variant: 0,
                     active_field: None,
@@ -6876,6 +7088,46 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
                 "V3 must bind the complete rvalue form"
             );
         }
+
+        let mut assume_true = portable_semantic_module();
+        let statement = &mut assume_true.functions[0].blocks[0].statements[0];
+        statement.kind = MirStatementKind::Assume;
+        statement.destination = None;
+        statement.operands = vec![MirOperandRef::Constant {
+            ty: MirImportedType {
+                kind: MirType::I1,
+                rust: "bool".to_owned(),
+                shape: MirTypeShape::Bool,
+                semantic_identity: MirSemanticTypeEvidence::synthetic(46),
+            },
+            literal: MirConstant::Bool(true),
+            value: "const true".to_owned(),
+        }];
+        statement.rvalue = None;
+        statement.semantic_rvalue_type = None;
+        let mut assume_false = assume_true.clone();
+        let MirOperandRef::Constant { literal, .. } =
+            &mut assume_false.functions[0].blocks[0].statements[0].operands[0]
+        else {
+            panic!("assume condition operand");
+        };
+        *literal = MirConstant::Bool(false);
+        assert_eq!(
+            portable_digest(&assume_true, &environment),
+            portable_digest(&assume_false, &environment),
+            "V2 retains its historical payload-free intrinsic encoding"
+        );
+        assert_ne!(
+            portable_digest_v3(&assume_true, &environment),
+            portable_digest_v3(&assume_false, &environment),
+            "V3 must bind the assume condition"
+        );
+
+        assume_false.functions[0].blocks[0].statements[0]
+            .operands
+            .clear();
+        portable_digest_v3_result(&assume_false, &environment)
+            .expect_err("V3 rejects an assume statement without its condition");
     }
 
     #[test]
