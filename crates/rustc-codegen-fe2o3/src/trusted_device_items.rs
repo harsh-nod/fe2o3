@@ -110,12 +110,27 @@ impl ProviderSemanticDefinitionRoleV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReviewedProviderSemanticProfileV1 {
+    WorkgroupFlashMoeV4,
+    RowSoftmaxV2,
+    MatrixV3,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProviderSemanticDefinitionExpectationV1<'a> {
+    pub(crate) definition_role: ProviderSemanticDefinitionRoleV1,
+    pub(crate) canonical_role: &'a str,
+    pub(crate) canonical_definition_path: &'a str,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewedProviderSemanticDefinitionV1 {
     /// These rustc values prove same-session crate membership only. They are
     /// intentionally excluded from `durable_semantic_identity` because Cargo
     /// can change them after an unrelated transitive feature change.
     pub(crate) provider: CompilerProviderObservationV1,
+    profile: ReviewedProviderSemanticProfileV1,
     pub(crate) canonical_definition_path: String,
     pub(crate) structural_local_definition_component: [u8; 32],
     pub(crate) cargo_metadata_build_observation: [u8; 32],
@@ -173,6 +188,22 @@ impl ReviewedProviderSemanticDefinitionV1 {
         hash_source_identity_field(&mut hasher, &self.definition_source_identity);
         Ok(hasher.finalize().into())
     }
+
+    #[allow(
+        dead_code,
+        reason = "called by the staged row-softmax V2 and matrix V3 collectors"
+    )]
+    pub(crate) fn durable_semantic_identity_for_profile(
+        &self,
+        expected_profile: ReviewedProviderSemanticProfileV1,
+        definition_role: ProviderSemanticDefinitionRoleV1,
+        canonical_role: &str,
+    ) -> Result<[u8; 32], String> {
+        if self.profile != expected_profile {
+            return Err("reviewed provider semantic profile was substituted".to_owned());
+        }
+        self.durable_semantic_identity(definition_role, canonical_role)
+    }
 }
 
 #[allow(
@@ -181,31 +212,49 @@ impl ReviewedProviderSemanticDefinitionV1 {
 )]
 pub(crate) fn validate_ordered_provider_semantic_definitions_v1(
     definitions: &[ReviewedProviderSemanticDefinitionV1],
-    expected_canonical_paths: &[&str],
-) -> Result<CompilerProviderObservationV1, String> {
-    if definitions.is_empty() || definitions.len() != expected_canonical_paths.len() {
+    expectations: &[ProviderSemanticDefinitionExpectationV1<'_>],
+) -> Result<(CompilerProviderObservationV1, Vec<[u8; 32]>), String> {
+    if definitions.is_empty() || definitions.len() != expectations.len() {
         return Err("reviewed provider definition sequence has the wrong length".to_owned());
     }
 
     let mut expected_paths = BTreeSet::new();
+    let mut expected_roles = BTreeSet::new();
     let mut observed_paths = BTreeSet::new();
     let provider = definitions[0].provider.clone();
-    for (definition, expected_path) in definitions.iter().zip(expected_canonical_paths) {
+    let profile = definitions[0].profile;
+    let mut identities = Vec::with_capacity(definitions.len());
+    for (definition, expectation) in definitions.iter().zip(expectations) {
         definition.validate()?;
-        if expected_path.is_empty() || !expected_paths.insert(*expected_path) {
+        if expectation.canonical_definition_path.is_empty()
+            || !expected_paths.insert(expectation.canonical_definition_path)
+        {
             return Err("reviewed provider definition sequence has duplicate expectations".into());
+        }
+        if expectation.canonical_role.is_empty()
+            || !expected_roles.insert(expectation.canonical_role)
+        {
+            return Err("reviewed provider definition sequence has duplicate roles".into());
         }
         if !observed_paths.insert(definition.canonical_definition_path.as_str()) {
             return Err("reviewed provider definition sequence has duplicate definitions".into());
         }
-        if definition.canonical_definition_path != *expected_path {
+        if definition.canonical_definition_path != expectation.canonical_definition_path {
             return Err("reviewed provider definition sequence is reordered or substituted".into());
         }
         if definition.provider != provider {
             return Err("reviewed provider changed within the compiler session".into());
         }
+        if definition.profile != profile {
+            return Err("reviewed provider semantic profile changed within the sequence".into());
+        }
+        identities.push(definition.durable_semantic_identity_for_profile(
+            profile,
+            expectation.definition_role,
+            expectation.canonical_role,
+        )?);
     }
-    Ok(provider)
+    Ok((provider, identities))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -884,6 +933,7 @@ pub(crate) fn reviewed_provider_semantic_definition_v1(
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         &WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE,
+        ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
     )
 }
 
@@ -901,6 +951,7 @@ pub(crate) fn reviewed_row_softmax_provider_semantic_definition_v2(
         ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
         ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
         &ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_V2,
+        ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
     )
 }
 
@@ -918,6 +969,7 @@ pub(crate) fn reviewed_matrix_provider_semantic_definition_v3(
         MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
         MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
         &MATRIX_PROVIDER_SOURCE_CLOSURE_V3,
+        ReviewedProviderSemanticProfileV1::MatrixV3,
     )
 }
 
@@ -927,6 +979,7 @@ fn reviewed_provider_semantic_definition_with_profile_v1(
     definition_source_domain: &[u8],
     source_closure_domain: &[u8],
     source_closure_cache: &OnceLock<Result<[u8; 32], String>>,
+    profile: ReviewedProviderSemanticProfileV1,
 ) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
     let crate_num = provider_definition.krate;
     let crate_name = named_external_provider(tcx, crate_num)?;
@@ -953,6 +1006,7 @@ fn reviewed_provider_semantic_definition_with_profile_v1(
         structural_local_definition_component_v1(&structural_local_definition_path)?;
     Ok(ReviewedProviderSemanticDefinitionV1 {
         provider,
+        profile,
         canonical_definition_path,
         structural_local_definition_component,
         cargo_metadata_build_observation: decode_sha256_environment(
@@ -1368,14 +1422,91 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::{
         CompilerProviderObservationV1, HALF_MATH_DIAGNOSTIC_ITEMS,
-        ProviderSemanticDefinitionRoleV1, ReviewedProviderSemanticDefinitionV1,
-        TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation, TrustedDeviceItem,
-        canonical_compiler_definition_path, pinned_core_semantic_terminal_identity_v1,
-        structural_local_definition_component_v1,
+        MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
+        ProviderSemanticDefinitionExpectationV1, ProviderSemanticDefinitionRoleV1,
+        ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, ReviewedProviderSemanticDefinitionV1,
+        ReviewedProviderSemanticProfileV1, TrustedAmdGpuDiagnosticOperation,
+        TrustedAmdGpuInlineOperation, TrustedDeviceItem,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
+        pinned_core_semantic_terminal_identity_v1, reviewed_provider_source_closure_identity,
+        reviewed_provider_source_identity_from_path, structural_local_definition_component_v1,
+        validate_ordered_provider_semantic_definitions_v1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
+
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    struct ProviderPackageFixture {
+        root: PathBuf,
+    }
+
+    impl ProviderPackageFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "fe2o3-provider-profile-{}-{}",
+                std::process::id(),
+                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(root.join("src/nested")).unwrap();
+            fs::write(root.join("Cargo.toml"), b"[package]\nname='fixture'\n").unwrap();
+            fs::write(root.join("src/lib.rs"), b"pub mod nested;\n").unwrap();
+            fs::write(root.join("src/nested/mod.rs"), b"pub fn value() {}\n").unwrap();
+            Self { root }
+        }
+
+        fn source_root(&self) -> PathBuf {
+            self.root.join("src")
+        }
+
+        fn definition(&self) -> PathBuf {
+            self.source_root().join("lib.rs")
+        }
+    }
+
+    impl Drop for ProviderPackageFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn digest(hex: &str) -> [u8; 32] {
+        assert_eq!(hex.len(), 64);
+        let mut output = [0_u8; 32];
+        for (byte, pair) in output.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+            *byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        output
+    }
+
+    fn semantic_definition(
+        profile: ReviewedProviderSemanticProfileV1,
+        path: &str,
+        source_closure_identity: [u8; 32],
+        definition_source_identity: [u8; 32],
+    ) -> ReviewedProviderSemanticDefinitionV1 {
+        ReviewedProviderSemanticDefinitionV1 {
+            provider: CompilerProviderObservationV1 {
+                crate_name: "fe2o3_device".into(),
+                stable_crate_id: 7,
+                crate_hash_observation: [3; 16],
+            },
+            profile,
+            canonical_definition_path: format!("fe2o3_device::{path}"),
+            structural_local_definition_component: structural_local_definition_component_v1(path)
+                .unwrap(),
+            cargo_metadata_build_observation: [4; 32],
+            source_closure_identity,
+            definition_source_identity,
+        }
+    }
 
     #[test]
     fn provider_semantic_identity_excludes_volatile_compilation_disambiguators() {
@@ -1392,6 +1523,7 @@ mod tests {
                 stable_crate_id: 7,
                 crate_hash_observation: [3; 16],
             },
+            profile: ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
             canonical_definition_path: "fe2o3_device::thread::thread_idx_x".into(),
             structural_local_definition_component: structural_local_definition_component_v1(
                 "thread::thread_idx_x",
@@ -1402,6 +1534,10 @@ mod tests {
             definition_source_identity: [6; 32],
         };
         let exact = identity(&definition).expect("complete provider semantic identity");
+        assert_eq!(
+            exact,
+            digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
+        );
 
         let mut mutation = definition.clone();
         mutation.provider.stable_crate_id ^= 1;
@@ -1419,6 +1555,11 @@ mod tests {
         mutation.canonical_definition_path = "fe2o3_device::thread::block_idx_x".into();
         assert!(identity(&mutation).is_err());
         mutation = definition.clone();
+        mutation.canonical_definition_path = "fe2o3_device::thread::block_idx_x".into();
+        mutation.structural_local_definition_component =
+            structural_local_definition_component_v1("thread::block_idx_x").unwrap();
+        assert_ne!(identity(&mutation).unwrap(), exact);
+        mutation = definition.clone();
         mutation.structural_local_definition_component[0] ^= 1;
         assert!(identity(&mutation).is_err());
         mutation = definition.clone();
@@ -1430,6 +1571,15 @@ mod tests {
         mutation = definition.clone();
         mutation.definition_source_identity[0] ^= 1;
         assert_ne!(identity(&mutation).unwrap(), exact);
+        mutation = definition.clone();
+        mutation.source_closure_identity = [0; 32];
+        assert!(identity(&mutation).is_err());
+        mutation = definition.clone();
+        mutation.definition_source_identity = [0; 32];
+        assert!(identity(&mutation).is_err());
+        mutation = definition.clone();
+        mutation.cargo_metadata_build_observation = [0; 32];
+        assert!(identity(&mutation).is_err());
         mutation = definition.clone();
         mutation.provider.stable_crate_id = 0;
         assert!(identity(&mutation).is_err());
@@ -1445,6 +1595,20 @@ mod tests {
                 .unwrap(),
             exact
         );
+        assert!(
+            definition
+                .durable_semantic_identity(ProviderSemanticDefinitionRoleV1::SemanticTerminal, "",)
+                .is_err()
+        );
+        assert!(
+            definition
+                .durable_semantic_identity_for_profile(
+                    ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
+                    ProviderSemanticDefinitionRoleV1::SemanticTerminal,
+                    "fe2o3_device::thread::thread_idx_x",
+                )
+                .is_err()
+        );
         assert_ne!(
             definition
                 .durable_semantic_identity(
@@ -1453,6 +1617,364 @@ mod tests {
                 )
                 .unwrap(),
             exact
+        );
+    }
+
+    #[test]
+    fn existing_flash_moe_and_workgroup_profile_bytes_match_the_parent() {
+        let closure = reviewed_provider_source_closure_identity(
+            Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT),
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        )
+        .unwrap();
+        assert_eq!(
+            closure,
+            digest("2b9c60625eb166fc28b949bf64c06eeafc393172bd46adaefc5daa71934dc3e7")
+        );
+
+        let definition = semantic_definition(
+            ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
+            "thread::thread_idx_x",
+            [5; 32],
+            [6; 32],
+        );
+        assert_eq!(
+            definition
+                .durable_semantic_identity_for_profile(
+                    ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
+                    ProviderSemanticDefinitionRoleV1::SemanticTerminal,
+                    "fe2o3_device::thread::thread_idx_x",
+                )
+                .unwrap(),
+            digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
+        );
+    }
+
+    #[test]
+    fn row_and_matrix_profiles_bind_distinct_source_domains() {
+        let fixture = ProviderPackageFixture::new();
+        let workgroup_closure = reviewed_provider_source_closure_identity(
+            &fixture.root,
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        )
+        .unwrap();
+        let row_closure = reviewed_provider_source_closure_identity(
+            &fixture.root,
+            ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+        )
+        .unwrap();
+        let matrix_closure = reviewed_provider_source_closure_identity(
+            &fixture.root,
+            MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
+        )
+        .unwrap();
+        assert_ne!(workgroup_closure, row_closure);
+        assert_ne!(workgroup_closure, matrix_closure);
+        assert_ne!(row_closure, matrix_closure);
+
+        let workgroup_source = reviewed_provider_source_identity_from_path(
+            &fixture.source_root(),
+            &fixture.definition(),
+            WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        )
+        .unwrap();
+        let row_source = reviewed_provider_source_identity_from_path(
+            &fixture.source_root(),
+            &fixture.definition(),
+            ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        )
+        .unwrap();
+        let matrix_source = reviewed_provider_source_identity_from_path(
+            &fixture.source_root(),
+            &fixture.definition(),
+            MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
+        )
+        .unwrap();
+        assert_ne!(workgroup_source, row_source);
+        assert_ne!(workgroup_source, matrix_source);
+        assert_ne!(row_source, matrix_source);
+
+        let row = semantic_definition(
+            ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
+            "thread::thread_idx_x",
+            row_closure,
+            row_source,
+        );
+        let matrix = semantic_definition(
+            ReviewedProviderSemanticProfileV1::MatrixV3,
+            "thread::thread_idx_x",
+            matrix_closure,
+            matrix_source,
+        );
+        let row_identity = row
+            .durable_semantic_identity_for_profile(
+                ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
+                ProviderSemanticDefinitionRoleV1::TrustedDefinition,
+                "provider-thread-index",
+            )
+            .unwrap();
+        let matrix_identity = matrix
+            .durable_semantic_identity_for_profile(
+                ReviewedProviderSemanticProfileV1::MatrixV3,
+                ProviderSemanticDefinitionRoleV1::TrustedDefinition,
+                "provider-thread-index",
+            )
+            .unwrap();
+        assert_ne!(row_identity, matrix_identity);
+        assert!(
+            row.durable_semantic_identity_for_profile(
+                ReviewedProviderSemanticProfileV1::MatrixV3,
+                ProviderSemanticDefinitionRoleV1::TrustedDefinition,
+                "provider-thread-index",
+            )
+            .is_err()
+        );
+        assert!(
+            matrix
+                .durable_semantic_identity_for_profile(
+                    ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
+                    ProviderSemanticDefinitionRoleV1::TrustedDefinition,
+                    "provider-thread-index",
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn complete_source_closure_binds_manifest_build_script_and_nested_sources() {
+        let fixture = ProviderPackageFixture::new();
+        let identity = || {
+            reviewed_provider_source_closure_identity(
+                &fixture.root,
+                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+            )
+            .unwrap()
+        };
+        let initial = identity();
+
+        fs::write(
+            fixture.root.join("Cargo.toml"),
+            b"[package]\nname='changed'\n",
+        )
+        .unwrap();
+        let changed_manifest = identity();
+        assert_ne!(changed_manifest, initial);
+
+        fs::write(fixture.root.join("build.rs"), b"fn main() {}\n").unwrap();
+        let with_build_script = identity();
+        assert_ne!(with_build_script, changed_manifest);
+
+        fs::write(
+            fixture.root.join("src/nested/mod.rs"),
+            b"pub fn changed() {}\n",
+        )
+        .unwrap();
+        let changed_nested_source = identity();
+        assert_ne!(changed_nested_source, with_build_script);
+
+        fs::write(
+            fixture.root.join("src/extra.rs"),
+            b"pub const EXTRA: u8 = 1;\n",
+        )
+        .unwrap();
+        assert_ne!(identity(), changed_nested_source);
+    }
+
+    #[test]
+    fn ordered_definition_validation_rejects_substitution_and_exposes_role_order() {
+        let first = semantic_definition(
+            ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
+            "thread::thread_idx_x",
+            [5; 32],
+            [6; 32],
+        );
+        let second = semantic_definition(
+            ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
+            "thread::block_idx_x",
+            [5; 32],
+            [7; 32],
+        );
+        let expectations = [
+            ProviderSemanticDefinitionExpectationV1 {
+                definition_role: ProviderSemanticDefinitionRoleV1::TrustedDefinition,
+                canonical_role: "thread-index",
+                canonical_definition_path: "fe2o3_device::thread::thread_idx_x",
+            },
+            ProviderSemanticDefinitionExpectationV1 {
+                definition_role: ProviderSemanticDefinitionRoleV1::SemanticTerminal,
+                canonical_role: "block-index",
+                canonical_definition_path: "fe2o3_device::thread::block_idx_x",
+            },
+        ];
+        let (provider, identities) = validate_ordered_provider_semantic_definitions_v1(
+            &[first.clone(), second.clone()],
+            &expectations,
+        )
+        .unwrap();
+        assert_eq!(provider, first.provider);
+        assert_eq!(identities.len(), 2);
+
+        assert!(
+            validate_ordered_provider_semantic_definitions_v1(
+                &[second.clone(), first.clone()],
+                &expectations,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_ordered_provider_semantic_definitions_v1(
+                &[first.clone(), first.clone()],
+                &expectations,
+            )
+            .is_err()
+        );
+
+        let mut duplicate_role = expectations;
+        duplicate_role[1].canonical_role = duplicate_role[0].canonical_role;
+        assert!(
+            validate_ordered_provider_semantic_definitions_v1(
+                &[first.clone(), second.clone()],
+                &duplicate_role,
+            )
+            .is_err()
+        );
+
+        let mut reordered_roles = expectations;
+        reordered_roles.swap(0, 1);
+        reordered_roles[0].canonical_definition_path = "fe2o3_device::thread::thread_idx_x";
+        reordered_roles[1].canonical_definition_path = "fe2o3_device::thread::block_idx_x";
+        let (_, reordered_identities) = validate_ordered_provider_semantic_definitions_v1(
+            &[first.clone(), second.clone()],
+            &reordered_roles,
+        )
+        .unwrap();
+        assert_ne!(reordered_identities, identities);
+
+        let mut changed_provider = second.clone();
+        changed_provider.provider.stable_crate_id ^= 1;
+        assert!(
+            validate_ordered_provider_semantic_definitions_v1(
+                &[first.clone(), changed_provider],
+                &expectations,
+            )
+            .is_err()
+        );
+        let mut changed_profile = second;
+        changed_profile.profile = ReviewedProviderSemanticProfileV1::MatrixV3;
+        assert!(
+            validate_ordered_provider_semantic_definitions_v1(
+                &[first, changed_profile],
+                &expectations,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn source_closure_rejects_missing_inputs_and_out_of_root_definitions() {
+        let missing_manifest = ProviderPackageFixture::new();
+        fs::remove_file(missing_manifest.root.join("Cargo.toml")).unwrap();
+        assert!(
+            reviewed_provider_source_closure_identity(
+                &missing_manifest.root,
+                MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
+            )
+            .is_err()
+        );
+
+        let missing_source_root = ProviderPackageFixture::new();
+        fs::remove_dir_all(missing_source_root.source_root()).unwrap();
+        assert!(
+            reviewed_provider_source_closure_identity(
+                &missing_source_root.root,
+                MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
+            )
+            .is_err()
+        );
+
+        let reviewed = ProviderPackageFixture::new();
+        let outside = ProviderPackageFixture::new();
+        let reviewed_root = fs::canonicalize(&reviewed.root).unwrap();
+        assert!(super::reviewed_source_file(&reviewed_root, &outside.definition()).is_err());
+        assert!(
+            reviewed_provider_source_identity_from_path(
+                &reviewed.source_root(),
+                &outside.definition(),
+                MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
+            )
+            .is_err()
+        );
+        assert!(reviewed_provider_source_closure_identity(&reviewed.root, b"").is_err());
+        assert!(
+            reviewed_provider_source_identity_from_path(
+                &reviewed.source_root(),
+                &reviewed.definition(),
+                b"",
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_closure_rejects_symlinks_and_nonregular_files() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::net::UnixListener;
+
+        let manifest_link = ProviderPackageFixture::new();
+        let manifest = manifest_link.root.join("Cargo.toml");
+        let real_manifest = manifest_link.root.join("Cargo.real.toml");
+        fs::rename(&manifest, &real_manifest).unwrap();
+        symlink(&real_manifest, &manifest).unwrap();
+        assert!(
+            reviewed_provider_source_closure_identity(
+                &manifest_link.root,
+                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+            )
+            .is_err()
+        );
+
+        let source_link = ProviderPackageFixture::new();
+        symlink(
+            source_link.definition(),
+            source_link.source_root().join("alias.rs"),
+        )
+        .unwrap();
+        assert!(
+            reviewed_provider_source_closure_identity(
+                &source_link.root,
+                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+            )
+            .is_err()
+        );
+
+        let source_root_link = ProviderPackageFixture::new();
+        fs::rename(
+            source_root_link.source_root(),
+            source_root_link.root.join("real-src"),
+        )
+        .unwrap();
+        symlink(
+            source_root_link.root.join("real-src"),
+            source_root_link.source_root(),
+        )
+        .unwrap();
+        assert!(
+            reviewed_provider_source_closure_identity(
+                &source_root_link.root,
+                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+            )
+            .is_err()
+        );
+
+        let socket = ProviderPackageFixture::new();
+        let _listener = UnixListener::bind(socket.source_root().join("provider.sock")).unwrap();
+        assert!(
+            reviewed_provider_source_closure_identity(
+                &socket.root,
+                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+            )
+            .is_err()
         );
     }
 
