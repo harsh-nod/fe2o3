@@ -207,8 +207,13 @@ rereads that identity in the wrapper before use, runs rustc, consumes the
 handoff once, and invokes the reproducible GenericLink
 V1 plus compiler-aware Worker V2 workflow. It requires byte-identical output
 from two executions, independently inspects the raw HSACO target, exports,
-descriptors, and AMDHSA launch metadata, and derives a typed publication plan
-only from the retained inspection evidence. Publication is attempt-scoped,
+descriptors, and AMDHSA launch metadata, then selects descriptor-free COV5 raw
+compatibility or canonical finalization of a descriptor-bearing COV6 output.
+Required-envelope mode accepts only the finalized COV6 route. The production
+worker uses pinned upstream LLVM target-machine APIs and the in-process LLD
+library API, with no COMGR or command-line `clang`, `llc`, or `ld.lld` path.
+The typed publication plan is derived only from retained inspection evidence.
+Publication is attempt-scoped,
 durable, digest-bound, and followed by managed attempt completion; exact
 in-process retries recover the same publication without rebinding its inputs.
 
@@ -227,7 +232,7 @@ respawning rustc. Package, generation, receipt, capsule, proof, payload, and
 envelope substitution fail closed; truncated or conflicting canonical files
 are never replaced implicitly.
 
-The published raw HSACO and load envelope remain inert. The envelope contains
+The published HSACO and load envelope remain inert. The envelope contains
 only a durable claim and explicitly contains no process-local currentness
 lease. This flow does not authenticate compiler origin or Verus proof evidence
 and grants no HSA loading or launch authority; downstream admission must

@@ -13,7 +13,7 @@ Decoding proves only that bytes are a canonical, internally consistent V1
 table. The decoder treats every field as attacker-controlled. In particular,
 the compiler identity, source and executable-IR evidence, Rust type identity,
 device layout identity, canonical AMD device target, and code-object digest are
-declarations until a later trusted layer matches the complete table
+declarations until a trusted consumer matches the complete table
 byte-for-byte against a host-linked copy selected by the generated Rust kernel
 marker.
 
@@ -137,7 +137,7 @@ shares the 256 KiB table bound.
 
 The 32-byte `CanonicalCodeObjectDigest` is the only self-referential field and
 has a fixed offset, `CANONICAL_CODE_OBJECT_DIGEST_OFFSET`, in the table header.
-A later ELF-aware linker step will:
+The canonical `fe2o3-hsaco-finalize` ELF-aware post-link step:
 
 1. place exactly one canonical table at a trusted, independently validated
    location in the final HSACO;
@@ -250,9 +250,12 @@ AMD WMMA, and AMD DS permute. Launch constraints encode rank, block policy
 maximum flat workgroup size, and static/dynamic shared-memory limits. All
 launch integers other than rank and block policy are `u32`; flags are zero.
 Every capability tag is an independent requirement. V1 does not imply
-dependency closure between tags. A later trusted compiler integration must
-derive the requirements from executable IR and match them against the observed
-target rather than trusting these declarations.
+dependency closure between tags. Bounded `rustc-codegen-fe2o3` profiles now
+derive their exact requirements from the retained compiler module and embed a
+zero-digest table for finalization. General compiler integration must still
+derive every requirement from executable IR and match it against the observed
+target rather than trusting caller declarations. Descriptor construction alone
+does not prove compiler or machine-code correctness.
 
 The kernel ABI layout bounds all explicit physical components. Its explicit
 size is canonically the exact end of the final physical component, or zero when

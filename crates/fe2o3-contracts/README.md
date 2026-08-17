@@ -1,6 +1,6 @@
 # fe2o3-contracts
 
-This crate defines a target-neutral vocabulary shared by ordinary Rust, future
+This crate defines a target-neutral vocabulary shared by ordinary Rust,
 device lowering, and verification tooling. Its v1 specification layer models:
 
 - logical one-dimensional launch domains and checked physical geometry;
@@ -21,10 +21,12 @@ device lowering, and verification tooling. Its v1 specification layer models:
 - kernel, executable, contract, and proof artifact identities; and
 - `Unverified`, `Checked`, and `Verified` proof states.
 
-The safe API can only create `Unverified` proof records. A future verifier/build
-integration must validate a proof manifest and gain a private construction path
-before it can issue `Checked` or `Verified` records. This prevents application
-code from promoting an artifact by assertion.
+The safe API can only create `Unverified` proof records. Current verifier
+execution records remain separate and do not mint this crate's `Checked` or
+`Verified` states. Any authority-bearing verifier/build integration must
+validate a proof manifest and gain a private construction path before issuing
+those records. This prevents application code from promoting an artifact by
+assertion.
 
 This crate is `no_std`, contains no target or runtime dependencies, and does not
 claim to model SIMT scheduling, barriers, atomics, arbitrary index mappings, or

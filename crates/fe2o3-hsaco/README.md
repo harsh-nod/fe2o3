@@ -74,6 +74,10 @@ The parser accepts AMDGPU HSA code object versions 4 through 6. It requires
 metadata version 1.1 for code object V4 and version 1.2 for V5 or V6. MessagePack
 is pre-scanned iteratively with explicit size, depth, node, string, collection,
 kernel, and argument limits before the bounded value tree is decoded.
+Parsing a code-object version or processor is descriptive compatibility, not a
+claim that the production compiler, finalizer, or runtime supports that target;
+production-directed profiles remain separately bounded, chiefly to exact
+`gfx942:xnack-` configurations.
 AMDHSA does not require a minimal or otherwise canonical MessagePack encoding.
 Systems that need an exact metadata identity must hash the original metadata
 descriptor bytes; re-encoding this descriptive model is not an identity

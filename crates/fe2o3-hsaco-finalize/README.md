@@ -32,10 +32,12 @@ producer strings, and source identities remain untrusted declarations. Finalizat
 internal byte integrity and declared metadata closure. It is not Verus verification, compiler
 attestation, module-load authority, launch authority, or evidence that a target device matches.
 
-A future compiler integration is responsible for creating the canonical table, embedding exactly
-one zero-digest `.fe2o3.kd.v1` section after kernel metadata is known, and invoking this post-link
-step before packaging. That responsibility intentionally remains outside `rustc-codegen-fe2o3`,
-`cargo-fe2o3`, and this first finalization slice.
+Bounded `rustc-codegen-fe2o3` profiles now construct the canonical table and embed exactly one
+zero-digest `.fe2o3.kd.v1` section in the compiler-owned LLVM module. The production-directed
+worker emits the object through pinned upstream LLVM target-machine APIs and links it through the
+in-process LLD library API. `cargo-fe2o3` invokes this post-link finalizer for descriptor-bearing
+COV6 output before publication. This is exact-profile plumbing, not general descriptor derivation
+or compiler-correctness evidence.
 
 ## Multi-input native link plans
 
@@ -96,8 +98,9 @@ evidence source.
 `stage_g4_ffi_link_plan_v1` matches exact input identities, kinds, roles, producers, symbol providers,
 target, code-object version, ordering, cardinality, aggregate bounds, and optional all-input symbol
 evidence. Rust definitions or kernels require exactly one neutral `CompilerModule` input claim. That
-role does not imply LLVM bitcode, and current rustc output does not provide the required exact module:
-the backend still emits per-kernel textual IR and omits non-kernel exports.
+role does not imply LLVM bitcode. This legacy G4 assertion path still does not carry the exact
+managed module; the separate live Worker V2 handoff carries one compiler-derived textual module
+with explicit kernel, helper, export, and import roles.
 
 Successful staging returns only `StagedFfiLinkPlanV1`. Its public surface exposes the complete staged
 identity and a non-authoritative count/blocker summary. Raw plan, input, provider, symbol-evidence,
@@ -110,7 +113,7 @@ generic evidence can never satisfy an FFI-bound evidence API. A caller can indep
 generic request with similar inputs and symbol strings, but that request and its output carry zero
 FFI provenance. Its API and wire bytes are unchanged, and no V1-to-V2 conversion exists.
 
-## Worker V2 raw-HSACO publication
+## Worker V2 HSACO admission and publication
 
 Worker Protocol V2 is a separate framing domain connected to the managed Cargo build flow. After
 consuming the compiler handoff, `execute_reproducible_first_build_worker_v2` derives exact import,
@@ -119,16 +122,18 @@ manifest rather than accepting an operator-supplied final-symbol list. It binds 
 executable, worker and LLVM build identities, target, code-object version, structured options,
 complete envelope identity, compiler module, every external provider, final symbol closure, and
 output bound. A GenericLink candidate establishes the first-build output identity; success requires
-the V2 execution to reproduce those bytes exactly. Both executions use the supervised direct
-LLVM/LLD worker and no COMGR path.
+the V2 execution to reproduce those bytes exactly. Both executions use the supervised production
+worker's pinned upstream LLVM module, optimization, and target-machine APIs plus the in-process LLD
+library API. They use no COMGR and do not invoke `clang`, `llc`, or `ld.lld` as subprocesses.
 
 `inspect_worker_v2_raw_hsaco_v1` then consumes the sealed reproducibility evidence and independently
 checks the exact raw HSACO against its retained lineage, target, code-object version, symbol-role
 manifest, defined-symbol closure, descriptors, and `gfx942` launch metadata. It accepts no caller
-replacement for those policies. This admission is deliberately distinct from canonical
-`.fe2o3.kd.v1` descriptor-table finalization, which does not run on the Worker V2 publication path.
+replacement for those policies. Raw admission remains distinct from canonical `.fe2o3.kd.v1`
+descriptor-table finalization; `cargo-fe2o3` selects descriptor-free COV5 raw compatibility or
+descriptor-bearing COV6 canonical finalization before publication.
 
-`finalize_inspected_worker_v2_hsaco_v1` is an opt-in bridge from that admitted raw evidence to the
+`finalize_inspected_worker_v2_hsaco_v1` is the typed bridge from that admitted raw evidence to the
 existing canonical finalizer. When the raw HSACO contains one valid zero-digest `.fe2o3.kd.v1`, it
 patches only the digest, independently verifies the result, cross-checks target, code-object
 version, kernel closure, and launch metadata against the retained raw policy, and returns an opaque
@@ -136,20 +141,22 @@ version, kernel closure, and launch metadata against the retained raw policy, an
 This is structural integrity evidence only: the embedded descriptor's compiler, source, ABI,
 layout, effect, and build-evidence claims remain unauthenticated.
 
-Current Worker V2 output may omit `.fe2o3.kd.v1`. In that case the bridge returns an owning
+Descriptor-free compatibility output may omit `.fe2o3.kd.v1`. In that case the
+bridge returns an owning
 `MissingAuthenticatedDescriptorSourceEvidenceV1` blocker. It records the admitted lineage, target,
 code-object version, policy, and observed kernels but does not expose or fabricate a descriptor
 table. In particular, Rust ABI, layout, effect, and source claims are never inferred from
 executable metadata. Neither the structural result nor the blocker grants publication, loading, or
-launch authority, and this bridge is not yet connected to `cargo-fe2o3` publication.
+launch authority. The bridge is connected to `cargo-fe2o3`; its publication policy permits raw
+COV5 only without a required load envelope and requires a present zero-digest descriptor for COV6.
 
-`prepare_worker_v2_hsaco_publication_v1` consumes the admitted evidence and returns the typed
-`PreparedWorkerV2HsacoPublicationV1` bridge. Its durable plan and upstream evidence identity remain
-private. `publish_prepared_worker_v2_hsaco_v1` uses that bridge with the matching producer and live
-attempt registry to publish the exact admitted bytes and an attempt-scoped durable provenance
-receipt; `cargo-fe2o3` then completes the same build attempt. The prepared value supports exact
-in-process reconciliation, but enough intent is not yet persisted to recover in a new process after
-the compiler handoff has already been consumed.
+The raw and finalized preparation APIs consume admitted evidence and retain the durable plan,
+upstream evidence identity, publication kind, and exact bytes privately. Their matching publish
+APIs use the producer and live attempt registry to publish those exact bytes and an attempt-scoped
+durable provenance receipt. `cargo-fe2o3` persists the selected intent and exact raw/finalized
+lineage, supports new-process recovery at committed boundaries without respawning rustc, and then
+completes the same build attempt. This recovery authenticates continuity of the retained records;
+it does not authenticate compiler correctness or artifact semantics.
 
 Neither the handoff, reproducibility evidence, raw-HSACO admission, typed bridge, nor publication
 receipt authenticates the compiler or its origin, authenticates or binds Verus verification, grants
