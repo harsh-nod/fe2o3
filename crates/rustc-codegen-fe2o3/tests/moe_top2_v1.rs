@@ -23,7 +23,7 @@ const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/moe_top2_v1/src/kernel.rs");
 const STRUCTURAL_CORRESPONDENCE: &str =
-    "b51716f0ebb211f6e0f6b869d0843fe41743211a1e5b837030f7716559edd989";
+    "7505eb2cb60a2827447b2542601afb8c46f67cb572c8781f7c5324af8f492ec4";
 
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
@@ -406,7 +406,7 @@ fn live_rustc_admission_emits_pinned_structural_record() {
         "exact handoff failed:\n{stderr}"
     );
     for marker in [
-        "opaque exact rustc FnAbi identity plus bounded structural projection, location-independent V3 trusted definitions and reviewed semantic-terminal manifest",
+        "opaque exact rustc FnAbi identity plus bounded structural projection, location-independent V4 provider-semantic definitions and reviewed semantic-terminal manifest",
         "complete reachable portable-MIR closure modulo those identity-bound terminals 934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13",
         "checked private same-session producer-derived structural source/FnAbi/MIR/KIR record",
         "explicitly not semantic refinement",
@@ -494,6 +494,18 @@ fn live_rustc_admission_emits_pinned_structural_record() {
 fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
+    let baseline = compile(
+        &workspace,
+        &output,
+        "hostile-suite-baseline",
+        SOURCE,
+        CompilerProfile::default(),
+    );
+    assert!(
+        baseline.process.status.success(),
+        "hostile suite baseline failed before any mutation:\n{}",
+        command_text(&baseline.process)
+    );
     let sources = [
         (
             "source-byte",

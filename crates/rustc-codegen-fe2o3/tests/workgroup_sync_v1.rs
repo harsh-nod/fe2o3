@@ -367,44 +367,48 @@ fn command_text(output: &Output) -> String {
     )
 }
 
-#[test]
-fn exact_sources_authenticate_complete_profiles() {
+fn assert_exact_profile_authenticates(kind: ProfileKind, source: &str, label: &str) {
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
-    for (kind, source, label) in [
-        (ProfileKind::Lds, LDS_SOURCE, "exact-lds"),
-        (ProfileKind::Atomic, ATOMIC_SOURCE, "exact-atomic"),
+    let result = compile(
+        &workspace,
+        &output,
+        label,
+        source,
+        kind,
+        CompilerProfile::exact(kind),
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        !result.status.success(),
+        "admission-only profile emitted code"
+    );
+    for marker in [
+        "authenticated exact source bytes",
+        "wrapper/session-derived ordinary #[kernel(typed)] root",
+        "exact rustc FnAbi, frozen V4 provider-semantic definitions and reviewed semantic-terminal manifest",
+        "complete reachable portable-MIR closure modulo those identity-bound terminals",
+        "reviewed source-to-profile and source-to-terminal correspondence only",
+        "no generic lowering, terminal-body refinement, compiler-refinement proof, LLVM lowering, Worker V2",
     ] {
-        let result = compile(
-            &workspace,
-            &output,
-            label,
-            source,
-            kind,
-            CompilerProfile::exact(kind),
-        );
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(
-            !result.status.success(),
-            "admission-only profile emitted code"
-        );
-        for marker in [
-            "authenticated exact source bytes",
-            "wrapper/session-derived ordinary #[kernel(typed)] root",
-            "exact rustc FnAbi, frozen trusted definitions and reviewed semantic-terminal manifest",
-            "complete reachable portable-MIR closure modulo those identity-bound terminals",
-            "reviewed source-to-profile and source-to-terminal correspondence only",
-            "no generic lowering, terminal-body refinement, compiler-refinement proof, LLVM lowering, Worker V2",
-        ] {
-            assert!(stderr.contains(marker), "missing `{marker}`:\n{stderr}");
-        }
-        if std::env::var_os("FE2O3_WORKGROUP_SYNC_REPORT_AUTHORITY").is_some() {
-            println!(
-                "WORKGROUP_SYNC_AUTHORITY {label} {}",
-                authenticated_authority(&stderr)
-            );
-        }
+        assert!(stderr.contains(marker), "missing `{marker}`:\n{stderr}");
     }
+    if std::env::var_os("FE2O3_WORKGROUP_SYNC_REPORT_AUTHORITY").is_some() {
+        println!(
+            "WORKGROUP_SYNC_AUTHORITY {label} {}",
+            authenticated_authority(&stderr)
+        );
+    }
+}
+
+#[test]
+fn exact_lds_source_authenticates_complete_profile() {
+    assert_exact_profile_authenticates(ProfileKind::Lds, LDS_SOURCE, "exact-lds");
+}
+
+#[test]
+fn exact_atomic_source_authenticates_complete_profile() {
+    assert_exact_profile_authenticates(ProfileKind::Atomic, ATOMIC_SOURCE, "exact-atomic");
 }
 
 #[test]
@@ -453,6 +457,7 @@ fn exact_profile_authority_is_location_independent_and_source_bound() {
 
 #[test]
 fn hostile_lds_source_and_compiler_mutations_fail_closed() {
+    assert_exact_profile_authenticates(ProfileKind::Lds, LDS_SOURCE, "hostile-lds-baseline");
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let sources = [
@@ -544,6 +549,11 @@ fn hostile_lds_source_and_compiler_mutations_fail_closed() {
 
 #[test]
 fn hostile_atomic_source_and_compiler_mutations_fail_closed() {
+    assert_exact_profile_authenticates(
+        ProfileKind::Atomic,
+        ATOMIC_SOURCE,
+        "hostile-atomic-baseline",
+    );
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let sources = [

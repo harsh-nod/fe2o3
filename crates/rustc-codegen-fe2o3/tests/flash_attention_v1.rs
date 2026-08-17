@@ -362,7 +362,7 @@ fn exact_phase_a_source_authenticates_complete_flash_attention_profile() {
     );
     assert!(result.status.success(), "exact handoff failed:\n{stderr}");
     for marker in [
-        "exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest",
+        "exact rustc FnAbi, location-independent V4 provider-semantic definitions and reviewed semantic-terminal manifest",
         "complete reachable portable-MIR closure modulo those identity-bound terminals 0b017dd135cfce94f3a223126363b42853f5dbbf27c244cceafdd65f49e89e7e",
         "closed causal FlashAttention B1/H1/N8/D16 semantic KIR with 10 ordered recurrence steps",
         "adjacent-pair output ownership",
@@ -394,6 +394,18 @@ fn exact_phase_a_source_authenticates_complete_flash_attention_profile() {
 fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
+    let baseline = compile(
+        &workspace,
+        &output,
+        "hostile-suite-baseline",
+        SOURCE,
+        CompilerProfile::default(),
+    );
+    assert!(
+        baseline.status.success(),
+        "hostile suite baseline failed before any mutation:\n{}",
+        command_text(&baseline)
+    );
     let sources = [
         (
             "source-byte",
