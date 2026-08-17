@@ -340,8 +340,10 @@ externally protected publisher contract`, even after validating production
 trust and an immutable source. Activation requires a separately provisioned
 publisher identity or service whose destination namespace and content cannot be
 modified by the evidence-producing UID, plus a verifier for that contract.
-That external contract is not present in this repository or on the reviewed
-host.
+The repository contains an opt-in
+[reference service](protected-publisher-service-v1.md), but it is not deployed
+and does not satisfy that production contract. No provisioned external
+publisher contract is present on the reviewed host.
 
 The inert/test publisher rejects mutable production sources, symlinks,
 hardlinks,
@@ -566,8 +568,9 @@ The production publisher private key must remain in the protected service's
 KMS/HSM or distinct publisher account. Repository and runner storage contain
 only its production public key.
 
-The repository includes neither that service nor production service
-configuration, private keys, one-time state, or installed repository rules.
+The repository includes the opt-in reference service and client, but no
+provisioned production service configuration, private keys, durable production
+ledger state, external rollback anchor, or installed repository rules.
 The `protected-publisher` GitHub environment is also not provisioned or deployed
 by this repository. It is an operational blocker, not active production
 authority. Before activation, administrators must independently create that
@@ -636,10 +639,11 @@ mutable source, but it cannot manufacture a privileged immutable filesystem.
 The privileged ext4/XFS harness creates ephemeral production keys and evidence
 at runtime and does not use or install repository test keys. It is currently a
 prerequisite/inert test: after immutable-source validation it must stop at the
-missing external publisher contract rather than publish production evidence.
+missing deployed external publisher contract rather than publish production
+evidence.
 It remains a production-activation prerequisite, not a current integration
-blocker while the external service, production keys, Actions variables, and
-repository rules are deliberately absent.
+blocker while the external service deployment, production keys, Actions
+variables, and repository rules are deliberately absent.
 Once that contract has an independently verifiable implementation, these are
 the intended operator invocations:
 

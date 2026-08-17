@@ -1,6 +1,8 @@
 # fe2o3 Verification Model
 
-Status: proposed source-level verification contract.
+Status: living source-level verification contract. Bounded Verus models and
+proof-record schemas implement portions of this contract; no general reviewed
+source-to-machine or Verus-to-machine refinement exists.
 
 This document defines what fe2o3 may call verified, what Verus is expected to
 prove, and what remains trusted. It is deliberately independent of AMDGPU

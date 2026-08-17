@@ -8,9 +8,12 @@ static analyses, Verus model, artifact binder, and host runtime. It refines the
 obligations, while this one defines the representations and authority rules
 used to implement them.
 
-Existing code does not yet satisfy this contract. Compatibility APIs remain
-available only through explicit unsafe boundaries until they are replaced by
-the generated path described here.
+Bounded profile-specific code implements portions of this contract, including
+generated argument preparation, artifact admission, linear runtime states, and
+proof-record schemas. No general path satisfies the complete contract or turns
+source proof into machine-code authority. Compatibility APIs remain available
+only through explicit unsafe boundaries until the generated path described here
+covers them.
 
 ## Authority Rule
 
