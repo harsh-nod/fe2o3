@@ -1,7 +1,9 @@
 # Scalar GEMM V1 Worker V2 Handoff
 
-This checkpoint implements the worker-side half of the scalar GEMM V1
-source-to-artifact join. It is intentionally narrow and fail-closed.
+This checkpoint originally implemented the worker-side half of the scalar GEMM
+V1 source-to-artifact join. The frontend-owned transfer subsequently landed in
+`00c395cbb13d0d5629fb01bcefd9bb9b9e9cbb23`. The combined path remains narrow
+and fail-closed.
 
 ## Implemented boundary
 
@@ -44,16 +46,15 @@ authorized Worker V2 links twice, requires deterministic HSACO bytes, and
 passes each output through this scalar-specific inspection. The focused native
 runner is `tools/fe2o3-llvm-link-worker/run-scalar-gemm-v1.sh`.
 
-## Remaining frontend join
+## Subsequent frontend join
 
-The parallel rustc frontend work currently retains its admitted exact scalar
-GEMM identity in a crate-private value. A downstream crate cannot consume that
-value without a frontend-owned transfer API. Accepting a public digest, symbol,
-or caller-constructed record here would let untrusted code mint the canonical
-Kernel IR, so this checkpoint does not add such a constructor.
+The rustc backend now retains its admitted exact scalar GEMM identity in a
+crate-private value and consumes it through a frontend-owned transfer API. A
+downstream crate still cannot construct that value. Accepting a public digest,
+symbol, or caller-constructed record would let untrusted code mint the
+canonical Kernel IR, so no such constructor exists.
 
-The remaining join must be implemented in the rustc backend after its portable
-MIR identity is pinned:
+The landed join:
 
 1. consume the crate-private admitted scalar GEMM value directly;
 2. move it into a single-use opaque frontend-to-lowering receipt;
@@ -67,6 +68,7 @@ The receipt must bind the reviewed portable MIR identity, compiler-semantics
 identity, target, COV requirement, ABI, launch contract, root identity, and
 export symbol. A serialized digest claim alone is not sufficient provenance.
 
-Until that join lands, the worker validation is independently useful but does
-not authenticate Rust-source-to-Kernel-IR refinement. COV6 is only a request
-before raw response inspection, and no HSA launch claim is made.
+This closes the frontend-to-Worker transfer gap but does not prove
+Rust-source-to-Kernel-IR semantic refinement. COV6 remains only a request before
+raw response inspection, and these validation APIs grant no HSA launch
+authority.

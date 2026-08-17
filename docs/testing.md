@@ -235,8 +235,8 @@ multi-symbol lifecycle tests at this checkpoint use the reviewed adapter's
 host-side test boundary and likewise do not establish two-kernel hardware
 execution.
 
-The next [general typed dispatch V1](general-typed-dispatch-v1.md) gate must
-archive one run from a single commit that includes all focused commands above
+The [general typed dispatch V1](general-typed-dispatch-v1.md) gate requires an
+archived run from a single commit that includes all focused commands above
 plus strict Clippy, the ignored Worker V2 test, and an opt-in MI300X execution
 test. That hardware test must load one executable, resolve and dispatch two
 differently typed kernels through the descriptor-driven path, compare outputs
@@ -340,16 +340,18 @@ the reviewed `fe2o3-hsa-runtime` lifecycle and implicit-kernarg adapters. Unit,
 mutation, and UI tests cover the state transitions, retained borrows, packing,
 alias admission, currentness, identity substitution, and terminal completion.
 
-The production trust chain still lacks both cross-process composition and
-prerequisite authentication. Canonical lease reacquisition and a durable load
-envelope now exist, but Cargo does not publish that envelope and there is no
-application handoff or recovered host-admission path.
-The `cargo-fe2o3` two-entry artifact-container adapter remains `cfg(test)` and
-inert. Separately, `WorkerV2PrerequisiteAuthenticatorV1` defines the reviewed
-boundary for compiler, Verus, proof, Rust ABI, and executable-effect evidence,
-but the repository has only test/fake implementations. Therefore the
-production safe path cannot yet authentically promote those prerequisites into
-load/launch authority.
+The production trust chain still lacks protected application handoff and
+prerequisite authentication. Cargo now durably publishes and reconstructs the
+canonical load envelope, transfers pinned envelope and artifact-directory
+descriptors through a bounded cooperative handoff, and retains a fresh
+current-publication lease. Recovered host admission revalidates that handoff
+and currentness but returns an inert descriptor. The `cargo-fe2o3` two-entry
+artifact-container adapter is compiled outside tests but remains inert.
+Separately, `WorkerV2PrerequisiteAuthenticatorV1` defines the reviewed boundary
+for compiler, Verus, proof, Rust ABI, and executable-effect evidence, but the
+repository has only test/fake implementations. Therefore the production safe
+path cannot yet authentically promote those prerequisites into load/launch
+authority.
 
 The raw alpha/zeta hardware harness has CPU/unit tests for exact `40`/`56` byte
 packing, equal-length rejection, boundary grids, independent oracles, and canary

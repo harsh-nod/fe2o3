@@ -353,12 +353,15 @@ Durable Worker V2 publication, finalized-bundle host admission, currentness
 leases, the authenticated HSA load state machine, generated alpha/zeta safe
 dispatch SPI, and the reviewed `fe2o3-hsa-runtime` adapter are production code.
 Canonical lease reacquisition and a Worker V2 load envelope with complete
-bundle/proof and raw/finalized lineage are implemented foundations. The blocking
-production gaps are Cargo envelope publication and application handoff,
-recovered host admission, and a production
-`WorkerV2PrerequisiteAuthenticatorV1`. Current authenticator
-implementations are tests/fakes, so compiler, Verus, proof, ABI, and effect
-evidence cannot yet be authentically promoted into safe load/launch authority.
+bundle/proof and raw/finalized lineage are implemented foundations. Cargo now
+durably publishes and reconstructs that envelope, a cooperative application
+handoff transfers pinned descriptors, and recovered host admission reacquires
+currentness and revalidates the handoff. Those paths remain inert without
+prerequisite authority. The blocking production gaps are a protected
+application handoff and a production `WorkerV2PrerequisiteAuthenticatorV1`.
+Current authenticator implementations are tests/fakes, so compiler, Verus,
+proof, ABI, and effect evidence cannot yet be authentically promoted into safe
+load/launch authority.
 Neither adapter nor either hardware observation may restamp a declaration
 without an updated shard and archived clean-checkout result record.
 

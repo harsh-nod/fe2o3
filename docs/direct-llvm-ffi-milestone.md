@@ -1,13 +1,17 @@
 # Direct LLVM and Device FFI Milestone
 
-Status: active; the bounded alpha/zeta `gfx942` compiler-to-HSACO vertical
-slice plus raw and generated-safe MI300X execution are implemented through
-commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`.
+Status: living milestone contract with a historical alpha/zeta checkpoint. The
+bounded `gfx942` compiler-to-HSACO slice plus raw and generated-safe MI300X
+execution were implemented through commit
+`dc9738e367c392f7716eacb8459ca73fa32abbbb`; later foundations are identified
+explicitly below.
 
-This milestone connects the existing direct LLVM/LLD worker and device FFI
-contracts to the artifact transaction, bundle, and runtime paths. Its end state
-is a reproducible external-device-code link that executes in both directions on
-RDNA and CDNA hardware without COMGR.
+This milestone connects the direct LLVM/LLD worker and device FFI contracts to
+the artifact transaction, bundle, and runtime paths. Production-directed GPU
+finalization uses one pinned upstream LLVM build for target-machine object
+emission and in-process LLD linking; it uses neither COMGR nor a shell linker.
+The milestone's end state remains a reproducible external-device-code link that
+executes in both directions on RDNA and CDNA hardware.
 
 The gates below are intentionally narrower than the repository-wide G1-G8
 roadmap. They describe one end-to-end milestone and do not replace the broader
@@ -83,8 +87,8 @@ allocation-relative regions, alias admission, geometry, physical COV6 layout,
 and hidden-argument initialization before its synchronous `dispatch` method can
 enter the reviewed HSA boundary.
 
-The production authority foundations are implemented, but the alpha/zeta Cargo
-path does not yet compose all of them.
+The production-facing authority foundations are implemented, but the
+alpha/zeta path is not production-authoritative.
 The artifact transaction persists and recovers exact Worker V2 raw or finalized
 publication state across process restart. Recovery validates the journal,
 publication kind, plan, upstream identity, route/admission, backend receipt,
@@ -97,20 +101,24 @@ reviewed `fe2o3-hsa-runtime` adapter then retain currentness, executable, symbol
 queue, kernarg, and completion lifetimes. These are existing production-facing
 host/runtime mechanisms, not missing designs.
 
-General V3 also has checked buffer views, typed binding/packing, generated
-alpha/zeta `Arguments`, safe preparation and dispatch SPI, and a rustc backend
-emitter for binding-derived semantic-witness host objects. The Worker V2
-integration builds both roots, links and validates both witnesses, publishes
-one inspected COV6 HSACO, and can export those exact bytes for the hardware
-test. The remaining composition gaps are narrower: Cargo's Worker V2
-artifact-container adapter is still inert and compiled only for tests, and no
-production implementation of `WorkerV2PrerequisiteAuthenticatorV1` authenticates
-the compiler, verifier, ABI, and executable-effect prerequisites required by
-the load state machine. The hardware harness therefore accepts the exported
-HSACO and digest through an opt-in test boundary and calls the reviewed raw
-unsafe HSA adapter directly instead of the generated alpha/zeta safe SPI. This
-does not establish production safe dispatch. No Verus result or machine-code
-effect/refinement evidence is yet authenticated and bound to the emitted code.
+General V3 also has checked buffer views and safe mutable splits, typed
+binding/packing, generated alpha/zeta `Arguments`, safe preparation and dispatch
+SPI, and a rustc backend emitter for binding-derived semantic-witness host
+objects. Cargo's Worker V2 artifact-container adapter is compiled outside tests
+and durably publishes the inert canonical load envelope. A bounded cooperative
+application handoff and recovered host admission transfer pinned descriptors,
+reacquire currentness, and revalidate the envelope, but grant no prerequisite,
+load, or launch authority by themselves. No production implementation of
+`WorkerV2PrerequisiteAuthenticatorV1` authenticates the compiler, verifier, ABI,
+and executable-effect prerequisites required by the load state machine.
+
+The hardware harnesses still accept the exported HSACO and digest through
+opt-in test boundaries: one calls the reviewed raw unsafe HSA adapter and one
+uses generated safe dispatch with explicit test authority. Bounded alpha/zeta
+Verus-facing proof-record and physical machine-effect evidence foundations now
+exist, but they grant no proof or launch authority, are not production-bound to
+compiler origin and the exact payload, and do not establish source-to-machine
+or Verus-to-machine refinement.
 
 The generic and adversarial suites pass. On the MI300X `gfx942` lane, three
 ignored Worker V2 integration tests pass with an unoptimized Debug worker:
@@ -144,8 +152,9 @@ request with two entries and one shared helper, preserve both metadata entries
 and both `.kd` symbols, require AMDHSA ELF ABI version 4, and reject mismatched
 descriptor metadata. This is a native LLVM/LLD boundary test, not archived
 MI300X execution evidence. Canonical `.fe2o3.kd.v1` authentication is
-implemented downstream. Exposing the Cargo Worker V2 artifact-container
-adapter outside tests remains open.
+implemented downstream. The Cargo Worker V2 artifact-container adapter is now
+compiled outside tests and used for inert durable envelope publication; that
+does not grant production application or launch authority.
 
 Commits `d3d23fc` and `0e7d46e` close the two COV6 convention failures: the
 finalizer accepts AMDHSA metadata that reports the explicit prefix while the
@@ -177,37 +186,32 @@ production proof-authenticated dispatch or CUDA-Oxide parity. Complete remains
 1. **Implemented: durable claim and lease recovery.** Reacquire a fresh non-clone lease only
    after revalidating the persisted receipt, complete plan, exact files,
    current generation, path identity, and lock.
-2. **Implemented schema: canonical Worker V2 load envelope.** Preserve raw/final snapshots and
-   encode the container, bundle/proof evidence, descriptor lineage, finalized
-   identity, and durable claim. Never serialize the process-local lease.
-3. **Next integration: production Cargo, recovered host admission, and application handoff.**
-   Publish the envelope before clearing restart state, pass a read-only pinned
-   descriptor, reacquire the lease, and re-run all structural, semantic,
-   physical ABI, marker, and currentness checks. Remove the external-HSACO
-   handoff from the generated-safe MI300X lane while retaining the explicit
-   fake-authenticator label.
-4. **Machine-code effect validation tied to evidence.** Analyze the finalized
-   alpha/zeta payload and its closed call graph with a bounded, versioned
-   validator. Bind the accepted global loads/stores, address derivations,
-   descriptor/effect identities, analyzer/toolchain identity, and exact payload
-   digest into machine-code evidence consumed by admission. Unknown calls,
-   indirect memory effects, effect expansion, or any byte substitution fail
-   closed. Hardware success remains separate evidence.
-5. **Verus proofs and proof-artifact binding.** Prove bounds, address overflow
-   freedom, injective writes/race freedom, and alpha/zeta functional results.
-   Bind source, crate/kernel identity, ABI/effects, launch contract, Verus and
-   solver identities, proof result, machine-code evidence, and finalized
-   payload into the artifact. Negative source/proof mutations and stale proof
-   replay must be rejected.
+2. **Implemented: canonical Worker V2 load envelope.** Cargo preserves raw/final
+   snapshots, encodes the container, bundle/proof evidence, descriptor lineage,
+   finalized identity, and durable claim, and publishes and reconstructs the
+   inert envelope. The process-local lease is never serialized.
+3. **Implemented inert foundation: recovered admission and cooperative handoff.**
+   Cargo passes read-only pinned descriptors; the host reacquires the lease and
+   reruns structural, semantic, physical ABI, marker, and currentness checks. A
+   protected production application handoff and a generated-safe MI300X replay
+   without the external-HSACO test handoff remain open.
+4. **Implemented inert foundation: machine-effect evidence.** Bounded physical
+   machine-effect records bind reviewed mechanics and identities. Directly
+   extracting each final alpha/zeta payload's closed effects and admitting that
+   evidence into production authority remain open. Hardware success remains
+   separate evidence.
+5. **Implemented inert foundation: proof records.** Bounded alpha/zeta records
+   bind declared proof inputs, tool identities, freshness, and executable
+   evidence. They grant no proof authority, do not establish compiler or
+   machine-code refinement, and are not production-bound to the final payload.
 6. **Production prerequisite authenticator.** Join reviewed persistent Verus,
    measured compiler, Rust-layout, proof-to-executable, machine-effect, and
    rollback freshness evidence. Only this final joined value may implement the
    unsafe authenticator; it accepts no caller-provided evidence digest.
-7. **Split mutable views.** Add a safe partition operation that can produce two
-   simultaneous non-overlapping mutable views of one allocation while retaining
-   parent allocation identity and exact byte regions. Cover overlap, overflow,
-   lifetime escape, rejoin/drop order, packing, and in-flight alias rejection,
-   then execute a same-allocation multi-view kernel on MI300X.
+7. **Implemented API foundation: split mutable views.** Safe two-way and guarded
+   three-way splits retain parent-allocation identity and exact byte regions,
+   with unit and compile-fail coverage. Mechanical Verus correspondence and
+   general same-allocation MI300X execution remain open.
 8. **Feature and architecture breadth.** Generalize the exact vertical slice
    only after the preceding authority and evidence gates: more signatures and
    control flow, aggregates, async/runtime features, core AMD operations, then
@@ -272,8 +276,8 @@ Exit gate:
 - bitcode plus bitcode, bitcode plus object, and multi-object fixtures link;
 - required imports resolve and requested exports survive optimization/linking;
 - target and code-object mismatches fail before output publication;
-- one pinned ROCm LLVM development build produces a reproducible inspected
-  HSACO without shelling out to COMGR or command-line link tools.
+- one pinned upstream LLVM development build produces a reproducible inspected
+  HSACO without COMGR or command-line link tools.
 
 Primary ownership: `tools/fe2o3-llvm-link-worker` and native tests.
 
@@ -353,12 +357,13 @@ independent CPU oracles on MI300X.
 
 Finalized Worker V2 bundle admission, currentness leases, the authenticated
 load state machine, generated alpha/zeta safe dispatch SPI, and the reviewed
-runtime adapter already exist. The generated-safe MI300X test now exercises
-those runtime pieces with explicit test authority. Canonical lease
-reacquisition and the load-envelope schema now exist. This gate still requires
-production Cargo and application handoff, recovered host admission, and a production
-`WorkerV2PrerequisiteAuthenticatorV1`. Bidirectional
-external-device FFI, `gfx1151`, machine-code effect evidence, and Verus
+runtime adapter already exist. The generated-safe MI300X test exercises those
+runtime pieces with explicit test authority. Cargo envelope publication,
+canonical lease reacquisition, cooperative descriptor handoff, and recovered
+inert host admission also exist. This gate still requires a protected
+production application handoff and a production
+`WorkerV2PrerequisiteAuthenticatorV1`. Bidirectional external-device FFI,
+`gfx1151`, production-bound machine-code effect evidence, and Verus/compiler
 refinement also remain open.
 
 ## G8: Reproducibility, Evidence, and Release Gate

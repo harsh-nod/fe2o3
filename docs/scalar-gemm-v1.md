@@ -1,12 +1,12 @@
 # Scalar GEMM V1
 
-The exact Worker V2 request/response validation boundary and the remaining
-frontend-owned source-to-IR join are documented in
+The exact Worker V2 request/response validation boundary and the subsequently
+completed frontend-owned source-to-IR transfer are documented in
 [`scalar-gemm-v1-worker-handoff.md`](scalar-gemm-v1-worker-handoff.md).
 
-Status: implementation contract. This document defines the first advanced
-kernel vertical slice; it does not claim that the slice is runnable, verified,
-or accepted.
+Status: implementation contract. Bounded implementation and evidence paths now
+exist, but this contract does not by itself grant runnable, verified, or
+accepted authority.
 
 ## Profile
 

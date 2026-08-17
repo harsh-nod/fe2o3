@@ -1,6 +1,8 @@
 # General Typed Dispatch V1
 
-Status: interface contract for the next CUDA-Oxide parity vertical slice.
+Status: living interface contract for a bounded CUDA-Oxide parity vertical
+slice. The compiler-to-HSACO and test-authority execution slice is implemented;
+the production-safe exit gate remains open.
 
 This milestone connects the existing general scalar/slice ABI model and
 packing plan to a second typed kernel selected from one authenticated Worker V2
@@ -32,8 +34,10 @@ Worker V2 load envelope, recovers it from exact retained inputs, and transfers
 the canonical envelope and artifact-directory descriptors to the application
 while retaining a fresh current-publication lease. The accepted host consumer
 revalidates that descriptor handoff and currentness before reaching exact
-prerequisite admission. No production authenticator, Verus proof, or
-machine-code effect/refinement evidence is bound to the payload.
+prerequisite admission. No production authenticator binds the bounded
+Verus-facing proof-record and physical machine-effect evidence foundations to
+compiler origin and the exact payload. The records grant no proof or launch
+authority and establish no source-to-machine or Verus-to-machine refinement.
 The production-safe exit gate therefore remains open, this result is not a
 CUDA-Oxide parity claim, and Complete remains `0`.
 
@@ -183,10 +187,12 @@ safe code cannot reuse or free a borrowed allocation while an input, view, or
 packed value remains live. Safe launch code must additionally retain allocation
 provenance, alias admission, and borrowed resources through completion.
 
-The current checked-view API cannot yet form two simultaneous mutable subviews
-of one allocation through a safe split operation. That is a remaining API and
-proof obligation even though runtime interval admission rejects overlapping
-regions supplied through existing trusted paths.
+The checked-view API now provides safe two-way and guarded three-way mutable
+splits. The resulting views retain parent-allocation identity and exact,
+non-overlapping allocation-relative intervals, with compile-fail coverage for
+parent reuse and lifetime escape. A mechanical Verus proof of the split
+implementation and general same-allocation hardware coverage remain open;
+runtime interval admission continues to reject overlap.
 
 ### HSA resolution and dispatch
 
@@ -261,26 +267,27 @@ refinement, or repository-wide CUDA-Oxide parity.
    non-clone lease.
 2. Implemented: publication-intent derivation is sealed behind the finalizer API
    with raw and finalized snapshots; Cargo's duplicate derivation is removed.
-3. Implemented schema: a canonical bounded Worker V2 load envelope contains the
-   container, bundle/proof index, descriptor lineage, raw/finalized identities,
-   and canonical published claim. Cargo must now publish it durably.
-4. Add recovered host admission from a decoded envelope plus a freshly
-   reacquired lease, and hand a read-only pinned descriptor to the application.
-   Re-run the generated-safe MI300X matrix without an external-HSACO handoff;
-   retain the explicit fake-authenticator label until the next gates pass.
-5. Produce bounded machine-code effect evidence for each final alpha/zeta entry
-   and its closed call graph. Bind accepted global loads/stores and address
-   derivations to the descriptor effects, analyzer/toolchain identity, kernel
-   identity, and exact payload digest; reject unsupported or expanded effects.
-6. Prove alpha/zeta bounds, overflow freedom, injective writes/race freedom,
-   and functional postconditions in Verus. Bind proof/tool identities and
-   results to the source contract, launch contract, machine-code evidence, and
-   finalized artifact; reject mutations and replay.
+3. Implemented: Cargo durably publishes and reconstructs the canonical bounded
+   Worker V2 load envelope containing the container, bundle/proof index,
+   descriptor lineage, raw/finalized identities, and published claim.
+4. Implemented inert foundation: recovered host admission consumes that
+   envelope with a freshly reacquired lease, and the cooperative application
+   handoff transfers read-only pinned descriptors. A protected production
+   application handoff and a generated-safe MI300X replay without the external
+   HSACO test handoff remain open.
+5. Implemented inert foundation: bounded physical machine-effect evidence and
+   executable-evidence records bind reviewed mechanics and identities. Direct
+   extraction of each final alpha/zeta entry's complete machine effects and
+   production admission of that evidence remain open.
+6. Implemented inert foundation: bounded alpha/zeta proof records bind declared
+   proof inputs, tools, identities, and freshness. They grant no proof authority,
+   are not compiler or machine-code refinement, and are not production-bound to
+   the final payload.
 7. Implement a production `WorkerV2PrerequisiteAuthenticatorV1` only after the
    compiler, Verus, proof-to-executable, Rust-layout, and machine-effect inputs
    are reviewed and immutable; reject mutation and stale replay.
-8. Add safe split mutable views over one allocation with exact disjoint-region
-   witnesses, compile-fail lifetime/overlap coverage, runtime alias admission,
-   and MI300X execution.
+8. Implemented API foundation: safe mutable splits retain exact disjoint
+   allocation-relative regions with unit and compile-fail coverage. Mechanical
+   Verus correspondence and general same-allocation MI300X execution remain.
 9. Only then broaden signatures, control flow, AMD features, async behavior,
    and architecture coverage beyond the bounded `gfx942` profile.
