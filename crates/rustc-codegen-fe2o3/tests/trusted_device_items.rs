@@ -340,9 +340,9 @@ fn malformed_registrations_invalidate_preseeded_artifacts_atomically() {
     let _lock = backend_test_lock();
     let workspace = workspace();
     let artifact_dir = workspace.join("target/fe2o3");
-    std::fs::create_dir_all(&artifact_dir).expect("create artifact directory");
 
     for &(feature, expected) in &REGISTRATION_REJECTED_CASES[..2] {
+        initialize_owned_artifact_directory(&workspace);
         let kernel = feature.replace('-', "_");
         let artifacts = ["ll", "o", "hsaco"]
             .map(|extension| artifact_dir.join(format!("{kernel}.{extension}")));

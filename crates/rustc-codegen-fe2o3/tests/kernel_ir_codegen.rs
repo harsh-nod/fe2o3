@@ -944,6 +944,7 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     let _lock = backend_test_lock();
     let workspace = workspace();
 
+    assert_vecadd_publication(&workspace, "build", false);
     let vecadd_artifacts = artifact_paths(&workspace, "vecadd");
     preseed(&vecadd_artifacts);
     let invalid = backend(&workspace, "build", "fe2o3-vecadd", Some("kernel-ir"));
@@ -964,6 +965,7 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
         );
     }
 
+    assert_vecadd_publication(&workspace, "build", false);
     let copy_artifacts = artifact_paths(&workspace, "copy");
     preseed(&copy_artifacts);
     let unsupported = backend(&workspace, "build", "fe2o3-copy", Some("kernel-ir-v1"));
