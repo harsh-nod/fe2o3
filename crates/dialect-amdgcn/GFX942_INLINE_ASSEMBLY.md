@@ -28,8 +28,13 @@ convergent instructions, immediates, inout operands, constraint mismatches, type
 missing capability declarations, and non-gfx942 targets before returning any LLVM text. Scalar
 ALU instructions such as `s_add_u32` are excluded because they modify SCC, which V1 does not model.
 
-The generated module uses the `amdgcn-amd-amdhsa` triple and fixes `target-cpu` to `gfx942`. Direct
-ROCm LLVM `llc` and `ld.lld` probes produce code object V6 without COMGR.
+The generated module uses the `amdgcn-amd-amdhsa` triple and fixes `target-cpu` to `gfx942`. The
+configured test `rocm_compiles_links_and_inspects_gfx942_inline_assembly` is ignored with
+`requires ROCm LLVM tools with gfx942 support`; it uses `FE2O3_LLC`, `FE2O3_LLD`,
+`FE2O3_LLVM_READELF`, and `FE2O3_LLVM_OBJDUMP` as a test-only code-object probe. It is not the
+production finalizer and grants no compiler- or machine-correctness evidence. Production-directed
+finalization instead uses pinned upstream LLVM target-machine APIs and the in-process LLD library
+API, without COMGR or command-line `clang`, `llc`, or `ld.lld`.
 
 ## Remaining work
 

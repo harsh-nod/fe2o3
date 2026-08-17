@@ -18,6 +18,10 @@ G1 accepts:
   LLVM phi nodes;
 - global and workgroup pointer memory access, explicit static or dynamic LDS,
   scoped fences, and convergence-bearing workgroup barriers;
+- aligned `i32`, `u32`, `i64`, and `u64` atomic loads, stores,
+  compare-exchange, exchange, arithmetic and bitwise RMW operations on global
+  memory at workgroup/device/system scope and workgroup memory at workgroup
+  scope;
 - workgroup-memory/barrier capabilities and exact wave32 or wave64 function
   attributes;
 - void return and unreachable.
@@ -62,9 +66,10 @@ predecessorless block arguments, irreducible control flow,
 private/constant/generic memory, unsupported scalar types, legacy barriers
 without convergence evidence, unproved barrier control flow, missing LDS or
 barrier capability declarations, under-aligned or unaddressable LDS, scoped
-atomics, ambiguous workgroup `Alloca`, and every operation not explicitly
-listed above. It does not select a GPU processor, invoke LLVM, produce an
-artifact, or grant launch authority.
+atomics with unsupported types, address spaces, scopes, capabilities, or
+volatile access, ambiguous workgroup `Alloca`, and every operation not
+explicitly listed above. It does not select a GPU processor, invoke LLVM,
+produce an artifact, or grant launch authority.
 
 ## Inert compiler-module construction
 
@@ -108,9 +113,10 @@ partial text. It is not bitcode, a linked module, a code object, compiler
 provenance, or publication/load/launch authority. The emitted text binds only
 the AMDGPU target triple. A target data layout, exact processor, and code-object
 version are deliberately unbound and remain required blockers before artifact
-construction. The ignored `gfx1151` toolchain probe demonstrates that an
-external Clang invocation can compile and disassemble current fixtures; that
-probe is test evidence, not target binding or production integration. The
+construction. The configured `gfx1151` toolchain probe is ignored with
+`requires clang and LLVM tools with gfx1151 support`. Its external Clang
+compilation and disassembly are historical test evidence, not target binding,
+general target support, or production integration. The
 bounded rustc-facing wrapper in `kernel_ir_codegen.rs` additionally limits all
 input graph dimensions before this path can be wired to collection.
 
@@ -142,9 +148,11 @@ LLVM is returned. Kernel-root body translation, broader Scalar V2 operations
 and result forms, and code-object construction remain separate work.
 
 The crate has no in-process LLVM target-machine/code-object API. Consequently
-these control-flow tests stop at exact, target-bound LLVM text. The exact
+these control-flow tests stop at exact, target-bound LLVM text. This boundary
+is specific to the dialect crate; the production-directed finalizer elsewhere
+uses pinned upstream LLVM target-machine APIs and in-process LLD. The exact
 device-lowering entry point emits the reviewed gfx942 data layout,
 `target-cpu=gfx942`, wave64 features, and `-xnack` on every definition.
 Code-object construction, object validation, Worker transport, and hardware
-dispatch remain separate wiring obligations; no COMGR or command-line tool is
-used here.
+dispatch remain separate obligations for this control-flow path; no COMGR or
+command-line tool is used by the lowering entry point.

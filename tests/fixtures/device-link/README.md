@@ -59,4 +59,8 @@ compatible with the LLVM bitcode emitted by HIP Clang.
 
 The runner invokes no COMGR and performs no GPU load or launch. Passing results
 establish source, LLVM closure, ABI-symbol, role, target, verifier, object, and
-CPU-oracle evidence only. They grant no load or launch authority.
+CPU-oracle evidence only. They grant no compiler-correctness, machine-code
+correctness, load, launch, or general target-support authority. Its HIP/Clang
+and command-line LLVM tools are fixture-only; the production-directed GPU
+finalizer uses pinned upstream LLVM target-machine APIs and in-process LLD and
+does not invoke `clang`, `llc`, or `ld.lld`.

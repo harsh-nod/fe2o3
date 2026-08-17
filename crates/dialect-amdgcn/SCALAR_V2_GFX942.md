@@ -53,8 +53,12 @@ rejected because the LLVM 18 gfx942 backend path is unsupported.
 - The dialect entry point emits one deterministic scalar helper module. Merging
   that helper into the existing multi-kernel compiler-module path is a later
   integration step.
-- A 1,544-operation module covering every admitted gfx942 scalar lowering is
-  compiled with ROCm clang. The functions are helpers rather than dispatchable
-  kernel entries, so this slice records no GPU execution evidence.
+- The configured test `rocm_clang_compiles_every_accepted_gfx942_scalar_path`
+  is ignored with `requires ROCm clang with gfx942 support`. It asks
+  `FE2O3_SCALAR_CLANG` to compile the 1,544-operation helper module at O0 and
+  O2. This command-line object probe is test-only, does not link or dispatch a
+  kernel, and records no GPU execution or machine-correctness evidence. The
+  production-directed finalizer instead uses pinned upstream LLVM
+  target-machine APIs and in-process LLD.
 - No Verus proof, signed production evidence, or independent Complete review is
   included here.

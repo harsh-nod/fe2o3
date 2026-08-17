@@ -17,6 +17,11 @@ FE2O3_TARGET=gfx1151 \
 scripts/differential/run.sh
 ```
 
+This is a legacy opt-in differential smoke target, not a production-support
+claim for `gfx1151` or arbitrary `FE2O3_TARGET` values. Production-directed GPU
+profiles are separately bounded to named exact `gfx942:xnack-` configurations
+and their code-object, wave, and workgroup requirements.
+
 `HSA_ENABLE_DXG_DETECTION` is needed only for WSL `/dev/dxg`. Native Linux uses
 `/dev/kfd`. `HIPCXX` or `CXX` may name one compiler executable. Per-command
 timeouts and the canonical artifact can be configured with:
