@@ -6,13 +6,17 @@
 //! identity, then issues one move-only link permit. Consuming that permit is the only broker API
 //! that can form a reservation-bound W0 request. Completion admits only a terminal V4 transcript
 //! that matches the reservation and a W0 output carrying the exact request binding.
-//! The machine then owns the external-anchor transition token through signature verification and
-//! records exactly one logical consume decision.
+//! Anchor preparation consumes the machine into a move-only pre-challenge capability. Only
+//! durable preparation can consume that capability, generate a service-owned random attempt nonce,
+//! form the nonce-bound transaction and challenge, and release challenge bytes after exact W0
+//! staging and canonical `Prepared` record fsync. The durable transaction then owns signature
+//! verification and one logical consume decision.
 //!
-//! `AUTHORITY=none`: this is a deterministic in-memory model. It does not make reservation,
-//! anti-rollback state, anchor nonce freshness, or publication durable. It does not invoke a
-//! linker, persist bytes, publish an artifact, authenticate anchor-key provenance, reconcile
-//! multiple writers, or grant replay, execution, publication, runtime, or GPU authority.
+//! `AUTHORITY=none`: this type-state model does not itself generate the service attempt nonce. It
+//! does not make reservation, anti-rollback state, durable nonce freshness, or publication
+//! durable. It does not invoke a linker, persist bytes, publish an artifact, authenticate
+//! anchor-key provenance, reconcile multiple writers, or grant replay, execution, publication,
+//! runtime, or GPU authority.
 //! Session ID and nonce uniqueness are caller preconditions; this model only rejects zero values,
 //! an ID/nonce collision, and a second reservation in one machine lifetime. The retained Linux
 //! admission is revalidated once at public reservation; later pure transitions do not provide
@@ -60,13 +64,15 @@
 
 use std::error::Error;
 use std::fmt;
+use std::fs::File;
+use std::os::fd::OwnedFd;
 
 use fe2o3_build_authority::{
     BrokerSessionClaimV4, CompletedBrokerTranscriptV4, HOST_LINK_OUTPUT_MODE_V4,
 };
 use fe2o3_external_anchor_protocol::{
-    ANCHOR_CHALLENGE_WIRE_LEN_V1, AnchorDecisionV1, AnchoredStateV1, CallerNonceV1,
-    HashChainHeadV1, PendingAnchorTransitionV1, PinnedAnchorKeyV1, PreparedAnchorAdvanceV1,
+    ANCHOR_CHALLENGE_WIRE_LEN_V1, ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorDecisionV1,
+    AnchoredStateV1, CallerNonceV1, HashChainHeadV1, PendingAnchorTransitionV1, PinnedAnchorKeyV1,
     TransactionDigestV1,
 };
 use fe2o3_host_link_closure::{
@@ -89,7 +95,7 @@ pub const BROKER_V4_COMPLETED_TRANSCRIPT_DIGEST_DOMAIN_V1: &[u8] =
 
 const BROKER_SESSION_CLAIM_DIGEST_DOMAIN_V1: &[u8] = b"FE2O3/BROKER-V4/SESSION-CLAIM-DIGEST/V1\0";
 const BROKER_SESSION_ANCHOR_TRANSACTION_DOMAIN_V1: &[u8] =
-    b"FE2O3/BROKER-SESSION/ANCHOR-TRANSACTION/V1\0";
+    b"FE2O3/BROKER-SESSION/ANCHOR-TRANSACTION/SERVICE-ATTEMPT/V1\0";
 /// Domain for the exact reservation digest carried by one move-only link permit.
 pub const BROKER_LINK_RESERVATION_DIGEST_DOMAIN_V1: &[u8] =
     b"FE2O3/BROKER-SESSION/LINK-RESERVATION/V1\0";
@@ -142,6 +148,11 @@ impl DurablePublicationPlanIdentityV1 {
     pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, BrokerSessionMachineErrorV1> {
         require_nonzero(bytes, BrokerSessionErrorKindV1::ZeroDurablePublicationPlan)?;
         Ok(Self(bytes))
+    }
+
+    /// Returns the exact publication-plan identity bytes.
+    pub const fn as_bytes(self) -> [u8; 32] {
+        self.0
     }
 }
 
@@ -316,30 +327,112 @@ impl BrokerSessionObservationV1 {
     }
 }
 
-/// Canonical challenge bytes emitted while the service retains the pending anchor token.
-#[derive(Clone, Eq, PartialEq)]
-pub struct BrokerAnchorChallengeObservationV1 {
-    bytes: [u8; ANCHOR_CHALLENGE_WIRE_LEN_V1],
+/// Move-only pre-challenge session whose service attempt nonce does not exist yet.
+///
+/// Construction consumes the only [`BrokerSessionMachineV1`] after it records the caller-visible
+/// stable anchor inputs. There is deliberately no nonce, challenge, observation, serialization,
+/// or inner-machine accessor. Only durable preparation inside this crate can consume the
+/// capability, generate the service attempt nonce, and release challenge bytes after staging the
+/// exact W0 output and fsyncing the canonical `Prepared` record.
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::BrokerAnchorPreparedSessionV1;
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<BrokerAnchorPreparedSessionV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::BrokerAnchorPreparedSessionV1;
+/// fn leak_challenge(prepared: BrokerAnchorPreparedSessionV1) {
+///     let _ = prepared.challenge_bytes();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::BrokerAnchorPreparedSessionV1;
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<BrokerAnchorPreparedSessionV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::BrokerAnchorPreparedSessionV1;
+/// fn leak_nonce(prepared: BrokerAnchorPreparedSessionV1) {
+///     let _ = prepared.service_attempt_nonce();
+/// }
+/// ```
+pub struct BrokerAnchorPreparedSessionV1 {
+    machine: BrokerSessionMachineV1,
 }
 
-impl BrokerAnchorChallengeObservationV1 {
-    /// Returns exact canonical protocol bytes. These bytes carry no session capability.
-    pub const fn as_bytes(&self) -> &[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1] {
-        &self.bytes
-    }
+/// Move-only proof that one exact broker session reached a verified external-anchor commit.
+///
+/// Fields, output bytes, and retained service-root descriptor are inaccessible to callers. The
+/// durable session transaction is the only in-tree consumer. This value is not serializable and
+/// carries the fixed `AUTHORITY=none` marker.
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::CommittedBrokerPublicationV1;
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<CommittedBrokerPublicationV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::CommittedBrokerPublicationV1;
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<CommittedBrokerPublicationV1>();
+/// ```
+pub struct CommittedBrokerPublicationV1 {
+    parts: BrokerCommittedPublicationPartsV1,
+}
 
+impl fmt::Debug for CommittedBrokerPublicationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CommittedBrokerPublicationV1")
+            .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
+            .field("output_length", &self.parts.binding.output_length)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CommittedBrokerPublicationV1 {
     /// Returns the fixed non-authority marker.
     pub const fn authority(&self) -> &'static str {
         BROKER_SESSION_MACHINE_AUTHORITY_V1
     }
+
+    /// This inert handoff never grants publication authority by itself.
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn into_parts(self) -> BrokerCommittedPublicationPartsV1 {
+        self.parts
+    }
 }
 
-impl fmt::Debug for BrokerAnchorChallengeObservationV1 {
+impl BrokerAnchorPreparedSessionV1 {
+    /// Returns the fixed non-authority marker.
+    pub const fn authority(&self) -> &'static str {
+        BROKER_SESSION_MACHINE_AUTHORITY_V1
+    }
+
+    /// Returns only the fixed `AnchorPrepared` lifecycle stage.
+    pub const fn stage(&self) -> BrokerSessionStageV1 {
+        BrokerSessionStageV1::AnchorPrepared
+    }
+
+    pub(crate) fn into_machine(self) -> BrokerSessionMachineV1 {
+        self.machine
+    }
+}
+
+impl fmt::Debug for BrokerAnchorPreparedSessionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("BrokerAnchorChallengeObservationV1")
+            .debug_struct("BrokerAnchorPreparedSessionV1")
             .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
-            .field("length", &self.bytes.len())
+            .field("stage", &BrokerSessionStageV1::AnchorPrepared)
             .finish_non_exhaustive()
     }
 }
@@ -406,6 +499,8 @@ pub enum BrokerSessionErrorKindV1 {
     AnchorNonceMismatch,
     /// Fixed internal state was inconsistent; the machine failed closed.
     InternalState,
+    /// Exact service-root or admitted-output handoff could not be retained.
+    DurableHandoff,
 }
 
 /// Panic-free error from the inert session lifecycle model.
@@ -439,9 +534,24 @@ impl Error for BrokerSessionMachineErrorV1 {}
 
 /// Broker-owned, move-only model of one complete session lifecycle.
 ///
-/// Retained client and output capabilities have no accessors and never leave this value. All
-/// methods are fixed-space and deterministic apart from the explicit cryptographic observation
-/// bytes supplied to [`Self::observe_anchor`].
+/// Retained client and output capabilities have no accessors and never leave this value. Anchor
+/// preparation consumes the machine into [`BrokerAnchorPreparedSessionV1`] before any service
+/// attempt nonce, transaction, or challenge exists. External code cannot begin or observe the
+/// anchor until durable preparation returns a [`crate::BrokerDurableSessionTransactionV1`].
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::BrokerSessionMachineV1;
+/// fn bypass_durability(mut machine: BrokerSessionMachineV1, observation: &[u8]) {
+///     let _ = machine.observe_anchor(observation);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::{BrokerAnchorModeV1, BrokerSessionMachineV1};
+/// fn choose_attempt(machine: BrokerSessionMachineV1) {
+///     let _ = machine.begin_anchor(BrokerAnchorModeV1::Advance, [7; 32]);
+/// }
+/// ```
 pub struct BrokerSessionMachineV1 {
     core: SessionCoreV1<ProtectedBrokerServiceAdmissionV1, AdmittedHostOutputV1>,
 }
@@ -492,7 +602,7 @@ impl BrokerSessionMachineV1 {
         reservation: BrokerSessionReservationV1,
     ) -> Result<BrokerHostLinkPermitV1, BrokerSessionMachineErrorV1> {
         self.core.require_reservation_capacity()?;
-        admission.validate_continuity().map_err(|_| {
+        admission.validate_session_continuity().map_err(|_| {
             BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::ClientIdentityRevalidation)
         })?;
         let client_matches = admission
@@ -547,32 +657,22 @@ impl BrokerSessionMachineV1 {
         self.core.complete(output, binding)
     }
 
-    /// Prepares the exact anchor transaction from retained session and completion identities.
+    /// Consumes this machine into one opaque pre-challenge anchor preparation.
+    ///
+    /// This retains the caller-visible stable position, mode, and pinned key. It does not form an
+    /// anchor transaction or challenge. The service attempt nonce is generated later inside
+    /// durable preparation and is bound into both.
     pub fn prepare_anchor(
-        &mut self,
+        mut self,
+        mode: BrokerAnchorModeV1,
         stable: AnchoredStateV1,
         key: &PinnedAnchorKeyV1,
-    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
-        self.core.prepare_anchor(stable, key)
+    ) -> Result<BrokerAnchorPreparedSessionV1, BrokerSessionMachineErrorV1> {
+        self.core.prepare_anchor(mode, stable, key)?;
+        Ok(BrokerAnchorPreparedSessionV1 { machine: self })
     }
 
-    /// Begins one advance or recovery challenge using the reservation's exact nonce.
-    ///
-    /// The pending verification token remains service-side. Only canonical challenge bytes leave
-    /// the machine.
-    pub fn begin_anchor(
-        &mut self,
-        mode: BrokerAnchorModeV1,
-        key: &PinnedAnchorKeyV1,
-    ) -> Result<BrokerAnchorChallengeObservationV1, BrokerSessionMachineErrorV1> {
-        self.core.begin_anchor(mode, key)
-    }
-
-    /// Consumes the one pending token and verifies one signed external-anchor observation.
-    ///
-    /// Exact proposed position commits; exact prior position aborts. Invalid or substituted bytes
-    /// permanently invalidate this in-memory machine instance.
-    pub fn observe_anchor(
+    pub(crate) fn observe_anchor(
         &mut self,
         observation: &[u8],
     ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
@@ -589,6 +689,121 @@ impl BrokerSessionMachineV1 {
     ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
         self.core.consume_publication(transcript)
     }
+
+    /// Consumes this machine into the only move-only committed durable-publication handoff.
+    ///
+    /// The exact terminal transcript is revalidated before the retained service root and W0
+    /// output leave the machine. The result remains inert and grants no filesystem authority on
+    /// its own; it is intended for `BrokerDurableSessionTransactionV1`.
+    pub fn into_committed_publication(
+        mut self,
+        transcript: &CompletedBrokerTranscriptV4,
+    ) -> Result<CommittedBrokerPublicationV1, BrokerSessionMachineErrorV1> {
+        self.core.validate_committed_publication(transcript)?;
+        let binding = self.core.durable_binding()?;
+        let challenge = self.core.anchor_challenge()?;
+        let anchor_key_bytes = self
+            .core
+            .anchor_expected
+            .ok_or_else(internal_state_error)?
+            .anchor_key_bytes;
+        let anchor_observation = self
+            .core
+            .anchor_commit
+            .ok_or_else(internal_state_error)?
+            .observation;
+        let client = self.core.client.take().ok_or_else(internal_state_error)?;
+        client.validate_session_continuity().map_err(|_| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::DurableHandoff)
+        })?;
+        let service_root = client.into_service_root();
+        let output = self.core.output.take().ok_or_else(internal_state_error)?;
+        Ok(CommittedBrokerPublicationV1 {
+            parts: BrokerCommittedPublicationPartsV1 {
+                service_root,
+                output,
+                binding,
+                challenge,
+                anchor_key_bytes,
+                anchor_observation,
+            },
+        })
+    }
+
+    pub(crate) fn durable_preparation_parts(
+        &self,
+    ) -> Result<BrokerDurablePreparationPartsV1, BrokerSessionMachineErrorV1> {
+        self.core
+            .require_stage(BrokerSessionStageV1::AnchorPrepared)?;
+        let client = self.core.client.as_ref().ok_or_else(internal_state_error)?;
+        let output = self.core.output.as_ref().ok_or_else(internal_state_error)?;
+        let service_root = client.try_clone_service_root().map_err(|_| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::DurableHandoff)
+        })?;
+        let output_file = output.try_clone_file().map_err(|_| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::DurableHandoff)
+        })?;
+        let preparation = self
+            .core
+            .anchor_preparation
+            .ok_or_else(internal_state_error)?;
+        Ok(BrokerDurablePreparationPartsV1 {
+            service_root,
+            output_file,
+            binding: self.core.durable_binding()?,
+            anchor_key_bytes: preparation.anchor_key_bytes,
+        })
+    }
+
+    pub(crate) fn begin_anchor_with_service_nonce(
+        &mut self,
+        service_attempt_nonce: [u8; 32],
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.core.begin_anchor(service_attempt_nonce)
+    }
+
+    pub(crate) fn anchor_challenge(
+        &self,
+    ) -> Result<[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1], BrokerSessionMachineErrorV1> {
+        self.core.anchor_challenge()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BrokerDurableBindingV1 {
+    pub(crate) session_id: [u8; 32],
+    pub(crate) session_nonce: [u8; 32],
+    pub(crate) reservation_digest: [u8; 32],
+    pub(crate) request_nonce_sha256: [u8; 32],
+    pub(crate) client_pid: u32,
+    pub(crate) client_start_time_ticks: u64,
+    pub(crate) claim_digest: [u8; 32],
+    pub(crate) transcript_digest: [u8; 32],
+    pub(crate) transcript_binding_identity: [u8; 32],
+    pub(crate) transcript_request_identity: [u8; 32],
+    pub(crate) transcript_plan_identity: [u8; 32],
+    pub(crate) transcript_closure_identity: [u8; 32],
+    pub(crate) transcript_grant_identity: [u8; 32],
+    pub(crate) output_digest: [u8; 32],
+    pub(crate) output_length: u64,
+    pub(crate) output_mode: u32,
+    pub(crate) durable_plan: [u8; 32],
+}
+
+pub(crate) struct BrokerDurablePreparationPartsV1 {
+    pub(crate) service_root: OwnedFd,
+    pub(crate) output_file: File,
+    pub(crate) binding: BrokerDurableBindingV1,
+    pub(crate) anchor_key_bytes: [u8; 32],
+}
+
+pub(crate) struct BrokerCommittedPublicationPartsV1 {
+    pub(crate) service_root: OwnedFd,
+    pub(crate) output: AdmittedHostOutputV1,
+    pub(crate) binding: BrokerDurableBindingV1,
+    pub(crate) challenge: [u8; ANCHOR_CHALLENGE_WIRE_LEN_V1],
+    pub(crate) anchor_key_bytes: [u8; 32],
+    pub(crate) anchor_observation: [u8; ANCHOR_OBSERVATION_WIRE_LEN_V1],
 }
 
 #[derive(Clone, Copy)]
@@ -626,6 +841,13 @@ struct CompletionBindingV1 {
     durable_plan: DurablePublicationPlanIdentityV1,
     broker_reservation: Option<[u8; 32]>,
     request_nonce_sha256: [u8; 32],
+    output_length: u64,
+    output_mode: u32,
+    transcript_binding_identity: [u8; 32],
+    transcript_request_identity: [u8; 32],
+    transcript_plan_identity: [u8; 32],
+    transcript_closure_identity: [u8; 32],
+    transcript_grant_identity: [u8; 32],
 }
 
 impl CompletionBindingV1 {
@@ -672,6 +894,13 @@ impl CompletionBindingV1 {
                 .broker_reservation()
                 .map(|reservation| *reservation.sha256().as_bytes()),
             request_nonce_sha256: *output.request_nonce_sha256().as_bytes(),
+            output_length: output.size(),
+            output_mode: output.mode(),
+            transcript_binding_identity: transcript.binding_identity(),
+            transcript_request_identity: transcript.request_identity(),
+            transcript_plan_identity: transcript.plan_identity(),
+            transcript_closure_identity: transcript.closure_identity(),
+            transcript_grant_identity: transcript.grant_identity(),
         })
     }
 
@@ -687,6 +916,13 @@ impl CompletionBindingV1 {
             )?,
             broker_reservation: None,
             request_nonce_sha256: [0; 32],
+            output_length: transcript.output_length(),
+            output_mode: transcript.output_mode(),
+            transcript_binding_identity: transcript.binding_identity(),
+            transcript_request_identity: transcript.request_identity(),
+            transcript_plan_identity: transcript.plan_identity(),
+            transcript_closure_identity: transcript.closure_identity(),
+            transcript_grant_identity: transcript.grant_identity(),
         })
     }
 }
@@ -698,12 +934,27 @@ struct LinkBindingV1 {
 }
 
 #[derive(Clone, Copy)]
+struct AnchorPreparationV1 {
+    mode: BrokerAnchorModeV1,
+    stable_sequence: u64,
+    stable_head: HashChainHeadV1,
+    anchor_key_bytes: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
 struct AnchorExpectedV1 {
     transaction: TransactionDigestV1,
     expected_sequence: u64,
     prior_head: HashChainHeadV1,
     proposed_head: HashChainHeadV1,
     nonce: [u8; 32],
+    anchor_key_bytes: [u8; 32],
+    challenge: [u8; ANCHOR_CHALLENGE_WIRE_LEN_V1],
+}
+
+#[derive(Clone, Copy)]
+struct AnchorCommitBindingV1 {
+    observation: [u8; ANCHOR_OBSERVATION_WIRE_LEN_V1],
 }
 
 struct SessionCoreV1<C, O> {
@@ -713,9 +964,10 @@ struct SessionCoreV1<C, O> {
     reservation: Option<ReservationBindingV1>,
     completion: Option<CompletionBindingV1>,
     link: Option<LinkBindingV1>,
-    prepared: Option<PreparedAnchorAdvanceV1>,
+    anchor_preparation: Option<AnchorPreparationV1>,
     pending: Option<PendingAnchorTransitionV1>,
     anchor_expected: Option<AnchorExpectedV1>,
+    anchor_commit: Option<AnchorCommitBindingV1>,
 }
 
 impl<C, O> SessionCoreV1<C, O> {
@@ -727,9 +979,10 @@ impl<C, O> SessionCoreV1<C, O> {
             reservation: None,
             completion: None,
             link: None,
-            prepared: None,
+            anchor_preparation: None,
             pending: None,
             anchor_expected: None,
+            anchor_commit: None,
         }
     }
 
@@ -847,47 +1100,57 @@ impl<C, O> SessionCoreV1<C, O> {
 
     fn prepare_anchor(
         &mut self,
+        mode: BrokerAnchorModeV1,
         stable: AnchoredStateV1,
         key: &PinnedAnchorKeyV1,
     ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
         self.require_stage(BrokerSessionStageV1::Completed)?;
-        let transaction = self.anchor_transaction()?;
-        let prepared = stable
-            .prepare(transaction, key)
-            .map_err(|_| anchor_protocol_error())?;
-        self.prepared = Some(prepared);
+        stable
+            .sequence()
+            .checked_add(1)
+            .ok_or_else(anchor_protocol_error)?;
+        self.anchor_preparation = Some(AnchorPreparationV1 {
+            mode,
+            stable_sequence: stable.sequence(),
+            stable_head: stable.head(),
+            anchor_key_bytes: key.to_bytes(),
+        });
         self.stage = BrokerSessionStageV1::AnchorPrepared;
         Ok(self.observation())
     }
 
     fn begin_anchor(
         &mut self,
-        mode: BrokerAnchorModeV1,
-        key: &PinnedAnchorKeyV1,
-    ) -> Result<BrokerAnchorChallengeObservationV1, BrokerSessionMachineErrorV1> {
+        service_attempt_nonce: [u8; 32],
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
         self.require_stage(BrokerSessionStageV1::AnchorPrepared)?;
-        let prepared = self.prepared.as_ref().ok_or_else(internal_state_error)?;
-        if prepared.anchor_key_identity() != key.identity() {
-            return Err(BrokerSessionMachineErrorV1::new(
-                BrokerSessionErrorKindV1::AnchorKeyMismatch,
-            ));
+        if service_attempt_nonce == [0; 32] {
+            return Err(anchor_protocol_error());
         }
-        let reservation = self.reservation.ok_or_else(internal_state_error)?;
-        let expected = AnchorExpectedV1 {
+        let preparation = self
+            .anchor_preparation
+            .take()
+            .ok_or_else(internal_state_error)?;
+        let key = PinnedAnchorKeyV1::from_bytes(preparation.anchor_key_bytes)
+            .map_err(|_| anchor_protocol_error())?;
+        let transaction = self.anchor_transaction(service_attempt_nonce)?;
+        let prepared =
+            AnchoredStateV1::from_local_state(preparation.stable_sequence, preparation.stable_head)
+                .prepare(transaction, &key)
+                .map_err(|_| anchor_protocol_error())?;
+        let mut expected = AnchorExpectedV1 {
             transaction: prepared.transaction(),
             expected_sequence: prepared.expected_sequence(),
             prior_head: prepared.prior_head(),
             proposed_head: prepared.proposed_head(),
-            nonce: reservation.nonce.0,
-        };
-        let Some(prepared) = self.prepared.take() else {
-            self.stage = BrokerSessionStageV1::Invalidated;
-            return Err(internal_state_error());
+            nonce: service_attempt_nonce,
+            anchor_key_bytes: preparation.anchor_key_bytes,
+            challenge: [0; ANCHOR_CHALLENGE_WIRE_LEN_V1],
         };
         let nonce = CallerNonceV1::from_bytes(expected.nonce);
-        let pending_result = match mode {
-            BrokerAnchorModeV1::Advance => prepared.begin_advance(nonce, key),
-            BrokerAnchorModeV1::Recovery => prepared.begin_recovery(nonce, key),
+        let pending_result = match preparation.mode {
+            BrokerAnchorModeV1::Advance => prepared.begin_advance(nonce, &key),
+            BrokerAnchorModeV1::Recovery => prepared.begin_recovery(nonce, &key),
         };
         let pending = match pending_result {
             Ok(pending) => pending,
@@ -898,10 +1161,11 @@ impl<C, O> SessionCoreV1<C, O> {
         };
         let mut bytes = [0_u8; ANCHOR_CHALLENGE_WIRE_LEN_V1];
         bytes.copy_from_slice(pending.challenge().as_bytes());
+        expected.challenge = bytes;
         self.anchor_expected = Some(expected);
         self.pending = Some(pending);
         self.stage = BrokerSessionStageV1::AnchorPending;
-        Ok(BrokerAnchorChallengeObservationV1 { bytes })
+        Ok(self.observation())
     }
 
     fn observe_anchor(
@@ -980,6 +1244,13 @@ impl<C, O> SessionCoreV1<C, O> {
                 return Err(error);
             }
         };
+        if result == BrokerSessionStageV1::AnchorCommitted {
+            let mut canonical = [0_u8; ANCHOR_OBSERVATION_WIRE_LEN_V1];
+            canonical.copy_from_slice(observation);
+            self.anchor_commit = Some(AnchorCommitBindingV1 {
+                observation: canonical,
+            });
+        }
         self.stage = result;
         Ok(self.observation())
     }
@@ -1015,7 +1286,80 @@ impl<C, O> SessionCoreV1<C, O> {
         Ok(self.observation())
     }
 
-    fn anchor_transaction(&self) -> Result<TransactionDigestV1, BrokerSessionMachineErrorV1> {
+    fn validate_committed_publication(
+        &self,
+        transcript: &CompletedBrokerTranscriptV4,
+    ) -> Result<(), BrokerSessionMachineErrorV1> {
+        self.require_stage(BrokerSessionStageV1::AnchorCommitted)?;
+        self.validate_consumed_transcript(transcript)
+    }
+
+    fn validate_consumed_transcript(
+        &self,
+        transcript: &CompletedBrokerTranscriptV4,
+    ) -> Result<(), BrokerSessionMachineErrorV1> {
+        let retained = self.completion.ok_or_else(internal_state_error)?;
+        let supplied = CompletionBindingV1::from_transcript(transcript)?;
+        if supplied.claim_digest != retained.claim_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::TranscriptClaimMismatch,
+            ));
+        }
+        if supplied.output_digest != retained.output_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::OutputDigestMismatch,
+            ));
+        }
+        if supplied.durable_plan != retained.durable_plan {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::DurablePublicationPlanMismatch,
+            ));
+        }
+        if supplied.transcript_digest != retained.transcript_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::TranscriptDigestMismatch,
+            ));
+        }
+        Ok(())
+    }
+
+    fn anchor_challenge(
+        &self,
+    ) -> Result<[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1], BrokerSessionMachineErrorV1> {
+        self.anchor_expected
+            .map(|expected| expected.challenge)
+            .ok_or_else(internal_state_error)
+    }
+
+    fn durable_binding(&self) -> Result<BrokerDurableBindingV1, BrokerSessionMachineErrorV1> {
+        let reservation = self.reservation.ok_or_else(internal_state_error)?;
+        let completion = self.completion.ok_or_else(internal_state_error)?;
+        let link = self.link.ok_or_else(internal_state_error)?;
+        Ok(BrokerDurableBindingV1 {
+            session_id: reservation.session_id.0,
+            session_nonce: reservation.nonce.0,
+            reservation_digest: link.broker_reservation,
+            request_nonce_sha256: link.request_nonce_sha256,
+            client_pid: reservation.client_pid,
+            client_start_time_ticks: reservation.client_start_time_ticks,
+            claim_digest: reservation.claim_digest,
+            transcript_digest: completion.transcript_digest,
+            transcript_binding_identity: completion.transcript_binding_identity,
+            transcript_request_identity: completion.transcript_request_identity,
+            transcript_plan_identity: completion.transcript_plan_identity,
+            transcript_closure_identity: completion.transcript_closure_identity,
+            transcript_grant_identity: completion.transcript_grant_identity,
+            output_digest: completion.output_digest,
+            output_length: completion.output_length,
+            output_mode: completion.output_mode,
+            durable_plan: completion.durable_plan.0,
+        })
+    }
+
+    fn anchor_transaction(
+        &self,
+        service_attempt_nonce: [u8; 32],
+    ) -> Result<TransactionDigestV1, BrokerSessionMachineErrorV1> {
         let reservation = self.reservation.ok_or_else(internal_state_error)?;
         let completion = self.completion.ok_or_else(internal_state_error)?;
         let mut digest = Sha256::new();
@@ -1027,6 +1371,7 @@ impl<C, O> SessionCoreV1<C, O> {
         digest.update(completion.transcript_digest);
         digest.update(completion.output_digest);
         digest.update(completion.durable_plan.0);
+        digest.update(service_attempt_nonce);
         Ok(TransactionDigestV1::from_bytes(digest.finalize().into()))
     }
 

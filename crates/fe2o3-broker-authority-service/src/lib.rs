@@ -27,9 +27,10 @@
 //! Liveness is inherently transient: the client can exit immediately after a successful check.
 //! `SO_PEERCRED` remains a connection-time credential snapshot, and neither it nor a pidfd proves
 //! exclusive ownership of the peer endpoint. Admission cannot attest how the supervisor acquired
-//! any descriptor before transfer. No replay registry, reservation, commit, host-link,
-//! publication, load, or launch operation is exposed. Anti-rollback state, exclusive endpoint
-//! ownership, and atomic admitted-output publication remain future work.
+//! any descriptor before transfer. The admission value itself exposes no replay registry,
+//! reservation, commit, host-link, publication, load, or launch operation. It supplies neither
+//! anti-rollback state nor exclusive endpoint ownership; the durable foundation described below
+//! does not add either guarantee or grant publication authority.
 //!
 //! The admission object is neither `Clone` nor `Copy`:
 //!
@@ -84,8 +85,17 @@
 //! retains an admitted client capability, issues one move-only reservation permit, and requires
 //! that permit before a reservation-bound W0 request can be formed. It binds one completed Broker
 //! V4 transcript and exact W0 output, then owns one external-anchor verification token through a
-//! logical consume or abort decision. It remains `AUTHORITY=none`: no storage, linker invocation,
-//! anti-rollback service, publication, or runtime authority is implemented.
+//! logical consume or abort decision. Anchor preparation consumes the machine into an opaque,
+//! move-only [`BrokerAnchorPreparedSessionV1`] before the service attempt nonce, transaction, or
+//! challenge exists. Durable preparation stages exact W0, obtains Linux `getrandom` entropy, and
+//! forms the nonce-bound challenge internally. [`BrokerDurableSessionTransactionV1`] provides the
+//! first live challenge-byte accessor only after the canonical prepared record is durable. A valid
+//! signed proposed-position observation can then precede the exact-mode final rename and published
+//! record. Restart can re-emit the challenge only through a validated
+//! [`BrokerRecoveredPreparedSessionV1`]. Recovery distinguishes prepared, anchor-committed,
+//! published, aborted, and invalid records. It remains `AUTHORITY=none`: this is not anti-rollback
+//! storage, cross-system atomicity, key provenance, multi-writer exclusion, linker invocation,
+//! publication authority, or runtime authority.
 //!
 #[cfg(not(target_os = "linux"))]
 compile_error!(
@@ -93,10 +103,23 @@ compile_error!(
 );
 
 #[cfg(target_os = "linux")]
+mod durable_session_consume;
+#[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 mod session;
 
+#[cfg(target_os = "linux")]
+pub use durable_session_consume::{
+    BROKER_DURABLE_SESSION_AUTHORITY_V1, BrokerDurableFaultPointV1, BrokerDurableOptionsV1,
+    BrokerDurableOutcomeV1, BrokerDurableRecordStageV1, BrokerDurableRecoveryV1,
+    BrokerDurableSessionErrorV1, BrokerDurableSessionTransactionV1,
+    BrokerRecoveredPreparedSessionV1, DurableBrokerPublicationPlanV1,
+    MAX_BROKER_DURABLE_OUTPUT_BYTES_V1, MAX_BROKER_DURABLE_RECORD_BYTES_V1,
+    inspect_durable_broker_session_v1, prepare_durable_broker_session_v1,
+    prepare_durable_broker_session_v1_with_options, recover_durable_broker_session_v1,
+    recover_durable_broker_session_v1_with_options, recover_prepared_durable_broker_session_v1,
+};
 #[cfg(target_os = "linux")]
 pub use linux::{
     AdmissionErrorKindV1, BrokerAuthorityServiceAdmissionErrorV1, ExpectedClientProcessIdentityV1,
@@ -106,11 +129,11 @@ pub use linux::{
 pub use session::{
     BROKER_LINK_RESERVATION_DIGEST_DOMAIN_V1, BROKER_SESSION_CAPACITY_V1,
     BROKER_SESSION_MACHINE_AUTHORITY_V1, BROKER_V4_COMPLETED_TRANSCRIPT_DIGEST_DOMAIN_V1,
-    BrokerAnchorChallengeObservationV1, BrokerAnchorModeV1, BrokerHostLinkPermitV1,
+    BrokerAnchorModeV1, BrokerAnchorPreparedSessionV1, BrokerHostLinkPermitV1,
     BrokerSessionErrorKindV1, BrokerSessionIdV1, BrokerSessionMachineErrorV1,
     BrokerSessionMachineV1, BrokerSessionNonceV1, BrokerSessionObservationV1,
-    BrokerSessionReservationV1, BrokerSessionStageV1, DurablePublicationPlanIdentityV1,
-    completed_broker_transcript_digest_v1,
+    BrokerSessionReservationV1, BrokerSessionStageV1, CommittedBrokerPublicationV1,
+    DurablePublicationPlanIdentityV1, completed_broker_transcript_digest_v1,
 };
 
 /// This foundation grants no execution, persistence, publication, or launch authority.

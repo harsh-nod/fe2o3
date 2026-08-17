@@ -3,6 +3,17 @@
 This crate coordinates local compiler artifact publication through bounded canonical records,
 descriptor-relative filesystem operations, and one cooperative output-directory lock.
 
+## Retained service directory
+
+`RetainedDurableDirectoryV1` is the lower-level descriptor-only mechanism used by the W1 durable
+broker-session journal. It admits an already-open, `FD_CLOEXEC`, service-owned `0700` directory
+and never accepts a path. Synced temporary files, durable redo promotion, exact-mode artifact
+staging, `RENAME_NOREPLACE`, and directory syncs are exposed through bounded fault boundaries.
+
+This mechanism is `AUTHORITY=none`. It validates file type, owner, mode, link count, retained
+directory identity, and operation ordering, but it does not interpret journal records, exclude
+multiple writers, authenticate checksums, or prevent same-host rollback.
+
 ## Durable published claims
 
 `AttemptScopedHsacoPublicationResultV1::published_claim` returns a

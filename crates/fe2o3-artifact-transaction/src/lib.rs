@@ -39,6 +39,7 @@ mod durable_link_publication;
 mod durable_published_claim;
 mod link_publication;
 mod managed_invocation_capability;
+mod retained_durable_directory;
 mod worker_v2_publication_intent;
 
 pub use attempt::{
@@ -89,6 +90,12 @@ pub use managed_invocation_capability::{
     BROKERED_INVOCATION_PREPARED_V1, BROKERED_INVOCATION_REQUEST_BYTES_V1,
     BrokeredInvocationCapabilityClaimV1, BrokeredInvocationCapabilityCodecErrorV1,
     BrokeredInvocationCapabilityRequestV1,
+};
+pub use retained_durable_directory::{
+    NoRetainedDurableDirectoryHooksV1, RetainedDurableArtifactBoundaryV1,
+    RetainedDurableDirectoryErrorV1, RetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
+    RetainedDurableFaultTimingV1, RetainedDurableRecordBoundaryV1,
+    RetainedDurableRecoveryBoundaryV1,
 };
 use rustix::fd::{AsRawFd, FromRawFd, OwnedFd};
 use rustix::fs::{

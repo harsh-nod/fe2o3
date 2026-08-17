@@ -127,6 +127,13 @@ fn completion(transcript: &CompletedBrokerTranscriptV4) -> CompletionBindingV1 {
         .unwrap(),
         broker_reservation: None,
         request_nonce_sha256: [0; 32],
+        output_length: transcript.output_length(),
+        output_mode: transcript.output_mode(),
+        transcript_binding_identity: transcript.binding_identity(),
+        transcript_request_identity: transcript.request_identity(),
+        transcript_plan_identity: transcript.plan_identity(),
+        transcript_closure_identity: transcript.closure_identity(),
+        transcript_grant_identity: transcript.grant_identity(),
     }
 }
 
@@ -166,12 +173,11 @@ fn signing_key(seed: u8) -> (SigningKey, PinnedAnchorKeyV1) {
 }
 
 fn signed_observation(
-    challenge: &BrokerAnchorChallengeObservationV1,
+    challenge: &AnchorChallengeV1,
     position: AnchorPositionV1,
     signing: &SigningKey,
 ) -> [u8; ANCHOR_OBSERVATION_WIRE_LEN_V1] {
-    let decoded = AnchorChallengeV1::decode(challenge.as_bytes()).unwrap();
-    let unsigned = UnsignedAnchorObservationV1::from_challenge(&decoded, position);
+    let unsigned = UnsignedAnchorObservationV1::from_challenge(challenge, position);
     let signature = signing.sign(&unsigned.signing_bytes()).to_bytes();
     unsigned.attach_signature(signature)
 }
@@ -205,15 +211,20 @@ fn anchor_pending(
     SessionCoreV1<(), ()>,
     CompletedBrokerTranscriptV4,
     SigningKey,
-    BrokerAnchorChallengeObservationV1,
+    AnchorChallengeV1,
 ) {
     let (mut core, transcript, signing, key) = completed_core(fixture, 80, 81);
     core.prepare_anchor(
+        mode,
         AnchoredStateV1::from_local_state(7, HashChainHeadV1::from_bytes(digest(82))),
         &key,
     )
     .unwrap();
-    let challenge = core.begin_anchor(mode, &key).unwrap();
+    assert_eq!(
+        core.begin_anchor(digest(83)).unwrap().stage(),
+        BrokerSessionStageV1::AnchorPending
+    );
+    let challenge = AnchorChallengeV1::decode(&core.anchor_challenge().unwrap()).unwrap();
     (core, transcript, signing, challenge)
 }
 
@@ -546,13 +557,13 @@ fn transition_order_rejects_linkless_anchor_and_premature_consume() {
     let stable = || AnchoredStateV1::from_local_state(1, HashChainHeadV1::from_bytes(digest(72)));
     let mut core = SessionCoreV1::<(), ()>::new();
     assert_eq!(
-        core.prepare_anchor(stable(), &key).unwrap_err().kind(),
+        core.prepare_anchor(BrokerAnchorModeV1::Advance, stable(), &key)
+            .unwrap_err()
+            .kind(),
         BrokerSessionErrorKindV1::TransitionOrder
     );
     assert_eq!(
-        core.begin_anchor(BrokerAnchorModeV1::Advance, &key)
-            .unwrap_err()
-            .kind(),
+        core.begin_anchor(digest(73)).unwrap_err().kind(),
         BrokerSessionErrorKindV1::TransitionOrder
     );
     assert_eq!(
@@ -569,7 +580,6 @@ fn transition_order_rejects_linkless_anchor_and_premature_consume() {
 fn advance_requires_valid_proposed_observation_before_one_consume() {
     let (mut core, transcript, signing, challenge) =
         anchor_pending(BrokerAnchorModeV1::Advance, TranscriptFixture::new(80));
-    assert_eq!(challenge.authority(), "none");
     let wire = signed_observation(&challenge, AnchorPositionV1::Proposed, &signing);
     assert_eq!(
         core.observe_anchor(&wire).unwrap().stage(),
@@ -665,9 +675,8 @@ fn recovery_mode_resolves_both_exact_anchor_positions() {
     ] {
         let (mut core, _, signing, challenge) =
             anchor_pending(BrokerAnchorModeV1::Recovery, TranscriptFixture::new(seed));
-        let decoded = AnchorChallengeV1::decode(challenge.as_bytes()).unwrap();
         assert_eq!(
-            decoded.kind(),
+            challenge.kind(),
             fe2o3_external_anchor_protocol::ChallengeKindV1::Recover
         );
         let wire = signed_observation(&challenge, position, &signing);
@@ -736,24 +745,21 @@ fn stale_nonce_or_transaction_challenge_is_rejected_and_invalidates() {
 }
 
 #[test]
-fn wrong_anchor_key_is_rejected_without_consuming_preparation() {
+fn prepared_anchor_key_is_retained_without_a_second_public_input() {
     let (mut core, _, signing, key) = completed_core(TranscriptFixture::new(150), 151, 152);
     core.prepare_anchor(
+        BrokerAnchorModeV1::Advance,
         AnchoredStateV1::from_local_state(5, HashChainHeadV1::from_bytes(digest(153))),
         &key,
     )
     .unwrap();
-    let (_, wrong_key) = signing_key(154);
-    assert_eq!(
-        core.begin_anchor(BrokerAnchorModeV1::Advance, &wrong_key)
-            .unwrap_err()
-            .kind(),
-        BrokerSessionErrorKindV1::AnchorKeyMismatch
-    );
     assert_eq!(core.stage, BrokerSessionStageV1::AnchorPrepared);
-    let challenge = core
-        .begin_anchor(BrokerAnchorModeV1::Advance, &key)
-        .unwrap();
+    assert_eq!(
+        core.begin_anchor(digest(154)).unwrap().stage(),
+        BrokerSessionStageV1::AnchorPending
+    );
+    let challenge = AnchorChallengeV1::decode(&core.anchor_challenge().unwrap()).unwrap();
+    assert_eq!(challenge.anchor_key_identity(), key.identity());
     let wire = signed_observation(&challenge, AnchorPositionV1::Proposed, &signing);
     assert_eq!(
         core.observe_anchor(&wire).unwrap().stage(),
@@ -766,6 +772,7 @@ fn anchor_sequence_overflow_rejects_without_advancing_stage() {
     let (mut core, _, _, key) = completed_core(TranscriptFixture::new(160), 161, 162);
     assert_eq!(
         core.prepare_anchor(
+            BrokerAnchorModeV1::Advance,
             AnchoredStateV1::from_local_state(u64::MAX, HashChainHeadV1::from_bytes(digest(163)),),
             &key,
         )
@@ -819,12 +826,8 @@ fn client_and_output_tokens_remain_owned_until_machine_drop() {
 }
 
 #[test]
-fn challenge_observation_is_exact_width_and_redacted_in_debug() {
+fn internal_anchor_challenge_remains_exact_width() {
     let (_, _, _, challenge) =
         anchor_pending(BrokerAnchorModeV1::Advance, TranscriptFixture::new(180));
     assert_eq!(challenge.as_bytes().len(), ANCHOR_CHALLENGE_WIRE_LEN_V1);
-    let rendered = format!("{challenge:?}");
-    assert!(rendered.contains("authority"));
-    assert!(rendered.contains("length"));
-    assert!(!rendered.contains(&format!("{:02x}", challenge.as_bytes()[32])));
 }

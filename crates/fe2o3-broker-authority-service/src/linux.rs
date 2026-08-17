@@ -394,6 +394,8 @@ pub struct ProtectedBrokerServiceAdmissionV1 {
     service_uid: u32,
     root_identity: ObjectIdentityV1,
     peer_identity: ObjectIdentityV1,
+    #[cfg(test)]
+    non_authoritative_same_uid_session_test: bool,
 }
 
 impl fmt::Debug for ProtectedBrokerServiceAdmissionV1 {
@@ -413,6 +415,40 @@ impl ProtectedBrokerServiceAdmissionV1 {
     pub(crate) const fn matches_client_process(&self, pid: u32, start_time_ticks: u64) -> bool {
         self.live_client.expected_client.pid == pid
             && self.live_client.start_time_ticks == start_time_ticks
+    }
+
+    pub(crate) fn try_clone_service_root(
+        &self,
+    ) -> Result<OwnedFd, BrokerAuthorityServiceAdmissionErrorV1> {
+        self.validate_session_continuity()?;
+        rustix::io::fcntl_dupfd_cloexec(&self.root, 0).map_err(|error| {
+            BrokerAuthorityServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::InspectRoot,
+                format!("cannot duplicate retained service root: {error}"),
+            )
+        })
+    }
+
+    pub(crate) fn into_service_root(self) -> OwnedFd {
+        self.root
+    }
+
+    pub(crate) fn validate_session_continuity(
+        &self,
+    ) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+        #[cfg(test)]
+        if self.non_authoritative_same_uid_session_test {
+            return self.validate_continuity_inner::<false>();
+        }
+        self.validate_continuity()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn non_authoritative_test_process_identity(&self) -> (u32, u64) {
+        (
+            self.live_client.expected_client.pid,
+            self.live_client.start_time_ticks,
+        )
     }
 
     /// Admits only supervisor-owned descriptors and an exact expected connection-time identity.
@@ -478,6 +514,48 @@ impl ProtectedBrokerServiceAdmissionV1 {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn admit_non_authoritative_same_uid_session_test(
+        root: OwnedFd,
+        peer: OwnedFd,
+        live_client: LiveClientPidfdIdentityV1,
+    ) -> Result<Self, BrokerAuthorityServiceAdmissionErrorV1> {
+        let service_uid = rustix::process::geteuid().as_raw();
+        require_close_on_exec(
+            &root,
+            AdmissionErrorKindV1::RootCloseOnExec,
+            "supervisor root",
+        )?;
+        require_close_on_exec(&peer, AdmissionErrorKindV1::PeerCloseOnExec, "broker peer")?;
+        let root_identity = validate_root(&root, service_uid)?;
+        let peer_identity = validate_peer_shape(&peer)?;
+        require_distinct_descriptors(root_identity, peer_identity)?;
+        require_distinct_pidfd_descriptor(
+            root_identity,
+            peer_identity,
+            live_client.descriptor_identity,
+        )?;
+        let credentials = PeerCredentialsV1::inspect(&peer)?;
+        if credentials != live_client.expected_client.credentials() {
+            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::PeerCredentialsMismatch,
+                "test peer SO_PEERCRED does not match retained pidfd identity",
+            ));
+        }
+        live_client.validate_liveness()?;
+        let admission = Self {
+            root,
+            peer,
+            live_client,
+            service_uid,
+            root_identity,
+            peer_identity,
+            non_authoritative_same_uid_session_test: true,
+        };
+        admission.validate_session_continuity()?;
+        Ok(admission)
+    }
+
     fn finish_admission(
         root: OwnedFd,
         peer: OwnedFd,
@@ -493,6 +571,8 @@ impl ProtectedBrokerServiceAdmissionV1 {
             service_uid,
             root_identity,
             peer_identity,
+            #[cfg(test)]
+            non_authoritative_same_uid_session_test: false,
         };
         admission.validate_continuity()?;
         Ok(admission)
@@ -1525,41 +1605,11 @@ mod tests {
         peer: OwnedFd,
         live_client: LiveClientPidfdIdentityV1,
     ) -> Result<ProtectedBrokerServiceAdmissionV1, BrokerAuthorityServiceAdmissionErrorV1> {
-        let service_uid = rustix::process::geteuid().as_raw();
-        require_close_on_exec(
-            &root,
-            AdmissionErrorKindV1::RootCloseOnExec,
-            "supervisor root",
-        )
-        .unwrap();
-        require_close_on_exec(&peer, AdmissionErrorKindV1::PeerCloseOnExec, "broker peer").unwrap();
-        let root_identity = validate_root(&root, service_uid).unwrap();
-        let peer_identity = validate_peer_shape(&peer).unwrap();
-        require_distinct_descriptors(root_identity, peer_identity).unwrap();
-        let credentials = PeerCredentialsV1::inspect(&peer).unwrap();
-        if credentials != live_client.expected_client.credentials() {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::PeerCredentialsMismatch,
-                "test peer SO_PEERCRED does not match retained pidfd identity",
-            ));
-        }
-        live_client.validate_liveness()?;
-        require_distinct_pidfd_descriptor(
-            root_identity,
-            peer_identity,
-            live_client.descriptor_identity,
-        )
-        .unwrap();
-        let admission = ProtectedBrokerServiceAdmissionV1 {
+        ProtectedBrokerServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
             root,
             peer,
             live_client,
-            service_uid,
-            root_identity,
-            peer_identity,
-        };
-        admission.validate_non_authoritative_test_continuity()?;
-        Ok(admission)
+        )
     }
 
     #[test]

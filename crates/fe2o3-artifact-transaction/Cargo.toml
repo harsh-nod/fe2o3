@@ -13,7 +13,7 @@ test-hooks = []
 
 [dependencies]
 libc.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["process"] }
 sha2.workspace = true
 
 [dev-dependencies]
