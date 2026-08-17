@@ -87,6 +87,45 @@ def local_links(markdown: Path) -> list[Path]:
     return links
 
 
+def function_body(source: str, name: str, next_name: str) -> str:
+    start = f"{name}() {{\n"
+    require(source.count(start) == 1, f"{name} CI function is absent or duplicated")
+    remainder = source.split(start, 1)[1]
+    boundary = re.search(r"\n}\n\n([A-Za-z_][A-Za-z0-9_]*)\(\) \{", remainder)
+    require(boundary is not None, f"{name} CI function boundary is absent")
+    require(
+        boundary.group(1) == next_name,
+        f"{name} CI function must be immediately followed by {next_name}",
+    )
+    return remainder[: boundary.start()]
+
+
+def validate_ci_dispatch(ci_local: str) -> None:
+    docs_command = (
+        "  run_step bounded-moe-docs \\\n"
+        "    python3 scripts/test-bounded-moe-docs.py"
+    )
+    core = function_body(ci_local, "run_generic_core", "run_generic")
+    generic = function_body(ci_local, "run_generic", "run_rocm_compile")
+
+    require(
+        ci_local.count(docs_command) == 1,
+        "generic CI must own one exact bounded MoE documentation command",
+    )
+    require(
+        core.count(docs_command) == 1,
+        "generic-core CI must run the bounded MoE documentation command once",
+    )
+    require(
+        docs_command not in generic,
+        "generic CI must reach bounded MoE documentation through generic-core",
+    )
+    require(
+        generic.count("  run_generic_core\n") == 1,
+        "generic CI must delegate to generic-core exactly once",
+    )
+
+
 def main() -> None:
     doc = DOC.read_text(encoding="utf-8")
     source = CANONICAL_SOURCE.read_text(encoding="utf-8")
@@ -102,16 +141,7 @@ def main() -> None:
     v2_adapter = V2_ADAPTER.read_text(encoding="utf-8")
     ci_local = CI_LOCAL.read_text(encoding="utf-8")
 
-    generic_match = re.search(r"run_generic\(\) \{\n(?P<body>.*?)\n\}", ci_local, re.DOTALL)
-    require(generic_match is not None, "generic CI function is absent")
-    generic_docs_command = (
-        "  run_step bounded-moe-docs \\\n"
-        "    python3 scripts/test-bounded-moe-docs.py"
-    )
-    require(
-        generic_match.group("body").count(generic_docs_command) == 1,
-        "generic CI must run the exact bounded MoE documentation command once",
-    )
+    validate_ci_dispatch(ci_local)
 
     source_entries = re.findall(r'canonical\.push\(\s*"([^"]+)"', source)
     doc_entries = re.findall(r"^\|\s*\d+\s*\|\s*`([^`]+)`\s*\|", doc, re.MULTILINE)

@@ -10,6 +10,7 @@ readonly TIMEOUT_TEST_ROOT
 trap 'rm -rf "${TIMEOUT_TEST_ROOT}"' EXIT
 
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
+python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
 
 set +e
 timeout 10s env \
