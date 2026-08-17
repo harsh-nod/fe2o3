@@ -56,8 +56,8 @@ const SOURCE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace/flash-attentio
 const WORKSPACE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace";
 const REVIEWED_ROOT_INSTANCE_IDENTITY: &str = "kernel::__fe2o3_host_kernel_v1_4cd011e31086168adc65ef2b706d5c0df66642392c149412d11e42edc718e291";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.flash-attention.compiler-semantics.v1";
-const TRUSTED_DEFINITIONS_DOMAIN_V3: &[u8] =
-    b"fe2o3.flash-attention.trusted-definitions-and-terminals.v3";
+const TRUSTED_DEFINITIONS_DOMAIN_V4: &[u8] =
+    b"fe2o3.flash-attention.trusted-definitions-and-terminals.v4";
 const AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.flash-attention.source-authority.v1";
 const FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3.flash-attention.rustc-fn-abi.v1";
 const ABI_BINDING_V1: &[u8] = b"ptr64;size=64;align=8;q@0:16:8:slice-f32:shared-readonly;k@16:16:8:slice-f32:shared-readonly;v@32:16:8:slice-f32:shared-readonly;output@48:16:8:slice-f32:exclusive-readwrite";
@@ -69,7 +69,7 @@ const PROFILE_LAUNCH_BINDING_V1: &[u8] =
 const NUMERICAL_BINDING_V1: &[u8] = b"b=1;h=1;n=8;d=16;inputs=f32-finite;dot=strict-sequential-f32-d16;scale-bits=0x3e800000;mask=causal-lower-triangle-diagonal-included;online=max,sum,numerator-pair;ordered-rescale;no-contraction;divide-at-end";
 const DESCRIPTOR_BINDING_V1: &[u8] = b"logical=flash_attention_causal_f32_b1_h1_n8_d16_v1;export=flash_attention_causal_f32_b1_h1_n8_d16_v1;descriptor=flash_attention_causal_f32_b1_h1_n8_d16_v1.kd;explicit-kernarg=64;complete-cov6-kernarg=320;wg=64,1,1;wave=64;static-lds=0;dynamic-lds=0";
 const CANONICAL_IR_BINDING_V1: &[u8] = b"fe2o3::flash_attention_causal_f32_v1;args=q,k,v-shared-f32x128,output-lane-owned-f32x128;shape=b1,h1,n8,d16;causal=key<=query;ordered-recurrence=dot,scale,init,next-max,previous-exp,current-exp,denominator,numerator-pair,maximum,divide;ownership=adjacent-pair-total-injective-in-bounds";
-const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/session registration, exact rustc FnAbi, location-independent V3 trusted definitions, identity-bound reviewed semantic terminals, and complete reachable portable-MIR modulo those terminals select a closed FlashAttention semantic sidecar;reviewed correspondence only;not generic lowering, terminal-body refinement, or a compiler-refinement proof";
+const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/session registration, exact rustc FnAbi, location-independent V4 provider-semantic definitions, identity-bound reviewed semantic terminals, and complete reachable portable-MIR modulo those terminals select a closed FlashAttention semantic sidecar;reviewed correspondence only;not generic lowering, terminal-body refinement, or a compiler-refinement proof";
 const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
     70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 1,
     0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
@@ -89,9 +89,9 @@ const COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
     0xb9, 0x25, 0x15, 0xfa, 0x53, 0x47, 0xd9, 0x3e, 0xe9, 0x63, 0x88, 0xda, 0x9e, 0x72, 0x76, 0xaa,
     0x96, 0xcd, 0x30, 0x3e, 0x66, 0x4c, 0xa6, 0x75, 0x3b, 0x9b, 0xbd, 0x23, 0xd9, 0x1f, 0x44, 0x3b,
 ];
-const TRUSTED_TERMINAL_IDENTITY_V3: [u8; 32] = [
-    0x4f, 0x3a, 0x3a, 0xcb, 0xa9, 0x31, 0xbf, 0x74, 0xf2, 0xde, 0x52, 0x11, 0x91, 0x34, 0x93, 0x57,
-    0x95, 0x4b, 0xa4, 0xb4, 0x83, 0xe6, 0x61, 0xdb, 0x65, 0xaf, 0x99, 0xe2, 0xe9, 0x1b, 0xb0, 0x61,
+const TRUSTED_TERMINAL_IDENTITY_V4: [u8; 32] = [
+    0xc7, 0xe3, 0xec, 0xcc, 0x16, 0x54, 0x94, 0xe4, 0x38, 0x7e, 0x08, 0x7f, 0x5a, 0xf4, 0xe7, 0xe5,
+    0x07, 0xc2, 0x45, 0xb2, 0xb8, 0x72, 0xde, 0x63, 0xe8, 0xa2, 0x5e, 0x7a, 0xe8, 0xe1, 0x3b, 0xbc,
 ];
 
 const ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 4] = [
@@ -870,27 +870,12 @@ fn hash_arg_attributes(digest: &mut Sha256, attributes: ArgAttributes) {
     );
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct CompilerProviderIdentityV1 {
-    crate_name: String,
-    stable_crate_id: u64,
-    crate_hash_observation: [u8; 16],
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ReviewedDeviceDefinitionIdentityV3 {
-    provider: CompilerProviderIdentityV1,
-    cargo_metadata_build_observation: [u8; 32],
-    source_closure_identity: [u8; 32],
-    definition_source_identity: [u8; 32],
-}
-
 fn trusted_definitions_and_terminals_identity<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
 ) -> Result<[u8; 32], CollectedFlashAttentionErrorV1> {
     let mut digest = Sha256::new();
-    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V3);
+    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V4);
     hash_field(
         &mut digest,
         COLLECTED_FLASH_ATTENTION_PIPELINE_V1.as_bytes(),
@@ -910,14 +895,13 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
             )));
         }
         provider.get_or_insert(definition.krate);
-        let identity = reviewed_device_definition_identity(tcx, definition)?;
-        hash_device_definition(
-            &mut digest,
+        let identity = reviewed_device_definition_identity(
+            tcx,
+            definition,
+            trusted_device_items::ProviderSemanticDefinitionRoleV1::TrustedDefinition,
             item.canonical_path(),
-            &tcx.def_path_str(definition),
-            tcx.def_path_hash(definition).local_hash().as_u64(),
-            &identity,
-        );
+        )?;
+        hash_field(&mut digest, &identity);
     }
     let provider = provider.ok_or_else(|| {
         CollectedFlashAttentionErrorV1::TrustedDefinitions(
@@ -1014,15 +998,13 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
                 terminal_provider.crate_name
             )));
         }
-        let identity = reviewed_device_definition_identity(tcx, definition)?;
-        hash_field(&mut digest, b"reviewed-semantic-terminal-v1");
-        hash_device_definition(
-            &mut digest,
+        let identity = reviewed_device_definition_identity(
+            tcx,
+            definition,
+            trusted_device_items::ProviderSemanticDefinitionRoleV1::SemanticTerminal,
             expected.canonical_path(),
-            &tcx.def_path_str(definition),
-            tcx.def_path_hash(definition).local_hash().as_u64(),
-            &identity,
-        );
+        )?;
+        hash_field(&mut digest, &identity);
     }
     let core_provider = tcx
         .lang_items()
@@ -1086,29 +1068,19 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
             "fabs semantic terminal did not come from pinned core".into(),
         ));
     }
-    hash_field(&mut digest, b"pinned-rustc-core-terminal-v1");
-    hash_field(
-        &mut digest,
-        FlashAttentionCompilerIntrinsicV1::FabsF32
-            .canonical_path()
-            .as_bytes(),
-    );
-    hash_field(&mut digest, tcx.def_path_str(fabs_definition).as_bytes());
-    hash_field(
-        &mut digest,
-        &tcx.def_path_hash(fabs_definition)
-            .local_hash()
-            .as_u64()
-            .to_le_bytes(),
-    );
-    hash_field(&mut digest, core_provider.crate_name.as_bytes());
-    hash_field(&mut digest, &core_provider.stable_crate_id.to_le_bytes());
-    hash_field(&mut digest, &core_provider.crate_hash_observation);
+    let core_terminal_identity = trusted_device_items::pinned_core_semantic_terminal_identity_v1(
+        &core_provider,
+        FlashAttentionCompilerIntrinsicV1::FabsF32.canonical_path(),
+        &tcx.def_path(fabs_definition).to_string_no_crate_verbose(),
+        tcx.def_path_hash(fabs_definition).local_hash().as_u64(),
+    )
+    .map_err(CollectedFlashAttentionErrorV1::TrustedDefinitions)?;
+    hash_field(&mut digest, &core_terminal_identity);
     let actual: [u8; 32] = digest.finalize().into();
-    if actual != TRUSTED_TERMINAL_IDENTITY_V3 {
+    if actual != TRUSTED_TERMINAL_IDENTITY_V4 {
         return Err(CollectedFlashAttentionErrorV1::TrustedDefinitions(format!(
             "trusted-definition/semantic-terminal identity drifted: expected {}, found {}",
-            encode_hex(&TRUSTED_TERMINAL_IDENTITY_V3),
+            encode_hex(&TRUSTED_TERMINAL_IDENTITY_V4),
             encode_hex(&actual)
         )));
     }
@@ -1118,57 +1090,27 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
 fn compiler_provider(
     tcx: TyCtxt<'_>,
     crate_num: rustc_hir::def_id::CrateNum,
-) -> CompilerProviderIdentityV1 {
-    CompilerProviderIdentityV1 {
-        crate_name: tcx.crate_name(crate_num).to_string(),
-        stable_crate_id: tcx.stable_crate_id(crate_num).as_u64(),
-        crate_hash_observation: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
-    }
+) -> trusted_device_items::CompilerProviderObservationV1 {
+    trusted_device_items::compiler_provider_observation_v1(tcx, crate_num)
 }
 
 fn reviewed_device_definition_identity(
     tcx: TyCtxt<'_>,
     definition: rustc_hir::def_id::DefId,
-) -> Result<ReviewedDeviceDefinitionIdentityV3, CollectedFlashAttentionErrorV1> {
-    let observed =
-        trusted_device_items::reviewed_workgroup_sync_provider_definition(tcx, definition)
-            .map_err(CollectedFlashAttentionErrorV1::TrustedDefinitions)?;
+    definition_role: trusted_device_items::ProviderSemanticDefinitionRoleV1,
+    canonical_role: &str,
+) -> Result<[u8; 32], CollectedFlashAttentionErrorV1> {
+    let observed = trusted_device_items::reviewed_provider_semantic_definition_v1(tcx, definition)
+        .map_err(CollectedFlashAttentionErrorV1::TrustedDefinitions)?;
     let provider = compiler_provider(tcx, definition.krate);
-    if observed.crate_name != provider.crate_name
-        || observed.stable_crate_id != provider.stable_crate_id
-        || observed.crate_hash_observation != provider.crate_hash_observation
-        || observed.cargo_metadata_build_observation == [0; 32]
-        || observed.source_closure_identity == [0; 32]
-        || observed.definition_source_identity == [0; 32]
-    {
+    if observed.provider != provider {
         return Err(CollectedFlashAttentionErrorV1::TrustedDefinitions(
-            "reviewed device provider observation is incomplete".into(),
+            "reviewed device provider observation changed within the compiler session".into(),
         ));
     }
-    Ok(ReviewedDeviceDefinitionIdentityV3 {
-        provider,
-        cargo_metadata_build_observation: observed.cargo_metadata_build_observation,
-        source_closure_identity: observed.source_closure_identity,
-        definition_source_identity: observed.definition_source_identity,
-    })
-}
-
-fn hash_device_definition(
-    digest: &mut Sha256,
-    role: &str,
-    compiler_path: &str,
-    local_def_path_hash: u64,
-    identity: &ReviewedDeviceDefinitionIdentityV3,
-) {
-    hash_field(digest, b"reviewed-fe2o3-device-definition-v1");
-    hash_field(digest, role.as_bytes());
-    hash_field(digest, compiler_path.as_bytes());
-    hash_field(digest, &local_def_path_hash.to_le_bytes());
-    hash_field(digest, identity.provider.crate_name.as_bytes());
-    hash_field(digest, &identity.provider.stable_crate_id.to_le_bytes());
-    hash_field(digest, &identity.cargo_metadata_build_observation);
-    hash_field(digest, &identity.source_closure_identity);
-    hash_field(digest, &identity.definition_source_identity);
+    observed
+        .durable_semantic_identity(definition_role, canonical_role)
+        .map_err(CollectedFlashAttentionErrorV1::TrustedDefinitions)
 }
 
 fn observe_compiler_semantics(tcx: TyCtxt<'_>) -> CompilerSemanticsV1 {
@@ -1332,7 +1274,7 @@ fn validate_authority(
     } else if authority.fn_abi_identity != RUSTC_FN_ABI_IDENTITY_V1 {
         Some("rustc FnAbi")
     } else if authority.compiler_semantics_identity != COMPILER_SEMANTICS_IDENTITY_V1
-        || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V3
+        || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V4
     {
         Some("compiler/trusted definition closure")
     } else if authority.frontend_contract_identity != sha256(EXACT_FRONTEND_CONTRACT_V1) {
@@ -1441,7 +1383,7 @@ mod tests {
             portable_mir_identity: PORTABLE_MIR_CLOSURE_IDENTITY_V1,
             compiler_semantics_identity: COMPILER_SEMANTICS_IDENTITY_V1,
             fn_abi_identity: RUSTC_FN_ABI_IDENTITY_V1,
-            trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V3,
+            trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V4,
             frontend_contract_identity: sha256(EXACT_FRONTEND_CONTRACT_V1),
             abi_identity: sha256(ABI_BINDING_V1),
             effects_identity: sha256(EFFECT_BINDING_V1),

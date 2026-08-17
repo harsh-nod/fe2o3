@@ -68,10 +68,10 @@ pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
     "effects=4f7a7d0996535ee75ff22216c776666526caa93106a49c2e8cfb4956cb0f7716;",
     "routing=dc93201e71d4ba820f52bb44833f4592383b2023f67089a4cc1b73aae14f051b;",
     "compiler=4950c225e0cdbdce4e1230166984949970290dedc19e8dc4cd31f865f1625a4a;",
-    "trusted=3dbbe3ec9d58a7c285a14159294051498378f291525d8445113b17aab9b0e08b;",
+    "trusted=0e1d82bdde1c45df368c64d62d27f9a8f1fb856eabae1c61d9c3290a907f6da6;",
     "root=kernel::__fe2o3_host_kernel_v1_",
     "0d0504325353eb74b0c9ace47560290e2278a7cd7c20e3b1c6c70f4a7e37b1ab;",
-    "authority=796a0c1a358d17670a018ceb35db92fa472e4aa43e0b366dc037ab098d6207d4",
+    "authority=55b9756de31a47ebe0cdd22e173dad39d8ed183ed054da5ee523d0c96e0f07cc",
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

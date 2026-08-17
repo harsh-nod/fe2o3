@@ -2,9 +2,9 @@
 //!
 //! Recognition starts from a rustc [`DefId`]. Diagnostic-item equality is only
 //! accepted after the provider definition is anchored to the reviewed sibling
-//! `fe2o3-device` source tree used to build this backend. The imported matrix
-//! and row-softmax records bind that source identity, rustc's observed stable
-//! crate ID and full crate hash, and the managed Cargo metadata observation.
+//! `fe2o3-device` source tree used to build this backend. Rustc's stable crate
+//! ID and crate hash are retained as same-session provenance observations, but
+//! portable semantic identities bind only canonical source-derived fields.
 //!
 //! This remains a compiler build-observation boundary, not cryptographic
 //! package authentication. A publisher signature or transparency-log identity
@@ -34,6 +34,10 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-IDENTITY/V1\0";
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
+const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
+    b"FE2O3/PROVIDER-SEMANTIC-DEFINITION-TRANSCRIPT/V1\0";
+const PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1: &[u8] =
+    b"FE2O3/PINNED-CORE-SEMANTIC-TERMINAL-TRANSCRIPT/V1\0";
 const REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device");
 const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
@@ -60,15 +64,77 @@ pub(crate) struct ReviewedRowSoftmaxProviderDefinitionV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReviewedWorkgroupSyncProviderDefinitionV1 {
+pub(crate) struct CompilerProviderObservationV1 {
     pub(crate) crate_name: String,
     pub(crate) stable_crate_id: u64,
-    /// Retained only to prove that all definitions came from one compilation
-    /// unit. Rustc's path-source crate hash is not a portable authority field.
     pub(crate) crate_hash_observation: [u8; 16],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProviderSemanticDefinitionRoleV1 {
+    TrustedDefinition,
+    SemanticTerminal,
+}
+
+impl ProviderSemanticDefinitionRoleV1 {
+    const fn canonical_name(self) -> &'static [u8] {
+        match self {
+            Self::TrustedDefinition => b"trusted-definition",
+            Self::SemanticTerminal => b"semantic-terminal",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewedProviderSemanticDefinitionV1 {
+    /// These rustc values prove same-session crate membership only. They are
+    /// intentionally excluded from `durable_semantic_identity` because Cargo
+    /// can change them after an unrelated transitive feature change.
+    pub(crate) provider: CompilerProviderObservationV1,
+    pub(crate) canonical_definition_path: String,
+    pub(crate) structural_local_definition_component: u64,
     pub(crate) cargo_metadata_build_observation: [u8; 32],
     pub(crate) source_closure_identity: [u8; 32],
     pub(crate) definition_source_identity: [u8; 32],
+}
+
+impl ReviewedProviderSemanticDefinitionV1 {
+    pub(crate) fn durable_semantic_identity(
+        &self,
+        definition_role: ProviderSemanticDefinitionRoleV1,
+        canonical_role: &str,
+    ) -> Result<[u8; 32], String> {
+        if self.provider.crate_name != "fe2o3_device"
+            || self.provider.stable_crate_id == 0
+            || self.provider.crate_hash_observation == [0; 16]
+            || canonical_role.is_empty()
+            || self.canonical_definition_path.is_empty()
+            || self.structural_local_definition_component == 0
+            || self.cargo_metadata_build_observation == [0; 32]
+            || self.source_closure_identity == [0; 32]
+            || self.definition_source_identity == [0; 32]
+        {
+            return Err("reviewed provider semantic definition is incomplete".to_owned());
+        }
+
+        let mut hasher = Sha256::new();
+        hash_source_identity_field(
+            &mut hasher,
+            PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1,
+        );
+        hash_source_identity_field(&mut hasher, definition_role.canonical_name());
+        hash_source_identity_field(&mut hasher, canonical_role.as_bytes());
+        hash_source_identity_field(&mut hasher, self.provider.crate_name.as_bytes());
+        hash_source_identity_field(&mut hasher, self.canonical_definition_path.as_bytes());
+        hash_source_identity_field(
+            &mut hasher,
+            &self.structural_local_definition_component.to_le_bytes(),
+        );
+        hash_source_identity_field(&mut hasher, &self.cargo_metadata_build_observation);
+        hash_source_identity_field(&mut hasher, &self.source_closure_identity);
+        hash_source_identity_field(&mut hasher, &self.definition_source_identity);
+        Ok(hasher.finalize().into())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -726,12 +792,24 @@ pub(crate) fn reviewed_row_softmax_provider_definition(
     })
 }
 
-pub(crate) fn reviewed_workgroup_sync_provider_definition(
+pub(crate) fn compiler_provider_observation_v1(
+    tcx: TyCtxt<'_>,
+    crate_num: rustc_hir::def_id::CrateNum,
+) -> CompilerProviderObservationV1 {
+    CompilerProviderObservationV1 {
+        crate_name: tcx.crate_name(crate_num).to_string(),
+        stable_crate_id: tcx.stable_crate_id(crate_num).as_u64(),
+        crate_hash_observation: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
+    }
+}
+
+pub(crate) fn reviewed_provider_semantic_definition_v1(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
-) -> Result<ReviewedWorkgroupSyncProviderDefinitionV1, String> {
+) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
     let crate_num = provider_definition.krate;
     let crate_name = named_external_provider(tcx, crate_num)?;
+    let provider = compiler_provider_observation_v1(tcx, crate_num);
     let definition_source_identity = reviewed_provider_source_identity(
         tcx,
         provider_definition,
@@ -740,16 +818,70 @@ pub(crate) fn reviewed_workgroup_sync_provider_definition(
     let source_closure_identity = WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE
         .get_or_init(workgroup_sync_provider_source_closure_identity)
         .clone()?;
-    Ok(ReviewedWorkgroupSyncProviderDefinitionV1 {
-        crate_name,
-        stable_crate_id: tcx.stable_crate_id(crate_num).as_u64(),
-        crate_hash_observation: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
+    if provider.crate_name != crate_name {
+        return Err("reviewed provider crate-name observation changed within the session".into());
+    }
+    let canonical_definition_path = canonical_compiler_definition_path(
+        &crate_name,
+        &tcx.def_path(provider_definition)
+            .to_string_no_crate_verbose(),
+    )?;
+    let structural_local_definition_component =
+        tcx.def_path_hash(provider_definition).local_hash().as_u64();
+    Ok(ReviewedProviderSemanticDefinitionV1 {
+        provider,
+        canonical_definition_path,
+        structural_local_definition_component,
         cargo_metadata_build_observation: decode_sha256_environment(
             CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
         )?,
         source_closure_identity,
         definition_source_identity,
     })
+}
+
+fn canonical_compiler_definition_path(
+    authenticated_crate_name: &str,
+    structural_local_path: &str,
+) -> Result<String, String> {
+    let structural_local_path = structural_local_path.trim_start_matches("::");
+    if authenticated_crate_name.is_empty() || structural_local_path.is_empty() {
+        return Err("compiler definition path is incomplete".to_owned());
+    }
+    Ok(format!(
+        "{authenticated_crate_name}::{structural_local_path}"
+    ))
+}
+
+pub(crate) fn pinned_core_semantic_terminal_identity_v1(
+    provider: &CompilerProviderObservationV1,
+    canonical_role: &str,
+    structural_local_definition_path: &str,
+    structural_local_definition_component: u64,
+) -> Result<[u8; 32], String> {
+    if provider.crate_name != "core"
+        || provider.stable_crate_id == 0
+        || provider.crate_hash_observation == [0; 16]
+        || canonical_role.is_empty()
+        || structural_local_definition_component == 0
+    {
+        return Err("pinned core semantic terminal observation is incomplete".to_owned());
+    }
+    let canonical_definition_path =
+        canonical_compiler_definition_path(&provider.crate_name, structural_local_definition_path)?;
+    let mut hasher = Sha256::new();
+    hash_source_identity_field(
+        &mut hasher,
+        PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1,
+    );
+    hash_source_identity_field(&mut hasher, canonical_role.as_bytes());
+    hash_source_identity_field(&mut hasher, provider.crate_name.as_bytes());
+    hash_source_identity_field(&mut hasher, canonical_definition_path.as_bytes());
+    hash_source_identity_field(
+        &mut hasher,
+        &structural_local_definition_component.to_le_bytes(),
+    );
+    Ok(hasher.finalize().into())
 }
 
 fn workgroup_sync_provider_source_closure_identity() -> Result<[u8; 32], String> {
@@ -1025,10 +1157,187 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 #[cfg(test)]
 mod tests {
     use super::{
-        HALF_MATH_DIAGNOSTIC_ITEMS, TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation,
-        TrustedDeviceItem,
+        CompilerProviderObservationV1, HALF_MATH_DIAGNOSTIC_ITEMS,
+        ProviderSemanticDefinitionRoleV1, ReviewedProviderSemanticDefinitionV1,
+        TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation, TrustedDeviceItem,
+        canonical_compiler_definition_path, pinned_core_semantic_terminal_identity_v1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
+
+    #[test]
+    fn provider_semantic_identity_excludes_volatile_compilation_disambiguators() {
+        fn identity(definition: &ReviewedProviderSemanticDefinitionV1) -> Result<[u8; 32], String> {
+            definition.durable_semantic_identity(
+                ProviderSemanticDefinitionRoleV1::SemanticTerminal,
+                "fe2o3_device::thread::thread_idx_x",
+            )
+        }
+
+        let definition = ReviewedProviderSemanticDefinitionV1 {
+            provider: CompilerProviderObservationV1 {
+                crate_name: "fe2o3_device".into(),
+                stable_crate_id: 7,
+                crate_hash_observation: [3; 16],
+            },
+            canonical_definition_path: "fe2o3_device::thread::thread_idx_x".into(),
+            structural_local_definition_component: 11,
+            cargo_metadata_build_observation: [4; 32],
+            source_closure_identity: [5; 32],
+            definition_source_identity: [6; 32],
+        };
+        let exact = identity(&definition).expect("complete provider semantic identity");
+
+        let mut mutation = definition.clone();
+        mutation.provider.stable_crate_id ^= 1;
+        assert_ne!(mutation.provider, definition.provider);
+        assert_eq!(identity(&mutation).unwrap(), exact);
+        mutation = definition.clone();
+        mutation.provider.crate_hash_observation[0] ^= 1;
+        assert_ne!(mutation.provider, definition.provider);
+        assert_eq!(identity(&mutation).unwrap(), exact);
+
+        mutation = definition.clone();
+        mutation.provider.crate_name = "fake_fe2o3_device".into();
+        assert!(identity(&mutation).is_err());
+        mutation = definition.clone();
+        mutation.canonical_definition_path = "fe2o3_device::thread::block_idx_x".into();
+        assert_ne!(identity(&mutation).unwrap(), exact);
+        mutation = definition.clone();
+        mutation.structural_local_definition_component ^= 1;
+        assert_ne!(identity(&mutation).unwrap(), exact);
+        mutation = definition.clone();
+        mutation.cargo_metadata_build_observation[0] ^= 1;
+        assert_ne!(identity(&mutation).unwrap(), exact);
+        mutation = definition.clone();
+        mutation.source_closure_identity[0] ^= 1;
+        assert_ne!(identity(&mutation).unwrap(), exact);
+        mutation = definition.clone();
+        mutation.definition_source_identity[0] ^= 1;
+        assert_ne!(identity(&mutation).unwrap(), exact);
+        mutation = definition.clone();
+        mutation.provider.stable_crate_id = 0;
+        assert!(identity(&mutation).is_err());
+        mutation = definition.clone();
+        mutation.provider.crate_hash_observation = [0; 16];
+        assert!(identity(&mutation).is_err());
+        assert_ne!(
+            definition
+                .durable_semantic_identity(
+                    ProviderSemanticDefinitionRoleV1::TrustedDefinition,
+                    "fe2o3_device::thread::thread_idx_x",
+                )
+                .unwrap(),
+            exact
+        );
+        assert_ne!(
+            definition
+                .durable_semantic_identity(
+                    ProviderSemanticDefinitionRoleV1::SemanticTerminal,
+                    "fe2o3_device::thread::block_idx_x",
+                )
+                .unwrap(),
+            exact
+        );
+    }
+
+    #[test]
+    fn pinned_core_terminal_identity_excludes_volatile_crate_disambiguators() {
+        let core = CompilerProviderObservationV1 {
+            crate_name: "core".into(),
+            stable_crate_id: 9,
+            crate_hash_observation: [8; 16],
+        };
+        let identity = |provider: &CompilerProviderObservationV1, role, path, local| {
+            pinned_core_semantic_terminal_identity_v1(provider, role, path, local)
+        };
+        let exact = identity(
+            &core,
+            "core::intrinsics::atomic_xadd",
+            "intrinsics::atomic_xadd",
+            17,
+        )
+        .expect("complete core terminal identity");
+
+        let mut mutation = core.clone();
+        mutation.stable_crate_id ^= 1;
+        assert_eq!(
+            identity(
+                &mutation,
+                "core::intrinsics::atomic_xadd",
+                "intrinsics::atomic_xadd",
+                17
+            )
+            .unwrap(),
+            exact
+        );
+        mutation = core.clone();
+        mutation.crate_hash_observation[0] ^= 1;
+        assert_eq!(
+            identity(
+                &mutation,
+                "core::intrinsics::atomic_xadd",
+                "intrinsics::atomic_xadd",
+                17
+            )
+            .unwrap(),
+            exact
+        );
+        assert_ne!(
+            identity(
+                &core,
+                "core::intrinsics::atomic_xsub",
+                "intrinsics::atomic_xadd",
+                17
+            )
+            .unwrap(),
+            exact
+        );
+        assert_ne!(
+            identity(
+                &core,
+                "core::intrinsics::atomic_xadd",
+                "intrinsics::atomic_xsub",
+                17
+            )
+            .unwrap(),
+            exact
+        );
+        assert_ne!(
+            identity(
+                &core,
+                "core::intrinsics::atomic_xadd",
+                "intrinsics::atomic_xadd",
+                18
+            )
+            .unwrap(),
+            exact
+        );
+        mutation = core;
+        mutation.crate_name = "impostor_core".into();
+        assert!(
+            identity(
+                &mutation,
+                "core::intrinsics::atomic_xadd",
+                "intrinsics::atomic_xadd",
+                17
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn structural_definition_paths_are_canonical_and_crate_qualified() {
+        assert_eq!(
+            canonical_compiler_definition_path(
+                "fe2o3_device",
+                "::__fe2o3_kernel_device::thread_idx_x",
+            )
+            .unwrap(),
+            "fe2o3_device::__fe2o3_kernel_device::thread_idx_x"
+        );
+        assert!(canonical_compiler_definition_path("", "thread_idx_x").is_err());
+        assert!(canonical_compiler_definition_path("fe2o3_device", "::").is_err());
+    }
 
     #[test]
     fn semantic_registry_is_complete_and_unique() {

@@ -68,7 +68,7 @@ const SOURCE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs
 const WORKSPACE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace";
 const REVIEWED_ROOT_INSTANCE_IDENTITY: &str = "kernel::__fe2o3_host_kernel_v1_0d0504325353eb74b0c9ace47560290e2278a7cd7c20e3b1c6c70f4a7e37b1ab";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.compiler-semantics.v1";
-const TRUSTED_DEFINITIONS_DOMAIN_V3: &[u8] = b"fe2o3.moe-top2.trusted-definitions-and-terminals.v3";
+const TRUSTED_DEFINITIONS_DOMAIN_V4: &[u8] = b"fe2o3.moe-top2.trusted-definitions-and-terminals.v4";
 const AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.source-authority.v1";
 const FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.rustc-fn-abi.v1";
 const FN_ABI_CALLING_CONVENTION_RUST_V2: u8 = 0;
@@ -82,7 +82,7 @@ const PROFILE_LAUNCH_BINDING_V1: &[u8] =
 const ROUTING_BINDING_V1: &[u8] = b"t=8;e=4;k=2;capacity=4;logits=finite-f32-token-major;top2=descending-score-lower-expert-tie;requested=exact-route-count;admitted=min(requested,4);offsets=exclusive-expert-scan;drop=stable-route-prefix;slot=offset+stable-rank-unique-bounded;permutation-inverse=round-trip;sentinel=u32-max-for-dropped-and-tail";
 const DESCRIPTOR_BINDING_V1: &[u8] = b"logical=moe_top2_route_f32_t8_e4_k2_c4_v1;export=moe_top2_route_f32_t8_e4_k2_c4_v1;descriptor=moe_top2_route_f32_t8_e4_k2_c4_v1.kd;explicit-kernarg=128;complete-cov6-kernarg=384;wg=64,1,1;wave=64;static-lds=0;dynamic-lds=0";
 const CANONICAL_IR_BINDING_V1: &[u8] = b"fe2o3::moe_top2_route_f32_t8_e4_k2_c4_v1;args=logits-shared-f32x32,seven-lane0-owned-u32-outputs;ordered-routing=validate,select,count,clamp,scan,initialize,stable-rank,slot,permutation-inverse,commit;ownership=lane0-total-exclusive-in-bounds;lanes1..63-inactive";
-const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/session registration, exact rustc FnAbi, location-independent V3 trusted definitions, identity-bound reviewed semantic terminals, and complete reachable portable-MIR modulo those terminals select a closed deterministic MoE top-2 semantic sidecar;reviewed correspondence only;not generic lowering, IEEE-754 refinement, terminal-body refinement, compiler refinement, or source-to-Verus/model refinement";
+const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/session registration, exact rustc FnAbi, location-independent V4 provider-semantic definitions, identity-bound reviewed semantic terminals, and complete reachable portable-MIR modulo those terminals select a closed deterministic MoE top-2 semantic sidecar;reviewed correspondence only;not generic lowering, IEEE-754 refinement, terminal-body refinement, compiler refinement, or source-to-Verus/model refinement";
 const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
     70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 1,
     0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
@@ -102,9 +102,9 @@ const COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
     0x49, 0x50, 0xc2, 0x25, 0xe0, 0xcd, 0xbd, 0xce, 0x4e, 0x12, 0x30, 0x16, 0x69, 0x84, 0x94, 0x99,
     0x70, 0x29, 0x0d, 0xed, 0xc1, 0x9e, 0x8d, 0xc4, 0xcd, 0x31, 0xf8, 0x65, 0xf1, 0x62, 0x5a, 0x4a,
 ];
-const TRUSTED_TERMINAL_IDENTITY_V3: [u8; 32] = [
-    0x3d, 0xbb, 0xe3, 0xec, 0x9d, 0x58, 0xa7, 0xc2, 0x85, 0xa1, 0x41, 0x59, 0x29, 0x40, 0x51, 0x49,
-    0x83, 0x78, 0xf2, 0x91, 0x52, 0x5d, 0x84, 0x45, 0x11, 0x3b, 0x17, 0xaa, 0xb9, 0xb0, 0xe0, 0x8b,
+const TRUSTED_TERMINAL_IDENTITY_V4: [u8; 32] = [
+    0x0e, 0x1d, 0x82, 0xbd, 0xde, 0x1c, 0x45, 0xdf, 0x36, 0x8c, 0x64, 0xd6, 0x2d, 0x27, 0xf9, 0xa8,
+    0xf1, 0xfb, 0x85, 0x6e, 0xab, 0xae, 0x1c, 0x61, 0xd9, 0xc3, 0x29, 0x0a, 0x90, 0x7f, 0x6d, 0xa6,
 ];
 
 const ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 8] = [
@@ -1030,29 +1030,12 @@ fn hash_arg_attributes(digest: &mut Sha256, attributes: ArgAttributes) {
     );
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct CompilerProviderIdentityV1 {
-    crate_name: String,
-    stable_crate_id: u64,
-    // Used only to require one internally consistent rustc session. Device
-    // definition identities never hash this path-sensitive observation.
-    crate_hash_observation: [u8; 16],
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ReviewedDeviceDefinitionIdentityV3 {
-    provider: CompilerProviderIdentityV1,
-    cargo_metadata_build_observation: [u8; 32],
-    source_closure_identity: [u8; 32],
-    definition_source_identity: [u8; 32],
-}
-
 fn trusted_definitions_and_terminals_identity<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
 ) -> Result<[u8; 32], CollectedMoeTop2ErrorV1> {
     let mut digest = Sha256::new();
-    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V3);
+    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V4);
     hash_field(&mut digest, COLLECTED_MOE_TOP2_PIPELINE_V1.as_bytes());
     let mut provider = None;
     for item in REQUIRED_TRUSTED_ITEMS_V1 {
@@ -1069,14 +1052,13 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
             )));
         }
         provider.get_or_insert(definition.krate);
-        let identity = reviewed_device_definition_identity(tcx, definition)?;
-        hash_device_definition(
-            &mut digest,
+        let identity = reviewed_device_definition_identity(
+            tcx,
+            definition,
+            trusted_device_items::ProviderSemanticDefinitionRoleV1::TrustedDefinition,
             item.canonical_path(),
-            &tcx.def_path_str(definition),
-            tcx.def_path_hash(definition).local_hash().as_u64(),
-            &identity,
-        );
+        )?;
+        hash_field(&mut digest, &identity);
     }
     let provider = provider.ok_or_else(|| {
         CollectedMoeTop2ErrorV1::TrustedDefinitions(
@@ -1173,15 +1155,13 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
                 terminal_provider.crate_name
             )));
         }
-        let identity = reviewed_device_definition_identity(tcx, definition)?;
-        hash_field(&mut digest, b"reviewed-semantic-terminal-v1");
-        hash_device_definition(
-            &mut digest,
+        let identity = reviewed_device_definition_identity(
+            tcx,
+            definition,
+            trusted_device_items::ProviderSemanticDefinitionRoleV1::SemanticTerminal,
             expected.canonical_path(),
-            &tcx.def_path_str(definition),
-            tcx.def_path_hash(definition).local_hash().as_u64(),
-            &identity,
-        );
+        )?;
+        hash_field(&mut digest, &identity);
     }
     let core_provider = tcx
         .lang_items()
@@ -1245,29 +1225,19 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
             "fabs semantic terminal did not come from pinned core".into(),
         ));
     }
-    hash_field(&mut digest, b"pinned-rustc-core-terminal-v1");
-    hash_field(
-        &mut digest,
-        MoeTop2CompilerIntrinsicV1::FabsF32
-            .canonical_path()
-            .as_bytes(),
-    );
-    hash_field(&mut digest, tcx.def_path_str(fabs_definition).as_bytes());
-    hash_field(
-        &mut digest,
-        &tcx.def_path_hash(fabs_definition)
-            .local_hash()
-            .as_u64()
-            .to_le_bytes(),
-    );
-    hash_field(&mut digest, core_provider.crate_name.as_bytes());
-    hash_field(&mut digest, &core_provider.stable_crate_id.to_le_bytes());
-    hash_field(&mut digest, &core_provider.crate_hash_observation);
+    let core_terminal_identity = trusted_device_items::pinned_core_semantic_terminal_identity_v1(
+        &core_provider,
+        MoeTop2CompilerIntrinsicV1::FabsF32.canonical_path(),
+        &tcx.def_path(fabs_definition).to_string_no_crate_verbose(),
+        tcx.def_path_hash(fabs_definition).local_hash().as_u64(),
+    )
+    .map_err(CollectedMoeTop2ErrorV1::TrustedDefinitions)?;
+    hash_field(&mut digest, &core_terminal_identity);
     let actual: [u8; 32] = digest.finalize().into();
-    if actual != TRUSTED_TERMINAL_IDENTITY_V3 {
+    if actual != TRUSTED_TERMINAL_IDENTITY_V4 {
         return Err(CollectedMoeTop2ErrorV1::TrustedDefinitions(format!(
             "trusted-definition/semantic-terminal identity drifted: expected {}, found {}",
-            encode_hex(&TRUSTED_TERMINAL_IDENTITY_V3),
+            encode_hex(&TRUSTED_TERMINAL_IDENTITY_V4),
             encode_hex(&actual)
         )));
     }
@@ -1277,57 +1247,27 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
 fn compiler_provider(
     tcx: TyCtxt<'_>,
     crate_num: rustc_hir::def_id::CrateNum,
-) -> CompilerProviderIdentityV1 {
-    CompilerProviderIdentityV1 {
-        crate_name: tcx.crate_name(crate_num).to_string(),
-        stable_crate_id: tcx.stable_crate_id(crate_num).as_u64(),
-        crate_hash_observation: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
-    }
+) -> trusted_device_items::CompilerProviderObservationV1 {
+    trusted_device_items::compiler_provider_observation_v1(tcx, crate_num)
 }
 
 fn reviewed_device_definition_identity(
     tcx: TyCtxt<'_>,
     definition: rustc_hir::def_id::DefId,
-) -> Result<ReviewedDeviceDefinitionIdentityV3, CollectedMoeTop2ErrorV1> {
-    let observed =
-        trusted_device_items::reviewed_workgroup_sync_provider_definition(tcx, definition)
-            .map_err(CollectedMoeTop2ErrorV1::TrustedDefinitions)?;
+    definition_role: trusted_device_items::ProviderSemanticDefinitionRoleV1,
+    canonical_role: &str,
+) -> Result<[u8; 32], CollectedMoeTop2ErrorV1> {
+    let observed = trusted_device_items::reviewed_provider_semantic_definition_v1(tcx, definition)
+        .map_err(CollectedMoeTop2ErrorV1::TrustedDefinitions)?;
     let provider = compiler_provider(tcx, definition.krate);
-    if observed.crate_name != provider.crate_name
-        || observed.stable_crate_id != provider.stable_crate_id
-        || observed.crate_hash_observation != provider.crate_hash_observation
-        || observed.cargo_metadata_build_observation == [0; 32]
-        || observed.source_closure_identity == [0; 32]
-        || observed.definition_source_identity == [0; 32]
-    {
+    if observed.provider != provider {
         return Err(CollectedMoeTop2ErrorV1::TrustedDefinitions(
-            "reviewed device provider observation is incomplete".into(),
+            "reviewed device provider observation changed within the compiler session".into(),
         ));
     }
-    Ok(ReviewedDeviceDefinitionIdentityV3 {
-        provider,
-        cargo_metadata_build_observation: observed.cargo_metadata_build_observation,
-        source_closure_identity: observed.source_closure_identity,
-        definition_source_identity: observed.definition_source_identity,
-    })
-}
-
-fn hash_device_definition(
-    digest: &mut Sha256,
-    role: &str,
-    compiler_path: &str,
-    local_def_path_hash: u64,
-    identity: &ReviewedDeviceDefinitionIdentityV3,
-) {
-    hash_field(digest, b"reviewed-fe2o3-device-definition-v1");
-    hash_field(digest, role.as_bytes());
-    hash_field(digest, compiler_path.as_bytes());
-    hash_field(digest, &local_def_path_hash.to_le_bytes());
-    hash_field(digest, identity.provider.crate_name.as_bytes());
-    hash_field(digest, &identity.provider.stable_crate_id.to_le_bytes());
-    hash_field(digest, &identity.cargo_metadata_build_observation);
-    hash_field(digest, &identity.source_closure_identity);
-    hash_field(digest, &identity.definition_source_identity);
+    observed
+        .durable_semantic_identity(definition_role, canonical_role)
+        .map_err(CollectedMoeTop2ErrorV1::TrustedDefinitions)
 }
 
 fn observe_compiler_semantics(tcx: TyCtxt<'_>) -> CompilerSemanticsV1 {
@@ -1504,7 +1444,7 @@ mod validated_authority {
         } else if authority.fn_abi_identity != RUSTC_FN_ABI_IDENTITY_V1 {
             Some("rustc FnAbi")
         } else if authority.compiler_semantics_identity != COMPILER_SEMANTICS_IDENTITY_V1
-            || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V3
+            || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V4
         {
             Some("compiler/trusted definition closure")
         } else if authority.frontend_contract_identity != sha256(EXACT_FRONTEND_CONTRACT_V1) {
@@ -1599,7 +1539,7 @@ fn exact_authority_for_test() -> MoeTop2AuthorityV1 {
         portable_mir_identity: PORTABLE_MIR_CLOSURE_IDENTITY_V1,
         compiler_semantics_identity: COMPILER_SEMANTICS_IDENTITY_V1,
         fn_abi_identity: RUSTC_FN_ABI_IDENTITY_V1,
-        trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V3,
+        trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V4,
         frontend_contract_identity: sha256(EXACT_FRONTEND_CONTRACT_V1),
         abi_identity: sha256(ABI_BINDING_V1),
         effects_identity: sha256(EFFECT_BINDING_V1),
