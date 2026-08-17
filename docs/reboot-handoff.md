@@ -1,6 +1,10 @@
-# Reboot Handoff
+# Historical Reboot Handoff
 
-This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
+This file is a historical incident handoff from the early elementwise backend
+and local RDNA driver bring-up. Paths, commits, commands, package versions, and
+"current" wording below describe that checkpoint only. For the current design
+and supported release gates, use [architecture-v2.md](architecture-v2.md),
+[testing.md](testing.md), and the repository README.
 
 ## Current Commit
 
@@ -50,8 +54,10 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   record-derived `ElementwiseExpr` for LLVM IR emission; raw rustc MIR remains
   the temporary fallback for shape discovery the record plan does not yet own.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
-- Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
-  `target/fe2o3/*.hsaco`.
+- At this checkpoint, generated LLVM IR was compiled through ROCm clang and
+  linked with `ld.lld` into `target/fe2o3/*.hsaco`. The current
+  production-directed finalizer instead uses pinned upstream LLVM
+  target-machine APIs and in-process LLD, with no COMGR or shell linker.
 - Generated HSACO metadata is validated with `llvm-readobj --notes` when that
   ROCm tool is available.
 - Supported read-only slice index helpers now include:

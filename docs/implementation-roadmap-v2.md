@@ -1,10 +1,14 @@
 # fe2o3 Implementation Roadmap v2
 
-Status: execution plan for parallel implementation.
+Status: living execution roadmap and chronological milestone record.
 
-Implementation checkpoint: this document belongs to pre-manifest implementation
-Commit A. A's final commit and tree identities are intentionally recorded only
-by a subsequent manifest-only Commit B, avoiding a self-reference in A.
+Commit identities in individual sections identify those bounded historical
+checkpoints, not the current repository head. Statements such as "next
+blocker" inside a checkpoint are local to that checkpoint unless repeated in
+the current parity matrix. Current implementation strength and remaining work
+are tracked by [architecture-v2.md](architecture-v2.md), the
+[cuda-oxide parity matrix](cuda-oxide-parity-matrix.md), and generated parity
+evidence.
 
 The bounded MoE V2 checkpoint remains
 `10e5f90ece1937aaee77492e8e4e4742863d013b`; it identifies that scoped

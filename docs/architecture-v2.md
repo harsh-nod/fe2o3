@@ -1,14 +1,11 @@
 # fe2o3 Architecture v2
 
-Status: proposed architecture and implementation contract.
+Status: living architecture and implementation contract.
 
-Implementation checkpoint: `90b6fe31cbb1d89b82755f194ac7950c4eef4756`.
-
-This document describes the target architecture for fe2o3. It is not a
-description of the current implementation. The current backend is a useful
-bootstrap: it discovers `#[kernel]` functions, walks reachable MIR, recognizes a
-limited set of elementwise expressions, emits AMDGPU LLVM IR, builds HSACO
-files, and delegates host code generation to `rustc_codegen_llvm`.
+This document describes both the permanent architecture and the boundary of
+the current implementation. Sections that describe an incomplete general form
+are explicit about that status. Historical commit-specific checkpoints belong
+in milestone documents and receipts, not in this living overview.
 
 The v2 architecture preserves the working AMD runtime and artifact path while
 replacing the expression recognizer with a general compiler pipeline. It also
@@ -22,6 +19,37 @@ Related documents:
 - [GPU safety contract v1](gpu-safety-contract-v1.md)
 - [implementation roadmap](implementation-roadmap-v2.md)
 - [general typed dispatch V1](general-typed-dispatch-v1.md)
+
+## Current Implementation Snapshot
+
+The repository has implemented a bounded vertical realization of the v2
+architecture, centered on exact `gfx942:xnack-` profiles:
+
+- `#[kernel]` emits versioned registrations and generated host markers. The
+  custom backend delegates ordinary host code to `rustc_codegen_llvm`, then
+  discovers roots and collects reachable, monomorphized device MIR.
+- The compiler has structured MIR import, rustc-derived ABI and layout
+  evidence, verified Kernel IR, target-gated AMDGPU lowering, and exact
+  fail-closed profiles for representative elementwise, scalar GEMM, tiled GEMM,
+  row softmax, Flash Attention, MoE, Wave64 collective, LDS, and atomic slices.
+- The production-directed finalizer runs outside rustc and uses one pinned
+  upstream LLVM build for module linking, optimization, target-machine object
+  emission, and in-process LLD linking. It neither uses COMGR nor shells out to
+  `clang`, `llc`, or `ld.lld`.
+- Versioned artifact, descriptor, durable-publication, generated launch, HIP,
+  and HSA layers exist. Safe generated dispatch is still profile-specific; an
+  arbitrary manifest cannot manufacture a safe Rust signature or launch
+  authority.
+- Verus models and proof-carrying artifact schemas exist for bounded kernels
+  and safety obligations. There is no general reviewed source-to-machine or
+  Verus-to-machine refinement proof, so source proof, compiler evidence,
+  machine-code inspection, and GPU execution remain separate claims.
+
+This is not general Rust GPU compilation or cuda-oxide parity. The exact
+implemented and missing surfaces are maintained in the
+[cuda-oxide parity matrix](cuda-oxide-parity-matrix.md); reproducible commands
+and strength labels are defined by the [testing guide](testing.md) and parity
+evidence policy.
 
 ## Goals
 
@@ -328,14 +356,16 @@ explicit unsafe obligation.
 
 ### Descriptor-driven multi-kernel dispatch
 
-The next implementation milestone makes the generated declaration and the
-finalized entry descriptor the only safe route from Rust arguments to kernarg
-bytes. The generated declaration is trusted compiler output compiled into the
-host object. The serialized manifest is untrusted input until it matches that
-declaration and independent code-object inspection. A loader must never create
-a safe Rust signature by interpreting manifest bytes alone. The exact V1
-accepted argument profiles, authority transitions, rejection suite, and exit
-gate are specified by the
+Bounded generated declarations, finalized descriptors, multi-entry artifacts,
+and typed preparation exist for reviewed profiles. The general rule remains:
+the generated declaration and finalized entry descriptor are the only safe
+route from Rust arguments to kernarg bytes. The generated declaration is
+trusted compiler output compiled into the host object. The serialized manifest
+is untrusted input until it matches that declaration and independent
+code-object inspection. A loader must never create a safe Rust signature by
+interpreting manifest bytes alone. The exact V1 accepted argument profiles,
+authority transitions, rejection suite, and remaining exit gate are specified
+by the
 [general typed dispatch contract](general-typed-dispatch-v1.md).
 
 The transition is:
@@ -414,8 +444,9 @@ libraries:
 - matrix capabilities to target-gated MFMA/WMMA operations;
 - kernels and metadata to HSA code objects.
 
-ROCm clang/lld remains the bootstrap finalizer. The production link path uses
-an out-of-process, pinned fe2o3 worker that calls LLVM module-linking,
+The historical compatibility path used ROCm command-line clang and `ld.lld`.
+The production-directed link path uses an out-of-process, pinned fe2o3 worker
+that calls LLVM module-linking,
 optimization, target-machine, and LLD library APIs directly. The worker keeps
 ROCm LLVM out of rustc's process, where rustc's independently built LLVM is
 already loaded. Requests are bounded canonical records with exact input,
@@ -424,7 +455,7 @@ not contain shell commands, arbitrary linker flags, or implicit library search
 paths. COMGR is not part of this architecture. Textual LLVM emission may remain
 as an inspection format but is not the semantic IR boundary.
 
-## Migration from Current fe2o3
+## Remaining Migration from Bootstrap Paths
 
 ### Retain
 
@@ -452,9 +483,10 @@ as an inspection format but is not the semantic IR boundary.
 - host async APIs so Rust lifetimes cover queued device execution;
 - build caching around complete source/proof/target/toolchain identities.
 
-The old and new compilers run side by side until the v2 path passes every
-current example and the relevant parity gates. Removal of the recognizer is a
-deliberate gate, not an early cleanup task.
+The legacy recognizer and the structured compiler paths remain side by side
+until the structured path passes every current example and the relevant parity
+gates. Removal of a bootstrap path is a deliberate compatibility gate, not an
+early cleanup task.
 
 ## Architectural Invariants
 

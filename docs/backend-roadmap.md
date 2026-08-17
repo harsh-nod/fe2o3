@@ -2,7 +2,7 @@
 
 For the full milestone plan, see [implementation-plan.md](implementation-plan.md).
 
-## Implemented In This Scaffold
+## Implemented Inventory
 
 This inventory includes the historical elementwise MVP. The
 production-directed architecture now uses an isolated worker backed by one

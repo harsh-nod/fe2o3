@@ -1,9 +1,16 @@
 # fe2o3 Implementation Plan
 
+Status: living plan with historical MVP milestones.
+
+The architecture source of truth is [architecture-v2.md](architecture-v2.md).
+Milestone status in this file describes bounded implemented profiles; it does
+not imply general Rust coverage, Verus-to-machine refinement, or cuda-oxide
+parity.
+
 ## Goal
 
-Build a native Rust backend for AMD GPUs that can compile and run a single
-combined host plus device Rust file:
+The original MVP goal was a native Rust backend for AMD GPUs that could compile
+and run a single combined host plus device Rust file:
 
 ```rust
 #[kernel]
@@ -19,9 +26,10 @@ fn main() {
 }
 ```
 
-The first success criterion is `cargo fe2o3 run -p fe2o3-vecadd` producing a
-host binary, a matching AMDGPU HSACO, launching on an AMD GPU through HIP, and
-passing the result check.
+That success criterion has been reached for bounded profiles. The current goal
+is to replace profile-specific compiler, artifact, and launch paths with the
+general typed architecture while retaining exact source, ABI, proof, target,
+toolchain, machine-code, and runtime evidence boundaries.
 
 ## Architecture
 
