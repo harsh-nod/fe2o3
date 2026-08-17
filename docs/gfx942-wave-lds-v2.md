@@ -74,13 +74,15 @@ identity. The existing LLVM checks still require one ballot, six shuffles, one
 1,024-byte aligned LDS allocation, 18 barriers, fixed workgroup metadata, and
 wave64 target features.
 
-The V1 direct LLVM/LLD hardware route remains independent of the genuine Rust
-source path. Candidate HSACO construction uses direct LLVM/LLD and does not use
-COMGR for linking. The surrounding HIP runtime process may invoke COMGR for its
-own runtime operations, including the first host-to-device copy; that is not
-part of candidate HSACO construction. The route inspects `gfx942:xnack-`
-assembly, `EF_AMDGPU_FEATURE_XNACK_OFF_V4`, and 1,024 bytes of fixed group
-storage before the 256-lane MI300X oracle runs.
+The V1 historical command-line LLVM hardware route remains independent of the
+genuine Rust source path. Candidate HSACO construction uses ROCm Clang and its
+link path and does not use COMGR. This probe is not the production-directed GPU
+finalizer, which uses pinned upstream LLVM target-machine APIs and in-process
+LLD without a shell linker. The surrounding HIP runtime process may invoke
+COMGR for its own runtime operations, including the first host-to-device copy;
+that is not part of candidate HSACO construction. The route inspects
+`gfx942:xnack-` assembly, `EF_AMDGPU_FEATURE_XNACK_OFF_V4`, and 1,024 bytes of
+fixed group storage before the 256-lane MI300X oracle runs.
 
 The Verus source and theorem statements are unchanged. The required proof lane
 still comprises six positive harnesses and 26 expected-rejection fixtures.

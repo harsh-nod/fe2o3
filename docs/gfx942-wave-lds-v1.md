@@ -99,15 +99,17 @@ cargo test --locked -p dialect-amdgcn --test gfx942_wave_lds_v1 \
 ```
 
 The first command passed two tests with the hardware case ignored by default.
-The second command passed the exact hardware test. Inside that test, this
-command invokes the direct LLVM/LLD route:
+The second command passed the exact hardware test. Inside that historical test,
+this command-line ROCm Clang invocation built the candidate HSACO:
 
 ```sh
 /opt/rocm/llvm/bin/clang --target=amdgcn-amd-amdhsa \
   -mcpu=gfx942:xnack- -nogpulib wave_lds.ll -o wave_lds.hsaco
 ```
 
-COMGR is not used for linking.
+COMGR is not used for linking. This historical probe is separate from the
+production-directed GPU finalizer, which uses pinned upstream LLVM
+target-machine APIs and in-process LLD without a shell linker.
 
 Before launch, the test verifies `ds_bpermute_b32`, `ds_write_b32`,
 `ds_read_b32`, and `s_barrier` in assembly. `llvm-readobj` verifies
