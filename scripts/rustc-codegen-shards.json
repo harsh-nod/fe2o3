@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "shards": [
+    {
+      "id": "01-control-flow",
+      "tests": [
+        "collected_executable_scalar_control_flow_v2"
+      ]
+    },
+    {
+      "id": "02-gfx942-wave-lds",
+      "tests": [
+        "gfx942_wave_lds_compiler"
+      ]
+    },
+    {
+      "id": "03-kernel-ir",
+      "tests": [
+        "kernel_ir_codegen"
+      ]
+    },
+    {
+      "id": "04-memory-math-gemm",
+      "tests": [
+        "half_math_compiler",
+        "memory_intrinsics_compiler",
+        "tiled_gemm_frontend"
+      ]
+    },
+    {
+      "id": "05-attention-moe",
+      "tests": [
+        "flash_attention_v1",
+        "moe_top2_v1"
+      ]
+    },
+    {
+      "id": "06-device-ffi",
+      "tests": [
+        "device_ffi_cross_crate"
+      ]
+    },
+    {
+      "id": "07-frontend-types",
+      "tests": [
+        "cross_crate_imports",
+        "frontend_contract_collector",
+        "g2_monomorphization",
+        "trusted_device_items"
+      ]
+    },
+    {
+      "id": "08-abi-collectives",
+      "tests": [
+        "cross_crate_typed_binding",
+        "g2_layout",
+        "g2_semantics",
+        "general_two_kernel_import",
+        "wave64_collectives_v1",
+        "workgroup_sync_v1"
+      ]
+    }
+  ]
+}

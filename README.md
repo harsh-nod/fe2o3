@@ -804,11 +804,23 @@ Run the repository validation lanes:
 
 ```bash
 scripts/ci-local.sh generic
+scripts/ci-local.sh generic-core
+scripts/ci-local.sh shard-policy
+scripts/ci-local.sh rustc-codegen-shard 01-control-flow
 scripts/ci-local.sh workspace-test
 VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
 FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
 FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx1151 scripts/ci-local.sh hardware-smoke
 ```
+
+`generic` remains the complete serial generic gate. Hosted CI runs
+`generic-core` once and executes every target-isolated rustc-codegen integration
+test through the checked-in shard manifest. `shard-policy` derives the
+authoritative test-target set from locked Cargo metadata and rejects missing,
+duplicate, renamed, unknown, malformed, empty, or newly unassigned targets.
+Each hosted core or shard job uses separate Cargo and log directories; the
+stable `Generic validation` check succeeds only after the core and all shards
+succeed.
 
 Run the exact opt-in S09 local-capability lane on `gfx942:xnack-`. The evidence
 directory must be an absolute path that does not already exist:

@@ -9,6 +9,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
+readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 
@@ -43,6 +44,9 @@ Usage: scripts/ci-local.sh <command>
 
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
+  generic-core    Run generic validation except codegen integration shards
+  shard-policy    Validate the codegen integration shard assignment
+  rustc-codegen-shard <id>  Run one codegen integration shard
   format          Check Rust formatting
   check           Check every workspace target, including example binaries
   test            Run unit tests that do not link or load the HIP runtime
@@ -158,7 +162,7 @@ run_check() {
   run_step workspace-check cargo "${cargo_args[@]}"
 }
 
-run_tests() {
+run_cpu_tests() {
   local cargo_args=(test --locked)
   local -a rustc_examples rocm_examples
   local -A rocm_example_set=()
@@ -179,7 +183,9 @@ run_tests() {
   # Keep the generic test lane independent of whether the host happens to have
   # ROCm installed. The raw HIP crate supplies a fail-closed no-runtime ABI.
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
-  run_rustc_codegen_tests
+}
+
+run_auxiliary_tests() {
   # fe2o3-core unit tests link HIP, but its compile-fail doctests do not.
   run_step core-doc-tests cargo test --locked --doc -p fe2o3-core
   run_step device-copy-renamed-dependency \
@@ -192,30 +198,90 @@ run_tests() {
   run_step s09-debug-ci-guard bash scripts/tests/s09-debug-ci.sh
 }
 
-run_rustc_codegen_tests() {
-  local test_directory="${REPO_ROOT}/crates/${RUSTC_CODEGEN_TEST_PACKAGE}/tests"
-  local -a test_sources
-  local test_source test_target
+run_shard_policy() {
+  run_step rustc-codegen-shard-policy \
+    python3 "${RUSTC_CODEGEN_SHARD_POLICY}" check
+}
 
-  mapfile -t test_sources < <(
-    printf '%s\n' "${test_directory}"/*.rs | LC_ALL=C sort
-  )
-  if ((${#test_sources[@]} == 0)) || [[ ! -f "${test_sources[0]}" ]]; then
-    printf 'no integration test targets found in %s\n' "${test_directory}" >&2
+load_rustc_codegen_shards() {
+  local destination_name="$1"
+  local output
+  # shellcheck disable=SC2178  # The destination is a caller-owned array nameref.
+  local -n destination="${destination_name}"
+  if ! output="$(python3 "${RUSTC_CODEGEN_SHARD_POLICY}" list)"; then
     return 2
   fi
+  destination=()
+  # shellcheck disable=SC2034  # The destination is written through a nameref.
+  mapfile -t destination <<<"${output}"
+}
 
-  # Cargo can emit a test rlib and an unversioned backend dylib with different
-  # Rust symbol hashes during one --all-targets build. Run each target only
-  # after Cargo has produced the exact dylib against which it was linked.
+load_rustc_codegen_shard_targets() {
+  local shard_id="$1"
+  local destination_name="$2"
+  local output
+  # shellcheck disable=SC2178  # The destination is a caller-owned array nameref.
+  local -n destination="${destination_name}"
+  if ! output="$(python3 "${RUSTC_CODEGEN_SHARD_POLICY}" tests "${shard_id}")"; then
+    return 2
+  fi
+  destination=()
+  # shellcheck disable=SC2034  # The destination is written through a nameref.
+  mapfile -t destination <<<"${output}"
+}
+
+run_rustc_codegen_lib_tests() {
+  # Do not combine this with integration targets: Cargo can emit a test rlib
+  # and an unversioned backend dylib with different Rust symbol hashes.
   run_step rustc-codegen-lib-tests \
     cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
-  for test_source in "${test_sources[@]}"; do
-    test_target="$(basename -- "${test_source}" .rs)"
-    run_step "rustc-codegen-test-${test_target}" \
-      cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
-        --test "${test_target}"
+}
+
+run_rustc_codegen_target() {
+  local test_target="$1"
+  # Cargo can emit a test rlib and an unversioned backend dylib with different
+  # Rust symbol hashes during one --all-targets build. This target-isolated Cargo
+  # invocation produces the exact backend dylib before running its linked test.
+  run_step "rustc-codegen-test-${test_target}" \
+    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
+      --test "${test_target}"
+}
+
+run_rustc_codegen_shard_targets() {
+  local shard_id="$1"
+  local -a test_targets
+  local test_target
+  load_rustc_codegen_shard_targets "${shard_id}" test_targets
+  for test_target in "${test_targets[@]}"; do
+    run_rustc_codegen_target "${test_target}"
   done
+}
+
+run_all_rustc_codegen_shards() {
+  local -a shard_ids
+  local shard_id
+  load_rustc_codegen_shards shard_ids
+  for shard_id in "${shard_ids[@]}"; do
+    run_rustc_codegen_shard_targets "${shard_id}"
+  done
+}
+
+run_rustc_codegen_shard() {
+  local shard_id="$1"
+  run_shard_policy
+  run_rustc_codegen_shard_targets "${shard_id}"
+}
+
+run_rustc_codegen_tests() {
+  run_shard_policy
+  run_rustc_codegen_lib_tests
+  run_all_rustc_codegen_shards
+}
+
+run_tests() {
+  run_cpu_tests
+  run_rustc_codegen_tests
+  run_auxiliary_tests
 }
 
 run_workspace_tests() {
@@ -270,17 +336,25 @@ run_parity_matrix_checks() {
     bash scripts/tests/hosted-parity-ci.sh
 }
 
-run_generic() {
+run_generic_core() {
   run_step example-manifest \
     cargo run --quiet --locked -p cargo-fe2o3 -- examples check
   run_step bounded-moe-docs \
     python3 scripts/test-bounded-moe-docs.py
+  run_shard_policy
   run_parity_matrix_checks
   run_format
   run_check
   run_backend_build
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
-  run_tests
+  run_cpu_tests
+  run_rustc_codegen_lib_tests
+  run_auxiliary_tests
+}
+
+run_generic() {
+  run_generic_core
+  run_all_rustc_codegen_shards
 }
 
 run_rocm_compile() {
@@ -447,6 +521,15 @@ main() {
 
   case "${1:-}" in
     generic) run_generic ;;
+    generic-core) run_generic_core ;;
+    shard-policy) run_shard_policy ;;
+    rustc-codegen-shard)
+      if (($# != 2)); then
+        printf '%s\n' 'rustc-codegen-shard requires exactly one shard id' >&2
+        return 2
+      fi
+      run_rustc_codegen_shard "$2"
+      ;;
     format) run_format ;;
     check) run_check ;;
     test) run_tests ;;

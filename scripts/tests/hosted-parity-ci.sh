@@ -10,6 +10,7 @@ readonly ROOT
 readonly PROTECTED_WORKFLOW="${ROOT}/.github/workflows/parity-promotion.yml"
 readonly PUBLISHER_WORKFLOW="${ROOT}/.github/workflows/parity-publisher-gate.yml"
 readonly GENERIC_WORKFLOW="${ROOT}/.github/workflows/ci.yml"
+readonly SHARD_POLICY="${ROOT}/scripts/rustc-codegen-shards.py"
 readonly HARDWARE_WORKFLOW="${ROOT}/.github/workflows/hardware-smoke.yml"
 readonly ROCM_WORKFLOW="${ROOT}/.github/workflows/rocm-compile.yml"
 readonly CHANGE_POLICY="${ROOT}/scripts/parity-protected-change-policy.sh"
@@ -185,14 +186,58 @@ done
 require_text "${GENERIC_WORKFLOW}" 'direct default-branch parity promotion is forbidden; repository rules must prevent this push'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic parity policy gate'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic validation'
-if ! sed -n '/^  parity-policy:/,/^  validate:/p' "${GENERIC_WORKFLOW}" |
+require_text "${GENERIC_WORKFLOW}" 'name: Generic core'
+require_text "${GENERIC_WORKFLOW}" 'name: Rustc codegen shard (${{ matrix.shard }})'
+if ! sed -n '/^  parity-policy:/,/^  generic-core:/p' "${GENERIC_WORKFLOW}" |
   rg -Fx '    timeout-minutes: 10' >/dev/null; then
   printf 'generic parity policy timeout is not exactly 10 minutes\n' >&2
   exit 1
 fi
-if ! sed -n '/^  validate:/,$p' "${GENERIC_WORKFLOW}" |
+if ! sed -n '/^  generic-core:/,/^  rustc-codegen-shards:/p' "${GENERIC_WORKFLOW}" |
   rg -Fx '    timeout-minutes: 60' >/dev/null; then
-  printf 'generic validation timeout is not exactly 60 minutes\n' >&2
+  printf 'generic core timeout is not exactly 60 minutes\n' >&2
+  exit 1
+fi
+if ! sed -n '/^  rustc-codegen-shards:/,/^  generic-validation:/p' "${GENERIC_WORKFLOW}" |
+  rg -Fx '    timeout-minutes: 60' >/dev/null; then
+  printf 'generic codegen shard timeout is not exactly 60 minutes\n' >&2
+  exit 1
+fi
+if ! sed -n '/^  generic-validation:/,$p' "${GENERIC_WORKFLOW}" |
+  rg -Fx '    timeout-minutes: 10' >/dev/null; then
+  printf 'generic aggregate timeout is not exactly 10 minutes\n' >&2
+  exit 1
+fi
+require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh generic-core'
+require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh rustc-codegen-shard "${{ matrix.shard }}"'
+require_text "${GENERIC_WORKFLOW}" 'fail-fast: false'
+require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core'
+require_text "${GENERIC_WORKFLOW}" 'CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core'
+require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/rustc-codegen-${{ matrix.shard }}'
+require_text "${GENERIC_WORKFLOW}" 'CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/rustc-codegen-${{ matrix.shard }}'
+require_text "${GENERIC_WORKFLOW}" 'name: generic-core-logs-${{ github.run_attempt }}'
+require_text "${GENERIC_WORKFLOW}" 'name: rustc-codegen-${{ matrix.shard }}-logs-${{ github.run_attempt }}'
+if [[ "$(rg -Fc 'if: ${{ failure() || cancelled() }}' "${GENERIC_WORKFLOW}")" -ne 2 ]]; then
+  printf 'generic core and shards do not both upload logs after failure or cancellation\n' >&2
+  exit 1
+fi
+require_text "${GENERIC_WORKFLOW}" 'if: ${{ always() }}'
+require_text "${GENERIC_WORKFLOW}" '      - generic-core'
+require_text "${GENERIC_WORKFLOW}" '      - rustc-codegen-shards'
+require_text "${GENERIC_WORKFLOW}" 'GENERIC_CORE_RESULT: ${{ needs.generic-core.result }}'
+require_text "${GENERIC_WORKFLOW}" 'RUSTC_CODEGEN_SHARDS_RESULT: ${{ needs.rustc-codegen-shards.result }}'
+require_text "${GENERIC_WORKFLOW}" 'scripts/require-ci-success.sh'
+
+workflow_shards="$(
+  sed -n '/^  rustc-codegen-shards:/,/^  generic-validation:/p' "${GENERIC_WORKFLOW}" |
+    sed -n '/^        shard:/,/^    env:/p' |
+    sed -n 's/^          - //p'
+)"
+manifest_shards="$(python3 "${SHARD_POLICY}" list)"
+if [[ "${workflow_shards}" != "${manifest_shards}" ]]; then
+  printf '%s\n' 'generic workflow matrix differs from the checked-in shard manifest' >&2
+  diff -u <(printf '%s\n' "${manifest_shards}") \
+    <(printf '%s\n' "${workflow_shards}") >&2 || true
   exit 1
 fi
 require_text "${GENERIC_WORKFLOW}" 'merge_group:'

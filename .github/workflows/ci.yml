@@ -98,12 +98,15 @@ jobs:
           # Candidate-controlled pull-request and generic CI jobs never receive
           # id-token permission or invoke the production publisher service.
 
-  validate:
-    name: Generic validation
+  generic-core:
+    name: Generic core
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core
+      CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core
 
     steps:
       - name: Check out repository
@@ -127,14 +130,94 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      - name: Validate with isolated codegen-backend tests
-        run: scripts/ci-local.sh generic
+      - name: Run generic core validation
+        run: scripts/ci-local.sh generic-core
 
       - name: Upload failure logs
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: generic-validation-logs
-          path: target/ci-logs/
+          name: generic-core-logs-${{ github.run_attempt }}
+          path: ${{ env.CI_LOG_DIR }}/
           if-no-files-found: ignore
           retention-days: 7
+
+  rustc-codegen-shards:
+    name: Rustc codegen shard (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - 01-control-flow
+          - 02-gfx942-wave-lds
+          - 03-kernel-ir
+          - 04-memory-math-gemm
+          - 05-attention-moe
+          - 06-device-ffi
+          - 07-frontend-types
+          - 08-abi-collectives
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/rustc-codegen-${{ matrix.shard }}
+      CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/rustc-codegen-${{ matrix.shard }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Install generic test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Record tool versions
+        run: |
+          rustc -Vv
+          cargo -V
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - name: Run target-isolated codegen integration shard
+        run: scripts/ci-local.sh rustc-codegen-shard "${{ matrix.shard }}"
+
+      - name: Upload failure logs
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rustc-codegen-${{ matrix.shard }}-logs-${{ github.run_attempt }}
+          path: ${{ env.CI_LOG_DIR }}/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  generic-validation:
+    name: Generic validation
+    if: ${{ always() }}
+    needs:
+      - generic-core
+      - rustc-codegen-shards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Require every generic dependency to succeed
+        env:
+          GENERIC_CORE_RESULT: ${{ needs.generic-core.result }}
+          RUSTC_CODEGEN_SHARDS_RESULT: ${{ needs.rustc-codegen-shards.result }}
+        run: >-
+          scripts/require-ci-success.sh
+          "${GENERIC_CORE_RESULT}"
+          "${RUSTC_CODEGEN_SHARDS_RESULT}"

@@ -9,6 +9,8 @@ TIMEOUT_TEST_ROOT="$(mktemp -d)"
 readonly TIMEOUT_TEST_ROOT
 trap 'rm -rf "${TIMEOUT_TEST_ROOT}"' EXIT
 
+bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
+
 set +e
 timeout 10s env \
   FE2O3_CI_STEP_TIMEOUT_SECONDS=1 \
@@ -188,6 +190,18 @@ step_command() {
   return 1
 }
 
+step_count() {
+  local expected_name="$1"
+  local count=0
+  local name
+  for name in "${STEP_NAMES[@]}"; do
+    if [[ "${name}" == "${expected_name}" ]]; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%d\n' "${count}"
+}
+
 assert_equals() {
   local expected="$1"
   local actual="$2"
@@ -199,6 +213,36 @@ assert_equals() {
   fi
 }
 
+assert_step_count() {
+  local expected_name="$1"
+  local expected_count="$2"
+  local context="$3"
+  assert_equals "${expected_count}" "$(step_count "${expected_name}")" "${context}"
+}
+
+assert_all_codegen_targets_once() {
+  local -a shard_ids test_targets
+  local shard_id test_target
+  local expected_total=0
+  local actual_total=0
+  load_rustc_codegen_shards shard_ids
+  for shard_id in "${shard_ids[@]}"; do
+    load_rustc_codegen_shard_targets "${shard_id}" test_targets
+    for test_target in "${test_targets[@]}"; do
+      expected_total=$((expected_total + 1))
+      assert_step_count "rustc-codegen-test-${test_target}" 1 \
+        "codegen target ${test_target} did not run exactly once"
+    done
+  done
+  for test_target in "${STEP_NAMES[@]}"; do
+    if [[ "${test_target}" == rustc-codegen-test-* ]]; then
+      actual_total=$((actual_total + 1))
+    fi
+  done
+  assert_equals "${expected_total}" "${actual_total}" \
+    'codegen integration target count differs from the manifest'
+}
+
 run_tests
 cpu_command="$(step_command cpu-tests)"
 if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
@@ -207,6 +251,10 @@ if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
   exit 1
 fi
 assert_equals \
+  "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
+  "$(step_command rustc-codegen-shard-policy)" \
+  'generic tests did not validate the codegen shard policy'
+assert_equals \
   "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
   "$(step_command rustc-codegen-lib-tests)" \
   'generic backend library test command changed'
@@ -214,6 +262,7 @@ assert_equals \
   "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'generic backend integration tests are not target-isolated'
+assert_all_codegen_targets_once
 for backend_command in "${STEP_COMMANDS[@]}"; do
   if [[ "${backend_command}" == *"-p ${RUSTC_CODEGEN_TEST_PACKAGE}"* ]] &&
     [[ "${backend_command}" == *"--all-targets"* ]]; then
@@ -237,6 +286,79 @@ assert_equals \
   "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'full workspace backend integration tests are not target-isolated'
+assert_all_codegen_targets_once
+
+STEP_NAMES=()
+STEP_COMMANDS=()
+run_rustc_codegen_shard 01-control-flow
+assert_equals \
+  "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
+  "$(step_command rustc-codegen-shard-policy)" \
+  'codegen shard did not validate the checked-in assignment'
+assert_equals \
+  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test collected_executable_scalar_control_flow_v2" \
+  "$(step_command rustc-codegen-test-collected_executable_scalar_control_flow_v2)" \
+  'codegen shard did not keep its target isolated'
+assert_step_count rustc-codegen-lib-tests 0 \
+  'integration shard unexpectedly reran backend library tests'
+for shard_step in "${STEP_NAMES[@]}"; do
+  if [[ "${shard_step}" == rustc-codegen-test-* ]] &&
+    [[ "${shard_step}" != rustc-codegen-test-collected_executable_scalar_control_flow_v2 ]]; then
+    printf 'codegen shard ran an unassigned target: %s\n' "${shard_step}" >&2
+    exit 1
+  fi
+done
+
+STEP_NAMES=()
+STEP_COMMANDS=()
+run_generic_core
+for core_step in \
+  example-manifest \
+  bounded-moe-docs \
+  rustc-codegen-shard-policy \
+  parity-matrix-check \
+  parity-matrix-tests \
+  parity-evidence-tests \
+  parity-oci-executor-tests \
+  parity-oci-operator-tests \
+  authority-launcher-tests \
+  rustc-trampoline-tests \
+  parity-row-evidence-tests \
+  parity-publisher-client-tests \
+  parity-signed-evidence-fd-tests \
+  parity-repository-rules-tests \
+  mi300x-evidence-queue-tests \
+  hosted-parity-ci-tests \
+  format \
+  workspace-check \
+  backend-build \
+  ci-local-test-gate \
+  cpu-tests \
+  rustc-codegen-lib-tests \
+  core-doc-tests \
+  device-copy-renamed-dependency \
+  device-copy-derive-real-trait \
+  device-copy-derive-ui \
+  s09-debug-checker \
+  s09-debug-ci-guard; do
+  assert_step_count "${core_step}" 1 \
+    "generic core did not run ${core_step} exactly once"
+done
+for core_step in "${STEP_NAMES[@]}"; do
+  if [[ "${core_step}" == rustc-codegen-test-* ]]; then
+    printf 'generic core unexpectedly ran integration target: %s\n' "${core_step}" >&2
+    exit 1
+  fi
+done
+
+STEP_NAMES=()
+STEP_COMMANDS=()
+run_generic
+assert_all_codegen_targets_once
+assert_step_count rustc-codegen-shard-policy 1 \
+  'serial generic gate did not run shard policy exactly once'
+assert_step_count rustc-codegen-lib-tests 1 \
+  'serial generic gate did not run backend library tests exactly once'
 
 STEP_NAMES=()
 STEP_COMMANDS=()
