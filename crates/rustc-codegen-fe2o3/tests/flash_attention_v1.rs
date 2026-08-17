@@ -363,7 +363,7 @@ fn exact_phase_a_source_authenticates_complete_flash_attention_profile() {
     assert!(result.status.success(), "exact handoff failed:\n{stderr}");
     for marker in [
         "exact rustc FnAbi, location-independent V4 provider-semantic definitions and reviewed semantic-terminal manifest",
-        "complete reachable portable-MIR closure modulo those identity-bound terminals 0b017dd135cfce94f3a223126363b42853f5dbbf27c244cceafdd65f49e89e7e",
+        "complete reachable portable-MIR closure modulo those identity-bound terminals 39dd09832a4972b4a3a112a8754db3be595d1176c0122e1f0b66d024df353591",
         "closed causal FlashAttention B1/H1/N8/D16 semantic KIR with 10 ordered recurrence steps",
         "adjacent-pair output ownership",
         "published an inert Worker V2 compiler handoff",
