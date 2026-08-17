@@ -10,6 +10,7 @@
 //! package authentication. A publisher signature or transparency-log identity
 //! must be checked before the managed build when that stronger claim is needed.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -34,6 +35,18 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-IDENTITY/V1\0";
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
+#[allow(
+    dead_code,
+    reason = "consumed by the staged row-softmax V2 provider protocol"
+)]
+const ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2: &[u8] =
+    b"FE2O3/ROW-SOFTMAX-PROVIDER-SOURCE-CLOSURE/V2\0";
+#[allow(
+    dead_code,
+    reason = "consumed by the staged matrix V3 provider protocol"
+)]
+const MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3: &[u8] =
+    b"FE2O3/MATRIX-PROVIDER-SOURCE-CLOSURE/V3\0";
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PROVIDER-SEMANTIC-DEFINITION-TRANSCRIPT/V1\0";
 const PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -46,6 +59,16 @@ const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device/src");
 
 static WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
+#[allow(
+    dead_code,
+    reason = "consumed by the staged row-softmax V2 provider protocol"
+)]
+static ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_V2: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
+#[allow(
+    dead_code,
+    reason = "consumed by the staged matrix V3 provider protocol"
+)]
+static MATRIX_PROVIDER_SOURCE_CLOSURE_V3: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewedMatrixProviderObservationV2 {
@@ -101,15 +124,10 @@ pub(crate) struct ReviewedProviderSemanticDefinitionV1 {
 }
 
 impl ReviewedProviderSemanticDefinitionV1 {
-    pub(crate) fn durable_semantic_identity(
-        &self,
-        definition_role: ProviderSemanticDefinitionRoleV1,
-        canonical_role: &str,
-    ) -> Result<[u8; 32], String> {
+    fn validate(&self) -> Result<(), String> {
         if self.provider.crate_name != "fe2o3_device"
             || self.provider.stable_crate_id == 0
             || self.provider.crate_hash_observation == [0; 16]
-            || canonical_role.is_empty()
             || self.canonical_definition_path.is_empty()
             || self.structural_local_definition_component == [0; 32]
             || self.cargo_metadata_build_observation == [0; 32]
@@ -127,6 +145,18 @@ impl ReviewedProviderSemanticDefinitionV1 {
         {
             return Err("reviewed provider structural definition component changed".to_owned());
         }
+        Ok(())
+    }
+
+    pub(crate) fn durable_semantic_identity(
+        &self,
+        definition_role: ProviderSemanticDefinitionRoleV1,
+        canonical_role: &str,
+    ) -> Result<[u8; 32], String> {
+        self.validate()?;
+        if canonical_role.is_empty() {
+            return Err("reviewed provider semantic definition is incomplete".to_owned());
+        }
 
         let mut hasher = Sha256::new();
         hash_source_identity_field(
@@ -143,6 +173,39 @@ impl ReviewedProviderSemanticDefinitionV1 {
         hash_source_identity_field(&mut hasher, &self.definition_source_identity);
         Ok(hasher.finalize().into())
     }
+}
+
+#[allow(
+    dead_code,
+    reason = "called by the staged row-softmax V2 and matrix V3 collectors"
+)]
+pub(crate) fn validate_ordered_provider_semantic_definitions_v1(
+    definitions: &[ReviewedProviderSemanticDefinitionV1],
+    expected_canonical_paths: &[&str],
+) -> Result<CompilerProviderObservationV1, String> {
+    if definitions.is_empty() || definitions.len() != expected_canonical_paths.len() {
+        return Err("reviewed provider definition sequence has the wrong length".to_owned());
+    }
+
+    let mut expected_paths = BTreeSet::new();
+    let mut observed_paths = BTreeSet::new();
+    let provider = definitions[0].provider.clone();
+    for (definition, expected_path) in definitions.iter().zip(expected_canonical_paths) {
+        definition.validate()?;
+        if expected_path.is_empty() || !expected_paths.insert(*expected_path) {
+            return Err("reviewed provider definition sequence has duplicate expectations".into());
+        }
+        if !observed_paths.insert(definition.canonical_definition_path.as_str()) {
+            return Err("reviewed provider definition sequence has duplicate definitions".into());
+        }
+        if definition.canonical_definition_path != *expected_path {
+            return Err("reviewed provider definition sequence is reordered or substituted".into());
+        }
+        if definition.provider != provider {
+            return Err("reviewed provider changed within the compiler session".into());
+        }
+    }
+    Ok(provider)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -815,16 +878,68 @@ pub(crate) fn reviewed_provider_semantic_definition_v1(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
 ) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
-    let crate_num = provider_definition.krate;
-    let crate_name = named_external_provider(tcx, crate_num)?;
-    let provider = compiler_provider_observation_v1(tcx, crate_num);
-    let definition_source_identity = reviewed_provider_source_identity(
+    reviewed_provider_semantic_definition_with_profile_v1(
         tcx,
         provider_definition,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-    )?;
-    let source_closure_identity = WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE
-        .get_or_init(workgroup_sync_provider_source_closure_identity)
+        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        &WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE,
+    )
+}
+
+#[allow(
+    dead_code,
+    reason = "consumed by the staged row-softmax V2 provider protocol"
+)]
+pub(crate) fn reviewed_row_softmax_provider_semantic_definition_v2(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
+    reviewed_provider_semantic_definition_with_profile_v1(
+        tcx,
+        provider_definition,
+        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+        &ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_V2,
+    )
+}
+
+#[allow(
+    dead_code,
+    reason = "consumed by the staged matrix V3 provider protocol"
+)]
+pub(crate) fn reviewed_matrix_provider_semantic_definition_v3(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
+    reviewed_provider_semantic_definition_with_profile_v1(
+        tcx,
+        provider_definition,
+        MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
+        MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
+        &MATRIX_PROVIDER_SOURCE_CLOSURE_V3,
+    )
+}
+
+fn reviewed_provider_semantic_definition_with_profile_v1(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+    definition_source_domain: &[u8],
+    source_closure_domain: &[u8],
+    source_closure_cache: &OnceLock<Result<[u8; 32], String>>,
+) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
+    let crate_num = provider_definition.krate;
+    let crate_name = named_external_provider(tcx, crate_num)?;
+    let provider = compiler_provider_observation_v1(tcx, crate_num);
+    let definition_source_identity =
+        reviewed_provider_source_identity(tcx, provider_definition, definition_source_domain)?;
+    let source_closure_identity = source_closure_cache
+        .get_or_init(|| {
+            reviewed_provider_source_closure_identity(
+                Path::new(REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT),
+                source_closure_domain,
+            )
+        })
         .clone()?;
     if provider.crate_name != crate_name {
         return Err("reviewed provider crate-name observation changed within the session".into());
@@ -903,52 +1018,107 @@ pub(crate) fn pinned_core_semantic_terminal_identity_v1(
     Ok(hasher.finalize().into())
 }
 
-fn workgroup_sync_provider_source_closure_identity() -> Result<[u8; 32], String> {
-    let package_root =
-        std::fs::canonicalize(REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT).map_err(|error| {
-            format!(
-                "reviewed fe2o3-device package root is unavailable to the managed build: {error}"
-            )
-        })?;
+fn reviewed_provider_source_closure_identity(
+    package_root: &Path,
+    domain: &[u8],
+) -> Result<[u8; 32], String> {
+    if domain.is_empty() {
+        return Err("reviewed provider source-closure domain is empty".to_owned());
+    }
+    require_directory_without_symlink(package_root, "package root")?;
+    let package_root = std::fs::canonicalize(package_root).map_err(|error| {
+        format!("reviewed fe2o3-device package root is unavailable to the managed build: {error}")
+    })?;
     let mut files = vec![package_root.join("Cargo.toml")];
     let build_script = package_root.join("build.rs");
-    if build_script.exists() {
-        files.push(build_script);
+    match std::fs::symlink_metadata(&build_script) {
+        Ok(_) => {
+            require_regular_file_without_symlink(&build_script)?;
+            files.push(build_script);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "reviewed fe2o3-device source `{}` cannot be inspected: {error}",
+                build_script.display()
+            ));
+        }
     }
-    collect_reviewed_source_files(&package_root.join("src"), &mut files)?;
+    require_regular_file_without_symlink(&package_root.join("Cargo.toml"))?;
+    let source_root = package_root.join("src");
+    require_directory_without_symlink(&source_root, "source directory")?;
+    collect_reviewed_source_files(&source_root, &mut files)?;
     files.sort();
 
     let mut hasher = Sha256::new();
-    hasher.update(WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1);
+    hasher.update(domain);
     for file in files {
-        let canonical = std::fs::canonicalize(&file).map_err(|error| {
-            format!(
-                "reviewed fe2o3-device source `{}` is unavailable: {error}",
-                file.display()
-            )
-        })?;
-        let relative = canonical.strip_prefix(&package_root).map_err(|_| {
-            format!(
-                "reviewed fe2o3-device source `{}` escaped its package root",
-                canonical.display()
-            )
-        })?;
-        let relative = relative.to_str().ok_or_else(|| {
-            format!(
-                "reviewed fe2o3-device source path `{}` is not UTF-8",
-                relative.display()
-            )
-        })?;
-        let bytes = std::fs::read(&canonical).map_err(|error| {
-            format!(
-                "reviewed fe2o3-device source `{}` cannot be observed: {error}",
-                canonical.display()
-            )
-        })?;
+        let (relative, bytes) = reviewed_source_file(&package_root, &file)?;
         hash_source_identity_field(&mut hasher, relative.as_bytes());
         hash_source_identity_field(&mut hasher, &bytes);
     }
     Ok(hasher.finalize().into())
+}
+
+fn require_directory_without_symlink(path: &Path, description: &str) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "reviewed fe2o3-device {description} `{}` is unavailable: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "reviewed fe2o3-device {description} `{}` is not a regular directory",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn require_regular_file_without_symlink(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "reviewed fe2o3-device source `{}` is unavailable: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "reviewed fe2o3-device source `{}` is not a regular file",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn reviewed_source_file(package_root: &Path, file: &Path) -> Result<(String, Vec<u8>), String> {
+    require_regular_file_without_symlink(file)?;
+    let canonical = std::fs::canonicalize(file).map_err(|error| {
+        format!(
+            "reviewed fe2o3-device source `{}` is unavailable: {error}",
+            file.display()
+        )
+    })?;
+    let relative = canonical.strip_prefix(package_root).map_err(|_| {
+        format!(
+            "reviewed fe2o3-device source `{}` escaped its package root",
+            canonical.display()
+        )
+    })?;
+    let relative = relative.to_str().ok_or_else(|| {
+        format!(
+            "reviewed fe2o3-device source path `{}` is not UTF-8",
+            relative.display()
+        )
+    })?;
+    let bytes = std::fs::read(&canonical).map_err(|error| {
+        format!(
+            "reviewed fe2o3-device source `{}` cannot be observed: {error}",
+            canonical.display()
+        )
+    })?;
+    Ok((relative.to_owned(), bytes))
 }
 
 fn collect_reviewed_source_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -1006,18 +1176,42 @@ fn reviewed_provider_source_identity(
         .prefer_local_unconditionally()
         .to_string_lossy()
         .into_owned();
-    let source = std::fs::canonicalize(&file_name).map_err(|error| {
-        format!("provider source file `{file_name}` is unavailable to the managed build: {error}")
-    })?;
     let reviewed_root =
         std::fs::canonicalize(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).map_err(|error| {
             format!(
                 "reviewed fe2o3-device source root is unavailable to the managed build: {error}"
             )
         })?;
+    reviewed_provider_source_identity_from_path(&reviewed_root, Path::new(&file_name), domain)
+}
+
+fn reviewed_provider_source_identity_from_path(
+    reviewed_root: &Path,
+    source: &Path,
+    domain: &[u8],
+) -> Result<[u8; 32], String> {
+    if domain.is_empty() {
+        return Err("reviewed provider definition-source domain is empty".to_owned());
+    }
+    require_regular_file_without_symlink(source)?;
+    let source = std::fs::canonicalize(source).map_err(|error| {
+        format!(
+            "provider source file `{}` is unavailable to the managed build: {error}",
+            source.display()
+        )
+    })?;
+    let reviewed_root = std::fs::canonicalize(reviewed_root).map_err(|error| {
+        format!("reviewed provider source root is unavailable to the managed build: {error}")
+    })?;
     let relative = source.strip_prefix(&reviewed_root).map_err(|_| {
         format!(
             "provider source file `{}` is outside the reviewed fe2o3-device source root",
+            source.display()
+        )
+    })?;
+    let relative = relative.to_str().ok_or_else(|| {
+        format!(
+            "provider source file `{}` has a non-UTF-8 reviewed path",
             source.display()
         )
     })?;
@@ -1027,7 +1221,6 @@ fn reviewed_provider_source_identity(
             source.display()
         )
     })?;
-    let relative = relative.to_string_lossy();
     let mut hasher = Sha256::new();
     hasher.update(domain);
     hasher.update((relative.len() as u64).to_le_bytes());
