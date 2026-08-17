@@ -1,0 +1,1138 @@
+//! Inert broker-owned lifecycle model for one bounded host-link session.
+//!
+//! The machine has exactly one lifetime slot. It retains the admitted protected-service token and
+//! the exact W0 [`AdmittedHostOutputV1`] inside the service. A reservation binds one opaque
+//! session ID and nonce, the complete Broker V4 session claim, and one durable publication-plan
+//! identity, then issues one move-only link permit. Consuming that permit is the only broker API
+//! that can form a reservation-bound W0 request. Completion admits only a terminal V4 transcript
+//! that matches the reservation and a W0 output carrying the exact request binding.
+//! The machine then owns the external-anchor transition token through signature verification and
+//! records exactly one logical consume decision.
+//!
+//! `AUTHORITY=none`: this is a deterministic in-memory model. It does not make reservation,
+//! anti-rollback state, anchor nonce freshness, or publication durable. It does not invoke a
+//! linker, persist bytes, publish an artifact, authenticate anchor-key provenance, reconcile
+//! multiple writers, or grant replay, execution, publication, runtime, or GPU authority.
+//! Session ID and nonce uniqueness are caller preconditions; this model only rejects zero values,
+//! an ID/nonce collision, and a second reservation in one machine lifetime. The retained Linux
+//! admission is revalidated once at public reservation; later pure transitions do not provide
+//! continuous process-liveness enforcement. The durable-plan identity is compared bit-for-bit
+//! against reservation and terminal transcript, but this crate does not authenticate how that
+//! identity was derived from a concrete durable plan.
+//!
+//! The machine and reservation are deliberately move-only and provide no serialization API:
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::BrokerSessionMachineV1;
+//! fn require_clone<T: Clone>() {}
+//! require_clone::<BrokerSessionMachineV1>();
+//! ```
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::BrokerSessionMachineV1;
+//! fn require_copy<T: Copy>() {}
+//! require_copy::<BrokerSessionMachineV1>();
+//! ```
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::BrokerSessionMachineV1;
+//! fn require_serialize<T: serde::Serialize>() {}
+//! require_serialize::<BrokerSessionMachineV1>();
+//! ```
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::BrokerSessionReservationV1;
+//! fn require_clone<T: Clone>() {}
+//! require_clone::<BrokerSessionReservationV1>();
+//! ```
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::BrokerHostLinkPermitV1;
+//! fn require_clone<T: Clone>() {}
+//! require_clone::<BrokerHostLinkPermitV1>();
+//! ```
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::BrokerHostLinkPermitV1;
+//! fn require_serialize<T: serde::Serialize>() {}
+//! require_serialize::<BrokerHostLinkPermitV1>();
+//! ```
+
+use std::error::Error;
+use std::fmt;
+
+use fe2o3_build_authority::{
+    BrokerSessionClaimV4, CompletedBrokerTranscriptV4, HOST_LINK_OUTPUT_MODE_V4,
+};
+use fe2o3_external_anchor_protocol::{
+    ANCHOR_CHALLENGE_WIRE_LEN_V1, AnchorDecisionV1, AnchoredStateV1, CallerNonceV1,
+    HashChainHeadV1, PendingAnchorTransitionV1, PinnedAnchorKeyV1, PreparedAnchorAdvanceV1,
+    TransactionDigestV1,
+};
+use fe2o3_host_link_closure::{
+    AdmittedHostOutputV1, BrokerReservedHostLinkV1, HostLinkBrokerReservationV1, HostLinkClosureV1,
+    Sha256Digest,
+};
+use sha2::{Digest, Sha256};
+
+use crate::ProtectedBrokerServiceAdmissionV1;
+
+/// Fixed semantic authority marker for every session-machine value.
+pub const BROKER_SESSION_MACHINE_AUTHORITY_V1: &str = "none";
+
+/// Exact number of live session slots represented by one machine value.
+pub const BROKER_SESSION_CAPACITY_V1: usize = 1;
+
+/// Domain for the canonical digest of every field in a terminal Broker V4 transcript.
+pub const BROKER_V4_COMPLETED_TRANSCRIPT_DIGEST_DOMAIN_V1: &[u8] =
+    b"FE2O3/BROKER-V4/COMPLETED-TRANSCRIPT-DIGEST/V1\0";
+
+const BROKER_SESSION_CLAIM_DIGEST_DOMAIN_V1: &[u8] = b"FE2O3/BROKER-V4/SESSION-CLAIM-DIGEST/V1\0";
+const BROKER_SESSION_ANCHOR_TRANSACTION_DOMAIN_V1: &[u8] =
+    b"FE2O3/BROKER-SESSION/ANCHOR-TRANSACTION/V1\0";
+/// Domain for the exact reservation digest carried by one move-only link permit.
+pub const BROKER_LINK_RESERVATION_DIGEST_DOMAIN_V1: &[u8] =
+    b"FE2O3/BROKER-SESSION/LINK-RESERVATION/V1\0";
+
+/// Opaque nonzero broker session identifier.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct BrokerSessionIdV1([u8; 32]);
+
+impl BrokerSessionIdV1 {
+    /// Validates one caller-generated fixed-width identifier.
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, BrokerSessionMachineErrorV1> {
+        require_nonzero(bytes, BrokerSessionErrorKindV1::ZeroSessionId)?;
+        Ok(Self(bytes))
+    }
+}
+
+impl fmt::Debug for BrokerSessionIdV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BrokerSessionIdV1(<opaque>)")
+    }
+}
+
+/// Opaque nonzero nonce retained for the exact external-anchor challenge.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct BrokerSessionNonceV1([u8; 32]);
+
+impl BrokerSessionNonceV1 {
+    /// Validates caller-generated nonce bytes.
+    ///
+    /// This check rejects zero only. Cryptographic uniqueness and durable replay detection remain
+    /// responsibilities of the future protected service.
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, BrokerSessionMachineErrorV1> {
+        require_nonzero(bytes, BrokerSessionErrorKindV1::ZeroSessionNonce)?;
+        Ok(Self(bytes))
+    }
+}
+
+impl fmt::Debug for BrokerSessionNonceV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BrokerSessionNonceV1(<opaque>)")
+    }
+}
+
+/// Exact nonzero identity of one durable publication plan.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct DurablePublicationPlanIdentityV1([u8; 32]);
+
+impl DurablePublicationPlanIdentityV1 {
+    /// Validates one fixed-width publication-plan identity.
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, BrokerSessionMachineErrorV1> {
+        require_nonzero(bytes, BrokerSessionErrorKindV1::ZeroDurablePublicationPlan)?;
+        Ok(Self(bytes))
+    }
+}
+
+impl fmt::Debug for DurablePublicationPlanIdentityV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DurablePublicationPlanIdentityV1(<opaque>)")
+    }
+}
+
+/// One move-only request for the machine's single lifetime reservation.
+pub struct BrokerSessionReservationV1 {
+    session_id: BrokerSessionIdV1,
+    nonce: BrokerSessionNonceV1,
+    claim_digest: [u8; 32],
+    client_pid: u32,
+    client_start_time_ticks: u64,
+    host_link_plan: [u8; 32],
+    host_link_closure: [u8; 32],
+    durable_plan: DurablePublicationPlanIdentityV1,
+}
+
+impl BrokerSessionReservationV1 {
+    /// Binds an opaque session identity to one exact V4 claim and publication plan.
+    pub fn new(
+        session_id: BrokerSessionIdV1,
+        nonce: BrokerSessionNonceV1,
+        claim: BrokerSessionClaimV4,
+        durable_plan: DurablePublicationPlanIdentityV1,
+    ) -> Result<Self, BrokerSessionMachineErrorV1> {
+        if session_id.0 == nonce.0 {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::SessionIdNonceCollision,
+            ));
+        }
+        Ok(Self {
+            session_id,
+            nonce,
+            claim_digest: broker_session_claim_digest_v1(claim),
+            client_pid: claim.process().pid(),
+            client_start_time_ticks: claim.process().start_time_ticks(),
+            host_link_plan: claim.plan_identity(),
+            host_link_closure: claim.closure_identity(),
+            durable_plan,
+        })
+    }
+}
+
+/// Unique move-only permit issued by one successful in-memory reservation.
+///
+/// The fields are private, the type is neither `Clone` nor serializable, and one successful
+/// [`BrokerSessionMachineV1::begin_link`] call irreversibly marks it consumed. Global uniqueness
+/// still depends on the caller-supplied session ID and nonce because no durable store exists.
+pub struct BrokerHostLinkPermitV1 {
+    reservation_digest: [u8; 32],
+    consumed: bool,
+}
+
+impl BrokerHostLinkPermitV1 {
+    /// Returns only whether this permit has already formed its one bound W0 request.
+    pub const fn is_consumed(&self) -> bool {
+        self.consumed
+    }
+
+    /// Returns the fixed non-authority marker.
+    pub const fn authority(&self) -> &'static str {
+        BROKER_SESSION_MACHINE_AUTHORITY_V1
+    }
+
+    fn validate_for(
+        &self,
+        expected_reservation_digest: [u8; 32],
+    ) -> Result<(), BrokerSessionMachineErrorV1> {
+        if self.consumed {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::LinkPermitAlreadyConsumed,
+            ));
+        }
+        if self.reservation_digest != expected_reservation_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::LinkPermitSubstitution,
+            ));
+        }
+        Ok(())
+    }
+
+    fn consume_for(
+        &mut self,
+        expected_reservation_digest: [u8; 32],
+    ) -> Result<(), BrokerSessionMachineErrorV1> {
+        self.validate_for(expected_reservation_digest)?;
+        self.consumed = true;
+        Ok(())
+    }
+
+    fn restore_after_failed_request_binding(&mut self) {
+        self.consumed = false;
+    }
+}
+
+impl fmt::Debug for BrokerHostLinkPermitV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerHostLinkPermitV1")
+            .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
+            .field("consumed", &self.consumed)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for BrokerSessionReservationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerSessionReservationV1")
+            .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
+            .field("session_id", &self.session_id)
+            .field("nonce", &self.nonce)
+            .field("durable_plan", &self.durable_plan)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Externally visible lifecycle stage. A stage observation is not a capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BrokerSessionStageV1 {
+    /// The machine's one lifetime slot has never been reserved.
+    Vacant,
+    /// Client, session, V4 claim, and publication plan are bound before linking.
+    Reserved,
+    /// The unique permit was consumed and one exact reservation-bound W0 request was formed.
+    Linking,
+    /// One exact matching V4/W0 completion is retained.
+    Completed,
+    /// The matching anchor transaction and positions are prepared.
+    AnchorPrepared,
+    /// One exact signed anchor observation is pending.
+    AnchorPending,
+    /// A valid proposed-position observation committed the anchor transition.
+    AnchorCommitted,
+    /// A valid prior-position observation deterministically aborted the transaction.
+    Aborted,
+    /// The single logical consume/publication decision was recorded.
+    Consumed,
+    /// A one-shot anchor operation failed and the machine failed closed.
+    Invalidated,
+}
+
+/// Whether the external anchor is being advanced normally or queried during recovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokerAnchorModeV1 {
+    /// Request an ordinary anchor advance.
+    Advance,
+    /// Query the exact prior/proposed positions for deterministic recovery.
+    Recovery,
+}
+
+/// Opaque caller-visible observation of a successful lifecycle transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BrokerSessionObservationV1 {
+    stage: BrokerSessionStageV1,
+}
+
+impl BrokerSessionObservationV1 {
+    /// Returns only the resulting lifecycle stage.
+    pub const fn stage(self) -> BrokerSessionStageV1 {
+        self.stage
+    }
+
+    /// Returns the fixed non-authority marker.
+    pub const fn authority(self) -> &'static str {
+        BROKER_SESSION_MACHINE_AUTHORITY_V1
+    }
+}
+
+/// Canonical challenge bytes emitted while the service retains the pending anchor token.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BrokerAnchorChallengeObservationV1 {
+    bytes: [u8; ANCHOR_CHALLENGE_WIRE_LEN_V1],
+}
+
+impl BrokerAnchorChallengeObservationV1 {
+    /// Returns exact canonical protocol bytes. These bytes carry no session capability.
+    pub const fn as_bytes(&self) -> &[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1] {
+        &self.bytes
+    }
+
+    /// Returns the fixed non-authority marker.
+    pub const fn authority(&self) -> &'static str {
+        BROKER_SESSION_MACHINE_AUTHORITY_V1
+    }
+}
+
+impl fmt::Debug for BrokerAnchorChallengeObservationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerAnchorChallengeObservationV1")
+            .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
+            .field("length", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Stable classification for a rejected lifecycle transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BrokerSessionErrorKindV1 {
+    /// The session identifier was all zero.
+    ZeroSessionId,
+    /// The anchor nonce was all zero.
+    ZeroSessionNonce,
+    /// The durable publication-plan identity was all zero.
+    ZeroDurablePublicationPlan,
+    /// Session ID and nonce used identical bytes.
+    SessionIdNonceCollision,
+    /// The machine's one fixed slot was already occupied.
+    CapacityOccupied,
+    /// A permit from another reservation was substituted.
+    LinkPermitSubstitution,
+    /// The move-only permit already formed its single W0 request.
+    LinkPermitAlreadyConsumed,
+    /// The transition was attempted from the wrong stage.
+    TransitionOrder,
+    /// The V4 process does not match the retained admitted client token.
+    ClientIdentityMismatch,
+    /// The retained admitted client token failed continuity revalidation at reservation.
+    ClientIdentityRevalidation,
+    /// The completed V4 session claim differs from the reservation.
+    TranscriptClaimMismatch,
+    /// The completed transcript digest differs from retained completion.
+    TranscriptDigestMismatch,
+    /// The V4 output digest differs from the W0 admitted output.
+    OutputDigestMismatch,
+    /// The V4 output length differs from the W0 admitted output.
+    OutputLengthMismatch,
+    /// The V4 output mode differs from the W0 admitted output.
+    OutputModeMismatch,
+    /// The V4 host-link plan differs from the W0 admitted output plan.
+    HostLinkPlanMismatch,
+    /// The V4 closure differs from the W0 admitted output closure.
+    HostLinkClosureMismatch,
+    /// W0 could not form the exact broker-reservation-bound request.
+    HostLinkRequestBinding,
+    /// The W0 output carries another or no broker reservation.
+    HostLinkReservationMismatch,
+    /// The W0 output carries another authenticated request nonce.
+    HostLinkRequestNonceMismatch,
+    /// The durable publication plan differs from the reservation or completion.
+    DurablePublicationPlanMismatch,
+    /// The pinned anchor key differs from the prepared key identity.
+    AnchorKeyMismatch,
+    /// The anchor protocol rejected preparation, challenge creation, or observation verification.
+    AnchorProtocol,
+    /// A commit or abort decision carried another transaction.
+    AnchorTransactionMismatch,
+    /// A commit or abort decision carried a stale or unexpected sequence.
+    AnchorSequenceMismatch,
+    /// A decision carried another prior position.
+    AnchorPriorMismatch,
+    /// A decision carried another proposed position.
+    AnchorProposedMismatch,
+    /// A decision carried another nonce.
+    AnchorNonceMismatch,
+    /// Fixed internal state was inconsistent; the machine failed closed.
+    InternalState,
+}
+
+/// Panic-free error from the inert session lifecycle model.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BrokerSessionMachineErrorV1 {
+    kind: BrokerSessionErrorKindV1,
+}
+
+impl BrokerSessionMachineErrorV1 {
+    const fn new(kind: BrokerSessionErrorKindV1) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the stable error classification.
+    pub const fn kind(self) -> BrokerSessionErrorKindV1 {
+        self.kind
+    }
+}
+
+impl fmt::Display for BrokerSessionMachineErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "broker session transition rejected: {:?}",
+            self.kind
+        )
+    }
+}
+
+impl Error for BrokerSessionMachineErrorV1 {}
+
+/// Broker-owned, move-only model of one complete session lifecycle.
+///
+/// Retained client and output capabilities have no accessors and never leave this value. All
+/// methods are fixed-space and deterministic apart from the explicit cryptographic observation
+/// bytes supplied to [`Self::observe_anchor`].
+pub struct BrokerSessionMachineV1 {
+    core: SessionCoreV1<ProtectedBrokerServiceAdmissionV1, AdmittedHostOutputV1>,
+}
+
+impl fmt::Debug for BrokerSessionMachineV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerSessionMachineV1")
+            .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
+            .field("capacity", &BROKER_SESSION_CAPACITY_V1)
+            .field("stage", &self.core.stage)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for BrokerSessionMachineV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BrokerSessionMachineV1 {
+    /// Creates one empty, fixed-capacity, non-authoritative machine.
+    pub const fn new() -> Self {
+        Self {
+            core: SessionCoreV1::new(),
+        }
+    }
+
+    /// Returns only the current lifecycle stage.
+    pub const fn stage(&self) -> BrokerSessionStageV1 {
+        self.core.stage
+    }
+
+    /// Returns the fixed non-authority marker.
+    pub const fn authority(&self) -> &'static str {
+        BROKER_SESSION_MACHINE_AUTHORITY_V1
+    }
+
+    /// Occupies the machine's only lifetime slot before any host-link completion is accepted.
+    ///
+    /// The protected admission is consumed and retained. Its descriptor, pidfd, PID, start time,
+    /// and liveness continuity are revalidated before its process identity is compared to the V4
+    /// claim, without exposing that identity through this API.
+    pub fn reserve(
+        &mut self,
+        admission: ProtectedBrokerServiceAdmissionV1,
+        reservation: BrokerSessionReservationV1,
+    ) -> Result<BrokerHostLinkPermitV1, BrokerSessionMachineErrorV1> {
+        self.core.require_reservation_capacity()?;
+        admission.validate_continuity().map_err(|_| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::ClientIdentityRevalidation)
+        })?;
+        let client_matches = admission
+            .matches_client_process(reservation.client_pid, reservation.client_start_time_ticks);
+        self.core.reserve(admission, reservation, client_matches)
+    }
+
+    /// Consumes the unique permit before forming one exact reservation-bound W0 request.
+    ///
+    /// Permit, plan, and closure substitutions fail before the permit is consumed. W0 then
+    /// domain-separates the reservation digest into its authenticated request nonce. No linker is
+    /// invoked by this operation.
+    pub fn begin_link(
+        &mut self,
+        permit: &mut BrokerHostLinkPermitV1,
+        closure: HostLinkClosureV1,
+    ) -> Result<BrokerReservedHostLinkV1, BrokerSessionMachineErrorV1> {
+        let plan_digest = *closure.plan_digest().as_bytes();
+        let closure_digest = *closure.closure_digest().as_bytes();
+        self.core
+            .validate_link_start(permit, plan_digest, closure_digest)?;
+        let reservation_digest = self.core.reservation_digest()?;
+        permit.consume_for(reservation_digest)?;
+        let reservation = HostLinkBrokerReservationV1::from_sha256(Sha256Digest::from_bytes(
+            permit.reservation_digest,
+        ))
+        .map_err(|_| {
+            permit.restore_after_failed_request_binding();
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::HostLinkRequestBinding)
+        })?;
+        let bound = closure.bind_broker_reservation(reservation).map_err(|_| {
+            permit.restore_after_failed_request_binding();
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::HostLinkRequestBinding)
+        })?;
+        self.core.commit_link_start(
+            permit.reservation_digest,
+            *bound.request_nonce_sha256().as_bytes(),
+        );
+        Ok(bound)
+    }
+
+    /// Retains one exact W0 output after checking every corresponding V4 terminal field.
+    ///
+    /// No linker is invoked. The operation only records an in-memory completion after reservation.
+    pub fn complete(
+        &mut self,
+        transcript: &CompletedBrokerTranscriptV4,
+        output: AdmittedHostOutputV1,
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.core.require_stage(BrokerSessionStageV1::Linking)?;
+        let binding = CompletionBindingV1::from_exact(transcript, &output)?;
+        self.core.complete(output, binding)
+    }
+
+    /// Prepares the exact anchor transaction from retained session and completion identities.
+    pub fn prepare_anchor(
+        &mut self,
+        stable: AnchoredStateV1,
+        key: &PinnedAnchorKeyV1,
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.core.prepare_anchor(stable, key)
+    }
+
+    /// Begins one advance or recovery challenge using the reservation's exact nonce.
+    ///
+    /// The pending verification token remains service-side. Only canonical challenge bytes leave
+    /// the machine.
+    pub fn begin_anchor(
+        &mut self,
+        mode: BrokerAnchorModeV1,
+        key: &PinnedAnchorKeyV1,
+    ) -> Result<BrokerAnchorChallengeObservationV1, BrokerSessionMachineErrorV1> {
+        self.core.begin_anchor(mode, key)
+    }
+
+    /// Consumes the one pending token and verifies one signed external-anchor observation.
+    ///
+    /// Exact proposed position commits; exact prior position aborts. Invalid or substituted bytes
+    /// permanently invalidate this in-memory machine instance.
+    pub fn observe_anchor(
+        &mut self,
+        observation: &[u8],
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.core.observe_anchor(observation)
+    }
+
+    /// Records one logical consume/publication decision after a valid anchor commit.
+    ///
+    /// The transcript is re-derived and compared to retained completion. No filesystem or
+    /// publication operation occurs, and no output capability is returned.
+    pub fn consume_publication(
+        &mut self,
+        transcript: &CompletedBrokerTranscriptV4,
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.core.consume_publication(transcript)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ReservationBindingV1 {
+    session_id: BrokerSessionIdV1,
+    nonce: BrokerSessionNonceV1,
+    claim_digest: [u8; 32],
+    client_pid: u32,
+    client_start_time_ticks: u64,
+    host_link_plan: [u8; 32],
+    host_link_closure: [u8; 32],
+    durable_plan: DurablePublicationPlanIdentityV1,
+}
+
+impl From<BrokerSessionReservationV1> for ReservationBindingV1 {
+    fn from(value: BrokerSessionReservationV1) -> Self {
+        Self {
+            session_id: value.session_id,
+            nonce: value.nonce,
+            claim_digest: value.claim_digest,
+            client_pid: value.client_pid,
+            client_start_time_ticks: value.client_start_time_ticks,
+            host_link_plan: value.host_link_plan,
+            host_link_closure: value.host_link_closure,
+            durable_plan: value.durable_plan,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompletionBindingV1 {
+    claim_digest: [u8; 32],
+    transcript_digest: [u8; 32],
+    output_digest: [u8; 32],
+    durable_plan: DurablePublicationPlanIdentityV1,
+    broker_reservation: Option<[u8; 32]>,
+    request_nonce_sha256: [u8; 32],
+}
+
+impl CompletionBindingV1 {
+    fn from_exact(
+        transcript: &CompletedBrokerTranscriptV4,
+        output: &AdmittedHostOutputV1,
+    ) -> Result<Self, BrokerSessionMachineErrorV1> {
+        let output_digest = *output.sha256().as_bytes();
+        if transcript.output_sha256() != output_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::OutputDigestMismatch,
+            ));
+        }
+        if transcript.output_length() != output.size() {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::OutputLengthMismatch,
+            ));
+        }
+        if transcript.output_mode() != output.mode()
+            || transcript.output_mode() != HOST_LINK_OUTPUT_MODE_V4
+        {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::OutputModeMismatch,
+            ));
+        }
+        if transcript.plan_identity() != *output.plan_digest().as_bytes() {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::HostLinkPlanMismatch,
+            ));
+        }
+        if transcript.closure_identity() != *output.closure_digest().as_bytes() {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::HostLinkClosureMismatch,
+            ));
+        }
+        let durable_plan =
+            DurablePublicationPlanIdentityV1::from_bytes(transcript.durable_plan_identity())?;
+        Ok(Self {
+            claim_digest: broker_session_claim_digest_v1(transcript.session_claim()),
+            transcript_digest: completed_broker_transcript_digest_v1(transcript),
+            output_digest,
+            durable_plan,
+            broker_reservation: output
+                .broker_reservation()
+                .map(|reservation| *reservation.sha256().as_bytes()),
+            request_nonce_sha256: *output.request_nonce_sha256().as_bytes(),
+        })
+    }
+
+    fn from_transcript(
+        transcript: &CompletedBrokerTranscriptV4,
+    ) -> Result<Self, BrokerSessionMachineErrorV1> {
+        Ok(Self {
+            claim_digest: broker_session_claim_digest_v1(transcript.session_claim()),
+            transcript_digest: completed_broker_transcript_digest_v1(transcript),
+            output_digest: transcript.output_sha256(),
+            durable_plan: DurablePublicationPlanIdentityV1::from_bytes(
+                transcript.durable_plan_identity(),
+            )?,
+            broker_reservation: None,
+            request_nonce_sha256: [0; 32],
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LinkBindingV1 {
+    broker_reservation: [u8; 32],
+    request_nonce_sha256: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
+struct AnchorExpectedV1 {
+    transaction: TransactionDigestV1,
+    expected_sequence: u64,
+    prior_head: HashChainHeadV1,
+    proposed_head: HashChainHeadV1,
+    nonce: [u8; 32],
+}
+
+struct SessionCoreV1<C, O> {
+    stage: BrokerSessionStageV1,
+    client: Option<C>,
+    output: Option<O>,
+    reservation: Option<ReservationBindingV1>,
+    completion: Option<CompletionBindingV1>,
+    link: Option<LinkBindingV1>,
+    prepared: Option<PreparedAnchorAdvanceV1>,
+    pending: Option<PendingAnchorTransitionV1>,
+    anchor_expected: Option<AnchorExpectedV1>,
+}
+
+impl<C, O> SessionCoreV1<C, O> {
+    const fn new() -> Self {
+        Self {
+            stage: BrokerSessionStageV1::Vacant,
+            client: None,
+            output: None,
+            reservation: None,
+            completion: None,
+            link: None,
+            prepared: None,
+            pending: None,
+            anchor_expected: None,
+        }
+    }
+
+    fn reserve(
+        &mut self,
+        client: C,
+        reservation: BrokerSessionReservationV1,
+        client_matches: bool,
+    ) -> Result<BrokerHostLinkPermitV1, BrokerSessionMachineErrorV1> {
+        self.require_reservation_capacity()?;
+        if !client_matches {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::ClientIdentityMismatch,
+            ));
+        }
+        let reservation = ReservationBindingV1::from(reservation);
+        let reservation_digest = broker_link_reservation_digest_v1(reservation);
+        self.client = Some(client);
+        self.reservation = Some(reservation);
+        self.stage = BrokerSessionStageV1::Reserved;
+        Ok(BrokerHostLinkPermitV1 {
+            reservation_digest,
+            consumed: false,
+        })
+    }
+
+    fn require_reservation_capacity(&self) -> Result<(), BrokerSessionMachineErrorV1> {
+        if self.stage == BrokerSessionStageV1::Vacant
+            && self.client.is_none()
+            && self.reservation.is_none()
+        {
+            Ok(())
+        } else {
+            Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::CapacityOccupied,
+            ))
+        }
+    }
+
+    fn validate_link_start(
+        &self,
+        permit: &BrokerHostLinkPermitV1,
+        plan_digest: [u8; 32],
+        closure_digest: [u8; 32],
+    ) -> Result<(), BrokerSessionMachineErrorV1> {
+        if permit.consumed {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::LinkPermitAlreadyConsumed,
+            ));
+        }
+        self.require_stage(BrokerSessionStageV1::Reserved)?;
+        let reservation = self.reservation.ok_or_else(internal_state_error)?;
+        permit.validate_for(broker_link_reservation_digest_v1(reservation))?;
+        if plan_digest != reservation.host_link_plan {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::HostLinkPlanMismatch,
+            ));
+        }
+        if closure_digest != reservation.host_link_closure {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::HostLinkClosureMismatch,
+            ));
+        }
+        Ok(())
+    }
+
+    fn reservation_digest(&self) -> Result<[u8; 32], BrokerSessionMachineErrorV1> {
+        self.require_stage(BrokerSessionStageV1::Reserved)?;
+        self.reservation
+            .map(broker_link_reservation_digest_v1)
+            .ok_or_else(internal_state_error)
+    }
+
+    fn commit_link_start(&mut self, broker_reservation: [u8; 32], request_nonce_sha256: [u8; 32]) {
+        self.link = Some(LinkBindingV1 {
+            broker_reservation,
+            request_nonce_sha256,
+        });
+        self.stage = BrokerSessionStageV1::Linking;
+    }
+
+    fn complete(
+        &mut self,
+        output: O,
+        completion: CompletionBindingV1,
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.require_stage(BrokerSessionStageV1::Linking)?;
+        let reservation = self.reservation.ok_or_else(internal_state_error)?;
+        let link = self.link.ok_or_else(internal_state_error)?;
+        if completion.claim_digest != reservation.claim_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::TranscriptClaimMismatch,
+            ));
+        }
+        if completion.durable_plan != reservation.durable_plan {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::DurablePublicationPlanMismatch,
+            ));
+        }
+        if completion.broker_reservation != Some(link.broker_reservation) {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::HostLinkReservationMismatch,
+            ));
+        }
+        if completion.request_nonce_sha256 != link.request_nonce_sha256 {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::HostLinkRequestNonceMismatch,
+            ));
+        }
+        self.output = Some(output);
+        self.completion = Some(completion);
+        self.stage = BrokerSessionStageV1::Completed;
+        Ok(self.observation())
+    }
+
+    fn prepare_anchor(
+        &mut self,
+        stable: AnchoredStateV1,
+        key: &PinnedAnchorKeyV1,
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.require_stage(BrokerSessionStageV1::Completed)?;
+        let transaction = self.anchor_transaction()?;
+        let prepared = stable
+            .prepare(transaction, key)
+            .map_err(|_| anchor_protocol_error())?;
+        self.prepared = Some(prepared);
+        self.stage = BrokerSessionStageV1::AnchorPrepared;
+        Ok(self.observation())
+    }
+
+    fn begin_anchor(
+        &mut self,
+        mode: BrokerAnchorModeV1,
+        key: &PinnedAnchorKeyV1,
+    ) -> Result<BrokerAnchorChallengeObservationV1, BrokerSessionMachineErrorV1> {
+        self.require_stage(BrokerSessionStageV1::AnchorPrepared)?;
+        let prepared = self.prepared.as_ref().ok_or_else(internal_state_error)?;
+        if prepared.anchor_key_identity() != key.identity() {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::AnchorKeyMismatch,
+            ));
+        }
+        let reservation = self.reservation.ok_or_else(internal_state_error)?;
+        let expected = AnchorExpectedV1 {
+            transaction: prepared.transaction(),
+            expected_sequence: prepared.expected_sequence(),
+            prior_head: prepared.prior_head(),
+            proposed_head: prepared.proposed_head(),
+            nonce: reservation.nonce.0,
+        };
+        let Some(prepared) = self.prepared.take() else {
+            self.stage = BrokerSessionStageV1::Invalidated;
+            return Err(internal_state_error());
+        };
+        let nonce = CallerNonceV1::from_bytes(expected.nonce);
+        let pending_result = match mode {
+            BrokerAnchorModeV1::Advance => prepared.begin_advance(nonce, key),
+            BrokerAnchorModeV1::Recovery => prepared.begin_recovery(nonce, key),
+        };
+        let pending = match pending_result {
+            Ok(pending) => pending,
+            Err(_) => {
+                self.stage = BrokerSessionStageV1::Invalidated;
+                return Err(anchor_protocol_error());
+            }
+        };
+        let mut bytes = [0_u8; ANCHOR_CHALLENGE_WIRE_LEN_V1];
+        bytes.copy_from_slice(pending.challenge().as_bytes());
+        self.anchor_expected = Some(expected);
+        self.pending = Some(pending);
+        self.stage = BrokerSessionStageV1::AnchorPending;
+        Ok(BrokerAnchorChallengeObservationV1 { bytes })
+    }
+
+    fn observe_anchor(
+        &mut self,
+        observation: &[u8],
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.require_stage(BrokerSessionStageV1::AnchorPending)?;
+        let expected = self.anchor_expected.ok_or_else(internal_state_error)?;
+        let Some(pending) = self.pending.take() else {
+            self.stage = BrokerSessionStageV1::Invalidated;
+            return Err(internal_state_error());
+        };
+        let decision = match pending.verify(observation) {
+            Ok(decision) => decision,
+            Err(_) => {
+                self.stage = BrokerSessionStageV1::Invalidated;
+                return Err(anchor_protocol_error());
+            }
+        };
+        let result = (|| match decision {
+            AnchorDecisionV1::Commit(commit) => {
+                require_anchor_field(
+                    commit.transaction() == expected.transaction,
+                    BrokerSessionErrorKindV1::AnchorTransactionMismatch,
+                )?;
+                require_anchor_field(
+                    commit.sequence() == expected.expected_sequence,
+                    BrokerSessionErrorKindV1::AnchorSequenceMismatch,
+                )?;
+                require_anchor_field(
+                    commit.prior_head() == expected.prior_head,
+                    BrokerSessionErrorKindV1::AnchorPriorMismatch,
+                )?;
+                require_anchor_field(
+                    commit.head() == expected.proposed_head,
+                    BrokerSessionErrorKindV1::AnchorProposedMismatch,
+                )?;
+                require_anchor_field(
+                    commit.observed_nonce() == &expected.nonce,
+                    BrokerSessionErrorKindV1::AnchorNonceMismatch,
+                )?;
+                Ok(BrokerSessionStageV1::AnchorCommitted)
+            }
+            AnchorDecisionV1::Abort(abort) => {
+                let prior_sequence = expected
+                    .expected_sequence
+                    .checked_sub(1)
+                    .ok_or_else(internal_state_error)?;
+                require_anchor_field(
+                    abort.transaction() == expected.transaction,
+                    BrokerSessionErrorKindV1::AnchorTransactionMismatch,
+                )?;
+                require_anchor_field(
+                    abort.sequence() == prior_sequence,
+                    BrokerSessionErrorKindV1::AnchorSequenceMismatch,
+                )?;
+                require_anchor_field(
+                    abort.head() == expected.prior_head,
+                    BrokerSessionErrorKindV1::AnchorPriorMismatch,
+                )?;
+                require_anchor_field(
+                    abort.proposed_head() == expected.proposed_head,
+                    BrokerSessionErrorKindV1::AnchorProposedMismatch,
+                )?;
+                require_anchor_field(
+                    abort.observed_nonce() == &expected.nonce,
+                    BrokerSessionErrorKindV1::AnchorNonceMismatch,
+                )?;
+                Ok(BrokerSessionStageV1::Aborted)
+            }
+        })();
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.stage = BrokerSessionStageV1::Invalidated;
+                return Err(error);
+            }
+        };
+        self.stage = result;
+        Ok(self.observation())
+    }
+
+    fn consume_publication(
+        &mut self,
+        transcript: &CompletedBrokerTranscriptV4,
+    ) -> Result<BrokerSessionObservationV1, BrokerSessionMachineErrorV1> {
+        self.require_stage(BrokerSessionStageV1::AnchorCommitted)?;
+        let retained = self.completion.ok_or_else(internal_state_error)?;
+        let supplied = CompletionBindingV1::from_transcript(transcript)?;
+        if supplied.claim_digest != retained.claim_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::TranscriptClaimMismatch,
+            ));
+        }
+        if supplied.output_digest != retained.output_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::OutputDigestMismatch,
+            ));
+        }
+        if supplied.durable_plan != retained.durable_plan {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::DurablePublicationPlanMismatch,
+            ));
+        }
+        if supplied.transcript_digest != retained.transcript_digest {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::TranscriptDigestMismatch,
+            ));
+        }
+        self.stage = BrokerSessionStageV1::Consumed;
+        Ok(self.observation())
+    }
+
+    fn anchor_transaction(&self) -> Result<TransactionDigestV1, BrokerSessionMachineErrorV1> {
+        let reservation = self.reservation.ok_or_else(internal_state_error)?;
+        let completion = self.completion.ok_or_else(internal_state_error)?;
+        let mut digest = Sha256::new();
+        digest.update(BROKER_SESSION_ANCHOR_TRANSACTION_DOMAIN_V1);
+        digest.update(reservation.session_id.0);
+        digest.update(reservation.nonce.0);
+        digest.update(reservation.claim_digest);
+        digest.update(link_binding_bytes(self.link)?);
+        digest.update(completion.transcript_digest);
+        digest.update(completion.output_digest);
+        digest.update(completion.durable_plan.0);
+        Ok(TransactionDigestV1::from_bytes(digest.finalize().into()))
+    }
+
+    fn require_stage(
+        &self,
+        expected: BrokerSessionStageV1,
+    ) -> Result<(), BrokerSessionMachineErrorV1> {
+        if self.stage == expected {
+            Ok(())
+        } else {
+            Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::TransitionOrder,
+            ))
+        }
+    }
+
+    const fn observation(&self) -> BrokerSessionObservationV1 {
+        BrokerSessionObservationV1 { stage: self.stage }
+    }
+}
+
+fn link_binding_bytes(
+    link: Option<LinkBindingV1>,
+) -> Result<[u8; 64], BrokerSessionMachineErrorV1> {
+    let link = link.ok_or_else(internal_state_error)?;
+    let mut bytes = [0_u8; 64];
+    bytes[..32].copy_from_slice(&link.broker_reservation);
+    bytes[32..].copy_from_slice(&link.request_nonce_sha256);
+    Ok(bytes)
+}
+
+/// Derives a canonical digest over every field of one completed Broker V4 transcript.
+pub fn completed_broker_transcript_digest_v1(transcript: &CompletedBrokerTranscriptV4) -> [u8; 32] {
+    let process = transcript.process();
+    let mut digest = Sha256::new();
+    digest.update(BROKER_V4_COMPLETED_TRANSCRIPT_DIGEST_DOMAIN_V1);
+    digest.update(transcript.binding_identity());
+    digest.update(process.pid().to_le_bytes());
+    digest.update(process.start_time_ticks().to_le_bytes());
+    digest.update(transcript.request_identity());
+    digest.update(transcript.plan_identity());
+    digest.update(transcript.closure_identity());
+    digest.update(transcript.grant_identity());
+    digest.update(transcript.output_sha256());
+    digest.update(transcript.output_length().to_le_bytes());
+    digest.update(transcript.output_mode().to_le_bytes());
+    digest.update(transcript.durable_plan_identity());
+    digest.finalize().into()
+}
+
+fn broker_session_claim_digest_v1(claim: BrokerSessionClaimV4) -> [u8; 32] {
+    let process = claim.process();
+    let mut digest = Sha256::new();
+    digest.update(BROKER_SESSION_CLAIM_DIGEST_DOMAIN_V1);
+    digest.update(claim.binding_identity());
+    digest.update(process.pid().to_le_bytes());
+    digest.update(process.start_time_ticks().to_le_bytes());
+    digest.update(claim.request_identity());
+    digest.update(claim.plan_identity());
+    digest.update(claim.closure_identity());
+    digest.finalize().into()
+}
+
+fn broker_link_reservation_digest_v1(reservation: ReservationBindingV1) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(BROKER_LINK_RESERVATION_DIGEST_DOMAIN_V1);
+    digest.update(reservation.session_id.0);
+    digest.update(reservation.nonce.0);
+    digest.update(reservation.claim_digest);
+    digest.update(reservation.client_pid.to_le_bytes());
+    digest.update(reservation.client_start_time_ticks.to_le_bytes());
+    digest.update(reservation.host_link_plan);
+    digest.update(reservation.host_link_closure);
+    digest.update(reservation.durable_plan.0);
+    digest.finalize().into()
+}
+
+fn require_nonzero(
+    bytes: [u8; 32],
+    kind: BrokerSessionErrorKindV1,
+) -> Result<(), BrokerSessionMachineErrorV1> {
+    if bytes.iter().all(|byte| *byte == 0) {
+        Err(BrokerSessionMachineErrorV1::new(kind))
+    } else {
+        Ok(())
+    }
+}
+
+fn require_anchor_field(
+    condition: bool,
+    kind: BrokerSessionErrorKindV1,
+) -> Result<(), BrokerSessionMachineErrorV1> {
+    if condition {
+        Ok(())
+    } else {
+        Err(BrokerSessionMachineErrorV1::new(kind))
+    }
+}
+
+const fn internal_state_error() -> BrokerSessionMachineErrorV1 {
+    BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::InternalState)
+}
+
+const fn anchor_protocol_error() -> BrokerSessionMachineErrorV1 {
+    BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::AnchorProtocol)
+}
+
+#[cfg(test)]
+mod tests;

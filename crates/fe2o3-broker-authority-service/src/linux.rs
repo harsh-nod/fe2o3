@@ -10,6 +10,7 @@ use rustix::net::{AddressFamily, SocketType};
 const DIRECTORY_PERMISSIONS: u32 = 0o700;
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
 const MAX_PIDFD_FDINFO_BYTES: u64 = 4096;
+const MAX_PROC_STAT_BYTES: u64 = 4096;
 const PIDFD_INFO_PID_V0: u64 = 1 << 0;
 const PIDFS_IOCTL_MAGIC: u32 = 0xff;
 const PIDFD_GET_INFO_NUMBER: u32 = 11;
@@ -57,10 +58,12 @@ pub enum AdmissionErrorKindV1 {
     PeerRemoteAddress,
     PeerCloseOnExec,
     InspectClientPidfd,
+    InspectClientStartTime,
     ClientPidfdCloseOnExec,
     ClientPidfdThread,
     ClientPidfdTargetMismatch,
     ClientPidfdIdentityChanged,
+    ClientStartTimeChanged,
     ClientAlreadyDead,
     SameUidClient,
     PeerCredentialsMismatch,
@@ -228,6 +231,7 @@ pub struct LiveClientPidfdIdentityV1 {
     expected_client: ExpectedClientProcessIdentityV1,
     descriptor_identity: ObjectIdentityV1,
     identity_source: PidfdIdentitySourceV1,
+    start_time_ticks: u64,
 }
 
 impl fmt::Debug for LiveClientPidfdIdentityV1 {
@@ -267,11 +271,13 @@ impl LiveClientPidfdIdentityV1 {
         let observation = inspect_pidfd_target(&supervisor_pidfd)?;
         require_process_pidfd_mode(&supervisor_pidfd)?;
         require_pidfd_target(observation.pid, expected_client.pid)?;
+        let start_time_ticks = inspect_process_start_time_ticks(expected_client.pid)?;
         let identity = Self {
             pidfd: supervisor_pidfd,
             expected_client,
             descriptor_identity,
             identity_source: observation.source,
+            start_time_ticks,
         };
         identity.validate_liveness()?;
         Ok(identity)
@@ -309,6 +315,10 @@ impl LiveClientPidfdIdentityV1 {
             ));
         }
         require_pidfd_target(observation.pid, self.expected_client.pid)?;
+        require_client_start_time(
+            inspect_process_start_time_ticks(self.expected_client.pid)?,
+            self.start_time_ticks,
+        )?;
         require_pidfd_live(&self.pidfd)?;
         let final_observation = inspect_pidfd_target(&self.pidfd)?;
         if final_observation != observation {
@@ -328,6 +338,10 @@ impl LiveClientPidfdIdentityV1 {
                 "retained client pidfd descriptor changed while checking liveness",
             ));
         }
+        require_client_start_time(
+            inspect_process_start_time_ticks(self.expected_client.pid)?,
+            self.start_time_ticks,
+        )?;
         Ok(())
     }
 }
@@ -396,6 +410,11 @@ impl fmt::Debug for ProtectedBrokerServiceAdmissionV1 {
 }
 
 impl ProtectedBrokerServiceAdmissionV1 {
+    pub(crate) const fn matches_client_process(&self, pid: u32, start_time_ticks: u64) -> bool {
+        self.live_client.expected_client.pid == pid
+            && self.live_client.start_time_ticks == start_time_ticks
+    }
+
     /// Admits only supervisor-owned descriptors and an exact expected connection-time identity.
     ///
     /// The caller must run as the protected service UID. The retained directory must be owned by
@@ -881,6 +900,141 @@ fn require_procfs(
         ));
     }
     Ok(())
+}
+
+fn inspect_process_start_time_ticks(
+    pid: u32,
+) -> Result<u64, BrokerAuthorityServiceAdmissionErrorV1> {
+    // Validate that the selected procfs mount maps the service's numeric getpid consistently
+    // before trusting a numeric client entry. This remains a trusted compatible-procfs
+    // precondition; the check does not prove mount-namespace provenance.
+    let _validated_self = open_validated_procfs_self()?;
+    let mut record = File::open(format!("/proc/{pid}/stat")).map_err(|error| {
+        BrokerAuthorityServiceAdmissionErrorV1::io(
+            AdmissionErrorKindV1::InspectClientStartTime,
+            "cannot open bounded client procfs stat identity",
+            error,
+        )
+    })?;
+    require_procfs(&record, "client process stat identity")?;
+    let mut contents = Vec::new();
+    record
+        .by_ref()
+        .take(MAX_PROC_STAT_BYTES + 1)
+        .read_to_end(&mut contents)
+        .map_err(|error| {
+            BrokerAuthorityServiceAdmissionErrorV1::io(
+                AdmissionErrorKindV1::InspectClientStartTime,
+                "cannot read bounded client procfs stat identity",
+                error,
+            )
+        })?;
+    if contents.is_empty() || contents.len() as u64 > MAX_PROC_STAT_BYTES {
+        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            AdmissionErrorKindV1::InspectClientStartTime,
+            "client procfs stat identity is empty or exceeds 4096 bytes",
+        ));
+    }
+    parse_process_start_time_ticks(&contents, pid)
+}
+
+fn parse_process_start_time_ticks(
+    contents: &[u8],
+    expected_pid: u32,
+) -> Result<u64, BrokerAuthorityServiceAdmissionErrorV1> {
+    let close = contents
+        .iter()
+        .rposition(|byte| *byte == b')')
+        .ok_or_else(|| {
+            BrokerAuthorityServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::InspectClientStartTime,
+                "client procfs stat identity has no command terminator",
+            )
+        })?;
+    let first_space = contents
+        .iter()
+        .position(|byte| *byte == b' ')
+        .ok_or_else(|| {
+            BrokerAuthorityServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::InspectClientStartTime,
+                "client procfs stat identity has no PID terminator",
+            )
+        })?;
+    if contents.get(first_space + 1) != Some(&b'(') || close <= first_space + 1 {
+        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            AdmissionErrorKindV1::InspectClientStartTime,
+            "client procfs stat identity has a malformed command field",
+        ));
+    }
+    let pid_bytes = &contents[..first_space];
+    if pid_bytes.is_empty()
+        || (pid_bytes.len() > 1 && pid_bytes.starts_with(b"0"))
+        || !pid_bytes.iter().all(u8::is_ascii_digit)
+    {
+        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            AdmissionErrorKindV1::InspectClientStartTime,
+            "client procfs stat identity has a noncanonical PID",
+        ));
+    }
+    let recorded_pid = std::str::from_utf8(pid_bytes)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    if recorded_pid != Some(expected_pid) {
+        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            AdmissionErrorKindV1::InspectClientStartTime,
+            "client procfs stat PID does not match the retained pidfd target",
+        ));
+    }
+    let mut fields = contents
+        .get(close + 1..)
+        .ok_or_else(|| {
+            BrokerAuthorityServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::InspectClientStartTime,
+                "client procfs stat identity ended at its command field",
+            )
+        })?
+        .split(u8::is_ascii_whitespace)
+        .filter(|field| !field.is_empty());
+    let start_time = fields.nth(19).ok_or_else(|| {
+        BrokerAuthorityServiceAdmissionErrorV1::new(
+            AdmissionErrorKindV1::InspectClientStartTime,
+            "client procfs stat identity has no start-time field",
+        )
+    })?;
+    if start_time.is_empty()
+        || (start_time.len() > 1 && start_time.starts_with(b"0"))
+        || !start_time.iter().all(u8::is_ascii_digit)
+    {
+        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            AdmissionErrorKindV1::InspectClientStartTime,
+            "client procfs stat identity has a noncanonical start time",
+        ));
+    }
+    let start_time = std::str::from_utf8(start_time)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0)
+        .ok_or_else(|| {
+            BrokerAuthorityServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::InspectClientStartTime,
+                "client procfs stat identity has an invalid start time",
+            )
+        })?;
+    Ok(start_time)
+}
+
+fn require_client_start_time(
+    actual: u64,
+    expected: u64,
+) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            AdmissionErrorKindV1::ClientStartTimeChanged,
+            "retained client process start time changed",
+        ))
+    }
 }
 
 fn require_pidfd_target(
@@ -1422,11 +1576,85 @@ mod tests {
     #[test]
     fn live_current_process_pidfd_is_admitted() {
         let identity = live_identity(current_process_identity());
+        assert_ne!(identity.start_time_ticks, 0);
         identity.validate_liveness().unwrap();
         let debug = format!("{identity:?}");
         assert!(debug.contains("authority: \"none\""));
         assert!(!debug.contains("raw_fd"));
         assert!(!debug.contains("descriptor_identity"));
+    }
+
+    fn proc_stat_fixture(pid: u32, start_time_ticks: &str) -> Vec<u8> {
+        let mut fields = vec!["R"; 19];
+        fields.push(start_time_ticks);
+        format!("{pid} (command with ) delimiters) {}\n", fields.join(" ")).into_bytes()
+    }
+
+    #[test]
+    fn proc_stat_parser_binds_exact_pid_and_start_time() {
+        let pid = std::process::id();
+        let bytes = proc_stat_fixture(pid, "987654321");
+        assert_eq!(
+            parse_process_start_time_ticks(&bytes, pid).unwrap(),
+            987_654_321
+        );
+
+        for wrong_pid in [pid.saturating_add(1), pid.saturating_sub(1)] {
+            if wrong_pid != 0 && wrong_pid != pid {
+                assert_eq!(
+                    parse_process_start_time_ticks(&bytes, wrong_pid)
+                        .unwrap_err()
+                        .kind(),
+                    AdmissionErrorKindV1::InspectClientStartTime
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn proc_stat_parser_rejects_noncanonical_or_missing_start_time() {
+        let pid = std::process::id();
+        for start_time in ["0", "01", "-1", "+1", "x", "18446744073709551616"] {
+            assert_eq!(
+                parse_process_start_time_ticks(&proc_stat_fixture(pid, start_time), pid)
+                    .unwrap_err()
+                    .kind(),
+                AdmissionErrorKindV1::InspectClientStartTime,
+                "start time {start_time}"
+            );
+        }
+        for malformed in [
+            format!("{pid} command R 1 2 3"),
+            format!("{pid} (command) R 1 2 3"),
+            format!("0{pid} (command) {}", vec!["1"; 20].join(" ")),
+            format!(
+                "{} (command) {}",
+                pid.saturating_add(1),
+                vec!["1"; 20].join(" ")
+            ),
+        ] {
+            assert_eq!(
+                parse_process_start_time_ticks(malformed.as_bytes(), pid)
+                    .unwrap_err()
+                    .kind(),
+                AdmissionErrorKindV1::InspectClientStartTime
+            );
+        }
+    }
+
+    #[test]
+    fn protected_admission_matches_both_pid_and_captured_start_time() {
+        let (_directory, root) = protected_root();
+        let (peer, _client) = seqpacket();
+        let admission = non_authoritative_test_admission(root, peer);
+        let pid = admission.live_client.expected_client.pid;
+        let start_time = admission.live_client.start_time_ticks;
+        assert!(admission.matches_client_process(pid, start_time));
+        assert!(!admission.matches_client_process(pid, start_time.saturating_add(1)));
+        assert!(!admission.matches_client_process(pid.saturating_add(1), start_time));
+        admission
+            .validate_non_authoritative_test_continuity()
+            .unwrap();
     }
 
     #[test]

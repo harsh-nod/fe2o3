@@ -9,9 +9,14 @@ description = "Inert protected-service admission boundary for future fe2o3 broke
 publish = false
 
 [dependencies]
+fe2o3-build-authority.workspace = true
+fe2o3-external-anchor-protocol.workspace = true
+fe2o3-host-link-closure = { path = "../fe2o3-host-link-closure" }
 libc.workspace = true
 rustix = { workspace = true, features = ["process"] }
+sha2.workspace = true
 
 [dev-dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 serde = "=1.0.229"
 tempfile = "=3.21.0"

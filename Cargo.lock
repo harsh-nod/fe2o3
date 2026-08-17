@@ -504,9 +504,14 @@ dependencies = [
 name = "fe2o3-broker-authority-service"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
+ "fe2o3-build-authority",
+ "fe2o3-external-anchor-protocol",
+ "fe2o3-host-link-closure",
  "libc",
  "rustix",
  "serde",
+ "sha2 0.11.0",
  "tempfile",
 ]
 

@@ -9,8 +9,11 @@
 //! supervisor launches the service under a dedicated UID and passes all three descriptors.
 //!
 //! The held pidfd removes numeric-PID reuse ambiguity for the retained process identity and is
-//! polled for point-in-time liveness. `waitid(P_PIDFD, WNOWAIT)` supplements polling for waitable
-//! children and never reaps. Exact PID binding first requests the 64-byte `PIDFD_GET_INFO` v0 ABI.
+//! polled for point-in-time liveness. The admission also captures the exact Linux procfs
+//! `starttime` tick field for that pidfd target and revalidates it before and after liveness checks,
+//! so a Broker V4 claim must match both PID and start time. `waitid(P_PIDFD, WNOWAIT)` supplements
+//! polling for waitable children and never reaps. Exact PID binding first requests the 64-byte
+//! `PIDFD_GET_INFO` v0 ABI.
 //! Only `ENOTTY` or `EINVAL` from that exact request dispatches to a fail-closed, 4096-byte
 //! `/proc/self/fdinfo/<fd>` inspection. `EINVAL` covers Linux 6.12, whose pidfd ioctl rejects a
 //! nonzero argument before checking an unknown command; the errno alone never admits a descriptor.
@@ -18,8 +21,8 @@
 //! kernel procfs record and rejects `PIDFD_THREAD == O_EXCL`. It also verifies that `/proc/self`
 //! and `/proc/<getpid>` are the same process entry in the selected procfs mount; this is a
 //! consistent numeric-self mapping, not proof that the mount represents the caller's active PID
-//! namespace. A compatible procfs mount is therefore required whenever the v0 ioctl does not
-//! succeed.
+//! namespace. A compatible procfs mount is therefore always a trusted precondition for start-time
+//! binding, including when the pidfd ioctl succeeds.
 //!
 //! Liveness is inherently transient: the client can exit immediately after a successful check.
 //! `SO_PEERCRED` remains a connection-time credential snapshot, and neither it nor a pidfd proves
@@ -77,6 +80,13 @@
 //! require_serialize::<LiveClientPidfdIdentityV1>();
 //! ```
 //!
+//! The [`BrokerSessionMachineV1`] is a separate fixed-capacity, in-memory lifecycle model. It
+//! retains an admitted client capability, issues one move-only reservation permit, and requires
+//! that permit before a reservation-bound W0 request can be formed. It binds one completed Broker
+//! V4 transcript and exact W0 output, then owns one external-anchor verification token through a
+//! logical consume or abort decision. It remains `AUTHORITY=none`: no storage, linker invocation,
+//! anti-rollback service, publication, or runtime authority is implemented.
+//!
 #[cfg(not(target_os = "linux"))]
 compile_error!(
     "fe2o3-broker-authority-service requires Linux descriptor and SO_PEERCRED semantics"
@@ -84,11 +94,23 @@ compile_error!(
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod session;
 
 #[cfg(target_os = "linux")]
 pub use linux::{
     AdmissionErrorKindV1, BrokerAuthorityServiceAdmissionErrorV1, ExpectedClientProcessIdentityV1,
     LiveClientPidfdIdentityV1, ProtectedBrokerServiceAdmissionV1,
+};
+#[cfg(target_os = "linux")]
+pub use session::{
+    BROKER_LINK_RESERVATION_DIGEST_DOMAIN_V1, BROKER_SESSION_CAPACITY_V1,
+    BROKER_SESSION_MACHINE_AUTHORITY_V1, BROKER_V4_COMPLETED_TRANSCRIPT_DIGEST_DOMAIN_V1,
+    BrokerAnchorChallengeObservationV1, BrokerAnchorModeV1, BrokerHostLinkPermitV1,
+    BrokerSessionErrorKindV1, BrokerSessionIdV1, BrokerSessionMachineErrorV1,
+    BrokerSessionMachineV1, BrokerSessionNonceV1, BrokerSessionObservationV1,
+    BrokerSessionReservationV1, BrokerSessionStageV1, DurablePublicationPlanIdentityV1,
+    completed_broker_transcript_digest_v1,
 };
 
 /// This foundation grants no execution, persistence, publication, or launch authority.

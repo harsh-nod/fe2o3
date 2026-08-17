@@ -28,6 +28,9 @@ pub const HOST_LLD_PROTOCOL_ARGUMENT_V1: &str = "--fe2o3-host-lld-elf-v2";
 pub const HOST_LLD_RESULT_SOCKET_ARGUMENT_PREFIX_V1: &str = "--fe2o3-result-socket-v1=";
 pub const HOST_LLD_REQUEST_ARGUMENT_PREFIX_V1: &str = "--fe2o3-request-v1=";
 pub const HOST_LLD_INPUT_ARGUMENT_PREFIX_V1: &str = "--fe2o3-input-v1=";
+/// Domain used to bind a broker reservation into the existing authenticated request nonce.
+pub const HOST_LINK_BROKER_RESERVATION_NONCE_DOMAIN_V1: &[u8] =
+    b"FE2O3/HOST-LINK/BROKER-RESERVATION-NONCE/V1\0";
 const STATIC_TOOL_MAX_ARGUMENTS_V1: usize = 4096;
 const STATIC_TOOL_MAX_ARGUMENT_BYTES_V1: usize = 4096;
 const STATIC_TOOL_MAX_TOTAL_ARGUMENT_BYTES_V1: usize = 1024 * 1024;
@@ -69,6 +72,112 @@ pub struct LldArgvV1 {
     arguments: Vec<OsString>,
     canonical_arguments: Vec<Vec<u8>>,
     inherited: Vec<InheritedDescriptorV1>,
+}
+
+/// Exact nonzero broker reservation identity attached to one W0 host-link request.
+///
+/// This copyable value is an identity, not a launch capability. W0 does not authenticate who
+/// derived it; the broker-owned move-only permit is responsible for controlling its use.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct HostLinkBrokerReservationV1(Sha256Digest);
+
+impl HostLinkBrokerReservationV1 {
+    /// Admits one nonzero broker reservation digest.
+    pub fn from_sha256(digest: Sha256Digest) -> Result<Self, HostLinkError> {
+        if digest == Sha256Digest::ZERO {
+            return Err(HostLinkError::new(
+                HostLinkErrorCodeV1::InvalidNonce,
+                "broker host-link reservation digest is zero",
+            ));
+        }
+        Ok(Self(digest))
+    }
+
+    /// Returns the exact reservation digest.
+    pub const fn sha256(self) -> Sha256Digest {
+        self.0
+    }
+}
+
+impl std::fmt::Debug for HostLinkBrokerReservationV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HostLinkBrokerReservationV1(<opaque>)")
+    }
+}
+
+/// Move-only W0 request whose authenticated nonce incorporates one broker reservation.
+///
+/// Construction consumes an ordinary [`HostLinkClosureV1`]. The existing unbound launch API is
+/// retained for W0 callers, but its output carries no broker reservation and is rejected by the
+/// W1 broker session machine. `AUTHORITY=none`: the binding does not grant tool approval,
+/// publication, runtime, or GPU authority; launch still requires a separately minted exact-tool
+/// [`ApprovedStaticHostLldV1`].
+///
+/// ```compile_fail
+/// use fe2o3_host_link_closure::BrokerReservedHostLinkV1;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<BrokerReservedHostLinkV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_host_link_closure::BrokerReservedHostLinkV1;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<BrokerReservedHostLinkV1>();
+/// ```
+pub struct BrokerReservedHostLinkV1 {
+    closure: HostLinkClosureV1,
+    reservation: HostLinkBrokerReservationV1,
+}
+
+impl std::fmt::Debug for BrokerReservedHostLinkV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrokerReservedHostLinkV1")
+            .field("authority", &"none")
+            .field("reservation", &self.reservation)
+            .field("request_nonce", &self.closure.nonce_sha256)
+            .finish_non_exhaustive()
+    }
+}
+
+impl BrokerReservedHostLinkV1 {
+    /// Returns the fixed non-authority marker for reservation binding alone.
+    pub const fn authority(&self) -> &'static str {
+        "none"
+    }
+
+    /// Borrows the exact closure for external tool-evidence approval.
+    pub const fn closure(&self) -> &HostLinkClosureV1 {
+        &self.closure
+    }
+
+    /// Returns the plan identity bound by this request.
+    pub fn plan_digest(&self) -> Sha256Digest {
+        self.closure.plan_digest()
+    }
+
+    /// Returns the closure identity bound by this request.
+    pub const fn closure_digest(&self) -> Sha256Digest {
+        self.closure.closure_digest()
+    }
+
+    /// Returns the broker reservation identity bound into the authenticated request nonce.
+    pub const fn broker_reservation(&self) -> HostLinkBrokerReservationV1 {
+        self.reservation
+    }
+
+    /// Returns the domain-separated request nonce sent to and echoed by the authenticated worker.
+    pub const fn request_nonce_sha256(&self) -> Sha256Digest {
+        self.closure.nonce_sha256()
+    }
+
+    /// Consumes the bound request into the existing authenticated W0 launch path.
+    pub fn launch(
+        self,
+        approval: ApprovedStaticHostLldV1,
+    ) -> Result<AuthenticatedHostLinkExecutionV1, HostLinkError> {
+        self.closure.launch(approval)
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -148,6 +257,8 @@ pub struct AdmittedHostOutputV1 {
     elf_profile: ElfProfileV1,
     plan_digest: Sha256Digest,
     closure_digest: Sha256Digest,
+    request_nonce_sha256: Sha256Digest,
+    broker_reservation: Option<HostLinkBrokerReservationV1>,
 }
 
 impl AdmittedHostOutputV1 {
@@ -173,6 +284,16 @@ impl AdmittedHostOutputV1 {
 
     pub const fn closure_digest(&self) -> Sha256Digest {
         self.closure_digest
+    }
+
+    /// Returns the authenticated request nonce echoed by the exact worker result record.
+    pub const fn request_nonce_sha256(&self) -> Sha256Digest {
+        self.request_nonce_sha256
+    }
+
+    /// Returns the broker reservation carried by a broker-bound request, if any.
+    pub const fn broker_reservation(&self) -> Option<HostLinkBrokerReservationV1> {
+        self.broker_reservation
     }
 
     pub fn try_clone_file(&self) -> Result<File, HostLinkError> {
@@ -274,6 +395,7 @@ pub struct HostLinkClosureV1 {
     lld_argv: LldArgvV1,
     closure_digest: Sha256Digest,
     nonce_sha256: Sha256Digest,
+    broker_reservation: Option<HostLinkBrokerReservationV1>,
     prevalidated: bool,
     child_handoff_complete: bool,
     admission_state: OutputAdmissionStateV1,
@@ -337,6 +459,7 @@ impl HostLinkClosureV1 {
             lld_argv,
             closure_digest,
             nonce_sha256,
+            broker_reservation: None,
             prevalidated: false,
             child_handoff_complete: false,
             admission_state: OutputAdmissionStateV1::AwaitPacket,
@@ -373,6 +496,98 @@ impl HostLinkClosureV1 {
 
     pub const fn nonce_sha256(&self) -> Sha256Digest {
         self.nonce_sha256
+    }
+
+    /// Consumes this closure to form one broker-reservation-bound W0 request.
+    ///
+    /// The new request nonce is SHA-256 over a fixed domain, the original getrandom-backed nonce,
+    /// and the exact broker reservation digest. The canonical request argv is rebuilt before any
+    /// launch can occur. The authenticated child must echo this bound nonce in its result record.
+    pub fn bind_broker_reservation(
+        mut self,
+        reservation: HostLinkBrokerReservationV1,
+    ) -> Result<BrokerReservedHostLinkV1, HostLinkError> {
+        if self.child_handoff_complete
+            || self.admitted_output.is_some()
+            || !matches!(self.admission_state, OutputAdmissionStateV1::AwaitPacket)
+            || self.broker_reservation.is_some()
+        {
+            return Err(HostLinkError::new(
+                HostLinkErrorCodeV1::InvalidState,
+                "broker reservation must bind one fresh pre-launch host-link closure",
+            ));
+        }
+        let mut digest = Sha256::new();
+        digest.update(HOST_LINK_BROKER_RESERVATION_NONCE_DOMAIN_V1);
+        digest.update(self.nonce_sha256.as_bytes());
+        digest.update(reservation.sha256().as_bytes());
+        let bound_nonce = Sha256Digest::from_bytes(digest.finalize().into());
+        self.replace_request_binding(bound_nonce)?;
+        self.nonce_sha256 = bound_nonce;
+        self.broker_reservation = Some(reservation);
+        Ok(BrokerReservedHostLinkV1 {
+            closure: self,
+            reservation,
+        })
+    }
+
+    fn replace_request_binding(&mut self, bound_nonce: Sha256Digest) -> Result<(), HostLinkError> {
+        let result_argument = self
+            .lld_argv
+            .canonical_arguments
+            .get(2)
+            .cloned()
+            .ok_or_else(|| {
+                HostLinkError::new(
+                    HostLinkErrorCodeV1::InvalidState,
+                    "canonical host-link argv lost its result binding",
+                )
+            })?;
+        let request_argument =
+            request_argument(self.plan.plan_digest(), self.closure_digest, bound_nonce);
+        validate_static_tool_argv(
+            &self.lld_argv.canonical_arguments,
+            &self.lld_argv.inherited,
+            &result_argument,
+            self.lld_argv.canonical_arguments.get(3).ok_or_else(|| {
+                HostLinkError::new(
+                    HostLinkErrorCodeV1::InvalidState,
+                    "canonical host-link argv lost its request binding",
+                )
+            })?,
+        )?;
+        let request_os = String::from_utf8(request_argument.clone())
+            .map(OsString::from)
+            .map_err(|_| {
+                HostLinkError::new(
+                    HostLinkErrorCodeV1::InvalidText,
+                    "broker-bound request argument is not UTF-8",
+                )
+            })?;
+        let canonical_slot = self
+            .lld_argv
+            .canonical_arguments
+            .get_mut(3)
+            .ok_or_else(|| {
+                HostLinkError::new(
+                    HostLinkErrorCodeV1::InvalidState,
+                    "canonical host-link argv lost its request slot",
+                )
+            })?;
+        *canonical_slot = request_argument.clone();
+        let argument_slot = self.lld_argv.arguments.get_mut(3).ok_or_else(|| {
+            HostLinkError::new(
+                HostLinkErrorCodeV1::InvalidState,
+                "host-link argv lost its request slot",
+            )
+        })?;
+        *argument_slot = request_os;
+        validate_static_tool_argv(
+            &self.lld_argv.canonical_arguments,
+            &self.lld_argv.inherited,
+            &result_argument,
+            &request_argument,
+        )
     }
 
     fn admit_output_from_authenticated_worker(
@@ -599,6 +814,8 @@ impl HostLinkClosureV1 {
                                 elf_profile: profile,
                                 plan_digest: self.plan.plan_digest(),
                                 closure_digest: self.closure_digest,
+                                request_nonce_sha256: self.nonce_sha256,
+                                broker_reservation: self.broker_reservation,
                             });
                             self.admission_state = OutputAdmissionStateV1::Complete;
                             return Ok(());
@@ -838,6 +1055,11 @@ impl AuthenticatedHostLinkExecutionV1 {
         self.closure.nonce_sha256()
     }
 
+    /// Returns the broker reservation attached to this execution, if any.
+    pub const fn broker_reservation(&self) -> Option<HostLinkBrokerReservationV1> {
+        self.closure.broker_reservation
+    }
+
     pub fn try_admit_output(&mut self) -> Result<&AdmittedHostOutputV1, HostLinkError> {
         if self.terminal {
             return Err(HostLinkError::new(
@@ -898,6 +1120,22 @@ impl AuthenticatedHostLinkExecutionV1 {
 
     pub fn revalidate(&self) -> Result<(), HostLinkError> {
         self.closure.revalidate()
+    }
+
+    /// Consumes a successfully completed execution and returns its move-only admitted output.
+    pub fn into_admitted_output(mut self) -> Result<AdmittedHostOutputV1, HostLinkError> {
+        if !self.terminal {
+            return Err(HostLinkError::new(
+                HostLinkErrorCodeV1::InvalidState,
+                "host-link output is unavailable before successful terminal admission",
+            ));
+        }
+        self.closure.admitted_output.take().ok_or_else(|| {
+            HostLinkError::new(
+                HostLinkErrorCodeV1::InvalidState,
+                "terminal host-link execution retained no admitted output",
+            )
+        })
     }
 }
 

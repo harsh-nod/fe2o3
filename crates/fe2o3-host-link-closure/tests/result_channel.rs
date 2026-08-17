@@ -3,9 +3,10 @@
 use fe2o3_host_link_closure::{
     ApprovedStaticHostLldV1, ArtifactProvenanceV1, AuthenticatedHostLinkExecutionV1, ElfClassV1,
     ElfEndianV1, ElfProfileV1, ExecutableToolchainV1, FixedRootSetV1, HostArtifactCatalogV1,
-    HostArtifactKindV1, HostLinkClosureV1, HostLinkError, HostLinkErrorCodeV1, HostLinkHandoffV1,
-    HostLinkPlanSpecV1, HostLinkPlanV1, OutputTypeV1, PlanArgumentV1, ProducerArtifactSpecV1,
-    PublishedHostArtifactV1, ReleaseNonceV1, RuntimeDsoClosureV1, TargetTripleV1,
+    HostArtifactKindV1, HostLinkBrokerReservationV1, HostLinkClosureV1, HostLinkError,
+    HostLinkErrorCodeV1, HostLinkHandoffV1, HostLinkPlanSpecV1, HostLinkPlanV1, OutputTypeV1,
+    PlanArgumentV1, ProducerArtifactSpecV1, PublishedHostArtifactV1, ReleaseNonceV1,
+    RuntimeDsoClosureV1, Sha256Digest, TargetTripleV1,
     authenticated_host_link_available_capacity_v1,
 };
 use rustix::fs::SealFlags;
@@ -249,6 +250,48 @@ fn authenticated_execveat_launch_admits_receiver_owned_output() {
     let admitted = execution.try_admit_output().unwrap_err();
     assert_eq!(admitted.code(), HostLinkErrorCodeV1::InvalidState);
     execution.revalidate().unwrap();
+}
+
+#[test]
+fn ordinary_w0_output_carries_no_broker_reservation() {
+    let closure = prepared_closure(None);
+    let request_nonce = closure.nonce_sha256();
+    let mut execution = closure.launch_unsafe_test_fixture().unwrap();
+    assert_eq!(execution.broker_reservation(), None);
+    await_admission(&mut execution).unwrap();
+    let output = execution.into_admitted_output().unwrap();
+    assert_eq!(output.broker_reservation(), None);
+    assert_eq!(output.request_nonce_sha256(), request_nonce);
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn broker_reservation_rebinds_authenticated_request_and_output_identity() {
+    let closure = prepared_closure(None);
+    let old_nonce = closure.nonce_sha256();
+    let old_request = closure.lld_argv().unwrap().canonical_arguments()[3].clone();
+    let reservation =
+        HostLinkBrokerReservationV1::from_sha256(Sha256Digest::from_bytes([0xa5; 32])).unwrap();
+    let bound = closure.bind_broker_reservation(reservation).unwrap();
+    let bound_nonce = bound.request_nonce_sha256();
+    assert_ne!(bound_nonce, old_nonce);
+    assert_ne!(
+        bound.closure().lld_argv().unwrap().canonical_arguments()[3],
+        old_request
+    );
+    assert_eq!(bound.authority(), "none");
+    assert_eq!(bound.broker_reservation(), reservation);
+
+    // SAFETY: this test-only fixture stands in for an external W1 tool-evidence authority.
+    let approval =
+        unsafe { ApprovedStaticHostLldV1::from_verified_evidence(bound.closure()).unwrap() };
+    let mut execution = bound.launch(approval).unwrap();
+    assert_eq!(execution.broker_reservation(), Some(reservation));
+    assert_eq!(execution.nonce_sha256(), bound_nonce);
+    await_admission(&mut execution).unwrap();
+    let output = execution.into_admitted_output().unwrap();
+    assert_eq!(output.broker_reservation(), Some(reservation));
+    assert_eq!(output.request_nonce_sha256(), bound_nonce);
 }
 
 #[test]
