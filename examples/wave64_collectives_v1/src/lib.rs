@@ -6,15 +6,17 @@
 //! One logical active-lane mask selects participants in a physically
 //! convergent 64-lane wave. The crate includes ordinary attributed Rust kernel
 //! source, an exact finite-corpus host oracle, a Verus integer model, and an
-//! identity-bound executable correspondence from that source model to the
-//! canonical semantic Kernel IR profile. The correspondence grants no
-//! compiler, artifact, runtime, machine, generalized-safety, or parity
+//! exact-syntax reviewed correspondence from the attributed source to the CPU
+//! model, plus an identity-bound executable correspondence from that source
+//! model to the canonical semantic Kernel IR profile. Neither correspondence
+//! grants compiler, artifact, runtime, machine, generalized-safety, or parity
 //! authority.
 
 pub mod contract;
 pub mod kernel;
 pub mod oracle;
 pub mod source_kir_refinement;
+pub mod source_model_correspondence;
 
 pub use contract::{
     EMPTY_MASK_POLICY_V1, INACTIVE_LANE_OUTPUT_POLICY_V1, LaneOutputsV1,
@@ -30,4 +32,11 @@ pub use source_kir_refinement::{
     Wave64RefinementErrorV1, Wave64RefinementIdentitiesV1, Wave64SemanticOutputV1,
     Wave64SemanticOutputsV1, Wave64SourceKirRefinementV1, exact_wave64_refinement_identities_v1,
     source_contributor_mask_v1, verify_wave64_source_model_to_kir_v1,
+};
+pub use source_model_correspondence::{
+    REVIEWED_SOURCE_CPU_CORRESPONDENCE_BOUNDARY_V2, ReviewedSourceAlgorithmV2, SourceCpuBindingV2,
+    SourceCpuContentIdentitiesV2, SourceCpuCorrespondenceErrorV2, SourceCpuCorrespondenceReceiptV2,
+    SourceCpuOutputsV2, SourceStructureErrorV2, bind_source_cpu_content_to_outer_commit_v2,
+    collect_reviewed_source_algorithm_v2, exact_source_cpu_content_identities_v2,
+    interpret_reviewed_source_algorithm_v2, verify_reviewed_source_to_cpu_correspondence_v2,
 };

@@ -3,6 +3,8 @@ use std::process::Command;
 
 const PROOF: &str = include_str!("../verus/wave64_collectives_v1.rs");
 const REFINEMENT_PROOF: &str = include_str!("../verus/wave64_source_kir_refinement_v1.rs");
+const SOURCE_CPU_PROOF: &str =
+    include_str!("../verus/wave64_attributed_source_cpu_correspondence_v2.rs");
 const ACTIVE_EXCLUSION_WRONG: &str = include_str!("../verus/negative/active_exclusion_wrong.rs");
 const BOUNDS_WRONG: &str = include_str!("../verus/negative/bounds_wrong.rs");
 const OWNERSHIP_WRONG: &str = include_str!("../verus/negative/ownership_wrong.rs");
@@ -13,6 +15,17 @@ const SOURCE_KIR_IDENTITY_WRONG: &str =
 const SOURCE_KIR_CONTRIBUTOR_WRONG: &str =
     include_str!("../verus/negative/source_kir_contributor_wrong.rs");
 const SOURCE_KIR_OWNER_WRONG: &str = include_str!("../verus/negative/source_kir_owner_wrong.rs");
+const SOURCE_CPU_MASK_WRONG: &str =
+    include_str!("../verus/negative/source_cpu_mask_selection_wrong.rs");
+const SOURCE_CPU_SCAN_WRONG: &str =
+    include_str!("../verus/negative/source_cpu_scan_order_wrong.rs");
+const SOURCE_CPU_ZERO_WRONG: &str =
+    include_str!("../verus/negative/source_cpu_inactive_zero_wrong.rs");
+const SOURCE_CPU_OWNER_WRONG: &str = include_str!("../verus/negative/source_cpu_owner_wrong.rs");
+const SOURCE_CPU_IDENTITY_WRONG: &str =
+    include_str!("../verus/negative/source_cpu_correspondence_identity_wrong.rs");
+const SOURCE_CPU_OUTER_COMMIT_WRONG: &str =
+    include_str!("../verus/negative/source_cpu_outer_commit_wrong.rs");
 const RUNNER: &str = include_str!("../run-verus.sh");
 const SCANNER: &str = include_str!("../check-proof-source.py");
 const README: &str = include_str!("../README.md");
@@ -62,6 +75,28 @@ fn refinement_proof_binds_identity_profile_mask_values_and_ownership() {
 }
 
 #[test]
+fn source_cpu_proof_binds_reviewed_algorithm_and_keeps_semantic_gap_false() {
+    for marker in [
+        "pub open spec fn attributed_source_identity_v2",
+        "pub open spec fn cpu_oracle_identity_v2",
+        "pub open spec fn reviewed_correspondence_identity_v2",
+        "pub open spec fn reviewed_outer_public_base_commit_v2",
+        "pub proof fn source_and_cpu_select_the_same_active_mask_v2",
+        "pub proof fn increasing_lane_recurrences_are_equal_v2",
+        "pub proof fn reduction_inclusive_exclusive_and_inactive_publications_match_v2",
+        "pub proof fn source_and_cpu_same_lane_ownership_is_equal_and_injective_v2",
+        "pub proof fn exact_attributed_source_algorithm_corresponds_to_cpu_oracle_v2",
+        "pub open spec fn proves_source_to_model_refinement_v2() -> bool { false }",
+        "pub proof fn reviewed_correspondence_grants_no_adjacent_authority_v2",
+    ] {
+        assert!(
+            SOURCE_CPU_PROOF.contains(marker),
+            "missing source/CPU obligation {marker}"
+        );
+    }
+}
+
+#[test]
 fn expected_negatives_mutate_each_requested_property() {
     for (source, marker) in [
         (
@@ -89,6 +124,30 @@ fn expected_negatives_mutate_each_requested_property() {
         (
             SOURCE_KIR_OWNER_WRONG,
             "mutated_kernel_ir_ownership_is_injective_v1",
+        ),
+        (
+            SOURCE_CPU_MASK_WRONG,
+            "mutated_cpu_mask_selection_matches_source_v2",
+        ),
+        (
+            SOURCE_CPU_SCAN_WRONG,
+            "mutated_cpu_exclusive_uses_same_physical_prefix_v2",
+        ),
+        (
+            SOURCE_CPU_ZERO_WRONG,
+            "mutated_cpu_inactive_publication_is_positive_zero_v2",
+        ),
+        (
+            SOURCE_CPU_OWNER_WRONG,
+            "mutated_cpu_owner_matches_same_lane_source_v2",
+        ),
+        (
+            SOURCE_CPU_IDENTITY_WRONG,
+            "mutated_reviewed_correspondence_identity_is_exact_v2",
+        ),
+        (
+            SOURCE_CPU_OUTER_COMMIT_WRONG,
+            "mutated_outer_public_base_commit_is_exact_v2",
         ),
     ] {
         assert!(source.contains(marker), "missing negative fixture {marker}");
@@ -140,7 +199,9 @@ fn runner_pins_identity_closure_and_expected_failures() {
         "env -i",
         "verification results:: 12 verified, 0 errors",
         "verification results:: 10 verified, 0 errors",
+        "verification results:: 13 verified, 0 errors",
         "identity-bound Wave64 source-model-to-Kernel-IR refinement verified",
+        "reviewed structural attributed-source-to-CPU correspondence verified",
         "expected-negative proof unexpectedly verified",
         "FE2O3_WAVE64_COLLECTIVES_V1_VERUS_OK",
     ] {
@@ -160,9 +221,15 @@ fn runner_pins_identity_closure_and_expected_failures() {
 fn documentation_keeps_refinement_and_execution_boundaries_explicit() {
     for marker in [
         "Source-model-to-Kernel-IR refinement",
+        "Reviewed attributed-source-to-CPU correspondence",
         "01ac1365b0fdfe91cdc8f7cf6a14ae5acbea41528103ec3de5fe6d895261625e",
+        "837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407",
+        "7b910de7f37d5fbdf8e72103f353dc743bd1292af39c6efcee405f3fcf5a9514",
+        "b8daeb2bc953924a424542820bed566e52d57290",
         "382fcf4c8733e55dcacaf8b25691a270a9adcf68912a679c6ea848fee62f84be",
-        "does not prove source-to-model correspondence",
+        "proves_source_to_model_refinement=false",
+        "does not prove semantic source-to-model",
+        "does not prove Git-tree membership",
         "does not prove compiler causality",
         "does not prove LLVM/ISA refinement",
         "grants no protected-execution authority",

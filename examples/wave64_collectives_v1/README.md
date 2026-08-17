@@ -39,6 +39,53 @@ version and digest, verifies the repository's authenticated release closure,
 audits proof source, requires the positive summary, and requires every mutation
 to fail.
 
+## Reviewed attributed-source-to-CPU correspondence
+
+`src/source_model_correspondence.rs` closes one narrower review gap without
+claiming semantic Rust refinement. A `syn` collector parses the entire ordinary
+attributed kernel and compares its complete syntax tree, after removing only
+documentation attributes, with an independently encoded exact shape. It is not
+a digest or keyword scanner: attributes, signature and types, guard predicates,
+mask selection, lane indexing, collective call order and operands, inactive
+values, publication sources, and all three ownership writes must be exact.
+Hostile tests preserve the familiar collective and output names while mutating
+each of those properties; every mutation rejects. Whitespace and non-doc
+comments remain irrelevant.
+
+Only after exact structural admission, an executable abstract interpreter
+selects bit `lane` of the `u64` mask, accumulates the reduction and
+inclusive/exclusive recurrences in increasing physical-lane order, publishes
+bit-exact positive zero for inactive lanes, and assigns each output index to the
+same physical lane. On the finite integral binary32 corpus, tests compare this
+model with the independent CPU oracle over 4,359 masks for each of four input
+families. Active signed zero is compared by integer value; inactive zero remains
+bit exact.
+
+The content binding carries exact SHA-256 identities:
+
+- attributed source: `01ac1365b0fdfe91cdc8f7cf6a14ae5acbea41528103ec3de5fe6d895261625e`;
+- CPU oracle: `837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407`;
+- reviewed correspondence: `7b910de7f37d5fbdf8e72103f353dc743bd1292af39c6efcee405f3fcf5a9514`.
+
+Those identities are domain-separated with an outer 20-byte Git commit. The
+formal profile pins public base
+`b8daeb2bc953924a424542820bed566e52d57290`; a process-level Rust test also
+checks that the current outer commit contains the exact three files. The inert
+receipt itself only records the supplied commit and deliberately reports that
+it does not prove Git-tree membership.
+
+`verus/wave64_attributed_source_cpu_correspondence_v2.rs` separately defines
+the reviewed attributed-source and CPU-oracle algorithms, then proves 13
+obligations relating exact identities/profile, all mask bits, active/inactive
+contributions, reduction/inclusive/exclusive prefix ends and recurrences,
+inactive publication, and injective same-lane ownership. Six expected-negative
+fixtures mutate mask selection, scan order, inactive zero, ownership,
+correspondence identity, and outer commit.
+
+This remains a reviewed structural correspondence. Both executable and formal
+receipts keep `proves_source_to_model_refinement=false` because no theorem gives
+Rust syntax an operational semantics and connects that semantics to the model.
+
 ## Source-model-to-Kernel-IR refinement
 
 `src/source_kir_refinement.rs` is an executable relation between the existing
@@ -78,7 +125,9 @@ VERUS=/absolute/path/to/verus examples/wave64_collectives_v1/run-verus.sh
 
 ## Boundary
 
-This semantic relation does not prove source-to-model correspondence.
+The reviewed structural relation does not prove semantic source-to-model
+refinement. The source-model-to-Kernel-IR relation starts from that unproven
+model boundary.
 It does not prove compiler causality.
 It does not prove LLVM/ISA refinement.
 It grants no artifact authority and grants no protected-execution authority.

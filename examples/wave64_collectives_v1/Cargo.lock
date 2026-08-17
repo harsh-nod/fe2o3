@@ -283,6 +283,7 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "quote",
  "sha2",
  "syn 2.0.119",
 ]
