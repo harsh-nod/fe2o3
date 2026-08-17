@@ -52,10 +52,23 @@ fn same_logical_name_in_two_rlibs_resolves_distinct_artifacts() {
         backend.display()
     );
 
-    let kernel_a = build_kernel(&workspace, &backend, &fixture_root.join("kernel-a"), "a");
-    let kernel_b = build_kernel(&workspace, &backend, &fixture_root.join("kernel-b"), "b");
-
     let output_dir = TestOutputDir::new(&workspace);
+    let fixture_target = output_dir.path.join("cargo-target");
+    let kernel_a = build_kernel(
+        &workspace,
+        &backend,
+        &fixture_root.join("kernel-a"),
+        &fixture_target,
+        "a",
+    );
+    let kernel_b = build_kernel(
+        &workspace,
+        &backend,
+        &fixture_root.join("kernel-b"),
+        &fixture_target,
+        "b",
+    );
+
     let executable = output_dir.path.join("binding-link-app");
     let source = fixture_root.join("app/src/main.rs");
     let rocm_path = std::env::var_os("ROCM_PATH")
@@ -96,16 +109,14 @@ fn same_logical_name_in_two_rlibs_resolves_distinct_artifacts() {
     require_success("fixture executable", &run);
 }
 
-fn build_kernel(workspace: &Path, backend: &Path, package_root: &Path, label: &str) -> PathBuf {
+fn build_kernel(
+    workspace: &Path,
+    backend: &Path,
+    package_root: &Path,
+    target_dir: &Path,
+    label: &str,
+) -> PathBuf {
     let manifest = package_root.join("Cargo.toml");
-    let clean = Command::new(env!("CARGO"))
-        .current_dir(package_root)
-        .args(["clean", "--manifest-path"])
-        .arg(&manifest)
-        .output()
-        .expect("clean kernel fixture");
-    require_success(&format!("kernel {label} clean"), &clean);
-
     let build = Command::new(env!("CARGO"))
         .current_dir(package_root)
         .args(["run", "--locked", "--manifest-path"])
@@ -119,6 +130,8 @@ fn build_kernel(workspace: &Path, backend: &Path, package_root: &Path, label: &s
             "--manifest-path",
         ])
         .arg(&manifest)
+        .arg("--target-dir")
+        .arg(target_dir)
         .env("FE2O3_BACKEND", backend)
         .env(
             "FE2O3_TARGET",
@@ -129,7 +142,7 @@ fn build_kernel(workspace: &Path, backend: &Path, package_root: &Path, label: &s
     require_success(&format!("kernel {label} build"), &build);
 
     let prefix = format!("libfe2o3_binding_kernel_{label}-");
-    let deps = package_root.join("target/debug/deps");
+    let deps = target_dir.join("debug/deps");
     let mut matches = std::fs::read_dir(&deps)
         .expect("read fixture dependencies")
         .filter_map(Result::ok)
