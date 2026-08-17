@@ -8,12 +8,15 @@ pub const EXTERNAL_ANCHOR_AUTHORITY_V1: &str = "none";
 pub const ANCHOR_CHALLENGE_WIRE_LEN_V1: usize = 184;
 pub const ANCHOR_OBSERVATION_SIGNED_LEN_V1: usize = 224;
 pub const ANCHOR_OBSERVATION_WIRE_LEN_V1: usize = 288;
+/// Maximum caller-canonical byte length admitted by [`derive_transaction_digest_v1`].
+pub const TRANSACTION_IDENTITY_MAX_LEN_V1: usize = 4096;
 
 const CHALLENGE_MAGIC: [u8; 8] = *b"F2ARBA1\0";
 const OBSERVATION_MAGIC: [u8; 8] = *b"F2ARBO1\0";
 const SIGNING_DOMAIN: &[u8] = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/OBSERVATION/V1\0";
 const KEY_ID_DOMAIN: &[u8] = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/KEY-ID/V1\0";
 const HEAD_DOMAIN: &[u8] = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/HASH-CHAIN-HEAD/V1\0";
+const TRANSACTION_DIGEST_DOMAIN: &[u8] = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/TRANSACTION-DIGEST/V1\0";
 
 const VERSION_OFFSET: usize = 8;
 const KIND_OFFSET: usize = 10;
@@ -101,6 +104,32 @@ impl TransactionDigestV1 {
     pub const fn to_bytes(self) -> [u8; 32] {
         self.0
     }
+}
+
+/// Derives a V1 transaction digest from bounded caller-canonical identity bytes.
+///
+/// The preimage is the exact concatenation of the NUL-terminated V1 domain, the
+/// little-endian protocol version, the little-endian `u32` byte length, and
+/// `canonical_identity`. The caller owns the canonical schema and must exclude
+/// unstable or process-local values such as paths, raw file descriptors, and
+/// pointers. This function establishes no provenance or publication authority.
+pub fn derive_transaction_digest_v1(
+    canonical_identity: &[u8],
+) -> Result<TransactionDigestV1, AnchorProtocolErrorV1> {
+    if canonical_identity.is_empty() || canonical_identity.len() > TRANSACTION_IDENTITY_MAX_LEN_V1 {
+        return Err(AnchorProtocolErrorV1::InvalidTransactionIdentityLength {
+            actual: canonical_identity.len(),
+            maximum: TRANSACTION_IDENTITY_MAX_LEN_V1,
+        });
+    }
+    let length = u32::try_from(canonical_identity.len())
+        .expect("the V1 transaction identity bound fits in u32");
+    Ok(TransactionDigestV1(sha256_parts(&[
+        TRANSACTION_DIGEST_DOMAIN,
+        &EXTERNAL_ANCHOR_PROTOCOL_VERSION_V1.to_le_bytes(),
+        &length.to_le_bytes(),
+        canonical_identity,
+    ])))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -435,6 +464,7 @@ pub enum AnchorProtocolErrorV1 {
     ZeroNonce,
     SequenceOverflow,
     SequenceRegression,
+    InvalidTransactionIdentityLength { actual: usize, maximum: usize },
     InvalidProposedHead,
     InvalidObservedPosition,
     ChallengeMismatch,
@@ -469,6 +499,10 @@ impl fmt::Display for AnchorProtocolErrorV1 {
             Self::SequenceRegression => {
                 formatter.write_str("anchor expected sequence must have a predecessor")
             }
+            Self::InvalidTransactionIdentityLength { actual, maximum } => write!(
+                formatter,
+                "transaction identity length must be in 1..={maximum} bytes, got {actual}"
+            ),
             Self::InvalidProposedHead => formatter.write_str("invalid proposed hash-chain head"),
             Self::InvalidObservedPosition => {
                 formatter.write_str("observation is neither the exact prior nor proposed position")
