@@ -49,7 +49,7 @@ fn static_preexec_launcher_cmake_suite() {
     )));
 
     run(
-        "/usr/bin/cmake",
+        "cmake",
         [
             OsStr::new("-S"),
             source.as_os_str(),
@@ -61,7 +61,7 @@ fn static_preexec_launcher_cmake_suite() {
         ],
     );
     run(
-        "/usr/bin/cmake",
+        "cmake",
         [
             OsStr::new("--build"),
             build.0.as_os_str(),
@@ -70,7 +70,7 @@ fn static_preexec_launcher_cmake_suite() {
         ],
     );
     run(
-        "/usr/bin/ctest",
+        "ctest",
         [
             OsStr::new("--test-dir"),
             build.0.as_os_str(),
