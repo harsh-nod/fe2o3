@@ -58,6 +58,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dialect-amdgcn"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
+ "sha2",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -129,6 +138,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-contracts"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-core"
 version = "0.1.0"
 dependencies = [
@@ -164,7 +177,12 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
+ "fe2o3-worker-v2-bundle",
+ "libc",
  "reserved-fe2o3-symbols",
+ "rustix",
+ "sha2",
 ]
 
 [[package]]
@@ -180,10 +198,13 @@ dependencies = [
 name = "fe2o3-hsaco-finalize"
 version = "0.1.0"
 dependencies = [
+ "dialect-amdgcn",
  "fe2o3-artifact-transaction",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
+ "fe2o3-verifier",
  "object",
  "reserved-fe2o3-symbols",
  "rustix",
@@ -199,6 +220,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-kernel-ir"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
@@ -208,6 +233,48 @@ dependencies = [
  "quote",
  "reserved-fe2o3-symbols",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "fe2o3-rustc-front"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-rustc-invocation"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-verifier"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-artifacts",
+ "fe2o3-contracts",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-rustc-front",
+ "proc-macro2",
+ "sha2",
+ "syn 2.0.117",
+ "toml",
+]
+
+[[package]]
+name = "fe2o3-worker-v2-bundle"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-artifacts",
+ "fe2o3-hsaco-finalize",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-rustc-invocation",
+ "sha2",
 ]
 
 [[package]]
@@ -363,6 +430,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "sha2"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -402,6 +478,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "1.1.4+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "1.1.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -430,6 +521,12 @@ checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "typenum"
