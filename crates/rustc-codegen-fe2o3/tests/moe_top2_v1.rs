@@ -23,7 +23,7 @@ const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/moe_top2_v1/src/kernel.rs");
 const STRUCTURAL_CORRESPONDENCE: &str =
-    "7505eb2cb60a2827447b2542601afb8c46f67cb572c8781f7c5324af8f492ec4";
+    "8eb5625bc27bc6883c6cc1fa71063ccfbf04fe7f898567ea2a433aabab871a33";
 
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();

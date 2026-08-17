@@ -38,6 +38,8 @@ const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PROVIDER-SEMANTIC-DEFINITION-TRANSCRIPT/V1\0";
 const PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PINNED-CORE-SEMANTIC-TERMINAL-TRANSCRIPT/V1\0";
+const STRUCTURAL_LOCAL_DEFINITION_COMPONENT_DOMAIN_V1: &[u8] =
+    b"FE2O3/STRUCTURAL-LOCAL-DEFINITION-COMPONENT/V1\0";
 const REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device");
 const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
@@ -92,7 +94,7 @@ pub(crate) struct ReviewedProviderSemanticDefinitionV1 {
     /// can change them after an unrelated transitive feature change.
     pub(crate) provider: CompilerProviderObservationV1,
     pub(crate) canonical_definition_path: String,
-    pub(crate) structural_local_definition_component: u64,
+    pub(crate) structural_local_definition_component: [u8; 32],
     pub(crate) cargo_metadata_build_observation: [u8; 32],
     pub(crate) source_closure_identity: [u8; 32],
     pub(crate) definition_source_identity: [u8; 32],
@@ -109,12 +111,21 @@ impl ReviewedProviderSemanticDefinitionV1 {
             || self.provider.crate_hash_observation == [0; 16]
             || canonical_role.is_empty()
             || self.canonical_definition_path.is_empty()
-            || self.structural_local_definition_component == 0
+            || self.structural_local_definition_component == [0; 32]
             || self.cargo_metadata_build_observation == [0; 32]
             || self.source_closure_identity == [0; 32]
             || self.definition_source_identity == [0; 32]
         {
             return Err("reviewed provider semantic definition is incomplete".to_owned());
+        }
+        let local_definition_path = self
+            .canonical_definition_path
+            .strip_prefix("fe2o3_device::")
+            .ok_or_else(|| "reviewed provider definition path is not canonical".to_owned())?;
+        if structural_local_definition_component_v1(local_definition_path)?
+            != self.structural_local_definition_component
+        {
+            return Err("reviewed provider structural definition component changed".to_owned());
         }
 
         let mut hasher = Sha256::new();
@@ -126,10 +137,7 @@ impl ReviewedProviderSemanticDefinitionV1 {
         hash_source_identity_field(&mut hasher, canonical_role.as_bytes());
         hash_source_identity_field(&mut hasher, self.provider.crate_name.as_bytes());
         hash_source_identity_field(&mut hasher, self.canonical_definition_path.as_bytes());
-        hash_source_identity_field(
-            &mut hasher,
-            &self.structural_local_definition_component.to_le_bytes(),
-        );
+        hash_source_identity_field(&mut hasher, &self.structural_local_definition_component);
         hash_source_identity_field(&mut hasher, &self.cargo_metadata_build_observation);
         hash_source_identity_field(&mut hasher, &self.source_closure_identity);
         hash_source_identity_field(&mut hasher, &self.definition_source_identity);
@@ -821,13 +829,13 @@ pub(crate) fn reviewed_provider_semantic_definition_v1(
     if provider.crate_name != crate_name {
         return Err("reviewed provider crate-name observation changed within the session".into());
     }
-    let canonical_definition_path = canonical_compiler_definition_path(
-        &crate_name,
-        &tcx.def_path(provider_definition)
-            .to_string_no_crate_verbose(),
-    )?;
+    let structural_local_definition_path = tcx
+        .def_path(provider_definition)
+        .to_string_no_crate_verbose();
+    let canonical_definition_path =
+        canonical_compiler_definition_path(&crate_name, &structural_local_definition_path)?;
     let structural_local_definition_component =
-        tcx.def_path_hash(provider_definition).local_hash().as_u64();
+        structural_local_definition_component_v1(&structural_local_definition_path)?;
     Ok(ReviewedProviderSemanticDefinitionV1 {
         provider,
         canonical_definition_path,
@@ -853,17 +861,31 @@ fn canonical_compiler_definition_path(
     ))
 }
 
+pub(crate) fn structural_local_definition_component_v1(
+    structural_local_path: &str,
+) -> Result<[u8; 32], String> {
+    let structural_local_path = structural_local_path.trim_start_matches("::");
+    if structural_local_path.is_empty() {
+        return Err("structural local definition path is empty".to_owned());
+    }
+    let mut hasher = Sha256::new();
+    hash_source_identity_field(&mut hasher, STRUCTURAL_LOCAL_DEFINITION_COMPONENT_DOMAIN_V1);
+    hash_source_identity_field(&mut hasher, structural_local_path.as_bytes());
+    Ok(hasher.finalize().into())
+}
+
 pub(crate) fn pinned_core_semantic_terminal_identity_v1(
     provider: &CompilerProviderObservationV1,
     canonical_role: &str,
     structural_local_definition_path: &str,
-    structural_local_definition_component: u64,
 ) -> Result<[u8; 32], String> {
+    let structural_local_definition_component =
+        structural_local_definition_component_v1(structural_local_definition_path)?;
     if provider.crate_name != "core"
         || provider.stable_crate_id == 0
         || provider.crate_hash_observation == [0; 16]
         || canonical_role.is_empty()
-        || structural_local_definition_component == 0
+        || structural_local_definition_component == [0; 32]
     {
         return Err("pinned core semantic terminal observation is incomplete".to_owned());
     }
@@ -877,10 +899,7 @@ pub(crate) fn pinned_core_semantic_terminal_identity_v1(
     hash_source_identity_field(&mut hasher, canonical_role.as_bytes());
     hash_source_identity_field(&mut hasher, provider.crate_name.as_bytes());
     hash_source_identity_field(&mut hasher, canonical_definition_path.as_bytes());
-    hash_source_identity_field(
-        &mut hasher,
-        &structural_local_definition_component.to_le_bytes(),
-    );
+    hash_source_identity_field(&mut hasher, &structural_local_definition_component);
     Ok(hasher.finalize().into())
 }
 
@@ -1161,6 +1180,7 @@ mod tests {
         ProviderSemanticDefinitionRoleV1, ReviewedProviderSemanticDefinitionV1,
         TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation, TrustedDeviceItem,
         canonical_compiler_definition_path, pinned_core_semantic_terminal_identity_v1,
+        structural_local_definition_component_v1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
 
@@ -1180,7 +1200,10 @@ mod tests {
                 crate_hash_observation: [3; 16],
             },
             canonical_definition_path: "fe2o3_device::thread::thread_idx_x".into(),
-            structural_local_definition_component: 11,
+            structural_local_definition_component: structural_local_definition_component_v1(
+                "thread::thread_idx_x",
+            )
+            .unwrap(),
             cargo_metadata_build_observation: [4; 32],
             source_closure_identity: [5; 32],
             definition_source_identity: [6; 32],
@@ -1201,10 +1224,10 @@ mod tests {
         assert!(identity(&mutation).is_err());
         mutation = definition.clone();
         mutation.canonical_definition_path = "fe2o3_device::thread::block_idx_x".into();
-        assert_ne!(identity(&mutation).unwrap(), exact);
+        assert!(identity(&mutation).is_err());
         mutation = definition.clone();
-        mutation.structural_local_definition_component ^= 1;
-        assert_ne!(identity(&mutation).unwrap(), exact);
+        mutation.structural_local_definition_component[0] ^= 1;
+        assert!(identity(&mutation).is_err());
         mutation = definition.clone();
         mutation.cargo_metadata_build_observation[0] ^= 1;
         assert_ne!(identity(&mutation).unwrap(), exact);
@@ -1247,14 +1270,13 @@ mod tests {
             stable_crate_id: 9,
             crate_hash_observation: [8; 16],
         };
-        let identity = |provider: &CompilerProviderObservationV1, role, path, local| {
-            pinned_core_semantic_terminal_identity_v1(provider, role, path, local)
+        let identity = |provider: &CompilerProviderObservationV1, role, path| {
+            pinned_core_semantic_terminal_identity_v1(provider, role, path)
         };
         let exact = identity(
             &core,
             "core::intrinsics::atomic_xadd",
             "intrinsics::atomic_xadd",
-            17,
         )
         .expect("complete core terminal identity");
 
@@ -1265,7 +1287,6 @@ mod tests {
                 &mutation,
                 "core::intrinsics::atomic_xadd",
                 "intrinsics::atomic_xadd",
-                17
             )
             .unwrap(),
             exact
@@ -1277,7 +1298,6 @@ mod tests {
                 &mutation,
                 "core::intrinsics::atomic_xadd",
                 "intrinsics::atomic_xadd",
-                17
             )
             .unwrap(),
             exact
@@ -1287,7 +1307,6 @@ mod tests {
                 &core,
                 "core::intrinsics::atomic_xsub",
                 "intrinsics::atomic_xadd",
-                17
             )
             .unwrap(),
             exact
@@ -1297,17 +1316,6 @@ mod tests {
                 &core,
                 "core::intrinsics::atomic_xadd",
                 "intrinsics::atomic_xsub",
-                17
-            )
-            .unwrap(),
-            exact
-        );
-        assert_ne!(
-            identity(
-                &core,
-                "core::intrinsics::atomic_xadd",
-                "intrinsics::atomic_xadd",
-                18
             )
             .unwrap(),
             exact
@@ -1319,7 +1327,6 @@ mod tests {
                 &mutation,
                 "core::intrinsics::atomic_xadd",
                 "intrinsics::atomic_xadd",
-                17
             )
             .is_err()
         );
