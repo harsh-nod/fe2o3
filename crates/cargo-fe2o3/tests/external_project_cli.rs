@@ -1835,10 +1835,16 @@ fn protected_release_rejects_unexpected_inherited_descriptor() {
         .expect("open hostile inherited descriptor");
     let source = inherited.as_raw_fd();
     let mut command = fixture.protected_release_command("probe");
-    // SAFETY: the retained source descriptor outlives spawn and dup3 is async-signal-safe.
+    // SAFETY: the retained source descriptor outlives spawn; fcntl, dup3, and close_range are
+    // async-signal-safe direct system calls in the post-fork child.
     unsafe {
         command.pre_exec(move || {
-            if libc::dup3(source, 42, 0) != 42 {
+            if source == 42 {
+                let flags = libc::fcntl(source, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(source, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup3(source, 42, 0) != 42 {
                 return Err(std::io::Error::last_os_error());
             }
             close_descriptor_range(3, 41)?;
