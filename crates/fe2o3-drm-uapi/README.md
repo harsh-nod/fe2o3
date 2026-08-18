@@ -6,8 +6,9 @@ syscall execution, topology policy, or resource authority.
 
 ## Admitted schema
 
-`linux-x86_64-drm-amdgpu-3.64.0-dkms-6.16.13-identity-v1` admits only the
-x86_64 LP64 generic-`_IOC` layouts checked on the MI300X development host.
+`linux-x86_64-drm-amdgpu-3.64.0-dkms-6.16.13-identity-currentness-v1` admits
+only the x86_64 LP64 generic-`_IOC` layouts checked on the MI300X development
+host.
 
 Kernel-side sources:
 
@@ -17,6 +18,10 @@ Kernel-side sources:
 - `amdgpu-dkms` package `1:6.16.13.30300400-2341068.24.04`
 - `/usr/src/amdgpu-6.16.13-2341068.24.04/include/uapi/drm/amdgpu_drm.h`
   SHA-256 `9d7ff60a211d2aa73a6c15b2da49e050cebe518fc059ee93e31d61288f7b60dc`
+- `/usr/src/amdgpu-6.16.13-2341068.24.04/amd/amdgpu/amdgpu_kms.c`
+  SHA-256 `ef2375c3f35ad4a24b560326b55676a907d6d2ba248e469a62e84e877435101c`
+- `/usr/src/amdgpu-6.16.13-2341068.24.04/amd/amdgpu/amdgpu_device.c`
+  SHA-256 `4d0edc4b714c005e911596e0e2e616be7fdbbb3526069938e4cc078eaba83673`
 - active AMDGPU DRM interface version `3.64.0`
 
 Independent userspace comparison:
@@ -57,10 +62,17 @@ cc -std=c11 -Wall -Wextra -Werror -DFE2O3_LIBDRM_ORACLE \
 - `DRM_IOCTL_AMDGPU_INFO` with `AMDGPU_INFO_ACCEL_WORKING`
 - `DRM_IOCTL_AMDGPU_INFO` with `AMDGPU_INFO_DEV_INFO`, limited to the immutable
   first 20 bytes through `DrmAmdgpuDeviceIdentityV1`
+- `DRM_IOCTL_AMDGPU_INFO` with `AMDGPU_INFO_VRAM_LOST_COUNTER`, limited to one
+  `u32` destructive-reset observation
 
 The full `drm_amdgpu_info_device` is append-only and currently 448 bytes in both
 reviewed headers. V1 requests only its five-field prefix, which the active
 driver supports through the UAPI's bounded `return_size` copy.
+
+The VRAM-loss counter is not an all-reset generation. In the reviewed driver it
+is incremented only when selected recovery paths determine that VRAM was lost,
+and its `u32` value can wrap. It is useful only as one component of a contracted
+currentness check.
 
 ## Identity boundary
 
@@ -78,5 +90,6 @@ buffer bounds, and kernel-call contracts.
 
 Other generic DRM or AMDGPU queries, fd ownership, sysfs parsing, PCI/KFD
 pairing, topology snapshots, VM acquisition, GEM allocation, mappings, queues,
-submission, synchronization, reset recovery, and all ioctl execution are outside
-this crate. A different architecture or data model requires a new named schema.
+submission, synchronization, all-reset detection, reset recovery, and all
+ioctl execution are outside this crate. A different architecture or data model
+requires a new named schema.

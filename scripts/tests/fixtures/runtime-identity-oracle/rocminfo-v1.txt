@@ -1,0 +1,139 @@
+ROCk module version 6.16.13 is loaded
+Runtime Version:         1.18
+XNACK enabled:           NO
+Agent 3
+  Name:                    gfx942
+  Uuid:                    GPU-6ced1647a296545c
+  Marketing Name:          AMD Instinct MI300X
+  Vendor Name:             AMD
+  Feature:                 KERNEL_DISPATCH
+  Profile:                 BASE_PROFILE
+  Device Type:             GPU
+  Node:                    2
+  Chip ID:                 29857(0x74a1)
+  ASIC Revision:           1(0x1)
+  BDFID:                   1280
+  Wavefront Size:          64(0x40)
+  Packet Processor uCode:: 192
+  SDMA engine uCode::      25
+      Name:                    amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+      Name:                    amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-
+Agent 4
+  Name:                    gfx942
+  Uuid:                    GPU-ab83d2ffef0d3cdf
+  Marketing Name:          AMD Instinct MI300X
+  Vendor Name:             AMD
+  Feature:                 KERNEL_DISPATCH
+  Profile:                 BASE_PROFILE
+  Device Type:             GPU
+  Node:                    3
+  Chip ID:                 29857(0x74a1)
+  ASIC Revision:           1(0x1)
+  BDFID:                   9728
+  Wavefront Size:          64(0x40)
+  Packet Processor uCode:: 192
+  SDMA engine uCode::      25
+      Name:                    amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+      Name:                    amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-
+Agent 5
+  Name:                    gfx942
+  Uuid:                    GPU-d2e26fef80cf5c33
+  Marketing Name:          AMD Instinct MI300X
+  Vendor Name:             AMD
+  Feature:                 KERNEL_DISPATCH
+  Profile:                 BASE_PROFILE
+  Device Type:             GPU
+  Node:                    4
+  Chip ID:                 29857(0x74a1)
+  ASIC Revision:           1(0x1)
+  BDFID:                   17920
+  Wavefront Size:          64(0x40)
+  Packet Processor uCode:: 192
+  SDMA engine uCode::      25
+      Name:                    amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+      Name:                    amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-
+Agent 6
+  Name:                    gfx942
+  Uuid:                    GPU-189ca857de1ef2fb
+  Marketing Name:          AMD Instinct MI300X
+  Vendor Name:             AMD
+  Feature:                 KERNEL_DISPATCH
+  Profile:                 BASE_PROFILE
+  Device Type:             GPU
+  Node:                    5
+  Chip ID:                 29857(0x74a1)
+  ASIC Revision:           1(0x1)
+  BDFID:                   25856
+  Wavefront Size:          64(0x40)
+  Packet Processor uCode:: 192
+  SDMA engine uCode::      25
+      Name:                    amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+      Name:                    amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-
+Agent 7
+  Name:                    gfx942
+  Uuid:                    GPU-54f88318ca05093d
+  Marketing Name:          AMD Instinct MI300X
+  Vendor Name:             AMD
+  Feature:                 KERNEL_DISPATCH
+  Profile:                 BASE_PROFILE
+  Device Type:             GPU
+  Node:                    6
+  Chip ID:                 29857(0x74a1)
+  ASIC Revision:           1(0x1)
+  BDFID:                   34048
+  Wavefront Size:          64(0x40)
+  Packet Processor uCode:: 192
+  SDMA engine uCode::      25
+      Name:                    amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+      Name:                    amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-
+Agent 8
+  Name:                    gfx942
+  Uuid:                    GPU-b7baafd0fb173d8e
+  Marketing Name:          AMD Instinct MI300X
+  Vendor Name:             AMD
+  Feature:                 KERNEL_DISPATCH
+  Profile:                 BASE_PROFILE
+  Device Type:             GPU
+  Node:                    7
+  Chip ID:                 29857(0x74a1)
+  ASIC Revision:           1(0x1)
+  BDFID:                   42496
+  Wavefront Size:          64(0x40)
+  Packet Processor uCode:: 192
+  SDMA engine uCode::      25
+      Name:                    amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+      Name:                    amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-
+Agent 9
+  Name:                    gfx942
+  Uuid:                    GPU-10a254ce4987e716
+  Marketing Name:          AMD Instinct MI300X
+  Vendor Name:             AMD
+  Feature:                 KERNEL_DISPATCH
+  Profile:                 BASE_PROFILE
+  Device Type:             GPU
+  Node:                    8
+  Chip ID:                 29857(0x74a1)
+  ASIC Revision:           1(0x1)
+  BDFID:                   50688
+  Wavefront Size:          64(0x40)
+  Packet Processor uCode:: 192
+  SDMA engine uCode::      25
+      Name:                    amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+      Name:                    amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-
+Agent 10
+  Name:                    gfx942
+  Uuid:                    GPU-53691ef168a0147d
+  Marketing Name:          AMD Instinct MI300X
+  Vendor Name:             AMD
+  Feature:                 KERNEL_DISPATCH
+  Profile:                 BASE_PROFILE
+  Device Type:             GPU
+  Node:                    9
+  Chip ID:                 29857(0x74a1)
+  ASIC Revision:           1(0x1)
+  BDFID:                   58624
+  Wavefront Size:          64(0x40)
+  Packet Processor uCode:: 192
+  SDMA engine uCode::      25
+      Name:                    amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+      Name:                    amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-

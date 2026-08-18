@@ -1,0 +1,58 @@
+name: R1 MI300X identity measurement
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_measurement:
+        description: Confirm this run may read KFD identity and launch the isolated HSA oracle
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-identity-oracle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  measured-identity:
+    if: ${{ inputs.confirm_measurement }}
+    name: Measure pure-Rust and HSA identity agreement
+    runs-on: [self-hosted, linux, x64, rocm, amd-gpu]
+    environment: gpu-hardware
+    timeout-minutes: 20
+    env:
+      FE2O3_ALLOW_RUNTIME_IDENTITY_ORACLE: '1'
+      CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/runtime-identity-oracle
+
+    steps:
+      - name: Check out repository without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Run isolated R1 identity measurement
+        run: scripts/ci-local.sh runtime-identity-oracle
+
+      - name: Upload non-authoritative measurement
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: r1-device-identity-measured-no-authority
+          path: target/runtime-identity-oracle/device-identity-measured-v1.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: r1-device-identity-measurement-failure
+          path: target/ci-logs/runtime-identity-oracle/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -14,13 +14,17 @@ use fe2o3_kfd_uapi::{
     KfdProcessDeviceApertures,
 };
 use fe2o3_runtime_model::{
-    ComputePartitionObservationV1, DeviceAdmissionErrorV1, DeviceAdmissionProfileIdV1,
-    DeviceAdmissionProfileV1, DeviceGenerationV1, DeviceIdentityStateV1, DeviceNodeV1,
-    DeviceObservationDomainIdV1, DrmDriverNameObservationV1, DrmFamilyObservationV1,
-    GpuTargetObservationV1, IdentityDigestV1, InventoryInputErrorV1, MemoryPartitionObservationV1,
-    ModelAdmissionStatusV1, ModelDeviceAdmissionV1, ObservationEpochV1, PciAddressV1,
-    UntrustedDeviceInventoryV1, UntrustedKfdObservationV1, UntrustedRenderObservationV1,
-    UntrustedTopologyObservationV1, XnackObservationV1,
+    AMD_PCI_VENDOR_ID_V1, AmdgpuModuleObservationV1, CharacterDeviceProjectionV1,
+    ComputePartitionObservationV1, DEVICE_PROJECTION_SCHEMA_VERSION_V1, DeviceAdmissionErrorV1,
+    DeviceAdmissionProfileIdV1, DeviceAdmissionProfileV1, DeviceGenerationV1,
+    DeviceIdentityStateV1, DeviceNodeV1, DeviceObservationDomainIdV1,
+    DeviceProjectionCommitFenceV1, DeviceProjectionErrorV1, DeviceProjectionHistoryErrorV1,
+    DeviceProjectionHistoryLinkV1, DeviceProjectionHistoryV1, DeviceProjectionRecordV1,
+    DeviceProjectionSourceV1, DrmDriverNameObservationV1, DrmFamilyObservationV1, IdentityDigestV1,
+    InclusiveRangeProjectionV1, InventoryDeviceProjectionV1, InventoryInputErrorV1,
+    KernelReleaseObservationV1, KfdProjectionV1, ModelAdmissionStatusV1, ModelDeviceAdmissionV1,
+    PciAddressV1, ProcessApertureProjectionV1, RenderProjectionV1, TopologyProjectionV1,
+    ValidatedDeviceProjectionV1, XnackObservationV1,
 };
 use rustix::fd::OwnedFd;
 use sha2::{Digest, Sha256};
@@ -45,8 +49,8 @@ pub(super) const PROCESS_APERTURE_QUERY_CAPACITY_V1: usize = MAX_PROCESS_APERTUR
 /// firmware, sysfs, or hardware.
 pub const DEVICE_ADMISSION_PROFILE_MANIFEST_V1: &str = concat!(
     "profile_id=fe2o3-linux-x86_64-mi300x-gfx942-xnack-minus-spx-nps1-r1\n",
-    "kfd_schema_sha256=2811cc71ae2d598c36adb52328d65c76a14205fcca71148fb75d98a6436ad586\n",
-    "drm_schema_sha256=2ecccaca71dcfd6b19456147ee2b132e2a331f872fb4e311d27a8b8989b58ac8\n",
+    "kfd_schema_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
+    "drm_schema_sha256=800569fe9b467b389bcfc6e5d65b23d66a0386a90fc2a669fac8c83800e76d8b\n",
     "kernel_release=6.8.0-124-generic\n",
     "amdgpu_module=6.16.13\n",
     "amdgpu_srcversion=A6F143BEC60C0AFC3263226\n",
@@ -57,18 +61,19 @@ pub const DEVICE_ADMISSION_PROFILE_MANIFEST_V1: &str = concat!(
     "firmware_observation=compute:192,sdma:25\n",
     "xnack=disabled-query,set-disabled-no-queue-barrier,disabled-query\n",
     "apertures=max:16,count-fill-count,complete-topology-inventory,page-aligned,inclusive,record-disjoint\n",
-    "commit_fence=process,retained-fds,full-topology,xnack,apertures\n",
+    "commit_fence=process,retained-fds,full-topology,xnack,apertures,smi-reset-events,vram-loss-counter\n",
+    "currentness=contracted-composite,no-all-reset-generation,no-aba-proof\n",
     "authority=model-only,no-vm,no-memory,no-queue,no-dispatch\n",
 );
 
 /// SHA-256 of [`DEVICE_ADMISSION_PROFILE_MANIFEST_V1`].
 pub const DEVICE_ADMISSION_PROFILE_SHA256_V1: &str =
-    "5ff1020acdf218ec48b714ca074dbcb80bdad6b85211e060dfff54cb5bed067d";
+    "e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de";
 
 /// Typed digest bytes of [`DEVICE_ADMISSION_PROFILE_MANIFEST_V1`].
 pub const DEVICE_ADMISSION_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x5f, 0xf1, 0x02, 0x0a, 0xcd, 0xf2, 0x18, 0xec, 0x48, 0xb7, 0x14, 0xca, 0x07, 0x4d, 0xbc, 0xb8,
-    0x0b, 0xda, 0xd6, 0xb8, 0x52, 0x11, 0xe0, 0x60, 0xdf, 0xff, 0x54, 0xcb, 0x5b, 0xed, 0x06, 0x7d,
+    0xe1, 0x2e, 0xa3, 0x3b, 0x25, 0x96, 0x66, 0xe7, 0x92, 0x86, 0x12, 0x40, 0x31, 0x09, 0x64, 0x0b,
+    0x03, 0xb0, 0xd6, 0x37, 0xb8, 0x93, 0xa2, 0xc1, 0x5b, 0x87, 0xd1, 0x7a, 0x42, 0x11, 0xc8, 0xde,
 ];
 
 const DRM_DEVICE_MAJOR: u32 = 226;
@@ -84,7 +89,10 @@ static NEXT_ADMISSION_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 enum DeviceModelHistory {
     Empty,
-    State(DeviceIdentityStateV1),
+    State {
+        identities: DeviceIdentityStateV1,
+        projections: DeviceProjectionHistoryV1,
+    },
     Poisoned,
 }
 
@@ -174,12 +182,13 @@ impl RenderDescriptorObservation {
     }
 }
 
-/// Contracted results returned by the two reviewed DRM identity requests.
+/// Contracted results returned by the reviewed DRM identity/currentness requests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DrmIdentityObservation {
     pub(super) driver_version: DrmDriverVersion,
     pub(super) acceleration_working: u32,
     pub(super) device: DrmAmdgpuDeviceIdentityV1,
+    pub(super) vram_lost_counter: u32,
 }
 
 impl DrmIdentityObservation {
@@ -193,6 +202,14 @@ impl DrmIdentityObservation {
 
     pub const fn device(self) -> DrmAmdgpuDeviceIdentityV1 {
         self.device
+    }
+
+    /// Returns the driver's wrapping VRAM-loss observation.
+    ///
+    /// This is not an all-reset generation. The admitted driver increments it
+    /// only on reset paths that report VRAM loss.
+    pub const fn vram_lost_counter(self) -> u32 {
+        self.vram_lost_counter
     }
 }
 
@@ -250,14 +267,18 @@ impl DeviceBindingObservation {
 /// correlation under named kernel/sysfs/ioctl contracts, not a proof of the
 /// kernel, firmware, hardware, or concrete-to-model refinement.
 pub struct CheckedGfx942XnackMinusDevice {
-    kfd: KfdWithAdmittedUapi,
-    render_fd: OwnedFd,
+    pub(super) kfd: KfdWithAdmittedUapi,
+    pub(super) render_fd: OwnedFd,
     render_path: PathBuf,
-    topology: HostTopologySnapshot,
-    apertures: Vec<ProcessApertureObservation>,
-    observation: DeviceBindingObservation,
+    pub(super) topology: HostTopologySnapshot,
+    pub(super) apertures: Vec<ProcessApertureObservation>,
+    pub(super) observation: DeviceBindingObservation,
     model_admission: ModelDeviceAdmissionV1,
-    process: ProcessIncarnationObservation,
+    projection: ValidatedDeviceProjectionV1,
+    projection_history: DeviceProjectionHistoryLinkV1,
+    pub(super) process: ProcessIncarnationObservation,
+    pub(super) reset_fence: crate::currentness::ResetEventFence,
+    pub(super) currentness_poisoned: bool,
     _lease: MutexGuard<'static, ()>,
 }
 
@@ -269,6 +290,8 @@ impl fmt::Debug for CheckedGfx942XnackMinusDevice {
             .field("render_path", &self.render_path)
             .field("observation", &self.observation)
             .field("process", &self.process)
+            .field("reset_fence", &self.reset_fence)
+            .field("currentness_poisoned", &self.currentness_poisoned)
             .finish_non_exhaustive()
     }
 }
@@ -288,6 +311,14 @@ impl CheckedGfx942XnackMinusDevice {
 
     pub const fn model_admission(&self) -> ModelDeviceAdmissionV1 {
         self.model_admission
+    }
+
+    pub const fn projection(&self) -> &ValidatedDeviceProjectionV1 {
+        &self.projection
+    }
+
+    pub const fn projection_history(&self) -> &DeviceProjectionHistoryLinkV1 {
+        &self.projection_history
     }
 
     pub fn render_opening_path(&self) -> &Path {
@@ -311,12 +342,13 @@ impl CheckedGfx942XnackMinusDevice {
         Ok(())
     }
 
-    /// No raw descriptor access is exposed. This method only forces both
-    /// retained descriptor fields to remain live and inspected by tests.
+    /// No raw descriptor access is exposed. This method only reports the
+    /// number of retained descriptor fields.
     pub fn descriptor_count(&self) -> usize {
         let _ = &self.render_fd;
         let _ = &self.kfd.opened.fd;
-        2
+        let _ = &self.reset_fence;
+        3
     }
 }
 
@@ -325,12 +357,21 @@ impl Drop for CheckedGfx942XnackMinusDevice {
         let Ok(mut history) = DEVICE_MODEL_HISTORY.lock() else {
             return;
         };
-        let DeviceModelHistory::State(state) = &*history else {
+        let DeviceModelHistory::State {
+            identities,
+            projections,
+        } = &*history
+        else {
             *history = DeviceModelHistory::Poisoned;
             return;
         };
-        match state.retire_device_model_only(self.model_admission) {
-            Ok(next) => *history = DeviceModelHistory::State(next),
+        match identities.retire_device_model_only(self.model_admission) {
+            Ok(next) => {
+                *history = DeviceModelHistory::State {
+                    identities: next,
+                    projections: projections.clone(),
+                };
+            }
             Err(_) => *history = DeviceModelHistory::Poisoned,
         }
     }
@@ -407,6 +448,21 @@ impl KfdWithAdmittedUapi {
         let render = crate::linux::open_and_observe_render(gpu.drm_render_minor())?;
         validate_render_profile(gpu, render_sysfs, &render)?;
 
+        // Subscribe before authority/token construction and the XNACK,
+        // aperture, and commit observations. The pre-subscription DRM result
+        // is immediately repeated after enabling the prospective stream.
+        let mut reset_fence =
+            crate::currentness::ResetEventFence::subscribe(&self.opened.fd, kfd_gpu_id)?;
+        let drm_after_subscription = crate::linux::observe_drm_identity(&render.fd)?;
+        if drm_after_subscription != render.drm {
+            return Err(DeviceBindingError::ObservableCurrentnessChanged(
+                "DRM identity or VRAM-loss counter across reset subscription",
+            ));
+        }
+        if crate::linux::observe_uapi(&self.opened.fd)? != self.uapi.reported_version() {
+            return Err(DeviceBindingError::UapiChanged);
+        }
+
         crate::linux::establish_xnack_disabled_no_queue_barrier(&self.opened.fd)?;
         let apertures_before = validate_apertures(
             crate::linux::observe_process_apertures(&self.opened.fd)?,
@@ -443,14 +499,19 @@ impl KfdWithAdmittedUapi {
             .find(|aperture| aperture.gpu_id == kfd_gpu_id)
             .copied()
             .ok_or(DeviceBindingError::SelectedApertureMissing(kfd_gpu_id))?;
-        let model_admission = model_admission(
+        // Keep this as the last fallible kernel observation. `model_admission`
+        // commits process-local history, so no fence failure may follow it.
+        reset_fence.check_clear()?;
+        let (model_admission, projection, projection_history) = model_admission(
             &topology_before,
             gpu,
             render_sysfs,
             kfd_node,
+            self.opened.node_observation(),
             render.descriptor,
             render.drm,
             process_before,
+            &apertures_before,
         )?;
 
         let observation = DeviceBindingObservation {
@@ -472,7 +533,11 @@ impl KfdWithAdmittedUapi {
             apertures: apertures_before,
             observation,
             model_admission,
+            projection,
+            projection_history,
             process: process_before,
+            reset_fence,
+            currentness_poisoned: false,
             _lease: lease,
         })
     }
@@ -615,7 +680,7 @@ fn ranges_overlap(left: InclusiveAperture, right: InclusiveAperture) -> bool {
     left.base <= right.limit && right.base <= left.limit
 }
 
-fn validate_apertures(
+pub(super) fn validate_apertures(
     raw: Vec<KfdProcessDeviceApertures>,
     topology: &HostTopologySnapshot,
 ) -> Result<Vec<ProcessApertureObservation>, DeviceBindingError> {
@@ -696,24 +761,90 @@ fn model_pci(pci: PciAddress) -> PciAddressV1 {
     }
 }
 
+fn model_profile() -> DeviceAdmissionProfileV1 {
+    DeviceAdmissionProfileV1::gfx942_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
+        DeviceAdmissionProfileIdV1::from_untrusted_digest(IdentityDigestV1::from_untrusted_bytes(
+            DEVICE_ADMISSION_PROFILE_SHA256_BYTES_V1,
+        )),
+        IdentityDigestV1::from_untrusted_bytes(KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES),
+        IdentityDigestV1::from_untrusted_bytes(DRM_UAPI_SCHEMA_MANIFEST_SHA256_BYTES),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn model_admission(
     snapshot: &HostTopologySnapshot,
     gpu: &topology::GpuTopologyNode,
     sysfs: &topology::RenderNodeObservation,
     kfd_node: DeviceNodeV1,
+    kfd_descriptor: crate::KfdNodeObservation,
     render_node: RenderDescriptorObservation,
     drm: DrmIdentityObservation,
     process: ProcessIncarnationObservation,
-) -> Result<ModelDeviceAdmissionV1, DeviceBindingError> {
+    apertures: &[ProcessApertureObservation],
+) -> Result<
+    (
+        ModelDeviceAdmissionV1,
+        ValidatedDeviceProjectionV1,
+        DeviceProjectionHistoryLinkV1,
+    ),
+    DeviceBindingError,
+> {
     let domain = model_domain(snapshot, process);
-    let epoch = ObservationEpochV1(snapshot.topology().provenance().generation());
     let pci = model_pci(sysfs.pci_address());
-    let inventory = UntrustedDeviceInventoryV1::from_untrusted_observations(
-        UntrustedKfdObservationV1 {
-            domain_id: domain,
-            epoch,
-            node: kfd_node,
+    let profile = model_profile();
+    let capacity = gpu.capacity();
+    let inventory = snapshot
+        .topology()
+        .gpu_nodes()
+        .iter()
+        .map(|inventory_gpu| {
+            let inventory_render = snapshot
+                .render_nodes()
+                .iter()
+                .find(|render| render.node_id() == inventory_gpu.node_id())
+                .ok_or(DeviceBindingError::RenderObservationMissing(
+                    inventory_gpu.node_id(),
+                ))?;
+            Ok(InventoryDeviceProjectionV1 {
+                topology_node_id: inventory_gpu.node_id(),
+                kfd_gpu_id: u32::try_from(inventory_gpu.gpu_id())
+                    .map_err(|_| DeviceBindingError::GpuIdOutOfRange(inventory_gpu.gpu_id()))?,
+                gpu_unique_id: inventory_gpu.unique_id(),
+                drm_render_minor: u32::from(inventory_gpu.drm_render_minor()),
+                pci: model_pci(inventory_render.pci_address()),
+                vendor_id: AMD_PCI_VENDOR_ID_V1,
+                device_id: inventory_gpu.pci_device_id(),
+                pci_revision_id: inventory_render.pci_revision(),
+                target: fe2o3_runtime_model::GpuTargetObservationV1::Gfx942,
+            })
+        })
+        .collect::<Result<Vec<_>, DeviceBindingError>>()?;
+    let record = DeviceProjectionRecordV1 {
+        schema_version: DEVICE_PROJECTION_SCHEMA_VERSION_V1,
+        domain_id: domain,
+        profile_id: profile.identity(),
+        source: DeviceProjectionSourceV1 {
+            boot_id: *snapshot.boot_id().as_bytes(),
+            topology_file_system_device: snapshot.topology().provenance().file_system_device(),
+            topology_inode: snapshot.topology().provenance().inode(),
+            topology_generation: snapshot.topology().provenance().generation(),
+            process_id: process.pid,
+            process_start_time_ticks: process.start_time_ticks,
+            mount_namespace_device: process.mount_namespace_device,
+            mount_namespace_inode: process.mount_namespace_inode,
+            amdgpu_module_file_system_device: snapshot.amdgpu_module().file_system_device(),
+            amdgpu_module_inode: snapshot.amdgpu_module().inode(),
+            kernel_release: KernelReleaseObservationV1::Linux6_8_0_124Generic,
+            amdgpu_module: AmdgpuModuleObservationV1::Version6_16_13SourceA6f143bec60c0afc3263226,
+        },
+        kfd: KfdProjectionV1 {
+            descriptor: CharacterDeviceProjectionV1 {
+                file_system_device: kfd_descriptor.file_system_device(),
+                inode: kfd_descriptor.inode(),
+                character_device: kfd_descriptor.character_device(),
+                node: kfd_node,
+            },
             uapi_major: KFD_IOCTL_MAJOR_VERSION,
             uapi_minor: KFD_IOCTL_MINOR_VERSION,
             schema_identity: IdentityDigestV1::from_untrusted_bytes(
@@ -721,85 +852,160 @@ fn model_admission(
             ),
             xnack: XnackObservationV1::Disabled,
         },
-        vec![UntrustedTopologyObservationV1 {
-            domain_id: domain,
-            epoch,
-            topology_node_id: gpu.node_id(),
+        topology: TopologyProjectionV1 {
+            node_id: gpu.node_id(),
             kfd_gpu_id: u32::try_from(gpu.gpu_id())
                 .map_err(|_| DeviceBindingError::GpuIdOutOfRange(gpu.gpu_id()))?,
             gpu_unique_id: gpu.unique_id(),
             drm_render_minor: u32::from(gpu.drm_render_minor()),
             pci,
-            vendor_id: 0x1002,
+            vendor_id: AMD_PCI_VENDOR_ID_V1,
             device_id: gpu.pci_device_id(),
-            target: GpuTargetObservationV1::Gfx942,
+            target: fe2o3_runtime_model::GpuTargetObservationV1::Gfx942,
             compute_partition: ComputePartitionObservationV1::Spx,
-            memory_partition: MemoryPartitionObservationV1::Nps1,
-        }],
-        vec![UntrustedRenderObservationV1 {
-            domain_id: domain,
-            epoch,
-            node: DeviceNodeV1 {
-                major: render_node.major,
-                minor: render_node.minor,
+            memory_partition: fe2o3_runtime_model::MemoryPartitionObservationV1::Nps1,
+            firmware_version: gpu.fw_version(),
+            sdma_firmware_version: gpu.sdma_fw_version(),
+            wavefront_size: capacity.wavefront_size(),
+            simd_count: capacity.simd_count(),
+            xcc_count: capacity.xcc_count(),
+        },
+        inventory,
+        render: RenderProjectionV1 {
+            descriptor: CharacterDeviceProjectionV1 {
+                file_system_device: render_node.file_system_device,
+                inode: render_node.inode,
+                character_device: render_node.character_device,
+                node: DeviceNodeV1 {
+                    major: render_node.major,
+                    minor: render_node.minor,
+                },
             },
             gpu_unique_id: sysfs.unique_id(),
             pci,
-            vendor_id: 0x1002,
+            vendor_id: AMD_PCI_VENDOR_ID_V1,
             device_id: u16::try_from(drm.device.device_id)
                 .map_err(|_| DeviceBindingError::DrmDeviceMismatch(drm.device))?,
             pci_revision_id: u8::try_from(drm.device.pci_rev)
                 .map_err(|_| DeviceBindingError::DrmDeviceMismatch(drm.device))?,
-            drm_schema_identity: IdentityDigestV1::from_untrusted_bytes(
+            schema_identity: IdentityDigestV1::from_untrusted_bytes(
                 DRM_UAPI_SCHEMA_MANIFEST_SHA256_BYTES,
             ),
             driver_name: DrmDriverNameObservationV1::Amdgpu,
-            drm_major: u32::try_from(drm.driver_version.major)
+            driver_major: u32::try_from(drm.driver_version.major)
                 .map_err(|_| DeviceBindingError::UnsupportedDrmVersion(drm.driver_version))?,
-            drm_minor: u32::try_from(drm.driver_version.minor)
+            driver_minor: u32::try_from(drm.driver_version.minor)
                 .map_err(|_| DeviceBindingError::UnsupportedDrmVersion(drm.driver_version))?,
-            drm_patch: u32::try_from(drm.driver_version.patch)
+            driver_patch: u32::try_from(drm.driver_version.patch)
                 .map_err(|_| DeviceBindingError::UnsupportedDrmVersion(drm.driver_version))?,
             acceleration_working: drm.acceleration_working == 1,
             family: DrmFamilyObservationV1::AmdgpuFamilyAi,
-        }],
-    )?;
-    let profile = DeviceAdmissionProfileV1::gfx942_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
-        DeviceAdmissionProfileIdV1::from_untrusted_digest(IdentityDigestV1::from_untrusted_bytes(
-            DEVICE_ADMISSION_PROFILE_SHA256_BYTES_V1,
-        )),
-        IdentityDigestV1::from_untrusted_bytes(KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES),
-        IdentityDigestV1::from_untrusted_bytes(DRM_UAPI_SCHEMA_MANIFEST_SHA256_BYTES),
-    );
-    let correlation = inventory.correlate_model_only(&profile)?;
+            family_id: drm.device.family,
+            chip_revision: drm.device.chip_rev,
+            external_revision: drm.device.external_rev,
+            vram_lost_counter: drm.vram_lost_counter,
+        },
+        apertures: apertures
+            .iter()
+            .map(|aperture| ProcessApertureProjectionV1 {
+                kfd_gpu_id: aperture.gpu_id,
+                lds: InclusiveRangeProjectionV1 {
+                    base: aperture.lds.base,
+                    limit: aperture.lds.limit,
+                },
+                scratch: InclusiveRangeProjectionV1 {
+                    base: aperture.scratch.base,
+                    limit: aperture.scratch.limit,
+                },
+                gpuvm: InclusiveRangeProjectionV1 {
+                    base: aperture.gpuvm.base,
+                    limit: aperture.gpuvm.limit,
+                },
+            })
+            .collect(),
+        commit_fence: DeviceProjectionCommitFenceV1 {
+            process_reobserved_equal: true,
+            descriptors_revalidated: true,
+            topology_reobserved_equal: true,
+            xnack_reobserved_disabled: true,
+            apertures_reobserved_equal: true,
+            reset_subscription_established: true,
+            reset_event_mask_enabled: true,
+            reset_event_descriptor_cloexec: true,
+            reset_fence_initially_clear: true,
+            drm_reobserved_after_subscription_equal: true,
+            reset_fence_clear_before_commit: true,
+        },
+    };
+    let projection =
+        fe2o3_runtime_model::validate_device_projection_model_only_v1(record, &profile)?;
+    let correlation = projection.correlation();
     let mut history = DEVICE_MODEL_HISTORY
         .lock()
         .map_err(|_| DeviceBindingError::ModelHistoryPoisoned)?;
-    let state = match &*history {
-        DeviceModelHistory::Empty => DeviceIdentityStateV1::new(domain),
-        DeviceModelHistory::Poisoned => return Err(DeviceBindingError::ModelHistoryPoisoned),
-        DeviceModelHistory::State(state) if state.domain_id() == domain => state.clone(),
-        DeviceModelHistory::State(state)
-            if state
+    let (identities, projections) = model_histories_for_domain(&history, domain)?;
+    let generation = DeviceGenerationV1(next_admission_generation()?);
+    // Check the projection journal first so its reviewed process-lifetime
+    // capacity has the stable public `ProjectionHistoryExhausted` failure.
+    let (next_projections, projection_history) = projections
+        .append_model_only(projection.clone(), generation)
+        .map_err(map_projection_history_error)?;
+    let (next_identities, admission) = identities
+        .register_device_model_only(correlation, generation)
+        .map_err(DeviceBindingError::ModelAdmission)?;
+    if admission.model_key() != projection_history.current() {
+        return Err(DeviceBindingError::ProjectionLinkMismatch);
+    }
+    debug_assert!(next_identities.validate_global_invariants().is_ok());
+    debug_assert!(next_projections.validate_global_invariants().is_ok());
+    *history = DeviceModelHistory::State {
+        identities: next_identities,
+        projections: next_projections,
+    };
+    Ok((admission, projection, projection_history))
+}
+
+fn model_histories_for_domain(
+    history: &DeviceModelHistory,
+    domain: DeviceObservationDomainIdV1,
+) -> Result<(DeviceIdentityStateV1, DeviceProjectionHistoryV1), DeviceBindingError> {
+    match history {
+        DeviceModelHistory::Empty => Ok((
+            DeviceIdentityStateV1::new(domain),
+            DeviceProjectionHistoryV1::new(domain),
+        )),
+        DeviceModelHistory::Poisoned => Err(DeviceBindingError::ModelHistoryPoisoned),
+        DeviceModelHistory::State {
+            identities,
+            projections,
+        } if identities.domain_id() == domain && projections.domain_id() == domain => {
+            Ok((identities.clone(), projections.clone()))
+        }
+        DeviceModelHistory::State { identities, .. }
+            if identities
                 .devices()
                 .iter()
                 .any(|record| record.status == ModelAdmissionStatusV1::Active)
-                || state
+                || identities
                     .vms()
                     .iter()
                     .any(|record| record.status == ModelAdmissionStatusV1::Active) =>
         {
-            return Err(DeviceBindingError::ModelDomainChangedWithActiveHistory);
+            Err(DeviceBindingError::ModelDomainChangedWithActiveHistory)
         }
-        DeviceModelHistory::State(_) => DeviceIdentityStateV1::new(domain),
-    };
-    let generation = DeviceGenerationV1(next_admission_generation()?);
-    let (next, admission) = state
-        .register_device_model_only(correlation, generation)
-        .map_err(DeviceBindingError::ModelAdmission)?;
-    debug_assert!(next.validate_global_invariants().is_ok());
-    *history = DeviceModelHistory::State(next);
-    Ok(admission)
+        DeviceModelHistory::State { .. } => {
+            Err(DeviceBindingError::ModelDomainChangedWithRetainedHistory)
+        }
+    }
+}
+
+fn map_projection_history_error(error: DeviceProjectionHistoryErrorV1) -> DeviceBindingError {
+    match error {
+        DeviceProjectionHistoryErrorV1::CapacityExceeded => {
+            DeviceBindingError::ProjectionHistoryExhausted
+        }
+        error => DeviceBindingError::ProjectionHistory(error),
+    }
 }
 
 fn next_admission_generation() -> Result<u64, DeviceBindingError> {
@@ -855,6 +1061,11 @@ pub enum DeviceBindingError {
     UnsupportedXnackMode,
     XnackChanged,
     UapiChanged,
+    InvalidResetEventDescriptor(u32),
+    ResetEventFenceProtocol,
+    WholeGpuResetObserved,
+    ObservableCurrentnessChanged(&'static str),
+    CurrentnessFencePoisoned,
     InvalidApertureCount(usize),
     InvalidApertureRecord(u32),
     InvalidAperture {
@@ -870,9 +1081,14 @@ pub enum DeviceBindingError {
     GenerationExhausted,
     ModelHistoryPoisoned,
     ModelDomainChangedWithActiveHistory,
+    ModelDomainChangedWithRetainedHistory,
     ModelInventory(InventoryInputErrorV1),
     ModelCorrelation(fe2o3_runtime_model::DeviceCorrelationErrorV1),
     ModelAdmission(DeviceAdmissionErrorV1),
+    Projection(DeviceProjectionErrorV1),
+    ProjectionHistory(DeviceProjectionHistoryErrorV1),
+    ProjectionHistoryExhausted,
+    ProjectionLinkMismatch,
 }
 
 impl From<KfdAdapterError> for DeviceBindingError {
@@ -896,6 +1112,12 @@ impl From<InventoryInputErrorV1> for DeviceBindingError {
 impl From<fe2o3_runtime_model::DeviceCorrelationErrorV1> for DeviceBindingError {
     fn from(error: fe2o3_runtime_model::DeviceCorrelationErrorV1) -> Self {
         Self::ModelCorrelation(error)
+    }
+}
+
+impl From<DeviceProjectionErrorV1> for DeviceBindingError {
+    fn from(error: DeviceProjectionErrorV1) -> Self {
+        Self::Projection(error)
     }
 }
 
@@ -998,6 +1220,22 @@ impl fmt::Display for DeviceBindingError {
             Self::UapiChanged => {
                 formatter.write_str("KFD UAPI observation changed during device admission")
             }
+            Self::InvalidResetEventDescriptor(value) => write!(
+                formatter,
+                "KFD SMI_EVENTS returned invalid descriptor value {value}"
+            ),
+            Self::ResetEventFenceProtocol => formatter
+                .write_str("KFD reset-event fence violated its admitted descriptor protocol"),
+            Self::WholeGpuResetObserved => {
+                formatter.write_str("KFD reported a whole-GPU reset after event-fence subscription")
+            }
+            Self::ObservableCurrentnessChanged(observation) => write!(
+                formatter,
+                "device currentness observation changed: {observation}"
+            ),
+            Self::CurrentnessFencePoisoned => {
+                formatter.write_str("the device currentness fence is permanently poisoned")
+            }
             Self::InvalidApertureCount(value) => {
                 write!(formatter, "invalid process aperture count {value}")
             }
@@ -1034,6 +1272,9 @@ impl fmt::Display for DeviceBindingError {
             Self::ModelDomainChangedWithActiveHistory => formatter.write_str(
                 "the observation domain changed while model history retained active authority",
             ),
+            Self::ModelDomainChangedWithRetainedHistory => formatter.write_str(
+                "the observation domain changed after process-lifetime model history was retained",
+            ),
             Self::ModelInventory(error) => write!(
                 formatter,
                 "model inventory rejected checked projections: {error:?}"
@@ -1045,6 +1286,17 @@ impl fmt::Display for DeviceBindingError {
             Self::ModelAdmission(error) => {
                 write!(formatter, "model generation admission failed: {error:?}")
             }
+            Self::Projection(error) => {
+                write!(formatter, "canonical device projection rejected: {error:?}")
+            }
+            Self::ProjectionHistory(error) => {
+                write!(formatter, "device projection history rejected: {error:?}")
+            }
+            Self::ProjectionHistoryExhausted => formatter.write_str(
+                "the reviewed process-lifetime device projection history bound is exhausted",
+            ),
+            Self::ProjectionLinkMismatch => formatter
+                .write_str("device identity and projection histories produced different links"),
         }
     }
 }
@@ -1099,6 +1351,188 @@ mod tests {
             validate_pci_revision(1),
             Err(DeviceBindingError::UnsupportedPciRevision(1))
         ));
+    }
+
+    #[test]
+    fn projection_history_capacity_maps_to_named_process_lifetime_error() {
+        assert!(matches!(
+            map_projection_history_error(DeviceProjectionHistoryErrorV1::CapacityExceeded),
+            DeviceBindingError::ProjectionHistoryExhausted
+        ));
+    }
+
+    fn retired_model_history(domain: DeviceObservationDomainIdV1) -> DeviceModelHistory {
+        let profile = model_profile();
+        let pci = PciAddressV1 {
+            domain: 0,
+            bus: 5,
+            device: 0,
+            function: 0,
+        };
+        let projection = fe2o3_runtime_model::validate_device_projection_model_only_v1(
+            DeviceProjectionRecordV1 {
+                schema_version: DEVICE_PROJECTION_SCHEMA_VERSION_V1,
+                domain_id: domain,
+                profile_id: profile.identity(),
+                source: DeviceProjectionSourceV1 {
+                    boot_id: [1; 16],
+                    topology_file_system_device: 2,
+                    topology_inode: 3,
+                    topology_generation: 4,
+                    process_id: 5,
+                    process_start_time_ticks: 6,
+                    mount_namespace_device: 7,
+                    mount_namespace_inode: 8,
+                    amdgpu_module_file_system_device: 9,
+                    amdgpu_module_inode: 10,
+                    kernel_release: KernelReleaseObservationV1::Linux6_8_0_124Generic,
+                    amdgpu_module:
+                        AmdgpuModuleObservationV1::Version6_16_13SourceA6f143bec60c0afc3263226,
+                },
+                kfd: KfdProjectionV1 {
+                    descriptor: CharacterDeviceProjectionV1 {
+                        file_system_device: 11,
+                        inode: 12,
+                        character_device: 13,
+                        node: DeviceNodeV1 {
+                            major: 511,
+                            minor: fe2o3_runtime_model::KFD_DEVICE_MINOR_V1,
+                        },
+                    },
+                    uapi_major: fe2o3_runtime_model::KFD_UAPI_MAJOR_V1,
+                    uapi_minor: fe2o3_runtime_model::KFD_UAPI_MINOR_V1,
+                    schema_identity: profile.kfd_schema_identity(),
+                    xnack: XnackObservationV1::Disabled,
+                },
+                topology: TopologyProjectionV1 {
+                    node_id: 2,
+                    kfd_gpu_id: 100,
+                    gpu_unique_id: 200,
+                    drm_render_minor: fe2o3_runtime_model::DRM_RENDER_MIN_MINOR_V1,
+                    pci,
+                    vendor_id: AMD_PCI_VENDOR_ID_V1,
+                    device_id: fe2o3_runtime_model::MI300X_PCI_DEVICE_ID_V1,
+                    target: fe2o3_runtime_model::GpuTargetObservationV1::Gfx942,
+                    compute_partition: ComputePartitionObservationV1::Spx,
+                    memory_partition: fe2o3_runtime_model::MemoryPartitionObservationV1::Nps1,
+                    firmware_version: fe2o3_runtime_model::MI300X_KFD_FIRMWARE_VERSION_V1,
+                    sdma_firmware_version: fe2o3_runtime_model::MI300X_SDMA_FIRMWARE_VERSION_V1,
+                    wavefront_size: fe2o3_runtime_model::MI300X_WAVEFRONT_SIZE_V1,
+                    simd_count: fe2o3_runtime_model::MI300X_SPX_SIMD_COUNT_V1,
+                    xcc_count: fe2o3_runtime_model::MI300X_SPX_XCC_COUNT_V1,
+                },
+                inventory: vec![InventoryDeviceProjectionV1 {
+                    topology_node_id: 2,
+                    kfd_gpu_id: 100,
+                    gpu_unique_id: 200,
+                    drm_render_minor: fe2o3_runtime_model::DRM_RENDER_MIN_MINOR_V1,
+                    pci,
+                    vendor_id: AMD_PCI_VENDOR_ID_V1,
+                    device_id: fe2o3_runtime_model::MI300X_PCI_DEVICE_ID_V1,
+                    pci_revision_id: fe2o3_runtime_model::MI300X_PCI_REVISION_V1,
+                    target: fe2o3_runtime_model::GpuTargetObservationV1::Gfx942,
+                }],
+                render: RenderProjectionV1 {
+                    descriptor: CharacterDeviceProjectionV1 {
+                        file_system_device: 14,
+                        inode: 15,
+                        character_device: 16,
+                        node: DeviceNodeV1 {
+                            major: fe2o3_runtime_model::DRM_DEVICE_MAJOR_V1,
+                            minor: fe2o3_runtime_model::DRM_RENDER_MIN_MINOR_V1,
+                        },
+                    },
+                    gpu_unique_id: 200,
+                    pci,
+                    vendor_id: AMD_PCI_VENDOR_ID_V1,
+                    device_id: fe2o3_runtime_model::MI300X_PCI_DEVICE_ID_V1,
+                    pci_revision_id: fe2o3_runtime_model::MI300X_PCI_REVISION_V1,
+                    schema_identity: profile.drm_schema_identity(),
+                    driver_name: DrmDriverNameObservationV1::Amdgpu,
+                    driver_major: fe2o3_runtime_model::DRM_DRIVER_MAJOR_V1,
+                    driver_minor: fe2o3_runtime_model::DRM_DRIVER_MINOR_V1,
+                    driver_patch: fe2o3_runtime_model::DRM_DRIVER_PATCH_V1,
+                    acceleration_working: true,
+                    family: DrmFamilyObservationV1::AmdgpuFamilyAi,
+                    family_id: fe2o3_runtime_model::AMDGPU_FAMILY_AI_V1,
+                    chip_revision: fe2o3_runtime_model::MI300X_CHIP_REVISION_V1,
+                    external_revision: fe2o3_runtime_model::MI300X_EXTERNAL_REVISION_V1,
+                    vram_lost_counter: 17,
+                },
+                apertures: vec![ProcessApertureProjectionV1 {
+                    kfd_gpu_id: 100,
+                    lds: InclusiveRangeProjectionV1 {
+                        base: 0x1000,
+                        limit: 0x1fff,
+                    },
+                    scratch: InclusiveRangeProjectionV1 {
+                        base: 0x3000,
+                        limit: 0x3fff,
+                    },
+                    gpuvm: InclusiveRangeProjectionV1 {
+                        base: 0x10_0000,
+                        limit: 0x1f_ffff,
+                    },
+                }],
+                commit_fence: DeviceProjectionCommitFenceV1 {
+                    process_reobserved_equal: true,
+                    descriptors_revalidated: true,
+                    topology_reobserved_equal: true,
+                    xnack_reobserved_disabled: true,
+                    apertures_reobserved_equal: true,
+                    reset_subscription_established: true,
+                    reset_event_mask_enabled: true,
+                    reset_event_descriptor_cloexec: true,
+                    reset_fence_initially_clear: true,
+                    drm_reobserved_after_subscription_equal: true,
+                    reset_fence_clear_before_commit: true,
+                },
+            },
+            &profile,
+        )
+        .unwrap();
+        let generation = DeviceGenerationV1(1);
+        let (identities, admission) = DeviceIdentityStateV1::new(domain)
+            .register_device_model_only(projection.correlation(), generation)
+            .unwrap();
+        let identities = identities.retire_device_model_only(admission).unwrap();
+        let (projections, _) = DeviceProjectionHistoryV1::new(domain)
+            .append_model_only(projection, generation)
+            .unwrap();
+        DeviceModelHistory::State {
+            identities,
+            projections,
+        }
+    }
+
+    #[test]
+    fn inactive_retained_history_rejects_domain_change_without_replacement() {
+        let old_domain = DeviceObservationDomainIdV1::from_untrusted_digest(
+            IdentityDigestV1::from_untrusted_bytes([41; 32]),
+        );
+        let new_domain = DeviceObservationDomainIdV1::from_untrusted_digest(
+            IdentityDigestV1::from_untrusted_bytes([42; 32]),
+        );
+        let state = retired_model_history(old_domain);
+        assert!(matches!(
+            model_histories_for_domain(&state, new_domain),
+            Err(DeviceBindingError::ModelDomainChangedWithRetainedHistory)
+        ));
+        let DeviceModelHistory::State {
+            identities,
+            projections,
+        } = state
+        else {
+            panic!("test state changed variant")
+        };
+        assert_eq!(identities.domain_id(), old_domain);
+        assert_eq!(identities.devices().len(), 1);
+        assert_eq!(
+            identities.devices()[0].status,
+            ModelAdmissionStatusV1::Retired
+        );
+        assert_eq!(projections.domain_id(), old_domain);
+        assert_eq!(projections.entries().len(), 1);
     }
 
     #[test]

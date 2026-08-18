@@ -48,5 +48,18 @@ int main(void) {
            _Alignof(struct kfd_ioctl_set_xnack_mode_args),
            offsetof(struct kfd_ioctl_set_xnack_mode_args, xnack_enabled),
            (unsigned long)AMDKFD_IOC_SET_XNACK_MODE);
+
+    printf("smi_events:size=%zu align=%zu gpu_id=%zu anon_fd=%zu request=%#lx "
+           "pre=%u post=%u mask=%#llx msg_size=%u\n",
+           sizeof(struct kfd_ioctl_smi_events_args),
+           _Alignof(struct kfd_ioctl_smi_events_args),
+           offsetof(struct kfd_ioctl_smi_events_args, gpuid),
+           offsetof(struct kfd_ioctl_smi_events_args, anon_fd),
+           (unsigned long)AMDKFD_IOC_SMI_EVENTS,
+           KFD_SMI_EVENT_GPU_PRE_RESET, KFD_SMI_EVENT_GPU_POST_RESET,
+           (unsigned long long)(
+               KFD_SMI_EVENT_MASK_FROM_INDEX(KFD_SMI_EVENT_GPU_PRE_RESET) |
+               KFD_SMI_EVENT_MASK_FROM_INDEX(KFD_SMI_EVENT_GPU_POST_RESET)),
+           KFD_SMI_EVENT_MSG_SIZE);
     return 0;
 }

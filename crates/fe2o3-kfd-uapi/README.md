@@ -24,8 +24,19 @@ The committed slice contains only:
   `AMDKFD_IOC_GET_PROCESS_APERTURES_NEW`
 - `kfd_ioctl_acquire_vm_args` and `AMDKFD_IOC_ACQUIRE_VM`
 - `kfd_ioctl_set_xnack_mode_args` and `AMDKFD_IOC_SET_XNACK_MODE`
+- `kfd_ioctl_smi_events_args`, `AMDKFD_IOC_SMI_EVENTS`, and only the whole-GPU
+  pre/post-reset event indices and mask
 - the generic Linux `_IOC` encoding needed by those requests
 - exact-version admission evidence
+
+The SMI event contract is pinned to these active implementation sources:
+
+- `amd/amdkfd/kfd_smi_events.c` SHA-256
+  `2d786562fe1e97b8257841b755106c8bce47658a2aa3b439ce4e0178323004bd`
+- `amd/amdkfd/kfd_device.c` SHA-256
+  `ccf20227c5cdd5b258758f50f61bbc1008a09ea776c101f035f83963e7d23037`
+- `amd/amdkfd/kfd_chardev.c` SHA-256
+  `f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba`
 
 Compile-time assertions and `tests/kfd_uapi_1_18.rs` pin every struct size,
 alignment, field offset, and request number to independent golden values.
@@ -60,6 +71,8 @@ separate reviewed schema.
 
 Topology parsing, stable device identity, aperture buffer bounds and snapshot
 policy, VM ownership, memory allocation and mapping, queue creation,
-event/signal handling, code-object loading, XNACK mode policy, and syscall
-execution remain outside this crate. In particular, this crate is not a safe
-wrapper around `/dev/kfd`; it is the bounded data-only input to that wrapper.
+general event/signal handling, code-object loading, XNACK mode policy, and
+syscall execution remain outside this crate. The reset constants describe a
+prospective whole-GPU event stream, not an all-reset generation. In particular,
+this crate is not a safe wrapper around `/dev/kfd`; it is the bounded data-only
+input to that wrapper.
