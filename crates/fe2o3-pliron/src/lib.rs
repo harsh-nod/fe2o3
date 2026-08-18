@@ -5,6 +5,7 @@ use std::{
     collections::BTreeSet,
     error::Error,
     fmt,
+    hash::{Hash, Hasher},
     num::NonZeroU64,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::atomic::{AtomicU64, Ordering},
@@ -41,8 +42,20 @@ static NEXT_CONTEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ContextIdentity(NonZeroU64);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 struct ContextIdentityAnchor(ContextIdentity);
+
+impl PartialEq for ContextIdentityAnchor {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for ContextIdentityAnchor {}
+
+impl Hash for ContextIdentityAnchor {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
 
 #[derive(Debug)]
 struct ContextIdentityMarker {
@@ -88,8 +101,9 @@ pub fn ensure_context_identity(
         return Ok(identity);
     }
 
-    let identity = ContextIdentity(next_context_identity()?);
-    let anchor = uniqued_any::save(context, ContextIdentityAnchor(identity));
+    let proposed_identity = ContextIdentity(next_context_identity()?);
+    let anchor = uniqued_any::save(context, ContextIdentityAnchor(proposed_identity));
+    let identity = uniqued_any::get(context, anchor).0;
     let marker = context
         .aux_data
         .insert(Box::new(ContextIdentityMarker { anchor }));

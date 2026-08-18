@@ -68,6 +68,25 @@ fn moving_a_marker_cannot_replace_a_foreign_context_identity() {
 }
 
 #[test]
+fn rebuilding_a_deleted_locator_preserves_the_original_private_identity() {
+    let mut victim = Context::new();
+    let original = ensure_context_identity(&mut victim).expect("original identity");
+    drop(take_marker(&mut victim));
+
+    let rebuilt = ensure_context_identity(&mut victim).expect("rebuilt locator");
+    assert_eq!(rebuilt, original);
+
+    let mut donor = Context::new();
+    let donor_identity = ensure_context_identity(&mut donor).expect("donor identity");
+    let donor_marker = take_marker(&mut donor);
+    drop(take_marker(&mut victim));
+    install_marker(&mut victim, donor_marker);
+
+    assert_ne!(donor_identity, original);
+    assert_eq!(require_context_identity(&victim), Ok(original));
+}
+
+#[test]
 fn foreign_and_dangling_locator_values_are_rejected() {
     let mut collision = Context::new();
     let foreign = collision.aux_data.insert(Box::new(9_u32));
