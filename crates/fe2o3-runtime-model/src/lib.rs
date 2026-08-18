@@ -15,11 +15,15 @@
 
 extern crate alloc;
 
+mod device_identity;
 mod identity;
 mod model;
 
+pub use device_identity::*;
 pub use identity::*;
 pub use model::*;
 
+#[cfg(test)]
+mod device_identity_tests;
 #[cfg(test)]
 mod tests;

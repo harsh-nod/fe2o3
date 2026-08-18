@@ -55,6 +55,14 @@ digest_identity!(
     /// Identity of a validated queue construction plan.
     QueuePlanIdV1
 );
+digest_identity!(
+    /// Identity of one model-only device-observation domain.
+    DeviceObservationDomainIdV1
+);
+digest_identity!(
+    /// Identity of the reviewed device-correlation profile.
+    DeviceAdmissionProfileIdV1
+);
 
 macro_rules! numeric_identity {
     ($(#[$meta:meta])* $name:ident) => {
@@ -70,7 +78,10 @@ numeric_identity!(
     PhysicalDeviceIdV1
 );
 numeric_identity!(
-    /// Monotonic incarnation of one physical GPU.
+    /// Software-selected monotonic admission incarnation of one physical GPU.
+    ///
+    /// This value prevents model token reuse. A topology observation does not
+    /// establish that a GPU reset or hardware reinitialization occurred.
     DeviceGenerationV1
 );
 numeric_identity!(

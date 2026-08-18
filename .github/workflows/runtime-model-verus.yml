@@ -1,0 +1,51 @@
+name: Runtime model authenticated Verus
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/runtime-model-verus.yml"
+      - "crates/fe2o3-runtime-model/**"
+      - "examples/row_softmax_v1/verify-verus-closure.sh"
+      - "examples/wave64_collectives_v1/check-proof-source.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/runtime-model-verus.yml"
+      - "crates/fe2o3-runtime-model/**"
+      - "examples/row_softmax_v1/verify-verus-closure.sh"
+      - "examples/wave64_collectives_v1/check-proof-source.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-model-verus-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  authenticated-runtime-model:
+    name: Device identity and lifecycle proofs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install pinned Verus closure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          readonly version="0.2026.08.09.92f466f"
+          readonly archive="${RUNNER_TEMP}/verus-${version}-x86-linux.zip"
+          readonly install_dir="${RUNNER_TEMP}/pinned-verus"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/verus-lang/verus/releases/download/release/${version}/verus-${version}-x86-linux.zip"
+          mkdir -- "${install_dir}"
+          unzip -q "${archive}" -d "${install_dir}"
+          printf 'VERUS=%s\n' "${install_dir}/verus-x86-linux/verus" >> "${GITHUB_ENV}"
+
+      - name: Verify authenticated runtime model
+        run: crates/fe2o3-runtime-model/verus/verify-verus.sh

@@ -19,7 +19,11 @@ driver source installed on the MI300X development host:
 The committed slice contains only:
 
 - `kfd_ioctl_get_version_args` and `AMDKFD_IOC_GET_VERSION`
+- `kfd_process_device_apertures`,
+  `kfd_ioctl_get_process_apertures_new_args`, and
+  `AMDKFD_IOC_GET_PROCESS_APERTURES_NEW`
 - `kfd_ioctl_acquire_vm_args` and `AMDKFD_IOC_ACQUIRE_VM`
+- `kfd_ioctl_set_xnack_mode_args` and `AMDKFD_IOC_SET_XNACK_MODE`
 - the generic Linux `_IOC` encoding needed by those requests
 - exact-version admission evidence
 
@@ -29,6 +33,16 @@ alignment, field offset, and request number to independent golden values.
 package provenance, and target encoding; its SHA-256 is recomputed in tests.
 This manifest identifies reviewed userspace content. Running kernel, module,
 boot, and device identities remain separate contracted observations.
+
+The independent C oracle is preserved at
+`tests/oracles/kfd_uapi_1_18.c`. On the reviewed host it is built directly
+against the active header with:
+
+```text
+cc -std=c11 -Wall -Wextra -Werror \
+  -I/usr/src/amdgpu-6.16.13-2341068.24.04/include/uapi \
+  tests/oracles/kfd_uapi_1_18.c -o /tmp/kfd-uapi-oracle
+```
 
 ## Fail-closed boundary
 
@@ -44,7 +58,8 @@ separate reviewed schema.
 
 ## Not yet supported
 
-Topology parsing and stable device identity, VM ownership, memory allocation and
-mapping, queue creation, event/signal handling, code-object loading, and syscall
+Topology parsing, stable device identity, aperture buffer bounds and snapshot
+policy, VM ownership, memory allocation and mapping, queue creation,
+event/signal handling, code-object loading, XNACK mode policy, and syscall
 execution remain outside this crate. In particular, this crate is not a safe
 wrapper around `/dev/kfd`; it is the bounded data-only input to that wrapper.
