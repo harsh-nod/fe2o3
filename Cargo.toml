@@ -71,6 +71,7 @@ fe2o3-kernel-descriptor = { path = "crates/fe2o3-kernel-descriptor" }
 fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis" }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }
+fe2o3-pliron = { path = "crates/fe2o3-pliron" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
 fe2o3-proof-contracts = { path = "crates/fe2o3-proof-contracts" }
 fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
@@ -85,6 +86,7 @@ rustix = { version = "1.1.4", features = ["fs", "net"] }
 
 proc-macro2 = "1"
 proc-macro-crate = "3"
+pliron = { git = "https://github.com/pliron-org/pliron.git", rev = "2610651306ea3ba670f68d5d8b1e1159bcd521ed" }
 quote = "1"
 sha2 = { version = "0.11.0", default-features = false }
 syn = { version = "2", features = ["full"] }
