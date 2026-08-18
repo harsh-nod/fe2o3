@@ -314,6 +314,8 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 run_generic_core
 for core_step in \
+  workspace-dependency-policy-tests \
+  workspace-dependency-policy \
   example-manifest \
   bounded-moe-docs \
   rustc-codegen-shard-policy \
@@ -345,6 +347,14 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+assert_equals \
+  "python3 ${WORKSPACE_DEPENDENCY_POLICY_TESTS}" \
+  "$(step_command workspace-dependency-policy-tests)" \
+  'generic core did not run workspace dependency policy tests'
+assert_equals \
+  "python3 ${WORKSPACE_DEPENDENCY_POLICY_CHECKER} --policy ${WORKSPACE_DEPENDENCY_POLICY}" \
+  "$(step_command workspace-dependency-policy)" \
+  'generic core did not enforce the workspace dependency policy'
 for core_step in "${STEP_NAMES[@]}"; do
   if [[ "${core_step}" == rustc-codegen-test-* ]]; then
     printf 'generic core unexpectedly ran integration target: %s\n' "${core_step}" >&2

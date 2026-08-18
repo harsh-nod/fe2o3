@@ -10,6 +10,9 @@ readonly REPO_ROOT
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
+readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
+readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
+readonly WORKSPACE_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/workspace_dependency_policy.py"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 
@@ -45,6 +48,7 @@ Usage: scripts/ci-local.sh <command>
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
   generic-core    Run generic validation except codegen integration shards
+  workspace-policy  Validate workspace ownership and dependency directions
   shard-policy    Validate the codegen integration shard assignment
   rustc-codegen-shard <id>  Run one codegen integration shard
   format          Check Rust formatting
@@ -203,6 +207,14 @@ run_shard_policy() {
     python3 "${RUSTC_CODEGEN_SHARD_POLICY}" check
 }
 
+run_workspace_dependency_policy() {
+  run_step workspace-dependency-policy-tests \
+    python3 "${WORKSPACE_DEPENDENCY_POLICY_TESTS}"
+  run_step workspace-dependency-policy \
+    python3 "${WORKSPACE_DEPENDENCY_POLICY_CHECKER}" \
+      --policy "${WORKSPACE_DEPENDENCY_POLICY}"
+}
+
 load_rustc_codegen_shards() {
   local destination_name="$1"
   local output
@@ -337,6 +349,7 @@ run_parity_matrix_checks() {
 }
 
 run_generic_core() {
+  run_workspace_dependency_policy
   run_step example-manifest \
     cargo run --quiet --locked -p cargo-fe2o3 -- examples check
   run_step bounded-moe-docs \
@@ -527,6 +540,7 @@ main() {
   case "${1:-}" in
     generic) run_generic ;;
     generic-core) run_generic_core ;;
+    workspace-policy) run_workspace_dependency_policy ;;
     shard-policy) run_shard_policy ;;
     rustc-codegen-shard)
       if (($# != 2)); then

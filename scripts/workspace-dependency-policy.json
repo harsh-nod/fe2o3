@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "layers": [
+    {
+      "name": "canonical-contracts",
+      "packages": [
+        "fe2o3-amd-target",
+        "fe2o3-artifact-transaction",
+        "fe2o3-artifacts",
+        "fe2o3-build-authority",
+        "fe2o3-compiler-api",
+        "fe2o3-compiler-ffi",
+        "fe2o3-completion",
+        "fe2o3-contracts",
+        "fe2o3-external-anchor-protocol",
+        "fe2o3-host-api",
+        "fe2o3-host-link-closure",
+        "fe2o3-hsaco",
+        "fe2o3-kernel-descriptor",
+        "fe2o3-kernel-ir",
+        "fe2o3-mir-model",
+        "fe2o3-process-identity",
+        "fe2o3-proof-contracts",
+        "fe2o3-protected-publisher",
+        "fe2o3-rustc-invocation",
+        "fe2o3-service-model",
+        "reserved-fe2o3-symbols"
+      ]
+    },
+    {
+      "name": "rust-frontend",
+      "packages": [
+        "fe2o3-device",
+        "fe2o3-macros",
+        "fe2o3-rustc-front"
+      ]
+    },
+    {
+      "name": "pliron-framework",
+      "packages": [
+        "dialect-autotune",
+        "dialect-dispatch",
+        "dialect-gpu",
+        "dialect-kernel",
+        "dialect-mir",
+        "dialect-proof",
+        "dialect-schedule",
+        "dialect-tile",
+        "fe2o3-kernel-analysis",
+        "fe2o3-kir-pliron-bridge",
+        "fe2o3-lower-kernel-gpu",
+        "fe2o3-lower-mir-kernel",
+        "fe2o3-pliron"
+      ]
+    },
+    {
+      "name": "target-backend",
+      "packages": [
+        "dialect-amdgcn",
+        "fe2o3-hsaco-finalize",
+        "fe2o3-lower-gpu-amdgcn"
+      ]
+    },
+    {
+      "name": "verification",
+      "packages": [
+        "fe2o3-service-verus",
+        "fe2o3-verifier"
+      ]
+    },
+    {
+      "name": "host-runtime",
+      "packages": [
+        "fe2o3-broker-authority-service",
+        "fe2o3-core",
+        "fe2o3-hip-sys",
+        "fe2o3-host",
+        "fe2o3-hsa-runtime",
+        "fe2o3-service-host",
+        "fe2o3-worker-v2-bundle"
+      ]
+    },
+    {
+      "name": "integration",
+      "packages": [
+        "cargo-fe2o3",
+        "fe2o3-compiler-driver",
+        "fe2o3-differential",
+        "fe2o3-legacy-compiler",
+        "rustc-codegen-fe2o3"
+      ]
+    },
+    {
+      "name": "fixture",
+      "packages": []
+    }
+  ],
+  "path_layers": [
+    {
+      "prefix": "crates/fe2o3-core/tests/",
+      "layer": "fixture"
+    },
+    {
+      "prefix": "crates/rustc-codegen-fe2o3/tests/fixtures/",
+      "layer": "fixture"
+    },
+    {
+      "prefix": "examples/",
+      "layer": "fixture"
+    }
+  ],
+  "forbidden_dependency_directions": [
+    {
+      "from": "canonical-contracts",
+      "to": [
+        "rust-frontend",
+        "pliron-framework",
+        "target-backend",
+        "verification",
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "rust-frontend",
+      "to": [
+        "pliron-framework",
+        "target-backend",
+        "verification",
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "pliron-framework",
+      "to": [
+        "target-backend",
+        "verification",
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "target-backend",
+      "to": [
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "verification",
+      "to": [
+        "pliron-framework",
+        "target-backend",
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "host-runtime",
+      "to": [
+        "pliron-framework",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "integration",
+      "to": [
+        "fixture"
+      ]
+    }
+  ]
+}
