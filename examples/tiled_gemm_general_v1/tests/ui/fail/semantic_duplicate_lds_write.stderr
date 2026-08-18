@@ -1,0 +1,7 @@
+error[E0599]: no method named `stage` found for struct `Gfx942TiledGemmWave64V1<GemmStaged>` in the current scope
+ --> tests/ui/fail/semantic_duplicate_lds_write.rs:8:29
+  |
+8 |     let _duplicate = staged.stage([0; 4], [0; 4]);
+  |                             ^^^^^ method not found in `Gfx942TiledGemmWave64V1<GemmStaged>`
+  |
+  = note: the method was found for `Gfx942TiledGemmWave64V1<GemmReady>`

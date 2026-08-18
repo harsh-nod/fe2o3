@@ -1,0 +1,15 @@
+error[E0382]: use of moved value: `wave`
+ --> tests/ui/fail/semantic_duplicate_lane_c_write.rs:8:5
+  |
+6 |     let wave = Gfx942TiledGemmWave64V1::from_compiler(0);
+  |         ---- move occurs because `wave` has type `Gfx942TiledGemmWave64V1<GemmReady>`, which does not implement the `Copy` trait
+7 |     wave.store_c_fragment(&mut c, 16, 16, 16, 1.0, 0.0);
+  |          ---------------------------------------------- `wave` moved due to this method call
+8 |     wave.store_c_fragment(&mut c, 16, 16, 16, 1.0, 0.0);
+  |     ^^^^ value used here after move
+  |
+note: `Gfx942TiledGemmWave64V1::<GemmReady>::store_c_fragment` takes ownership of the receiver `self`, which moves `wave`
+ --> device-api/src/lib.rs
+  |
+  |         self,
+  |         ^^^^

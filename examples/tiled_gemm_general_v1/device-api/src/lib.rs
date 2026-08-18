@@ -44,6 +44,250 @@ pub const GENERAL_TILED_GEMM_WAVE_LANES_V1: u32 = 64;
 /// Bytes reserved for two separate 16x16 BF16 XOR4 LDS tiles.
 pub const GENERAL_TILED_GEMM_LDS_BYTES_V1: u32 = 2 * 16 * 16 * 2;
 
+/// One issue #138 semantic mutation category in canonical issue order.
+///
+/// This vocabulary mirrors the ordinary-Rust semantic corpus without making
+/// that corpus a dependency of this isolated device-surface crate.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum GemmSemanticCategoryV1 {
+    /// A global A load omits its M/K tail predicate.
+    UnguardedATailLoad,
+    /// A global B load omits its K/N tail predicate.
+    UnguardedBTailLoad,
+    /// A C store selects a coordinate outside the M/N domain.
+    UnguardedCTailStore,
+    /// Two lanes select the same C coordinate.
+    DuplicateLaneCWrite,
+    /// Two workgroups select overlapping C tiles.
+    OverlappingWorkgroupCTile,
+    /// Two lanes select the same LDS staging slot.
+    DuplicateLdsWrite,
+    /// An LDS value is read before complete initialization.
+    LdsReadBeforeInitialization,
+    /// MFMA consumes LDS without the publish transition.
+    MissingPublishBarrier,
+    /// A barrier is reached through lane-varying control flow.
+    DivergentBarrier,
+    /// A later phase overwrites LDS without the reuse transition.
+    MissingReuseBarrier,
+    /// Source attempts to consume an already expired phase capability.
+    ExpiredLdsEpoch,
+    /// Source reads an asynchronous stage before its admitted wait.
+    StagedReadBeforeWait,
+    /// Source resets the carried accumulator between phases.
+    AccumulatorReset,
+    /// An out-of-domain K-tail component is not positive BF16 zero.
+    IncorrectKTailZeroFill,
+    /// The output does not implement `alpha * AB + beta * C`.
+    IncorrectAlphaBetaEpilogue,
+}
+
+impl GemmSemanticCategoryV1 {
+    /// Returns the stable semantic-corpus mutation ID.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnguardedATailLoad => "unguarded_a_tail_load",
+            Self::UnguardedBTailLoad => "unguarded_b_tail_load",
+            Self::UnguardedCTailStore => "unguarded_c_tail_store",
+            Self::DuplicateLaneCWrite => "duplicate_lane_c_write",
+            Self::OverlappingWorkgroupCTile => "overlapping_workgroup_c_tile",
+            Self::DuplicateLdsWrite => "duplicate_lds_write",
+            Self::LdsReadBeforeInitialization => "lds_read_before_initialization",
+            Self::MissingPublishBarrier => "missing_publish_barrier",
+            Self::DivergentBarrier => "divergent_barrier",
+            Self::MissingReuseBarrier => "missing_reuse_barrier",
+            Self::ExpiredLdsEpoch => "expired_lds_epoch",
+            Self::StagedReadBeforeWait => "staged_read_before_wait",
+            Self::AccumulatorReset => "accumulator_reset",
+            Self::IncorrectKTailZeroFill => "incorrect_k_tail_zero_fill",
+            Self::IncorrectAlphaBetaEpilogue => "incorrect_alpha_beta_epilogue",
+        }
+    }
+}
+
+/// Strongest honest source-enforcement owner for one semantic category.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum GemmSourceEnforcementV1 {
+    /// Rust move/typestate rules reject the invalid local lifecycle directly.
+    RustTypestate,
+    /// The sealed surface rejects direct address/state selection, but dynamic
+    /// or cross-invocation correctness still requires fe2o3 verification.
+    SealedSurfaceAndVerifier,
+    /// Well-typed safe Rust can express the mutation; MIR/Pliron must reject it.
+    SemanticVerifier,
+}
+
+impl GemmSourceEnforcementV1 {
+    /// Returns the stable enforcement-owner spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RustTypestate => "rust_typestate",
+            Self::SealedSurfaceAndVerifier => "sealed_surface_and_verifier",
+            Self::SemanticVerifier => "semantic_verifier",
+        }
+    }
+}
+
+/// Enforcement boundary for one issue #138 semantic category.
+///
+/// `rust_ui_fixture` names a compile-fail attempt against this sealed API. It
+/// is deliberately absent when safe Rust can express the real mutation. A UI
+/// failure establishes only the stated local surface restriction; it is not a
+/// substitute for the well-typed semantic fixture or its proof obligation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GemmSemanticEnforcementV1 {
+    category: GemmSemanticCategoryV1,
+    owner: GemmSourceEnforcementV1,
+    rust_ui_fixture: Option<&'static str>,
+    verifier_requirement: &'static str,
+}
+
+impl GemmSemanticEnforcementV1 {
+    const fn new(
+        category: GemmSemanticCategoryV1,
+        owner: GemmSourceEnforcementV1,
+        rust_ui_fixture: Option<&'static str>,
+        verifier_requirement: &'static str,
+    ) -> Self {
+        Self {
+            category,
+            owner,
+            rust_ui_fixture,
+            verifier_requirement,
+        }
+    }
+
+    /// Returns the semantic mutation category.
+    pub const fn category(self) -> GemmSemanticCategoryV1 {
+        self.category
+    }
+
+    /// Returns the strongest honest source-enforcement owner.
+    pub const fn owner(self) -> GemmSourceEnforcementV1 {
+        self.owner
+    }
+
+    /// Returns the standalone-crate-relative compile-fail fixture, when meaningful.
+    pub const fn rust_ui_fixture(self) -> Option<&'static str> {
+        self.rust_ui_fixture
+    }
+
+    /// Returns the remaining semantic-verifier responsibility, or an empty
+    /// string when local Rust typestate fully owns the source misuse.
+    pub const fn verifier_requirement(self) -> &'static str {
+        self.verifier_requirement
+    }
+}
+
+const fn enforcement(
+    category: GemmSemanticCategoryV1,
+    owner: GemmSourceEnforcementV1,
+    rust_ui_fixture: Option<&'static str>,
+    verifier_requirement: &'static str,
+) -> GemmSemanticEnforcementV1 {
+    GemmSemanticEnforcementV1::new(category, owner, rust_ui_fixture, verifier_requirement)
+}
+
+/// Complete issue #138 source-enforcement boundary in canonical issue order.
+///
+/// The five `SemanticVerifier` entries intentionally have no trybuild fixture:
+/// their ordinary-Rust mutations must continue to typecheck and reach the
+/// proof-required compiler. Seven hybrid entries have API escape tests but
+/// retain the stated dynamic verifier obligation. Only three local lifecycle
+/// errors are fully owned by Rust typestate.
+pub const GENERAL_GEMM_SEMANTIC_ENFORCEMENT_V1: [GemmSemanticEnforcementV1; 15] = [
+    enforcement(
+        GemmSemanticCategoryV1::UnguardedATailLoad,
+        GemmSourceEnforcementV1::SemanticVerifier,
+        None,
+        "prove the dynamic A region and M/K tail predicate",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::UnguardedBTailLoad,
+        GemmSourceEnforcementV1::SemanticVerifier,
+        None,
+        "prove the dynamic B region and K/N tail predicate",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::UnguardedCTailStore,
+        GemmSourceEnforcementV1::SealedSurfaceAndVerifier,
+        Some("tests/ui/fail/semantic_unguarded_c_tail_store.rs"),
+        "prove dynamic C bounds under compiler-issued lane and tile identities",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::DuplicateLaneCWrite,
+        GemmSourceEnforcementV1::SealedSurfaceAndVerifier,
+        Some("tests/ui/fail/semantic_duplicate_lane_c_write.rs"),
+        "prove lane/component output injectivity",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::OverlappingWorkgroupCTile,
+        GemmSourceEnforcementV1::SealedSurfaceAndVerifier,
+        Some("tests/ui/fail/semantic_overlapping_workgroup_c_tile.rs"),
+        "prove workgroup output-tile disjointness",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::DuplicateLdsWrite,
+        GemmSourceEnforcementV1::SealedSurfaceAndVerifier,
+        Some("tests/ui/fail/semantic_duplicate_lds_write.rs"),
+        "prove the compiler-lowered XOR4 lane-to-slot bijection",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::LdsReadBeforeInitialization,
+        GemmSourceEnforcementV1::SealedSurfaceAndVerifier,
+        Some("tests/ui/fail/semantic_lds_read_before_initialization.rs"),
+        "prove every lane completes its disjoint stage before publication",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::MissingPublishBarrier,
+        GemmSourceEnforcementV1::RustTypestate,
+        Some("tests/ui/fail/semantic_missing_publish_barrier.rs"),
+        "",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::DivergentBarrier,
+        GemmSourceEnforcementV1::SemanticVerifier,
+        None,
+        "prove barrier convergence over the reachable MIR control-flow graph",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::MissingReuseBarrier,
+        GemmSourceEnforcementV1::RustTypestate,
+        Some("tests/ui/fail/semantic_missing_reuse_barrier.rs"),
+        "",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::ExpiredLdsEpoch,
+        GemmSourceEnforcementV1::RustTypestate,
+        Some("tests/ui/fail/semantic_expired_lds_epoch.rs"),
+        "",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::StagedReadBeforeWait,
+        GemmSourceEnforcementV1::SealedSurfaceAndVerifier,
+        Some("tests/ui/fail/semantic_staged_read_before_wait.rs"),
+        "the conservative profile has no async stage; a future profile must prove wait epochs",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::AccumulatorReset,
+        GemmSourceEnforcementV1::SealedSurfaceAndVerifier,
+        Some("tests/ui/fail/semantic_accumulator_reset.rs"),
+        "prove unique compiler issuance and accumulator carry across all dynamic phases",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::IncorrectKTailZeroFill,
+        GemmSourceEnforcementV1::SemanticVerifier,
+        None,
+        "prove each out-of-domain staged component is positive BF16 zero",
+    ),
+    enforcement(
+        GemmSemanticCategoryV1::IncorrectAlphaBetaEpilogue,
+        GemmSourceEnforcementV1::SemanticVerifier,
+        None,
+        "prove the runtime alpha/beta argument binding and exact epilogue expression",
+    ),
+];
+
 mod sealed {
     pub trait Sealed {}
 }

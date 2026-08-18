@@ -18,6 +18,25 @@ disjoint output addressing. Its only phase sequence is:
 Ready -> Staged -> Published -> Consumed -> Ready
 ```
 
+## Compile-time enforcement boundary
+
+The V1 contract records one enforcement owner for each of issue #138's 15
+semantic mutations. Rust typestate directly rejects the three local lifecycle
+errors: missing publish, missing reuse, and reuse of an expired LDS epoch.
+
+The sealed surface also has compile-fail escape tests for unguarded arbitrary C
+stores, duplicate same-capability C/LDS writes, forged workgroup coordinates,
+pre-publication LDS reads, premature staged reads, and accumulator reset. Those
+seven categories still require MIR/Pliron proof for dynamic bounds, lane and
+workgroup injectivity, complete distributed initialization, wait epochs, or
+cross-phase refinement. A rustc error for an API escape attempt is not evidence
+that the corresponding distributed property has been proved.
+
+Unguarded A/B loads, divergent barriers, incorrect K-tail zero fill, and an
+incorrect alpha/beta epilogue are intentionally verifier-only. Safe ordinary
+Rust can express those five mutations, so their semantic-corpus fixtures must
+continue to typecheck and reach proof-required compiler analysis.
+
 ## Current boundary
 
 This is a compile-tested source contract, not GPU execution authority. The
