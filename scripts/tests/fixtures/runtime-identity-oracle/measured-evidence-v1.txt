@@ -1,0 +1,61 @@
+schema=fe2o3-r1-device-identity-oracle-measurement-v1
+claim_status=Measured
+claim_scope=device-identity-differential
+authority=none
+proof_effect=none
+runtime_authority_effect=none
+result=match
+differential_match_fields=uuid,node,pci-bdf,target,wavefront,firmware
+pure_rust_only_fields=currentness,vram_lost_counter
+oracle_only_fields=isa
+currentness_claim_status=Contracted
+currentness=contracted-clear
+currentness_source=pure-rust-only
+currentness_hsa_comparison=not-performed
+vram_lost_counter_source=pure-rust-only
+oracle=rocminfo
+rocm_release=7.2.4
+hsa_runtime=1.18
+hsa_xnack=NO
+amdgpu_module=6.16.13
+kernel_release=6.8.0-124-generic
+boot_id=12345678-1234-4234-9234-123456789abc
+device_model=AMD-Instinct-MI300X
+profile=gfx942:xnack-
+profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de
+oracle_primary_isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack-
+oracle_compat_isa=amdgcn-amd-amdhsa--gfx9-4-generic:sramecc+:xnack-
+gpu_count=8
+git_head=1111111111111111111111111111111111111111
+git_worktree=clean
+measurement_utc_observed=2026-08-18T12:34:56Z
+measurement_time_trust=untrusted-host-clock
+runtime_oracle_runner_sha256=167833ea683336389d99c8c9712eca06a748221f53b3a55fc6ff2140428f3c01
+runtime_pure_rust_policy_sha256=7101b60b6a61003dd499ca79fc019f06a29ae0760accff634350930c97ad0857
+runtime_pure_rust_auditor_sha256=df1808335ed1e98c66a5d2e76a3341085de690f75ae3578fa3f7fa8c1ef0c3c7
+cargo_lock_sha256=7881c0e33d5456cc5d8c7ee8f2b27e57995fa73a57a34f9eb0d762fe6e9b0e32
+metadata_audit_status=passed
+metadata_audit_roots=4
+metadata_audit_packages=17
+metadata_audit_allowed_build_scripts=libc@0.2.189,rustix@1.1.4
+metadata_audit_report_sha256=265e73ae384075464626ce527ca08cddbd7cba50d9120602aaffb9cd57c77b12
+metadata_snapshot_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+elf_audit_status=passed
+elf_audit_bytes=23
+elf_audit_needed=3
+elf_audit_dynsym=75
+elf_audit_report_sha256=7fa461786c77ac5403410868c22611055f891c3e49199b0dce9f8a0f888e034b
+elf_audited_sha256=1a4956bc1a670646bc1380dbaf524c103e9cbd386f091dbdbb319a40bc6e72f0
+pure_rust_output_sha256=49ece88e601c568cdc2082a2316e55194dfc8f3856697cd5eb376f13e9f95cd6
+rocminfo_output_sha256=b9a75ef9eb8a6e2ae607090f236b8381ead637f65e35f4faf83b56ab42aa43f6
+pure_rust_executable_sha256=1a4956bc1a670646bc1380dbaf524c103e9cbd386f091dbdbb319a40bc6e72f0
+rocminfo_executable_sha256=67fbc53f9c40e2ed0720e450c85fd9fa6ce521559fae2281e70218d086a00ea7
+comparator_sha256=67ab7726b5cc51109cb27190b236440c4023121d0983e8c945c48eadc9ef511a
+gpu unique_id=10a254ce4987e716 node=8 gpu_id=53667 pci=0000:c6:00.0 renderD176 oracle_agent=9 oracle_bdf_id=50688 target=gfx942 wavefront=64 firmware=192/25 isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack- differential_match=true currentness=contracted-clear currentness_source=pure-rust-only vram_lost_counter=0 vram_lost_counter_source=pure-rust-only
+gpu unique_id=189ca857de1ef2fb node=5 gpu_id=22683 pci=0000:65:00.0 renderD152 oracle_agent=6 oracle_bdf_id=25856 target=gfx942 wavefront=64 firmware=192/25 isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack- differential_match=true currentness=contracted-clear currentness_source=pure-rust-only vram_lost_counter=0 vram_lost_counter_source=pure-rust-only
+gpu unique_id=53691ef168a0147d node=9 gpu_id=63738 pci=0000:e5:00.0 renderD184 oracle_agent=10 oracle_bdf_id=58624 target=gfx942 wavefront=64 firmware=192/25 isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack- differential_match=true currentness=contracted-clear currentness_source=pure-rust-only vram_lost_counter=0 vram_lost_counter_source=pure-rust-only
+gpu unique_id=54f88318ca05093d node=6 gpu_id=53458 pci=0000:85:00.0 renderD160 oracle_agent=7 oracle_bdf_id=34048 target=gfx942 wavefront=64 firmware=192/25 isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack- differential_match=true currentness=contracted-clear currentness_source=pure-rust-only vram_lost_counter=0 vram_lost_counter_source=pure-rust-only
+gpu unique_id=6ced1647a296545c node=2 gpu_id=28851 pci=0000:05:00.0 renderD128 oracle_agent=3 oracle_bdf_id=1280 target=gfx942 wavefront=64 firmware=192/25 isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack- differential_match=true currentness=contracted-clear currentness_source=pure-rust-only vram_lost_counter=0 vram_lost_counter_source=pure-rust-only
+gpu unique_id=ab83d2ffef0d3cdf node=3 gpu_id=23018 pci=0000:26:00.0 renderD136 oracle_agent=4 oracle_bdf_id=9728 target=gfx942 wavefront=64 firmware=192/25 isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack- differential_match=true currentness=contracted-clear currentness_source=pure-rust-only vram_lost_counter=0 vram_lost_counter_source=pure-rust-only
+gpu unique_id=b7baafd0fb173d8e node=7 gpu_id=63883 pci=0000:a6:00.0 renderD168 oracle_agent=8 oracle_bdf_id=42496 target=gfx942 wavefront=64 firmware=192/25 isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack- differential_match=true currentness=contracted-clear currentness_source=pure-rust-only vram_lost_counter=0 vram_lost_counter_source=pure-rust-only
+gpu unique_id=d2e26fef80cf5c33 node=4 gpu_id=29122 pci=0000:46:00.0 renderD144 oracle_agent=5 oracle_bdf_id=17920 target=gfx942 wavefront=64 firmware=192/25 isa=amdgcn-amd-amdhsa--gfx942:sramecc+:xnack- differential_match=true currentness=contracted-clear currentness_source=pure-rust-only vram_lost_counter=0 vram_lost_counter_source=pure-rust-only

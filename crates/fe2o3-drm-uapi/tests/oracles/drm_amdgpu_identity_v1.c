@@ -35,6 +35,8 @@ int main(void) {
            offsetof(struct drm_amdgpu_info, read_mmr_reg),
            (unsigned long)DRM_IOCTL_AMDGPU_INFO,
            AMDGPU_INFO_ACCEL_WORKING, AMDGPU_INFO_DEV_INFO);
+    printf("currentness:vram_lost_counter=%#x result_size=%zu\n",
+           AMDGPU_INFO_VRAM_LOST_COUNTER, sizeof(__u32));
 
     printf("device:size=%zu align=%zu device_id=%zu chip_rev=%zu external_rev=%zu "
            "pci_rev=%zu family=%zu family_ai=%u\n",

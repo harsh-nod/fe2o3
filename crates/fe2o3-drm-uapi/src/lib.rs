@@ -1,7 +1,8 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-//! Reviewed raw definitions for the first Linux DRM/AMDGPU identity slice.
+//! Reviewed raw definitions for the first Linux DRM/AMDGPU identity and
+//! destructive-reset observation slice.
 //!
 //! This crate performs no file access, allocation, pointer dereference, FFI, or
 //! `ioctl`. It describes only the x86_64 LP64 records and request encodings a
@@ -11,7 +12,8 @@
 use core::mem::{align_of, offset_of, size_of};
 
 /// Stable name of the exact reviewed userspace schema.
-pub const DRM_UAPI_SCHEMA_ID: &str = "linux-x86_64-drm-amdgpu-3.64.0-dkms-6.16.13-identity-v1";
+pub const DRM_UAPI_SCHEMA_ID: &str =
+    "linux-x86_64-drm-amdgpu-3.64.0-dkms-6.16.13-identity-currentness-v1";
 
 /// Architecture and data model admitted by this schema.
 pub const DRM_UAPI_ADMITTED_TARGET: &str = "linux-x86_64-lp64-generic-ioc";
@@ -35,6 +37,14 @@ pub const DRM_UAPI_EXPORTED_CORE_HEADER_SHA256: &str =
 pub const DRM_UAPI_AMDGPU_DKMS_HEADER_SHA256: &str =
     "9d7ff60a211d2aa73a6c15b2da49e050cebe518fc059ee93e31d61288f7b60dc";
 
+/// SHA-256 of the active driver's implementation of AMDGPU INFO queries.
+pub const DRM_UAPI_AMDGPU_KMS_SOURCE_SHA256: &str =
+    "ef2375c3f35ad4a24b560326b55676a907d6d2ba248e469a62e84e877435101c";
+
+/// SHA-256 of the active driver's VRAM-loss detection and increment sites.
+pub const DRM_UAPI_AMDGPU_DEVICE_SOURCE_SHA256: &str =
+    "4d0edc4b714c005e911596e0e2e616be7fdbbb3526069938e4cc078eaba83673";
+
 /// SHA-256 of the independently checked libdrm core header.
 pub const DRM_UAPI_LIBDRM_CORE_HEADER_SHA256: &str =
     "e97d535df3d33844a7c66578cb5adb501c57d17fb5ba55395309d1f275432060";
@@ -48,7 +58,7 @@ pub const DRM_UAPI_LIBDRM_AMDGPU_HEADER_SHA256: &str =
 /// This identifies reviewed definitions. It does not authenticate a running
 /// kernel, driver, render node, or GPU.
 pub const DRM_UAPI_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-x86_64-drm-amdgpu-3.64.0-dkms-6.16.13-identity-v1\n",
+    "schema_id=linux-x86_64-drm-amdgpu-3.64.0-dkms-6.16.13-identity-currentness-v1\n",
     "target=linux-x86_64-lp64-generic-ioc\n",
     "kernel_core_header=include/uapi/drm/drm.h\n",
     "kernel_core_header_sha256=3ab6ac01bf91067aed96b70d7fa7847a86e7f726d74278151f085143688659cc\n",
@@ -57,6 +67,8 @@ pub const DRM_UAPI_SCHEMA_MANIFEST: &str = concat!(
     "exported_core_package=linux-libc-dev@6.8.0-137.137\n",
     "amdgpu_header=include/uapi/drm/amdgpu_drm.h\n",
     "amdgpu_header_sha256=9d7ff60a211d2aa73a6c15b2da49e050cebe518fc059ee93e31d61288f7b60dc\n",
+    "amdgpu_kms_source_sha256=ef2375c3f35ad4a24b560326b55676a907d6d2ba248e469a62e84e877435101c\n",
+    "amdgpu_device_source_sha256=4d0edc4b714c005e911596e0e2e616be7fdbbb3526069938e4cc078eaba83673\n",
     "amdgpu_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
     "libdrm_core_header_sha256=e97d535df3d33844a7c66578cb5adb501c57d17fb5ba55395309d1f275432060\n",
     "libdrm_amdgpu_header_sha256=2881120496c69fc2154e590d0bc6e615a48adc43df1a658dd8cd8f78ec648557\n",
@@ -65,18 +77,18 @@ pub const DRM_UAPI_SCHEMA_MANIFEST: &str = concat!(
     "drm_version=size:64,align:8,major:0,minor:4,patch:8,pad:12,name_len:16,name:24,date_len:32,date:40,desc_len:48,desc:56,request:c0406400\n",
     "amdgpu_info=size:32,align:8,return_pointer:0,return_size:8,query:12,query_data:16,request:40206445\n",
     "device_identity_v1=size:20,align:4,device_id:0,chip_rev:4,external_rev:8,pci_rev:12,family:16\n",
-    "queries=accel_working:00,dev_info:16\n",
+    "queries=accel_working:00,dev_info:16,vram_lost_counter:1f\n",
     "family_constants=ai:141\n",
 );
 
 /// SHA-256 of [`DRM_UAPI_SCHEMA_MANIFEST`].
 pub const DRM_UAPI_SCHEMA_MANIFEST_SHA256: &str =
-    "2ecccaca71dcfd6b19456147ee2b132e2a331f872fb4e311d27a8b8989b58ac8";
+    "800569fe9b467b389bcfc6e5d65b23d66a0386a90fc2a669fac8c83800e76d8b";
 
 /// Typed digest bytes of [`DRM_UAPI_SCHEMA_MANIFEST`].
 pub const DRM_UAPI_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0x2e, 0xcc, 0xca, 0xca, 0x71, 0xdc, 0xfd, 0x6b, 0x19, 0x45, 0x61, 0x47, 0xee, 0x2b, 0x13, 0x2e,
-    0x2a, 0x33, 0x1f, 0x87, 0x2f, 0xb4, 0xe3, 0x11, 0xd2, 0x7a, 0x8b, 0x89, 0x89, 0xb5, 0x8a, 0xc8,
+    0x80, 0x05, 0x69, 0xfe, 0x9b, 0x46, 0x7b, 0x38, 0x9b, 0xcf, 0xc6, 0xe5, 0xd6, 0x5b, 0x23, 0xd6,
+    0x6a, 0x03, 0x86, 0xa9, 0x0f, 0xc2, 0xa6, 0x69, 0xfa, 0xc8, 0xc8, 0x38, 0x00, 0xe7, 0x6d, 0x8b,
 ];
 
 /// Driver name required from `DRM_IOCTL_VERSION` before AMDGPU queries.
@@ -100,6 +112,12 @@ pub const AMDGPU_INFO_ACCEL_WORKING: u32 = 0x00;
 /// Query the append-only `drm_amdgpu_info_device` record.
 pub const AMDGPU_INFO_DEV_INFO: u32 = 0x16;
 
+/// Query the driver's 32-bit counter of resets determined to have lost VRAM.
+///
+/// This does not count resets that preserve VRAM and is not a general GPU reset
+/// generation. The counter may wrap after `u32::MAX`.
+pub const AMDGPU_INFO_VRAM_LOST_COUNTER: u32 = 0x1f;
+
 /// `AMDGPU_FAMILY_AI` from the reviewed header.
 ///
 /// This family includes multiple products and is not a unique gfx942 identity.
@@ -110,6 +128,9 @@ pub const AMDGPU_ACCEL_WORKING_RESULT_BYTES: u32 = 4;
 
 /// Number of immutable prefix bytes admitted from `AMDGPU_INFO_DEV_INFO`.
 pub const AMDGPU_DEVICE_IDENTITY_V1_BYTES: u32 = 20;
+
+/// Number of output bytes admitted for `AMDGPU_INFO_VRAM_LOST_COUNTER`.
+pub const AMDGPU_VRAM_LOST_COUNTER_RESULT_BYTES: u32 = 4;
 
 /// Linux generic ioctl request number type.
 pub type IoctlRequest = u32;
@@ -237,7 +258,7 @@ impl DrmVersion {
 /// Layout of `struct drm_amdgpu_info` for the admitted no-subquery requests.
 ///
 /// `query_data` is the 16-byte anonymous C union. It must remain zero for the
-/// two admitted queries.
+/// admitted queries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct DrmAmdgpuInfo {
@@ -262,6 +283,16 @@ impl DrmAmdgpuInfo {
             return_pointer,
             return_size: AMDGPU_DEVICE_IDENTITY_V1_BYTES,
             query: AMDGPU_INFO_DEV_INFO,
+            query_data: [0; 4],
+        }
+    }
+
+    /// Constructs the query for the driver's destructive-reset observation.
+    pub const fn vram_lost_counter(return_pointer: u64) -> Self {
+        Self {
+            return_pointer,
+            return_size: AMDGPU_VRAM_LOST_COUNTER_RESULT_BYTES,
+            query: AMDGPU_INFO_VRAM_LOST_COUNTER,
             query_data: [0; 4],
         }
     }
@@ -334,4 +365,5 @@ const _: () = {
     assert!(DRM_IOCTL_AMDGPU_INFO == 0x4020_6445);
     assert!(AMDGPU_INFO_ACCEL_WORKING == 0x00);
     assert!(AMDGPU_INFO_DEV_INFO == 0x16);
+    assert!(AMDGPU_INFO_VRAM_LOST_COUNTER == 0x1f);
 };
