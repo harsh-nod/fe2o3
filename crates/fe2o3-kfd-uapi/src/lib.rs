@@ -32,6 +32,10 @@ pub const KFD_UAPI_DEVICE_SOURCE_SHA256: &str =
 pub const KFD_UAPI_CHARDEV_SOURCE_SHA256: &str =
     "f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba";
 
+/// SHA-256 of the active driver's KFD GPUVM allocation and mapping implementation.
+pub const KFD_UAPI_GPUVM_SOURCE_SHA256: &str =
+    "c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d";
+
 /// Canonical content manifest for the admitted schema.
 ///
 /// This identifies reviewed userspace definitions. It does not authenticate a
@@ -44,24 +48,31 @@ pub const KFD_UAPI_SCHEMA_MANIFEST: &str = concat!(
     "smi_events_source_sha256=2d786562fe1e97b8257841b755106c8bce47658a2aa3b439ce4e0178323004bd\n",
     "device_source_sha256=ccf20227c5cdd5b258758f50f61bbc1008a09ea776c101f035f83963e7d23037\n",
     "chardev_source_sha256=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
+    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
     "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
     "kfd_uapi=1.18\n",
     "get_version=size:8,align:4,major:0,minor:4,request:80084b01\n",
     "process_device_apertures=size:56,align:8,lds_base:0,lds_limit:8,scratch_base:16,scratch_limit:24,gpuvm_base:32,gpuvm_limit:40,gpu_id:48,pad:52\n",
     "get_process_apertures_new=size:16,align:8,process_apertures_ptr:0,num_of_nodes:8,pad:12,request:c0104b14\n",
     "acquire_vm=size:8,align:4,drm_fd:0,gpu_id:4,request:40084b15\n",
+    "alloc_flags=gtt:00000002,writable:80000000,executable:40000000,aql_queue:08000000,coherent:04000000,uncached:02000000\n",
+    "alloc_profiles=host_visible_coherent:84000002,kernarg:86000002,aql_queue:8e000002,executable:c4000002\n",
+    "alloc_memory=size:40,align:8,va_addr:0,size_field:8,handle:16,mmap_offset:24,gpu_id:32,flags:36,request:c0284b16\n",
+    "free_memory=size:8,align:8,handle:0,request:40084b17\n",
+    "map_memory=size:24,align:8,handle:0,device_ids_array_ptr:8,n_devices:16,n_success:20,request:c0184b18\n",
+    "unmap_memory=size:24,align:8,handle:0,device_ids_array_ptr:8,n_devices:16,n_success:20,request:c0184b19\n",
     "set_xnack_mode=size:4,align:4,xnack_enabled:0,request:c0044b21\n",
     "smi_events=size:8,align:4,gpu_id:0,anon_fd:4,request:c0084b1f,pre_reset:3,post_reset:4,mask:000000000000000c\n",
 );
 
 /// SHA-256 of [`KFD_UAPI_SCHEMA_MANIFEST`].
 pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256: &str =
-    "e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4";
+    "c201fe3821c4909e023499307afa6efc4b27bb9ea03be5ff470406f618b3019a";
 
 /// Typed digest bytes of [`KFD_UAPI_SCHEMA_MANIFEST`].
 pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0xe4, 0xaa, 0xd5, 0xd8, 0xe3, 0x17, 0x7e, 0xa6, 0xd7, 0x02, 0x98, 0xad, 0xab, 0x77, 0x41, 0xc3,
-    0x77, 0xcb, 0x09, 0x13, 0x73, 0x55, 0x3c, 0xe6, 0x89, 0xf3, 0x52, 0x5e, 0x75, 0x14, 0xd9, 0xb4,
+    0xc2, 0x01, 0xfe, 0x38, 0x21, 0xc4, 0x90, 0x9e, 0x02, 0x34, 0x99, 0x30, 0x7a, 0xfa, 0x6e, 0xfc,
+    0x4b, 0x27, 0xbb, 0x9e, 0xa0, 0x3b, 0xe5, 0xff, 0x47, 0x04, 0x06, 0xf6, 0x18, 0xb3, 0x01, 0x9a,
 ];
 
 /// Major version declared by the reviewed AMDGPU 6.16.13 KFD UAPI header.
@@ -78,6 +89,88 @@ pub const KFD_IOCTL_MAX_ADMITTED_MINOR_VERSION: u32 = KFD_IOCTL_MINOR_VERSION;
 
 /// The KFD ioctl type byte (`'K'`).
 pub const AMDKFD_IOCTL_BASE: u8 = b'K';
+
+/// GTT/system-memory allocation type admitted by this schema.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_GTT: u32 = 1 << 1;
+
+/// Permit GPU writes to the allocation.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE: u32 = 1 << 31;
+
+/// Permit GPU instruction fetches from the allocation.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE: u32 = 1 << 30;
+
+/// Request the KFD AQL queue double-mapping behavior.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM: u32 = 1 << 27;
+
+/// Request coherent backing memory.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_COHERENT: u32 = 1 << 26;
+
+/// Request uncached backing memory.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED: u32 = 1 << 25;
+
+/// Exact admitted profile for ordinary host-visible coherent memory.
+pub const KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT: u32 = KFD_IOC_ALLOC_MEM_FLAGS_GTT
+    | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE
+    | KFD_IOC_ALLOC_MEM_FLAGS_COHERENT;
+
+/// Exact admitted profile for host-visible kernarg memory.
+pub const KFD_ALLOC_MEMORY_FLAGS_KERNARG: u32 =
+    KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED;
+
+/// Exact admitted profile for an AQL queue ring's double-mapped storage.
+pub const KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE: u32 =
+    KFD_ALLOC_MEMORY_FLAGS_KERNARG | KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM;
+
+/// Exact admitted profile for host-visible executable memory.
+pub const KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE: u32 =
+    KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE;
+
+/// An exact, reviewed allocation-flag profile accepted by fe2o3's R2 builder.
+///
+/// The private field prevents callers from constructing novel bit
+/// combinations through the typed builder. Raw UAPI records remain inspectable
+/// and serializable as C-layout data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdAllocMemoryFlags(u32);
+
+impl KfdAllocMemoryFlags {
+    pub const HOST_VISIBLE_COHERENT: Self = Self(KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT);
+    pub const KERNARG: Self = Self(KFD_ALLOC_MEMORY_FLAGS_KERNARG);
+    pub const AQL_QUEUE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE);
+    pub const EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE);
+
+    /// Returns the exact KFD UAPI bit pattern carried on the wire.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+}
+
+/// Why an allocation-flag bit pattern was not admitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KfdAllocMemoryFlagsError {
+    /// The pattern is not one of the four exact reviewed profiles.
+    Unsupported { flags: u32 },
+}
+
+/// Admits only the exact host-visible profiles reviewed for R2.
+///
+/// In particular, this rejects every pattern containing VRAM, USERPTR/SVM,
+/// doorbell, MMIO, public, or unknown/reserved flag bits. Peer mapping is a
+/// separate adapter-level device-array policy.
+pub const fn admit_kfd_alloc_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT => {
+            Ok(KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT)
+        }
+        KFD_ALLOC_MEMORY_FLAGS_KERNARG => Ok(KfdAllocMemoryFlags::KERNARG),
+        KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE => Ok(KfdAllocMemoryFlags::AQL_QUEUE),
+        KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE => Ok(KfdAllocMemoryFlags::EXECUTABLE),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
 
 /// Negative input queries the current process XNACK mode without changing it.
 pub const KFD_XNACK_MODE_QUERY: i32 = -1;
@@ -207,6 +300,140 @@ impl KfdIoctlAcquireVmArgs {
     }
 }
 
+/// C layout of `struct kfd_ioctl_alloc_memory_of_gpu_args`.
+///
+/// `va_addr`, the returned `handle`, and the returned `mmap_offset` are opaque
+/// integer values. This data-only crate neither dereferences them nor assigns
+/// ownership. USERPTR is not admitted, so the input `mmap_offset` is always
+/// initialized to zero by [`Self::new`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlAllocMemoryOfGpuArgs {
+    pub va_addr: u64,
+    pub size: u64,
+    pub handle: u64,
+    pub mmap_offset: u64,
+    pub gpu_id: u32,
+    pub flags: u32,
+}
+
+impl KfdIoctlAllocMemoryOfGpuArgs {
+    /// Constructs an allocation request from an exact admitted profile.
+    ///
+    /// Kernel-output fields are zeroed so stale handles and mmap offsets cannot
+    /// cross the syscall boundary if a later adapter reuses caller storage.
+    pub const fn new(va_addr: u64, size: u64, gpu_id: u32, flags: KfdAllocMemoryFlags) -> Self {
+        Self {
+            va_addr,
+            size,
+            handle: 0,
+            mmap_offset: 0,
+            gpu_id,
+            flags: flags.bits(),
+        }
+    }
+}
+
+/// C layout of `struct kfd_ioctl_free_memory_of_gpu_args`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlFreeMemoryOfGpuArgs {
+    /// Opaque KFD allocation handle returned by the allocation request.
+    pub handle: u64,
+}
+
+impl KfdIoctlFreeMemoryOfGpuArgs {
+    pub const fn new(handle: u64) -> Self {
+        Self { handle }
+    }
+}
+
+/// C layout of `struct kfd_ioctl_map_memory_to_gpu_args`.
+///
+/// `device_ids_array_ptr` is an opaque userspace address. A syscall adapter
+/// must retain and bound the backing `u32` array for the full ioctl. The
+/// adapter, not this record, is also responsible for rejecting peer devices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlMapMemoryToGpuArgs {
+    pub handle: u64,
+    pub device_ids_array_ptr: u64,
+    pub n_devices: u32,
+    /// In/out prefix length. Preserve the kernel-written value after failure.
+    pub n_success: u32,
+}
+
+impl KfdIoctlMapMemoryToGpuArgs {
+    /// Constructs a first-attempt request with no completed prefix.
+    pub const fn initial(handle: u64, device_ids_array_ptr: u64, n_devices: u32) -> Self {
+        Self {
+            handle,
+            device_ids_array_ptr,
+            n_devices,
+            n_success: 0,
+        }
+    }
+
+    /// Constructs a retry while preserving the exact completed prefix.
+    ///
+    /// Semantic validation such as `n_success <= n_devices` remains with the
+    /// syscall adapter so this raw record never silently clamps kernel state.
+    pub const fn retry(
+        handle: u64,
+        device_ids_array_ptr: u64,
+        n_devices: u32,
+        n_success: u32,
+    ) -> Self {
+        Self {
+            handle,
+            device_ids_array_ptr,
+            n_devices,
+            n_success,
+        }
+    }
+}
+
+/// C layout of `struct kfd_ioctl_unmap_memory_from_gpu_args`.
+///
+/// Field semantics and buffer-lifetime requirements match
+/// [`KfdIoctlMapMemoryToGpuArgs`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlUnmapMemoryFromGpuArgs {
+    pub handle: u64,
+    pub device_ids_array_ptr: u64,
+    pub n_devices: u32,
+    /// In/out prefix length. Preserve the kernel-written value after failure.
+    pub n_success: u32,
+}
+
+impl KfdIoctlUnmapMemoryFromGpuArgs {
+    /// Constructs a first-attempt request with no completed prefix.
+    pub const fn initial(handle: u64, device_ids_array_ptr: u64, n_devices: u32) -> Self {
+        Self {
+            handle,
+            device_ids_array_ptr,
+            n_devices,
+            n_success: 0,
+        }
+    }
+
+    /// Constructs a retry while preserving the exact completed prefix.
+    pub const fn retry(
+        handle: u64,
+        device_ids_array_ptr: u64,
+        n_devices: u32,
+        n_success: u32,
+    ) -> Self {
+        Self {
+            handle,
+            device_ids_array_ptr,
+            n_devices,
+            n_success,
+        }
+    }
+}
+
 /// C layout of `struct kfd_process_device_apertures`.
 ///
 /// The record reports one process-visible virtual address aperture set and its
@@ -313,6 +540,38 @@ pub const AMDKFD_IOC_ACQUIRE_VM: IoctlRequest = encode_admitted_ioctl(
     size_of::<KfdIoctlAcquireVmArgs>(),
 );
 
+/// Request for `_IOWR('K', 0x16, struct kfd_ioctl_alloc_memory_of_gpu_args)`.
+pub const AMDKFD_IOC_ALLOC_MEMORY_OF_GPU: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x16,
+    size_of::<KfdIoctlAllocMemoryOfGpuArgs>(),
+);
+
+/// Request for `_IOW('K', 0x17, struct kfd_ioctl_free_memory_of_gpu_args)`.
+pub const AMDKFD_IOC_FREE_MEMORY_OF_GPU: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::Write,
+    AMDKFD_IOCTL_BASE,
+    0x17,
+    size_of::<KfdIoctlFreeMemoryOfGpuArgs>(),
+);
+
+/// Request for `_IOWR('K', 0x18, struct kfd_ioctl_map_memory_to_gpu_args)`.
+pub const AMDKFD_IOC_MAP_MEMORY_TO_GPU: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x18,
+    size_of::<KfdIoctlMapMemoryToGpuArgs>(),
+);
+
+/// Request for `_IOWR('K', 0x19, struct kfd_ioctl_unmap_memory_from_gpu_args)`.
+pub const AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x19,
+    size_of::<KfdIoctlUnmapMemoryFromGpuArgs>(),
+);
+
 /// Request for `_IOWR('K', 0x14, struct kfd_ioctl_get_process_apertures_new_args)`.
 pub const AMDKFD_IOC_GET_PROCESS_APERTURES_NEW: IoctlRequest = encode_admitted_ioctl(
     IoctlDirection::ReadWrite,
@@ -378,6 +637,26 @@ impl AdmittedKfdUapi {
     /// require reviewed version evidence before exposing the operation.
     pub const fn acquire_vm_request(self) -> IoctlRequest {
         AMDKFD_IOC_ACQUIRE_VM
+    }
+
+    /// Returns the admitted ALLOC_MEMORY_OF_GPU request number.
+    pub const fn alloc_memory_of_gpu_request(self) -> IoctlRequest {
+        AMDKFD_IOC_ALLOC_MEMORY_OF_GPU
+    }
+
+    /// Returns the admitted FREE_MEMORY_OF_GPU request number.
+    pub const fn free_memory_of_gpu_request(self) -> IoctlRequest {
+        AMDKFD_IOC_FREE_MEMORY_OF_GPU
+    }
+
+    /// Returns the admitted MAP_MEMORY_TO_GPU request number.
+    pub const fn map_memory_to_gpu_request(self) -> IoctlRequest {
+        AMDKFD_IOC_MAP_MEMORY_TO_GPU
+    }
+
+    /// Returns the admitted UNMAP_MEMORY_FROM_GPU request number.
+    pub const fn unmap_memory_from_gpu_request(self) -> IoctlRequest {
+        AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU
     }
 
     /// Returns the admitted GET_PROCESS_APERTURES_NEW request number.
@@ -446,6 +725,33 @@ const _: () = {
     assert!(offset_of!(KfdIoctlAcquireVmArgs, drm_fd) == 0);
     assert!(offset_of!(KfdIoctlAcquireVmArgs, gpu_id) == 4);
 
+    assert!(size_of::<KfdIoctlAllocMemoryOfGpuArgs>() == 40);
+    assert!(align_of::<KfdIoctlAllocMemoryOfGpuArgs>() == 8);
+    assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, va_addr) == 0);
+    assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, size) == 8);
+    assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, handle) == 16);
+    assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, mmap_offset) == 24);
+    assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, gpu_id) == 32);
+    assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, flags) == 36);
+
+    assert!(size_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);
+    assert!(align_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);
+    assert!(offset_of!(KfdIoctlFreeMemoryOfGpuArgs, handle) == 0);
+
+    assert!(size_of::<KfdIoctlMapMemoryToGpuArgs>() == 24);
+    assert!(align_of::<KfdIoctlMapMemoryToGpuArgs>() == 8);
+    assert!(offset_of!(KfdIoctlMapMemoryToGpuArgs, handle) == 0);
+    assert!(offset_of!(KfdIoctlMapMemoryToGpuArgs, device_ids_array_ptr) == 8);
+    assert!(offset_of!(KfdIoctlMapMemoryToGpuArgs, n_devices) == 16);
+    assert!(offset_of!(KfdIoctlMapMemoryToGpuArgs, n_success) == 20);
+
+    assert!(size_of::<KfdIoctlUnmapMemoryFromGpuArgs>() == 24);
+    assert!(align_of::<KfdIoctlUnmapMemoryFromGpuArgs>() == 8);
+    assert!(offset_of!(KfdIoctlUnmapMemoryFromGpuArgs, handle) == 0);
+    assert!(offset_of!(KfdIoctlUnmapMemoryFromGpuArgs, device_ids_array_ptr) == 8);
+    assert!(offset_of!(KfdIoctlUnmapMemoryFromGpuArgs, n_devices) == 16);
+    assert!(offset_of!(KfdIoctlUnmapMemoryFromGpuArgs, n_success) == 20);
+
     assert!(size_of::<KfdProcessDeviceApertures>() == 56);
     assert!(align_of::<KfdProcessDeviceApertures>() == 8);
     assert!(offset_of!(KfdProcessDeviceApertures, lds_base) == 0);
@@ -480,7 +786,15 @@ const _: () = {
     assert!(AMDKFD_IOC_GET_VERSION == 0x8008_4b01);
     assert!(AMDKFD_IOC_GET_PROCESS_APERTURES_NEW == 0xc010_4b14);
     assert!(AMDKFD_IOC_ACQUIRE_VM == 0x4008_4b15);
+    assert!(AMDKFD_IOC_ALLOC_MEMORY_OF_GPU == 0xc028_4b16);
+    assert!(AMDKFD_IOC_FREE_MEMORY_OF_GPU == 0x4008_4b17);
+    assert!(AMDKFD_IOC_MAP_MEMORY_TO_GPU == 0xc018_4b18);
+    assert!(AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU == 0xc018_4b19);
     assert!(AMDKFD_IOC_SET_XNACK_MODE == 0xc004_4b21);
     assert!(AMDKFD_IOC_SMI_EVENTS == 0xc008_4b1f);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT == 0x8400_0002);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_KERNARG == 0x8600_0002);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0x8e00_0002);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE == 0xc400_0002);
     assert!(KFD_SMI_EVENT_GPU_RESET_MASK == 0x0c);
 };
