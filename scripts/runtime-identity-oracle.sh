@@ -96,6 +96,7 @@ readonly METADATA_AUDIT_ERROR="${CAPTURE_DIR}/metadata-audit-error.txt"
 readonly ELF_AUDIT_REPORT="${CAPTURE_DIR}/elf-audit-report.txt"
 readonly ELF_AUDIT_ERROR="${CAPTURE_DIR}/elf-audit-error.txt"
 readonly MEASUREMENT_TIME="${CAPTURE_DIR}/measurement-time.txt"
+readonly MAX_AUDIT_REPORT_BYTES=4096
 
 cd -- "${REPO_ROOT}"
 
@@ -106,16 +107,21 @@ if ! grep -qx 'worktree=clean' "${GIT_OBSERVATION}"; then
 fi
 
 # Re-establish that neither the separately launched oracle nor this harness is a
-# production Cargo edge. The linked pure-Rust evidence producer is audited too.
-if ! (
-  ulimit -f 16
-  python3 "${AUDITOR}" --policy "${POLICY}" metadata --cargo \
+# production Cargo edge. Bound the report through the pipe instead of applying
+# RLIMIT_FSIZE to Cargo: Cargo may update its shared global-cache database while
+# producing metadata, and that unrelated file can already exceed the report cap.
+if ! python3 "${AUDITOR}" --policy "${POLICY}" metadata --cargo \
     --root fe2o3-kfd \
     --root fe2o3-drm-uapi \
     --root fe2o3-kfd-uapi \
-    --root fe2o3-runtime-model
-) >"${METADATA_AUDIT_REPORT}" 2>"${METADATA_AUDIT_ERROR}"; then
+    --root fe2o3-runtime-model \
+    2>"${METADATA_AUDIT_ERROR}" | \
+    head -c "$((MAX_AUDIT_REPORT_BYTES + 1))" >"${METADATA_AUDIT_REPORT}"; then
   cat -- "${METADATA_AUDIT_ERROR}" >&2
+  exit 2
+fi
+if [[ $(stat -c %s -- "${METADATA_AUDIT_REPORT}") -gt ${MAX_AUDIT_REPORT_BYTES} ]]; then
+  printf '%s\n' 'metadata audit report exceeded its byte bound' >&2
   exit 2
 fi
 if [[ -s "${METADATA_AUDIT_ERROR}" ]]; then

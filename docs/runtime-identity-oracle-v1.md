@@ -111,6 +111,12 @@ stable-reader checks as the measurement inputs.
 The detached summary retains each audit's passed status, bounded counts, and the
 exact reviewed build-script exceptions in addition to the report digests.
 
+The runner bounds the metadata audit report at the capture pipe. It deliberately
+does not pass a report-sized `RLIMIT_FSIZE` into `cargo metadata`, because Cargo
+may update its shared global-cache database as an unrelated side effect and that
+database can already exceed the report bound. The auditor independently caps the
+metadata input, and the comparator reopens and enforces the exact report schema.
+
 GPU rows contain UUID, KFD node/GPU ID, PCI address, render minor, oracle
 agent/BDFID, target, wavefront, firmware, exact ISA, currentness source, and the
 pure-Rust VRAM-loss-counter source.
