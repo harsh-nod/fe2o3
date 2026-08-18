@@ -12,6 +12,7 @@
         "fe2o3-compiler-ffi",
         "fe2o3-completion",
         "fe2o3-contracts",
+        "fe2o3-drm-uapi",
         "fe2o3-external-anchor-protocol",
         "fe2o3-host-api",
         "fe2o3-host-link-closure",

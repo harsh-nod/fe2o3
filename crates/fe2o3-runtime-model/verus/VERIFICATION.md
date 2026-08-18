@@ -1,7 +1,8 @@
 # Runtime model verification
 
 This directory contains the initial issue #137 Verus specifications. The
-authenticated runner proves six obligations over bounded abstract models.
+authenticated runner proves six obligations over finite abstract traces. The
+sequence lengths are not bounded by these proofs.
 
 `runtime_lifecycle_v1.rs` proves:
 
@@ -16,7 +17,8 @@ authenticated runner proves six obligations over bounded abstract models.
 2. registering a VM preserves its exact active device-generation binding;
 3. an active VM cannot be substituted onto another generation of the same
    physical device; and
-4. an active or stale generation cannot be reused as a fresh admission.
+4. while a current generation is active, that generation or an older one
+   cannot be reused as a fresh admission.
 
 Run both proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
@@ -26,6 +28,11 @@ source checker, transcript, and mutations are pinned under `verus/pins`:
 VERUS=/absolute/path/to/verus \
   crates/fe2o3-runtime-model/verus/verify-verus.sh
 ```
+
+`scripts/ci-local.sh verus` invokes the same authenticated runner. The
+`runtime-model-verus.yml` pull-request workflow downloads the named release and
+then relies on this runner's executable and complete-closure pins before any
+proof result is accepted.
 
 The mutations must fail at their named postconditions: release while retained,
 VM generation substitution, stale generation reuse, and topology/render PCI

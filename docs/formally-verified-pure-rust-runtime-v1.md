@@ -467,9 +467,10 @@ inventory template.
 Exit requires:
 
 - generic CI runs all metadata/ELF audit unit tests without ROCm, audits the
-  actual locked production closures rooted at `fe2o3-kfd`, `fe2o3-kfd-uapi`,
-  and `fe2o3-runtime-model`, builds `fe2o3-kfd`'s `kfd-version` example in a
-  dedicated target directory, and audits that linked ELF;
+  actual locked production closures rooted at `fe2o3-kfd`, `fe2o3-drm-uapi`,
+  `fe2o3-kfd-uapi`, and `fe2o3-runtime-model`, builds `fe2o3-kfd`'s
+  `kfd-version`, `kfd-topology`, and `kfd-device-identity` examples in a
+  dedicated target directory, and audits all three linked ELFs;
 - malformed metadata/ELF, missing resolve data, unknown DSO, prohibited DSO,
   `libdl`, prohibited symbol, dynamic-loader/process-launch symbol,
   loader-control dynamic tag, hidden loader literal, `links`, unapproved build
@@ -620,5 +621,6 @@ scripts/ci-local.sh runtime-policy
 
 The same gate runs in `generic-core`. Its unit tests create adversarial ELF and
 Cargo metadata fixtures in temporary directories. The gate additionally audits
-the actual three-crate production closure and the freshly linked `kfd-version`
-ELF. It does not inspect or require the host ROCm installation.
+the actual four-crate production closure and the freshly linked `kfd-version`,
+`kfd-topology`, and `kfd-device-identity` ELFs. It does not inspect or require
+the host ROCm installation.

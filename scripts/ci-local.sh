@@ -44,6 +44,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-contracts
   fe2o3-device
   fe2o3-differential
+  fe2o3-drm-uapi
   fe2o3-hsaco
   fe2o3-hsaco-finalize
   fe2o3-host
@@ -265,15 +266,27 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \
       --root fe2o3-kfd \
+      --root fe2o3-drm-uapi \
       --root fe2o3-kfd-uapi \
       --root fe2o3-runtime-model
-  run_step runtime-pure-rust-kfd-version-build \
+  run_step runtime-pure-rust-kfd-examples-build \
     env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
-      cargo build --locked -p fe2o3-kfd --example kfd-version
+      cargo build --locked -p fe2o3-kfd \
+        --example kfd-version \
+        --example kfd-topology \
+        --example kfd-device-identity
   run_step runtime-pure-rust-kfd-version-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-version"
+  run_step runtime-pure-rust-kfd-topology-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-topology"
+  run_step runtime-pure-rust-kfd-device-identity-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-device-identity"
 }
 
 load_rustc_codegen_shards() {
@@ -369,6 +382,8 @@ run_backend_build() {
 }
 
 run_verus() {
+  run_step runtime-model-verus \
+    "${REPO_ROOT}/crates/fe2o3-runtime-model/verus/verify-verus.sh"
   run_step verus-fixtures \
     "${REPO_ROOT}/examples/verus_vecadd/run-verus.sh" --require
   run_step scalar-gemm-verus \

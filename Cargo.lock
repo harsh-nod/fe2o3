@@ -798,6 +798,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-drm-uapi"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-external-anchor-protocol"
 version = "0.1.0"
 dependencies = [
@@ -957,8 +964,11 @@ version = "0.1.0"
 name = "fe2o3-kfd"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-drm-uapi",
  "fe2o3-kfd-uapi",
+ "fe2o3-runtime-model",
  "rustix",
+ "sha2 0.11.0",
 ]
 
 [[package]]

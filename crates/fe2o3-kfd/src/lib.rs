@@ -14,6 +14,12 @@ use fe2o3_kfd_uapi::{
 #[allow(unsafe_code)]
 mod linux;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod device;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use device::*;
+
 #[cfg(target_os = "linux")]
 pub mod topology;
 
