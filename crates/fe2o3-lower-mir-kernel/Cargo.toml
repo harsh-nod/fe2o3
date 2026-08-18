@@ -5,11 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Bounded MIR-to-kernel Pliron transformation shell for fe2o3."
+description = "Bounded detached MIR-to-kernel Pliron lowering service for fe2o3."
 readme = "README.md"
 publish = false
 
 [dependencies]
 dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
+fe2o3-pliron.workspace = true
 pliron.workspace = true

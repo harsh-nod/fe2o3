@@ -5,15 +5,12 @@ use dialect_mir::{
 };
 use fe2o3_lower_mir_kernel::{
     DIALECT_REGISTRATION_ORDER, LoweringConfig, LoweringLimits, LoweringResult,
-    MirKernelLoweringPass, PASS_NAME, PassRegistrationOutcome, SourceOperationEvidence,
-    register_pass,
+    MirKernelLoweringPass, PassRegistrationOutcome, SourceOperationEvidence, register_pass,
 };
 use pliron::{
     context::Context,
-    irbuild::IRStatus,
     op::Op,
     operation::{Operation, verify_operation},
-    pass::{AnalysisManager, Pass},
 };
 
 fn config() -> LoweringConfig {
@@ -118,25 +115,4 @@ fn lowering_record_is_deterministic_and_preserves_source_evidence() {
     right
         .validate(&right_context)
         .expect("right postconditions");
-}
-
-#[test]
-fn pliron_pass_adapter_reports_detached_output_without_ir_change() {
-    let mut context = Context::new();
-    register_pass(&mut context).expect("registration");
-    let source = source(&mut context);
-    let mut pass = MirKernelLoweringPass::new(config());
-    let mut analyses = AnalysisManager::default();
-
-    assert_eq!(Pass::name(&pass), PASS_NAME);
-    let pass_result = Pass::run(
-        &mut pass,
-        source.get_operation(),
-        &mut context,
-        &mut analyses,
-    )
-    .expect("Pliron adapter succeeds");
-
-    assert_eq!(pass_result.ir_changed, IRStatus::Unchanged);
-    assert!(pass.last_result().is_some());
 }

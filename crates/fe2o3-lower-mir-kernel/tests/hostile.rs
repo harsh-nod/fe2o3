@@ -1,3 +1,8 @@
+use std::{
+    any::Any,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
+
 use dialect_kernel::{AlgorithmOp, IterationDomainAttr};
 use dialect_mir::{
     MAX_EXECUTABLE_BLOCKS, MirBlockId,
@@ -40,6 +45,28 @@ fn module_with_functions(context: &mut Context, count: usize) -> MirModuleOp {
             .expect("valid function");
     }
     module
+}
+
+fn take_registration_marker(context: &mut Context) -> Box<dyn Any> {
+    let key: Identifier = PASS_REGISTRATION_MARKER_KEY
+        .try_into()
+        .expect("valid marker key");
+    let index = context
+        .aux_data_map
+        .remove(&key)
+        .expect("registration marker exists");
+    context
+        .aux_data
+        .remove(index)
+        .expect("registration marker is live")
+}
+
+fn install_registration_marker(context: &mut Context, marker: Box<dyn Any>) {
+    let key: Identifier = PASS_REGISTRATION_MARKER_KEY
+        .try_into()
+        .expect("valid marker key");
+    let index = context.aux_data.insert(marker);
+    context.aux_data_map.insert(key, index);
 }
 
 #[test]
@@ -432,4 +459,83 @@ fn postconditions_reject_a_foreign_context_before_dereferencing() {
         result.validate(&foreign),
         Err(PostconditionError::ContextMismatch)
     );
+}
+
+#[test]
+fn transplanted_registration_markers_fail_closed() {
+    let mut unanchored_owner = Context::new();
+    register_pass(&mut unanchored_owner).expect("owner registration");
+    let owner_marker = take_registration_marker(&mut unanchored_owner);
+
+    let mut unanchored_foreign = Context::new();
+    install_registration_marker(&mut unanchored_foreign, owner_marker);
+    assert_eq!(
+        register_pass(&mut unanchored_foreign),
+        Err(PassRegistrationError::CorruptMarker)
+    );
+
+    let config = config_with(limits(1, 1, 4, 1));
+    let mut owner = Context::new();
+    register_pass(&mut owner).expect("owner registration");
+    let source = module_with_functions(&mut owner, 1);
+    let mut service = MirKernelLoweringPass::new(config.clone());
+    service
+        .run_checked(source.get_operation(), &mut owner)
+        .expect("owner lowering");
+    let result = service.take_result().expect("owner result");
+    let owner_marker = take_registration_marker(&mut owner);
+
+    let mut populated_foreign = Context::new();
+    register_pass(&mut populated_foreign).expect("foreign registration");
+    let foreign_source = module_with_functions(&mut populated_foreign, 1);
+    MirKernelLoweringPass::new(config)
+        .run_checked(foreign_source.get_operation(), &mut populated_foreign)
+        .expect("foreign lowering populates comparable arena slots");
+    drop(take_registration_marker(&mut populated_foreign));
+    install_registration_marker(&mut populated_foreign, owner_marker);
+
+    assert_eq!(
+        register_pass(&mut populated_foreign),
+        Err(PassRegistrationError::CorruptMarker)
+    );
+    assert_eq!(
+        result.validate(&populated_foreign),
+        Err(PostconditionError::ContextMismatch)
+    );
+}
+
+#[test]
+fn erased_source_and_output_handles_return_typed_errors_without_unwinding() {
+    let config = config_with(limits(1, 1, 4, 1));
+
+    let mut source_context = Context::new();
+    register_pass(&mut source_context).expect("source registration");
+    let source = module_with_functions(&mut source_context, 1).get_operation();
+    let mut source_service = MirKernelLoweringPass::new(config.clone());
+    source_service
+        .run_checked(source, &mut source_context)
+        .expect("source lowering");
+    let source_result = source_service.take_result().expect("source result");
+    Operation::erase(source, &mut source_context);
+    match catch_unwind(AssertUnwindSafe(|| source_result.validate(&source_context))) {
+        Ok(result) => assert_eq!(result, Err(PostconditionError::SourceNoLongerValid)),
+        Err(_) => panic!("erased source validation must not unwind"),
+    }
+
+    let mut output_context = Context::new();
+    register_pass(&mut output_context).expect("output registration");
+    let source = module_with_functions(&mut output_context, 1).get_operation();
+    let mut output_service = MirKernelLoweringPass::new(config);
+    output_service
+        .run_checked(source, &mut output_context)
+        .expect("output lowering");
+    let output_result = output_service.take_result().expect("output result");
+    Operation::erase(output_result.operations()[0], &mut output_context);
+    match catch_unwind(AssertUnwindSafe(|| output_result.validate(&output_context))) {
+        Ok(result) => assert_eq!(
+            result,
+            Err(PostconditionError::InvalidKernelOperation { index: 0 })
+        ),
+        Err(_) => panic!("erased output validation must not unwind"),
+    }
 }

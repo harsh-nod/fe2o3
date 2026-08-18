@@ -5,8 +5,7 @@
 use std::{
     error::Error,
     fmt,
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
+    panic::{AssertUnwindSafe, catch_unwind},
 };
 
 use dialect_kernel::{AlgorithmOp, KernelError};
@@ -17,20 +16,20 @@ use dialect_mir::{
         MirBlockOp, MirFunctionOp, MirModuleOp, MirReturnOp, MirTypeRef, register_mir_dialect,
     },
 };
+use fe2o3_pliron::{
+    ContextIdentity, ContextIdentityError, ensure_context_identity, require_context_identity,
+};
 use pliron::{
     builtin::{type_interfaces::FunctionTypeInterface, types::FunctionType},
     context::{Context, Ptr},
     dialect::{Dialect, DialectName},
     identifier::Identifier,
-    irbuild::IRStatus,
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::{Operation, verify_operation},
-    pass::{AnalysisManager, Pass, PassResult},
 };
 
-/// Stable Pliron pass name.
+/// Stable detached lowering service name.
 pub const PASS_NAME: &str = "fe2o3-lower-mir-kernel";
 
 /// Context marker used by [`register_pass`].
@@ -58,11 +57,9 @@ pub const MAX_STRUCTURED_RANK: u32 = dialect_kernel::MAX_ITERATION_RANK;
 /// Hard bound on emitted kernel algorithm roots.
 pub const MAX_REWRITES: usize = MAX_SOURCE_FUNCTIONS;
 
-static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
-
 #[derive(Debug)]
 struct PassRegistrationMarker {
-    context_id: NonZeroU64,
+    context_identity: ContextIdentity,
 }
 
 /// Result of explicitly registering the pass and its source and target dialects.
@@ -116,7 +113,7 @@ impl Error for PassRegistrationError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RegistrationState {
     Absent,
-    Registered(NonZeroU64),
+    Registered(ContextIdentity),
 }
 
 fn registration_marker_key() -> Identifier {
@@ -130,22 +127,27 @@ fn registration_state(context: &Context) -> Result<RegistrationState, PassRegist
     let Some(index) = context.aux_data_map.get(&key).copied() else {
         return Ok(RegistrationState::Absent);
     };
-    match context.aux_data.get(index) {
-        Some(marker) => marker
-            .downcast_ref::<PassRegistrationMarker>()
-            .map(|marker| RegistrationState::Registered(marker.context_id))
-            .ok_or(PassRegistrationError::MarkerCollision),
-        None => Err(PassRegistrationError::CorruptMarker),
+    let marker = context
+        .aux_data
+        .get(index)
+        .ok_or(PassRegistrationError::CorruptMarker)?
+        .downcast_ref::<PassRegistrationMarker>()
+        .ok_or(PassRegistrationError::MarkerCollision)?;
+    let context_identity = require_context_identity(context).map_err(map_context_identity_error)?;
+    if marker.context_identity != context_identity {
+        return Err(PassRegistrationError::CorruptMarker);
     }
+    Ok(RegistrationState::Registered(context_identity))
 }
 
-fn next_context_id() -> Result<NonZeroU64, PassRegistrationError> {
-    let value = NEXT_CONTEXT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-            value.checked_add(1)
-        })
-        .map_err(|_| PassRegistrationError::ContextIdentityExhausted)?;
-    NonZeroU64::new(value).ok_or(PassRegistrationError::ContextIdentityExhausted)
+fn map_context_identity_error(error: ContextIdentityError) -> PassRegistrationError {
+    match error {
+        ContextIdentityError::MarkerCollision => PassRegistrationError::MarkerCollision,
+        ContextIdentityError::CorruptMarker => PassRegistrationError::CorruptMarker,
+        ContextIdentityError::IdentitySpaceExhausted => {
+            PassRegistrationError::ContextIdentityExhausted
+        }
+    }
 }
 
 /// Explicitly registers the MIR dialect, kernel dialect, and pass marker.
@@ -162,6 +164,8 @@ pub fn register_pass(
         RegistrationState::Absent => {}
     }
 
+    let context_identity = ensure_context_identity(context).map_err(map_context_identity_error)?;
+
     let mir_name = DialectName::try_new(DIALECT_REGISTRATION_ORDER[0])
         .map_err(|_| PassRegistrationError::InvalidDialectName)?;
     Dialect::register(context, &mir_name);
@@ -172,9 +176,9 @@ pub fn register_pass(
     dialect_kernel::register_dialect(context, &kernel_name)
         .map_err(PassRegistrationError::KernelDialect)?;
 
-    let marker = context.aux_data.insert(Box::new(PassRegistrationMarker {
-        context_id: next_context_id()?,
-    }));
+    let marker = context
+        .aux_data
+        .insert(Box::new(PassRegistrationMarker { context_identity }));
     context
         .aux_data_map
         .insert(registration_marker_key(), marker);
@@ -487,18 +491,21 @@ impl LoweringRecord {
     }
 }
 
-/// Successful bounded transformation output.
+/// Successful bounded detached-lowering output.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoweringResult {
     source_root: Ptr<Operation>,
     config: LoweringConfig,
     record: LoweringRecord,
     operations: Vec<Ptr<Operation>>,
-    context_id: NonZeroU64,
+    context_identity: ContextIdentity,
 }
 
 impl LoweringResult {
     /// Returns the exact in-memory source root consumed by this result.
+    ///
+    /// This contextless Pliron pointer is an internal TCB handle. It is valid
+    /// only with the context accepted by [`Self::validate`].
     pub const fn source_root(&self) -> Ptr<Operation> {
         self.source_root
     }
@@ -514,6 +521,9 @@ impl LoweringResult {
     }
 
     /// Returns unlinked Pliron roots for emitted `kernel.*` operations.
+    ///
+    /// These contextless Pliron pointers are internal TCB handles. They are
+    /// valid only with the context accepted by [`Self::validate`].
     pub fn operations(&self) -> &[Ptr<Operation>] {
         &self.operations
     }
@@ -713,7 +723,11 @@ impl fmt::Display for LoweringError {
 
 impl Error for LoweringError {}
 
-/// Bounded target-neutral MIR-to-kernel Pliron transformation pass.
+/// Bounded target-neutral detached MIR-to-kernel lowering service.
+///
+/// The historical `Pass` suffix is retained for compatibility. This type does
+/// not implement Pliron's in-tree pass contract because its outputs are
+/// detached operations rather than rewrites beneath the supplied source root.
 #[derive(Clone, Debug)]
 pub struct MirKernelLoweringPass {
     config: LoweringConfig,
@@ -721,7 +735,7 @@ pub struct MirKernelLoweringPass {
 }
 
 impl MirKernelLoweringPass {
-    /// Creates a pass with an already validated immutable configuration.
+    /// Creates a service with an already validated immutable configuration.
     pub const fn new(config: LoweringConfig) -> Self {
         Self {
             config,
@@ -729,7 +743,7 @@ impl MirKernelLoweringPass {
         }
     }
 
-    /// Returns this pass's immutable bounded configuration.
+    /// Returns this service's immutable bounded configuration.
     pub const fn config(&self) -> &LoweringConfig {
         &self.config
     }
@@ -754,7 +768,7 @@ impl MirKernelLoweringPass {
         context: &mut Context,
     ) -> Result<&LoweringResult, LoweringError> {
         self.last_result = None;
-        let context_id = require_registration(context)?;
+        let context_identity = require_registration(context)?;
         let source_evidence = inspect_source(context, source, &self.config)?;
         let steps = build_steps(&source_evidence, &self.config)?;
         let operations = materialize_steps(context, &steps)?;
@@ -766,7 +780,7 @@ impl MirKernelLoweringPass {
                 steps,
             },
             operations,
-            context_id,
+            context_identity,
         };
         result
             .validate(context)
@@ -779,29 +793,9 @@ impl MirKernelLoweringPass {
     }
 }
 
-impl Pass for MirKernelLoweringPass {
-    fn name(&self) -> &str {
-        PASS_NAME
-    }
-
-    fn run(
-        &mut self,
-        source: Ptr<Operation>,
-        context: &mut Context,
-        _analyses: &mut AnalysisManager,
-    ) -> pliron::result::Result<PassResult> {
-        let location = source.deref(context).loc();
-        self.run_checked(source, context)
-            .map_err(|error| pliron::verify_error!(location.clone(), "{error}"))?;
-        let mut result = PassResult::default();
-        result.ir_changed = IRStatus::Unchanged;
-        Ok(result)
-    }
-}
-
-fn require_registration(context: &Context) -> Result<NonZeroU64, LoweringError> {
+fn require_registration(context: &Context) -> Result<ContextIdentity, LoweringError> {
     match registration_state(context) {
-        Ok(RegistrationState::Registered(context_id)) => Ok(context_id),
+        Ok(RegistrationState::Registered(context_identity)) => Ok(context_identity),
         Ok(RegistrationState::Absent) => Err(LoweringError::PassNotRegistered),
         Err(_) => Err(LoweringError::RegistrationCorrupt),
     }
@@ -815,6 +809,21 @@ struct SourceCounts {
 }
 
 fn inspect_source(
+    context: &Context,
+    source: Ptr<Operation>,
+    config: &LoweringConfig,
+) -> Result<SourceModuleEvidence, LoweringError> {
+    let source_ref = source
+        .try_deref(context)
+        .map_err(|_| LoweringError::SourceVerificationFailed)?;
+    drop(source_ref);
+    catch_unwind(AssertUnwindSafe(|| {
+        inspect_live_source(context, source, config)
+    }))
+    .unwrap_or(Err(LoweringError::SourceVerificationFailed))
+}
+
+fn inspect_live_source(
     context: &Context,
     source: Ptr<Operation>,
     config: &LoweringConfig,
@@ -1090,7 +1099,8 @@ fn validate_postconditions(
     result: &LoweringResult,
 ) -> Result<(), PostconditionError> {
     match registration_state(context) {
-        Ok(RegistrationState::Registered(context_id)) if context_id == result.context_id => {}
+        Ok(RegistrationState::Registered(context_identity))
+            if context_identity == result.context_identity => {}
         _ => return Err(PostconditionError::ContextMismatch),
     }
     let source = inspect_source(context, result.source_root, &result.config)
@@ -1116,11 +1126,20 @@ fn validate_postconditions(
         .zip(&result.operations)
         .enumerate()
     {
-        verify_operation(*operation, context)
+        let operation_ref = operation
+            .try_deref(context)
             .map_err(|_| PostconditionError::InvalidKernelOperation { index })?;
+        drop(operation_ref);
+        catch_unwind(AssertUnwindSafe(|| verify_operation(*operation, context)))
+            .map_err(|_| PostconditionError::InvalidKernelOperation { index })?
+            .map_err(|_| PostconditionError::InvalidKernelOperation { index })?;
+        let matches = catch_unwind(AssertUnwindSafe(|| {
+            kernel_operation_matches(context, *operation, step.iteration_rank)
+        }))
+        .map_err(|_| PostconditionError::InvalidKernelOperation { index })?;
         if step.source_function_ordinal != index
             || step.iteration_rank != result.config.iteration_rank
-            || !kernel_operation_matches(context, *operation, step.iteration_rank)
+            || !matches
         {
             return Err(PostconditionError::UnexpectedKernelOperation { index });
         }
