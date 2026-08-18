@@ -86,8 +86,9 @@ explicit performance and reliability gates.
   exception in the versioned policy and its Cargo source matches that review.
 - Rust `unsafe` code in a sealed syscall adapter, with each operation linked to
   a reviewed precondition/postcondition contract.
-- The host C ABI supplied by the platform libc for system calls and process
-  services. The initial ELF policy permits only the named baseline system DSOs.
+- The host C ABI supplied by the platform libc for the bounded system interfaces
+  required by the adapter. Dynamic loading and process launch are excluded; the
+  initial ELF policy permits only the named baseline system DSOs.
 - Checked-in UAPI constants and `#[repr(C)]` Rust structures generated or
   transcribed from a pinned Linux UAPI revision, provided independent layout
   tests bind every size, alignment, offset, ioctl number, and version.
@@ -103,7 +104,10 @@ explicit performance and reliability gates.
   `libdrm_amdgpu`, HIPRTC, or a renamed/repackaged equivalent.
 - C/C++/assembly shims compiled by a crate build script, including a static
   archive that avoids a `DT_NEEDED` record.
-- Production `dlopen`/`dlsym` escape hatches for a prohibited runtime.
+- Production `libdl`, `dlopen`/`dlsym`, process-launch, or equivalent escape
+  hatches for loading a prohibited runtime out of process.
+- Loader-controlled search/audit/filter indirection through `DT_RPATH`,
+  `DT_RUNPATH`, `DT_AUDIT`, `DT_DEPAUDIT`, `DT_FILTER`, or `DT_AUXILIARY`.
 - Build-time bindgen, `pkg-config`, CMake, `cc`, or shell discovery of ROCm.
 - Calling COMGR to compile, relocate, or load code at runtime.
 - Treating an arbitrary raw pointer, GPU virtual address, queue handle, signal,
@@ -117,14 +121,16 @@ The checked-in policy is `scripts/runtime-pure-rust-policy.json`. The auditor is
 `scripts/runtime_pure_rust_audit.py`. It uses only the Python standard library
 and has no ROCm dependency.
 
-Audit an exact resolved production closure, including normal and build edges:
+Audit the current locked, target-filtered production closure, including normal
+and build edges. The auditor invokes Cargo directly so CI cannot accidentally
+reuse detached or stale metadata:
 
 ```bash
-cargo metadata --locked --offline --filter-platform x86_64-unknown-linux-gnu \
-  --format-version 1 > /tmp/fe2o3-runtime-metadata.json
 python3 scripts/runtime_pure_rust_audit.py metadata \
-  --input /tmp/fe2o3-runtime-metadata.json \
-  --root fe2o3-runtime
+  --cargo \
+  --root fe2o3-kfd \
+  --root fe2o3-kfd-uapi \
+  --root fe2o3-runtime-model
 ```
 
 Do not use `cargo metadata --no-deps`: the auditor requires the complete resolve
@@ -155,19 +161,21 @@ python3 scripts/runtime_pure_rust_audit.py elf \
   --input /absolute/path/to/fe2o3-runtime-host
 ```
 
-The ELF audit parses `PT_DYNAMIC`, `DT_NEEDED`, `SHT_DYNSYM`, and their string
-tables without invoking `ldd`, `readelf`, or the dynamic loader. It rejects
-unknown DSOs, prohibited imports/exports, and known hidden loader literals. A
-malformed, truncated, unsupported, symlinked, changing, or incompletely
-inspectable input is an audit error, not a pass. The input digest and counts are
-reported deterministically.
+The ELF audit parses `PT_DYNAMIC`, its dynamic tags, `DT_NEEDED`, `SHT_DYNSYM`,
+and their string tables without invoking `ldd`, `readelf`, or the dynamic
+loader. It rejects unknown DSOs (including `libdl`), prohibited imports/exports,
+standard dynamic-loader and process-launch imports, loader-controlled
+search/audit/filter tags, and known hidden loader literals. A malformed,
+truncated, unsupported, symlinked, changing, or incompletely inspectable input
+is an audit error, not a pass. The input digest and counts are reported
+deterministically.
 
 This audit is a necessary negative control, not a semantic proof. It cannot
-show that arbitrary statically linked machine code is benign, detect a runtime
-that constructs an obfuscated DSO name, or authenticate a caller-supplied Cargo
-metadata file. Release admission must bind the policy, exact Cargo metadata,
-source tree, compiler invocation, final ELF digest, and audit result. Repository
-review prohibits obfuscating or recreating the rejected boundary.
+show that arbitrary statically linked machine code is benign or rule out a
+custom loader/executor implemented directly with syscalls. Release admission
+must bind the policy, Cargo invocation and exact metadata, source tree, compiler
+invocation, final ELF digest, and audit result. Repository review prohibits
+obfuscating or recreating the rejected boundary.
 
 ## Initial `gfx942` Profile
 
@@ -458,11 +466,15 @@ inventory template.
 
 Exit requires:
 
-- generic CI runs all metadata/ELF audit unit tests without ROCm;
+- generic CI runs all metadata/ELF audit unit tests without ROCm, audits the
+  actual locked production closures rooted at `fe2o3-kfd`, `fe2o3-kfd-uapi`,
+  and `fe2o3-runtime-model`, builds `fe2o3-kfd`'s `kfd-version` example in a
+  dedicated target directory, and audits that linked ELF;
 - malformed metadata/ELF, missing resolve data, unknown DSO, prohibited DSO,
-  prohibited symbol, hidden loader literal, `links`, unapproved build script,
-  unapproved allowlist source, and HIP/HSA production dependency fixtures all
-  fail;
+  `libdl`, prohibited symbol, dynamic-loader/process-launch symbol,
+  loader-control dynamic tag, hidden loader literal, `links`, unapproved build
+  script, unapproved allowlist source, and HIP/HSA production dependency
+  fixtures all fail;
 - a pure Rust closure, the exact reviewed rustix/libc configuration-script
   exceptions, and a baseline-system-DSO ELF fixture pass deterministically, with
   every exercised build-script exception named in the report;
@@ -600,12 +612,13 @@ are mandatory controls against claiming breadth before it exists.
 
 ## R0 Validation
 
-Run the offline R0 gate with:
+Run the ROCm-independent R0 gate with:
 
 ```bash
 scripts/ci-local.sh runtime-policy
 ```
 
-The same tests run in `generic-core`. They create synthetic ELF and Cargo
-metadata fixtures in temporary directories and do not inspect or require the
-host ROCm installation.
+The same gate runs in `generic-core`. Its unit tests create adversarial ELF and
+Cargo metadata fixtures in temporary directories. The gate additionally audits
+the actual three-crate production closure and the freshly linked `kfd-version`
+ELF. It does not inspect or require the host ROCm installation.

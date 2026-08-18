@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import stat
 import struct
+import subprocess
 import sys
 from typing import Any
 
@@ -37,6 +38,21 @@ DT_NULL = 0
 DT_NEEDED = 1
 DT_STRTAB = 5
 DT_STRSZ = 10
+DT_RPATH = 15
+DT_RUNPATH = 29
+DT_DEPAUDIT = 0x6FFFFEFB
+DT_AUDIT = 0x6FFFFEFC
+DT_AUXILIARY = 0x7FFFFFFD
+DT_FILTER = 0x7FFFFFFF
+DYNAMIC_TAG_VALUES = {
+    "DT_AUDIT": DT_AUDIT,
+    "DT_AUXILIARY": DT_AUXILIARY,
+    "DT_DEPAUDIT": DT_DEPAUDIT,
+    "DT_FILTER": DT_FILTER,
+    "DT_RPATH": DT_RPATH,
+    "DT_RUNPATH": DT_RUNPATH,
+}
+CARGO_METADATA_TARGET = "x86_64-unknown-linux-gnu"
 
 
 class AuditInputError(ValueError):
@@ -98,6 +114,8 @@ def load_policy(path: Path) -> dict[str, Any]:
         "forbidden_package_substrings",
         "forbidden_dynamic_dependency_substrings",
         "forbidden_dynamic_symbol_prefixes",
+        "forbidden_dynamic_symbols",
+        "forbidden_dynamic_tags",
         "forbidden_binary_literals",
         "reject_cargo_links",
         "reject_unapproved_cargo_build_scripts",
@@ -117,14 +135,25 @@ def load_policy(path: Path) -> dict[str, Any]:
         "forbidden_package_substrings",
         "forbidden_dynamic_dependency_substrings",
         "forbidden_dynamic_symbol_prefixes",
+        "forbidden_dynamic_symbols",
+        "forbidden_dynamic_tags",
         "forbidden_binary_literals",
     ):
         values = _require_string_list(policy[key], f"policy {key}")
-        if key != "allowed_dynamic_dependencies" and any(
-            value.lower() != value for value in values
-        ):
+        if key not in (
+            "allowed_dynamic_dependencies",
+            "forbidden_dynamic_tags",
+        ) and any(value.lower() != value for value in values):
             raise AuditInputError(f"policy {key} entries must be lowercase")
         policy[key] = values
+    unknown_dynamic_tags = sorted(
+        set(policy["forbidden_dynamic_tags"]) - set(DYNAMIC_TAG_VALUES)
+    )
+    if unknown_dynamic_tags:
+        raise AuditInputError(
+            "policy forbidden_dynamic_tags contains unknown names: "
+            f"{unknown_dynamic_tags}"
+        )
     for identity in policy["allowed_cargo_build_script_packages"]:
         name, separator, version = identity.rpartition("@")
         if (
@@ -317,7 +346,9 @@ def _cstring(table: bytes, offset: int, context: str) -> str:
         raise AuditInputError(f"{context} string is not UTF-8") from error
 
 
-def _parse_elf(data: bytes) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _parse_elf(
+    data: bytes,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...]]:
     if len(data) < 16 or data[:4] != b"\x7fELF":
         raise AuditInputError("input is not an ELF file")
     elf_class = data[4]
@@ -393,7 +424,7 @@ def _parse_elf(data: bytes) -> tuple[tuple[str, ...], tuple[str, ...]]:
 
     dynamic_segments = [entry for entry in programs if entry[0] == PT_DYNAMIC]
     if not dynamic_segments:
-        return (), ()
+        return (), (), ()
     if len(dynamic_segments) != 1:
         raise AuditInputError("ELF must contain at most one PT_DYNAMIC segment")
     if not section_offset or not section_count:
@@ -520,7 +551,7 @@ def _parse_elf(data: bytes) -> tuple[tuple[str, ...], tuple[str, ...]]:
                 )
     if dynsym_count != 1:
         raise AuditInputError("dynamic ELF must contain exactly one SHT_DYNSYM section")
-    return tuple(needed), tuple(dynamic_symbols)
+    return tuple(needed), tuple(dynamic_symbols), tuple(sorted(dynamic_values))
 
 
 def _read_stable_regular_file(path: Path) -> tuple[bytes, str]:
@@ -574,7 +605,7 @@ def _read_stable_regular_file(path: Path) -> tuple[bytes, str]:
 
 def audit_elf(path: Path, policy: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
     data, digest = _read_stable_regular_file(path)
-    needed, symbols = _parse_elf(data)
+    needed, symbols, dynamic_tags = _parse_elf(data)
     violations: set[str] = set()
     allowed = set(policy["allowed_dynamic_dependencies"])
     forbidden_needed = policy["forbidden_dynamic_dependency_substrings"]
@@ -587,13 +618,20 @@ def audit_elf(path: Path, policy: dict[str, Any]) -> tuple[list[str], dict[str, 
             )
         elif dependency not in allowed:
             violations.add(f"unapproved dynamic dependency: {dependency}")
+    forbidden_symbols = set(policy["forbidden_dynamic_symbols"])
     prefixes = policy["forbidden_dynamic_symbol_prefixes"]
     for symbol in symbols:
         normalized = symbol.lstrip("_").lower()
+        if normalized in forbidden_symbols:
+            violations.add(f"prohibited dynamic symbol: {symbol} (exact)")
         for prefix in prefixes:
             if normalized.startswith(prefix):
                 violations.add(f"prohibited dynamic symbol: {symbol} ({prefix})")
                 break
+    present_dynamic_tags = set(dynamic_tags)
+    for tag_name in policy["forbidden_dynamic_tags"]:
+        if DYNAMIC_TAG_VALUES[tag_name] in present_dynamic_tags:
+            violations.add(f"prohibited dynamic tag: {tag_name}")
     for literal in policy["forbidden_binary_literals"]:
         if literal.encode("ascii") in data.lower():
             violations.add(f"prohibited dynamic-loader literal: {literal}")
@@ -605,12 +643,49 @@ def audit_elf(path: Path, policy: dict[str, Any]) -> tuple[list[str], dict[str, 
     }
 
 
+def _cargo_metadata_bytes() -> bytes:
+    command = [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--filter-platform",
+        CARGO_METADATA_TARGET,
+        "--format-version",
+        "1",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as error:
+        raise AuditInputError(f"cannot execute cargo metadata: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr[-4096:].decode("utf-8", errors="replace").strip()
+        suffix = f": {detail}" if detail else ""
+        raise AuditInputError(
+            f"cargo metadata --locked failed with status {result.returncode}{suffix}"
+        )
+    if len(result.stdout) > MAX_INPUT_BYTES:
+        raise AuditInputError(f"Cargo metadata exceeds {MAX_INPUT_BYTES} bytes")
+    return result.stdout
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     subparsers = parser.add_subparsers(dest="mode", required=True)
     metadata_parser = subparsers.add_parser("metadata", help="audit Cargo metadata JSON")
-    metadata_parser.add_argument("--input", type=Path, required=True)
+    metadata_inputs = metadata_parser.add_mutually_exclusive_group(required=True)
+    metadata_inputs.add_argument("--input", type=Path)
+    metadata_inputs.add_argument(
+        "--cargo",
+        action="store_true",
+        help="generate locked metadata for the repository before auditing",
+    )
     metadata_parser.add_argument("--root", action="append", default=[])
     elf_parser = subparsers.add_parser("elf", help="audit one host ELF file")
     elf_parser.add_argument("--input", type=Path, required=True)
@@ -619,7 +694,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         policy = load_policy(arguments.policy)
         if arguments.mode == "metadata":
-            metadata_bytes = arguments.input.read_bytes()
+            metadata_bytes = (
+                _cargo_metadata_bytes()
+                if arguments.cargo
+                else arguments.input.read_bytes()
+            )
             if len(metadata_bytes) > MAX_INPUT_BYTES:
                 raise AuditInputError(f"Cargo metadata exceeds {MAX_INPUT_BYTES} bytes")
             try:
@@ -628,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise AuditInputError(
-                    f"cannot parse Cargo metadata {arguments.input}: {error}"
+                    f"cannot parse Cargo metadata {arguments.input or '<cargo>'}: {error}"
                 ) from error
             violations, stats = audit_metadata(
                 metadata, tuple(arguments.root), policy

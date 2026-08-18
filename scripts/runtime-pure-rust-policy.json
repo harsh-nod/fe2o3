@@ -8,7 +8,6 @@
   "allowed_dynamic_dependencies": [
     "ld-linux-x86-64.so.2",
     "libc.so.6",
-    "libdl.so.2",
     "libgcc_s.so.1",
     "libm.so.6",
     "libpthread.so.0",
@@ -38,6 +37,7 @@
     "hiprtc",
     "hsa-runtime",
     "hsakmt",
+    "libdl",
     "libdrm"
   ],
   "forbidden_dynamic_symbol_prefixes": [
@@ -48,6 +48,35 @@
     "fe2o3_hsa_",
     "hip",
     "hsa_"
+  ],
+  "forbidden_dynamic_symbols": [
+    "dlmopen",
+    "dlopen",
+    "dlsym",
+    "dlvsym",
+    "execl",
+    "execle",
+    "execlp",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "fexecve",
+    "fork",
+    "libc_dlopen_mode",
+    "popen",
+    "posix_spawn",
+    "posix_spawnp",
+    "system",
+    "vfork"
+  ],
+  "forbidden_dynamic_tags": [
+    "DT_AUDIT",
+    "DT_AUXILIARY",
+    "DT_DEPAUDIT",
+    "DT_FILTER",
+    "DT_RPATH",
+    "DT_RUNPATH"
   ],
   "forbidden_binary_literals": [
     "libamd_comgr.so",

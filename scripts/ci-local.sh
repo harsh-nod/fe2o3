@@ -16,7 +16,10 @@ readonly WORKSPACE_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/workspace
 readonly PLIRON_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/pliron_dependency_policy.py"
 readonly PLIRON_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/pliron_dependency_policy.py"
 readonly STANDALONE_LOCKFILE_CHECKER="${REPO_ROOT}/scripts/check-standalone-lockfiles.sh"
+readonly RUNTIME_PURE_RUST_AUDITOR="${REPO_ROOT}/scripts/runtime_pure_rust_audit.py"
+readonly RUNTIME_PURE_RUST_POLICY="${REPO_ROOT}/scripts/runtime-pure-rust-policy.json"
 readonly RUNTIME_PURE_RUST_AUDIT_TESTS="${REPO_ROOT}/scripts/tests/runtime_pure_rust_audit.py"
+readonly RUNTIME_PURE_RUST_TARGET_DIR="${REPO_ROOT}/target/runtime-pure-rust-policy"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 
@@ -45,6 +48,8 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-hsaco-finalize
   fe2o3-host
   fe2o3-host-api
+  fe2o3-kfd
+  fe2o3-kfd-uapi
   fe2o3-kernel-analysis
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
@@ -61,6 +66,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-rustc-invocation
   fe2o3-service-host
   fe2o3-service-model
+  fe2o3-runtime-model
   fe2o3-verifier
   fe2o3-worker-v2-bundle
   reserved-fe2o3-symbols
@@ -255,6 +261,19 @@ run_standalone_lockfiles() {
 run_runtime_pure_rust_policy() {
   run_step runtime-pure-rust-audit-tests \
     python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
+  run_step runtime-pure-rust-metadata \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \
+      --root fe2o3-kfd \
+      --root fe2o3-kfd-uapi \
+      --root fe2o3-runtime-model
+  run_step runtime-pure-rust-kfd-version-build \
+    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+      cargo build --locked -p fe2o3-kfd --example kfd-version
+  run_step runtime-pure-rust-kfd-version-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-version"
 }
 
 load_rustc_codegen_shards() {

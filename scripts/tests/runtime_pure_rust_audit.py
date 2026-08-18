@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from unittest import mock
 
 
 sys.dont_write_bytecode = True
@@ -369,6 +370,39 @@ class MetadataAuditTests(unittest.TestCase):
             output.getvalue(),
         )
 
+    def test_cli_cargo_mode_generates_locked_target_metadata(self) -> None:
+        value = metadata([package("runtime")], [node("runtime")])
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(value).encode("utf-8"),
+            stderr=b"",
+        )
+        output = io.StringIO()
+        with mock.patch.object(
+            CHECKER.subprocess, "run", return_value=completed
+        ) as run:
+            with redirect_stdout(output):
+                status = CHECKER.main(
+                    ["metadata", "--cargo", "--root", "runtime"]
+                )
+        self.assertEqual(0, status)
+        run.assert_called_once_with(
+            [
+                "cargo",
+                "metadata",
+                "--locked",
+                "--filter-platform",
+                "x86_64-unknown-linux-gnu",
+                "--format-version",
+                "1",
+            ],
+            cwd=CHECKER.REPO_ROOT,
+            stdout=CHECKER.subprocess.PIPE,
+            stderr=CHECKER.subprocess.PIPE,
+            check=False,
+        )
+        self.assertIn("metadata roots=1 packages=1", output.getvalue())
+
 
 class ElfAuditTests(unittest.TestCase):
     def audit(self, contents: bytes) -> tuple[list[str], dict]:
@@ -393,9 +427,39 @@ class ElfAuditTests(unittest.TestCase):
             ["unapproved dynamic dependency: libprivate_shim.so"], violations
         )
 
+    def test_rejects_libdl_dependency(self) -> None:
+        violations, _ = self.audit(synthetic_elf(dependency="libdl.so.2"))
+        self.assertTrue(
+            any("prohibited dynamic dependency" in item for item in violations)
+        )
+
     def test_rejects_hsa_dynamic_symbol(self) -> None:
         violations, _ = self.audit(synthetic_elf(symbol="hsa_init"))
         self.assertTrue(any("prohibited dynamic symbol" in item for item in violations))
+
+    def test_rejects_loader_and_process_spawn_dynamic_symbols(self) -> None:
+        for symbol in POLICY["forbidden_dynamic_symbols"]:
+            with self.subTest(symbol=symbol):
+                violations, _ = self.audit(synthetic_elf(symbol=symbol))
+                self.assertIn(
+                    f"prohibited dynamic symbol: {symbol} (exact)", violations
+                )
+
+    def test_rejects_loader_control_dynamic_tags(self) -> None:
+        for tag_name in POLICY["forbidden_dynamic_tags"]:
+            with self.subTest(tag=tag_name):
+                contents = bytearray(synthetic_elf())
+                struct.pack_into(
+                    "<qQ",
+                    contents,
+                    0x1C0 + 2 * 16,
+                    CHECKER.DYNAMIC_TAG_VALUES[tag_name],
+                    1,
+                )
+                violations, _ = self.audit(bytes(contents))
+                self.assertIn(
+                    f"prohibited dynamic tag: {tag_name}", violations
+                )
 
     def test_rejects_hidden_comgr_loader_literal(self) -> None:
         violations, _ = self.audit(
