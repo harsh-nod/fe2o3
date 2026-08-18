@@ -3588,16 +3588,20 @@ fn subprocess_timeout_reaps_its_descendant_group() {
         .trim()
         .parse()
         .expect("numeric timed-out descendant PID");
-    let probe = unsafe { libc::kill(descendant, 0) };
-    assert_eq!(
-        probe, -1,
-        "timed-out descendant {descendant} survived cleanup"
-    );
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH),
-        "timed-out descendant still exists"
-    );
+    let reap_deadline = Instant::now() + TERMINATION_GRACE;
+    loop {
+        let probe = unsafe { libc::kill(descendant, 0) };
+        let error = std::io::Error::last_os_error();
+        if probe == -1 && error.raw_os_error() == Some(libc::ESRCH) {
+            break;
+        }
+        assert_eq!(probe, 0, "probe timed-out descendant {descendant}: {error}");
+        assert!(
+            Instant::now() < reap_deadline,
+            "timed-out descendant {descendant} survived bounded cleanup"
+        );
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
 }
 
 #[test]
