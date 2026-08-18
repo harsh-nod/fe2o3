@@ -503,6 +503,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dialect-dispatch"
+version = "0.1.0"
+dependencies = [
+ "dialect-gpu",
+ "dialect-proof",
+ "pliron",
+]
+
+[[package]]
+name = "dialect-gpu"
+version = "0.1.0"
+dependencies = [
+ "pliron",
+]
+
+[[package]]
 name = "dialect-kernel"
 version = "0.1.0"
 dependencies = [
@@ -516,6 +532,13 @@ dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-mir-model",
  "serde_json",
+]
+
+[[package]]
+name = "dialect-proof"
+version = "0.1.0"
+dependencies = [
+ "pliron",
 ]
 
 [[package]]

@@ -1,0 +1,229 @@
+use dialect_proof::{
+    CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ObligationRefType,
+    ProofIdAttr, ProofOverlayOpInterface, PropertyAttr, RegistrationOutcome,
+    evidence_ref_op_attr_names, register_dialect,
+};
+use pliron::{
+    attribute::{AttrObj, verify_attr},
+    builtin::{attributes::UnitAttr, types::UnitType},
+    combine::{Parser, eof},
+    context::Context,
+    identifier::Identifier,
+    op::{Op, op_cast, verify_op},
+    operation::{Operation, OperationParserConfig},
+    parsable::{Parsable, parse_from_str},
+    printable::Printable,
+    r#type::TypeHandle,
+};
+
+fn id(seed: u64) -> ProofIdAttr {
+    ProofIdAttr::new([seed, seed + 1, seed + 2, seed + 3])
+}
+
+#[test]
+fn registration_is_real_duplicate_safe_and_round_trips_entities() {
+    let mut context = Context::new();
+    assert_eq!(
+        register_dialect(&mut context),
+        RegistrationOutcome::Registered
+    );
+    assert_eq!(
+        register_dialect(&mut context),
+        RegistrationOutcome::AlreadyRegistered
+    );
+
+    let attribute: AttrObj = Box::new(id(10));
+    let attribute_text = attribute.disp(&context).to_string();
+    let parsed_attribute = parse_from_str(
+        AttrObj::parser(()).skip(eof()),
+        &mut context,
+        &attribute_text,
+    )
+    .expect("registered proof attribute must parse");
+    assert_eq!(
+        parsed_attribute.downcast_ref::<ProofIdAttr>(),
+        Some(&id(10))
+    );
+
+    let ty: TypeHandle = ObligationRefType::get(&context).into();
+    let type_text = ty.disp(&context).to_string();
+    let parsed_type = parse_from_str(TypeHandle::parser(()).skip(eof()), &mut context, &type_text)
+        .expect("registered proof type must parse");
+    assert!(parsed_type.deref(&context).is::<ObligationRefType>());
+
+    let obligation = ObligationOp::new(
+        &mut context,
+        id(20),
+        id(30),
+        id(40),
+        PropertyAttr::RaceFreedom,
+    );
+    let operation_text = obligation.disp(&context).to_string();
+    let parsed_operation = parse_from_str(
+        Operation::parser(OperationParserConfig {
+            look_for_outlined_attrs: false,
+        })
+        .skip(eof()),
+        &mut context,
+        &operation_text,
+    )
+    .expect("registered proof operation must parse");
+    let parsed = Operation::get_op_dyn(parsed_operation, &context);
+    assert!(parsed.is::<ObligationOp>());
+    verify_op(&*parsed, &context).expect("parsed obligation must verify");
+}
+
+#[test]
+fn fixed_width_ids_have_bounded_parsing_and_reject_zero() {
+    let mut context = Context::new();
+    register_dialect(&mut context);
+
+    let valid = "0123456789abcdef".repeat(4);
+    let parsed = parse_from_str(ProofIdAttr::parser(()).skip(eof()), &mut context, &valid)
+        .expect("exactly 256 bits of hexadecimal identity");
+    assert!(!parsed.is_zero());
+
+    for hostile in ["a".repeat(63), "a".repeat(65), "a".repeat(4_096)] {
+        assert!(
+            parse_from_str(ProofIdAttr::parser(()).skip(eof()), &mut context, &hostile).is_err(),
+            "hostile proof identity length {} parsed",
+            hostile.len()
+        );
+    }
+    assert!(verify_attr(&ProofIdAttr::new([0; 4]), &context).is_err());
+}
+
+#[test]
+fn property_statuses_remain_independent_and_non_authoritative() {
+    let mut context = Context::new();
+    register_dialect(&mut context);
+
+    let obligation_id = id(100);
+    let bounds = EvidenceRefOp::new(
+        &mut context,
+        id(110),
+        obligation_id.clone(),
+        PropertyAttr::Bounds,
+        EvidenceStatusAttr::Proved,
+        CoveredBoundaryAttr::TargetNeutralGpu,
+    );
+    let deadlock = EvidenceRefOp::new(
+        &mut context,
+        id(120),
+        obligation_id,
+        PropertyAttr::DeadlockFreedom,
+        EvidenceStatusAttr::Unsupported,
+        CoveredBoundaryAttr::TargetNeutralGpu,
+    );
+
+    verify_op(&bounds, &context).expect("bounded property evidence");
+    verify_op(&deadlock, &context).expect("unsupported property evidence");
+    assert_eq!(bounds.status(&context), Some(EvidenceStatusAttr::Proved));
+    assert_eq!(
+        deadlock.status(&context),
+        Some(EvidenceStatusAttr::Unsupported)
+    );
+    assert!(!EvidenceStatusAttr::Proved.grants_authority());
+
+    for op in [&bounds as &dyn Op, &deadlock] {
+        let interface = op_cast::<dyn ProofOverlayOpInterface>(op)
+            .expect("proof overlay interface must be registered");
+        assert!(!interface.is_executable());
+        assert!(!interface.grants_authority());
+    }
+}
+
+#[test]
+fn verifier_rejects_identity_confusion_and_zero_references() {
+    let mut context = Context::new();
+    register_dialect(&mut context);
+
+    let same = id(200);
+    let confused = EvidenceRefOp::new(
+        &mut context,
+        same.clone(),
+        same,
+        PropertyAttr::FunctionalRefinement,
+        EvidenceStatusAttr::Validated,
+        CoveredBoundaryAttr::StructuredKernel,
+    );
+    assert!(verify_op(&confused, &context).is_err());
+
+    let zero = ObligationOp::new(
+        &mut context,
+        ProofIdAttr::new([0; 4]),
+        id(210),
+        id(220),
+        PropertyAttr::Initialization,
+    );
+    assert!(verify_op(&zero, &context).is_err());
+}
+
+#[test]
+fn verifier_rejects_missing_wrong_extra_and_structural_payloads() {
+    let mut context = Context::new();
+    register_dialect(&mut context);
+
+    let wrong_status = EvidenceRefOp::new(
+        &mut context,
+        id(300),
+        id(310),
+        PropertyAttr::Convergence,
+        EvidenceStatusAttr::Checked,
+        CoveredBoundaryAttr::Schedule,
+    );
+    wrong_status
+        .get_operation()
+        .deref_mut(&context)
+        .attributes
+        .set(
+            evidence_ref_op_attr_names::ATTR_KEY_PROOF_EVIDENCE_REF_STATUS.clone(),
+            UnitAttr,
+        );
+    assert!(verify_op(&wrong_status, &context).is_err());
+
+    let extra = ObligationOp::new(
+        &mut context,
+        id(320),
+        id(330),
+        id(340),
+        PropertyAttr::Provenance,
+    );
+    extra.get_operation().deref_mut(&context).attributes.set(
+        Identifier::try_from("proof_hostile_extra").expect("valid key"),
+        UnitAttr,
+    );
+    assert!(verify_op(&extra, &context).is_err());
+
+    let missing = EvidenceRefOp::new(
+        &mut context,
+        id(350),
+        id(360),
+        PropertyAttr::NumericalBound,
+        EvidenceStatusAttr::Contracted,
+        CoveredBoundaryAttr::Source,
+    );
+    missing
+        .get_operation()
+        .deref_mut(&context)
+        .attributes
+        .0
+        .remove(&*evidence_ref_op_attr_names::ATTR_KEY_PROOF_EVIDENCE_REF_STATUS);
+    assert!(verify_op(&missing, &context).is_err());
+
+    let result_type = UnitType::get(&context).into();
+    let operation = Operation::new(
+        &mut context,
+        ObligationOp::get_concrete_op_info(),
+        vec![result_type],
+        vec![],
+        vec![],
+        0,
+    );
+    let malformed = ObligationOp::from_operation(operation);
+    malformed.set_attr_proof_obligation_obligation_id(&context, id(370));
+    malformed.set_attr_proof_obligation_subject_id(&context, id(380));
+    malformed.set_attr_proof_obligation_model_id(&context, id(390));
+    malformed.set_attr_proof_obligation_property(&context, PropertyAttr::Determinism);
+    assert!(verify_op(&malformed, &context).is_err());
+}

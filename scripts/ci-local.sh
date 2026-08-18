@@ -23,8 +23,11 @@ readonly CPU_TEST_PACKAGES=(
   cargo-fe2o3
   dialect-amdgcn
   dialect-autotune
+  dialect-dispatch
+  dialect-gpu
   dialect-kernel
   dialect-mir
+  dialect-proof
   dialect-schedule
   dialect-tile
   fe2o3-amd-target
