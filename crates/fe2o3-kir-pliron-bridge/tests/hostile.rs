@@ -4,16 +4,16 @@ use fe2o3_kernel_ir::{
     encode_module_v1,
 };
 use fe2o3_kir_pliron_bridge::{
-    BRIDGE_SCHEMA_V1, BridgeError, BridgeLimits, CANONICAL_BYTES_ATTR_KEY, CanonicalKirRecord,
-    HARD_MAX_CANONICAL_BYTES, HARD_MAX_SHELL_OPERATIONS, KirVersion, LimitError, LimitResource,
-    MODULE_IDENTITY_ATTR_KEY, MetadataField, SCHEMA_ATTR_KEY, ShellOperationKind,
-    WIRE_VERSION_ATTR_KEY, recover_canonical,
+    BRIDGE_SCHEMA_V1, BridgeEnvelope, BridgeError, BridgeLimits, CANONICAL_BYTES_ATTR_KEY,
+    CanonicalKirRecord, HARD_MAX_CANONICAL_BYTES, HARD_MAX_SHELL_OPERATIONS, KirVersion,
+    LimitError, LimitResource, MODULE_IDENTITY_ATTR_KEY, MetadataField, SCHEMA_ATTR_KEY,
+    ShellOperationKind, WIRE_VERSION_ATTR_KEY, recover_canonical,
 };
+use fe2o3_pliron::{CONTEXT_IDENTITY_MARKER_KEY, ContextIdentityError};
 use pliron::{
     builtin::{
         attributes::{BytesAttr, StringAttr, UnitAttr},
         op_interfaces::{SingleBlockRegionInterface, SymbolOpInterface},
-        ops::ModuleOp,
     },
     context::Context,
     identifier::Identifier,
@@ -45,22 +45,42 @@ fn kernel_module(identity: &str) -> Module {
     module
 }
 
-fn projected() -> (Context, pliron::builtin::ops::ModuleOp, CanonicalKirRecord) {
+fn projected() -> (Context, BridgeEnvelope, CanonicalKirRecord) {
     let limits = BridgeLimits::default();
     let record =
         CanonicalKirRecord::from_module(&kernel_module("hostile"), KirVersion::V5, limits).unwrap();
     let mut context = Context::new();
-    let shell = record.project_to_pliron(&mut context, limits).unwrap();
-    (context, shell, record)
+    let envelope = record.project_to_pliron(&mut context, limits).unwrap();
+    (context, envelope, record)
 }
 
 fn recover_projected(
     context: &Context,
-    shell: &ModuleOp,
+    envelope: &BridgeEnvelope,
     record: &CanonicalKirRecord,
     limits: BridgeLimits,
 ) -> Result<CanonicalKirRecord, BridgeError> {
-    recover_canonical(context, shell, record.canonical_bytes(), limits)
+    recover_canonical(context, envelope, record.canonical_bytes(), limits)
+}
+
+fn context_identity_key() -> Identifier {
+    key(CONTEXT_IDENTITY_MARKER_KEY)
+}
+
+fn take_context_identity_marker(context: &mut Context) -> Box<dyn std::any::Any> {
+    let index = context
+        .aux_data_map
+        .remove(&context_identity_key())
+        .expect("context identity marker exists");
+    context
+        .aux_data
+        .remove(index)
+        .expect("context identity marker is live")
+}
+
+fn install_context_identity_marker(context: &mut Context, marker: Box<dyn std::any::Any>) {
+    let index = context.aux_data.insert(marker);
+    context.aux_data_map.insert(context_identity_key(), index);
 }
 
 #[test]
@@ -247,27 +267,33 @@ fn duplicate_and_conflicting_kir_identities_are_rejected_after_wire_validation()
 
 #[test]
 fn missing_or_type_confused_canonical_payload_never_falls_back_to_shell_reconstruction() {
-    let (context, shell, record) = projected();
-    shell
+    let (context, envelope, record) = projected();
+    envelope
+        .shell()
         .get_operation()
         .deref_mut(&context)
         .attributes
         .0
         .remove(&key(CANONICAL_BYTES_ATTR_KEY));
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::LossyConversion {
             missing: MetadataField::CanonicalBytes
         })
     ));
 
-    let (context, shell, record) = projected();
-    shell.get_operation().deref_mut(&context).attributes.set(
-        key(CANONICAL_BYTES_ATTR_KEY),
-        StringAttr::new("not bytes".into()),
-    );
+    let (context, envelope, record) = projected();
+    envelope
+        .shell()
+        .get_operation()
+        .deref_mut(&context)
+        .attributes
+        .set(
+            key(CANONICAL_BYTES_ATTR_KEY),
+            StringAttr::new("not bytes".into()),
+        );
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataTypeConfusion(
             MetadataField::CanonicalBytes
         ))
@@ -276,83 +302,104 @@ fn missing_or_type_confused_canonical_payload_never_falls_back_to_shell_reconstr
 
 #[test]
 fn redundant_schema_version_identity_and_metadata_cardinality_are_enforced() {
-    let (context, shell, record) = projected();
+    let (context, envelope, record) = projected();
     let mut wrong_schema = BRIDGE_SCHEMA_V1;
     wrong_schema[0] ^= 1;
-    shell
+    envelope
+        .shell()
         .get_operation()
         .deref_mut(&context)
         .attributes
         .set(key(SCHEMA_ATTR_KEY), BytesAttr::new(wrong_schema.to_vec()));
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataConflict(MetadataField::Schema))
     ));
 
-    let (context, shell, record) = projected();
-    shell.get_operation().deref_mut(&context).attributes.set(
-        key(WIRE_VERSION_ATTR_KEY),
-        BytesAttr::new(4_u16.to_le_bytes().to_vec()),
-    );
+    let (context, envelope, record) = projected();
+    envelope
+        .shell()
+        .get_operation()
+        .deref_mut(&context)
+        .attributes
+        .set(
+            key(WIRE_VERSION_ATTR_KEY),
+            BytesAttr::new(4_u16.to_le_bytes().to_vec()),
+        );
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataConflict(MetadataField::WireVersion))
     ));
 
-    let (context, shell, record) = projected();
-    shell.get_operation().deref_mut(&context).attributes.set(
-        key(WIRE_VERSION_ATTR_KEY),
-        BytesAttr::new(99_u16.to_le_bytes().to_vec()),
-    );
+    let (context, envelope, record) = projected();
+    envelope
+        .shell()
+        .get_operation()
+        .deref_mut(&context)
+        .attributes
+        .set(
+            key(WIRE_VERSION_ATTR_KEY),
+            BytesAttr::new(99_u16.to_le_bytes().to_vec()),
+        );
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::UnknownVersion(99))
     ));
 
-    let (context, shell, record) = projected();
-    shell.get_operation().deref_mut(&context).attributes.set(
-        key(MODULE_IDENTITY_ATTR_KEY),
-        StringAttr::new("substituted".into()),
-    );
+    let (context, envelope, record) = projected();
+    envelope
+        .shell()
+        .get_operation()
+        .deref_mut(&context)
+        .attributes
+        .set(
+            key(MODULE_IDENTITY_ATTR_KEY),
+            StringAttr::new("substituted".into()),
+        );
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataConflict(MetadataField::ModuleIdentity))
     ));
 
-    let (context, shell, record) = projected();
-    shell
+    let (context, envelope, record) = projected();
+    envelope
+        .shell()
         .get_operation()
         .deref_mut(&context)
         .attributes
         .set(key("hostile_extra"), UnitAttr);
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::UnexpectedMetadata)
     ));
 
-    let (mut context, shell, record) = projected();
-    shell.set_symbol_name(&mut context, "confused_shell_identity".try_into().unwrap());
+    let (mut context, envelope, record) = projected();
+    envelope
+        .shell()
+        .set_symbol_name(&mut context, "confused_shell_identity".try_into().unwrap());
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataConflict(MetadataField::ModuleSymbol))
     ));
 }
 
 #[test]
 fn duplicate_extra_and_valid_but_conflicting_shell_operations_are_rejected() {
-    let (mut context, shell, record) = projected();
+    let (mut context, envelope, record) = projected();
     let duplicate = dialect_gpu::HierarchyIdOp::new(&mut context, dialect_gpu::HierarchyAttr::Grid);
-    shell.append_operation(&mut context, duplicate.get_operation(), 0);
+    envelope
+        .shell()
+        .append_operation(&mut context, duplicate.get_operation(), 0);
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::ShellOperationCount {
             expected: 2,
             actual: 3
         })
     ));
 
-    let (mut context, shell, record) = projected();
-    let body = shell.get_body(&context, 0);
+    let (mut context, envelope, record) = projected();
+    let body = envelope.shell().get_body(&context, 0);
     let original_grid = body
         .deref(&context)
         .iter(&context)
@@ -360,21 +407,25 @@ fn duplicate_extra_and_valid_but_conflicting_shell_operations_are_rejected() {
         .expect("grid projection");
     original_grid.unlink(&context);
     let lane = dialect_gpu::HierarchyIdOp::new(&mut context, dialect_gpu::HierarchyAttr::Lane);
-    shell.append_operation(&mut context, lane.get_operation(), 0);
+    envelope
+        .shell()
+        .append_operation(&mut context, lane.get_operation(), 0);
     assert!(matches!(
-        recover_projected(&context, &shell, &record, BridgeLimits::default()),
+        recover_projected(&context, &envelope, &record, BridgeLimits::default()),
         Err(BridgeError::ShellOperationConflict {
             index: 1,
             expected: ShellOperationKind::GpuGridHierarchy
         })
     ));
 
-    let (mut context, shell, record) = projected();
+    let (mut context, envelope, record) = projected();
     let foreign = dialect_kernel::AlgorithmOp::new(&mut context, 1).unwrap();
-    shell.append_operation(&mut context, foreign.get_operation(), 0);
+    envelope
+        .shell()
+        .append_operation(&mut context, foreign.get_operation(), 0);
     let tight = BridgeLimits::new(HARD_MAX_CANONICAL_BYTES, 2).unwrap();
     assert!(matches!(
-        recover_projected(&context, &shell, &record, tight),
+        recover_projected(&context, &envelope, &record, tight),
         Err(BridgeError::ShellOperationsLimit { actual: 3, max: 2 })
     ));
 }
@@ -382,8 +433,8 @@ fn duplicate_extra_and_valid_but_conflicting_shell_operations_are_rejected() {
 #[test]
 fn extra_bytes_metadata_is_rejected_on_every_projected_child() {
     for index in 0..2 {
-        let (context, shell, record) = projected();
-        let body = shell.get_body(&context, 0);
+        let (context, envelope, record) = projected();
+        let body = envelope.shell().get_body(&context, 0);
         let child = body
             .deref(&context)
             .iter(&context)
@@ -395,7 +446,7 @@ fn extra_bytes_metadata_is_rejected_on_every_projected_child() {
         );
 
         assert!(matches!(
-            recover_projected(&context, &shell, &record, BridgeLimits::default()),
+            recover_projected(&context, &envelope, &record, BridgeLimits::default()),
             Err(BridgeError::UnexpectedShellMetadata { index: actual })
                 if actual == index
         ));
@@ -436,12 +487,61 @@ fn crate_manifest_contains_only_representation_dependencies() {
 }
 
 #[test]
-fn a_foreign_operation_wrapped_as_a_module_is_rejected_before_traversal() {
-    let (mut context, _, record) = projected();
-    let hierarchy = dialect_gpu::HierarchyIdOp::new(&mut context, dialect_gpu::HierarchyAttr::Grid);
-    let forged = ModuleOp::from_operation(hierarchy.get_operation());
+fn matching_foreign_arena_layout_is_rejected_before_shell_traversal() {
+    let (_owner, envelope, record) = projected();
+    let mut foreign = Context::new();
+    let foreign_envelope = record
+        .project_to_pliron(&mut foreign, BridgeLimits::default())
+        .unwrap();
+
+    assert_eq!(
+        envelope.shell().get_operation(),
+        foreign_envelope.shell().get_operation(),
+        "test requires colliding contextless Pliron arena handles"
+    );
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        recover_projected(&foreign, &envelope, &record, BridgeLimits::default())
+    }));
+    assert!(matches!(outcome, Ok(Err(BridgeError::ContextMismatch))));
+}
+
+#[test]
+fn transplanted_marker_cannot_transfer_an_envelope_to_an_anchored_context() {
+    let (mut owner, envelope, record) = projected();
+    let owner_marker = take_context_identity_marker(&mut owner);
+
+    let mut foreign = Context::new();
+    let foreign_envelope = record
+        .project_to_pliron(&mut foreign, BridgeLimits::default())
+        .unwrap();
+    drop(take_context_identity_marker(&mut foreign));
+    install_context_identity_marker(&mut foreign, owner_marker);
+
+    assert_eq!(
+        envelope.shell().get_operation(),
+        foreign_envelope.shell().get_operation(),
+        "test requires colliding contextless Pliron arena handles"
+    );
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        recover_projected(&foreign, &envelope, &record, BridgeLimits::default())
+    }));
+    assert!(matches!(outcome, Ok(Err(BridgeError::ContextMismatch))));
+}
+
+#[test]
+fn transplanted_marker_into_an_unanchored_context_is_typed_and_panic_free() {
+    let (mut owner, envelope, record) = projected();
+    let owner_marker = take_context_identity_marker(&mut owner);
+    let mut foreign = Context::new();
+    install_context_identity_marker(&mut foreign, owner_marker);
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        recover_projected(&foreign, &envelope, &record, BridgeLimits::default())
+    }));
     assert!(matches!(
-        recover_projected(&context, &forged, &record, BridgeLimits::default()),
-        Err(BridgeError::MalformedShell)
+        outcome,
+        Ok(Err(BridgeError::ContextIdentity(
+            ContextIdentityError::CorruptMarker
+        )))
     ));
 }

@@ -17,6 +17,9 @@ use fe2o3_kernel_ir::{
     encode_module_v1, encode_module_v2, encode_module_v3, encode_module_v4, encode_module_v5,
     verify_module,
 };
+use fe2o3_pliron::{
+    ContextIdentity, ContextIdentityError, ensure_context_identity, require_context_identity,
+};
 use pliron::{
     attribute::{Attribute, AttributeDict},
     builtin::{
@@ -269,6 +272,10 @@ pub enum BridgeError {
     KernelRegistration(dialect_kernel::RegistrationError),
     /// Explicit `dialect-gpu` registration failed closed.
     GpuRegistration(dialect_gpu::RegistrationError),
+    /// The context identity anchor was absent, corrupt, or type-confused.
+    ContextIdentity(ContextIdentityError),
+    /// The envelope belongs to a different Pliron context.
+    ContextMismatch,
     /// Recovering without the canonical payload would require lossy conversion.
     LossyConversion {
         /// Required field that was absent.
@@ -333,6 +340,15 @@ impl fmt::Display for BridgeError {
             Self::GpuRegistration(error) => {
                 write!(formatter, "GPU dialect registration failed: {error}")
             }
+            Self::ContextIdentity(error) => {
+                write!(
+                    formatter,
+                    "Pliron context identity validation failed: {error}"
+                )
+            }
+            Self::ContextMismatch => {
+                formatter.write_str("bridge envelope belongs to a different Pliron context")
+            }
             Self::LossyConversion { missing } => {
                 write!(formatter, "lossless recovery requires {missing:?}")
             }
@@ -374,6 +390,7 @@ impl Error for BridgeError {
             Self::InvalidKir(error) => Some(error),
             Self::KernelRegistration(error) => Some(error),
             Self::GpuRegistration(error) => Some(error),
+            Self::ContextIdentity(error) => Some(error),
             _ => None,
         }
     }
@@ -382,6 +399,40 @@ impl Error for BridgeError {
 impl From<LimitError> for BridgeError {
     fn from(error: LimitError) -> Self {
         Self::InvalidLimits(error)
+    }
+}
+
+impl From<ContextIdentityError> for BridgeError {
+    fn from(error: ContextIdentityError) -> Self {
+        Self::ContextIdentity(error)
+    }
+}
+
+/// A detached Pliron shell bound to the context that owns its arena handles.
+///
+/// Construction is restricted to bridge projection and import. The private
+/// identity prevents recovery APIs from accepting a raw, contextless Pliron
+/// operation handle.
+pub struct BridgeEnvelope {
+    shell: ModuleOp,
+    context_identity: ContextIdentity,
+}
+
+impl fmt::Debug for BridgeEnvelope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BridgeEnvelope")
+            .finish_non_exhaustive()
+    }
+}
+
+impl BridgeEnvelope {
+    /// Returns the inert shell for bounded inspection or mutation by passes.
+    ///
+    /// Recovery still requires this envelope and authenticates its private
+    /// context identity before dereferencing the returned shell handle.
+    pub const fn shell(&self) -> &ModuleOp {
+        &self.shell
     }
 }
 
@@ -456,9 +507,10 @@ impl CanonicalKirRecord {
         &self,
         context: &mut Context,
         limits: BridgeLimits,
-    ) -> Result<ModuleOp, BridgeError> {
+    ) -> Result<BridgeEnvelope, BridgeError> {
         check_canonical_byte_limit(self.canonical_bytes.len(), limits)?;
         check_projection_count(self.module.kernels.len(), limits)?;
+        let context_identity = ensure_context_identity(context)?;
         register_shells(context)?;
 
         let symbol: Identifier = BRIDGE_MODULE_SYMBOL
@@ -476,7 +528,10 @@ impl CanonicalKirRecord {
             let hierarchy = HierarchyIdOp::new(context, HierarchyAttr::Grid);
             shell.append_operation(context, hierarchy.get_operation(), 0);
         }
-        Ok(shell)
+        Ok(BridgeEnvelope {
+            shell,
+            context_identity,
+        })
     }
 }
 
@@ -485,7 +540,7 @@ pub fn import_canonical(
     context: &mut Context,
     bytes: &[u8],
     limits: BridgeLimits,
-) -> Result<ModuleOp, BridgeError> {
+) -> Result<BridgeEnvelope, BridgeError> {
     CanonicalKirRecord::parse(bytes, limits)?.project_to_pliron(context, limits)
 }
 
@@ -496,12 +551,17 @@ pub fn import_canonical(
 /// rejects an internally consistent envelope carrying any other record.
 pub fn recover_canonical(
     context: &Context,
-    shell: &ModuleOp,
+    envelope: &BridgeEnvelope,
     expected_canonical_bytes: &[u8],
     limits: BridgeLimits,
 ) -> Result<CanonicalKirRecord, BridgeError> {
+    let context_identity = require_context_identity(context)?;
+    if context_identity != envelope.context_identity {
+        return Err(BridgeError::ContextMismatch);
+    }
+
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        recover_expected_canonical_inner(context, shell, expected_canonical_bytes, limits)
+        recover_expected_canonical_inner(context, &envelope.shell, expected_canonical_bytes, limits)
     }))
     .unwrap_or(Err(BridgeError::MalformedShell))
 }
@@ -509,11 +569,11 @@ pub fn recover_canonical(
 /// Recovers a bridge envelope and rejects substitution of an expected record.
 pub fn recover_exact(
     context: &Context,
-    shell: &ModuleOp,
+    envelope: &BridgeEnvelope,
     expected: &CanonicalKirRecord,
     limits: BridgeLimits,
 ) -> Result<CanonicalKirRecord, BridgeError> {
-    let recovered = recover_canonical(context, shell, expected.canonical_bytes(), limits)?;
+    let recovered = recover_canonical(context, envelope, expected.canonical_bytes(), limits)?;
     if recovered.version != expected.version
         || recovered.module.id != expected.module.id
         || recovered.canonical_bytes != expected.canonical_bytes

@@ -3,8 +3,8 @@ use fe2o3_kernel_ir::{
     Terminator,
 };
 use fe2o3_kir_pliron_bridge::{
-    BRIDGE_MODULE_SYMBOL, BridgeLimits, CanonicalKirRecord, KirVersion, recover_canonical,
-    recover_exact,
+    BRIDGE_MODULE_SYMBOL, BridgeLimits, CanonicalKirRecord, KirVersion, import_canonical,
+    recover_canonical, recover_exact,
 };
 use pliron::{
     builtin::op_interfaces::{SingleBlockRegionInterface, SymbolOpInterface},
@@ -65,15 +65,16 @@ fn every_frozen_version_round_trips_exact_bytes_and_discriminant() {
         );
 
         let mut context = Context::new();
-        let shell = record
+        let envelope = record
             .project_to_pliron(&mut context, limits)
             .expect("projection must succeed");
         assert_eq!(
-            shell.get_symbol_name(&context).as_ref(),
+            envelope.shell().get_symbol_name(&context).as_ref(),
             BRIDGE_MODULE_SYMBOL
         );
         assert_eq!(
-            shell
+            envelope
+                .shell()
                 .get_body(&context, 0)
                 .deref(&context)
                 .iter(&context)
@@ -81,7 +82,7 @@ fn every_frozen_version_round_trips_exact_bytes_and_discriminant() {
             2
         );
 
-        let recovered = recover_canonical(&context, &shell, record.canonical_bytes(), limits)
+        let recovered = recover_canonical(&context, &envelope, record.canonical_bytes(), limits)
             .expect("valid projection must recover");
         assert_eq!(recovered.version(), version);
         assert_eq!(recovered.module_identity(), identity);
@@ -96,21 +97,23 @@ fn zero_kernel_record_retains_non_pliron_identity_without_shell_operations() {
     let module = Module::new("KIR identity has spaces/slashes::and-is-not-a-symbol");
     let record = CanonicalKirRecord::from_module(&module, KirVersion::V5, limits).unwrap();
     let mut context = Context::new();
-    let shell = record.project_to_pliron(&mut context, limits).unwrap();
+    let envelope = import_canonical(&mut context, record.canonical_bytes(), limits).unwrap();
 
     assert_eq!(
-        shell.get_symbol_name(&context).as_ref(),
+        envelope.shell().get_symbol_name(&context).as_ref(),
         BRIDGE_MODULE_SYMBOL
     );
     assert_eq!(
-        shell
+        envelope
+            .shell()
             .get_body(&context, 0)
             .deref(&context)
             .iter(&context)
             .count(),
         0
     );
-    let recovered = recover_canonical(&context, &shell, record.canonical_bytes(), limits).unwrap();
+    let recovered =
+        recover_canonical(&context, &envelope, record.canonical_bytes(), limits).unwrap();
     assert_eq!(recovered.module_identity(), module.id.as_str());
     assert_eq!(recovered.canonical_bytes(), record.canonical_bytes());
 }
@@ -127,17 +130,17 @@ fn exact_recovery_binds_the_expected_record_not_only_a_self_consistent_shell() {
         CanonicalKirRecord::from_module(&kernel_module("first", 2), KirVersion::V2, limits)
             .unwrap();
     let mut context = Context::new();
-    let shell = first.project_to_pliron(&mut context, limits).unwrap();
+    let envelope = first.project_to_pliron(&mut context, limits).unwrap();
 
-    assert!(recover_canonical(&context, &shell, first.canonical_bytes(), limits).is_ok());
-    assert!(recover_exact(&context, &shell, &first, limits).is_ok());
+    assert!(recover_canonical(&context, &envelope, first.canonical_bytes(), limits).is_ok());
+    assert!(recover_exact(&context, &envelope, &first, limits).is_ok());
     for substituted in [&second, &same_identity_different_bytes] {
         assert!(matches!(
-            recover_canonical(&context, &shell, substituted.canonical_bytes(), limits),
+            recover_canonical(&context, &envelope, substituted.canonical_bytes(), limits),
             Err(fe2o3_kir_pliron_bridge::BridgeError::RecordSubstitution)
         ));
         assert!(matches!(
-            recover_exact(&context, &shell, substituted, limits),
+            recover_exact(&context, &envelope, substituted, limits),
             Err(fe2o3_kir_pliron_bridge::BridgeError::RecordSubstitution)
         ));
     }
