@@ -81,16 +81,15 @@ impl TempProject {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
-            .args(args)
-            .current_dir(&self.cwd)
-            .output()
-            .expect("run cargo-fe2o3")
+        self.command(args).output().expect("run cargo-fe2o3")
     }
 
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
-        command.args(args).current_dir(&self.cwd);
+        command
+            .args(args)
+            .current_dir(&self.cwd)
+            .env_remove("CARGO_TARGET_DIR");
         command
     }
 }
