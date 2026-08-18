@@ -45,8 +45,8 @@ pub(super) const PROCESS_APERTURE_QUERY_CAPACITY_V1: usize = MAX_PROCESS_APERTUR
 /// firmware, sysfs, or hardware.
 pub const DEVICE_ADMISSION_PROFILE_MANIFEST_V1: &str = concat!(
     "profile_id=fe2o3-linux-x86_64-mi300x-gfx942-xnack-minus-spx-nps1-r1\n",
-    "kfd_schema_sha256=2811cc71ae2d598c36adb52328d65c76a14205fcca71148fb75d98a6436ad586\n",
-    "drm_schema_sha256=2ecccaca71dcfd6b19456147ee2b132e2a331f872fb4e311d27a8b8989b58ac8\n",
+    "kfd_schema_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
+    "drm_schema_sha256=800569fe9b467b389bcfc6e5d65b23d66a0386a90fc2a669fac8c83800e76d8b\n",
     "kernel_release=6.8.0-124-generic\n",
     "amdgpu_module=6.16.13\n",
     "amdgpu_srcversion=A6F143BEC60C0AFC3263226\n",
@@ -57,18 +57,19 @@ pub const DEVICE_ADMISSION_PROFILE_MANIFEST_V1: &str = concat!(
     "firmware_observation=compute:192,sdma:25\n",
     "xnack=disabled-query,set-disabled-no-queue-barrier,disabled-query\n",
     "apertures=max:16,count-fill-count,complete-topology-inventory,page-aligned,inclusive,record-disjoint\n",
-    "commit_fence=process,retained-fds,full-topology,xnack,apertures\n",
+    "commit_fence=process,retained-fds,full-topology,xnack,apertures,smi-reset-events,vram-loss-counter\n",
+    "currentness=contracted-composite,no-all-reset-generation,no-aba-proof\n",
     "authority=model-only,no-vm,no-memory,no-queue,no-dispatch\n",
 );
 
 /// SHA-256 of [`DEVICE_ADMISSION_PROFILE_MANIFEST_V1`].
 pub const DEVICE_ADMISSION_PROFILE_SHA256_V1: &str =
-    "5ff1020acdf218ec48b714ca074dbcb80bdad6b85211e060dfff54cb5bed067d";
+    "e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de";
 
 /// Typed digest bytes of [`DEVICE_ADMISSION_PROFILE_MANIFEST_V1`].
 pub const DEVICE_ADMISSION_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x5f, 0xf1, 0x02, 0x0a, 0xcd, 0xf2, 0x18, 0xec, 0x48, 0xb7, 0x14, 0xca, 0x07, 0x4d, 0xbc, 0xb8,
-    0x0b, 0xda, 0xd6, 0xb8, 0x52, 0x11, 0xe0, 0x60, 0xdf, 0xff, 0x54, 0xcb, 0x5b, 0xed, 0x06, 0x7d,
+    0xe1, 0x2e, 0xa3, 0x3b, 0x25, 0x96, 0x66, 0xe7, 0x92, 0x86, 0x12, 0x40, 0x31, 0x09, 0x64, 0x0b,
+    0x03, 0xb0, 0xd6, 0x37, 0xb8, 0x93, 0xa2, 0xc1, 0x5b, 0x87, 0xd1, 0x7a, 0x42, 0x11, 0xc8, 0xde,
 ];
 
 const DRM_DEVICE_MAJOR: u32 = 226;
@@ -174,12 +175,13 @@ impl RenderDescriptorObservation {
     }
 }
 
-/// Contracted results returned by the two reviewed DRM identity requests.
+/// Contracted results returned by the reviewed DRM identity/currentness requests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DrmIdentityObservation {
     pub(super) driver_version: DrmDriverVersion,
     pub(super) acceleration_working: u32,
     pub(super) device: DrmAmdgpuDeviceIdentityV1,
+    pub(super) vram_lost_counter: u32,
 }
 
 impl DrmIdentityObservation {
@@ -193,6 +195,14 @@ impl DrmIdentityObservation {
 
     pub const fn device(self) -> DrmAmdgpuDeviceIdentityV1 {
         self.device
+    }
+
+    /// Returns the driver's wrapping VRAM-loss observation.
+    ///
+    /// This is not an all-reset generation. The admitted driver increments it
+    /// only on reset paths that report VRAM loss.
+    pub const fn vram_lost_counter(self) -> u32 {
+        self.vram_lost_counter
     }
 }
 
@@ -250,14 +260,16 @@ impl DeviceBindingObservation {
 /// correlation under named kernel/sysfs/ioctl contracts, not a proof of the
 /// kernel, firmware, hardware, or concrete-to-model refinement.
 pub struct CheckedGfx942XnackMinusDevice {
-    kfd: KfdWithAdmittedUapi,
-    render_fd: OwnedFd,
+    pub(super) kfd: KfdWithAdmittedUapi,
+    pub(super) render_fd: OwnedFd,
     render_path: PathBuf,
-    topology: HostTopologySnapshot,
-    apertures: Vec<ProcessApertureObservation>,
-    observation: DeviceBindingObservation,
+    pub(super) topology: HostTopologySnapshot,
+    pub(super) apertures: Vec<ProcessApertureObservation>,
+    pub(super) observation: DeviceBindingObservation,
     model_admission: ModelDeviceAdmissionV1,
-    process: ProcessIncarnationObservation,
+    pub(super) process: ProcessIncarnationObservation,
+    pub(super) reset_fence: crate::currentness::ResetEventFence,
+    pub(super) currentness_poisoned: bool,
     _lease: MutexGuard<'static, ()>,
 }
 
@@ -269,6 +281,8 @@ impl fmt::Debug for CheckedGfx942XnackMinusDevice {
             .field("render_path", &self.render_path)
             .field("observation", &self.observation)
             .field("process", &self.process)
+            .field("reset_fence", &self.reset_fence)
+            .field("currentness_poisoned", &self.currentness_poisoned)
             .finish_non_exhaustive()
     }
 }
@@ -311,12 +325,13 @@ impl CheckedGfx942XnackMinusDevice {
         Ok(())
     }
 
-    /// No raw descriptor access is exposed. This method only forces both
-    /// retained descriptor fields to remain live and inspected by tests.
+    /// No raw descriptor access is exposed. This method only reports the
+    /// number of retained descriptor fields.
     pub fn descriptor_count(&self) -> usize {
         let _ = &self.render_fd;
         let _ = &self.kfd.opened.fd;
-        2
+        let _ = &self.reset_fence;
+        3
     }
 }
 
@@ -407,6 +422,21 @@ impl KfdWithAdmittedUapi {
         let render = crate::linux::open_and_observe_render(gpu.drm_render_minor())?;
         validate_render_profile(gpu, render_sysfs, &render)?;
 
+        // Subscribe before authority/token construction and the XNACK,
+        // aperture, and commit observations. The pre-subscription DRM result
+        // is immediately repeated after enabling the prospective stream.
+        let mut reset_fence =
+            crate::currentness::ResetEventFence::subscribe(&self.opened.fd, kfd_gpu_id)?;
+        let drm_after_subscription = crate::linux::observe_drm_identity(&render.fd)?;
+        if drm_after_subscription != render.drm {
+            return Err(DeviceBindingError::ObservableCurrentnessChanged(
+                "DRM identity or VRAM-loss counter across reset subscription",
+            ));
+        }
+        if crate::linux::observe_uapi(&self.opened.fd)? != self.uapi.reported_version() {
+            return Err(DeviceBindingError::UapiChanged);
+        }
+
         crate::linux::establish_xnack_disabled_no_queue_barrier(&self.opened.fd)?;
         let apertures_before = validate_apertures(
             crate::linux::observe_process_apertures(&self.opened.fd)?,
@@ -443,6 +473,9 @@ impl KfdWithAdmittedUapi {
             .find(|aperture| aperture.gpu_id == kfd_gpu_id)
             .copied()
             .ok_or(DeviceBindingError::SelectedApertureMissing(kfd_gpu_id))?;
+        // Keep this as the last fallible kernel observation. `model_admission`
+        // commits process-local history, so no fence failure may follow it.
+        reset_fence.check_clear()?;
         let model_admission = model_admission(
             &topology_before,
             gpu,
@@ -473,6 +506,8 @@ impl KfdWithAdmittedUapi {
             observation,
             model_admission,
             process: process_before,
+            reset_fence,
+            currentness_poisoned: false,
             _lease: lease,
         })
     }
@@ -615,7 +650,7 @@ fn ranges_overlap(left: InclusiveAperture, right: InclusiveAperture) -> bool {
     left.base <= right.limit && right.base <= left.limit
 }
 
-fn validate_apertures(
+pub(super) fn validate_apertures(
     raw: Vec<KfdProcessDeviceApertures>,
     topology: &HostTopologySnapshot,
 ) -> Result<Vec<ProcessApertureObservation>, DeviceBindingError> {
@@ -855,6 +890,11 @@ pub enum DeviceBindingError {
     UnsupportedXnackMode,
     XnackChanged,
     UapiChanged,
+    InvalidResetEventDescriptor(u32),
+    ResetEventFenceProtocol,
+    WholeGpuResetObserved,
+    ObservableCurrentnessChanged(&'static str),
+    CurrentnessFencePoisoned,
     InvalidApertureCount(usize),
     InvalidApertureRecord(u32),
     InvalidAperture {
@@ -997,6 +1037,22 @@ impl fmt::Display for DeviceBindingError {
             }
             Self::UapiChanged => {
                 formatter.write_str("KFD UAPI observation changed during device admission")
+            }
+            Self::InvalidResetEventDescriptor(value) => write!(
+                formatter,
+                "KFD SMI_EVENTS returned invalid descriptor value {value}"
+            ),
+            Self::ResetEventFenceProtocol => formatter
+                .write_str("KFD reset-event fence violated its admitted descriptor protocol"),
+            Self::WholeGpuResetObserved => {
+                formatter.write_str("KFD reported a whole-GPU reset after event-fence subscription")
+            }
+            Self::ObservableCurrentnessChanged(observation) => write!(
+                formatter,
+                "device currentness observation changed: {observation}"
+            ),
+            Self::CurrentnessFencePoisoned => {
+                formatter.write_str("the device currentness fence is permanently poisoned")
             }
             Self::InvalidApertureCount(value) => {
                 write!(formatter, "invalid process aperture count {value}")

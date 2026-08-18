@@ -238,7 +238,9 @@ pub(super) fn open_and_observe_render(minor: u16) -> Result<OpenedRender, Device
     })
 }
 
-fn observe_drm_identity(fd: &OwnedFd) -> Result<DrmIdentityObservation, DeviceBindingError> {
+pub(super) fn observe_drm_identity(
+    fd: &OwnedFd,
+) -> Result<DrmIdentityObservation, DeviceBindingError> {
     let mut name = [0_u8; MAX_DRM_DRIVER_NAME_BYTES];
     let mut version = DrmVersion::zeroed();
     version.name_len = name.len() as u64;
@@ -278,10 +280,21 @@ fn observe_drm_identity(fd: &OwnedFd) -> Result<DrmIdentityObservation, DeviceBi
     unsafe { rustix::ioctl::ioctl(fd, request) }
         .map_err(|source| binding_syscall("AMDGPU_INFO_DEV_INFO", source))?;
 
+    let mut vram_lost_counter = 0_u32;
+    let mut reset_query =
+        DrmAmdgpuInfo::vram_lost_counter((&mut vram_lost_counter as *mut u32) as usize as u64);
+    // SAFETY: the pinned query writes exactly one initialized `u32` through the
+    // nested pointer. `Updater` keeps rustix's userspace-mutation contract true.
+    let request = unsafe { Updater::<DRM_INFO_OPCODE, _>::new(&mut reset_query) };
+    // SAFETY: the output and outer request remain live for the call.
+    unsafe { rustix::ioctl::ioctl(fd, request) }
+        .map_err(|source| binding_syscall("AMDGPU_INFO_VRAM_LOST_COUNTER", source))?;
+
     Ok(DrmIdentityObservation {
         driver_version: version.reported_driver_version(),
         acceleration_working: acceleration,
         device,
+        vram_lost_counter,
     })
 }
 

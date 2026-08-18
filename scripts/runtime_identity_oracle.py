@@ -64,6 +64,7 @@ PURE_KEYS = {
     "aperture_lds",
     "aperture_scratch",
     "boot_id",
+    "currentness",
     "descriptors",
     "drm",
     "firmware",
@@ -76,6 +77,7 @@ PURE_KEYS = {
     "profile_sha256",
     "target",
     "unique_id",
+    "vram_lost_counter",
     "wavefront",
 }
 
@@ -93,6 +95,7 @@ class PureRustGpu:
     render_minor: int
     target: str
     wavefront: int
+    vram_lost_counter: int
     boot_id: str
 
 
@@ -242,7 +245,8 @@ def parse_pure_rust(data: bytes) -> tuple[PureRustGpu, ...]:
             "aperture_gpuvm": "0x10000..=0x7fffffffffff",
             "aperture_lds": "0x1000000000000..=0x10000ffffffff",
             "aperture_scratch": "0x2000000000000..=0x20000ffffffff",
-            "descriptors": "2",
+            "currentness": "contracted-clear",
+            "descriptors": "3",
             "drm": "3.64.0",
             "firmware": "192/25",
             "kernel": EXPECTED_KERNEL_RELEASE,
@@ -269,9 +273,16 @@ def parse_pure_rust(data: bytes) -> tuple[PureRustGpu, ...]:
                 raise OracleInputError(f"invalid {key} on pure-Rust line {line_number}")
         node = _parse_decimal(fields["node"], "topology node")
         gpu_id = _parse_decimal(fields["gpu_id"], "KFD GPU ID")
+        vram_lost_counter = _parse_decimal(
+            fields["vram_lost_counter"], "VRAM-lost counter"
+        )
         if not 2 <= node <= 257 or not 1 <= gpu_id <= 0xFFFF_FFFF:
             raise OracleInputError(
                 f"pure-Rust line {line_number} device number is outside the V1 bounds"
+            )
+        if vram_lost_counter > 0xFFFF_FFFF:
+            raise OracleInputError(
+                f"pure-Rust line {line_number} VRAM-lost counter is outside the V1 bounds"
             )
         if not 128 <= render_minor <= 0xFFFF:
             raise OracleInputError(
@@ -294,6 +305,7 @@ def parse_pure_rust(data: bytes) -> tuple[PureRustGpu, ...]:
                 render_minor=render_minor,
                 target=fields["target"],
                 wavefront=int(fields["wavefront"]),
+                vram_lost_counter=vram_lost_counter,
                 boot_id=fields["boot_id"],
             )
         )
@@ -554,7 +566,8 @@ def compare_and_render(
             f"gpu unique_id={checked.unique_id} node={checked.node} gpu_id={checked.gpu_id} "
             f"pci={checked.pci} renderD{checked.render_minor} oracle_agent={measured.agent} "
             f"oracle_bdf_id={measured.bdf_id} target={checked.target} "
-            f"wavefront={checked.wavefront} firmware={measured.compute_firmware}/"
+            f"wavefront={checked.wavefront} vram_lost_counter={checked.vram_lost_counter} "
+            f"firmware={measured.compute_firmware}/"
             f"{measured.sdma_firmware} isa={measured.primary_isa} match=true"
         )
     return "\n".join(lines) + "\n"

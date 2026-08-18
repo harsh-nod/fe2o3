@@ -97,6 +97,16 @@ class RuntimeIdentityOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.OracleInputError, "outside the V1 bounds"):
             CHECKER.parse_pure_rust(mutated)
 
+    def test_pure_currentness_fields_are_required_and_bounded(self) -> None:
+        missing = PURE.replace(b" currentness=contracted-clear", b"", 1)
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "fields differ from schema"):
+            CHECKER.parse_pure_rust(missing)
+        overflow = PURE.replace(
+            b"vram_lost_counter=0", b"vram_lost_counter=4294967296", 1
+        )
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "outside the V1 bounds"):
+            CHECKER.parse_pure_rust(overflow)
+
     def test_rocminfo_gpu_count_is_exact(self) -> None:
         marker = b"Agent 10\n"
         truncated = ROCMINFO[: ROCMINFO.index(marker)]

@@ -10,9 +10,10 @@ fn parse_unique_id(value: &str) -> Result<u64, Box<dyn std::error::Error>> {
 }
 
 fn admit_and_print(selected: u64) -> Result<(), Box<dyn std::error::Error>> {
-    let device = OpenedKfd::open_default()?
+    let mut device = OpenedKfd::open_default()?
         .admit_uapi()?
         .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(selected))?;
+    let currentness = device.check_observable_currentness()?;
     let observation = device.observation();
     let aperture = observation.aperture();
     let snapshot = device.topology_snapshot();
@@ -31,7 +32,7 @@ fn admit_and_print(selected: u64) -> Result<(), Box<dyn std::error::Error>> {
         .srcversion()
         .ok_or("admitted amdgpu module srcversion disappeared")?;
     println!(
-        "profile=gfx942:xnack- target=gfx942 wavefront={} profile_sha256={} boot_id={} kernel={} amdgpu={} amdgpu_srcversion={} partition=SPX/NPS1 node={} gpu_id={} unique_id={:016x} pci={} renderD{} drm={}.{}.{} firmware={}/{} descriptors={} aperture_lds={:#x}..={:#x} aperture_scratch={:#x}..={:#x} aperture_gpuvm={:#x}..={:#x}",
+        "profile=gfx942:xnack- target=gfx942 wavefront={} profile_sha256={} boot_id={} kernel={} amdgpu={} amdgpu_srcversion={} partition=SPX/NPS1 node={} gpu_id={} unique_id={:016x} pci={} renderD{} drm={}.{}.{} firmware={}/{} descriptors={} vram_lost_counter={} currentness=contracted-clear aperture_lds={:#x}..={:#x} aperture_scratch={:#x}..={:#x} aperture_gpuvm={:#x}..={:#x}",
         gpu.capacity().wavefront_size(),
         DEVICE_ADMISSION_PROFILE_SHA256_V1,
         snapshot.boot_id(),
@@ -49,6 +50,7 @@ fn admit_and_print(selected: u64) -> Result<(), Box<dyn std::error::Error>> {
         gpu.fw_version(),
         gpu.sdma_fw_version(),
         device.descriptor_count(),
+        currentness.vram_lost_counter(),
         aperture.lds().base(),
         aperture.lds().limit(),
         aperture.scratch().base(),

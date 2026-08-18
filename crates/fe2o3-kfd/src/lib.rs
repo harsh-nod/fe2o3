@@ -15,7 +15,14 @@ use fe2o3_kfd_uapi::{
 mod linux;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[allow(unsafe_code)]
+mod currentness;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod device;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use currentness::ObservableDeviceCurrentnessV1;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use device::*;
@@ -194,7 +201,8 @@ impl OpenedKfd {
 ///
 /// This is not yet a device-bound capability. VM, memory, and queue operations
 /// must require a later typestate that also binds physical device, render node,
-/// process, target, topology, boot/module, and reset generations.
+/// process, target, topology, boot/module, and contracted reset/currentness
+/// observations.
 pub struct KfdWithAdmittedUapi {
     opened: OpenedKfd,
     uapi: AdmittedKfdUapiIdentity,
