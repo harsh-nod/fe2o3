@@ -29,19 +29,16 @@ use fe2o3_kir_pliron_bridge::{
 use fe2o3_lower_kernel_gpu as lower_kernel_gpu;
 use fe2o3_lower_mir_kernel as lower_mir_kernel;
 use fe2o3_pliron::{
-    AuthorityEffect, ContextBuildError, DiagnosticCode, DialectRegistration, PassPipeline,
-    PlironSession, RegistrationHookError, SessionPoisoned, ShellLimits, StageStatus,
+    ContextBuildError, DialectRegistration, PlironSession, RegistrationHookError, ShellLimits,
 };
 use pliron::{
     builtin::{attributes::UnitAttr, op_interfaces::SingleBlockRegionInterface},
     context::{Context, Ptr},
     dialect::DialectName,
     identifier::Identifier,
-    irbuild::IRStatus,
     linked_list::ContainsLinkedList,
     op::{Op, op_cast},
     operation::{Operation, verify_operation},
-    pass::{AnalysisManager, Pass},
 };
 
 const FORWARD_DIALECTS: [&str; 8] = [
@@ -326,9 +323,9 @@ fn exercise_lowerings(session: &mut PlironSession) -> LoweringSnapshot {
         .with_context_mut(|context| {
             register_lowerings(context);
             let source = mir_source(context, "lowering");
-            let mut mir_pass = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(2));
+            let mut mir_service = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(2));
             let (kernel_root, mir_record) = {
-                let result = mir_pass
+                let result = mir_service
                     .run_checked(source.get_operation(), context)
                     .expect("supported MIR lowering");
                 result.validate(context).expect("valid MIR lowering result");
@@ -336,9 +333,9 @@ fn exercise_lowerings(session: &mut PlironSession) -> LoweringSnapshot {
                 (result.operations()[0], result.record().clone())
             };
 
-            let mut gpu_pass = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[8, 4]));
+            let mut gpu_service = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[8, 4]));
             let gpu_record = {
-                let result = gpu_pass
+                let result = gpu_service
                     .run_checked(kernel_root, context)
                     .expect("supported kernel lowering");
                 result.validate(context).expect("valid GPU lowering result");
@@ -443,12 +440,12 @@ fn duplicate_and_colliding_registration_fail_before_use() {
         Err(lower_mir_kernel::PassRegistrationError::CorruptMarker)
     );
     let mir_source = mir_source(&mut mir_collision, "poisoned-mir");
-    let mut mir_pass = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
+    let mut mir_service = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
     assert_eq!(
-        mir_pass.run_checked(mir_source.get_operation(), &mut mir_collision),
+        mir_service.run_checked(mir_source.get_operation(), &mut mir_collision),
         Err(lower_mir_kernel::LoweringError::RegistrationCorrupt)
     );
-    assert!(mir_pass.last_result().is_none());
+    assert!(mir_service.last_result().is_none());
 
     let mut gpu_collision = Context::new();
     install_foreign_marker(
@@ -468,12 +465,12 @@ fn duplicate_and_colliding_registration_fail_before_use() {
         Err(lower_kernel_gpu::PassRegistrationError::CorruptMarker)
     );
     let kernel_source = AlgorithmOp::new(&mut gpu_collision, 1).expect("valid kernel source");
-    let mut gpu_pass = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
+    let mut gpu_service = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
     assert_eq!(
-        gpu_pass.run_checked(kernel_source.get_operation(), &mut gpu_collision),
+        gpu_service.run_checked(kernel_source.get_operation(), &mut gpu_collision),
         Err(lower_kernel_gpu::LoweringError::RegistrationCorrupt)
     );
-    assert!(gpu_pass.last_result().is_none());
+    assert!(gpu_service.last_result().is_none());
 }
 
 fn install_foreign_marker(context: &mut Context, key: &str) {
@@ -492,91 +489,17 @@ fn corrupt_foreign_marker(context: &mut Context, key: &str) {
 }
 
 #[test]
-fn pipeline_rejects_stage_order_confusion_and_poisons_the_session() {
-    let mut reversed = combined_session(&FORWARD_DIALECTS);
-    let reversed_root = reversed
-        .with_context_mut(|context| {
-            register_lowerings(context);
-            mir_source(context, "pipeline-reversed").get_operation()
-        })
-        .unwrap();
-    let mut reversed_pipeline = PassPipeline::new(ShellLimits::default());
-    reversed_pipeline
-        .add_pass(lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[
-            64,
-        ])))
-        .unwrap();
-    reversed_pipeline
-        .add_pass(lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1)))
-        .unwrap();
-    assert_eq!(
-        reversed_pipeline.pass_order().collect::<Vec<_>>(),
-        [lower_kernel_gpu::PASS_NAME, lower_mir_kernel::PASS_NAME]
-    );
-    let failure = reversed_pipeline
-        .run(&mut reversed, reversed_root)
-        .expect_err("GPU lowering cannot consume a MIR root");
-    assert!(failure.completed().is_empty());
-    assert_failed_stage(&failure, 0, lower_kernel_gpu::PASS_NAME);
-    assert!(reversed.is_poisoned());
-    assert_eq!(reversed.with_context_mut(|_| ()), Err(SessionPoisoned));
-
-    let mut nominal = combined_session(&FORWARD_DIALECTS);
-    let nominal_root = nominal
-        .with_context_mut(|context| {
-            register_lowerings(context);
-            mir_source(context, "pipeline-nominal").get_operation()
-        })
-        .unwrap();
-    let mut nominal_pipeline = PassPipeline::new(ShellLimits::default());
-    nominal_pipeline
-        .add_pass(lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1)))
-        .unwrap();
-    nominal_pipeline
-        .add_pass(lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[
-            64,
-        ])))
-        .unwrap();
-    let failure = nominal_pipeline
-        .run(&mut nominal, nominal_root)
-        .expect_err("pipeline stages share one root and do not imply chaining");
-    assert_eq!(failure.completed().len(), 1);
-    assert_eq!(
-        failure.completed()[0].pass_name(),
-        lower_mir_kernel::PASS_NAME
-    );
-    assert_eq!(
-        failure.completed()[0].authority_effect(),
-        AuthorityEffect::None
-    );
-    assert_failed_stage(&failure, 1, lower_kernel_gpu::PASS_NAME);
-}
-
-fn assert_failed_stage(failure: &fe2o3_pliron::PipelineFailure, ordinal: usize, pass_name: &str) {
-    let receipt = failure.failed().expect("failed stage receipt");
-    assert_eq!(receipt.ordinal(), ordinal);
-    assert_eq!(receipt.pass_name(), pass_name);
-    assert_eq!(receipt.verify_before(), StageStatus::Passed);
-    assert_eq!(receipt.pass_status(), StageStatus::Failed);
-    assert_eq!(receipt.verify_after(), StageStatus::NotRun);
-    assert_eq!(receipt.authority_effect(), AuthorityEffect::None);
-    let diagnostic = failure.diagnostic().expect("bounded diagnostic");
-    assert_eq!(diagnostic.code(), DiagnosticCode::PassFailed);
-    assert_eq!(diagnostic.stage(), Some(pass_name));
-}
-
-#[test]
 fn stale_source_and_mutated_outputs_fail_postconditions() {
     let mut session = combined_session(&FORWARD_DIALECTS);
     session
         .with_context_mut(|context| {
             register_lowerings(context);
             let source = mir_source(context, "mutable-source");
-            let mut mir_pass = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
-            mir_pass
+            let mut mir_service = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
+            mir_service
                 .run_checked(source.get_operation(), context)
                 .expect("initial MIR lowering");
-            let mir_result = mir_pass.take_result().expect("MIR result");
+            let mir_result = mir_service.take_result().expect("MIR result");
 
             source.set_attr_module_identity(context, MirIdentityAttr::new("stale-source"));
             assert_eq!(
@@ -596,11 +519,11 @@ fn stale_source_and_mutated_outputs_fail_postconditions() {
             );
 
             let source_kernel = AlgorithmOp::new(context, 1).expect("valid kernel source");
-            let mut gpu_pass = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
-            gpu_pass
+            let mut gpu_service = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
+            gpu_service
                 .run_checked(source_kernel.get_operation(), context)
                 .expect("initial GPU lowering");
-            let gpu_result = gpu_pass.take_result().expect("GPU result");
+            let gpu_result = gpu_service.take_result().expect("GPU result");
             gpu_result.operations()[0]
                 .deref_mut(context)
                 .attributes
@@ -623,62 +546,27 @@ fn terminal_unsupported_inputs_clear_results_without_fallback_reuse() {
             let mir = mir_source(context, "terminal");
             let kernel = AlgorithmOp::new(context, 1).expect("valid kernel source");
 
-            let mut mir_pass = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
-            mir_pass
+            let mut mir_service = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
+            mir_service
                 .run_checked(mir.get_operation(), context)
                 .expect("initial MIR success");
-            assert!(mir_pass.last_result().is_some());
+            assert!(mir_service.last_result().is_some());
             assert_eq!(
-                mir_pass.run_checked(kernel.get_operation(), context),
+                mir_service.run_checked(kernel.get_operation(), context),
                 Err(lower_mir_kernel::LoweringError::UnsupportedSourceOperation)
             );
-            assert!(mir_pass.last_result().is_none());
+            assert!(mir_service.last_result().is_none());
 
-            let mut gpu_pass = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
-            gpu_pass
+            let mut gpu_service = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
+            gpu_service
                 .run_checked(kernel.get_operation(), context)
                 .expect("initial GPU success");
-            assert!(gpu_pass.last_result().is_some());
+            assert!(gpu_service.last_result().is_some());
             assert_eq!(
-                gpu_pass.run_checked(mir.get_operation(), context),
+                gpu_service.run_checked(mir.get_operation(), context),
                 Err(lower_kernel_gpu::LoweringError::UnsupportedSourceOperation)
             );
-            assert!(gpu_pass.last_result().is_none());
-        })
-        .unwrap();
-}
-
-#[test]
-fn detached_lowering_pass_adapters_report_unchanged_ir() {
-    let mut session = combined_session(&FORWARD_DIALECTS);
-    session
-        .with_context_mut(|context| {
-            register_lowerings(context);
-            let mir = mir_source(context, "detached-adapter");
-            let mut mir_pass = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
-            let mut mir_analyses = AnalysisManager::default();
-            let mir_adapter = Pass::run(
-                &mut mir_pass,
-                mir.get_operation(),
-                context,
-                &mut mir_analyses,
-            )
-            .expect("bounded detached MIR lowering");
-            assert_eq!(mir_adapter.ir_changed, IRStatus::Unchanged);
-            assert!(mir_pass.last_result().is_some());
-
-            let kernel = AlgorithmOp::new(context, 1).expect("valid kernel source");
-            let mut gpu_pass = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
-            let mut gpu_analyses = AnalysisManager::default();
-            let gpu_adapter = Pass::run(
-                &mut gpu_pass,
-                kernel.get_operation(),
-                context,
-                &mut gpu_analyses,
-            )
-            .expect("bounded detached GPU lowering");
-            assert_eq!(gpu_adapter.ir_changed, IRStatus::Unchanged);
-            assert!(gpu_pass.last_result().is_some());
+            assert!(gpu_service.last_result().is_none());
         })
         .unwrap();
 }
@@ -690,18 +578,18 @@ fn lowering_results_reject_populated_foreign_contexts_before_pointer_dereference
         .with_context_mut(|context| {
             register_lowerings(context);
             let mir = mir_source(context, "context-bound");
-            let mut mir_pass = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
-            mir_pass
+            let mut mir_service = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(1));
+            mir_service
                 .run_checked(mir.get_operation(), context)
                 .expect("MIR lowering");
-            let mir_result = mir_pass.take_result().expect("MIR result");
+            let mir_result = mir_service.take_result().expect("MIR result");
 
             let kernel = AlgorithmOp::new(context, 1).expect("valid kernel source");
-            let mut gpu_pass = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
-            gpu_pass
+            let mut gpu_service = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[64]));
+            gpu_service
                 .run_checked(kernel.get_operation(), context)
                 .expect("GPU lowering");
-            let gpu_result = gpu_pass.take_result().expect("GPU result");
+            let gpu_result = gpu_service.take_result().expect("GPU result");
             (mir_result, gpu_result)
         })
         .unwrap();
@@ -770,16 +658,17 @@ fn every_exact_kir_v1_v5_envelope_is_deterministic() {
         let mut session = combined_session(order);
         session
             .with_context_mut(|context| {
-                let shell = first.project_to_pliron(context, limits).unwrap();
+                let envelope = first.project_to_pliron(context, limits).unwrap();
                 assert_eq!(
-                    shell
+                    envelope
+                        .shell()
                         .get_body(context, 0)
                         .deref(context)
                         .iter(context)
                         .count(),
                     2
                 );
-                let recovered = recover_exact(context, &shell, &first, limits).unwrap();
+                let recovered = recover_exact(context, &envelope, &first, limits).unwrap();
                 assert_eq!(recovered.version(), version);
                 assert_eq!(recovered.module_identity(), identity);
                 assert_eq!(recovered.canonical_bytes(), first.canonical_bytes());
@@ -799,18 +688,18 @@ fn kir_substitution_and_projection_order_confusion_fail_closed() {
     let mut session = combined_session(&REVERSE_DIALECTS);
     session
         .with_context_mut(|context| {
-            let shell = expected.project_to_pliron(context, limits).unwrap();
+            let envelope = expected.project_to_pliron(context, limits).unwrap();
             assert!(matches!(
-                recover_exact(context, &shell, &substituted, limits),
+                recover_exact(context, &envelope, &substituted, limits),
                 Err(BridgeError::RecordSubstitution)
             ));
 
-            let body = shell.get_body(context, 0);
+            let body = envelope.shell().get_body(context, 0);
             let first = body.deref(context).get_head().expect("kernel projection");
             first.unlink(context);
             first.insert_at_back(body, context);
             assert!(matches!(
-                recover_exact(context, &shell, &expected, limits),
+                recover_exact(context, &envelope, &expected, limits),
                 Err(BridgeError::ShellOperationConflict {
                     index: 0,
                     expected: ShellOperationKind::KernelAlgorithm,
@@ -832,6 +721,7 @@ fn kir_trust_boundary_rejects_extra_metadata_and_preflights_bounds() {
             let extra = expected.project_to_pliron(context, limits).unwrap();
             let extra_key: Identifier = "hostile_extra_metadata".try_into().unwrap();
             extra
+                .shell()
                 .get_operation()
                 .deref_mut(context)
                 .attributes
@@ -873,21 +763,22 @@ fn lowering_and_kir_outputs_remain_distinct_and_non_authoritative() {
         .with_context_mut(|context| {
             register_lowerings(context);
             let source = mir_source(context, "independent-mir");
-            let mut mir_pass = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(2));
-            mir_pass
+            let mut mir_service = lower_mir_kernel::MirKernelLoweringPass::new(mir_config(2));
+            mir_service
                 .run_checked(source.get_operation(), context)
                 .expect("MIR lowering");
-            let mir_result = mir_pass.take_result().expect("MIR result");
+            let mir_result = mir_service.take_result().expect("MIR result");
             let lowered_kernel = mir_result.operations()[0];
 
-            let mut gpu_pass = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[8, 4]));
-            gpu_pass
+            let mut gpu_service = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config(&[8, 4]));
+            gpu_service
                 .run_checked(lowered_kernel, context)
                 .expect("kernel lowering");
-            let gpu_result = gpu_pass.take_result().expect("GPU result");
+            let gpu_result = gpu_service.take_result().expect("GPU result");
 
-            let shell = record.project_to_pliron(context, limits).unwrap();
-            let bridge_operations: Vec<Ptr<Operation>> = shell
+            let envelope = record.project_to_pliron(context, limits).unwrap();
+            let bridge_operations: Vec<Ptr<Operation>> = envelope
+                .shell()
                 .get_body(context, 0)
                 .deref(context)
                 .iter(context)
@@ -907,7 +798,7 @@ fn lowering_and_kir_outputs_remain_distinct_and_non_authoritative() {
             assert!(!mir_result.grants_authority());
             assert!(!gpu_result.grants_authority());
             assert_eq!(
-                recover_exact(context, &shell, &record, limits).unwrap(),
+                recover_exact(context, &envelope, &record, limits).unwrap(),
                 record
             );
         })
