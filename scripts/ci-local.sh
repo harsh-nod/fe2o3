@@ -47,6 +47,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kernel-analysis
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
+  fe2o3-kir-pliron-bridge
   fe2o3-legacy-compiler
   fe2o3-lower-kernel-gpu
   fe2o3-macros

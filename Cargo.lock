@@ -954,6 +954,16 @@ name = "fe2o3-kernel-ir"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-kir-pliron-bridge"
+version = "0.1.0"
+dependencies = [
+ "dialect-gpu",
+ "dialect-kernel",
+ "fe2o3-kernel-ir",
+ "pliron",
+]
+
+[[package]]
 name = "fe2o3-legacy-compiler"
 version = "0.1.0"
 dependencies = [

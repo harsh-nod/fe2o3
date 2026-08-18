@@ -1,0 +1,19 @@
+[package]
+name = "fe2o3-kir-pliron-bridge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded lossless bridge from canonical fe2o3 KIR to inert Pliron shells."
+readme = "README.md"
+publish = false
+
+[dependencies]
+dialect-gpu.workspace = true
+dialect-kernel.workspace = true
+fe2o3-kernel-ir.workspace = true
+pliron.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
