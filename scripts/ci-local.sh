@@ -13,6 +13,8 @@ readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.p
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
 readonly WORKSPACE_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/workspace_dependency_policy.py"
+readonly PLIRON_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/pliron_dependency_policy.py"
+readonly PLIRON_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/pliron_dependency_policy.py"
 readonly STANDALONE_LOCKFILE_CHECKER="${REPO_ROOT}/scripts/check-standalone-lockfiles.sh"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
@@ -223,6 +225,10 @@ run_workspace_dependency_policy() {
   run_step workspace-dependency-policy \
     python3 "${WORKSPACE_DEPENDENCY_POLICY_CHECKER}" \
       --policy "${WORKSPACE_DEPENDENCY_POLICY}"
+  run_step pliron-dependency-policy-tests \
+    python3 "${PLIRON_DEPENDENCY_POLICY_TESTS}"
+  run_step pliron-dependency-policy \
+    python3 "${PLIRON_DEPENDENCY_POLICY_CHECKER}"
 }
 
 run_standalone_lockfiles() {
