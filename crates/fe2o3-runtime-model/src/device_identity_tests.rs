@@ -2,6 +2,8 @@ use alloc::{vec, vec::Vec};
 
 use super::*;
 
+const TEST_KFD_DYNAMIC_MAJOR: u32 = 511;
+
 fn digest(seed: u8) -> IdentityDigestV1 {
     IdentityDigestV1::from_untrusted_bytes([seed; IDENTITY_DIGEST_BYTES_V1])
 }
@@ -54,7 +56,7 @@ fn observations(seed: u8) -> ObservationFixture {
             domain_id,
             epoch,
             node: DeviceNodeV1 {
-                major: KFD_DEVICE_MAJOR_V1,
+                major: TEST_KFD_DYNAMIC_MAJOR,
                 minor: KFD_DEVICE_MINOR_V1,
             },
             uapi_major: KFD_UAPI_MAJOR_V1,
@@ -215,6 +217,12 @@ fn kfd_domain_epoch_schema_and_node_mutations_fail_closed() {
         Err(DeviceCorrelationErrorV1::ObservationEpochMismatch)
     );
     fixture = observations(4);
+    fixture.kfd.node.major = 0;
+    assert!(matches!(
+        fixture.inventory().correlate_model_only(&profile()),
+        Err(DeviceCorrelationErrorV1::KfdNodeMismatch(_))
+    ));
+    fixture = observations(4);
     fixture.kfd.node.minor = 1;
     assert!(matches!(
         fixture.inventory().correlate_model_only(&profile()),
@@ -235,6 +243,10 @@ fn kfd_domain_epoch_schema_and_node_mutations_fail_closed() {
         fixture.inventory().correlate_model_only(&profile()),
         Err(DeviceCorrelationErrorV1::KfdSchemaMismatch)
     );
+
+    fixture = observations(4);
+    fixture.kfd.node.major = 240;
+    assert!(fixture.inventory().correlate_model_only(&profile()).is_ok());
 }
 
 #[test]

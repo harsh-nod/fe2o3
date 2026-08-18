@@ -78,7 +78,10 @@ numeric_identity!(
     PhysicalDeviceIdV1
 );
 numeric_identity!(
-    /// Monotonic incarnation of one physical GPU.
+    /// Software-selected monotonic admission incarnation of one physical GPU.
+    ///
+    /// This value prevents model token reuse. A topology observation does not
+    /// establish that a GPU reset or hardware reinitialization occurred.
     DeviceGenerationV1
 );
 numeric_identity!(

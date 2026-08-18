@@ -8,7 +8,6 @@ use crate::{
 };
 
 pub const DEVICE_IDENTITY_SCHEMA_VERSION_V1: u16 = 1;
-pub const KFD_DEVICE_MAJOR_V1: u32 = 235;
 pub const KFD_DEVICE_MINOR_V1: u32 = 0;
 pub const DRM_DEVICE_MAJOR_V1: u32 = 226;
 pub const DRM_RENDER_MIN_MINOR_V1: u32 = 128;
@@ -387,12 +386,10 @@ pub fn correlate_model_only_v1(
     if topology.epoch != kfd.epoch || render.epoch != kfd.epoch {
         return Err(DeviceCorrelationErrorV1::ObservationEpochMismatch);
     }
-    if kfd.node
-        != (DeviceNodeV1 {
-            major: KFD_DEVICE_MAJOR_V1,
-            minor: KFD_DEVICE_MINOR_V1,
-        })
-    {
+    // Linux dynamically allocates the KFD character-device major. This model
+    // checks only its shape; a sealed adapter must bind the node to its opened
+    // file descriptor and the corresponding sysfs device.
+    if kfd.node.major == 0 || kfd.node.minor != KFD_DEVICE_MINOR_V1 {
         return Err(DeviceCorrelationErrorV1::KfdNodeMismatch(kfd.node));
     }
     if kfd.uapi_major != KFD_UAPI_MAJOR_V1 || kfd.uapi_minor != KFD_UAPI_MINOR_V1 {

@@ -38,7 +38,10 @@ These are proofs of abstract transition relations. They are not refinement
 proofs of `src/model.rs` or `src/device_identity.rs`, and the model-only
 correlation receipt is not production device authority. A later sealed adapter
 must authenticate the KFD topology, DRM render, partition, schema, and process
-XNACK observations and prove that concrete ioctl/sysfs results refine this
-model. Firmware execution, hardware completion, progress, liveness,
+XNACK observations, bind the dynamically allocated KFD device node to the
+opened file descriptor and sysfs device, and prove that concrete ioctl/sysfs
+results refine this model. `DeviceGenerationV1` is a software admission
+incarnation for stale-token rejection; topology correlation does not detect or
+attest a GPU reset. Firmware execution, hardware completion, progress, liveness,
 coherency, performance, and absence of kernel/firmware defects remain outside
 this proof boundary.
