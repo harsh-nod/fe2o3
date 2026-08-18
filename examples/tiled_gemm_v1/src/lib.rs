@@ -12,6 +12,7 @@
 //! Multi-phase production export, source-driven GPU execution, and
 //! machine-level proofs remain pending.
 
+pub mod compiler_bridge;
 pub mod contract;
 pub mod general_plan;
 pub mod general_reference;
@@ -24,6 +25,12 @@ pub mod numerical_vectors;
 pub mod oracle;
 pub mod semantic_corpus;
 
+pub use compiler_bridge::{
+    GENERAL_GEMM_FRONTEND_SCHEMA_V1, GemmPropertySchemaErrorV1, GeneralGemmCompilerBindingErrorV1,
+    GeneralGemmCompilerBindingV1, GeneralGemmCompilerProfilesV1,
+    bind_general_gemm_compiler_request_v1, validate_gemm_property_schema_v1,
+    validate_general_gemm_compiler_request_v1,
+};
 pub use contract::{
     AdmittedTargetV1, EDGE_CASES_V1, EdgeCaseV1, ExpectedDecisionV1, LaunchDecisionV1,
     LaunchGeometryV1, PlanErrorV1, ShapeErrorV1, ShapeV1, TargetAdmissionErrorV1, TileOriginV1,
@@ -58,7 +65,8 @@ pub use oracle::{
     tiled_gemm_arithmetic_oracle_v1, tiled_gemm_evidence_oracle_v1, validate_evidence_inputs_v1,
 };
 pub use semantic_corpus::{
-    GEMM_SEMANTIC_CORPUS_SCHEMA_V1, GENERAL_GEMM_SAFE_SOURCE_MODEL_V1, GemmFailureKindV1,
-    GemmRequiredPropertyV1, GemmSemanticDiagnosticV1, GemmSemanticNegativeCaseV1,
-    GemmVerificationStageV1, SEMANTIC_NEGATIVE_CORPUS_V1, SemanticMutationV1,
+    GEMM_REQUIRED_PROPERTIES_V1, GEMM_SEMANTIC_CORPUS_SCHEMA_V1, GENERAL_GEMM_SAFE_SOURCE_MODEL_V1,
+    GemmFailureKindV1, GemmRequiredPropertyV1, GemmSemanticDiagnosticV1,
+    GemmSemanticNegativeCaseV1, GemmVerificationStageV1, SEMANTIC_NEGATIVE_CORPUS_V1,
+    SemanticMutationV1,
 };

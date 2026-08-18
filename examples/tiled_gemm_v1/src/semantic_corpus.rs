@@ -46,6 +46,22 @@ pub enum GemmRequiredPropertyV1 {
     MachineRefinementBoundary,
 }
 
+/// Complete mirrored property order checked against the compiler driver.
+pub const GEMM_REQUIRED_PROPERTIES_V1: [GemmRequiredPropertyV1; 12] = [
+    GemmRequiredPropertyV1::MemorySafe,
+    GemmRequiredPropertyV1::BoundsSafe,
+    GemmRequiredPropertyV1::Initialized,
+    GemmRequiredPropertyV1::RaceFree,
+    GemmRequiredPropertyV1::BarrierConvergent,
+    GemmRequiredPropertyV1::OutputRegionInjective,
+    GemmRequiredPropertyV1::LdsEpochCorrect,
+    GemmRequiredPropertyV1::AccumulatorPhaseRefinement,
+    GemmRequiredPropertyV1::TailRefinement,
+    GemmRequiredPropertyV1::EpilogueRefinement,
+    GemmRequiredPropertyV1::NumericalContract,
+    GemmRequiredPropertyV1::MachineRefinementBoundary,
+];
+
 impl GemmRequiredPropertyV1 {
     /// Returns the frozen compiler-facing property spelling.
     pub const fn as_str(self) -> &'static str {
