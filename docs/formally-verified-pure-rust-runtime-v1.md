@@ -462,7 +462,10 @@ before starting `rocminfo`, re-audits the production closure and ELF, compares
 exactly eight sorted MI300X identities, and emits only `Measured`,
 non-authoritative evidence. That observation satisfies the R1 differential-test
 deliverable; it does not discharge the generation proof or any external
-contract.
+contract. Its detached record binds the exact clean Git commit, runner, policy,
+auditor, lockfile, bounded audit reports, comparator, and measured executables.
+Contracted currentness and the VRAM-loss counter remain explicitly
+pure-Rust-only rather than being laundered into the HSA comparison.
 
 ## Staged Adoption and Exit Criteria
 

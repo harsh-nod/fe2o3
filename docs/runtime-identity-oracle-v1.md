@@ -8,12 +8,17 @@ admit a device, prove a runtime property, or grant any runtime authority.
 
 `scripts/runtime-identity-oracle.sh` performs this fixed sequence:
 
-1. audit the four production Cargo roots with the pure-Rust dependency policy;
-2. build and ELF-audit the pure-Rust `kfd-device-identity` example;
-3. execute that example with `--all` in a bounded subprocess;
-4. execute `/opt/rocm/bin/rocminfo` in a different bounded subprocess with a
-   cleared environment; and
-5. pass the two completed output files to the standalone Python comparator.
+1. require a clean Git worktree and capture its exact 40-digit `HEAD`;
+2. audit the four production Cargo roots with the pure-Rust dependency policy,
+   retaining the bounded success report;
+3. build and ELF-audit the pure-Rust `kfd-device-identity` example, retaining
+   the bounded success report;
+4. execute that example with `--all` in a bounded subprocess;
+5. execute `/opt/rocm/bin/rocminfo` in a different bounded subprocess with a
+   cleared environment;
+6. recheck the same clean Git observation, capture a canonical UTC host-clock
+   observation, and pass the completed files to the standalone comparator; and
+7. recheck Git once more before atomically publishing the evidence.
 
 The pure-Rust process exits before `rocminfo` starts. Oracle bytes are never an
 argument, environment value, file descriptor, expected digest, proof record, or
@@ -21,7 +26,8 @@ other input to the pure-Rust process. The comparator is a repository script, not
 a Cargo package, and neither it nor ROCm is reachable from a production Cargo
 edge. The production metadata and final ELF audits are repeated in the hardware
 lane so this separation is an executable gate rather than a documentation-only
-rule.
+rule. A dirty worktree, changed `HEAD`, or a worktree change during measurement
+fails closed and publishes no result.
 
 ## Exact Profile
 
@@ -58,7 +64,15 @@ scripts/runtime_identity_oracle.py \
   --rocminfo-output PATH \
   --rocm-release PATH \
   --pure-rust-executable PATH \
-  --rocminfo-executable PATH
+  --rocminfo-executable PATH \
+  --runner PATH \
+  --policy PATH \
+  --auditor PATH \
+  --cargo-lock PATH \
+  --metadata-audit-report PATH \
+  --elf-audit-report PATH \
+  --git-observation PATH \
+  --measurement-time PATH
 ```
 
 Successful stdout uses schema
@@ -71,12 +85,35 @@ authority=none
 proof_effect=none
 runtime_authority_effect=none
 result=match
+differential_match_fields=uuid,node,pci-bdf,target,wavefront,firmware
+pure_rust_only_fields=currentness,vram_lost_counter
+oracle_only_fields=isa
+currentness_claim_status=Contracted
+currentness=contracted-clear
+currentness_source=pure-rust-only
+currentness_hsa_comparison=not-performed
+vram_lost_counter_source=pure-rust-only
 ```
 
 It then records the exact profile and platform identities, raw-output digests,
-both executable digests, comparator digest, and eight sorted GPU rows containing
-UUID, KFD node/GPU ID, PCI address, render minor, oracle agent/BDFID, target,
-wavefront, firmware, exact ISA, and match result.
+both executable digests, comparator digest, and eight sorted GPU rows. Each row
+uses `differential_match=true` only for the named differential fields. The
+contracted-currentness result and wrapping VRAM-loss counter are explicitly
+marked `pure-rust-only`; rocminfo does not independently check either property.
+
+Detached evidence also records the clean Git commit, an explicitly untrusted UTC
+host-clock observation, and SHA-256 digests of the runner, policy, auditor,
+`Cargo.lock`, captured metadata audit report, and captured ELF audit report. It
+retains the metadata snapshot digest reported by the auditor and requires the ELF
+report's byte count and digest to match the supplied pure-Rust executable. All
+provenance inputs are bounded, regular, non-symlink files read through the same
+stable-reader checks as the measurement inputs.
+The detached summary retains each audit's passed status, bounded counts, and the
+exact reviewed build-script exceptions in addition to the report digests.
+
+GPU rows contain UUID, KFD node/GPU ID, PCI address, render minor, oracle
+agent/BDFID, target, wavefront, firmware, exact ISA, currentness source, and the
+pure-Rust VRAM-loss-counter source.
 `Measured` is the only claim status. In particular, a matching record cannot be
 used as `Checked`, `Proved`, `ProvedUnderContract`, or aggregate `Verified`
 evidence. There is no runtime API that accepts this record.
@@ -109,3 +146,10 @@ the state retained by the earlier pure-Rust process. UUID agreement does not
 prove physical anti-substitution, reset absence, liveness, progress, memory
 coherency, queue semantics, kernel execution correctness, or performance. V1 is
 deliberately restricted to this eight-GPU MI300X and exact software profile.
+The UTC value is a host-clock observation, not trusted time or a freshness
+guarantee. Git and stable-file checks detect observations visible before and
+after the bounded run, but they are not an atomic filesystem snapshot and do not
+exclude a privileged actor that can change and restore inputs between checks.
+The evidence is neither signed nor independently attested; its extra digests
+make a detached measurement auditable and traceable to exact inputs, not
+authoritative.

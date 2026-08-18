@@ -88,3 +88,6 @@ The separate `scripts/runtime-identity-oracle.sh` hardware lane compares the
 device, VM, memory, queue, dispatch, or proof authority. The exact comparison,
 evidence schema, CI separation, and limitations are documented in
 `docs/runtime-identity-oracle-v1.md`.
+The evidence marks contracted currentness and the VRAM-loss counter as
+pure-Rust-only observations; neither is represented as an HSA differential
+match.

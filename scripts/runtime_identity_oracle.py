@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path
@@ -36,6 +37,10 @@ MAX_PURE_RUST_BYTES = 128 * 1024
 MAX_ROCMINFO_BYTES = 1024 * 1024
 MAX_EXECUTABLE_BYTES = 64 * 1024 * 1024
 MAX_VERSION_BYTES = 256
+MAX_PROVENANCE_SOURCE_BYTES = 2 * 1024 * 1024
+MAX_AUDIT_REPORT_BYTES = 4096
+MAX_GIT_OBSERVATION_BYTES = 256
+MAX_TIME_OBSERVATION_BYTES = 64
 MAX_LINES = 16_384
 MAX_LINE_BYTES = 4096
 MAX_AGENTS = 64
@@ -56,6 +61,18 @@ TOP_FIELD_RE = re.compile(
 )
 FIRMWARE_FIELD_RE = re.compile(r"  (Packet Processor uCode|SDMA engine uCode):: +(.+?) *")
 ISA_NAME_RE = re.compile(r"      Name: +(amdgcn-[!-~]+) *")
+GIT_HEAD_RE = re.compile(r"[0-9a-f]{40}")
+UTC_TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+METADATA_AUDIT_RE = re.compile(
+    r"pure-Rust runtime audit: OK \(metadata roots=([0-9]+) packages=([0-9]+) "
+    r"allowed_build_scripts=([^ ]+) sha256=([0-9a-f]{64}); "
+    r"profile=fe2o3\.runtime\.pure-rust\.gfx942\.v1\)"
+)
+ELF_AUDIT_RE = re.compile(
+    r"pure-Rust runtime audit: OK \(ELF bytes=([0-9]+) needed=([0-9]+) "
+    r"dynsym=([0-9]+) sha256=([0-9a-f]{64}); "
+    r"profile=fe2o3\.runtime\.pure-rust\.gfx942\.v1\)"
+)
 
 PURE_KEYS = {
     "amdgpu",
@@ -118,6 +135,31 @@ class RocminfoObservation:
     runtime_version: str
     xnack_enabled: str
     gpus: tuple[RocminfoGpu, ...]
+
+
+@dataclass(frozen=True)
+class ProvenanceInputs:
+    runner_data: bytes
+    policy_data: bytes
+    auditor_data: bytes
+    cargo_lock_data: bytes
+    metadata_audit_report_data: bytes
+    elf_audit_report_data: bytes
+    git_observation_data: bytes
+    measurement_time_data: bytes
+
+
+@dataclass(frozen=True)
+class MeasurementProvenance:
+    git_head: str
+    measurement_utc: str
+    metadata_packages: int
+    metadata_allowed_build_scripts: str
+    metadata_snapshot_sha256: str
+    elf_bytes: int
+    elf_needed: int
+    elf_dynsym: int
+    elf_audited_sha256: str
 
 
 def _read_stable_regular(
@@ -208,6 +250,91 @@ def _parse_decimal(value: str, label: str) -> int:
     if DECIMAL_RE.fullmatch(value) is None:
         raise OracleInputError(f"invalid {label}: {value!r}")
     return int(value)
+
+
+def _single_ascii_line(data: bytes, label: str) -> str:
+    lines = _strict_lines(data, label)
+    if len(lines) != 1:
+        raise OracleInputError(f"{label} must contain exactly one line")
+    return lines[0]
+
+
+def parse_provenance(
+    inputs: ProvenanceInputs, pure_executable_data: bytes
+) -> MeasurementProvenance:
+    git_lines = _strict_lines(inputs.git_observation_data, "Git observation")
+    if len(git_lines) != 2:
+        raise OracleInputError("Git observation must contain exactly two lines")
+    head_key, head_separator, git_head = git_lines[0].partition("=")
+    worktree_key, worktree_separator, worktree = git_lines[1].partition("=")
+    if (
+        head_key != "head"
+        or head_separator != "="
+        or GIT_HEAD_RE.fullmatch(git_head) is None
+        or worktree_key != "worktree"
+        or worktree_separator != "="
+        or worktree != "clean"
+    ):
+        raise OracleInputError("Git observation is not an exact clean commit")
+
+    measurement_utc = _single_ascii_line(
+        inputs.measurement_time_data, "UTC measurement-time observation"
+    )
+    if UTC_TIME_RE.fullmatch(measurement_utc) is None:
+        raise OracleInputError("UTC measurement-time observation is not canonical")
+    try:
+        parsed_time = datetime.strptime(measurement_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError as error:
+        raise OracleInputError("UTC measurement-time observation is invalid") from error
+    if parsed_time.strftime("%Y-%m-%dT%H:%M:%SZ") != measurement_utc:
+        raise OracleInputError("UTC measurement-time observation is not canonical")
+
+    metadata_report = _single_ascii_line(
+        inputs.metadata_audit_report_data, "metadata audit report"
+    )
+    metadata_match = METADATA_AUDIT_RE.fullmatch(metadata_report)
+    if metadata_match is None:
+        raise OracleInputError("metadata audit report does not match the V1 success schema")
+    roots = _parse_decimal(metadata_match.group(1), "metadata audit root count")
+    packages = _parse_decimal(metadata_match.group(2), "metadata audit package count")
+    allowed_build_scripts = metadata_match.group(3)
+    if (
+        roots != 4
+        or not 4 <= packages <= 65_536
+        or allowed_build_scripts != "libc@0.2.189,rustix@1.1.4"
+    ):
+        raise OracleInputError("metadata audit report differs from the V1 policy gate")
+
+    elf_report = _single_ascii_line(inputs.elf_audit_report_data, "ELF audit report")
+    elf_match = ELF_AUDIT_RE.fullmatch(elf_report)
+    if elf_match is None:
+        raise OracleInputError("ELF audit report does not match the V1 success schema")
+    elf_bytes = _parse_decimal(elf_match.group(1), "ELF audit byte count")
+    needed = _parse_decimal(elf_match.group(2), "ELF dependency count")
+    dynsym = _parse_decimal(elf_match.group(3), "ELF dynamic-symbol count")
+    elf_audited_sha256 = elf_match.group(4)
+    executable_sha256 = hashlib.sha256(pure_executable_data).hexdigest()
+    if (
+        elf_bytes != len(pure_executable_data)
+        or needed > 4096
+        or dynsym > 1_000_000
+        or elf_audited_sha256 != executable_sha256
+    ):
+        raise OracleInputError("ELF audit report is not bound to the supplied executable")
+
+    return MeasurementProvenance(
+        git_head=git_head,
+        measurement_utc=measurement_utc,
+        metadata_packages=packages,
+        metadata_allowed_build_scripts=allowed_build_scripts,
+        metadata_snapshot_sha256=metadata_match.group(4),
+        elf_bytes=elf_bytes,
+        elf_needed=needed,
+        elf_dynsym=dynsym,
+        elf_audited_sha256=elf_audited_sha256,
+    )
 
 
 def parse_pure_rust(data: bytes) -> tuple[PureRustGpu, ...]:
@@ -499,9 +626,11 @@ def compare_and_render(
     pure_executable_data: bytes,
     rocminfo_executable_data: bytes,
     checker_data: bytes,
+    provenance_inputs: ProvenanceInputs,
 ) -> str:
     pure = parse_pure_rust(pure_data)
     oracle = parse_rocminfo(rocminfo_data)
+    provenance = parse_provenance(provenance_inputs, pure_executable_data)
     try:
         rocm_release = rocm_release_data.decode("ascii")
     except UnicodeDecodeError as error:
@@ -542,6 +671,14 @@ def compare_and_render(
         "proof_effect=none",
         "runtime_authority_effect=none",
         "result=match",
+        "differential_match_fields=uuid,node,pci-bdf,target,wavefront,firmware",
+        "pure_rust_only_fields=currentness,vram_lost_counter",
+        "oracle_only_fields=isa",
+        "currentness_claim_status=Contracted",
+        "currentness=contracted-clear",
+        "currentness_source=pure-rust-only",
+        "currentness_hsa_comparison=not-performed",
+        "vram_lost_counter_source=pure-rust-only",
         "oracle=rocminfo",
         f"rocm_release={EXPECTED_ROCM_RELEASE}",
         f"hsa_runtime={oracle.runtime_version}",
@@ -555,6 +692,26 @@ def compare_and_render(
         f"oracle_primary_isa={EXPECTED_PRIMARY_ISA}",
         f"oracle_compat_isa={EXPECTED_ISAS[0]}",
         f"gpu_count={EXPECTED_GPU_COUNT}",
+        f"git_head={provenance.git_head}",
+        "git_worktree=clean",
+        f"measurement_utc_observed={provenance.measurement_utc}",
+        "measurement_time_trust=untrusted-host-clock",
+        f"runtime_oracle_runner_sha256={hashlib.sha256(provenance_inputs.runner_data).hexdigest()}",
+        f"runtime_pure_rust_policy_sha256={hashlib.sha256(provenance_inputs.policy_data).hexdigest()}",
+        f"runtime_pure_rust_auditor_sha256={hashlib.sha256(provenance_inputs.auditor_data).hexdigest()}",
+        f"cargo_lock_sha256={hashlib.sha256(provenance_inputs.cargo_lock_data).hexdigest()}",
+        "metadata_audit_status=passed",
+        "metadata_audit_roots=4",
+        f"metadata_audit_packages={provenance.metadata_packages}",
+        f"metadata_audit_allowed_build_scripts={provenance.metadata_allowed_build_scripts}",
+        f"metadata_audit_report_sha256={hashlib.sha256(provenance_inputs.metadata_audit_report_data).hexdigest()}",
+        f"metadata_snapshot_sha256={provenance.metadata_snapshot_sha256}",
+        "elf_audit_status=passed",
+        f"elf_audit_bytes={provenance.elf_bytes}",
+        f"elf_audit_needed={provenance.elf_needed}",
+        f"elf_audit_dynsym={provenance.elf_dynsym}",
+        f"elf_audit_report_sha256={hashlib.sha256(provenance_inputs.elf_audit_report_data).hexdigest()}",
+        f"elf_audited_sha256={provenance.elf_audited_sha256}",
         f"pure_rust_output_sha256={hashlib.sha256(pure_data).hexdigest()}",
         f"rocminfo_output_sha256={hashlib.sha256(rocminfo_data).hexdigest()}",
         f"pure_rust_executable_sha256={hashlib.sha256(pure_executable_data).hexdigest()}",
@@ -566,9 +723,12 @@ def compare_and_render(
             f"gpu unique_id={checked.unique_id} node={checked.node} gpu_id={checked.gpu_id} "
             f"pci={checked.pci} renderD{checked.render_minor} oracle_agent={measured.agent} "
             f"oracle_bdf_id={measured.bdf_id} target={checked.target} "
-            f"wavefront={checked.wavefront} vram_lost_counter={checked.vram_lost_counter} "
+            f"wavefront={checked.wavefront} "
             f"firmware={measured.compute_firmware}/"
-            f"{measured.sdma_firmware} isa={measured.primary_isa} match=true"
+            f"{measured.sdma_firmware} isa={measured.primary_isa} differential_match=true "
+            f"currentness=contracted-clear currentness_source=pure-rust-only "
+            f"vram_lost_counter={checked.vram_lost_counter} "
+            f"vram_lost_counter_source=pure-rust-only"
         )
     return "\n".join(lines) + "\n"
 
@@ -594,6 +754,44 @@ def compare_files(args: argparse.Namespace) -> str:
             require_executable=True,
         ),
         _read_stable_regular(checker_path, MAX_EXECUTABLE_BYTES, "oracle comparator"),
+        ProvenanceInputs(
+            runner_data=_read_stable_regular(
+                args.runner,
+                MAX_PROVENANCE_SOURCE_BYTES,
+                "oracle runner",
+                require_executable=True,
+            ),
+            policy_data=_read_stable_regular(
+                args.policy, MAX_PROVENANCE_SOURCE_BYTES, "pure-Rust runtime policy"
+            ),
+            auditor_data=_read_stable_regular(
+                args.auditor,
+                MAX_PROVENANCE_SOURCE_BYTES,
+                "pure-Rust runtime auditor",
+                require_executable=True,
+            ),
+            cargo_lock_data=_read_stable_regular(
+                args.cargo_lock, MAX_PROVENANCE_SOURCE_BYTES, "Cargo lockfile"
+            ),
+            metadata_audit_report_data=_read_stable_regular(
+                args.metadata_audit_report,
+                MAX_AUDIT_REPORT_BYTES,
+                "metadata audit report",
+            ),
+            elf_audit_report_data=_read_stable_regular(
+                args.elf_audit_report, MAX_AUDIT_REPORT_BYTES, "ELF audit report"
+            ),
+            git_observation_data=_read_stable_regular(
+                args.git_observation,
+                MAX_GIT_OBSERVATION_BYTES,
+                "Git observation",
+            ),
+            measurement_time_data=_read_stable_regular(
+                args.measurement_time,
+                MAX_TIME_OBSERVATION_BYTES,
+                "UTC measurement-time observation",
+            ),
+        ),
     )
 
 
@@ -604,6 +802,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rocm-release", required=True, type=Path)
     parser.add_argument("--pure-rust-executable", required=True, type=Path)
     parser.add_argument("--rocminfo-executable", required=True, type=Path)
+    parser.add_argument("--runner", required=True, type=Path)
+    parser.add_argument("--policy", required=True, type=Path)
+    parser.add_argument("--auditor", required=True, type=Path)
+    parser.add_argument("--cargo-lock", required=True, type=Path)
+    parser.add_argument("--metadata-audit-report", required=True, type=Path)
+    parser.add_argument("--elf-audit-report", required=True, type=Path)
+    parser.add_argument("--git-observation", required=True, type=Path)
+    parser.add_argument("--measurement-time", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
         sys.stdout.write(compare_files(args))

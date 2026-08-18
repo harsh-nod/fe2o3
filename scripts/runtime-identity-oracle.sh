@@ -11,9 +11,38 @@ readonly ROCMINFO=/opt/rocm/bin/rocminfo
 readonly ROCM_RELEASE=/opt/rocm/.info/version
 readonly TARGET_DIR="${REPO_ROOT}/target/runtime-identity-oracle"
 readonly EVIDENCE="${TARGET_DIR}/device-identity-measured-v1.txt"
+readonly RUNNER="${SCRIPT_DIR}/runtime-identity-oracle.sh"
 readonly COMPARATOR="${SCRIPT_DIR}/runtime_identity_oracle.py"
 readonly AUDITOR="${SCRIPT_DIR}/runtime_pure_rust_audit.py"
 readonly POLICY="${SCRIPT_DIR}/runtime-pure-rust-policy.json"
+readonly CARGO_LOCK="${REPO_ROOT}/Cargo.lock"
+
+capture_git_observation() {
+  local output="$1"
+  local head_file="${output}.head"
+  local status_file="${output}.status"
+  local head
+
+  (
+    ulimit -f 2
+    git rev-parse --verify 'HEAD^{commit}'
+  ) >"${head_file}"
+  if ! IFS= read -r head <"${head_file}" ||
+    [[ ! "${head}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf '%s\n' 'runtime identity oracle could not capture a canonical Git HEAD' >&2
+    return 2
+  fi
+  (
+    ulimit -f 32
+    git status --porcelain=v1 --untracked-files=all
+  ) >"${status_file}"
+  if [[ -s "${status_file}" ]]; then
+    printf 'head=%s\nworktree=dirty\n' "${head}" >"${output}"
+  else
+    printf 'head=%s\nworktree=clean\n' "${head}" >"${output}"
+  fi
+  rm -f -- "${head_file}" "${status_file}"
+}
 
 if [[ "${FE2O3_ALLOW_RUNTIME_IDENTITY_ORACLE:-}" != 1 ]]; then
   printf '%s\n' \
@@ -24,14 +53,22 @@ if [[ ! -c /dev/kfd || ! -r /dev/kfd || ! -w /dev/kfd ]]; then
   printf '%s\n' 'runtime identity oracle requires read/write access to /dev/kfd' >&2
   exit 2
 fi
-for path in "${ROCMINFO}" "${ROCM_RELEASE}" "${COMPARATOR}" "${AUDITOR}" "${POLICY}"; do
+for path in \
+  "${ROCMINFO}" \
+  "${ROCM_RELEASE}" \
+  "${RUNNER}" \
+  "${COMPARATOR}" \
+  "${AUDITOR}" \
+  "${POLICY}" \
+  "${CARGO_LOCK}"; do
   if [[ ! -f "${path}" || -L "${path}" ]]; then
     printf 'runtime identity oracle requires a regular non-symlink input: %s\n' \
       "${path}" >&2
     exit 2
   fi
 done
-if [[ ! -x "${ROCMINFO}" || ! -x "${COMPARATOR}" ]]; then
+if [[ ! -x "${ROCMINFO}" || ! -x "${RUNNER}" || ! -x "${COMPARATOR}" ||
+  ! -x "${AUDITOR}" ]]; then
   printf '%s\n' 'runtime identity oracle executable is not executable' >&2
   exit 2
 fi
@@ -51,19 +88,55 @@ chmod 700 "${CAPTURE_DIR}"
 trap 'rm -rf -- "${CAPTURE_DIR}"' EXIT
 readonly BUILD_DIR="${CAPTURE_DIR}/build"
 readonly PURE_EXECUTABLE="${BUILD_DIR}/debug/examples/kfd-device-identity"
+readonly GIT_OBSERVATION="${CAPTURE_DIR}/git-observation.txt"
+readonly GIT_OBSERVATION_AFTER="${CAPTURE_DIR}/git-observation-after.txt"
+readonly GIT_OBSERVATION_FINAL="${CAPTURE_DIR}/git-observation-final.txt"
+readonly METADATA_AUDIT_REPORT="${CAPTURE_DIR}/metadata-audit-report.txt"
+readonly METADATA_AUDIT_ERROR="${CAPTURE_DIR}/metadata-audit-error.txt"
+readonly ELF_AUDIT_REPORT="${CAPTURE_DIR}/elf-audit-report.txt"
+readonly ELF_AUDIT_ERROR="${CAPTURE_DIR}/elf-audit-error.txt"
+readonly MEASUREMENT_TIME="${CAPTURE_DIR}/measurement-time.txt"
 
 cd -- "${REPO_ROOT}"
 
+capture_git_observation "${GIT_OBSERVATION}"
+if ! grep -qx 'worktree=clean' "${GIT_OBSERVATION}"; then
+  printf '%s\n' 'runtime identity oracle requires a clean Git worktree' >&2
+  exit 2
+fi
+
 # Re-establish that neither the separately launched oracle nor this harness is a
 # production Cargo edge. The linked pure-Rust evidence producer is audited too.
-python3 "${AUDITOR}" --policy "${POLICY}" metadata --cargo \
-  --root fe2o3-kfd \
-  --root fe2o3-drm-uapi \
-  --root fe2o3-kfd-uapi \
-  --root fe2o3-runtime-model
+if ! (
+  ulimit -f 16
+  python3 "${AUDITOR}" --policy "${POLICY}" metadata --cargo \
+    --root fe2o3-kfd \
+    --root fe2o3-drm-uapi \
+    --root fe2o3-kfd-uapi \
+    --root fe2o3-runtime-model
+) >"${METADATA_AUDIT_REPORT}" 2>"${METADATA_AUDIT_ERROR}"; then
+  cat -- "${METADATA_AUDIT_ERROR}" >&2
+  exit 2
+fi
+if [[ -s "${METADATA_AUDIT_ERROR}" ]]; then
+  printf '%s\n' 'metadata audit wrote to stderr' >&2
+  exit 2
+fi
+cat -- "${METADATA_AUDIT_REPORT}"
 env CARGO_TARGET_DIR="${BUILD_DIR}" \
   cargo build --locked -p fe2o3-kfd --example kfd-device-identity
-python3 "${AUDITOR}" --policy "${POLICY}" elf --input "${PURE_EXECUTABLE}"
+if ! (
+  ulimit -f 16
+  python3 "${AUDITOR}" --policy "${POLICY}" elf --input "${PURE_EXECUTABLE}"
+) >"${ELF_AUDIT_REPORT}" 2>"${ELF_AUDIT_ERROR}"; then
+  cat -- "${ELF_AUDIT_ERROR}" >&2
+  exit 2
+fi
+if [[ -s "${ELF_AUDIT_ERROR}" ]]; then
+  printf '%s\n' 'ELF audit wrote to stderr' >&2
+  exit 2
+fi
+cat -- "${ELF_AUDIT_REPORT}"
 
 pure_output="${CAPTURE_DIR}/pure-rust.txt"
 pure_error="${CAPTURE_DIR}/pure-rust.err"
@@ -95,12 +168,35 @@ if [[ -s "${rocminfo_error}" ]]; then
   exit 2
 fi
 
+capture_git_observation "${GIT_OBSERVATION_AFTER}"
+if ! cmp -s -- "${GIT_OBSERVATION}" "${GIT_OBSERVATION_AFTER}"; then
+  printf '%s\n' 'Git HEAD or worktree changed during identity measurement' >&2
+  exit 2
+fi
+(
+  ulimit -f 2
+  date --utc '+%Y-%m-%dT%H:%M:%SZ'
+) >"${MEASUREMENT_TIME}"
+
 python3 "${COMPARATOR}" \
   --pure-rust-output "${pure_output}" \
   --rocminfo-output "${rocminfo_output}" \
   --rocm-release "${ROCM_RELEASE}" \
   --pure-rust-executable "${PURE_EXECUTABLE}" \
-  --rocminfo-executable "${ROCMINFO}" >"${evidence_temporary}"
+  --rocminfo-executable "${ROCMINFO}" \
+  --runner "${RUNNER}" \
+  --policy "${POLICY}" \
+  --auditor "${AUDITOR}" \
+  --cargo-lock "${CARGO_LOCK}" \
+  --metadata-audit-report "${METADATA_AUDIT_REPORT}" \
+  --elf-audit-report "${ELF_AUDIT_REPORT}" \
+  --git-observation "${GIT_OBSERVATION}" \
+  --measurement-time "${MEASUREMENT_TIME}" >"${evidence_temporary}"
+capture_git_observation "${GIT_OBSERVATION_FINAL}"
+if ! cmp -s -- "${GIT_OBSERVATION}" "${GIT_OBSERVATION_FINAL}"; then
+  printf '%s\n' 'Git HEAD or worktree changed while producing identity evidence' >&2
+  exit 2
+fi
 chmod 600 "${evidence_temporary}"
 mv -f -- "${evidence_temporary}" "${EVIDENCE}"
 cat -- "${EVIDENCE}"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -24,6 +26,32 @@ SPEC.loader.exec_module(CHECKER)
 PURE = (FIXTURES / "pure-rust-v1.txt").read_bytes()
 ROCMINFO = (FIXTURES / "rocminfo-v1.txt").read_bytes()
 ROCM_VERSION = (FIXTURES / "rocm-version").read_bytes()
+PURE_EXECUTABLE = b"pure executable fixture"
+ROCMINFO_EXECUTABLE = b"rocminfo executable fixture"
+COMPARATOR = b"comparator fixture"
+
+
+def provenance() -> CHECKER.ProvenanceInputs:
+    elf_digest = hashlib.sha256(PURE_EXECUTABLE).hexdigest()
+    return CHECKER.ProvenanceInputs(
+        runner_data=b"oracle runner fixture\n",
+        policy_data=b"runtime policy fixture\n",
+        auditor_data=b"runtime auditor fixture\n",
+        cargo_lock_data=b"cargo lock fixture\n",
+        metadata_audit_report_data=(
+            b"pure-Rust runtime audit: OK (metadata roots=4 packages=17 "
+            b"allowed_build_scripts=libc@0.2.189,rustix@1.1.4 sha256="
+            + b"a" * 64
+            + b"; profile=fe2o3.runtime.pure-rust.gfx942.v1)\n"
+        ),
+        elf_audit_report_data=(
+            f"pure-Rust runtime audit: OK (ELF bytes={len(PURE_EXECUTABLE)} "
+            f"needed=3 dynsym=75 sha256={elf_digest}; "
+            "profile=fe2o3.runtime.pure-rust.gfx942.v1)\n"
+        ).encode(),
+        git_observation_data=b"head=1111111111111111111111111111111111111111\nworktree=clean\n",
+        measurement_time_data=b"2026-08-18T12:34:56Z\n",
+    )
 
 
 class RuntimeIdentityOracleTests(unittest.TestCase):
@@ -32,9 +60,10 @@ class RuntimeIdentityOracleTests(unittest.TestCase):
             pure,
             rocminfo,
             ROCM_VERSION,
-            b"pure executable fixture",
-            b"rocminfo executable fixture",
-            b"comparator fixture",
+            PURE_EXECUTABLE,
+            ROCMINFO_EXECUTABLE,
+            COMPARATOR,
+            provenance(),
         )
 
     def test_valid_fixtures_emit_only_measured_non_authority(self) -> None:
@@ -46,6 +75,12 @@ class RuntimeIdentityOracleTests(unittest.TestCase):
         self.assertIn("authority=none\n", evidence)
         self.assertIn("proof_effect=none\n", evidence)
         self.assertIn("runtime_authority_effect=none\n", evidence)
+        self.assertIn("currentness_claim_status=Contracted\n", evidence)
+        self.assertIn("currentness=contracted-clear\n", evidence)
+        self.assertIn("currentness_hsa_comparison=not-performed\n", evidence)
+        self.assertIn("vram_lost_counter_source=pure-rust-only\n", evidence)
+        self.assertIn("git_worktree=clean\n", evidence)
+        self.assertIn("measurement_time_trust=untrusted-host-clock\n", evidence)
         for prohibited in ("claim_status=Checked", "Proved", "Verified"):
             self.assertNotIn(prohibited, evidence)
         gpu_lines = [line for line in evidence.splitlines() if line.startswith("gpu ")]
@@ -54,6 +89,16 @@ class RuntimeIdentityOracleTests(unittest.TestCase):
         self.assertTrue(
             all(f"isa={CHECKER.EXPECTED_PRIMARY_ISA}" in line for line in gpu_lines)
         )
+        self.assertTrue(all("differential_match=true" in line for line in gpu_lines))
+        self.assertTrue(
+            all("vram_lost_counter_source=pure-rust-only" in line for line in gpu_lines)
+        )
+        self.assertTrue(all("currentness=contracted-clear" in line for line in gpu_lines))
+        self.assertNotIn(" match=true", evidence)
+
+    def test_valid_fixtures_match_canonical_evidence_golden(self) -> None:
+        expected = (FIXTURES / "measured-evidence-v1.txt").read_text(encoding="ascii")
+        self.assertEqual(self.render(), expected)
 
     def test_ansi_color_on_module_banner_is_bounded_and_accepted(self) -> None:
         colored = ROCMINFO.replace(
@@ -106,6 +151,11 @@ class RuntimeIdentityOracleTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(CHECKER.OracleInputError, "outside the V1 bounds"):
             CHECKER.parse_pure_rust(overflow)
+        substituted = PURE.replace(
+            b"currentness=contracted-clear", b"currentness=proved-current", 1
+        )
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "currentness"):
+            CHECKER.parse_pure_rust(substituted)
 
     def test_rocminfo_gpu_count_is_exact(self) -> None:
         marker = b"Agent 10\n"
@@ -172,10 +222,59 @@ class RuntimeIdentityOracleTests(unittest.TestCase):
                 PURE,
                 ROCMINFO,
                 b"7.2.5\n",
-                b"pure",
-                b"oracle",
-                b"checker",
+                PURE_EXECUTABLE,
+                ROCMINFO_EXECUTABLE,
+                COMPARATOR,
+                provenance(),
             )
+
+    def test_provenance_rejects_dirty_or_malformed_git_observation(self) -> None:
+        dirty = provenance()
+        dirty = replace(
+            dirty,
+            git_observation_data=dirty.git_observation_data.replace(
+                b"worktree=clean", b"worktree=dirty"
+            ),
+        )
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "exact clean commit"):
+            CHECKER.parse_provenance(dirty, PURE_EXECUTABLE)
+
+        malformed = provenance()
+        malformed = replace(
+            malformed,
+            git_observation_data=b"head=not-a-commit\nworktree=clean\n",
+        )
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "exact clean commit"):
+            CHECKER.parse_provenance(malformed, PURE_EXECUTABLE)
+
+    def test_provenance_rejects_audit_report_substitution(self) -> None:
+        inputs = provenance()
+        wrong_elf = replace(
+            inputs,
+            elf_audit_report_data=inputs.elf_audit_report_data.replace(
+                hashlib.sha256(PURE_EXECUTABLE).hexdigest().encode(), b"0" * 64
+            ),
+        )
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "not bound"):
+            CHECKER.parse_provenance(wrong_elf, PURE_EXECUTABLE)
+
+        failed_metadata = replace(
+            inputs,
+            metadata_audit_report_data=inputs.metadata_audit_report_data.replace(
+                b"audit: OK", b"audit: FAILED"
+            ),
+        )
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "success schema"):
+            CHECKER.parse_provenance(failed_metadata, PURE_EXECUTABLE)
+
+    def test_provenance_rejects_invalid_utc_time(self) -> None:
+        inputs = provenance()
+        invalid = replace(
+            inputs,
+            measurement_time_data=b"2026-02-30T12:34:56Z\n",
+        )
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "invalid"):
+            CHECKER.parse_provenance(invalid, PURE_EXECUTABLE)
 
     def test_stable_reader_rejects_symlink_and_oversized_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
