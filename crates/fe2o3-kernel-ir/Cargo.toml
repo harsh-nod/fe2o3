@@ -10,5 +10,8 @@ description = "Target-neutral semantic kernel IR for fe2o3"
 [lib]
 name = "fe2o3_kernel_ir"
 
+[dependencies]
+sha2.workspace = true
+
 [lints.rust]
 unsafe_code = "forbid"
