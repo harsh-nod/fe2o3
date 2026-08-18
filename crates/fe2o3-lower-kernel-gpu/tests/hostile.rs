@@ -5,7 +5,9 @@ use fe2o3_lower_kernel_gpu::{
     MAX_REWRITES, MAX_WORKGROUP_AXIS, PASS_REGISTRATION_MARKER_KEY, PassRegistrationError,
     PostconditionError, SynchronizationMode, WorkgroupShape, register_pass,
 };
-use pliron::{context::Context, identifier::Identifier, op::Op};
+use fe2o3_pliron::CONTEXT_IDENTITY_MARKER_KEY;
+use pliron::{context::Context, identifier::Identifier, op::Op, operation::Operation};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn config(
     rank: &[u32],
@@ -21,6 +23,20 @@ fn config(
         synchronization,
         rewrites,
     )
+}
+
+fn transplant_aux_marker(owner: &mut Context, foreign: &mut Context, key: &str) {
+    let key: Identifier = key.try_into().expect("valid marker key");
+    let owner_index = owner
+        .aux_data_map
+        .remove(&key)
+        .expect("owner marker is indexed");
+    let owner_marker = owner
+        .aux_data
+        .remove(owner_index)
+        .expect("owner marker exists");
+    let transplanted_index = foreign.aux_data.insert(owner_marker);
+    foreign.aux_data_map.insert(key, transplanted_index);
 }
 
 #[test]
@@ -278,6 +294,71 @@ fn postcondition_validator_detects_mutated_gpu_ir() {
     assert_eq!(
         result.validate(&context),
         Err(PostconditionError::InvalidGpuOperation { index: 0 })
+    );
+}
+
+#[test]
+fn postcondition_validator_reports_erased_gpu_ir_without_unwinding() {
+    let mut context = Context::new();
+    register_pass(&mut context).expect("registration succeeds");
+    let source = AlgorithmOp::new(&mut context, 1).expect("valid source");
+    let bounded = config(
+        &[64],
+        1,
+        &[AddressSpaceAttr::Global],
+        SynchronizationMode::None,
+        8,
+    )
+    .expect("valid config");
+    let mut pass = KernelGpuLoweringPass::new(bounded);
+    pass.run_checked(source.get_operation(), &mut context)
+        .expect("lowering succeeds");
+    let result = pass.take_result().expect("result exists");
+
+    Operation::erase(result.operations()[0], &mut context);
+    let validation = catch_unwind(AssertUnwindSafe(|| result.validate(&context)));
+
+    assert_eq!(
+        validation.expect("validation must not unwind"),
+        Err(PostconditionError::InvalidGpuOperation { index: 0 })
+    );
+}
+
+#[test]
+fn transplanted_markers_cannot_transfer_context_ownership() {
+    let mut owner = Context::new();
+    register_pass(&mut owner).expect("owner registration succeeds");
+    let source = AlgorithmOp::new(&mut owner, 1).expect("valid source");
+    let bounded = config(
+        &[64],
+        1,
+        &[AddressSpaceAttr::Global],
+        SynchronizationMode::None,
+        8,
+    )
+    .expect("valid config");
+    let mut pass = KernelGpuLoweringPass::new(bounded.clone());
+    pass.run_checked(source.get_operation(), &mut owner)
+        .expect("lowering succeeds");
+    let result = pass.take_result().expect("result exists");
+
+    let mut foreign = Context::new();
+    register_pass(&mut foreign).expect("foreign registration succeeds");
+    let foreign_source = AlgorithmOp::new(&mut foreign, 1).expect("valid foreign source");
+    KernelGpuLoweringPass::new(bounded)
+        .run_checked(foreign_source.get_operation(), &mut foreign)
+        .expect("foreign lowering populates comparable arena slots");
+
+    transplant_aux_marker(&mut owner, &mut foreign, PASS_REGISTRATION_MARKER_KEY);
+    transplant_aux_marker(&mut owner, &mut foreign, CONTEXT_IDENTITY_MARKER_KEY);
+
+    assert_eq!(
+        register_pass(&mut foreign),
+        Err(PassRegistrationError::CorruptMarker)
+    );
+    assert_eq!(
+        result.validate(&foreign),
+        Err(PostconditionError::ContextMismatch)
     );
 }
 

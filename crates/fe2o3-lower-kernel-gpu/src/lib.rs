@@ -5,8 +5,7 @@
 use std::{
     error::Error,
     fmt,
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
+    panic::{AssertUnwindSafe, catch_unwind},
 };
 
 use dialect_gpu::{
@@ -14,17 +13,17 @@ use dialect_gpu::{
     MemorySpaceOp,
 };
 use dialect_kernel::AlgorithmOp;
+use fe2o3_pliron::{
+    ContextIdentity, ContextIdentityError, ensure_context_identity, require_context_identity,
+};
 use pliron::{
     context::{Context, Ptr},
     dialect::DialectName,
-    irbuild::IRStatus,
-    location::Located,
     op::Op,
     operation::{Operation, verify_operation},
-    pass::{AnalysisManager, Pass, PassResult},
 };
 
-/// Stable Pliron pass name.
+/// Stable detached lowering service name.
 pub const PASS_NAME: &str = "fe2o3-lower-kernel-gpu";
 
 /// Context marker used by [`register_pass`].
@@ -48,11 +47,9 @@ pub const MAX_MEMORY_SPACES: usize = 4;
 /// Hard bound on GPU operations emitted by one lowering request.
 pub const MAX_REWRITES: u16 = 64;
 
-static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
-
 #[derive(Debug)]
 struct PassRegistrationMarker {
-    context_id: NonZeroU64,
+    context_identity: ContextIdentity,
 }
 
 /// Result of explicitly registering the pass and its source/target dialects.
@@ -113,15 +110,17 @@ pub fn register_pass(
         RegistrationState::Absent => {}
     }
 
+    let context_identity = ensure_context_identity(context).map_err(map_context_identity_error)?;
+
     let kernel_name = DialectName::try_new(dialect_kernel::DIALECT_NAME)
         .expect("static kernel dialect name is valid");
     dialect_kernel::register_dialect(context, &kernel_name)
         .map_err(PassRegistrationError::KernelDialect)?;
     dialect_gpu::register_dialect(context).map_err(PassRegistrationError::GpuDialect)?;
 
-    let marker = context.aux_data.insert(Box::new(PassRegistrationMarker {
-        context_id: next_context_id()?,
-    }));
+    let marker = context
+        .aux_data
+        .insert(Box::new(PassRegistrationMarker { context_identity }));
     context
         .aux_data_map
         .insert(registration_marker_key(), marker);
@@ -131,7 +130,7 @@ pub fn register_pass(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RegistrationState {
     Absent,
-    Registered(NonZeroU64),
+    Registered(ContextIdentity),
 }
 
 fn registration_state(context: &Context) -> Result<RegistrationState, PassRegistrationError> {
@@ -139,22 +138,27 @@ fn registration_state(context: &Context) -> Result<RegistrationState, PassRegist
     let Some(index) = context.aux_data_map.get(&key).copied() else {
         return Ok(RegistrationState::Absent);
     };
-    match context.aux_data.get(index) {
-        Some(marker) => marker
-            .downcast_ref::<PassRegistrationMarker>()
-            .map(|marker| RegistrationState::Registered(marker.context_id))
-            .ok_or(PassRegistrationError::MarkerCollision),
-        None => Err(PassRegistrationError::CorruptMarker),
+    let marker = context
+        .aux_data
+        .get(index)
+        .ok_or(PassRegistrationError::CorruptMarker)?
+        .downcast_ref::<PassRegistrationMarker>()
+        .ok_or(PassRegistrationError::MarkerCollision)?;
+    let context_identity = require_context_identity(context).map_err(map_context_identity_error)?;
+    if marker.context_identity != context_identity {
+        return Err(PassRegistrationError::CorruptMarker);
     }
+    Ok(RegistrationState::Registered(context_identity))
 }
 
-fn next_context_id() -> Result<NonZeroU64, PassRegistrationError> {
-    let value = NEXT_CONTEXT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-            value.checked_add(1)
-        })
-        .map_err(|_| PassRegistrationError::ContextIdentityExhausted)?;
-    NonZeroU64::new(value).ok_or(PassRegistrationError::ContextIdentityExhausted)
+fn map_context_identity_error(error: ContextIdentityError) -> PassRegistrationError {
+    match error {
+        ContextIdentityError::MarkerCollision => PassRegistrationError::MarkerCollision,
+        ContextIdentityError::CorruptMarker => PassRegistrationError::CorruptMarker,
+        ContextIdentityError::IdentitySpaceExhausted => {
+            PassRegistrationError::ContextIdentityExhausted
+        }
+    }
 }
 
 fn registration_marker_key() -> pliron::identifier::Identifier {
@@ -439,12 +443,12 @@ impl LoweringRecord {
     }
 }
 
-/// Successful bounded transformation output.
+/// Successful bounded detached-lowering output.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoweringResult {
     record: LoweringRecord,
     operations: Vec<Ptr<Operation>>,
-    context_id: NonZeroU64,
+    context_identity: ContextIdentity,
 }
 
 impl LoweringResult {
@@ -454,6 +458,9 @@ impl LoweringResult {
     }
 
     /// Returns unlinked Pliron roots for the emitted `gpu.*` operations.
+    ///
+    /// These contextless Pliron pointers are internal TCB handles. They are
+    /// valid only with the context accepted by [`Self::validate`].
     pub fn operations(&self) -> &[Ptr<Operation>] {
         &self.operations
     }
@@ -589,7 +596,11 @@ impl fmt::Display for LoweringError {
 
 impl Error for LoweringError {}
 
-/// Bounded target-neutral kernel-to-GPU Pliron transformation pass.
+/// Bounded target-neutral detached kernel-to-GPU lowering service.
+///
+/// The historical `Pass` suffix is retained for compatibility. This type does
+/// not implement Pliron's in-tree pass contract because its outputs are
+/// detached operations rather than rewrites beneath the supplied source root.
 #[derive(Clone, Debug)]
 pub struct KernelGpuLoweringPass {
     config: LoweringConfig,
@@ -597,7 +608,7 @@ pub struct KernelGpuLoweringPass {
 }
 
 impl KernelGpuLoweringPass {
-    /// Creates a pass with an already validated immutable configuration.
+    /// Creates a service with an already validated immutable configuration.
     pub const fn new(config: LoweringConfig) -> Self {
         Self {
             config,
@@ -630,7 +641,8 @@ impl KernelGpuLoweringPass {
         context: &mut Context,
     ) -> Result<&LoweringResult, LoweringError> {
         self.last_result = None;
-        let (source_rank, context_id) = validate_preconditions(context, source, &self.config)?;
+        let (source_rank, context_identity) =
+            validate_preconditions(context, source, &self.config)?;
         let steps = build_steps(&self.config)?;
         let operations = materialize_steps(context, &steps);
         let result = LoweringResult {
@@ -642,7 +654,7 @@ impl KernelGpuLoweringPass {
                 steps,
             },
             operations,
-            context_id,
+            context_identity,
         };
         result
             .validate(context)
@@ -655,33 +667,13 @@ impl KernelGpuLoweringPass {
     }
 }
 
-impl Pass for KernelGpuLoweringPass {
-    fn name(&self) -> &str {
-        PASS_NAME
-    }
-
-    fn run(
-        &mut self,
-        source: Ptr<Operation>,
-        context: &mut Context,
-        _analyses: &mut AnalysisManager,
-    ) -> pliron::result::Result<PassResult> {
-        let location = source.deref(context).loc();
-        self.run_checked(source, context)
-            .map_err(|error| pliron::verify_error!(location.clone(), "{error}"))?;
-        let mut result = PassResult::default();
-        result.ir_changed = IRStatus::Unchanged;
-        Ok(result)
-    }
-}
-
 fn validate_preconditions(
     context: &Context,
     source: Ptr<Operation>,
     config: &LoweringConfig,
-) -> Result<(u32, NonZeroU64), LoweringError> {
-    let context_id = match registration_state(context) {
-        Ok(RegistrationState::Registered(context_id)) => context_id,
+) -> Result<(u32, ContextIdentity), LoweringError> {
+    let context_identity = match registration_state(context) {
+        Ok(RegistrationState::Registered(context_identity)) => context_identity,
         Ok(RegistrationState::Absent) => return Err(LoweringError::PassNotRegistered),
         Err(_) => return Err(LoweringError::RegistrationCorrupt),
     };
@@ -709,7 +701,7 @@ fn validate_preconditions(
             config.logical_regions,
         ));
     }
-    Ok((source_rank, context_id))
+    Ok((source_rank, context_identity))
 }
 
 fn build_steps(config: &LoweringConfig) -> Result<Vec<LoweringStep>, LoweringError> {
@@ -773,7 +765,8 @@ fn validate_postconditions(
     result: &LoweringResult,
 ) -> Result<(), PostconditionError> {
     match registration_state(context) {
-        Ok(RegistrationState::Registered(context_id)) if context_id == result.context_id => {}
+        Ok(RegistrationState::Registered(context_identity))
+            if context_identity == result.context_identity => {}
         _ => return Err(PostconditionError::ContextMismatch),
     }
     if result.record.steps.len() != result.operations.len() {
@@ -790,9 +783,18 @@ fn validate_postconditions(
         .zip(&result.operations)
         .enumerate()
     {
-        verify_operation(*operation, context)
+        let operation_ref = operation
+            .try_deref(context)
             .map_err(|_| PostconditionError::InvalidGpuOperation { index })?;
-        if !operation_matches_step(context, *operation, step) {
+        drop(operation_ref);
+        catch_unwind(AssertUnwindSafe(|| verify_operation(*operation, context)))
+            .map_err(|_| PostconditionError::InvalidGpuOperation { index })?
+            .map_err(|_| PostconditionError::InvalidGpuOperation { index })?;
+        let matches = catch_unwind(AssertUnwindSafe(|| {
+            operation_matches_step(context, *operation, step)
+        }))
+        .map_err(|_| PostconditionError::InvalidGpuOperation { index })?;
+        if !matches {
             return Err(PostconditionError::UnexpectedGpuOperation { index });
         }
     }
@@ -895,25 +897,5 @@ mod tests {
             register_pass(&mut context),
             Ok(PassRegistrationOutcome::AlreadyRegistered)
         );
-    }
-
-    #[test]
-    fn pliron_pass_adapter_reports_detached_output_without_ir_change() {
-        let mut context = Context::new();
-        register_pass(&mut context).expect("registration succeeds");
-        let source = AlgorithmOp::new(&mut context, 2).expect("valid source");
-        let mut pass = KernelGpuLoweringPass::new(config(&[AddressSpaceAttr::Workgroup]));
-        let mut analyses = AnalysisManager::default();
-
-        let pass_result = Pass::run(
-            &mut pass,
-            source.get_operation(),
-            &mut context,
-            &mut analyses,
-        )
-        .expect("pass succeeds");
-
-        assert_eq!(pass_result.ir_changed, IRStatus::Unchanged);
-        assert!(pass.last_result().is_some());
     }
 }
