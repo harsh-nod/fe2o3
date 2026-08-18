@@ -28,30 +28,47 @@ def target(kind: str = "lib") -> dict:
     return {"kind": [kind]}
 
 
+def package_id(name: str, version: str = "0.1.0") -> str:
+    return f"path+file:///workspace/{name}#{version}"
+
+
 def package(
     name: str,
     *,
     links: str | None = None,
+    source: str | None = None,
     targets: list[dict] | None = None,
+    version: str = "0.1.0",
 ) -> dict:
     return {
-        "id": f"path+file:///workspace/{name}#0.1.0",
+        "id": package_id(name, version),
         "name": name,
         "links": links,
+        "source": source,
         "targets": targets if targets is not None else [target()],
+        "version": version,
     }
 
 
-def node(name: str, dependencies: list[tuple[str, str | None]] | None = None) -> dict:
+def dependency(
+    name: str,
+    kind: str | None = None,
+    version: str = "0.1.0",
+) -> dict:
     return {
-        "id": f"path+file:///workspace/{name}#0.1.0",
-        "deps": [
-            {
-                "pkg": f"path+file:///workspace/{dependency}#0.1.0",
-                "dep_kinds": [{"kind": kind, "target": None}],
-            }
-            for dependency, kind in dependencies or []
-        ],
+        "pkg": package_id(name, version),
+        "dep_kinds": [{"kind": kind, "target": None}],
+    }
+
+
+def node(
+    name: str,
+    dependencies: list[dict] | None = None,
+    version: str = "0.1.0",
+) -> dict:
+    return {
+        "id": package_id(name, version),
+        "deps": dependencies or [],
     }
 
 
@@ -187,17 +204,19 @@ class MetadataAuditTests(unittest.TestCase):
     def test_accepts_closed_pure_rust_production_closure(self) -> None:
         value = metadata(
             [package("runtime"), package("model")],
-            [node("runtime", [("model", None)]), node("model")],
+            [node("runtime", [dependency("model")]), node("model")],
         )
         violations, stats = CHECKER.audit_metadata(value, ("runtime",), POLICY)
         self.assertEqual([], violations)
-        self.assertEqual({"packages": 2, "roots": 1}, stats)
+        self.assertEqual(
+            {"allowed_build_scripts": (), "packages": 2, "roots": 1}, stats
+        )
 
     def test_dev_only_oracle_is_outside_production_closure(self) -> None:
         value = metadata(
             [package("runtime"), package("fe2o3-hsa-runtime")],
             [
-                node("runtime", [("fe2o3-hsa-runtime", "dev")]),
+                node("runtime", [dependency("fe2o3-hsa-runtime", "dev")]),
                 node("fe2o3-hsa-runtime"),
             ],
         )
@@ -208,7 +227,10 @@ class MetadataAuditTests(unittest.TestCase):
     def test_rejects_prohibited_runtime_package(self) -> None:
         value = metadata(
             [package("runtime"), package("fe2o3-hip-sys")],
-            [node("runtime", [("fe2o3-hip-sys", None)]), node("fe2o3-hip-sys")],
+            [
+                node("runtime", [dependency("fe2o3-hip-sys")]),
+                node("fe2o3-hip-sys"),
+            ],
         )
         violations, _ = CHECKER.audit_metadata(value, ("runtime",), POLICY)
         self.assertTrue(any("prohibited package" in item for item in violations))
@@ -219,12 +241,103 @@ class MetadataAuditTests(unittest.TestCase):
                 package("runtime"),
                 package("native", links="private", targets=[target(), target("custom-build")]),
             ],
-            [node("runtime", [("native", "build")]), node("native")],
+            [node("runtime", [dependency("native", "build")]), node("native")],
         )
         violations, _ = CHECKER.audit_metadata(value, ("runtime",), POLICY)
         self.assertEqual(2, len(violations))
         self.assertTrue(any("Cargo links" in item for item in violations))
-        self.assertTrue(any("Cargo build script" in item for item in violations))
+        self.assertTrue(any("unapproved Cargo build script" in item for item in violations))
+
+    def test_rejects_unapproved_build_script_without_links(self) -> None:
+        value = metadata(
+            [
+                package("runtime"),
+                package("unreviewed", targets=[target(), target("custom-build")]),
+            ],
+            [
+                node("runtime", [dependency("unreviewed")]),
+                node("unreviewed"),
+            ],
+        )
+        violations, stats = CHECKER.audit_metadata(value, ("runtime",), POLICY)
+        self.assertEqual(
+            [
+                "unapproved Cargo build script in production closure: "
+                "unreviewed@0.1.0"
+            ],
+            violations,
+        )
+        self.assertEqual((), stats["allowed_build_scripts"])
+
+    def test_allows_and_reports_reviewed_rustix_and_libc_build_scripts(self) -> None:
+        registry = CHECKER.CRATES_IO_SOURCE
+        value = metadata(
+            [
+                package("runtime"),
+                package(
+                    "rustix",
+                    source=registry,
+                    targets=[target(), target("custom-build")],
+                    version="1.1.4",
+                ),
+                package(
+                    "libc",
+                    source=registry,
+                    targets=[target(), target("custom-build")],
+                    version="0.2.189",
+                ),
+            ],
+            [
+                node(
+                    "runtime",
+                    [dependency("rustix", version="1.1.4")],
+                ),
+                node(
+                    "rustix",
+                    [dependency("libc", version="0.2.189")],
+                    version="1.1.4",
+                ),
+                node("libc", version="0.2.189"),
+            ],
+        )
+        violations, stats = CHECKER.audit_metadata(value, ("runtime",), POLICY)
+        self.assertEqual([], violations)
+        self.assertEqual(
+            ("libc@0.2.189", "rustix@1.1.4"),
+            stats["allowed_build_scripts"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "metadata.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = CHECKER.main(
+                    ["metadata", "--input", str(path), "--root", "runtime"]
+                )
+        self.assertEqual(0, status)
+        self.assertIn(
+            "allowed_build_scripts=libc@0.2.189,rustix@1.1.4",
+            output.getvalue(),
+        )
+
+    def test_rejects_allowlisted_build_script_from_another_source(self) -> None:
+        value = metadata(
+            [
+                package("runtime"),
+                package(
+                    "rustix",
+                    targets=[target(), target("custom-build")],
+                    version="1.1.4",
+                ),
+            ],
+            [
+                node("runtime", [dependency("rustix", version="1.1.4")]),
+                node("rustix", version="1.1.4"),
+            ],
+        )
+        violations, _ = CHECKER.audit_metadata(value, ("runtime",), POLICY)
+        self.assertEqual(1, len(violations))
+        self.assertIn("unapproved source", violations[0])
 
     def test_missing_resolve_graph_fails_closed(self) -> None:
         with self.assertRaisesRegex(CHECKER.AuditInputError, "resolve"):
@@ -251,7 +364,10 @@ class MetadataAuditTests(unittest.TestCase):
                     ]
                 )
         self.assertEqual(0, status)
-        self.assertIn("metadata roots=1 packages=1 sha256=", output.getvalue())
+        self.assertIn(
+            "metadata roots=1 packages=1 allowed_build_scripts=none sha256=",
+            output.getvalue(),
+        )
 
 
 class ElfAuditTests(unittest.TestCase):

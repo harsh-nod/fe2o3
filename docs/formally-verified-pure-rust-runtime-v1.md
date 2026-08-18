@@ -17,7 +17,8 @@ later implementations cannot gain authority by weakening an assumption.
 The fe2o3 production runtime will be implemented in Rust and verified as a
 refinement of a versioned abstract runtime state machine. Its user-space
 production dependency closure will contain no HIP, ROCr/HSA runtime, COMGR,
-`libdrm`, C or C++ runtime shim, build-time bindgen, or native build script.
+`libdrm`, C or C++ runtime shim, build-time bindgen, or build script that
+compiles or links native code.
 
 The initial runtime talks directly to:
 
@@ -80,8 +81,9 @@ explicit performance and reliability gates.
 
 ### Permitted
 
-- Rust crates with no `links` key and no Cargo custom build target in the exact
-  production dependency closure.
+- Rust crates with no `links` key. A Cargo custom build target is permitted only
+  when its exact `name@version` has a reviewed pure-Rust configuration-script
+  exception in the versioned policy and its Cargo source matches that review.
 - Rust `unsafe` code in a sealed syscall adapter, with each operation linked to
   a reviewed precondition/postcondition contract.
 - The host C ABI supplied by the platform libc for system calls and process
@@ -128,7 +130,23 @@ python3 scripts/runtime_pure_rust_audit.py metadata \
 Do not use `cargo metadata --no-deps`: the auditor requires the complete resolve
 graph and fails if it is missing. Dev-only edges are excluded so a separately
 compiled oracle may use HIP/HSA. Normal and build edges are always included.
-Every reachable `links` package and custom build target is rejected.
+Every reachable `links` package and every unapproved custom build target is
+rejected.
+
+The V1 configuration-script exceptions are exactly `libc@0.2.189` and
+`rustix@1.1.4` from the crates.io registry. Their reviewed build scripts select
+Rust `cfg` behavior and do not invoke a native compiler, generate a native
+object, or add a native library. Cargo metadata can retain rustix alternatives
+that are mutually exclusive in the selected `linux_raw_sys` feature closure;
+in particular, a conservative resolve graph can still reach libc. Allowing both
+exact identities prevents this Cargo representation detail from being confused
+with a native shim.
+
+An allowlist entry is not proof authority. Each version/source change requires
+review and a policy update. Release evidence binds the exact package source,
+lockfile, metadata, policy digest, and resulting ELF. The deterministic audit
+report names every allowlisted build script actually exercised by the selected
+closure; an unused allowlist entry is not reported as if it ran.
 
 Audit the final host executable or shared object:
 
@@ -334,9 +352,11 @@ The intended user-space trusted base contains:
    the Verus boundary;
 2. the admitted specifications for the Linux UAPI, AQL, AMDHSA COV6, GPU ISA,
    and memory model;
-3. the Rust compiler, Verus translator/checker, SMT solver, artifact binder, and
+3. each exact allowlisted pure-Rust configuration build script that influences
+   the production compilation;
+4. the Rust compiler, Verus translator/checker, SMT solver, artifact binder, and
    evidence verifier identified by exact versions; and
-4. cryptographic hash and signature primitives used for identity and origin.
+5. cryptographic hash and signature primitives used for identity and origin.
 
 The external execution base contains the host kernel, KFD/DRM implementation,
 firmware, CPU, GPU, and memory hardware. HIP, ROCr, COMGR, `libdrm`, C shims, and
@@ -440,9 +460,12 @@ Exit requires:
 
 - generic CI runs all metadata/ELF audit unit tests without ROCm;
 - malformed metadata/ELF, missing resolve data, unknown DSO, prohibited DSO,
-  prohibited symbol, hidden loader literal, `links`, build script, and HIP/HSA
-  production dependency fixtures all fail;
-- a pure Rust closure and baseline-system-DSO ELF fixture pass deterministically;
+  prohibited symbol, hidden loader literal, `links`, unapproved build script,
+  unapproved allowlist source, and HIP/HSA production dependency fixtures all
+  fail;
+- a pure Rust closure, the exact reviewed rustix/libc configuration-script
+  exceptions, and a baseline-system-DSO ELF fixture pass deterministically, with
+  every exercised build-script exception named in the report;
 - the current HIP and HSA paths are explicitly classified as oracle/legacy, not
   production-compliant; and
 - architecture review accepts every contract and non-goal in this document.

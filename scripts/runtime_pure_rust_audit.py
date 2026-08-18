@@ -26,6 +26,7 @@ MAX_ELF_SECTION_HEADERS = 65535
 MAX_DYNAMIC_ENTRIES = 65536
 MAX_DYNAMIC_STRING_BYTES = 64 * 1024 * 1024
 MAX_DYNAMIC_SYMBOLS = 1_000_000
+CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 
 PT_LOAD = 1
 PT_DYNAMIC = 2
@@ -92,13 +93,14 @@ def load_policy(path: Path) -> dict[str, Any]:
     expected = {
         "schema_version",
         "profile",
+        "allowed_cargo_build_script_packages",
         "allowed_dynamic_dependencies",
         "forbidden_package_substrings",
         "forbidden_dynamic_dependency_substrings",
         "forbidden_dynamic_symbol_prefixes",
         "forbidden_binary_literals",
         "reject_cargo_links",
-        "reject_cargo_build_scripts",
+        "reject_unapproved_cargo_build_scripts",
     }
     if set(policy) != expected:
         missing = sorted(expected - set(policy))
@@ -110,6 +112,7 @@ def load_policy(path: Path) -> dict[str, Any]:
         raise AuditInputError("policy schema_version must be 1")
     _require_string(policy["profile"], "policy profile")
     for key in (
+        "allowed_cargo_build_script_packages",
         "allowed_dynamic_dependencies",
         "forbidden_package_substrings",
         "forbidden_dynamic_dependency_substrings",
@@ -122,7 +125,20 @@ def load_policy(path: Path) -> dict[str, Any]:
         ):
             raise AuditInputError(f"policy {key} entries must be lowercase")
         policy[key] = values
-    for key in ("reject_cargo_links", "reject_cargo_build_scripts"):
+    for identity in policy["allowed_cargo_build_script_packages"]:
+        name, separator, version = identity.rpartition("@")
+        if (
+            separator != "@"
+            or not name
+            or not version
+            or name.lower() != name
+            or any(character.isspace() for character in identity)
+        ):
+            raise AuditInputError(
+                "policy allowed_cargo_build_script_packages entries must be "
+                "lowercase name@version identities"
+            )
+    for key in ("reject_cargo_links", "reject_unapproved_cargo_build_scripts"):
         if policy[key] is not True:
             raise AuditInputError(f"policy {key} must be true for schema version 1")
     return policy
@@ -159,7 +175,7 @@ def _production_dependency_ids(node: dict[str, Any]) -> tuple[str, ...]:
 
 def audit_metadata(
     metadata: dict[str, Any], roots: tuple[str, ...], policy: dict[str, Any]
-) -> tuple[list[str], dict[str, int]]:
+) -> tuple[list[str], dict[str, Any]]:
     if metadata.get("version") != 1:
         raise AuditInputError("Cargo metadata format version must be 1")
     if not roots:
@@ -227,6 +243,10 @@ def audit_metadata(
             pending.append(dependency_id)
 
     violations: set[str] = set()
+    allowed_build_script_packages = set(
+        policy["allowed_cargo_build_script_packages"]
+    )
+    exercised_build_script_exceptions: set[str] = set()
     forbidden_names = policy["forbidden_package_substrings"]
     for package_id in sorted(closure):
         package = packages_by_id[package_id]
@@ -246,9 +266,25 @@ def audit_metadata(
             target = _require_object(raw_target, f"target {target_index} for {name}")
             kinds = _require_list(target.get("kind"), f"target kinds for {name}")
             if "custom-build" in kinds:
-                violations.add(f"Cargo build script in production closure: {name}")
+                version = _require_string(
+                    package.get("version"), f"package {name} version"
+                )
+                identity = f"{name}@{version}"
+                if identity not in allowed_build_script_packages:
+                    violations.add(
+                        "unapproved Cargo build script in production closure: "
+                        f"{identity}"
+                    )
+                elif package.get("source") != CRATES_IO_SOURCE:
+                    violations.add(
+                        "approved Cargo build-script identity has unapproved source: "
+                        f"{identity} ({package.get('source')!r})"
+                    )
+                else:
+                    exercised_build_script_exceptions.add(identity)
 
     return sorted(violations), {
+        "allowed_build_scripts": tuple(sorted(exercised_build_script_exceptions)),
         "packages": len(closure),
         "roots": len(root_ids),
     }
@@ -597,9 +633,15 @@ def main(argv: list[str] | None = None) -> int:
             violations, stats = audit_metadata(
                 metadata, tuple(arguments.root), policy
             )
-            subject = "metadata roots={} packages={} sha256={}".format(
+            allowed_build_scripts = ",".join(stats["allowed_build_scripts"])
+            if not allowed_build_scripts:
+                allowed_build_scripts = "none"
+            subject = (
+                "metadata roots={} packages={} allowed_build_scripts={} sha256={}"
+            ).format(
                 stats["roots"],
                 stats["packages"],
+                allowed_build_scripts,
                 hashlib.sha256(metadata_bytes).hexdigest(),
             )
         else:
