@@ -1,0 +1,15 @@
+[package]
+name = "fe2o3-runtime-model"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pure Rust bounded transition model for fe2o3 KFD runtime verification."
+publish = false
+
+[lib]
+name = "fe2o3_runtime_model"
+
+[lints.rust]
+unsafe_code = "forbid"
