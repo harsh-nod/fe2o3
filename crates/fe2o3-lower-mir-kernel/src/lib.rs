@@ -2,7 +2,12 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use dialect_kernel::{AlgorithmOp, KernelError};
 use dialect_mir::{
@@ -53,8 +58,12 @@ pub const MAX_STRUCTURED_RANK: u32 = dialect_kernel::MAX_ITERATION_RANK;
 /// Hard bound on emitted kernel algorithm roots.
 pub const MAX_REWRITES: usize = MAX_SOURCE_FUNCTIONS;
 
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Debug)]
-struct PassRegistrationMarker;
+struct PassRegistrationMarker {
+    context_id: NonZeroU64,
+}
 
 /// Result of explicitly registering the pass and its source and target dialects.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +81,8 @@ pub enum PassRegistrationError {
     MarkerCollision,
     /// The marker map points at absent auxiliary data.
     CorruptMarker,
+    /// The process exhausted the private context-identity space.
+    ContextIdentityExhausted,
     /// A fixed source or target dialect name was rejected by Pliron.
     InvalidDialectName,
     /// The kernel dialect rejected explicit registration.
@@ -86,6 +97,9 @@ impl fmt::Display for PassRegistrationError {
             }
             Self::CorruptMarker => {
                 formatter.write_str("MIR-to-kernel pass registration marker is corrupt")
+            }
+            Self::ContextIdentityExhausted => {
+                formatter.write_str("MIR-to-kernel context identity space is exhausted")
             }
             Self::InvalidDialectName => {
                 formatter.write_str("a fixed lowering dialect name is invalid")
@@ -102,7 +116,7 @@ impl Error for PassRegistrationError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RegistrationState {
     Absent,
-    Registered,
+    Registered(NonZeroU64),
 }
 
 fn registration_marker_key() -> Identifier {
@@ -117,10 +131,21 @@ fn registration_state(context: &Context) -> Result<RegistrationState, PassRegist
         return Ok(RegistrationState::Absent);
     };
     match context.aux_data.get(index) {
-        Some(marker) if marker.is::<PassRegistrationMarker>() => Ok(RegistrationState::Registered),
-        Some(_) => Err(PassRegistrationError::MarkerCollision),
+        Some(marker) => marker
+            .downcast_ref::<PassRegistrationMarker>()
+            .map(|marker| RegistrationState::Registered(marker.context_id))
+            .ok_or(PassRegistrationError::MarkerCollision),
         None => Err(PassRegistrationError::CorruptMarker),
     }
+}
+
+fn next_context_id() -> Result<NonZeroU64, PassRegistrationError> {
+    let value = NEXT_CONTEXT_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| PassRegistrationError::ContextIdentityExhausted)?;
+    NonZeroU64::new(value).ok_or(PassRegistrationError::ContextIdentityExhausted)
 }
 
 /// Explicitly registers the MIR dialect, kernel dialect, and pass marker.
@@ -131,7 +156,9 @@ pub fn register_pass(
     context: &mut Context,
 ) -> Result<PassRegistrationOutcome, PassRegistrationError> {
     match registration_state(context)? {
-        RegistrationState::Registered => return Ok(PassRegistrationOutcome::AlreadyRegistered),
+        RegistrationState::Registered(_) => {
+            return Ok(PassRegistrationOutcome::AlreadyRegistered);
+        }
         RegistrationState::Absent => {}
     }
 
@@ -145,7 +172,9 @@ pub fn register_pass(
     dialect_kernel::register_dialect(context, &kernel_name)
         .map_err(PassRegistrationError::KernelDialect)?;
 
-    let marker = context.aux_data.insert(Box::new(PassRegistrationMarker));
+    let marker = context.aux_data.insert(Box::new(PassRegistrationMarker {
+        context_id: next_context_id()?,
+    }));
     context
         .aux_data_map
         .insert(registration_marker_key(), marker);
@@ -465,6 +494,7 @@ pub struct LoweringResult {
     config: LoweringConfig,
     record: LoweringRecord,
     operations: Vec<Ptr<Operation>>,
+    context_id: NonZeroU64,
 }
 
 impl LoweringResult {
@@ -502,6 +532,8 @@ impl LoweringResult {
 /// A failed output invariant, indicating stale evidence or mutated IR.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PostconditionError {
+    /// The supplied context does not own this result's arena pointers.
+    ContextMismatch,
     /// The live source no longer satisfies the bounded input contract.
     SourceNoLongerValid,
     /// The live source differs from the recorded identity or structure.
@@ -525,6 +557,9 @@ pub enum PostconditionError {
 impl fmt::Display for PostconditionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ContextMismatch => {
+                formatter.write_str("lowering result belongs to a different Pliron context")
+            }
             Self::SourceNoLongerValid => {
                 formatter.write_str("the lowering source is no longer valid")
             }
@@ -719,7 +754,7 @@ impl MirKernelLoweringPass {
         context: &mut Context,
     ) -> Result<&LoweringResult, LoweringError> {
         self.last_result = None;
-        require_registration(context)?;
+        let context_id = require_registration(context)?;
         let source_evidence = inspect_source(context, source, &self.config)?;
         let steps = build_steps(&source_evidence, &self.config)?;
         let operations = materialize_steps(context, &steps)?;
@@ -731,6 +766,7 @@ impl MirKernelLoweringPass {
                 steps,
             },
             operations,
+            context_id,
         };
         result
             .validate(context)
@@ -758,14 +794,14 @@ impl Pass for MirKernelLoweringPass {
         self.run_checked(source, context)
             .map_err(|error| pliron::verify_error!(location.clone(), "{error}"))?;
         let mut result = PassResult::default();
-        result.ir_changed = IRStatus::Changed;
+        result.ir_changed = IRStatus::Unchanged;
         Ok(result)
     }
 }
 
-fn require_registration(context: &Context) -> Result<(), LoweringError> {
+fn require_registration(context: &Context) -> Result<NonZeroU64, LoweringError> {
     match registration_state(context) {
-        Ok(RegistrationState::Registered) => Ok(()),
+        Ok(RegistrationState::Registered(context_id)) => Ok(context_id),
         Ok(RegistrationState::Absent) => Err(LoweringError::PassNotRegistered),
         Err(_) => Err(LoweringError::RegistrationCorrupt),
     }
@@ -1053,6 +1089,10 @@ fn validate_postconditions(
     context: &Context,
     result: &LoweringResult,
 ) -> Result<(), PostconditionError> {
+    match registration_state(context) {
+        Ok(RegistrationState::Registered(context_id)) if context_id == result.context_id => {}
+        _ => return Err(PostconditionError::ContextMismatch),
+    }
     let source = inspect_source(context, result.source_root, &result.config)
         .map_err(|_| PostconditionError::SourceNoLongerValid)?;
     if source != result.record.source {

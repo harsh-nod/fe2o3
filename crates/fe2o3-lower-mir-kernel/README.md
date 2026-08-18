@@ -24,4 +24,9 @@ evidence and every emitted kernel operation.
 The crate does not choose a GPU or physical target and contains no AMDGCN,
 COMGR, `pliron-llvm`, compiler, linker, artifact publication, loader, launcher,
 tuning, proof-authority, runtime, filesystem, process-execution, or unsafe-code
-surface.
+surface in its own source. Pinned Pliron remains part of the memory-safety
+trusted computing base.
+
+The Pliron `Pass` adapter reports the source IR as unchanged because this
+shell materializes detached operations. Callers retrieve that explicit bundle
+from the pass result instead of treating it as an in-place rewrite.

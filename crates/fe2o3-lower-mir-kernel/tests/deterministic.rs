@@ -121,7 +121,7 @@ fn lowering_record_is_deterministic_and_preserves_source_evidence() {
 }
 
 #[test]
-fn pliron_pass_adapter_reports_materialization_and_retains_result() {
+fn pliron_pass_adapter_reports_detached_output_without_ir_change() {
     let mut context = Context::new();
     register_pass(&mut context).expect("registration");
     let source = source(&mut context);
@@ -137,6 +137,6 @@ fn pliron_pass_adapter_reports_materialization_and_retains_result() {
     )
     .expect("Pliron adapter succeeds");
 
-    assert_eq!(pass_result.ir_changed, IRStatus::Changed);
+    assert_eq!(pass_result.ir_changed, IRStatus::Unchanged);
     assert!(pass.last_result().is_some());
 }

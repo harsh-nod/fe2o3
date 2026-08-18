@@ -409,3 +409,27 @@ fn postconditions_detect_stale_source_and_mutated_kernel_output() {
         Err(PostconditionError::SourceNoLongerValid)
     );
 }
+
+#[test]
+fn postconditions_reject_a_foreign_context_before_dereferencing() {
+    let mut owner = Context::new();
+    register_pass(&mut owner).expect("owner registration");
+    let source = module_with_functions(&mut owner, 1);
+    let config = config_with(limits(1, 1, 4, 1));
+    let mut pass = MirKernelLoweringPass::new(config.clone());
+    pass.run_checked(source.get_operation(), &mut owner)
+        .expect("lowering");
+    let result = pass.take_result().expect("result");
+
+    let mut foreign = Context::new();
+    register_pass(&mut foreign).expect("foreign registration");
+    let foreign_source = module_with_functions(&mut foreign, 1);
+    MirKernelLoweringPass::new(config)
+        .run_checked(foreign_source.get_operation(), &mut foreign)
+        .expect("foreign lowering populates comparable arena slots");
+
+    assert_eq!(
+        result.validate(&foreign),
+        Err(PostconditionError::ContextMismatch)
+    );
+}
