@@ -1,5 +1,8 @@
 pub use fe2o3_mir_model::*;
 
+#[cfg(feature = "pliron")]
+pub mod pliron;
+
 pub const DIALECT: &str = "mir";
 
 #[derive(Clone, Debug, Eq, PartialEq)]

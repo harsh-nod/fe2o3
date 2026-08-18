@@ -81,6 +81,7 @@ fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis" }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
 fe2o3-legacy-compiler = { path = "crates/fe2o3-legacy-compiler" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }
+fe2o3-mir-model = { path = "crates/fe2o3-mir-model" }
 fe2o3-pliron = { path = "crates/fe2o3-pliron" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
 fe2o3-proof-contracts = { path = "crates/fe2o3-proof-contracts" }

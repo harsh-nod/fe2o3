@@ -207,6 +207,8 @@ run_cpu_tests() {
   # Keep the generic test lane independent of whether the host happens to have
   # ROCm installed. The raw HIP crate supplies a fail-closed no-runtime ABI.
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+  run_step dialect-mir-pliron-tests \
+    cargo test --locked -p dialect-mir --features pliron --test pliron_shell
 }
 
 run_auxiliary_tests() {

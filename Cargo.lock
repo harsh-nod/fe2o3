@@ -531,6 +531,8 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-mir-model",
+ "fe2o3-pliron",
+ "pliron",
  "serde_json",
 ]
 
