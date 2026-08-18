@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             concat!(
                 "node={} gpu_id={} target={} render_minor={} unique_id={} hive_id={} ",
                 "pci={} pci_revision={:#04x} partition={}/{} domain={} location_id={} ",
-                "wavefront={} simds={} xccs={}"
+                "fw_version={} sdma_fw_version={} wavefront={} simds={} xccs={}"
             ),
             gpu.node_id(),
             gpu.gpu_id(),
@@ -39,6 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             render.partition().memory().name(),
             gpu.domain(),
             gpu.location_id(),
+            gpu.fw_version(),
+            gpu.sdma_fw_version(),
             gpu.capacity().wavefront_size(),
             gpu.capacity().simd_count(),
             gpu.capacity().xcc_count(),

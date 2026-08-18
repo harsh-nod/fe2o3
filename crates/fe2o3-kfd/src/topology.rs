@@ -439,6 +439,8 @@ pub struct GpuTopologyNode {
     hive_id: u64,
     location_id: u32,
     domain: u16,
+    fw_version: u32,
+    sdma_fw_version: u32,
     capacity: GpuCapacityObservation,
 }
 
@@ -481,6 +483,16 @@ impl GpuTopologyNode {
 
     pub const fn domain(&self) -> u16 {
         self.domain
+    }
+
+    /// Opaque firmware version reported by the KFD topology contract.
+    pub const fn fw_version(&self) -> u32 {
+        self.fw_version
+    }
+
+    /// Opaque SDMA firmware version reported by the KFD topology contract.
+    pub const fn sdma_fw_version(&self) -> u32 {
+        self.sdma_fw_version
     }
 
     pub const fn capacity(&self) -> GpuCapacityObservation {
@@ -1535,6 +1547,20 @@ fn parse_gpu_node(
         u32::MAX as u64,
     )?;
     let domain = bounded_u32(properties, properties_path, "domain", 0, u16::MAX as u64)?;
+    let fw_version = bounded_u32(
+        properties,
+        properties_path,
+        "fw_version",
+        0,
+        u32::MAX as u64,
+    )?;
+    let sdma_fw_version = bounded_u32(
+        properties,
+        properties_path,
+        "sdma_fw_version",
+        0,
+        u32::MAX as u64,
+    )?;
     let capacity = GpuCapacityObservation {
         simd_count: bounded_u32(properties, properties_path, "simd_count", 1, 65_536)?,
         memory_bank_count: bounded_u32(properties, properties_path, "mem_banks_count", 1, 4096)?,
@@ -1555,6 +1581,8 @@ fn parse_gpu_node(
         hive_id,
         location_id,
         domain: domain as u16,
+        fw_version,
+        sdma_fw_version,
         capacity,
     })
 }
@@ -1903,7 +1931,7 @@ mod tests {
                      io_links_count 8\np2p_links_count 1\nwave_front_size 64\n\
                      gfx_target_version 90402\nvendor_id 4098\ndevice_id 29857\n\
                      location_id {}\ndomain 0\ndrm_render_minor {}\nhive_id 99\n\
-                     unique_id {}\nnum_xcc 8\n",
+                     unique_id {}\nfw_version 192\nsdma_fw_version 25\nnum_xcc 8\n",
                     4096 * identity,
                     127 + identity,
                     2000 + u64::from(identity),
@@ -1995,6 +2023,8 @@ mod tests {
                     hive_id: 99,
                     location_id: 0x0500,
                     domain: 0,
+                    fw_version: 192,
+                    sdma_fw_version: 25,
                     capacity: GpuCapacityObservation {
                         simd_count: 1216,
                         memory_bank_count: 1,
@@ -2045,6 +2075,8 @@ mod tests {
         assert_eq!(snapshot.gpu_nodes()[0].node_id(), 1);
         assert_eq!(snapshot.gpu_nodes()[0].target(), GfxTarget::Gfx942);
         assert_eq!(snapshot.gpu_nodes()[0].drm_render_minor(), 128);
+        assert_eq!(snapshot.gpu_nodes()[0].fw_version(), 192);
+        assert_eq!(snapshot.gpu_nodes()[0].sdma_fw_version(), 25);
         assert_eq!(snapshot.gpu_nodes()[0].capacity().xcc_count(), 8);
         assert_eq!(snapshot.gpu_nodes()[1].node_id(), 2);
     }
@@ -2329,6 +2361,26 @@ mod tests {
         assert!(matches!(
             fixture.discover(),
             Err(TopologyError::PropertyOutOfRange { ref key, .. }) if key == "caches_count"
+        ));
+    }
+
+    #[test]
+    fn firmware_observations_are_required_and_bounded() {
+        let fixture = Fixture::valid(1);
+        fixture.replace_property(1, "fw_version 192", "fw_version 4294967296");
+        assert!(matches!(
+            fixture.discover(),
+            Err(TopologyError::PropertyOutOfRange { ref key, .. }) if key == "fw_version"
+        ));
+
+        let fixture = Fixture::valid(1);
+        fixture.replace_property(1, "sdma_fw_version 25\n", "");
+        assert!(matches!(
+            fixture.discover(),
+            Err(TopologyError::MissingProperty {
+                key: "sdma_fw_version",
+                ..
+            })
         ));
     }
 

@@ -13,7 +13,9 @@ parsed boot UUID, bounded kernel release, and optional `amdgpu` module version i
 correlates every render minor to a kernel sysfs link below `/sys/devices`.
 KFD unique ID, PCI domain/location, vendor/device ID, PCI revision, render
 device number, and typed compute/memory partition observations are captured or
-must agree. The initial admission layer can require the exported `SPX/NPS1` V1
+must agree. Each GPU observation also retains the bounded, opaque KFD topology
+`fw_version` and `sdma_fw_version` integers. The initial admission layer can
+require the exported `SPX/NPS1` V1
 partition constant without losing the observed values. The fixed
 kernel-owned render and PCI symlinks are resolved deliberately; symlinks in
 the KFD topology tree and regular-file inputs remain prohibited.
@@ -34,4 +36,6 @@ authority layer. The safe filesystem API checks terminal entries and stable
 metadata, while the kernel-owned sysfs mount remains a contract boundary for
 ancestor traversal and race behavior. Successful kernel responses and node
 metadata remain contracted observations rather than proofs of the kernel
-implementation.
+implementation. In particular, the two firmware version integers can be bound
+into later R1 evidence, but they do not identify firmware bytes or source,
+authenticate loaded firmware, or prove which firmware executes on the device.
