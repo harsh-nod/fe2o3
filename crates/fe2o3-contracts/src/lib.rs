@@ -10,6 +10,7 @@ mod artifact;
 mod control_flow_v1;
 mod index;
 mod kernel_frontend_v1;
+mod kernel_identity_v1;
 mod launch;
 mod memory_v1;
 mod static_view_description_v1;
@@ -29,6 +30,15 @@ pub use kernel_frontend_v1::{
     KernelFrontendContractV1, LaunchBoundsV1, MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1,
     MAX_WORKGROUP_THREADS_V1, UnsafeAssemblyDeclarationV1, UnsafeAssemblyTargetV1,
     WorkgroupDimensionsV1,
+};
+pub use kernel_identity_v1::{
+    KERNEL_IDENTITY_COMPONENT_BYTES_V1, KERNEL_IDENTITY_VERSION_V1,
+    KERNEL_INST_ID_CANONICAL_BYTES_V1, KERNEL_INST_ID_MAGIC_V1, KERNEL_ITEM_ID_CANONICAL_BYTES_V1,
+    KERNEL_ITEM_ID_MAGIC_V1, KernelCfgIdentityV1, KernelConstArgumentsIdentityV1,
+    KernelCrateIdentityV1, KernelGenericDefinitionIdentityV1, KernelInstId,
+    KernelInstIdDecodeErrorV1, KernelItemId, KernelItemIdDecodeErrorV1, KernelRustItemIdentityV1,
+    KernelTypeArgumentsIdentityV1, decode_kernel_inst_id, decode_kernel_item_id,
+    encode_kernel_inst_id, encode_kernel_item_id,
 };
 pub use launch::{LaunchDomain1d, LaunchGeometry1d, ThreadId1d, ThreadInDomain1d};
 pub use memory_v1::{
