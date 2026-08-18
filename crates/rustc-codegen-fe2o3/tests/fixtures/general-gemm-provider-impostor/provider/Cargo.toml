@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+[dependencies]
+fe2o3-device = { path = "../../../../../fe2o3-device" }
+
 [lib]
 name = "fe2o3_gemm_device_v1"
 path = "src/lib.rs"

@@ -1,6 +1,9 @@
 #![no_std]
 #![feature(rustc_attrs)]
 #![allow(internal_features)]
+#![allow(dead_code)]
+
+use fe2o3_device::DisjointSlice;
 
 pub struct ProofSensitiveGeneralGemmWave64V1 {
     _sealed: (),
@@ -13,9 +16,13 @@ impl ProofSensitiveGeneralGemmWave64V1 {
     }
 }
 
-#[inline(never)]
-#[rustc_diagnostic_item = "fe2o3_device_general_tiled_gemm_proof_acquire_v1"]
-fn proof_acquire_gfx942_tiled_gemm_wave64_v1(k: u32) -> ProofSensitiveGeneralGemmWave64V1 {
-    let _ = k;
-    unreachable!("same-name provider has no GEMM authority")
+const fn phase_count(k: u32) -> u32 {
+    k / 16 + if k.is_multiple_of(16) { 0 } else { 1 }
 }
+
+// Reuses the exact reviewed terminal source and source spans. Authentication
+// must still reject this different same-name package by compiled-crate identity.
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../../../examples/tiled_gemm_general_v1/device-api/src/proof_sensitive_terminals.rs"
+));

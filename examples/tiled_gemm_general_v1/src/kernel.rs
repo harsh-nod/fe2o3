@@ -2,13 +2,17 @@
 
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
-use fe2o3_device::{DisjointSlice, kernel, trap};
+use fe2o3_device::{kernel, trap, DisjointSlice};
 use fe2o3_gemm_device_v1::Gfx942TiledGemmWave64V1;
 
 /// Exact workgroup dimensions required by the positive source contract.
 pub const GENERAL_TILED_GEMM_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 /// Maximum number of 16-deep phases required by a `u32` K dimension.
 pub const GENERAL_TILED_GEMM_MAX_PHASES_V1: u32 = 1 << 28;
+
+// Dynamic row-major offsets are computed in u64 and converted to usize. The
+// admitted gfx942 target is pointer64; fail at compile time on any other host.
+const _: [(); 64] = [(); usize::BITS as usize];
 
 fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
     if rows == 0 || columns == 0 {

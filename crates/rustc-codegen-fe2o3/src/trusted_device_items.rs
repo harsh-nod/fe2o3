@@ -53,13 +53,33 @@ const GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/GENERAL-GEMM-PROVIDER-SOURCE-CLOSURE/V1\0";
 // Updated only after review of the complete standalone companion package.
 const REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x70, 0x88, 0x14, 0x5d, 0x4b, 0xdc, 0xf9, 0x7b, 0x6e, 0x44, 0x3c, 0xfe, 0xbe, 0x8e, 0x2e, 0x37,
-    0xea, 0xff, 0xd3, 0xc4, 0xff, 0x97, 0xa6, 0x72, 0x9f, 0x4d, 0xb5, 0x49, 0x49, 0x87, 0x26, 0x32,
+    0x9c, 0x6c, 0xfc, 0xac, 0x33, 0xc6, 0xac, 0xb6, 0x77, 0x6a, 0x55, 0xce, 0x4b, 0xd4, 0x10, 0xc9,
+    0x02, 0x75, 0x08, 0xf7, 0x8b, 0x19, 0x87, 0x90, 0x7f, 0x52, 0x09, 0x48, 0x0d, 0x4f, 0xa2, 0x8e,
 ];
-// All V1 terminals are defined in the companion's exact `src/lib.rs`.
-const REVIEWED_GENERAL_GEMM_PROVIDER_DEFINITION_SOURCE_V1: [u8; 32] = [
-    0xa3, 0x53, 0x50, 0x48, 0x6e, 0x60, 0x21, 0xef, 0xf9, 0x74, 0x62, 0x8d, 0x4b, 0xa4, 0xa5, 0x16,
-    0x11, 0x73, 0xe8, 0x31, 0xb4, 0xe6, 0x85, 0xc1, 0x86, 0x4a, 0xce, 0x12, 0xf8, 0x63, 0x2a, 0xd1,
+const REVIEWED_GENERAL_GEMM_TYPESTATE_DEFINITION_SOURCE_V1: [u8; 32] = [
+    0xc7, 0xe8, 0xe1, 0xfd, 0x4d, 0xa7, 0x7c, 0xfe, 0xdd, 0x2a, 0x6d, 0x97, 0x14, 0x38, 0x21, 0xf6,
+    0x6f, 0x4a, 0x9a, 0x70, 0xf8, 0x7c, 0x7f, 0xcd, 0xa7, 0x23, 0x01, 0x96, 0x82, 0x87, 0x31, 0x23,
+];
+const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
+    0x0a, 0xd9, 0x34, 0xd8, 0x81, 0x19, 0x3d, 0x56, 0x3b, 0x79, 0xb2, 0xad, 0xf3, 0xcf, 0x74, 0x70,
+    0xca, 0x85, 0x9f, 0x3e, 0x14, 0x34, 0x4b, 0xd0, 0x62, 0x09, 0x94, 0xc6, 0x29, 0x55, 0xd4, 0xe4,
+];
+// Exact rustc observations admitted for reviewed release-profile companion builds.
+const REVIEWED_GENERAL_GEMM_COMPILER_OBSERVATIONS_V1: &[(u64, [u8; 16])] = &[
+    (
+        0xf8fa_b634_cbab_5012,
+        [
+            0x39, 0xa6, 0x03, 0xd5, 0x7d, 0xae, 0x59, 0x93, 0xd5, 0xea, 0x85, 0x55, 0xfb, 0xa8,
+            0x6c, 0xab,
+        ],
+    ),
+    (
+        0x18d7_b803_1ee0_32aa,
+        [
+            0x26, 0x09, 0x8f, 0xcb, 0x3d, 0x49, 0x12, 0x36, 0x38, 0x7b, 0x5b, 0xbc, 0x12, 0xd2,
+            0x24, 0xdd,
+        ],
+    ),
 ];
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PROVIDER-SEMANTIC-DEFINITION-TRANSCRIPT/V1\0";
@@ -1068,11 +1088,16 @@ fn reviewed_general_gemm_provider_definition_v1(
     {
         return Err("reviewed general-GEMM provider observation is incomplete".to_owned());
     }
-    validate_reviewed_general_gemm_source_v1(source_closure, source_identity)?;
+    let TrustedDeviceItem::GeneralGemm(surface, _) = item else {
+        return Err("general-GEMM provider rule received a non-GEMM item".to_owned());
+    };
+    validate_reviewed_general_gemm_source_v1(surface, source_closure, source_identity)?;
+    validate_reviewed_general_gemm_compiler_observation_v1(&provider)?;
     Ok(())
 }
 
 fn validate_reviewed_general_gemm_source_v1(
+    surface: TrustedGeneralGemmSurfaceV1,
     source_closure: [u8; 32],
     definition_source: [u8; 32],
 ) -> Result<(), String> {
@@ -1081,12 +1106,39 @@ fn validate_reviewed_general_gemm_source_v1(
             "general-GEMM provider source closure does not match the reviewed V1 identity: {source_closure:02x?}"
         ));
     }
-    if definition_source != REVIEWED_GENERAL_GEMM_PROVIDER_DEFINITION_SOURCE_V1 {
+    let expected_definition = match surface {
+        TrustedGeneralGemmSurfaceV1::Typestate => {
+            REVIEWED_GENERAL_GEMM_TYPESTATE_DEFINITION_SOURCE_V1
+        }
+        TrustedGeneralGemmSurfaceV1::ProofSensitive => {
+            REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1
+        }
+    };
+    if definition_source != expected_definition {
         return Err(format!(
             "general-GEMM provider definition source does not match the reviewed V1 identity: {definition_source:02x?}"
         ));
     }
     Ok(())
+}
+
+fn validate_reviewed_general_gemm_compiler_observation_v1(
+    provider: &CompilerProviderObservationV1,
+) -> Result<(), String> {
+    if provider.crate_name == "fe2o3_gemm_device_v1"
+        && REVIEWED_GENERAL_GEMM_COMPILER_OBSERVATIONS_V1.iter().any(
+            |(stable_crate_id, crate_hash)| {
+                (*stable_crate_id, *crate_hash)
+                    == (provider.stable_crate_id, provider.crate_hash_observation)
+            },
+        )
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "compiled general-GEMM provider does not match a reviewed V1 rustc observation: stable_crate_id={:016x}, crate_hash={:02x?}",
+        provider.stable_crate_id, provider.crate_hash_observation
+    ))
 }
 
 pub(crate) fn reviewed_matrix_provider_observation(
@@ -1657,20 +1709,23 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        CompilerProviderObservationV1, GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        canonical_compiler_definition_path, pinned_core_semantic_terminal_identity_v1,
+        reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
+        structural_local_definition_component_v1,
+        validate_ordered_provider_semantic_definitions_v1,
+        validate_reviewed_general_gemm_compiler_observation_v1,
+        validate_reviewed_general_gemm_source_v1, CompilerProviderObservationV1,
+        ProviderSemanticDefinitionExpectationV1, ProviderSemanticDefinitionRoleV1,
+        ReviewedProviderSemanticDefinitionV1, ReviewedProviderSemanticProfileV1,
+        TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation, TrustedDeviceItem,
+        TrustedGeneralGemmOperationV1, TrustedGeneralGemmSurfaceV1,
+        GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, HALF_MATH_DIAGNOSTIC_ITEMS,
         MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
-        ProviderSemanticDefinitionExpectationV1, ProviderSemanticDefinitionRoleV1,
         ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, ReviewedProviderSemanticDefinitionV1,
-        ReviewedProviderSemanticProfileV1, TrustedAmdGpuDiagnosticOperation,
-        TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedGeneralGemmOperationV1,
-        TrustedGeneralGemmSurfaceV1, WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
-        pinned_core_semantic_terminal_identity_v1, reviewed_provider_source_closure_identity,
-        reviewed_provider_source_identity_from_path, structural_local_definition_component_v1,
-        validate_ordered_provider_semantic_definitions_v1,
-        validate_reviewed_general_gemm_source_v1,
+        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
 
@@ -1827,20 +1882,16 @@ mod tests {
                 .unwrap(),
             exact
         );
-        assert!(
-            definition
-                .durable_semantic_identity(ProviderSemanticDefinitionRoleV1::SemanticTerminal, "",)
-                .is_err()
-        );
-        assert!(
-            definition
-                .durable_semantic_identity_for_profile(
-                    ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-                    ProviderSemanticDefinitionRoleV1::SemanticTerminal,
-                    "fe2o3_device::thread::thread_idx_x",
-                )
-                .is_err()
-        );
+        assert!(definition
+            .durable_semantic_identity(ProviderSemanticDefinitionRoleV1::SemanticTerminal, "",)
+            .is_err());
+        assert!(definition
+            .durable_semantic_identity_for_profile(
+                ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
+                ProviderSemanticDefinitionRoleV1::SemanticTerminal,
+                "fe2o3_device::thread::thread_idx_x",
+            )
+            .is_err());
         assert_ne!(
             definition
                 .durable_semantic_identity(
@@ -1891,13 +1942,30 @@ mod tests {
             GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         )
         .unwrap();
-        let definition = reviewed_provider_source_identity_from_path(
+        let typestate_definition = reviewed_provider_source_identity_from_path(
             source_root,
             &source_root.join("lib.rs"),
             GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
         )
         .unwrap();
-        validate_reviewed_general_gemm_source_v1(closure, definition).unwrap();
+        let proof_definition = reviewed_provider_source_identity_from_path(
+            source_root,
+            &source_root.join("proof_sensitive_terminals.rs"),
+            GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        )
+        .unwrap();
+        validate_reviewed_general_gemm_source_v1(
+            TrustedGeneralGemmSurfaceV1::Typestate,
+            closure,
+            typestate_definition,
+        )
+        .unwrap();
+        validate_reviewed_general_gemm_source_v1(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            closure,
+            proof_definition,
+        )
+        .unwrap();
 
         let modified = ProviderPackageFixture::new();
         fs::remove_dir_all(modified.source_root()).unwrap();
@@ -1921,9 +1989,36 @@ mod tests {
             GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
         )
         .unwrap();
-        assert!(
-            validate_reviewed_general_gemm_source_v1(changed_closure, changed_definition).is_err()
-        );
+        assert!(validate_reviewed_general_gemm_source_v1(
+            TrustedGeneralGemmSurfaceV1::Typestate,
+            changed_closure,
+            changed_definition,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reviewed_general_gemm_compiler_observations_are_exact_pairs() {
+        for (stable_crate_id, crate_hash_observation) in
+            super::REVIEWED_GENERAL_GEMM_COMPILER_OBSERVATIONS_V1
+        {
+            let exact = CompilerProviderObservationV1 {
+                crate_name: "fe2o3_gemm_device_v1".into(),
+                stable_crate_id: *stable_crate_id,
+                crate_hash_observation: *crate_hash_observation,
+            };
+            validate_reviewed_general_gemm_compiler_observation_v1(&exact).unwrap();
+
+            let mut changed = exact.clone();
+            changed.stable_crate_id ^= 1;
+            assert!(validate_reviewed_general_gemm_compiler_observation_v1(&changed).is_err());
+            changed = exact.clone();
+            changed.crate_hash_observation[0] ^= 1;
+            assert!(validate_reviewed_general_gemm_compiler_observation_v1(&changed).is_err());
+            changed = exact;
+            changed.crate_name = "same_name_impostor".into();
+            assert!(validate_reviewed_general_gemm_compiler_observation_v1(&changed).is_err());
+        }
     }
 
     #[test]
@@ -1997,23 +2092,20 @@ mod tests {
             )
             .unwrap();
         assert_ne!(row_identity, matrix_identity);
-        assert!(
-            row.durable_semantic_identity_for_profile(
+        assert!(row
+            .durable_semantic_identity_for_profile(
                 ReviewedProviderSemanticProfileV1::MatrixV3,
                 ProviderSemanticDefinitionRoleV1::TrustedDefinition,
                 "provider-thread-index",
             )
-            .is_err()
-        );
-        assert!(
-            matrix
-                .durable_semantic_identity_for_profile(
-                    ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-                    ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-                    "provider-thread-index",
-                )
-                .is_err()
-        );
+            .is_err());
+        assert!(matrix
+            .durable_semantic_identity_for_profile(
+                ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
+                ProviderSemanticDefinitionRoleV1::TrustedDefinition,
+                "provider-thread-index",
+            )
+            .is_err());
     }
 
     #[test]
@@ -2090,30 +2182,24 @@ mod tests {
         assert_eq!(provider, first.provider);
         assert_eq!(identities.len(), 2);
 
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[second.clone(), first.clone()],
-                &expectations,
-            )
-            .is_err()
-        );
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[first.clone(), first.clone()],
-                &expectations,
-            )
-            .is_err()
-        );
+        assert!(validate_ordered_provider_semantic_definitions_v1(
+            &[second.clone(), first.clone()],
+            &expectations,
+        )
+        .is_err());
+        assert!(validate_ordered_provider_semantic_definitions_v1(
+            &[first.clone(), first.clone()],
+            &expectations,
+        )
+        .is_err());
 
         let mut duplicate_role = expectations;
         duplicate_role[1].canonical_role = duplicate_role[0].canonical_role;
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[first.clone(), second.clone()],
-                &duplicate_role,
-            )
-            .is_err()
-        );
+        assert!(validate_ordered_provider_semantic_definitions_v1(
+            &[first.clone(), second.clone()],
+            &duplicate_role,
+        )
+        .is_err());
 
         let mut reordered_roles = expectations;
         reordered_roles.swap(0, 1);
@@ -2128,67 +2214,55 @@ mod tests {
 
         let mut changed_provider = second.clone();
         changed_provider.provider.stable_crate_id ^= 1;
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[first.clone(), changed_provider],
-                &expectations,
-            )
-            .is_err()
-        );
+        assert!(validate_ordered_provider_semantic_definitions_v1(
+            &[first.clone(), changed_provider],
+            &expectations,
+        )
+        .is_err());
         let mut changed_profile = second;
         changed_profile.profile = ReviewedProviderSemanticProfileV1::MatrixV3;
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[first, changed_profile],
-                &expectations,
-            )
-            .is_err()
-        );
+        assert!(validate_ordered_provider_semantic_definitions_v1(
+            &[first, changed_profile],
+            &expectations,
+        )
+        .is_err());
     }
 
     #[test]
     fn source_closure_rejects_missing_inputs_and_out_of_root_definitions() {
         let missing_manifest = ProviderPackageFixture::new();
         fs::remove_file(missing_manifest.root.join("Cargo.toml")).unwrap();
-        assert!(
-            reviewed_provider_source_closure_identity(
-                &missing_manifest.root,
-                MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
-            )
-            .is_err()
-        );
+        assert!(reviewed_provider_source_closure_identity(
+            &missing_manifest.root,
+            MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
+        )
+        .is_err());
 
         let missing_source_root = ProviderPackageFixture::new();
         fs::remove_dir_all(missing_source_root.source_root()).unwrap();
-        assert!(
-            reviewed_provider_source_closure_identity(
-                &missing_source_root.root,
-                MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
-            )
-            .is_err()
-        );
+        assert!(reviewed_provider_source_closure_identity(
+            &missing_source_root.root,
+            MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
+        )
+        .is_err());
 
         let reviewed = ProviderPackageFixture::new();
         let outside = ProviderPackageFixture::new();
         let reviewed_root = fs::canonicalize(&reviewed.root).unwrap();
         assert!(super::reviewed_source_file(&reviewed_root, &outside.definition()).is_err());
-        assert!(
-            reviewed_provider_source_identity_from_path(
-                &reviewed.source_root(),
-                &outside.definition(),
-                MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
-            )
-            .is_err()
-        );
+        assert!(reviewed_provider_source_identity_from_path(
+            &reviewed.source_root(),
+            &outside.definition(),
+            MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
+        )
+        .is_err());
         assert!(reviewed_provider_source_closure_identity(&reviewed.root, b"").is_err());
-        assert!(
-            reviewed_provider_source_identity_from_path(
-                &reviewed.source_root(),
-                &reviewed.definition(),
-                b"",
-            )
-            .is_err()
-        );
+        assert!(reviewed_provider_source_identity_from_path(
+            &reviewed.source_root(),
+            &reviewed.definition(),
+            b"",
+        )
+        .is_err());
     }
 
     #[cfg(unix)]
@@ -2202,13 +2276,11 @@ mod tests {
         let real_manifest = manifest_link.root.join("Cargo.real.toml");
         fs::rename(&manifest, &real_manifest).unwrap();
         symlink(&real_manifest, &manifest).unwrap();
-        assert!(
-            reviewed_provider_source_closure_identity(
-                &manifest_link.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-            )
-            .is_err()
-        );
+        assert!(reviewed_provider_source_closure_identity(
+            &manifest_link.root,
+            ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+        )
+        .is_err());
 
         let source_link = ProviderPackageFixture::new();
         symlink(
@@ -2216,13 +2288,11 @@ mod tests {
             source_link.source_root().join("alias.rs"),
         )
         .unwrap();
-        assert!(
-            reviewed_provider_source_closure_identity(
-                &source_link.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-            )
-            .is_err()
-        );
+        assert!(reviewed_provider_source_closure_identity(
+            &source_link.root,
+            ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+        )
+        .is_err());
 
         let source_root_link = ProviderPackageFixture::new();
         fs::rename(
@@ -2235,23 +2305,19 @@ mod tests {
             source_root_link.source_root(),
         )
         .unwrap();
-        assert!(
-            reviewed_provider_source_closure_identity(
-                &source_root_link.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-            )
-            .is_err()
-        );
+        assert!(reviewed_provider_source_closure_identity(
+            &source_root_link.root,
+            ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+        )
+        .is_err());
 
         let socket = ProviderPackageFixture::new();
         let _listener = UnixListener::bind(socket.source_root().join("provider.sock")).unwrap();
-        assert!(
-            reviewed_provider_source_closure_identity(
-                &socket.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-            )
-            .is_err()
-        );
+        assert!(reviewed_provider_source_closure_identity(
+            &socket.root,
+            ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+        )
+        .is_err());
     }
 
     #[test]
@@ -2313,14 +2379,12 @@ mod tests {
         );
         mutation = core;
         mutation.crate_name = "impostor_core".into();
-        assert!(
-            identity(
-                &mutation,
-                "core::intrinsics::atomic_xadd",
-                "intrinsics::atomic_xadd",
-            )
-            .is_err()
-        );
+        assert!(identity(
+            &mutation,
+            "core::intrinsics::atomic_xadd",
+            "intrinsics::atomic_xadd",
+        )
+        .is_err());
     }
 
     #[test]

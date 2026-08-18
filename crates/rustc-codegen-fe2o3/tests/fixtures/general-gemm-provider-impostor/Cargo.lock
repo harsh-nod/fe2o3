@@ -94,6 +94,9 @@ dependencies = [
 [[package]]
 name = "fe2o3-gemm-device-v1"
 version = "0.0.0"
+dependencies = [
+ "fe2o3-device",
+]
 
 [[package]]
 name = "fe2o3-macros"
