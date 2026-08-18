@@ -14,6 +14,9 @@ use fe2o3_kfd_uapi::{
 #[allow(unsafe_code)]
 mod linux;
 
+#[cfg(target_os = "linux")]
+pub mod topology;
+
 /// Default device node for the Linux KFD process interface.
 pub const DEFAULT_KFD_PATH: &str = "/dev/kfd";
 
