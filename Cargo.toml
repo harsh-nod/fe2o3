@@ -68,6 +68,7 @@ fe2o3-hsaco = { path = "crates/fe2o3-hsaco" }
 fe2o3-hsaco-finalize = { path = "crates/fe2o3-hsaco-finalize" }
 fe2o3-hsa-runtime = { path = "crates/fe2o3-hsa-runtime" }
 fe2o3-host = { path = "crates/fe2o3-host" }
+fe2o3-host-api = { path = "crates/fe2o3-host-api" }
 fe2o3-kernel-descriptor = { path = "crates/fe2o3-kernel-descriptor" }
 fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis" }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }

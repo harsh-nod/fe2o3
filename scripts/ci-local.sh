@@ -36,6 +36,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-hsaco
   fe2o3-hsaco-finalize
   fe2o3-host
+  fe2o3-host-api
   fe2o3-kernel-analysis
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
