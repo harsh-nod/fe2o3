@@ -30,7 +30,19 @@ process-aperture inventory, and repeats process, descriptor, topology, XNACK,
 aperture, and reset-event observations before committing the token. The
 `DEVICE_ADMISSION_PROFILE_MANIFEST_V1` digest binds the exact checked profile
 and claim boundary. Retired model history is retained across admissions in the
-same process and observation domain; a poisoned history fails closed. The
+same process and observation domain; a poisoned history fails closed. Each
+successful admission also retains a solver-neutral `DeviceProjectionRecordV1`
+covering platform, module-filesystem, and process provenance, both descriptors
+and UAPI schemas, the selected topology/DRM profile fields, the explicit
+bounded full-GPU identity inventory, firmware and selected capacity
+observations, the complete process aperture inventory, and the final
+reobservation fence. Projection history is
+updated atomically with identity history and links each admission generation to
+its exact predecessor. R1 deliberately retains, rather than compacts, at most
+`MAX_MODEL_DEVICE_ADMISSIONS_V1` admissions per process/domain. The next bind
+fails with `ProjectionHistoryExhausted`; restarting the process creates a new
+history domain. This reviewed availability bound avoids silently discarding
+substitution evidence. The
 `kfd-device-identity` example performs this no-queue admission.
 
 `check_observable_currentness(&mut self)` sandwiches a complete reobservation
@@ -43,8 +55,10 @@ the admitted identity, process, descriptor, XNACK, aperture, and topology
 queries.
 
 This crate checks userspace schema admission and encapsulates descriptor
-ownership. The abstract Verus device-generation theorem is stored only as a
-model receipt; there is not yet a concrete adapter refinement proof or a
+ownership. Verus proves the pure canonical-record projection and abstract
+generation/history relations. The executable validator checks the same record,
+but there is not yet a Verus proof of the Rust implementation or a syscall-to-record
+refinement proof, nor a
 `ProductionDeviceAuthorityV1` implementation. No R1 API grants VM, allocation,
 mapping, queue, event, code, or dispatch authority. It does not enumerate
 cache, memory-bank, or link subtrees or prove their reported counts. The
