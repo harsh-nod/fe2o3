@@ -32,12 +32,21 @@ pub const KFD_UAPI_SCHEMA_MANIFEST: &str = concat!(
     "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
     "kfd_uapi=1.18\n",
     "get_version=size:8,align:4,major:0,minor:4,request:80084b01\n",
+    "process_device_apertures=size:56,align:8,lds_base:0,lds_limit:8,scratch_base:16,scratch_limit:24,gpuvm_base:32,gpuvm_limit:40,gpu_id:48,pad:52\n",
+    "get_process_apertures_new=size:16,align:8,process_apertures_ptr:0,num_of_nodes:8,pad:12,request:c0104b14\n",
     "acquire_vm=size:8,align:4,drm_fd:0,gpu_id:4,request:40084b15\n",
+    "set_xnack_mode=size:4,align:4,xnack_enabled:0,request:c0044b21\n",
 );
 
 /// SHA-256 of [`KFD_UAPI_SCHEMA_MANIFEST`].
 pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256: &str =
-    "cba3563b091e9747ca0452f12df6a08cce95a4c240b081b205e99b6cd81726ed";
+    "2811cc71ae2d598c36adb52328d65c76a14205fcca71148fb75d98a6436ad586";
+
+/// Typed digest bytes of [`KFD_UAPI_SCHEMA_MANIFEST`].
+pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0x28, 0x11, 0xcc, 0x71, 0xae, 0x2d, 0x59, 0x8c, 0x36, 0xad, 0xb5, 0x23, 0x28, 0xd6, 0x5c, 0x76,
+    0xa1, 0x42, 0x05, 0xfc, 0xca, 0x71, 0x14, 0x8f, 0xb7, 0x5d, 0x98, 0xa6, 0x43, 0x6a, 0xd5, 0x86,
+];
 
 /// Major version declared by the reviewed AMDGPU 6.16.13 KFD UAPI header.
 pub const KFD_IOCTL_MAJOR_VERSION: u32 = 1;
@@ -53,6 +62,15 @@ pub const KFD_IOCTL_MAX_ADMITTED_MINOR_VERSION: u32 = KFD_IOCTL_MINOR_VERSION;
 
 /// The KFD ioctl type byte (`'K'`).
 pub const AMDKFD_IOCTL_BASE: u8 = b'K';
+
+/// Negative input queries the current process XNACK mode without changing it.
+pub const KFD_XNACK_MODE_QUERY: i32 = -1;
+
+/// Input and normalized output value for disabled process XNACK mode.
+pub const KFD_XNACK_MODE_DISABLED: i32 = 0;
+
+/// Canonical positive input value for enabled process XNACK mode.
+pub const KFD_XNACK_MODE_ENABLED: i32 = 1;
 
 /// Linux generic ioctl request number type.
 pub type IoctlRequest = u32;
@@ -160,6 +178,74 @@ impl KfdIoctlAcquireVmArgs {
     }
 }
 
+/// C layout of `struct kfd_process_device_apertures`.
+///
+/// The record reports one process-visible virtual address aperture set and its
+/// KFD `gpu_id`. It does not allocate, map, or grant authority over any range.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdProcessDeviceApertures {
+    pub lds_base: u64,
+    pub lds_limit: u64,
+    pub scratch_base: u64,
+    pub scratch_limit: u64,
+    pub gpuvm_base: u64,
+    pub gpuvm_limit: u64,
+    pub gpu_id: u32,
+    pub pad: u32,
+}
+
+/// C layout of `struct kfd_ioctl_get_process_apertures_new_args`.
+///
+/// `kfd_process_device_apertures_ptr` is an opaque userspace address. A later
+/// syscall adapter owns its provenance, capacity, lifetime, and initialization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlGetProcessAperturesNewArgs {
+    pub kfd_process_device_apertures_ptr: u64,
+    pub num_of_nodes: u32,
+    pub pad: u32,
+}
+
+impl KfdIoctlGetProcessAperturesNewArgs {
+    /// Constructs an argument record for a caller-owned output array.
+    pub const fn new(kfd_process_device_apertures_ptr: u64, capacity: u32) -> Self {
+        Self {
+            kfd_process_device_apertures_ptr,
+            num_of_nodes: capacity,
+            pad: 0,
+        }
+    }
+}
+
+/// C layout of `struct kfd_ioctl_set_xnack_mode_args`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlSetXnackModeArgs {
+    /// Negative queries, zero disables, and positive enables process XNACK mode.
+    pub xnack_enabled: i32,
+}
+
+impl KfdIoctlSetXnackModeArgs {
+    /// Constructs a query that leaves the process mode unchanged.
+    pub const fn query() -> Self {
+        Self {
+            xnack_enabled: KFD_XNACK_MODE_QUERY,
+        }
+    }
+
+    /// Constructs a request for one canonical process mode.
+    pub const fn set(enabled: bool) -> Self {
+        Self {
+            xnack_enabled: if enabled {
+                KFD_XNACK_MODE_ENABLED
+            } else {
+                KFD_XNACK_MODE_DISABLED
+            },
+        }
+    }
+}
+
 /// Request number for `_IOR('K', 0x01, struct kfd_ioctl_get_version_args)`.
 pub const AMDKFD_IOC_GET_VERSION: IoctlRequest = encode_admitted_ioctl(
     IoctlDirection::Read,
@@ -174,6 +260,22 @@ pub const AMDKFD_IOC_ACQUIRE_VM: IoctlRequest = encode_admitted_ioctl(
     AMDKFD_IOCTL_BASE,
     0x15,
     size_of::<KfdIoctlAcquireVmArgs>(),
+);
+
+/// Request for `_IOWR('K', 0x14, struct kfd_ioctl_get_process_apertures_new_args)`.
+pub const AMDKFD_IOC_GET_PROCESS_APERTURES_NEW: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x14,
+    size_of::<KfdIoctlGetProcessAperturesNewArgs>(),
+);
+
+/// Request number for `_IOWR('K', 0x21, struct kfd_ioctl_set_xnack_mode_args)`.
+pub const AMDKFD_IOC_SET_XNACK_MODE: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x21,
+    size_of::<KfdIoctlSetXnackModeArgs>(),
 );
 
 /// KFD UAPI version reported by `AMDKFD_IOC_GET_VERSION`.
@@ -217,6 +319,16 @@ impl AdmittedKfdUapi {
     /// require reviewed version evidence before exposing the operation.
     pub const fn acquire_vm_request(self) -> IoctlRequest {
         AMDKFD_IOC_ACQUIRE_VM
+    }
+
+    /// Returns the admitted GET_PROCESS_APERTURES_NEW request number.
+    pub const fn get_process_apertures_new_request(self) -> IoctlRequest {
+        AMDKFD_IOC_GET_PROCESS_APERTURES_NEW
+    }
+
+    /// Returns the admitted SET_XNACK_MODE request number.
+    pub const fn set_xnack_mode_request(self) -> IoctlRequest {
+        AMDKFD_IOC_SET_XNACK_MODE
     }
 }
 
@@ -270,6 +382,34 @@ const _: () = {
     assert!(offset_of!(KfdIoctlAcquireVmArgs, drm_fd) == 0);
     assert!(offset_of!(KfdIoctlAcquireVmArgs, gpu_id) == 4);
 
+    assert!(size_of::<KfdProcessDeviceApertures>() == 56);
+    assert!(align_of::<KfdProcessDeviceApertures>() == 8);
+    assert!(offset_of!(KfdProcessDeviceApertures, lds_base) == 0);
+    assert!(offset_of!(KfdProcessDeviceApertures, lds_limit) == 8);
+    assert!(offset_of!(KfdProcessDeviceApertures, scratch_base) == 16);
+    assert!(offset_of!(KfdProcessDeviceApertures, scratch_limit) == 24);
+    assert!(offset_of!(KfdProcessDeviceApertures, gpuvm_base) == 32);
+    assert!(offset_of!(KfdProcessDeviceApertures, gpuvm_limit) == 40);
+    assert!(offset_of!(KfdProcessDeviceApertures, gpu_id) == 48);
+    assert!(offset_of!(KfdProcessDeviceApertures, pad) == 52);
+
+    assert!(size_of::<KfdIoctlGetProcessAperturesNewArgs>() == 16);
+    assert!(align_of::<KfdIoctlGetProcessAperturesNewArgs>() == 8);
+    assert!(
+        offset_of!(
+            KfdIoctlGetProcessAperturesNewArgs,
+            kfd_process_device_apertures_ptr
+        ) == 0
+    );
+    assert!(offset_of!(KfdIoctlGetProcessAperturesNewArgs, num_of_nodes) == 8);
+    assert!(offset_of!(KfdIoctlGetProcessAperturesNewArgs, pad) == 12);
+
+    assert!(size_of::<KfdIoctlSetXnackModeArgs>() == 4);
+    assert!(align_of::<KfdIoctlSetXnackModeArgs>() == 4);
+    assert!(offset_of!(KfdIoctlSetXnackModeArgs, xnack_enabled) == 0);
+
     assert!(AMDKFD_IOC_GET_VERSION == 0x8008_4b01);
+    assert!(AMDKFD_IOC_GET_PROCESS_APERTURES_NEW == 0xc010_4b14);
     assert!(AMDKFD_IOC_ACQUIRE_VM == 0x4008_4b15);
+    assert!(AMDKFD_IOC_SET_XNACK_MODE == 0xc004_4b21);
 };
