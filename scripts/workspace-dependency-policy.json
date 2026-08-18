@@ -57,6 +57,7 @@
       "name": "target-backend",
       "packages": [
         "dialect-amdgcn",
+        "fe2o3-amdgcn-model",
         "fe2o3-hsaco-finalize",
         "fe2o3-lower-gpu-amdgcn"
       ]

@@ -1,0 +1,16 @@
+[package]
+name = "fe2o3-amdgcn-model"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pliron-independent AMDGPU target model and strict gfx942 lowering for fe2o3."
+
+[lib]
+name = "fe2o3_amdgcn_model"
+
+[dependencies]
+fe2o3-kernel-descriptor.workspace = true
+fe2o3-kernel-ir.workspace = true
+sha2.workspace = true

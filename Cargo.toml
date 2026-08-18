@@ -49,6 +49,7 @@ rust-version = "1.94"
 [workspace.dependencies]
 dialect-amdgcn = { path = "crates/dialect-amdgcn" }
 dialect-mir = { path = "crates/dialect-mir" }
+fe2o3-amdgcn-model = { path = "crates/fe2o3-amdgcn-model" }
 fe2o3-amd-target = { path = "crates/fe2o3-amd-target" }
 fe2o3-artifact-transaction = { path = "crates/fe2o3-artifact-transaction" }
 fe2o3-build-authority = { path = "crates/fe2o3-build-authority" }

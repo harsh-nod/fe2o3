@@ -5,12 +5,14 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "AMDGPU intrinsic names and lowering seam for fe2o3."
+description = "Compatibility facade for the fe2o3 AMDGPU target model."
 
 [lib]
 name = "dialect_amdgcn"
 
 [dependencies]
+fe2o3-amdgcn-model.workspace = true
+
+[dev-dependencies]
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
-sha2.workspace = true
