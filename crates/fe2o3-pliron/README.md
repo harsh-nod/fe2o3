@@ -4,6 +4,8 @@
 workspace. It provides:
 
 - construction of a real Pliron `Context`;
+- opaque process-local context identities backed by Pliron's private uniqued
+  store rather than transferable auxiliary marker data;
 - explicit, bounded dialect-registration hooks;
 - deterministic, bounded pass plans over real Pliron `Pass` values;
 - verification before and after every pass; and
@@ -29,6 +31,13 @@ worker containment in a later stage. A pass or verification failure poisons
 the session so partially transformed IR cannot be reused through this API.
 Hook and upstream diagnostic text is not copied into stable diagnostics; the
 shell emits fixed fe2o3 codes and messages instead.
+
+Context identities protect fe2o3-owned envelopes and results from being
+validated against a different context, including when public Pliron auxiliary
+marker boxes are moved between contexts. They do not add provenance to
+upstream Pliron `Ptr<T>` values. Raw pointers remain contextless arena indexes
+inside the Pliron trusted computing base and must not be exposed as a safe
+cross-context capability.
 
 ## Upstream API findings
 

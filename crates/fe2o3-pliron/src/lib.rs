@@ -1,14 +1,23 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
-use std::{collections::BTreeSet, fmt};
+use std::{
+    collections::BTreeSet,
+    error::Error,
+    fmt,
+    num::NonZeroU64,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use pliron::{
     context::{Context, Ptr},
     dialect::{Dialect, DialectName},
+    identifier::Identifier,
     irbuild::IRStatus,
     operation::{Operation, verify_operation},
     pass::{AnalysisManager, Pass, PassManager, PassResult},
+    uniqued_any::{self, UniquedKey},
 };
 
 /// The only accepted Pliron workspace revision for Wave 0.
@@ -19,6 +28,121 @@ pub const HARD_MAX_DIALECTS: usize = 64;
 pub const HARD_MAX_PASSES: usize = 256;
 pub const HARD_MAX_NAME_BYTES: usize = 96;
 pub const HARD_MAX_DIAGNOSTIC_BYTES: usize = 4_096;
+
+/// Auxiliary-data key for the fe2o3 context-identity locator.
+pub const CONTEXT_IDENTITY_MARKER_KEY: &str = "fe2o3_pliron_context_identity_v1";
+
+static NEXT_CONTEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
+
+/// Opaque process-local identity for one Pliron context.
+///
+/// The value is descriptive provenance for in-memory handles. It is not a
+/// durable compiler, artifact, proof, publication, or runtime identity.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ContextIdentity(NonZeroU64);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ContextIdentityAnchor(ContextIdentity);
+
+#[derive(Debug)]
+struct ContextIdentityMarker {
+    anchor: UniquedKey<ContextIdentityAnchor>,
+}
+
+/// Failure to create or validate a context-bound identity anchor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContextIdentityError {
+    /// Another typed value claimed the public locator key.
+    MarkerCollision,
+    /// The locator is missing its private, context-owned anchor.
+    CorruptMarker,
+    /// The process exhausted the context-identity counter.
+    IdentitySpaceExhausted,
+}
+
+impl fmt::Display for ContextIdentityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MarkerCollision => {
+                formatter.write_str("Pliron context identity marker collision")
+            }
+            Self::CorruptMarker => formatter.write_str("Pliron context identity marker is corrupt"),
+            Self::IdentitySpaceExhausted => {
+                formatter.write_str("Pliron context identity space is exhausted")
+            }
+        }
+    }
+}
+
+impl Error for ContextIdentityError {}
+
+/// Returns this context's identity, creating its private anchor when absent.
+///
+/// The authoritative anchor is stored in Pliron's private uniqued store. The
+/// public auxiliary-data marker is only a locator, so moving that marker to a
+/// different context does not transfer the identity.
+pub fn ensure_context_identity(
+    context: &mut Context,
+) -> Result<ContextIdentity, ContextIdentityError> {
+    if let Some(identity) = context_identity_state(context)? {
+        return Ok(identity);
+    }
+
+    let identity = ContextIdentity(next_context_identity()?);
+    let anchor = uniqued_any::save(context, ContextIdentityAnchor(identity));
+    let marker = context
+        .aux_data
+        .insert(Box::new(ContextIdentityMarker { anchor }));
+    context
+        .aux_data_map
+        .insert(context_identity_marker_key(), marker);
+    Ok(identity)
+}
+
+/// Returns a previously created context identity without creating one.
+pub fn require_context_identity(
+    context: &Context,
+) -> Result<ContextIdentity, ContextIdentityError> {
+    context_identity_state(context)?.ok_or(ContextIdentityError::CorruptMarker)
+}
+
+fn context_identity_state(
+    context: &Context,
+) -> Result<Option<ContextIdentity>, ContextIdentityError> {
+    let Some(index) = context
+        .aux_data_map
+        .get(&context_identity_marker_key())
+        .copied()
+    else {
+        return Ok(None);
+    };
+    let Some(marker) = context.aux_data.get(index) else {
+        return Err(ContextIdentityError::CorruptMarker);
+    };
+    let marker = marker
+        .downcast_ref::<ContextIdentityMarker>()
+        .ok_or(ContextIdentityError::MarkerCollision)?;
+    catch_unwind(AssertUnwindSafe(|| {
+        uniqued_any::get(context, marker.anchor).0
+    }))
+    .map(Some)
+    .map_err(|_| ContextIdentityError::CorruptMarker)
+}
+
+fn next_context_identity() -> Result<NonZeroU64, ContextIdentityError> {
+    let value = NEXT_CONTEXT_IDENTITY
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| ContextIdentityError::IdentitySpaceExhausted)?;
+    NonZeroU64::new(value).ok_or(ContextIdentityError::IdentitySpaceExhausted)
+}
+
+fn context_identity_marker_key() -> Identifier {
+    CONTEXT_IDENTITY_MARKER_KEY
+        .try_into()
+        .expect("static context identity key is valid")
+}
 
 /// Resource limits for one context and pass plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
