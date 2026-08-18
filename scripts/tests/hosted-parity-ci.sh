@@ -13,6 +13,7 @@ readonly GENERIC_WORKFLOW="${ROOT}/.github/workflows/ci.yml"
 readonly SHARD_POLICY="${ROOT}/scripts/rustc-codegen-shards.py"
 readonly HARDWARE_WORKFLOW="${ROOT}/.github/workflows/hardware-smoke.yml"
 readonly ROCM_WORKFLOW="${ROOT}/.github/workflows/rocm-compile.yml"
+readonly ROW_SOFTMAX_WORKFLOW="${ROOT}/.github/workflows/row-softmax-v1.yml"
 readonly CHANGE_POLICY="${ROOT}/scripts/parity-protected-change-policy.sh"
 readonly CODEOWNERS="${ROOT}/.github/CODEOWNERS"
 TEST_ROOT="$(mktemp -d)"
@@ -257,6 +258,11 @@ require_text "${GENERIC_WORKFLOW}" 'missing or zero parity base SHA'
 require_text "${GENERIC_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
 require_text "${HARDWARE_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
 require_text "${ROCM_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
+if ! sed -n '/^  host-contract:/,$p' "${ROW_SOFTMAX_WORKFLOW}" \
+  | grep -F -- 'fetch-depth: 0' >/dev/null; then
+  printf 'row-softmax host contract checkout lacks complete lineage history\n' >&2
+  exit 1
+fi
 if rg -n 'git rev-parse HEAD\^' "${GENERIC_WORKFLOW}"; then
   printf 'generic parity CI does not cover the complete push range\n' >&2
   exit 1
@@ -267,7 +273,7 @@ if rg -n 'BASE_SHA="\$\(git merge-base' "${GENERIC_WORKFLOW}"; then
 fi
 if rg -n 'actions/checkout@(v[0-9]+|main|master)' \
   "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}" "${PUBLISHER_WORKFLOW}" \
-  "${HARDWARE_WORKFLOW}" "${ROCM_WORKFLOW}"; then
+  "${HARDWARE_WORKFLOW}" "${ROCM_WORKFLOW}" "${ROW_SOFTMAX_WORKFLOW}"; then
   printf 'hosted CI uses a mutable checkout action reference\n' >&2
   exit 1
 fi
