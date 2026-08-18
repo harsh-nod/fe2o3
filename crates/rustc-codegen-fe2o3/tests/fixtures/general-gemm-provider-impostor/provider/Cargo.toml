@@ -1,0 +1,9 @@
+[package]
+name = "fe2o3-gemm-device-v1"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "fe2o3_gemm_device_v1"
+path = "src/lib.rs"

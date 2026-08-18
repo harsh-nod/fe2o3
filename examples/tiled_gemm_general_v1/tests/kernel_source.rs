@@ -134,7 +134,7 @@ fn status_is_explicitly_source_only_and_fail_closed() {
     ));
     assert_eq!(
         GENERAL_TILED_GEMM_SOURCE_BLOCKER_V1,
-        "general tiled-GEMM semantic calls are not imported into verified Kernel IR"
+        "authenticated MIR reaches only a non-authoritative GeneralGemmKirV1 witness; runtime plan binding and frontend promotion are not implemented"
     );
     assert_eq!(GENERAL_TILED_GEMM_SOURCE_BLOCKERS_V1.len(), 5);
 }

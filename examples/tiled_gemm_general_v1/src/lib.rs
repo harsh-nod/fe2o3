@@ -19,8 +19,7 @@ pub const GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1: bool = false;
 pub const GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1: bool = false;
 
 /// Current integration boundary for the positive source fixture.
-pub const GENERAL_TILED_GEMM_SOURCE_BLOCKER_V1: &str =
-    "general tiled-GEMM semantic calls are not imported into verified Kernel IR";
+pub const GENERAL_TILED_GEMM_SOURCE_BLOCKER_V1: &str = "authenticated MIR reaches only a non-authoritative GeneralGemmKirV1 witness; runtime plan binding and frontend promotion are not implemented";
 
 /// Work remaining before the positive source can become execution authority.
 pub const GENERAL_TILED_GEMM_SOURCE_BLOCKERS_V1: [&str; 5] = [
@@ -28,5 +27,5 @@ pub const GENERAL_TILED_GEMM_SOURCE_BLOCKERS_V1: [&str; 5] = [
     "the proof-required pipeline does not yet discharge the general source properties",
     "the safe phase intrinsics do not yet lower to gfx942 LDS, barriers, and MFMA",
     "the dynamic GEMM ABI and launch plan are not joined to protected publication",
-    "the negative semantic corpus is not yet enforced by compiler diagnostics",
+    "only missing-publish and duplicate-store semantic sources have compiler diagnostics; thirteen corpus categories remain verifier work",
 ];

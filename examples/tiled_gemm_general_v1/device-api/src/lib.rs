@@ -23,6 +23,12 @@
 //! semantic obligations, and selected the exact `gfx942:xnack-` wave64
 //! profile. This module does not claim that source import, proof discharge,
 //! LLVM lowering, artifact publication, or GPU execution is implemented.
+//!
+//! [`ProofSensitiveGeneralGemmWave64V1`] is a separate production-candidate
+//! frontend surface. Its safe calls name proof obligations without using
+//! typestate to reject invalid order locally. That lets attributed safe-Rust
+//! negative sources reach compiler semantic analysis. The context remains
+//! sealed and every unsupported or host call still fails closed.
 
 use core::marker::PhantomData;
 
@@ -358,26 +364,31 @@ impl Gfx942TiledGemmWave64V1<GemmReady> {
     }
 
     /// Returns the authenticated physical lane in `0..64` as coordinate data.
+    #[inline(always)]
     pub const fn lane(&self) -> u32 {
         self.lane
     }
 
     /// Returns the output tile's row coordinate in the launch grid.
+    #[inline(always)]
     pub const fn tile_row(&self) -> u32 {
         self.tile_row
     }
 
     /// Returns the output tile's column coordinate in the launch grid.
+    #[inline(always)]
     pub const fn tile_column(&self) -> u32 {
         self.tile_column
     }
 
     /// Returns the next K-phase epoch, starting at zero.
+    #[inline(always)]
     pub const fn phase(&self) -> u32 {
         self.epoch
     }
 
     /// Reports whether another complete or zero-filled K phase is required.
+    #[inline(always)]
     pub const fn has_remaining_phases(&self) -> bool {
         self.epoch < self.phases
     }
@@ -472,6 +483,71 @@ impl Gfx942TiledGemmWave64V1<GemmConsumed> {
     }
 }
 
+/// Sealed safe source context whose calls create general-GEMM proof obligations.
+///
+/// Unlike [`Gfx942TiledGemmWave64V1`], this surface deliberately does not use
+/// Rust typestate to enforce phase order. Safe attributed source can therefore
+/// express missing barriers or duplicate stores, and the compiler must derive
+/// and reject those schedules before artifact creation. Private fields prevent
+/// source from forging the context or selecting lane, workgroup, LDS, or
+/// accumulator state. The value is neither `Copy`, `Clone`, `Send`, nor `Sync`.
+///
+/// This is a production-candidate frontend contract, not execution authority.
+/// Its diagnostic-item terminals are panic stubs until authenticated MIR
+/// import, runtime plan binding, proof discharge, lowering, and publication
+/// are joined.
+#[must_use = "the proof-sensitive GEMM context must reach semantic compiler analysis"]
+pub struct ProofSensitiveGeneralGemmWave64V1 {
+    _sealed: (),
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl ProofSensitiveGeneralGemmWave64V1 {
+    /// Requests one compiler-issued proof-sensitive wave64 context.
+    #[inline(always)]
+    pub fn from_compiler(k: u32) -> Self {
+        proof_acquire_gfx942_tiled_gemm_wave64_v1(k)
+    }
+
+    /// Names complete guarded, zero-filled A/B staging obligations.
+    #[inline(always)]
+    pub fn stage(&mut self, a_bits: [u16; 4], b_bits: [u16; 4]) {
+        proof_stage_gfx942_tiled_gemm_wave64_v1(self, a_bits, b_bits)
+    }
+
+    /// Names a convergent publish-barrier obligation for the current phase.
+    #[inline(always)]
+    pub fn publish(&mut self) {
+        proof_publish_gfx942_tiled_gemm_wave64_v1(self)
+    }
+
+    /// Names current-epoch LDS reads and one carried MFMA update obligation.
+    #[inline(always)]
+    pub fn multiply_accumulate(&mut self) {
+        proof_mfma_gfx942_tiled_gemm_wave64_v1(self)
+    }
+
+    /// Names a convergent LDS reuse-barrier obligation for the current phase.
+    #[inline(always)]
+    pub fn reuse(&mut self) {
+        proof_reuse_gfx942_tiled_gemm_wave64_v1(self)
+    }
+
+    /// Names guarded, disjoint `alpha * AB + beta * C` store obligations.
+    #[inline(always)]
+    pub fn store_c_fragment(
+        &mut self,
+        c: &mut DisjointSlice<f32>,
+        m: u32,
+        n: u32,
+        ldc: u32,
+        alpha: f32,
+        beta: f32,
+    ) {
+        proof_store_gfx942_tiled_gemm_wave64_v1(self, c, m, n, ldc, alpha, beta)
+    }
+}
+
 const fn phase_count(k: u32) -> u32 {
     k / GENERAL_TILED_GEMM_TILE_K_V1
         + if k.is_multiple_of(GENERAL_TILED_GEMM_TILE_K_V1) {
@@ -542,6 +618,61 @@ unsafe fn store_gfx942_tiled_gemm_wave64_v1(
     unreachable!("general tiled-GEMM stores require authenticated compiler lowering")
 }
 
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_general_tiled_gemm_proof_acquire_v1"]
+fn proof_acquire_gfx942_tiled_gemm_wave64_v1(k: u32) -> ProofSensitiveGeneralGemmWave64V1 {
+    let _ = phase_count(k);
+    unreachable!("proof-sensitive GEMM authority requires authenticated compiler analysis")
+}
+
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_general_tiled_gemm_proof_stage_v1"]
+fn proof_stage_gfx942_tiled_gemm_wave64_v1(
+    context: &mut ProofSensitiveGeneralGemmWave64V1,
+    a_bits: [u16; 4],
+    b_bits: [u16; 4],
+) {
+    let _ = (context, a_bits, b_bits);
+    unreachable!("proof-sensitive GEMM staging requires authenticated compiler analysis")
+}
+
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_general_tiled_gemm_proof_publish_v1"]
+fn proof_publish_gfx942_tiled_gemm_wave64_v1(context: &mut ProofSensitiveGeneralGemmWave64V1) {
+    let _ = context;
+    unreachable!("proof-sensitive GEMM publish requires authenticated compiler analysis")
+}
+
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_general_tiled_gemm_proof_mfma_v1"]
+fn proof_mfma_gfx942_tiled_gemm_wave64_v1(context: &mut ProofSensitiveGeneralGemmWave64V1) {
+    let _ = context;
+    unreachable!("proof-sensitive GEMM MFMA requires authenticated compiler analysis")
+}
+
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_general_tiled_gemm_proof_reuse_v1"]
+fn proof_reuse_gfx942_tiled_gemm_wave64_v1(context: &mut ProofSensitiveGeneralGemmWave64V1) {
+    let _ = context;
+    unreachable!("proof-sensitive GEMM reuse requires authenticated compiler analysis")
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_general_tiled_gemm_proof_store_v1"]
+fn proof_store_gfx942_tiled_gemm_wave64_v1(
+    context: &mut ProofSensitiveGeneralGemmWave64V1,
+    c: &mut DisjointSlice<f32>,
+    m: u32,
+    n: u32,
+    ldc: u32,
+    alpha: f32,
+    beta: f32,
+) {
+    let _ = (context, c, m, n, ldc, alpha, beta);
+    unreachable!("proof-sensitive GEMM stores require authenticated compiler analysis")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,6 +705,14 @@ mod tests {
     fn host_acquisition_fails_closed() {
         let failure = catch_unwind(AssertUnwindSafe(|| {
             let _ = Gfx942TiledGemmWave64V1::from_compiler(16);
+        }));
+        assert!(failure.is_err());
+    }
+
+    #[test]
+    fn proof_sensitive_host_acquisition_fails_closed() {
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            let _ = ProofSensitiveGeneralGemmWave64V1::from_compiler(16);
         }));
         assert!(failure.is_err());
     }

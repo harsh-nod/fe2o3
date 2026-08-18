@@ -14,9 +14,8 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
     if rows == 0 || columns == 0 {
         return 0;
     }
-    ((rows - 1) as usize)
-        .saturating_mul(stride as usize)
-        .saturating_add(columns as usize)
+    // The maximum u32 row-major extent is strictly smaller than u64::MAX.
+    (u64::from(rows - 1) * u64::from(stride) + u64::from(columns)) as usize
 }
 
 fn load_bf16_or_zero(
@@ -30,22 +29,10 @@ fn load_bf16_or_zero(
     if row >= u64::from(rows) || column >= u64::from(columns) {
         return 0;
     }
-    let Some(row) = usize::try_from(row).ok() else {
-        trap();
-        return 0;
-    };
-    let Some(column) = usize::try_from(column).ok() else {
-        trap();
-        return 0;
-    };
-    let Some(index) = row
-        .checked_mul(stride as usize)
-        .and_then(|base| base.checked_add(column))
-    else {
-        trap();
-        return 0;
-    };
-    let Some(value) = values.get(index) else {
+    // The bounds above reduce both coordinates to u32 domains, so this u64
+    // row-major calculation cannot overflow.
+    let index = row * u64::from(stride) + column;
+    let Some(value) = values.get(index as usize) else {
         trap();
         return 0;
     };

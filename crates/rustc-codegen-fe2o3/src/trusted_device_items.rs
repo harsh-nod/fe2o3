@@ -47,6 +47,20 @@ const ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2: &[u8] =
 )]
 const MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3: &[u8] =
     b"FE2O3/MATRIX-PROVIDER-SOURCE-CLOSURE/V3\0";
+const GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/GENERAL-GEMM-PROVIDER-SOURCE-IDENTITY/V1\0";
+const GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
+    b"FE2O3/GENERAL-GEMM-PROVIDER-SOURCE-CLOSURE/V1\0";
+// Updated only after review of the complete standalone companion package.
+const REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_V1: [u8; 32] = [
+    0x70, 0x88, 0x14, 0x5d, 0x4b, 0xdc, 0xf9, 0x7b, 0x6e, 0x44, 0x3c, 0xfe, 0xbe, 0x8e, 0x2e, 0x37,
+    0xea, 0xff, 0xd3, 0xc4, 0xff, 0x97, 0xa6, 0x72, 0x9f, 0x4d, 0xb5, 0x49, 0x49, 0x87, 0x26, 0x32,
+];
+// All V1 terminals are defined in the companion's exact `src/lib.rs`.
+const REVIEWED_GENERAL_GEMM_PROVIDER_DEFINITION_SOURCE_V1: [u8; 32] = [
+    0xa3, 0x53, 0x50, 0x48, 0x6e, 0x60, 0x21, 0xef, 0xf9, 0x74, 0x62, 0x8d, 0x4b, 0xa4, 0xa5, 0x16,
+    0x11, 0x73, 0xe8, 0x31, 0xb4, 0xe6, 0x85, 0xc1, 0x86, 0x4a, 0xce, 0x12, 0xf8, 0x63, 0x2a, 0xd1,
+];
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PROVIDER-SEMANTIC-DEFINITION-TRANSCRIPT/V1\0";
 const PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -57,6 +71,14 @@ const REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device");
 const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device/src");
+const REVIEWED_GENERAL_GEMM_PROVIDER_PACKAGE_ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/tiled_gemm_general_v1/device-api"
+);
+const REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/tiled_gemm_general_v1/device-api/src"
+);
 
 static WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 #[allow(
@@ -69,6 +91,8 @@ static ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_V2: OnceLock<Result<[u8; 32], String>
     reason = "consumed by the staged matrix V3 provider protocol"
 )]
 static MATRIX_PROVIDER_SOURCE_CLOSURE_V3: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
+static GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_V1: OnceLock<Result<[u8; 32], String>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewedMatrixProviderObservationV2 {
@@ -260,6 +284,7 @@ pub(crate) fn validate_ordered_provider_semantic_definitions_v1(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RejectedTrustedProvider {
     pub(crate) marker: &'static str,
+    pub(crate) expected_provider_crate: &'static str,
     pub(crate) reason: String,
 }
 
@@ -294,6 +319,22 @@ pub(crate) enum TrustedAmdGpuDiagnosticOperation {
     Trap,
     DebugTrap,
     ProfilingMarker,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrustedGeneralGemmSurfaceV1 {
+    Typestate,
+    ProofSensitive,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrustedGeneralGemmOperationV1 {
+    Acquire,
+    Stage,
+    Publish,
+    Mfma,
+    Reuse,
+    Store,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -344,6 +385,7 @@ pub(crate) enum TrustedDeviceItem {
     F32AccumulatorFragmentFromValues,
     F32AccumulatorFragmentIntoValues,
     DeviceMatrixMultiplyAccumulate,
+    GeneralGemm(TrustedGeneralGemmSurfaceV1, TrustedGeneralGemmOperationV1),
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
     HalfOperation(TrustedHalfOperation),
@@ -583,6 +625,102 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::DeviceMatrix::multiply_accumulate",
     ),
     (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::Typestate,
+            TrustedGeneralGemmOperationV1::Acquire,
+        ),
+        "fe2o3_device_general_tiled_gemm_wave64_acquire_v1",
+        "fe2o3_gemm_device_v1::acquire_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::Typestate,
+            TrustedGeneralGemmOperationV1::Stage,
+        ),
+        "fe2o3_device_general_tiled_gemm_wave64_stage_v1",
+        "fe2o3_gemm_device_v1::stage_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::Typestate,
+            TrustedGeneralGemmOperationV1::Publish,
+        ),
+        "fe2o3_device_general_tiled_gemm_wave64_publish_v1",
+        "fe2o3_gemm_device_v1::publish_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::Typestate,
+            TrustedGeneralGemmOperationV1::Mfma,
+        ),
+        "fe2o3_device_general_tiled_gemm_wave64_mfma_v1",
+        "fe2o3_gemm_device_v1::mfma_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::Typestate,
+            TrustedGeneralGemmOperationV1::Reuse,
+        ),
+        "fe2o3_device_general_tiled_gemm_wave64_reuse_v1",
+        "fe2o3_gemm_device_v1::reuse_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::Typestate,
+            TrustedGeneralGemmOperationV1::Store,
+        ),
+        "fe2o3_device_general_tiled_gemm_wave64_store_v1",
+        "fe2o3_gemm_device_v1::store_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::Acquire,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_acquire_v1",
+        "fe2o3_gemm_device_v1::proof_acquire_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::Stage,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_stage_v1",
+        "fe2o3_gemm_device_v1::proof_stage_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::Publish,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_publish_v1",
+        "fe2o3_gemm_device_v1::proof_publish_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::Mfma,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_mfma_v1",
+        "fe2o3_gemm_device_v1::proof_mfma_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::Reuse,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_reuse_v1",
+        "fe2o3_gemm_device_v1::proof_reuse_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::Store,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_store_v1",
+        "fe2o3_gemm_device_v1::proof_store_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
         TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
         "fe2o3_device_amdgpu_v_mov_b32_v1",
         "fe2o3_device::diagnostics::__amdgpu_v_mov_b32_v1",
@@ -733,6 +871,13 @@ impl TrustedDeviceItem {
                 .expect("every trusted device item has one canonical path"),
         }
     }
+
+    pub(crate) const fn expected_provider_crate(self) -> &'static str {
+        match self {
+            Self::GeneralGemm(_, _) => "fe2o3_gemm_device_v1",
+            _ => "fe2o3_device",
+        }
+    }
 }
 
 pub(crate) fn definition(tcx: TyCtxt<'_>, item: TrustedDeviceItem) -> Option<DefId> {
@@ -815,11 +960,17 @@ pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Reject
         })?;
     provider_rule(tcx, def_id, item)
         .err()
-        .map(|reason| RejectedTrustedProvider { marker, reason })
+        .map(|reason| RejectedTrustedProvider {
+            marker,
+            expected_provider_crate: item.expected_provider_crate(),
+            reason,
+        })
 }
 
 fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
-    if matrix_provider_bound_item(item) {
+    if matches!(item, TrustedDeviceItem::GeneralGemm(_, _)) {
+        reviewed_general_gemm_provider_definition_v1(tcx, def_id, item)
+    } else if matrix_provider_bound_item(item) {
         reviewed_matrix_provider_observation(tcx, def_id).map(|_| ())
     } else if row_softmax_provider_bound_item(item) {
         reviewed_row_softmax_provider_definition(tcx, def_id).map(|_| ())
@@ -860,14 +1011,82 @@ fn named_external_provider(
     tcx: TyCtxt<'_>,
     crate_num: rustc_hir::def_id::CrateNum,
 ) -> Result<String, String> {
+    named_external_provider_as(tcx, crate_num, "fe2o3_device")
+}
+
+fn named_external_provider_as(
+    tcx: TyCtxt<'_>,
+    crate_num: rustc_hir::def_id::CrateNum,
+    expected_crate_name: &str,
+) -> Result<String, String> {
     if crate_num == LOCAL_CRATE {
         return Err("provider is the local compilation crate".to_owned());
     }
     let crate_name = tcx.crate_name(crate_num).as_str().to_owned();
-    if crate_name != "fe2o3_device" {
+    if crate_name != expected_crate_name {
         return Err(format!("provider crate name is `{crate_name}`"));
     }
     Ok(crate_name)
+}
+
+fn reviewed_general_gemm_provider_definition_v1(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+    item: TrustedDeviceItem,
+) -> Result<(), String> {
+    let crate_name =
+        named_external_provider_as(tcx, provider_definition.krate, "fe2o3_gemm_device_v1")?;
+    let actual_path = tcx.def_path_str(provider_definition);
+    if actual_path != item.canonical_path() {
+        return Err(format!(
+            "provider definition path is `{actual_path}`, expected `{}`",
+            item.canonical_path()
+        ));
+    }
+    let source_identity = reviewed_provider_source_identity_at_root(
+        tcx,
+        provider_definition,
+        Path::new(REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_ROOT),
+        GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+    )?;
+    let source_closure = GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_V1
+        .get_or_init(|| {
+            reviewed_provider_source_closure_identity(
+                Path::new(REVIEWED_GENERAL_GEMM_PROVIDER_PACKAGE_ROOT),
+                GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+            )
+        })
+        .clone()?;
+    let cargo_metadata = decode_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
+    let provider = compiler_provider_observation_v1(tcx, provider_definition.krate);
+    if provider.crate_name != crate_name
+        || provider.stable_crate_id == 0
+        || provider.crate_hash_observation == [0; 16]
+        || source_identity == [0; 32]
+        || source_closure == [0; 32]
+        || cargo_metadata == [0; 32]
+    {
+        return Err("reviewed general-GEMM provider observation is incomplete".to_owned());
+    }
+    validate_reviewed_general_gemm_source_v1(source_closure, source_identity)?;
+    Ok(())
+}
+
+fn validate_reviewed_general_gemm_source_v1(
+    source_closure: [u8; 32],
+    definition_source: [u8; 32],
+) -> Result<(), String> {
+    if source_closure != REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_V1 {
+        return Err(format!(
+            "general-GEMM provider source closure does not match the reviewed V1 identity: {source_closure:02x?}"
+        ));
+    }
+    if definition_source != REVIEWED_GENERAL_GEMM_PROVIDER_DEFINITION_SOURCE_V1 {
+        return Err(format!(
+            "general-GEMM provider definition source does not match the reviewed V1 identity: {definition_source:02x?}"
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn reviewed_matrix_provider_observation(
@@ -1223,6 +1442,20 @@ fn reviewed_provider_source_identity(
     def_id: DefId,
     domain: &[u8],
 ) -> Result<[u8; 32], String> {
+    reviewed_provider_source_identity_at_root(
+        tcx,
+        def_id,
+        Path::new(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT),
+        domain,
+    )
+}
+
+fn reviewed_provider_source_identity_at_root(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    reviewed_root: &Path,
+    domain: &[u8],
+) -> Result<[u8; 32], String> {
     let file_name = tcx
         .sess
         .source_map()
@@ -1230,12 +1463,9 @@ fn reviewed_provider_source_identity(
         .prefer_local_unconditionally()
         .to_string_lossy()
         .into_owned();
-    let reviewed_root =
-        std::fs::canonicalize(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).map_err(|error| {
-            format!(
-                "reviewed fe2o3-device source root is unavailable to the managed build: {error}"
-            )
-        })?;
+    let reviewed_root = std::fs::canonicalize(reviewed_root).map_err(|error| {
+        format!("reviewed provider source root is unavailable to the managed build: {error}")
+    })?;
     reviewed_provider_source_identity_from_path(&reviewed_root, Path::new(&file_name), domain)
 }
 
@@ -1427,18 +1657,20 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        CompilerProviderObservationV1, HALF_MATH_DIAGNOSTIC_ITEMS,
+        CompilerProviderObservationV1, GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, HALF_MATH_DIAGNOSTIC_ITEMS,
         MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
         ProviderSemanticDefinitionExpectationV1, ProviderSemanticDefinitionRoleV1,
         ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
         ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, ReviewedProviderSemanticDefinitionV1,
         ReviewedProviderSemanticProfileV1, TrustedAmdGpuDiagnosticOperation,
-        TrustedAmdGpuInlineOperation, TrustedDeviceItem,
-        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedGeneralGemmOperationV1,
+        TrustedGeneralGemmSurfaceV1, WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
         pinned_core_semantic_terminal_identity_v1, reviewed_provider_source_closure_identity,
         reviewed_provider_source_identity_from_path, structural_local_definition_component_v1,
         validate_ordered_provider_semantic_definitions_v1,
+        validate_reviewed_general_gemm_source_v1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
 
@@ -1647,6 +1879,50 @@ mod tests {
                 )
                 .unwrap(),
             digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
+        );
+    }
+
+    #[test]
+    fn reviewed_general_gemm_companion_source_is_exactly_pinned() {
+        let package_root = Path::new(super::REVIEWED_GENERAL_GEMM_PROVIDER_PACKAGE_ROOT);
+        let source_root = Path::new(super::REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_ROOT);
+        let closure = reviewed_provider_source_closure_identity(
+            package_root,
+            GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        )
+        .unwrap();
+        let definition = reviewed_provider_source_identity_from_path(
+            source_root,
+            &source_root.join("lib.rs"),
+            GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        )
+        .unwrap();
+        validate_reviewed_general_gemm_source_v1(closure, definition).unwrap();
+
+        let modified = ProviderPackageFixture::new();
+        fs::remove_dir_all(modified.source_root()).unwrap();
+        fs::create_dir_all(modified.source_root()).unwrap();
+        fs::copy(
+            package_root.join("Cargo.toml"),
+            modified.root.join("Cargo.toml"),
+        )
+        .unwrap();
+        let mut changed = fs::read(source_root.join("lib.rs")).unwrap();
+        changed.extend_from_slice(b"\n// semantic mutation\n");
+        fs::write(modified.definition(), changed).unwrap();
+        let changed_closure = reviewed_provider_source_closure_identity(
+            &modified.root,
+            GENERAL_GEMM_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        )
+        .unwrap();
+        let changed_definition = reviewed_provider_source_identity_from_path(
+            &modified.source_root(),
+            &modified.definition(),
+            GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        )
+        .unwrap();
+        assert!(
+            validate_reviewed_general_gemm_source_v1(changed_closure, changed_definition).is_err()
         );
     }
 
@@ -2110,6 +2386,54 @@ mod tests {
             TrustedDeviceItem::F32AccumulatorFragmentFromValues,
             TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::Typestate,
+                TrustedGeneralGemmOperationV1::Acquire,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::Typestate,
+                TrustedGeneralGemmOperationV1::Stage,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::Typestate,
+                TrustedGeneralGemmOperationV1::Publish,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::Typestate,
+                TrustedGeneralGemmOperationV1::Mfma,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::Typestate,
+                TrustedGeneralGemmOperationV1::Reuse,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::Typestate,
+                TrustedGeneralGemmOperationV1::Store,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::Acquire,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::Stage,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::Publish,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::Mfma,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::Reuse,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::Store,
+            ),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),
