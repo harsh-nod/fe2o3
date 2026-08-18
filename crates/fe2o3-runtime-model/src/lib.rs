@@ -1,0 +1,25 @@
+#![no_std]
+#![forbid(unsafe_code)]
+
+//! Pure Rust executable model for issue #137 runtime lifecycles.
+//!
+//! The model performs no I/O and grants no KFD, DRM, load, dispatch, completion,
+//! or proof authority. It is the finite state-machine carrier that future Verus
+//! specifications and syscall refinement layers can relate to concrete runtime
+//! execution.
+//!
+//! All identities, observations, and transitions are intentionally constructible
+//! by model clients. Therefore no value from this crate is runtime evidence.
+//! Production adapters must seal identity and quiescence witnesses and prove a
+//! refinement from their concrete operations before consuming modeled states.
+
+extern crate alloc;
+
+mod identity;
+mod model;
+
+pub use identity::*;
+pub use model::*;
+
+#[cfg(test)]
+mod tests;

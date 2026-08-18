@@ -16,6 +16,7 @@
         "fe2o3-host-api",
         "fe2o3-host-link-closure",
         "fe2o3-hsaco",
+        "fe2o3-kfd-uapi",
         "fe2o3-kernel-descriptor",
         "fe2o3-kernel-ir",
         "fe2o3-mir-model",
@@ -23,6 +24,7 @@
         "fe2o3-proof-contracts",
         "fe2o3-protected-publisher",
         "fe2o3-rustc-invocation",
+        "fe2o3-runtime-model",
         "fe2o3-service-model",
         "reserved-fe2o3-symbols"
       ]
@@ -77,6 +79,7 @@
         "fe2o3-hip-sys",
         "fe2o3-host",
         "fe2o3-hsa-runtime",
+        "fe2o3-kfd",
         "fe2o3-service-host",
         "fe2o3-worker-v2-bundle"
       ]
