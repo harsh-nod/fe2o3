@@ -496,12 +496,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "dialect-autotune"
+version = "0.1.0"
+dependencies = [
+ "pliron",
+]
+
+[[package]]
+name = "dialect-kernel"
+version = "0.1.0"
+dependencies = [
+ "pliron",
+]
+
+[[package]]
 name = "dialect-mir"
 version = "0.1.0"
 dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-mir-model",
  "serde_json",
+]
+
+[[package]]
+name = "dialect-schedule"
+version = "0.1.0"
+dependencies = [
+ "pliron",
+]
+
+[[package]]
+name = "dialect-tile"
+version = "0.1.0"
+dependencies = [
+ "pliron",
 ]
 
 [[package]]

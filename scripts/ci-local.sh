@@ -22,7 +22,11 @@ readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 readonly CPU_TEST_PACKAGES=(
   cargo-fe2o3
   dialect-amdgcn
+  dialect-autotune
+  dialect-kernel
   dialect-mir
+  dialect-schedule
+  dialect-tile
   fe2o3-amd-target
   fe2o3-amdgcn-model
   fe2o3-artifact-transaction

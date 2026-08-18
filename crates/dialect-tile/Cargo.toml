@@ -1,0 +1,13 @@
+[package]
+name = "dialect-tile"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Target-neutral distributed tile and layout dialect shell for fe2o3."
+readme = "README.md"
+publish = false
+
+[dependencies]
+pliron.workspace = true
