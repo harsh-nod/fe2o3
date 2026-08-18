@@ -817,6 +817,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-proof-contracts"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-protected-publisher"
 version = "0.1.0"
 dependencies = [
