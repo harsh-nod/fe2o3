@@ -25,6 +25,10 @@ The committed slice contains only:
 
 Compile-time assertions and `tests/kfd_uapi_1_18.rs` pin every struct size,
 alignment, field offset, and request number to independent golden values.
+`KFD_UAPI_SCHEMA_MANIFEST` canonically binds those ABI facts, source-header and
+package provenance, and target encoding; its SHA-256 is recomputed in tests.
+This manifest identifies reviewed userspace content. Running kernel, module,
+boot, and device identities remain separate contracted observations.
 
 ## Fail-closed boundary
 

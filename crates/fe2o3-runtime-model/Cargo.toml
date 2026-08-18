@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Pure Rust bounded transition model for the verified fe2o3 KFD runtime."
+description = "Pure Rust bounded transition model for fe2o3 KFD runtime verification."
 publish = false
 
 [lib]

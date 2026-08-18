@@ -7,6 +7,11 @@
 //! or proof authority. It is the finite state-machine carrier that future Verus
 //! specifications and syscall refinement layers can relate to concrete runtime
 //! execution.
+//!
+//! All identities, observations, and transitions are intentionally constructible
+//! by model clients. Therefore no value from this crate is runtime evidence.
+//! Production adapters must seal identity and quiescence witnesses and prove a
+//! refinement from their concrete operations before consuming modeled states.
 
 extern crate alloc;
 

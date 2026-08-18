@@ -4,9 +4,11 @@ use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_GET_VERSION, AMDKFD_IOCTL_BASE, IoctlDirection,
     KFD_IOCTL_MAJOR_VERSION, KFD_IOCTL_MAX_ADMITTED_MINOR_VERSION,
     KFD_IOCTL_MIN_ADMITTED_MINOR_VERSION, KFD_IOCTL_MINOR_VERSION, KFD_UAPI_SCHEMA_ID,
+    KFD_UAPI_SCHEMA_MANIFEST, KFD_UAPI_SCHEMA_MANIFEST_SHA256, KFD_UAPI_SOURCE_HEADER_SHA256,
     KfdIoctlAcquireVmArgs, KfdIoctlGetVersionArgs, KfdUapiVersion, KfdUapiVersionError,
     encode_ioctl, negotiate_kfd_uapi_version,
 };
+use sha2::{Digest, Sha256};
 
 #[test]
 fn schema_identity_is_linux_kfd_1_18() {
@@ -15,6 +17,23 @@ fn schema_identity_is_linux_kfd_1_18() {
     assert_eq!(KFD_IOCTL_MINOR_VERSION, 18);
     assert_eq!(KFD_IOCTL_MIN_ADMITTED_MINOR_VERSION, 18);
     assert_eq!(KFD_IOCTL_MAX_ADMITTED_MINOR_VERSION, 18);
+    assert_eq!(
+        KFD_UAPI_SOURCE_HEADER_SHA256,
+        "b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d"
+    );
+    let manifest_digest = Sha256::digest(KFD_UAPI_SCHEMA_MANIFEST);
+    assert_eq!(
+        &manifest_digest[..],
+        &[
+            0xcb, 0xa3, 0x56, 0x3b, 0x09, 0x1e, 0x97, 0x47, 0xca, 0x04, 0x52, 0xf1, 0x2d, 0xf6,
+            0xa0, 0x8c, 0xce, 0x95, 0xa4, 0xc2, 0x40, 0xb0, 0x81, 0xb2, 0x05, 0xe9, 0x9b, 0x6c,
+            0xd8, 0x17, 0x26, 0xed,
+        ]
+    );
+    assert_eq!(
+        KFD_UAPI_SCHEMA_MANIFEST_SHA256,
+        "cba3563b091e9747ca0452f12df6a08cce95a4c240b081b205e99b6cd81726ed"
+    );
 }
 
 #[test]
@@ -77,6 +96,10 @@ fn exact_reviewed_version_produces_admission_evidence() {
     let admitted = negotiate_kfd_uapi_version(KfdUapiVersion::new(1, 18)).unwrap();
     assert_eq!(admitted.reported_version(), KfdUapiVersion::new(1, 18));
     assert_eq!(admitted.schema_id(), KFD_UAPI_SCHEMA_ID);
+    assert_eq!(
+        admitted.schema_manifest_sha256(),
+        KFD_UAPI_SCHEMA_MANIFEST_SHA256
+    );
     assert_eq!(admitted.acquire_vm_request(), AMDKFD_IOC_ACQUIRE_VM);
 }
 

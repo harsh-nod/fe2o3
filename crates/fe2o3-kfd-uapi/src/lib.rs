@@ -16,6 +16,29 @@ pub const KFD_UAPI_SCHEMA_ID: &str = "linux-kfd-uapi-1.18-generic-ioc-v1";
 /// Path of the Linux UAPI header from which this schema was reviewed.
 pub const KFD_UAPI_SOURCE_HEADER: &str = "include/uapi/linux/kfd_ioctl.h";
 
+/// SHA-256 of the exact reviewed source header.
+pub const KFD_UAPI_SOURCE_HEADER_SHA256: &str =
+    "b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d";
+
+/// Canonical content manifest for the admitted schema.
+///
+/// This identifies reviewed userspace definitions. It does not authenticate a
+/// running kernel or claim that the driver implements the schema correctly.
+pub const KFD_UAPI_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-uapi-1.18-generic-ioc-v1\n",
+    "target=linux-x86_64-generic-ioc\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
+    "kfd_uapi=1.18\n",
+    "get_version=size:8,align:4,major:0,minor:4,request:80084b01\n",
+    "acquire_vm=size:8,align:4,drm_fd:0,gpu_id:4,request:40084b15\n",
+);
+
+/// SHA-256 of [`KFD_UAPI_SCHEMA_MANIFEST`].
+pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256: &str =
+    "cba3563b091e9747ca0452f12df6a08cce95a4c240b081b205e99b6cd81726ed";
+
 /// Major version declared by the reviewed AMDGPU 6.16.13 KFD UAPI header.
 pub const KFD_IOCTL_MAJOR_VERSION: u32 = 1;
 
@@ -182,6 +205,10 @@ impl AdmittedKfdUapi {
 
     pub const fn schema_id(self) -> &'static str {
         KFD_UAPI_SCHEMA_ID
+    }
+
+    pub const fn schema_manifest_sha256(self) -> &'static str {
+        KFD_UAPI_SCHEMA_MANIFEST_SHA256
     }
 
     /// Returns the admitted ACQUIRE_VM request number.

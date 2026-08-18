@@ -260,7 +260,7 @@ run_standalone_lockfiles() {
 
 run_runtime_pure_rust_policy() {
   run_step runtime-pure-rust-audit-tests \
-    python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
+    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
   run_step runtime-pure-rust-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \

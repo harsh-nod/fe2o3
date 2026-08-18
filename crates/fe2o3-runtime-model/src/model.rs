@@ -318,6 +318,8 @@ pub enum RuntimeTransitionV1 {
 ///
 /// `next` is immutable: a rejected transition cannot partially mutate the
 /// source state. All collections are capped by public, versioned bounds.
+/// Callers can construct every transition, including quiescence transitions,
+/// so neither this state nor its terminal records grant production authority.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RuntimeStateV1 {
     devices: Vec<DeviceRecordV1>,

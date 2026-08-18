@@ -9,8 +9,9 @@ proves two facts over a bounded sequence model:
    published, or ambiguous dispatch retains that mapping.
 
 The proof contains no `assume`, `admit`, `external_body`, uninterpreted
-specification, or external function specification. Run it with the repository's
-pinned Verus distribution:
+specification, or external function specification. Run it with the exact Verus
+release whose executable, complete release closure, version, proof source, and
+negative mutation are pinned under `verus/pins`:
 
 ```sh
 VERUS=/absolute/path/to/verus \
@@ -20,6 +21,10 @@ VERUS=/absolute/path/to/verus \
 The command also checks an expected-negative mutation that releases a mapping
 while a dispatch is published. The mutation must fail at the claimed
 postcondition.
+
+The launcher runs Verus with a cleared environment, bounded timeout, pinned Z3
+path, and the repository's authenticated closure checker. A matching transcript
+from a substituted executable is not accepted.
 
 This is a proof of the abstract transition relation, not a refinement proof of
 the executable Rust implementation in `src/model.rs`. Establishing that
