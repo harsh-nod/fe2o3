@@ -7,8 +7,10 @@ tails, carries its accumulator across all phases, and applies `alpha`/`beta`
 only to valid output coordinates.
 
 The kernel crate uses `#![forbid(unsafe_code)]`. Compiler-only operations are
-exposed through the sealed linear `Gfx942TiledGemmWave64V1` typestate in
-`fe2o3-device`. That capability hides wave identity, two separate XOR4 LDS
+exposed through the sealed linear `Gfx942TiledGemmWave64V1` typestate in the
+standalone `fe2o3-gemm-device-v1` companion crate. Keeping the new intrinsics
+outside `fe2o3-device` preserves the reviewed provider-tree identities used by
+existing kernels. The capability hides wave identity, two separate XOR4 LDS
 tiles, publish/reuse barriers, MFMA state, the accumulator, phase epochs, and
 disjoint output addressing. Its only phase sequence is:
 

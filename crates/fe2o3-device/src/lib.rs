@@ -23,7 +23,6 @@ pub mod collective;
 pub mod diagnostics;
 pub mod ffi;
 pub mod fp8;
-pub mod gemm;
 pub mod group;
 pub mod half;
 pub mod lds;
@@ -51,12 +50,6 @@ pub use ffi::{
     DevicePrivateConstPtr, DevicePrivateMutPtr, DeviceWorkgroupConstPtr, DeviceWorkgroupMutPtr,
 };
 pub use fp8::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4};
-pub use gemm::{
-    GENERAL_TILED_GEMM_DEVICE_CONTRACT_VERSION_V1, GENERAL_TILED_GEMM_LDS_BYTES_V1,
-    GENERAL_TILED_GEMM_TILE_K_V1, GENERAL_TILED_GEMM_TILE_M_V1, GENERAL_TILED_GEMM_TILE_N_V1,
-    GENERAL_TILED_GEMM_WAVE_LANES_V1, GemmConsumed, GemmPhaseState, GemmPublished, GemmReady,
-    GemmStaged, Gfx942TiledGemmWave64V1,
-};
 pub use group::{
     ActiveLaneGroup, Grid, Group, GroupMemoryOrdering, GroupMemorySpace, GroupScope, SubgroupTile,
     SynchronizationContract, TYPED_GROUP_CONTRACT_VERSION_V1, UnsupportedSynchronization,

@@ -1,4 +1,4 @@
-use fe2o3_device::{GemmReady, Gfx942TiledGemmWave64V1};
+use fe2o3_gemm_device_v1::{GemmReady, Gfx942TiledGemmWave64V1};
 
 fn require_clone<T: Clone>() {}
 

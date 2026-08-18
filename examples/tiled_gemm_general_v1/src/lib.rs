@@ -4,8 +4,8 @@
 //!
 //! The attributed kernel is a positive source fixture. It is not currently a
 //! source-lowered or executable GPU kernel. Unsupported and host paths fail
-//! closed at the compiler-issued [`fe2o3_device::Gfx942TiledGemmWave64V1`]
-//! capability boundary.
+//! closed at the compiler-issued
+//! [`fe2o3_gemm_device_v1::Gfx942TiledGemmWave64V1`] capability boundary.
 
 pub mod kernel;
 

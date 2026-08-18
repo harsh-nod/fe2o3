@@ -1,4 +1,4 @@
-use fe2o3_device::Gfx942TiledGemmWave64V1;
+use fe2o3_gemm_device_v1::Gfx942TiledGemmWave64V1;
 
 fn main() {
     let wave = Gfx942TiledGemmWave64V1::from_compiler(16);

@@ -10,13 +10,17 @@ publish = false
 # This source contract remains standalone until general MIR import, proof
 # discharge, lowering, and protected execution are joined end to end.
 [workspace]
+members = ["device-api"]
+resolver = "3"
 
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
+fe2o3-gemm-device-v1 = { path = "device-api" }
 fe2o3-host = { path = "../../crates/fe2o3-host" }
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit"] }
+trybuild = "1"
 
 [lib]
 name = "fe2o3_tiled_gemm_general_v1"

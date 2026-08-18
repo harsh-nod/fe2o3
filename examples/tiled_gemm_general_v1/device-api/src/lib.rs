@@ -1,3 +1,7 @@
+#![no_std]
+#![feature(rustc_attrs)]
+#![allow(internal_features)]
+
 //! Safe, compiler-issued capabilities for a conservative tiled GEMM.
 //!
 //! This module is the safe Rust source boundary for the general wave64 GEMM
@@ -22,7 +26,10 @@
 
 use core::marker::PhantomData;
 
-use crate::DisjointSlice;
+pub use fe2o3_device::DisjointSlice;
+
+#[cfg(test)]
+extern crate std;
 
 /// Version of the safe general tiled-GEMM device contract.
 pub const GENERAL_TILED_GEMM_DEVICE_CONTRACT_VERSION_V1: u16 = 1;

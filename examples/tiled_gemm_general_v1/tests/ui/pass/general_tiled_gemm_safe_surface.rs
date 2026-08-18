@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use fe2o3_device::{DisjointSlice, Gfx942TiledGemmWave64V1};
+use fe2o3_gemm_device_v1::{DisjointSlice, Gfx942TiledGemmWave64V1};
 
 fn checked_safe_sequence(mut c: DisjointSlice<f32>, k: u32) {
     let mut wave = Gfx942TiledGemmWave64V1::from_compiler(k);
