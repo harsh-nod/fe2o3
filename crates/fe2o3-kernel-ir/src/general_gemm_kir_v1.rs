@@ -1508,8 +1508,15 @@ fn verify_phase_state(kir: &GeneralGemmKirV1) -> Result<(), GeneralGemmKirDiagno
     let mut publish_seen = false;
     let mut reuse_seen = false;
     let mut accumulate_seen = false;
+    let mut epoch_closed = false;
 
     for (index, event) in kir.phase_events.iter().enumerate() {
+        if epoch_closed {
+            return Err(diagnostic(
+                GeneralGemmPropertyV1::LdsEpochCorrect,
+                Some(index),
+            ));
+        }
         match *event {
             GeneralGemmPhaseEventV1::Stage(stage) => {
                 let state = operand_state_mut(stage.operand, &mut a, &mut b)
@@ -1524,13 +1531,19 @@ fn verify_phase_state(kir: &GeneralGemmKirV1) -> Result<(), GeneralGemmKirDiagno
             GeneralGemmPhaseEventV1::AsyncWait(wait) => {
                 let state = operand_state_mut(wait.operand, &mut a, &mut b)
                     .ok_or_else(|| diagnostic(GeneralGemmPropertyV1::MemorySafe, Some(index)))?;
-                if !state.present {
+                if !state.present || state.ready {
                     return Err(diagnostic(GeneralGemmPropertyV1::Initialized, Some(index)));
                 }
                 state.ready = true;
             }
             GeneralGemmPhaseEventV1::Barrier(barrier) => match barrier.role {
                 GeneralGemmBarrierRoleV1::Publish => {
+                    if publish_seen {
+                        return Err(diagnostic(
+                            GeneralGemmPropertyV1::LdsEpochCorrect,
+                            Some(index),
+                        ));
+                    }
                     if !a.present
                         || !b.present
                         || !a.complete
@@ -1552,6 +1565,7 @@ fn verify_phase_state(kir: &GeneralGemmKirV1) -> Result<(), GeneralGemmKirDiagno
                         ));
                     }
                     reuse_seen = true;
+                    epoch_closed = true;
                 }
             },
             GeneralGemmPhaseEventV1::LdsRead(read) => {
@@ -1573,12 +1587,24 @@ fn verify_phase_state(kir: &GeneralGemmKirV1) -> Result<(), GeneralGemmKirDiagno
                 }
                 let state = operand_state_mut(read.operand, &mut a, &mut b)
                     .expect("A and B were matched above");
+                if state.read {
+                    return Err(diagnostic(
+                        GeneralGemmPropertyV1::LdsEpochCorrect,
+                        Some(index),
+                    ));
+                }
                 if !state.present || !state.complete || !state.ready || !state.published {
                     return Err(diagnostic(GeneralGemmPropertyV1::Initialized, Some(index)));
                 }
                 state.read = true;
             }
             GeneralGemmPhaseEventV1::Accumulate(_) => {
+                if accumulate_seen {
+                    return Err(diagnostic(
+                        GeneralGemmPropertyV1::AccumulatorPhaseRefinement,
+                        Some(index),
+                    ));
+                }
                 if !a.read || !b.read {
                     return Err(diagnostic(GeneralGemmPropertyV1::Initialized, Some(index)));
                 }
