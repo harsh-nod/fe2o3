@@ -140,7 +140,7 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
         ) && impostor_stderr.contains(
             "not bound to the reviewed `fe2o3_gemm_device_v1` compilation unit"
         ) && impostor_stderr
-            .contains("compiled general-GEMM provider does not match a reviewed V1 rustc observation"),
+            .contains("outside the reviewed fe2o3-device source root"),
         "same-name external general GEMM provider crossed the reviewed source boundary:\n{impostor_stderr}"
     );
 
