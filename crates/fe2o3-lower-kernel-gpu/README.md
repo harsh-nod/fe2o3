@@ -13,4 +13,9 @@ lowering.
 
 This crate cannot lower to AMDGCN, compile, link, publish, load, launch, tune,
 or grant proof or runtime authority. It has no target, runtime, filesystem,
-process, COMGR, `pliron-llvm`, or unsafe-code dependency.
+process, COMGR, or `pliron-llvm` dependency. Its own source forbids unsafe
+code; pinned Pliron remains part of the memory-safety trusted computing base.
+
+The Pliron `Pass` adapter reports the source IR as unchanged because this
+shell materializes detached operations. Callers retrieve that explicit bundle
+from the pass result instead of treating it as an in-place rewrite.

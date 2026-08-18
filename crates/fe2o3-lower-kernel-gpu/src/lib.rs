@@ -2,7 +2,12 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use dialect_gpu::{
     AddressSpaceAttr, BarrierOp, HierarchyAttr, HierarchyIdOp, MemoryOrderAttr, MemoryScopeAttr,
@@ -43,8 +48,12 @@ pub const MAX_MEMORY_SPACES: usize = 4;
 /// Hard bound on GPU operations emitted by one lowering request.
 pub const MAX_REWRITES: u16 = 64;
 
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Debug)]
-struct PassRegistrationMarker;
+struct PassRegistrationMarker {
+    context_id: NonZeroU64,
+}
 
 /// Result of explicitly registering the pass and its source/target dialects.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +71,8 @@ pub enum PassRegistrationError {
     MarkerCollision,
     /// The marker map points at absent auxiliary data.
     CorruptMarker,
+    /// The process exhausted the private context-identity space.
+    ContextIdentityExhausted,
     /// The kernel dialect rejected its explicit registration.
     KernelDialect(dialect_kernel::RegistrationError),
 }
@@ -74,6 +85,9 @@ impl fmt::Display for PassRegistrationError {
             }
             Self::CorruptMarker => {
                 formatter.write_str("kernel-to-GPU pass registration marker is corrupt")
+            }
+            Self::ContextIdentityExhausted => {
+                formatter.write_str("kernel-to-GPU context identity space is exhausted")
             }
             Self::KernelDialect(error) => write!(formatter, "kernel dialect registration: {error}"),
         }
@@ -90,7 +104,9 @@ pub fn register_pass(
     context: &mut Context,
 ) -> Result<PassRegistrationOutcome, PassRegistrationError> {
     match registration_state(context)? {
-        RegistrationState::Registered => return Ok(PassRegistrationOutcome::AlreadyRegistered),
+        RegistrationState::Registered(_) => {
+            return Ok(PassRegistrationOutcome::AlreadyRegistered);
+        }
         RegistrationState::Absent => {}
     }
 
@@ -100,7 +116,9 @@ pub fn register_pass(
         .map_err(PassRegistrationError::KernelDialect)?;
     dialect_gpu::register_dialect(context);
 
-    let marker = context.aux_data.insert(Box::new(PassRegistrationMarker));
+    let marker = context.aux_data.insert(Box::new(PassRegistrationMarker {
+        context_id: next_context_id()?,
+    }));
     context
         .aux_data_map
         .insert(registration_marker_key(), marker);
@@ -110,7 +128,7 @@ pub fn register_pass(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RegistrationState {
     Absent,
-    Registered,
+    Registered(NonZeroU64),
 }
 
 fn registration_state(context: &Context) -> Result<RegistrationState, PassRegistrationError> {
@@ -119,10 +137,21 @@ fn registration_state(context: &Context) -> Result<RegistrationState, PassRegist
         return Ok(RegistrationState::Absent);
     };
     match context.aux_data.get(index) {
-        Some(marker) if marker.is::<PassRegistrationMarker>() => Ok(RegistrationState::Registered),
-        Some(_) => Err(PassRegistrationError::MarkerCollision),
+        Some(marker) => marker
+            .downcast_ref::<PassRegistrationMarker>()
+            .map(|marker| RegistrationState::Registered(marker.context_id))
+            .ok_or(PassRegistrationError::MarkerCollision),
         None => Err(PassRegistrationError::CorruptMarker),
     }
+}
+
+fn next_context_id() -> Result<NonZeroU64, PassRegistrationError> {
+    let value = NEXT_CONTEXT_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| PassRegistrationError::ContextIdentityExhausted)?;
+    NonZeroU64::new(value).ok_or(PassRegistrationError::ContextIdentityExhausted)
 }
 
 fn registration_marker_key() -> pliron::identifier::Identifier {
@@ -412,6 +441,7 @@ impl LoweringRecord {
 pub struct LoweringResult {
     record: LoweringRecord,
     operations: Vec<Ptr<Operation>>,
+    context_id: NonZeroU64,
 }
 
 impl LoweringResult {
@@ -439,6 +469,8 @@ impl LoweringResult {
 /// A failed output invariant, indicating malformed or externally mutated IR.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PostconditionError {
+    /// The supplied context does not own this result's arena pointers.
+    ContextMismatch,
     /// Semantic-step and operation counts differ.
     OperationCountMismatch,
     /// The result escaped the hard rewrite bound.
@@ -458,6 +490,9 @@ pub enum PostconditionError {
 impl fmt::Display for PostconditionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ContextMismatch => {
+                formatter.write_str("lowering result belongs to a different Pliron context")
+            }
             Self::OperationCountMismatch => {
                 formatter.write_str("lowering step and GPU operation counts differ")
             }
@@ -592,7 +627,7 @@ impl KernelGpuLoweringPass {
         context: &mut Context,
     ) -> Result<&LoweringResult, LoweringError> {
         self.last_result = None;
-        let source_rank = validate_preconditions(context, source, &self.config)?;
+        let (source_rank, context_id) = validate_preconditions(context, source, &self.config)?;
         let steps = build_steps(&self.config)?;
         let operations = materialize_steps(context, &steps);
         let result = LoweringResult {
@@ -604,6 +639,7 @@ impl KernelGpuLoweringPass {
                 steps,
             },
             operations,
+            context_id,
         };
         result
             .validate(context)
@@ -631,7 +667,7 @@ impl Pass for KernelGpuLoweringPass {
         self.run_checked(source, context)
             .map_err(|error| pliron::verify_error!(location.clone(), "{error}"))?;
         let mut result = PassResult::default();
-        result.ir_changed = IRStatus::Changed;
+        result.ir_changed = IRStatus::Unchanged;
         Ok(result)
     }
 }
@@ -640,12 +676,12 @@ fn validate_preconditions(
     context: &Context,
     source: Ptr<Operation>,
     config: &LoweringConfig,
-) -> Result<u32, LoweringError> {
-    match registration_state(context) {
-        Ok(RegistrationState::Registered) => {}
+) -> Result<(u32, NonZeroU64), LoweringError> {
+    let context_id = match registration_state(context) {
+        Ok(RegistrationState::Registered(context_id)) => context_id,
         Ok(RegistrationState::Absent) => return Err(LoweringError::PassNotRegistered),
         Err(_) => return Err(LoweringError::RegistrationCorrupt),
-    }
+    };
     if !Operation::is_op::<AlgorithmOp>(source, context) {
         return Err(LoweringError::UnsupportedSourceOperation);
     }
@@ -670,7 +706,7 @@ fn validate_preconditions(
             config.logical_regions,
         ));
     }
-    Ok(source_rank)
+    Ok((source_rank, context_id))
 }
 
 fn build_steps(config: &LoweringConfig) -> Result<Vec<LoweringStep>, LoweringError> {
@@ -733,6 +769,10 @@ fn validate_postconditions(
     context: &Context,
     result: &LoweringResult,
 ) -> Result<(), PostconditionError> {
+    match registration_state(context) {
+        Ok(RegistrationState::Registered(context_id)) if context_id == result.context_id => {}
+        _ => return Err(PostconditionError::ContextMismatch),
+    }
     if result.record.steps.len() != result.operations.len() {
         return Err(PostconditionError::OperationCountMismatch);
     }
@@ -855,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn pliron_pass_adapter_reports_a_real_change_and_retains_result() {
+    fn pliron_pass_adapter_reports_detached_output_without_ir_change() {
         let mut context = Context::new();
         register_pass(&mut context).expect("registration succeeds");
         let source = AlgorithmOp::new(&mut context, 2).expect("valid source");
@@ -870,7 +910,7 @@ mod tests {
         )
         .expect("pass succeeds");
 
-        assert_eq!(pass_result.ir_changed, IRStatus::Changed);
+        assert_eq!(pass_result.ir_changed, IRStatus::Unchanged);
         assert!(pass.last_result().is_some());
     }
 }

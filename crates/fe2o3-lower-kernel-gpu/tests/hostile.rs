@@ -267,3 +267,34 @@ fn postcondition_validator_detects_mutated_gpu_ir() {
         Err(PostconditionError::InvalidGpuOperation { index: 0 })
     );
 }
+
+#[test]
+fn postcondition_validator_rejects_a_foreign_context_before_dereferencing() {
+    let mut owner = Context::new();
+    register_pass(&mut owner).expect("owner registration succeeds");
+    let source = AlgorithmOp::new(&mut owner, 1).expect("valid source");
+    let bounded = config(
+        &[64],
+        1,
+        &[AddressSpaceAttr::Global],
+        SynchronizationMode::None,
+        8,
+    )
+    .expect("valid config");
+    let mut pass = KernelGpuLoweringPass::new(bounded.clone());
+    pass.run_checked(source.get_operation(), &mut owner)
+        .expect("lowering succeeds");
+    let result = pass.take_result().expect("result exists");
+
+    let mut foreign = Context::new();
+    register_pass(&mut foreign).expect("foreign registration succeeds");
+    let foreign_source = AlgorithmOp::new(&mut foreign, 1).expect("valid foreign source");
+    KernelGpuLoweringPass::new(bounded)
+        .run_checked(foreign_source.get_operation(), &mut foreign)
+        .expect("foreign lowering populates comparable arena slots");
+
+    assert_eq!(
+        result.validate(&foreign),
+        Err(PostconditionError::ContextMismatch)
+    );
+}
