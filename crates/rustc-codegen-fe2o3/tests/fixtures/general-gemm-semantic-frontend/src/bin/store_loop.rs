@@ -13,7 +13,7 @@ pub fn store_loop(mut c: DisjointSlice<f32>, k: u32) {
     context.publish();
     context.multiply_accumulate();
     context.reuse();
-    let mut remaining = k;
+    let mut remaining = k / 16;
     while remaining != 0 {
         context.store_c_fragment(&mut c, 16, 16, 16, 1.0, 0.0);
         remaining -= 1;

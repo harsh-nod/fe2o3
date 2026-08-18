@@ -9,7 +9,7 @@ use fe2o3_gemm_device_v1::ProofSensitiveGeneralGemmWave64V1;
 )]
 pub fn reversed_cycle(mut c: DisjointSlice<f32>, k: u32) {
     let mut context = ProofSensitiveGeneralGemmWave64V1::from_compiler(k);
-    let mut remaining = k;
+    let mut remaining = k / 16;
     while remaining != 0 {
         context.multiply_accumulate();
         context.reuse();
