@@ -456,6 +456,14 @@ The oracle may not supply kernel descriptors, proof records, expected digests,
 or runtime state to the path under test. CPU specifications remain the primary
 functional oracle where feasible.
 
+The R1 identity comparison is implemented by the isolated, bounded lane in
+`docs/runtime-identity-oracle-v1.md`. It executes the pure-Rust evidence producer
+before starting `rocminfo`, re-audits the production closure and ELF, compares
+exactly eight sorted MI300X identities, and emits only `Measured`,
+non-authoritative evidence. That observation satisfies the R1 differential-test
+deliverable; it does not discharge the generation proof or any external
+contract.
+
 ## Staged Adoption and Exit Criteria
 
 ### R0: boundary, model, and audit

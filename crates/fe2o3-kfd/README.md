@@ -44,3 +44,11 @@ truth, cross-file snapshot semantics, KFD/DRM ioctl behavior, firmware meaning,
 and absence of an ABA reset remain named external contracts. Successful kernel
 responses and node metadata are checked or contracted observations, not proof
 of the kernel or hardware implementation.
+
+The separate `scripts/runtime-identity-oracle.sh` hardware lane compares the
+`kfd-device-identity --all` evidence with bounded output from an isolated
+`/opt/rocm/bin/rocminfo` subprocess. A match is recorded only as `Measured` with
+`authority=none`; oracle output is never passed to this crate and cannot create
+device, VM, memory, queue, dispatch, or proof authority. The exact comparison,
+evidence schema, CI separation, and limitations are documented in
+`docs/runtime-identity-oracle-v1.md`.

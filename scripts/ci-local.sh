@@ -19,6 +19,8 @@ readonly STANDALONE_LOCKFILE_CHECKER="${REPO_ROOT}/scripts/check-standalone-lock
 readonly RUNTIME_PURE_RUST_AUDITOR="${REPO_ROOT}/scripts/runtime_pure_rust_audit.py"
 readonly RUNTIME_PURE_RUST_POLICY="${REPO_ROOT}/scripts/runtime-pure-rust-policy.json"
 readonly RUNTIME_PURE_RUST_AUDIT_TESTS="${REPO_ROOT}/scripts/tests/runtime_pure_rust_audit.py"
+readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_identity_oracle.py"
+readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.sh"
 readonly RUNTIME_PURE_RUST_TARGET_DIR="${REPO_ROOT}/target/runtime-pure-rust-policy"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
@@ -83,6 +85,7 @@ Commands:
   workspace-policy  Validate workspace ownership and dependency directions
   standalone-locks  Validate every tracked standalone Cargo lockfile
   runtime-policy  Validate the pure-Rust runtime dependency and ELF auditor
+  runtime-identity-oracle  Measure MI300X identity against isolated rocminfo; explicit opt-in
   shard-policy    Validate the codegen integration shard assignment
   rustc-codegen-shard <id>  Run one codegen integration shard
   format          Check Rust formatting
@@ -262,6 +265,8 @@ run_standalone_lockfiles() {
 run_runtime_pure_rust_policy() {
   run_step runtime-pure-rust-audit-tests \
     env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
+  run_step runtime-identity-oracle-parser-tests \
+    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_IDENTITY_ORACLE_TESTS}"
   run_step runtime-pure-rust-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \
@@ -287,6 +292,10 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-device-identity"
+}
+
+run_runtime_identity_oracle() {
+  run_step runtime-identity-oracle bash "${RUNTIME_IDENTITY_ORACLE}"
 }
 
 load_rustc_codegen_shards() {
@@ -621,6 +630,7 @@ main() {
     workspace-policy) run_workspace_dependency_policy ;;
     standalone-locks) run_standalone_lockfiles ;;
     runtime-policy) run_runtime_pure_rust_policy ;;
+    runtime-identity-oracle) run_runtime_identity_oracle ;;
     shard-policy) run_shard_policy ;;
     rustc-codegen-shard)
       if (($# != 2)); then
