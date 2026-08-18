@@ -461,7 +461,7 @@ impl GemmProofDiagnosticV1 {
         self as u32
     }
 
-    const fn for_property(property: GemmSafetyPropertyV1) -> Self {
+    pub(crate) const fn for_property(property: GemmSafetyPropertyV1) -> Self {
         match property {
             GemmSafetyPropertyV1::MemorySafe => Self::MemorySafe,
             GemmSafetyPropertyV1::BoundsSafe => Self::BoundsSafe,
@@ -1043,4 +1043,38 @@ fn rejected_output(request: &CompileRequestV1, rejection: GemmProofRejectionV1) 
         None,
     )
     .expect("a checked request always admits one bounded GEMM rejection diagnostic")
+}
+
+pub(crate) fn semantic_counterexample_output(
+    request: &CompileRequestV1,
+    property: GemmSafetyPropertyV1,
+    subject: Option<DiagnosticSubjectIdentityV1>,
+) -> CompileOutputV1 {
+    rejected_output(
+        request,
+        GemmProofRejectionV1::new(
+            GemmProofRejectionKindV1::RequiredPropertyNotDischarged {
+                property,
+                outcome: GemmObligationOutcomeV1::Counterexample,
+            },
+            subject,
+        ),
+    )
+}
+
+pub(crate) fn semantic_binding_mismatch_output(request: &CompileRequestV1) -> CompileOutputV1 {
+    rejected_output(
+        request,
+        GemmProofRejectionV1::new(GemmProofRejectionKindV1::RequirementsRequestMismatch, None),
+    )
+}
+
+pub(crate) fn semantic_malformed_output(request: &CompileRequestV1) -> CompileOutputV1 {
+    rejected_output(
+        request,
+        GemmProofRejectionV1::new(
+            GemmProofRejectionKindV1::EvaluationFailed(GemmProofEvaluationFailureV1::InvalidResult),
+            None,
+        ),
+    )
 }
