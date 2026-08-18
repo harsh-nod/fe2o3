@@ -981,6 +981,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-lower-mir-kernel"
+version = "0.1.0"
+dependencies = [
+ "dialect-kernel",
+ "dialect-mir",
+ "pliron",
+]
+
+[[package]]
 name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
