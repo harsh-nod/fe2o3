@@ -8,8 +8,7 @@
 use core::fmt;
 
 use fe2o3_compiler_api::{
-    CompileOutputV1, CompileRequestV1, CompilerStageV1, ObligationSetIdentityV1, RequestIdentityV1,
-    SnapshotIdentityV1,
+    CompileOutputV1, CompileRequestV1, CompilerStageV1, ObligationSetIdentityV1, SnapshotIdentityV1,
 };
 use fe2o3_kernel_ir::{
     GeneralGemmKirDiagnosticV1, GeneralGemmKirV1, GeneralGemmPropertyV1,
@@ -21,12 +20,27 @@ use crate::gemm_proof_required::{
     semantic_binding_mismatch_output, semantic_counterexample_output, semantic_malformed_output,
 };
 use crate::{
-    CompilerBackendFailureV1, GEMM_REQUIRED_SAFETY_PROPERTIES_V1, GemmProofDiagnosticV1,
-    GemmSafetyPropertyV1, TransactionalCompilerBackendV1,
+    AdmittedGemmCompilerBackendV1, CompilerBackendFailureV1, GEMM_REQUIRED_SAFETY_PROPERTIES_V1,
+    GemmProofDiagnosticV1, GemmProofReportProviderV1, GemmSafetyPropertyV1,
+    ProofRequiredGemmBackendV1, TransactionalCompilerBackendV1,
 };
 
 const GENERAL_GEMM_SEMANTIC_OBLIGATION_SET_DOMAIN_V1: &[u8] =
     b"fe2o3.compiler-driver.general-gemm.semantic-obligation-set.v1";
+const GENERAL_GEMM_KIR_PROPERTIES_V1: [GeneralGemmPropertyV1; 12] = [
+    GeneralGemmPropertyV1::MemorySafe,
+    GeneralGemmPropertyV1::BoundsSafe,
+    GeneralGemmPropertyV1::Initialized,
+    GeneralGemmPropertyV1::RaceFree,
+    GeneralGemmPropertyV1::BarrierConvergent,
+    GeneralGemmPropertyV1::OutputRegionInjective,
+    GeneralGemmPropertyV1::LdsEpochCorrect,
+    GeneralGemmPropertyV1::AccumulatorPhaseRefinement,
+    GeneralGemmPropertyV1::TailRefinement,
+    GeneralGemmPropertyV1::EpilogueRefinement,
+    GeneralGemmPropertyV1::NumericalContract,
+    GeneralGemmPropertyV1::MachineRefinementBoundary,
+];
 
 #[derive(Clone, Copy)]
 struct GemmSemanticPropertySchemaEntryV1 {
@@ -34,6 +48,14 @@ struct GemmSemanticPropertySchemaEntryV1 {
     spelling: &'static str,
     code: u32,
     stage: CompilerStageV1,
+}
+
+#[derive(Clone, Copy)]
+struct GemmKirPropertySchemaEntryV1 {
+    property: GeneralGemmPropertyV1,
+    spelling: &'static str,
+    code: u32,
+    stage: GeneralGemmVerificationStageV1,
 }
 
 fn semantic_property_schema_v1()
@@ -44,6 +66,34 @@ fn semantic_property_schema_v1()
         code: GemmProofDiagnosticV1::for_property(property).code(),
         stage: property.verification_stage(),
     })
+}
+
+fn kir_property_schema_v1()
+-> [GemmKirPropertySchemaEntryV1; GEMM_REQUIRED_SAFETY_PROPERTIES_V1.len()] {
+    GENERAL_GEMM_KIR_PROPERTIES_V1.map(|property| GemmKirPropertySchemaEntryV1 {
+        property,
+        spelling: property.as_str(),
+        code: property.diagnostic_code(),
+        stage: property.verification_stage(),
+    })
+}
+
+fn validate_kir_property_schema_v1(
+    schema: &[GemmKirPropertySchemaEntryV1],
+) -> Result<(), GemmSemanticAnalysisErrorV1> {
+    if schema.len() != GEMM_REQUIRED_SAFETY_PROPERTIES_V1.len() {
+        return Err(GemmSemanticAnalysisErrorV1::SchemaMismatch);
+    }
+    for (entry, expected) in schema.iter().zip(GEMM_REQUIRED_SAFETY_PROPERTIES_V1) {
+        if compiler_property(entry.property) != expected
+            || entry.spelling != expected.as_str()
+            || entry.code != GemmProofDiagnosticV1::for_property(expected).code()
+            || compiler_stage(entry.stage) != expected.verification_stage()
+        {
+            return Err(GemmSemanticAnalysisErrorV1::SchemaMismatch);
+        }
+    }
+    Ok(())
 }
 
 fn semantic_obligation_set_identity_from_schema_v1(
@@ -139,9 +189,7 @@ impl std::error::Error for GemmSemanticProgramBindingErrorV1 {}
 /// record. This record grants no proof or artifact authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GemmSemanticProgramV1 {
-    request_identity: RequestIdentityV1,
-    input_snapshot_identity: SnapshotIdentityV1,
-    obligation_set_identity: ObligationSetIdentityV1,
+    request: CompileRequestV1,
     kir: GeneralGemmKirV1,
 }
 
@@ -157,9 +205,7 @@ impl GemmSemanticProgramV1 {
             return Err(GemmSemanticProgramBindingErrorV1::ObligationSetMismatch);
         }
         Ok(Self {
-            request_identity: request.identity(),
-            input_snapshot_identity: request.input().identity(),
-            obligation_set_identity: request.input_obligations_identity(),
+            request: request.clone(),
             kir,
         })
     }
@@ -170,9 +216,7 @@ impl GemmSemanticProgramV1 {
     }
 
     fn is_bound_to(&self, request: &CompileRequestV1) -> bool {
-        self.request_identity == request.identity()
-            && self.input_snapshot_identity == request.input().identity()
-            && self.obligation_set_identity == request.input_obligations_identity()
+        self.request == *request
     }
 }
 
@@ -184,7 +228,15 @@ impl GemmSemanticProgramV1 {
 pub fn analyze_gemm_semantics_v1(
     program: &GemmSemanticProgramV1,
 ) -> Result<(), GemmSemanticAnalysisErrorV1> {
-    let diagnostic = match verify_general_gemm_kir_v1(&program.kir) {
+    analyze_gemm_kir_semantics_with_schema_v1(&program.kir, &kir_property_schema_v1())
+}
+
+fn analyze_gemm_kir_semantics_with_schema_v1(
+    kir: &GeneralGemmKirV1,
+    schema: &[GemmKirPropertySchemaEntryV1],
+) -> Result<(), GemmSemanticAnalysisErrorV1> {
+    validate_kir_property_schema_v1(schema)?;
+    let diagnostic = match verify_general_gemm_kir_v1(kir) {
         Ok(_) => return Ok(()),
         Err(diagnostic) => diagnostic,
     };
@@ -196,7 +248,10 @@ fn translate_diagnostic(
     diagnostic: GeneralGemmKirDiagnosticV1,
 ) -> Result<GemmSemanticCounterexampleV1, GemmSemanticAnalysisErrorV1> {
     let property = compiler_property(diagnostic.property);
-    if diagnostic.code != GemmProofDiagnosticV1::for_property(property).code()
+    if diagnostic.property.as_str() != property.as_str()
+        || diagnostic.code != diagnostic.property.diagnostic_code()
+        || diagnostic.stage != diagnostic.property.verification_stage()
+        || diagnostic.code != GemmProofDiagnosticV1::for_property(property).code()
         || compiler_stage(diagnostic.stage) != property.verification_stage()
     {
         return Err(GemmSemanticAnalysisErrorV1::SchemaMismatch);
@@ -237,8 +292,8 @@ const fn compiler_stage(stage: GeneralGemmVerificationStageV1) -> CompilerStageV
     }
 }
 
-/// Pre-proof backend that rejects KIR counterexamples before invoking any
-/// downstream compiler or artifact path.
+/// Pre-proof backend that rejects KIR counterexamples before invoking the
+/// proof-required GEMM gate.
 #[derive(Clone, Debug)]
 pub struct GemmSemanticCheckingBackendV1<Backend> {
     program: GemmSemanticProgramV1,
@@ -246,11 +301,6 @@ pub struct GemmSemanticCheckingBackendV1<Backend> {
 }
 
 impl<Backend> GemmSemanticCheckingBackendV1<Backend> {
-    /// Wraps request-bound KIR and a downstream backend.
-    pub const fn new(program: GemmSemanticProgramV1, backend: Backend) -> Self {
-        Self { program, backend }
-    }
-
     /// Returns shared access to the semantic program and downstream backend.
     pub const fn parts(&self) -> (&GemmSemanticProgramV1, &Backend) {
         (&self.program, &self.backend)
@@ -262,9 +312,23 @@ impl<Backend> GemmSemanticCheckingBackendV1<Backend> {
     }
 }
 
-impl<Backend> TransactionalCompilerBackendV1 for GemmSemanticCheckingBackendV1<Backend>
+impl<Provider, Candidate>
+    GemmSemanticCheckingBackendV1<ProofRequiredGemmBackendV1<Provider, Candidate>>
+{
+    /// Wraps request-bound KIR and the mandatory proof-required GEMM gate.
+    pub const fn new(
+        program: GemmSemanticProgramV1,
+        backend: ProofRequiredGemmBackendV1<Provider, Candidate>,
+    ) -> Self {
+        Self { program, backend }
+    }
+}
+
+impl<Provider, Candidate> TransactionalCompilerBackendV1
+    for GemmSemanticCheckingBackendV1<ProofRequiredGemmBackendV1<Provider, Candidate>>
 where
-    Backend: TransactionalCompilerBackendV1,
+    Provider: GemmProofReportProviderV1,
+    Candidate: AdmittedGemmCompilerBackendV1,
 {
     fn compile_transaction(
         &mut self,
@@ -287,24 +351,29 @@ where
 
 #[cfg(test)]
 mod tests {
-    use fe2o3_kernel_ir::{GeneralGemmPlanFieldsV1, GeneralGemmPlanSnapshotV1};
+    use fe2o3_kernel_ir::{
+        GENERAL_GEMM_MUTATION_EXPECTATIONS_V1, GeneralGemmPlanFieldsV1, GeneralGemmPlanSnapshotV1,
+        general_gemm_semantic_mutation_kir_v1,
+    };
 
     use super::*;
 
+    fn plan() -> GeneralGemmPlanFieldsV1 {
+        GeneralGemmPlanFieldsV1::checked(GeneralGemmPlanSnapshotV1 {
+            dimensions: [17, 19, 18],
+            strides: [23, 29, 31],
+            storage_elements: [386, 512, 515],
+            block_counts: [2, 2, 1],
+            aql_grid_work_items: [128, 2, 1],
+            reduction_phases: 2,
+            alpha_bits: 2.0_f32.to_bits(),
+            beta_bits: (-1.0_f32).to_bits(),
+        })
+        .unwrap()
+    }
+
     fn kir() -> GeneralGemmKirV1 {
-        GeneralGemmKirV1::canonical(
-            GeneralGemmPlanFieldsV1::checked(GeneralGemmPlanSnapshotV1 {
-                dimensions: [17, 19, 18],
-                strides: [23, 29, 31],
-                storage_elements: [386, 512, 515],
-                block_counts: [2, 2, 1],
-                aql_grid_work_items: [128, 2, 1],
-                reduction_phases: 2,
-                alpha_bits: 2.0_f32.to_bits(),
-                beta_bits: (-1.0_f32).to_bits(),
-            })
-            .unwrap(),
-        )
+        GeneralGemmKirV1::canonical(plan())
     }
 
     fn memory_diagnostic() -> GeneralGemmKirDiagnosticV1 {
@@ -329,6 +398,67 @@ mod tests {
         stage_drift.stage = GeneralGemmVerificationStageV1::Kernel;
         assert_eq!(
             translate_diagnostic(stage_drift),
+            Err(GemmSemanticAnalysisErrorV1::SchemaMismatch)
+        );
+    }
+
+    #[test]
+    fn every_kir_property_spelling_code_and_stage_must_match_driver_schema() {
+        let schema = kir_property_schema_v1();
+        assert_eq!(schema.len(), 12);
+        assert_eq!(validate_kir_property_schema_v1(&schema), Ok(()));
+
+        for index in 0..schema.len() {
+            let mut spelling_drift = schema;
+            spelling_drift[index].spelling = "schema_drift";
+            assert_eq!(
+                validate_kir_property_schema_v1(&spelling_drift),
+                Err(GemmSemanticAnalysisErrorV1::SchemaMismatch),
+                "property {index} accepted spelling drift"
+            );
+
+            let mut code_drift = schema;
+            code_drift[index].code ^= 1;
+            assert_eq!(
+                validate_kir_property_schema_v1(&code_drift),
+                Err(GemmSemanticAnalysisErrorV1::SchemaMismatch),
+                "property {index} accepted code drift"
+            );
+
+            let mut stage_drift = schema;
+            stage_drift[index].stage = match stage_drift[index].stage {
+                GeneralGemmVerificationStageV1::Kernel => GeneralGemmVerificationStageV1::Tile,
+                _ => GeneralGemmVerificationStageV1::Kernel,
+            };
+            assert_eq!(
+                validate_kir_property_schema_v1(&stage_drift),
+                Err(GemmSemanticAnalysisErrorV1::SchemaMismatch),
+                "property {index} accepted stage drift"
+            );
+        }
+
+        assert_eq!(
+            validate_kir_property_schema_v1(&schema[..schema.len() - 1]),
+            Err(GemmSemanticAnalysisErrorV1::SchemaMismatch)
+        );
+    }
+
+    #[test]
+    fn schema_drift_preempts_both_valid_and_invalid_kir_results() {
+        let mut schema = kir_property_schema_v1();
+        schema[0].code ^= 1;
+        let valid = kir();
+        let invalid = general_gemm_semantic_mutation_kir_v1(
+            plan(),
+            GENERAL_GEMM_MUTATION_EXPECTATIONS_V1[0].mutation,
+        );
+
+        assert_eq!(
+            analyze_gemm_kir_semantics_with_schema_v1(&valid, &schema),
+            Err(GemmSemanticAnalysisErrorV1::SchemaMismatch)
+        );
+        assert_eq!(
+            analyze_gemm_kir_semantics_with_schema_v1(&invalid, &schema),
             Err(GemmSemanticAnalysisErrorV1::SchemaMismatch)
         );
     }

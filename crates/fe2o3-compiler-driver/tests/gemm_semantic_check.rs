@@ -1,3 +1,5 @@
+use std::{cell::Cell, rc::Rc};
+
 use fe2o3_compiler_api::{
     CompileDispositionV1, CompileLimitsV1, CompileOutputV1, CompileRequestV1,
     CompilerProfileIdentityV1, CompilerStageV1, KernelInstanceIdentityV1, ObligationSetIdentityV1,
@@ -5,9 +7,12 @@ use fe2o3_compiler_api::{
     SnapshotFormatIdentityV1, SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
 };
 use fe2o3_compiler_driver::{
-    CompilerBackendFailureV1, GemmSemanticAnalysisErrorV1, GemmSemanticCheckingBackendV1,
-    GemmSemanticProgramBindingErrorV1, GemmSemanticProgramV1, TransactionalCompilerBackendV1,
-    analyze_gemm_semantics_v1, general_gemm_semantic_obligation_set_identity_v1,
+    AdmittedGemmCompilerBackendV1, CompilerBackendFailureV1, GemmProofEvaluationFailureV1,
+    GemmProofReportProviderV1, GemmProofReportV1, GemmProofRequirementsV1,
+    GemmSemanticAnalysisErrorV1, GemmSemanticCheckingBackendV1, GemmSemanticProgramBindingErrorV1,
+    GemmSemanticProgramV1, ProofRequiredGemmAdmissionV1, ProofRequiredGemmBackendV1,
+    TransactionalCompilerBackendV1, analyze_gemm_semantics_v1,
+    general_gemm_semantic_obligation_set_identity_v1,
 };
 use fe2o3_kernel_ir::{
     GENERAL_GEMM_MUTATION_EXPECTATIONS_V1, GeneralGemmKirV1, GeneralGemmPlanFieldsV1,
@@ -52,6 +57,105 @@ fn bound_request(
     )
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SameIdentityRequestMutation {
+    KernelInstance,
+    CompilerProfile,
+    TargetProfile,
+    PipelineConfiguration,
+    Selector,
+    Limits,
+    SnapshotFormat,
+    SnapshotPayload,
+}
+
+const SAME_IDENTITY_REQUEST_MUTATIONS: [SameIdentityRequestMutation; 8] = [
+    SameIdentityRequestMutation::KernelInstance,
+    SameIdentityRequestMutation::CompilerProfile,
+    SameIdentityRequestMutation::TargetProfile,
+    SameIdentityRequestMutation::PipelineConfiguration,
+    SameIdentityRequestMutation::Selector,
+    SameIdentityRequestMutation::Limits,
+    SameIdentityRequestMutation::SnapshotFormat,
+    SameIdentityRequestMutation::SnapshotPayload,
+];
+
+fn mutate_request_with_same_identity(
+    request: &CompileRequestV1,
+    mutation: SameIdentityRequestMutation,
+) -> CompileRequestV1 {
+    let kernel_instance_identity = match mutation {
+        SameIdentityRequestMutation::KernelInstance => {
+            KernelInstanceIdentityV1::from_untrusted_bytes([12; 32])
+        }
+        _ => request.kernel_instance_identity(),
+    };
+    let compiler_profile_identity = match mutation {
+        SameIdentityRequestMutation::CompilerProfile => {
+            CompilerProfileIdentityV1::from_untrusted_bytes([13; 32])
+        }
+        _ => request.compiler_profile_identity(),
+    };
+    let target_profile_identity = match mutation {
+        SameIdentityRequestMutation::TargetProfile => {
+            TargetProfileIdentityV1::from_untrusted_bytes([14; 32])
+        }
+        _ => request.target_profile_identity(),
+    };
+    let pipeline_configuration_identity = match mutation {
+        SameIdentityRequestMutation::PipelineConfiguration => {
+            PipelineConfigurationIdentityV1::from_untrusted_bytes([15; 32])
+        }
+        _ => request.pipeline_configuration_identity(),
+    };
+    let selector = match mutation {
+        SameIdentityRequestMutation::Selector => PipelineSelectorV1::Legacy,
+        _ => request.selector(),
+    };
+    let limits = match mutation {
+        SameIdentityRequestMutation::Limits => CompileLimitsV1::new(
+            request.limits().max_stage_snapshots() - 1,
+            request.limits().max_stage_receipts(),
+            request.limits().max_diagnostics(),
+            request.limits().max_snapshot_bytes(),
+            request.limits().max_total_snapshot_bytes(),
+            request.limits().max_candidate_bytes(),
+        )
+        .unwrap(),
+        _ => request.limits(),
+    };
+    let format_identity = match mutation {
+        SameIdentityRequestMutation::SnapshotFormat => {
+            SnapshotFormatIdentityV1::from_untrusted_bytes([17; 32])
+        }
+        _ => request.input().format_identity(),
+    };
+    let payload = match mutation {
+        SameIdentityRequestMutation::SnapshotPayload => vec![18],
+        _ => request.input().canonical_bytes().to_vec(),
+    };
+    let input = StageSnapshotV1::new(
+        request.input().stage(),
+        request.input().identity(),
+        format_identity,
+        payload,
+    )
+    .unwrap();
+
+    CompileRequestV1::new(
+        request.identity(),
+        kernel_instance_identity,
+        compiler_profile_identity,
+        target_profile_identity,
+        pipeline_configuration_identity,
+        request.input_obligations_identity(),
+        selector,
+        input,
+        limits,
+    )
+    .unwrap()
+}
+
 fn plan() -> GeneralGemmPlanFieldsV1 {
     GeneralGemmPlanFieldsV1::checked(GeneralGemmPlanSnapshotV1 {
         dimensions: [17, 19, 18],
@@ -75,34 +179,77 @@ const fn compiler_stage(stage: GeneralGemmVerificationStageV1) -> CompilerStageV
     }
 }
 
-#[derive(Default)]
-struct RecordingBackend {
-    calls: usize,
+#[derive(Clone)]
+struct RejectingProofProvider {
+    calls: Rc<Cell<usize>>,
 }
 
-impl TransactionalCompilerBackendV1 for RecordingBackend {
-    fn compile_transaction(
+impl GemmProofReportProviderV1 for RejectingProofProvider {
+    fn evaluate(
         &mut self,
         _request: &CompileRequestV1,
-    ) -> Result<CompileOutputV1, CompilerBackendFailureV1> {
-        self.calls += 1;
-        Err(CompilerBackendFailureV1::UnsupportedRequest)
+        _requirements: &GemmProofRequirementsV1,
+    ) -> Result<GemmProofReportV1, GemmProofEvaluationFailureV1> {
+        self.calls.set(self.calls.get() + 1);
+        Err(GemmProofEvaluationFailureV1::InvalidResult)
     }
 }
 
+#[derive(Clone)]
+struct MaliciousCandidateBackend {
+    calls: Rc<Cell<usize>>,
+}
+
+impl AdmittedGemmCompilerBackendV1 for MaliciousCandidateBackend {
+    fn compile_admitted(
+        &mut self,
+        _request: &CompileRequestV1,
+        _admission: ProofRequiredGemmAdmissionV1,
+    ) -> Result<CompileOutputV1, CompilerBackendFailureV1> {
+        self.calls.set(self.calls.get() + 1);
+        Err(CompilerBackendFailureV1::Internal)
+    }
+}
+
+type TestSemanticBackend = GemmSemanticCheckingBackendV1<
+    ProofRequiredGemmBackendV1<RejectingProofProvider, MaliciousCandidateBackend>,
+>;
+
+fn semantic_backend(
+    program: GemmSemanticProgramV1,
+    request: &CompileRequestV1,
+) -> (TestSemanticBackend, Rc<Cell<usize>>, Rc<Cell<usize>>) {
+    let proof_calls = Rc::new(Cell::new(0));
+    let candidate_calls = Rc::new(Cell::new(0));
+    let proof_gate = ProofRequiredGemmBackendV1::new(
+        GemmProofRequirementsV1::new(request, Vec::new()).unwrap(),
+        RejectingProofProvider {
+            calls: Rc::clone(&proof_calls),
+        },
+        MaliciousCandidateBackend {
+            calls: Rc::clone(&candidate_calls),
+        },
+    );
+    (
+        GemmSemanticCheckingBackendV1::new(program, proof_gate),
+        proof_calls,
+        candidate_calls,
+    )
+}
+
 #[test]
-fn valid_structured_kir_delegates_without_minting_proof_authority() {
+fn valid_structured_kir_reaches_proof_gate_but_not_malicious_candidate_backend() {
     let kir = GeneralGemmKirV1::canonical(plan());
     let request = bound_request(1, SnapshotIdentityV1::from_untrusted_bytes([6; 32]), &kir);
     let program = GemmSemanticProgramV1::new(&request, kir).unwrap();
     assert_eq!(analyze_gemm_semantics_v1(&program), Ok(()));
 
-    let mut backend = GemmSemanticCheckingBackendV1::new(program, RecordingBackend::default());
-    assert_eq!(
-        backend.compile_transaction(&request),
-        Err(CompilerBackendFailureV1::UnsupportedRequest)
-    );
-    assert_eq!(backend.parts().1.calls, 1);
+    let (mut backend, proof_calls, candidate_calls) = semantic_backend(program, &request);
+    let output = backend.compile_transaction(&request).unwrap();
+    assert_eq!(output.disposition(), CompileDispositionV1::Rejected);
+    assert!(output.candidate().is_none());
+    assert_eq!(proof_calls.get(), 1);
+    assert_eq!(candidate_calls.get(), 0);
 }
 
 #[test]
@@ -141,9 +288,10 @@ fn all_registered_kir_mutations_reject_transactionally_with_frozen_diagnostics()
             expectation.mutation.as_str()
         );
 
-        let mut backend = GemmSemanticCheckingBackendV1::new(program, RecordingBackend::default());
+        let (mut backend, proof_calls, candidate_calls) = semantic_backend(program, &request);
         let output = backend.compile_transaction(&request).unwrap();
-        assert_eq!(backend.parts().1.calls, 0);
+        assert_eq!(proof_calls.get(), 0);
+        assert_eq!(candidate_calls.get(), 0);
         assert_eq!(output.disposition(), CompileDispositionV1::Rejected);
         assert!(output.snapshots().is_empty());
         assert!(output.receipts().is_empty());
@@ -178,16 +326,43 @@ fn request_substitution_fails_before_downstream_or_artifact_construction() {
     let first = bound_request(1, snapshot_identity, &kir);
     let second = bound_request(2, snapshot_identity, &kir);
     let program = GemmSemanticProgramV1::new(&first, kir).unwrap();
-    let mut backend = GemmSemanticCheckingBackendV1::new(program, RecordingBackend::default());
+    let (mut backend, proof_calls, candidate_calls) = semantic_backend(program, &first);
     let output = backend.compile_transaction(&second).unwrap();
 
-    assert_eq!(backend.parts().1.calls, 0);
+    assert_eq!(proof_calls.get(), 0);
+    assert_eq!(candidate_calls.get(), 0);
     assert_eq!(output.disposition(), CompileDispositionV1::Rejected);
     assert!(output.snapshots().is_empty());
     assert!(output.receipts().is_empty());
     assert!(output.candidate().is_none());
     assert_eq!(output.diagnostics()[0].code().get(), 0x4647_0006);
     assert_eq!(output.diagnostics()[0].stage(), Some(CompilerStageV1::Mir));
+}
+
+#[test]
+fn same_request_identity_cannot_hide_any_request_field_substitution() {
+    let kir = GeneralGemmKirV1::canonical(plan());
+    let snapshot_identity = SnapshotIdentityV1::from_untrusted_bytes([6; 32]);
+    let original = bound_request(1, snapshot_identity, &kir);
+    let program = GemmSemanticProgramV1::new(&original, kir).unwrap();
+
+    for mutation in SAME_IDENTITY_REQUEST_MUTATIONS {
+        let substituted = mutate_request_with_same_identity(&original, mutation);
+        assert_eq!(substituted.identity(), original.identity());
+        assert_ne!(substituted, original, "{mutation:?}");
+
+        let (mut backend, proof_calls, candidate_calls) =
+            semantic_backend(program.clone(), &original);
+        let output = backend.compile_transaction(&substituted).unwrap();
+        assert_eq!(proof_calls.get(), 0, "{mutation:?}");
+        assert_eq!(candidate_calls.get(), 0, "{mutation:?}");
+        assert_eq!(output.disposition(), CompileDispositionV1::Rejected);
+        assert!(output.snapshots().is_empty());
+        assert!(output.receipts().is_empty());
+        assert!(output.candidate().is_none());
+        assert_eq!(output.diagnostics()[0].code().get(), 0x4647_0006);
+        assert_eq!(output.diagnostics()[0].stage(), Some(CompilerStageV1::Mir));
+    }
 }
 
 #[test]
@@ -205,10 +380,11 @@ fn valid_kir_cannot_replace_mutated_kir_committed_by_request() {
     );
 
     let invalid_program = GemmSemanticProgramV1::new(&invalid_request, invalid_kir).unwrap();
-    let mut backend =
-        GemmSemanticCheckingBackendV1::new(invalid_program, RecordingBackend::default());
+    let (mut backend, proof_calls, candidate_calls) =
+        semantic_backend(invalid_program, &invalid_request);
     let output = backend.compile_transaction(&invalid_request).unwrap();
-    assert_eq!(backend.parts().1.calls, 0);
+    assert_eq!(proof_calls.get(), 0);
+    assert_eq!(candidate_calls.get(), 0);
     assert_eq!(output.disposition(), CompileDispositionV1::Rejected);
     assert!(output.snapshots().is_empty());
     assert!(output.receipts().is_empty());
