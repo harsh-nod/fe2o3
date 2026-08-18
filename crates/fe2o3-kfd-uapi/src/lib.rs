@@ -20,6 +20,18 @@ pub const KFD_UAPI_SOURCE_HEADER: &str = "include/uapi/linux/kfd_ioctl.h";
 pub const KFD_UAPI_SOURCE_HEADER_SHA256: &str =
     "b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d";
 
+/// SHA-256 of the active driver's SMI event stream implementation.
+pub const KFD_UAPI_SMI_EVENTS_SOURCE_SHA256: &str =
+    "2d786562fe1e97b8257841b755106c8bce47658a2aa3b439ce4e0178323004bd";
+
+/// SHA-256 of the active driver's whole-GPU pre/post reset notification sites.
+pub const KFD_UAPI_DEVICE_SOURCE_SHA256: &str =
+    "ccf20227c5cdd5b258758f50f61bbc1008a09ea776c101f035f83963e7d23037";
+
+/// SHA-256 of the active driver's KFD ioctl dispatch implementation.
+pub const KFD_UAPI_CHARDEV_SOURCE_SHA256: &str =
+    "f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba";
+
 /// Canonical content manifest for the admitted schema.
 ///
 /// This identifies reviewed userspace definitions. It does not authenticate a
@@ -29,6 +41,9 @@ pub const KFD_UAPI_SCHEMA_MANIFEST: &str = concat!(
     "target=linux-x86_64-generic-ioc\n",
     "source_header=include/uapi/linux/kfd_ioctl.h\n",
     "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "smi_events_source_sha256=2d786562fe1e97b8257841b755106c8bce47658a2aa3b439ce4e0178323004bd\n",
+    "device_source_sha256=ccf20227c5cdd5b258758f50f61bbc1008a09ea776c101f035f83963e7d23037\n",
+    "chardev_source_sha256=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
     "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
     "kfd_uapi=1.18\n",
     "get_version=size:8,align:4,major:0,minor:4,request:80084b01\n",
@@ -36,16 +51,17 @@ pub const KFD_UAPI_SCHEMA_MANIFEST: &str = concat!(
     "get_process_apertures_new=size:16,align:8,process_apertures_ptr:0,num_of_nodes:8,pad:12,request:c0104b14\n",
     "acquire_vm=size:8,align:4,drm_fd:0,gpu_id:4,request:40084b15\n",
     "set_xnack_mode=size:4,align:4,xnack_enabled:0,request:c0044b21\n",
+    "smi_events=size:8,align:4,gpu_id:0,anon_fd:4,request:c0084b1f,pre_reset:3,post_reset:4,mask:000000000000000c\n",
 );
 
 /// SHA-256 of [`KFD_UAPI_SCHEMA_MANIFEST`].
 pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256: &str =
-    "2811cc71ae2d598c36adb52328d65c76a14205fcca71148fb75d98a6436ad586";
+    "e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4";
 
 /// Typed digest bytes of [`KFD_UAPI_SCHEMA_MANIFEST`].
 pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0x28, 0x11, 0xcc, 0x71, 0xae, 0x2d, 0x59, 0x8c, 0x36, 0xad, 0xb5, 0x23, 0x28, 0xd6, 0x5c, 0x76,
-    0xa1, 0x42, 0x05, 0xfc, 0xca, 0x71, 0x14, 0x8f, 0xb7, 0x5d, 0x98, 0xa6, 0x43, 0x6a, 0xd5, 0x86,
+    0xe4, 0xaa, 0xd5, 0xd8, 0xe3, 0x17, 0x7e, 0xa6, 0xd7, 0x02, 0x98, 0xad, 0xab, 0x77, 0x41, 0xc3,
+    0x77, 0xcb, 0x09, 0x13, 0x73, 0x55, 0x3c, 0xe6, 0x89, 0xf3, 0x52, 0x5e, 0x75, 0x14, 0xd9, 0xb4,
 ];
 
 /// Major version declared by the reviewed AMDGPU 6.16.13 KFD UAPI header.
@@ -71,6 +87,19 @@ pub const KFD_XNACK_MODE_DISABLED: i32 = 0;
 
 /// Canonical positive input value for enabled process XNACK mode.
 pub const KFD_XNACK_MODE_ENABLED: i32 = 1;
+
+/// KFD SMI event index emitted before a whole-GPU reset.
+pub const KFD_SMI_EVENT_GPU_PRE_RESET: u32 = 3;
+
+/// KFD SMI event index emitted after a whole-GPU reset.
+pub const KFD_SMI_EVENT_GPU_POST_RESET: u32 = 4;
+
+/// Event mask enabling only whole-GPU pre/post reset notifications.
+pub const KFD_SMI_EVENT_GPU_RESET_MASK: u64 =
+    (1_u64 << (KFD_SMI_EVENT_GPU_PRE_RESET - 1)) | (1_u64 << (KFD_SMI_EVENT_GPU_POST_RESET - 1));
+
+/// Maximum single SMI event message size declared by KFD UAPI 1.18.
+pub const KFD_SMI_EVENT_MSG_SIZE: usize = 96;
 
 /// Linux generic ioctl request number type.
 pub type IoctlRequest = u32;
@@ -246,6 +275,28 @@ impl KfdIoctlSetXnackModeArgs {
     }
 }
 
+/// C layout of `struct kfd_ioctl_smi_events_args`.
+///
+/// A successful request returns an anonymous event descriptor in `anon_fd`.
+/// Descriptor ownership, event-mask writes, reads, and close-on-exec policy
+/// belong to the syscall adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlSmiEventsArgs {
+    pub gpu_id: u32,
+    pub anon_fd: u32,
+}
+
+impl KfdIoctlSmiEventsArgs {
+    /// Constructs a request with a fail-closed sentinel output descriptor.
+    pub const fn new(gpu_id: u32) -> Self {
+        Self {
+            gpu_id,
+            anon_fd: u32::MAX,
+        }
+    }
+}
+
 /// Request number for `_IOR('K', 0x01, struct kfd_ioctl_get_version_args)`.
 pub const AMDKFD_IOC_GET_VERSION: IoctlRequest = encode_admitted_ioctl(
     IoctlDirection::Read,
@@ -276,6 +327,14 @@ pub const AMDKFD_IOC_SET_XNACK_MODE: IoctlRequest = encode_admitted_ioctl(
     AMDKFD_IOCTL_BASE,
     0x21,
     size_of::<KfdIoctlSetXnackModeArgs>(),
+);
+
+/// Request for `_IOWR('K', 0x1f, struct kfd_ioctl_smi_events_args)`.
+pub const AMDKFD_IOC_SMI_EVENTS: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x1f,
+    size_of::<KfdIoctlSmiEventsArgs>(),
 );
 
 /// KFD UAPI version reported by `AMDKFD_IOC_GET_VERSION`.
@@ -329,6 +388,11 @@ impl AdmittedKfdUapi {
     /// Returns the admitted SET_XNACK_MODE request number.
     pub const fn set_xnack_mode_request(self) -> IoctlRequest {
         AMDKFD_IOC_SET_XNACK_MODE
+    }
+
+    /// Returns the admitted SMI_EVENTS request number.
+    pub const fn smi_events_request(self) -> IoctlRequest {
+        AMDKFD_IOC_SMI_EVENTS
     }
 }
 
@@ -408,8 +472,15 @@ const _: () = {
     assert!(align_of::<KfdIoctlSetXnackModeArgs>() == 4);
     assert!(offset_of!(KfdIoctlSetXnackModeArgs, xnack_enabled) == 0);
 
+    assert!(size_of::<KfdIoctlSmiEventsArgs>() == 8);
+    assert!(align_of::<KfdIoctlSmiEventsArgs>() == 4);
+    assert!(offset_of!(KfdIoctlSmiEventsArgs, gpu_id) == 0);
+    assert!(offset_of!(KfdIoctlSmiEventsArgs, anon_fd) == 4);
+
     assert!(AMDKFD_IOC_GET_VERSION == 0x8008_4b01);
     assert!(AMDKFD_IOC_GET_PROCESS_APERTURES_NEW == 0xc010_4b14);
     assert!(AMDKFD_IOC_ACQUIRE_VM == 0x4008_4b15);
     assert!(AMDKFD_IOC_SET_XNACK_MODE == 0xc004_4b21);
+    assert!(AMDKFD_IOC_SMI_EVENTS == 0xc008_4b1f);
+    assert!(KFD_SMI_EVENT_GPU_RESET_MASK == 0x0c);
 };
