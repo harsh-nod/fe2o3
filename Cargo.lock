@@ -1054,6 +1054,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-pliron-conformance"
+version = "0.1.0"
+dependencies = [
+ "dialect-autotune",
+ "dialect-dispatch",
+ "dialect-gpu",
+ "dialect-kernel",
+ "dialect-mir",
+ "dialect-proof",
+ "dialect-schedule",
+ "dialect-tile",
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-pliron-bridge",
+ "fe2o3-lower-kernel-gpu",
+ "fe2o3-lower-mir-kernel",
+ "fe2o3-pliron",
+ "pliron",
+]
+
+[[package]]
 name = "fe2o3-previous"
 version = "0.1.0"
 dependencies = [

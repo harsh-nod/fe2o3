@@ -88,6 +88,7 @@
         "fe2o3-compiler-driver",
         "fe2o3-differential",
         "fe2o3-legacy-compiler",
+        "fe2o3-pliron-conformance",
         "rustc-codegen-fe2o3"
       ]
     },
