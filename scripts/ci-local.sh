@@ -22,8 +22,10 @@ readonly CPU_TEST_PACKAGES=(
   dialect-amdgcn
   dialect-mir
   fe2o3-amd-target
+  fe2o3-amdgcn-model
   fe2o3-artifact-transaction
   fe2o3-completion
+  fe2o3-compiler-api
   fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
@@ -35,8 +37,12 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
   fe2o3-macros
+  fe2o3-mir-model
+  fe2o3-pliron
+  fe2o3-proof-contracts
   fe2o3-rustc-front
   fe2o3-rustc-invocation
+  fe2o3-service-model
   fe2o3-verifier
   fe2o3-worker-v2-bundle
   reserved-fe2o3-symbols
