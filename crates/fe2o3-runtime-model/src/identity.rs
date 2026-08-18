@@ -55,6 +55,14 @@ digest_identity!(
     /// Identity of a validated queue construction plan.
     QueuePlanIdV1
 );
+digest_identity!(
+    /// Identity of one model-only device-observation domain.
+    DeviceObservationDomainIdV1
+);
+digest_identity!(
+    /// Identity of the reviewed device-correlation profile.
+    DeviceAdmissionProfileIdV1
+);
 
 macro_rules! numeric_identity {
     ($(#[$meta:meta])* $name:ident) => {

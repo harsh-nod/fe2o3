@@ -3,11 +3,16 @@ set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
-proof="$script_dir/runtime_lifecycle_v1.rs"
-negative="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
+lifecycle_proof="$script_dir/runtime_lifecycle_v1.rs"
+identity_proof="$script_dir/device_identity_generation_v1.rs"
+negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
+negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
+negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
+negative_render="$script_dir/negative/device_identity_generation_v1_render_substitution.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
+source_checker="$repo_root/examples/wave64_collectives_v1/check-proof-source.py"
 verus_bin=${VERUS:-verus}
 
 if [ "$#" -ne 0 ]; then
@@ -27,10 +32,16 @@ read_pin() {
     printf '%s\n' "$value"
 }
 
-expected_model=$(read_pin "$pin_dir/MODEL_SHA256")
-expected_negative=$(read_pin "$pin_dir/NEGATIVE_SHA256")
+expected_lifecycle=$(read_pin "$pin_dir/MODEL_SHA256")
+expected_identity=$(read_pin "$pin_dir/DEVICE_IDENTITY_MODEL_SHA256")
+expected_negative_lifecycle=$(read_pin "$pin_dir/NEGATIVE_SHA256")
+expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
+expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
+expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
 expected_verus=$(read_pin "$pin_dir/VERUS_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
+expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
+expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
 expected_version=$(sed -n '1p' "$pin_dir/VERUS_VERSION")
 case "$expected_version" in
     ''|*[!0-9A-Za-z.-]*) printf 'FAIL: invalid pinned Verus version\n' >&2; exit 1 ;;
@@ -52,10 +63,26 @@ check_digest() {
     fi
 }
 
-check_digest "$expected_model" "$proof"
-check_digest "$expected_negative" "$negative"
-check_digest "$expected_closure" "$closure_manifest"
-check_digest 'c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c' "$closure_checker"
+check_sources() {
+    check_digest "$expected_lifecycle" "$lifecycle_proof"
+    check_digest "$expected_identity" "$identity_proof"
+    check_digest "$expected_negative_lifecycle" "$negative_lifecycle"
+    check_digest "$expected_negative_vm" "$negative_vm"
+    check_digest "$expected_negative_stale" "$negative_stale"
+    check_digest "$expected_negative_render" "$negative_render"
+    check_digest "$expected_closure" "$closure_manifest"
+    check_digest 'c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c' "$closure_checker"
+    check_digest "$expected_source_checker" "$source_checker"
+}
+
+check_sources
+"$source_checker" \
+    "$lifecycle_proof" \
+    "$identity_proof" \
+    "$negative_lifecycle" \
+    "$negative_vm" \
+    "$negative_stale" \
+    "$negative_render"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -102,13 +129,6 @@ if [ "$timeout_seconds" -lt 1 ] || [ "$timeout_seconds" -gt 300 ]; then
     exit 2
 fi
 
-for source in "$proof" "$negative"; do
-    if grep -Eq 'assume[[:space:]]*\(|admit[[:space:]]*\(|external_body|external_fn_specification|uninterp[[:space:]]+spec' "$source"; then
-        printf 'FAIL: forbidden trusted construct in %s\n' "$source" >&2
-        exit 1
-    fi
-done
-
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-runtime-model-verus.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
@@ -123,27 +143,60 @@ run_verus() {
         "$verus_path" --crate-type lib --triggers-mode silent "$1"
 }
 
-positive_log="$tmp_dir/positive.log"
-if ! run_verus "$proof" >"$positive_log" 2>&1; then
-    cat "$positive_log" >&2
-    exit 1
-fi
-if ! grep -Fq 'verification results:: 2 verified, 0 errors' "$positive_log"; then
-    printf 'FAIL: unexpected positive verification summary\n' >&2
-    cat "$positive_log" >&2
-    exit 1
-fi
-cat "$positive_log"
+check_positive() {
+    source=$1
+    expected_summary=$2
+    label=$3
+    log="$tmp_dir/$label-positive.log"
+    if ! run_verus "$source" >"$log" 2>&1; then
+        printf 'FAIL: positive proof did not verify: %s\n' "$label" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    if ! grep -Fq "$expected_summary" "$log"; then
+        printf 'FAIL: unexpected positive verification summary: %s\n' "$label" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    cat "$log"
+}
 
-negative_log="$tmp_dir/negative.log"
-if run_verus "$negative" >"$negative_log" 2>&1; then
-    printf 'FAIL: release-while-published mutation unexpectedly verified\n' >&2
+check_negative() {
+    source=$1
+    marker=$2
+    label=$3
+    log="$tmp_dir/$label-negative.log"
+    if run_verus "$source" >"$log" 2>&1; then
+        printf 'FAIL: expected-negative proof unexpectedly verified: %s\n' "$label" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    if ! grep -Fq "$marker" "$log" \
+        || ! grep -Fq 'error: postcondition not satisfied' "$log" \
+        || ! grep -Fq 'verification results:: 0 verified, 1 errors' "$log"; then
+        printf 'FAIL: mutation failed at an unexpected verification surface: %s\n' "$label" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    printf 'expected-negative rejected: %s\n' "$label"
+}
+
+check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
+check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
+check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
+check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
+check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
+check_negative "$negative_render" mutated_render_substitution_correlates_v1 render-substitution
+
+# Detect source, checker, closure, or executable replacement during the run.
+check_sources
+check_digest "$expected_verus" "$verus_path"
+"$closure_checker" "$verus_root" "$closure_manifest"
+
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 mutations=4'
+actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
+if [ "$actual_transcript" != "$expected_transcript" ]; then
+    printf 'FAIL: verification transcript does not match the pin\n' >&2
     exit 1
 fi
-if ! grep -Fq 'mutated_release_while_published_is_safe_v1' "$negative_log" \
-    || ! grep -Fq 'error: postcondition not satisfied' "$negative_log"; then
-    printf 'FAIL: mutation failed at an unexpected verification surface\n' >&2
-    cat "$negative_log" >&2
-    exit 1
-fi
-printf '%s\n' 'XFAIL: Verus rejected release while a dispatch retains the mapping'
+printf '%s\n' "$transcript"
