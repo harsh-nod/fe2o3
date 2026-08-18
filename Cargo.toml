@@ -55,6 +55,7 @@ fe2o3-artifact-transaction = { path = "crates/fe2o3-artifact-transaction" }
 fe2o3-build-authority = { path = "crates/fe2o3-build-authority" }
 fe2o3-completion = { path = "crates/fe2o3-completion" }
 fe2o3-compiler-api = { path = "crates/fe2o3-compiler-api" }
+fe2o3-compiler-driver = { path = "crates/fe2o3-compiler-driver" }
 fe2o3-compiler-ffi = { path = "crates/fe2o3-compiler-ffi" }
 fe2o3-artifacts = { path = "crates/fe2o3-artifacts" }
 fe2o3-contracts = { path = "crates/fe2o3-contracts" }
@@ -70,6 +71,7 @@ fe2o3-host = { path = "crates/fe2o3-host" }
 fe2o3-kernel-descriptor = { path = "crates/fe2o3-kernel-descriptor" }
 fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis" }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
+fe2o3-legacy-compiler = { path = "crates/fe2o3-legacy-compiler" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }
 fe2o3-pliron = { path = "crates/fe2o3-pliron" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }

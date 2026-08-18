@@ -26,6 +26,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-artifact-transaction
   fe2o3-completion
   fe2o3-compiler-api
+  fe2o3-compiler-driver
   fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
@@ -36,6 +37,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kernel-analysis
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
+  fe2o3-legacy-compiler
   fe2o3-macros
   fe2o3-mir-model
   fe2o3-pliron

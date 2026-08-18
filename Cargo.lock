@@ -675,6 +675,13 @@ name = "fe2o3-compiler-api"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-compiler-driver"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-compiler-api",
+]
+
+[[package]]
 name = "fe2o3-compiler-ffi"
 version = "0.1.0"
 dependencies = [
@@ -888,6 +895,14 @@ dependencies = [
 [[package]]
 name = "fe2o3-kernel-ir"
 version = "0.1.0"
+
+[[package]]
+name = "fe2o3-legacy-compiler"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-compiler-api",
+ "fe2o3-compiler-driver",
+]
 
 [[package]]
 name = "fe2o3-macros"
