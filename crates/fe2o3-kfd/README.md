@@ -71,8 +71,9 @@ engine/per-queue reset through that stream, and creates its anonymous event fd
 with an empty mask and without an atomic `CLOEXEC` option. A reset can therefore
 occur between descriptor creation and mask enablement. The adapter sandwiches
 that enablement between DRM identity/VRAM-counter observations, sets `CLOEXEC`
-immediately, and never drains an observed event, but a VRAM-preserving reset in
-the enablement gap can remain unobservable. It also cannot close the concurrent
+immediately, and never drains the complete event after detecting its first byte,
+but a VRAM-preserving reset in the enablement gap can remain unobservable. It
+also cannot close the concurrent
 fork/exec inheritance window or exclude interference from arbitrary raw KFD
 users in the process. A retained-device, nonwrapping counter incremented for
 every reset class plus an atomic create/mask/CLOEXEC operation, or an atomic

@@ -122,9 +122,9 @@ impl ResetEventFence {
         Ok(fence)
     }
 
-    /// Checks without draining a successful event record. Once any byte is
-    /// observed, the latch remains poisoned, so FIFO overflow cannot erase the
-    /// first reset indication from a live fe2o3 token.
+    /// Checks without draining the complete successful event record. Once one
+    /// byte is observed, the latch remains poisoned, so FIFO overflow cannot
+    /// erase the first reset indication from a live fe2o3 token.
     pub(super) fn check_clear(&mut self) -> Result<(), DeviceBindingError> {
         if self.latch.poisoned {
             return Err(DeviceBindingError::CurrentnessFencePoisoned);
@@ -195,7 +195,6 @@ impl CheckedGfx942XnackMinusDevice {
     fn check_observable_currentness_inner(
         &mut self,
     ) -> Result<ObservableDeviceCurrentnessV1, DeviceBindingError> {
-        self.reset_fence.check_clear()?;
         self.kfd
             .opened
             .ensure_process(std::process::id())
@@ -204,6 +203,9 @@ impl CheckedGfx942XnackMinusDevice {
         if process_before != self.process {
             return Err(DeviceBindingError::ProcessIncarnationChanged);
         }
+        // Validate the opener process before touching the shared kernel FIFO.
+        // An inherited child must not be able to consume a reset-event byte.
+        self.reset_fence.check_clear()?;
 
         crate::linux::validate_kfd_descriptor_and_sysfs(
             &self.kfd.opened.fd,
