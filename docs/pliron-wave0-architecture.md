@@ -2,7 +2,7 @@
 
 Status: normative architecture decision for issue
 [#134](https://github.com/harsh-nod/fe2o3/issues/134) Wave 0, updated for the
-refactor through `db7bfdc8e`. Issue #134 remains open. The current repository
+2026-08-18 ownership refactor. Issue #134 remains open. The current repository
 implements bounded contracts and representation shells described below; it
 does not implement the complete Pliron pipeline, proof coverage, or performance
 qualification.
@@ -26,10 +26,12 @@ printer output are not public source concepts, durable identities, or artifact
 authority.
 
 The Wave 0 dependency baseline is the single Pliron workspace release
-`v0.17.0`, commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. Any
-implementation dependency on `pliron`, `pliron-derive`, or `pliron-llvm` MUST
-resolve to that same source revision through one centralized workspace
-configuration. The dependency may land only after the D0 license, advisory,
+`v0.17.0`, commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. Every
+implementation dependency on `pliron` or `pliron-derive` MUST resolve to that
+same source revision through one centralized workspace configuration.
+`pliron-llvm` is outside this architecture; LLVM emission and linking use
+pinned upstream LLVM and in-process LLD APIs directly. A dependency may land
+only after the D0 license, advisory,
 build-closure, duplicate-package, and LLVM-integration review. Updating the
 revision is an architecture migration with golden identity and pipeline tests,
 not a routine semver update.
@@ -67,7 +69,7 @@ needed for D0-D11. It deliberately does not:
 Syntax shown below is illustrative. Wire records, operation schemas, and Rust
 API syntax become stable only through their owning versioned stage.
 
-## Implementation Boundary Through `db7bfdc8e`
+## Implementation Boundary At The 2026-08-18 Checkpoint
 
 The following infrastructure is implemented:
 
@@ -83,8 +85,11 @@ The following infrastructure is implemented:
 - `fe2o3-proof-contracts` defines solver-neutral property, status, obligation,
   TCB, and correspondence records. Structural validation does not authenticate
   evidence, run a solver, or promote proof authority.
-- `fe2o3-pliron` constructs a real bounded Pliron context and pass shell using
-  v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
+- `fe2o3-pliron` constructs a real bounded Pliron context with a private,
+  process-local identity anchor and validates dialect registration and pass
+  plans using v0.17.0 commit
+  `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. It does not expose generic pass
+  execution because upstream `Ptr<T>` values carry no owner provenance.
   The workspace policy rejects another Pliron revision, duplicate Pliron
   package identities, unexpected packages from that source, and
   `pliron-llvm`, which remains outside the D0 dependency closure.
@@ -96,12 +101,15 @@ The following infrastructure is implemented:
   feature. Without that feature it remains the compatibility facade that
   re-exports `fe2o3-mir-model`.
 - `fe2o3-kir-pliron-bridge` keeps canonical KIR V1-V5 bytes as the only durable
-  record, checks a redundant deterministic Pliron projection, and requires
-  exact expected-record agreement before recovery. This is bounded D2 envelope
-  coverage, not completion of the full D2 semantic bridge gate.
+  record, wraps each redundant Pliron projection in an opaque context-bound
+  envelope, and requires exact expected-record agreement before recovery. This
+  is bounded D2 envelope coverage, not completion of the full D2 semantic
+  bridge gate.
 - `fe2o3-lower-mir-kernel` accepts a deliberately narrow verified `mir.*`
   subset and emits bounded `kernel.*` roots. `fe2o3-lower-kernel-gpu` converts
-  bounded kernel roots into target-neutral `gpu.*` operations. Both expose
+  bounded kernel roots into target-neutral `gpu.*` operations. Both are
+  detached services rather than in-tree Pliron passes; their results are bound
+  to the owning context and erased handles return typed errors. Both expose
   terminal unsupported errors and no fallback, target, or artifact authority.
 - The existing strict AMDGPU vocabulary and lowering moved into
   `fe2o3-amdgcn-model`. `dialect-amdgcn` is now a compatibility re-export, not
@@ -117,9 +125,8 @@ The following infrastructure is implemented:
 These components make later implementation and parallel ownership possible.
 They do not connect rustc MIR extraction to the Pliron ladder, complete the
 D1-D11 gates, replace the current compiler selector, publish an artifact,
-execute a host operation, or create a persistent GPU scheduler. Their receipts
-and validated records describe representation and attempted transformations
-only.
+execute a host operation, or create a persistent GPU scheduler. Their validated
+records describe representation and attempted transformations only.
 
 The existing production-directed GPU finalizer remains separate: an isolated
 worker uses pinned upstream LLVM target-machine APIs for object emission and
@@ -201,7 +208,7 @@ No Pliron type or operation appears in a public Rust kernel or host signature.
 
 ## Target Production Pipeline
 
-The intended production-directed pipeline is shown below. At `db7bfdc8e`, the
+The intended production-directed pipeline is shown below. At this checkpoint, the
 landed Pliron crates represent bounded pieces of this ladder but do not compose
 or execute the full route.
 
@@ -524,7 +531,7 @@ The pipeline rejects, without fallback or partial authority, on:
   versions, mandatory fields, or numerical semantics;
 - malformed CFG/SSA, dominance, type, layout, region, permission, epoch,
   barrier, ABI, origin, or resource state;
-- missing pass receipts, dropped obligations, invalid proof projection, stale
+- missing stage receipts, dropped obligations, invalid proof projection, stale
   evidence, proof timeout, or policy downgrade;
 - target feature, wave width, instruction, address-space, layout, alignment,
   resource, object, code-object, symbol, or ISA disagreement;
@@ -557,8 +564,8 @@ Input: this ADR, existing architecture/safety/evidence contracts, the pinned
 Rust/Verus/LLVM environment, and Pliron commit
 `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
 
-Output: centralized exact Pliron dependencies; `fe2o3-pliron` context/pass
-shell; explicit dialect registration; versioned GPU Rust conformance matrix,
+Output: centralized exact Pliron dependencies; `fe2o3-pliron` context,
+identity, registration, and non-executing pass-plan shell; versioned GPU Rust conformance matrix,
 identity schemas, theorem schema, erasure profile, proof-sensitive-type policy,
 and minimal cross-crate `#[kernel]` metadata/descriptor prototype.
 
@@ -581,8 +588,8 @@ non-ZST followed by verified mem2reg.
 Gate: collect only the concrete reachable cross-crate closure; parse no display
 strings; reject spoofed or unsupported providers transactionally; report root,
 call chain, and source span; enforce exact consumption of proof-sensitive
-values; verify before and after every pass; explicit Pliron selection has no
-legacy recognizer fallback.
+values; verify before and after every owner-authenticated transformation;
+explicit Pliron selection has no legacy recognizer fallback.
 
 ### D2: Lossless executable KIR bridge
 
@@ -766,6 +773,7 @@ stable intent labels; owning crates may choose local Rust test function names.
 | `W0-ID-001-fresh-context` | Fresh processes, Pliron contexts, arenas, build directories, allocation orders, and traversal orders produce identical canonical fe2o3 records. |
 | `W0-ID-002-text-independence` | Parse/print spelling, printer order, arena IDs, and diagnostic presentation cannot alter artifact, proof, or cache identity. |
 | `W0-ID-003-mutation-matrix` | Each source, algorithm, schedule, target, toolchain, proof-model, ABI, launch, and artifact mutation changes exactly the dependent identities and rejects stale reuse. |
+| `W0-ID-004-context-ownership` | Foreign same-slot arena handles, transplanted public markers, erased operations, and repaired locators reject or preserve the original context identity before traversal. |
 | `W0-KIR-001-frozen-wire` | Every canonical KIR V1-V5 fixture round-trips byte-for-byte through fresh Pliron contexts; `fe2o3-kernel-ir` tests without a Pliron dependency. |
 | `W0-CONF-001-complete-matrix` | Every reachable Rust feature/API fixture maps to one conformance class; an absent class rejects. |
 | `W0-CONF-002-call-chain` | Unsupported cross-crate behavior reports the kernel root, complete reachable call chain, and source span without partial output. |

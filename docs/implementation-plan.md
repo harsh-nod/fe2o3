@@ -72,10 +72,11 @@ not shell out to `clang`, `llc`, or `ld.lld`. Early elementwise prototypes used
 ROCm command-line clang and `ld.lld`; references to that path below are
 historical compatibility notes, not the target architecture.
 
-The refactor through `db7bfdc8e` implements the canonical model/API boundaries,
-the pinned Pliron D0 shell, seven target-neutral dialect shells, a
-feature-gated `mir.*` Pliron shell, an exact-byte KIR envelope, bounded
-MIR-to-kernel and kernel-to-GPU transformation shells, compiler routing
+The 2026-08-18 ownership refactor implements the canonical model/API boundaries,
+the pinned Pliron D0 context, identity, registration, and pass-plan shell,
+seven target-neutral dialect shells, a feature-gated `mir.*` Pliron shell, an
+opaque context-bound exact-byte KIR envelope, bounded detached MIR-to-kernel
+and kernel-to-GPU lowering services, compiler routing
 contracts, and inert host/service contracts. It does not yet connect the
 device path in the diagram.
 The working compiler remains the existing `rustc-codegen-fe2o3` composition,
@@ -113,8 +114,9 @@ shortest path to a running kernel is a Pliron-based AMDGPU LLVM IR exporter.
 
 The current D0 closure is Pliron v0.17.0 commit
 `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. `fe2o3-pliron` provides a real
-context, explicit bounded registration, verified pass execution, and inert
-attempt receipts. It deliberately excludes `pliron-llvm`; no landed Pliron
+context, private identity anchor, explicit bounded registration, and bounded
+pass-plan validation. It deliberately withholds generic pass execution because
+upstream pointers are contextless and excludes `pliron-llvm`; no landed Pliron
 crate compiles a production kernel or replaces the direct upstream LLVM and
 in-process LLD finalizer.
 
@@ -137,14 +139,16 @@ in-process LLD finalizer.
   transformations.
 - `dialect-mir`: compatibility facade over that model and a bounded
   feature-gated Pliron `mir.*` shell.
-- `fe2o3-pliron`: pinned context, registration, verifier, and pass shell.
+- `fe2o3-pliron`: pinned context, private identity, registration, verifier, and
+  non-executing pass-plan shell.
 - `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`,
   `dialect-proof`, `dialect-dispatch`, `dialect-autotune`: target-neutral,
   representation-only Pliron shells.
-- `fe2o3-kir-pliron-bridge`: exact canonical KIR V1-V5 byte envelope with a
-  redundant checked Pliron projection.
+- `fe2o3-kir-pliron-bridge`: opaque context-bound exact canonical KIR V1-V5
+  byte envelope with a redundant checked Pliron projection.
 - `fe2o3-lower-mir-kernel`, `fe2o3-lower-kernel-gpu`: bounded target-neutral
-  transformation shells; neither is a production pipeline selector.
+  detached lowering services; neither is an in-tree Pliron pass or production
+  pipeline selector.
 - `fe2o3-amdgcn-model`: existing AMDGPU intrinsic and strict lowering model.
 - `dialect-amdgcn`: historical compatibility re-export; not yet an AMD Pliron
   dialect.

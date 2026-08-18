@@ -1,7 +1,7 @@
 # Workspace Layers and Parallel Ownership
 
-Status: normative Wave 1 workspace policy, updated for the refactor through
-`db7bfdc8e`. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
+Status: normative Wave 1 workspace policy, updated for the 2026-08-18 ownership
+refactor. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The landed
 crates make both epics infrastructure-enabled; they do not implement the
 production Pliron pipeline or persistent GPU execution.
@@ -71,21 +71,25 @@ implementations.
 
 ### Pliron framework
 
-The Pliron framework owns context construction, dialect registration APIs,
-operation verification, transformation passes, pass receipts, and the single
-KIR bridge. Planned operation families are `mir.*`, `kernel.*`, `schedule.*`,
+The Pliron framework owns context construction and identity, dialect
+registration APIs, operation verification, detached transformation services,
+and the single KIR bridge. Generic pass execution is withheld until Pliron
+provides owner-aware operation handles as tracked by
+[#140](https://github.com/harsh-nod/fe2o3/issues/140). Planned operation families are
+`mir.*`, `kernel.*`, `schedule.*`,
 `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
 
-At `db7bfdc8e`, `fe2o3-pliron` constructs the pinned D0 context and bounded
-pass shell. Seven always-Pliron target-neutral dialect shells implement
+`fe2o3-pliron` constructs the pinned D0 context and private identity anchor and
+validates bounded pass plans without executing them. Seven always-Pliron target-neutral dialect shells implement
 `kernel.*`, `schedule.*`, `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and
 `autotune.*`. `dialect-mir` is primarily the compatibility facade over
 `fe2o3-mir-model`; its bounded `mir.*` Pliron module/function/block shell is
 available only through the non-default `pliron` feature. These are verified
 in-memory representations, not a connected compiler pipeline.
-`fe2o3-kir-pliron-bridge` implements the exact-byte canonical KIR envelope,
-while `fe2o3-lower-mir-kernel` and `fe2o3-lower-kernel-gpu` implement narrow
-bounded transformation shells. None is a production compiler stage.
+`fe2o3-kir-pliron-bridge` implements an opaque context-bound exact-byte
+canonical KIR envelope, while `fe2o3-lower-mir-kernel` and
+`fe2o3-lower-kernel-gpu` implement narrow bounded detached lowering services
+with context-bound results. None is a production compiler stage.
 
 This layer may consume canonical contracts and admitted frontend models. It
 MUST NOT depend on target backend, host runtime, Verus execution, compiler
@@ -144,7 +148,7 @@ on examples or test fixtures. It is the only layer that selects `Legacy`,
 `fe2o3-compiler-driver` routes exactly one selected, configured backend and
 revalidates its bounded output. `fe2o3-legacy-compiler` only defines the
 dormant adapter contract for the current implementation owner. No production
-selection path depends on the new driver or adapter at `db7bfdc8e`; the
+selection path depends on the new driver or adapter at this checkpoint; the
 working legacy and opt-in Kernel IR routes remain composed in
 `rustc-codegen-fe2o3`.
 
@@ -184,21 +188,21 @@ Issue #134 remains open and can proceed in the following non-overlapping
 lanes. "Landed" below means representation or routing infrastructure exists;
 it does not mean production compilation exists.
 
-| Lane | Primary write ownership | State through `db7bfdc8e` |
+| Lane | Primary write ownership | State at the 2026-08-18 checkpoint |
 |---|---|---|
 | Source/model extraction | `fe2o3-mir-model`, frontend adapters | Canonical model extracted; general frontend integration remains open |
-| Pliron context | `fe2o3-pliron` | Pinned D0 context/pass shell landed |
+| Pliron context | `fe2o3-pliron` | Pinned context, private identity anchor, registration, and bounded pass planning landed; generic execution awaits owner-aware handles |
 | Dialects | One `dialect-*` crate per operation family | Seven target-neutral shells plus feature-gated `mir.*` shell landed |
-| Transformations | One `fe2o3-lower-*` family | Narrow MIR-to-kernel and kernel-to-GPU shells landed; full production ladder remains open |
-| KIR bridge | `fe2o3-kir-pliron-bridge` | Exact-byte V1-V5 envelope landed; complete semantic bridge gate remains open |
+| Transformations | One `fe2o3-lower-*` family | Narrow context-bound MIR-to-kernel and kernel-to-GPU detached services landed; full production ladder remains open |
+| KIR bridge | `fe2o3-kir-pliron-bridge` | Opaque context-bound exact-byte V1-V5 envelope landed; complete semantic bridge gate remains open |
 | Proof overlays | `fe2o3-proof-contracts`, `dialect-proof` | Solver-neutral records and inert Pliron overlay landed; proof integration remains open |
 | AMD lowering | AMD model/dialect/lowering crates | Existing implementation extracted to `fe2o3-amdgcn-model`; future Pliron AMD lowering remains open |
 | Driver | `fe2o3-compiler-driver`, legacy adapter | API routing and dormant adapter landed; production selection and shadow comparison remain open |
 
 Dialect agents MUST NOT edit central registration or production selection.
 They provide a registration function and focused tests for the integration
-owner to compose. A Pliron pass cannot publish, load, tune, or launch an
-artifact directly.
+owner to compose. A Pliron transformation service cannot publish, load, tune,
+or launch an artifact directly.
 
 ## Issue #135 Ownership
 
@@ -206,7 +210,7 @@ Issue #135 remains open. It depends on stable #134 contracts but has
 independent model, host, and proof lanes. The P0/P1 representations below do
 not execute a persistent service.
 
-| Lane | Primary write ownership | State through `db7bfdc8e` |
+| Lane | Primary write ownership | State at the 2026-08-18 checkpoint |
 |---|---|---|
 | Service model | `fe2o3-service-model` | P0 identities, transitions, invariants, and independent property classifications landed |
 | Scheduler proofs | `fe2o3-service-verus` | Package boundary reserved; proof implementation remains open |

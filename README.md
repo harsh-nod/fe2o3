@@ -250,7 +250,7 @@ rustc frontend and MIR
 
 ## Architecture
 
-The refactor through `db7bfdc8e` splits representation, compiler composition,
+The 2026-08-18 ownership refactor splits representation, compiler composition,
 target lowering, and host execution into explicit ownership boundaries:
 
 - Canonical contracts and models: `fe2o3-mir-model` owns the
@@ -269,8 +269,11 @@ target lowering, and host execution into explicit ownership boundaries:
   `rustc-codegen-fe2o3`; no production selector uses the new driver or adapter
   yet. The working codegen paths and `FE2O3_CODEGEN_PIPELINE` selection remain
   owned by the existing integration crate.
-- Pliron framework: `fe2o3-pliron` is a bounded D0 shell over Pliron v0.17.0 at
-  commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. Seven target-neutral
+- Pliron framework: `fe2o3-pliron` is a bounded D0 context, registration,
+  context-identity, and pass-planning shell over Pliron v0.17.0 at commit
+  `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. Generic pass execution is withheld
+  until [#140](https://github.com/harsh-nod/fe2o3/issues/140) supplies upstream
+  Pliron handles with authenticatable context provenance. Seven target-neutral
   representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
   `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`. `dialect-mir` remains a
   compatibility facade over `fe2o3-mir-model` and additionally exposes a
@@ -278,12 +281,14 @@ target lowering, and host execution into explicit ownership boundaries:
   These crates construct and verify in-memory representations; they do not
   form a production MIR-to-HSACO pipeline.
 - Bridge and transformation shells: `fe2o3-kir-pliron-bridge` retains exact
-  canonical KIR V1-V5 bytes and rejects any inconsistent Pliron projection.
+  canonical KIR V1-V5 bytes in an opaque context-bound envelope and rejects any
+  inconsistent, substituted, or foreign-context Pliron projection.
   `fe2o3-lower-mir-kernel` implements a narrow, terminally fail-closed
-  `mir.*`-to-`kernel.*` pass, and `fe2o3-lower-kernel-gpu` implements a bounded
-  target-neutral `kernel.*`-to-`gpu.*` pass. These passes are deterministic
-  in-memory boundaries, not a rustc frontend, AMD lowering, artifact producer,
-  or production compiler route.
+  `mir.*`-to-`kernel.*` detached service, and `fe2o3-lower-kernel-gpu`
+  implements a bounded target-neutral `kernel.*`-to-`gpu.*` detached service.
+  Their results are context-bound and stale handles fail with typed errors.
+  They do not implement Pliron's in-tree `Pass` contract and are not a rustc
+  frontend, AMD lowering, artifact producer, or production compiler route.
 - Target model and facades: `fe2o3-amd-target` owns canonical AMD target
   contracts. The existing strict AMDGPU lowering implementation moved to
   `fe2o3-amdgcn-model`; `dialect-amdgcn` now preserves the historical crate API
@@ -294,6 +299,10 @@ target lowering, and host execution into explicit ownership boundaries:
   adapter over `fe2o3-service-model` and `fe2o3-host-api`; it retains storage
   borrows and checks lifecycle descriptions but allocates, loads, launches,
   waits for, and executes nothing.
+- Pure-Rust runtime foundation: `fe2o3-kfd-uapi`, `fe2o3-kfd`, and
+  `fe2o3-runtime-model` provide reviewed KFD 1.18 encodings, fail-closed device
+  observation, and Verus-backed lifecycle modeling. They do not yet replace
+  the existing HIP/HSA execution path or establish persistent GPU execution.
 - Artifact, build, proof, and evidence boundaries remain in
   `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
   `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`,

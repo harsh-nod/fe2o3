@@ -47,6 +47,14 @@ build evidence grants no protected publication, broker or durable handoff,
 runtime, load, launch, or GPU evidence, memory-safety or race-freedom proof, or
 source-to-machine or Verus-to-machine refinement.
 
+The 2026-08-18 Pliron ownership checkpoint also promotes no parity row. It
+anchors process-local context identities, returns opaque context-bound KIR
+envelopes, binds detached lowering results to their owning context, and rejects
+erased handles with typed errors. Generic Pliron pass execution remains withheld
+until [#140](https://github.com/harsh-nod/fe2o3/issues/140) supplies owner-aware
+operation handles. The authoritative TSV and generated dashboard therefore
+remain unchanged at `0/97/0/12` combined.
+
 The existing V1 artifact wire format now has a strict `gfx942` profile with two
 canonically ordered entries over one digest-validated native payload. Each
 entry has a separate proof binding over its kernel, ABI, effects, launch,

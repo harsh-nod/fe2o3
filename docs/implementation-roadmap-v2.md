@@ -24,7 +24,7 @@ dates depend on staffing and hardware availability.
 
 ## Issue #134/#135 Infrastructure Checkpoint
 
-The refactor through `db7bfdc8e` makes issues
+The 2026-08-18 ownership refactor makes issues
 [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) infrastructure-enabled,
 but both issues remain open.
@@ -36,15 +36,18 @@ but both issues remain open.
   `fe2o3-legacy-compiler` provides a dormant adapter contract. Neither is wired
   into production compiler selection; the current implementation remains in
   `rustc-codegen-fe2o3`.
-- `fe2o3-pliron` provides the pinned D0 context/pass shell. Seven
+- `fe2o3-pliron` provides the pinned D0 context, private context identity,
+  registration, and bounded pass-plan shell. Generic pass execution is withheld
+  pending owner-aware upstream Pliron handles. Seven
   target-neutral Pliron dialect shells cover `kernel.*`, `schedule.*`,
   `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
   `dialect-mir` adds a bounded `mir.*` shell only with feature `pliron` while
   preserving its default compatibility facade over `fe2o3-mir-model`.
 - `fe2o3-kir-pliron-bridge` round-trips exact canonical KIR V1-V5 bytes through
-  a checked inert Pliron envelope. `fe2o3-lower-mir-kernel` and
+  an opaque context-bound Pliron envelope. `fe2o3-lower-mir-kernel` and
   `fe2o3-lower-kernel-gpu` add narrow, bounded, terminally fail-closed
-  transformation shells. They are not wired into production selection.
+  detached lowering services with context-bound results. They are not Pliron
+  in-tree passes and are not wired into production selection.
 - Existing AMDGPU lowering is owned by `fe2o3-amdgcn-model` and re-exported by
   the historical `dialect-amdgcn` facade. A production `gpu.*` to `amdgcn.*`
   Pliron route has not landed.

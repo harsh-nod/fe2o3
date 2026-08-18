@@ -10,7 +10,7 @@ pinned upstream LLVM build: LLVM target-machine APIs emit relocatable objects
 and in-process LLD library APIs link HSACO. That path uses neither COMGR nor
 shell invocations of `clang`, `llc`, or `ld.lld`.
 
-The ownership refactor through `db7bfdc8e` is infrastructure, not a compiler
+The 2026-08-18 ownership refactor is infrastructure, not a compiler
 promotion. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The working
 production compiler still selects its existing legacy and opt-in Kernel IR
@@ -30,13 +30,14 @@ driver route or persistent-service model.
   contains no existing codegen and is not production-selected.
 - `fe2o3-pliron` pins Pliron v0.17.0 commit
   `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and implements a bounded D0
-  context, registration, verification, and pass shell. Seven target-neutral
+  context, private identity anchor, registration, verification, and pass-plan
+  shell. It does not expose generic pass execution over contextless pointers. Seven target-neutral
   representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
   `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`. They perform no connected
   lowering, target selection, artifact production, or launch.
-- `fe2o3-kir-pliron-bridge` preserves exact canonical KIR V1-V5 bytes in a
-  checked inert Pliron envelope. `fe2o3-lower-mir-kernel` and
-  `fe2o3-lower-kernel-gpu` provide narrow bounded transformation shells. They
+- `fe2o3-kir-pliron-bridge` preserves exact canonical KIR V1-V5 bytes in an
+  opaque context-bound Pliron envelope. `fe2o3-lower-mir-kernel` and
+  `fe2o3-lower-kernel-gpu` provide narrow bounded detached lowering services. They
   are not connected to rustc extraction, AMD lowering, or production selection.
 - `fe2o3-amdgcn-model` now owns the existing strict AMDGPU target vocabulary
   and lowering implementation. `dialect-amdgcn` is its historical compatibility
