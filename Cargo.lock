@@ -962,6 +962,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-lower-kernel-gpu"
+version = "0.1.0"
+dependencies = [
+ "dialect-gpu",
+ "dialect-kernel",
+ "pliron",
+]
+
+[[package]]
 name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
