@@ -1,0 +1,19 @@
+[package]
+name = "fe2o3-service-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Authority-free persistent service host typestate contracts for fe2o3."
+publish = false
+
+[lib]
+name = "fe2o3_service_host"
+
+[dependencies]
+fe2o3-host-api.workspace = true
+fe2o3-service-model.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

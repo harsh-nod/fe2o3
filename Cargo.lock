@@ -1190,6 +1190,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-service-host"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-host-api",
+ "fe2o3-service-model",
+]
+
+[[package]]
 name = "fe2o3-service-model"
 version = "0.1.0"
 

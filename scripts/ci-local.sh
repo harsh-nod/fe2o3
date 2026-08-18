@@ -54,6 +54,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-proof-contracts
   fe2o3-rustc-front
   fe2o3-rustc-invocation
+  fe2o3-service-host
   fe2o3-service-model
   fe2o3-verifier
   fe2o3-worker-v2-bundle
