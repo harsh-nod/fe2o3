@@ -10,7 +10,7 @@ pinned upstream LLVM build: LLVM target-machine APIs emit relocatable objects
 and in-process LLD library APIs link HSACO. That path uses neither COMGR nor
 shell invocations of `clang`, `llc`, or `ld.lld`.
 
-The ownership refactor through `371a0682e` is infrastructure, not a compiler
+The ownership refactor through `db7bfdc8e` is infrastructure, not a compiler
 promotion. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The working
 production compiler still selects its existing legacy and opt-in Kernel IR
@@ -34,6 +34,10 @@ driver route or persistent-service model.
   representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
   `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`. They perform no connected
   lowering, target selection, artifact production, or launch.
+- `fe2o3-kir-pliron-bridge` preserves exact canonical KIR V1-V5 bytes in a
+  checked inert Pliron envelope. `fe2o3-lower-mir-kernel` and
+  `fe2o3-lower-kernel-gpu` provide narrow bounded transformation shells. They
+  are not connected to rustc extraction, AMD lowering, or production selection.
 - `fe2o3-amdgcn-model` now owns the existing strict AMDGPU target vocabulary
   and lowering implementation. `dialect-amdgcn` is its historical compatibility
   facade, not an implemented AMD Pliron dialect.

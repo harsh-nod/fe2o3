@@ -2,7 +2,7 @@
 
 Status: normative architecture decision for issue
 [#134](https://github.com/harsh-nod/fe2o3/issues/134) Wave 0, updated for the
-refactor through `371a0682e`. Issue #134 remains open. The current repository
+refactor through `db7bfdc8e`. Issue #134 remains open. The current repository
 implements bounded contracts and representation shells described below; it
 does not implement the complete Pliron pipeline, proof coverage, or performance
 qualification.
@@ -67,7 +67,7 @@ needed for D0-D11. It deliberately does not:
 Syntax shown below is illustrative. Wire records, operation schemas, and Rust
 API syntax become stable only through their owning versioned stage.
 
-## Implementation Boundary Through `371a0682e`
+## Implementation Boundary Through `db7bfdc8e`
 
 The following infrastructure is implemented:
 
@@ -95,6 +95,14 @@ The following infrastructure is implemented:
   module/function/block representation only under its non-default `pliron`
   feature. Without that feature it remains the compatibility facade that
   re-exports `fe2o3-mir-model`.
+- `fe2o3-kir-pliron-bridge` keeps canonical KIR V1-V5 bytes as the only durable
+  record, checks a redundant deterministic Pliron projection, and requires
+  exact expected-record agreement before recovery. This is bounded D2 envelope
+  coverage, not completion of the full D2 semantic bridge gate.
+- `fe2o3-lower-mir-kernel` accepts a deliberately narrow verified `mir.*`
+  subset and emits bounded `kernel.*` roots. `fe2o3-lower-kernel-gpu` converts
+  bounded kernel roots into target-neutral `gpu.*` operations. Both expose
+  terminal unsupported errors and no fallback, target, or artifact authority.
 - The existing strict AMDGPU vocabulary and lowering moved into
   `fe2o3-amdgcn-model`. `dialect-amdgcn` is now a compatibility re-export, not
   an implemented `amdgcn.*` Pliron dialect. Canonical target contracts remain
@@ -107,10 +115,11 @@ The following infrastructure is implemented:
   adapter. Neither crate executes a persistent service.
 
 These components make later implementation and parallel ownership possible.
-They do not connect rustc MIR to the Pliron ladder, implement the D1-D11
-lowerings, replace the current compiler selector, publish an artifact, execute
-a host operation, or create a persistent GPU scheduler. Their receipts and
-validated records describe representation and attempted transformations only.
+They do not connect rustc MIR extraction to the Pliron ladder, complete the
+D1-D11 gates, replace the current compiler selector, publish an artifact,
+execute a host operation, or create a persistent GPU scheduler. Their receipts
+and validated records describe representation and attempted transformations
+only.
 
 The existing production-directed GPU finalizer remains separate: an isolated
 worker uses pinned upstream LLVM target-machine APIs for object emission and
@@ -192,7 +201,7 @@ No Pliron type or operation appears in a public Rust kernel or host signature.
 
 ## Target Production Pipeline
 
-The intended production-directed pipeline is shown below. At `371a0682e`, the
+The intended production-directed pipeline is shown below. At `db7bfdc8e`, the
 landed Pliron crates represent bounded pieces of this ladder but do not compose
 or execute the full route.
 

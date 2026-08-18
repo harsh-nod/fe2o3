@@ -1,7 +1,7 @@
 # Workspace Layers and Parallel Ownership
 
 Status: normative Wave 1 workspace policy, updated for the refactor through
-`371a0682e`. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
+`db7bfdc8e`. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The landed
 crates make both epics infrastructure-enabled; they do not implement the
 production Pliron pipeline or persistent GPU execution.
@@ -76,15 +76,16 @@ operation verification, transformation passes, pass receipts, and the single
 KIR bridge. Planned operation families are `mir.*`, `kernel.*`, `schedule.*`,
 `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
 
-At `371a0682e`, `fe2o3-pliron` constructs the pinned D0 context and bounded
+At `db7bfdc8e`, `fe2o3-pliron` constructs the pinned D0 context and bounded
 pass shell. Seven always-Pliron target-neutral dialect shells implement
 `kernel.*`, `schedule.*`, `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and
 `autotune.*`. `dialect-mir` is primarily the compatibility facade over
 `fe2o3-mir-model`; its bounded `mir.*` Pliron module/function/block shell is
 available only through the non-default `pliron` feature. These are verified
-in-memory representations, not a connected compiler pipeline. The KIR bridge
-and `fe2o3-lower-*` package names remain reserved integration boundaries at
-this checkpoint rather than implemented production stages.
+in-memory representations, not a connected compiler pipeline.
+`fe2o3-kir-pliron-bridge` implements the exact-byte canonical KIR envelope,
+while `fe2o3-lower-mir-kernel` and `fe2o3-lower-kernel-gpu` implement narrow
+bounded transformation shells. None is a production compiler stage.
 
 This layer may consume canonical contracts and admitted frontend models. It
 MUST NOT depend on target backend, host runtime, Verus execution, compiler
@@ -143,7 +144,7 @@ on examples or test fixtures. It is the only layer that selects `Legacy`,
 `fe2o3-compiler-driver` routes exactly one selected, configured backend and
 revalidates its bounded output. `fe2o3-legacy-compiler` only defines the
 dormant adapter contract for the current implementation owner. No production
-selection path depends on the new driver or adapter at `371a0682e`; the
+selection path depends on the new driver or adapter at `db7bfdc8e`; the
 working legacy and opt-in Kernel IR routes remain composed in
 `rustc-codegen-fe2o3`.
 
@@ -183,13 +184,13 @@ Issue #134 remains open and can proceed in the following non-overlapping
 lanes. "Landed" below means representation or routing infrastructure exists;
 it does not mean production compilation exists.
 
-| Lane | Primary write ownership | State through `371a0682e` |
+| Lane | Primary write ownership | State through `db7bfdc8e` |
 |---|---|---|
 | Source/model extraction | `fe2o3-mir-model`, frontend adapters | Canonical model extracted; general frontend integration remains open |
 | Pliron context | `fe2o3-pliron` | Pinned D0 context/pass shell landed |
 | Dialects | One `dialect-*` crate per operation family | Seven target-neutral shells plus feature-gated `mir.*` shell landed |
-| Transformations | One `fe2o3-lower-*` family | Package boundaries reserved; production transformations remain open |
-| KIR bridge | `fe2o3-kir-pliron-bridge` | Package boundary reserved; production bridge remains open |
+| Transformations | One `fe2o3-lower-*` family | Narrow MIR-to-kernel and kernel-to-GPU shells landed; full production ladder remains open |
+| KIR bridge | `fe2o3-kir-pliron-bridge` | Exact-byte V1-V5 envelope landed; complete semantic bridge gate remains open |
 | Proof overlays | `fe2o3-proof-contracts`, `dialect-proof` | Solver-neutral records and inert Pliron overlay landed; proof integration remains open |
 | AMD lowering | AMD model/dialect/lowering crates | Existing implementation extracted to `fe2o3-amdgcn-model`; future Pliron AMD lowering remains open |
 | Driver | `fe2o3-compiler-driver`, legacy adapter | API routing and dormant adapter landed; production selection and shadow comparison remain open |
@@ -205,7 +206,7 @@ Issue #135 remains open. It depends on stable #134 contracts but has
 independent model, host, and proof lanes. The P0/P1 representations below do
 not execute a persistent service.
 
-| Lane | Primary write ownership | State through `371a0682e` |
+| Lane | Primary write ownership | State through `db7bfdc8e` |
 |---|---|---|
 | Service model | `fe2o3-service-model` | P0 identities, transitions, invariants, and independent property classifications landed |
 | Scheduler proofs | `fe2o3-service-verus` | Package boundary reserved; proof implementation remains open |

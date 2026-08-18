@@ -72,10 +72,12 @@ not shell out to `clang`, `llc`, or `ld.lld`. Early elementwise prototypes used
 ROCm command-line clang and `ld.lld`; references to that path below are
 historical compatibility notes, not the target architecture.
 
-The refactor through `371a0682e` implements the canonical model/API boundaries,
+The refactor through `db7bfdc8e` implements the canonical model/API boundaries,
 the pinned Pliron D0 shell, seven target-neutral dialect shells, a
-feature-gated `mir.*` Pliron shell, compiler routing contracts, and inert
-host/service contracts. It does not yet connect the device path in the diagram.
+feature-gated `mir.*` Pliron shell, an exact-byte KIR envelope, bounded
+MIR-to-kernel and kernel-to-GPU transformation shells, compiler routing
+contracts, and inert host/service contracts. It does not yet connect the
+device path in the diagram.
 The working compiler remains the existing `rustc-codegen-fe2o3` composition,
 including the default legacy recognizer and bounded opt-in Kernel IR routes.
 Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
@@ -139,6 +141,10 @@ in-process LLD finalizer.
 - `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`,
   `dialect-proof`, `dialect-dispatch`, `dialect-autotune`: target-neutral,
   representation-only Pliron shells.
+- `fe2o3-kir-pliron-bridge`: exact canonical KIR V1-V5 byte envelope with a
+  redundant checked Pliron projection.
+- `fe2o3-lower-mir-kernel`, `fe2o3-lower-kernel-gpu`: bounded target-neutral
+  transformation shells; neither is a production pipeline selector.
 - `fe2o3-amdgcn-model`: existing AMDGPU intrinsic and strict lowering model.
 - `dialect-amdgcn`: historical compatibility re-export; not yet an AMD Pliron
   dialect.

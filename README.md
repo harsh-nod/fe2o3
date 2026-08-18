@@ -250,7 +250,7 @@ rustc frontend and MIR
 
 ## Architecture
 
-The refactor through `371a0682e` splits representation, compiler composition,
+The refactor through `db7bfdc8e` splits representation, compiler composition,
 target lowering, and host execution into explicit ownership boundaries:
 
 - Canonical contracts and models: `fe2o3-mir-model` owns the
@@ -277,6 +277,13 @@ target lowering, and host execution into explicit ownership boundaries:
   bounded `mir.*` Pliron shell only with its non-default `pliron` feature.
   These crates construct and verify in-memory representations; they do not
   form a production MIR-to-HSACO pipeline.
+- Bridge and transformation shells: `fe2o3-kir-pliron-bridge` retains exact
+  canonical KIR V1-V5 bytes and rejects any inconsistent Pliron projection.
+  `fe2o3-lower-mir-kernel` implements a narrow, terminally fail-closed
+  `mir.*`-to-`kernel.*` pass, and `fe2o3-lower-kernel-gpu` implements a bounded
+  target-neutral `kernel.*`-to-`gpu.*` pass. These passes are deterministic
+  in-memory boundaries, not a rustc frontend, AMD lowering, artifact producer,
+  or production compiler route.
 - Target model and facades: `fe2o3-amd-target` owns canonical AMD target
   contracts. The existing strict AMDGPU lowering implementation moved to
   `fe2o3-amdgcn-model`; `dialect-amdgcn` now preserves the historical crate API

@@ -24,7 +24,7 @@ dates depend on staffing and hardware availability.
 
 ## Issue #134/#135 Infrastructure Checkpoint
 
-The refactor through `371a0682e` makes issues
+The refactor through `db7bfdc8e` makes issues
 [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) infrastructure-enabled,
 but both issues remain open.
@@ -41,6 +41,10 @@ but both issues remain open.
   `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
   `dialect-mir` adds a bounded `mir.*` shell only with feature `pliron` while
   preserving its default compatibility facade over `fe2o3-mir-model`.
+- `fe2o3-kir-pliron-bridge` round-trips exact canonical KIR V1-V5 bytes through
+  a checked inert Pliron envelope. `fe2o3-lower-mir-kernel` and
+  `fe2o3-lower-kernel-gpu` add narrow, bounded, terminally fail-closed
+  transformation shells. They are not wired into production selection.
 - Existing AMDGPU lowering is owned by `fe2o3-amdgcn-model` and re-exported by
   the historical `dialect-amdgcn` facade. A production `gpu.*` to `amdgcn.*`
   Pliron route has not landed.
