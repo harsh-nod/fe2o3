@@ -5,7 +5,10 @@ use dialect_tile::{
 };
 use pliron::{
     attribute::Attribute,
-    builtin::{op_interfaces::SingleBlockRegionInterface, ops::ModuleOp, types::UnitType},
+    builtin::{
+        attributes::BytesAttr, op_interfaces::SingleBlockRegionInterface, ops::ModuleOp,
+        types::UnitType,
+    },
     common_traits::Verify,
     context::Context,
     dialect::DialectName,
@@ -162,4 +165,16 @@ fn hostile_operation_shapes_and_metadata_fail_verification() {
             Box::new(DistributionAttr::new(3, 32, 4).expect("bounded distribution")),
         );
     assert!(verify_op(&mismatched, context).is_err());
+
+    let extra = MaterializeOp::new(context, 2, 32, 4).expect("bounded tile");
+    extra
+        .get_operation()
+        .deref_mut(context)
+        .attributes
+        .0
+        .insert(
+            "tile_hostile_extra".try_into().expect("valid key"),
+            Box::new(BytesAttr::new(vec![0xde, 0xad, 0xbe, 0xef])),
+        );
+    assert!(verify_op(&extra, context).is_err());
 }

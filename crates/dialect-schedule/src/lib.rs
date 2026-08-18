@@ -5,7 +5,10 @@ use std::{error::Error, fmt};
 
 use pliron::{
     attribute::Attribute,
-    builtin::op_interfaces::{NOpdsInterface, NRegionsInterface, NResultsInterface},
+    builtin::{
+        ATTR_KEY_DEBUG_INFO,
+        op_interfaces::{NOpdsInterface, NRegionsInterface, NResultsInterface},
+    },
     common_traits::Verify,
     context::Context,
     derive::{op_interface, op_interface_impl, pliron_attr, pliron_op, pliron_type},
@@ -317,6 +320,7 @@ impl PlanOp {
 
 impl Verify for PlanOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_closed_shape(self, context)?;
         let parameters = self
             .parameters(context)
             .ok_or_else(|| verify_error!(self.loc(context), ScheduleError::MissingParameters))?;
@@ -340,6 +344,33 @@ impl Verify for PlanOp {
         }
         Ok(())
     }
+}
+
+fn verify_closed_shape(op: &dyn Op, context: &Context) -> PlironResult<()> {
+    let operation = op.get_operation();
+    let operation = operation.deref(context);
+    let attributes_are_closed = operation.attributes.0.iter().all(|(key, attribute)| {
+        key == &parameters_attr_key()
+            || (key == &*ATTR_KEY_DEBUG_INFO && is_debug_info(attribute.as_ref()))
+    });
+    if operation.get_num_operands() != 0
+        || operation.get_num_results() != 1
+        || operation.get_num_successors() != 0
+        || operation.num_regions() != 0
+        || !attributes_are_closed
+    {
+        return verify_err!(
+            op.loc(context),
+            "{} has malformed or unbounded structural payload",
+            op.get_opid()
+        );
+    }
+    Ok(())
+}
+
+fn is_debug_info(attribute: &dyn Attribute) -> bool {
+    let id = attribute.get_attr_id();
+    id.dialect.as_ref() == "builtin" && AsRef::<str>::as_ref(&id.name) == "debug_info"
 }
 
 fn parameters_attr_key() -> Identifier {

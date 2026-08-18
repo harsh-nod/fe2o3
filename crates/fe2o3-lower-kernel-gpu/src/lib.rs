@@ -75,6 +75,8 @@ pub enum PassRegistrationError {
     ContextIdentityExhausted,
     /// The kernel dialect rejected its explicit registration.
     KernelDialect(dialect_kernel::RegistrationError),
+    /// The GPU dialect rejected its explicit registration.
+    GpuDialect(dialect_gpu::RegistrationError),
 }
 
 impl fmt::Display for PassRegistrationError {
@@ -90,6 +92,7 @@ impl fmt::Display for PassRegistrationError {
                 formatter.write_str("kernel-to-GPU context identity space is exhausted")
             }
             Self::KernelDialect(error) => write!(formatter, "kernel dialect registration: {error}"),
+            Self::GpuDialect(error) => write!(formatter, "GPU dialect registration: {error}"),
         }
     }
 }
@@ -114,7 +117,7 @@ pub fn register_pass(
         .expect("static kernel dialect name is valid");
     dialect_kernel::register_dialect(context, &kernel_name)
         .map_err(PassRegistrationError::KernelDialect)?;
-    dialect_gpu::register_dialect(context);
+    dialect_gpu::register_dialect(context).map_err(PassRegistrationError::GpuDialect)?;
 
     let marker = context.aux_data.insert(Box::new(PassRegistrationMarker {
         context_id: next_context_id()?,

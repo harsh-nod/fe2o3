@@ -6,10 +6,13 @@
 
 #![forbid(unsafe_code)]
 
+use std::{error::Error, fmt};
+
 use pliron::{
     attribute::Attribute,
-    builtin::op_interfaces::{
-        NOpdsInterface, NRegionsInterface, NResultsInterface, OneResultInterface,
+    builtin::{
+        ATTR_KEY_DEBUG_INFO,
+        op_interfaces::{NOpdsInterface, NRegionsInterface, NResultsInterface, OneResultInterface},
     },
     common_traits::Verify,
     context::Context,
@@ -41,6 +44,26 @@ pub enum RegistrationOutcome {
     /// The same complete surface was already registered by this crate.
     AlreadyRegistered,
 }
+
+/// A fail-closed explicit registration error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistrationError {
+    /// Another typed value already claimed this crate's marker key.
+    MarkerCollision,
+    /// The marker map referenced absent auxiliary data.
+    CorruptMarker,
+}
+
+impl fmt::Display for RegistrationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MarkerCollision => formatter.write_str("gpu registration marker collision"),
+            Self::CorruptMarker => formatter.write_str("gpu registration marker is corrupt"),
+        }
+    }
+}
+
+impl Error for RegistrationError {}
 
 /// Abstract GPU execution hierarchy.
 #[pliron_attr(name = "gpu.hierarchy", format, verifier = "succ")]
@@ -495,11 +518,17 @@ fn verify_closed_shape(
 ) -> Result<()> {
     let operation = op.get_operation();
     let operation = operation.deref(context);
+    let debug_info = operation.attributes.0.get(&*ATTR_KEY_DEBUG_INFO);
+    let debug_info_is_valid = debug_info
+        .map(|attribute| results != 0 && is_debug_info(attribute.as_ref()))
+        .unwrap_or(true);
+    let expected_attributes = attributes + usize::from(debug_info.is_some());
     if operation.get_num_operands() != operands
         || operation.get_num_results() != results
         || operation.get_num_successors() != 0
         || operation.num_regions() != 0
-        || operation.attributes.0.len() != attributes
+        || operation.attributes.0.len() != expected_attributes
+        || !debug_info_is_valid
     {
         return verify_err!(
             op.loc(context),
@@ -508,6 +537,11 @@ fn verify_closed_shape(
         );
     }
     Ok(())
+}
+
+fn is_debug_info(attribute: &dyn Attribute) -> bool {
+    let id = attribute.get_attr_id();
+    id.dialect.as_ref() == "builtin" && AsRef::<str>::as_ref(&id.name) == "debug_info"
 }
 
 const fn hierarchy_memory_rank(hierarchy: HierarchyAttr) -> u8 {
@@ -531,9 +565,17 @@ const fn memory_scope_rank(scope: MemoryScopeAttr) -> u8 {
 /// Explicitly registers every `gpu.*` type, attribute, and operation.
 ///
 /// Repeated calls are side-effect free and report [`RegistrationOutcome::AlreadyRegistered`].
-pub fn register_dialect(context: &mut Context) -> RegistrationOutcome {
-    if context.aux_data_map.contains_key(&*GPU_REGISTRATION_KEY) {
-        return RegistrationOutcome::AlreadyRegistered;
+pub fn register_dialect(
+    context: &mut Context,
+) -> std::result::Result<RegistrationOutcome, RegistrationError> {
+    if let Some(index) = context.aux_data_map.get(&*GPU_REGISTRATION_KEY).copied() {
+        return match context.aux_data.get(index) {
+            Some(marker) if marker.downcast_ref::<RegistrationMarker>().is_some() => {
+                Ok(RegistrationOutcome::AlreadyRegistered)
+            }
+            Some(_) => Err(RegistrationError::MarkerCollision),
+            None => Err(RegistrationError::CorruptMarker),
+        };
     }
 
     let dialect_name = DialectName::try_new(DIALECT_NAME).expect("static gpu dialect name");
@@ -554,5 +596,5 @@ pub fn register_dialect(context: &mut Context) -> RegistrationOutcome {
     context
         .aux_data_map
         .insert(GPU_REGISTRATION_KEY.clone(), marker);
-    RegistrationOutcome::Registered
+    Ok(RegistrationOutcome::Registered)
 }

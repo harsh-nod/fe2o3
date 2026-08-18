@@ -145,6 +145,19 @@ fn rejects_missing_or_poisoned_registration() {
         Err(PassRegistrationError::MarkerCollision)
     );
 
+    let mut gpu_poisoned = Context::new();
+    let gpu_marker_key: Identifier = "fe2o3_dialect_gpu_explicit_registration"
+        .try_into()
+        .expect("valid GPU marker key");
+    let gpu_marker = gpu_poisoned.aux_data.insert(Box::new(11_u32));
+    gpu_poisoned.aux_data_map.insert(gpu_marker_key, gpu_marker);
+    assert_eq!(
+        register_pass(&mut gpu_poisoned),
+        Err(PassRegistrationError::GpuDialect(
+            dialect_gpu::RegistrationError::MarkerCollision
+        ))
+    );
+
     let poisoned_source = AlgorithmOp::new(&mut poisoned, 1).expect("valid source");
     let mut poisoned_pass = KernelGpuLoweringPass::new(bounded);
     assert_eq!(

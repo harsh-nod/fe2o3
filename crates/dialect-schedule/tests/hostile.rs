@@ -5,7 +5,10 @@ use dialect_schedule::{
 };
 use pliron::{
     attribute::Attribute,
-    builtin::{op_interfaces::SingleBlockRegionInterface, ops::ModuleOp, types::UnitType},
+    builtin::{
+        attributes::BytesAttr, op_interfaces::SingleBlockRegionInterface, ops::ModuleOp,
+        types::UnitType,
+    },
     common_traits::Verify,
     context::Context,
     dialect::DialectName,
@@ -164,4 +167,16 @@ fn hostile_operation_shapes_and_metadata_fail_verification() {
             Box::new(ParametersAttr::new(3, 64, 2).expect("bounded parameters")),
         );
     assert!(verify_op(&mismatched, context).is_err());
+
+    let extra = PlanOp::new(context, 2, 64, 2).expect("bounded plan");
+    extra
+        .get_operation()
+        .deref_mut(context)
+        .attributes
+        .0
+        .insert(
+            "schedule_hostile_extra".try_into().expect("valid key"),
+            Box::new(BytesAttr::new(vec![0xde, 0xad, 0xbe, 0xef])),
+        );
+    assert!(verify_op(&extra, context).is_err());
 }

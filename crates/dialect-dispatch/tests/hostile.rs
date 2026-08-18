@@ -1,12 +1,15 @@
 use dialect_dispatch::{
     DependencyIntentOp, DependencyKindAttr, DispatchIdAttr, DispatchIntentOpInterface,
-    DispatchModeAttr, GraphCapacityAttr, GraphIntentOp, GraphRefType, RegistrationOutcome,
-    SelectionIntentOp, SelectionPolicyAttr, WorkspaceClassAttr, WorkspaceIntentOp,
-    WorkspaceLifetimeAttr, register_dialect, selection_intent_op_attr_names,
+    DispatchModeAttr, GraphCapacityAttr, GraphIntentOp, GraphRefType, RegistrationError,
+    RegistrationOutcome, SelectionIntentOp, SelectionPolicyAttr, WorkspaceClassAttr,
+    WorkspaceIntentOp, WorkspaceLifetimeAttr, register_dialect, selection_intent_op_attr_names,
 };
 use pliron::{
     attribute::{AttrObj, verify_attr},
-    builtin::{attributes::UnitAttr, types::UnitType},
+    builtin::{
+        attributes::{BytesAttr, UnitAttr},
+        types::UnitType,
+    },
     combine::{Parser, eof},
     context::Context,
     identifier::Identifier,
@@ -26,11 +29,11 @@ fn registration_is_real_duplicate_safe_and_round_trips_entities() {
     let mut context = Context::new();
     assert_eq!(
         register_dialect(&mut context),
-        RegistrationOutcome::Registered
+        Ok(RegistrationOutcome::Registered)
     );
     assert_eq!(
         register_dialect(&mut context),
-        RegistrationOutcome::AlreadyRegistered
+        Ok(RegistrationOutcome::AlreadyRegistered)
     );
 
     let attribute: AttrObj = Box::new(id(10));
@@ -74,9 +77,27 @@ fn registration_is_real_duplicate_safe_and_round_trips_entities() {
 }
 
 #[test]
+fn hostile_registration_marker_is_rejected() {
+    let mut context = Context::new();
+    let key = Identifier::try_from("fe2o3_dialect_dispatch_explicit_registration")
+        .expect("valid marker key");
+    let hostile = context.aux_data.insert(Box::new("foreign"));
+    context.aux_data_map.insert(key.clone(), hostile);
+    assert_eq!(
+        register_dialect(&mut context),
+        Err(RegistrationError::MarkerCollision)
+    );
+    context.aux_data.remove(hostile);
+    assert_eq!(
+        register_dialect(&mut context),
+        Err(RegistrationError::CorruptMarker)
+    );
+}
+
+#[test]
 fn fixed_width_ids_have_bounded_parsing_and_reject_zero() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("dispatch registration");
 
     let valid = "fedcba9876543210".repeat(4);
     let parsed = parse_from_str(DispatchIdAttr::parser(()).skip(eof()), &mut context, &valid)
@@ -101,7 +122,7 @@ fn fixed_width_ids_have_bounded_parsing_and_reject_zero() {
 #[test]
 fn valid_intents_are_inert_and_non_authoritative() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("dispatch registration");
 
     let graph_id = id(100);
     let graph = GraphIntentOp::new(
@@ -145,7 +166,7 @@ fn valid_intents_are_inert_and_non_authoritative() {
 #[test]
 fn verifier_rejects_reflexive_dependencies_and_bad_workspace_owners() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("dispatch registration");
 
     let node = id(200);
     let reflexive = DependencyIntentOp::new(
@@ -183,7 +204,7 @@ fn verifier_rejects_reflexive_dependencies_and_bad_workspace_owners() {
 #[test]
 fn verifier_rejects_ambiguous_selection_intents() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("dispatch registration");
 
     let exact_distinct = SelectionIntentOp::new(
         &mut context,
@@ -216,7 +237,7 @@ fn verifier_rejects_ambiguous_selection_intents() {
 #[test]
 fn verifier_rejects_wrong_missing_extra_and_structural_payloads() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("dispatch registration");
 
     let wrong_policy = SelectionIntentOp::new(
         &mut context,
@@ -251,18 +272,51 @@ fn verifier_rejects_wrong_missing_extra_and_structural_payloads() {
         );
     assert!(verify_op(&missing, &context).is_err());
 
-    let extra = DependencyIntentOp::new(
+    let extra_graph = GraphIntentOp::new(
         &mut context,
         id(440),
+        GraphCapacityAttr::Nodes64,
+        DispatchModeAttr::PersistentService,
+    );
+    let extra_dependency = DependencyIntentOp::new(
+        &mut context,
+        id(441),
         id(450),
         id(460),
         DependencyKindAttr::Visibility,
     );
-    extra.get_operation().deref_mut(&context).attributes.set(
-        Identifier::try_from("dispatch_hostile_extra").expect("valid key"),
-        UnitAttr,
+    let workspace_graph_id = id(442);
+    let extra_workspace = WorkspaceIntentOp::new(
+        &mut context,
+        workspace_graph_id.clone(),
+        id(451),
+        workspace_graph_id,
+        WorkspaceClassAttr::Bytes4096,
+        WorkspaceLifetimeAttr::Graph,
     );
-    assert!(verify_op(&extra, &context).is_err());
+    let extra_selection = SelectionIntentOp::new(
+        &mut context,
+        id(443),
+        id(452),
+        id(462),
+        SelectionPolicyAttr::DeterministicRanked,
+    );
+    for op in [
+        &extra_graph as &dyn Op,
+        &extra_dependency,
+        &extra_workspace,
+        &extra_selection,
+    ] {
+        op.get_operation().deref_mut(&context).attributes.set(
+            Identifier::try_from("dispatch_hostile_extra").expect("valid key"),
+            BytesAttr::new(vec![0xde, 0xad, 0xbe, 0xef]),
+        );
+        assert!(
+            verify_op(op, &context).is_err(),
+            "{} accepted an undeclared byte payload",
+            op.get_opid()
+        );
+    }
 
     let result_type = UnitType::get(&context).into();
     let operation = Operation::new(

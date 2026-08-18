@@ -1,11 +1,14 @@
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ObligationRefType,
-    ProofIdAttr, ProofOverlayOpInterface, PropertyAttr, RegistrationOutcome,
+    ProofIdAttr, ProofOverlayOpInterface, PropertyAttr, RegistrationError, RegistrationOutcome,
     evidence_ref_op_attr_names, register_dialect,
 };
 use pliron::{
     attribute::{AttrObj, verify_attr},
-    builtin::{attributes::UnitAttr, types::UnitType},
+    builtin::{
+        attributes::{BytesAttr, UnitAttr},
+        types::UnitType,
+    },
     combine::{Parser, eof},
     context::Context,
     identifier::Identifier,
@@ -25,11 +28,11 @@ fn registration_is_real_duplicate_safe_and_round_trips_entities() {
     let mut context = Context::new();
     assert_eq!(
         register_dialect(&mut context),
-        RegistrationOutcome::Registered
+        Ok(RegistrationOutcome::Registered)
     );
     assert_eq!(
         register_dialect(&mut context),
-        RegistrationOutcome::AlreadyRegistered
+        Ok(RegistrationOutcome::AlreadyRegistered)
     );
 
     let attribute: AttrObj = Box::new(id(10));
@@ -74,9 +77,27 @@ fn registration_is_real_duplicate_safe_and_round_trips_entities() {
 }
 
 #[test]
+fn hostile_registration_marker_is_rejected() {
+    let mut context = Context::new();
+    let key = Identifier::try_from("fe2o3_dialect_proof_explicit_registration")
+        .expect("valid marker key");
+    let hostile = context.aux_data.insert(Box::new(false));
+    context.aux_data_map.insert(key.clone(), hostile);
+    assert_eq!(
+        register_dialect(&mut context),
+        Err(RegistrationError::MarkerCollision)
+    );
+    context.aux_data.remove(hostile);
+    assert_eq!(
+        register_dialect(&mut context),
+        Err(RegistrationError::CorruptMarker)
+    );
+}
+
+#[test]
 fn fixed_width_ids_have_bounded_parsing_and_reject_zero() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("proof registration");
 
     let valid = "0123456789abcdef".repeat(4);
     let parsed = parse_from_str(ProofIdAttr::parser(()).skip(eof()), &mut context, &valid)
@@ -96,7 +117,7 @@ fn fixed_width_ids_have_bounded_parsing_and_reject_zero() {
 #[test]
 fn property_statuses_remain_independent_and_non_authoritative() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("proof registration");
 
     let obligation_id = id(100);
     let bounds = EvidenceRefOp::new(
@@ -136,7 +157,7 @@ fn property_statuses_remain_independent_and_non_authoritative() {
 #[test]
 fn verifier_rejects_identity_confusion_and_zero_references() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("proof registration");
 
     let same = id(200);
     let confused = EvidenceRefOp::new(
@@ -162,7 +183,7 @@ fn verifier_rejects_identity_confusion_and_zero_references() {
 #[test]
 fn verifier_rejects_missing_wrong_extra_and_structural_payloads() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("proof registration");
 
     let wrong_status = EvidenceRefOp::new(
         &mut context,
@@ -182,18 +203,32 @@ fn verifier_rejects_missing_wrong_extra_and_structural_payloads() {
         );
     assert!(verify_op(&wrong_status, &context).is_err());
 
-    let extra = ObligationOp::new(
+    let extra_obligation = ObligationOp::new(
         &mut context,
         id(320),
         id(330),
         id(340),
         PropertyAttr::Provenance,
     );
-    extra.get_operation().deref_mut(&context).attributes.set(
-        Identifier::try_from("proof_hostile_extra").expect("valid key"),
-        UnitAttr,
+    let extra_evidence = EvidenceRefOp::new(
+        &mut context,
+        id(321),
+        id(331),
+        PropertyAttr::Bounds,
+        EvidenceStatusAttr::Validated,
+        CoveredBoundaryAttr::Mir,
     );
-    assert!(verify_op(&extra, &context).is_err());
+    for op in [&extra_obligation as &dyn Op, &extra_evidence] {
+        op.get_operation().deref_mut(&context).attributes.set(
+            Identifier::try_from("proof_hostile_extra").expect("valid key"),
+            BytesAttr::new(vec![0xde, 0xad, 0xbe, 0xef]),
+        );
+        assert!(
+            verify_op(op, &context).is_err(),
+            "{} accepted an undeclared byte payload",
+            op.get_opid()
+        );
+    }
 
     let missing = EvidenceRefOp::new(
         &mut context,

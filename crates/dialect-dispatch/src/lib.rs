@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::{error::Error, fmt};
+
 use pliron::{
     attribute::Attribute,
     builtin::op_interfaces::{NOpdsInterface, NRegionsInterface, NResultsInterface},
@@ -40,9 +42,31 @@ struct RegistrationMarker;
 /// Result of explicitly registering this dialect in a context.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistrationOutcome {
+    /// The complete dialect surface was explicitly registered.
     Registered,
+    /// The same complete surface was already registered by this crate.
     AlreadyRegistered,
 }
+
+/// A fail-closed explicit registration error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistrationError {
+    /// Another typed value already claimed this crate's marker key.
+    MarkerCollision,
+    /// The marker map referenced absent auxiliary data.
+    CorruptMarker,
+}
+
+impl fmt::Display for RegistrationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MarkerCollision => formatter.write_str("dispatch registration marker collision"),
+            Self::CorruptMarker => formatter.write_str("dispatch registration marker is corrupt"),
+        }
+    }
+}
+
+impl Error for RegistrationError {}
 
 /// Fixed-width graph, node, variant, event, or workspace identity.
 #[pliron_attr(name = "dispatch.id")]
@@ -609,12 +633,21 @@ fn verify_closed_shape(op: &dyn Op, context: &Context, attributes: usize) -> Res
 }
 
 /// Explicitly registers every `dispatch.*` type, attribute, and operation.
-pub fn register_dialect(context: &mut Context) -> RegistrationOutcome {
-    if context
+pub fn register_dialect(
+    context: &mut Context,
+) -> std::result::Result<RegistrationOutcome, RegistrationError> {
+    if let Some(index) = context
         .aux_data_map
-        .contains_key(&*DISPATCH_REGISTRATION_KEY)
+        .get(&*DISPATCH_REGISTRATION_KEY)
+        .copied()
     {
-        return RegistrationOutcome::AlreadyRegistered;
+        return match context.aux_data.get(index) {
+            Some(marker) if marker.downcast_ref::<RegistrationMarker>().is_some() => {
+                Ok(RegistrationOutcome::AlreadyRegistered)
+            }
+            Some(_) => Err(RegistrationError::MarkerCollision),
+            None => Err(RegistrationError::CorruptMarker),
+        };
     }
 
     let dialect_name = DialectName::try_new(DIALECT_NAME).expect("static dispatch dialect name");
@@ -639,5 +672,5 @@ pub fn register_dialect(context: &mut Context) -> RegistrationOutcome {
     context
         .aux_data_map
         .insert(DISPATCH_REGISTRATION_KEY.clone(), marker);
-    RegistrationOutcome::Registered
+    Ok(RegistrationOutcome::Registered)
 }

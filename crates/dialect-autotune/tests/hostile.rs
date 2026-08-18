@@ -5,7 +5,10 @@ use dialect_autotune::{
 };
 use pliron::{
     attribute::Attribute,
-    builtin::{op_interfaces::SingleBlockRegionInterface, ops::ModuleOp, types::UnitType},
+    builtin::{
+        attributes::BytesAttr, op_interfaces::SingleBlockRegionInterface, ops::ModuleOp,
+        types::UnitType,
+    },
     common_traits::Verify,
     context::Context,
     dialect::DialectName,
@@ -167,4 +170,16 @@ fn hostile_operation_shapes_and_metadata_fail_verification() {
             Box::new(CandidateBudgetAttr::new(3, 4).expect("bounded budget")),
         );
     assert!(verify_op(&mismatched, context).is_err());
+
+    let extra = CandidateSetOp::new(context, 2, 4).expect("bounded candidate set");
+    extra
+        .get_operation()
+        .deref_mut(context)
+        .attributes
+        .0
+        .insert(
+            "autotune_hostile_extra".try_into().expect("valid key"),
+            Box::new(BytesAttr::new(vec![0xde, 0xad, 0xbe, 0xef])),
+        );
+    assert!(verify_op(&extra, context).is_err());
 }

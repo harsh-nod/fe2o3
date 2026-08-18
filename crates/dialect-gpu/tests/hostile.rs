@@ -1,17 +1,22 @@
 use dialect_gpu::{
     AddressSpaceAttr, BarrierOp, FenceOp, HierarchyAttr, HierarchyIdOp, HierarchyIndexType,
-    MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType, RegistrationOutcome,
-    SynchronizationOpInterface, TargetNeutralGpuOpInterface, barrier_op_attr_names,
-    register_dialect,
+    MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType, RegistrationError,
+    RegistrationOutcome, SynchronizationOpInterface, TargetNeutralGpuOpInterface,
+    barrier_op_attr_names, register_dialect,
 };
 use pliron::{
     attribute::AttrObj,
-    builtin::{attributes::UnitAttr, types::UnitType},
+    builtin::{
+        attributes::{BytesAttr, UnitAttr},
+        op_interfaces::SingleBlockRegionInterface,
+        ops::ModuleOp,
+        types::UnitType,
+    },
     combine::{Parser, eof},
     context::Context,
     identifier::Identifier,
     op::{Op, op_cast, verify_op},
-    operation::{Operation, OperationParserConfig},
+    operation::{Operation, OperationParserConfig, verify_operation},
     parsable::{Parsable, parse_from_str},
     printable::Printable,
     r#type::TypeHandle,
@@ -22,11 +27,11 @@ fn registration_is_real_duplicate_safe_and_round_trips_entities() {
     let mut context = Context::new();
     assert_eq!(
         register_dialect(&mut context),
-        RegistrationOutcome::Registered
+        Ok(RegistrationOutcome::Registered)
     );
     assert_eq!(
         register_dialect(&mut context),
-        RegistrationOutcome::AlreadyRegistered
+        Ok(RegistrationOutcome::AlreadyRegistered)
     );
 
     let attribute: AttrObj = Box::new(HierarchyAttr::Workgroup);
@@ -75,12 +80,45 @@ fn registration_is_real_duplicate_safe_and_round_trips_entities() {
     let parsed = Operation::get_op_dyn(parsed_operation, &context);
     assert!(parsed.is::<BarrierOp>());
     verify_op(&*parsed, &context).expect("parsed barrier must verify");
+
+    for operation in [
+        HierarchyIdOp::new(&mut context, HierarchyAttr::Subgroup).get_operation(),
+        MemorySpaceOp::new(&mut context, AddressSpaceAttr::Workgroup).get_operation(),
+    ] {
+        let module = ModuleOp::new(
+            &mut context,
+            "gpu_roundtrip".try_into().expect("valid name"),
+        );
+        module.append_operation(&mut context, operation, 0);
+        let printed = module.get_operation().disp(&context).to_string();
+        let parsed = parse_from_str(Operation::top_level_parser(), &mut context, &printed)
+            .expect("registered result operation must parse");
+        verify_operation(parsed, &context).expect("parsed result operation must verify");
+    }
+}
+
+#[test]
+fn hostile_registration_marker_is_rejected() {
+    let mut context = Context::new();
+    let key =
+        Identifier::try_from("fe2o3_dialect_gpu_explicit_registration").expect("valid marker key");
+    let hostile = context.aux_data.insert(Box::new(17_u32));
+    context.aux_data_map.insert(key.clone(), hostile);
+    assert_eq!(
+        register_dialect(&mut context),
+        Err(RegistrationError::MarkerCollision)
+    );
+    context.aux_data.remove(hostile);
+    assert_eq!(
+        register_dialect(&mut context),
+        Err(RegistrationError::CorruptMarker)
+    );
 }
 
 #[test]
 fn valid_operations_are_target_neutral_and_non_authoritative() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("gpu registration");
 
     let hierarchy = HierarchyIdOp::new(&mut context, HierarchyAttr::Lane);
     let memory = MemorySpaceOp::new(&mut context, AddressSpaceAttr::Workgroup);
@@ -113,7 +151,7 @@ fn valid_operations_are_target_neutral_and_non_authoritative() {
 #[test]
 fn verifier_rejects_mismatched_result_types_and_attributes() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("gpu registration");
 
     let wrong_type = MemorySpaceType::get(&context, AddressSpaceAttr::Global).into();
     let operation = Operation::new(
@@ -156,7 +194,7 @@ fn verifier_rejects_mismatched_result_types_and_attributes() {
 #[test]
 fn verifier_rejects_hostile_synchronization_combinations() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("gpu registration");
 
     let private = BarrierOp::new(
         &mut context,
@@ -197,7 +235,7 @@ fn verifier_rejects_hostile_synchronization_combinations() {
 #[test]
 fn verifier_rejects_missing_extra_and_structural_payloads() {
     let mut context = Context::new();
-    register_dialect(&mut context);
+    register_dialect(&mut context).expect("gpu registration");
 
     let missing = BarrierOp::new(
         &mut context,
@@ -214,17 +252,37 @@ fn verifier_rejects_missing_extra_and_structural_payloads() {
         .remove(&*barrier_op_attr_names::ATTR_KEY_GPU_BARRIER_ORDER);
     assert!(verify_op(&missing, &context).is_err());
 
-    let extra = FenceOp::new(
+    let extra_hierarchy = HierarchyIdOp::new(&mut context, HierarchyAttr::Grid);
+    let extra_memory = MemorySpaceOp::new(&mut context, AddressSpaceAttr::Global);
+    let extra_barrier = BarrierOp::new(
+        &mut context,
+        HierarchyAttr::Workgroup,
+        MemoryScopeAttr::Device,
+        AddressSpaceAttr::Global,
+        MemoryOrderAttr::SequentiallyConsistent,
+    );
+    let extra_fence = FenceOp::new(
         &mut context,
         MemoryScopeAttr::Device,
         AddressSpaceAttr::Global,
         MemoryOrderAttr::Acquire,
     );
-    extra.get_operation().deref_mut(&context).attributes.set(
-        Identifier::try_from("gpu_hostile_extra").expect("valid key"),
-        UnitAttr,
-    );
-    assert!(verify_op(&extra, &context).is_err());
+    for op in [
+        &extra_hierarchy as &dyn Op,
+        &extra_memory,
+        &extra_barrier,
+        &extra_fence,
+    ] {
+        op.get_operation().deref_mut(&context).attributes.set(
+            Identifier::try_from("gpu_hostile_extra").expect("valid key"),
+            BytesAttr::new(vec![0xde, 0xad, 0xbe, 0xef]),
+        );
+        assert!(
+            verify_op(op, &context).is_err(),
+            "{} accepted an undeclared byte payload",
+            op.get_opid()
+        );
+    }
 
     let unit = UnitType::get(&context).into();
     let operation = Operation::new(

@@ -262,6 +262,8 @@ pub enum BridgeError {
     InvalidKir(SemanticKirError),
     /// Explicit `dialect-kernel` registration failed closed.
     KernelRegistration(dialect_kernel::RegistrationError),
+    /// Explicit `dialect-gpu` registration failed closed.
+    GpuRegistration(dialect_gpu::RegistrationError),
     /// Recovering without the canonical payload would require lossy conversion.
     LossyConversion {
         /// Required field that was absent.
@@ -318,6 +320,9 @@ impl fmt::Display for BridgeError {
             Self::KernelRegistration(error) => {
                 write!(formatter, "kernel dialect registration failed: {error}")
             }
+            Self::GpuRegistration(error) => {
+                write!(formatter, "GPU dialect registration failed: {error}")
+            }
             Self::LossyConversion { missing } => {
                 write!(formatter, "lossless recovery requires {missing:?}")
             }
@@ -355,6 +360,7 @@ impl Error for BridgeError {
             Self::Decode(error) => Some(error),
             Self::InvalidKir(error) => Some(error),
             Self::KernelRegistration(error) => Some(error),
+            Self::GpuRegistration(error) => Some(error),
             _ => None,
         }
     }
@@ -554,7 +560,7 @@ fn register_shells(context: &mut Context) -> Result<(), BridgeError> {
         .expect("fixed kernel dialect name is valid");
     dialect_kernel::register_dialect(context, &kernel_name)
         .map_err(BridgeError::KernelRegistration)?;
-    let _ = dialect_gpu::register_dialect(context);
+    dialect_gpu::register_dialect(context).map_err(BridgeError::GpuRegistration)?;
     Ok(())
 }
 
