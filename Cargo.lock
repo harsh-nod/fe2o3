@@ -373,9 +373,8 @@ name = "dialect-mir"
 version = "0.1.0"
 dependencies = [
  "fe2o3-compiler-ffi",
- "serde",
+ "fe2o3-mir-model",
  "serde_json",
- "sha2 0.11.0",
 ]
 
 [[package]]
@@ -756,6 +755,16 @@ version = "0.0.0"
 dependencies = [
  "fe2o3-device",
  "fe2o3-host",
+]
+
+[[package]]
+name = "fe2o3-mir-model"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-compiler-ffi",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

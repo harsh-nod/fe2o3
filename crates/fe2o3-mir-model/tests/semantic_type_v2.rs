@@ -1,4 +1,4 @@
-use dialect_mir::semantic_type_v2::*;
+use fe2o3_mir_model::semantic_type_v2::*;
 
 fn budgets() -> SemanticTypeGraphBudgetsV2 {
     SemanticTypeGraphBudgetsV2 {

@@ -1,0 +1,19 @@
+[package]
+name = "fe2o3-mir-model"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pliron-independent semantic MIR schema and transformations for fe2o3."
+
+[lib]
+name = "fe2o3_mir_model"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2.workspace = true
+
+[dev-dependencies]
+fe2o3-compiler-ffi.workspace = true
