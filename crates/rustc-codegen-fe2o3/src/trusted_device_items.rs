@@ -288,10 +288,7 @@ fn general_gemm_dependency_semantic_identity_v1(
     hash_source_identity_field(&mut hasher, definition_role.canonical_name());
     hash_source_identity_field(&mut hasher, canonical_role.as_bytes());
     hash_source_identity_field(&mut hasher, definition.provider.crate_name.as_bytes());
-    hash_source_identity_field(
-        &mut hasher,
-        definition.canonical_definition_path.as_bytes(),
-    );
+    hash_source_identity_field(&mut hasher, definition.canonical_definition_path.as_bytes());
     hash_source_identity_field(
         &mut hasher,
         &definition.structural_local_definition_component,
@@ -1970,27 +1967,25 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        canonical_compiler_definition_path, pinned_core_semantic_terminal_identity_v1,
+        CompilerProviderObservationV1, GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1, HALF_MATH_DIAGNOSTIC_ITEMS,
+        MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
+        ProviderSemanticDefinitionExpectationV1, ProviderSemanticDefinitionRoleV1,
+        ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, ReviewedProviderSemanticDefinitionV1,
+        ReviewedProviderSemanticProfileV1, TrustedAmdGpuDiagnosticOperation,
+        TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedGeneralGemmOperationV1,
+        TrustedGeneralGemmSurfaceV1, WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
+        general_gemm_dependency_semantic_identity_v1, pinned_core_semantic_terminal_identity_v1,
         reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
         reviewed_source_tree_identity, structural_local_definition_component_v1,
         validate_compiled_provider_source_hash_v1,
         validate_ordered_provider_semantic_definitions_v1,
-        general_gemm_dependency_semantic_identity_v1,
         validate_reviewed_general_gemm_definition_source_v1,
         validate_reviewed_general_gemm_dependency_identity_v1,
         validate_reviewed_general_gemm_source_tree_v1,
-        validate_reviewed_general_gemm_terminal_provider_v1, CompilerProviderObservationV1,
-        ProviderSemanticDefinitionExpectationV1, ProviderSemanticDefinitionRoleV1,
-        ReviewedProviderSemanticDefinitionV1, ReviewedProviderSemanticProfileV1,
-        TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation, TrustedDeviceItem,
-        TrustedGeneralGemmOperationV1, TrustedGeneralGemmSurfaceV1,
-        GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1, HALF_MATH_DIAGNOSTIC_ITEMS,
-        MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
-        ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        validate_reviewed_general_gemm_terminal_provider_v1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
     use rustc_span::{SourceFileHash, SourceFileHashAlgorithm};
@@ -2398,12 +2393,14 @@ mod tests {
             Path::new("provider.rs"),
         )
         .unwrap();
-        assert!(validate_compiled_provider_source_hash_v1(
-            &stale_compiled,
-            "reviewed provider source restored on disk",
-            Path::new("provider.rs"),
-        )
-        .is_err());
+        assert!(
+            validate_compiled_provider_source_hash_v1(
+                &stale_compiled,
+                "reviewed provider source restored on disk",
+                Path::new("provider.rs"),
+            )
+            .is_err()
+        );
     }
 
     #[test]
