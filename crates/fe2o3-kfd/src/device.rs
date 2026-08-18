@@ -761,6 +761,16 @@ fn model_pci(pci: PciAddress) -> PciAddressV1 {
     }
 }
 
+fn model_profile() -> DeviceAdmissionProfileV1 {
+    DeviceAdmissionProfileV1::gfx942_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
+        DeviceAdmissionProfileIdV1::from_untrusted_digest(IdentityDigestV1::from_untrusted_bytes(
+            DEVICE_ADMISSION_PROFILE_SHA256_BYTES_V1,
+        )),
+        IdentityDigestV1::from_untrusted_bytes(KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES),
+        IdentityDigestV1::from_untrusted_bytes(DRM_UAPI_SCHEMA_MANIFEST_SHA256_BYTES),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn model_admission(
     snapshot: &HostTopologySnapshot,
@@ -782,13 +792,7 @@ fn model_admission(
 > {
     let domain = model_domain(snapshot, process);
     let pci = model_pci(sysfs.pci_address());
-    let profile = DeviceAdmissionProfileV1::gfx942_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
-        DeviceAdmissionProfileIdV1::from_untrusted_digest(IdentityDigestV1::from_untrusted_bytes(
-            DEVICE_ADMISSION_PROFILE_SHA256_BYTES_V1,
-        )),
-        IdentityDigestV1::from_untrusted_bytes(KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES),
-        IdentityDigestV1::from_untrusted_bytes(DRM_UAPI_SCHEMA_MANIFEST_SHA256_BYTES),
-    );
+    let profile = model_profile();
     let capacity = gpu.capacity();
     let inventory = snapshot
         .topology()
@@ -899,6 +903,7 @@ fn model_admission(
             family_id: drm.device.family,
             chip_revision: drm.device.chip_rev,
             external_revision: drm.device.external_rev,
+            vram_lost_counter: drm.vram_lost_counter,
         },
         apertures: apertures
             .iter()
@@ -924,6 +929,12 @@ fn model_admission(
             topology_reobserved_equal: true,
             xnack_reobserved_disabled: true,
             apertures_reobserved_equal: true,
+            reset_subscription_established: true,
+            reset_event_mask_enabled: true,
+            reset_event_descriptor_cloexec: true,
+            reset_fence_initially_clear: true,
+            drm_reobserved_after_subscription_equal: true,
+            reset_fence_clear_before_commit: true,
         },
     };
     let projection =
@@ -932,17 +943,43 @@ fn model_admission(
     let mut history = DEVICE_MODEL_HISTORY
         .lock()
         .map_err(|_| DeviceBindingError::ModelHistoryPoisoned)?;
-    let (identities, projections) = match &*history {
-        DeviceModelHistory::Empty => (
+    let (identities, projections) = model_histories_for_domain(&history, domain)?;
+    let generation = DeviceGenerationV1(next_admission_generation()?);
+    // Check the projection journal first so its reviewed process-lifetime
+    // capacity has the stable public `ProjectionHistoryExhausted` failure.
+    let (next_projections, projection_history) = projections
+        .append_model_only(projection.clone(), generation)
+        .map_err(map_projection_history_error)?;
+    let (next_identities, admission) = identities
+        .register_device_model_only(correlation, generation)
+        .map_err(DeviceBindingError::ModelAdmission)?;
+    if admission.model_key() != projection_history.current() {
+        return Err(DeviceBindingError::ProjectionLinkMismatch);
+    }
+    debug_assert!(next_identities.validate_global_invariants().is_ok());
+    debug_assert!(next_projections.validate_global_invariants().is_ok());
+    *history = DeviceModelHistory::State {
+        identities: next_identities,
+        projections: next_projections,
+    };
+    Ok((admission, projection, projection_history))
+}
+
+fn model_histories_for_domain(
+    history: &DeviceModelHistory,
+    domain: DeviceObservationDomainIdV1,
+) -> Result<(DeviceIdentityStateV1, DeviceProjectionHistoryV1), DeviceBindingError> {
+    match history {
+        DeviceModelHistory::Empty => Ok((
             DeviceIdentityStateV1::new(domain),
             DeviceProjectionHistoryV1::new(domain),
-        ),
-        DeviceModelHistory::Poisoned => return Err(DeviceBindingError::ModelHistoryPoisoned),
+        )),
+        DeviceModelHistory::Poisoned => Err(DeviceBindingError::ModelHistoryPoisoned),
         DeviceModelHistory::State {
             identities,
             projections,
         } if identities.domain_id() == domain && projections.domain_id() == domain => {
-            (identities.clone(), projections.clone())
+            Ok((identities.clone(), projections.clone()))
         }
         DeviceModelHistory::State { identities, .. }
             if identities
@@ -954,30 +991,12 @@ fn model_admission(
                     .iter()
                     .any(|record| record.status == ModelAdmissionStatusV1::Active) =>
         {
-            return Err(DeviceBindingError::ModelDomainChangedWithActiveHistory);
+            Err(DeviceBindingError::ModelDomainChangedWithActiveHistory)
         }
-        DeviceModelHistory::State { .. } => (
-            DeviceIdentityStateV1::new(domain),
-            DeviceProjectionHistoryV1::new(domain),
-        ),
-    };
-    let generation = DeviceGenerationV1(next_admission_generation()?);
-    let (next_identities, admission) = identities
-        .register_device_model_only(correlation, generation)
-        .map_err(DeviceBindingError::ModelAdmission)?;
-    let (next_projections, projection_history) = projections
-        .append_model_only(projection.clone(), generation)
-        .map_err(map_projection_history_error)?;
-    if admission.model_key() != projection_history.current() {
-        return Err(DeviceBindingError::ProjectionLinkMismatch);
+        DeviceModelHistory::State { .. } => {
+            Err(DeviceBindingError::ModelDomainChangedWithRetainedHistory)
+        }
     }
-    debug_assert!(next_identities.validate_global_invariants().is_ok());
-    debug_assert!(next_projections.validate_global_invariants().is_ok());
-    *history = DeviceModelHistory::State {
-        identities: next_identities,
-        projections: next_projections,
-    };
-    Ok((admission, projection, projection_history))
 }
 
 fn map_projection_history_error(error: DeviceProjectionHistoryErrorV1) -> DeviceBindingError {
@@ -1062,6 +1081,7 @@ pub enum DeviceBindingError {
     GenerationExhausted,
     ModelHistoryPoisoned,
     ModelDomainChangedWithActiveHistory,
+    ModelDomainChangedWithRetainedHistory,
     ModelInventory(InventoryInputErrorV1),
     ModelCorrelation(fe2o3_runtime_model::DeviceCorrelationErrorV1),
     ModelAdmission(DeviceAdmissionErrorV1),
@@ -1252,6 +1272,9 @@ impl fmt::Display for DeviceBindingError {
             Self::ModelDomainChangedWithActiveHistory => formatter.write_str(
                 "the observation domain changed while model history retained active authority",
             ),
+            Self::ModelDomainChangedWithRetainedHistory => formatter.write_str(
+                "the observation domain changed after process-lifetime model history was retained",
+            ),
             Self::ModelInventory(error) => write!(
                 formatter,
                 "model inventory rejected checked projections: {error:?}"
@@ -1336,6 +1359,180 @@ mod tests {
             map_projection_history_error(DeviceProjectionHistoryErrorV1::CapacityExceeded),
             DeviceBindingError::ProjectionHistoryExhausted
         ));
+    }
+
+    fn retired_model_history(domain: DeviceObservationDomainIdV1) -> DeviceModelHistory {
+        let profile = model_profile();
+        let pci = PciAddressV1 {
+            domain: 0,
+            bus: 5,
+            device: 0,
+            function: 0,
+        };
+        let projection = fe2o3_runtime_model::validate_device_projection_model_only_v1(
+            DeviceProjectionRecordV1 {
+                schema_version: DEVICE_PROJECTION_SCHEMA_VERSION_V1,
+                domain_id: domain,
+                profile_id: profile.identity(),
+                source: DeviceProjectionSourceV1 {
+                    boot_id: [1; 16],
+                    topology_file_system_device: 2,
+                    topology_inode: 3,
+                    topology_generation: 4,
+                    process_id: 5,
+                    process_start_time_ticks: 6,
+                    mount_namespace_device: 7,
+                    mount_namespace_inode: 8,
+                    amdgpu_module_file_system_device: 9,
+                    amdgpu_module_inode: 10,
+                    kernel_release: KernelReleaseObservationV1::Linux6_8_0_124Generic,
+                    amdgpu_module:
+                        AmdgpuModuleObservationV1::Version6_16_13SourceA6f143bec60c0afc3263226,
+                },
+                kfd: KfdProjectionV1 {
+                    descriptor: CharacterDeviceProjectionV1 {
+                        file_system_device: 11,
+                        inode: 12,
+                        character_device: 13,
+                        node: DeviceNodeV1 {
+                            major: 511,
+                            minor: fe2o3_runtime_model::KFD_DEVICE_MINOR_V1,
+                        },
+                    },
+                    uapi_major: fe2o3_runtime_model::KFD_UAPI_MAJOR_V1,
+                    uapi_minor: fe2o3_runtime_model::KFD_UAPI_MINOR_V1,
+                    schema_identity: profile.kfd_schema_identity(),
+                    xnack: XnackObservationV1::Disabled,
+                },
+                topology: TopologyProjectionV1 {
+                    node_id: 2,
+                    kfd_gpu_id: 100,
+                    gpu_unique_id: 200,
+                    drm_render_minor: fe2o3_runtime_model::DRM_RENDER_MIN_MINOR_V1,
+                    pci,
+                    vendor_id: AMD_PCI_VENDOR_ID_V1,
+                    device_id: fe2o3_runtime_model::MI300X_PCI_DEVICE_ID_V1,
+                    target: fe2o3_runtime_model::GpuTargetObservationV1::Gfx942,
+                    compute_partition: ComputePartitionObservationV1::Spx,
+                    memory_partition: fe2o3_runtime_model::MemoryPartitionObservationV1::Nps1,
+                    firmware_version: fe2o3_runtime_model::MI300X_KFD_FIRMWARE_VERSION_V1,
+                    sdma_firmware_version: fe2o3_runtime_model::MI300X_SDMA_FIRMWARE_VERSION_V1,
+                    wavefront_size: fe2o3_runtime_model::MI300X_WAVEFRONT_SIZE_V1,
+                    simd_count: fe2o3_runtime_model::MI300X_SPX_SIMD_COUNT_V1,
+                    xcc_count: fe2o3_runtime_model::MI300X_SPX_XCC_COUNT_V1,
+                },
+                inventory: vec![InventoryDeviceProjectionV1 {
+                    topology_node_id: 2,
+                    kfd_gpu_id: 100,
+                    gpu_unique_id: 200,
+                    drm_render_minor: fe2o3_runtime_model::DRM_RENDER_MIN_MINOR_V1,
+                    pci,
+                    vendor_id: AMD_PCI_VENDOR_ID_V1,
+                    device_id: fe2o3_runtime_model::MI300X_PCI_DEVICE_ID_V1,
+                    pci_revision_id: fe2o3_runtime_model::MI300X_PCI_REVISION_V1,
+                    target: fe2o3_runtime_model::GpuTargetObservationV1::Gfx942,
+                }],
+                render: RenderProjectionV1 {
+                    descriptor: CharacterDeviceProjectionV1 {
+                        file_system_device: 14,
+                        inode: 15,
+                        character_device: 16,
+                        node: DeviceNodeV1 {
+                            major: fe2o3_runtime_model::DRM_DEVICE_MAJOR_V1,
+                            minor: fe2o3_runtime_model::DRM_RENDER_MIN_MINOR_V1,
+                        },
+                    },
+                    gpu_unique_id: 200,
+                    pci,
+                    vendor_id: AMD_PCI_VENDOR_ID_V1,
+                    device_id: fe2o3_runtime_model::MI300X_PCI_DEVICE_ID_V1,
+                    pci_revision_id: fe2o3_runtime_model::MI300X_PCI_REVISION_V1,
+                    schema_identity: profile.drm_schema_identity(),
+                    driver_name: DrmDriverNameObservationV1::Amdgpu,
+                    driver_major: fe2o3_runtime_model::DRM_DRIVER_MAJOR_V1,
+                    driver_minor: fe2o3_runtime_model::DRM_DRIVER_MINOR_V1,
+                    driver_patch: fe2o3_runtime_model::DRM_DRIVER_PATCH_V1,
+                    acceleration_working: true,
+                    family: DrmFamilyObservationV1::AmdgpuFamilyAi,
+                    family_id: fe2o3_runtime_model::AMDGPU_FAMILY_AI_V1,
+                    chip_revision: fe2o3_runtime_model::MI300X_CHIP_REVISION_V1,
+                    external_revision: fe2o3_runtime_model::MI300X_EXTERNAL_REVISION_V1,
+                    vram_lost_counter: 17,
+                },
+                apertures: vec![ProcessApertureProjectionV1 {
+                    kfd_gpu_id: 100,
+                    lds: InclusiveRangeProjectionV1 {
+                        base: 0x1000,
+                        limit: 0x1fff,
+                    },
+                    scratch: InclusiveRangeProjectionV1 {
+                        base: 0x3000,
+                        limit: 0x3fff,
+                    },
+                    gpuvm: InclusiveRangeProjectionV1 {
+                        base: 0x10_0000,
+                        limit: 0x1f_ffff,
+                    },
+                }],
+                commit_fence: DeviceProjectionCommitFenceV1 {
+                    process_reobserved_equal: true,
+                    descriptors_revalidated: true,
+                    topology_reobserved_equal: true,
+                    xnack_reobserved_disabled: true,
+                    apertures_reobserved_equal: true,
+                    reset_subscription_established: true,
+                    reset_event_mask_enabled: true,
+                    reset_event_descriptor_cloexec: true,
+                    reset_fence_initially_clear: true,
+                    drm_reobserved_after_subscription_equal: true,
+                    reset_fence_clear_before_commit: true,
+                },
+            },
+            &profile,
+        )
+        .unwrap();
+        let generation = DeviceGenerationV1(1);
+        let (identities, admission) = DeviceIdentityStateV1::new(domain)
+            .register_device_model_only(projection.correlation(), generation)
+            .unwrap();
+        let identities = identities.retire_device_model_only(admission).unwrap();
+        let (projections, _) = DeviceProjectionHistoryV1::new(domain)
+            .append_model_only(projection, generation)
+            .unwrap();
+        DeviceModelHistory::State {
+            identities,
+            projections,
+        }
+    }
+
+    #[test]
+    fn inactive_retained_history_rejects_domain_change_without_replacement() {
+        let old_domain = DeviceObservationDomainIdV1::from_untrusted_digest(
+            IdentityDigestV1::from_untrusted_bytes([41; 32]),
+        );
+        let new_domain = DeviceObservationDomainIdV1::from_untrusted_digest(
+            IdentityDigestV1::from_untrusted_bytes([42; 32]),
+        );
+        let state = retired_model_history(old_domain);
+        assert!(matches!(
+            model_histories_for_domain(&state, new_domain),
+            Err(DeviceBindingError::ModelDomainChangedWithRetainedHistory)
+        ));
+        let DeviceModelHistory::State {
+            identities,
+            projections,
+        } = state
+        else {
+            panic!("test state changed variant")
+        };
+        assert_eq!(identities.domain_id(), old_domain);
+        assert_eq!(identities.devices().len(), 1);
+        assert_eq!(
+            identities.devices()[0].status,
+            ModelAdmissionStatusV1::Retired
+        );
+        assert_eq!(projections.domain_id(), old_domain);
+        assert_eq!(projections.entries().len(), 1);
     }
 
     #[test]

@@ -121,6 +121,7 @@ fn record(seed: u8) -> DeviceProjectionRecordV1 {
             family_id: AMDGPU_FAMILY_AI_V1,
             chip_revision: MI300X_CHIP_REVISION_V1,
             external_revision: MI300X_EXTERNAL_REVISION_V1,
+            vram_lost_counter: 7,
         },
         apertures: vec![ProcessApertureProjectionV1 {
             kfd_gpu_id: u32::from(seed) + 1,
@@ -134,6 +135,12 @@ fn record(seed: u8) -> DeviceProjectionRecordV1 {
             topology_reobserved_equal: true,
             xnack_reobserved_disabled: true,
             apertures_reobserved_equal: true,
+            reset_subscription_established: true,
+            reset_event_mask_enabled: true,
+            reset_event_descriptor_cloexec: true,
+            reset_fence_initially_clear: true,
+            drm_reobserved_after_subscription_equal: true,
+            reset_fence_clear_before_commit: true,
         },
     }
 }
@@ -162,6 +169,7 @@ fn canonical_projection_preserves_every_model_identity_and_schema() {
         correlation.drm_schema_identity(),
         record.render.schema_identity
     );
+    assert_eq!(projection.record().render.vram_lost_counter, 7);
 }
 
 #[test]
@@ -190,6 +198,51 @@ fn projection_rejects_profile_source_and_commit_mutations() {
         validate_device_projection_model_only_v1(candidate, &profile()),
         Err(DeviceProjectionErrorV1::CommitFenceIncomplete)
     );
+
+    let mut candidate = record(4);
+    candidate.commit_fence.reset_subscription_established = false;
+    assert_eq!(
+        validate_device_projection_model_only_v1(candidate, &profile()),
+        Err(DeviceProjectionErrorV1::CommitFenceIncomplete)
+    );
+    let mut candidate = record(4);
+    candidate.commit_fence.reset_event_mask_enabled = false;
+    assert_eq!(
+        validate_device_projection_model_only_v1(candidate, &profile()),
+        Err(DeviceProjectionErrorV1::CommitFenceIncomplete)
+    );
+    let mut candidate = record(4);
+    candidate.commit_fence.reset_event_descriptor_cloexec = false;
+    assert_eq!(
+        validate_device_projection_model_only_v1(candidate, &profile()),
+        Err(DeviceProjectionErrorV1::CommitFenceIncomplete)
+    );
+    let mut candidate = record(4);
+    candidate.commit_fence.reset_fence_initially_clear = false;
+    assert_eq!(
+        validate_device_projection_model_only_v1(candidate, &profile()),
+        Err(DeviceProjectionErrorV1::CommitFenceIncomplete)
+    );
+    let mut candidate = record(4);
+    candidate
+        .commit_fence
+        .drm_reobserved_after_subscription_equal = false;
+    assert_eq!(
+        validate_device_projection_model_only_v1(candidate, &profile()),
+        Err(DeviceProjectionErrorV1::CommitFenceIncomplete)
+    );
+    let mut candidate = record(4);
+    candidate.commit_fence.reset_fence_clear_before_commit = false;
+    assert_eq!(
+        validate_device_projection_model_only_v1(candidate, &profile()),
+        Err(DeviceProjectionErrorV1::CommitFenceIncomplete)
+    );
+
+    let first = validate(record(4));
+    let mut changed_counter = record(4);
+    changed_counter.render.vram_lost_counter += 1;
+    let second = validate(changed_counter);
+    assert_ne!(first.record(), second.record());
 }
 
 #[test]
@@ -288,6 +341,31 @@ fn projection_history_links_exact_predecessors_and_rejects_reuse() {
 }
 
 #[test]
+fn projection_history_rejects_domain_change_without_discarding_retired_evidence() {
+    let projection = validate(record(4));
+    let history = DeviceProjectionHistoryV1::new(domain(1));
+    let (history, first) = history
+        .append_model_only(projection.clone(), DeviceGenerationV1(1))
+        .unwrap();
+
+    let mut changed_domain = record(4);
+    changed_domain.domain_id = domain(9);
+    let changed_domain = validate(changed_domain);
+    assert_eq!(
+        history.append_model_only(changed_domain, DeviceGenerationV1(2)),
+        Err(DeviceProjectionHistoryErrorV1::DomainMismatch)
+    );
+    assert_eq!(history.entries().len(), 1);
+    assert_eq!(history.entries()[0].key, first.current());
+
+    let (history, second) = history
+        .append_model_only(projection, DeviceGenerationV1(2))
+        .unwrap();
+    assert_eq!(history.entries().len(), 2);
+    assert_eq!(second.predecessor(), Some(first.current()));
+}
+
+#[test]
 fn projection_history_rejects_physical_and_correlation_substitution() {
     let first = validate(record(4));
     let history = DeviceProjectionHistoryV1::new(domain(1));
@@ -325,9 +403,20 @@ fn projection_history_has_an_explicit_process_lifetime_bound() {
     }
     assert_eq!(
         history.append_model_only(
-            projection,
+            projection.clone(),
             DeviceGenerationV1(MAX_MODEL_DEVICE_ADMISSIONS_V1 as u64 + 1),
         ),
         Err(DeviceProjectionHistoryErrorV1::CapacityExceeded)
     );
+
+    let mut changed_domain = record(4);
+    changed_domain.domain_id = domain(9);
+    assert_eq!(
+        history.append_model_only(
+            validate(changed_domain),
+            DeviceGenerationV1(MAX_MODEL_DEVICE_ADMISSIONS_V1 as u64 + 2),
+        ),
+        Err(DeviceProjectionHistoryErrorV1::CapacityExceeded)
+    );
+    assert_eq!(history.entries().len(), MAX_MODEL_DEVICE_ADMISSIONS_V1);
 }

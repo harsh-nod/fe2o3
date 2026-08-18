@@ -35,14 +35,20 @@ successful admission also retains a solver-neutral `DeviceProjectionRecordV1`
 covering platform, module-filesystem, and process provenance, both descriptors
 and UAPI schemas, the selected topology/DRM profile fields, the explicit
 bounded full-GPU identity inventory, firmware and selected capacity
-observations, the complete process aperture inventory, and the final
-reobservation fence. Projection history is
+observations, the initial wrapping VRAM-loss counter, the complete process
+aperture inventory, and explicit reset-subscription, event-mask, `CLOEXEC`,
+post-subscription DRM equality, and initial/final clear-fence facts. These are
+contracted currentness observations, not an all-reset generation or proof.
+Projection history is
 updated atomically with identity history and links each admission generation to
 its exact predecessor. R1 deliberately retains, rather than compacts, at most
-`MAX_MODEL_DEVICE_ADMISSIONS_V1` admissions per process/domain. The next bind
-fails with `ProjectionHistoryExhausted`; restarting the process creates a new
-history domain. This reviewed availability bound avoids silently discarding
-substitution evidence. The
+`MAX_MODEL_DEVICE_ADMISSIONS_V1` admissions for the process lifetime. After the
+first admission, any observation-domain change fails closed with
+`ModelDomainChangedWithActiveHistory` or
+`ModelDomainChangedWithRetainedHistory`; it never replaces retained history.
+The sixty-fifth bind fails with `ProjectionHistoryExhausted`. Restarting the
+process is the only supported way to create an empty history. This reviewed
+availability bound avoids silently discarding substitution evidence. The
 `kfd-device-identity` example performs this no-queue admission.
 
 `check_observable_currentness(&mut self)` sandwiches a complete reobservation

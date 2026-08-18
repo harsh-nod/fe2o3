@@ -122,6 +122,8 @@ pub struct RenderProjectionV1 {
     pub family_id: u32,
     pub chip_revision: u32,
     pub external_revision: u32,
+    /// Initial wrapping DRM VRAM-loss observation. This is not an all-reset generation.
+    pub vram_lost_counter: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +147,12 @@ pub struct DeviceProjectionCommitFenceV1 {
     pub topology_reobserved_equal: bool,
     pub xnack_reobserved_disabled: bool,
     pub apertures_reobserved_equal: bool,
+    pub reset_subscription_established: bool,
+    pub reset_event_mask_enabled: bool,
+    pub reset_event_descriptor_cloexec: bool,
+    pub reset_fence_initially_clear: bool,
+    pub drm_reobserved_after_subscription_equal: bool,
+    pub reset_fence_clear_before_commit: bool,
 }
 
 /// Canonical value assembled by an adapter after its concrete checks.
@@ -370,6 +378,12 @@ pub fn validate_device_projection_model_only_v1(
         || !fence.topology_reobserved_equal
         || !fence.xnack_reobserved_disabled
         || !fence.apertures_reobserved_equal
+        || !fence.reset_subscription_established
+        || !fence.reset_event_mask_enabled
+        || !fence.reset_event_descriptor_cloexec
+        || !fence.reset_fence_initially_clear
+        || !fence.drm_reobserved_after_subscription_equal
+        || !fence.reset_fence_clear_before_commit
     {
         return Err(DeviceProjectionErrorV1::CommitFenceIncomplete);
     }

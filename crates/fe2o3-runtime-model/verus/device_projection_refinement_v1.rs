@@ -15,12 +15,47 @@ pub struct InventoryIdentityV1 {
     pub target: nat,
 }
 
+#[derive(PartialEq, Eq)]
+pub struct DigestV1 {
+    pub word0: nat,
+    pub word1: nat,
+    pub word2: nat,
+    pub word3: nat,
+}
+
+pub open spec fn v1_profile_identity() -> DigestV1 {
+    DigestV1 {
+        word0: 0xe12ea33b259666e7,
+        word1: 0x928612403109640b,
+        word2: 0x03b0d637b893a2c1,
+        word3: 0x5b87d17a4211c8de,
+    }
+}
+
+pub open spec fn v1_kfd_schema_identity() -> DigestV1 {
+    DigestV1 {
+        word0: 0xe4aad5d8e3177ea6,
+        word1: 0xd70298adab7741c3,
+        word2: 0x77cb091373553ce6,
+        word3: 0x89f3525e7514d9b4,
+    }
+}
+
+pub open spec fn v1_drm_schema_identity() -> DigestV1 {
+    DigestV1 {
+        word0: 0x800569fe9b467b38,
+        word1: 0x9bcfc6e5d65b23d6,
+        word2: 0x6a0386a90fc2a669,
+        word3: 0xfac8c83800e76d8b,
+    }
+}
+
 pub struct CanonicalObservationV1 {
     pub schema_version: nat,
     pub domain: nat,
-    pub profile: nat,
-    pub kfd_schema: nat,
-    pub drm_schema: nat,
+    pub profile: DigestV1,
+    pub kfd_schema: DigestV1,
+    pub drm_schema: DigestV1,
     pub source_commitment: nat,
     pub module_file_system_device: nat,
     pub module_inode: nat,
@@ -58,7 +93,14 @@ pub struct CanonicalObservationV1 {
     pub wavefront_size: nat,
     pub simd_count: nat,
     pub xcc_count: nat,
+    pub initial_vram_lost_counter: nat,
     pub commit_fence_complete: bool,
+    pub reset_subscription_established: bool,
+    pub reset_event_mask_enabled: bool,
+    pub reset_event_descriptor_cloexec: bool,
+    pub reset_fence_initially_clear: bool,
+    pub drm_reobserved_after_subscription_equal: bool,
+    pub reset_fence_clear_before_commit: bool,
 }
 
 pub open spec fn canonical_equal_v1(
@@ -107,7 +149,33 @@ pub open spec fn canonical_equal_v1(
     &&& left.wavefront_size == right.wavefront_size
     &&& left.simd_count == right.simd_count
     &&& left.xcc_count == right.xcc_count
+    &&& left.initial_vram_lost_counter == right.initial_vram_lost_counter
     &&& left.commit_fence_complete == right.commit_fence_complete
+    &&& left.reset_subscription_established == right.reset_subscription_established
+    &&& left.reset_event_mask_enabled == right.reset_event_mask_enabled
+    &&& left.reset_event_descriptor_cloexec == right.reset_event_descriptor_cloexec
+    &&& left.reset_fence_initially_clear == right.reset_fence_initially_clear
+    &&& left.drm_reobserved_after_subscription_equal
+        == right.drm_reobserved_after_subscription_equal
+    &&& left.reset_fence_clear_before_commit == right.reset_fence_clear_before_commit
+}
+
+pub open spec fn inventory_globally_unique_v1(
+    observation: CanonicalObservationV1,
+) -> bool {
+    forall |left: int, right: int|
+        0 <= left < observation.inventory.len()
+        && 0 <= right < observation.inventory.len()
+        && left != right
+        ==> {
+            let left_identity = #[trigger] observation.inventory[left];
+            let right_identity = #[trigger] observation.inventory[right];
+            &&& left_identity.topology_node != right_identity.topology_node
+            &&& left_identity.gpu_unique != right_identity.gpu_unique
+            &&& left_identity.kfd_gpu_id != right_identity.kfd_gpu_id
+            &&& left_identity.render_minor != right_identity.render_minor
+            &&& left_identity.pci != right_identity.pci
+        }
 }
 
 pub open spec fn exactly_one_selected_inventory_v1(
@@ -126,13 +194,13 @@ pub open spec fn exactly_one_selected_inventory_v1(
 pub struct ModelProjectionV1 {
     pub canonical: CanonicalObservationV1,
     pub domain: nat,
-    pub profile: nat,
+    pub profile: DigestV1,
     pub physical: nat,
     pub pci: nat,
     pub kfd_gpu_id: nat,
     pub render_minor: nat,
-    pub kfd_schema: nat,
-    pub drm_schema: nat,
+    pub kfd_schema: DigestV1,
+    pub drm_schema: DigestV1,
 }
 
 pub open spec fn project_v1(observation: CanonicalObservationV1) -> ModelProjectionV1 {
@@ -167,9 +235,9 @@ pub open spec fn projection_refines_v1(
 pub open spec fn canonical_observation_admitted_v1(observation: CanonicalObservationV1) -> bool {
     &&& observation.schema_version == 1
     &&& observation.domain > 0
-    &&& observation.profile > 0
-    &&& observation.kfd_schema > 0
-    &&& observation.drm_schema > 0
+    &&& observation.profile == v1_profile_identity()
+    &&& observation.kfd_schema == v1_kfd_schema_identity()
+    &&& observation.drm_schema == v1_drm_schema_identity()
     &&& observation.source_commitment > 0
     &&& observation.module_file_system_device > 0
     &&& observation.module_inode > 0
@@ -177,6 +245,8 @@ pub open spec fn canonical_observation_admitted_v1(observation: CanonicalObserva
     &&& observation.render_descriptor_commitment > 0
     &&& observation.aperture_inventory_commitment > 0
     &&& observation.inventory.len() > 0
+    &&& observation.inventory.len() <= 16
+    &&& inventory_globally_unique_v1(observation)
     &&& exactly_one_selected_inventory_v1(observation)
     &&& observation.topology_generation > 0
     &&& observation.physical > 0
@@ -206,18 +276,36 @@ pub open spec fn canonical_observation_admitted_v1(observation: CanonicalObserva
     &&& observation.wavefront_size == 64
     &&& observation.simd_count == 1216
     &&& observation.xcc_count == 8
+    &&& observation.initial_vram_lost_counter <= 0xffff_ffff
     &&& observation.commit_fence_complete
+    &&& observation.reset_subscription_established
+    &&& observation.reset_event_mask_enabled
+    &&& observation.reset_event_descriptor_cloexec
+    &&& observation.reset_fence_initially_clear
+    &&& observation.drm_reobserved_after_subscription_equal
+    &&& observation.reset_fence_clear_before_commit
 }
 
 pub open spec fn model_projection_admitted_v1(projection: ModelProjectionV1) -> bool {
     &&& projection.domain > 0
-    &&& projection.profile > 0
+    &&& projection.profile == v1_profile_identity()
     &&& projection.physical > 0
     &&& projection.kfd_gpu_id > 0
     &&& projection.render_minor >= 128
-    &&& projection.kfd_schema > 0
-    &&& projection.drm_schema > 0
+    &&& projection.kfd_schema == v1_kfd_schema_identity()
+    &&& projection.drm_schema == v1_drm_schema_identity()
+    &&& projection.canonical.inventory.len() > 0
+    &&& projection.canonical.inventory.len() <= 16
+    &&& inventory_globally_unique_v1(projection.canonical)
+    &&& exactly_one_selected_inventory_v1(projection.canonical)
+    &&& projection.canonical.initial_vram_lost_counter <= 0xffff_ffff
     &&& projection.canonical.commit_fence_complete
+    &&& projection.canonical.reset_subscription_established
+    &&& projection.canonical.reset_event_mask_enabled
+    &&& projection.canonical.reset_event_descriptor_cloexec
+    &&& projection.canonical.reset_fence_initially_clear
+    &&& projection.canonical.drm_reobserved_after_subscription_equal
+    &&& projection.canonical.reset_fence_clear_before_commit
 }
 
 pub proof fn canonical_projection_refines_every_retained_field_v1(
@@ -243,9 +331,13 @@ pub proof fn canonical_projection_retains_exact_inventory_v1(
     observation: CanonicalObservationV1,
 )
     requires
+        observation.inventory.len() <= 16,
+        inventory_globally_unique_v1(observation),
         exactly_one_selected_inventory_v1(observation),
     ensures
         project_v1(observation).canonical.inventory =~= observation.inventory,
+        project_v1(observation).canonical.inventory.len() <= 16,
+        inventory_globally_unique_v1(project_v1(observation).canonical),
         exactly_one_selected_inventory_v1(project_v1(observation).canonical),
 {
 }

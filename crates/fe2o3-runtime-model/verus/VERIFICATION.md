@@ -23,13 +23,17 @@ sequence lengths are not bounded by these proofs.
 `device_projection_refinement_v1.rs` proves the pure boundary introduced for
 the executable adapter:
 
-1. the model projection retains the complete canonical observation record and
-   exactly projects its domain, profile, physical identity, PCI address, KFD
-   GPU ID, render node, and both UAPI schema identities;
-2. a canonical record satisfying the exact V1 predicates projects to a model
-   value satisfying the corresponding model profile;
-3. the projection retains the explicit bounded topology inventory, including
-   the unique selected-device match, without replacing it with an opaque hash;
+1. the model projection retains every field represented in the formal
+   canonical observation, including the literal V1 profile and UAPI-schema
+   identities, initial wrapping VRAM-loss counter, and contracted reset-fence
+   facts;
+2. a canonical record satisfying the explicitly modeled V1 predicates projects
+   to a model value satisfying the same exact profile/schema identities and
+   contracted currentness facts;
+3. the projection preserves the explicit 1-through-16-entry topology
+   inventory, its pairwise physical/KFD/render/PCI identity uniqueness, and the
+   unique selected-device match without replacing the inventory with an opaque
+   hash;
 4. appending a later generation preserves its exact predecessor link and the
    single-physical-device history invariant.
 
@@ -49,11 +53,12 @@ proof result is accepted.
 
 The mutations must fail at their named postconditions: release while retained,
 VM generation substitution, stale generation reuse, topology/render PCI
-substitution, dropped DRM schema identity, lost history predecessor, and mixed
-cross-source identity. The launcher rejects source substitution, lexically audits all
-proof files for trusted constructs, clears the environment, bounds execution
-time, pins Z3 through the authenticated Verus release closure, and rechecks
-the authenticated inputs after verification.
+substitution, dropped DRM schema identity, lost history predecessor, mixed
+cross-source identity, and a dropped final reset-fence observation. The launcher
+rejects source substitution, lexically audits all proof files for trusted
+constructs, clears the environment, bounds execution time, pins Z3 through the
+authenticated Verus release closure, and rechecks the authenticated inputs after
+verification.
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
@@ -66,6 +71,8 @@ observations, bind the dynamically allocated KFD device node to the opened file
 descriptor and sysfs device, and connect concrete ioctl/sysfs results to the
 canonical record. `DeviceGenerationV1` is a software admission
 incarnation for stale-token rejection; topology correlation does not detect or
-attest a GPU reset. Firmware execution, hardware completion, progress, liveness,
-coherency, performance, and absence of kernel/firmware defects remain outside
-this proof boundary.
+attest a GPU reset. The reset booleans and wrapping VRAM-loss value are retained
+contracted observations only; these proofs do not establish an all-reset
+generation, ABA freedom, or correctness of the KFD event stream. Firmware
+execution, hardware completion, progress, liveness, coherency, performance, and
+absence of kernel/firmware defects remain outside this proof boundary.
