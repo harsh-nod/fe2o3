@@ -677,6 +677,22 @@ fn validate_preconditions(
         Ok(RegistrationState::Absent) => return Err(LoweringError::PassNotRegistered),
         Err(_) => return Err(LoweringError::RegistrationCorrupt),
     };
+    let source_ref = source
+        .try_deref(context)
+        .map_err(|_| LoweringError::SourceVerificationFailed)?;
+    drop(source_ref);
+    catch_unwind(AssertUnwindSafe(|| {
+        validate_live_preconditions(context, source, config, context_identity)
+    }))
+    .unwrap_or(Err(LoweringError::SourceVerificationFailed))
+}
+
+fn validate_live_preconditions(
+    context: &Context,
+    source: Ptr<Operation>,
+    config: &LoweringConfig,
+    context_identity: ContextIdentity,
+) -> Result<(u32, ContextIdentity), LoweringError> {
     if !Operation::is_op::<AlgorithmOp>(source, context) {
         return Err(LoweringError::UnsupportedSourceOperation);
     }

@@ -269,6 +269,34 @@ fn rejects_rewrite_overflow_and_malformed_source() {
 }
 
 #[test]
+fn erased_source_handle_returns_a_typed_error_without_unwinding() {
+    let mut context = Context::new();
+    register_pass(&mut context).expect("registration succeeds");
+    let source = AlgorithmOp::new(&mut context, 1).expect("valid source");
+    let source = source.get_operation();
+    Operation::erase(source, &mut context);
+    let bounded = config(
+        &[64],
+        1,
+        &[AddressSpaceAttr::Global],
+        SynchronizationMode::None,
+        8,
+    )
+    .expect("valid config");
+    let mut pass = KernelGpuLoweringPass::new(bounded);
+
+    let lowering = catch_unwind(AssertUnwindSafe(|| {
+        pass.run_checked(source, &mut context).map(|_| ())
+    }));
+
+    assert_eq!(
+        lowering.expect("lowering must not unwind"),
+        Err(LoweringError::SourceVerificationFailed)
+    );
+    assert!(pass.last_result().is_none());
+}
+
+#[test]
 fn postcondition_validator_detects_mutated_gpu_ir() {
     let mut context = Context::new();
     register_pass(&mut context).expect("registration succeeds");
