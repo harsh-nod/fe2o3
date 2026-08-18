@@ -1,6 +1,7 @@
 use fe2o3_kernel_ir::{
-    BasicBlock, BlockId, DiagnosticCode, Function, Kernel, LaunchDomain, LaunchExtent, Module,
-    Signature, TargetCapability, Terminator, encode_module_v1,
+    BasicBlock, BlockId, DiagnosticCode, Function, Kernel, LaunchDomain, LaunchExtent,
+    MAX_FUNCTIONS_V1, MAX_TEXT_BYTES_V1, Module, Signature, TargetCapability, Terminator,
+    encode_module_v1,
 };
 use fe2o3_kir_pliron_bridge::{
     BRIDGE_SCHEMA_V1, BridgeError, BridgeLimits, CANONICAL_BYTES_ATTR_KEY, CanonicalKirRecord,
@@ -53,6 +54,15 @@ fn projected() -> (Context, pliron::builtin::ops::ModuleOp, CanonicalKirRecord) 
     (context, shell, record)
 }
 
+fn recover_projected(
+    context: &Context,
+    shell: &ModuleOp,
+    record: &CanonicalKirRecord,
+    limits: BridgeLimits,
+) -> Result<CanonicalKirRecord, BridgeError> {
+    recover_canonical(context, shell, record.canonical_bytes(), limits)
+}
+
 #[test]
 fn limit_configuration_and_payload_preflights_fail_closed() {
     assert_eq!(
@@ -87,6 +97,51 @@ fn limit_configuration_and_payload_preflights_fail_closed() {
             limits
         ),
         Err(BridgeError::ShellOperationsLimit { actual: 2, max: 1 })
+    ));
+
+    let oversized_text = Module::new("x".repeat(MAX_TEXT_BYTES_V1 + 1));
+    assert!(matches!(
+        CanonicalKirRecord::from_module(
+            &oversized_text,
+            KirVersion::V5,
+            BridgeLimits::default()
+        ),
+        Err(BridgeError::Encode(
+            fe2o3_kernel_ir::KernelIrEncodeError::LimitExceeded {
+                field: "module ID",
+                actual,
+                max: MAX_TEXT_BYTES_V1,
+            }
+        )) if actual == MAX_TEXT_BYTES_V1 + 1
+    ));
+
+    let declaration = Function::declaration("f", Signature::new(vec![], vec![]));
+    let mut oversized_shape = Module::new("oversized-shape");
+    oversized_shape.functions = vec![declaration; MAX_FUNCTIONS_V1 + 1];
+    assert!(matches!(
+        CanonicalKirRecord::from_module(
+            &oversized_shape,
+            KirVersion::V5,
+            BridgeLimits::default()
+        ),
+        Err(BridgeError::Encode(
+            fe2o3_kernel_ir::KernelIrEncodeError::LimitExceeded {
+                field: "module functions",
+                actual,
+                max: MAX_FUNCTIONS_V1,
+            }
+        )) if actual == MAX_FUNCTIONS_V1 + 1
+    ));
+
+    let mut semantically_invalid = Module::new("active-limit-precedes-verification");
+    semantically_invalid.functions.extend([
+        Function::declaration("same", Signature::new(vec![], vec![])),
+        Function::declaration("same", Signature::new(vec![], vec![])),
+    ]);
+    let low_byte_limit = BridgeLimits::new(20, HARD_MAX_SHELL_OPERATIONS).unwrap();
+    assert!(matches!(
+        CanonicalKirRecord::from_module(&semantically_invalid, KirVersion::V5, low_byte_limit),
+        Err(BridgeError::CanonicalBytesLimit { max: 20, .. })
     ));
 }
 
@@ -192,7 +247,7 @@ fn duplicate_and_conflicting_kir_identities_are_rejected_after_wire_validation()
 
 #[test]
 fn missing_or_type_confused_canonical_payload_never_falls_back_to_shell_reconstruction() {
-    let (context, shell, _) = projected();
+    let (context, shell, record) = projected();
     shell
         .get_operation()
         .deref_mut(&context)
@@ -200,19 +255,19 @@ fn missing_or_type_confused_canonical_payload_never_falls_back_to_shell_reconstr
         .0
         .remove(&key(CANONICAL_BYTES_ATTR_KEY));
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::LossyConversion {
             missing: MetadataField::CanonicalBytes
         })
     ));
 
-    let (context, shell, _) = projected();
+    let (context, shell, record) = projected();
     shell.get_operation().deref_mut(&context).attributes.set(
         key(CANONICAL_BYTES_ATTR_KEY),
         StringAttr::new("not bytes".into()),
     );
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataTypeConfusion(
             MetadataField::CanonicalBytes
         ))
@@ -221,7 +276,7 @@ fn missing_or_type_confused_canonical_payload_never_falls_back_to_shell_reconstr
 
 #[test]
 fn redundant_schema_version_identity_and_metadata_cardinality_are_enforced() {
-    let (context, shell, _) = projected();
+    let (context, shell, record) = projected();
     let mut wrong_schema = BRIDGE_SCHEMA_V1;
     wrong_schema[0] ^= 1;
     shell
@@ -230,73 +285,73 @@ fn redundant_schema_version_identity_and_metadata_cardinality_are_enforced() {
         .attributes
         .set(key(SCHEMA_ATTR_KEY), BytesAttr::new(wrong_schema.to_vec()));
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataConflict(MetadataField::Schema))
     ));
 
-    let (context, shell, _) = projected();
+    let (context, shell, record) = projected();
     shell.get_operation().deref_mut(&context).attributes.set(
         key(WIRE_VERSION_ATTR_KEY),
         BytesAttr::new(4_u16.to_le_bytes().to_vec()),
     );
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataConflict(MetadataField::WireVersion))
     ));
 
-    let (context, shell, _) = projected();
+    let (context, shell, record) = projected();
     shell.get_operation().deref_mut(&context).attributes.set(
         key(WIRE_VERSION_ATTR_KEY),
         BytesAttr::new(99_u16.to_le_bytes().to_vec()),
     );
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::UnknownVersion(99))
     ));
 
-    let (context, shell, _) = projected();
+    let (context, shell, record) = projected();
     shell.get_operation().deref_mut(&context).attributes.set(
         key(MODULE_IDENTITY_ATTR_KEY),
         StringAttr::new("substituted".into()),
     );
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataConflict(MetadataField::ModuleIdentity))
     ));
 
-    let (context, shell, _) = projected();
+    let (context, shell, record) = projected();
     shell
         .get_operation()
         .deref_mut(&context)
         .attributes
         .set(key("hostile_extra"), UnitAttr);
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::UnexpectedMetadata)
     ));
 
-    let (mut context, shell, _) = projected();
+    let (mut context, shell, record) = projected();
     shell.set_symbol_name(&mut context, "confused_shell_identity".try_into().unwrap());
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::MetadataConflict(MetadataField::ModuleSymbol))
     ));
 }
 
 #[test]
 fn duplicate_extra_and_valid_but_conflicting_shell_operations_are_rejected() {
-    let (mut context, shell, _) = projected();
+    let (mut context, shell, record) = projected();
     let duplicate = dialect_gpu::HierarchyIdOp::new(&mut context, dialect_gpu::HierarchyAttr::Grid);
     shell.append_operation(&mut context, duplicate.get_operation(), 0);
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::ShellOperationCount {
             expected: 2,
             actual: 3
         })
     ));
 
-    let (mut context, shell, _) = projected();
+    let (mut context, shell, record) = projected();
     let body = shell.get_body(&context, 0);
     let original_grid = body
         .deref(&context)
@@ -307,20 +362,65 @@ fn duplicate_extra_and_valid_but_conflicting_shell_operations_are_rejected() {
     let lane = dialect_gpu::HierarchyIdOp::new(&mut context, dialect_gpu::HierarchyAttr::Lane);
     shell.append_operation(&mut context, lane.get_operation(), 0);
     assert!(matches!(
-        recover_canonical(&context, &shell, BridgeLimits::default()),
+        recover_projected(&context, &shell, &record, BridgeLimits::default()),
         Err(BridgeError::ShellOperationConflict {
             index: 1,
             expected: ShellOperationKind::GpuGridHierarchy
         })
     ));
 
-    let (mut context, shell, _) = projected();
+    let (mut context, shell, record) = projected();
     let foreign = dialect_kernel::AlgorithmOp::new(&mut context, 1).unwrap();
     shell.append_operation(&mut context, foreign.get_operation(), 0);
     let tight = BridgeLimits::new(HARD_MAX_CANONICAL_BYTES, 2).unwrap();
     assert!(matches!(
-        recover_canonical(&context, &shell, tight),
+        recover_projected(&context, &shell, &record, tight),
         Err(BridgeError::ShellOperationsLimit { actual: 3, max: 2 })
+    ));
+}
+
+#[test]
+fn extra_bytes_metadata_is_rejected_on_every_projected_child() {
+    for index in 0..2 {
+        let (context, shell, record) = projected();
+        let body = shell.get_body(&context, 0);
+        let child = body
+            .deref(&context)
+            .iter(&context)
+            .nth(index)
+            .expect("projected child");
+        child.deref_mut(&context).attributes.set(
+            key("hostile_child_bytes"),
+            BytesAttr::new(vec![index as u8]),
+        );
+
+        assert!(matches!(
+            recover_projected(&context, &shell, &record, BridgeLimits::default()),
+            Err(BridgeError::UnexpectedShellMetadata { index: actual })
+                if actual == index
+        ));
+    }
+}
+
+#[test]
+fn gpu_registration_failure_is_propagated_fail_closed() {
+    let record = CanonicalKirRecord::from_module(
+        &kernel_module("gpu-registration"),
+        KirVersion::V5,
+        BridgeLimits::default(),
+    )
+    .unwrap();
+    let mut context = Context::new();
+    let marker = context.aux_data.insert(Box::new(17_u32));
+    context
+        .aux_data_map
+        .insert(key("fe2o3_dialect_gpu_explicit_registration"), marker);
+
+    assert!(matches!(
+        record.project_to_pliron(&mut context, BridgeLimits::default()),
+        Err(BridgeError::GpuRegistration(
+            dialect_gpu::RegistrationError::MarkerCollision
+        ))
     ));
 }
 
@@ -337,11 +437,11 @@ fn crate_manifest_contains_only_representation_dependencies() {
 
 #[test]
 fn a_foreign_operation_wrapped_as_a_module_is_rejected_before_traversal() {
-    let (mut context, _, _) = projected();
+    let (mut context, _, record) = projected();
     let hierarchy = dialect_gpu::HierarchyIdOp::new(&mut context, dialect_gpu::HierarchyAttr::Grid);
     let forged = ModuleOp::from_operation(hierarchy.get_operation());
     assert!(matches!(
-        recover_canonical(&context, &forged, BridgeLimits::default()),
+        recover_projected(&context, &forged, &record, BridgeLimits::default()),
         Err(BridgeError::MalformedShell)
     ));
 }

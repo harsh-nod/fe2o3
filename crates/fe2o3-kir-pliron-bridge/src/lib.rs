@@ -9,8 +9,13 @@ use dialect_kernel::{AlgorithmOp, IterationDomainAttr};
 use fe2o3_kernel_ir::{
     DiagnosticCode, KERNEL_IR_VERSION_V1, KERNEL_IR_VERSION_V2, KERNEL_IR_VERSION_V3,
     KERNEL_IR_VERSION_V4, KERNEL_IR_VERSION_V5, KernelIrDecodeError, KernelIrEncodeError,
-    MAX_KERNELS_V1, MAX_MODULE_BYTES_V1, Module, decode_module_v5, encode_module_v1,
-    encode_module_v2, encode_module_v3, encode_module_v4, encode_module_v5, verify_module,
+    MAX_ASSEMBLY_OPERANDS_V3, MAX_BLOCK_PARAMETERS_V1, MAX_BLOCKS_V1, MAX_CAPABILITIES_V1,
+    MAX_FUNCTION_PARAMETERS_V1, MAX_FUNCTIONS_V1, MAX_INTEGER_SWITCH_CASES_V2, MAX_KERNELS_V1,
+    MAX_MODULE_BYTES_V1, MAX_OPERATION_RESULTS_V1, MAX_OPERATIONS_V1, MAX_SIGNATURE_TYPES_V1,
+    MAX_SWITCH_CASES_V1, MAX_TEXT_BYTES_V1, MAX_TYPE_DEPTH_V1, MAX_VALUE_ARGUMENTS_V1, Module,
+    OperationKind, TargetCapability, Terminator, Type, WorkgroupMemoryExtent, decode_module_v5,
+    encode_module_v1, encode_module_v2, encode_module_v3, encode_module_v4, encode_module_v5,
+    verify_module,
 };
 use pliron::{
     attribute::{Attribute, AttributeDict},
@@ -242,7 +247,7 @@ pub enum BridgeError {
     InvalidLimits(LimitError),
     /// Canonical bytes exceed the active caller limit.
     CanonicalBytesLimit {
-        /// Actual payload length.
+        /// Exact payload length or a proven minimum encoded length.
         actual: usize,
         /// Active maximum payload length.
         max: usize,
@@ -295,6 +300,11 @@ pub enum BridgeError {
         /// Required operation kind at that index.
         expected: ShellOperationKind,
     },
+    /// A projected child operation carried attributes outside its exact schema.
+    UnexpectedShellMetadata {
+        /// Zero-based top-level operation index.
+        index: usize,
+    },
     /// A caller-supplied expected canonical record was substituted.
     RecordSubstitution,
     /// Bounded count arithmetic overflowed.
@@ -308,7 +318,7 @@ impl fmt::Display for BridgeError {
             Self::CanonicalBytesLimit { actual, max } => {
                 write!(
                     formatter,
-                    "canonical KIR has {actual} bytes; maximum is {max}"
+                    "canonical KIR requires at least {actual} bytes; maximum is {max}"
                 )
             }
             Self::ShellOperationsLimit { actual, max } => {
@@ -344,6 +354,9 @@ impl fmt::Display for BridgeError {
                 formatter,
                 "shell operation {index} conflicts with required {expected:?} projection"
             ),
+            Self::UnexpectedShellMetadata { index } => {
+                write!(formatter, "shell operation {index} has unexpected metadata")
+            }
             Self::RecordSubstitution => {
                 formatter.write_str("recovered canonical KIR is not the expected record")
             }
@@ -404,8 +417,8 @@ impl CanonicalKirRecord {
         version: KirVersion,
         limits: BridgeLimits,
     ) -> Result<Self, BridgeError> {
+        preflight_module(module, version, limits)?;
         verify_semantic_kir(module)?;
-        check_projection_count(module.kernels.len(), limits)?;
         let bytes = match version {
             KirVersion::V1 => encode_module_v1(module),
             KirVersion::V2 => encode_module_v2(module),
@@ -414,6 +427,7 @@ impl CanonicalKirRecord {
             KirVersion::V5 => encode_module_v5(module),
         }
         .map_err(BridgeError::Encode)?;
+        check_canonical_byte_limit(bytes.len(), limits)?;
         Self::parse(&bytes, limits)
     }
 
@@ -475,17 +489,19 @@ pub fn import_canonical(
     CanonicalKirRecord::parse(bytes, limits)?.project_to_pliron(context, limits)
 }
 
-/// Recovers exact canonical KIR bytes from a bridge envelope.
+/// Recovers exact canonical KIR bytes expected by the caller from a bridge envelope.
 ///
 /// This function catches malformed Pliron traversal failures and returns a
-/// fail-closed error. It never reconstructs KIR from shell presentation.
+/// fail-closed error. It never reconstructs KIR from shell presentation and
+/// rejects an internally consistent envelope carrying any other record.
 pub fn recover_canonical(
     context: &Context,
     shell: &ModuleOp,
+    expected_canonical_bytes: &[u8],
     limits: BridgeLimits,
 ) -> Result<CanonicalKirRecord, BridgeError> {
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        recover_canonical_inner(context, shell, limits)
+        recover_expected_canonical_inner(context, shell, expected_canonical_bytes, limits)
     }))
     .unwrap_or(Err(BridgeError::MalformedShell))
 }
@@ -497,7 +513,7 @@ pub fn recover_exact(
     expected: &CanonicalKirRecord,
     limits: BridgeLimits,
 ) -> Result<CanonicalKirRecord, BridgeError> {
-    let recovered = recover_canonical(context, shell, limits)?;
+    let recovered = recover_canonical(context, shell, expected.canonical_bytes(), limits)?;
     if recovered.version != expected.version
         || recovered.module.id != expected.module.id
         || recovered.canonical_bytes != expected.canonical_bytes
@@ -546,6 +562,361 @@ fn check_projection_count(kernel_count: usize, limits: BridgeLimits) -> Result<u
     Ok(count)
 }
 
+struct EncodedSizePreflight {
+    minimum: usize,
+    max: usize,
+}
+
+impl EncodedSizePreflight {
+    fn new(max: usize) -> Self {
+        Self { minimum: 0, max }
+    }
+
+    fn charge(&mut self, bytes: usize) -> Result<(), BridgeError> {
+        let minimum = self
+            .minimum
+            .checked_add(bytes)
+            .ok_or(BridgeError::ArithmeticOverflow)?;
+        if minimum > self.max {
+            return Err(BridgeError::CanonicalBytesLimit {
+                actual: minimum,
+                max: self.max,
+            });
+        }
+        self.minimum = minimum;
+        Ok(())
+    }
+
+    fn charge_items(&mut self, count: usize, bytes_each: usize) -> Result<(), BridgeError> {
+        let bytes = count
+            .checked_mul(bytes_each)
+            .ok_or(BridgeError::ArithmeticOverflow)?;
+        self.charge(bytes)
+    }
+
+    fn count(&mut self, field: &'static str, actual: usize, max: usize) -> Result<(), BridgeError> {
+        check_codec_limit(field, actual, max)?;
+        self.charge(4)
+    }
+
+    fn values(&mut self, field: &'static str, actual: usize) -> Result<(), BridgeError> {
+        self.count(field, actual, MAX_VALUE_ARGUMENTS_V1)?;
+        self.charge_items(actual, 4)
+    }
+
+    fn text(&mut self, field: &'static str, value: &str) -> Result<(), BridgeError> {
+        check_codec_limit(field, value.len(), MAX_TEXT_BYTES_V1)?;
+        self.charge(4)?;
+        self.charge(value.len())
+    }
+}
+
+fn check_codec_limit(field: &'static str, actual: usize, max: usize) -> Result<(), BridgeError> {
+    if actual > max {
+        return Err(BridgeError::Encode(KernelIrEncodeError::LimitExceeded {
+            field,
+            actual,
+            max,
+        }));
+    }
+    Ok(())
+}
+
+fn unsupported_in_version(version: KirVersion, feature: &'static str) -> BridgeError {
+    BridgeError::Encode(KernelIrEncodeError::UnsupportedInVersion {
+        version: version.wire_value(),
+        feature,
+    })
+}
+
+fn preflight_module(
+    module: &Module,
+    version: KirVersion,
+    limits: BridgeLimits,
+) -> Result<(), BridgeError> {
+    check_codec_limit("module functions", module.functions.len(), MAX_FUNCTIONS_V1)?;
+    check_codec_limit("module kernels", module.kernels.len(), MAX_KERNELS_V1)?;
+    check_projection_count(module.kernels.len(), limits)?;
+
+    let mut size = EncodedSizePreflight::new(limits.max_canonical_bytes());
+    size.charge(20)?;
+    size.text("module ID", module.id.as_str())?;
+    size.count("module functions", module.functions.len(), MAX_FUNCTIONS_V1)?;
+    size.count("module kernels", module.kernels.len(), MAX_KERNELS_V1)?;
+    preflight_capabilities(&mut size, &module.required_capabilities)?;
+
+    for function in &module.functions {
+        size.text("function ID", function.id.as_str())?;
+        size.count(
+            "signature parameters",
+            function.signature.parameters.len(),
+            MAX_SIGNATURE_TYPES_V1,
+        )?;
+        for ty in &function.signature.parameters {
+            preflight_type(&mut size, ty, 0)?;
+        }
+        size.count(
+            "signature results",
+            function.signature.results.len(),
+            MAX_SIGNATURE_TYPES_V1,
+        )?;
+        for ty in &function.signature.results {
+            preflight_type(&mut size, ty, 0)?;
+        }
+
+        size.charge(1)?;
+        if let Some(body) = &function.body {
+            size.count(
+                "function parameters",
+                body.parameters.len(),
+                MAX_FUNCTION_PARAMETERS_V1,
+            )?;
+            size.charge_items(body.parameters.len(), 4)?;
+            size.count("function blocks", body.blocks.len(), MAX_BLOCKS_V1)?;
+            for block in &body.blocks {
+                size.charge(4)?;
+                size.count(
+                    "block parameters",
+                    block.parameters.len(),
+                    MAX_BLOCK_PARAMETERS_V1,
+                )?;
+                for parameter in &block.parameters {
+                    size.charge(4)?;
+                    preflight_type(&mut size, &parameter.ty, 0)?;
+                }
+                size.count(
+                    "block operations",
+                    block.operations.len(),
+                    MAX_OPERATIONS_V1,
+                )?;
+                for operation in &block.operations {
+                    size.count(
+                        "operation results",
+                        operation.results.len(),
+                        MAX_OPERATION_RESULTS_V1,
+                    )?;
+                    for result in &operation.results {
+                        size.charge(4)?;
+                        preflight_type(&mut size, &result.ty, 0)?;
+                    }
+                    preflight_operation_kind(&mut size, &operation.kind, version)?;
+                }
+                size.charge(1)?;
+                if let Some(terminator) = &block.terminator {
+                    preflight_terminator(&mut size, terminator, version)?;
+                }
+            }
+        }
+        preflight_capabilities(&mut size, &function.required_capabilities)?;
+    }
+
+    for kernel in &module.kernels {
+        size.text("kernel ID", kernel.id.as_str())?;
+        size.text("kernel entry", kernel.entry.as_str())?;
+        size.charge(2)?;
+        size.charge(1)?;
+        if kernel.workgroup_size.is_some() {
+            size.charge(12)?;
+        }
+        preflight_capabilities(&mut size, &kernel.required_capabilities)?;
+    }
+    Ok(())
+}
+
+fn preflight_capabilities(
+    size: &mut EncodedSizePreflight,
+    capabilities: &std::collections::BTreeSet<TargetCapability>,
+) -> Result<(), BridgeError> {
+    size.count("capabilities", capabilities.len(), MAX_CAPABILITIES_V1)?;
+    for capability in capabilities {
+        size.charge(1)?;
+        if let TargetCapability::Extension { namespace, name } = capability {
+            size.text("capability extension namespace", namespace)?;
+            size.text("capability extension name", name)?;
+        }
+    }
+    Ok(())
+}
+
+fn preflight_type(
+    size: &mut EncodedSizePreflight,
+    ty: &Type,
+    depth: usize,
+) -> Result<(), BridgeError> {
+    if depth > MAX_TYPE_DEPTH_V1 {
+        return Err(BridgeError::Encode(
+            KernelIrEncodeError::TypeNestingTooDeep {
+                max: MAX_TYPE_DEPTH_V1,
+            },
+        ));
+    }
+    match ty {
+        Type::Unit => size.charge(1),
+        Type::Scalar(_) => size.charge(2),
+        Type::Pointer(pointer) => {
+            size.charge(3)?;
+            preflight_type(size, &pointer.pointee, depth + 1)
+        }
+        Type::Slice(slice) => {
+            size.charge(3)?;
+            preflight_type(size, &slice.element, depth + 1)
+        }
+    }
+}
+
+fn preflight_operation_kind(
+    size: &mut EncodedSizePreflight,
+    operation: &OperationKind,
+    version: KirVersion,
+) -> Result<(), BridgeError> {
+    size.charge(1)?;
+    match operation {
+        OperationKind::Intrinsic(intrinsic) => preflight_type(size, &intrinsic.result_type, 0),
+        OperationKind::MemoryIntrinsic(_) => {
+            Err(unsupported_in_version(version, "semantic memory intrinsic"))
+        }
+        OperationKind::Cast { to, .. } => preflight_type(size, to, 0),
+        OperationKind::Call { callee, arguments } => {
+            size.text("call callee", callee.as_str())?;
+            size.values("call arguments", arguments.len())
+        }
+        OperationKind::Alloca { element, .. } => preflight_type(size, element, 0),
+        OperationKind::Fence(_) if version < KirVersion::V2 => {
+            Err(unsupported_in_version(version, "memory fence"))
+        }
+        OperationKind::WorkgroupBarrier(_) if version < KirVersion::V2 => Err(
+            unsupported_in_version(version, "convergent workgroup barrier"),
+        ),
+        OperationKind::WorkgroupMemory(memory) => {
+            if version < KirVersion::V2 {
+                return Err(unsupported_in_version(version, "explicit workgroup memory"));
+            }
+            preflight_type(size, &memory.element, 0)?;
+            if matches!(memory.extent, WorkgroupMemoryExtent::DynamicAtLeast(_)) {
+                return Err(unsupported_in_version(
+                    version,
+                    "authenticated dynamic workgroup-memory extent",
+                ));
+            }
+            Ok(())
+        }
+        OperationKind::Wave(_) if version < KirVersion::V2 => {
+            Err(unsupported_in_version(version, "physical wave operation"))
+        }
+        OperationKind::Matrix(matrix) => {
+            if version < KirVersion::V5 {
+                return Err(unsupported_in_version(version, "matrix operation"));
+            }
+            if matrix.frontend_binding.is_some() {
+                return Err(unsupported_in_version(version, "matrix frontend binding"));
+            }
+            Ok(())
+        }
+        OperationKind::InlineAssembly(assembly) => {
+            if version < KirVersion::V3 {
+                return Err(unsupported_in_version(
+                    version,
+                    "source-bound inline assembly",
+                ));
+            }
+            size.charge(129)?;
+            size.text("inline assembly mnemonic", &assembly.mnemonic)?;
+            size.count(
+                "inline assembly operands",
+                assembly.operands.len(),
+                MAX_ASSEMBLY_OPERANDS_V3,
+            )?;
+            size.charge_items(assembly.operands.len(), 6)?;
+            size.count("inline assembly options", assembly.options.len(), 5)?;
+            size.charge(assembly.options.len())?;
+            size.count(
+                "inline assembly declared effects",
+                assembly.declared_effects.len(),
+                7,
+            )?;
+            size.charge(assembly.declared_effects.len())
+        }
+        OperationKind::Constant(_)
+        | OperationKind::Unary { .. }
+        | OperationKind::Binary { .. }
+        | OperationKind::Compare { .. }
+        | OperationKind::Select { .. }
+        | OperationKind::SliceLength { .. }
+        | OperationKind::SliceData { .. }
+        | OperationKind::GetElementPointer { .. }
+        | OperationKind::Load { .. }
+        | OperationKind::Store { .. }
+        | OperationKind::Barrier(_)
+        | OperationKind::Atomic(_)
+        | OperationKind::Fence(_)
+        | OperationKind::WorkgroupBarrier(_)
+        | OperationKind::Wave(_) => Ok(()),
+    }
+}
+
+fn preflight_terminator(
+    size: &mut EncodedSizePreflight,
+    terminator: &Terminator,
+    version: KirVersion,
+) -> Result<(), BridgeError> {
+    size.charge(1)?;
+    match terminator {
+        Terminator::Branch { arguments, .. } => {
+            size.charge(4)?;
+            size.values("branch arguments", arguments.len())
+        }
+        Terminator::ConditionalBranch {
+            then_arguments,
+            else_arguments,
+            ..
+        } => {
+            size.charge(12)?;
+            size.values("conditional branch then arguments", then_arguments.len())?;
+            size.values("conditional branch else arguments", else_arguments.len())
+        }
+        Terminator::Switch {
+            cases,
+            default_arguments,
+            ..
+        } => {
+            size.charge(4)?;
+            size.count("switch cases", cases.len(), MAX_SWITCH_CASES_V1)?;
+            for case in cases {
+                size.charge(12)?;
+                size.values("switch case arguments", case.arguments.len())?;
+            }
+            size.charge(4)?;
+            size.values("switch default arguments", default_arguments.len())
+        }
+        Terminator::IntegerSwitch {
+            cases,
+            default_arguments,
+            ..
+        } => {
+            if version < KirVersion::V2 {
+                return Err(unsupported_in_version(
+                    version,
+                    "typed integer switch terminator",
+                ));
+            }
+            size.charge(4)?;
+            size.count(
+                "integer switch cases",
+                cases.len(),
+                MAX_INTEGER_SWITCH_CASES_V2,
+            )?;
+            for case in cases {
+                size.charge(6)?;
+                size.values("integer switch case arguments", case.arguments.len())?;
+            }
+            size.charge(4)?;
+            size.values("integer switch default arguments", default_arguments.len())
+        }
+        Terminator::Return { values } => size.values("return values", values.len()),
+        Terminator::Unreachable => Ok(()),
+    }
+}
+
 fn wire_version(bytes: &[u8]) -> Result<KirVersion, BridgeError> {
     let raw = bytes
         .get(8..10)
@@ -591,9 +962,10 @@ fn install_metadata(context: &Context, shell: &ModuleOp, record: &CanonicalKirRe
     );
 }
 
-fn recover_canonical_inner(
+fn recover_expected_canonical_inner(
     context: &Context,
     shell: &ModuleOp,
+    expected_canonical_bytes: &[u8],
     limits: BridgeLimits,
 ) -> Result<CanonicalKirRecord, BridgeError> {
     if !Operation::is_op::<ModuleOp>(shell.get_operation(), context) {
@@ -630,6 +1002,9 @@ fn recover_canonical_inner(
         return Err(BridgeError::MetadataConflict(MetadataField::ModuleSymbol));
     }
     check_canonical_byte_limit(canonical.as_ref().len(), limits)?;
+    if canonical.as_ref().as_slice() != expected_canonical_bytes {
+        return Err(BridgeError::RecordSubstitution);
+    }
 
     let stored_version = decode_stored_version(version.as_ref())?;
     let record = CanonicalKirRecord::parse(canonical.as_ref(), limits)?;
@@ -716,10 +1091,6 @@ fn preflight_and_verify_shell(
         return Err(BridgeError::ShellOperationCount { expected, actual });
     }
 
-    if verify_operation(shell.get_operation(), context).is_err() {
-        return Err(BridgeError::MalformedShell);
-    }
-
     let body_ref = body.deref(context);
     let mut operations = body_ref.iter(context);
     for (kernel_index, kernel) in record.module.kernels.iter().enumerate() {
@@ -734,6 +1105,11 @@ fn preflight_and_verify_shell(
                 expected: ShellOperationKind::KernelAlgorithm,
             },
         )?;
+        if algorithm.get_operation().deref(context).attributes.0.len() != 1 {
+            return Err(BridgeError::UnexpectedShellMetadata {
+                index: algorithm_index,
+            });
+        }
         let expected_rank = u32::from(kernel.domain.rank());
         let rank = algorithm
             .iteration_domain(context)
@@ -756,6 +1132,11 @@ fn preflight_and_verify_shell(
                 expected: ShellOperationKind::GpuGridHierarchy,
             },
         )?;
+        if hierarchy.get_operation().deref(context).attributes.0.len() != 1 {
+            return Err(BridgeError::UnexpectedShellMetadata {
+                index: hierarchy_index,
+            });
+        }
         if hierarchy
             .get_attr_gpu_hierarchy_id_hierarchy(context)
             .is_none_or(|value| *value != HierarchyAttr::Grid)
@@ -765,6 +1146,9 @@ fn preflight_and_verify_shell(
                 expected: ShellOperationKind::GpuGridHierarchy,
             });
         }
+    }
+    if verify_operation(shell.get_operation(), context).is_err() {
+        return Err(BridgeError::MalformedShell);
     }
     Ok(())
 }

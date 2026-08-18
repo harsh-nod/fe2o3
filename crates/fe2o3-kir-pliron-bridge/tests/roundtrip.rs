@@ -81,8 +81,8 @@ fn every_frozen_version_round_trips_exact_bytes_and_discriminant() {
             2
         );
 
-        let recovered =
-            recover_canonical(&context, &shell, limits).expect("valid projection must recover");
+        let recovered = recover_canonical(&context, &shell, record.canonical_bytes(), limits)
+            .expect("valid projection must recover");
         assert_eq!(recovered.version(), version);
         assert_eq!(recovered.module_identity(), identity);
         assert_eq!(recovered.canonical_bytes(), record.canonical_bytes());
@@ -110,7 +110,7 @@ fn zero_kernel_record_retains_non_pliron_identity_without_shell_operations() {
             .count(),
         0
     );
-    let recovered = recover_canonical(&context, &shell, limits).unwrap();
+    let recovered = recover_canonical(&context, &shell, record.canonical_bytes(), limits).unwrap();
     assert_eq!(recovered.module_identity(), module.id.as_str());
     assert_eq!(recovered.canonical_bytes(), record.canonical_bytes());
 }
@@ -123,12 +123,22 @@ fn exact_recovery_binds_the_expected_record_not_only_a_self_consistent_shell() {
     let second =
         CanonicalKirRecord::from_module(&kernel_module("second", 1), KirVersion::V2, limits)
             .unwrap();
+    let same_identity_different_bytes =
+        CanonicalKirRecord::from_module(&kernel_module("first", 2), KirVersion::V2, limits)
+            .unwrap();
     let mut context = Context::new();
     let shell = first.project_to_pliron(&mut context, limits).unwrap();
 
+    assert!(recover_canonical(&context, &shell, first.canonical_bytes(), limits).is_ok());
     assert!(recover_exact(&context, &shell, &first, limits).is_ok());
-    assert!(matches!(
-        recover_exact(&context, &shell, &second, limits),
-        Err(fe2o3_kir_pliron_bridge::BridgeError::RecordSubstitution)
-    ));
+    for substituted in [&second, &same_identity_different_bytes] {
+        assert!(matches!(
+            recover_canonical(&context, &shell, substituted.canonical_bytes(), limits),
+            Err(fe2o3_kir_pliron_bridge::BridgeError::RecordSubstitution)
+        ));
+        assert!(matches!(
+            recover_exact(&context, &shell, substituted, limits),
+            Err(fe2o3_kir_pliron_bridge::BridgeError::RecordSubstitution)
+        ));
+    }
 }

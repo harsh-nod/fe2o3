@@ -10,14 +10,17 @@ KIR module-identity metadata. For each KIR kernel, it emits one
 `kernel.algorithm_root` carrying the launch rank and one `gpu.hierarchy_id`
 grid marker. This deterministic shell projection is an inert index, not a
 second serialization of KIR and not a semantic lowering. Recovery decodes and
-revalidates the canonical bytes, checks every redundant field, and requires an
-exact shell projection before returning the original bytes.
+revalidates the canonical bytes, checks every redundant field, requires an
+exact shell projection, and compares the payload with canonical bytes or a
+validated record supplied by the caller before returning the original bytes.
 
 The bridge rejects unknown wire versions, noncanonical or malformed KIR,
 resource-limit violations, missing or type-confused metadata, duplicate or
 conflicting KIR identities, unexpected or reordered shell operations, shell
-mutation, and record substitution when an expected record is supplied. It
-never derives KIR identity from a Pliron symbol or printed form.
+mutation, extra child-operation attributes, and wholesale self-consistent
+record substitution. In-memory module imports preflight codec shape limits and
+a proven minimum encoded size before semantic verification or encoding. The
+bridge never derives KIR identity from a Pliron symbol or printed form.
 
 This crate does not select a target or runtime, lower code, invoke a compiler,
 read or write files, start processes, publish or create artifacts, load code,
