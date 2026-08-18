@@ -12,12 +12,10 @@ use std::{
 };
 
 use pliron::{
-    context::{Context, Ptr},
+    context::Context,
     dialect::{Dialect, DialectName},
     identifier::Identifier,
-    irbuild::IRStatus,
-    operation::{Operation, verify_operation},
-    pass::{AnalysisManager, Pass, PassManager, PassResult},
+    pass::Pass,
     uniqued_any::{self, UniquedKey},
 };
 
@@ -237,20 +235,12 @@ fn validate_limit(value: usize, hard_cap: usize, kind: LimitKind) -> Result<(), 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum DiagnosticCode {
     DialectHookFailed,
-    PassIdentityChanged,
-    VerifyBeforeFailed,
-    PassFailed,
-    VerifyAfterFailed,
 }
 
 impl DiagnosticCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DialectHookFailed => "FE2O3-PLIRON-DIALECT-HOOK-FAILED",
-            Self::PassIdentityChanged => "FE2O3-PLIRON-PASS-IDENTITY-CHANGED",
-            Self::VerifyBeforeFailed => "FE2O3-PLIRON-VERIFY-BEFORE-FAILED",
-            Self::PassFailed => "FE2O3-PLIRON-PASS-FAILED",
-            Self::VerifyAfterFailed => "FE2O3-PLIRON-VERIFY-AFTER-FAILED",
         }
     }
 }
@@ -423,7 +413,6 @@ impl ContextManifest {
 pub struct PlironSession {
     context: Context,
     manifest: ContextManifest,
-    limits: ShellLimits,
     poisoned: bool,
 }
 
@@ -472,7 +461,6 @@ impl PlironSession {
                     .map(|registration| registration.name)
                     .collect(),
             },
-            limits,
             poisoned: false,
         })
     }
@@ -511,17 +499,23 @@ pub enum PassPlanError {
 
 struct PlannedPass {
     name: String,
-    pass: Box<dyn Pass>,
+    _pass: Box<dyn Pass>,
 }
 
-/// A bounded pass sequence. Insertion order is execution order.
-pub struct PassPipeline {
+/// A bounded pass plan. Insertion order is preserved as plan metadata.
+///
+/// This boundary intentionally exposes no generic execution method. Upstream
+/// Pliron operation pointers do not carry context provenance, so a safe API
+/// cannot distinguish a same-slot foreign root from a root owned by the
+/// session. Issue #140 tracks the owner-aware handle required before execution
+/// can be restored.
+pub struct PassPlan {
     limits: ShellLimits,
     passes: Vec<PlannedPass>,
     names: BTreeSet<String>,
 }
 
-impl PassPipeline {
+impl PassPlan {
     pub fn new(limits: ShellLimits) -> Self {
         Self {
             limits,
@@ -544,288 +538,12 @@ impl PassPipeline {
         }
         self.passes.push(PlannedPass {
             name,
-            pass: Box::new(pass),
+            _pass: Box::new(pass),
         });
         Ok(())
     }
 
     pub fn pass_order(&self) -> impl ExactSizeIterator<Item = &str> {
         self.passes.iter().map(|pass| pass.name.as_str())
-    }
-
-    /// Runs each pass through Pliron after explicit pre-verification and before
-    /// explicit post-verification. The session is poisoned on any failure.
-    pub fn run(
-        mut self,
-        session: &mut PlironSession,
-        root: Ptr<Operation>,
-    ) -> Result<PipelineReport, PipelineFailure> {
-        if session.poisoned {
-            return Err(PipelineFailure::session_poisoned());
-        }
-
-        let mut completed = Vec::with_capacity(self.passes.len());
-        let mut analyses = AnalysisManager::default();
-        for (ordinal, planned) in self.passes.iter_mut().enumerate() {
-            if planned.pass.name() != planned.name || planned.pass.as_pass_manager().is_some() {
-                let receipt = StageReceipt::failed(
-                    ordinal,
-                    &planned.name,
-                    StageStatus::NotRun,
-                    StageStatus::NotRun,
-                    StageStatus::NotRun,
-                );
-                return Err(fail_pipeline(
-                    session,
-                    completed,
-                    receipt,
-                    DiagnosticCode::PassIdentityChanged,
-                    "the pass identity or leaf shape changed after plan construction",
-                ));
-            }
-
-            if verify_operation(root, &session.context).is_err() {
-                let receipt = StageReceipt::failed(
-                    ordinal,
-                    &planned.name,
-                    StageStatus::Failed,
-                    StageStatus::NotRun,
-                    StageStatus::NotRun,
-                );
-                return Err(fail_pipeline(
-                    session,
-                    completed,
-                    receipt,
-                    DiagnosticCode::VerifyBeforeFailed,
-                    "Pliron verification failed before the pass",
-                ));
-            }
-
-            let pass_result = match ShellPassManager::run_pass(
-                &mut *planned.pass,
-                root,
-                &mut session.context,
-                &mut analyses,
-            ) {
-                Ok(result) => result,
-                Err(_) => {
-                    let receipt = StageReceipt::failed(
-                        ordinal,
-                        &planned.name,
-                        StageStatus::Passed,
-                        StageStatus::Failed,
-                        StageStatus::NotRun,
-                    );
-                    return Err(fail_pipeline(
-                        session,
-                        completed,
-                        receipt,
-                        DiagnosticCode::PassFailed,
-                        "the Pliron pass returned an error",
-                    ));
-                }
-            };
-            analyses.retain_preserved(&pass_result);
-
-            if verify_operation(root, &session.context).is_err() {
-                let receipt = StageReceipt::failed_with_effect(
-                    ordinal,
-                    &planned.name,
-                    StageStatus::Passed,
-                    StageStatus::Passed,
-                    StageStatus::Failed,
-                    pass_result.ir_changed,
-                );
-                return Err(fail_pipeline(
-                    session,
-                    completed,
-                    receipt,
-                    DiagnosticCode::VerifyAfterFailed,
-                    "Pliron verification failed after the pass",
-                ));
-            }
-
-            completed.push(StageReceipt::passed(ordinal, &planned.name, pass_result));
-        }
-        Ok(PipelineReport {
-            receipts: completed,
-        })
-    }
-}
-
-struct ShellPassManager;
-impl PassManager for ShellPassManager {}
-
-/// A stage status with no implied proof, publication, load, or launch authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StageStatus {
-    NotRun,
-    Passed,
-    Failed,
-}
-
-/// The only authority effect a D0 stage-attempt receipt can represent.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthorityEffect {
-    None,
-}
-
-/// A deterministic observation of one pass attempt.
-///
-/// This is not a canonical identity, proof receipt, publication receipt, or
-/// launch capability.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StageReceipt {
-    ordinal: usize,
-    pass_name: String,
-    verify_before: StageStatus,
-    pass: StageStatus,
-    verify_after: StageStatus,
-    ir_changed: Option<bool>,
-    authority_effect: AuthorityEffect,
-}
-
-impl StageReceipt {
-    fn passed(ordinal: usize, pass_name: &str, result: PassResult) -> Self {
-        Self {
-            ordinal,
-            pass_name: pass_name.to_owned(),
-            verify_before: StageStatus::Passed,
-            pass: StageStatus::Passed,
-            verify_after: StageStatus::Passed,
-            ir_changed: Some(result.ir_changed == IRStatus::Changed),
-            authority_effect: AuthorityEffect::None,
-        }
-    }
-
-    fn failed(
-        ordinal: usize,
-        pass_name: &str,
-        verify_before: StageStatus,
-        pass: StageStatus,
-        verify_after: StageStatus,
-    ) -> Self {
-        Self::failed_with_effect(
-            ordinal,
-            pass_name,
-            verify_before,
-            pass,
-            verify_after,
-            IRStatus::Unchanged,
-        )
-        .without_effect_observation()
-    }
-
-    fn failed_with_effect(
-        ordinal: usize,
-        pass_name: &str,
-        verify_before: StageStatus,
-        pass: StageStatus,
-        verify_after: StageStatus,
-        effect: IRStatus,
-    ) -> Self {
-        Self {
-            ordinal,
-            pass_name: pass_name.to_owned(),
-            verify_before,
-            pass,
-            verify_after,
-            ir_changed: Some(effect == IRStatus::Changed),
-            authority_effect: AuthorityEffect::None,
-        }
-    }
-
-    fn without_effect_observation(mut self) -> Self {
-        self.ir_changed = None;
-        self
-    }
-
-    pub const fn ordinal(&self) -> usize {
-        self.ordinal
-    }
-
-    pub fn pass_name(&self) -> &str {
-        &self.pass_name
-    }
-
-    pub const fn verify_before(&self) -> StageStatus {
-        self.verify_before
-    }
-
-    pub const fn pass_status(&self) -> StageStatus {
-        self.pass
-    }
-
-    pub const fn verify_after(&self) -> StageStatus {
-        self.verify_after
-    }
-
-    pub const fn ir_changed(&self) -> Option<bool> {
-        self.ir_changed
-    }
-
-    pub const fn authority_effect(&self) -> AuthorityEffect {
-        self.authority_effect
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PipelineReport {
-    receipts: Vec<StageReceipt>,
-}
-
-impl PipelineReport {
-    pub fn receipts(&self) -> &[StageReceipt] {
-        &self.receipts
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PipelineFailure {
-    completed: Vec<StageReceipt>,
-    failed: Option<StageReceipt>,
-    diagnostic: Option<Diagnostic>,
-}
-
-impl PipelineFailure {
-    fn session_poisoned() -> Self {
-        Self {
-            completed: Vec::new(),
-            failed: None,
-            diagnostic: None,
-        }
-    }
-
-    pub fn completed(&self) -> &[StageReceipt] {
-        &self.completed
-    }
-
-    pub const fn failed(&self) -> Option<&StageReceipt> {
-        self.failed.as_ref()
-    }
-
-    pub const fn diagnostic(&self) -> Option<&Diagnostic> {
-        self.diagnostic.as_ref()
-    }
-}
-
-fn fail_pipeline(
-    session: &mut PlironSession,
-    completed: Vec<StageReceipt>,
-    failed: StageReceipt,
-    code: DiagnosticCode,
-    message: &str,
-) -> PipelineFailure {
-    session.poisoned = true;
-    let diagnostic = Diagnostic::new(
-        code,
-        Some(failed.pass_name()),
-        message,
-        session.limits.max_diagnostic_bytes,
-    );
-    PipelineFailure {
-        completed,
-        failed: Some(failed),
-        diagnostic: Some(diagnostic),
     }
 }
