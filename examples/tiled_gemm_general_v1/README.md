@@ -39,10 +39,18 @@ continue to typecheck and reach proof-required compiler analysis.
 
 ## Current boundary
 
+Provider authentication covers the compiled semantic surface: imported source
+hashes for all six terminals and the provider-owned context type, plus the
+reviewed `fe2o3_device::DisjointSlice` dependency in the compiled store
+signature. It does not authenticate Cargo-manifest authorship, package
+publication, or publisher identity. An alternate manifest that selects the
+exact reviewed source and dependency is therefore semantically equivalent;
+package provenance needs a separate signature or transparency-log authority.
+
 This is a compile-tested source contract, not GPU execution authority. The
-safe compiler operations are panic stubs under host rustc and have no current
-MIR-to-Kernel-IR or LLVM lowering. A proof-required build must reject this
-kernel before emitting an artifact until general source import, semantic proof
-discharge, gfx942 lowering, protected publication, and runtime launch are all
-joined. The existing exact `tiled_gemm_v1` Slice 1 source and identities are
-unchanged.
+safe compiler operations are panic stubs under host rustc. Authenticated MIR
+can reach a non-authoritative semantic Kernel IR witness, but runtime-plan
+binding, frontend promotion, LLVM lowering, protected publication, and GPU
+execution remain unimplemented. A proof-required build must therefore reject
+before emitting an artifact. The existing exact `tiled_gemm_v1` Slice 1 source
+and identities are unchanged.

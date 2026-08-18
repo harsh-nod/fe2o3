@@ -21,7 +21,7 @@ const fn phase_count(k: u32) -> u32 {
 }
 
 // Reuses the exact reviewed terminal source and source spans. Authentication
-// must still reject this different same-name package by compiled-crate identity.
+// must still reject its locally defined context ADT.
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../../../../examples/tiled_gemm_general_v1/device-api/src/proof_sensitive_terminals.rs"
