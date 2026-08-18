@@ -22,6 +22,39 @@ This roadmap turns [architecture-v2.md](architecture-v2.md),
 owned work with staged integration gates. Gates are evidence-based; calendar
 dates depend on staffing and hardware availability.
 
+## Issue #134/#135 Infrastructure Checkpoint
+
+The refactor through `371a0682e` makes issues
+[#134](https://github.com/harsh-nod/fe2o3/issues/134) and
+[#135](https://github.com/harsh-nod/fe2o3/issues/135) infrastructure-enabled,
+but both issues remain open.
+
+- Canonical, Pliron-independent ownership now exists for the MIR model,
+  compiler API, solver-neutral proof contracts, target-neutral host-operation
+  contracts, and executable-free persistent-service model.
+- `fe2o3-compiler-driver` provides fail-closed single-route API dispatch and
+  `fe2o3-legacy-compiler` provides a dormant adapter contract. Neither is wired
+  into production compiler selection; the current implementation remains in
+  `rustc-codegen-fe2o3`.
+- `fe2o3-pliron` provides the pinned D0 context/pass shell. Seven
+  target-neutral Pliron dialect shells cover `kernel.*`, `schedule.*`,
+  `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
+  `dialect-mir` adds a bounded `mir.*` shell only with feature `pliron` while
+  preserving its default compatibility facade over `fe2o3-mir-model`.
+- Existing AMDGPU lowering is owned by `fe2o3-amdgcn-model` and re-exported by
+  the historical `dialect-amdgcn` facade. A production `gpu.*` to `amdgcn.*`
+  Pliron route has not landed.
+- `fe2o3-service-host` consumes the service and host models through
+  authority-free, borrow-retaining typestates. It has no HSA/HIP handles and
+  performs no allocation, publication, load, launch, execution, wait,
+  persistence, proof, or storage release.
+
+This checkpoint changes ownership and representation contracts, not parity
+status. It does not establish production compilation, persistent service
+execution, proof promotion, GPU execution, or performance qualification. The
+production-directed finalizer remains the isolated pinned-upstream-LLVM
+target-machine and in-process LLD path, with no COMGR or shell GPU linker.
+
 ## Program Rules
 
 1. Implement vertical slices. A feature includes frontend, IR, lowering,
@@ -47,9 +80,9 @@ are frozen.
 | Lane | Owns | Depends on | First deliverable |
 |:--|:--|:--|:--|
 | A: Frontend | rustc driver, kernel metadata, mono-item/call-graph collection, layout extraction | Kernel metadata schema | One non-generic kernel and helper serialized as typed frontend fixtures |
-| B: IR | `mir.*`, `gpu.*`, verifiers, parser/printer, mem2reg, canonicalization | Versioned IR schema | Round-trip and verifier tests for control flow, memory, and GPU ops |
-| C: AMD backend | `gpu.*` legalization, AMDGPU LLVM export, OCML/OCKL, HSACO finalization | `gpu.*` contracts, target capability schema | General vecadd from IR fixture to validated HSACO |
-| D: Runtime/API | artifacts, ABI, generated modules, prepared launches, buffers, streams, events, async operations | Manifest v1 | Safe typed vecadd launch with retained lifetimes |
+| B: IR | `fe2o3-mir-model`, target-neutral dialects, verifiers, mem2reg, canonicalization | Versioned model and IR schemas | Round-trip and verifier tests for control flow, memory, and GPU ops |
+| C: AMD backend | `fe2o3-amdgcn-model`, future `gpu.*` legalization, LLVM export, OCML/OCKL, HSACO finalization | `gpu.*` contracts, target capability schema | General vecadd from IR fixture to validated HSACO |
+| D: Runtime/API | `fe2o3-host-api`, artifacts, ABI, generated modules, prepared launches, buffers, streams, events, async operations | Manifest v1 | Safe typed vecadd launch with retained lifetimes |
 | E: Verification | contracts, abstract model, Verus harness, proof policy, proof manifest | Launch/index/memory schema | Verified map kernel with exact proof binding |
 | F: Quality | parity status generator, compile tests, differential runner/fuzzer, hardware CI, sanitizer/debug jobs | Stable command/test interfaces | Reproducible baseline dashboard and current-example regression suite |
 | G: Advanced AMD | atomics, LDS, waves, matrix/async operations, device linking | G1 compiler and capability interfaces | Target-gated LDS reduction and wave collective suites |
@@ -72,6 +105,8 @@ Parallel work is effective only after these contracts have golden fixtures:
 7. Launch contract and `PreparedLaunch<K>` identity.
 8. Proof record, assurance level, and executable semantic identity.
 9. Diagnostic codes used by compile-fail tests.
+10. Compiler request/result and stage-receipt contracts.
+11. Host operation and persistent-service transition contracts.
 
 Freeze means backward-compatible evolution through explicit version changes,
 not permanent immutability.

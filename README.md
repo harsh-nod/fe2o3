@@ -8,6 +8,8 @@ pipeline and adding source-level Verus contracts. The general form remains
 incomplete, while bounded `gfx942` vertical slices exercise the compiler,
 artifact, runtime, and proof boundaries described below. See the
 [living v2 architecture](docs/architecture-v2.md),
+[workspace ownership policy](docs/workspace-layers-and-ownership.md),
+[Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
 [evidence-backed parity dashboard](docs/generated/cuda-oxide-parity-dashboard.md),
 [verification model](docs/verification-model.md),
@@ -248,30 +250,63 @@ rustc frontend and MIR
 
 ## Architecture
 
-The workspace is split into explicit compiler, artifact, runtime, and proof
-boundaries:
+The refactor through `371a0682e` splits representation, compiler composition,
+target lowering, and host execution into explicit ownership boundaries:
 
-- Device surface: `fe2o3-device`, `fe2o3-macros`,
-  `reserved-fe2o3-symbols`, and `fe2o3-contracts`.
-- Compiler: `rustc-codegen-fe2o3`, `fe2o3-kernel-ir`,
-  `fe2o3-kernel-analysis`, `fe2o3-rustc-front`, `dialect-mir`, and
-  `dialect-amdgcn`.
-- Artifact model: `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
-  `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`, and
-  `fe2o3-worker-v2-bundle`.
-- Runtime: `fe2o3-core`, `fe2o3-completion`, `fe2o3-host`,
-  `fe2o3-hsa-runtime`, and `fe2o3-hip-sys`.
-- Build coordination: `cargo-fe2o3`, `fe2o3-rustc-invocation`, and the
-  `fe2o3-rustc-wrapper`, direct LLVM/LLD worker, and static host-link worker.
-- Build and evidence authority: `fe2o3-build-authority`,
+- Canonical contracts and models: `fe2o3-mir-model` owns the
+  Pliron-independent MIR schema and transformations; `fe2o3-compiler-api`
+  owns target-neutral compiler request/result contracts;
+  `fe2o3-proof-contracts` owns solver-neutral property records;
+  `fe2o3-host-api` owns inert compile/admit/load/dispatch/wait records; and
+  `fe2o3-service-model` owns executable-free persistent-service semantics.
+  These records validate representation and consistency. They do not prove a
+  claim, compile a kernel, execute a service, or grant artifact/runtime
+  authority.
+- Compiler composition: `fe2o3-compiler-driver` routes one explicit `Legacy`,
+  `PlironShadow`, or `PlironV1` request to one configured backend and never
+  falls back to a second route. `fe2o3-legacy-compiler` is only a dormant
+  adapter contract for the existing implementation in
+  `rustc-codegen-fe2o3`; no production selector uses the new driver or adapter
+  yet. The working codegen paths and `FE2O3_CODEGEN_PIPELINE` selection remain
+  owned by the existing integration crate.
+- Pliron framework: `fe2o3-pliron` is a bounded D0 shell over Pliron v0.17.0 at
+  commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. Seven target-neutral
+  representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
+  `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`. `dialect-mir` remains a
+  compatibility facade over `fe2o3-mir-model` and additionally exposes a
+  bounded `mir.*` Pliron shell only with its non-default `pliron` feature.
+  These crates construct and verify in-memory representations; they do not
+  form a production MIR-to-HSACO pipeline.
+- Target model and facades: `fe2o3-amd-target` owns canonical AMD target
+  contracts. The existing strict AMDGPU lowering implementation moved to
+  `fe2o3-amdgcn-model`; `dialect-amdgcn` now preserves the historical crate API
+  by re-exporting that model and is not yet an `amdgcn.*` Pliron dialect.
+- Host and service boundaries: `fe2o3-core`, `fe2o3-host`,
+  `fe2o3-hsa-runtime`, and `fe2o3-hip-sys` own the existing executable runtime.
+  In contrast, `fe2o3-service-host` is an authority-free, `no_std` typestate
+  adapter over `fe2o3-service-model` and `fe2o3-host-api`; it retains storage
+  borrows and checks lifecycle descriptions but allocates, loads, launches,
+  waits for, and executes nothing.
+- Artifact, build, proof, and evidence boundaries remain in
+  `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
+  `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`,
+  `fe2o3-worker-v2-bundle`, `fe2o3-build-authority`,
   `fe2o3-host-link-closure`, `fe2o3-broker-authority-service`,
-  `fe2o3-external-anchor-protocol`, `fe2o3-process-identity`, and
-  `fe2o3-protected-publisher`.
-- Verification: `fe2o3-contracts`, the bounded `fe2o3-verifier` driver model,
-  `examples/verus_vecadd`, and proof records in `fe2o3-artifacts`.
-- Test and release evidence: `fe2o3-differential`, the Cargo inspection/tool
-  commands, `scripts/parity-evidence.sh`, and the deterministic claim gate in
-  `scripts/parity-dashboard.sh`.
+  `fe2o3-external-anchor-protocol`, `fe2o3-process-identity`,
+  `fe2o3-protected-publisher`, `fe2o3-verifier`, and
+  `fe2o3-differential`.
+
+The machine-checked layer policy forbids dependencies that invert these
+ownership directions. The production-directed GPU finalizer continues to use
+an isolated worker built against pinned upstream LLVM target-machine APIs and
+in-process LLD library APIs. COMGR is not part of the architecture, and shell
+`clang`/`ld.lld` use belongs only to the historical compatibility path.
+
+[#134](https://github.com/harsh-nod/fe2o3/issues/134) and
+[#135](https://github.com/harsh-nod/fe2o3/issues/135) are both still open. The
+landed crates make parallel implementation possible and enforce representation
+boundaries; they do not mean that the Pliron production compiler or persistent
+GPU service exists. No parity row or count is promoted by this refactor.
 
 Safe buffer element types and their limits are documented in the
 [device memory safety contract](docs/device-memory-safety.md). `DeviceCopy`
@@ -366,10 +401,11 @@ turn the foundations below into end-to-end features.
   scalar control flow, helper calls, and slice memory operations, into the
   target-neutral `fe2o3-kernel-ir`. Its verifier checks types, SSA uses,
   control-flow edges, memory accesses, launch axes, capabilities, barriers, and
-  atomics. The IR has a bounded canonical V1 wire format. The G1
-  `dialect-amdgcn` path lowers the verified 1D fill and vecadd subset to
-  deterministic AMDGPU LLVM and is connected to the opt-in `kernel-ir-v1`
-  fill and vecadd paths above; it is not yet general or the default. For its
+  atomics. The IR has a bounded canonical V1 wire format. The G1 lowering now
+  owned by `fe2o3-amdgcn-model` and re-exported through the historical
+  `dialect-amdgcn` facade lowers the verified 1D fill and vecadd subset to
+  deterministic AMDGPU LLVM and is connected to the opt-in `kernel-ir-v1` fill
+  and vecadd paths above; it is not yet general or the default. For its
   modeled effects, Kernel IR derives formal allocation identities, affine byte
   regions, bounds requirements, runtime-alias requirements, and
   inter-invocation race obligations. Unsupported index widths, arithmetic,

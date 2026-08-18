@@ -1,8 +1,11 @@
 # Pliron Wave 0 Architecture and Proof Boundary
 
-Status: normative architecture decision for issue #134 Wave 0. This document
-defines contracts for later implementation; it does not claim that the Pliron
-pipeline, proof coverage, or performance qualification is implemented.
+Status: normative architecture decision for issue
+[#134](https://github.com/harsh-nod/fe2o3/issues/134) Wave 0, updated for the
+refactor through `371a0682e`. Issue #134 remains open. The current repository
+implements bounded contracts and representation shells described below; it
+does not implement the complete Pliron pipeline, proof coverage, or performance
+qualification.
 
 This decision refines, and does not replace, the existing
 [architecture](architecture-v2.md), [verification model](verification-model.md),
@@ -63,6 +66,57 @@ needed for D0-D11. It deliberately does not:
 
 Syntax shown below is illustrative. Wire records, operation schemas, and Rust
 API syntax become stable only through their owning versioned stage.
+
+## Implementation Boundary Through `371a0682e`
+
+The following infrastructure is implemented:
+
+- `fe2o3-mir-model` owns the canonical, Pliron-independent MIR semantic model,
+  executable schema, wire validation, control-flow analysis, and mem2reg
+  implementation that previously lived behind `dialect-mir`.
+- `fe2o3-compiler-api` defines bounded target-neutral requests, snapshots,
+  receipts, diagnostics, outputs, and the `Legacy`, `PlironShadow`, and
+  `PlironV1` selectors. `fe2o3-compiler-driver` routes exactly one configured
+  backend and revalidates its output. `fe2o3-legacy-compiler` is a dormant
+  adapter contract only; it neither contains the existing compiler nor appears
+  in production selection.
+- `fe2o3-proof-contracts` defines solver-neutral property, status, obligation,
+  TCB, and correspondence records. Structural validation does not authenticate
+  evidence, run a solver, or promote proof authority.
+- `fe2o3-pliron` constructs a real bounded Pliron context and pass shell using
+  v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
+  The workspace policy rejects another Pliron revision, duplicate Pliron
+  package identities, unexpected packages from that source, and
+  `pliron-llvm`, which remains outside the D0 dependency closure.
+- Seven target-neutral Pliron shells implement bounded `kernel.*`,
+  `schedule.*`, `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`
+  types, attributes, operations, interfaces, registration, and verification.
+  `dialect-mir` additionally exposes a bounded Pliron `mir.*`
+  module/function/block representation only under its non-default `pliron`
+  feature. Without that feature it remains the compatibility facade that
+  re-exports `fe2o3-mir-model`.
+- The existing strict AMDGPU vocabulary and lowering moved into
+  `fe2o3-amdgcn-model`. `dialect-amdgcn` is now a compatibility re-export, not
+  an implemented `amdgcn.*` Pliron dialect. Canonical target contracts remain
+  separate in `fe2o3-amd-target`.
+- `fe2o3-host-api` defines inert target-neutral compile/admit/load/dispatch/wait
+  records. For issue
+  [#135](https://github.com/harsh-nod/fe2o3/issues/135), which also remains
+  open, `fe2o3-service-model` defines executable-free P0 service semantics and
+  `fe2o3-service-host` defines an authority-free P1 borrow-retaining typestate
+  adapter. Neither crate executes a persistent service.
+
+These components make later implementation and parallel ownership possible.
+They do not connect rustc MIR to the Pliron ladder, implement the D1-D11
+lowerings, replace the current compiler selector, publish an artifact, execute
+a host operation, or create a persistent GPU scheduler. Their receipts and
+validated records describe representation and attempted transformations only.
+
+The existing production-directed GPU finalizer remains separate: an isolated
+worker uses pinned upstream LLVM target-machine APIs for object emission and
+in-process LLD library APIs for HSACO. COMGR is not used. Shell-mediated GPU
+compilation/linking is historical compatibility behavior, not the target
+architecture.
 
 ## Rust-First Source Contract
 
@@ -136,9 +190,11 @@ conflicts require typed event dependencies or an explicit unsafe obligation.
 
 No Pliron type or operation appears in a public Rust kernel or host signature.
 
-## Production Pipeline
+## Target Production Pipeline
 
-The production-directed pipeline is:
+The intended production-directed pipeline is shown below. At `371a0682e`, the
+landed Pliron crates represent bounded pieces of this ladder but do not compose
+or execute the full route.
 
 ```text
 Rust crate graph
@@ -173,7 +229,7 @@ gpu.*        executable target-neutral SIMT CFG, memory, barriers, and epochs
 amdgcn.*     selected AMD semantics and target legalization
   |
   v
-llvm.*       pliron-llvm representation
+llvm.*       future Pliron/LLVM representation
   |
   v
 deterministic export -> pinned LLVM target machine -> object -> LLD -> HSACO
@@ -189,6 +245,11 @@ complete. `schedule.*` describes transformation choices and is not executable.
 without premature scalarization. `gpu.*` is the target-neutral executable
 boundary and has a lossless, versioned bridge to `fe2o3-kernel-ir`.
 AMD-specific operations first appear in `amdgcn.*`.
+
+The D0 dependency closure deliberately excludes `pliron-llvm`. Adding an LLVM
+dialect adapter is a later reviewed integration; native object emission and
+HSACO linking continue to use the isolated pinned-upstream-LLVM worker and
+in-process LLD boundary described above.
 
 Every operation family defines its typed operands and results, effects,
 capabilities, canonical identity payload, verifier, lowering contract, source
@@ -475,6 +536,11 @@ inert outside the named consumer. Parallel implementation is allowed when
 inputs are exact, but no stage may bypass an earlier gate. D6 proof work
 branches from semantic snapshots and rejoins only through property-level
 evidence admission.
+
+The sections below are acceptance contracts, not a completion ledger. The
+infrastructure listed in the implementation-boundary section satisfies parts
+of D0 and creates shells for later stages; issue #134 remains open and no
+D1-D11 production route is claimed complete by those crates.
 
 ### D0: Architecture and dependency baseline
 

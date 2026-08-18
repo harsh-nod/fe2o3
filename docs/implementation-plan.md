@@ -33,8 +33,8 @@ toolchain, machine-code, and runtime evidence boundaries.
 
 ## Architecture
 
-The project follows the proven cuda-oxide shape, with AMD-specific compiler and
-runtime pieces:
+The target architecture follows the proven cuda-oxide shape, with AMD-specific
+compiler and runtime pieces:
 
 ```text
 Rust source
@@ -50,10 +50,10 @@ rustc frontend: parse, typecheck, MIR, monomorphization
      collect #[kernel] roots and reachable no_std functions
         |
         v
-     MIR -> Pliron dialect-mir -> optimized dialect-mir
+     canonical MIR model -> Pliron mir.* -> target-neutral dialect ladder
         |
         v
-     AMDGPU lowering -> LLVM IR for amdgcn-amd-amdhsa
+     gpu.* -> AMDGPU lowering -> LLVM IR for amdgcn-amd-amdhsa
         |
         v
      pinned upstream LLVM target-machine APIs -> relocatable ELF
@@ -72,6 +72,15 @@ not shell out to `clang`, `llc`, or `ld.lld`. Early elementwise prototypes used
 ROCm command-line clang and `ld.lld`; references to that path below are
 historical compatibility notes, not the target architecture.
 
+The refactor through `371a0682e` implements the canonical model/API boundaries,
+the pinned Pliron D0 shell, seven target-neutral dialect shells, a
+feature-gated `mir.*` Pliron shell, compiler routing contracts, and inert
+host/service contracts. It does not yet connect the device path in the diagram.
+The working compiler remains the existing `rustc-codegen-fe2o3` composition,
+including the default legacy recognizer and bounded opt-in Kernel IR routes.
+Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
+[#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open.
+
 The initial runtime uses HIP's module API:
 
 - `hipModuleLoad` or `hipModuleLoadData`
@@ -83,7 +92,7 @@ A direct HSA/ROCR loader can be added after the compiler path is working.
 
 ## IR Strategy
 
-Use Pliron for the MVP.
+Use the pinned Pliron workspace for the target compiler pipeline.
 
 Pliron is the closest fit for the cuda-oxide-derived design because the source
 pipeline is already Rust-native: MIR is imported into a custom IR, then lowered
@@ -100,18 +109,44 @@ standard MLIR dialects:
 Do not start with Melior unless the MVP blocks on custom Pliron lowering. The
 shortest path to a running kernel is a Pliron-based AMDGPU LLVM IR exporter.
 
+The current D0 closure is Pliron v0.17.0 commit
+`2610651306ea3ba670f68d5d8b1e1159bcd521ed`. `fe2o3-pliron` provides a real
+context, explicit bounded registration, verified pass execution, and inert
+attempt receipts. It deliberately excludes `pliron-llvm`; no landed Pliron
+crate compiles a production kernel or replaces the direct upstream LLVM and
+in-process LLD finalizer.
+
 ## Crate Responsibilities
 
 - `cargo-fe2o3`: user command, backend discovery, build/run orchestration.
 - `fe2o3-artifact-transaction`: rustc-independent artifact ownership and publication protocol.
 - `rustc-codegen-fe2o3`: rustc codegen backend and HSACO toolchain helpers.
+- `fe2o3-compiler-api`: target-neutral compile request/result contracts.
+- `fe2o3-compiler-driver`: fail-closed single-route API dispatch; not yet the
+  production selector.
+- `fe2o3-legacy-compiler`: dormant adapter contract for the existing compiler
+  owner; it contains no codegen implementation.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.
 - `fe2o3-core`: HIP-backed context, stream, memory, module, and launch runtime.
 - `fe2o3-host`: launch macro and host ergonomics.
-- `dialect-amdgcn`: AMDGPU intrinsic and address-space lowering seam.
-- `dialect-mir`: MIR operation/type naming seam for the future Pliron lowering.
+- `fe2o3-mir-model`: canonical Pliron-independent MIR semantics and
+  transformations.
+- `dialect-mir`: compatibility facade over that model and a bounded
+  feature-gated Pliron `mir.*` shell.
+- `fe2o3-pliron`: pinned context, registration, verifier, and pass shell.
+- `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`,
+  `dialect-proof`, `dialect-dispatch`, `dialect-autotune`: target-neutral,
+  representation-only Pliron shells.
+- `fe2o3-amdgcn-model`: existing AMDGPU intrinsic and strict lowering model.
+- `dialect-amdgcn`: historical compatibility re-export; not yet an AMD Pliron
+  dialect.
+- `fe2o3-proof-contracts`: solver-neutral proof statement/evidence contracts.
+- `fe2o3-host-api`: inert target-neutral host-operation contracts.
+- `fe2o3-service-model`: executable-free persistent-service semantics.
+- `fe2o3-service-host`: authority-free service lifecycle typestates; no service
+  execution.
 
 ## Device ABI
 
@@ -273,7 +308,8 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
 
 Remaining generalization:
 
-- Import collected MIR into Pliron `dialect-mir`.
+- Adapt collected MIR from `fe2o3-mir-model` into the feature-gated Pliron
+  `mir.*` shell.
 - Run basic verification and mem2reg.
 - Lower arithmetic, branches, loads/stores, pointer math, calls, and returns.
 - Lower 1D thread-index intrinsics from device API calls instead of a fixed IR

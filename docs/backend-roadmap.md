@@ -10,9 +10,37 @@ pinned upstream LLVM build: LLVM target-machine APIs emit relocatable objects
 and in-process LLD library APIs link HSACO. That path uses neither COMGR nor
 shell invocations of `clang`, `llc`, or `ld.lld`.
 
+The ownership refactor through `371a0682e` is infrastructure, not a compiler
+promotion. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
+[#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The working
+production compiler still selects its existing legacy and opt-in Kernel IR
+routes inside `rustc-codegen-fe2o3`; no production path uses the new Pliron
+driver route or persistent-service model.
+
 - Project naming and reserved symbol namespace use `fe2o3`.
-- `dialect-mir` defines the local `mir.*` operation/type naming seam that the
-  MIR import scaffold can later back with Pliron operations.
+- `fe2o3-mir-model` now owns the canonical Pliron-independent MIR executable,
+  type, memory, constant, control-flow, wire, and mem2reg models formerly
+  implemented behind `dialect-mir`. `dialect-mir` remains a compatibility
+  re-export and exposes a bounded Pliron `mir.*` module/function/block shell
+  only with its non-default `pliron` feature.
+- `fe2o3-compiler-api` defines bounded target-neutral contracts for `Legacy`,
+  `PlironShadow`, and `PlironV1` requests and outputs.
+  `fe2o3-compiler-driver` routes exactly one configured backend without
+  fallback, while `fe2o3-legacy-compiler` is a dormant adapter contract that
+  contains no existing codegen and is not production-selected.
+- `fe2o3-pliron` pins Pliron v0.17.0 commit
+  `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and implements a bounded D0
+  context, registration, verification, and pass shell. Seven target-neutral
+  representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
+  `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`. They perform no connected
+  lowering, target selection, artifact production, or launch.
+- `fe2o3-amdgcn-model` now owns the existing strict AMDGPU target vocabulary
+  and lowering implementation. `dialect-amdgcn` is its historical compatibility
+  facade, not an implemented AMD Pliron dialect.
+- `fe2o3-host-api`, `fe2o3-service-model`, and `fe2o3-service-host` provide
+  inert host-operation records, executable-free persistent-service semantics,
+  and authority-free borrow-retaining lifecycle typestates. They do not compile,
+  allocate, load, launch, wait, persist, or execute a service.
 - A HIP runtime wrapper can allocate buffers, copy data, load HSACO modules, look
   up kernels, and launch them with packed parameter arrays.
 - `#[kernel]` emits strict V1 registration metadata with a direct function
@@ -68,15 +96,16 @@ shell invocations of `clang`, `llc`, or `ld.lld`.
   COMGR or a command-line compiler or linker.
 - `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` selects the first integrated G1 path:
   imported device MIR is translated to canonical kernel IR, verified, strictly
-  legalized for the exact 1D `fill` shape, lowered by `dialect-amdgcn`, and
-  published through the existing transactional LLVM/object/HSACO path. Invalid
-  selectors and unsupported selected inputs fail without legacy fallback and
-  remove stale artifacts. The default remains `legacy-v1` while coverage is
-  extended.
-- `dialect-amdgcn` lowers that verified fill subset to deterministic AMDGPU
-  LLVM. Its code-object regression checks target/features, ELF and metadata
-  versions, exact kernel symbol and descriptor, ABI, address space, and fixed
-  workgroup metadata. Unsupported IR fails with located diagnostics.
+  legalized for the exact 1D `fill` shape, lowered by `fe2o3-amdgcn-model`
+  through the `dialect-amdgcn` compatibility facade, and published through the
+  existing transactional LLVM/object/HSACO path. Invalid selectors and
+  unsupported selected inputs fail without legacy fallback and remove stale
+  artifacts. The default remains `legacy-v1` while coverage is extended.
+- `fe2o3-amdgcn-model`, reached through the `dialect-amdgcn` compatibility
+  facade, lowers that verified fill subset to deterministic AMDGPU LLVM. Its
+  code-object regression checks target/features, ELF and metadata versions,
+  exact kernel symbol and descriptor, ABI, address space, and fixed workgroup
+  metadata. Unsupported IR fails with located diagnostics.
 - `cargo-fe2o3 build/run` writes `.ll` and `.hsaco` artifacts under
   `target/fe2o3`; `fe2o3-copy` covers a leaf-only store,
   `fe2o3-downsample` covers a constant-stride input load,

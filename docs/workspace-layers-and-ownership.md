@@ -1,8 +1,10 @@
 # Workspace Layers and Parallel Ownership
 
-Status: normative Wave 1 workspace policy for issues #134 and #135. This
-document defines repository ownership and dependency boundaries. It does not
-claim that the Pliron pipeline or persistent GPU execution is implemented.
+Status: normative Wave 1 workspace policy, updated for the refactor through
+`371a0682e`. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
+[#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The landed
+crates make both epics infrastructure-enabled; they do not implement the
+production Pliron pipeline or persistent GPU execution.
 
 This policy refines the [Pliron Wave 0 architecture](pliron-wave0-architecture.md)
 and preserves the existing production compiler, artifact, proof, publication,
@@ -46,8 +48,13 @@ addition that changes `Cargo.lock` is a separate, integration-reviewed commit.
 
 Canonical contracts own versioned records, stable identities, wire encodings,
 public compiler/host interfaces, target descriptions, and Pliron-independent
-models. Planned crates include `fe2o3-mir-model`, `fe2o3-compiler-api`,
-`fe2o3-proof-contracts`, `fe2o3-service-model`, and `fe2o3-host-api`.
+models. The current boundaries include `fe2o3-mir-model`,
+`fe2o3-compiler-api`, `fe2o3-proof-contracts`, `fe2o3-service-model`,
+`fe2o3-host-api`, `fe2o3-amd-target`, and the existing artifact, descriptor,
+completion, invocation, and authority contracts listed in the machine-readable
+policy. A type in this layer may be canonical representation without being a
+durable wire format or an authenticated statement; each owning crate states
+which of those stronger contracts, if any, it provides.
 
 This layer MUST remain independent of rustc implementation objects, Pliron
 handles or text, LLVM objects, Verus executors, HSA/HIP handles, process-local
@@ -69,6 +76,16 @@ operation verification, transformation passes, pass receipts, and the single
 KIR bridge. Planned operation families are `mir.*`, `kernel.*`, `schedule.*`,
 `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
 
+At `371a0682e`, `fe2o3-pliron` constructs the pinned D0 context and bounded
+pass shell. Seven always-Pliron target-neutral dialect shells implement
+`kernel.*`, `schedule.*`, `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and
+`autotune.*`. `dialect-mir` is primarily the compatibility facade over
+`fe2o3-mir-model`; its bounded `mir.*` Pliron module/function/block shell is
+available only through the non-default `pliron` feature. These are verified
+in-memory representations, not a connected compiler pipeline. The KIR bridge
+and `fe2o3-lower-*` package names remain reserved integration boundaries at
+this checkpoint rather than implemented production stages.
+
 This layer may consume canonical contracts and admitted frontend models. It
 MUST NOT depend on target backend, host runtime, Verus execution, compiler
 driver, or fixture crates. `fe2o3-kernel-ir` remains outside this layer and
@@ -83,6 +100,14 @@ verification contracts as required by the current legacy finalizer. It MUST
 NOT depend on host runtime, integration drivers, or fixtures.
 
 No production path may introduce COMGR or shell-mediated GPU linking.
+
+`fe2o3-amdgcn-model` currently owns the existing Pliron-independent AMDGPU
+vocabulary and strict lowering implementation. `dialect-amdgcn` is a thin
+compatibility re-export under the historical package name; it is not yet the
+future `amdgcn.*` Pliron dialect. Canonical AMD target identities and
+capabilities remain in `fe2o3-amd-target`. The production-directed finalizer
+continues to use one pinned upstream LLVM build, target-machine object emission,
+and in-process LLD linking in the isolated worker.
 
 ### Verification
 
@@ -99,6 +124,13 @@ loading, service host typestates, and persistent-worker runtime mechanics. It
 may consume canonical, frontend, backend, and verification contracts. It MUST
 NOT depend on Pliron implementation objects, compiler drivers, or fixtures.
 
+`fe2o3-service-host` is classified here because it owns the host-side service
+typestate boundary, but its current P1 implementation is deliberately
+authority-free. It consumes only canonical `fe2o3-service-model` and
+`fe2o3-host-api` records, retains caller storage borrows, and performs no
+allocation, load, launch, queue publication, execution, runtime wait,
+authentication, proof, or storage release.
+
 ### Integration
 
 Integration owns CLI composition, rustc codegen integration, pipeline
@@ -106,6 +138,14 @@ selection, legacy adaptation, shadow comparison, and end-to-end differential
 orchestration. Integration may compose any production layer but MUST NOT depend
 on examples or test fixtures. It is the only layer that selects `Legacy`,
 `PlironShadow`, or `PlironV1`.
+
+`fe2o3-compiler-api` defines those three selectors as inert request data.
+`fe2o3-compiler-driver` routes exactly one selected, configured backend and
+revalidates its bounded output. `fe2o3-legacy-compiler` only defines the
+dormant adapter contract for the current implementation owner. No production
+selection path depends on the new driver or adapter at `371a0682e`; the
+working legacy and opt-in Kernel IR routes remain composed in
+`rustc-codegen-fe2o3`.
 
 ### Fixtures
 
@@ -139,18 +179,20 @@ fixture or integration crate.
 
 ## Issue #134 Ownership
 
-Issue #134 can proceed in the following non-overlapping lanes:
+Issue #134 remains open and can proceed in the following non-overlapping
+lanes. "Landed" below means representation or routing infrastructure exists;
+it does not mean production compilation exists.
 
-| Lane | Primary write ownership | Integration input |
+| Lane | Primary write ownership | State through `371a0682e` |
 |---|---|---|
-| Source/model extraction | `fe2o3-mir-model`, frontend adapters | Canonical model and compatibility tests |
-| Pliron context | `fe2o3-pliron` | Registration and verifier API |
-| Dialects | One `dialect-*` crate per operation family | Registered operations and round-trip tests |
-| Transformations | One `fe2o3-lower-*` family | Input/output verifier and receipt tests |
-| KIR bridge | `fe2o3-kir-pliron-bridge` | Versioned lossless conversion tests |
-| Proof overlays | `fe2o3-proof-contracts`, `dialect-proof` | Canonical obligations and erasure tests |
-| AMD lowering | AMD dialect/lowering crates | LLVM export and physical ABI tests |
-| Driver | `fe2o3-compiler-driver`, legacy adapter | Shadow comparison and selector tests |
+| Source/model extraction | `fe2o3-mir-model`, frontend adapters | Canonical model extracted; general frontend integration remains open |
+| Pliron context | `fe2o3-pliron` | Pinned D0 context/pass shell landed |
+| Dialects | One `dialect-*` crate per operation family | Seven target-neutral shells plus feature-gated `mir.*` shell landed |
+| Transformations | One `fe2o3-lower-*` family | Package boundaries reserved; production transformations remain open |
+| KIR bridge | `fe2o3-kir-pliron-bridge` | Package boundary reserved; production bridge remains open |
+| Proof overlays | `fe2o3-proof-contracts`, `dialect-proof` | Solver-neutral records and inert Pliron overlay landed; proof integration remains open |
+| AMD lowering | AMD model/dialect/lowering crates | Existing implementation extracted to `fe2o3-amdgcn-model`; future Pliron AMD lowering remains open |
+| Driver | `fe2o3-compiler-driver`, legacy adapter | API routing and dormant adapter landed; production selection and shadow comparison remain open |
 
 Dialect agents MUST NOT edit central registration or production selection.
 They provide a registration function and focused tests for the integration
@@ -159,17 +201,19 @@ artifact directly.
 
 ## Issue #135 Ownership
 
-Issue #135 depends on stable #134 contracts but has independent model, host,
-and proof lanes:
+Issue #135 remains open. It depends on stable #134 contracts but has
+independent model, host, and proof lanes. The P0/P1 representations below do
+not execute a persistent service.
 
-| Lane | Primary write ownership | May begin when |
+| Lane | Primary write ownership | State through `371a0682e` |
 |---|---|---|
-| Service model | `fe2o3-service-model` | Canonical identity conventions are stable |
-| Scheduler proofs | `fe2o3-service-verus` | Model transitions and properties are versioned |
-| Host typestates | `fe2o3-service-host` | Service model API is reviewed |
-| GPU operations | scheduler/service dialect crates | Required #134 dialect APIs are registered |
-| AMD synchronization | AMD lowering family | GPU memory/order semantics are verified |
-| Integration and qualification | compiler driver and external fixtures | All consumed stages emit canonical receipts |
+| Service model | `fe2o3-service-model` | P0 identities, transitions, invariants, and independent property classifications landed |
+| Scheduler proofs | `fe2o3-service-verus` | Package boundary reserved; proof implementation remains open |
+| Host typestates | `fe2o3-service-host` | Authority-free P1 lifecycle/ticket/borrow adapter landed; runtime binding remains open |
+| Host operation contracts | `fe2o3-host-api` | Inert compile/admit/load/dispatch/wait records landed; executors remain open |
+| GPU operations | scheduler/service dialect crates | Required general service operations and compilation remain open |
+| AMD synchronization | AMD lowering family | Persistent-service memory/order lowering remains open |
+| Integration and qualification | compiler driver and external fixtures | Production service composition, execution, and qualification remain open |
 
 The service model MUST NOT depend on Pliron, Verus, HSA, HIP, or host process
 types. Persistent host code MUST NOT import Pliron handles. Verification and
@@ -190,9 +234,11 @@ The integration owner exclusively performs:
 4. compiler selector and release-pipeline composition;
 5. cross-layer conflict resolution and final generic/hardware qualification.
 
-`PlironShadow` remains inspect-only. `PlironV1` must fail closed without legacy
-fallback. The existing legacy path remains the production default until a
-separate reviewed milestone satisfies the Wave 0 gates.
+At the compiler API boundary, `PlironShadow` is inspect-only and `PlironV1`
+must fail closed without legacy fallback. Neither selector is wired into the
+production compiler at this checkpoint. The existing legacy path remains the
+production default until a separate reviewed milestone satisfies the Wave 0
+gates.
 
 ## Policy Checker
 

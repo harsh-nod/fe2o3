@@ -44,12 +44,24 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,
   machine-code inspection, and GPU execution remain separate claims.
+- The refactor through `371a0682e` establishes canonical MIR, compiler, proof,
+  host-operation, and service-model contracts; an explicit compiler
+  API/driver/dormant-legacy-adapter boundary; a pinned Pliron D0 shell; seven
+  target-neutral dialect shells; a feature-gated `mir.*` Pliron shell; and an
+  authority-free service-host typestate adapter. These are representation and
+  composition foundations. They are not connected production compilation or
+  persistent-service execution.
 
 This is not general Rust GPU compilation or cuda-oxide parity. The exact
 implemented and missing surfaces are maintained in the
 [cuda-oxide parity matrix](cuda-oxide-parity-matrix.md); reproducible commands
 and strength labels are defined by the [testing guide](testing.md) and parity
 evidence policy.
+
+Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
+[#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The
+[workspace ownership policy](workspace-layers-and-ownership.md) records which
+infrastructure has landed and which production stages remain reserved.
 
 ## Goals
 
@@ -165,27 +177,37 @@ execution or cuda-oxide parity.
 
 ## Permanent Component Boundaries
 
-The crate names below are architectural ownership boundaries. Exact package
-names may change during bootstrap, but dependencies must continue to point
-downward through these layers.
+The crate names below are current ownership boundaries. Dependencies must
+continue to point downward according to the machine-checked
+[workspace layer policy](workspace-layers-and-ownership.md).
 
 | Component | Responsibility | Must not own |
 |:--|:--|:--|
 | `fe2o3-rustc-front` | Kernel discovery, final mono-item collection, `rustc_public` conversion, source spans | GPU lowering, host launch packing |
-| `fe2o3-mir` | Rust layout-aware types and `mir.*` operations | AMD intrinsics, HIP handles |
-| `fe2o3-kernel-ir` | `gpu.*` operations, SIMT domains, effects, address spaces, barriers, atomics, capabilities | Rust compiler types, HIP calls |
-| `fe2o3-transforms` | Verification, mem2reg, canonicalization, divergence/effect analyses | Target command execution |
-| `fe2o3-amdgpu` | AMDGPU lowering, OCML/OCKL calls, target features, code-object metadata | Host borrow policy, Verus proof claims |
+| `fe2o3-mir-model` | Pliron-independent semantic MIR types, executable schema/wire, control-flow analysis, and mem2reg | Pliron handles, AMD lowering, runtime handles |
+| `dialect-mir` | Historical MIR compatibility facade; optional bounded Pliron `mir.*` shell behind feature `pliron` | Durable MIR identity, production selection, target lowering |
+| `fe2o3-kernel-ir` | Canonical target-neutral Kernel IR, SIMT domains, effects, address spaces, barriers, atomics, and capabilities | Pliron identity, Rust compiler types, HIP calls |
+| `fe2o3-pliron` | Pinned Pliron context, registration, verification, bounded pass plans, and inert receipts | fe2o3 dialect semantics, production selection, artifact authority |
+| `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`, `dialect-proof`, `dialect-dispatch`, `dialect-autotune` | Bounded target-neutral Pliron representation shells | Target legalization, compiler selection, proof or runtime authority |
+| `fe2o3-amd-target` | Canonical AMD target identities, features, and capability contracts | Compiler execution and runtime observation |
+| `fe2o3-amdgcn-model` | Existing strict AMDGPU vocabulary, legalization/lowering, OCML/OCKL selection, and LLVM text generation | Pliron object identity, host borrow policy, artifact/launch authority |
+| `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
+| `fe2o3-compiler-api` | Target-neutral request, selector, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
+| `fe2o3-compiler-driver`, `fe2o3-legacy-compiler` | Single-route fail-closed API dispatch and dormant adaptation of the existing legacy owner | Production selection, codegen ownership, artifact/runtime authority |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
 | `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |
 | `fe2o3-core` | HIP resource wrappers, streams, events, buffers, raw launch | Kernel type discovery |
-| `fe2o3-contracts` | Shared launch/spec vocabulary and erased proof markers | Solving proofs, code generation |
+| `fe2o3-host-api` | Inert target-neutral compile/admit/load/dispatch/wait records | Executing those operations or authenticating authority |
+| `fe2o3-service-model`, `fe2o3-service-host` | Executable-free service semantics and authority-free borrow-retaining host typestates | Persistent execution, runtime waits, progress proof, storage-release authority |
+| `fe2o3-contracts`, `fe2o3-proof-contracts` | Shared launch/spec vocabulary, erased proof markers, and solver-neutral property records | Solving proofs, code generation, proof promotion |
 | `fe2o3-verifier` | Verus invocation, policy checks, proof manifest creation | Claiming compiler correctness |
 | `cargo-fe2o3` | Build graph orchestration, tool discovery, cache keys, inspection commands | Semantic lowering logic |
 
 `fe2o3-hip-sys` remains the narrow raw FFI layer. The current
 `rustc-codegen-fe2o3` can host adapters while the new layers are introduced,
-but it is not the permanent owner of host compilation.
+but it is not the permanent owner of host compilation. At `371a0682e`, it
+still owns the working production compiler composition; the new compiler
+driver and legacy adapter are not wired into that selection path.
 
 ## Frontend and Device Extraction
 
@@ -261,12 +283,19 @@ capabilities supported by the selected device.
 
 ### IR framework
 
-The near-term implementation uses Pliron because the pinned cuda-oxide
+The target architecture uses Pliron because the pinned cuda-oxide
 baseline already demonstrates a Rust-native MIR importer, verification,
 mem2reg, dialect conversion, and LLVM export. V2 must keep serialization and
 pass interfaces independent of Pliron object identity. That boundary permits a
 future MLIR lower half without changing the source API, artifact manifest, or
 verification model.
+
+The current D0 implementation pins Pliron v0.17.0 commit
+`2610651306ea3ba670f68d5d8b1e1159bcd521ed` and provides a bounded context/pass
+shell. Seven target-neutral operation-family shells and the feature-gated
+`dialect-mir` shell construct and verify in-memory Pliron values. They do not
+yet import general rustc MIR, run the target pipeline above, lower to AMDGPU,
+or emit an executable. `pliron-llvm` is deliberately outside the D0 closure.
 
 ## Capabilities, Not CUDA Vocabulary
 
@@ -454,6 +483,11 @@ target, option, symbol-resolution, toolchain, and output identities; they do
 not contain shell commands, arbitrary linker flags, or implicit library search
 paths. COMGR is not part of this architecture. Textual LLVM emission may remain
 as an inspection format but is not the semantic IR boundary.
+
+The existing lowering implementation is owned by `fe2o3-amdgcn-model` and
+re-exported by the historical `dialect-amdgcn` facade. A future
+`amdgcn.*` Pliron dialect and its `gpu.*` lowering must preserve this finalizer
+boundary; it must not introduce COMGR or shell-mediated GPU linking.
 
 ## Remaining Migration from Bootstrap Paths
 
