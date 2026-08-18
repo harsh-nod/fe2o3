@@ -487,6 +487,15 @@ pub enum GeneralGemmWorkgroupOutputMappingV1 {
     Overlapping,
 }
 
+/// Dynamic number of epilogue stores issued for each logical output owner.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum GeneralGemmStoreCardinalityV1 {
+    /// Each admitted lane/component owner issues exactly one store.
+    OncePerOwner,
+    /// At least one admitted lane/component owner issues more than one store.
+    RepeatedPerOwner,
+}
+
 /// Algebra computed by the output event.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum GeneralGemmEpilogueExpressionV1 {
@@ -507,6 +516,8 @@ pub struct GeneralGemmEpilogueEventV1 {
     pub lane_mapping: GeneralGemmLaneOutputMappingV1,
     /// Per-workgroup ownership.
     pub workgroup_mapping: GeneralGemmWorkgroupOutputMappingV1,
+    /// Dynamic store multiplicity for each logical output owner.
+    pub store_cardinality: GeneralGemmStoreCardinalityV1,
     /// Exact alpha/beta algebra.
     pub expression: GeneralGemmEpilogueExpressionV1,
 }
@@ -548,6 +559,7 @@ impl GeneralGemmKirV1 {
                 store_guard: GeneralGemmBoundsGuardV1::CRowAndColumn,
                 lane_mapping: GeneralGemmLaneOutputMappingV1::Wave64FourRows,
                 workgroup_mapping: GeneralGemmWorkgroupOutputMappingV1::GridXY16,
+                store_cardinality: GeneralGemmStoreCardinalityV1::OncePerOwner,
                 expression: GeneralGemmEpilogueExpressionV1::AlphaAccumulatorPlusBetaC,
             },
         )
@@ -774,6 +786,7 @@ pub fn encode_general_gemm_kir_canonical_v1(kir: &GeneralGemmKirV1) -> Vec<u8> {
         guard_tag(kir.epilogue.store_guard),
         lane_output_tag(kir.epilogue.lane_mapping),
         workgroup_output_tag(kir.epilogue.workgroup_mapping),
+        store_cardinality_tag(kir.epilogue.store_cardinality),
         epilogue_expression_tag(kir.epilogue.expression),
     ]);
     output
@@ -897,6 +910,13 @@ const fn workgroup_output_tag(value: GeneralGemmWorkgroupOutputMappingV1) -> u8 
     match value {
         GeneralGemmWorkgroupOutputMappingV1::GridXY16 => 1,
         GeneralGemmWorkgroupOutputMappingV1::Overlapping => 2,
+    }
+}
+
+const fn store_cardinality_tag(value: GeneralGemmStoreCardinalityV1) -> u8 {
+    match value {
+        GeneralGemmStoreCardinalityV1::OncePerOwner => 1,
+        GeneralGemmStoreCardinalityV1::RepeatedPerOwner => 2,
     }
 }
 
@@ -1468,6 +1488,7 @@ fn verify_bounds_and_regions(kir: &GeneralGemmKirV1) -> Result<(), GeneralGemmKi
 fn verify_output_ownership(kir: &GeneralGemmKirV1) -> Result<(), GeneralGemmKirDiagnosticV1> {
     if kir.epilogue.lane_mapping != GeneralGemmLaneOutputMappingV1::Wave64FourRows
         || kir.epilogue.workgroup_mapping != GeneralGemmWorkgroupOutputMappingV1::GridXY16
+        || kir.epilogue.store_cardinality != GeneralGemmStoreCardinalityV1::OncePerOwner
     {
         return Err(diagnostic(
             GeneralGemmPropertyV1::OutputRegionInjective,

@@ -12,10 +12,10 @@ use std::fmt;
 
 use fe2o3_kernel_ir::{
     GeneralGemmBarrierRoleV1, GeneralGemmKirDiagnosticV1, GeneralGemmKirV1,
-    GeneralGemmLaneOutputMappingV1, GeneralGemmPhaseEventV1, GeneralGemmPlanFieldsV1,
-    GeneralGemmPlanSnapshotV1, verify_general_gemm_kir_v1,
+    GeneralGemmPhaseEventV1, GeneralGemmPlanFieldsV1, GeneralGemmPlanSnapshotV1,
+    GeneralGemmStoreCardinalityV1, verify_general_gemm_kir_v1,
 };
-use rustc_middle::mir::{BasicBlock, Body, Operand, TerminatorKind};
+use rustc_middle::mir::{BasicBlock, Body, Operand, START_BLOCK, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
 
 use crate::AmdGpuTarget;
@@ -118,7 +118,7 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
         });
     }
     if call_count(&root_calls, TrustedGeneralGemmOperationV1::Store) == 2 {
-        epilogue.lane_mapping = GeneralGemmLaneOutputMappingV1::Aliased;
+        epilogue.store_cardinality = GeneralGemmStoreCardinalityV1::RepeatedPerOwner;
     }
     let kir = GeneralGemmKirV1::checked_from_parts(canonical.plan(), events, epilogue)
         .map_err(|error| GeneralGemmMirImportErrorV1::new(error.to_string()))?;
@@ -223,6 +223,18 @@ fn validate_call_shape(
         store_maximum,
     )?;
 
+    match surface {
+        TrustedGeneralGemmSurfaceV1::Typestate => validate_typestate_template_order(body, calls),
+        TrustedGeneralGemmSurfaceV1::ProofSensitive => validate_proof_sensitive_order(body, calls),
+    }
+}
+
+// The move-checked typestate API owns local ordering. This intentionally loose
+// template admission remains non-authoritative until runtime plan binding.
+fn validate_typestate_template_order(
+    body: &Body<'_>,
+    calls: &[GeneralGemmCallV1],
+) -> Result<(), GeneralGemmMirImportErrorV1> {
     let acquire = unique_call(calls, TrustedGeneralGemmOperationV1::Acquire)?;
     let stage = unique_call(calls, TrustedGeneralGemmOperationV1::Stage)?;
     let mfma = unique_call(calls, TrustedGeneralGemmOperationV1::Mfma)?;
@@ -251,6 +263,213 @@ fn validate_call_shape(
         )?;
     }
     Ok(())
+}
+
+fn validate_proof_sensitive_order(
+    body: &Body<'_>,
+    calls: &[GeneralGemmCallV1],
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    let acquire = unique_call(calls, TrustedGeneralGemmOperationV1::Acquire)?;
+    let stage = unique_call(calls, TrustedGeneralGemmOperationV1::Stage)?;
+    let publish = optional_call(calls, TrustedGeneralGemmOperationV1::Publish)?;
+    let mfma = unique_call(calls, TrustedGeneralGemmOperationV1::Mfma)?;
+    let reuse = unique_call(calls, TrustedGeneralGemmOperationV1::Reuse)?;
+    let stores = calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::Store)
+        .collect::<Vec<_>>();
+
+    let mut prefix = vec![acquire, stage];
+    prefix.extend(publish);
+    prefix.extend([mfma, reuse]);
+
+    let mut ordered = prefix.clone();
+    ordered.extend(stores.iter().copied());
+    match validate_acyclic_lifecycle(body, calls, &ordered) {
+        Ok(()) => Ok(()),
+        Err(first_error) if stores.len() == 2 => {
+            let mut reversed = prefix;
+            reversed.extend([stores[1], stores[0]]);
+            validate_acyclic_lifecycle(body, calls, &reversed).map_err(|_| first_error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn validate_acyclic_lifecycle(
+    body: &Body<'_>,
+    calls: &[GeneralGemmCallV1],
+    ordered: &[&GeneralGemmCallV1],
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    let lifecycle_blocks = calls.iter().map(|call| call.block).collect::<BTreeSet<_>>();
+    let mut from = START_BLOCK;
+    let mut from_name = "kernel entry";
+    for call in ordered {
+        require_all_paths_reach_lifecycle(
+            body,
+            from,
+            call.block,
+            from_name,
+            operation_name(call.operation),
+            &lifecycle_blocks,
+        )?;
+        from = call.return_target;
+        from_name = operation_name(call.operation);
+    }
+    require_all_paths_reach_return(body, from, from_name, &lifecycle_blocks)
+}
+
+fn require_all_paths_reach_lifecycle(
+    body: &Body<'_>,
+    from: BasicBlock,
+    to: BasicBlock,
+    from_name: &str,
+    to_name: &str,
+    lifecycle_blocks: &BTreeSet<BasicBlock>,
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    let mut pending = VecDeque::from([from]);
+    let mut region = BTreeSet::new();
+    let mut reached_target = false;
+    while let Some(block) = pending.pop_front() {
+        if block == to {
+            reached_target = true;
+            continue;
+        }
+        if !region.insert(block) {
+            continue;
+        }
+        if lifecycle_blocks.contains(&block) {
+            return Err(GeneralGemmMirImportErrorV1::new(format!(
+                "proof-sensitive general GEMM reaches a different lifecycle event before {to_name} after {from_name}"
+            )));
+        }
+        let successors = normal_successors(body, block)?;
+        if successors.is_empty() {
+            return Err(GeneralGemmMirImportErrorV1::new(format!(
+                "proof-sensitive general GEMM has a normal path that bypasses {to_name} after {from_name}"
+            )));
+        }
+        pending.extend(successors);
+    }
+    if !reached_target {
+        return Err(GeneralGemmMirImportErrorV1::new(format!(
+            "proof-sensitive general GEMM has no normal CFG path from {from_name} to {to_name}"
+        )));
+    }
+    require_acyclic_region(body, &region, Some(to), from_name, to_name)
+}
+
+fn require_all_paths_reach_return(
+    body: &Body<'_>,
+    from: BasicBlock,
+    from_name: &str,
+    lifecycle_blocks: &BTreeSet<BasicBlock>,
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    let mut pending = VecDeque::from([from]);
+    let mut region = BTreeSet::new();
+    let mut reached_return = false;
+    while let Some(block) = pending.pop_front() {
+        if !region.insert(block) {
+            continue;
+        }
+        if lifecycle_blocks.contains(&block) {
+            return Err(GeneralGemmMirImportErrorV1::new(format!(
+                "proof-sensitive general GEMM repeats a lifecycle event after {from_name}"
+            )));
+        }
+        let Some(terminator) = &body.basic_blocks[block].terminator else {
+            return Err(missing_terminator(block));
+        };
+        if matches!(&terminator.kind, TerminatorKind::Return) {
+            reached_return = true;
+            continue;
+        }
+        let successors = normal_successors(body, block)?;
+        if successors.is_empty() {
+            return Err(GeneralGemmMirImportErrorV1::new(format!(
+                "proof-sensitive general GEMM has a normal path that does not return after {from_name}"
+            )));
+        }
+        pending.extend(successors);
+    }
+    if !reached_return {
+        return Err(GeneralGemmMirImportErrorV1::new(format!(
+            "proof-sensitive general GEMM has no normal return after {from_name}"
+        )));
+    }
+    require_acyclic_region(body, &region, None, from_name, "return")
+}
+
+fn require_acyclic_region(
+    body: &Body<'_>,
+    region: &BTreeSet<BasicBlock>,
+    boundary: Option<BasicBlock>,
+    from_name: &str,
+    to_name: &str,
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    let mut indegree = vec![0_usize; body.basic_blocks.len()];
+    for &block in region {
+        for successor in normal_successors(body, block)? {
+            if Some(successor) != boundary && region.contains(&successor) {
+                indegree[successor.as_usize()] += 1;
+            }
+        }
+    }
+    let mut ready = region
+        .iter()
+        .copied()
+        .filter(|block| indegree[block.as_usize()] == 0)
+        .collect::<VecDeque<_>>();
+    let mut removed = 0_usize;
+    while let Some(block) = ready.pop_front() {
+        removed += 1;
+        for successor in normal_successors(body, block)? {
+            if Some(successor) == boundary || !region.contains(&successor) {
+                continue;
+            }
+            indegree[successor.as_usize()] -= 1;
+            if indegree[successor.as_usize()] == 0 {
+                ready.push_back(successor);
+            }
+        }
+    }
+    if removed != region.len() {
+        return Err(GeneralGemmMirImportErrorV1::new(format!(
+            "proof-sensitive general GEMM has a cyclic normal CFG between {from_name} and {to_name}"
+        )));
+    }
+    Ok(())
+}
+
+fn normal_successors(
+    body: &Body<'_>,
+    block: BasicBlock,
+) -> Result<Vec<BasicBlock>, GeneralGemmMirImportErrorV1> {
+    let Some(terminator) = &body.basic_blocks[block].terminator else {
+        return Err(missing_terminator(block));
+    };
+    Ok(terminator
+        .successors()
+        .filter(|successor| !body.basic_blocks[*successor].is_cleanup)
+        .collect())
+}
+
+fn missing_terminator(block: BasicBlock) -> GeneralGemmMirImportErrorV1 {
+    GeneralGemmMirImportErrorV1::new(format!(
+        "general GEMM MIR block bb{} has no terminator",
+        block.as_usize()
+    ))
+}
+
+const fn operation_name(operation: TrustedGeneralGemmOperationV1) -> &'static str {
+    match operation {
+        TrustedGeneralGemmOperationV1::Acquire => "acquire",
+        TrustedGeneralGemmOperationV1::Stage => "stage",
+        TrustedGeneralGemmOperationV1::Publish => "publish",
+        TrustedGeneralGemmOperationV1::Mfma => "MFMA",
+        TrustedGeneralGemmOperationV1::Reuse => "reuse",
+        TrustedGeneralGemmOperationV1::Store => "store",
+    }
 }
 
 fn require_count(

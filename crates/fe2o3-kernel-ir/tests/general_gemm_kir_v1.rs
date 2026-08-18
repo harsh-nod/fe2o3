@@ -4,12 +4,13 @@ use fe2o3_kernel_ir::{
     GENERAL_GEMM_KIR_LDS_ELEMENTS_V1, GENERAL_GEMM_KIR_SCHEMA_V1,
     GENERAL_GEMM_MUTATION_EXPECTATIONS_V1, GENERAL_GEMM_SEMANTIC_MUTATIONS_V1, GemmOperandV1,
     GeneralGemmAsyncWaitEventV1, GeneralGemmBoundsGuardV1, GeneralGemmKirBuildErrorV1,
-    GeneralGemmKirV1, GeneralGemmPhaseEventV1, GeneralGemmPlanFieldsV1,
-    GeneralGemmPlanSnapshotErrorV1, GeneralGemmPlanSnapshotV1, GeneralGemmPropertyV1,
-    GeneralGemmRegionScopeV1, GeneralGemmRegionV1, GeneralGemmStageCompletionV1,
-    GeneralGemmVerificationStageV1, MAX_GENERAL_GEMM_PHASE_EVENTS_V1,
-    encode_general_gemm_kir_canonical_v1, general_gemm_kir_identity_v1,
-    general_gemm_semantic_mutation_kir_v1, verify_general_gemm_kir_v1,
+    GeneralGemmKirV1, GeneralGemmLaneOutputMappingV1, GeneralGemmPhaseEventV1,
+    GeneralGemmPlanFieldsV1, GeneralGemmPlanSnapshotErrorV1, GeneralGemmPlanSnapshotV1,
+    GeneralGemmPropertyV1, GeneralGemmRegionScopeV1, GeneralGemmRegionV1,
+    GeneralGemmStageCompletionV1, GeneralGemmStoreCardinalityV1, GeneralGemmVerificationStageV1,
+    MAX_GENERAL_GEMM_PHASE_EVENTS_V1, encode_general_gemm_kir_canonical_v1,
+    general_gemm_kir_identity_v1, general_gemm_semantic_mutation_kir_v1,
+    verify_general_gemm_kir_v1,
 };
 
 fn plan() -> GeneralGemmPlanFieldsV1 {
@@ -63,6 +64,10 @@ fn checked_plan_fields_drive_regions_geometry_tails_and_scalars() {
     assert_eq!(kir.regions()[3].scope, GeneralGemmRegionScopeV1::Workgroup);
     assert_eq!(kir.regions()[3].elements, GENERAL_GEMM_KIR_LDS_ELEMENTS_V1);
     assert_eq!(kir.regions()[4].region, GeneralGemmRegionV1::LdsB);
+    assert_eq!(
+        kir.epilogue().store_cardinality,
+        GeneralGemmStoreCardinalityV1::OncePerOwner
+    );
     assert!(verify_general_gemm_kir_v1(&kir).is_ok());
 }
 
@@ -207,6 +212,36 @@ fn unguarded_c_load_has_the_exact_bounds_diagnostic() {
         0x4647_0102,
         None,
     );
+}
+
+#[test]
+fn repeated_store_per_owner_has_the_exact_output_ownership_diagnostic() {
+    let plan = plan();
+    let canonical = GeneralGemmKirV1::canonical(plan);
+    let mut epilogue = *canonical.epilogue();
+    epilogue.store_cardinality = GeneralGemmStoreCardinalityV1::RepeatedPerOwner;
+    let invalid =
+        GeneralGemmKirV1::checked_from_parts(plan, canonical.phase_events().to_vec(), epilogue)
+            .unwrap();
+
+    assert_finding(
+        &invalid,
+        GeneralGemmPropertyV1::OutputRegionInjective,
+        GeneralGemmVerificationStageV1::Tile,
+        0x4647_0106,
+        None,
+    );
+    assert_ne!(invalid.identity(), canonical.identity());
+
+    let mut aliased_epilogue = *canonical.epilogue();
+    aliased_epilogue.lane_mapping = GeneralGemmLaneOutputMappingV1::Aliased;
+    let aliased = GeneralGemmKirV1::checked_from_parts(
+        plan,
+        canonical.phase_events().to_vec(),
+        aliased_epilogue,
+    )
+    .unwrap();
+    assert_ne!(invalid.identity(), aliased.identity());
 }
 
 #[test]
@@ -443,8 +478,8 @@ fn canonical_identity_is_deterministic_and_binds_all_semantic_substitutions() {
     assert_eq!(
         *canonical.identity().as_bytes(),
         [
-            210, 198, 178, 58, 186, 107, 24, 11, 144, 90, 20, 102, 40, 155, 177, 197, 185, 237, 93,
-            147, 124, 158, 95, 58, 164, 149, 97, 210, 168, 19, 152, 32,
+            131, 208, 248, 78, 171, 76, 20, 6, 73, 45, 43, 116, 111, 146, 112, 17, 205, 78, 100,
+            160, 213, 168, 179, 235, 11, 15, 238, 118, 227, 46, 247, 131,
         ]
     );
 }
