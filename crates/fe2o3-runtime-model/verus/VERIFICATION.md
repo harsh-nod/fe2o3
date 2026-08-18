@@ -1,7 +1,7 @@
 # Runtime model verification
 
 This directory contains the initial issue #137 Verus specifications. The
-authenticated runner proves six obligations over finite abstract traces. The
+authenticated runner proves ten obligations over finite abstract traces. The
 sequence lengths are not bounded by these proofs.
 
 `runtime_lifecycle_v1.rs` proves:
@@ -20,6 +20,19 @@ sequence lengths are not bounded by these proofs.
 4. while a current generation is active, that generation or an older one
    cannot be reused as a fresh admission.
 
+`device_projection_refinement_v1.rs` proves the pure boundary introduced for
+the executable adapter:
+
+1. the model projection retains the complete canonical observation record and
+   exactly projects its domain, profile, physical identity, PCI address, KFD
+   GPU ID, render node, and both UAPI schema identities;
+2. a canonical record satisfying the exact V1 predicates projects to a model
+   value satisfying the corresponding model profile;
+3. the projection retains the explicit bounded topology inventory, including
+   the unique selected-device match, without replacing it with an opaque hash;
+4. appending a later generation preserves its exact predecessor link and the
+   single-physical-device history invariant.
+
 Run both proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -35,19 +48,23 @@ then relies on this runner's executable and complete-closure pins before any
 proof result is accepted.
 
 The mutations must fail at their named postconditions: release while retained,
-VM generation substitution, stale generation reuse, and topology/render PCI
-substitution. The launcher rejects source substitution, lexically audits all
+VM generation substitution, stale generation reuse, topology/render PCI
+substitution, dropped DRM schema identity, lost history predecessor, and mixed
+cross-source identity. The launcher rejects source substitution, lexically audits all
 proof files for trusted constructs, clears the environment, bounds execution
 time, pins Z3 through the authenticated Verus release closure, and rechecks
 the authenticated inputs after verification.
 
-These are proofs of abstract transition relations. They are not refinement
-proofs of `src/model.rs` or `src/device_identity.rs`, and the model-only
-correlation receipt is not production device authority. A later sealed adapter
-must authenticate the KFD topology, DRM render, partition, schema, and process
-XNACK observations, bind the dynamically allocated KFD device node to the
-opened file descriptor and sysfs device, and prove that concrete ioctl/sysfs
-results refine this model. `DeviceGenerationV1` is a software admission
+The projection proof establishes the mathematical relation implemented by the
+pure canonical-record mapping; it is not a proof that the executable Rust
+implements that relation, nor that the adapter observed truthful kernel data.
+The other files prove abstract transition relations, not refinement of
+`src/model.rs` or `src/device_identity.rs`. All receipts remain model-only and
+are not production device authority. A later sealed adapter refinement must
+authenticate the KFD topology, DRM render, partition, schema, and process XNACK
+observations, bind the dynamically allocated KFD device node to the opened file
+descriptor and sysfs device, and connect concrete ioctl/sysfs results to the
+canonical record. `DeviceGenerationV1` is a software admission
 incarnation for stale-token rejection; topology correlation does not detect or
 attest a GPU reset. Firmware execution, hardware completion, progress, liveness,
 coherency, performance, and absence of kernel/firmware defects remain outside

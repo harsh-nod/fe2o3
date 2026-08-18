@@ -5,10 +5,14 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
 lifecycle_proof="$script_dir/runtime_lifecycle_v1.rs"
 identity_proof="$script_dir/device_identity_generation_v1.rs"
+projection_proof="$script_dir/device_projection_refinement_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
 negative_render="$script_dir/negative/device_identity_generation_v1_render_substitution.rs"
+negative_projection_schema="$script_dir/negative/device_projection_refinement_v1_schema_drop.rs"
+negative_projection_history="$script_dir/negative/device_projection_refinement_v1_history_link.rs"
+negative_projection_identity="$script_dir/negative/device_projection_refinement_v1_identity_mix.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -34,10 +38,14 @@ read_pin() {
 
 expected_lifecycle=$(read_pin "$pin_dir/MODEL_SHA256")
 expected_identity=$(read_pin "$pin_dir/DEVICE_IDENTITY_MODEL_SHA256")
+expected_projection=$(read_pin "$pin_dir/DEVICE_PROJECTION_REFINEMENT_SHA256")
 expected_negative_lifecycle=$(read_pin "$pin_dir/NEGATIVE_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
+expected_negative_projection_schema=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_SCHEMA_SHA256")
+expected_negative_projection_history=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_HISTORY_SHA256")
+expected_negative_projection_identity=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_IDENTITY_SHA256")
 expected_verus=$(read_pin "$pin_dir/VERUS_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
@@ -66,10 +74,14 @@ check_digest() {
 check_sources() {
     check_digest "$expected_lifecycle" "$lifecycle_proof"
     check_digest "$expected_identity" "$identity_proof"
+    check_digest "$expected_projection" "$projection_proof"
     check_digest "$expected_negative_lifecycle" "$negative_lifecycle"
     check_digest "$expected_negative_vm" "$negative_vm"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
+    check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
+    check_digest "$expected_negative_projection_history" "$negative_projection_history"
+    check_digest "$expected_negative_projection_identity" "$negative_projection_identity"
     check_digest "$expected_closure" "$closure_manifest"
     check_digest 'c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c' "$closure_checker"
     check_digest "$expected_source_checker" "$source_checker"
@@ -79,10 +91,14 @@ check_sources
 "$source_checker" \
     "$lifecycle_proof" \
     "$identity_proof" \
+    "$projection_proof" \
     "$negative_lifecycle" \
     "$negative_vm" \
     "$negative_stale" \
-    "$negative_render"
+    "$negative_render" \
+    "$negative_projection_schema" \
+    "$negative_projection_history" \
+    "$negative_projection_identity"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -183,17 +199,21 @@ check_negative() {
 
 check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
 check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
+check_positive "$projection_proof" 'verification results:: 4 verified, 0 errors' device-projection-refinement
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
 check_negative "$negative_render" mutated_render_substitution_correlates_v1 render-substitution
+check_negative "$negative_projection_schema" mutated_projection_drops_drm_schema_v1 projection-schema-drop
+check_negative "$negative_projection_history" mutated_history_forgets_predecessor_v1 projection-history-link
+check_negative "$negative_projection_identity" mutated_cross_source_identity_mix_is_equal_v1 projection-identity-mix
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 mutations=4'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 mutations=7'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
