@@ -21,8 +21,10 @@ use fe2o3_verifier::{
 use sha2::{Digest as _, Sha256};
 
 use crate::collected_general_gemm_v1::{
-    AuthenticatedGeneralGemmFrontendCorrespondenceV1, GeneralGemmSourcePropertyKindV1,
+    AuthenticatedGeneralGemmFrontendCorrespondenceV1, GeneralGemmSourceMirEvidenceV1,
+    GeneralGemmSourcePropertyKindV1,
 };
+use crate::general_gemm_intrinsic_semantics_v1::GeneralGemmIntrinsicSemanticsV1;
 
 const FINAL_JOIN_DOMAIN_V1: &[u8] = b"FE2O3/GENERAL-GEMM/RUSTC-FINAL-JOIN/V1\0";
 const MFMA_F32_16X16X16BF16_1K_OPCODE_V1: u32 = 0xd3e1_0002;
@@ -120,6 +122,8 @@ pub(crate) enum GeneralGemmFinalJoinErrorV1 {
     MachineRequestSubstitution { index: usize },
     SourceReceiptOrder { index: usize },
     SourceReceiptIdentity { index: usize },
+    SourceIntrinsicFact { index: usize },
+    SourceMirEvidence { index: usize },
     MissingSourceConfirmation { index: usize },
     MachineCompilationSubstitution,
     MachineScheduleSubstitution,
@@ -248,9 +252,21 @@ fn require_exact_proof_request(
 fn validate_source_receipts(
     receipts: &[crate::collected_general_gemm_v1::GeneralGemmSourcePropertyReceiptV1; 11],
 ) -> Result<(), GeneralGemmFinalJoinErrorV1> {
-    validate_source_receipt_snapshot(&receipts.each_ref().map(|receipt| SourceReceiptSnapshotV1 {
-        kind: receipt.kind(),
-        evidence_identity: *receipt.evidence_identity(),
+    let semantics = GeneralGemmIntrinsicSemanticsV1::canonical();
+    if semantics.validate().is_err() {
+        return Err(GeneralGemmFinalJoinErrorV1::SourceIntrinsicFact { index: 0 });
+    }
+    validate_source_receipt_snapshot(&receipts.each_ref().map(|receipt| {
+        let index = receipt.kind() as usize - 1;
+        SourceReceiptSnapshotV1 {
+            kind: receipt.kind(),
+            evidence_identity: *receipt.evidence_identity(),
+            intrinsic_fact_matches: receipt.intrinsic_fact() == semantics.source_facts()[index],
+            mir_evidence_matches: source_mir_evidence_matches_kind(
+                receipt.kind(),
+                receipt.mir_evidence(),
+            ),
+        }
     }))
 }
 
@@ -258,6 +274,8 @@ fn validate_source_receipts(
 struct SourceReceiptSnapshotV1 {
     kind: GeneralGemmSourcePropertyKindV1,
     evidence_identity: [u8; 32],
+    intrinsic_fact_matches: bool,
+    mir_evidence_matches: bool,
 }
 
 fn validate_source_receipt_snapshot(
@@ -274,8 +292,57 @@ fn validate_source_receipt_snapshot(
         if receipt.evidence_identity == [0; 32] {
             return Err(GeneralGemmFinalJoinErrorV1::SourceReceiptIdentity { index });
         }
+        if !receipt.intrinsic_fact_matches {
+            return Err(GeneralGemmFinalJoinErrorV1::SourceIntrinsicFact { index });
+        }
+        if !receipt.mir_evidence_matches {
+            return Err(GeneralGemmFinalJoinErrorV1::SourceMirEvidence { index });
+        }
     }
     Ok(())
+}
+
+const fn source_mir_evidence_matches_kind(
+    kind: GeneralGemmSourcePropertyKindV1,
+    evidence: &GeneralGemmSourceMirEvidenceV1,
+) -> bool {
+    matches!(
+        (kind, evidence),
+        (
+            GeneralGemmSourcePropertyKindV1::AllocationAndProvenance,
+            GeneralGemmSourceMirEvidenceV1::AllocationAndProvenance { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::GuardedGlobalAccesses,
+            GeneralGemmSourceMirEvidenceV1::GuardedGlobalAccesses { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::LdsWriteReadInitialization,
+            GeneralGemmSourceMirEvidenceV1::LdsWriteReadInitialization { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::EffectConflictFreedom,
+            GeneralGemmSourceMirEvidenceV1::EffectConflictFreedom { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::ControlFlowBarrierConvergence,
+            GeneralGemmSourceMirEvidenceV1::ControlFlowBarrierConvergence { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::OutputOwnership,
+            GeneralGemmSourceMirEvidenceV1::OutputOwnership { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::LdsLifecycle,
+            GeneralGemmSourceMirEvidenceV1::LdsLifecycle { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::AccumulatorPhase,
+            GeneralGemmSourceMirEvidenceV1::AccumulatorPhase { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::MaskedTail,
+            GeneralGemmSourceMirEvidenceV1::MaskedTail { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::AlphaBetaEpilogue,
+            GeneralGemmSourceMirEvidenceV1::AlphaBetaEpilogue { .. }
+        ) | (
+            GeneralGemmSourcePropertyKindV1::NumericalOperationOrder,
+            GeneralGemmSourceMirEvidenceV1::NumericalOperationOrder { .. }
+        )
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -729,6 +796,8 @@ mod tests {
         let canonical = canonical_source_property_kinds().map(|kind| SourceReceiptSnapshotV1 {
             kind,
             evidence_identity: [kind as u8; 32],
+            intrinsic_fact_matches: true,
+            mir_evidence_matches: true,
         });
         validate_source_receipt_snapshot(&canonical).unwrap();
         for index in 0..11 {
@@ -744,6 +813,20 @@ mod tests {
             assert_eq!(
                 validate_source_receipt_snapshot(&reordered),
                 Err(GeneralGemmFinalJoinErrorV1::SourceReceiptOrder { index })
+            );
+
+            let mut changed = canonical;
+            changed[index].intrinsic_fact_matches = false;
+            assert_eq!(
+                validate_source_receipt_snapshot(&changed),
+                Err(GeneralGemmFinalJoinErrorV1::SourceIntrinsicFact { index })
+            );
+
+            let mut changed = canonical;
+            changed[index].mir_evidence_matches = false;
+            assert_eq!(
+                validate_source_receipt_snapshot(&changed),
+                Err(GeneralGemmFinalJoinErrorV1::SourceMirEvidence { index })
             );
         }
     }
