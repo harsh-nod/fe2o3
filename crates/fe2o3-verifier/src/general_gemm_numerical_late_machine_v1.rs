@@ -167,7 +167,7 @@ impl std::error::Error for GeneralGemmNumericalLateMachineErrorV1 {}
 ///
 /// ```compile_fail
 /// fn duplicate(value: &fe2o3_verifier::GeneralGemmNumericalLateMachineBindingV1) {
-///     let _copy = value.clone();
+///     let _copy: fe2o3_verifier::GeneralGemmNumericalLateMachineBindingV1 = (*value).clone();
 /// }
 /// ```
 ///
