@@ -511,6 +511,95 @@ fn transplanted_schedule_metadata_cannot_validate_as_the_projection() {
 }
 
 #[test]
+fn descriptor_source_is_exactly_bound_to_projection_schedule_and_safe_abi() {
+    let reference = unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let reference_projection = project_to_pliron(&reference).unwrap().receipt;
+    let reference_source =
+        derive_general_gemm_descriptor_source_v1(&reference, reference_projection).unwrap();
+    let table = reference_source.table();
+    assert_eq!(table.code_object_version(), CodeObjectVersion::V6);
+    assert_eq!(
+        table.device_target().to_string(),
+        GENERAL_GEMM_DEVICE_TARGET_V1
+    );
+    let [kernel] = table.kernels() else {
+        panic!("general GEMM descriptor must contain exactly one kernel");
+    };
+    assert_eq!(
+        kernel.kernel_id().as_bytes(),
+        reference.identity().as_bytes()
+    );
+    assert_eq!(kernel.entry_name().as_str(), GENERAL_GEMM_KERNEL_SYMBOL_V1);
+    assert_eq!(
+        kernel.descriptor_symbol().as_str(),
+        GENERAL_GEMM_KERNEL_DESCRIPTOR_SYMBOL_V1
+    );
+    assert_eq!(
+        kernel.abi_layout().explicit_argument_size(),
+        GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1
+    );
+    assert_eq!(
+        kernel.abi_layout().kernarg_segment_size(),
+        GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1
+    );
+    assert_eq!(kernel.arguments().len(), 11);
+    assert_eq!(kernel.launch().rank(), 2);
+    assert_eq!(
+        kernel.launch().block_size(),
+        BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1).unwrap())
+    );
+    assert_eq!(kernel.launch().max_flat_workgroup_size(), 64);
+    assert_eq!(
+        kernel.launch().static_shared_memory_bytes(),
+        GENERAL_GEMM_STATIC_LDS_BYTES_V1
+    );
+    let components = kernel
+        .arguments()
+        .iter()
+        .flat_map(LogicalArgumentV1::physical_components)
+        .map(|(_, offset, size, _)| (offset, size))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        components,
+        [
+            (0, 8),
+            (8, 8),
+            (16, 8),
+            (24, 8),
+            (32, 8),
+            (40, 8),
+            (48, 4),
+            (52, 4),
+            (56, 4),
+            (60, 4),
+            (64, 4),
+            (68, 4),
+            (72, 4),
+            (76, 4),
+        ]
+    );
+    assert_eq!(
+        kernel.source_evidence().identity().as_bytes(),
+        reference.frontend_semantic_binding_identity().as_bytes()
+    );
+    assert_eq!(
+        kernel.executable_ir_evidence().identity().as_bytes(),
+        reference_projection.identity().as_bytes()
+    );
+    assert!(
+        reference_source
+            .identity()
+            .matches(reference_source.canonical_bytes())
+    );
+
+    let optimized = unit(GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1);
+    let optimized_projection = project_to_pliron(&optimized).unwrap().receipt;
+    let optimized_source =
+        derive_general_gemm_descriptor_source_v1(&optimized, optimized_projection).unwrap();
+    assert_ne!(reference_source.identity(), optimized_source.identity());
+}
+
+#[test]
 fn zero_request_commitments_and_invalid_limit_configuration_fail_closed() {
     let plan = plan();
     let kir = GeneralGemmKirV1::canonical(plan);

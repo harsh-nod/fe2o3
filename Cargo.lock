@@ -858,6 +858,7 @@ dependencies = [
  "fe2o3-compiler-api",
  "fe2o3-compiler-driver",
  "fe2o3-compiler-ffi",
+ "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-text",

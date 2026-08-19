@@ -18,6 +18,7 @@ fe2o3-compiler-api.workspace = true
 fe2o3-compiler-driver.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-kernel-ir.workspace = true
+fe2o3-kernel-descriptor.workspace = true
 fe2o3-llvm-handoff.workspace = true
 fe2o3-llvm-text.workspace = true
 fe2o3-pliron.workspace = true

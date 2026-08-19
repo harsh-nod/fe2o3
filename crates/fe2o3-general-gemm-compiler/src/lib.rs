@@ -22,7 +22,17 @@ use fe2o3_compiler_driver::{
     ProofRequiredGemmAdmissionV1, analyze_gemm_semantics_v1,
     general_gemm_semantic_obligation_set_identity_v1,
 };
-use fe2o3_compiler_ffi::CompilerModuleHandoffIdentityV2;
+use fe2o3_compiler_ffi::{
+    CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceV1, CompilerModuleHandoffIdentityV2,
+};
+use fe2o3_kernel_descriptor::{
+    AccessMode, BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CapabilityV1,
+    CodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1,
+    DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest, EvidenceIdentity,
+    KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1,
+    ProducerIdentityV1, ScalarTypeV1 as DescriptorScalarTypeV1, SourceTypeDescriptorV1,
+    SourceTypeRecordV1, Text, ValidName, ValidationError as DescriptorValidationError,
+};
 use fe2o3_kernel_ir::{
     GENERAL_GEMM_KIR_COMPONENTS_PER_LANE_V1, GENERAL_GEMM_KIR_LDS_ELEMENTS_V1,
     GENERAL_GEMM_KIR_TILE_EXTENT_V1, GENERAL_GEMM_KIR_WAVE_LANES_V1, GeneralGemmKirDiagnosticV1,
@@ -61,8 +71,16 @@ pub const GENERAL_GEMM_COMPILATION_BINDING_SCHEMA_V1: &str =
     "fe2o3.general-gemm.compilation-binding.v1";
 /// Fixed kernel symbol in the authenticated safe source profile.
 pub const GENERAL_GEMM_KERNEL_SYMBOL_V1: &str = "tiled_gemm_general_v1";
+/// Descriptor symbol paired with the exact kernel entry.
+pub const GENERAL_GEMM_KERNEL_DESCRIPTOR_SYMBOL_V1: &str = "tiled_gemm_general_v1.kd";
 /// Exact target selected by this first lowering route.
 pub const GENERAL_GEMM_DEVICE_TARGET_V1: &str = "gfx942:xnack-";
+/// Exact explicit kernarg bytes for the eleven source-level arguments.
+pub const GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1: u32 = 80;
+/// Exact complete kernarg bytes including the gfx942 implicit argument span.
+pub const GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1: u32 = 336;
+/// Static bytes reserved by the two distinct BF16 LDS tiles.
+pub const GENERAL_GEMM_STATIC_LDS_BYTES_V1: u32 = 1024;
 /// Maximum complete structured KIR bytes admitted by this route.
 pub const MAX_GENERAL_GEMM_KIR_BYTES_V1: usize = 4 * 1024;
 /// Exact number of typed operations in the current Pliron projection.
@@ -975,6 +993,169 @@ impl GeneralGemmPlironProjectionV1 {
     pub const fn grants_artifact_authority(self) -> bool {
         false
     }
+}
+
+/// Failure while deriving the exact compiler-owned descriptor source.
+#[derive(Debug)]
+pub enum GeneralGemmDescriptorSourceErrorV1 {
+    /// A typed descriptor field was invalid.
+    Descriptor(DescriptorValidationError),
+    /// Canonical zero-digest descriptor-source encoding failed.
+    Source(CompilerDescriptorSourceErrorV1),
+}
+
+impl fmt::Display for GeneralGemmDescriptorSourceErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Descriptor(error) => {
+                write!(formatter, "invalid general GEMM descriptor: {error}")
+            }
+            Self::Source(error) => {
+                write!(formatter, "invalid general GEMM descriptor source: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GeneralGemmDescriptorSourceErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Descriptor(error) => Some(error),
+            Self::Source(error) => Some(error),
+        }
+    }
+}
+
+impl From<DescriptorValidationError> for GeneralGemmDescriptorSourceErrorV1 {
+    fn from(value: DescriptorValidationError) -> Self {
+        Self::Descriptor(value)
+    }
+}
+
+impl From<CompilerDescriptorSourceErrorV1> for GeneralGemmDescriptorSourceErrorV1 {
+    fn from(value: CompilerDescriptorSourceErrorV1) -> Self {
+        Self::Source(value)
+    }
+}
+
+/// Derives the canonical zero-digest descriptor source from one exact projection.
+///
+/// The result is structural compiler data. It authenticates no producer and
+/// grants no worker, publication, loading, or launch authority.
+pub fn derive_general_gemm_descriptor_source_v1(
+    unit: &GeneralGemmCompilationUnitV1,
+    projection: GeneralGemmPlironProjectionV1,
+) -> Result<CompilerDescriptorSourceV1, GeneralGemmDescriptorSourceErrorV1> {
+    if projection.compilation_binding_identity() != unit.identity()
+        || projection.schedule_identity() != unit.schedule_identity()
+        || projection.kir_identity() != unit.kir_identity()
+    {
+        return Err(GeneralGemmDescriptorSourceErrorV1::Descriptor(
+            DescriptorValidationError::IdentityMismatch {
+                field: "general GEMM Pliron projection",
+            },
+        ));
+    }
+
+    let bf16_slice_type = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(
+        DescriptorScalarTypeV1::U16,
+    ));
+    let c_slice_type = SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(
+        DescriptorScalarTypeV1::F32,
+    ));
+    let u32_type =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(DescriptorScalarTypeV1::U32));
+    let f32_type =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(DescriptorScalarTypeV1::F32));
+    let bf16_slice_layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(
+        DescriptorScalarTypeV1::U16,
+    ));
+    let c_slice_layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(
+        DescriptorScalarTypeV1::F32,
+    ));
+    let u32_layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(
+        DescriptorScalarTypeV1::U32,
+    ));
+    let f32_layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(
+        DescriptorScalarTypeV1::F32,
+    ));
+
+    let name = |value: &'static str| ValidName::new(value);
+    let arguments = vec![
+        LogicalArgumentV1::shared_slice(0, name("a")?, &bf16_slice_type, &bf16_slice_layout, 0)?,
+        LogicalArgumentV1::shared_slice(1, name("b")?, &bf16_slice_type, &bf16_slice_layout, 16)?,
+        LogicalArgumentV1::disjoint_slice(
+            2,
+            name("c")?,
+            &c_slice_type,
+            &c_slice_layout,
+            AccessMode::ReadWrite,
+            32,
+        )?,
+        LogicalArgumentV1::scalar(3, name("m")?, &u32_type, &u32_layout, 48)?,
+        LogicalArgumentV1::scalar(4, name("n")?, &u32_type, &u32_layout, 52)?,
+        LogicalArgumentV1::scalar(5, name("k")?, &u32_type, &u32_layout, 56)?,
+        LogicalArgumentV1::scalar(6, name("lda")?, &u32_type, &u32_layout, 60)?,
+        LogicalArgumentV1::scalar(7, name("ldb")?, &u32_type, &u32_layout, 64)?,
+        LogicalArgumentV1::scalar(8, name("ldc")?, &u32_type, &u32_layout, 68)?,
+        LogicalArgumentV1::scalar(9, name("alpha")?, &f32_type, &f32_layout, 72)?,
+        LogicalArgumentV1::scalar(10, name("beta")?, &f32_type, &f32_layout, 76)?,
+    ];
+    let source_evidence = BuildEvidenceV1::new(
+        EvidenceIdentity::from_opaque_bytes(unit.frontend_semantic_binding_identity().into_bytes()),
+        EvidenceDigest::from_sha256_bytes(*unit.frontend_semantics().compiled_source_identity()),
+    );
+    let executable_ir_evidence = BuildEvidenceV1::new(
+        EvidenceIdentity::from_opaque_bytes(projection.identity().into_bytes()),
+        EvidenceDigest::from_sha256_bytes(*unit.kir_identity().as_bytes()),
+    );
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes(unit.identity().into_bytes()),
+        name(GENERAL_GEMM_KERNEL_SYMBOL_V1)?,
+        name(GENERAL_GEMM_KERNEL_SYMBOL_V1)?,
+        name(GENERAL_GEMM_KERNEL_DESCRIPTOR_SYMBOL_V1)?,
+        source_evidence,
+        executable_ir_evidence,
+        vec![
+            CapabilityV1::WorkgroupMemory,
+            CapabilityV1::MatrixMultiply,
+            CapabilityV1::AmdWave,
+            CapabilityV1::AmdMfma,
+        ],
+        KernelAbiLayoutV1::new(
+            GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1,
+            GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1,
+            8,
+        )?,
+        LaunchConstraintsV1::new(
+            2,
+            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1)?),
+            DimensionsV1::new(u32::MAX, u32::MAX, 1)?,
+            64,
+            GENERAL_GEMM_STATIC_LDS_BYTES_V1,
+            0,
+        )?,
+        arguments,
+    )?;
+    let target = DeviceTargetV1::parse(GENERAL_GEMM_DEVICE_TARGET_V1)?;
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(
+            Text::new("fe2o3-general-gemm-compiler")?,
+            Text::new(env!("CARGO_PKG_VERSION"))?,
+            [0; 20],
+        ),
+        ProducerIdentityV1::new(
+            Text::new("fe2o3-general-gemm-compiler")?,
+            Text::new("general-gemm-v1")?,
+        ),
+        target,
+        vec![bf16_slice_type, c_slice_type, u32_type, f32_type],
+        vec![bf16_slice_layout, c_slice_layout, u32_layout, f32_layout],
+        vec![kernel],
+    )?;
+    CompilerDescriptorSourceV1::new(table).map_err(Into::into)
 }
 
 /// Fail-closed result after consuming the existing proof admission.
