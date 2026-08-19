@@ -1164,6 +1164,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-pliron-worker-v2"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdgcn-pliron-llvm",
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-ffi",
+ "fe2o3-hsaco-finalize",
+ "fe2o3-llvm-handoff",
+ "fe2o3-llvm-text",
+ "fe2o3-llvm-worker-handoff",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-previous"
 version = "0.1.0"
 dependencies = [
