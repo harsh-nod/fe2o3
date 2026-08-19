@@ -3,11 +3,13 @@
 This crate is a test-only integration and conformance harness for the bounded
 fe2o3 Pliron surfaces. It checks fresh-context combined registration for the
 feature-gated MIR dialect and the kernel, schedule, tile, GPU, proof, dispatch,
-and autotune dialects. It also checks the `fe2o3-pliron` session boundary, the
-bounded MIR-to-kernel and kernel-to-GPU detached lowering services, and exact
-canonical KIR V1-V5 bridge envelopes.
+and autotune dialects through owner-scoped registration services in both
+forward and reverse deterministic order. It also checks the `fe2o3-pliron`
+session boundary, the bounded MIR-to-kernel and kernel-to-GPU detached lowering
+services, and exact canonical KIR V1-V5 bridge envelopes.
 
 Hostile coverage includes duplicate, colliding, and corrupt registration;
+registration-hook panic containment with stable bounded diagnostics;
 terminal unsupported inputs with no fallback or prior-result reuse; stale and
 erased source or output handles; rejection of registered, populated foreign
 contexts before stored pointers are dereferenced; bridge bound preflights;
