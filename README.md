@@ -43,6 +43,27 @@ source path still stops before an authenticated HSACO. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
+The 2026-08-19 [#134](https://github.com/harsh-nod/fe2o3/issues/134)
+integration branch adds an initial, deliberately bounded Pliron scalar-add
+vertical slice. `pliron-llvm` is used only as a typed dialect dependency with
+default features disabled; its optional `llvm-sys` converter is excluded from
+both the compiler and worker. A live Pliron graph is extracted into fe2o3's
+canonical V2 handoff, serialized as deterministic bounded LLVM assembly, and
+bound through Worker V2 to the sole measured upstream LLVM 22.1.8
+target-machine/in-process-LLD worker. The branch contains the source-graph
+extractor, serializer, Worker V2 bridge, exact scalar worker profile, and an
+initial MI300X scalar execution with immutable-input and output-canary checks.
+No COMGR or subprocess compiler/linker has artifact authority on this route.
+
+That branch is not yet public-main evidence and does not complete
+[#159](https://github.com/harsh-nod/fe2o3/issues/159). Independent review still
+requires opaque typed source lineage, a policy distinction between approved
+and merely observed worker identities, exact descriptor and decoded-machine
+closure, structural ELF dependency/symbol/relocation closure, a sealed runtime
+consumer, and hostile substitutions at every lineage boundary. Consequently,
+this scalar checkpoint changes no dashboard state or count and establishes
+neither general CUDA-Oxide parity nor general GEMM, attention, or MoE support.
+
 The Wave64 and workgroup-synchronization slices now start from ordinary
 `#[kernel(typed)]` Rust sources rather than explanatory pseudocode. They include
 deterministic CPU oracles, hostile source tests, and bounded Verus models for a

@@ -55,6 +55,29 @@ until [#140](https://github.com/harsh-nod/fe2o3/issues/140) supplies owner-aware
 operation handles. The authoritative TSV and generated dashboard therefore
 remain unchanged at `0/97/0/12` combined.
 
+The 2026-08-19 [#134](https://github.com/harsh-nod/fe2o3/issues/134)
+integration-branch checkpoint also promotes no parity row. It uses
+`pliron-llvm` only as a typed dialect dependency with default features disabled;
+the optional `llvm-sys` converter is excluded from the compiler and worker.
+The live source graph feeds fe2o3's canonical V2 handoff and deterministic
+bounded LLVM assembly, which enter only the measured pinned upstream LLVM
+22.1.8 target-machine/in-process-LLD Worker V2 route. No COMGR or subprocess
+compiler/linker has artifact authority. The branch contains source-graph
+extraction, the V2 serializer and Worker V2 bridge, an exact scalar worker
+profile, and an initial MI300X scalar execution with immutable-input and
+output-canary checks; public-main synchronization and final independent closure
+review remain pending.
+
+In particular, [#159](https://github.com/harsh-nod/fe2o3/issues/159) remains
+incomplete until the implementation requires opaque typed source lineage,
+separates approved worker/toolchain policy from observed measurements, closes
+the exact descriptor and decoded-machine profiles, validates ELF dependencies,
+symbols, section types, and relocations structurally, exposes bytes only to a
+sealed runtime consumer, and rejects hostile substitutions at every lineage
+boundary. The canonical status TSV and generated dashboard remain unchanged at
+`0/97/0/12` combined. This one scalar slice is not evidence of general
+CUDA-Oxide parity or general GEMM, attention, or MoE support.
+
 The existing V1 artifact wire format now has a strict `gfx942` profile with two
 canonically ordered entries over one digest-validated native payload. Each
 entry has a separate proof binding over its kernel, ABI, effects, launch,
