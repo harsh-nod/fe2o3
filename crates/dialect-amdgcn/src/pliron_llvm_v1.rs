@@ -3,10 +3,11 @@
 use core::{error::Error, fmt};
 
 use fe2o3_llvm_handoff::{
-    BinaryOperationV2, CallingConventionV2, CastOperationV2, FloatBinaryOperationV2,
-    FunctionAttributeV2, FunctionKindV2, Gfx942HandoffV2, Gfx942TargetPolicyV1, InstructionKindV2,
-    IntegerBinaryOperationV2, IntrinsicV2, ModuleFlagV1, NamedMetadataV1, ObligationKindV1,
-    OriginKindV1, ReturnTypeV2, ScalarTypeV1, TerminatorV2, ValueTypeV2,
+    AddressSpaceV1, BinaryOperationV2, CallingConventionV2, CastOperationV2,
+    FloatBinaryOperationV2, FunctionAttributeV2, FunctionKindV2, Gfx942HandoffV2,
+    Gfx942TargetPolicyV1, GlobalLinkageV2, GlobalV2, InstructionKindV2, IntegerBinaryOperationV2,
+    IntrinsicV2, ModuleFlagV1, NamedMetadataV1, ObligationKindV1, OriginKindV1, ReturnTypeV2,
+    ScalarTypeV1, TerminatorV2, ValueTypeV2,
 };
 
 /// The two closed source profiles recognized by the first typed lowering lane.
@@ -16,6 +17,8 @@ pub enum AmdgcnPlironLlvmProfileV1 {
     ScalarMemoryArithmetic,
     /// Scalar GEMM-style control flow with block-argument phi values.
     ScalarControlFlowGemm,
+    /// Global arrays and fixed vectors used by tiled GEMM data movement.
+    TiledDataRepresentationGemm,
 }
 
 /// A typed class of global rejected before Pliron construction.
@@ -130,6 +133,7 @@ pub fn admit_amdgcn_pliron_llvm_v1(
     validate_policy(handoff)?;
 
     let mut control_flow_gemm = false;
+    let mut tiled_data_representation = !handoff.module().globals().is_empty();
     for function in handoff.module().functions() {
         if function.calling_convention() != CallingConventionV2::AmdGpuKernel {
             return Err(AmdgcnPlironLlvmRejectionV1::UnsupportedCallingConvention(
@@ -159,6 +163,14 @@ pub fn admit_amdgcn_pliron_llvm_v1(
                     validate_value_type(result.value_type())?;
                 }
                 validate_instruction(instruction.kind())?;
+                tiled_data_representation |= matches!(
+                    instruction.kind(),
+                    InstructionKindV2::GlobalAddress(_)
+                        | InstructionKindV2::VectorZero { .. }
+                        | InstructionKindV2::VectorLoad4 { .. }
+                        | InstructionKindV2::InsertElement { .. }
+                        | InstructionKindV2::ExtractElement { .. }
+                );
                 control_flow_gemm |= matches!(instruction.kind(), InstructionKindV2::Phi { .. });
                 control_flow_gemm |= matches!(
                     instruction.kind(),
@@ -174,7 +186,9 @@ pub fn admit_amdgcn_pliron_llvm_v1(
 
     Ok(AdmittedAmdgcnPlironLlvmV1 {
         handoff,
-        profile: if control_flow_gemm {
+        profile: if tiled_data_representation {
+            AmdgcnPlironLlvmProfileV1::TiledDataRepresentationGemm
+        } else if control_flow_gemm {
             AmdgcnPlironLlvmProfileV1::ScalarControlFlowGemm
         } else {
             AmdgcnPlironLlvmProfileV1::ScalarMemoryArithmetic
@@ -238,15 +252,8 @@ fn validate_policy(handoff: &Gfx942HandoffV2) -> Result<(), AmdgcnPlironLlvmReje
             return Err(AmdgcnPlironLlvmRejectionV1::MissingObligation(required));
         }
     }
-    if let Some(global) = handoff.module().globals().first() {
-        let kind = if global.byte_initializer().is_some() {
-            UnsupportedGlobalV1::PrivateConstantBytes
-        } else if global.array_elements().is_some() {
-            UnsupportedGlobalV1::LdsArray
-        } else {
-            UnsupportedGlobalV1::Scalar
-        };
-        return Err(AmdgcnPlironLlvmRejectionV1::UnsupportedGlobal(kind));
+    for global in handoff.module().globals() {
+        validate_global(global)?;
     }
     if let Some(intrinsic) = handoff.module().intrinsics().first() {
         return Err(AmdgcnPlironLlvmRejectionV1::UnsupportedIntrinsic(
@@ -254,6 +261,42 @@ fn validate_policy(handoff: &Gfx942HandoffV2) -> Result<(), AmdgcnPlironLlvmReje
         ));
     }
     Ok(())
+}
+
+fn validate_global(global: &GlobalV2) -> Result<(), AmdgcnPlironLlvmRejectionV1> {
+    if !is_supported_scalar(global.value_type()) {
+        return Err(AmdgcnPlironLlvmRejectionV1::UnsupportedValueType(
+            ValueTypeV2::Scalar(global.value_type()),
+        ));
+    }
+    match (global.array_elements(), global.byte_initializer()) {
+        (Some(elements), Some(bytes))
+            if global.linkage() == GlobalLinkageV2::Internal
+                && global.address_space() == AddressSpaceV1::Constant
+                && !global.is_mutable()
+                && global.value_type() == ScalarTypeV1::I8
+                && usize::from(elements) == bytes.len() =>
+        {
+            Ok(())
+        }
+        (Some(256), None)
+            if global.linkage() == GlobalLinkageV2::Internal
+                && global.address_space() == AddressSpaceV1::Local
+                && global.is_mutable()
+                && global.value_type() == ScalarTypeV1::I16 =>
+        {
+            Ok(())
+        }
+        (Some(_), Some(_)) => Err(AmdgcnPlironLlvmRejectionV1::UnsupportedGlobal(
+            UnsupportedGlobalV1::PrivateConstantBytes,
+        )),
+        (Some(_), None) => Err(AmdgcnPlironLlvmRejectionV1::UnsupportedGlobal(
+            UnsupportedGlobalV1::LdsArray,
+        )),
+        (None, _) => Err(AmdgcnPlironLlvmRejectionV1::UnsupportedGlobal(
+            UnsupportedGlobalV1::Scalar,
+        )),
+    }
 }
 
 fn validate_function_attribute(
@@ -281,21 +324,15 @@ fn validate_function_attribute(
 }
 
 fn validate_value_type(value_type: ValueTypeV2) -> Result<(), AmdgcnPlironLlvmRejectionV1> {
-    let scalar_supported = |scalar| {
-        matches!(
-            scalar,
-            ScalarTypeV1::I1
-                | ScalarTypeV1::I8
-                | ScalarTypeV1::I16
-                | ScalarTypeV1::I32
-                | ScalarTypeV1::I64
-                | ScalarTypeV1::F32
-        )
-    };
     let supported = match value_type {
-        ValueTypeV2::Scalar(scalar) => scalar_supported(scalar),
-        ValueTypeV2::Pointer { pointee, .. } => pointee == ScalarTypeV1::F32,
-        ValueTypeV2::Vector { .. } | ValueTypeV2::ArrayPointer { .. } => false,
+        ValueTypeV2::Scalar(scalar)
+        | ValueTypeV2::Pointer {
+            pointee: scalar, ..
+        } => is_supported_scalar(scalar),
+        ValueTypeV2::Vector { element, lanes } => lanes == 4 && is_supported_scalar(element),
+        ValueTypeV2::ArrayPointer {
+            element, elements, ..
+        } => elements > 0 && is_supported_scalar(element),
     };
     if supported {
         Ok(())
@@ -304,6 +341,18 @@ fn validate_value_type(value_type: ValueTypeV2) -> Result<(), AmdgcnPlironLlvmRe
             value_type,
         ))
     }
+}
+
+const fn is_supported_scalar(scalar: ScalarTypeV1) -> bool {
+    matches!(
+        scalar,
+        ScalarTypeV1::I1
+            | ScalarTypeV1::I8
+            | ScalarTypeV1::I16
+            | ScalarTypeV1::I32
+            | ScalarTypeV1::I64
+            | ScalarTypeV1::F32
+    )
 }
 
 fn validate_instruction(
@@ -348,43 +397,25 @@ fn validate_instruction(
                 | CastOperationV2::PointerToInt,
             ..
         }
+        | InstructionKindV2::GlobalAddress(_)
+        | InstructionKindV2::VectorZero { .. }
         | InstructionKindV2::Load { .. }
+        | InstructionKindV2::VectorLoad4 { .. }
         | InstructionKindV2::Store { .. }
-        | InstructionKindV2::Phi { .. } => Ok(()),
-        InstructionKindV2::GetElementPtr { indices, .. } if indices.len() == 1 => Ok(()),
+        | InstructionKindV2::Phi { .. }
+        | InstructionKindV2::InsertElement { .. }
+        | InstructionKindV2::ExtractElement { .. } => Ok(()),
+        InstructionKindV2::GetElementPtr { indices, .. } if matches!(indices.len(), 1 | 2) => {
+            Ok(())
+        }
         InstructionKindV2::GetElementPtr { .. } => {
             Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
                 UnsupportedInstructionV1::GetElementPtrShape,
             ))
         }
-        InstructionKindV2::GlobalAddress(_) => {
-            Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
-                UnsupportedInstructionV1::GlobalAddress,
-            ))
-        }
-        InstructionKindV2::VectorZero { .. } => {
-            Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
-                UnsupportedInstructionV1::VectorZero,
-            ))
-        }
-        InstructionKindV2::VectorLoad4 { .. } => {
-            Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
-                UnsupportedInstructionV1::VectorLoad4,
-            ))
-        }
         InstructionKindV2::Call { .. } => Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
             UnsupportedInstructionV1::Call,
         )),
-        InstructionKindV2::InsertElement { .. } => {
-            Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
-                UnsupportedInstructionV1::InsertElement,
-            ))
-        }
-        InstructionKindV2::ExtractElement { .. } => {
-            Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
-                UnsupportedInstructionV1::ExtractElement,
-            ))
-        }
     }
 }
 

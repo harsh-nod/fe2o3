@@ -54,8 +54,8 @@ fn rejects_unsupported_type_and_tiled_gemm_global_with_named_categories() {
         AmdgcnPlironLlvmRejectionV1::UnsupportedValueType(ValueTypeV2::Scalar(ScalarTypeV1::F64))
     );
     assert_eq!(
-        rejection(&support::handoff_with_global()),
-        AmdgcnPlironLlvmRejectionV1::UnsupportedGlobal(UnsupportedGlobalV1::LdsArray)
+        rejection(&support::handoff_with_scalar_global()),
+        AmdgcnPlironLlvmRejectionV1::UnsupportedGlobal(UnsupportedGlobalV1::Scalar)
     );
 }
 

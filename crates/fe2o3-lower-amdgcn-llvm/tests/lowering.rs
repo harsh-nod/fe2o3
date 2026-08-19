@@ -47,6 +47,25 @@ fn lowers_gemm_control_flow_phi_to_a_block_argument() {
 }
 
 #[test]
+fn lowers_tiled_data_representation_into_a_live_verified_graph() {
+    let source = support::tiled_data_handoff();
+    let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).expect("typed tiled-data lowering");
+    assert_eq!(
+        lowered.profile(),
+        AmdgcnPlironLlvmProfileV1::TiledDataRepresentationGemm
+    );
+    let inspection = lowered.inspect_live_graph().expect("live graph inspection");
+    assert_eq!(inspection, lowered.construction_inspection());
+    assert_eq!(inspection.global_count(), 2);
+    assert_eq!(inspection.function_count(), 1);
+    assert_eq!(inspection.block_count(), 1);
+    assert_eq!(inspection.block_argument_count(), 3);
+    assert_eq!(inspection.operation_count(), 14);
+    assert!(inspection.strict_float());
+    assert!(inspection.exact_memory_alignment());
+}
+
+#[test]
 fn receipt_contains_the_exact_canonical_typed_source() {
     let source = support::scalar_handoff();
     let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();

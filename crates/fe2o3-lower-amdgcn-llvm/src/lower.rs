@@ -7,14 +7,15 @@ use std::{
 use dialect_amdgcn::{AdmittedAmdgcnPlironLlvmV1, admit_amdgcn_pliron_llvm_v1};
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, BasicBlockV2, BinaryOperationV2, BlockIdV2, CastOperationV2,
-    ComparePredicateV2, FloatBinaryOperationV2, FunctionV2, Gfx942HandoffV2, InstructionKindV2,
-    IntegerBinaryOperationV2, ScalarConstantV2, ScalarTypeV1, TerminatorV2, ValueIdV2, ValueTypeV2,
+    ComparePredicateV2, FloatBinaryOperationV2, FunctionV2, Gfx942HandoffV2, GlobalIdV2,
+    GlobalLinkageV2, GlobalV2, InstructionKindV2, IntegerBinaryOperationV2, ScalarConstantV2,
+    ScalarTypeV1, TerminatorV2, ValueIdV2, ValueTypeV2,
 };
 use fe2o3_pliron::{ensure_context_identity, require_context_identity};
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
-        attributes::{FPSingleAttr, IntegerAttr},
+        attributes::{BytesAttr, FPSingleAttr, IntegerAttr},
         op_interfaces::{
             AtMostOneRegionInterface, OneResultInterface, SingleBlockRegionInterface,
             SymbolOpInterface,
@@ -34,18 +35,20 @@ use pliron::{
 use pliron_llvm::{
     attributes::{
         FCmpPredicateAttr, FastmathFlagsAttr, ICmpPredicateAttr, IntegerOverflowFlagsAttr,
+        LinkageAttr,
     },
     op_interfaces::{
         AlignableOpInterface, BinArithOp, CastOpInterface, FastMathFlags,
         FloatBinArithOpWithFastMathFlags, IntBinArithOpWithOverflowFlag,
     },
     ops::{
-        AShrOp, AddOp, AndOp, BrOp, CondBrOp, ConstantOp, FAddOp, FCmpOp, FDivOp, FMulOp, FPExtOp,
-        FPToSIOp, FPToUIOp, FPTruncOp, FSubOp, FuncOp, GepIndex, GetElementPtrOp, ICmpOp, LShrOp,
-        LoadOp, MulOp, OrOp, PtrToIntOp, ReturnOp, SExtOp, SIToFPOp, ShlOp, StoreOp, SubOp,
-        TruncOp, UIToFPOp, UnreachableOp, XorOp, ZExtOp,
+        AShrOp, AddOp, AddressOfOp, AndOp, BrOp, CondBrOp, ConstantOp, ExtractElementOp, FAddOp,
+        FCmpOp, FDivOp, FMulOp, FPExtOp, FPToSIOp, FPToUIOp, FPTruncOp, FSubOp, FuncOp, GepIndex,
+        GetElementPtrOp, GlobalOp, ICmpOp, InsertElementOp, LShrOp, LoadOp, MulOp, OrOp,
+        PtrToIntOp, ReturnOp, SExtOp, SIToFPOp, ShlOp, StoreOp, SubOp, TruncOp, UIToFPOp,
+        UnreachableOp, XorOp, ZExtOp, ZeroOp,
     },
-    types::{FuncType, PointerType, VoidType},
+    types::{ArrayType, FuncType, PointerType, VectorType, VectorTypeKind, VoidType},
 };
 use sha2::{Digest as _, Sha256};
 
@@ -121,16 +124,67 @@ fn build_module(
     let module_name = Identifier::try_from(MODULE_NAME_V1)
         .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph))?;
     let module = ModuleOp::new(context, module_name);
+    let globals = admitted
+        .handoff()
+        .module()
+        .globals()
+        .iter()
+        .map(|global| build_global(context, &module, global).map(|binding| (global.id(), binding)))
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     for function in admitted.handoff().module().functions() {
-        build_function(context, &module, function)?;
+        build_function(context, &module, function, &globals)?;
     }
     Ok(module)
+}
+
+#[derive(Clone)]
+struct GlobalBinding {
+    symbol: Identifier,
+    address_space: u32,
+}
+
+fn build_global(
+    context: &mut Context,
+    module: &ModuleOp,
+    source: &GlobalV2,
+) -> Result<GlobalBinding, LoweringErrorV1> {
+    let symbol = Identifier::try_from(source.symbol())
+        .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph))?;
+    let value_type = global_value_type(context, source)?;
+    let global = GlobalOp::new(context, symbol.clone(), value_type);
+    global.set_attr_llvm_global_linkage(
+        context,
+        match source.linkage() {
+            GlobalLinkageV2::Internal => LinkageAttr::InternalLinkage,
+            GlobalLinkageV2::External => LinkageAttr::ExternalLinkage,
+        },
+    );
+    let address_space = address_space_id(source.address_space());
+    global.set_address_space(context, address_space);
+    global.set_alignment(context, u32::from(source.alignment()));
+    if let Some(bytes) = source.byte_initializer() {
+        global.set_initializer_value(context, BytesAttr::new(bytes.to_vec()).into());
+    }
+    module.append_operation(context, global.get_operation(), 0);
+    Ok(GlobalBinding {
+        symbol,
+        address_space,
+    })
+}
+
+fn global_value_type(context: &Context, source: &GlobalV2) -> Result<TypeHandle, LoweringErrorV1> {
+    let element = scalar_type(context, source.value_type())?;
+    match source.array_elements() {
+        Some(elements) => Ok(ArrayType::get(context, element, u64::from(elements)).into()),
+        None => Ok(element),
+    }
 }
 
 fn build_function(
     context: &mut Context,
     module: &ModuleOp,
     source: &FunctionV2,
+    globals: &BTreeMap<GlobalIdV2, GlobalBinding>,
 ) -> Result<(), LoweringErrorV1> {
     let symbol = Identifier::try_from(source.symbol())
         .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph))?;
@@ -166,6 +220,7 @@ fn build_function(
     }
 
     let mut values = BTreeMap::new();
+    let value_types = collect_value_types(source)?;
     for (index, parameter) in source.parameters().iter().enumerate() {
         values.insert(
             parameter.value().id(),
@@ -213,7 +268,14 @@ fn build_function(
             if matches!(instruction.kind(), InstructionKindV2::Phi { .. }) {
                 continue;
             }
-            let result = build_instruction(context, target, instruction.kind(), &values)?;
+            let result = build_instruction(
+                context,
+                target,
+                instruction.kind(),
+                &values,
+                &value_types,
+                globals,
+            )?;
             match (instruction.result(), result) {
                 (Some(expected), Some(value)) => {
                     values.insert(expected.id(), value);
@@ -229,6 +291,34 @@ fn build_function(
         build_terminator(context, target, block, source, &blocks, &values)?;
     }
     Ok(())
+}
+
+fn collect_value_types(
+    source: &FunctionV2,
+) -> Result<BTreeMap<ValueIdV2, ValueTypeV2>, LoweringErrorV1> {
+    let mut types = BTreeMap::new();
+    for parameter in source.parameters() {
+        if types
+            .insert(parameter.value().id(), parameter.value().value_type())
+            .is_some()
+        {
+            return Err(LoweringErrorV1::Construction(
+                ConstructionStageV1::DialectGraph,
+            ));
+        }
+    }
+    for block in source.blocks() {
+        for instruction in block.instructions() {
+            if let Some(result) = instruction.result()
+                && types.insert(result.id(), result.value_type()).is_some()
+            {
+                return Err(LoweringErrorV1::Construction(
+                    ConstructionStageV1::DialectGraph,
+                ));
+            }
+        }
+    }
+    Ok(types)
 }
 
 fn ordered_blocks(source: &FunctionV2) -> Vec<&BasicBlockV2> {
@@ -262,6 +352,8 @@ fn build_instruction(
     block: Ptr<BasicBlock>,
     instruction: &InstructionKindV2,
     values: &BTreeMap<ValueIdV2, Value>,
+    value_types: &BTreeMap<ValueIdV2, ValueTypeV2>,
+    globals: &BTreeMap<GlobalIdV2, GlobalBinding>,
 ) -> Result<Option<Value>, LoweringErrorV1> {
     let value = |id: ValueIdV2| {
         values
@@ -275,6 +367,25 @@ fn build_instruction(
         InstructionKindV2::Constant(constant) => {
             let attribute = constant_attribute(context, *constant)?;
             let operation = ConstantOp::new(context, attribute);
+            Some(append_result(context, block, operation))
+        }
+        InstructionKindV2::VectorZero { element_type } => {
+            let vector_type = type_for(
+                context,
+                ValueTypeV2::Vector {
+                    element: *element_type,
+                    lanes: 4,
+                },
+            )?;
+            let operation = ZeroOp::new(context, vector_type);
+            Some(append_result(context, block, operation))
+        }
+        InstructionKindV2::GlobalAddress(global) => {
+            let binding = globals.get(global).ok_or(LoweringErrorV1::Construction(
+                ConstructionStageV1::DialectGraph,
+            ))?;
+            let operation =
+                AddressOfOp::new(context, binding.symbol.clone(), binding.address_space);
             Some(append_result(context, block, operation))
         }
         InstructionKindV2::Binary {
@@ -315,7 +426,12 @@ fn build_instruction(
         }
         InstructionKindV2::GetElementPtr { base, indices } => {
             let base_value = value(*base)?;
-            let source_type = source_element_type(context, base_value)?;
+            let source_type = source_element_type(
+                context,
+                *value_types.get(base).ok_or(LoweringErrorV1::Construction(
+                    ConstructionStageV1::DialectGraph,
+                ))?,
+            )?;
             let indices = indices
                 .iter()
                 .map(|index| value(*index).map(GepIndex::Value))
@@ -333,6 +449,22 @@ fn build_instruction(
             operation.set_alignment(context, u32::from(*alignment));
             Some(append_result(context, block, operation))
         }
+        InstructionKindV2::VectorLoad4 {
+            pointer,
+            element_type,
+            alignment,
+        } => {
+            let result_type = type_for(
+                context,
+                ValueTypeV2::Vector {
+                    element: *element_type,
+                    lanes: 4,
+                },
+            )?;
+            let operation = LoadOp::new(context, value(*pointer)?, result_type);
+            operation.set_alignment(context, u32::from(*alignment));
+            Some(append_result(context, block, operation))
+        }
         InstructionKindV2::Store {
             pointer,
             value: stored,
@@ -344,13 +476,20 @@ fn build_instruction(
             operation.get_operation().insert_at_back(block, context);
             None
         }
-        InstructionKindV2::Phi { .. }
-        | InstructionKindV2::GlobalAddress(_)
-        | InstructionKindV2::VectorZero { .. }
-        | InstructionKindV2::VectorLoad4 { .. }
-        | InstructionKindV2::Call { .. }
-        | InstructionKindV2::InsertElement { .. }
-        | InstructionKindV2::ExtractElement { .. } => {
+        InstructionKindV2::InsertElement {
+            vector,
+            element,
+            index,
+        } => {
+            let operation =
+                InsertElementOp::new(context, value(*vector)?, value(*element)?, value(*index)?);
+            Some(append_result(context, block, operation))
+        }
+        InstructionKindV2::ExtractElement { vector, index } => {
+            let operation = ExtractElementOp::new(context, value(*vector)?, value(*index)?);
+            Some(append_result(context, block, operation))
+        }
+        InstructionKindV2::Phi { .. } | InstructionKindV2::Call { .. } => {
             return Err(LoweringErrorV1::Construction(
                 ConstructionStageV1::DialectGraph,
             ));
@@ -605,19 +744,26 @@ fn constant_attribute(
     }
 }
 
-fn type_for(context: &mut Context, value_type: ValueTypeV2) -> Result<TypeHandle, LoweringErrorV1> {
+fn type_for(context: &Context, value_type: ValueTypeV2) -> Result<TypeHandle, LoweringErrorV1> {
     match value_type {
         ValueTypeV2::Scalar(scalar) => scalar_type(context, scalar),
         ValueTypeV2::Pointer { address_space, .. } => {
             Ok(PointerType::get(context, address_space_id(address_space)).into())
         }
-        ValueTypeV2::Vector { .. } | ValueTypeV2::ArrayPointer { .. } => Err(
-            LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph),
-        ),
+        ValueTypeV2::Vector { element, lanes } => Ok(VectorType::get(
+            context,
+            scalar_type(context, element)?,
+            u32::from(lanes),
+            VectorTypeKind::Fixed,
+        )
+        .into()),
+        ValueTypeV2::ArrayPointer { address_space, .. } => {
+            Ok(PointerType::get(context, address_space_id(address_space)).into())
+        }
     }
 }
 
-fn scalar_type(context: &mut Context, scalar: ScalarTypeV1) -> Result<TypeHandle, LoweringErrorV1> {
+fn scalar_type(context: &Context, scalar: ScalarTypeV1) -> Result<TypeHandle, LoweringErrorV1> {
     match scalar {
         ScalarTypeV1::I1
         | ScalarTypeV1::I8
@@ -659,20 +805,20 @@ const fn address_space_id(address_space: AddressSpaceV1) -> u32 {
 }
 
 fn source_element_type(
-    context: &mut Context,
-    pointer: Value,
+    context: &Context,
+    pointer_type: ValueTypeV2,
 ) -> Result<TypeHandle, LoweringErrorV1> {
-    if pointer
-        .get_type(context)
-        .deref(context)
-        .downcast_ref::<PointerType>()
-        .is_none()
-    {
-        return Err(LoweringErrorV1::Construction(
+    match pointer_type {
+        ValueTypeV2::Pointer { pointee, .. } => scalar_type(context, pointee),
+        ValueTypeV2::ArrayPointer {
+            element, elements, ..
+        } => {
+            Ok(ArrayType::get(context, scalar_type(context, element)?, u64::from(elements)).into())
+        }
+        ValueTypeV2::Scalar(_) | ValueTypeV2::Vector { .. } => Err(LoweringErrorV1::Construction(
             ConstructionStageV1::DialectGraph,
-        ));
+        )),
     }
-    Ok(FP32Type::get(context).into())
 }
 
 fn inspect_module(
@@ -686,25 +832,40 @@ fn inspect_module(
         .map_err(|_| InspectionErrorV1::StaleModule)?;
     verify_operation(module_pointer, context)
         .map_err(|_| InspectionErrorV1::DialectVerification)?;
-    let actual_functions = owned
+    let actual_module_operations = owned
         .module
         .get_body(context, 0)
         .deref(context)
         .iter(context)
         .collect::<Vec<_>>();
-    if actual_functions.len() != source.module().functions().len() {
+    let global_count = source.module().globals().len();
+    if actual_module_operations.len() != global_count + source.module().functions().len() {
         return Err(InspectionErrorV1::UnexpectedGraph);
     }
+    let (actual_globals, actual_functions) = actual_module_operations.split_at(global_count);
 
     let mut facts = Vec::new();
+    let mut global_count = 0_u32;
     let mut function_count = 0_u32;
     let mut block_count = 0_u32;
     let mut block_argument_count = 0_u32;
     let mut operation_count = 0_u32;
     let mut strict_float = true;
     let mut exact_memory_alignment = true;
+    for (source_global, actual) in source.module().globals().iter().zip(actual_globals) {
+        inspect_global(
+            context,
+            *actual,
+            source_global,
+            &mut facts,
+            &mut exact_memory_alignment,
+        )?;
+        global_count = global_count
+            .checked_add(1)
+            .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+    }
     for (source_function, actual) in source.module().functions().iter().zip(actual_functions) {
-        let function = Operation::get_op::<FuncOp>(actual, context)
+        let function = Operation::get_op::<FuncOp>(*actual, context)
             .ok_or(InspectionErrorV1::UnexpectedGraph)?;
         let source_symbol = Identifier::try_from(source_function.symbol())
             .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
@@ -794,6 +955,7 @@ fn inspect_module(
     }
     let graph_sha256: [u8; 32] = Sha256::digest(&facts).into();
     Ok(LiveGraphInspectionV1 {
+        global_count,
         function_count,
         block_count,
         block_argument_count,
@@ -802,6 +964,84 @@ fn inspect_module(
         strict_float,
         exact_memory_alignment,
     })
+}
+
+fn inspect_global(
+    context: &Context,
+    actual: Ptr<Operation>,
+    expected: &GlobalV2,
+    facts: &mut Vec<u8>,
+    exact_memory_alignment: &mut bool,
+) -> Result<(), InspectionErrorV1> {
+    let global =
+        Operation::get_op::<GlobalOp>(actual, context).ok_or(InspectionErrorV1::UnexpectedGraph)?;
+    let symbol =
+        Identifier::try_from(expected.symbol()).map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+    let linkage = match expected.linkage() {
+        GlobalLinkageV2::Internal => LinkageAttr::InternalLinkage,
+        GlobalLinkageV2::External => LinkageAttr::ExternalLinkage,
+    };
+    if global.get_symbol_name(context) != symbol
+        || global.address_space(context) != address_space_id(expected.address_space())
+        || global.get_attr_llvm_global_linkage(context).as_deref() != Some(&linkage)
+    {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
+    *exact_memory_alignment &= global.alignment(context) == Some(u32::from(expected.alignment()));
+
+    let global_type = global.get_type(context);
+    let global_type = global_type.deref(context);
+    match expected.array_elements() {
+        Some(elements) => {
+            let array = global_type
+                .downcast_ref::<ArrayType>()
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            if array.size() != u64::from(elements)
+                || !scalar_type_matches(context, array.elem_type(), expected.value_type())
+            {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+        }
+        None => return Err(InspectionErrorV1::UnexpectedGraph),
+    }
+    drop(global_type);
+
+    match (
+        expected.byte_initializer(),
+        global.get_initializer_value(context),
+    ) {
+        (Some(expected), Some(actual)) => {
+            let actual = actual
+                .downcast_ref::<BytesAttr>()
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            if actual.as_ref().as_slice() != expected {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            facts.push(5);
+            facts.extend_from_slice(&(expected.len() as u32).to_le_bytes());
+            facts.extend_from_slice(&Sha256::digest(expected));
+        }
+        (None, None) => facts.push(4),
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    }
+    facts.extend_from_slice(&expected.alignment().to_le_bytes());
+    facts.push(expected.address_space() as u8);
+    Ok(())
+}
+
+fn scalar_type_matches(context: &Context, actual: TypeHandle, expected: ScalarTypeV1) -> bool {
+    let actual = actual.deref(context);
+    match expected {
+        ScalarTypeV1::I1
+        | ScalarTypeV1::I8
+        | ScalarTypeV1::I16
+        | ScalarTypeV1::I32
+        | ScalarTypeV1::I64 => actual
+            .downcast_ref::<IntegerType>()
+            .is_some_and(|integer| integer.width() == scalar_width(expected).unwrap()),
+        ScalarTypeV1::F32 => actual.is::<FP32Type>(),
+        ScalarTypeV1::F16 | ScalarTypeV1::Bf16 | ScalarTypeV1::F64 => false,
+    }
 }
 
 fn inspect_instruction(
@@ -829,6 +1069,8 @@ fn inspect_instruction(
     }
     match expected {
         InstructionKindV2::Constant(_) => typed!(ConstantOp, 10),
+        InstructionKindV2::VectorZero { .. } => typed!(ZeroOp, 39),
+        InstructionKindV2::GlobalAddress(_) => typed!(AddressOfOp, 40),
         InstructionKindV2::Binary { operation, .. } => match operation {
             BinaryOperationV2::Integer(IntegerBinaryOperationV2::Add) => typed!(AddOp, 11),
             BinaryOperationV2::Integer(IntegerBinaryOperationV2::Subtract) => typed!(SubOp, 12),
@@ -880,6 +1122,13 @@ fn inspect_instruction(
             facts.push(37);
             facts.extend_from_slice(&alignment.to_le_bytes());
         }
+        InstructionKindV2::VectorLoad4 { alignment, .. } => {
+            let operation = Operation::get_op::<LoadOp>(actual, context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            *exact_memory_alignment &= operation.alignment(context) == Some(u32::from(*alignment));
+            facts.push(41);
+            facts.extend_from_slice(&alignment.to_le_bytes());
+        }
         InstructionKindV2::Store { alignment, .. } => {
             let operation = Operation::get_op::<StoreOp>(actual, context)
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
@@ -887,13 +1136,9 @@ fn inspect_instruction(
             facts.push(38);
             facts.extend_from_slice(&alignment.to_le_bytes());
         }
-        InstructionKindV2::Phi { .. }
-        | InstructionKindV2::GlobalAddress(_)
-        | InstructionKindV2::VectorZero { .. }
-        | InstructionKindV2::VectorLoad4 { .. }
-        | InstructionKindV2::Call { .. }
-        | InstructionKindV2::InsertElement { .. }
-        | InstructionKindV2::ExtractElement { .. } => {
+        InstructionKindV2::InsertElement { .. } => typed!(InsertElementOp, 42),
+        InstructionKindV2::ExtractElement { .. } => typed!(ExtractElementOp, 43),
+        InstructionKindV2::Phi { .. } | InstructionKindV2::Call { .. } => {
             return Err(InspectionErrorV1::UnexpectedGraph);
         }
     }
@@ -940,9 +1185,11 @@ fn encode_receipt(
     bytes.push(match profile {
         dialect_amdgcn::AmdgcnPlironLlvmProfileV1::ScalarMemoryArithmetic => 1,
         dialect_amdgcn::AmdgcnPlironLlvmProfileV1::ScalarControlFlowGemm => 2,
+        dialect_amdgcn::AmdgcnPlironLlvmProfileV1::TiledDataRepresentationGemm => 3,
     });
     bytes.extend_from_slice(&source_len.to_le_bytes());
     bytes.extend_from_slice(source_bytes.as_bytes());
+    bytes.extend_from_slice(&inspection.global_count.to_le_bytes());
     bytes.extend_from_slice(&inspection.function_count.to_le_bytes());
     bytes.extend_from_slice(&inspection.block_count.to_le_bytes());
     bytes.extend_from_slice(&inspection.block_argument_count.to_le_bytes());

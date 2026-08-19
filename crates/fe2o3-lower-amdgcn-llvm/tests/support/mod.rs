@@ -114,6 +114,180 @@ pub fn handoff_with_global() -> Gfx942HandoffV2 {
     Gfx942HandoffV2::new(canonical.base, module).unwrap()
 }
 
+pub fn tiled_data_handoff() -> Gfx942HandoffV2 {
+    let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
+    let source = &canonical.function;
+    let mut instructions = source.blocks()[0].instructions().to_vec();
+    let i64_zero = instruction(
+        Some(TypedValueV2::new(
+            ValueIdV2::new(6),
+            ValueTypeV2::Scalar(ScalarTypeV1::I64),
+        )),
+        InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I64, 0).unwrap()),
+        &canonical.evidence,
+    );
+    let i32_zero = instruction(
+        Some(TypedValueV2::new(
+            ValueIdV2::new(7),
+            ValueTypeV2::Scalar(ScalarTypeV1::I32),
+        )),
+        InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I32, 0).unwrap()),
+        &canonical.evidence,
+    );
+    let i16_zero = instruction(
+        Some(TypedValueV2::new(
+            ValueIdV2::new(8),
+            ValueTypeV2::Scalar(ScalarTypeV1::I16),
+        )),
+        InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I16, 0).unwrap()),
+        &canonical.evidence,
+    );
+    let lds_array = ValueTypeV2::ArrayPointer {
+        element: ScalarTypeV1::I16,
+        elements: 256,
+        address_space: AddressSpaceV1::Local,
+    };
+    let local_i16 = ValueTypeV2::Pointer {
+        pointee: ScalarTypeV1::I16,
+        address_space: AddressSpaceV1::Local,
+    };
+    let i16x4 = ValueTypeV2::Vector {
+        element: ScalarTypeV1::I16,
+        lanes: 4,
+    };
+    instructions.extend([
+        i64_zero,
+        i32_zero,
+        i16_zero,
+        instruction(
+            Some(TypedValueV2::new(ValueIdV2::new(9), lds_array)),
+            InstructionKindV2::GlobalAddress(GlobalIdV2::new(1)),
+            &canonical.evidence,
+        ),
+        instruction(
+            Some(TypedValueV2::new(ValueIdV2::new(10), local_i16)),
+            InstructionKindV2::GetElementPtr {
+                base: ValueIdV2::new(9),
+                indices: vec![ValueIdV2::new(6), ValueIdV2::new(6)],
+            },
+            &canonical.evidence,
+        ),
+        instruction(
+            Some(TypedValueV2::new(ValueIdV2::new(11), i16x4)),
+            InstructionKindV2::VectorZero {
+                element_type: ScalarTypeV1::I16,
+            },
+            &canonical.evidence,
+        ),
+        instruction(
+            Some(TypedValueV2::new(ValueIdV2::new(12), i16x4)),
+            InstructionKindV2::InsertElement {
+                vector: ValueIdV2::new(11),
+                element: ValueIdV2::new(8),
+                index: ValueIdV2::new(7),
+            },
+            &canonical.evidence,
+        ),
+        instruction(
+            Some(TypedValueV2::new(ValueIdV2::new(13), i16x4)),
+            InstructionKindV2::VectorLoad4 {
+                pointer: ValueIdV2::new(10),
+                element_type: ScalarTypeV1::I16,
+                alignment: 8,
+            },
+            &canonical.evidence,
+        ),
+        instruction(
+            Some(TypedValueV2::new(
+                ValueIdV2::new(14),
+                ValueTypeV2::Scalar(ScalarTypeV1::I16),
+            )),
+            InstructionKindV2::ExtractElement {
+                vector: ValueIdV2::new(13),
+                index: ValueIdV2::new(7),
+            },
+            &canonical.evidence,
+        ),
+        instruction(
+            None,
+            InstructionKindV2::Store {
+                pointer: ValueIdV2::new(10),
+                value: ValueIdV2::new(14),
+                value_type: ScalarTypeV1::I16,
+                alignment: 2,
+            },
+            &canonical.evidence,
+        ),
+    ]);
+    let function = FunctionV2::new(
+        source.id(),
+        source.symbol(),
+        source.kind(),
+        source.calling_convention(),
+        source.return_type(),
+        source.parameters().to_vec(),
+        source.attributes().to_vec(),
+        source.entry(),
+        vec![BasicBlockV2::new(
+            source.entry(),
+            instructions,
+            TerminatorV2::Return(None),
+        )],
+        canonical.evidence.clone(),
+    )
+    .unwrap();
+    let globals = vec![
+        GlobalV2::new_lds_bf16_array_256(
+            GlobalIdV2::new(1),
+            "tile_lds",
+            canonical.evidence.clone(),
+        )
+        .unwrap(),
+        GlobalV2::new_private_constant_bytes(
+            GlobalIdV2::new(2),
+            "kernel_descriptor",
+            KERNEL_DESCRIPTOR_SECTION_V2,
+            vec![1, 2, 3, 4],
+            4,
+            canonical.evidence.clone(),
+        )
+        .unwrap(),
+    ];
+    let module = ExecutableModuleV2::new(
+        canonical.flags,
+        canonical.named_metadata,
+        globals,
+        vec![],
+        vec![function],
+    )
+    .unwrap();
+    Gfx942HandoffV2::new(canonical.base, module).unwrap()
+}
+
+pub fn handoff_with_scalar_global() -> Gfx942HandoffV2 {
+    let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
+    let global = GlobalV2::new(
+        GlobalIdV2::new(1),
+        "unsupported_scalar",
+        GlobalLinkageV2::Internal,
+        AddressSpaceV1::Constant,
+        false,
+        ScalarTypeV1::I32,
+        Some(ScalarConstantV2::new(ScalarTypeV1::I32, 0).unwrap()),
+        canonical.evidence.clone(),
+    )
+    .unwrap();
+    let module = ExecutableModuleV2::new(
+        canonical.flags,
+        canonical.named_metadata,
+        vec![global],
+        vec![],
+        vec![canonical.function],
+    )
+    .unwrap();
+    Gfx942HandoffV2::new(canonical.base, module).unwrap()
+}
+
 pub fn handoff_with_required_workgroup_size(shape: [u16; 3]) -> Gfx942HandoffV2 {
     let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
     let source = &canonical.function;

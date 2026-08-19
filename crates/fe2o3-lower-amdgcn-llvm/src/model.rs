@@ -102,6 +102,7 @@ impl CanonicalLoweringReceiptV1 {
 /// Owner-checked facts recovered from the live Pliron LLVM graph.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LiveGraphInspectionV1 {
+    pub(crate) global_count: u32,
     pub(crate) function_count: u32,
     pub(crate) block_count: u32,
     pub(crate) block_argument_count: u32,
@@ -112,6 +113,11 @@ pub struct LiveGraphInspectionV1 {
 }
 
 impl LiveGraphInspectionV1 {
+    /// Returns the number of live `llvm.global` operations.
+    pub const fn global_count(self) -> u32 {
+        self.global_count
+    }
+
     /// Returns the number of live `llvm.func` operations.
     pub const fn function_count(self) -> u32 {
         self.function_count
