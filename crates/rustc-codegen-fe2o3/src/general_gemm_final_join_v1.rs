@@ -27,6 +27,7 @@ use crate::collected_general_gemm_v1::{
 use crate::general_gemm_intrinsic_semantics_v1::GeneralGemmIntrinsicSemanticsV1;
 
 const FINAL_JOIN_DOMAIN_V1: &[u8] = b"FE2O3/GENERAL-GEMM/RUSTC-FINAL-JOIN/V1\0";
+const FINAL_PAIR_JOIN_DOMAIN_V1: &[u8] = b"FE2O3/GENERAL-GEMM/RUSTC-FINAL-PAIR-JOIN/V1\0";
 const MFMA_F32_16X16X16BF16_1K_OPCODE_V1: u32 = 0xd3e1_0002;
 
 /// Exact owner-local property contract expected from the pinned verifier run.
@@ -48,26 +49,19 @@ struct QualifiedGeneralGemmPropertyV1 {
     machine_confirmation: Option<GeneralGemmMachinePropertyConfirmationKindV1>,
 }
 
-/// Private owning qualification produced only by the three-owner join.
-///
-/// It is deliberately neither `Clone` nor serializable. In particular, the
-/// exact post-link observation stays alive so later rustc-private hardware and
-/// publication phases do not reconstruct authority from the descriptive join
-/// identity.
-#[must_use = "the general GEMM qualification must remain in its owning rustc transaction"]
-pub(crate) struct QualifiedGeneralGemmCompilationV1 {
+/// One schedule-local owner retained inside the private pair qualification.
+pub(crate) struct QualifiedGeneralGemmScheduleV1 {
     identity: [u8; 32],
-    frontend: AuthenticatedGeneralGemmFrontendCorrespondenceV1,
     symbolic: GeneralGemmSymbolicCompilationUnitV1,
     proof: GeneralGemmPropertyClosureEvaluationV1,
     machine: OpaqueGeneralGemmPostLinkMachineObservationV1,
     properties: [QualifiedGeneralGemmPropertyV1; GENERAL_GEMM_PROPERTY_CLOSURE_COUNT_V1],
 }
 
-impl fmt::Debug for QualifiedGeneralGemmCompilationV1 {
+impl fmt::Debug for QualifiedGeneralGemmScheduleV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("QualifiedGeneralGemmCompilationV1")
+            .debug_struct("QualifiedGeneralGemmScheduleV1")
             .field("identity", &self.identity)
             .field("symbolic", &self.symbolic.identity())
             .field("proof", &self.proof.proof_and_numerical_evidence_identity())
@@ -77,13 +71,17 @@ impl fmt::Debug for QualifiedGeneralGemmCompilationV1 {
     }
 }
 
-impl QualifiedGeneralGemmCompilationV1 {
+impl QualifiedGeneralGemmScheduleV1 {
     pub(crate) const fn identity(&self) -> &[u8; 32] {
         &self.identity
     }
 
     pub(crate) const fn symbolic_unit(&self) -> &GeneralGemmSymbolicCompilationUnitV1 {
         &self.symbolic
+    }
+
+    pub(crate) const fn proof_closure(&self) -> &GeneralGemmPropertyClosureEvaluationV1 {
+        &self.proof
     }
 
     pub(crate) fn exact_finalized_bytes(&self) -> &[u8] {
@@ -96,15 +94,48 @@ impl QualifiedGeneralGemmCompilationV1 {
         &self.machine
     }
 
-    pub(crate) fn into_owners(
-        self,
-    ) -> (
-        AuthenticatedGeneralGemmFrontendCorrespondenceV1,
-        GeneralGemmSymbolicCompilationUnitV1,
-        GeneralGemmPropertyClosureEvaluationV1,
-        OpaqueGeneralGemmPostLinkMachineObservationV1,
-    ) {
-        (self.frontend, self.symbolic, self.proof, self.machine)
+    pub(crate) const fn schedule(&self) -> GeneralGemmScheduleV1 {
+        self.symbolic.schedule()
+    }
+}
+
+/// Private seven-owner qualification for both production schedules.
+///
+/// This value is deliberately neither `Clone` nor serializable. One frontend
+/// correspondence is consumed once and retained beside both exact symbolic,
+/// verifier, and post-link machine owners. Borrowed schedule views can feed the
+/// hardware executor without reconstructing authority from identities.
+#[must_use = "the paired general GEMM qualification must remain in its owning rustc transaction"]
+pub(crate) struct QualifiedGeneralGemmPairCompilationV1 {
+    identity: [u8; 32],
+    frontend: AuthenticatedGeneralGemmFrontendCorrespondenceV1,
+    reference: QualifiedGeneralGemmScheduleV1,
+    vectorized: QualifiedGeneralGemmScheduleV1,
+}
+
+impl fmt::Debug for QualifiedGeneralGemmPairCompilationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedGeneralGemmPairCompilationV1")
+            .field("identity", &self.identity)
+            .field("frontend", &self.frontend.identity())
+            .field("reference", &self.reference)
+            .field("vectorized", &self.vectorized)
+            .finish_non_exhaustive()
+    }
+}
+
+impl QualifiedGeneralGemmPairCompilationV1 {
+    pub(crate) const fn identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+
+    pub(crate) const fn reference(&self) -> &QualifiedGeneralGemmScheduleV1 {
+        &self.reference
+    }
+
+    pub(crate) const fn vectorized(&self) -> &QualifiedGeneralGemmScheduleV1 {
+        &self.vectorized
     }
 }
 
@@ -113,6 +144,7 @@ impl QualifiedGeneralGemmCompilationV1 {
 pub(crate) enum GeneralGemmFinalJoinErrorV1 {
     FrontendBindingSubstitution,
     FrontendIdentity,
+    ScheduleOrder { index: usize },
     ProofRequestSubstitution,
     PropertyOrder { index: usize },
     PropertyStatus { index: usize },
@@ -140,18 +172,56 @@ impl fmt::Display for GeneralGemmFinalJoinErrorV1 {
 
 impl std::error::Error for GeneralGemmFinalJoinErrorV1 {}
 
-/// Consumes the exact source, verifier, and machine owners in one rustc process.
-pub(crate) fn qualify_general_gemm_compilation_v1(
+/// Consumes one source owner and both ordered schedule-owner triples.
+pub(crate) fn qualify_general_gemm_pair_compilation_v1(
     frontend: AuthenticatedGeneralGemmFrontendCorrespondenceV1,
+    reference_symbolic: GeneralGemmSymbolicCompilationUnitV1,
+    reference_proof: GeneralGemmPropertyClosureEvaluationV1,
+    reference_machine: OpaqueGeneralGemmPostLinkMachineObservationV1,
+    vectorized_symbolic: GeneralGemmSymbolicCompilationUnitV1,
+    vectorized_proof: GeneralGemmPropertyClosureEvaluationV1,
+    vectorized_machine: OpaqueGeneralGemmPostLinkMachineObservationV1,
+) -> Result<QualifiedGeneralGemmPairCompilationV1, GeneralGemmFinalJoinErrorV1> {
+    if frontend.identity().as_bytes() == &[0; 32] {
+        return Err(GeneralGemmFinalJoinErrorV1::FrontendIdentity);
+    }
+    validate_source_receipts(frontend.source_properties())?;
+    let reference = qualify_general_gemm_schedule_v1(
+        &frontend,
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+        0,
+        reference_symbolic,
+        reference_proof,
+        reference_machine,
+    )?;
+    let vectorized = qualify_general_gemm_schedule_v1(
+        &frontend,
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+        1,
+        vectorized_symbolic,
+        vectorized_proof,
+        vectorized_machine,
+    )?;
+    let identity = calculate_final_pair_join_identity(&frontend, &reference, &vectorized);
+    Ok(QualifiedGeneralGemmPairCompilationV1 {
+        identity,
+        frontend,
+        reference,
+        vectorized,
+    })
+}
+
+fn qualify_general_gemm_schedule_v1(
+    frontend: &AuthenticatedGeneralGemmFrontendCorrespondenceV1,
+    expected_schedule: GeneralGemmScheduleV1,
+    schedule_index: usize,
     symbolic: GeneralGemmSymbolicCompilationUnitV1,
     proof: GeneralGemmPropertyClosureEvaluationV1,
     machine: OpaqueGeneralGemmPostLinkMachineObservationV1,
-) -> Result<QualifiedGeneralGemmCompilationV1, GeneralGemmFinalJoinErrorV1> {
+) -> Result<QualifiedGeneralGemmScheduleV1, GeneralGemmFinalJoinErrorV1> {
+    require_schedule_order(symbolic.schedule(), expected_schedule, schedule_index)?;
     if frontend.binding() != symbolic.frontend_semantics() {
         return Err(GeneralGemmFinalJoinErrorV1::FrontendBindingSubstitution);
-    }
-    if frontend.identity().as_bytes() == &[0; 32] {
-        return Err(GeneralGemmFinalJoinErrorV1::FrontendIdentity);
     }
 
     let expected_request = symbolic
@@ -162,7 +232,6 @@ pub(crate) fn qualify_general_gemm_compilation_v1(
     let schedule = proof.proof_request().schedule();
     let contracts = property_join_contracts(schedule);
     let source_receipts = frontend.source_properties();
-    validate_source_receipts(source_receipts)?;
     let machine_confirmations = validate_machine_observation(&symbolic, &machine)?;
 
     let mut properties = [QualifiedGeneralGemmPropertyV1 {
@@ -228,15 +297,25 @@ pub(crate) fn qualify_general_gemm_compilation_v1(
         };
     }
 
-    let identity = calculate_final_join_identity(&frontend, &symbolic, &proof, &machine);
-    Ok(QualifiedGeneralGemmCompilationV1 {
+    let identity = calculate_final_join_identity(frontend, &symbolic, &proof, &machine);
+    Ok(QualifiedGeneralGemmScheduleV1 {
         identity,
-        frontend,
         symbolic,
         proof,
         machine,
         properties,
     })
+}
+
+fn require_schedule_order(
+    actual: GeneralGemmScheduleV1,
+    expected: GeneralGemmScheduleV1,
+    index: usize,
+) -> Result<(), GeneralGemmFinalJoinErrorV1> {
+    if actual != expected {
+        return Err(GeneralGemmFinalJoinErrorV1::ScheduleOrder { index });
+    }
+    Ok(())
 }
 
 fn require_exact_proof_request(
@@ -438,6 +517,35 @@ fn calculate_final_join_identity(
     for request in proof.requests() {
         digest.update(request.schedule_evidence().identity().as_bytes());
     }
+    digest.finalize().into()
+}
+
+fn calculate_final_pair_join_identity(
+    frontend: &AuthenticatedGeneralGemmFrontendCorrespondenceV1,
+    reference: &QualifiedGeneralGemmScheduleV1,
+    vectorized: &QualifiedGeneralGemmScheduleV1,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(FINAL_PAIR_JOIN_DOMAIN_V1);
+    digest.update(frontend.identity().as_bytes());
+    digest.update(reference.identity());
+    digest.update(reference.symbolic.identity().as_bytes());
+    digest.update(
+        reference
+            .proof
+            .proof_and_numerical_evidence_identity()
+            .as_bytes(),
+    );
+    digest.update(reference.machine.identity().as_bytes());
+    digest.update(vectorized.identity());
+    digest.update(vectorized.symbolic.identity().as_bytes());
+    digest.update(
+        vectorized
+            .proof
+            .proof_and_numerical_evidence_identity()
+            .as_bytes(),
+    );
+    digest.update(vectorized.machine.identity().as_bytes());
     digest.finalize().into()
 }
 
@@ -708,6 +816,22 @@ mod tests {
         ] {
             validate_observed_properties(schedule, &canonical_observed(schedule)).unwrap();
         }
+    }
+
+    #[test]
+    fn pair_join_requires_reference_then_vectorized_owner_order() {
+        let reference = GeneralGemmScheduleV1::ReferenceWave64Xor4V1;
+        let vectorized = GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1;
+        require_schedule_order(reference, reference, 0).unwrap();
+        require_schedule_order(vectorized, vectorized, 1).unwrap();
+        assert_eq!(
+            require_schedule_order(vectorized, reference, 0),
+            Err(GeneralGemmFinalJoinErrorV1::ScheduleOrder { index: 0 })
+        );
+        assert_eq!(
+            require_schedule_order(reference, vectorized, 1),
+            Err(GeneralGemmFinalJoinErrorV1::ScheduleOrder { index: 1 })
+        );
     }
 
     #[test]
