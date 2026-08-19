@@ -2,10 +2,12 @@ use std::{collections::BTreeSet, path::Path};
 
 use fe2o3_verifier::{
     AuthenticatedGeneralGemmScheduleProofV1, GENERAL_GEMM_PROOF_PROPERTIES_V1,
-    GENERAL_GEMM_VERUS_SHA256_V1, GeneralGemmEvidenceIdentityV1, GeneralGemmProofExecutionErrorV1,
-    GeneralGemmProofPropertyV1, GeneralGemmProofRequestV1, GeneralGemmProofScheduleV1,
-    GeneralGemmPropertyEvidenceBasisV1, GeneralGemmPropertyEvidenceStatusV1,
-    execute_general_gemm_schedule_proof_v1,
+    GENERAL_GEMM_VERUS_SHA256_V1, GeneralGemmEvidenceIdentityV1,
+    GeneralGemmNumericalComparisonPolicyV1, GeneralGemmNumericalPolicyRequestV1,
+    GeneralGemmProofExecutionErrorV1, GeneralGemmProofPropertyV1, GeneralGemmProofRequestV1,
+    GeneralGemmProofScheduleV1, GeneralGemmPropertyEvidenceBasisV1,
+    GeneralGemmPropertyEvidenceStatusV1, execute_general_gemm_numerical_policy_v1,
+    execute_general_gemm_schedule_proof_v1, join_general_gemm_proof_and_numerical_evidence_v1,
 };
 
 const MODEL: &str = include_str!("../verus/general_gemm_schedule_model_v1.rs");
@@ -227,4 +229,40 @@ fn pinned_verus_independently_checks_reference_and_a_only_vectorized_schedules()
     assert_ne!(reference.identity(), vectorized.identity());
     assert!(reference.positive_output().stdout_bytes() > 0);
     assert!(vectorized.positive_output().stdout_bytes() > 0);
+}
+
+#[test]
+#[ignore = "requires the exact pinned Verus installation"]
+fn proof_numerical_join_preserves_all_open_and_weaker_property_records() {
+    let path = std::env::var_os("FE2O3_GENERAL_GEMM_VERUS")
+        .expect("FE2O3_GENERAL_GEMM_VERUS must name the pinned Verus launcher");
+    let request = request(GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1);
+    let proof = execute_general_gemm_schedule_proof_v1(request, Path::new(&path), 120).unwrap();
+    let expected_properties = *proof.properties();
+    let numerical_request = GeneralGemmNumericalPolicyRequestV1::checked(
+        request.compilation_binding_identity(),
+        request.plan_identity(),
+        request.kir_identity(),
+        request.numerical_policy_identity(),
+    )
+    .unwrap();
+    let numerical = execute_general_gemm_numerical_policy_v1(
+        numerical_request,
+        GeneralGemmNumericalComparisonPolicyV1::ExactBits,
+    )
+    .unwrap();
+    let evidence = join_general_gemm_proof_and_numerical_evidence_v1(proof, numerical).unwrap();
+
+    assert_eq!(evidence.properties(), &expected_properties);
+    assert!(evidence.properties().iter().any(|property| {
+        property.status() == GeneralGemmPropertyEvidenceStatusV1::OpenCorrespondenceRequired
+    }));
+    assert!(evidence.properties().iter().any(|property| {
+        property.status() == GeneralGemmPropertyEvidenceStatusV1::WeakerExactRealTheoremVerified
+    }));
+    assert!(evidence.properties().iter().any(|property| {
+        property.status() == GeneralGemmPropertyEvidenceStatusV1::OpenArtifactRequired
+    }));
+    assert!(!evidence.can_enter_compiler_proof_gate());
+    assert!(!evidence.grants_artifact_or_runtime_authority());
 }

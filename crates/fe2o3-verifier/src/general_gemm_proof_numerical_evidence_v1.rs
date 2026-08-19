@@ -13,13 +13,13 @@ use sha2::{Digest as _, Sha256};
 use crate::{
     AuthenticatedGeneralGemmNumericalPolicyV1, AuthenticatedGeneralGemmScheduleProofV1,
     GeneralGemmEvidenceIdentityV1, GeneralGemmNumericalPolicyRequestV1, GeneralGemmProofRequestV1,
-    GeneralGemmProofScheduleV1,
+    GeneralGemmProofScheduleV1, GeneralGemmPropertyEvidenceV1,
 };
 
 /// Number of identity domains compared at the eventual three-owner join.
 pub const GENERAL_GEMM_FINAL_JOIN_IDENTITY_COUNT_V1: usize = 31;
 
-const PROOF_NUMERICAL_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.proof-numerical-admission.v1\0";
+const PROOF_NUMERICAL_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.proof-numerical-evidence.v1\0";
 
 /// One exact identity domain compared by the eventual rustc-codegen join.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -205,8 +205,8 @@ impl GeneralGemmFinalJoinIdentityRegistryV1 {
         Ok(())
     }
 
-    /// Descriptive registries never grant authority.
-    pub const fn grants_final_admission(self) -> bool {
+    /// Descriptive registries never grant final-join authority.
+    pub const fn grants_final_join_authority(self) -> bool {
         false
     }
 }
@@ -238,38 +238,41 @@ impl fmt::Display for GeneralGemmFinalJoinIdentityRegistryErrorV1 {
 
 impl std::error::Error for GeneralGemmFinalJoinIdentityRegistryErrorV1 {}
 
-/// Linear verifier result covering exact schedule and numerical evidence.
+/// Linear, non-admitting verifier evidence for one schedule and numerical policy.
 ///
-/// This is not frontend correspondence or machine admission. rustc-codegen
-/// must consume it with both opaque owning capabilities before executable work.
-/// Its private fields prevent caller-constructed reports or raw registries from
-/// minting proof evidence.
+/// The retained property records include open, model-definition-only, and
+/// weaker exact-real results. Consequently this value cannot enter a compiler
+/// proof gate and must never be interpreted as discharged source, numerical
+/// machine, or machine-refinement proof. Its private fields only authenticate
+/// provenance of the evidence; they do not promote its authority level.
 ///
 /// ```compile_fail
 /// use fe2o3_verifier::{
-///     GeneralGemmEvidenceIdentityV1, GeneralGemmProofAndNumericalAdmissionV1,
+///     GeneralGemmEvidenceIdentityV1, GeneralGemmProofAndNumericalEvidenceV1,
 ///     GeneralGemmProofRequestV1,
 /// };
-/// fn forge(request: GeneralGemmProofRequestV1) -> GeneralGemmProofAndNumericalAdmissionV1 {
-///     GeneralGemmProofAndNumericalAdmissionV1 {
+/// fn forge(request: GeneralGemmProofRequestV1) -> GeneralGemmProofAndNumericalEvidenceV1 {
+///     GeneralGemmProofAndNumericalEvidenceV1 {
 ///         request,
 ///         schedule_proof_identity: GeneralGemmEvidenceIdentityV1::from_untrusted_bytes([1; 32]),
 ///         numerical_policy_evidence_identity:
 ///             GeneralGemmEvidenceIdentityV1::from_untrusted_bytes([2; 32]),
+///         properties: todo!(),
 ///         identity: GeneralGemmEvidenceIdentityV1::from_untrusted_bytes([3; 32]),
 ///     }
 /// }
 /// ```
 #[derive(Debug)]
 #[must_use = "proof/numerical evidence must be consumed by the three-owner final join"]
-pub struct GeneralGemmProofAndNumericalAdmissionV1 {
+pub struct GeneralGemmProofAndNumericalEvidenceV1 {
     request: GeneralGemmProofRequestV1,
     schedule_proof_identity: GeneralGemmEvidenceIdentityV1,
     numerical_policy_evidence_identity: GeneralGemmEvidenceIdentityV1,
+    properties: [GeneralGemmPropertyEvidenceV1; 12],
     identity: GeneralGemmEvidenceIdentityV1,
 }
 
-impl GeneralGemmProofAndNumericalAdmissionV1 {
+impl GeneralGemmProofAndNumericalEvidenceV1 {
     /// Returns every exact compiler identity bound by the schedule proof.
     pub const fn request(&self) -> GeneralGemmProofRequestV1 {
         self.request
@@ -285,12 +288,22 @@ impl GeneralGemmProofAndNumericalAdmissionV1 {
         self.numerical_policy_evidence_identity
     }
 
+    /// Returns every property record without changing its authority status.
+    pub const fn properties(&self) -> &[GeneralGemmPropertyEvidenceV1; 12] {
+        &self.properties
+    }
+
     /// Returns the aggregate verifier evidence identity.
     pub const fn identity(&self) -> GeneralGemmEvidenceIdentityV1 {
         self.identity
     }
 
-    /// Frontend and machine capabilities remain required.
+    /// Open and weaker property records prohibit compiler proof-gate entry.
+    pub const fn can_enter_compiler_proof_gate(&self) -> bool {
+        false
+    }
+
+    /// Evidence alone grants no artifact, publication, load, or launch authority.
     pub const fn grants_artifact_or_runtime_authority(&self) -> bool {
         false
     }
@@ -298,7 +311,7 @@ impl GeneralGemmProofAndNumericalAdmissionV1 {
 
 /// Failure while joining typed schedule and numerical verifier evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GeneralGemmProofAndNumericalAdmissionErrorV1 {
+pub enum GeneralGemmProofAndNumericalEvidenceErrorV1 {
     /// Numerical evidence names another exact compiler identity.
     IdentitySubstitution {
         /// Substituted domain.
@@ -306,25 +319,29 @@ pub enum GeneralGemmProofAndNumericalAdmissionErrorV1 {
     },
 }
 
-impl fmt::Display for GeneralGemmProofAndNumericalAdmissionErrorV1 {
+impl fmt::Display for GeneralGemmProofAndNumericalEvidenceErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "general GEMM proof/numerical admission failed: {self:?}"
+            "general GEMM proof/numerical evidence failed: {self:?}"
         )
     }
 }
 
-impl std::error::Error for GeneralGemmProofAndNumericalAdmissionErrorV1 {}
+impl std::error::Error for GeneralGemmProofAndNumericalEvidenceErrorV1 {}
 
-/// Consumes one pinned schedule proof and one shared numerical-policy witness.
-pub fn admit_general_gemm_proof_and_numerical_v1(
+/// Joins one pinned schedule result and one shared numerical-policy witness.
+///
+/// This operation preserves every open/weaker property status and produces
+/// non-admitting evidence. It does not close any frontend or machine boundary.
+pub fn join_general_gemm_proof_and_numerical_evidence_v1(
     schedule_proof: AuthenticatedGeneralGemmScheduleProofV1,
     numerical_policy: AuthenticatedGeneralGemmNumericalPolicyV1,
-) -> Result<GeneralGemmProofAndNumericalAdmissionV1, GeneralGemmProofAndNumericalAdmissionErrorV1> {
+) -> Result<GeneralGemmProofAndNumericalEvidenceV1, GeneralGemmProofAndNumericalEvidenceErrorV1> {
     let request = schedule_proof.request();
     validate_numerical_request(request, numerical_policy.request())?;
     let schedule_proof_identity = schedule_proof.identity();
+    let properties = *schedule_proof.properties();
     let numerical_policy_evidence_identity = numerical_policy.identity();
     let mut hasher = Sha256::new();
     hasher.update(PROOF_NUMERICAL_DOMAIN_V1);
@@ -334,10 +351,14 @@ pub fn admit_general_gemm_proof_and_numerical_v1(
     }
     hasher.update(schedule_proof_identity.as_bytes());
     hasher.update(numerical_policy_evidence_identity.as_bytes());
-    Ok(GeneralGemmProofAndNumericalAdmissionV1 {
+    for property in properties {
+        hasher.update(property.identity().as_bytes());
+    }
+    Ok(GeneralGemmProofAndNumericalEvidenceV1 {
         request,
         schedule_proof_identity,
         numerical_policy_evidence_identity,
+        properties,
         identity: GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(hasher.finalize().into()),
     })
 }
@@ -345,7 +366,7 @@ pub fn admit_general_gemm_proof_and_numerical_v1(
 fn validate_numerical_request(
     schedule: GeneralGemmProofRequestV1,
     numerical: GeneralGemmNumericalPolicyRequestV1,
-) -> Result<(), GeneralGemmProofAndNumericalAdmissionErrorV1> {
+) -> Result<(), GeneralGemmProofAndNumericalEvidenceErrorV1> {
     for (field, expected, actual) in [
         (
             GeneralGemmFinalJoinIdentityFieldV1::CompilationBinding,
@@ -370,7 +391,7 @@ fn validate_numerical_request(
     ] {
         if expected != actual {
             return Err(
-                GeneralGemmProofAndNumericalAdmissionErrorV1::IdentitySubstitution { field },
+                GeneralGemmProofAndNumericalEvidenceErrorV1::IdentitySubstitution { field },
             );
         }
     }
@@ -473,7 +494,7 @@ mod tests {
             ),
             Err(GeneralGemmFinalJoinIdentityRegistryErrorV1::DuplicateIdentity)
         );
-        assert!(!registry().grants_final_admission());
+        assert!(!registry().grants_final_join_authority());
     }
 
     #[test]
@@ -553,7 +574,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 validate_numerical_request(proof, changed),
-                Err(GeneralGemmProofAndNumericalAdmissionErrorV1::IdentitySubstitution { field }),
+                Err(GeneralGemmProofAndNumericalEvidenceErrorV1::IdentitySubstitution { field }),
                 "accepted field {field:?}"
             );
         }
