@@ -278,6 +278,18 @@ fn foreign_and_stale_operation_handles_fail_without_unwinding() {
         Err(OperationHandleError::ForeignSession)
     );
     assert_eq!(owner.operation_result_count(&handle), Ok(0));
+    let shape = owner.operation_shape(&handle).expect("module shape");
+    assert_eq!(shape.operand_count(), 0);
+    assert_eq!(shape.result_count(), 0);
+    assert_eq!(shape.region_count(), 1);
+    assert_eq!(shape.block_count(), 1);
+    assert_eq!(shape.child_operation_count(), 0);
+    assert!(
+        owner
+            .operation_children(&handle)
+            .expect("module children")
+            .is_empty()
+    );
     owner.erase_operation(&handle).expect("owner erases module");
     assert_eq!(
         owner.operation_result_count(&handle),
