@@ -8,6 +8,10 @@
 //! a later syscall adapter. The admitted schema is pinned to KFD UAPI 1.18 as
 //! shipped by the active AMDGPU 6.16.13 DKMS driver on the MI300X test host.
 
+mod event;
+
+pub use event::*;
+
 use core::mem::{align_of, offset_of, size_of};
 
 /// Stable name of the frozen R1 discovery and identity UAPI schema.

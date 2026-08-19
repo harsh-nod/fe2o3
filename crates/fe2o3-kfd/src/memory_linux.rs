@@ -2,15 +2,22 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use std::os::fd::AsRawFd;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
+use fe2o3_aql::{
+    AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+    AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+};
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
     AMDKFD_IOC_MAP_MEMORY_TO_GPU, AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU, KfdAllocMemoryFlags,
     KfdIoctlAcquireVmArgs, KfdIoctlAllocMemoryOfGpuArgs, KfdIoctlFreeMemoryOfGpuArgs,
     KfdIoctlMapMemoryToGpuArgs, KfdIoctlUnmapMemoryFromGpuArgs,
 };
-use fe2o3_runtime_model::{ModelDeviceAdmissionV1, ModelVmAdmissionV1, VmIdV1};
+use fe2o3_runtime_model::{
+    DeviceIdentityStateV1, ModelDeviceAdmissionV1, ModelVmAdmissionV1, VmIdV1,
+};
 use rustix::ioctl::{Opcode, Setter, Updater};
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
@@ -55,10 +62,14 @@ impl LinuxMemoryBackend {
     pub(super) fn bind_model_vm(
         &mut self,
         vm_id: VmIdV1,
-    ) -> Result<ModelVmAdmissionV1, MemorySessionError> {
+    ) -> Result<(DeviceIdentityStateV1, ModelVmAdmissionV1), MemorySessionError> {
         self.device
             .register_memory_vm_model_only(vm_id)
             .map_err(MemorySessionError::Device)
+    }
+
+    pub(super) fn kfd_fd(&self) -> BorrowedFd<'_> {
+        self.device.kfd.opened.fd.as_fd()
     }
 
     pub(super) fn model_device(&self) -> ModelDeviceAdmissionV1 {
@@ -289,13 +300,13 @@ impl MemoryBackend for LinuxMemoryBackend {
         reservation.address.as_ptr() as usize as u64
     }
 
-    fn alloc(&mut self, va: u64, bytes: u64) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
-        let mut args = KfdIoctlAllocMemoryOfGpuArgs::new(
-            va,
-            bytes,
-            self.gpu_id(),
-            KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT,
-        );
+    fn alloc(
+        &mut self,
+        va: u64,
+        bytes: u64,
+        flags: KfdAllocMemoryFlags,
+    ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+        let mut args = KfdIoctlAllocMemoryOfGpuArgs::new(va, bytes, self.gpu_id(), flags);
         // SAFETY: the opcode and in/out C layout are frozen by the KFD 1.18
         // oracle, and initialized exclusive storage remains live for the call.
         let request = unsafe { Updater::<ALLOC_MEMORY_OPCODE, _>::new(&mut args) };
@@ -314,17 +325,21 @@ impl MemoryBackend for LinuxMemoryBackend {
         reservation: &mut Self::Reservation,
         mmap_offset: u64,
         bytes: usize,
+        retain_gpu_va_guard: bool,
     ) -> Result<Self::Mapping, MemorySessionError> {
-        if reservation.replaced || reservation.bytes != bytes {
+        if reservation.replaced || bytes == 0 || bytes > reservation.bytes {
             return Err(MemorySessionError::KernelResultMalformed(
                 "VA reservation replacement",
             ));
         }
-        // SAFETY: this exact anonymous reservation is owned and has no Rust
-        // references. GPU VA and CPU VMA remain distinct authorities.
-        unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
-            .map_err(|source| Self::syscall("release anonymous GPU VA reservation", source))?;
-        reservation.replaced = true;
+        if !retain_gpu_va_guard {
+            // SAFETY: this exact anonymous reservation is owned and has no
+            // Rust references. The single-allocation compatibility path does
+            // not require a persistent userspace VA guard.
+            unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
+                .map_err(|source| Self::syscall("release anonymous GPU VA reservation", source))?;
+            reservation.replaced = true;
+        }
         // SAFETY: null requests a kernel-selected CPU VMA. It is deliberately
         // PROT_NONE until DONTFORK succeeds, so the setup gap cannot expose BO
         // bytes even if an external raw fork violates the named contract.
@@ -398,6 +413,24 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(())
     }
 
+    fn protect_cpu_read_only(
+        &mut self,
+        mapping: &mut Self::Mapping,
+    ) -> Result<(), MemorySessionError> {
+        if !mapping.active || !mapping.accessible {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "CPU mapping protection state",
+            ));
+        }
+        // SAFETY: the mapping is live, exclusively borrowed, and no slice can
+        // escape a safe closure. This removes CPU write access atomically for
+        // the complete VMA; it does not constrain GPU writes.
+        unsafe {
+            rustix::mm::mprotect(mapping.address.as_ptr(), mapping.bytes, MprotectFlags::READ)
+        }
+        .map_err(|source| Self::syscall("mprotect AMDGPU BO read-only", source))
+    }
+
     fn map_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
         Self::exact_progress(
             "AMDKFD_IOC_MAP_MEMORY_TO_GPU",
@@ -448,6 +481,102 @@ impl MemoryBackend for LinuxMemoryBackend {
         f(bytes)
     }
 
+    fn observe_aql_counters(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+    ) -> Result<(u64, u64), MemorySessionError> {
+        let write = checked_atomic_u64(mapping, requested_bytes, 0)?.load(Ordering::Acquire);
+        let read = checked_atomic_u64(mapping, requested_bytes, 8)?.load(Ordering::Acquire);
+        Ok((write, read))
+    }
+
+    fn fetch_add_aql_write(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        increment: u64,
+    ) -> Result<u64, MemorySessionError> {
+        Ok(checked_atomic_u64(mapping, requested_bytes, 0)?.fetch_add(increment, Ordering::AcqRel))
+    }
+
+    fn write_aql_slot(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        let unpublished = u32::from_le_bytes(
+            packet[..4]
+                .try_into()
+                .map_err(|_| malformed_aql_mapping("packet header"))?,
+        );
+        let setup = unpublished >> 16;
+        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
+            || !(1..=3).contains(&setup)
+        {
+            return Err(malformed_aql_mapping("unpublished packet header"));
+        }
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("packet slot offset"))?;
+        let pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            core::mem::align_of::<AtomicU32>(),
+        )?;
+        // SAFETY: each header AtomicU32 was initialized before GPU mapping;
+        // the checked slot is aligned and remains owned by this mapping.
+        unsafe { &*pointer.cast::<AtomicU32>() }.store(unpublished.to_le(), Ordering::Relaxed);
+        // SAFETY: the checked slot contains 64 bytes. Offset zero remains an
+        // AtomicU32 and the remaining 60 bytes are the unpublished body.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                packet.as_ptr().add(4),
+                pointer.add(4),
+                AQL_KERNEL_DISPATCH_PACKET_BYTES_V1 - 4,
+            );
+        }
+        Ok(())
+    }
+
+    fn publish_aql_header(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+        header: u16,
+    ) -> Result<(), MemorySessionError> {
+        if header != AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 {
+            return Err(malformed_aql_mapping("release header"));
+        }
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("packet slot offset"))?;
+        let pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            core::mem::size_of::<AtomicU32>(),
+            core::mem::align_of::<AtomicU32>(),
+        )?;
+        // SAFETY: this is the exact initialized header AtomicU32.
+        let atomic = unsafe { &*pointer.cast::<AtomicU32>() };
+        let unpublished = u32::from_le(atomic.load(Ordering::Relaxed));
+        let setup = unpublished >> 16;
+        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
+            || !(1..=3).contains(&setup)
+        {
+            return Err(malformed_aql_mapping("packet no longer unpublished"));
+        }
+        atomic.store(
+            ((setup << 16) | u32::from(header)).to_le(),
+            Ordering::Release,
+        );
+        Ok(())
+    }
+
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
         if !mapping.active || !mapping.accessible {
             return Err(MemorySessionError::KernelResultMalformed(
@@ -463,6 +592,23 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(())
     }
 
+    fn release_va_reservation(
+        &mut self,
+        reservation: &mut Self::Reservation,
+    ) -> Result<(), MemorySessionError> {
+        if reservation.replaced {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "GPU VA reservation release state",
+            ));
+        }
+        // SAFETY: the PROT_NONE guard is owned by the session, no references
+        // can exist to it, and the associated KFD allocation has been freed.
+        unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
+            .map_err(|source| Self::syscall("release retained GPU VA reservation", source))?;
+        reservation.replaced = true;
+        Ok(())
+    }
+
     fn free(&mut self, handle: u64) -> Result<(), MemorySessionError> {
         let args = KfdIoctlFreeMemoryOfGpuArgs::new(handle);
         // SAFETY: the input-only opcode/layout are oracle-frozen. The safe
@@ -472,6 +618,56 @@ impl MemoryBackend for LinuxMemoryBackend {
         unsafe { rustix::ioctl::ioctl(&self.device.kfd.opened.fd, request) }
             .map_err(|source| Self::syscall("AMDKFD_IOC_FREE_MEMORY_OF_GPU", source))
     }
+}
+
+fn malformed_aql_mapping(detail: &'static str) -> MemorySessionError {
+    MemorySessionError::KernelResultMalformed(detail)
+}
+
+fn checked_mapping_pointer(
+    mapping: &mut LinuxCpuMapping,
+    requested_bytes: usize,
+    offset: usize,
+    byte_len: usize,
+    alignment: usize,
+) -> Result<*mut u8, MemorySessionError> {
+    let end = offset
+        .checked_add(byte_len)
+        .ok_or_else(|| malformed_aql_mapping("mapped range overflow"))?;
+    if !mapping.active
+        || !mapping.accessible
+        || requested_bytes > mapping.bytes
+        || end > requested_bytes
+        || alignment == 0
+        || !alignment.is_power_of_two()
+    {
+        return Err(malformed_aql_mapping("mapped range"));
+    }
+    // SAFETY: offset is bounded by the live retained mapping above. The raw
+    // pointer remains inside this private backend and no slice/reference is
+    // returned to safe queue code.
+    let pointer = unsafe { mapping.address.as_ptr().cast::<u8>().add(offset) };
+    if !(pointer as usize).is_multiple_of(alignment) {
+        return Err(malformed_aql_mapping("mapped alignment"));
+    }
+    Ok(pointer)
+}
+
+fn checked_atomic_u64(
+    mapping: &mut LinuxCpuMapping,
+    requested_bytes: usize,
+    offset: usize,
+) -> Result<&AtomicU64, MemorySessionError> {
+    let pointer = checked_mapping_pointer(
+        mapping,
+        requested_bytes,
+        offset,
+        core::mem::size_of::<AtomicU64>(),
+        core::mem::align_of::<AtomicU64>(),
+    )?;
+    // SAFETY: both control AtomicU64 objects were explicitly initialized
+    // before GPU mapping and the exact object remains live until teardown.
+    Ok(unsafe { &*pointer.cast::<AtomicU64>() })
 }
 
 impl Drop for LinuxVaReservation {

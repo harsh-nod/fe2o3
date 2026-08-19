@@ -696,6 +696,17 @@ dependencies = [
 [[package]]
 name = "fe2o3-amdhsa-loader"
 version = "0.1.0"
+dependencies = [
+ "fe2o3-hsaco",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-aql"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
 
 [[package]]
 name = "fe2o3-artifact-transaction"
@@ -964,7 +975,6 @@ name = "fe2o3-hsaco"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
- "object 0.39.1",
  "rmpv",
 ]
 
@@ -1019,6 +1029,7 @@ dependencies = [
 name = "fe2o3-kfd"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-aql",
  "fe2o3-drm-uapi",
  "fe2o3-kfd-uapi",
  "fe2o3-runtime-model",

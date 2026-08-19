@@ -86,6 +86,14 @@ fn inspects_bounded_physical_kernel_metadata() {
     assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
     assert_eq!(inspected.metadata_version().major(), 1);
     assert_eq!(inspected.metadata_version().minor(), 2);
+    let metadata_range = inspected.metadata_descriptor_range();
+    assert_eq!(metadata_range.file_offset(), 84);
+    assert!(metadata_range.byte_len() > 0);
+    let metadata_end = metadata_range
+        .file_offset()
+        .checked_add(metadata_range.byte_len())
+        .unwrap() as usize;
+    assert!(metadata_end <= hsaco.len());
     assert_eq!(inspected.target().to_string(), "gfx1151");
     assert!(!inspected.has_printf_metadata());
     assert_eq!(inspected.kernels().len(), 1);
@@ -1409,9 +1417,7 @@ fn rejects_malformed_symbol_table_dimensions_links_and_names() {
     write_u64(&mut remainder, fixture.symtab_header + 32, 4 * 24 + 1);
     assert_binding_error(
         remainder,
-        KernelBindingError::Inspection(InspectionError::InvalidElf(
-            "object parser rejected the file",
-        )),
+        KernelBindingError::InvalidSymbolTable("invalid symbol entry size or count"),
     );
 
     let mut too_many = fixture.bytes.clone();
@@ -1427,18 +1433,14 @@ fn rejects_malformed_symbol_table_dimensions_links_and_names() {
     write_u32(&mut bad_link, fixture.symtab_header + 40, 99);
     assert_binding_error(
         bad_link,
-        KernelBindingError::Inspection(InspectionError::InvalidElf(
-            "object parser rejected the file",
-        )),
+        KernelBindingError::InvalidSymbolTable("symbol string-table link is out of bounds"),
     );
 
     let mut wrong_link_type = fixture.bytes.clone();
     write_u32(&mut wrong_link_type, fixture.symtab_header + 40, 3);
     assert_binding_error(
         wrong_link_type,
-        KernelBindingError::Inspection(InspectionError::InvalidElf(
-            "object parser rejected the file",
-        )),
+        KernelBindingError::InvalidSymbolTable("symbol table does not link to SHT_STRTAB"),
     );
 
     let mut bad_info = fixture.bytes.clone();

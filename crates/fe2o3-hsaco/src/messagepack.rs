@@ -1,28 +1,231 @@
 use std::collections::BTreeSet;
 
-use rmpv::{ValueRef, decode::read_value_ref_with_max_depth};
-
 use crate::{
     InspectionError, MAX_MESSAGEPACK_BLOB_BYTES, MAX_MESSAGEPACK_COLLECTION_ITEMS,
     MAX_MESSAGEPACK_DEPTH, MAX_MESSAGEPACK_NODES, MAX_MESSAGEPACK_STRING_BYTES,
     MAX_MESSAGEPACK_TOTAL_ITEMS, MessagePackLimit,
 };
 
-// rmpv decrements once for each value, once for each collection body, and up
-// to twice more for a terminal string or extension payload.
-const RMPV_MAX_DEPTH: usize = MAX_MESSAGEPACK_DEPTH * 2 + 3;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StringRef<'a>(&'a [u8]);
+
+impl<'a> StringRef<'a> {
+    pub(crate) fn as_str(self) -> Option<&'a str> {
+        core::str::from_utf8(self.0).ok()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Integer {
+    Unsigned(u64),
+    Signed(i64),
+}
+
+impl Integer {
+    const fn as_u64(self) -> Option<u64> {
+        match self {
+            Self::Unsigned(value) => Some(value),
+            Self::Signed(value) if value >= 0 => Some(value as u64),
+            Self::Signed(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum ValueRef<'a> {
+    Nil,
+    Boolean(bool),
+    Integer(Integer),
+    F32,
+    F64,
+    String(StringRef<'a>),
+    Binary,
+    Array(Vec<ValueRef<'a>>),
+    Map(Vec<(ValueRef<'a>, ValueRef<'a>)>),
+    Ext,
+}
+
+impl ValueRef<'_> {
+    pub(crate) const fn as_u64(&self) -> Option<u64> {
+        match self {
+            Self::Integer(value) => value.as_u64(),
+            _ => None,
+        }
+    }
+}
 
 pub(crate) fn decode_bounded(bytes: &[u8]) -> Result<ValueRef<'_>, InspectionError> {
     preflight(bytes)?;
 
-    let mut remaining = bytes;
-    let value = read_value_ref_with_max_depth(&mut remaining, RMPV_MAX_DEPTH)
-        .map_err(|_| InspectionError::MalformedMessagePack)?;
-    if !remaining.is_empty() {
+    let mut cursor = 0usize;
+    let value = decode_value(bytes, &mut cursor, 0)?;
+    if cursor != bytes.len() {
         return Err(InspectionError::TrailingMessagePack);
     }
     validate_value_tree(&value)?;
     Ok(value)
+}
+
+fn decode_value<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    depth: usize,
+) -> Result<ValueRef<'a>, InspectionError> {
+    if depth > MAX_MESSAGEPACK_DEPTH {
+        return Err(InspectionError::MessagePackLimit(MessagePackLimit::Depth));
+    }
+    let marker = take_u8(bytes, cursor)?;
+    match marker {
+        0x00..=0x7f => Ok(ValueRef::Integer(Integer::Unsigned(u64::from(marker)))),
+        0x80..=0x8f => decode_map(bytes, cursor, depth, usize::from(marker & 0x0f)),
+        0x90..=0x9f => decode_array(bytes, cursor, depth, usize::from(marker & 0x0f)),
+        0xa0..=0xbf => decode_string(bytes, cursor, usize::from(marker & 0x1f)),
+        0xc0 => Ok(ValueRef::Nil),
+        0xc1 => Err(InspectionError::MalformedMessagePack),
+        0xc2 => Ok(ValueRef::Boolean(false)),
+        0xc3 => Ok(ValueRef::Boolean(true)),
+        0xc4 => {
+            let length = usize::from(take_u8(bytes, cursor)?);
+            take_slice(bytes, cursor, length)?;
+            Ok(ValueRef::Binary)
+        }
+        0xc5 => {
+            let length = usize::from(take_u16(bytes, cursor)?);
+            take_slice(bytes, cursor, length)?;
+            Ok(ValueRef::Binary)
+        }
+        0xc6 => {
+            let length = usize_from_u32(take_u32(bytes, cursor)?)?;
+            take_slice(bytes, cursor, length)?;
+            Ok(ValueRef::Binary)
+        }
+        0xc7 => {
+            let length = usize::from(take_u8(bytes, cursor)?);
+            decode_extension(bytes, cursor, length)
+        }
+        0xc8 => {
+            let length = usize::from(take_u16(bytes, cursor)?);
+            decode_extension(bytes, cursor, length)
+        }
+        0xc9 => {
+            let length = usize_from_u32(take_u32(bytes, cursor)?)?;
+            decode_extension(bytes, cursor, length)
+        }
+        0xca => {
+            take_u32(bytes, cursor)?;
+            Ok(ValueRef::F32)
+        }
+        0xcb => {
+            take_u64(bytes, cursor)?;
+            Ok(ValueRef::F64)
+        }
+        0xcc => Ok(ValueRef::Integer(Integer::Unsigned(u64::from(take_u8(
+            bytes, cursor,
+        )?)))),
+        0xcd => Ok(ValueRef::Integer(Integer::Unsigned(u64::from(take_u16(
+            bytes, cursor,
+        )?)))),
+        0xce => Ok(ValueRef::Integer(Integer::Unsigned(u64::from(take_u32(
+            bytes, cursor,
+        )?)))),
+        0xcf => Ok(ValueRef::Integer(Integer::Unsigned(take_u64(
+            bytes, cursor,
+        )?))),
+        0xd0 => Ok(ValueRef::Integer(Integer::Signed(i64::from(
+            take_u8(bytes, cursor)? as i8,
+        )))),
+        0xd1 => Ok(ValueRef::Integer(Integer::Signed(i64::from(
+            take_u16(bytes, cursor)? as i16,
+        )))),
+        0xd2 => Ok(ValueRef::Integer(Integer::Signed(i64::from(
+            take_u32(bytes, cursor)? as i32,
+        )))),
+        0xd3 => Ok(ValueRef::Integer(Integer::Signed(
+            take_u64(bytes, cursor)? as i64
+        ))),
+        0xd4 => decode_extension(bytes, cursor, 1),
+        0xd5 => decode_extension(bytes, cursor, 2),
+        0xd6 => decode_extension(bytes, cursor, 4),
+        0xd7 => decode_extension(bytes, cursor, 8),
+        0xd8 => decode_extension(bytes, cursor, 16),
+        0xd9 => {
+            let length = usize::from(take_u8(bytes, cursor)?);
+            decode_string(bytes, cursor, length)
+        }
+        0xda => {
+            let length = usize::from(take_u16(bytes, cursor)?);
+            decode_string(bytes, cursor, length)
+        }
+        0xdb => {
+            let length = usize_from_u32(take_u32(bytes, cursor)?)?;
+            decode_string(bytes, cursor, length)
+        }
+        0xdc => {
+            let length = usize::from(take_u16(bytes, cursor)?);
+            decode_array(bytes, cursor, depth, length)
+        }
+        0xdd => {
+            let length = usize_from_u32(take_u32(bytes, cursor)?)?;
+            decode_array(bytes, cursor, depth, length)
+        }
+        0xde => {
+            let length = usize::from(take_u16(bytes, cursor)?);
+            decode_map(bytes, cursor, depth, length)
+        }
+        0xdf => {
+            let length = usize_from_u32(take_u32(bytes, cursor)?)?;
+            decode_map(bytes, cursor, depth, length)
+        }
+        0xe0..=0xff => Ok(ValueRef::Integer(Integer::Signed(i64::from(marker as i8)))),
+    }
+}
+
+fn decode_array<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    depth: usize,
+    length: usize,
+) -> Result<ValueRef<'a>, InspectionError> {
+    let mut values = Vec::with_capacity(length);
+    for _ in 0..length {
+        values.push(decode_value(bytes, cursor, depth + 1)?);
+    }
+    Ok(ValueRef::Array(values))
+}
+
+fn decode_map<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    depth: usize,
+    length: usize,
+) -> Result<ValueRef<'a>, InspectionError> {
+    let mut values = Vec::with_capacity(length);
+    for _ in 0..length {
+        let key = decode_value(bytes, cursor, depth + 1)?;
+        let value = decode_value(bytes, cursor, depth + 1)?;
+        values.push((key, value));
+    }
+    Ok(ValueRef::Map(values))
+}
+
+fn decode_string<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    length: usize,
+) -> Result<ValueRef<'a>, InspectionError> {
+    Ok(ValueRef::String(StringRef(take_slice(
+        bytes, cursor, length,
+    )?)))
+}
+
+fn decode_extension<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    length: usize,
+) -> Result<ValueRef<'a>, InspectionError> {
+    take_u8(bytes, cursor)?;
+    take_slice(bytes, cursor, length)?;
+    Ok(ValueRef::Ext)
 }
 
 fn preflight(bytes: &[u8]) -> Result<(), InspectionError> {
@@ -242,6 +445,26 @@ fn take_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, InspectionError> {
     Ok(u32::from_be_bytes(value))
 }
 
+fn take_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, InspectionError> {
+    let value = take_array::<8>(bytes, cursor)?;
+    Ok(u64::from_be_bytes(value))
+}
+
+fn take_slice<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    length: usize,
+) -> Result<&'a [u8], InspectionError> {
+    let end = cursor
+        .checked_add(length)
+        .ok_or(InspectionError::MalformedMessagePack)?;
+    let value = bytes
+        .get(*cursor..end)
+        .ok_or(InspectionError::MalformedMessagePack)?;
+    *cursor = end;
+    Ok(value)
+}
+
 fn take_array<const N: usize>(
     bytes: &[u8],
     cursor: &mut usize,
@@ -300,10 +523,10 @@ fn validate_value_tree(value: &ValueRef<'_>) -> Result<(), InspectionError> {
         ValueRef::Nil
         | ValueRef::Boolean(_)
         | ValueRef::Integer(_)
-        | ValueRef::F32(_)
-        | ValueRef::F64(_)
-        | ValueRef::Binary(_)
-        | ValueRef::Ext(_, _) => {}
+        | ValueRef::F32
+        | ValueRef::F64
+        | ValueRef::Binary
+        | ValueRef::Ext => {}
     }
     Ok(())
 }

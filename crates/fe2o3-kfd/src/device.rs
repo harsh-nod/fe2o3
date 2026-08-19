@@ -362,7 +362,7 @@ impl CheckedGfx942XnackMinusDevice {
     pub(super) fn register_memory_vm_model_only(
         &mut self,
         vm_id: VmIdV1,
-    ) -> Result<ModelVmAdmissionV1, DeviceBindingError> {
+    ) -> Result<(DeviceIdentityStateV1, ModelVmAdmissionV1), DeviceBindingError> {
         // ACQUIRE_VM has already made process-lifetime state irreversible.
         self.retire_model_on_drop = false;
         let correlation = self.model_admission.correlation();
@@ -389,10 +389,10 @@ impl CheckedGfx942XnackMinusDevice {
             .register_vm_model_only(self.model_admission, observation)
             .map_err(DeviceBindingError::ModelAdmission)?;
         *history = DeviceModelHistory::State {
-            identities: next,
+            identities: next.clone(),
             projections: projections.clone(),
         };
-        Ok(vm)
+        Ok((next, vm))
     }
 }
 

@@ -782,7 +782,10 @@ impl QueueLifecycleStateV1 {
             ComputeAqlQueuePhaseV1::DestroyPending => {
                 queue_id_valid
                     && record.pending_configuration.is_none()
-                    && record.resume_phase == Some(ComputeAqlQueuePhaseV1::Disabled)
+                    && matches!(
+                        record.resume_phase,
+                        Some(ComputeAqlQueuePhaseV1::Active | ComputeAqlQueuePhaseV1::Disabled)
+                    )
             }
             ComputeAqlQueuePhaseV1::Ambiguous => true,
         };
@@ -924,7 +927,13 @@ impl QueueLifecycleStateV1 {
                 }
             }
             QueueTransitionV1::BeginDestroy { .. } => {
-                require_queue_phase(before, &[ComputeAqlQueuePhaseV1::Disabled])?;
+                require_queue_phase(
+                    before,
+                    &[
+                        ComputeAqlQueuePhaseV1::Active,
+                        ComputeAqlQueuePhaseV1::Disabled,
+                    ],
+                )?;
                 self.queues[index].resume_phase = Some(before.phase);
                 self.queues[index].phase = ComputeAqlQueuePhaseV1::DestroyPending;
                 QueueHistoryEventKindV1::DestroyBegan
@@ -939,7 +948,13 @@ impl QueueLifecycleStateV1 {
                     }
                     QueueSyscallStatusV1::FailedNoEffect => {
                         self.queues[index].resume_phase = None;
-                        self.queues[index].phase = ComputeAqlQueuePhaseV1::Disabled;
+                        self.queues[index].phase =
+                            before
+                                .resume_phase
+                                .ok_or(QueueTransitionErrorV1::IllegalState {
+                                    queue: key,
+                                    phase: before.phase,
+                                })?;
                         QueueHistoryEventKindV1::DestroyFailedNoEffect
                     }
                     QueueSyscallStatusV1::Indeterminate => {
@@ -1153,7 +1168,11 @@ fn history_edge_is_valid(entry: QueueHistoryEntryV1) -> bool {
                 Phase::DisablePending,
                 Phase::Ambiguous
             )
-            | (Event::DestroyBegan, Phase::Disabled, Phase::DestroyPending)
+            | (
+                Event::DestroyBegan,
+                Phase::Active | Phase::Disabled,
+                Phase::DestroyPending,
+            )
             | (
                 Event::DestroySucceeded,
                 Phase::DestroyPending,
@@ -1162,7 +1181,7 @@ fn history_edge_is_valid(entry: QueueHistoryEntryV1) -> bool {
             | (
                 Event::DestroyFailedNoEffect,
                 Phase::DestroyPending,
-                Phase::Disabled
+                Phase::Active | Phase::Disabled
             )
             | (
                 Event::DestroyAmbiguous,

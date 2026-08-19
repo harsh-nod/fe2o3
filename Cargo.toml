@@ -59,6 +59,7 @@ dialect-tile = { path = "crates/dialect-tile" }
 fe2o3-amdgcn-model = { path = "crates/fe2o3-amdgcn-model" }
 fe2o3-amdgcn-pliron-llvm = { path = "crates/fe2o3-amdgcn-pliron-llvm" }
 fe2o3-amdhsa-loader = { path = "crates/fe2o3-amdhsa-loader" }
+fe2o3-aql = { path = "crates/fe2o3-aql" }
 fe2o3-amd-target = { path = "crates/fe2o3-amd-target" }
 fe2o3-artifact-transaction = { path = "crates/fe2o3-artifact-transaction" }
 fe2o3-build-authority = { path = "crates/fe2o3-build-authority" }

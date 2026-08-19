@@ -5,6 +5,11 @@ objects. It accepts untrusted bytes, validates the ELF envelope, locates the
 AMDGPU metadata note, and exposes the target and physical kernel argument
 metadata needed by a later ABI matcher.
 
+Inspection also retains the exact file offset and length of the selected
+MessagePack descriptor. A composing loader can use that range to require two
+independent parsers to refer to the same physical note bytes; the range itself
+does not grant authority.
+
 Inspection is descriptive metadata evidence only. An `InspectedHsaco` does not
 authorize module loading or kernel launch, and it does not establish that a
 metadata kernel name or `.symbol` agrees with an ELF symbol, kernel descriptor,
@@ -74,6 +79,10 @@ The parser accepts AMDGPU HSA code object versions 4 through 6. It requires
 metadata version 1.1 for code object V4 and version 1.2 for V5 or V6. MessagePack
 is pre-scanned iteratively with explicit size, depth, node, string, collection,
 kernel, and argument limits before the bounded value tree is decoded.
+The production ELF-note and MessagePack readers use checked integer/range
+arithmetic in this crate and contain no unsafe code or third-party parser
+dependency. `rmpv` remains only a dev-dependency for independent test-fixture
+encoding and is absent from production Cargo closures.
 Parsing a code-object version or processor is descriptive compatibility, not a
 claim that the production compiler, finalizer, or runtime supports that target;
 production-directed profiles remain separately bounded, chiefly to exact
