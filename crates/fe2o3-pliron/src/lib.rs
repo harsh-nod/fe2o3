@@ -12,9 +12,13 @@ use std::{
 };
 
 use pliron::{
+    builtin::ops::ModuleOp,
     context::Context,
+    context::Ptr,
     dialect::{Dialect, DialectName},
     identifier::Identifier,
+    op::Op,
+    operation::Operation,
     pass::Pass,
     uniqued_any::{self, UniquedKey},
 };
@@ -58,6 +62,7 @@ impl Hash for ContextIdentityAnchor {
 #[derive(Debug)]
 struct ContextIdentityMarker {
     anchor: UniquedKey<ContextIdentityAnchor>,
+    identity: ContextIdentity,
 }
 
 /// Failure to create or validate a context-bound identity anchor.
@@ -104,7 +109,7 @@ pub fn ensure_context_identity(
     let identity = uniqued_any::get(context, anchor).0;
     let marker = context
         .aux_data
-        .insert(Box::new(ContextIdentityMarker { anchor }));
+        .insert(Box::new(ContextIdentityMarker { anchor, identity }));
     context
         .aux_data_map
         .insert(context_identity_marker_key(), marker);
@@ -134,11 +139,14 @@ fn context_identity_state(
     let marker = marker
         .downcast_ref::<ContextIdentityMarker>()
         .ok_or(ContextIdentityError::MarkerCollision)?;
-    catch_unwind(AssertUnwindSafe(|| {
+    let identity = catch_unwind(AssertUnwindSafe(|| {
         uniqued_any::get(context, marker.anchor).0
     }))
-    .map(Some)
-    .map_err(|_| ContextIdentityError::CorruptMarker)
+    .map_err(|_| ContextIdentityError::CorruptMarker)?;
+    if identity != marker.identity {
+        return Err(ContextIdentityError::CorruptMarker);
+    }
+    Ok(Some(identity))
 }
 
 fn next_context_identity() -> Result<NonZeroU64, ContextIdentityError> {
@@ -387,6 +395,7 @@ pub enum ContextBuildError {
     TooManyDialects,
     DuplicateDialect(String),
     UpstreamRejectedDialect(String),
+    ContextIdentity(ContextIdentityError),
     RegistrationFailed(Diagnostic),
 }
 
@@ -412,9 +421,59 @@ impl ContextManifest {
 /// A real Pliron context behind a fail-closed fe2o3 session boundary.
 pub struct PlironSession {
     context: Context,
+    identity: ContextIdentity,
     manifest: ContextManifest,
     poisoned: bool,
 }
+
+/// An opaque operation capability owned by one [`PlironSession`].
+///
+/// The upstream pointer and its owner identity are intentionally private. A
+/// handle can only be dereferenced by session methods that authenticate both.
+#[derive(Clone)]
+pub struct OperationHandle {
+    owner: ContextIdentity,
+    pointer: Ptr<Operation>,
+}
+
+impl fmt::Debug for OperationHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OperationHandle")
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Bounded failures from an owner-aware operation handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationHandleError {
+    SessionPoisoned,
+    InvalidName(NameError),
+    ContextIdentity(ContextIdentityError),
+    ForeignSession,
+    StaleHandle,
+    UpstreamPanicked,
+}
+
+impl fmt::Display for OperationHandleError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SessionPoisoned => formatter.write_str("Pliron session is poisoned"),
+            Self::InvalidName(_) => formatter.write_str("invalid operation name"),
+            Self::ContextIdentity(_) => {
+                formatter.write_str("Pliron context identity validation failed")
+            }
+            Self::ForeignSession => {
+                formatter.write_str("operation handle belongs to another session")
+            }
+            Self::StaleHandle => formatter.write_str("operation handle is stale"),
+            Self::UpstreamPanicked => formatter.write_str("Pliron operation access panicked"),
+        }
+    }
+}
+
+impl Error for OperationHandleError {}
 
 impl PlironSession {
     /// Builds a fresh context after preflighting every registration.
@@ -437,12 +496,17 @@ impl PlironSession {
         }
 
         let mut context = Context::new();
+        let identity =
+            ensure_context_identity(&mut context).map_err(ContextBuildError::ContextIdentity)?;
         for registration in &registrations {
             let dialect_name = DialectName::try_new(&registration.name).map_err(|_| {
                 ContextBuildError::UpstreamRejectedDialect(registration.name.clone())
             })?;
             Dialect::register(&mut context, &dialect_name);
-            if (registration.hook)(&mut context, &dialect_name).is_err() {
+            let hook_result = catch_unwind(AssertUnwindSafe(|| {
+                (registration.hook)(&mut context, &dialect_name)
+            }));
+            if !matches!(hook_result, Ok(Ok(()))) {
                 return Err(ContextBuildError::RegistrationFailed(Diagnostic::new(
                     DiagnosticCode::DialectHookFailed,
                     Some(&registration.name),
@@ -451,9 +515,15 @@ impl PlironSession {
                 )));
             }
         }
+        if require_context_identity(&context) != Ok(identity) {
+            return Err(ContextBuildError::ContextIdentity(
+                ContextIdentityError::CorruptMarker,
+            ));
+        }
 
         Ok(Self {
             context,
+            identity,
             manifest: ContextManifest {
                 pliron_revision: PLIRON_REVISION,
                 registration_order: registrations
@@ -473,15 +543,87 @@ impl PlironSession {
         self.poisoned
     }
 
-    /// Grants scoped construction access without exposing context data as identity.
-    pub fn with_context_mut<T>(
+    /// Creates an empty builtin module and returns only its owner-aware handle.
+    pub fn create_module(&mut self, name: &str) -> Result<OperationHandle, OperationHandleError> {
+        validate_name(name, NameKind::Dialect).map_err(OperationHandleError::InvalidName)?;
+        self.validate_identity()?;
+        let name = Identifier::try_from(name)
+            .map_err(|_| OperationHandleError::InvalidName(NameError::InvalidByte))?;
+        let pointer = match catch_unwind(AssertUnwindSafe(|| {
+            ModuleOp::new(&mut self.context, name).get_operation()
+        })) {
+            Ok(pointer) => pointer,
+            Err(_) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::UpstreamPanicked);
+            }
+        };
+        Ok(OperationHandle {
+            owner: self.identity,
+            pointer,
+        })
+    }
+
+    /// Returns the operation's result count after authenticating its owner.
+    pub fn operation_result_count(
         &mut self,
-        action: impl FnOnce(&mut Context) -> T,
-    ) -> Result<T, SessionPoisoned> {
+        handle: &OperationHandle,
+    ) -> Result<usize, OperationHandleError> {
+        self.with_operation(handle, |pointer, context| {
+            pointer.deref(context).get_num_results()
+        })
+    }
+
+    /// Erases an authenticated operation, invalidating all clones of its handle.
+    pub fn erase_operation(
+        &mut self,
+        handle: &OperationHandle,
+    ) -> Result<(), OperationHandleError> {
+        self.with_operation(handle, Operation::erase)
+    }
+
+    fn validate_identity(&self) -> Result<(), OperationHandleError> {
         if self.poisoned {
-            return Err(SessionPoisoned);
+            return Err(OperationHandleError::SessionPoisoned);
         }
-        Ok(action(&mut self.context))
+        let current = require_context_identity(&self.context)
+            .map_err(OperationHandleError::ContextIdentity)?;
+        if current != self.identity {
+            return Err(OperationHandleError::ContextIdentity(
+                ContextIdentityError::CorruptMarker,
+            ));
+        }
+        Ok(())
+    }
+
+    fn with_operation<T>(
+        &mut self,
+        handle: &OperationHandle,
+        action: impl FnOnce(Ptr<Operation>, &mut Context) -> T,
+    ) -> Result<T, OperationHandleError> {
+        self.validate_identity()?;
+        if handle.owner != self.identity {
+            return Err(OperationHandleError::ForeignSession);
+        }
+        match catch_unwind(AssertUnwindSafe(|| {
+            handle.pointer.try_deref(&self.context).map(drop)
+        })) {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => return Err(OperationHandleError::StaleHandle),
+            Err(_) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::UpstreamPanicked);
+            }
+        }
+        match catch_unwind(AssertUnwindSafe(|| {
+            action(handle.pointer, &mut self.context)
+        })) {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                self.poisoned = true;
+                Err(OperationHandleError::UpstreamPanicked)
+            }
+        }
     }
 }
 
@@ -545,5 +687,75 @@ impl PassPlan {
 
     pub fn pass_order(&self) -> impl ExactSizeIterator<Item = &str> {
         self.passes.iter().map(|pass| pass.name.as_str())
+    }
+}
+
+#[cfg(test)]
+mod owner_handle_tests {
+    use super::*;
+
+    fn session() -> PlironSession {
+        PlironSession::new(ShellLimits::default(), []).expect("fresh session")
+    }
+
+    #[test]
+    fn equal_upstream_slots_do_not_transfer_handle_ownership() {
+        let mut owner = session();
+        let mut foreign = session();
+        let owner_handle = owner.create_module("owner").expect("owner module");
+        let foreign_handle = foreign.create_module("foreign").expect("foreign module");
+
+        assert_eq!(owner_handle.pointer, foreign_handle.pointer);
+        assert_eq!(
+            foreign.operation_result_count(&owner_handle),
+            Err(OperationHandleError::ForeignSession)
+        );
+    }
+
+    #[test]
+    fn transplanted_marker_is_rejected_before_pointer_access() {
+        let mut owner = session();
+        let mut foreign = session();
+        let foreign_handle = foreign.create_module("foreign").expect("foreign module");
+        let key = context_identity_marker_key();
+        let owner_index = owner
+            .context
+            .aux_data_map
+            .remove(&key)
+            .expect("owner marker index");
+        let owner_marker = owner
+            .context
+            .aux_data
+            .remove(owner_index)
+            .expect("owner marker");
+        let foreign_index = foreign
+            .context
+            .aux_data_map
+            .remove(&key)
+            .expect("foreign marker index");
+        foreign.context.aux_data.remove(foreign_index);
+        let transplanted = foreign.context.aux_data.insert(owner_marker);
+        foreign.context.aux_data_map.insert(key, transplanted);
+
+        assert_eq!(
+            foreign.operation_result_count(&foreign_handle),
+            Err(OperationHandleError::ContextIdentity(
+                ContextIdentityError::CorruptMarker
+            ))
+        );
+    }
+
+    #[test]
+    fn operation_panics_are_contained_and_poison_the_session() {
+        let mut session = session();
+        let handle = session.create_module("owner").expect("owner module");
+
+        let result = session.with_operation(&handle, |_, _| panic!("hostile operation"));
+        assert_eq!(result, Err(OperationHandleError::UpstreamPanicked));
+        assert!(session.is_poisoned());
+        assert_eq!(
+            session.operation_result_count(&handle),
+            Err(OperationHandleError::SessionPoisoned)
+        );
     }
 }

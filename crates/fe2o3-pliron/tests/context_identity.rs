@@ -53,7 +53,7 @@ fn moving_a_marker_to_an_unanchored_context_fails_closed() {
 }
 
 #[test]
-fn moving_a_marker_cannot_replace_a_foreign_context_identity() {
+fn moving_a_marker_to_an_anchored_context_fails_closed() {
     let mut owner = Context::new();
     let owner_identity = ensure_context_identity(&mut owner).expect("owner identity");
     let owner_marker = take_marker(&mut owner);
@@ -64,7 +64,10 @@ fn moving_a_marker_cannot_replace_a_foreign_context_identity() {
     install_marker(&mut foreign, owner_marker);
 
     assert_ne!(owner_identity, foreign_identity);
-    assert_eq!(require_context_identity(&foreign), Ok(foreign_identity));
+    assert_eq!(
+        require_context_identity(&foreign),
+        Err(ContextIdentityError::CorruptMarker)
+    );
 }
 
 #[test]
@@ -83,7 +86,10 @@ fn rebuilding_a_deleted_locator_preserves_the_original_private_identity() {
     install_marker(&mut victim, donor_marker);
 
     assert_ne!(donor_identity, original);
-    assert_eq!(require_context_identity(&victim), Ok(original));
+    assert_eq!(
+        require_context_identity(&victim),
+        Err(ContextIdentityError::CorruptMarker)
+    );
 }
 
 #[test]

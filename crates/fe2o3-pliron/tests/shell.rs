@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fe2o3_pliron::{
-    ContextBuildError, DiagnosticCode, DialectRegistration, PLIRON_REVISION, PassPlan,
-    PassPlanError, PlironSession, RegistrationHookError, ShellLimits,
+    ContextBuildError, DiagnosticCode, DialectRegistration, OperationHandleError, PLIRON_REVISION,
+    PassPlan, PassPlanError, PlironSession, RegistrationHookError, ShellLimits,
 };
 use pliron::{
     context::Context,
@@ -156,4 +156,45 @@ fn pass_plan_rejects_hidden_nested_passes() {
         ))
     );
     assert_eq!(pipeline.pass_order().count(), 0);
+}
+
+#[test]
+fn foreign_and_stale_operation_handles_fail_without_unwinding() {
+    let limits = ShellLimits::default();
+    let mut owner = session(limits);
+    let mut foreign = session(limits);
+    let handle = owner.create_module("owner").expect("owner module");
+    foreign.create_module("foreign").expect("equal-slot module");
+
+    assert_eq!(
+        foreign.operation_result_count(&handle),
+        Err(OperationHandleError::ForeignSession)
+    );
+    assert_eq!(owner.operation_result_count(&handle), Ok(0));
+    owner.erase_operation(&handle).expect("owner erases module");
+    assert_eq!(
+        owner.operation_result_count(&handle),
+        Err(OperationHandleError::StaleHandle)
+    );
+}
+
+fn panicking_registration(
+    _context: &mut Context,
+    _name: &DialectName,
+) -> Result<(), RegistrationHookError> {
+    panic!("unbounded hostile payload")
+}
+
+#[test]
+fn registration_hook_panics_are_contained_and_bounded() {
+    let registration = DialectRegistration::new("hostile", panicking_registration).expect("valid");
+    let result =
+        std::panic::catch_unwind(|| PlironSession::new(ShellLimits::default(), [registration]));
+    let error = result.expect("hook panic is contained");
+    assert!(matches!(
+        error,
+        Err(ContextBuildError::RegistrationFailed(diagnostic))
+            if diagnostic.code() == DiagnosticCode::DialectHookFailed
+                && !diagnostic.message().contains("hostile payload")
+    ));
 }
