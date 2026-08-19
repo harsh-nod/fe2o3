@@ -495,6 +495,19 @@ fn backend_compiler_profile_substitution_is_rejected_before_handoff() {
 }
 
 #[test]
+fn positive_analysis_never_creates_frontend_correspondence() {
+    let error = consume_general_gemm_production_import_v1(Some(
+        GeneralGemmMirImportV1::PositiveAnalysisBlocked,
+    ))
+    .expect_err("positive analysis must remain non-executable");
+    assert!(
+        error
+            .to_string()
+            .contains("production frontend correspondence is disabled")
+    );
+}
+
+#[test]
 fn mutation_oracle_never_creates_a_handoff_and_failed_attempt_is_unclaimable() {
     let directory = TestDirectory::new("mutation-oracle-route");
     let producer = producer();

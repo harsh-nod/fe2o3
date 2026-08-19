@@ -2,17 +2,19 @@
 //!
 //! The adapter recognizes exact diagnostic-item `DefId`s from the reviewed
 //! standalone companion crate and derives a runtime-parameterized semantic
-//! template from optimized MIR. Concrete plan/KIR construction belongs to the
-//! checked launch-time instantiation boundary; this module never seeds a
-//! synthetic plan or treats caller assertions as semantic facts.
+//! diagnostic facts from optimized MIR. Positive frontend correspondence is
+//! disabled until the complete optimized-MIR authority proof is closed; this
+//! module never seeds a synthetic plan or treats caller assertions as facts.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt;
 
+#[cfg(test)]
+use fe2o3_general_gemm_compiler::GeneralGemmFrontendSemanticBindingErrorV1;
 use fe2o3_general_gemm_compiler::{
     GeneralGemmAbiArgumentV1, GeneralGemmDerivedKirBehaviorV1, GeneralGemmDerivedSourceSchemaV1,
-    GeneralGemmFrontendSemanticBindingErrorV1, GeneralGemmFrontendSemanticBindingV1,
-    GeneralGemmSymbolicKirV1, GeneralGemmSymbolicPlanExpressionV1, GeneralGemmSymbolicPlanV1,
+    GeneralGemmFrontendSemanticBindingV1, GeneralGemmSymbolicKirV1,
+    GeneralGemmSymbolicPlanExpressionV1, GeneralGemmSymbolicPlanV1,
 };
 use fe2o3_kernel_ir::{GeneralGemmKirDiagnosticV1, GeneralGemmPropertyV1};
 use rustc_abi::ExternAbi;
@@ -38,11 +40,8 @@ use crate::trusted_device_items::{
 const EXACT_GENERAL_GEMM_TARGET_V1: &str = "gfx942:xnack-";
 
 #[derive(Debug, Eq, PartialEq)]
-// The large receipt stays inline so its one-shot ownership is visible at the
-// private importer boundary and cannot be confused with shared hash authority.
-#[allow(clippy::large_enum_variant)]
 pub(crate) enum GeneralGemmMirImportV1 {
-    VerifiedTemplate(Box<AuthenticatedGeneralGemmSemanticReceiptV1>),
+    PositiveAnalysisBlocked,
     VerifiedMutationOracle,
     Rejected(GeneralGemmSemanticRejectionV1),
 }
@@ -102,6 +101,7 @@ pub(crate) struct GeneralGemmAbiOperandBindingV1 {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) struct ConsumedGeneralGemmSemanticTemplateV1 {
     pub(crate) kernel_instance: [u8; 32],
     pub(crate) compiled_source: [u8; 32],
@@ -112,6 +112,7 @@ pub(crate) struct ConsumedGeneralGemmSemanticTemplateV1 {
     pub(crate) symbolic_kir: GeneralGemmSymbolicKirV1,
 }
 
+#[cfg(test)]
 impl ConsumedGeneralGemmSemanticTemplateV1 {
     fn abi_identity(&self) -> [u8; 32] {
         general_gemm_abi_identity(&self.abi)
@@ -308,7 +309,9 @@ pub(crate) struct GeneralGemmStoreTranscriptV1 {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-#[allow(clippy::enum_variant_names)] // The prefix marks the production typestate evidence class.
+#[allow(clippy::enum_variant_names, dead_code)]
+// The variants are retained for correspondence revalidation, but production
+// construction stays disabled with the positive importer boundary.
 pub(crate) enum GeneralGemmSourceMirEvidenceV1 {
     AllocationAndProvenance {
         abi_identity: [u8; 32],
@@ -544,16 +547,19 @@ impl GeneralGemmSourcePropertyReceiptV1 {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) struct AuthenticatedGeneralGemmSemanticReceiptV1 {
     consumed: Option<ConsumedGeneralGemmSemanticTemplateV1>,
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) enum GeneralGemmReceiptConsumptionErrorV1 {
     SourcePropertyRevalidation,
     Binding(GeneralGemmFrontendSemanticBindingErrorV1),
 }
 
+#[cfg(test)]
 impl fmt::Display for GeneralGemmReceiptConsumptionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -565,6 +571,7 @@ impl fmt::Display for GeneralGemmReceiptConsumptionErrorV1 {
     }
 }
 
+#[cfg(test)]
 impl AuthenticatedGeneralGemmSemanticReceiptV1 {
     pub(crate) fn into_verified_template(
         mut self,
@@ -819,10 +826,13 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
         require_dynamic_accumulator_carry(tcx, body, &root_calls)?;
         return Ok(Some(GeneralGemmMirImportV1::VerifiedMutationOracle));
     }
-    let receipt = derive_positive_receipt(tcx, root_function.instance.def_id(), body, &root_calls)?;
-    Ok(Some(GeneralGemmMirImportV1::VerifiedTemplate(Box::new(
-        receipt,
-    ))))
+    validate_positive_source_non_authoritative(
+        tcx,
+        root_function.instance.def_id(),
+        body,
+        &root_calls,
+    )?;
+    Ok(Some(GeneralGemmMirImportV1::PositiveAnalysisBlocked))
 }
 
 fn derived_counterexample(
@@ -1322,50 +1332,27 @@ fn diagnostic(property: GeneralGemmPropertyV1) -> GeneralGemmKirDiagnosticV1 {
     }
 }
 
-fn derive_positive_receipt<'tcx>(
+fn validate_positive_source_non_authoritative<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: rustc_hir::def_id::DefId,
     body: &Body<'tcx>,
     calls: &[GeneralGemmCallV1],
-) -> Result<AuthenticatedGeneralGemmSemanticReceiptV1, GeneralGemmMirImportErrorV1> {
-    let abi = require_positive_abi(tcx, root)?;
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    require_positive_abi(tcx, root)?;
     require_terminal_abi_binding(body, calls)?;
     require_positive_root_lifecycle_coverage(tcx, body, calls)?;
-    let (source_properties, symbolic_plan, symbolic_kir) =
-        derive_typestate_source_property_receipts(tcx, root, body, calls, &abi)?;
-
-    let kernel_instance = hash_fields(&[
-        b"FE2O3/GENERAL-GEMM-KERNEL-INSTANCE/V1\0",
-        &tcx.def_path_hash(root).0.to_le_bytes(),
-    ]);
-    let source_file = tcx
-        .sess
-        .source_map()
-        .lookup_source_file(tcx.def_span(root).lo());
-    let source = source_file
-        .src
-        .as_ref()
-        .ok_or_else(|| unproved("compiled kernel SourceFile bytes are retained"))?;
-    let compiled_source = hash_fields(&[
-        b"FE2O3/GENERAL-GEMM-COMPILED-SOURCE/V1\0",
-        source.as_bytes(),
-    ]);
-    let provider_semantics =
-        trusted_device_items::reviewed_general_gemm_provider_semantics_identity_v1();
-    if [kernel_instance, compiled_source, provider_semantics].contains(&[0; 32]) {
-        return Err(unproved("receipt identities are nonzero"));
+    derive_phase_cycle_transcript(tcx, body, calls)?;
+    require_guarded_stage_inputs(tcx, body, calls)?;
+    let store = store_calls(calls);
+    let [store] = store.as_slice() else {
+        return Err(unproved("positive typestate kernel has one output store"));
+    };
+    if store.operation != TrustedGeneralGemmOperationV1::Store {
+        return Err(unproved(
+            "positive typestate kernel uses the sealed canonical store",
+        ));
     }
-    Ok(AuthenticatedGeneralGemmSemanticReceiptV1 {
-        consumed: Some(ConsumedGeneralGemmSemanticTemplateV1 {
-            kernel_instance,
-            compiled_source,
-            provider_semantics,
-            abi,
-            source_properties,
-            symbolic_plan,
-            symbolic_kir,
-        }),
-    })
+    Ok(())
 }
 
 fn require_positive_root_lifecycle_coverage<'tcx>(
@@ -1463,6 +1450,8 @@ fn is_trusted_trap_block(tcx: TyCtxt<'_>, body: &Body<'_>, block: BasicBlock) ->
     )
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn derive_typestate_source_property_receipts<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: rustc_hir::def_id::DefId,
@@ -1799,6 +1788,7 @@ const fn abi(
     }
 }
 
+#[cfg(test)]
 fn general_gemm_abi_identity(abi: &[GeneralGemmAbiOperandBindingV1; 11]) -> [u8; 32] {
     let mut encoded = Vec::with_capacity(abi.len() * 3);
     for binding in abi {
@@ -1925,6 +1915,7 @@ fn require_counterexample_abi_binding(
     Ok(())
 }
 
+#[cfg(test)]
 fn source_property(
     semantics: &GeneralGemmIntrinsicSemanticsV1,
     kind: GeneralGemmSourcePropertyKindV1,

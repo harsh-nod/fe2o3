@@ -134,7 +134,7 @@ fn status_is_explicitly_source_only_and_fail_closed() {
     ));
     assert_eq!(
         GENERAL_TILED_GEMM_SOURCE_BLOCKER_V1,
-        "authenticated MIR reaches only a non-authoritative GeneralGemmKirV1 witness; runtime plan binding and frontend promotion are not implemented"
+        "authenticated optimized MIR receives only non-authoritative structural analysis; production frontend correspondence is disabled until the complete optimized-MIR authority proof is closed"
     );
     assert_eq!(GENERAL_TILED_GEMM_SOURCE_BLOCKERS_V1.len(), 5);
 }

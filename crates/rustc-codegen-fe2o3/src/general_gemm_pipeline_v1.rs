@@ -667,15 +667,18 @@ pub(crate) fn execute_general_gemm_pipeline_v1(
     })
 }
 
-/// Consumes only a positive receipt. Mutation oracles and non-GEMM collections
-/// cannot be relabeled as production frontend correspondence.
+/// Rejects every imported source until positive frontend correspondence is
+/// re-enabled behind the complete optimized-MIR authority proof.
 pub(crate) fn consume_general_gemm_production_import_v1(
     imported: Option<GeneralGemmMirImportV1>,
 ) -> Result<AuthenticatedGeneralGemmFrontendCorrespondenceV1, GeneralGemmPipelineErrorV1> {
     match imported {
-        Some(GeneralGemmMirImportV1::VerifiedTemplate(receipt)) => (*receipt)
-            .into_verified_template()
-            .map_err(|error| GeneralGemmPipelineErrorV1::Frontend(error.to_string())),
+        Some(GeneralGemmMirImportV1::PositiveAnalysisBlocked) => {
+            Err(GeneralGemmPipelineErrorV1::Frontend(
+                "positive structural analysis completed, but production frontend correspondence is disabled until the optimized-MIR authority proof is closed"
+                    .to_owned(),
+            ))
+        }
         Some(GeneralGemmMirImportV1::VerifiedMutationOracle) => {
             Err(GeneralGemmPipelineErrorV1::Frontend(
                 "the proof-sensitive mutation oracle is non-executable and cannot issue production frontend correspondence"

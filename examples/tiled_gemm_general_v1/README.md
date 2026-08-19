@@ -45,17 +45,18 @@ exact reviewed source and dependency is therefore semantically equivalent;
 package provenance needs a separate signature or transparency-log authority.
 
 This is a compile-tested source contract, not GPU execution authority. The
-safe compiler operations are panic stubs under host rustc. The positive source
-can produce an opaque, non-Clone frontend correspondence whose 11 typed
-property receipts revalidate the exact optimized-MIR, provider, source, ABI,
-and symbolic plan/KIR binding.
+safe compiler operations are panic stubs under host rustc. The compiler may run
+non-authoritative structural diagnostics over the positive source, but positive
+frontend correspondence is disabled until the complete optimized-MIR authority
+proof is closed. No receipt or correspondence crosses production preflight.
 
 The compiler also contains structural Pliron/GPU lowering, two separately
 identified reference and vectorized machine schedules, measured Worker/finalizer
 observations, and a private owner-retaining pair join. The exact
 `collected-general-gemm-v1` selector now enters a dedicated, no-fallback
-in-process route, but Verus proof execution remains fail-closed until the exact
-root-owned runtime closure is provisioned. The route therefore stops before
-Worker execution or the pair join, and no proof, durable artifact publication,
-load, launch, or protected general-GEMM hardware authority can be issued. The
-existing exact `tiled_gemm_v1` Slice 1 source and identities are unchanged.
+in-process route, but both positive correspondence and Verus proof execution
+remain fail-closed until the complete MIR authority proof and exact root-owned
+runtime closure are provisioned. The route therefore stops before Worker
+execution or the pair join, and no proof, durable artifact publication, load,
+launch, or protected general-GEMM hardware authority can be issued. The existing
+exact `tiled_gemm_v1` Slice 1 source and identities are unchanged.

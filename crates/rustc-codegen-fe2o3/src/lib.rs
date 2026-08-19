@@ -1834,30 +1834,9 @@ fn general_gemm_semantic_preflight_v1<'tcx>(
             reason: format!("general GEMM authenticated MIR import failed: {error}"),
         },
     )? {
-        Some(collected_general_gemm_v1::GeneralGemmMirImportV1::VerifiedTemplate(receipt)) => {
-            let template = (*receipt).into_verified_template().map_err(|error| {
-                amdgpu_llvm::EmitError::Preflight {
-                    reason: format!(
-                        "authenticated general GEMM semantic receipt failed structural compiler binding: {error:?}; no artifact authority was issued"
-                    ),
-                }
-            })?;
-            let identity = template.identity();
-            let binding_identity = template.binding().identity();
+        Some(collected_general_gemm_v1::GeneralGemmMirImportV1::PositiveAnalysisBlocked) => {
             Err(amdgpu_llvm::EmitError::Preflight {
-                reason: format!(
-                    "authenticated general GEMM MIR reached verified symbolic semantic template {} with opaque frontend correspondence {}; checked launch-time plan/KIR instantiation and lowering are not implemented; no artifact authority was issued",
-                    binding_identity
-                        .as_bytes()
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>(),
-                    identity
-                        .as_bytes()
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>(),
-                ),
+                reason: "authenticated general GEMM positive structural analysis completed, but frontend correspondence is disabled until the optimized-MIR authority proof is closed; this source is non-executable and cannot issue frontend correspondence or artifact authority".to_owned(),
             })
         }
         Some(collected_general_gemm_v1::GeneralGemmMirImportV1::VerifiedMutationOracle) => {
