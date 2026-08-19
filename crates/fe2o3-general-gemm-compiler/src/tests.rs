@@ -648,3 +648,38 @@ fn zero_request_commitments_and_invalid_limit_configuration_fail_closed() {
         Err(GeneralGemmLoweringLimitErrorV1::PlironOperations)
     );
 }
+
+#[test]
+fn structural_machine_lowers_both_schedules_without_artifact_authority() {
+    for schedule in [
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+    ] {
+        let unit = unit(schedule);
+        let machine = lower_general_gemm_structural_machine_v1(&unit).unwrap();
+        assert_eq!(
+            machine.projection().compilation_binding_identity(),
+            unit.identity()
+        );
+        assert_eq!(
+            machine
+                .handoff()
+                .base()
+                .stage_identities()
+                .schedule()
+                .as_bytes(),
+            unit.schedule_identity().as_bytes()
+        );
+        assert_eq!(
+            machine.assembly().source_identity(),
+            machine.handoff().identity()
+        );
+        assert!(machine.assembly().has_embedded_source_identity());
+        assert!(!machine.grants_artifact_authority());
+        assert!(!machine.compiler_handoff().grants_compiler_authority());
+        assert!(!machine.compiler_handoff().grants_worker_authority());
+        assert!(!machine.compiler_handoff().grants_link_authority());
+        assert!(!machine.compiler_handoff().grants_load_authority());
+        assert!(!machine.compiler_handoff().grants_launch_authority());
+    }
+}

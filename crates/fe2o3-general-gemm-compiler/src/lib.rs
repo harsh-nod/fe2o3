@@ -66,6 +66,10 @@ use pliron::{
 };
 use sha2::{Digest, Sha256};
 
+mod machine;
+
+pub use machine::*;
+
 /// Schema for the exact compilation-unit binding.
 pub const GENERAL_GEMM_COMPILATION_BINDING_SCHEMA_V1: &str =
     "fe2o3.general-gemm.compilation-binding.v1";
