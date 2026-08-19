@@ -245,7 +245,7 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
     for (bin, root, code, property, stage) in [
         (
             "missing-publish",
-            "missing_publish",
+            "valid_proof_sensitive",
             "0x46470103",
             "initialized",
             "gpu",
