@@ -162,9 +162,14 @@ impl GeneralGemmSymbolicStructuralMachineV1 {
         &self.binding_section
     }
 
-    /// Returns the complete typed dynamic gfx942 Handoff V2 graph.
+    /// Returns the retained construction-source Handoff V2.
     pub const fn handoff(&self) -> &Gfx942HandoffV2 {
         &self.handoff
+    }
+
+    /// Returns the canonical Handoff V2 freshly derived from the admitted live graph.
+    pub const fn graph_handoff(&self) -> &Gfx942HandoffV2 {
+        self.compiler_boundary.graph_export().graph_handoff()
     }
 
     /// Returns the inert typed pre-LLVM admission bound to this exact handoff.
@@ -214,9 +219,14 @@ impl GeneralGemmStructuralMachineV1 {
         &self.binding_section
     }
 
-    /// Returns the complete typed gfx942 Handoff V2 graph.
+    /// Returns the retained construction-source Handoff V2.
     pub const fn handoff(&self) -> &Gfx942HandoffV2 {
         &self.handoff
+    }
+
+    /// Returns the canonical Handoff V2 freshly derived from the admitted live graph.
+    pub const fn graph_handoff(&self) -> &Gfx942HandoffV2 {
+        self.compiler_boundary.graph_export().graph_handoff()
     }
 
     /// Returns the inert typed pre-LLVM admission bound to this exact handoff.
@@ -470,14 +480,34 @@ fn admit_compiler_boundary_inner(
             lowered.receipt().identity(),
         ))
         .map_err(GeneralGemmStructuralMachineErrorV1::GraphExport)?;
-    if graph_export.graph_handoff() != handoff
-        || graph_export.source_identity() != handoff.identity()
-        || graph_export.graph_handoff_identity() != handoff.identity()
-        || graph_export.graph_inspection() != lowered.construction_inspection()
+    if graph_export.source_identity() != handoff.identity()
+        || graph_export.construction_receipt_identity() != lowered.receipt().identity()
     {
         return Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity);
     }
 
+    admit_graph_export_inner(graph_export, build)
+}
+
+/// Admits a freshly inspected live-graph export for the exact measured worker build.
+///
+/// The graph-derived Handoff is the worker payload authority. The retained source
+/// identity remains bound only as construction provenance, so an admitted graph
+/// transformation is not replaced with its pre-transformation source bytes.
+pub fn admit_general_gemm_graph_export_v1(
+    graph_export: CanonicalPlironLlvmGraphExportV1,
+    build: MeasuredLlvmLldBuildV1<'_>,
+) -> Result<GeneralGemmCompilerBoundaryV1, GeneralGemmStructuralMachineErrorV1> {
+    catch_unwind(AssertUnwindSafe(|| {
+        admit_graph_export_inner(graph_export, build)
+    }))
+    .unwrap_or(Err(GeneralGemmStructuralMachineErrorV1::Construction))
+}
+
+fn admit_graph_export_inner(
+    graph_export: CanonicalPlironLlvmGraphExportV1,
+    build: MeasuredLlvmLldBuildV1<'_>,
+) -> Result<GeneralGemmCompilerBoundaryV1, GeneralGemmStructuralMachineErrorV1> {
     let canonical_handoff = graph_export.graph_handoff().encode_canonical();
     let graph_handoff_identity = graph_export.graph_handoff_identity();
     let worker_admission = WorkerAdmissionRequestV2::new(

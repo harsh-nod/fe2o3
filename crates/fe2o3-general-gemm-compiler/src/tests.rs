@@ -990,11 +990,11 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
         );
         assert_eq!(
             machine.assembly().source_identity(),
-            machine.handoff().identity()
+            machine.graph_handoff().identity()
         );
         assert_eq!(
             machine.worker_admission().handoff_identity(),
-            machine.handoff().identity()
+            machine.graph_handoff().identity()
         );
         assert_ne!(
             machine.worker_admission().admission_identity().as_bytes(),
@@ -1002,7 +1002,7 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
         );
         assert_eq!(
             machine.compiler_boundary().graph_export().graph_handoff(),
-            machine.handoff()
+            machine.graph_handoff()
         );
         assert_eq!(
             machine.compiler_boundary().graph_export().source_identity(),
@@ -1027,6 +1027,25 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
         assert!(!machine.compiler_handoff().grants_load_authority());
         assert!(!machine.compiler_handoff().grants_launch_authority());
     }
+}
+
+#[test]
+fn canonical_graph_export_has_a_direct_non_authoritative_worker_admission_path() {
+    let machine = lower_general_gemm_structural_machine_v1(&unit(
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+    ))
+    .unwrap();
+    let export = machine.compiler_boundary().graph_export().clone();
+    let expected_graph_identity = export.graph_handoff_identity();
+    let boundary =
+        admit_general_gemm_graph_export_v1(export, MeasuredLlvmLldBuildV1::exact()).unwrap();
+
+    assert_eq!(
+        boundary.worker_admission().handoff_identity(),
+        expected_graph_identity
+    );
+    assert!(!boundary.grants_artifact_authority());
+    assert!(!boundary.worker_admission().grants_object_authority());
 }
 
 #[test]
