@@ -6,7 +6,7 @@ use fe2o3_amdgcn_pliron_llvm::{
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, BinaryOperationV2, CallingConventionV2, FloatBinaryOperationV2,
     FunctionAttributeV1, FunctionKindV2, IdentityV1, InstructionKindV2, ReturnTypeV2, ScalarTypeV1,
-    StageIdentitiesV1, TerminatorV2, ValueIdV2, ValueTypeV2, WorkgroupSizeRangeV1,
+    StageIdentitiesV1, TargetFeatureV1, TerminatorV2, ValueIdV2, ValueTypeV2, WorkgroupSizeRangeV1,
 };
 
 fn request() -> ScalarKernelModuleV1 {
@@ -169,8 +169,8 @@ fn diagnostics_remain_bounded_and_non_authoritative() {
 }
 
 #[test]
-fn handoff_dependency_currently_blocks_one_to_sixty_four_workgroup_range() {
-    assert!(WorkgroupSizeRangeV1::new(1, 64).is_err());
+fn one_to_sixty_four_workgroup_range_is_preserved_with_wave64_policy() {
+    let expected = WorkgroupSizeRangeV1::new(1, 64).unwrap();
 
     let handoff = lower_scalar_kernel_v2(&request()).unwrap();
     let flat_range = handoff.module().functions()[0]
@@ -181,10 +181,16 @@ fn handoff_dependency_currently_blocks_one_to_sixty_four_workgroup_range() {
             _ => None,
         })
         .expect("admitted kernel must preserve a flat workgroup range");
-    assert_eq!((flat_range.minimum(), flat_range.maximum()), (64, 64));
+    assert_eq!(flat_range, expected);
     assert!(
         handoff.base().kernels()[0]
             .function_attributes()
             .contains(&FunctionAttributeV1::FlatWorkgroupSize(flat_range))
     );
+    assert!(handoff.base().target().features().iter().any(|feature| {
+        feature.feature() == TargetFeatureV1::WavefrontSize64 && feature.enabled()
+    }));
+    assert!(handoff.base().target().features().iter().any(|feature| {
+        feature.feature() == TargetFeatureV1::WavefrontSize32 && !feature.enabled()
+    }));
 }

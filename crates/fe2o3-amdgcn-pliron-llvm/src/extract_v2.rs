@@ -142,7 +142,7 @@ fn has_exact_function_attributes(attributes: &[FunctionAttributeV1]) -> bool {
                 matches!(
                     attribute,
                     FunctionAttributeV1::FlatWorkgroupSize(range)
-                        if range.minimum() == 64 && range.maximum() == 64
+                        if range.minimum() == 1 && range.maximum() == 64
                 )
             })
             .count()
