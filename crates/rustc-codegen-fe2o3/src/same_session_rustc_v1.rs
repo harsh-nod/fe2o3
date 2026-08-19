@@ -215,6 +215,8 @@ enum PendingRustMirAdmissionV1 {
 pub(crate) struct RustMirIdentityJoinBoundaryV1 {
     item: CanonicalKernelItemIdV1,
     instance: CanonicalKernelInstIdV1,
+    source_closure_identity: [u8; 32],
+    frontend_import_identity: [u8; 32],
     mir_closure: [u8; 32],
     abi_closure: [u8; 32],
     mir_import: [u8; 32],
@@ -228,6 +230,14 @@ impl RustMirIdentityJoinBoundaryV1 {
 
     pub(crate) const fn instance(&self) -> CanonicalKernelInstIdV1 {
         self.instance
+    }
+
+    pub(crate) const fn source_closure_identity(&self) -> &[u8; 32] {
+        &self.source_closure_identity
+    }
+
+    pub(crate) const fn frontend_import_identity(&self) -> &[u8; 32] {
+        &self.frontend_import_identity
     }
 
     pub(crate) const fn mir_closure(&self) -> &[u8; 32] {
@@ -304,6 +314,8 @@ impl OwnerControlledRustKernelImportV1 {
         let join = self.identity_join_boundary();
         join.item() == self.imported.kernel_item()
             && join.instance() == self.imported.kernel_instance()
+            && join.source_closure_identity() == self.imported.source_closure_identity()
+            && join.frontend_import_identity() == self.imported.import_identity()
             && join.mir_closure() == self.mir_closure()
             && join.abi_closure() == self.abi_closure()
             && join.mir_import() == self.mir_import_identity()
@@ -407,6 +419,8 @@ impl<'tcx> RustcSessionCustodianV1<'tcx> {
                 let identity_join = RustMirIdentityJoinBoundaryV1 {
                     item: captured.imported.kernel_item(),
                     instance: captured.imported.kernel_instance(),
+                    source_closure_identity: *captured.imported.source_closure_identity(),
+                    frontend_import_identity: *captured.imported.import_identity(),
                     mir_closure: captured.semantic.mir_closure,
                     abi_closure: captured.semantic.abi_closure,
                     mir_import: captured.semantic.mir_import,

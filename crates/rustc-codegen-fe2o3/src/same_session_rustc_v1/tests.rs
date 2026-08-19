@@ -101,8 +101,8 @@ impl Callbacks for CustodyCallbacks {
         let supported_rewrite_count = supported.lowering_record().rewrite_count();
         let supported_grants_no_authority = !supported.grants_compiler_authority()
             && !supported.imported().grants_execution_authority();
-        supported.identity_join.mir_import[0] ^= 1;
-        let supported_join_rejects_substitution = !supported.source_identity_join_is_exact();
+        let supported_join_rejects_substitution =
+            identity_join_rejects_every_substitution(&mut supported);
         let unsupported_code = unsupported.code();
         let unsupported_is_terminal = unsupported.is_terminal();
         let unsupported_custody_is_bound = unsupported.custody_binding() != &[0; 32];
@@ -340,6 +340,54 @@ fn alternate_instance(instance: CanonicalKernelInstIdV1) -> CanonicalKernelInstI
     let mut bytes = *instance.as_bytes();
     bytes[128] ^= 1;
     CanonicalKernelInstIdV1::new(bytes).unwrap()
+}
+
+fn identity_join_rejects_every_substitution(
+    supported: &mut OwnerControlledRustKernelImportV1,
+) -> bool {
+    let original_item = supported.identity_join.item;
+    supported.identity_join.item = alternate_item(original_item);
+    let item_rejected = !supported.source_identity_join_is_exact();
+    supported.identity_join.item = original_item;
+
+    let original_instance = supported.identity_join.instance;
+    supported.identity_join.instance = alternate_instance(original_instance);
+    let instance_rejected = !supported.source_identity_join_is_exact();
+    supported.identity_join.instance = original_instance;
+
+    supported.identity_join.source_closure_identity[0] ^= 1;
+    let source_closure_rejected = !supported.source_identity_join_is_exact();
+    supported.identity_join.source_closure_identity[0] ^= 1;
+
+    supported.identity_join.frontend_import_identity[0] ^= 1;
+    let frontend_import_rejected = !supported.source_identity_join_is_exact();
+    supported.identity_join.frontend_import_identity[0] ^= 1;
+
+    supported.identity_join.mir_closure[0] ^= 1;
+    let mir_closure_rejected = !supported.source_identity_join_is_exact();
+    supported.identity_join.mir_closure[0] ^= 1;
+
+    supported.identity_join.abi_closure[0] ^= 1;
+    let abi_closure_rejected = !supported.source_identity_join_is_exact();
+    supported.identity_join.abi_closure[0] ^= 1;
+
+    supported.identity_join.mir_import[0] ^= 1;
+    let mir_import_rejected = !supported.source_identity_join_is_exact();
+    supported.identity_join.mir_import[0] ^= 1;
+
+    supported.identity_join.pliron_graph[0] ^= 1;
+    let pliron_graph_rejected = !supported.source_identity_join_is_exact();
+    supported.identity_join.pliron_graph[0] ^= 1;
+
+    item_rejected
+        && instance_rejected
+        && source_closure_rejected
+        && frontend_import_rejected
+        && mir_closure_rejected
+        && abi_closure_rejected
+        && mir_import_rejected
+        && pliron_graph_rejected
+        && supported.source_identity_join_is_exact()
 }
 
 struct CompilerFixture {
