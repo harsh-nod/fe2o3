@@ -24,6 +24,9 @@ mod device;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod memory;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod shared_memory;
+
 #[cfg(target_os = "linux")]
 mod queue_resources;
 
@@ -44,6 +47,9 @@ mod memory_linux;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use memory::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use shared_memory::*;
 
 #[cfg(target_os = "linux")]
 pub use queue_resources::*;

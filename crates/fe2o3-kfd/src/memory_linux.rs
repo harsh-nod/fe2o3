@@ -289,13 +289,13 @@ impl MemoryBackend for LinuxMemoryBackend {
         reservation.address.as_ptr() as usize as u64
     }
 
-    fn alloc(&mut self, va: u64, bytes: u64) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
-        let mut args = KfdIoctlAllocMemoryOfGpuArgs::new(
-            va,
-            bytes,
-            self.gpu_id(),
-            KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT,
-        );
+    fn alloc(
+        &mut self,
+        va: u64,
+        bytes: u64,
+        flags: KfdAllocMemoryFlags,
+    ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+        let mut args = KfdIoctlAllocMemoryOfGpuArgs::new(va, bytes, self.gpu_id(), flags);
         // SAFETY: the opcode and in/out C layout are frozen by the KFD 1.18
         // oracle, and initialized exclusive storage remains live for the call.
         let request = unsafe { Updater::<ALLOC_MEMORY_OPCODE, _>::new(&mut args) };
@@ -314,17 +314,21 @@ impl MemoryBackend for LinuxMemoryBackend {
         reservation: &mut Self::Reservation,
         mmap_offset: u64,
         bytes: usize,
+        retain_gpu_va_guard: bool,
     ) -> Result<Self::Mapping, MemorySessionError> {
-        if reservation.replaced || reservation.bytes != bytes {
+        if reservation.replaced || bytes == 0 || bytes > reservation.bytes {
             return Err(MemorySessionError::KernelResultMalformed(
                 "VA reservation replacement",
             ));
         }
-        // SAFETY: this exact anonymous reservation is owned and has no Rust
-        // references. GPU VA and CPU VMA remain distinct authorities.
-        unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
-            .map_err(|source| Self::syscall("release anonymous GPU VA reservation", source))?;
-        reservation.replaced = true;
+        if !retain_gpu_va_guard {
+            // SAFETY: this exact anonymous reservation is owned and has no
+            // Rust references. The single-allocation compatibility path does
+            // not require a persistent userspace VA guard.
+            unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
+                .map_err(|source| Self::syscall("release anonymous GPU VA reservation", source))?;
+            reservation.replaced = true;
+        }
         // SAFETY: null requests a kernel-selected CPU VMA. It is deliberately
         // PROT_NONE until DONTFORK succeeds, so the setup gap cannot expose BO
         // bytes even if an external raw fork violates the named contract.
@@ -398,6 +402,24 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(())
     }
 
+    fn protect_cpu_read_only(
+        &mut self,
+        mapping: &mut Self::Mapping,
+    ) -> Result<(), MemorySessionError> {
+        if !mapping.active || !mapping.accessible {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "CPU mapping protection state",
+            ));
+        }
+        // SAFETY: the mapping is live, exclusively borrowed, and no slice can
+        // escape a safe closure. This removes CPU write access atomically for
+        // the complete VMA; it does not constrain GPU writes.
+        unsafe {
+            rustix::mm::mprotect(mapping.address.as_ptr(), mapping.bytes, MprotectFlags::READ)
+        }
+        .map_err(|source| Self::syscall("mprotect AMDGPU BO read-only", source))
+    }
+
     fn map_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
         Self::exact_progress(
             "AMDKFD_IOC_MAP_MEMORY_TO_GPU",
@@ -460,6 +482,23 @@ impl MemoryBackend for LinuxMemoryBackend {
             .map_err(|source| Self::syscall("munmap AMDGPU BO", source))?;
         mapping.active = false;
         mapping.accessible = false;
+        Ok(())
+    }
+
+    fn release_va_reservation(
+        &mut self,
+        reservation: &mut Self::Reservation,
+    ) -> Result<(), MemorySessionError> {
+        if reservation.replaced {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "GPU VA reservation release state",
+            ));
+        }
+        // SAFETY: the PROT_NONE guard is owned by the session, no references
+        // can exist to it, and the associated KFD allocation has been freed.
+        unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
+            .map_err(|source| Self::syscall("release retained GPU VA reservation", source))?;
+        reservation.replaced = true;
         Ok(())
     }
 

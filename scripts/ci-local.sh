@@ -285,6 +285,7 @@ run_runtime_pure_rust_policy() {
         --example kfd-topology \
         --example kfd-device-identity \
         --example kfd-host-visible-memory-policy \
+        --example kfd-shared-gtt-memory-policy \
         --example kfd-queue-resources
   run_step runtime-pure-rust-kfd-version-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
@@ -302,6 +303,10 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-host-visible-memory-policy"
+  run_step runtime-pure-rust-kfd-shared-memory-policy-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-shared-gtt-memory-policy"
   run_step runtime-pure-rust-kfd-queue-resources-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \

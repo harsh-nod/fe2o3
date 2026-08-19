@@ -99,6 +99,15 @@ pub struct MemoryModelJournalSummary {
 }
 
 impl MemoryModelJournalSummary {
+    pub(super) fn from_model(model: &MemoryLifecycleStateV1) -> Self {
+        Self {
+            vm_records: model.vms().len(),
+            reservation_records: model.reservations().len(),
+            allocation_records: model.allocations().len(),
+            mapping_records: model.mappings().len(),
+        }
+    }
+
     pub const fn vm_records(self) -> usize {
         self.vm_records
     }
@@ -133,6 +142,15 @@ pub enum MemorySessionError {
     ProcessChanged,
     InvalidRequestedSize,
     SizeOverflow,
+    SharedSessionQuarantined,
+    SharedAllocationCapacity {
+        maximum: usize,
+    },
+    SharedVaCapacity {
+        maximum_bytes: u64,
+    },
+    InvalidAllocationAuthority,
+    InvalidProfileSize(&'static str),
     UnsupportedPageSize(usize),
     AddressOutsideAperture,
     AddressNotPageAligned,
@@ -165,6 +183,25 @@ impl fmt::Display for MemorySessionError {
             Self::ProcessChanged => formatter.write_str("the memory session process changed"),
             Self::InvalidRequestedSize => formatter.write_str("allocation size must be nonzero"),
             Self::SizeOverflow => formatter.write_str("allocation footprint overflowed"),
+            Self::SharedSessionQuarantined => {
+                formatter.write_str("the shared memory session is permanently quarantined")
+            }
+            Self::SharedAllocationCapacity { maximum } => {
+                write!(
+                    formatter,
+                    "shared allocation capacity {maximum} is exhausted"
+                )
+            }
+            Self::SharedVaCapacity { maximum_bytes } => write!(
+                formatter,
+                "shared GPU VA capacity {maximum_bytes} bytes would be exceeded"
+            ),
+            Self::InvalidAllocationAuthority => {
+                formatter.write_str("the allocation authority token is stale or substituted")
+            }
+            Self::InvalidProfileSize(profile) => {
+                write!(formatter, "the requested size is invalid for {profile}")
+            }
             Self::UnsupportedPageSize(size) => {
                 write!(
                     formatter,
@@ -230,14 +267,24 @@ pub(super) trait MemoryBackend {
     fn acquire_vm(&mut self) -> Result<(), MemorySessionError>;
     fn reserve_va(&mut self, bytes: usize) -> Result<Self::Reservation, MemorySessionError>;
     fn reservation_address(reservation: &Self::Reservation) -> u64;
-    fn alloc(&mut self, va: u64, bytes: u64) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs>;
+    fn alloc(
+        &mut self,
+        va: u64,
+        bytes: u64,
+        flags: KfdAllocMemoryFlags,
+    ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs>;
     fn map_cpu(
         &mut self,
         reservation: &mut Self::Reservation,
         mmap_offset: u64,
         bytes: usize,
+        retain_gpu_va_guard: bool,
     ) -> Result<Self::Mapping, MemorySessionError>;
     fn prepare_cpu_mapping(
+        &mut self,
+        mapping: &mut Self::Mapping,
+    ) -> Result<(), MemorySessionError>;
+    fn protect_cpu_read_only(
         &mut self,
         mapping: &mut Self::Mapping,
     ) -> Result<(), MemorySessionError>;
@@ -254,6 +301,10 @@ pub(super) trait MemoryBackend {
         f: impl FnOnce(&mut [u8]) -> R,
     ) -> R;
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError>;
+    fn release_va_reservation(
+        &mut self,
+        reservation: &mut Self::Reservation,
+    ) -> Result<(), MemorySessionError>;
     fn free(&mut self, handle: u64) -> Result<(), MemorySessionError>;
 }
 
@@ -343,7 +394,11 @@ impl<B: MemoryBackend> MemoryEngine<B> {
             return self.quarantine(error);
         }
         self.reservation = Some(reservation);
-        let outcome = self.backend.alloc(va, backing_bytes as u64);
+        let outcome = self.backend.alloc(
+            va,
+            backing_bytes as u64,
+            KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT,
+        );
         let args = outcome.value;
         if let Err(error) = outcome.result {
             return self.quarantine(error);
@@ -372,13 +427,14 @@ impl<B: MemoryBackend> MemoryEngine<B> {
                 "reservation ownership",
             ));
         };
-        let mut mapping = match self
-            .backend
-            .map_cpu(reservation, args.mmap_offset, backing_bytes)
-        {
-            Ok(value) => value,
-            Err(error) => return self.quarantine(error),
-        };
+        let mut mapping =
+            match self
+                .backend
+                .map_cpu(reservation, args.mmap_offset, backing_bytes, false)
+            {
+                Ok(value) => value,
+                Err(error) => return self.quarantine(error),
+            };
         if let Err(error) = self.backend.prepare_cpu_mapping(&mut mapping) {
             self.mapping = Some(mapping);
             return self.quarantine(error);
@@ -749,9 +805,9 @@ enum ProcessVmState {
 }
 
 static PROCESS_VM_STATE: Mutex<ProcessVmState> = Mutex::new(ProcessVmState::Fresh);
-static NEXT_MODEL_VM_ID: AtomicU64 = AtomicU64::new(1);
+pub(super) static NEXT_MODEL_VM_ID: AtomicU64 = AtomicU64::new(1);
 
-fn begin_process_vm_attempt(pid: u32, gpu_id: u32) -> Result<(), MemorySessionError> {
+pub(super) fn begin_process_vm_attempt(pid: u32, gpu_id: u32) -> Result<(), MemorySessionError> {
     let mut state = PROCESS_VM_STATE
         .lock()
         .map_err(|_| MemorySessionError::ProcessVmStatePoisoned)?;
@@ -767,7 +823,7 @@ fn begin_process_vm_attempt(pid: u32, gpu_id: u32) -> Result<(), MemorySessionEr
     }
 }
 
-fn finish_process_vm_attempt(success: bool, pid: u32, gpu_id: u32) {
+pub(super) fn finish_process_vm_attempt(success: bool, pid: u32, gpu_id: u32) {
     let Ok(mut state) = PROCESS_VM_STATE.lock() else {
         return;
     };
@@ -869,12 +925,7 @@ impl HostVisibleMemorySession {
     /// Native handles, GPU virtual addresses, mapping addresses, descriptors,
     /// and model keys are intentionally not exposed.
     pub fn model_journal_summary(&self) -> MemoryModelJournalSummary {
-        MemoryModelJournalSummary {
-            vm_records: self.model.vms().len(),
-            reservation_records: self.model.reservations().len(),
-            allocation_records: self.model.allocations().len(),
-            mapping_records: self.model.mappings().len(),
-        }
+        MemoryModelJournalSummary::from_model(&self.model)
     }
 
     /// Allocates and prepares the one admitted host-visible BO.
@@ -1098,13 +1149,13 @@ mod tests {
         fn reservation_address(reservation: &Self::Reservation) -> u64 {
             *reservation
         }
-        fn alloc(&mut self, va: u64, bytes: u64) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
-            let mut args = KfdIoctlAllocMemoryOfGpuArgs::new(
-                va,
-                bytes,
-                7,
-                KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT,
-            );
+        fn alloc(
+            &mut self,
+            va: u64,
+            bytes: u64,
+            flags: KfdAllocMemoryFlags,
+        ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+            let mut args = KfdIoctlAllocMemoryOfGpuArgs::new(va, bytes, 7, flags);
             args.handle = 0x55;
             args.mmap_offset = 0x40_000;
             if let Some(override_args) = self.alloc_override {
@@ -1117,6 +1168,7 @@ mod tests {
             _reservation: &mut u64,
             _offset: u64,
             bytes: usize,
+            _retain_gpu_va_guard: bool,
         ) -> Result<ScriptedMapping, MemorySessionError> {
             self.tick("map_cpu")?;
             Ok(ScriptedMapping {
@@ -1142,6 +1194,17 @@ mod tests {
             }
             mapping.accessible = true;
             Ok(())
+        }
+        fn protect_cpu_read_only(
+            &mut self,
+            mapping: &mut ScriptedMapping,
+        ) -> Result<(), MemorySessionError> {
+            if !mapping.active || !mapping.accessible {
+                return Err(MemorySessionError::KernelResultMalformed(
+                    "CPU mapping protection state",
+                ));
+            }
+            self.tick("mprotect_read_only")
         }
         fn map_gpu(&mut self, _handle: u64, _old: u32) -> KernelOutcome<u32> {
             self.outcome("map_gpu", self.map_progress)
@@ -1171,6 +1234,12 @@ mod tests {
             mapping.active = false;
             mapping.accessible = false;
             Ok(())
+        }
+        fn release_va_reservation(
+            &mut self,
+            _reservation: &mut u64,
+        ) -> Result<(), MemorySessionError> {
+            self.tick("release_va_reservation")
         }
         fn free(&mut self, _handle: u64) -> Result<(), MemorySessionError> {
             self.free_calls += 1;

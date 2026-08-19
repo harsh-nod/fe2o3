@@ -176,7 +176,12 @@ impl MemoryBackend for JournalBackend {
         0
     }
 
-    fn alloc(&mut self, _va: u64, _bytes: u64) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+    fn alloc(
+        &mut self,
+        _va: u64,
+        _bytes: u64,
+        _flags: KfdAllocMemoryFlags,
+    ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
         panic!("unused alloc")
     }
 
@@ -185,12 +190,17 @@ impl MemoryBackend for JournalBackend {
         _reservation: &mut (),
         _mmap_offset: u64,
         _bytes: usize,
+        _retain_gpu_va_guard: bool,
     ) -> Result<(), MemorySessionError> {
         Err(MemorySessionError::Injected("unused mmap"))
     }
 
     fn prepare_cpu_mapping(&mut self, _mapping: &mut ()) -> Result<(), MemorySessionError> {
         Err(MemorySessionError::Injected("unused setup"))
+    }
+
+    fn protect_cpu_read_only(&mut self, _mapping: &mut ()) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::Injected("unused protect"))
     }
 
     fn map_gpu(&mut self, _handle: u64, _old_success: u32) -> KernelOutcome<u32> {
@@ -215,6 +225,9 @@ impl MemoryBackend for JournalBackend {
 
     fn unmap_cpu(&mut self, _mapping: &mut ()) -> Result<(), MemorySessionError> {
         Err(MemorySessionError::Injected("unused munmap"))
+    }
+    fn release_va_reservation(&mut self, _reservation: &mut ()) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::Injected("unused reservation release"))
     }
 
     fn free(&mut self, _handle: u64) -> Result<(), MemorySessionError> {
