@@ -149,6 +149,41 @@ They are deterministic for the same bound rustc inputs; they are not claimed
 to be compiler-version-independent semantic identities. Tool and invocation
 identity must be bound separately when records become durable evidence.
 
+## Ordinary-Rust scalar import V1
+
+`AuthenticatedOrdinaryRustScalarKernelImportV1` is the target-neutral join for
+the first real-Rust scalar frontend milestone. It preserves, as separate
+identity axes:
+
+- the exact canonical `KernelItemId` and concrete `KernelInstId` envelopes;
+- the existing canonical frontend unit and its function/signature/CFG facts;
+- per-function Rust item, concrete monomorphization, canonical source, and
+  canonical MIR identities;
+- exact rustc `FnAbi` identity plus ordered type, layout, size, alignment, pass
+  mode, variadic, and unwind observations;
+- the checked kernel launch sidecar; and
+- every collected direct call, source span, reachable cross-crate helper, and
+  a deterministic kernel-to-helper diagnostic call chain.
+
+The V1 profile is deliberately narrow. It admits exactly one ordinary,
+concrete kernel item and its closed, acyclic set of ordinary direct-call
+helpers. The kernel must declare required and maximum workgroup dimensions
+`[1, 1, 1]`, no occupancy request, and no unsafe assembly. Variadic or
+unwinding ABI facts and typed observations of indirect calls, virtual dispatch,
+closures/coroutines, intrinsics, foreign calls, assembly, panic/unwind,
+allocation, dynamic drop, thread-local or mutable-static access,
+target-dependent types, and unadmitted MIR constructs fail with stable
+`FE2O3-RUST-SCALAR-NNNN` diagnostic codes. Diagnostics retain the exact source
+span and a root-to-failure call chain where one exists.
+
+This record contains no MIR statements, source parser, body-shape recognizer,
+executable callback, or second executable body. Its SHA-256 closure identities
+bind the supplied canonical source and MIR observations; they do not prove that
+the observations came from rustc. The public observation constructor is inert.
+`rustc-codegen-fe2o3` must derive every fact from typed same-session rustc APIs,
+privately bind the resulting receipt to compiler authority, and reject any
+record/observation disagreement before importing MIR into Pliron.
+
 ## Trust boundary and non-goals
 
 This crate validates structure and canonical representation only. In
