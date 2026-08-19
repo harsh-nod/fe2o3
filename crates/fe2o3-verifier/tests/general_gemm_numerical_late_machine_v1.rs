@@ -81,6 +81,41 @@ fn machine_join(
     }
 }
 
+fn set_machine_identity(
+    join: &mut GeneralGemmNumericalMachineJoinV1,
+    axis: GeneralGemmNumericalMachineIdentityAxisV1,
+    identity: GeneralGemmEvidenceIdentityV1,
+) {
+    match axis {
+        GeneralGemmNumericalMachineIdentityAxisV1::OwnerBoundPlironGraphSerialization => {
+            join.owner_bound_pliron_graph_serialization_identity = Some(identity);
+        }
+        GeneralGemmNumericalMachineIdentityAxisV1::DirectLlvmWorkerRequestResponse => {
+            join.direct_llvm_worker_request_response_identity = Some(identity);
+        }
+        GeneralGemmNumericalMachineIdentityAxisV1::FinalizerPostLinkIsaResult => {
+            join.finalizer_post_link_isa_result_identity = Some(identity);
+        }
+    }
+}
+
+fn machine_identity(
+    join: GeneralGemmNumericalMachineJoinV1,
+    axis: GeneralGemmNumericalMachineIdentityAxisV1,
+) -> GeneralGemmEvidenceIdentityV1 {
+    match axis {
+        GeneralGemmNumericalMachineIdentityAxisV1::OwnerBoundPlironGraphSerialization => join
+            .owner_bound_pliron_graph_serialization_identity
+            .unwrap(),
+        GeneralGemmNumericalMachineIdentityAxisV1::DirectLlvmWorkerRequestResponse => {
+            join.direct_llvm_worker_request_response_identity.unwrap()
+        }
+        GeneralGemmNumericalMachineIdentityAxisV1::FinalizerPostLinkIsaResult => {
+            join.finalizer_post_link_isa_result_identity.unwrap()
+        }
+    }
+}
+
 fn exact_claim() -> (
     GeneralGemmNumericalCorrespondenceV1,
     GeneralGemmNumericalLateMachineClaimV1,
@@ -258,6 +293,52 @@ fn every_zero_machine_axis_fails_separately_before_binding() {
 }
 
 #[test]
+fn cross_domain_and_cross_axis_identity_reuse_fail_before_binding() {
+    use GeneralGemmNumericalMachineIdentityAxisV1 as Axis;
+
+    let axes = [
+        Axis::OwnerBoundPlironGraphSerialization,
+        Axis::DirectLlvmWorkerRequestResponse,
+        Axis::FinalizerPostLinkIsaResult,
+    ];
+    for axis in axes {
+        let correspondence =
+            numerical_correspondence(GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1);
+        let mut join = machine_join(correspondence.identity());
+        set_machine_identity(&mut join, axis, correspondence.identity());
+        assert_eq!(
+            derive_general_gemm_numerical_late_machine_claim_v1(&correspondence, join).unwrap_err(),
+            GeneralGemmNumericalLateMachineErrorV1::NumericalCorrespondenceIdentityReused(axis)
+        );
+    }
+
+    for (first, second) in [
+        (
+            Axis::OwnerBoundPlironGraphSerialization,
+            Axis::DirectLlvmWorkerRequestResponse,
+        ),
+        (
+            Axis::OwnerBoundPlironGraphSerialization,
+            Axis::FinalizerPostLinkIsaResult,
+        ),
+        (
+            Axis::DirectLlvmWorkerRequestResponse,
+            Axis::FinalizerPostLinkIsaResult,
+        ),
+    ] {
+        let correspondence =
+            numerical_correspondence(GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1);
+        let mut join = machine_join(correspondence.identity());
+        let first_identity = machine_identity(join, first);
+        set_machine_identity(&mut join, second, first_identity);
+        assert_eq!(
+            derive_general_gemm_numerical_late_machine_claim_v1(&correspondence, join).unwrap_err(),
+            GeneralGemmNumericalLateMachineErrorV1::MachineIdentityReused { first, second }
+        );
+    }
+}
+
+#[test]
 fn missing_and_zero_machine_axes_in_transported_claims_fail_before_comparison() {
     use GeneralGemmNumericalMachineIdentityAxisV1 as Axis;
 
@@ -331,7 +412,7 @@ fn missing_and_zero_machine_axes_in_transported_claims_fail_before_comparison() 
 fn every_context_claim_property_manifest_and_mfma_substitution_fails_closed() {
     use GeneralGemmNumericalLateMachineFieldV1 as Field;
 
-    let cases: [(Field, ClaimMutation); 17] = [
+    let cases: [(Field, ClaimMutation); 25] = [
         (Field::SchemaIdentity, |claim| {
             claim.schema_identity = flip(claim.schema_identity)
         }),
@@ -353,6 +434,15 @@ fn every_context_claim_property_manifest_and_mfma_substitution_fails_closed() {
         (Field::ScheduleIdentity, |claim| {
             claim.schedule_identity = flip(claim.schedule_identity)
         }),
+        (Field::NumericalPolicyIdentity, |claim| {
+            claim.numerical_policy_identity = flip(claim.numerical_policy_identity)
+        }),
+        (Field::TargetIdentity, |claim| {
+            claim.target_identity = flip(claim.target_identity)
+        }),
+        (Field::CompilerToolchainIdentity, |claim| {
+            claim.compiler_toolchain_identity = flip(claim.compiler_toolchain_identity)
+        }),
         (Field::ScheduleModelIdentity, |claim| {
             claim.schedule_model_identity = flip(claim.schedule_model_identity)
         }),
@@ -361,6 +451,9 @@ fn every_context_claim_property_manifest_and_mfma_substitution_fails_closed() {
         }),
         (Field::ScheduleSourceClosureIdentity, |claim| {
             claim.schedule_source_closure_identity = flip(claim.schedule_source_closure_identity)
+        }),
+        (Field::NumericalSourceIdentity, |claim| {
+            claim.numerical_source_identity = flip(claim.numerical_source_identity)
         }),
         (Field::PropertyTheoremManifestIdentity, |claim| {
             claim.property_theorem_manifest_identity =
@@ -376,6 +469,15 @@ fn every_context_claim_property_manifest_and_mfma_substitution_fails_closed() {
         (Field::NumericalSourceClosureIdentity, |claim| {
             claim.numerical_source_closure_identity = flip(claim.numerical_source_closure_identity)
         }),
+        (Field::ReviewedVerusToolIdentity, |claim| {
+            claim.reviewed_verus_tool_identity = flip(claim.reviewed_verus_tool_identity)
+        }),
+        (Field::ExhaustiveBf16Identity, |claim| {
+            claim.exhaustive_bf16_identity = flip(claim.exhaustive_bf16_identity)
+        }),
+        (Field::DifferentialFixtureIdentity, |claim| {
+            claim.differential_fixture_identity = flip(claim.differential_fixture_identity)
+        }),
         (Field::Properties, |claim| {
             claim.properties[0].status = GeneralGemmNumericalCorrespondenceStatusV1::Contracted
         }),
@@ -384,6 +486,10 @@ fn every_context_claim_property_manifest_and_mfma_substitution_fails_closed() {
         }),
         (Field::MfmaMnemonic, |claim| {
             claim.mfma_mnemonic = GeneralGemmGfx942MfmaMnemonicV1::UnsupportedOther
+        }),
+        (Field::OpenMachineRefinementJoinIdentity, |claim| {
+            claim.open_machine_refinement_join_identity =
+                flip(claim.open_machine_refinement_join_identity)
         }),
     ];
     for (field, mutate) in cases {

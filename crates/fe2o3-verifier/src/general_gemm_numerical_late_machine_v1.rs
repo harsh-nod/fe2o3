@@ -97,17 +97,25 @@ pub struct GeneralGemmNumericalLateMachineClaimV1 {
     pub proof_request_identity: GeneralGemmEvidenceIdentityV1,
     pub schedule: GeneralGemmProofScheduleV1,
     pub schedule_identity: GeneralGemmEvidenceIdentityV1,
+    pub numerical_policy_identity: GeneralGemmEvidenceIdentityV1,
+    pub target_identity: GeneralGemmEvidenceIdentityV1,
+    pub compiler_toolchain_identity: GeneralGemmEvidenceIdentityV1,
     pub schedule_model_identity: GeneralGemmEvidenceIdentityV1,
     pub schedule_theorem_set_identity: GeneralGemmEvidenceIdentityV1,
     pub schedule_source_closure_identity: GeneralGemmEvidenceIdentityV1,
+    pub numerical_source_identity: GeneralGemmEvidenceIdentityV1,
     pub property_theorem_manifest_identity: GeneralGemmEvidenceIdentityV1,
     pub property_theorem_binding_identities:
         [GeneralGemmEvidenceIdentityV1; GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1],
     pub numerical_theorem_set_identity: GeneralGemmEvidenceIdentityV1,
     pub numerical_source_closure_identity: GeneralGemmEvidenceIdentityV1,
+    pub reviewed_verus_tool_identity: GeneralGemmEvidenceIdentityV1,
+    pub exhaustive_bf16_identity: GeneralGemmEvidenceIdentityV1,
+    pub differential_fixture_identity: GeneralGemmEvidenceIdentityV1,
     pub properties: [GeneralGemmNumericalPropertyFactV1; GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1],
     pub mfma_contract_identity: GeneralGemmEvidenceIdentityV1,
     pub mfma_mnemonic: GeneralGemmGfx942MfmaMnemonicV1,
+    pub open_machine_refinement_join_identity: GeneralGemmEvidenceIdentityV1,
     pub machine_join: GeneralGemmNumericalMachineJoinV1,
 }
 
@@ -121,16 +129,24 @@ pub enum GeneralGemmNumericalLateMachineFieldV1 {
     ProofRequestIdentity,
     Schedule,
     ScheduleIdentity,
+    NumericalPolicyIdentity,
+    TargetIdentity,
+    CompilerToolchainIdentity,
     ScheduleModelIdentity,
     ScheduleTheoremSetIdentity,
     ScheduleSourceClosureIdentity,
+    NumericalSourceIdentity,
     PropertyTheoremManifestIdentity,
     PropertyTheoremBindingIdentities,
     NumericalTheoremSetIdentity,
     NumericalSourceClosureIdentity,
+    ReviewedVerusToolIdentity,
+    ExhaustiveBf16Identity,
+    DifferentialFixtureIdentity,
     Properties,
     MfmaContractIdentity,
     MfmaMnemonic,
+    OpenMachineRefinementJoinIdentity,
     OwnerBoundPlironGraphSerializationIdentity,
     DirectLlvmWorkerRequestResponseIdentity,
     FinalizerPostLinkIsaResultIdentity,
@@ -142,6 +158,11 @@ pub enum GeneralGemmNumericalLateMachineErrorV1 {
     ZeroNumericalCorrespondenceIdentity,
     MissingMachineIdentity(GeneralGemmNumericalMachineIdentityAxisV1),
     ZeroMachineIdentity(GeneralGemmNumericalMachineIdentityAxisV1),
+    NumericalCorrespondenceIdentityReused(GeneralGemmNumericalMachineIdentityAxisV1),
+    MachineIdentityReused {
+        first: GeneralGemmNumericalMachineIdentityAxisV1,
+        second: GeneralGemmNumericalMachineIdentityAxisV1,
+    },
     StaleOrMismatchedNumericalCorrespondenceIdentity,
     RetainedCorrespondenceInvariant(GeneralGemmNumericalLateMachineFieldV1),
     FieldMismatch(GeneralGemmNumericalLateMachineFieldV1),
@@ -249,16 +270,24 @@ pub fn derive_general_gemm_numerical_late_machine_claim_v1(
         proof_request_identity: claim.proof_request_identity,
         schedule: claim.schedule,
         schedule_identity: claim.schedule_identity,
+        numerical_policy_identity: claim.numerical_policy_identity,
+        target_identity: claim.target_identity,
+        compiler_toolchain_identity: claim.compiler_toolchain_identity,
         schedule_model_identity: claim.schedule_model_identity,
         schedule_theorem_set_identity: claim.schedule_theorem_set_identity,
         schedule_source_closure_identity: claim.schedule_source_closure_identity,
+        numerical_source_identity: claim.numerical_source_identity,
         property_theorem_manifest_identity: claim.property_theorem_manifest_identity,
         property_theorem_binding_identities: claim.property_theorem_binding_identities,
         numerical_theorem_set_identity: claim.numerical_theorem_set_identity,
         numerical_source_closure_identity: claim.numerical_source_closure_identity,
+        reviewed_verus_tool_identity: claim.reviewed_verus_tool_identity,
+        exhaustive_bf16_identity: claim.exhaustive_bf16_identity,
+        differential_fixture_identity: claim.differential_fixture_identity,
         properties: claim.properties,
         mfma_contract_identity: claim.mfma_contract_identity,
         mfma_mnemonic: GeneralGemmGfx942MfmaMnemonicV1::VmfmaF32_16x16x16Bf16,
+        open_machine_refinement_join_identity: claim.machine_refinement_join_identity,
         machine_join,
     })
 }
@@ -296,24 +325,48 @@ fn validate_machine_join(
     if join.numerical_correspondence_identity.as_bytes() == &[0; 32] {
         return Err(GeneralGemmNumericalLateMachineErrorV1::ZeroNumericalCorrespondenceIdentity);
     }
-    validate_machine_identity(
+    let graph_axis = GeneralGemmNumericalMachineIdentityAxisV1::OwnerBoundPlironGraphSerialization;
+    let worker_axis = GeneralGemmNumericalMachineIdentityAxisV1::DirectLlvmWorkerRequestResponse;
+    let finalizer_axis = GeneralGemmNumericalMachineIdentityAxisV1::FinalizerPostLinkIsaResult;
+    let graph = validate_machine_identity(
         join.owner_bound_pliron_graph_serialization_identity,
-        GeneralGemmNumericalMachineIdentityAxisV1::OwnerBoundPlironGraphSerialization,
+        graph_axis,
     )?;
-    validate_machine_identity(
+    let worker = validate_machine_identity(
         join.direct_llvm_worker_request_response_identity,
-        GeneralGemmNumericalMachineIdentityAxisV1::DirectLlvmWorkerRequestResponse,
+        worker_axis,
     )?;
-    validate_machine_identity(
-        join.finalizer_post_link_isa_result_identity,
-        GeneralGemmNumericalMachineIdentityAxisV1::FinalizerPostLinkIsaResult,
-    )
+    let finalizer =
+        validate_machine_identity(join.finalizer_post_link_isa_result_identity, finalizer_axis)?;
+    for (axis, identity) in [
+        (graph_axis, graph),
+        (worker_axis, worker),
+        (finalizer_axis, finalizer),
+    ] {
+        if identity == join.numerical_correspondence_identity {
+            return Err(
+                GeneralGemmNumericalLateMachineErrorV1::NumericalCorrespondenceIdentityReused(axis),
+            );
+        }
+    }
+    for (first, first_identity, second, second_identity) in [
+        (graph_axis, graph, worker_axis, worker),
+        (graph_axis, graph, finalizer_axis, finalizer),
+        (worker_axis, worker, finalizer_axis, finalizer),
+    ] {
+        if first_identity == second_identity {
+            return Err(
+                GeneralGemmNumericalLateMachineErrorV1::MachineIdentityReused { first, second },
+            );
+        }
+    }
+    Ok(())
 }
 
 fn validate_machine_identity(
     identity: Option<GeneralGemmEvidenceIdentityV1>,
     axis: GeneralGemmNumericalMachineIdentityAxisV1,
-) -> Result<(), GeneralGemmNumericalLateMachineErrorV1> {
+) -> Result<GeneralGemmEvidenceIdentityV1, GeneralGemmNumericalLateMachineErrorV1> {
     let Some(identity) = identity else {
         return Err(GeneralGemmNumericalLateMachineErrorV1::MissingMachineIdentity(axis));
     };
@@ -322,7 +375,7 @@ fn validate_machine_identity(
             axis,
         ));
     }
-    Ok(())
+    Ok(identity)
 }
 
 fn validate_retained_correspondence(
@@ -404,7 +457,7 @@ fn validate_retained_correspondence(
     {
         return Err(
             GeneralGemmNumericalLateMachineErrorV1::RetainedCorrespondenceInvariant(
-                Field::Properties,
+                Field::OpenMachineRefinementJoinIdentity,
             ),
         );
     }
@@ -457,6 +510,19 @@ fn compare_claims(
     require_field!(
         expected,
         claimed,
+        numerical_policy_identity,
+        NumericalPolicyIdentity
+    );
+    require_field!(expected, claimed, target_identity, TargetIdentity);
+    require_field!(
+        expected,
+        claimed,
+        compiler_toolchain_identity,
+        CompilerToolchainIdentity
+    );
+    require_field!(
+        expected,
+        claimed,
         schedule_model_identity,
         ScheduleModelIdentity
     );
@@ -471,6 +537,12 @@ fn compare_claims(
         claimed,
         schedule_source_closure_identity,
         ScheduleSourceClosureIdentity
+    );
+    require_field!(
+        expected,
+        claimed,
+        numerical_source_identity,
+        NumericalSourceIdentity
     );
     require_field!(
         expected,
@@ -496,6 +568,24 @@ fn compare_claims(
         numerical_source_closure_identity,
         NumericalSourceClosureIdentity
     );
+    require_field!(
+        expected,
+        claimed,
+        reviewed_verus_tool_identity,
+        ReviewedVerusToolIdentity
+    );
+    require_field!(
+        expected,
+        claimed,
+        exhaustive_bf16_identity,
+        ExhaustiveBf16Identity
+    );
+    require_field!(
+        expected,
+        claimed,
+        differential_fixture_identity,
+        DifferentialFixtureIdentity
+    );
     require_field!(expected, claimed, properties, Properties);
     require_field!(
         expected,
@@ -504,6 +594,12 @@ fn compare_claims(
         MfmaContractIdentity
     );
     require_field!(expected, claimed, mfma_mnemonic, MfmaMnemonic);
+    require_field!(
+        expected,
+        claimed,
+        open_machine_refinement_join_identity,
+        OpenMachineRefinementJoinIdentity
+    );
     require_field!(
         expected.machine_join,
         claimed.machine_join,
@@ -539,13 +635,21 @@ fn late_machine_binding_identity(
         claim.kir_identity,
         claim.proof_request_identity,
         claim.schedule_identity,
+        claim.numerical_policy_identity,
+        claim.target_identity,
+        claim.compiler_toolchain_identity,
         claim.schedule_model_identity,
         claim.schedule_theorem_set_identity,
         claim.schedule_source_closure_identity,
+        claim.numerical_source_identity,
         claim.property_theorem_manifest_identity,
         claim.numerical_theorem_set_identity,
         claim.numerical_source_closure_identity,
+        claim.reviewed_verus_tool_identity,
+        claim.exhaustive_bf16_identity,
+        claim.differential_fixture_identity,
         claim.mfma_contract_identity,
+        claim.open_machine_refinement_join_identity,
     ] {
         hasher.update(identity.as_bytes());
     }
