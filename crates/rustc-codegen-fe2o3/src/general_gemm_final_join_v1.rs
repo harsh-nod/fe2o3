@@ -743,42 +743,59 @@ mod tests {
         .unwrap()
     }
 
-    fn symbolic_unit_for(
-        schedule: GeneralGemmScheduleV1,
-        frontend: GeneralGemmFrontendSemanticBindingV1,
+    #[derive(Clone, Copy)]
+    struct SymbolicUnitFixtureV1 {
         request_byte: u8,
         input_byte: u8,
         compiler_byte: u8,
         target_byte: u8,
         compile_limits: CompileLimitsV1,
         lowering_limits: GeneralGemmLoweringLimitsV1,
+    }
+
+    fn canonical_symbolic_fixture() -> SymbolicUnitFixtureV1 {
+        SymbolicUnitFixtureV1 {
+            request_byte: 0x11,
+            input_byte: 0x17,
+            compiler_byte: 0x13,
+            target_byte: 0x14,
+            compile_limits: CompileLimitsV1::new(16, 16, 16, 4096, 16_384, 4096).unwrap(),
+            lowering_limits: GeneralGemmLoweringLimitsV1::default(),
+        }
+    }
+
+    fn symbolic_unit_for(
+        schedule: GeneralGemmScheduleV1,
+        frontend: GeneralGemmFrontendSemanticBindingV1,
+        fixture: SymbolicUnitFixtureV1,
     ) -> GeneralGemmSymbolicCompilationUnitV1 {
         let input = StageSnapshotV1::new(
             CompilerStageV1::FrontendInput,
-            SnapshotIdentityV1::from_untrusted_bytes(identity(input_byte)),
+            SnapshotIdentityV1::from_untrusted_bytes(identity(fixture.input_byte)),
             SnapshotFormatIdentityV1::from_untrusted_bytes(identity(0x18)),
-            vec![input_byte],
+            vec![fixture.input_byte],
         )
         .unwrap();
         let obligations = general_gemm_symbolic_obligation_set_identity_v1(&input, &frontend);
         let request = CompileRequestV1::new(
-            RequestIdentityV1::from_untrusted_bytes(identity(request_byte)),
+            RequestIdentityV1::from_untrusted_bytes(identity(fixture.request_byte)),
             KernelInstanceIdentityV1::from_untrusted_bytes(*frontend.kernel_instance_identity()),
-            CompilerProfileIdentityV1::from_untrusted_bytes(identity(compiler_byte)),
-            TargetProfileIdentityV1::from_untrusted_bytes(identity(target_byte)),
+            CompilerProfileIdentityV1::from_untrusted_bytes(identity(fixture.compiler_byte)),
+            TargetProfileIdentityV1::from_untrusted_bytes(identity(fixture.target_byte)),
             general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
             obligations,
             PipelineSelectorV1::PlironV1,
             input,
-            compile_limits,
+            fixture.compile_limits,
         )
         .unwrap();
-        GeneralGemmSymbolicCompilationUnitV1::checked(&request, frontend, schedule, lowering_limits)
-            .unwrap()
-    }
-
-    fn canonical_compile_limits() -> CompileLimitsV1 {
-        CompileLimitsV1::new(16, 16, 16, 4096, 16_384, 4096).unwrap()
+        GeneralGemmSymbolicCompilationUnitV1::checked(
+            &request,
+            frontend,
+            schedule,
+            fixture.lowering_limits,
+        )
+        .unwrap()
     }
 
     fn proof_request(
@@ -836,23 +853,13 @@ mod tests {
         let reference = symbolic_unit_for(
             GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
             frontend_binding(0x12, 0x41),
-            0x11,
-            0x17,
-            0x13,
-            0x14,
-            canonical_compile_limits(),
-            GeneralGemmLoweringLimitsV1::default(),
+            canonical_symbolic_fixture(),
         );
         let canonical_vectorized = || {
             symbolic_unit_for(
                 GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
                 frontend_binding(0x12, 0x41),
-                0x11,
-                0x17,
-                0x13,
-                0x14,
-                canonical_compile_limits(),
-                GeneralGemmLoweringLimitsV1::default(),
+                canonical_symbolic_fixture(),
             )
         };
         require_pair_request_consistency(&reference, &canonical_vectorized()).unwrap();
@@ -861,72 +868,55 @@ mod tests {
             symbolic_unit_for(
                 GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
                 frontend_binding(0x12, 0x51),
-                0x11,
-                0x17,
-                0x13,
-                0x14,
-                canonical_compile_limits(),
-                GeneralGemmLoweringLimitsV1::default(),
+                canonical_symbolic_fixture(),
             ),
             symbolic_unit_for(
                 GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
                 frontend_binding(0x12, 0x41),
-                0x21,
-                0x17,
-                0x13,
-                0x14,
-                canonical_compile_limits(),
-                GeneralGemmLoweringLimitsV1::default(),
+                SymbolicUnitFixtureV1 {
+                    request_byte: 0x21,
+                    ..canonical_symbolic_fixture()
+                },
             ),
             symbolic_unit_for(
                 GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
                 frontend_binding(0x12, 0x41),
-                0x11,
-                0x27,
-                0x13,
-                0x14,
-                canonical_compile_limits(),
-                GeneralGemmLoweringLimitsV1::default(),
+                SymbolicUnitFixtureV1 {
+                    input_byte: 0x27,
+                    ..canonical_symbolic_fixture()
+                },
             ),
             symbolic_unit_for(
                 GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
                 frontend_binding(0x12, 0x41),
-                0x11,
-                0x17,
-                0x23,
-                0x14,
-                canonical_compile_limits(),
-                GeneralGemmLoweringLimitsV1::default(),
+                SymbolicUnitFixtureV1 {
+                    compiler_byte: 0x23,
+                    ..canonical_symbolic_fixture()
+                },
             ),
             symbolic_unit_for(
                 GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
                 frontend_binding(0x12, 0x41),
-                0x11,
-                0x17,
-                0x13,
-                0x24,
-                canonical_compile_limits(),
-                GeneralGemmLoweringLimitsV1::default(),
+                SymbolicUnitFixtureV1 {
+                    target_byte: 0x24,
+                    ..canonical_symbolic_fixture()
+                },
             ),
             symbolic_unit_for(
                 GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
                 frontend_binding(0x12, 0x41),
-                0x11,
-                0x17,
-                0x13,
-                0x14,
-                CompileLimitsV1::new(15, 16, 16, 4096, 16_384, 4096).unwrap(),
-                GeneralGemmLoweringLimitsV1::default(),
+                SymbolicUnitFixtureV1 {
+                    compile_limits: CompileLimitsV1::new(15, 16, 16, 4096, 16_384, 4096).unwrap(),
+                    ..canonical_symbolic_fixture()
+                },
             ),
             symbolic_unit_for(
                 GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
                 frontend_binding(0x12, 0x41),
-                0x11,
-                0x17,
-                0x13,
-                0x14,
-                canonical_compile_limits(),
-                GeneralGemmLoweringLimitsV1::new(4095, 32).unwrap(),
+                SymbolicUnitFixtureV1 {
+                    lowering_limits: GeneralGemmLoweringLimitsV1::new(4095, 32).unwrap(),
+                    ..canonical_symbolic_fixture()
+                },
             ),
         ];
         for vectorized in substitutions {
