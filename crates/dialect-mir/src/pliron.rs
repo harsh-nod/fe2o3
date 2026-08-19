@@ -132,6 +132,16 @@ fn check_limit(
     Ok(())
 }
 
+fn ensure_mir_context_owner(
+    context: &mut Context,
+) -> Result<ContextIdentity, MirDialectBuildError> {
+    match catch_unwind(AssertUnwindSafe(|| ensure_context_identity(context))) {
+        Ok(Ok(owner)) => Ok(owner),
+        Ok(Err(error)) => Err(MirDialectBuildError::ContextIdentity(error)),
+        Err(_) => Err(MirDialectBuildError::UpstreamPanicked),
+    }
+}
+
 /// Errors from the bounded construction surface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MirDialectBuildError {
@@ -213,6 +223,8 @@ impl Error for MirDialectBuildError {}
 pub struct MirBlockHandle {
     owner: ContextIdentity,
     pointer: Ptr<BasicBlock>,
+    parent: Ptr<Operation>,
+    role: MirBlockRole,
 }
 
 impl fmt::Debug for MirBlockHandle {
@@ -230,6 +242,8 @@ pub enum MirBlockHandleError {
     ContextIdentity(ContextIdentityError),
     ForeignContext,
     StaleHandle,
+    TransplantedHandle,
+    WrongKind,
     MalformedBlock,
     VerificationFailed,
     UpstreamPanicked,
@@ -245,6 +259,10 @@ impl fmt::Display for MirBlockHandleError {
                 formatter.write_str("MIR block handle belongs to another context")
             }
             Self::StaleHandle => formatter.write_str("MIR block handle is stale"),
+            Self::TransplantedHandle => {
+                formatter.write_str("MIR block handle was transplanted to another parent")
+            }
+            Self::WrongKind => formatter.write_str("MIR block handle has the wrong block kind"),
             Self::MalformedBlock => formatter.write_str("MIR block marker is malformed"),
             Self::VerificationFailed => formatter.write_str("MIR block verification failed"),
             Self::UpstreamPanicked => {
@@ -255,6 +273,74 @@ impl fmt::Display for MirBlockHandleError {
 }
 
 impl Error for MirBlockHandleError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MirBlockRole {
+    ModuleBody,
+    FunctionEntry,
+    FunctionBlock,
+}
+
+/// An opaque module-body capability bound to one Pliron context.
+///
+/// The handle identifies the single block containing a module's functions
+/// without exposing Pliron's raw block pointer.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MirModuleBodyHandle {
+    owner: ContextIdentity,
+    pointer: Ptr<BasicBlock>,
+    parent: Ptr<Operation>,
+}
+
+impl fmt::Debug for MirModuleBodyHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MirModuleBodyHandle")
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MirModuleBodyHandle {
+    /// Returns the number of live functions after owner and liveness checks.
+    pub fn function_count(&self, context: &Context) -> Result<usize, MirBlockHandleError> {
+        with_owned_block(
+            self.owner,
+            self.pointer,
+            self.parent,
+            MirBlockRole::ModuleBody,
+            context,
+            |body, context| body.deref(context).iter(context).count(),
+        )
+    }
+
+    /// Verifies the live module containing this body.
+    pub fn verify(&self, context: &Context) -> Result<(), MirBlockHandleError> {
+        verify_owned_block_parent(
+            self.owner,
+            self.pointer,
+            self.parent,
+            MirBlockRole::ModuleBody,
+            context,
+        )
+    }
+
+    /// Erases this module body after owner, liveness, and role checks.
+    pub fn erase(&self, context: &mut Context) -> Result<(), MirBlockHandleError> {
+        erase_owned_block(
+            self.owner,
+            self.pointer,
+            self.parent,
+            MirBlockRole::ModuleBody,
+            context,
+        )
+    }
+
+    /// This in-memory capability grants no publication or runtime authority.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+}
 
 impl MirBlockHandle {
     /// Returns the canonical MIR block identity after owner and liveness checks.
@@ -286,11 +372,7 @@ impl MirBlockHandle {
 
     /// Erases this block after owner and liveness checks.
     pub fn erase(&self, context: &mut Context) -> Result<(), MirBlockHandleError> {
-        self.authenticate(context)?;
-        catch_unwind(AssertUnwindSafe(|| {
-            BasicBlock::erase(self.pointer, context)
-        }))
-        .map_err(|_| MirBlockHandleError::UpstreamPanicked)
+        erase_owned_block(self.owner, self.pointer, self.parent, self.role, context)
     }
 
     /// This in-memory capability grants no publication or runtime authority.
@@ -299,18 +381,7 @@ impl MirBlockHandle {
     }
 
     fn authenticate(&self, context: &Context) -> Result<(), MirBlockHandleError> {
-        let owner =
-            require_context_identity(context).map_err(MirBlockHandleError::ContextIdentity)?;
-        if owner != self.owner {
-            return Err(MirBlockHandleError::ForeignContext);
-        }
-        match catch_unwind(AssertUnwindSafe(|| {
-            self.pointer.try_deref(context).map(drop)
-        })) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) => Err(MirBlockHandleError::StaleHandle),
-            Err(_) => Err(MirBlockHandleError::UpstreamPanicked),
-        }
+        authenticate_owned_block(self.owner, self.pointer, self.parent, self.role, context)
     }
 
     fn with_block<T>(
@@ -318,10 +389,118 @@ impl MirBlockHandle {
         context: &Context,
         action: impl FnOnce(Ptr<BasicBlock>, &Context) -> T,
     ) -> Result<T, MirBlockHandleError> {
-        self.authenticate(context)?;
-        catch_unwind(AssertUnwindSafe(|| action(self.pointer, context)))
-            .map_err(|_| MirBlockHandleError::UpstreamPanicked)
+        with_owned_block(
+            self.owner,
+            self.pointer,
+            self.parent,
+            self.role,
+            context,
+            action,
+        )
     }
+}
+
+fn authenticate_owned_block(
+    expected_owner: ContextIdentity,
+    pointer: Ptr<BasicBlock>,
+    expected_parent: Ptr<Operation>,
+    role: MirBlockRole,
+    context: &Context,
+) -> Result<(), MirBlockHandleError> {
+    let owner = require_context_identity(context).map_err(MirBlockHandleError::ContextIdentity)?;
+    if owner != expected_owner {
+        return Err(MirBlockHandleError::ForeignContext);
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let block = pointer
+            .try_deref(context)
+            .map_err(|_| MirBlockHandleError::StaleHandle)?;
+        let Some(parent_region) = block.get_parent_region() else {
+            return Err(MirBlockHandleError::WrongKind);
+        };
+        drop(block);
+
+        let region = parent_region.deref(context);
+        let parent = region.get_parent_op();
+        let at_head = region.get_head() == Some(pointer);
+        let is_only_block = at_head && region.get_tail() == Some(pointer);
+        drop(region);
+
+        let parent_operation = parent.deref(context);
+        let owns_region =
+            parent_operation.num_regions() == 1 && parent_operation.get_region(0) == parent_region;
+        drop(parent_operation);
+        let (has_expected_parent_kind, has_expected_position) = match role {
+            MirBlockRole::ModuleBody => (
+                Operation::is_op::<MirModuleOp>(parent, context),
+                is_only_block,
+            ),
+            MirBlockRole::FunctionEntry => {
+                (Operation::is_op::<MirFunctionOp>(parent, context), at_head)
+            }
+            MirBlockRole::FunctionBlock => {
+                (Operation::is_op::<MirFunctionOp>(parent, context), true)
+            }
+        };
+        if !owns_region || !has_expected_parent_kind {
+            return Err(MirBlockHandleError::WrongKind);
+        }
+        if parent != expected_parent {
+            return Err(MirBlockHandleError::TransplantedHandle);
+        }
+        if !has_expected_position {
+            return Err(MirBlockHandleError::WrongKind);
+        }
+        Ok(())
+    })) {
+        Ok(result) => result,
+        Err(_) => Err(MirBlockHandleError::UpstreamPanicked),
+    }
+}
+
+fn with_owned_block<T>(
+    owner: ContextIdentity,
+    pointer: Ptr<BasicBlock>,
+    parent: Ptr<Operation>,
+    role: MirBlockRole,
+    context: &Context,
+    action: impl FnOnce(Ptr<BasicBlock>, &Context) -> T,
+) -> Result<T, MirBlockHandleError> {
+    authenticate_owned_block(owner, pointer, parent, role, context)?;
+    catch_unwind(AssertUnwindSafe(|| action(pointer, context)))
+        .map_err(|_| MirBlockHandleError::UpstreamPanicked)
+}
+
+fn verify_owned_block_parent(
+    owner: ContextIdentity,
+    pointer: Ptr<BasicBlock>,
+    parent: Ptr<Operation>,
+    role: MirBlockRole,
+    context: &Context,
+) -> Result<(), MirBlockHandleError> {
+    let verified = with_owned_block(owner, pointer, parent, role, context, |block, context| {
+        block
+            .deref(context)
+            .get_parent_op(context)
+            .is_some_and(|parent| verify_operation(parent, context).is_ok())
+    })?;
+    if verified {
+        Ok(())
+    } else {
+        Err(MirBlockHandleError::VerificationFailed)
+    }
+}
+
+fn erase_owned_block(
+    owner: ContextIdentity,
+    pointer: Ptr<BasicBlock>,
+    parent: Ptr<Operation>,
+    role: MirBlockRole,
+    context: &mut Context,
+) -> Result<(), MirBlockHandleError> {
+    authenticate_owned_block(owner, pointer, parent, role, context)?;
+    catch_unwind(AssertUnwindSafe(|| BasicBlock::erase(pointer, context)))
+        .map_err(|_| MirBlockHandleError::UpstreamPanicked)
 }
 
 /// Verifier failures specific to the MIR dialect shell.
@@ -590,6 +769,7 @@ impl MirModuleOp {
         limits: MirDialectLimits,
     ) -> Result<Self, MirDialectBuildError> {
         let identity = MirIdentityAttr::try_new_bounded(identity, limits.max_identity_bytes)?;
+        ensure_mir_context_owner(context)?;
         let op = Operation::new(
             context,
             Self::get_concrete_op_info(),
@@ -611,7 +791,23 @@ impl MirModuleOp {
         Ok(module)
     }
 
-    pub fn body(&self, context: &Context) -> Ptr<BasicBlock> {
+    /// Returns the owner-bound block containing this module's functions.
+    pub fn body(&self, context: &Context) -> Result<MirModuleBodyHandle, MirBlockHandleError> {
+        let owner =
+            require_context_identity(context).map_err(MirBlockHandleError::ContextIdentity)?;
+        let pointer = catch_unwind(AssertUnwindSafe(|| self.body_raw(context)))
+            .map_err(|_| MirBlockHandleError::UpstreamPanicked)?;
+        let parent = self.get_operation();
+        let handle = MirModuleBodyHandle {
+            owner,
+            pointer,
+            parent,
+        };
+        authenticate_owned_block(owner, pointer, parent, MirBlockRole::ModuleBody, context)?;
+        Ok(handle)
+    }
+
+    fn body_raw(&self, context: &Context) -> Ptr<BasicBlock> {
         self.get_region(context)
             .deref(context)
             .get_head()
@@ -619,7 +815,7 @@ impl MirModuleOp {
     }
 
     pub fn function_count(&self, context: &Context) -> usize {
-        self.body(context).deref(context).iter(context).count()
+        self.body_raw(context).deref(context).iter(context).count()
     }
 
     pub fn append_function(
@@ -654,7 +850,7 @@ impl MirModuleOp {
         let function = MirFunctionOp::new(context, identity, limits, argument_types);
         function
             .get_operation()
-            .insert_at_back(self.body(context), context);
+            .insert_at_back(self.body_raw(context), context);
         Ok(function)
     }
 }
@@ -683,7 +879,11 @@ impl Verify for MirModuleOp {
         }
 
         let mut identities = BTreeSet::new();
-        let functions: Vec<_> = self.body(context).deref(context).iter(context).collect();
+        let functions: Vec<_> = self
+            .body_raw(context)
+            .deref(context)
+            .iter(context)
+            .collect();
         if functions.len() > limits.max_functions {
             return verify_err!(
                 op.deref(context).loc(),
@@ -776,7 +976,24 @@ impl MirFunctionOp {
         function
     }
 
-    pub fn entry_block(&self, context: &Context) -> Ptr<BasicBlock> {
+    /// Returns the owner-bound entry block for this function.
+    pub fn entry_block(&self, context: &Context) -> Result<MirBlockHandle, MirBlockHandleError> {
+        let owner =
+            require_context_identity(context).map_err(MirBlockHandleError::ContextIdentity)?;
+        let pointer = catch_unwind(AssertUnwindSafe(|| self.entry_block_raw(context)))
+            .map_err(|_| MirBlockHandleError::UpstreamPanicked)?;
+        let parent = self.get_operation();
+        let handle = MirBlockHandle {
+            owner,
+            pointer,
+            parent,
+            role: MirBlockRole::FunctionEntry,
+        };
+        handle.authenticate(context)?;
+        Ok(handle)
+    }
+
+    fn entry_block_raw(&self, context: &Context) -> Ptr<BasicBlock> {
         self.get_region(context)
             .deref(context)
             .get_head()
@@ -794,11 +1011,7 @@ impl MirFunctionOp {
         &self,
         context: &mut Context,
     ) -> Result<MirBlockHandle, MirDialectBuildError> {
-        let owner = match catch_unwind(AssertUnwindSafe(|| ensure_context_identity(context))) {
-            Ok(Ok(owner)) => owner,
-            Ok(Err(error)) => return Err(MirDialectBuildError::ContextIdentity(error)),
-            Err(_) => return Err(MirDialectBuildError::UpstreamPanicked),
-        };
+        let owner = ensure_mir_context_owner(context)?;
         catch_unwind(AssertUnwindSafe(|| {
             let limits = self
                 .get_attr_function_limits(context)
@@ -832,6 +1045,8 @@ impl MirFunctionOp {
             Ok(MirBlockHandle {
                 owner,
                 pointer: block,
+                parent: self.get_operation(),
+                role: MirBlockRole::FunctionBlock,
             })
         }))
         .unwrap_or(Err(MirDialectBuildError::UpstreamPanicked))
@@ -1037,6 +1252,7 @@ impl Verify for MirReturnOp {
 
 /// Explicitly registers every D1 MIR entity. Repeated calls are idempotent.
 pub fn register_mir_dialect(context: &mut Context) {
+    let _ = catch_unwind(AssertUnwindSafe(|| ensure_context_identity(context)));
     MirTypeRef::register(context);
     MirIdentityAttr::register(context);
     MirLimitsAttr::register(context);

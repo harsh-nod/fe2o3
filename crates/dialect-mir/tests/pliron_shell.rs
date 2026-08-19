@@ -18,7 +18,8 @@ use fe2o3_pliron::{
     CONTEXT_IDENTITY_MARKER_KEY, ContextIdentityError, PLIRON_REVISION, PlironSession, ShellLimits,
 };
 use pliron::{
-    context::Context,
+    basic_block::BasicBlock,
+    context::{Context, Ptr},
     identifier::Identifier,
     linked_list::ContainsLinkedList,
     op::Op,
@@ -28,6 +29,34 @@ use pliron::{
     result::ExpectOk,
     r#type::{Type, TypeHandle, verify_type},
 };
+
+#[cfg(test)]
+fn raw_module_body_for_pliron_handle_test(
+    module: &MirModuleOp,
+    context: &Context,
+) -> Ptr<BasicBlock> {
+    module
+        .get_operation()
+        .deref(context)
+        .get_region(0)
+        .deref(context)
+        .get_head()
+        .expect("test module body")
+}
+
+#[cfg(test)]
+fn raw_function_entry_for_pliron_handle_test(
+    function: &MirFunctionOp,
+    context: &Context,
+) -> Ptr<BasicBlock> {
+    function
+        .get_operation()
+        .deref(context)
+        .get_region(0)
+        .deref(context)
+        .get_head()
+        .expect("test function entry")
+}
 
 fn marker_key(value: &str) -> Identifier {
     value.try_into().expect("fixed marker key is valid")
@@ -94,17 +123,9 @@ fn typed_module_function_and_blocks_round_trip_through_pliron() {
     assert_eq!(second_block.block_id(&context), Ok(MirBlockId(1)));
     assert_eq!(second_block.verify(&context), Ok(()));
     assert!(!second_block.grants_authority());
-    assert_eq!(
-        MirBlockOp::from_operation(
-            function
-                .entry_block(&context)
-                .deref(&context)
-                .get_head()
-                .unwrap()
-        )
-        .block_id(&context),
-        Some(MirBlockId(0))
-    );
+    let entry = function.entry_block(&context).unwrap();
+    assert_eq!(entry.block_id(&context), Ok(MirBlockId(0)));
+    assert_eq!(entry.verify(&context), Ok(()));
     verify_operation(module.get_operation(), &context).unwrap();
 
     let printed = module
@@ -216,8 +237,7 @@ fn verifier_rejects_duplicate_identities_and_hostile_attributes() {
         .append_function(&mut context, "function", &[])
         .unwrap();
     let marker = MirBlockOp::from_operation(
-        function
-            .entry_block(&context)
+        raw_function_entry_for_pliron_handle_test(&function, &context)
             .deref(&context)
             .get_head()
             .unwrap(),
@@ -248,15 +268,17 @@ fn verifier_rejects_malformed_structure_and_nesting() {
     let misplaced = MirModuleOp::try_new(&mut context, "misplaced", limits).unwrap();
     MirReturnOp::new(&mut context)
         .get_operation()
-        .insert_at_back(misplaced.body(&context), &context);
+        .insert_at_back(
+            raw_module_body_for_pliron_handle_test(&misplaced, &context),
+            &context,
+        );
     assert!(verify_operation(misplaced.get_operation(), &context).is_err());
 
     let missing_marker = MirModuleOp::try_new(&mut context, "missing", limits).unwrap();
     let function = missing_marker
         .append_function(&mut context, "function", &[])
         .unwrap();
-    let marker = function
-        .entry_block(&context)
+    let marker = raw_function_entry_for_pliron_handle_test(&function, &context)
         .deref(&context)
         .get_head()
         .unwrap();
