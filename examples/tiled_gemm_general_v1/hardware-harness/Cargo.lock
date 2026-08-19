@@ -415,8 +415,6 @@ name = "fe2o3-hsaco"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
- "object",
- "rmpv",
 ]
 
 [[package]]
@@ -546,6 +544,7 @@ dependencies = [
  "fe2o3-artifacts",
  "fe2o3-contracts",
  "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
  "fe2o3-rustc-front",
  "proc-macro2",
  "rustix",
