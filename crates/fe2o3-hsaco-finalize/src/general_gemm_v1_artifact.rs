@@ -181,6 +181,8 @@ pub struct OpaqueGeneralGemmPostLinkMachineObservationV1 {
     symbolic_compilation: GeneralGemmSymbolicCompilationIdentityV1,
     symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
     projection: GeneralGemmPlironProjectionIdentityV1,
+    graph_export: [u8; 32],
+    compiler_boundary: [u8; 32],
     handoff_v2: HandoffIdentityV2,
     typed_worker_admission: [u8; 32],
     llvm_assembly: LlvmAssemblySha256V2,
@@ -232,6 +234,14 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
 
     pub const fn projection_identity(&self) -> GeneralGemmPlironProjectionIdentityV1 {
         self.projection
+    }
+
+    pub const fn graph_export_identity(&self) -> &[u8; 32] {
+        &self.graph_export
+    }
+
+    pub const fn compiler_boundary_identity(&self) -> &[u8; 32] {
+        &self.compiler_boundary
     }
 
     pub const fn handoff_v2_identity(&self) -> HandoffIdentityV2 {
@@ -399,7 +409,7 @@ impl InertGeneralGemmWorkerV2EvidenceV1 {
     }
 
     pub fn handoff_v2_identity(&self) -> HandoffIdentityV2 {
-        self.machine.handoff().identity()
+        self.machine.graph_handoff().identity()
     }
 
     pub const fn llvm_assembly_identity(&self) -> LlvmAssemblySha256V2 {
@@ -572,11 +582,9 @@ pub fn execute_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
-    if machine.compiler_boundary().graph_export().graph_handoff() != machine.handoff()
-        || machine.compiler_boundary().graph_export().source_identity()
-            != machine.handoff().identity()
-        || machine.worker_admission().handoff() != machine.handoff()
-        || machine.worker_admission().handoff_identity() != machine.handoff().identity()
+    if machine.compiler_boundary().graph_export().source_identity() != machine.handoff().identity()
+        || machine.worker_admission().handoff() != machine.graph_handoff()
+        || machine.worker_admission().handoff_identity() != machine.graph_handoff().identity()
     {
         return Err(GeneralGemmWorkerV2ErrorV1::TypedAdmissionSubstitution);
     }
@@ -618,11 +626,9 @@ pub fn execute_symbolic_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertSymbolicGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
-    if machine.compiler_boundary().graph_export().graph_handoff() != machine.handoff()
-        || machine.compiler_boundary().graph_export().source_identity()
-            != machine.handoff().identity()
-        || machine.worker_admission().handoff() != machine.handoff()
-        || machine.worker_admission().handoff_identity() != machine.handoff().identity()
+    if machine.compiler_boundary().graph_export().source_identity() != machine.handoff().identity()
+        || machine.worker_admission().handoff() != machine.graph_handoff()
+        || machine.worker_admission().handoff_identity() != machine.graph_handoff().identity()
     {
         return Err(GeneralGemmWorkerV2ErrorV1::TypedAdmissionSubstitution);
     }
@@ -746,7 +752,13 @@ pub fn finalize_symbolic_general_gemm_worker_v2_v1(
         symbolic_compilation: machine.projection().compilation_identity(),
         symbolic_artifact: machine.artifact_identity(),
         projection: machine.projection().identity(),
-        handoff_v2: machine.handoff().identity(),
+        graph_export: machine
+            .compiler_boundary()
+            .graph_export()
+            .identity()
+            .as_bytes(),
+        compiler_boundary: *machine.compiler_boundary().identity().as_bytes(),
+        handoff_v2: machine.graph_handoff().identity(),
         typed_worker_admission: *machine.worker_admission().admission_identity().as_bytes(),
         llvm_assembly: machine.assembly().sha256(),
         compiler_handoff: machine.compiler_handoff().identity(),
@@ -800,7 +812,7 @@ fn schedule_from_identity(
 fn validate_typed_machine_refinement(
     machine: &GeneralGemmSymbolicStructuralMachineV1,
 ) -> Result<(), GeneralGemmPostLinkMachineErrorV1> {
-    let functions = machine.handoff().module().functions();
+    let functions = machine.graph_handoff().module().functions();
     if functions.len() != 1 || functions[0].symbol() != GENERAL_GEMM_KERNEL_SYMBOL_V1 {
         return Err(GeneralGemmPostLinkMachineErrorV1::MachineProfile(
             "typed kernel closure",
@@ -1103,7 +1115,15 @@ fn calculate_post_link_identity(
     hasher.update(machine.projection().schedule_identity().as_bytes());
     hasher.update(machine.projection().symbolic_plan_identity().as_bytes());
     hasher.update(machine.projection().symbolic_kir_identity().as_bytes());
-    hasher.update(machine.handoff().identity().as_bytes());
+    hasher.update(
+        machine
+            .compiler_boundary()
+            .graph_export()
+            .identity()
+            .as_bytes(),
+    );
+    hasher.update(machine.compiler_boundary().identity().as_bytes());
+    hasher.update(machine.graph_handoff().identity().as_bytes());
     hasher.update(machine.worker_admission().admission_identity().as_bytes());
     hasher.update(machine.assembly().sha256().as_bytes());
     hasher.update(machine.compiler_handoff().identity().sha256());
@@ -1167,7 +1187,7 @@ fn calculate_worker_identity(
     let mut hasher = Sha256::new();
     hasher.update(GENERAL_GEMM_WORKER_IDENTITY_DOMAIN_V1);
     hasher.update(machine.projection().identity().as_bytes());
-    hasher.update(machine.handoff().identity().as_bytes());
+    hasher.update(machine.graph_handoff().identity().as_bytes());
     hasher.update(machine.compiler_boundary().identity().as_bytes());
     hasher.update(machine.worker_admission().admission_identity().as_bytes());
     hasher.update(machine.assembly().sha256().as_bytes());
@@ -1194,7 +1214,7 @@ fn calculate_symbolic_worker_identity(
     hasher.update(GENERAL_GEMM_WORKER_IDENTITY_DOMAIN_V1);
     hasher.update(machine.artifact_identity().as_bytes());
     hasher.update(machine.projection().identity().as_bytes());
-    hasher.update(machine.handoff().identity().as_bytes());
+    hasher.update(machine.graph_handoff().identity().as_bytes());
     hasher.update(machine.compiler_boundary().identity().as_bytes());
     hasher.update(machine.worker_admission().admission_identity().as_bytes());
     hasher.update(machine.assembly().sha256().as_bytes());

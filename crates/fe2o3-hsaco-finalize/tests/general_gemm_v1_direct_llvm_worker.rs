@@ -202,6 +202,12 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
         );
         assert_ne!(machine.compiler_boundary().identity().as_bytes(), &[0; 32]);
         assert!(!machine.compiler_boundary().grants_artifact_authority());
+        let graph_export_identity = machine
+            .compiler_boundary()
+            .graph_export()
+            .identity()
+            .as_bytes();
+        let compiler_boundary_identity = *machine.compiler_boundary().identity().as_bytes();
         let directory = TestDirectory::new();
         let consumed = consumed_handoff(&directory, machine.compiler_handoff(), schedule_byte);
         let evidence = execute_symbolic_general_gemm_worker_v2_v1(
@@ -220,6 +226,11 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
         .expect("write inert raw HSACO for audit");
         let observation = finalize_symbolic_general_gemm_worker_v2_v1(evidence)
             .unwrap_or_else(|error| panic!("{label} post-link inspection failed: {error:?}"));
+        assert_eq!(observation.graph_export_identity(), &graph_export_identity);
+        assert_eq!(
+            observation.compiler_boundary_identity(),
+            &compiler_boundary_identity
+        );
         assert_eq!(observation.schedule(), schedule);
         assert_eq!(
             observation.vector_global_load_count(),
