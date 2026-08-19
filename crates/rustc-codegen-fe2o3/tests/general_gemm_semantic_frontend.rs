@@ -137,7 +137,7 @@ fn assert_failed_without_artifact(output: &Output, artifacts: &Path) -> String {
 }
 
 #[test]
-fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() {
+fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic() {
     let _lock = backend_test_lock();
     let workspace = workspace();
     let fixture = fixture(&workspace);
@@ -244,6 +244,55 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
 
     for (bin, root, code, property, stage) in [
         (
+            "unguarded-a-tail-load",
+            "valid_proof_sensitive",
+            "0x46470102",
+            "bounds_safe",
+            "tile",
+        ),
+        (
+            "unguarded-b-tail-load",
+            "valid_proof_sensitive",
+            "0x46470102",
+            "bounds_safe",
+            "tile",
+        ),
+        (
+            "out-of-bounds-c-store",
+            "valid_proof_sensitive",
+            "0x46470102",
+            "bounds_safe",
+            "tile",
+        ),
+        (
+            "lane-output-collision",
+            "valid_proof_sensitive",
+            "0x46470106",
+            "output_region_injective",
+            "tile",
+        ),
+        (
+            "workgroup-output-collision",
+            "valid_proof_sensitive",
+            "0x46470106",
+            "output_region_injective",
+            "tile",
+        ),
+        (
+            "lds-write-collision",
+            "valid_proof_sensitive",
+            "0x46470104",
+            "race_free",
+            "gpu",
+        ),
+        (
+            "missing-b-stage-initialization",
+            "valid_proof_sensitive",
+            "0x46470103",
+            "initialized",
+            "gpu",
+        ),
+        (
             "missing-publish",
             "valid_proof_sensitive",
             "0x46470103",
@@ -251,11 +300,46 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
             "gpu",
         ),
         (
-            "duplicate-store",
-            "duplicate_store",
-            "0x46470106",
-            "output_region_injective",
-            "tile",
+            "divergent-publish",
+            "valid_proof_sensitive",
+            "0x46470105",
+            "barrier_convergent",
+            "gpu",
+        ),
+        (
+            "missing-reuse",
+            "valid_proof_sensitive",
+            "0x46470107",
+            "lds_epoch_correct",
+            "gpu",
+        ),
+        (
+            "expired-lds-epoch",
+            "valid_proof_sensitive",
+            "0x46470107",
+            "lds_epoch_correct",
+            "gpu",
+        ),
+        (
+            "read-before-wait",
+            "valid_proof_sensitive",
+            "0x46470103",
+            "initialized",
+            "gpu",
+        ),
+        (
+            "reset-accumulator",
+            "valid_proof_sensitive",
+            "0x46470108",
+            "accumulator_phase_refinement",
+            "kernel",
+        ),
+        (
+            "incorrect-k-tail-zero-fill",
+            "valid_proof_sensitive",
+            "0x46470109",
+            "tail_refinement",
+            "kernel",
         ),
         (
             "incorrect-alpha-beta-epilogue",
@@ -263,6 +347,15 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
             "0x4647010a",
             "epilogue_refinement",
             "kernel",
+        ),
+        // This older reduced fixture is not one of the exact 15 reversible
+        // corpus edits, but retains coverage for repeated sequential stores.
+        (
+            "duplicate-store",
+            "duplicate_store",
+            "0x46470106",
+            "output_region_injective",
+            "tile",
         ),
     ] {
         let source_bin = bin.replace('-', "_");
