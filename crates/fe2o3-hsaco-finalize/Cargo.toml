@@ -15,9 +15,12 @@ name = "fe2o3_hsaco_finalize"
 dialect-amdgcn.workspace = true
 fe2o3-artifact-transaction.workspace = true
 fe2o3-compiler-ffi.workspace = true
+fe2o3-general-gemm-compiler.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
+fe2o3-llvm-handoff.workspace = true
+fe2o3-llvm-text.workspace = true
 fe2o3-verifier.workspace = true
 object = { version = "0.39.1", default-features = false, features = ["elf", "read_core"] }
 reserved-fe2o3-symbols.workspace = true
@@ -37,5 +40,7 @@ test = false
 bench = false
 
 [dev-dependencies]
+fe2o3-compiler-api.workspace = true
+fe2o3-compiler-driver.workspace = true
 rmpv = { version = "1.3.1", default-features = false }
 trybuild = "1"

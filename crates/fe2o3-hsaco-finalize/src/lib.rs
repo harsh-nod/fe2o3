@@ -21,6 +21,7 @@ mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
 mod flash_attention_v1_finalizer;
+mod general_gemm_v1_artifact;
 mod lds_gemm_finalizer;
 mod lds_gemm_profile_registry;
 mod link_plan;
@@ -90,6 +91,10 @@ pub use flash_attention_v1_finalizer::{
     FlashAttentionV1FinalizationExpectationV1, FlashAttentionV1FinalizationReceiptIdentityV1,
     FlashAttentionV1OcmlProviderPinsV1, FlashAttentionV1WorkerPinsV1,
     finalize_flash_attention_v1_worker_v2_hsaco_v1,
+};
+pub use general_gemm_v1_artifact::{
+    GeneralGemmWorkerV2ErrorV1, GeneralGemmWorkerV2IdentityV1, InertGeneralGemmWorkerV2EvidenceV1,
+    execute_general_gemm_worker_v2_v1,
 };
 pub use lds_gemm_finalizer::{
     ExactLdsGemmFinalizationErrorV1, FinalizedExactLdsGemmHsacoIdentityV1,
