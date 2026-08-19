@@ -3,14 +3,14 @@
 use core::{error::Error, fmt};
 
 use fe2o3_llvm_handoff::{
-    AddressSpaceV1, BinaryOperationV2, CallingConventionV2, CastOperationV2,
+    AddressSpaceV1, BinaryOperationV2, CallTargetV2, CallingConventionV2, CastOperationV2,
     FloatBinaryOperationV2, FunctionAttributeV2, FunctionKindV2, Gfx942HandoffV2,
     Gfx942TargetPolicyV1, GlobalLinkageV2, GlobalV2, InstructionKindV2, IntegerBinaryOperationV2,
     IntrinsicV2, ModuleFlagV1, NamedMetadataV1, ObligationKindV1, OriginKindV1, ReturnTypeV2,
     ScalarTypeV1, TerminatorV2, ValueTypeV2,
 };
 
-/// The two closed source profiles recognized by the first typed lowering lane.
+/// The closed source profiles recognized by the first typed lowering lane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AmdgcnPlironLlvmProfileV1 {
     /// Straight-line scalar memory and arithmetic.
@@ -41,7 +41,7 @@ pub enum UnsupportedInstructionV1 {
     VectorZero,
     /// A four-lane vector load.
     VectorLoad4,
-    /// A direct function or intrinsic call.
+    /// A direct function call.
     Call,
     /// A fixed-vector insertion.
     InsertElement,
@@ -170,12 +170,21 @@ pub fn admit_amdgcn_pliron_llvm_v1(
                         | InstructionKindV2::VectorLoad4 { .. }
                         | InstructionKindV2::InsertElement { .. }
                         | InstructionKindV2::ExtractElement { .. }
+                        | InstructionKindV2::Call {
+                            target: CallTargetV2::Intrinsic(
+                                IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k
+                            ),
+                            ..
+                        }
                 );
                 control_flow_gemm |= matches!(instruction.kind(), InstructionKindV2::Phi { .. });
                 control_flow_gemm |= matches!(
                     instruction.kind(),
                     InstructionKindV2::Binary {
                         operation: BinaryOperationV2::Float(FloatBinaryOperationV2::Multiply),
+                        ..
+                    } | InstructionKindV2::Call {
+                        target: CallTargetV2::Intrinsic(IntrinsicV2::FmaF32),
                         ..
                     }
                 );
@@ -255,12 +264,30 @@ fn validate_policy(handoff: &Gfx942HandoffV2) -> Result<(), AmdgcnPlironLlvmReje
     for global in handoff.module().globals() {
         validate_global(global)?;
     }
-    if let Some(intrinsic) = handoff.module().intrinsics().first() {
-        return Err(AmdgcnPlironLlvmRejectionV1::UnsupportedIntrinsic(
-            intrinsic.intrinsic(),
-        ));
+    for reference in handoff.module().intrinsics() {
+        validate_intrinsic(reference.intrinsic())?;
     }
     Ok(())
+}
+
+fn validate_intrinsic(intrinsic: IntrinsicV2) -> Result<(), AmdgcnPlironLlvmRejectionV1> {
+    let (return_type, parameters) = intrinsic.signature();
+    if let ReturnTypeV2::Value(value_type) = return_type {
+        validate_value_type(value_type)?;
+    }
+    for parameter in parameters {
+        validate_value_type(parameter)?;
+    }
+
+    match intrinsic {
+        IntrinsicV2::AmdGpuWorkitemId(_)
+        | IntrinsicV2::AmdGpuWorkgroupId(_)
+        | IntrinsicV2::AmdGpuBarrier
+        | IntrinsicV2::FmaF32
+        | IntrinsicV2::SqrtF32
+        | IntrinsicV2::Trap
+        | IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k => Ok(()),
+    }
 }
 
 fn validate_global(global: &GlobalV2) -> Result<(), AmdgcnPlironLlvmRejectionV1> {
@@ -413,7 +440,14 @@ fn validate_instruction(
                 UnsupportedInstructionV1::GetElementPtrShape,
             ))
         }
-        InstructionKindV2::Call { .. } => Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
+        InstructionKindV2::Call {
+            target: CallTargetV2::Intrinsic(intrinsic),
+            ..
+        } => validate_intrinsic(*intrinsic),
+        InstructionKindV2::Call {
+            target: CallTargetV2::Function(_),
+            ..
+        } => Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
             UnsupportedInstructionV1::Call,
         )),
     }
