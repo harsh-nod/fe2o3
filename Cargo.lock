@@ -1102,6 +1102,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-pliron-llvm-smoke"
+version = "0.1.0"
+dependencies = [
+ "pliron",
+ "pliron-llvm",
+ "serde_json",
+]
+
+[[package]]
 name = "fe2o3-previous"
 version = "0.1.0"
 dependencies = [
@@ -2128,6 +2137,17 @@ dependencies = [
  "quote",
  "rustc-hash",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "pliron-llvm"
+version = "0.17.0"
+source = "git+https://github.com/pliron-org/pliron.git?rev=2610651306ea3ba670f68d5d8b1e1159bcd521ed#2610651306ea3ba670f68d5d8b1e1159bcd521ed"
+dependencies = [
+ "bitflags",
+ "log",
+ "pliron",
+ "thiserror",
 ]
 
 [[package]]
