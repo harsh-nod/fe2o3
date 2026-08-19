@@ -1,22 +1,20 @@
 # `pliron-llvm` v0.17.0 coverage for the gfx942 finalizer
 
-Status: source audit at fe2o3 commit
-[`2f7c4fd1dfef7b9056caab0880700e3da7eeef03`](https://github.com/powderluv/fe2o3/tree/2f7c4fd1dfef7b9056caab0880700e3da7eeef03)
-and Pliron commit
+Status: upstream source audit at Pliron commit
 [`2610651306ea3ba670f68d5d8b1e1159bcd521ed`](https://github.com/pliron-org/pliron/tree/2610651306ea3ba670f68d5d8b1e1159bcd521ed),
-the commit published as `pliron`/`pliron-llvm` v0.17.0.
+the commit published as `pliron`/`pliron-llvm` v0.17.0. fe2o3 implementation
+status includes one bounded backend-fixture-to-MI300X scalar closure at
+`fce35b087`, `8190f8ae0`, `ee581c3c2`, `41f78f414`, `ff8311fcf`, and
+`0fa9c6249`.
 
 ## Scope and conclusion
 
-The root manifest pins the Pliron workspace commit, and the lockfile resolves
-`pliron` v0.17.0 at that exact revision. `pliron-llvm` is in the pinned upstream
-workspace but is deliberately not a fe2o3 dependency. The architecture records
-that exclusion and assigns LLVM target-machine and in-process LLD work to the
-isolated finalizer worker
-([pin](https://github.com/powderluv/fe2o3/blob/2f7c4fd1dfef7b9056caab0880700e3da7eeef03/Cargo.toml#L108),
-[lock](https://github.com/powderluv/fe2o3/blob/2f7c4fd1dfef7b9056caab0880700e3da7eeef03/Cargo.lock#L2093-L2095),
-[architecture](https://github.com/powderluv/fe2o3/blob/2f7c4fd1dfef7b9056caab0880700e3da7eeef03/docs/pliron-wave0-architecture.md#L28-L37)).
-No repository-local `AGENTS.md` file exists at this commit.
+The root manifest pins that exact Pliron workspace revision. fe2o3 now uses
+`pliron-llvm` selectively as a typed dialect dependency with
+`default-features = false`. Its optional `llvm-sys` converter is not used in
+the producer or inside the production worker. LLVM target-machine and
+in-process LLD work remains assigned exclusively to the isolated measured
+upstream LLVM 22.1.8 finalizer.
 
 The audited `pliron-llvm` is a useful target-neutral LLVM dialect and a partial
 LLVM-C importer/exporter. It is **not** a drop-in representation or finalizer for
@@ -27,16 +25,50 @@ metadata, strict constrained-FP metadata operands, and some memory-operation
 flags. Its LLVM wrapper also has no target-machine object emission and no LLD
 API. Those absences are architectural, not a short list of spelling changes.
 
-The recommendation is:
+The architecture decision is:
 
 1. Keep the existing isolated finalizer worker as the only authority for target
    setup, device-library linking, optimization, object emission, LLD, and HSACO
    inspection.
-2. Upstream target-independent representation and conversion fixes to
-   `pliron-llvm`.
-3. Add only a bounded fe2o3 AMDGPU contract layer and a fail-closed export gate.
-   Do not fork a second target machine or linker implementation into the Pliron
-   path.
+2. Use only the reviewed `pliron-llvm` dialect surface. Do not run its
+   LLVM-C/`llvm-sys` converter in any production component, including the
+   worker.
+3. Let fe2o3 derive canonical V2 from the live graph and serialize only the
+   admitted subset to deterministic bounded LLVM assembly. Do not fork a
+   second target machine or linker implementation into the Pliron path.
+
+## Implemented scalar boundary
+
+The current scalar slice structurally parses an embedded backend fixture and
+constructs a real dialect graph for one load/strict-`fadd`/store/return kernel.
+The extractor derives operations, operands, results, types, and CFG from that
+live graph. A validated V1 sidecar still supplies the AMD calling convention,
+target attributes, module metadata, and origin/obligation evidence because
+upstream v0.17.0 has no lossless dialect representation for them. V2
+construction requires exact graph/sidecar agreement. The fixture is not Rust
+user source and does not demonstrate a Rust frontend-to-machine path.
+
+The graph-derived extractor (`81918dfa2`), V2 serializer (`db06813ef`), and
+attempt-scoped bridge (`17baa5b1f`) are implemented. The serializer produces
+deterministic bounded LLVM assembly and binds its digest to the source handoff
+identity. The bridge binds those bytes through the compiler handoff, symbol
+manifest, link plan, measured worker identity, and sealed Worker V2 request. It
+is inert and grants no object, link, publication, load, or launch authority.
+The closed route adds hardened Worker `fce35b087`, exact ELF and machine
+inspection `8190f8ae0`, measured-HSACO admission `ee581c3c2`, move-only Worker
+execution evidence `41f78f414`, dedicated repository-policy/finalizer/runtime
+join `ff8311fcf`, and alignment correction `0fa9c6249`. Existing low-level HSA
+adapters were reused, but a dedicated sealed consumer was required. The COV6
+descriptor reports a 280-byte kernarg segment (24 explicit plus 256 hidden)
+with alignment 8; ROCr reports runtime alignment 16, which the consumer
+enforces.
+
+The exact MI300X run completed with
+`evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`
+and ROCr 1.18 runtime image
+`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+The embedded checkout policy and marker are consistency evidence, not an
+external signature or CI attestation.
 
 ## Status definitions
 
@@ -136,10 +168,10 @@ model.
 
 | fe2o3-required surface | v0.17.0 coverage | Status | Required action |
 | --- | --- | --- | --- |
-| Kernel calling convention `amdgpu_kernel` | `FuncOp` stores function type, linkage, and symbol name. Function conversion applies linkage but no calling convention ([function op](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/ops.rs#L4526-L4688), [export](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/to_llvm_ir.rs#L2061-L2115)). | **Missing** | Upstream numeric/named LLVM calling conventions on functions and call sites. fe2o3 export must require `amdgpu_kernel` on entries and the expected convention on helpers/calls. |
-| `nounwind`, `convergent`, memory effects, `speculatable`, `willreturn` | Not modeled or round-tripped as function attributes. fe2o3 emits these on kernel/intrinsic declarations ([current attributes](https://github.com/powderluv/fe2o3/blob/2f7c4fd1dfef7b9056caab0880700e3da7eeef03/crates/fe2o3-amdgcn-model/src/lowering.rs#L5831-L5856)). | **Missing** | Upstream a lossless general attribute-set representation. The fe2o3 gate supplies and validates a closed required set rather than trusting defaults. |
-| `target-cpu`, `target-features` | No function string-attribute representation or conversion. | **Missing** | Upstream general string attributes; fe2o3 sets exact gfx942, sramecc, and xnack values from the target plan and rejects disagreement. |
-| `amdgpu-flat-work-group-size` and implicit-argument attributes | No representation or conversion. | **Missing** | Implement as general string attributes upstream where possible; keep permitted values and code-object-version rules in fe2o3. |
+| Kernel calling convention `amdgpu_kernel` | `FuncOp` stores function type, linkage, and symbol name. Function conversion applies linkage but no calling convention ([function op](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/ops.rs#L4526-L4688), [export](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/to_llvm_ir.rs#L2061-L2115)). | **Missing** | Upstream numeric/named LLVM calling conventions would improve dialect fidelity. The current scalar requires `amdgpu_kernel` from its validated V1 sidecar and emits it only through the fe2o3 serializer. |
+| `nounwind`, `convergent`, memory effects, `speculatable`, `willreturn` | Not modeled or round-tripped as function attributes. fe2o3 emits these on kernel/intrinsic declarations ([current attributes](https://github.com/powderluv/fe2o3/blob/2f7c4fd1dfef7b9056caab0880700e3da7eeef03/crates/fe2o3-amdgcn-model/src/lowering.rs#L5831-L5856)). | **Missing** | Upstream a lossless general attribute-set representation. The current scalar's exact V1 sidecar supplies the closed required set to V2; the fe2o3 serializer rejects anything outside that set. |
+| `target-cpu`, `target-features` | No function string-attribute representation or conversion. | **Missing** | Upstream general string attributes are useful. The current scalar obtains exact gfx942, sramecc, xnack, and wave policy from the validated V1 target sidecar. |
+| `amdgpu-flat-work-group-size` and implicit-argument attributes | No representation or conversion. | **Missing** | Implement as general string attributes upstream where possible. The current scalar sidecar fixes `1..64`; Wave64 remains separate target policy, and hardware launch above one workitem is not admitted. |
 | Argument/return attributes such as `noalias`, `nocapture`, `readonly`, `writeonly`, and `align` | No parameter or return attribute lists. | **Missing** | Upstream indexed LLVM attribute sets. fe2o3 derives them from its ABI/effect analysis and verifies that export did not lose them. |
 | Linkage and global alignment | Represented and applied for functions/globals ([module conversion](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/to_llvm_ir.rs#L2583-L2680)). | **Supported** | Whitelist linkages by symbol role. Keep exact export-set and unresolved-symbol checks in the worker. |
 | Instruction flags | Fast-math and some `nsw`/`nuw` flags are represented; `inbounds`, volatile, `exact`, tail kind, and complete atomic/call flags are not. | **Extension required** | Upstream per-instruction LLVM semantic properties. Add verifier rules so omission is an error whenever the source contract requires a property. |
@@ -156,10 +188,10 @@ does not import those module contracts
 
 | fe2o3-required surface | v0.17.0 coverage | Status | Required action |
 | --- | --- | --- | --- |
-| Target triple `amdgcn-amd-amdhsa` | Not represented or converted. | **Missing** | A general module target property is upstreamable. fe2o3 must set and validate the exact triple at its export/worker boundary. |
-| gfx942 data layout | Not represented or converted. | **Missing** | Upstream a module data-layout property. The worker remains authoritative and rejects an input layout that disagrees with the target machine. |
-| `amdhsa_code_object_version`, sramecc, and xnack module flags | No module-flag model. | **Missing** | Upstream general module flags if lossless behavior can be defined; keep profile selection and exact values in fe2o3. |
-| `!reqd_work_group_size` and kernel argument metadata | No instruction/function metadata attachment or named metadata model. | **Missing** | Upstream generic metadata nodes/attachments. A small fe2o3 layer defines the required schema and cross-checks it against ABI facts. |
+| Target triple `amdgcn-amd-amdhsa` | Not represented or converted. | **Missing** | A general module target property is upstreamable. The current scalar's validated V1 target sidecar fixes the triple, and the fe2o3 serializer emits it exactly for worker revalidation. |
+| gfx942 data layout | Not represented or converted. | **Missing** | Upstream a module data-layout property. The current scalar sidecar and serializer fix the expected layout; the measured target machine remains authoritative and must reject disagreement. |
+| `amdhsa_code_object_version`, sramecc, and xnack module flags | No module-flag model. | **Missing** | Upstream general module flags if lossless behavior can be defined. The current scalar retains exact module/target policy in its V1 sidecar and V2 handoff. |
+| `!reqd_work_group_size` and kernel argument metadata | No instruction/function metadata attachment or named metadata model. | **Missing** | Upstream generic metadata nodes/attachments. The current scalar sidecar admits no named metadata and carries its exact flat-workgroup attribute; broader metadata-bearing profiles remain unsupported. |
 | `!llvm.dbg.cu`, `!llvm.module.flags`, `!llvm.ident`, DI nodes, `!dbg`, and `llvm.dbg.value` | Metadata types, nodes, attachments, and metadata operands are not covered. | **Missing** | This is a substantial upstream feature. Until complete, preserve the current late debug injection path or disable this exporter for debug-bearing modules; never silently strip required source/coverage provenance. |
 | Module inline assembly identity section | No module-inline-assembly property. fe2o3 currently emits one for identity material ([source debug](https://github.com/powderluv/fe2o3/blob/2f7c4fd1dfef7b9056caab0880700e3da7eeef03/crates/rustc-codegen-fe2o3/src/source_debug.rs#L1332-L1420)). | **Missing** | Upstream a generic module-assembly property, or retain deterministic late injection in fe2o3 and inspect the resulting section. |
 | AMDHSA kernel descriptors and MsgPack metadata in the final ELF | These are backend/linker outputs, not LLVM dialect metadata. `pliron-llvm` has no object reader or AMDGPU metadata validator. | **Missing** as finalizer capability | Keep generation in LLVM/LLD and structural plus semantic inspection in the finalizer worker. Do not duplicate the backend format in the dialect. |
@@ -170,11 +202,13 @@ The optional `llvm-sys` feature targets LLVM 22 and contains wrappers named
 `core`, `lljit`, and `target`; there is no LLD dependency
 ([manifest](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/Cargo.toml),
 [module list](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/llvm_sys/mod.rs#L1-L42)).
+This describes audited upstream capability, not an admitted fe2o3 route. The
+feature remains disabled everywhere in production, including the worker.
 
 | finalizer capability | v0.17.0 coverage | Status | Ownership |
 | --- | --- | --- | --- |
-| Parse/print/verify LLVM IR and read/write bitcode | Core LLVM-C wrappers provide these operations. | **Supported** | Useful at an IR boundary, subject to the importer caveats below. |
-| Initialize LLVM targets | `target.rs` can initialize all targets or the native target ([wrapper](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/llvm_sys/target.rs#L15-L110)). | **Supported**, but insufficient | Initialization alone does not establish a target contract. |
+| Parse/print/verify LLVM IR and read/write bitcode | Core LLVM-C wrappers provide these operations. | **Supported** upstream | Not used by fe2o3. The canonical V2 serializer emits bounded LLVM assembly, and the measured upstream LLVM 22.1.8 worker parses and verifies those exact bytes directly. |
+| Initialize LLVM targets | `target.rs` can initialize all targets or the native target ([wrapper](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/llvm_sys/target.rs#L15-L110)). | **Supported** upstream, but insufficient | Not used by fe2o3. Initialization and target policy stay in the measured worker. |
 | Lookup AMDGPU target and create a gfx942 target machine | No wrapper for lookup/configuration of triple, CPU, features, relocation model, code model, or optimization level. | **Missing** | Keep in fe2o3 worker. A generic target-machine wrapper could be upstreamed, but it would not replace policy validation. |
 | Derive/check target data layout | No target-machine data-layout API in the wrapper. | **Missing** | Keep worker comparison against the exact expected input layout. |
 | Link measured OCML/device bitcode | No LLVM module-linking/device-library provider capability. | **Missing** | Keep digest-pinned provider selection, ABI checks, and `LinkOnlyNeeded` in the worker. |
@@ -196,10 +230,10 @@ implementation without eliminating the existing worker's inspection duties.
 | boundary | Observed behavior | Assessment and requirement |
 | --- | --- | --- |
 | Pliron operation verification | Operations generally have verifiers, but coverage is per operation. `FuncOp::verify` returns `Ok(())` unconditionally ([function verifier](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/ops.rs#L4679-L4682)). | **Not a complete module/ABI gate.** Add a fe2o3 whole-module verifier for symbol roles, ABI, call graph, target properties, metadata, memory effects, scopes, and permitted operations. |
-| Dialect-to-LLVM export | Unknown/unconvertible operations can return `ToLLVMErr`, including multi-index aggregate errors ([error type](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/to_llvm_ir.rs#L153-L179)). The implementation also uses `expect` for malformed/missing state. | **Partially fail-closed, not robust against untrusted IR.** Replace reachable panics with structured errors and verify before crossing FFI. Run conversion in the isolated worker until this is demonstrated panic-free. |
-| LLVM-to-dialect import | Unsupported valid LLVM types, opcodes, constant expressions, and values reach `todo!`; other paths use `expect` ([types](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/from_llvm_ir.rs#L301-L309), [opcodes](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/from_llvm_ir.rs#L1181-L1186), [values](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/from_llvm_ir.rs#L852-L864)). | **Not fail-closed in-process.** A controlled process abort is containment only if import runs in the worker. Prefer an allowlist preflight plus typed `Unsupported*` errors for every switch default. |
-| Semantic round trip | Target triple/layout, attributes, calling conventions, and metadata are omitted. Named sync scopes and inline-asm convergence can be changed on import/export. | **Unsafe silent loss.** These are harder failures than an explicit unsupported error. Export must compare a required-property manifest before and after LLVM construction and reject any omission or change. |
-| LLVM FFI safety | The wrapper states that it is not a fully memory-safe interface and does not manage all value lifetimes ([module warning](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/llvm_sys/mod.rs#L4-L38)). | **Isolation remains required.** Do not move parsing/conversion of untrusted modules into the trusted producer process merely because the API is Rust. |
+| Dialect-to-LLVM export | Unknown/unconvertible operations can return `ToLLVMErr`, including multi-index aggregate errors ([error type](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/to_llvm_ir.rs#L153-L179)). The implementation also uses `expect` for malformed/missing state. | **Not an admitted production boundary.** Do not call this converter in the producer or worker. Translate the reviewed live graph into canonical V2, then use the bounded fe2o3 serializer. |
+| LLVM-to-dialect import | Unsupported valid LLVM types, opcodes, constant expressions, and values reach `todo!`; other paths use `expect` ([types](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/from_llvm_ir.rs#L301-L309), [opcodes](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/from_llvm_ir.rs#L1181-L1186), [values](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/from_llvm_ir.rs#L852-L864)). | **Not an admitted production boundary.** Do not import through this converter in the producer or worker. The worker parses only the bounded fe2o3 assembly with measured upstream LLVM. |
+| Semantic round trip | Target triple/layout, attributes, calling conventions, and metadata are omitted. Named sync scopes and inline-asm convergence can be changed on import/export. | **Unsafe silent loss.** The production path does not round-trip through the upstream converter. The selected profile must carry every missing property in canonical fe2o3 data and reject graph/sidecar disagreement before serialization. |
+| LLVM FFI safety | The wrapper states that it is not a fully memory-safe interface and does not manage all value lifetimes ([module warning](https://github.com/pliron-org/pliron/blob/2610651306ea3ba670f68d5d8b1e1159bcd521ed/pliron-llvm/src/llvm_sys/mod.rs#L4-L38)). | **Excluded from production.** Process isolation does not make this converter an admitted route; keep the optional feature disabled in every production component. |
 | Target and link policy | `pliron-llvm` has no target-plan binding, device-provider digest, closed symbol policy, resource limit, object inspection, or LLD invocation. | **No finalizer fail closure.** Preserve the worker's bounded request, stage-coded errors, measured identities, exact profiles, repeated verification, and output-only-after-inspection behavior. |
 
 The existing worker validates bounded requests, target/profile identities, module
@@ -245,40 +279,47 @@ the closed gfx942 contract:
 1. A verified `amdgcn.*` vocabulary or equivalent typed properties for exact
    kernel entry roles, target plan, workgroup shape, ABI/effects, resource
    expectations, permitted scopes, and approved intrinsic/inline-asm forms.
-2. A whole-module export gate that requires every target, ABI, attribute,
-   metadata, symbol, memory, FP, and convergence property. Missing information
-   is an error; there are no inferred security-relevant defaults.
-3. A deterministic lowering from that bounded contract to upstream `llvm.*`,
-   followed by LLVM verification and a post-export manifest comparison.
-4. A request to the existing isolated worker containing the canonical LLVM
-   text/bitcode and the existing measured target/device/output policy. The
-   worker remains solely responsible for LLVM linking, passes, target-machine
-   emission, LLD, and final inspection.
+2. A whole-module V2 construction and serialization gate that requires every
+   target, ABI, attribute, metadata, symbol, memory, FP, and convergence
+   property. Missing information is an error; there are no inferred
+   security-relevant defaults.
+3. A deterministic extraction from the reviewed live `llvm.*` graph to
+   canonical V2, with exact sidecar equality checks for properties absent from
+   the dialect, followed by bounded fe2o3 LLVM-assembly serialization.
+4. A request to the existing isolated worker containing the exact serialized
+   bytes and existing measured target/device/output policy. The worker parses
+   with upstream LLVM 22.1.8 and remains solely responsible for LLVM linking,
+   passes, target-machine emission, LLD, and final inspection.
 
 Do not add fe2o3-specific target-machine or LLD wrappers to `pliron-llvm`, do not
 accept arbitrary LLVM attributes/metadata as opaque strings, and do not make
 the Pliron verifier the only authority for the resulting machine artifact.
 
-## Adoption gate
+## Generalization gate
 
-A production Pliron-backed gfx942 path should remain disabled until all of the
-following hold:
+The exact scalar fixture profile has passed finalization and one measured
+MI300X execution. A general Pliron-backed gfx942 path should remain disabled
+until all of the following hold:
 
-- every **Extension required** or **Missing** row used by the selected profile
-  has either landed or is rejected before conversion;
-- malformed and valid-but-unsupported inputs return bounded structured errors,
-  with no reachable panic across importer/exporter tests and fuzzing;
-- golden modules demonstrate exact preservation of calling conventions,
-  target attributes, parameter attributes, named scopes, volatile/inbounds and
-  FP flags, kernel metadata, strict-FP metadata operands, and debug provenance;
-- canonical output from the direct and Pliron-backed lowerings is compared at
-  the LLVM contract level, with expected normalization explicitly documented;
-- both routes enter the same measured finalizer worker and pass the same symbol,
-  ELF, AMDHSA metadata, resource, spill/stack/call, and code-object-version
-  checks; and
-- no target identity, ABI property, metadata field, or machine-resource fact is
-  supplied by an unchecked default.
+- every **Extension required** or **Missing** property used by the selected
+  profile is represented in canonical fe2o3 data or rejected before V2
+  construction; no unchecked default may supply target, ABI, metadata,
+  evidence, or machine-resource facts;
+- live-graph extraction and sidecar validation return bounded structured
+  errors for malformed, unsupported, stale, substituted, or inconsistent
+  inputs;
+- golden and hostile V2 serializer tests demonstrate exact preservation of the
+  selected calling convention, target attributes, parameter attributes, FP
+  flags, module metadata, source identity, and evidence;
+- the optional `pliron-llvm` converter remains disabled in the producer and
+  worker;
+- each additional profile passes the same closed LLVM, symbol, ELF, AMDHSA
+  metadata, resource, spill/stack/call, and code-object checks; and
+- each additional runtime profile binds its descriptor and observed ROCr ABI,
+  exact runtime image, device, dispatch, result, canary, wait, and unload facts
+  through a separately reviewed one-shot consumer.
 
-Until that gate is met, `pliron-llvm` can be evaluated as a pre-finalization IR
-tool, but it must not replace the current direct LLVM/finalizer security
+Until that gate is met, the closure remains one backend fixture and one exact
+runtime lane. It must not be described as CUDA-Oxide parity, general memory
+safety, race freedom, or replacement of the direct LLVM/finalizer security
 boundary.

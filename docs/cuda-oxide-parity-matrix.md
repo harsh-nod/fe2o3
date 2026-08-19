@@ -56,27 +56,41 @@ operation handles. The authoritative TSV and generated dashboard therefore
 remain unchanged at `0/97/0/12` combined.
 
 The 2026-08-19 [#134](https://github.com/harsh-nod/fe2o3/issues/134)
-integration-branch checkpoint also promotes no parity row. It uses
+bounded scalar-add checkpoint also promotes no parity row. It uses
 `pliron-llvm` only as a typed dialect dependency with default features disabled;
 the optional `llvm-sys` converter is excluded from the compiler and worker.
-The live source graph feeds fe2o3's canonical V2 handoff and deterministic
-bounded LLVM assembly, which enter only the measured pinned upstream LLVM
-22.1.8 target-machine/in-process-LLD Worker V2 route. No COMGR or subprocess
-compiler/linker has artifact authority. The branch contains source-graph
-extraction, the V2 serializer and Worker V2 bridge, an exact scalar worker
-profile, and an initial MI300X scalar execution with immutable-input and
-output-canary checks; public-main synchronization and final independent closure
-review remain pending.
+A checked-in backend fixture constructs the exact admitted Pliron graph and
+canonical V2 handoff, then deterministic bounded LLVM assembly enters only the
+pinned upstream LLVM 22.1.8 target-machine/in-process-LLD Worker V2 route. The
+fixture is not Rust user source, so this is not Rust frontend or
+source-to-machine evidence. No COMGR or subprocess compiler/linker has artifact
+authority.
 
-In particular, [#159](https://github.com/harsh-nod/fe2o3/issues/159) remains
-incomplete until the implementation requires opaque typed source lineage,
-separates approved worker/toolchain policy from observed measurements, closes
-the exact descriptor and decoded-machine profiles, validates ELF dependencies,
-symbols, section types, and relocations structurally, exposes bytes only to a
-sealed runtime consumer, and rejects hostile substitutions at every lineage
-boundary. The canonical status TSV and generated dashboard remain unchanged at
-`0/97/0/12` combined. This one scalar slice is not evidence of general
-CUDA-Oxide parity or general GEMM, attention, or MoE support.
+The bounded closure comprises `fce35b087`, `8190f8ae0`, `ee581c3c2`,
+`41f78f414`, `ff8311fcf`, and alignment correction `0fa9c6249`. Together they
+close the exact Worker machine-effect profile, structural ELF/descriptor/machine
+inspection, measured-HSACO gate, move-only execution custody, repository join,
+and sealed one-shot runtime consumption for this one scalar shape. The exact
+code target is `gfx942:xnack-`, while the qualifying MI300X observation is
+`gfx942:sramecc+:xnack-`. Pinned measurements include Worker executable
+SHA-256 `8576808284ea9dc56fcf075ebcf0a97410302b76f34e1090b2ea6d15e9f3340a`,
+HSACO SHA-256
+`011671a80384051232fb684c90afadd9b5e9d81c13d216238f15af55dd3880b1`,
+and ROCr HSA 1.18 image SHA-256
+`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+The descriptor kernarg alignment is 8 and the separately observed runtime
+storage alignment is 16, both over the same 280-byte `24+256` layout.
+
+The MI300X run returned bit-exact `3.75f32`, preserved immutable input and all
+guard canaries, and unloaded once. Its
+`FE2O3_REPOSITORY_SCALAR_ADD_V1_MI300X_OK` marker binds the bounded policy,
+artifact, runtime image, device, dispatch, result, canary, and unload
+observations as a self-consistent record. The marker is not externally signed
+or attested, and the compile-time checkout policy is not an external signature
+or separately owned approval. The canonical status TSV and generated dashboard
+remain unchanged at `0/97/0/12` combined. This one scalar slice proves neither
+general CUDA-Oxide parity, memory safety, nor race freedom, and is not evidence
+of general GEMM, attention, or MoE support.
 
 The existing V1 artifact wire format now has a strict `gfx942` profile with two
 canonically ordered entries over one digest-validated native payload. Each

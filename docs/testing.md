@@ -235,6 +235,55 @@ multi-symbol lifecycle tests at this checkpoint use the reviewed adapter's
 host-side test boundary and likewise do not establish two-kernel hardware
 execution.
 
+## Bounded Pliron scalar-add MI300X slice
+
+Commits `fce35b087`, `8190f8ae0`, `ee581c3c2`, `41f78f414`, `ff8311fcf`, and
+`0fa9c6249` close one exact backend-fixture-to-MI300X scalar-add route. The code
+target is `gfx942:xnack-`; the qualifying device reports
+`gfx942:sramecc+:xnack-`. The backend fixture is not Rust user source. Run the
+ignored test on `mi300x` with the exact qualified files and lane variables:
+
+```text
+cd /home/harsh/fe2o3-pliron-final-current
+HSA_XNACK=0 \
+HIP_VISIBLE_DEVICES=0 \
+ROCR_VISIBLE_DEVICES=0 \
+FE2O3_RUN_REPOSITORY_SCALAR_ADD_V1_MI300X=1 \
+FE2O3_PLIRON_SCALAR_ADD_V1_WORKER=/home/harsh/fe2o3-pliron-integrated-worker-build/fe2o3-llvm-link-worker \
+FE2O3_PLIRON_SCALAR_ADD_V1_OBSERVED_WORKER_BUILD_ID_FILE=/home/harsh/fe2o3-pliron-integrated-worker-build/fe2o3-worker-build-id.txt \
+FE2O3_PLIRON_SCALAR_ADD_V1_OBSERVED_LLVM_BUILD_ID_FILE=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/evidence-v6/upstream-llvm-build-id.txt \
+cargo test --locked -p fe2o3-pliron-scalar-add-v1 \
+  --test gfx942_repository_scalar_add_v1_hardware \
+  repository_scalar_add_v1_isolated_mi300x \
+  -- --ignored --exact --nocapture
+```
+
+The qualified Worker executable has SHA-256
+`8576808284ea9dc56fcf075ebcf0a97410302b76f34e1090b2ea6d15e9f3340a`
+and embedded build identity
+`fe2o3-worker-v1-sha256-c3abc4bf9a0a02d004e6d07318acad1f672430f57b6eb9001a40b466d450f400`.
+It uses upstream LLVM identity
+`upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`.
+The expected HSACO is 4,984 bytes with SHA-256
+`011671a80384051232fb684c90afadd9b5e9d81c13d216238f15af55dd3880b1`;
+the pinned ROCr HSA 1.18 image SHA-256 is
+`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+The COV6 descriptor declares the 280-byte kernarg at alignment 8, while the
+runtime reports and supplies alignment 16.
+
+Success prints a marker beginning
+`FE2O3_REPOSITORY_SCALAR_ADD_V1_MI300X_OK`. The sealed, move-only consumer is
+the only typed route from the finalized receipt to load, dispatch, checking,
+and terminal unload. The marker is a canonical self-consistency record binding
+the bounded policy, artifact, runtime image, device, dispatch, result, canaries,
+and unload observations. Its fixed-order serialization is stable,
+but process-local runtime, agent, executable, dispatch, and kernarg identities
+may differ between runs. It is not an external signature, trusted CI
+attestation, general memory-safety or race-freedom proof, or CUDA-Oxide parity
+claim. The compile-time checkout policy likewise relies on repository/build
+provenance and is not separately authenticated. This test changes no parity
+row or dashboard count.
+
 The [general typed dispatch V1](general-typed-dispatch-v1.md) gate requires an
 archived run from a single commit that includes all focused commands above
 plus strict Clippy, the ignored Worker V2 test, and an opt-in MI300X execution

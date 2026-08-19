@@ -22,7 +22,7 @@ This roadmap turns [architecture-v2.md](architecture-v2.md),
 owned work with staged integration gates. Gates are evidence-based; calendar
 dates depend on staffing and hardware availability.
 
-## Issue #134/#135 Infrastructure Checkpoint
+## Issue #134/#135 Infrastructure and Scalar Checkpoint
 
 The 2026-08-18 ownership refactor makes issues
 [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
@@ -50,37 +50,68 @@ but both issues remain open.
   in-tree passes and are not wired into production selection.
 - Existing AMDGPU lowering is owned by `fe2o3-amdgcn-model` and re-exported by
   the historical `dialect-amdgcn` facade. A production `gpu.*` to `amdgcn.*`
-  Pliron route has not landed.
-- The graph now pins dialect-only `pliron-llvm` with `llvm-sys` disabled and
-  includes the first Pliron-independent #144 canonical-handoff schema. Typed
-  AMDGCN lowering and worker consumption have not landed.
+  Pliron route has not landed; the implemented scalar dialect slice is not
+  that general route.
+- The graph pins dialect-only `pliron-llvm` with
+  `default-features = false`. The bounded scalar slice has live graph-derived
+  V2 extraction (`81918dfa2`), deterministic bounded LLVM assembly
+  (`db06813ef`), an inert attempt-scoped request bridge (`17baa5b1f`), and an
+  exact closed execution route: hardened Worker `fce35b087`, exact ELF and
+  machine inspector `8190f8ae0`, measured-HSACO gate `ee581c3c2`, move-only
+  Worker evidence `41f78f414`, sealed finalizer/runtime join `ff8311fcf`, and
+  runtime-alignment correction `0fa9c6249`. The bridge grants no
+  artifact/runtime authority by itself.
 - `fe2o3-service-host` consumes the service and host models through
   authority-free, borrow-retaining typestates. It has no HSA/HIP handles and
   performs no allocation, publication, load, launch, execution, wait,
   persistence, proof, or storage release.
 
-This checkpoint changes ownership and representation contracts, not parity
-status. It does not establish production compilation, persistent service
-execution, proof promotion, GPU execution, or performance qualification. The
-production-directed finalizer remains the isolated pinned upstream LLVM 22.1.8
-target-machine and in-process LLD path, with no COMGR or shell GPU linker. It
-remains the sole machine authority.
+This checkpoint changes ownership, representation, and one exact scalar
+execution slice, not parity status. The scalar slice performs measured MI300X
+GPU execution, but it does not establish a general production compiler,
+persistent service execution, proof promotion, or performance qualification.
+The production-directed finalizer remains the isolated pinned upstream LLVM
+22.1.8 target-machine and in-process LLD path, with no COMGR or shell GPU
+linker. It remains the sole machine authority.
 
 ## Selective Pliron LLVM Target State
 
 The integration permits `pliron-llvm` only in the Pliron LLVM
-dialect/lowering layer. Ordinary compiler crates must use
-`default-features = false` so the optional `llvm-sys` dependency is not loaded
-into their processes. The dialect layer may own transient `llvm.*`
-construction, transformation, verification, and deterministic export; it may
-not own LLVM code generation, object emission, LLD linking, canonical identity,
-or evidence.
+dialect/lowering layer. Every use must set `default-features = false`; the
+optional `llvm-sys` converter is excluded from the producer and from the
+production worker. The dialect layer may own transient `llvm.*` construction,
+transformation, and verification. It may not own LLVM code generation, object
+emission, LLD linking, canonical identity, or evidence, and its printer output
+is not the finalizer contract.
 
-fe2o3 owns the bounded canonical handoff into finalization and all stable stage
-receipts and evidence around that handoff. The isolated pinned upstream LLVM
-22.1.8 target machine and in-process LLD remain the sole machine-code and HSACO
-authority. The dialect-only closure and first canonical-handoff schema are
-implemented; the production lowering and worker adapters remain target work.
+fe2o3 owns canonical handoff V2, the live-graph extractor, deterministic
+bounded LLVM-assembly serialization, and all stable stage receipts and
+evidence around finalization. For the current scalar, a validated V1 sidecar
+still carries the AMD calling convention, target attributes, module metadata,
+and evidence absent from the upstream dialect; graph/sidecar disagreement
+rejects. The embedded backend fixture is structurally parsed before building
+the live graph; it is not Rust user source. The landed attempt-scoped bridge
+binds the fixture identity, exact
+assembly bytes, compiler handoff, manifest, plan, measured worker identity, and
+sealed request, but remains inert.
+
+The isolated measured upstream LLVM 22.1.8 target machine and in-process LLD
+remain the sole machine-code and HSACO authority. The bounded #159 and #161
+slices are closed by the six commits above. They required a new dedicated
+`fe2o3-pliron-scalar-add-v1` join and sealed one-shot consumer on top of the
+existing low-level HSA adapters. The COV6 descriptor establishes a 280-byte
+24+256 kernarg segment with alignment 8, while ROCr reports runtime alignment
+16; the consumer enforces the stricter runtime alignment. #160 is closed
+because its explicit-only premise was incorrect, not because the old runtime
+route was sufficient.
+
+The successful MI300X run records
+`evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`
+with ROCr 1.18 runtime image
+`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+The compile-time checkout policy and self-consistent marker are not an external
+signature or CI attestation. This exact fixture route makes no CUDA-Oxide
+parity, general memory-safety, or race-freedom claim.
 See [pliron-llvm-gfx942-coverage.md](pliron-llvm-gfx942-coverage.md) for the
 pinned operation, attribute, metadata, exporter, and finalizer gap audit.
 

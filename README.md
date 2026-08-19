@@ -44,25 +44,45 @@ dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
 The 2026-08-19 [#134](https://github.com/harsh-nod/fe2o3/issues/134)
-integration branch adds an initial, deliberately bounded Pliron scalar-add
-vertical slice. `pliron-llvm` is used only as a typed dialect dependency with
-default features disabled; its optional `llvm-sys` converter is excluded from
-both the compiler and worker. A live Pliron graph is extracted into fe2o3's
-canonical V2 handoff, serialized as deterministic bounded LLVM assembly, and
-bound through Worker V2 to the sole measured upstream LLVM 22.1.8
-target-machine/in-process-LLD worker. The branch contains the source-graph
-extractor, serializer, Worker V2 bridge, exact scalar worker profile, and an
-initial MI300X scalar execution with immutable-input and output-canary checks.
-No COMGR or subprocess compiler/linker has artifact authority on this route.
+checkpoint completes one deliberately bounded Pliron scalar-add vertical
+slice. `pliron-llvm` is used only as a typed dialect dependency with default
+features disabled; its optional `llvm-sys` converter is excluded from both the
+compiler and worker. The route starts from a checked-in backend fixture,
+constructs the exact admitted Pliron graph and canonical V2 handoff, serializes
+deterministic bounded LLVM assembly, and uses the pinned upstream LLVM 22.1.8
+target-machine plus in-process LLD worker. The backend fixture is not Rust user
+source and this checkpoint does not establish a Rust-source frontend or
+source-to-machine refinement proof. No COMGR or subprocess compiler/linker has
+artifact authority on this route.
 
-That branch is not yet public-main evidence and does not complete
-[#159](https://github.com/harsh-nod/fe2o3/issues/159). Independent review still
-requires opaque typed source lineage, a policy distinction between approved
-and merely observed worker identities, exact descriptor and decoded-machine
-closure, structural ELF dependency/symbol/relocation closure, a sealed runtime
-consumer, and hostile substitutions at every lineage boundary. Consequently,
-this scalar checkpoint changes no dashboard state or count and establishes
-neither general CUDA-Oxide parity nor general GEMM, attention, or MoE support.
+The closure landed in `fce35b087` (exact Worker machine effects), `8190f8ae0`
+(structural ELF, descriptor, and decoded-machine inspection), `ee581c3c2`
+(measured-HSACO gate), `41f78f414` (move-only Worker execution evidence),
+`ff8311fcf` (repository policy, finalizer join, and sealed one-shot HSA
+consumer), and `0fa9c6249` (descriptor-versus-runtime kernarg alignment). The
+code target is exactly `gfx942:xnack-`; the qualifying MI300X reported
+`gfx942:sramecc+:xnack-`. The repository pins Worker executable SHA-256
+`8576808284ea9dc56fcf075ebcf0a97410302b76f34e1090b2ea6d15e9f3340a`,
+HSACO SHA-256
+`011671a80384051232fb684c90afadd9b5e9d81c13d216238f15af55dd3880b1`,
+and ROCr HSA 1.18 image SHA-256
+`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+The COV6 descriptor requires 280 kernarg bytes aligned to 8; the observed HSA
+kernel requires the same 280 bytes in runtime storage aligned to 16.
+
+The successful run consumed the finalized bytes through the sole typed,
+move-only runtime transition, produced bit-exact `3.75f32`, preserved the input
+and all allocation canaries, and reached terminal unload. Its
+`FE2O3_REPOSITORY_SCALAR_ADD_V1_MI300X_OK` marker is a canonically serialized,
+self-consistent record of the bounded policy, artifact, runtime image, device,
+dispatch, result, canary, and unload observations. It is not a signature or CI
+attestation; process-local runtime, agent, executable, dispatch, and kernarg
+identities may differ between runs. Likewise, the compile-time checkout policy
+is repository/build provenance, not an externally signed or separately
+authenticated approval.
+This checkpoint changes no CUDA-Oxide parity row or count and proves neither
+general memory safety nor race freedom; it also does not establish general
+GEMM, attention, or MoE support.
 
 The Wave64 and workgroup-synchronization slices now start from ordinary
 `#[kernel(typed)]` Rust sources rather than explanatory pseudocode. They include

@@ -1,11 +1,13 @@
 # Pliron Wave 0 Architecture and Proof Boundary
 
 Status: normative architecture decision for issue
-[#134](https://github.com/harsh-nod/fe2o3/issues/134) Wave 0, updated for the
-2026-08-18 ownership refactor. Issue #134 remains open. The current repository
-implements bounded contracts and representation shells described below; it
-does not implement the complete Pliron pipeline, proof coverage, or performance
-qualification.
+[#134](https://github.com/harsh-nod/fe2o3/issues/134) Wave 0, updated through
+the bounded scalar closure at `fce35b087`, `8190f8ae0`, `ee581c3c2`,
+`41f78f414`, `ff8311fcf`, and `0fa9c6249`. Issue #134 remains open. The current
+repository implements bounded contracts, representation shells, and one exact
+backend-fixture-to-MI300X scalar route described below. The repository does not
+implement the complete Pliron pipeline, general Rust-source lowering, proof
+coverage, or performance qualification.
 
 This decision refines, and does not replace, the existing
 [architecture](architecture-v2.md), [verification model](verification-model.md),
@@ -30,10 +32,10 @@ The Wave 0 dependency baseline is the single Pliron workspace release
 implementation dependency on `pliron` or `pliron-derive` MUST resolve to that
 same source revision through one centralized workspace configuration. The
 workspace now pins `pliron-llvm` at that revision with
-`default-features = false`; a dedicated smoke crate proves that ordinary
-compiler crates do not enable `llvm-sys`. Production use remains confined to
-the future LLVM dialect/lowering layer. Any such dependency may land only after
-the D0 license, advisory,
+`default-features = false`; the optional `llvm-sys` converter is excluded from
+all production components, including the isolated worker. Selective use is
+confined to the reviewed LLVM dialect/lowering layer. Any such dependency may
+land only after the D0 license, advisory,
 build-closure, duplicate-package, and LLVM-integration review. Updating the
 revision is an architecture migration with golden identity and pipeline tests,
 not a routine semver update.
@@ -71,7 +73,7 @@ needed for D0-D11. It deliberately does not:
 Syntax shown below is illustrative. Wire records, operation schemas, and Rust
 API syntax become stable only through their owning versioned stage.
 
-## Implementation Boundary At The 2026-08-18 Checkpoint
+## Current Implementation Boundary
 
 The following infrastructure is implemented:
 
@@ -117,6 +119,27 @@ The following infrastructure is implemented:
   `fe2o3-amdgcn-model`. `dialect-amdgcn` is now a compatibility re-export, not
   an implemented `amdgcn.*` Pliron dialect. Canonical target contracts remain
   separate in `fe2o3-amd-target`.
+- The closed scalar slice structurally parses its embedded backend fixture,
+  constructs real `pliron-llvm` load, strict add, store, and return operations,
+  and extracts operations, operands, results, types, and CFG from the live
+  graph into canonical handoff V2. Because upstream v0.17.0 cannot represent
+  the AMD calling convention, target attributes, module metadata, or fe2o3
+  evidence, an exact validated V1 sidecar supplies only those properties;
+  every mismatch rejects. The fixture is not Rust user source.
+- The canonical V2 serializer emits deterministic bounded LLVM assembly with
+  its source identity, and the scalar bridge binds those exact bytes through an
+  attempt-scoped compiler handoff into a sealed Worker V2 request. This record
+  is inert: it authenticates no compiler executable and grants no worker,
+  object, link, publication, load, or launch authority.
+- The graph-derived extractor (`81918dfa2`), serializer (`db06813ef`), bridge
+  (`17baa5b1f`), hardened Worker (`fce35b087`), exact inspector (`8190f8ae0`),
+  measured-HSACO gate (`ee581c3c2`), move-only execution evidence
+  (`41f78f414`), sealed join (`ff8311fcf`), and runtime-alignment correction
+  (`0fa9c6249`) are implemented.
+- `fe2o3-pliron-scalar-add-v1` is the dedicated join crate for this exact
+  profile. It combines compile-time checkout policy, finalization, and a sealed
+  one-shot HSA consumer; it is not a general backend, approval service, or
+  reusable runtime-policy layer.
 - `fe2o3-host-api` defines inert target-neutral compile/admit/load/dispatch/wait
   records. For issue
   [#135](https://github.com/harsh-nod/fe2o3/issues/135), which also remains
@@ -125,16 +148,30 @@ The following infrastructure is implemented:
   adapter. Neither crate executes a persistent service.
 
 These components make later implementation and parallel ownership possible.
-They do not connect rustc MIR extraction to the Pliron ladder, complete the
-D1-D11 gates, replace the current compiler selector, publish an artifact,
-execute a host operation, or create a persistent GPU scheduler. Their validated
-records describe representation and attempted transformations only.
+They do not connect general rustc MIR extraction to the Pliron ladder, complete
+the D1-D11 gates, replace the current compiler selector, publish an artifact,
+execute a general host operation, or create a persistent GPU scheduler. The
+bounded #159 finalization and #161 MI300X execution slices are closed. Existing
+low-level HSA adapters were reused, but the old runtime route was not
+sufficient by itself; the dedicated join crate owns the one-shot policy,
+artifact, device, ABI, dispatch, result, canary, and unload checks. The COV6
+descriptor records a 280-byte 24+256 kernarg segment with alignment 8, while
+ROCr reports runtime alignment 16; the consumer requires the stricter value.
+
+The measured run records
+`evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`
+against ROCr 1.18 runtime image
+`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+The embedded checkout policy and marker are self-consistent repository
+evidence, not an external signature or CI attestation. They make no
+CUDA-Oxide parity, general memory-safety, or race-freedom claim.
 
 The existing production-directed GPU finalizer remains separate: an isolated
 worker uses pinned upstream LLVM 22.1.8 target-machine APIs for object emission
 and in-process LLD library APIs for HSACO. It is the sole machine authority.
-COMGR is not used. Shell-mediated GPU compilation/linking is historical
-compatibility behavior, not the target architecture.
+It does not use the `pliron-llvm` `llvm-sys` converter. COMGR is not used.
+Shell-mediated GPU compilation/linking is historical compatibility behavior,
+not the target architecture.
 
 ## Rust-First Source Contract
 
@@ -247,11 +284,12 @@ gpu.*        executable target-neutral SIMT CFG, memory, barriers, and epochs
 amdgcn.*     selected AMD semantics and target legalization
   |
   v
-llvm.*       future selective pliron-llvm dialect representation
+llvm.*       selective pliron-llvm dialect representation
   |
   v
-fe2o3 canonical handoff/evidence -> pinned LLVM 22.1.8 target machine
-                                 -> object -> in-process LLD -> HSACO
+fe2o3 canonical V2 handoff -> bounded deterministic LLVM assembly
+                           -> pinned LLVM 22.1.8 target machine
+                           -> object -> in-process LLD -> HSACO
 
 dispatch.*   optional admitted graph around exact kernel variants
 autotune.*   inert selection among already admitted variants
@@ -265,15 +303,21 @@ without premature scalarization. `gpu.*` is the target-neutral executable
 boundary and has a lossless, versioned bridge to `fe2o3-kernel-ir`.
 AMD-specific operations first appear in `amdgcn.*`.
 
-The D0 dependency closure contains a reviewed, dialect-only `pliron-llvm`
-dependency with `default-features = false` in ordinary compiler crates, keeping
-the optional `llvm-sys` feature out of those processes. That
-layer may build, transform, verify, and deterministically export transient
+The dependency closure contains reviewed, dialect-only `pliron-llvm` uses with
+`default-features = false`. The optional `llvm-sys` converter is absent from
+the producer and worker. That layer may build, transform, and verify transient
 `llvm.*` operations; it does not own stable identity, evidence, LLVM code
-generation, object emission, or linking. fe2o3 canonical records and receipts
-own the handoff to the isolated worker. Pinned upstream LLVM 22.1.8 and
-in-process LLD remain the sole machine authority. The closure guard and first
-canonical-handoff schema are landed; production lowering is not.
+generation, object emission, or linking. fe2o3 canonical records, receipts,
+and the bounded serializer own the handoff to the isolated worker. Pinned
+upstream LLVM 22.1.8 and in-process LLD remain the sole machine authority.
+
+The bounded scalar implementation has landed structurally parsed backend-
+fixture-to-live-graph V2 extraction, deterministic LLVM assembly, an inert
+attempt-scoped request bridge, exact Worker/finalizer inspection, move-only
+execution evidence, and one sealed MI300X runtime consumer. Its V1 sidecar
+remains necessary for the AMD calling convention, target attributes, module
+metadata, and evidence missing from the upstream dialect. General Rust-source
+production lowering remains incomplete.
 
 Every operation family defines its typed operands and results, effects,
 capabilities, canonical identity payload, verifier, lowering contract, source
@@ -692,9 +736,9 @@ the intended transfer, wait, barrier, and matrix sequence is present; estimates
 and observed resources disagree loudly; unexpected scratch, spills, stack,
 calls, symbols, or control flow block qualification; finalization uses the
 existing isolated pinned upstream LLVM 22.1.8 target-machine and in-process LLD
-as the sole machine authority, with no `pliron-llvm` code generation, COMGR, or
-shell compiler fallback; `machine_refined` ends at the exact validated
-boundary.
+as the sole machine authority, with no `pliron-llvm` converter or code
+generation, COMGR, or shell compiler fallback; `machine_refined` ends at the
+exact validated boundary.
 
 ### D8: Autotuning and variant dispatch
 
@@ -772,7 +816,7 @@ stable intent labels; owning crates may choose local Rust test function names.
 |---|---|
 | `W0-DEP-001-single-revision` | The resolved graph contains exactly one source revision and one crate identity for each Pliron workspace package; a mixed revision fails CI. |
 | `W0-DEP-002-closure-review` | License, advisory, feature, transitive dependency, proc-macro, and LLVM linkage reports are complete and identity-bound. |
-| `W0-DEP-003-selective-llvm` | Any target graph containing `pliron-llvm` confines it to reviewed dialect/lowering crates at the pinned revision, uses `default-features = false`, and contains no `llvm-sys` in ordinary compiler crates. |
+| `W0-DEP-003-selective-llvm` | Any target graph containing `pliron-llvm` confines it to reviewed dialect/lowering crates at the pinned revision, uses `default-features = false`, and contains no optional `llvm-sys` converter in the producer, worker, or any other production component. |
 | `W0-SRC-001-one-body` | Macro expansion contains one executable algorithm body; generated entry, descriptor, and proof harness contain only permitted delegation/support code. |
 | `W0-SRC-002-cross-crate-mono` | One generic library kernel and helper graph produce one stable `KernelItemId` and distinct deterministic `KernelInstId` values for concrete type/const configurations in a final crate. |
 | `W0-SRC-003-authentication` | Forged attributes, symbols, paths, marker traits, device operations, helper metadata, and proof-only markers reject with stable source diagnostics. |
