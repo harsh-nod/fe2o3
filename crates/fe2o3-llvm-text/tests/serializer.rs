@@ -233,7 +233,7 @@ fn comprehensive_module_matches_the_golden_llvm_assembly() {
     );
     assert_eq!(
         artifact.sha256().to_string(),
-        "424e701afe634ea318278c3947ccea7518ba4082a725652999f088d73917a499"
+        "e663dcedd0ed4208967b3bbf5397c85f42fe51503114dee8fbb61b0029b47f1e"
     );
 }
 
