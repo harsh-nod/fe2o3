@@ -14,7 +14,7 @@ use dialect_mir::{
     MAX_EXECUTABLE_STATEMENTS, MirTypeId,
     pliron::{
         MirBlockOp, MirFunctionOp, MirModuleOp, MirModuleSnapshotError, MirReturnOp,
-        MirSemanticOperationKind, MirSemanticSourceSpan, MirSemanticStatementOp,
+        MirSemanticOperationKind, MirSemanticSpanProvenance, MirSemanticStatementOp,
         MirSemanticTerminatorOp, MirSnapshotOperation, register_mir_dialect,
     },
 };
@@ -364,8 +364,8 @@ pub enum SourceOperationEvidence {
     SemanticReturn {
         /// Stable identity of the exact rustc terminator.
         identity: [u64; 4],
-        /// Exact source coordinates reported by rustc.
-        span: MirSemanticSourceSpan,
+        /// Exact expansion and resolved call-site coordinates reported by rustc.
+        provenance: MirSemanticSpanProvenance,
     },
 }
 
@@ -668,8 +668,8 @@ pub enum LoweringError {
         ordinal: u32,
         /// Typed rustc MIR classification.
         kind: MirSemanticOperationKind,
-        /// Exact rustc source coordinates for the rejected operation.
-        span: MirSemanticSourceSpan,
+        /// Exact rustc expansion and call-site coordinates for the rejection.
+        provenance: MirSemanticSpanProvenance,
     },
     /// The source module has no function to transform.
     EmptyModule,
@@ -732,11 +732,12 @@ impl fmt::Display for LoweringError {
                 block,
                 ordinal,
                 kind,
-                span,
+                provenance,
             } => write!(
                 formatter,
-                "unsupported typed rustc MIR operation {kind:?} at function {function}, block {block}, ordinal {ordinal}, source coordinates {:?}",
-                span.coordinates()
+                "unsupported typed rustc MIR operation {kind:?} at function {function}, block {block}, ordinal {ordinal}, expansion coordinates {:?}, call-site coordinates {:?}",
+                provenance.expansion().coordinates(),
+                provenance.call_site().coordinates()
             ),
             Self::EmptyModule => formatter.write_str("source MIR module has no functions"),
             Self::SourceVerificationFailed => {
@@ -885,7 +886,7 @@ fn preflight_source(
             limit: limits.max_modules,
         });
     }
-    verify_closed_shape(context, source, SourceEntityKind::Module, 1, 2)?;
+    verify_closed_shape(context, source, SourceEntityKind::Module, 1, 2, 0)?;
     let source_ref = source.deref(context);
     let region = source_ref.get_region(0);
     let mut module_blocks = region.deref(context).iter(context);
@@ -925,7 +926,7 @@ fn preflight_source(
                 ordinal: function_index,
             });
         }
-        verify_closed_shape(context, operation, SourceEntityKind::Function, 1, 3)?;
+        verify_closed_shape(context, operation, SourceEntityKind::Function, 1, 3, 0)?;
 
         let function_ref = operation.deref(context);
         let function_region = function_ref.get_region(0);
@@ -946,9 +947,17 @@ fn preflight_source(
                         SourceEntityKind::BlockMarker,
                         0,
                         1,
+                        0,
                     )?;
                 } else if Operation::is_op::<MirReturnOp>(block_operation, context) {
-                    verify_closed_shape(context, block_operation, SourceEntityKind::Return, 0, 0)?;
+                    verify_closed_shape(
+                        context,
+                        block_operation,
+                        SourceEntityKind::Return,
+                        0,
+                        0,
+                        0,
+                    )?;
                 } else if let Some(statement) =
                     Operation::get_op::<MirSemanticStatementOp>(block_operation, context)
                 {
@@ -957,7 +966,8 @@ fn preflight_source(
                         block_operation,
                         SourceEntityKind::SemanticStatement,
                         0,
-                        4,
+                        5,
+                        0,
                     )?;
                     let semantic = statement
                         .semantic_snapshot(context)
@@ -967,21 +977,22 @@ fn preflight_source(
                         block: block_index,
                         ordinal: semantic.ordinal(),
                         kind: semantic.kind(),
-                        span: semantic.span(),
+                        provenance: semantic.provenance(),
                     });
                 } else if let Some(terminator) =
                     Operation::get_op::<MirSemanticTerminatorOp>(block_operation, context)
                 {
+                    let semantic = terminator
+                        .semantic_snapshot(context)
+                        .ok_or(LoweringError::SourceVerificationFailed)?;
                     verify_closed_shape(
                         context,
                         block_operation,
                         SourceEntityKind::SemanticTerminator,
                         0,
-                        5,
+                        6,
+                        semantic.successors().len(),
                     )?;
-                    let semantic = terminator
-                        .semantic_snapshot(context)
-                        .ok_or(LoweringError::SourceVerificationFailed)?;
                     if semantic.kind() != MirSemanticOperationKind::TerminatorReturn
                         || !semantic.successors().is_empty()
                     {
@@ -990,7 +1001,7 @@ fn preflight_source(
                             block: block_index,
                             ordinal: semantic.ordinal(),
                             kind: semantic.kind(),
-                            span: semantic.span(),
+                            provenance: semantic.provenance(),
                         });
                     }
                 } else {
@@ -1016,11 +1027,12 @@ fn verify_closed_shape(
     kind: SourceEntityKind,
     regions: usize,
     attributes: usize,
+    successors: usize,
 ) -> Result<(), LoweringError> {
     let operation = operation.deref(context);
     if operation.get_num_operands() != 0
         || operation.get_num_results() != 0
-        || operation.get_num_successors() != 0
+        || operation.get_num_successors() != successors
         || operation.num_regions() != regions
         || operation.attributes.0.len() != attributes
     {
@@ -1104,7 +1116,7 @@ fn collect_source_evidence(
                         MirSnapshotOperation::SemanticTerminator(semantic) => {
                             SourceOperationEvidence::SemanticReturn {
                                 identity: semantic.identity(),
-                                span: semantic.span(),
+                                provenance: semantic.provenance(),
                             }
                         }
                     })

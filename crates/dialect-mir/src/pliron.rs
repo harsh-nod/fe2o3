@@ -464,6 +464,7 @@ pub enum MirSemanticOperationKind {
     TerminatorInlineAsm = 267,
     TerminatorTailCall = 268,
     TerminatorUnwindTerminate = 269,
+    TerminatorFalseUnwind = 270,
 }
 
 impl MirSemanticOperationKind {
@@ -497,6 +498,7 @@ impl MirSemanticOperationKind {
             267 => Self::TerminatorInlineAsm,
             268 => Self::TerminatorTailCall,
             269 => Self::TerminatorUnwindTerminate,
+            270 => Self::TerminatorFalseUnwind,
             _ => return None,
         })
     }
