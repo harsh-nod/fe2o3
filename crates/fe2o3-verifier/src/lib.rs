@@ -21,6 +21,7 @@ mod authenticated_verus_execution_v2;
 mod control_flow_binding;
 mod executor;
 mod flash_attention_memory_v1;
+mod general_gemm_kir_model_correspondence_v1;
 mod general_gemm_numerical_v1;
 mod general_gemm_proof_numerical_evidence_v1;
 mod general_gemm_proof_v1;
@@ -120,6 +121,7 @@ pub use executor::{
     ExecutionSuccess, MAX_CAPTURE_BYTES, OutputStream, ProcessOutput, execute_recorder,
 };
 pub use flash_attention_memory_v1::*;
+pub use general_gemm_kir_model_correspondence_v1::*;
 pub use general_gemm_numerical_v1::*;
 pub use general_gemm_proof_numerical_evidence_v1::*;
 pub use general_gemm_proof_v1::*;

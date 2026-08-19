@@ -6,6 +6,7 @@
       "packages": [
         "fe2o3-amd-target",
         "fe2o3-amdhsa-loader",
+        "fe2o3-aql",
         "fe2o3-artifact-transaction",
         "fe2o3-artifacts",
         "fe2o3-build-authority",

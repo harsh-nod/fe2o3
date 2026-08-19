@@ -44,6 +44,17 @@ runtime device and process evidence. Future queue authority must additionally
 bind the R4 queue manifest. R1 version or device admission alone does not
 authorize ACQUIRE_VM, memory operations, or queue operations.
 
+The additive event and queue-exception records are bound by
+`KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_MANIFEST` under schema ID
+`linux-kfd-event-and-queue-exception-1.18-gfx942-v1`, with SHA-256
+`8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849`.
+That schema includes the exact four frozen prerequisite schema IDs and digests;
+it does not edit or reinterpret their manifests. It also pins the active KFD
+event, process-exception, debug, chardev, and private-header sources and the
+exact ROCr 7.2.4 event/queue composition sources. The source set supports the
+listed observations but is not a complete transitive kernel or ROCr build
+closure and does not authenticate the running module.
+
 The committed slice contains only:
 
 - `kfd_ioctl_get_version_args` and `AMDKFD_IOC_GET_VERSION`
@@ -68,6 +79,11 @@ The committed slice contains only:
   ring sizes of at least 1024 bytes
 - the generic Linux `_IOC` encoding needed by those requests
 - exact-version admission evidence
+- exact CREATE_EVENT, DESTROY_EVENT, SET_EVENT, RESET_EVENT, and WAIT_EVENTS
+  records and request numbers; the event-data union storage, memory and
+  hardware exception records, and queue context-save header
+- a signal-only, auto-reset queue-exception event profile; one-event wait
+  admission; and a fail-closed gfx942 queue-exception reason mask
 
 Reviewed event and memory behavior is pinned to these active implementation
 sources:
@@ -213,6 +229,75 @@ against the active KFD header, and prints the queue-ID, CWSR, ring, EOP,
 counter, doorbell, and ROCr flag goldens. This source-profile oracle is
 read-only and creates no queue.
 
+`tests/oracles/run-kfd-event-uapi-oracle.sh` hashes the exact event semantic
+source set and ROCr checkout, compiles the event oracle against the active KFD
+1.18 header, and compares every admitted event layout, field offset, opcode,
+event constant, and queue exception mask with independent C goldens. It opens
+no KFD fd and performs no ioctl or mmap.
+
+## Event and queue-exception boundary
+
+The queue-exception profile constructs only a signal event with `auto_reset=1`
+and `node_id=0`. Event ID zero is reserved by the active process event IDR, so
+successful output admission accepts IDs 1 through 4095 and requires the event
+ID, trigger data, and event-page slot index to be identical. It also requires
+the exact event mmap token returned by the driver. An optional nonzero first
+event-page handle is an opaque numeric input only: it neither proves that the
+handle names the required 32768-byte KFD allocation nor authorizes the driver
+to map it. With no handle, active KFD can allocate its compatibility signal
+page internally. A native adapter must choose and own one path, validate ioctl
+success before output admission, and retain any userspace-provided backing for
+the whole KFD process event-page lifetime.
+
+The event mmap token is not an mmap plan. Active KFD maps at most its 32768-byte
+signal page and marks the VMA `VM_DONTCOPY`, `VM_DONTEXPAND`, `VM_DONTDUMP`,
+`VM_IO`, `VM_NORESERVE`, and `VM_PFNMAP`. The mapping and event IDR are process
+state. Destroying an event wakes its waiters with failure but does not transfer,
+unmap, or free the process event page. Forked children do not inherit the VMA.
+This crate does not model fd inheritance, process teardown, unmap ordering, or
+the lifetime link among a page, its events, and the originating KFD process.
+
+The admitted wait shape contains one signal event and fixes `wait_for_all=1`.
+Timeout zero is immediate and `u32::MAX` is infinite. Active KFD clamps other
+values above `i32::MAX` to `i32::MAX`, converts finite milliseconds to jiffies,
+and adds one jiffy. Waiting is interruptible: a fatal signal returns `EINTR`;
+another pending signal returns the internal restart result and may rewrite a
+finite remaining timeout. Any ioctl error writes the UAPI FAIL result, while a
+successful ioctl is admitted only as COMPLETE or TIMEOUT. The data-only
+admission routine is intentionally for a successful native call; it cannot
+interpret errno, restart a wait, or prove elapsed-time bounds.
+
+Signal state is level-like, not a lossless notification log. Repeated sets can
+coalesce while `event_age` continues to change. Age zero disables age-based
+change detection. Auto-reset consumes an already-signaled state when a waiter
+is installed; the driver tries to restore an activated auto-reset event only
+on its restart path. RESET_EVENT clears the kernel event's signaled boolean; it
+does not clear the event-page slot or a queue error payload. The interrupt path
+acknowledges a GPU-written slot by replacing it with `u64::MAX` before setting
+the kernel event. No API in this crate claims a count of interrupts or absence
+of a lost/coalesced notification.
+
+For queue exceptions, the context-save header contains an opaque aligned
+userspace address for a `u64` error-reason word and the admitted signal event
+ID. Active KFD reads that address and ID from userspace, performs a non-atomic
+read/OR/write of the reason word, and then sets the event. Concurrent reason
+updates may coalesce or lose a read-modify-write update; RESET_EVENT does not
+clear the word. The admitted mask rejects every bit outside the sixteen active
+queue exception codes but accepts zero because a reader can observe a cleared
+or raced payload. The source provides no release/acquire or atomic protocol
+that this crate can expose. A later native composition must establish CPU
+mapping validity, alignment, ownership, initialization, visibility, read/clear
+policy, queue destruction ordering, and the lifetime relation among the queue,
+CWSR header, payload, and event.
+
+Every address and first-page handle in this schema is a private-field numeric
+observation. There are no raw Rust pointers, dereferences, unsafe blocks, fds,
+syscalls, event-page mappings, event objects, queue objects, waits, signals, or
+ownership transfer. The context-save constructor zeros dynamic wave fields and
+reserved data and checks only the documented debug alignment/range arithmetic;
+it does not prove that the header resides at a KFD-readable address or that GPU
+CWSR storage and CPU exception-header storage have coherent identity.
+
 ## Fail-closed boundary
 
 The initial schema accepts exactly UAPI `1.18`. Linux minor UAPI revisions are
@@ -228,8 +313,9 @@ separate reviewed schema.
 ## Not yet supported
 
 VM ownership, virtual-address reservation, CPU mmap, memory ownership and
-rollback, executable loading, queue syscalls, queue ownership and rollback,
-doorbell mmap and stores, AQL packet encoding, signal handling, SVM/VRAM/peer
+rollback, executable loading, queue or event syscalls, queue/event ownership
+and rollback, doorbell or event-page mmap and stores, AQL packet encoding,
+wait execution and restart policy, SVM/VRAM/peer
 allocation and mapping, and all syscall execution remain outside this crate.
 SDMA, PM4 compute, XGMI, target-XCC selection, CU masks, GWS, queue priority
 policy, queue preemption, CWSR allocation, EOP allocation, persistent-queue

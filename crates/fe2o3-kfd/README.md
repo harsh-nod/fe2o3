@@ -152,8 +152,9 @@ quarantined ALLOC, MAP, or UNMAP path can have unmodeled kernel effects. The
 journal is model-only evidence, not production authority or a Verus/concrete
 refinement proof.
 
-AQL, executable, kernarg, VRAM, USERPTR, peer-device mapping, multiple
-allocations, retry, queues, and dispatch are rejected or absent. The
+For this one-allocation compatibility API, AQL, executable, kernarg, VRAM,
+USERPTR, peer-device mapping, multiple allocations, retry, queues, and dispatch
+are rejected or absent. The
 default-feature `kfd-host-visible-memory-policy` example links and reaches the
 complete production memory adapter without enabling process/fork support. CI
 builds and ELF-audits that executable under the pure-Rust runtime policy so
@@ -164,6 +165,79 @@ The `live-validation` feature is non-production only. It enables the
 that verifies the DONTFORK VMA is absent in the child. The example always
 launches the selected-GPU transaction in an isolated subprocess and creates no
 queue or reset.
+
+## R2 shared typed GTT memory slice
+
+`CheckedGfx942XnackMinusDevice::acquire_shared_gtt_memory_session` is the
+bounded multi-allocation successor to the one-BO foundation. It still performs
+one irreversible process `ACQUIRE_VM` and retains the selected KFD and render
+files, but one session can own at most 64 simultaneous allocations and at most
+8 GiB of admitted GPU VA. Each allocation is represented by a non-cloneable,
+redacted `SharedGttAllocationV1<Profile, State>` token. Tokens expose sizes and
+the exact reviewed flag profile, never native handles, GPU VAs, CPU addresses,
+or descriptors.
+
+Four marker profiles are constructible: ordinary host-visible coherent GTT,
+kernarg GTT, AQL queue GTT, and host-visible executable GTT. Ordinary requests
+are checked and page-rounded. AQL requests must be a power of two from 4096
+through 2 GiB. The active driver allocates one physical ring while reserving
+and mapping two consecutive GPU copies, so the typed layout records distinct
+logical/CPU bytes and a checked doubled GPU-VA span. The CPU VMA covers only
+the physical copy. All four raw flag values are private constants supplied by
+the typed profile; callers cannot introduce other bits.
+
+Every live allocation retains its original anonymous `PROT_NONE` VMA as a GPU
+VA guard. CPU BO mappings are separately kernel-selected. Guards prevent the
+host VMA allocator from recycling an address that KFD still owns, and the
+session independently checks half-open ranges for overlap. A guard is unmapped
+only after CPU munmap and successful `FREE_MEMORY_OF_GPU`.
+
+Every safe CPU view is closure-scoped and requires exclusive mutable access to
+the session. This prevents simultaneous safe aliases across allocations as
+well as escaping borrows. Mutable views exist only in `GttCpuWritableV1`.
+Executable construction begins in that state and must pass
+`seal_executable`, which changes the complete CPU VMA to read-only before the
+token can enter the executable GPU-map path. This is CPU/VMA immutability, not
+global content immutability: the reviewed executable UAPI profile includes GPU
+write permission, and concurrent GPU writes remain outside this foundation.
+
+Map/unmap/release consume and return typed state tokens. CPU access is absent
+while GPU-mapped. A started native transaction, malformed output, range or
+identity collision, partial/errno ambiguity, currentness loss, sealing error,
+or destructive cleanup error quarantines the whole shared session. Previously
+issued tokens then grant no further operation. Preflight size and capacity
+rejections are failure-atomic and leave the session active. CPU munmap precedes
+the one permitted `FREE_MEMORY_OF_GPU` attempt; Drop performs no ioctl, munmap,
+FREE, or retry.
+
+The crate-private queue bridge can consume mapped tokens into distinct,
+non-Clone ring, control, EOP, and context-save role capabilities. Each retains
+the exact private GPU VA span, model mapping key, and proposed publication key;
+validated subranges are computed with checked bounds and alignment. Numeric
+addresses and bridge constructors are not public, and the bridge neither
+publishes a mapping nor grants queue authority. The eventual native queue
+adapter must retain all four role capabilities and admit their exact fe2o3
+backing policy before it can construct queue arguments.
+
+The completion journal projects exact profile kinds, allocation generations,
+non-overlapping GPU-VA spans, and successful map/unmap/release order into
+`fe2o3-runtime-model`. It does not model the CPU VMA, AQL physical-versus-double
+mapping relation, executable `mprotect`, or failed native side effects. There
+is no Verus theorem connecting this unsafe Linux adapter to the abstract model.
+Those relations, loaded-kernel behavior, reset exclusion during a borrow, and
+the mmap-to-DONTFORK fork gap remain Contracted. The manifest and hostile tests
+are evidence, not refinement proof.
+
+The default-feature `kfd-shared-gtt-memory-policy` example links the complete
+production closure for dependency and ELF auditing. The `live-validation`
+`kfd-shared-gtt-memory` example runs all four profiles, AQL double mapping,
+executable sealing, GPU map/unmap, CPU content checks, and explicit release in
+an isolated subprocess. It additionally exercises exact 4096-byte EOP and
+186019840-byte gfx942 context-save footprints through fe2o3's executable GTT
+profile. This measures that bounded GTT policy only; it does not claim ROCr
+backing equivalence or queue acceptance. This slice performs no queue ioctl,
+doorbell mapping, packet publication, dispatch, wait, VRAM, USERPTR/SVM, or
+peer mapping.
 
 ## R4 queue-resource observations
 
@@ -198,3 +272,70 @@ device-profile digest is only a compositional prerequisite identifier, not
 evidence that R1 admission occurred. A future queue authority must pair the
 plan with a live checked device token that establishes XNACK-disabled
 admission and currentness.
+
+## R4 native queue adapter foundation
+
+The crate now contains a crate-private process-level CREATE/UPDATE/DISABLE/
+DESTROY engine and narrow private Linux ioctl shims. Every lifecycle ioctl is
+surrounded by opener-PID and contracted device-currentness checks, enters the
+existing queue model's pending phase before the call, validates immutable and
+output fields, and projects the observation before the trailing check. Linux
+errno, malformed output, projection failure, process change, and currentness
+loss fail closed. Queue ID zero remains valid; process-global unknown-create
+poison and known-ID collision behavior come from the shared queue model.
+
+The backend-specific resource authority is private and linearly retained by
+the adapter through every phase that may have a native queue. Model
+publications are returned only by an explicit non-syscall release after
+confirmed DESTROY. Engine Drop performs no queue ioctl or retry. Scripted tests
+cover success, every per-operation
+failure/ambiguity class, hostile CREATE outputs, request mutation,
+currentness/process loss, multi-queue collisions, global create poison, and
+no-Drop-call behavior.
+
+The first production composition consumes one checked gfx942:xnack- device and
+creates a redacted, non-Clone queue session. It allocates one exact 4 KiB AQL
+ring with the required doubled GPUVA, one exact 4 KiB control mapping with
+distinct aligned write/read counters in the same page, a 4 KiB EOP mapping,
+and the exact 0xb167000-byte CWSR mapping. EOP and CWSR use the separately named
+fe2o3 executable-GTT policy; this is not ROCr policy equivalence. All four
+linear role authorities and the shared model owner transfer into the queue
+engine and remain there until confirmed direct DESTROY.
+
+CREATE returns an admitted process-local queue ID, including zero, and the
+adapter maps the exact complete 8192-byte KFD process doorbell slice. It checks
+the encoded returned offset, installs MADV_DONTFORK before enabling the VMA,
+and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
+private submission foundation initializes every ring header to exact INVALID
+type 1 and the two control counters as atomics before GPU mapping. It uses the
+canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
+one acquire-release write-pointer fetch-add, INVALID packet copy, aligned
+release header, and one release-fenced x86-SFENCE volatile `u64` doorbell
+store. Counter divergence/regression and every possible side-effect failure
+poison the non-Clone owner; only an ordinary full ring is retryable. No mapped
+slice or raw mapping pointer escapes the private Linux backend. Explicit
+destroy confirms the ioctl, unmaps the doorbell, releases model publications,
+restores the shared-memory model owner, then explicitly unmaps and frees all
+four resources. Drop performs none of those native operations. The isolated
+`kfd-compute-aql-queue` live example checks queue ID zero, the DONTFORK child
+negative, direct DESTROY, and resource return without publishing a packet or
+performing an MMIO store. `kfd-compute-aql-queue-policy` links the default
+production closure for the no-ROCm ELF audit.
+
+The private submission call is nevertheless structurally gated by an
+unconstructible CWSR fault-policy admission. The executable-GTT CPU VMA is
+distinct from the PROT_NONE GPU VA passed to CREATE, while active KFD fault
+handling reads the header through that CREATE address. The current slice does
+not claim same-address USERPTR/SVM semantics or dispatch-ready exception
+delivery. The reviewed bounded next gate is eight owned DONTFORK anonymous
+header shadow pages plus a KFD event and aligned shared error payload. It does
+not cover wave-state/debug/eviction control-stack copies, which remain
+unsupported. Live packet publication stays disabled until that slice is
+admitted; zero event fields are not general dispatch authority.
+
+The abstract Verus relation proves Active and Disabled are the only direct
+destroy sources and that failed-no-effect restores the exact retained source.
+It does not prove the Rust adapter, ioctl/mmap implementation, kernel, firmware,
+hardware, CPU/GPU atomic coherence, or concrete-to-model refinement. The
+private CPU publication sequence is implemented and hostile-tested, but live
+dispatch and completion remain excluded.

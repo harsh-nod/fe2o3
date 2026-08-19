@@ -1,7 +1,7 @@
 # Runtime model verification
 
 This directory contains the initial issue #137 Verus specifications. The
-authenticated runner proves thirty-seven obligations over finite abstract values
+authenticated runner proves forty-eight obligations over finite abstract values
 and traces. The materialization input and image sequences are capped at 64 MiB
 and its phase trace has exactly four entries. The lifecycle-history sequence
 lengths are not bounded by these proofs.
@@ -71,14 +71,17 @@ the executable adapter:
    relation and is covered only by the field/status-aware relation above;
 6. CancelledBeforeCreate and Destroyed are exactly the two non-retaining
    terminals, reached by plan cancellation and successful destroy respectively;
-7. generic memory release cannot discharge a live publication structurally
+7. direct destroy begins only from Active or Disabled, retains that exact source
+   in the pending record, and a failed-no-effect observation restores the same
+   source while success reaches Destroyed;
+8. generic memory release cannot discharge a live publication structurally
    owned by an exact queue VM, instance, and generation;
-8. every retaining queue blocks release of each exact composite mapping in its
+9. every retaining queue blocks release of each exact composite mapping in its
    plan;
-9. an ambiguous known queue ID remains reserved, while CreatePending or any
+10. an ambiguous known queue ID remains reserved, while CreatePending or any
    number of Ambiguous states with no known ID poison process-level future
    CREATE; only CreatePending itself is globally single-flight; and
-10. appending a history event preserves the exact prior sequence as a prefix
+11. appending a history event preserves the exact prior sequence as a prefix
     and places the new event at the next index.
 
 `load_plan_v1.rs` proves the initial R3 abstract load-plan relation:
@@ -123,6 +126,51 @@ invariants, or proves that its mapping starts and sizes use 4096-byte rounding.
 The 4 KiB and page-rounded properties listed above remain claims of the separate
 `load_plan_v1.rs` proof only.
 
+`aql_publication_v1.rs` proves the initial R4 abstract packet-publication,
+single-producer reservation, and completion-signal relations:
+
+1. copying one canonical 64-byte INVALID packet body into a checked bounded ring
+   slot writes every exact source byte to the corresponding destination and
+   preserves every ring byte outside that slot;
+2. the modeled release-`u32` transition produces the exact little-endian
+   system-scoped kernel-dispatch header, preserves both copied setup bytes, and
+   preserves every byte outside the four-byte publication word;
+3. composing those two transitions records an INVALID body before the final
+   invariant header, retains the source setup dimension, and preserves the exact
+   source and destination frame;
+4. every accepted reservation advances the write counter exactly once, retains
+   capacity, records the exact prior packet ID and modulo slot, and preserves the
+   canonical bounded no-wrap state;
+5. two accepted transitions linked through the exact intermediate state have
+   distinct consecutive packet IDs and advance the initial write counter by two;
+6. an accepted read observation is nondecreasing from the prior observation;
+7. a full ring produces the exact Full rejection and no reservation;
+8. every rejection branch returns the exact input state unchanged;
+9. the pending completion-signal image is exactly 64 bytes, has little-endian
+   USER kind one at byte zero and pending value one at byte eight, and has zero
+   in every other byte;
+10. classification of every supplied `i64` maps one to Pending, zero to
+    Completed, and preserves every other value as Unexpected; and
+11. concrete packet, ring, signal-image, classification, two-reservation, and
+   full-ring witnesses inhabit the predicates, including a nonzero copied byte
+   and a preserved byte outside the
+   destination frame.
+
+The AQL model operates only on mathematical byte sequences, integer and
+natural-number counter states, and explicit successor relations. `release-u32`
+names one abstract state transition; it is not evidence of a CPU atomic
+operation, ordering, coherence, device visibility, or firmware consumption. No
+theorem imports or refines `fe2o3-aql`, its byte encoder, initializer,
+classifier, callback trait, or executable Rust ring model, native queue memory,
+a doorbell, or an observed hardware read pointer.
+The classifier's acquired-value name is only an input label; the proof performs
+no load and establishes neither atomic object initialization nor CPU/GPU
+visibility.
+
+The two-step theorem proves linearity only along one supplied mathematical
+successor chain. It does not establish uniqueness among independently
+constructed Rust values, counter truth, completion, liveness, or performance.
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -154,7 +202,10 @@ second CREATE beginning while the first ID is unresolved,
 cancellation incorrectly retaining resources, descriptor
 containment that substitutes a different file-to-virtual-address delta, the
 production-shaped copy transition substituting another source byte, and the
-production-shaped zero-first transition omitting the first zero byte. The launcher
+production-shaped zero-first transition omitting the first zero byte, an INVALID
+packet body changed to vendor type zero, setup substitution during the modeled
+release word, reservation replay without write advance, acceptance of a
+regressed read observation, and overwrite of a full ring. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
@@ -199,9 +250,9 @@ CREATE for the process lifetime of this model, and known ambiguous IDs remain
 collision-retaining. No model value creates or owns a
 native KFD queue. The proof does not establish executable-Rust
 refinement, ioctl truth or atomicity, queue-ID ownership, target resource sizes,
-doorbell mapping or arithmetic, AQL packet publication, completion, quiescence,
-firmware execution, liveness, or performance. Those remain adapter, target
-profile, dispatch, and hardware-refinement obligations.
+doorbell mapping or arithmetic, executable AQL packet publication, completion,
+quiescence, firmware execution, liveness, or performance. Those remain adapter,
+target profile, dispatch, and hardware-refinement obligations.
 
 The R3 load-plan and materialization proofs establish only the stated
 mathematical relations over already-formed abstract values. They do not prove

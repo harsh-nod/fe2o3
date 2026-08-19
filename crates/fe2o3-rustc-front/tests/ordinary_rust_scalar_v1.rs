@@ -400,6 +400,42 @@ fn canonical_identity_envelopes_reject_mutation_and_substitution() {
 }
 
 #[test]
+fn canonical_identity_component_constructors_match_frozen_envelopes() {
+    let item =
+        CanonicalKernelItemIdV1::from_components([0x21; 32], [0x22; 32], [0x23; 32]).unwrap();
+    assert_eq!(item, kernel_item(0x21, 0x22, 0x23));
+
+    let instance =
+        CanonicalKernelInstIdV1::from_components(item, [0x31; 32], [0x32; 32], [0x33; 32]).unwrap();
+    assert_eq!(instance, kernel_instance(item, 0x31, 0x32, 0x33));
+
+    assert_eq!(
+        CanonicalKernelItemIdV1::from_components([0x21; 32], [0; 32], [0x23; 32])
+            .unwrap_err()
+            .code(),
+        OrdinaryRustScalarDiagnosticCodeV1::ZeroIdentity
+    );
+    assert_eq!(
+        CanonicalKernelItemIdV1::from_components([0; 32], [0x22; 32], [0x23; 32])
+            .unwrap_err()
+            .code(),
+        OrdinaryRustScalarDiagnosticCodeV1::ZeroIdentity
+    );
+    assert_eq!(
+        CanonicalKernelItemIdV1::from_components([0x21; 32], [0x22; 32], [0; 32])
+            .unwrap_err()
+            .code(),
+        OrdinaryRustScalarDiagnosticCodeV1::ZeroIdentity
+    );
+    assert_eq!(
+        CanonicalKernelInstIdV1::from_components(item, [0x31; 32], [0; 32], [0x33; 32])
+            .unwrap_err()
+            .code(),
+        OrdinaryRustScalarDiagnosticCodeV1::ZeroIdentity
+    );
+}
+
+#[test]
 fn typed_function_and_abi_admission_fails_with_stable_codes() {
     let nonordinary = observation_with(
         FixtureMutation::default(),

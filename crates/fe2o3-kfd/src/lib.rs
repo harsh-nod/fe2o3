@@ -24,8 +24,18 @@ mod device;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod memory;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod shared_memory;
+
 #[cfg(target_os = "linux")]
 mod queue_resources;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod queue;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[allow(unsafe_code)]
+mod queue_linux;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
@@ -34,8 +44,19 @@ mod memory_linux;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use memory::*;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use shared_memory::*;
+
 #[cfg(target_os = "linux")]
 pub use queue_resources::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use queue::{
+    ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
+    ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
+    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
+    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1,
+};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use currentness::ObservableDeviceCurrentnessV1;

@@ -5,8 +5,10 @@ loader. It accepts an untrusted byte slice and either returns a canonical,
 inert load plan or rejects the object. A lifetime-bound validated envelope can
 deterministically materialize that plan into an exact caller-provided,
 exclusively borrowed byte slice.
-The crate performs no file access, allocation, GPU mapping, relocation, symbol
-lookup, permission transition, or dispatch.
+The crate performs no file access, GPU mapping, permission transition, or
+dispatch. Envelope planning and materialization allocate nothing; the optional
+semantic closure composes the repository's bounded, allocating
+`fe2o3-hsaco` inspector instead of maintaining a second metadata parser.
 
 ## Admitted foundation profile
 
@@ -65,11 +67,86 @@ mapping, permission, W^X, relocation, symbol, kernel, loaded-code, launch, or
 execution authority. A later adapter must bind the image to one allocation
 without substitution and enforce the remaining lifecycle.
 
-`fe2o3-hsaco` remains the repository's existing descriptive MessagePack,
-kernel metadata, symbol, and descriptor inspector. This crate does not copy
-that parser. It owns the stricter load-planning boundary and records only the
-metadata note's file range. A later composition must require both surfaces (or
-refactor a shared validated envelope) before granting loader authority.
+## Exact semantic and selected-kernel closure
+
+`ValidatedEnvelope::bind_kernel` consumes the content-bound envelope and runs
+the repository's existing bounded `fe2o3-hsaco` MessagePack, symbol, descriptor,
+and resource inspector over the same retained byte slice. The composition
+requires COV6 metadata 1.2 for exact `gfx942:xnack-`; rejects unknown metadata
+fields and malformed or over-limit documents through the inspector; and
+requires both parsers to identify the same physical metadata descriptor offset
+and length. `printf` roots, init/fini kernels, dynamic stacks, and device
+enqueue reject because their runtime lifecycle is absent from this slice.
+
+Every metadata kernel must bind to one bounded static ELF descriptor and entry
+symbol before one exact metadata kernel name can be selected. The selected
+64-byte descriptor must translate into exactly one canonical read-only load;
+the complete nonempty entry-symbol range must independently translate into
+exactly one canonical read-execute load. Descriptor fields and encoded
+register capacities are cross-checked against metadata by `fe2o3-hsaco`.
+`SelectedKernelResourceBindingV1` retains the selected kernarg, group/private
+memory, wavefront, register, spill, workgroup, cluster, and raw descriptor
+evidence without turning it into launch authority.
+
+Successful closure returns `ClosedRelocationEvidenceV1`. Its private
+construction records that envelope validation admitted no `SHT_REL` or
+`SHT_RELA` section, no dynamic relocation tag, and no unknown section or
+dynamic-tag extension. The policy applies zero relocations; it does not provide
+a relocation engine.
+
+`KernelIdentityInputsV1` hashes the exact input object, physical metadata
+descriptor, selected descriptor, and selected entry-symbol bytes. A
+domain-separated, length-delimited closure digest additionally binds the loader
+and relocation profiles, physical ranges and addresses, metadata kernel index,
+name, and symbol. These deterministic values are identity inputs for a later
+loaded-kernel authority; they are neither an authenticated compiler identity
+nor proof that the entry implements its source semantics.
+
+## Exact vecadd COV6 kernarg profile
+
+`ValidatedKernelEnvelope::bind_vecadd_cov6` consumes the selected closure and
+admits only the immutable durable vecadd object with SHA-256
+`c4547fe045f839711f1f022a485f50c7c1eafed7f5e4a7e96598e0d1c825908c`.
+It independently checks the selected index, `vecadd` / `vecadd.kd` names, the
+complete explicit and hidden metadata argument lists, exact qualifier omission,
+the 304-byte/8-byte-aligned kernarg contract, required `256x1x1` workgroup,
+zero static group/private memory, and the selected descriptor/entry/image
+locations. Any metadata or object-content drift rejects.
+
+The pinned byte manifest is:
+
+| Bytes | Source and policy |
+| --- | --- |
+| `0..48` | `arg0`, `arg1`, and `arg2` fat slices, each GPU address `u64` then element count `u64`, in exact parsed metadata order |
+| `48..60` | required block counts `u32[3]`; X is `ceil(output_len / 256)`, Y/Z are one |
+| `60..66` | required group sizes `u16[3]` = `[256, 1, 1]` |
+| `66..72` | required partial-group remainders `u16[3]` = zero because the AQL grid is padded to complete groups |
+| `72..88` | COV6 geometry padding, zero |
+| `88..112` | required global offsets `u64[3]` = zero |
+| `112..114` | required grid dimensionality `u16` = one |
+| `114..120` | COV6 grid padding, zero |
+| `120..128` | absent optional printf-buffer slot, zero |
+| `128..168` | compiler-declared hostcall, multigrid, heap, default-queue, and completion pointers, all zero for this kernel/profile |
+| `168..240` | absent dynamic-LDS slot and COV6 reserved bytes, zero |
+| `240..248` | absent GFX8-only private/shared aperture slots, zero on gfx942 |
+| `248..256` | compiler-declared queue pointer, zero; the ABI requires it only before GFX9 and this kernel does not consume it |
+| `256..304` | reserved tail completing the exact 256-byte implicit block, zero |
+
+`VecaddCov6KernargV1` is represented at alignment 8 and initializes all 304
+bytes. The encoder checks nonzero, four-byte-aligned numeric slice addresses,
+checked `f32` byte ranges, nonempty output, output length no greater than either
+input, and a padded AQL grid representable in `u32`. It returns the exact AQL
+grid/workgroup dimensions needed by the encoded geometry. An independent test
+decoder reads every populated field without using the production writer.
+
+`UnboundGpuF32SliceV1` deliberately carries only numeric descriptions. It does
+not prove allocation ownership, lifetime, device accessibility, mapping,
+aliasing, or read/write permissions. Likewise, `LoadedImageAddressPlanV1`
+exposes checked descriptor and entry offsets relative to the materialized image
+base, but cannot resolve them against a native allocation address. The KFD
+composition must bind these descriptions to live allocation capabilities,
+preserve the object and kernarg bytes, apply permissions, and retain all
+resources through observed completion.
 
 ## Proof and implementation gaps
 
@@ -79,18 +156,26 @@ refactor a shared validated envelope) before granting loader authority.
   executable byte parser or the materialization instructions to that relation;
   these checks remain covered by hostile unit tests rather than an executable
   Verus refinement proof.
-- The metadata descriptor is not decoded here, so its `amdhsa.version` and
-  `amdhsa.target` fields are not yet bound to the ELF ABI and flags by this
-  crate. The exact ELF-side profile and note identity are checked.
-- Static and dynamic symbol contents, undefined symbols, kernel descriptors,
-  resource metadata, origin maps, and selected-kernel identity are not loader
-  authority in this foundation.
+- The executable parsers now bind the exact metadata note, schema and target,
+  every metadata kernel's static descriptor/entry symbols, descriptor resources,
+  and one deterministic selected-kernel identity. Verus does not yet prove
+  refinement from those executable checks to a semantic loader model.
+- Static symbols and the complete selected entry-symbol byte range are bound,
+  but no disassembler, control-flow closure, machine-code verifier, source-to-
+  ISA refinement, undefined-symbol policy beyond the no-relocation envelope,
+  or code/data origin map is claimed.
 - Relocations are rejected rather than executed. No relocated byte-image
   refinement is claimed.
-- Borrow identity prevents construction of a validated envelope from a plan and
-  unrelated bytes, but it is not a digest, signature, authenticated content
-  identity, or proof about bytes after an external copy.
+- Borrow identity prevents construction from a plan and unrelated bytes, and
+  closure hashes detect content substitution when a later authority rechecks
+  them. A SHA-256 value is not a signature, trusted producer identity, or proof
+  about bytes after an unchecked external copy.
 - The executable zero/copy method is not proved to refine the runtime-model
   Verus materialization relation. Allocation identity, mapping permissions, W^X
-  lifecycle enforcement, immutable loaded-image transition, KFD/HSA comparison,
-  and hardware behavior remain outside this crate.
+  lifecycle enforcement, immutable loaded-image transition, compiler/manifest
+  ABI binding, observed-device compatibility, KFD/HSA comparison, dispatch
+  packet construction, and hardware behavior remain outside this crate.
+- The vecadd encoder has exhaustive executable checks and independent decode
+  tests, but no Verus refinement proof from parsed metadata plus typed inputs to
+  the 304 output bytes. Its numeric GPU addresses and image offsets are not
+  allocation or native-address authorities.

@@ -11,5 +11,9 @@ publish = false
 [lib]
 name = "fe2o3_amdhsa_loader"
 
+[dependencies]
+fe2o3-hsaco.workspace = true
+sha2.workspace = true
+
 [lints.rust]
 unsafe_code = "forbid"

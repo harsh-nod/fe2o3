@@ -52,6 +52,7 @@ mod rust_type_layout;
 mod rust_type_layout_general;
 mod rust_type_layout_v3;
 pub mod s09_identity_v2;
+mod same_session_rustc_v1;
 pub mod scalar_mir_v2;
 mod semantic_features;
 pub mod semantic_layout_bridge;
@@ -376,6 +377,15 @@ impl BackendConfig {
 fn dump_authenticated_frontend_contracts(
     frontend: &frontend_record_bridge::CompilerFrontendRecordV1,
 ) {
+    if let Some(imported) = frontend.ordinary_rust_scalar() {
+        eprintln!(
+            "[rustc-codegen-fe2o3] same-session ordinary-Rust custody: {} function(s), import {}, optimized-MIR closure {}, FnAbi closure {}; inert owner-controlled data only",
+            imported.function_count(),
+            encode_hex(imported.imported().import_identity()),
+            encode_hex(imported.mir_closure()),
+            encode_hex(imported.abi_closure()),
+        );
+    }
     let contracts = frontend.kernel_contracts();
     if contracts.is_empty() {
         return;

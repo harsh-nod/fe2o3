@@ -35,6 +35,9 @@ const PROOF_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3-general-gemm-symbolic-schedule-p
 const PROPERTY_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-property-evidence-v1\0";
 const SOURCE_CLOSURE_DOMAIN_V2: &[u8] = b"fe2o3-general-gemm-proof-source-closure-v2\0";
 const EXECUTION_OUTPUT_DOMAIN_V2: &[u8] = b"fe2o3-general-gemm-proof-output-v2\0";
+const MODEL_INPUT_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-verus-model-input-v1\0";
+const POSITIVE_SOURCE_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-verus-positive-source-v1\0";
+const THEOREM_SET_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-verus-theorem-set-v1\0";
 
 const MODEL_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_schedule_model_v1.rs");
 #[cfg(test)]
@@ -336,7 +339,7 @@ impl GeneralGemmProofRequestV1 {
         false
     }
 
-    fn identities(self) -> [GeneralGemmEvidenceIdentityV1; 11] {
+    pub(crate) fn identities(self) -> [GeneralGemmEvidenceIdentityV1; 11] {
         [
             self.schedule_identity,
             self.symbolic_plan_identity,
@@ -534,6 +537,8 @@ pub enum GeneralGemmProofExecutionErrorV1 {
     PositiveProofFailed,
     /// An expected-negative proof unexpectedly passed or failed elsewhere.
     NegativeProofMismatch,
+    /// Executed retained source evidence did not match checked KIR/model correspondence.
+    RetainedSourceCorrespondenceMismatch,
     /// The reviewed retained Verus runtime closure could not be used safely.
     RuntimeClosure(GeneralGemmRuntimeClosureErrorV2),
     /// Filesystem or process execution failed.
@@ -595,30 +600,7 @@ pub fn execute_general_gemm_schedule_proof_with_runtime_closure_v2(
 
     let positive = request.schedule.positive_source();
 
-    let mut negatives = Vec::with_capacity(
-        if request.schedule == GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 {
-            3
-        } else {
-            2
-        },
-    );
-    if request.schedule == GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 {
-        negatives.push(NegativeCaseV2::new(
-            GeneralGemmProofSourceV2::VectorTailWrong,
-            MODEL_NEGATIVE_STDOUT,
-            VECTOR_TAIL_WRONG_STDERR,
-        ));
-    }
-    negatives.push(NegativeCaseV2::new(
-        GeneralGemmProofSourceV2::EpilogueWrong,
-        EPILOGUE_NEGATIVE_STDOUT,
-        EPILOGUE_WRONG_STDERR,
-    ));
-    negatives.push(NegativeCaseV2::new(
-        GeneralGemmProofSourceV2::MachineClaimWrong,
-        MODEL_NEGATIVE_STDOUT,
-        MACHINE_CLAIM_WRONG_STDERR,
-    ));
+    let negatives = negative_cases(request.schedule);
 
     let source_closure_identity = source_closure_identity(positive, &negatives);
     let positive_observation = runtime
@@ -694,6 +676,118 @@ impl NegativeCaseV2 {
             expected_stdout,
             expected_stderr,
         }
+    }
+}
+
+fn negative_cases(schedule: GeneralGemmProofScheduleV1) -> Vec<NegativeCaseV2> {
+    let mut negatives = Vec::with_capacity(
+        if schedule == GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 {
+            3
+        } else {
+            2
+        },
+    );
+    if schedule == GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 {
+        negatives.push(NegativeCaseV2::new(
+            GeneralGemmProofSourceV2::VectorTailWrong,
+            MODEL_NEGATIVE_STDOUT,
+            VECTOR_TAIL_WRONG_STDERR,
+        ));
+    }
+    negatives.push(NegativeCaseV2::new(
+        GeneralGemmProofSourceV2::EpilogueWrong,
+        EPILOGUE_NEGATIVE_STDOUT,
+        EPILOGUE_WRONG_STDERR,
+    ));
+    negatives.push(NegativeCaseV2::new(
+        GeneralGemmProofSourceV2::MachineClaimWrong,
+        MODEL_NEGATIVE_STDOUT,
+        MACHINE_CLAIM_WRONG_STDERR,
+    ));
+    negatives
+}
+
+pub(crate) struct GeneralGemmDerivedVerusInputIdentitiesV1 {
+    pub(crate) model_identity: GeneralGemmEvidenceIdentityV1,
+    pub(crate) positive_source_identity: GeneralGemmEvidenceIdentityV1,
+    pub(crate) theorem_set_identity: GeneralGemmEvidenceIdentityV1,
+    pub(crate) source_closure_identity: GeneralGemmEvidenceIdentityV1,
+}
+
+pub(crate) fn derive_general_gemm_verus_input_identities_v1(
+    schedule: GeneralGemmProofScheduleV1,
+) -> GeneralGemmDerivedVerusInputIdentitiesV1 {
+    let positive = schedule.positive_source();
+    let model_identity = model_input_identity_with_bytes(MODEL_SOURCE);
+    let positive_source_identity = positive_source_identity_with_bytes(
+        schedule,
+        positive.relative_to_proof_directory(),
+        positive.embedded_bytes(),
+    );
+
+    let mut theorem_set = Sha256::new();
+    theorem_set.update(THEOREM_SET_IDENTITY_DOMAIN_V1);
+    theorem_set.update([schedule as u8]);
+    theorem_set.update(model_identity.as_bytes());
+    theorem_set.update(positive_source_identity.as_bytes());
+    for property in GENERAL_GEMM_PROOF_PROPERTIES_V1 {
+        let (status, basis) = property_evidence_basis(schedule, property);
+        theorem_set.update([property as u8, property_status_tag(status)]);
+        match basis {
+            GeneralGemmPropertyEvidenceBasisV1::VerifiedTheorem(name) => {
+                theorem_set.update([1]);
+                put_blob(&mut theorem_set, name.as_bytes());
+            }
+            GeneralGemmPropertyEvidenceBasisV1::ModelDefinition(name) => {
+                theorem_set.update([2]);
+                put_blob(&mut theorem_set, name.as_bytes());
+            }
+            GeneralGemmPropertyEvidenceBasisV1::OpenObligation(name) => {
+                theorem_set.update([3]);
+                put_blob(&mut theorem_set, name.as_bytes());
+            }
+        }
+    }
+    let theorem_set_identity = GeneralGemmEvidenceIdentityV1(theorem_set.finalize().into());
+    let negatives = negative_cases(schedule);
+    let source_closure_identity = source_closure_identity(positive, &negatives);
+
+    GeneralGemmDerivedVerusInputIdentitiesV1 {
+        model_identity,
+        positive_source_identity,
+        theorem_set_identity,
+        source_closure_identity,
+    }
+}
+
+fn model_input_identity_with_bytes(bytes: &[u8]) -> GeneralGemmEvidenceIdentityV1 {
+    let mut model = Sha256::new();
+    model.update(MODEL_INPUT_IDENTITY_DOMAIN_V1);
+    put_blob(&mut model, b"general_gemm_schedule_model_v1.rs");
+    put_blob(&mut model, bytes);
+    GeneralGemmEvidenceIdentityV1(model.finalize().into())
+}
+
+fn positive_source_identity_with_bytes(
+    schedule: GeneralGemmProofScheduleV1,
+    relative_path: &str,
+    bytes: &[u8],
+) -> GeneralGemmEvidenceIdentityV1 {
+    let mut source = Sha256::new();
+    source.update(POSITIVE_SOURCE_IDENTITY_DOMAIN_V1);
+    source.update([schedule as u8]);
+    put_blob(&mut source, relative_path.as_bytes());
+    put_blob(&mut source, bytes);
+    GeneralGemmEvidenceIdentityV1(source.finalize().into())
+}
+
+const fn property_status_tag(status: GeneralGemmPropertyEvidenceStatusV1) -> u8 {
+    match status {
+        GeneralGemmPropertyEvidenceStatusV1::ScheduleModelTheoremVerified => 1,
+        GeneralGemmPropertyEvidenceStatusV1::ModelDefinitionOnly => 2,
+        GeneralGemmPropertyEvidenceStatusV1::WeakerExactRealTheoremVerified => 3,
+        GeneralGemmPropertyEvidenceStatusV1::OpenCorrespondenceRequired => 4,
+        GeneralGemmPropertyEvidenceStatusV1::OpenArtifactRequired => 5,
     }
 }
 
@@ -990,6 +1084,31 @@ mod tests {
                 GeneralGemmProofSourceV2::Reference,
                 &substituted,
                 &negatives,
+            )
+        );
+    }
+
+    #[test]
+    fn model_and_positive_source_identities_reject_stale_bytes() {
+        let schedule = GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1;
+        let positive = schedule.positive_source();
+        let exact = derive_general_gemm_verus_input_identities_v1(schedule);
+
+        let mut stale_model = MODEL_SOURCE.to_vec();
+        stale_model[0] ^= 1;
+        assert_ne!(
+            exact.model_identity,
+            model_input_identity_with_bytes(&stale_model)
+        );
+
+        let mut stale_source = positive.embedded_bytes().to_vec();
+        stale_source[0] ^= 1;
+        assert_ne!(
+            exact.positive_source_identity,
+            positive_source_identity_with_bytes(
+                schedule,
+                positive.relative_to_proof_directory(),
+                &stale_source,
             )
         );
     }

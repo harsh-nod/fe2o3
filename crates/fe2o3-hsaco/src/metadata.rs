@@ -1,12 +1,12 @@
 use fe2o3_amd_target::AmdTargetId;
-use rmpv::ValueRef;
 
 use crate::{
     ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, CodeObjectVersion,
     ExplicitArgument, ExplicitValueKind, ExplicitValueType, Gfx1250Revision, HiddenArgument,
     HiddenValueKind, InspectedHsaco, InspectedKernel, InspectionError, KernelKind,
-    MAX_ARGUMENTS_PER_KERNEL, MAX_KERNARG_BYTES, MAX_KERNELS, MetadataVersion,
-    ParsedExplicitArgument, hidden_argument, inspected_hsaco, messagepack::decode_bounded,
+    MAX_ARGUMENTS_PER_KERNEL, MAX_KERNARG_BYTES, MAX_KERNELS, MetadataDescriptorRange,
+    MetadataVersion, ParsedExplicitArgument, hidden_argument, inspected_hsaco,
+    messagepack::{ValueRef, decode_bounded},
 };
 
 const TARGET_PREFIX: &str = "amdgcn-amd-amdhsa--";
@@ -25,6 +25,7 @@ struct ParsedArguments {
 pub(crate) fn inspect_metadata(
     code_object_version: CodeObjectVersion,
     e_flags: u32,
+    metadata_descriptor_range: MetadataDescriptorRange,
     bytes: &[u8],
 ) -> Result<InspectedHsaco, InspectionError> {
     let document = decode_bounded(bytes)?;
@@ -76,6 +77,7 @@ pub(crate) fn inspect_metadata(
     Ok(inspected_hsaco(
         code_object_version,
         metadata_version,
+        metadata_descriptor_range,
         target,
         has_printf_metadata,
         kernels,
