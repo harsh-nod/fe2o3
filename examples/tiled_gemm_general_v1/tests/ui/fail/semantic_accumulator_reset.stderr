@@ -1,0 +1,5 @@
+error[E0616]: field `accumulator` of struct `Gfx942TiledGemmWave64V1` is private
+ --> tests/ui/fail/semantic_accumulator_reset.rs:7:10
+  |
+7 |     wave.accumulator = [0.0; 4];
+  |          ^^^^^^^^^^^ private field

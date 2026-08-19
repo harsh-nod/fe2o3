@@ -20,6 +20,7 @@ mod amdgpu_llvm;
 mod closure_profile_v1;
 mod collected_executable_scalar_control_flow_v2;
 mod collected_flash_attention_v1;
+mod collected_general_gemm_v1;
 mod collected_moe_top2_v1;
 mod collected_row_softmax_v1;
 mod collected_scalar_gemm_v1;
@@ -1409,6 +1410,16 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     reason: error.to_string(),
                                 }
                             })?;
+                            if matches!(
+                                codegen_pipeline,
+                                PipelineSelection::Valid(CodegenPipeline::KernelIrV1)
+                            ) {
+                                general_gemm_semantic_preflight_v1(
+                                    tcx,
+                                    &collection,
+                                    &self.config.target,
+                                )?;
+                            }
                             typed_roots = typed_roots_from_collection(&collection.functions)
                                 .map_err(|error| amdgpu_llvm::EmitError::Preflight {
                                     reason: error.to_string(),
@@ -1697,6 +1708,39 @@ impl CodegenBackend for Fe2o3CodegenBackend {
         self.llvm_backend
             .link(sess, compiled_modules, crate_info, metadata, outputs);
         drop(temporary_host_objects);
+    }
+}
+
+fn general_gemm_semantic_preflight_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    collection: &collector::CollectionResult<'tcx>,
+    target: &AmdGpuTarget,
+) -> Result<(), amdgpu_llvm::EmitError> {
+    match collected_general_gemm_v1::try_import_general_gemm_v1(tcx, collection, target).map_err(
+        |error| amdgpu_llvm::EmitError::Preflight {
+            reason: format!("general GEMM authenticated MIR import failed: {error}"),
+        },
+    )? {
+        Some(collected_general_gemm_v1::GeneralGemmMirImportV1::VerifiedWitness {
+            surface,
+            identity,
+        }) => Err(amdgpu_llvm::EmitError::Preflight {
+            reason: format!(
+                "authenticated {surface:?} general GEMM MIR reached verified semantic KIR witness {}; runtime plan binding, frontend promotion, and lowering are not implemented; no artifact authority was issued",
+                identity
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+            ),
+        }),
+        Some(collected_general_gemm_v1::GeneralGemmMirImportV1::Rejected(diagnostic)) => {
+            Err(amdgpu_llvm::EmitError::Preflight {
+                reason: format!(
+                    "authenticated general GEMM semantic KIR rejected: {diagnostic}; no artifact authority was issued"
+                ),
+            })
+        }
+        None => Ok(()),
     }
 }
 
