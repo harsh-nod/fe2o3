@@ -23,6 +23,18 @@ Order-insensitive collections are sorted during checked construction. Parameter
 order remains significant. Duplicate, conflicting, oversized, dangling,
 unknown, and noncanonical values fail closed.
 
-This slice does not model arbitrary helper bodies, globals, instruction graphs,
-intrinsics, or opaque LLVM strings. A later schema must add each such semantic
-family as typed data before the worker may accept it.
+Schema V2 additively embeds the exact canonical V1 record and carries an
+authenticated executable-module graph. Its closed typed families cover scalar
+globals, intrinsic references, helper and kernel functions, calling
+conventions, parameter and function attributes, basic blocks, bounded SSA
+values, arithmetic, comparisons, casts, scalar memory operations, calls,
+terminators, module flags, named metadata, and V1-bound origin and obligation
+references. Canonical module and V2 handoff identities use separate SHA-256
+domains; changing valid-looking module semantics without changing the bound
+module identity fails decoding.
+
+V2 is deliberately not arbitrary LLVM IR. Unsupported types, instructions,
+intrinsics, calling conventions, metadata, attributes, malformed graphs, and
+unbounded inputs are rejected with typed diagnostics. The crate remains an
+inert schema: it does not parse or emit LLVM text, invoke a toolchain, link or
+load code, or grant artifact, execution, or publication authority.
