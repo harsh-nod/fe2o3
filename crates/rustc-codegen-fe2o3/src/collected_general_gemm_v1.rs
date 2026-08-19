@@ -18,10 +18,11 @@ use fe2o3_kernel_ir::{GeneralGemmKirDiagnosticV1, GeneralGemmPropertyV1};
 use rustc_abi::ExternAbi;
 use rustc_hir::Safety;
 use rustc_middle::mir::{
-    BasicBlock, BinOp, Body, Local, Operand, ProjectionElem, Rvalue, START_BLOCK, TerminatorKind,
+    AggregateKind, BasicBlock, BinOp, Body, Local, Operand, ProjectionElem, Rvalue, START_BLOCK,
+    TerminatorKind,
 };
 use rustc_middle::ty::{FloatTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
-use rustc_span::Spanned;
+use rustc_span::{Spanned, sym};
 use sha2::{Digest, Sha256};
 
 use crate::AmdGpuTarget;
@@ -37,6 +38,9 @@ use crate::trusted_device_items::{
 const EXACT_GENERAL_GEMM_TARGET_V1: &str = "gfx942:xnack-";
 
 #[derive(Debug, Eq, PartialEq)]
+// The large receipt stays inline so its one-shot ownership is visible at the
+// private importer boundary and cannot be confused with shared hash authority.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum GeneralGemmMirImportV1 {
     VerifiedTemplate(Box<AuthenticatedGeneralGemmSemanticReceiptV1>),
     VerifiedMutationOracle,
@@ -162,7 +166,7 @@ impl AuthenticatedGeneralGemmFrontendCorrespondenceV1 {
         {
             return false;
         }
-        let GeneralGemmSourceMirEvidenceV1::TypestateAllocationAndProvenance {
+        let GeneralGemmSourceMirEvidenceV1::AllocationAndProvenance {
             abi_identity,
             root_compiled_source,
             store,
@@ -306,46 +310,46 @@ pub(crate) struct GeneralGemmStoreTranscriptV1 {
 #[derive(Debug, Eq, PartialEq)]
 #[allow(clippy::enum_variant_names)] // The prefix marks the production typestate evidence class.
 pub(crate) enum GeneralGemmSourceMirEvidenceV1 {
-    TypestateAllocationAndProvenance {
+    AllocationAndProvenance {
         abi_identity: [u8; 32],
         root_compiled_source: [u8; 32],
         stage_inputs: GeneralGemmStageInputTranscriptV1,
         store: GeneralGemmStoreTranscriptV1,
     },
-    TypestateGuardedGlobalAccesses {
+    GuardedGlobalAccesses {
         stage_inputs: GeneralGemmStageInputTranscriptV1,
         store: GeneralGemmStoreTranscriptV1,
     },
-    TypestateLdsWriteReadInitialization {
+    LdsWriteReadInitialization {
         phase: GeneralGemmPhaseCycleTranscriptV1,
     },
-    TypestateEffectConflictFreedom {
+    EffectConflictFreedom {
         phase: GeneralGemmPhaseCycleTranscriptV1,
         stage_inputs: GeneralGemmStageInputTranscriptV1,
         store: GeneralGemmStoreTranscriptV1,
     },
-    TypestateControlFlowBarrierConvergence {
+    ControlFlowBarrierConvergence {
         stage_to_publish: GeneralGemmAllPathsTranscriptV1,
         mfma_to_reuse: GeneralGemmAllPathsTranscriptV1,
     },
-    TypestateOutputOwnership {
+    OutputOwnership {
         phase: GeneralGemmPhaseCycleTranscriptV1,
         store: GeneralGemmStoreTranscriptV1,
     },
-    TypestateLdsLifecycle {
+    LdsLifecycle {
         phase: GeneralGemmPhaseCycleTranscriptV1,
     },
-    TypestateAccumulatorPhase {
+    AccumulatorPhase {
         phase: GeneralGemmPhaseCycleTranscriptV1,
     },
-    TypestateMaskedTail {
+    MaskedTail {
         stage_inputs: GeneralGemmStageInputTranscriptV1,
         store: GeneralGemmStoreTranscriptV1,
     },
-    TypestateAlphaBetaEpilogue {
+    AlphaBetaEpilogue {
         store: GeneralGemmStoreTranscriptV1,
     },
-    TypestateNumericalOperationOrder {
+    NumericalOperationOrder {
         stage_inputs: GeneralGemmStageInputTranscriptV1,
         phase: GeneralGemmPhaseCycleTranscriptV1,
         store: GeneralGemmStoreTranscriptV1,
@@ -356,19 +360,17 @@ fn evidence_kind(evidence: &GeneralGemmSourceMirEvidenceV1) -> GeneralGemmSource
     use GeneralGemmSourceMirEvidenceV1 as Evidence;
     use GeneralGemmSourcePropertyKindV1 as Kind;
     match evidence {
-        Evidence::TypestateAllocationAndProvenance { .. } => Kind::AllocationAndProvenance,
-        Evidence::TypestateGuardedGlobalAccesses { .. } => Kind::GuardedGlobalAccesses,
-        Evidence::TypestateLdsWriteReadInitialization { .. } => Kind::LdsWriteReadInitialization,
-        Evidence::TypestateEffectConflictFreedom { .. } => Kind::EffectConflictFreedom,
-        Evidence::TypestateControlFlowBarrierConvergence { .. } => {
-            Kind::ControlFlowBarrierConvergence
-        }
-        Evidence::TypestateOutputOwnership { .. } => Kind::OutputOwnership,
-        Evidence::TypestateLdsLifecycle { .. } => Kind::LdsLifecycle,
-        Evidence::TypestateAccumulatorPhase { .. } => Kind::AccumulatorPhase,
-        Evidence::TypestateMaskedTail { .. } => Kind::MaskedTail,
-        Evidence::TypestateAlphaBetaEpilogue { .. } => Kind::AlphaBetaEpilogue,
-        Evidence::TypestateNumericalOperationOrder { .. } => Kind::NumericalOperationOrder,
+        Evidence::AllocationAndProvenance { .. } => Kind::AllocationAndProvenance,
+        Evidence::GuardedGlobalAccesses { .. } => Kind::GuardedGlobalAccesses,
+        Evidence::LdsWriteReadInitialization { .. } => Kind::LdsWriteReadInitialization,
+        Evidence::EffectConflictFreedom { .. } => Kind::EffectConflictFreedom,
+        Evidence::ControlFlowBarrierConvergence { .. } => Kind::ControlFlowBarrierConvergence,
+        Evidence::OutputOwnership { .. } => Kind::OutputOwnership,
+        Evidence::LdsLifecycle { .. } => Kind::LdsLifecycle,
+        Evidence::AccumulatorPhase { .. } => Kind::AccumulatorPhase,
+        Evidence::MaskedTail { .. } => Kind::MaskedTail,
+        Evidence::AlphaBetaEpilogue { .. } => Kind::AlphaBetaEpilogue,
+        Evidence::NumericalOperationOrder { .. } => Kind::NumericalOperationOrder,
     }
 }
 
@@ -442,7 +444,7 @@ fn encode_source_mir_evidence(evidence: &GeneralGemmSourceMirEvidenceV1) -> Vec<
     use GeneralGemmSourceMirEvidenceV1 as Evidence;
     let mut bytes = vec![evidence_kind(evidence) as u8];
     match evidence {
-        Evidence::TypestateAllocationAndProvenance {
+        Evidence::AllocationAndProvenance {
             abi_identity,
             root_compiled_source,
             stage_inputs,
@@ -453,26 +455,26 @@ fn encode_source_mir_evidence(evidence: &GeneralGemmSourceMirEvidenceV1) -> Vec<
             encode_stage(&mut bytes, *stage_inputs);
             encode_store(&mut bytes, *store);
         }
-        Evidence::TypestateGuardedGlobalAccesses {
+        Evidence::GuardedGlobalAccesses {
             stage_inputs,
             store,
         }
-        | Evidence::TypestateMaskedTail {
+        | Evidence::MaskedTail {
             stage_inputs,
             store,
         } => {
             encode_stage(&mut bytes, *stage_inputs);
             encode_store(&mut bytes, *store);
         }
-        Evidence::TypestateLdsWriteReadInitialization { phase }
-        | Evidence::TypestateLdsLifecycle { phase }
-        | Evidence::TypestateAccumulatorPhase { phase } => encode_phase(&mut bytes, *phase),
-        Evidence::TypestateEffectConflictFreedom {
+        Evidence::LdsWriteReadInitialization { phase }
+        | Evidence::LdsLifecycle { phase }
+        | Evidence::AccumulatorPhase { phase } => encode_phase(&mut bytes, *phase),
+        Evidence::EffectConflictFreedom {
             phase,
             stage_inputs,
             store,
         }
-        | Evidence::TypestateNumericalOperationOrder {
+        | Evidence::NumericalOperationOrder {
             stage_inputs,
             phase,
             store,
@@ -481,18 +483,18 @@ fn encode_source_mir_evidence(evidence: &GeneralGemmSourceMirEvidenceV1) -> Vec<
             encode_stage(&mut bytes, *stage_inputs);
             encode_store(&mut bytes, *store);
         }
-        Evidence::TypestateControlFlowBarrierConvergence {
+        Evidence::ControlFlowBarrierConvergence {
             stage_to_publish,
             mfma_to_reuse,
         } => {
             encode_all_paths(&mut bytes, *stage_to_publish);
             encode_all_paths(&mut bytes, *mfma_to_reuse);
         }
-        Evidence::TypestateOutputOwnership { phase, store } => {
+        Evidence::OutputOwnership { phase, store } => {
             encode_phase(&mut bytes, *phase);
             encode_store(&mut bytes, *store);
         }
-        Evidence::TypestateAlphaBetaEpilogue { store } => encode_store(&mut bytes, *store),
+        Evidence::AlphaBetaEpilogue { store } => encode_store(&mut bytes, *store),
     }
     bytes
 }
@@ -683,6 +685,7 @@ enum ProofSymbolicValueV1 {
     Component,
     Constant(u128),
     Add(Box<Self>, Box<Self>),
+    Subtract(Box<Self>, Box<Self>),
     Multiply(Box<Self>, Box<Self>),
     Divide(Box<Self>, Box<Self>),
     Remainder(Box<Self>, Box<Self>),
@@ -732,12 +735,32 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
     let surface = unique_surface(&root_calls)?;
     let root_function = root_function.expect("recognized terminal root has collected metadata");
     require_positive_abi(tcx, root_function.instance.def_id())?;
-    let lane_conditional_publish = publish_is_lane_conditional(body, &root_calls)?;
-    validate_call_shape(body, surface, &root_calls, lane_conditional_publish)?;
-    if let Some((diagnostic, call_chain)) =
-        derived_counterexample(&root_calls, lane_conditional_publish)
-    {
+    let dynamic_mutation_oracle = surface == TrustedGeneralGemmSurfaceV1::ProofSensitive
+        && (call_count(&root_calls, TrustedGeneralGemmOperationV1::MfmaValue) != 0
+            || call_count(&root_calls, TrustedGeneralGemmOperationV1::StoreEpilogue) != 0);
+    if surface == TrustedGeneralGemmSurfaceV1::ProofSensitive {
         require_counterexample_abi_binding(body, &root_calls)?;
+    }
+    let early_counterexample = if dynamic_mutation_oracle {
+        derived_dynamic_counterexample(tcx, body, &root_calls)?
+    } else {
+        None
+    };
+    let lane_conditional_publish =
+        if call_count(&root_calls, TrustedGeneralGemmOperationV1::Publish) == 0 {
+            false
+        } else {
+            publish_is_lane_conditional(body, &root_calls)?
+        };
+    if early_counterexample.is_none() {
+        validate_call_shape(body, surface, &root_calls, lane_conditional_publish)?;
+    }
+    let counterexample = early_counterexample.or_else(|| {
+        (!dynamic_mutation_oracle)
+            .then(|| derived_counterexample(&root_calls, lane_conditional_publish))
+            .flatten()
+    });
+    if let Some((diagnostic, call_chain)) = counterexample {
         if !call_chain
             .iter()
             .all(|call| reachable(body, START_BLOCK, call.block))
@@ -790,7 +813,6 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
         )));
     }
     if surface == TrustedGeneralGemmSurfaceV1::ProofSensitive {
-        require_counterexample_abi_binding(body, &root_calls)?;
         require_dynamic_terminal_inventory(&root_calls)?;
         require_guarded_dynamic_accesses(tcx, body, &root_calls)?;
         require_dynamic_lds_mapping(tcx, body, &root_calls)?;
@@ -867,6 +889,428 @@ fn derived_counterexample(
         ));
     }
     None
+}
+
+fn derived_dynamic_counterexample<'a, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    calls: &'a [GeneralGemmCallV1],
+) -> Result<
+    Option<(GeneralGemmKirDiagnosticV1, Vec<&'a GeneralGemmCallV1>)>,
+    GeneralGemmMirImportErrorV1,
+> {
+    require_dynamic_mutation_oracle_shape(calls)?;
+
+    let load_a = unique_call(calls, TrustedGeneralGemmOperationV1::LoadA)?;
+    let load_a_args = call_args(body, load_a.block)?;
+    let a_row_guard = has_true_lt_guard(
+        tcx,
+        body,
+        load_a.block,
+        &load_a_args[2].node,
+        &load_a_args[4].node,
+    );
+    let a_depth_guard = has_true_lt_guard(
+        tcx,
+        body,
+        load_a.block,
+        &load_a_args[3].node,
+        &load_a_args[5].node,
+    );
+    if !a_row_guard && a_depth_guard {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::BoundsSafe),
+            vec![load_a],
+        )));
+    }
+    if !a_row_guard || !a_depth_guard {
+        return Err(unproved(
+            "A load has exactly the row<M and depth<K guards or the named single-guard counterexample",
+        ));
+    }
+
+    let load_b = unique_call(calls, TrustedGeneralGemmOperationV1::LoadB)?;
+    let load_b_args = call_args(body, load_b.block)?;
+    let b_depth_guard = has_true_lt_guard(
+        tcx,
+        body,
+        load_b.block,
+        &load_b_args[2].node,
+        &load_b_args[4].node,
+    );
+    let b_column_guard = has_true_lt_guard(
+        tcx,
+        body,
+        load_b.block,
+        &load_b_args[3].node,
+        &load_b_args[5].node,
+    );
+    if !b_depth_guard && b_column_guard {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::BoundsSafe),
+            vec![load_b],
+        )));
+    }
+    if !b_depth_guard || !b_column_guard {
+        return Err(unproved(
+            "B load has exactly the depth<K and column<N guards or the named single-guard counterexample",
+        ));
+    }
+
+    let phase = dynamic_phase_local(body, calls)?;
+    let stores = calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::StoreEpilogue)
+        .collect::<Vec<_>>();
+    for store in &stores {
+        let args = call_args(body, store.block)?;
+        let row = proof_symbolic_operand(tcx, body, calls, phase, &args[2].node)?;
+        let column = proof_symbolic_operand(tcx, body, calls, phase, &args[3].node)?;
+        if row == ProofSymbolicValueV1::KernelArgument(3)
+            && column != ProofSymbolicValueV1::KernelArgument(4)
+        {
+            return Ok(Some((
+                diagnostic(GeneralGemmPropertyV1::BoundsSafe),
+                vec![*store],
+            )));
+        }
+    }
+
+    let lane = ProofSymbolicValueV1::Lane;
+    let lane_row = proof_rem(lane.clone(), proof_constant(16));
+    let expected_row_base = proof_add(
+        proof_mul(ProofSymbolicValueV1::WorkgroupY, proof_constant(16)),
+        proof_mul(
+            proof_constant(4),
+            proof_div(lane.clone(), proof_constant(16)),
+        ),
+    );
+    let expected_column = proof_add(
+        proof_mul(ProofSymbolicValueV1::WorkgroupX, proof_constant(16)),
+        lane_row.clone(),
+    );
+    let lane_collision_column = proof_mul(ProofSymbolicValueV1::WorkgroupX, proof_constant(16));
+    let workgroup_collision_column = lane_row.clone();
+    for (component, store) in stores.iter().enumerate() {
+        let args = call_args(body, store.block)?;
+        let row = proof_symbolic_operand(tcx, body, calls, phase, &args[2].node)?;
+        let column = proof_symbolic_operand(tcx, body, calls, phase, &args[3].node)?;
+        if component == 0
+            && row == expected_row_base
+            && (column == lane_collision_column || column == workgroup_collision_column)
+        {
+            return Ok(Some((
+                diagnostic(GeneralGemmPropertyV1::OutputRegionInjective),
+                vec![*store],
+            )));
+        }
+        let expected_row = if component == 0 {
+            expected_row_base.clone()
+        } else {
+            proof_add(expected_row_base.clone(), proof_constant(component as u128))
+        };
+        if row != expected_row || column != expected_column {
+            return Err(unproved(
+                "C stores have exact grid-XY16 lane/component ownership or a derived lane/workgroup collision",
+            ));
+        }
+        if !has_true_lt_guard(tcx, body, store.block, &args[2].node, &args[4].node)
+            || !has_true_lt_guard(tcx, body, store.block, &args[3].node, &args[5].node)
+        {
+            return Err(unproved(
+                "C stores are dominated by exact row<M and column<N guards",
+            ));
+        }
+    }
+
+    let stages = calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::StageValue)
+        .collect::<Vec<_>>();
+    let depth_base = proof_mul(
+        proof_constant(4),
+        proof_div(lane.clone(), proof_constant(16)),
+    );
+    let tile_depth = proof_add(depth_base.clone(), ProofSymbolicValueV1::Component);
+    let swizzle = proof_xor(
+        tile_depth,
+        proof_mul(
+            proof_constant(4),
+            proof_rem(lane_row.clone(), proof_constant(4)),
+        ),
+    );
+    let expected_a_slot = proof_add(
+        proof_mul(proof_constant(16), lane_row.clone()),
+        swizzle.clone(),
+    );
+    let expected_b_slot = proof_add(
+        proof_add(
+            proof_constant(256),
+            proof_mul(proof_constant(16), lane_row.clone()),
+        ),
+        swizzle,
+    );
+    let stage_slots = stages
+        .iter()
+        .map(|stage| {
+            let args = call_args(body, stage.block)?;
+            Ok((
+                *stage,
+                proof_symbolic_operand(tcx, body, calls, phase, &args[1].node)?,
+                proof_symbolic_operand(tcx, body, calls, phase, &args[2].node)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, GeneralGemmMirImportErrorV1>>()?;
+    if let Some((stage, _, _)) = stage_slots
+        .iter()
+        .find(|(_, slot, epoch)| *slot == lane_row && *epoch == ProofSymbolicValueV1::Phase)
+    {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::RaceFree),
+            vec![*stage],
+        )));
+    }
+    if stage_slots.len() == 1
+        && stage_slots[0].1 == expected_a_slot
+        && stage_slots[0].2 == ProofSymbolicValueV1::Phase
+    {
+        let first_b_read = calls
+            .iter()
+            .filter(|call| call.operation == TrustedGeneralGemmOperationV1::ReadStage)
+            .nth(1)
+            .ok_or_else(|| unproved("missing B stage retains a B LDS read witness"))?;
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::Initialized),
+            vec![stage_slots[0].0, first_b_read],
+        )));
+    }
+    if stage_slots.len() != 2
+        || stage_slots[0].1 != expected_a_slot
+        || stage_slots[1].1 != expected_b_slot
+        || stage_slots
+            .iter()
+            .any(|(_, _, epoch)| *epoch != ProofSymbolicValueV1::Phase)
+    {
+        return Err(unproved(
+            "two stage sites derive disjoint XOR4 A/B slots in the current phase epoch",
+        ));
+    }
+
+    let publish_count = call_count(calls, TrustedGeneralGemmOperationV1::Publish);
+    if publish_count == 0 {
+        let first_mfma = calls
+            .iter()
+            .find(|call| call.operation == TrustedGeneralGemmOperationV1::MfmaValue)
+            .ok_or_else(|| unproved("missing publish retains a consuming MFMA witness"))?;
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::Initialized),
+            vec![first_mfma],
+        )));
+    }
+    let publish = unique_call(calls, TrustedGeneralGemmOperationV1::Publish)?;
+    let stage = unique_call(calls, TrustedGeneralGemmOperationV1::Stage)?;
+    if publish_is_lane_conditional(body, calls)? {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::BarrierConvergent),
+            vec![publish],
+        )));
+    }
+    if !dominates(body, stage.block, publish.block) {
+        return Err(unproved("publish is dominated by the complete stage event"));
+    }
+
+    if call_count(calls, TrustedGeneralGemmOperationV1::Reuse) == 0 {
+        let last_mfma = calls
+            .iter()
+            .rfind(|call| call.operation == TrustedGeneralGemmOperationV1::MfmaValue)
+            .ok_or_else(|| unproved("missing reuse retains a completed MFMA witness"))?;
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::LdsEpochCorrect),
+            vec![last_mfma],
+        )));
+    }
+
+    let reads = calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::ReadStage)
+        .collect::<Vec<_>>();
+    for read in &reads {
+        let args = call_args(body, read.block)?;
+        let epoch = proof_symbolic_operand(tcx, body, calls, phase, &args[2].node)?;
+        if epoch
+            == ProofSymbolicValueV1::Subtract(
+                Box::new(ProofSymbolicValueV1::Phase),
+                Box::new(proof_constant(1)),
+            )
+        {
+            return Ok(Some((
+                diagnostic(GeneralGemmPropertyV1::LdsEpochCorrect),
+                vec![*read],
+            )));
+        }
+        if epoch != ProofSymbolicValueV1::Phase {
+            return Err(unproved("every LDS read uses the current phase epoch"));
+        }
+    }
+
+    let wait = unique_call(calls, TrustedGeneralGemmOperationV1::WaitStage)?;
+    let wait_args = call_args(body, wait.block)?;
+    if proof_symbolic_operand(tcx, body, calls, phase, &wait_args[1].node)?
+        != ProofSymbolicValueV1::Phase
+    {
+        return Err(unproved("stage wait binds the current phase epoch"));
+    }
+    if let Some(read) = reads
+        .iter()
+        .find(|read| !dominates(body, wait.block, read.block))
+    {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::Initialized),
+            vec![*read, wait],
+        )));
+    }
+    if reads
+        .iter()
+        .any(|read| !dominates(body, publish.block, read.block))
+    {
+        return Err(unproved("convergent publish dominates every LDS read"));
+    }
+
+    let mfmas = calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::MfmaValue)
+        .collect::<Vec<_>>();
+    for mfma in &mfmas {
+        let args = call_args(body, mfma.block)?;
+        if symbolic_f32_operand(tcx, body, &args[3].node, 0, &mut BTreeSet::new())
+            == Some(SymbolicF32ValueV1::Constant(0.0_f32.to_bits()))
+        {
+            return Ok(Some((
+                diagnostic(GeneralGemmPropertyV1::AccumulatorPhaseRefinement),
+                vec![*mfma],
+            )));
+        }
+    }
+
+    for stage in &stages {
+        let args = call_args(body, stage.block)?;
+        let Some(value) = args.get(5).and_then(|arg| operand_local(&arg.node)) else {
+            return Err(unproved("staged tail value has local MIR provenance"));
+        };
+        let constants = local_u16_constants(tcx, body, value, 0, &mut BTreeSet::new());
+        if constants.iter().any(|value| *value != 0) {
+            return Ok(Some((
+                diagnostic(GeneralGemmPropertyV1::TailRefinement),
+                vec![*stage],
+            )));
+        }
+        if !constants.contains(&0) {
+            return Err(unproved(
+                "each staged A/B value has a CFG-derived positive-zero tail assignment",
+            ));
+        }
+    }
+
+    if let Some(store) = stores
+        .iter()
+        .find(|call| call.evidence == GeneralGemmEvidenceV1::WrongEpilogue)
+    {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::EpilogueRefinement),
+            vec![*store],
+        )));
+    }
+    Ok(None)
+}
+
+fn require_dynamic_mutation_oracle_shape(
+    calls: &[GeneralGemmCallV1],
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    for (operation, expected) in [
+        (TrustedGeneralGemmOperationV1::Acquire, 1),
+        (TrustedGeneralGemmOperationV1::Lane, 1),
+        (TrustedGeneralGemmOperationV1::WorkgroupX, 1),
+        (TrustedGeneralGemmOperationV1::WorkgroupY, 1),
+        (TrustedGeneralGemmOperationV1::LoadA, 1),
+        (TrustedGeneralGemmOperationV1::LoadB, 1),
+        (TrustedGeneralGemmOperationV1::Stage, 1),
+        (TrustedGeneralGemmOperationV1::WaitStage, 1),
+        (TrustedGeneralGemmOperationV1::ReadStage, 8),
+        (TrustedGeneralGemmOperationV1::Mfma, 0),
+        (TrustedGeneralGemmOperationV1::MfmaValue, 4),
+        (TrustedGeneralGemmOperationV1::Store, 0),
+        (TrustedGeneralGemmOperationV1::LoadC, 4),
+        (TrustedGeneralGemmOperationV1::StoreEpilogue, 4),
+    ] {
+        let observed = call_count(calls, operation);
+        if observed != expected {
+            return Err(unproved(&format!(
+                "full mutation-oracle baseline has {expected} {} event(s), observed {observed}",
+                operation_name(operation),
+            )));
+        }
+    }
+    for (operation, minimum, maximum) in [
+        (TrustedGeneralGemmOperationV1::StageValue, 1, 2),
+        (TrustedGeneralGemmOperationV1::Publish, 0, 1),
+        (TrustedGeneralGemmOperationV1::Reuse, 0, 1),
+    ] {
+        let observed = call_count(calls, operation);
+        if !(minimum..=maximum).contains(&observed) {
+            return Err(unproved(&format!(
+                "full mutation-oracle baseline has {minimum} through {maximum} {} event(s), observed {observed}",
+                operation_name(operation),
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn dynamic_phase_local(
+    body: &Body<'_>,
+    calls: &[GeneralGemmCallV1],
+) -> Result<Local, GeneralGemmMirImportErrorV1> {
+    calls
+        .iter()
+        .find(|call| call.operation == TrustedGeneralGemmOperationV1::StageValue)
+        .ok_or_else(|| unproved("one stage value retains the loop-carried phase"))
+        .and_then(|stage| call_args(body, stage.block))?
+        .get(2)
+        .and_then(|arg| operand_local(&arg.node))
+        .map(|local| canonical_local_alias_root(body, local))
+        .ok_or_else(|| unproved("stage epoch has one loop-carried local"))
+}
+
+fn local_u16_constants<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    local: Local,
+    depth: usize,
+    visiting: &mut BTreeSet<Local>,
+) -> BTreeSet<u16> {
+    if depth >= 32 || !visiting.insert(local) {
+        return BTreeSet::new();
+    }
+    let mut constants = BTreeSet::new();
+    for value in body
+        .basic_blocks
+        .iter()
+        .flat_map(|data| &data.statements)
+        .filter_map(|statement| statement.kind.as_assign())
+        .filter_map(|(destination, value)| (destination.as_local() == Some(local)).then_some(value))
+    {
+        if let Rvalue::Use(Operand::Constant(constant)) = value
+            && let Some(value) = constant_u16_from_constant(tcx, constant)
+        {
+            constants.insert(value);
+        } else if let Rvalue::Use(operand) | Rvalue::Cast(_, operand, _) = value
+            && let Some(source) = operand_local(operand)
+        {
+            constants.extend(local_u16_constants(tcx, body, source, depth + 1, visiting));
+        }
+    }
+    visiting.remove(&local);
+    constants
 }
 
 fn diagnostic(property: GeneralGemmPropertyV1) -> GeneralGemmKirDiagnosticV1 {
@@ -990,7 +1434,7 @@ fn derive_typestate_source_property_receipts<'tcx>(
             Kind::AllocationAndProvenance,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateAllocationAndProvenance {
+            GeneralGemmSourceMirEvidenceV1::AllocationAndProvenance {
                 abi_identity,
                 root_compiled_source,
                 stage_inputs,
@@ -1002,7 +1446,7 @@ fn derive_typestate_source_property_receipts<'tcx>(
             Kind::GuardedGlobalAccesses,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateGuardedGlobalAccesses {
+            GeneralGemmSourceMirEvidenceV1::GuardedGlobalAccesses {
                 stage_inputs,
                 store,
             },
@@ -1012,14 +1456,14 @@ fn derive_typestate_source_property_receipts<'tcx>(
             Kind::LdsWriteReadInitialization,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateLdsWriteReadInitialization { phase },
+            GeneralGemmSourceMirEvidenceV1::LdsWriteReadInitialization { phase },
         ),
         source_property(
             &semantics,
             Kind::EffectConflictFreedom,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateEffectConflictFreedom {
+            GeneralGemmSourceMirEvidenceV1::EffectConflictFreedom {
                 phase,
                 stage_inputs,
                 store,
@@ -1030,7 +1474,7 @@ fn derive_typestate_source_property_receipts<'tcx>(
             Kind::ControlFlowBarrierConvergence,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateControlFlowBarrierConvergence {
+            GeneralGemmSourceMirEvidenceV1::ControlFlowBarrierConvergence {
                 stage_to_publish: phase.stage_to_publish,
                 mfma_to_reuse: phase.mfma_to_reuse,
             },
@@ -1040,28 +1484,28 @@ fn derive_typestate_source_property_receipts<'tcx>(
             Kind::OutputOwnership,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateOutputOwnership { phase, store },
+            GeneralGemmSourceMirEvidenceV1::OutputOwnership { phase, store },
         ),
         source_property(
             &semantics,
             Kind::LdsLifecycle,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateLdsLifecycle { phase },
+            GeneralGemmSourceMirEvidenceV1::LdsLifecycle { phase },
         ),
         source_property(
             &semantics,
             Kind::AccumulatorPhase,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateAccumulatorPhase { phase },
+            GeneralGemmSourceMirEvidenceV1::AccumulatorPhase { phase },
         ),
         source_property(
             &semantics,
             Kind::MaskedTail,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateMaskedTail {
+            GeneralGemmSourceMirEvidenceV1::MaskedTail {
                 stage_inputs,
                 store,
             },
@@ -1071,14 +1515,14 @@ fn derive_typestate_source_property_receipts<'tcx>(
             Kind::AlphaBetaEpilogue,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateAlphaBetaEpilogue { store },
+            GeneralGemmSourceMirEvidenceV1::AlphaBetaEpilogue { store },
         ),
         source_property(
             &semantics,
             Kind::NumericalOperationOrder,
             &mir_closure,
             &provider_profile,
-            GeneralGemmSourceMirEvidenceV1::TypestateNumericalOperationOrder {
+            GeneralGemmSourceMirEvidenceV1::NumericalOperationOrder {
                 stage_inputs,
                 phase,
                 store,
@@ -1111,7 +1555,7 @@ fn derived_schema_from_typestate_properties(
         numerical,
     ] = properties;
     let (stage, store) = match &allocation.mir_evidence {
-        Evidence::TypestateAllocationAndProvenance {
+        Evidence::AllocationAndProvenance {
             stage_inputs,
             store,
             ..
@@ -1123,7 +1567,7 @@ fn derived_schema_from_typestate_properties(
         }
     };
     let phase = match &initialized.mir_evidence {
-        Evidence::TypestateLdsWriteReadInitialization { phase } => *phase,
+        Evidence::LdsWriteReadInitialization { phase } => *phase,
         _ => {
             return Err(unproved(
                 "initialization receipt retains typestate MIR evidence",
@@ -1132,36 +1576,36 @@ fn derived_schema_from_typestate_properties(
     };
     let exact = matches!(
         &guarded.mir_evidence,
-        Evidence::TypestateGuardedGlobalAccesses { stage_inputs, store: retained }
+        Evidence::GuardedGlobalAccesses { stage_inputs, store: retained }
             if *stage_inputs == stage && *retained == store
     ) && matches!(
         &conflict.mir_evidence,
-        Evidence::TypestateEffectConflictFreedom { phase: retained_phase, stage_inputs, store: retained_store }
+        Evidence::EffectConflictFreedom { phase: retained_phase, stage_inputs, store: retained_store }
             if *retained_phase == phase && *stage_inputs == stage && *retained_store == store
     ) && matches!(
         &convergence.mir_evidence,
-        Evidence::TypestateControlFlowBarrierConvergence { stage_to_publish, mfma_to_reuse }
+        Evidence::ControlFlowBarrierConvergence { stage_to_publish, mfma_to_reuse }
             if *stage_to_publish == phase.stage_to_publish && *mfma_to_reuse == phase.mfma_to_reuse
     ) && matches!(
         &output.mir_evidence,
-        Evidence::TypestateOutputOwnership { phase: retained_phase, store: retained_store }
+        Evidence::OutputOwnership { phase: retained_phase, store: retained_store }
             if *retained_phase == phase && *retained_store == store
     ) && matches!(
         &lifecycle.mir_evidence,
-        Evidence::TypestateLdsLifecycle { phase: retained } if *retained == phase
+        Evidence::LdsLifecycle { phase: retained } if *retained == phase
     ) && matches!(
         &accumulator.mir_evidence,
-        Evidence::TypestateAccumulatorPhase { phase: retained } if *retained == phase
+        Evidence::AccumulatorPhase { phase: retained } if *retained == phase
     ) && matches!(
         &tail.mir_evidence,
-        Evidence::TypestateMaskedTail { stage_inputs, store: retained }
+        Evidence::MaskedTail { stage_inputs, store: retained }
             if *stage_inputs == stage && *retained == store
     ) && matches!(
         &epilogue.mir_evidence,
-        Evidence::TypestateAlphaBetaEpilogue { store: retained } if *retained == store
+        Evidence::AlphaBetaEpilogue { store: retained } if *retained == store
     ) && matches!(
         &numerical.mir_evidence,
-        Evidence::TypestateNumericalOperationOrder { stage_inputs, phase: retained_phase, store: retained_store }
+        Evidence::NumericalOperationOrder { stage_inputs, phase: retained_phase, store: retained_store }
             if *stage_inputs == stage && *retained_phase == phase && *retained_store == store
     );
     if !exact {
@@ -1313,6 +1757,13 @@ fn require_terminal_abi_binding(
         return Err(unproved("positive output uses the sealed canonical store"));
     }
     let args = call_args(body, store.block)?;
+    if !args.get(1).is_some_and(|value| {
+        is_kernel_argument_or_alias(body, &value.node, 2, 0, &mut BTreeSet::new())
+    }) {
+        return Err(unproved(
+            "positive output store is rooted in the exact ABI C allocation",
+        ));
+    }
     for (operand, argument) in [(2, 3), (3, 4), (4, 8), (5, 9), (6, 10)] {
         if !args.get(operand).is_some_and(|value| {
             is_kernel_argument_or_alias(body, &value.node, argument, 0, &mut BTreeSet::new())
@@ -1755,9 +2206,7 @@ fn block_dominates(body: &Body<'_>, dominator: BasicBlock, dominated: BasicBlock
         if block == dominated {
             return false;
         }
-        if let Some(terminator) = &body.basic_blocks[block].terminator {
-            pending.extend(terminator.successors());
-        }
+        pending.extend(normal_successors(body, block).unwrap_or_default());
     }
     true
 }
@@ -1935,25 +2384,67 @@ fn find_phase_split<'tcx>(
         let Some(terminator) = &body.basic_blocks[block].terminator else {
             return None;
         };
-        let successors = terminator.successors().collect::<Vec<_>>();
-        if let TerminatorKind::SwitchInt { discr, .. } = &terminator.kind
+        let successors = normal_successors(body, block).ok()?;
+        if let TerminatorKind::SwitchInt { discr, targets } = &terminator.kind
             && symbolic_operand(tcx, body, discr, wave, 0, &mut BTreeSet::new())
                 == Some(SymbolicValueV1::LessThan(
                     Box::new(SymbolicValueV1::WaveField(3)),
                     Box::new(SymbolicValueV1::WaveField(4)),
                 ))
-            && successors
-                .iter()
-                .any(|successor| reachable(body, *successor, stage))
-            && successors
-                .iter()
-                .any(|successor| reachable(body, *successor, store))
+            && let Some((false_target, true_target)) = boolean_switch_targets(targets)
+            && all_paths_reach_before(body, true_target, stage, store)
+            && all_paths_reach_before(body, false_target, store, stage)
         {
             return Some(block);
         }
         pending.extend(successors);
     }
     None
+}
+
+fn boolean_switch_targets(
+    targets: &rustc_middle::mir::SwitchTargets,
+) -> Option<(BasicBlock, BasicBlock)> {
+    let true_target = targets
+        .iter()
+        .find_map(|(value, target)| (value == 1).then_some(target))
+        .unwrap_or_else(|| targets.otherwise());
+    let false_target = targets
+        .iter()
+        .find_map(|(value, target)| (value == 0).then_some(target))
+        .unwrap_or_else(|| targets.otherwise());
+    (true_target != false_target).then_some((false_target, true_target))
+}
+
+fn all_paths_reach_before(
+    body: &Body<'_>,
+    from: BasicBlock,
+    required: BasicBlock,
+    forbidden: BasicBlock,
+) -> bool {
+    let mut pending = VecDeque::from([from]);
+    let mut visited = BTreeSet::new();
+    let mut reached_required = false;
+    while let Some(block) = pending.pop_front() {
+        if block == required {
+            reached_required = true;
+            continue;
+        }
+        if block == forbidden {
+            return false;
+        }
+        if !visited.insert(block) {
+            continue;
+        }
+        let Ok(successors) = normal_successors(body, block) else {
+            return false;
+        };
+        if successors.is_empty() {
+            return false;
+        }
+        pending.extend(successors);
+    }
+    reached_required
 }
 
 fn require_guarded_stage_inputs<'tcx>(
@@ -1969,8 +2460,8 @@ fn require_guarded_stage_inputs<'tcx>(
     let b = stage_args
         .get(2)
         .ok_or_else(|| unproved("stage carries four B values"))?;
-    let a_values = array_value_locals(body, &a.node)?;
-    let b_values = array_value_locals(body, &b.node)?;
+    let a_values = array_value_locals(body, &a.node, stage.block)?;
+    let b_values = array_value_locals(body, &b.node, stage.block)?;
     if a_values.len() != 4 || b_values.len() != 4 {
         return Err(unproved(
             "stage carries exactly four A and four B components",
@@ -2000,7 +2491,7 @@ fn require_guarded_stage_inputs<'tcx>(
         (
             0_u8,
             &a_values,
-            [(3, 3), (4, 5), (5, 6)],
+            [(0, 0), (3, 3), (4, 5), (5, 6)],
             a_row,
             depth_base.clone(),
             false,
@@ -2008,14 +2499,20 @@ fn require_guarded_stage_inputs<'tcx>(
         (
             1_u8,
             &b_values,
-            [(3, 5), (4, 4), (5, 7)],
+            [(0, 1), (3, 5), (4, 4), (5, 7)],
             depth_base,
             b_column,
             true,
         ),
     ] {
         for (component_index, value) in values.iter().enumerate() {
-            let (definition, arguments) = defining_call(body, *value)?;
+            let (definition, arguments, definition_block) =
+                defining_call(body, *value, stage.block)?;
+            if !dominates(body, definition_block, stage.block) {
+                return Err(unproved(
+                    "each guarded stage component definition dominates the stage event",
+                ));
+            }
             if helper
                 .replace(definition)
                 .is_some_and(|prior| prior != definition)
@@ -2162,7 +2659,12 @@ fn require_guarded_row_major_helper(
                     };
                     let expected = add(multiply(argument(1), argument(5)), argument(2));
                     if symbolic == expected {
-                        if row_major.replace(block).is_some() {
+                        let Some(local) = destination.as_local() else {
+                            return Err(unproved(
+                                "loader row-major offset has local MIR provenance",
+                            ));
+                        };
+                        if row_major.replace((block, local)).is_some() {
                             return Err(unproved("loader has one exact row-major offset"));
                         }
                         dataflow.push(2);
@@ -2179,6 +2681,9 @@ fn require_guarded_row_major_helper(
                     dataflow.extend_from_slice(&(block.as_usize() as u32).to_le_bytes());
                 }
                 Rvalue::BinaryOp(BinOp::Lt, operands) => {
+                    let Some(left) = operand_local(&operands.0) else {
+                        continue;
+                    };
                     let Some(right) = operand_local(&operands.1) else {
                         continue;
                     };
@@ -2189,7 +2694,14 @@ fn require_guarded_row_major_helper(
                         })
                     });
                     if metadata {
-                        extent_guard = Some(block);
+                        let Some(discriminant) = destination.as_local() else {
+                            return Err(unproved(
+                                "loader extent comparison has local MIR provenance",
+                            ));
+                        };
+                        if extent_guard.replace((block, discriminant, left)).is_some() {
+                            return Err(unproved("loader has one exact slice-extent guard"));
+                        }
                         dataflow.push(4);
                         dataflow.extend_from_slice(&(block.as_usize() as u32).to_le_bytes());
                     }
@@ -2201,7 +2713,9 @@ fn require_guarded_row_major_helper(
                             .iter()
                             .any(|projection| matches!(projection, ProjectionElem::Deref)) =>
                 {
-                    load = Some(block);
+                    if load.replace((block, *place)).is_some() {
+                        return Err(unproved("loader has one in-bounds dereference result"));
+                    }
                     dataflow.push(5);
                     dataflow.extend_from_slice(&(block.as_usize() as u32).to_le_bytes());
                 }
@@ -2229,36 +2743,106 @@ fn require_guarded_row_major_helper(
     let (column_guard, column_discriminant) =
         column_guard.ok_or_else(|| unproved("loader has the exact column bounds guard"))?;
     let zero_return = zero_return.ok_or_else(|| unproved("loader has a positive-zero tail"))?;
-    let row_major = row_major.ok_or_else(|| unproved("loader has an exact row-major offset"))?;
-    let extent_guard = extent_guard.ok_or_else(|| unproved("loader checks the slice extent"))?;
-    let load = load.ok_or_else(|| unproved("loader returns the in-bounds slice element"))?;
+    let (row_major, row_major_local) =
+        row_major.ok_or_else(|| unproved("loader has an exact row-major offset"))?;
+    let (extent_guard, extent_discriminant, extent_index) =
+        extent_guard.ok_or_else(|| unproved("loader checks the slice extent"))?;
+    let (load, load_place) =
+        load.ok_or_else(|| unproved("loader returns the in-bounds slice element"))?;
     let trap =
         trap.ok_or_else(|| unproved("loader traps when the slice extent is insufficient"))?;
-    let row_successors = normal_successors(body, row_guard)?;
-    let column_successors = normal_successors(body, column_guard)?;
-    if !switches_on_local(body, row_guard, row_discriminant)
-        || !switches_on_local(body, column_guard, column_discriminant)
-        || !row_successors
-            .iter()
-            .any(|next| reachable(body, *next, zero_return))
-        || !row_successors
-            .iter()
-            .any(|next| reachable(body, *next, column_guard))
-        || !column_successors
-            .iter()
-            .any(|next| reachable(body, *next, zero_return))
-        || !column_successors
-            .iter()
-            .any(|next| reachable(body, *next, row_major))
-        || !dominates(body, row_guard, column_guard)
-        || !dominates(body, column_guard, row_major)
-        || !dominates(body, row_major, extent_guard)
-        || !dominates(body, extent_guard, load)
-        || !reachable(body, extent_guard, trap)
-    {
+    let Some((row_in_bounds, row_out_of_bounds)) = ge_switch_targets(body, row_guard) else {
         return Err(unproved(
-            "loader CFG derives both guards, zero tail, checked row-major extent, in-bounds load, and trap",
+            "loader row guard has exact false/true branch polarity",
         ));
+    };
+    let Some((column_in_bounds, column_out_of_bounds)) = ge_switch_targets(body, column_guard)
+    else {
+        return Err(unproved(
+            "loader column guard has exact false/true branch polarity",
+        ));
+    };
+    let Some((extent_decision, extent_out_of_bounds, extent_in_bounds)) =
+        find_exact_option_decision(
+            tcx,
+            body,
+            extent_guard,
+            extent_discriminant,
+            trap,
+            load,
+            row_major_local,
+        )
+    else {
+        return Err(unproved(
+            "loader extent comparison lowers through exact None/Some arms and a downstream Option decision whose None edge traps and Some edge loads",
+        ));
+    };
+    let checks = [
+        (
+            "row switch discriminant",
+            switches_on_local(body, row_guard, row_discriminant),
+        ),
+        (
+            "column switch discriminant",
+            switches_on_local(body, column_guard, column_discriminant),
+        ),
+        (
+            "row true -> zero",
+            all_paths_reach_before(body, row_out_of_bounds, zero_return, column_guard),
+        ),
+        (
+            "row false -> column",
+            all_paths_reach_before(body, row_in_bounds, column_guard, zero_return),
+        ),
+        (
+            "column true -> zero",
+            all_paths_reach_before(body, column_out_of_bounds, zero_return, row_major),
+        ),
+        (
+            "column false -> index",
+            all_paths_reach_before(body, column_in_bounds, row_major, zero_return),
+        ),
+        (
+            "extent uses row-major index",
+            canonical_local_alias_root(body, extent_index)
+                == canonical_local_alias_root(body, row_major_local),
+        ),
+        ("extent false -> trap", true),
+        ("extent true -> load", true),
+        (
+            "row dominates column",
+            dominates(body, row_guard, column_guard),
+        ),
+        (
+            "column dominates index",
+            dominates(body, column_guard, row_major),
+        ),
+        (
+            "index dominates extent",
+            dominates(body, row_major, extent_guard),
+        ),
+        (
+            "extent dominates decision",
+            dominates(body, extent_guard, extent_decision),
+        ),
+        (
+            "extent decision dominates load",
+            dominates(body, extent_decision, load),
+        ),
+        (
+            "load derives from slice and index",
+            place_is_derived_from_loader_index(body, &load_place, row_major_local),
+        ),
+    ];
+    let failed = checks
+        .iter()
+        .filter_map(|(name, passed)| (!passed).then_some(*name))
+        .collect::<Vec<_>>();
+    if !failed.is_empty() {
+        return Err(unproved(&format!(
+            "loader CFG derives both guards, zero tail, checked row-major extent, in-bounds load, and trap (failed: {}; row={row_guard:?}/{row_in_bounds:?}/{row_out_of_bounds:?}, column={column_guard:?}/{column_in_bounds:?}/{column_out_of_bounds:?}, index={row_major:?}/{row_major_local:?}, extent={extent_guard:?}/{extent_decision:?}/{extent_out_of_bounds:?}/{extent_in_bounds:?}/{extent_index:?}, load={load:?}, trap={trap:?})",
+            failed.join(", "),
+        )));
     }
     let source_file = tcx
         .sess
@@ -2279,7 +2863,7 @@ fn require_guarded_row_major_helper(
         column_guard_block: column_guard.as_usize() as u32,
         zero_return_block: zero_return.as_usize() as u32,
         row_major_block: row_major.as_usize() as u32,
-        extent_guard_block: extent_guard.as_usize() as u32,
+        extent_guard_block: extent_decision.as_usize() as u32,
         load_block: load.as_usize() as u32,
         trap_block: trap.as_usize() as u32,
         dataflow_identity: hash_fields(&[
@@ -2287,6 +2871,230 @@ fn require_guarded_row_major_helper(
             &dataflow,
         ]),
     })
+}
+
+fn ge_switch_targets(body: &Body<'_>, block: BasicBlock) -> Option<(BasicBlock, BasicBlock)> {
+    let TerminatorKind::SwitchInt { targets, .. } =
+        &body.basic_blocks[block].terminator.as_ref()?.kind
+    else {
+        return None;
+    };
+    let (false_target, true_target) = boolean_switch_targets(targets)?;
+    Some((false_target, true_target))
+}
+
+fn find_exact_option_decision<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    comparison: BasicBlock,
+    discriminant: Local,
+    false_boundary: BasicBlock,
+    true_boundary: BasicBlock,
+    index: Local,
+) -> Option<(BasicBlock, BasicBlock, BasicBlock)> {
+    let TerminatorKind::SwitchInt {
+        discr: comparison_operand,
+        targets: comparison_targets,
+    } = &body.basic_blocks[comparison].terminator.as_ref()?.kind
+    else {
+        return None;
+    };
+    if operand_local(comparison_operand) != Some(discriminant) {
+        return None;
+    }
+    let (none_entry, some_entry) = boolean_switch_targets(comparison_targets)?;
+    let candidates = body
+        .basic_blocks
+        .iter_enumerated()
+        .filter_map(|(block, data)| {
+            let TerminatorKind::SwitchInt { discr, targets } = &data.terminator.as_ref()?.kind
+            else {
+                return None;
+            };
+            let decision_discriminant = operand_local(discr)?;
+            if !dominates(body, comparison, block) {
+                return None;
+            }
+            let option_places = data
+                .statements
+                .iter()
+                .filter_map(|statement| statement.kind.as_assign())
+                .filter_map(|(destination, value)| {
+                    (destination.as_local() == Some(decision_discriminant)).then_some(value)
+                })
+                .filter_map(|value| match value {
+                    Rvalue::Discriminant(place) if place.projection.is_empty() => place.as_local(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [option] = option_places.as_slice() else {
+                return None;
+            };
+            let TyKind::Adt(option_adt, _) = body.local_decls[*option].ty.kind() else {
+                return None;
+            };
+            if !tcx.is_diagnostic_item(sym::Option, option_adt.did())
+                || !all_paths_reach_before(body, none_entry, block, some_entry)
+                || !all_paths_reach_before(body, some_entry, block, none_entry)
+                || !option_arm_has_exact_definition(
+                    tcx, body, none_entry, block, *option, index, false,
+                )
+                || !option_arm_has_exact_definition(
+                    tcx, body, some_entry, block, *option, index, true,
+                )
+            {
+                return None;
+            }
+            let (false_target, true_target) = boolean_switch_targets(targets)?;
+            (all_paths_reach_before(body, false_target, false_boundary, true_boundary)
+                && all_paths_reach_before(body, true_target, true_boundary, false_boundary))
+            .then_some((block, false_target, true_target))
+        })
+        .collect::<Vec<_>>();
+    let [decision] = candidates.as_slice() else {
+        return None;
+    };
+    Some(*decision)
+}
+
+fn option_arm_has_exact_definition<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    entry: BasicBlock,
+    decision: BasicBlock,
+    option: Local,
+    index: Local,
+    some: bool,
+) -> bool {
+    let mut pending = VecDeque::from([entry]);
+    let mut visited = BTreeSet::new();
+    let mut definitions = Vec::new();
+    while let Some(block) = pending.pop_front() {
+        if block == decision || !visited.insert(block) || visited.len() > 64 {
+            continue;
+        }
+        for statement in &body.basic_blocks[block].statements {
+            let Some((destination, value)) = statement.kind.as_assign() else {
+                continue;
+            };
+            if destination.as_local() == Some(option) {
+                definitions.push(value);
+            }
+        }
+        let Ok(successors) = normal_successors(body, block) else {
+            return false;
+        };
+        pending.extend(successors);
+    }
+    let [definition] = definitions.as_slice() else {
+        return false;
+    };
+    let TyKind::Adt(option_adt, _) = body.local_decls[option].ty.kind() else {
+        return false;
+    };
+    if !tcx.is_diagnostic_item(sym::Option, option_adt.did()) {
+        return false;
+    }
+    if !some {
+        return matches!(
+            definition,
+            Rvalue::Use(Operand::Constant(constant))
+                if constant.const_.ty() == body.local_decls[option].ty
+                    && constant.const_.try_eval_target_usize(
+                        tcx,
+                        TypingEnv::fully_monomorphized(),
+                    ) == Some(0)
+        );
+    }
+    let Rvalue::Aggregate(kind, operands) = definition else {
+        return false;
+    };
+    let AggregateKind::Adt(definition, variant, _, _, active_field) = &**kind else {
+        return false;
+    };
+    if *definition != option_adt.did()
+        || active_field.is_some()
+        || option_adt.discriminant_for_variant(tcx, *variant).val != 1
+    {
+        return false;
+    }
+    let [payload] = &operands.raw[..] else {
+        return false;
+    };
+    let index_tainted = loader_taint_closure(body, index);
+    let source_tainted = loader_taint_closure(body, Local::from_usize(1));
+    loader_operand_uses_tainted(payload, &index_tainted)
+        && loader_operand_uses_tainted(payload, &source_tainted)
+}
+
+fn place_is_derived_from_loader_index(
+    body: &Body<'_>,
+    place: &rustc_middle::mir::Place<'_>,
+    index: Local,
+) -> bool {
+    let index_tainted = loader_taint_closure(body, index);
+    let source_tainted = loader_taint_closure(body, Local::from_usize(1));
+    loader_place_uses_tainted(place, &index_tainted)
+        && loader_place_uses_tainted(place, &source_tainted)
+}
+
+fn loader_taint_closure(body: &Body<'_>, source: Local) -> BTreeSet<Local> {
+    let mut tainted = BTreeSet::from([source]);
+    for _ in 0..64 {
+        let before = tainted.len();
+        for data in body.basic_blocks.iter() {
+            for statement in &data.statements {
+                let Some((destination, value)) = statement.kind.as_assign() else {
+                    continue;
+                };
+                let Some(destination) = destination.as_local() else {
+                    continue;
+                };
+                if loader_rvalue_uses_tainted(value, &tainted) {
+                    tainted.insert(destination);
+                }
+            }
+        }
+        if tainted.len() == before {
+            break;
+        }
+    }
+    tainted
+}
+
+fn loader_rvalue_uses_tainted(value: &Rvalue<'_>, tainted: &BTreeSet<Local>) -> bool {
+    match value {
+        Rvalue::Use(operand)
+        | Rvalue::Repeat(operand, _)
+        | Rvalue::Cast(_, operand, _)
+        | Rvalue::UnaryOp(_, operand) => loader_operand_uses_tainted(operand, tainted),
+        Rvalue::BinaryOp(_, operands) => {
+            loader_operand_uses_tainted(&operands.0, tainted)
+                || loader_operand_uses_tainted(&operands.1, tainted)
+        }
+        Rvalue::Aggregate(_, operands) => operands
+            .iter()
+            .any(|operand| loader_operand_uses_tainted(operand, tainted)),
+        Rvalue::Ref(_, _, place) => loader_place_uses_tainted(place, tainted),
+        _ => false,
+    }
+}
+
+fn loader_operand_uses_tainted(operand: &Operand<'_>, tainted: &BTreeSet<Local>) -> bool {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => loader_place_uses_tainted(place, tainted),
+        Operand::Constant(_) | Operand::RuntimeChecks(_) => false,
+    }
+}
+
+fn loader_place_uses_tainted(
+    place: &rustc_middle::mir::Place<'_>,
+    tainted: &BTreeSet<Local>,
+) -> bool {
+    tainted.contains(&place.local)
+        || place.projection.iter().any(
+            |projection| matches!(projection, ProjectionElem::Index(local) if tainted.contains(&local)),
+        )
 }
 
 fn switches_on_local(body: &Body<'_>, block: BasicBlock, local: Option<Local>) -> bool {
@@ -2312,10 +3120,10 @@ fn dominates(body: &Body<'_>, dominator: BasicBlock, target: BasicBlock) -> bool
         if block == target {
             return false;
         }
-        let Some(terminator) = &body.basic_blocks[block].terminator else {
+        let Ok(successors) = normal_successors(body, block) else {
             return false;
         };
-        pending.extend(terminator.successors());
+        pending.extend(successors);
     }
     true
 }
@@ -2521,6 +3329,7 @@ fn is_kernel_argument_or_alias(
 fn array_value_locals(
     body: &Body<'_>,
     operand: &Operand<'_>,
+    use_block: BasicBlock,
 ) -> Result<Vec<Local>, GeneralGemmMirImportErrorV1> {
     let Some(array) = (match operand {
         Operand::Copy(place) | Operand::Move(place) => place.as_local(),
@@ -2528,8 +3337,9 @@ fn array_value_locals(
     }) else {
         return Err(unproved("stage array has local MIR provenance"));
     };
-    for block in body.basic_blocks.iter() {
-        for statement in &block.statements {
+    let mut found = None;
+    for (block, data) in body.basic_blocks.iter_enumerated() {
+        for statement in &data.statements {
             let Some((destination, Rvalue::Aggregate(_, elements))) = statement.kind.as_assign()
             else {
                 continue;
@@ -2537,7 +3347,12 @@ fn array_value_locals(
             if destination.as_local() != Some(array) {
                 continue;
             }
-            return elements
+            if !dominates(body, block, use_block) {
+                return Err(unproved(
+                    "stage array aggregate definition dominates the stage event",
+                ));
+            }
+            let values = elements
                 .iter()
                 .map(|element| match element {
                     Operand::Copy(place) | Operand::Move(place) => place
@@ -2545,19 +3360,32 @@ fn array_value_locals(
                         .ok_or_else(|| unproved("stage component has local MIR provenance")),
                     _ => Err(unproved("stage component has local MIR provenance")),
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
+            if found.replace(values).is_some() {
+                return Err(unproved(
+                    "stage array has one reaching aggregate definition",
+                ));
+            }
         }
     }
-    Err(unproved("stage array has one aggregate definition"))
+    found.ok_or_else(|| unproved("stage array has one aggregate definition"))
 }
 
 fn defining_call<'a, 'tcx>(
     body: &'a Body<'tcx>,
     local: Local,
-) -> Result<(rustc_hir::def_id::DefId, &'a [Spanned<Operand<'tcx>>]), GeneralGemmMirImportErrorV1> {
+    use_block: BasicBlock,
+) -> Result<
+    (
+        rustc_hir::def_id::DefId,
+        &'a [Spanned<Operand<'tcx>>],
+        BasicBlock,
+    ),
+    GeneralGemmMirImportErrorV1,
+> {
     let mut found = None;
-    for block in body.basic_blocks.iter() {
-        let Some(terminator) = &block.terminator else {
+    for (block, data) in body.basic_blocks.iter_enumerated() {
+        let Some(terminator) = &data.terminator else {
             continue;
         };
         let TerminatorKind::Call {
@@ -2578,7 +3406,12 @@ fn defining_call<'a, 'tcx>(
         let TyKind::FnDef(definition, _) = function.const_.ty().kind() else {
             return Err(unproved("stage component producer is a direct function"));
         };
-        if found.replace((*definition, &args[..])).is_some() {
+        if !dominates(body, block, use_block) {
+            return Err(unproved(
+                "stage component call definition dominates its stage use",
+            ));
+        }
+        if found.replace((*definition, &args[..], block)).is_some() {
             return Err(unproved("stage component has one reaching call definition"));
         }
     }
@@ -2965,6 +3798,10 @@ fn proof_symbolic_rvalue<'tcx>(
             )?;
             match operation {
                 BinOp::Add => Some(proof_add(left, right)),
+                BinOp::Sub => Some(ProofSymbolicValueV1::Subtract(
+                    Box::new(left),
+                    Box::new(right),
+                )),
                 BinOp::Mul => Some(proof_mul(left, right)),
                 BinOp::Div => Some(proof_div(left, right)),
                 BinOp::Rem => Some(proof_rem(left, right)),
@@ -3116,13 +3953,18 @@ fn publish_is_lane_conditional(
         .ok_or_else(|| unproved("lane identity reaches the barrier condition"))?;
     let stage = unique_call(calls, TrustedGeneralGemmOperationV1::Stage)?;
     let publish = unique_call(calls, TrustedGeneralGemmOperationV1::Publish)?;
-    if all_paths_reach(body, stage.return_target, publish.block) {
+    let reuse = optional_call(calls, TrustedGeneralGemmOperationV1::Reuse)?;
+    if reuse.is_some_and(|reuse| {
+        all_paths_reach_before(body, stage.return_target, publish.block, reuse.block)
+    }) || reuse.is_none() && all_paths_reach(body, stage.return_target, publish.block)
+    {
         return Ok(false);
     }
     Ok(region_has_lane_switch(
         body,
         stage.return_target,
         publish.block,
+        reuse.map(|reuse| reuse.block),
         lane,
     ))
 }
@@ -3134,13 +3976,9 @@ fn all_paths_reach(body: &Body<'_>, from: BasicBlock, to: BasicBlock) -> bool {
         if block == to || !visited.insert(block) {
             continue;
         }
-        let Some(terminator) = &body.basic_blocks[block].terminator else {
+        let Ok(successors) = normal_successors(body, block) else {
             return false;
         };
-        let successors = terminator
-            .successors()
-            .filter(|successor| !body.basic_blocks[*successor].is_cleanup)
-            .collect::<Vec<_>>();
         if successors.is_empty() {
             return false;
         }
@@ -3153,6 +3991,7 @@ fn region_has_lane_switch(
     body: &Body<'_>,
     from: BasicBlock,
     boundary: BasicBlock,
+    forbidden: Option<BasicBlock>,
     lane: Local,
 ) -> bool {
     let mut tainted = BTreeSet::from([lane]);
@@ -3178,7 +4017,7 @@ fn region_has_lane_switch(
     let mut pending = VecDeque::from([from]);
     let mut visited = BTreeSet::new();
     while let Some(block) = pending.pop_front() {
-        if block == boundary || !visited.insert(block) {
+        if block == boundary || Some(block) == forbidden || !visited.insert(block) {
             continue;
         }
         let Some(terminator) = &body.basic_blocks[block].terminator else {
@@ -3189,7 +4028,7 @@ fn region_has_lane_switch(
         {
             return true;
         }
-        pending.extend(terminator.successors());
+        pending.extend(normal_successors(body, block).unwrap_or_default());
     }
     false
 }
@@ -3586,8 +4425,13 @@ fn normal_successors(
     let Some(terminator) = &body.basic_blocks[block].terminator else {
         return Err(missing_terminator(block));
     };
-    Ok(terminator
-        .successors()
+    let successors = match &terminator.kind {
+        TerminatorKind::FalseEdge { real_target, .. }
+        | TerminatorKind::FalseUnwind { real_target, .. } => vec![*real_target],
+        _ => terminator.successors().collect(),
+    };
+    Ok(successors
+        .into_iter()
         .filter(|successor| !body.basic_blocks[*successor].is_cleanup)
         .collect())
 }
@@ -3738,10 +4582,10 @@ fn reachable(body: &Body<'_>, from: BasicBlock, to: BasicBlock) -> bool {
         if !visited.insert(block) {
             continue;
         }
-        let Some(terminator) = &body.basic_blocks[block].terminator else {
+        let Ok(successors) = normal_successors(body, block) else {
             return false;
         };
-        pending.extend(terminator.successors());
+        pending.extend(successors);
     }
     false
 }
@@ -3864,39 +4708,35 @@ mod tests {
             abi_identity: general_gemm_abi_identity(&abi_bindings()),
         };
         match kind {
-            Kind::AllocationAndProvenance => Evidence::TypestateAllocationAndProvenance {
+            Kind::AllocationAndProvenance => Evidence::AllocationAndProvenance {
                 abi_identity: general_gemm_abi_identity(&abi_bindings()),
                 root_compiled_source: [0x22; 32],
                 stage_inputs,
                 store,
             },
-            Kind::GuardedGlobalAccesses => Evidence::TypestateGuardedGlobalAccesses {
+            Kind::GuardedGlobalAccesses => Evidence::GuardedGlobalAccesses {
                 stage_inputs,
                 store,
             },
-            Kind::LdsWriteReadInitialization => {
-                Evidence::TypestateLdsWriteReadInitialization { phase }
-            }
-            Kind::EffectConflictFreedom => Evidence::TypestateEffectConflictFreedom {
+            Kind::LdsWriteReadInitialization => Evidence::LdsWriteReadInitialization { phase },
+            Kind::EffectConflictFreedom => Evidence::EffectConflictFreedom {
                 phase,
                 stage_inputs,
                 store,
             },
-            Kind::ControlFlowBarrierConvergence => {
-                Evidence::TypestateControlFlowBarrierConvergence {
-                    stage_to_publish: phase.stage_to_publish,
-                    mfma_to_reuse: phase.mfma_to_reuse,
-                }
-            }
-            Kind::OutputOwnership => Evidence::TypestateOutputOwnership { phase, store },
-            Kind::LdsLifecycle => Evidence::TypestateLdsLifecycle { phase },
-            Kind::AccumulatorPhase => Evidence::TypestateAccumulatorPhase { phase },
-            Kind::MaskedTail => Evidence::TypestateMaskedTail {
+            Kind::ControlFlowBarrierConvergence => Evidence::ControlFlowBarrierConvergence {
+                stage_to_publish: phase.stage_to_publish,
+                mfma_to_reuse: phase.mfma_to_reuse,
+            },
+            Kind::OutputOwnership => Evidence::OutputOwnership { phase, store },
+            Kind::LdsLifecycle => Evidence::LdsLifecycle { phase },
+            Kind::AccumulatorPhase => Evidence::AccumulatorPhase { phase },
+            Kind::MaskedTail => Evidence::MaskedTail {
                 stage_inputs,
                 store,
             },
-            Kind::AlphaBetaEpilogue => Evidence::TypestateAlphaBetaEpilogue { store },
-            Kind::NumericalOperationOrder => Evidence::TypestateNumericalOperationOrder {
+            Kind::AlphaBetaEpilogue => Evidence::AlphaBetaEpilogue { store },
+            Kind::NumericalOperationOrder => Evidence::NumericalOperationOrder {
                 stage_inputs,
                 phase,
                 store,
