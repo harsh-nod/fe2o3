@@ -22,6 +22,7 @@
     {
       "id": "04-memory-math-gemm",
       "tests": [
+        "general_gemm_mutation_corpus_integrity",
         "general_gemm_provider_auth",
         "general_gemm_semantic_frontend",
         "half_math_compiler",

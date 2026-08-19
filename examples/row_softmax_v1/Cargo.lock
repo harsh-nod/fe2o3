@@ -531,6 +531,7 @@ dependencies = [
  "fe2o3-kernel-descriptor",
  "fe2o3-rustc-front",
  "proc-macro2",
+ "rustix",
  "sha2",
  "syn 2.0.119",
  "toml",
