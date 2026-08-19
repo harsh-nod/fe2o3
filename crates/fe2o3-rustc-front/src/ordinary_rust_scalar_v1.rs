@@ -78,6 +78,25 @@ impl ConcreteMonomorphizationIdentityV1 {
 pub struct CanonicalKernelItemIdV1([u8; KERNEL_ITEM_ID_CANONICAL_BYTES_V1]);
 
 impl CanonicalKernelItemIdV1 {
+    /// Builds the frozen V1 envelope from independently derived identity
+    /// commitments. This only frames inert data; it does not authenticate the
+    /// commitments or grant compiler authority.
+    pub fn from_components(
+        crate_identity: [u8; 32],
+        rust_item_identity: [u8; 32],
+        generic_definition_identity: [u8; 32],
+    ) -> Result<Self, OrdinaryRustScalarValidationErrorV1> {
+        let mut bytes = [0_u8; KERNEL_ITEM_ID_CANONICAL_BYTES_V1];
+        bytes[..8].copy_from_slice(&KERNEL_ITEM_MAGIC_V1);
+        bytes[8..10].copy_from_slice(&KERNEL_IDENTITY_VERSION_V1.to_le_bytes());
+        bytes[12..16].copy_from_slice(&KERNEL_ITEM_PAYLOAD_BYTES_V1.to_le_bytes());
+        bytes[16..48].copy_from_slice(&crate_identity);
+        bytes[48..80].copy_from_slice(&rust_item_identity);
+        bytes[80..112].copy_from_slice(&generic_definition_identity);
+        RustItemDefinitionIdentityV1::new(rust_item_identity)?;
+        Self::new(bytes)
+    }
+
     pub fn new(
         bytes: [u8; KERNEL_ITEM_ID_CANONICAL_BYTES_V1],
     ) -> Result<Self, OrdinaryRustScalarValidationErrorV1> {
@@ -107,6 +126,34 @@ impl CanonicalKernelItemIdV1 {
 pub struct CanonicalKernelInstIdV1([u8; KERNEL_INST_ID_CANONICAL_BYTES_V1]);
 
 impl CanonicalKernelInstIdV1 {
+    /// Builds the frozen V1 concrete-instance envelope from one canonical item
+    /// and independently derived specialization commitments.
+    pub fn from_components(
+        item: CanonicalKernelItemIdV1,
+        type_arguments_identity: [u8; 32],
+        const_arguments_identity: [u8; 32],
+        cfg_identity: [u8; 32],
+    ) -> Result<Self, OrdinaryRustScalarValidationErrorV1> {
+        for (field, identity) in [
+            ("kernel type arguments", type_arguments_identity),
+            ("kernel const arguments", const_arguments_identity),
+            ("kernel cfg", cfg_identity),
+        ] {
+            if identity == [0; 32] {
+                return Err(OrdinaryRustScalarValidationErrorV1::ZeroIdentity { field });
+            }
+        }
+        let mut bytes = [0_u8; KERNEL_INST_ID_CANONICAL_BYTES_V1];
+        bytes[..8].copy_from_slice(&KERNEL_INST_MAGIC_V1);
+        bytes[8..10].copy_from_slice(&KERNEL_IDENTITY_VERSION_V1.to_le_bytes());
+        bytes[12..16].copy_from_slice(&KERNEL_INST_PAYLOAD_BYTES_V1.to_le_bytes());
+        bytes[16..128].copy_from_slice(item.as_bytes());
+        bytes[128..160].copy_from_slice(&type_arguments_identity);
+        bytes[160..192].copy_from_slice(&const_arguments_identity);
+        bytes[192..224].copy_from_slice(&cfg_identity);
+        Self::new(bytes)
+    }
+
     pub fn new(
         bytes: [u8; KERNEL_INST_ID_CANONICAL_BYTES_V1],
     ) -> Result<Self, OrdinaryRustScalarValidationErrorV1> {
@@ -181,6 +228,7 @@ pub enum RustcAbiPassModeV1 {
     Direct = 2,
     Pair = 3,
     Indirect = 4,
+    Cast = 5,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
