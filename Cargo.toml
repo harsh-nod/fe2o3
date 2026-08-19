@@ -88,6 +88,7 @@ fe2o3-kir-pliron-bridge = { path = "crates/fe2o3-kir-pliron-bridge" }
 fe2o3-legacy-compiler = { path = "crates/fe2o3-legacy-compiler" }
 fe2o3-llvm-handoff = { path = "crates/fe2o3-llvm-handoff" }
 fe2o3-llvm-route-conformance = { path = "crates/fe2o3-llvm-route-conformance" }
+fe2o3-llvm-text = { path = "crates/fe2o3-llvm-text" }
 fe2o3-llvm-worker-handoff = { path = "crates/fe2o3-llvm-worker-handoff" }
 fe2o3-lower-kernel-gpu = { path = "crates/fe2o3-lower-kernel-gpu" }
 fe2o3-lower-mir-kernel = { path = "crates/fe2o3-lower-mir-kernel" }
