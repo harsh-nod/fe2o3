@@ -52,8 +52,10 @@ and symbolic plan/KIR binding.
 
 The compiler also contains structural Pliron/GPU lowering, two separately
 identified reference and vectorized machine schedules, measured Worker/finalizer
-observations, and a private owner-retaining pair join. That join has no
-production caller. Verus proof execution remains fail-closed until the exact
-root-owned runtime closure is provisioned, so no proof, artifact publication,
+observations, and a private owner-retaining pair join. The exact
+`collected-general-gemm-v1` selector now enters a dedicated, no-fallback
+in-process route, but Verus proof execution remains fail-closed until the exact
+root-owned runtime closure is provisioned. The route therefore stops before
+Worker execution or the pair join, and no proof, durable artifact publication,
 load, launch, or protected general-GEMM hardware authority can be issued. The
 existing exact `tiled_gemm_v1` Slice 1 source and identities are unchanged.
