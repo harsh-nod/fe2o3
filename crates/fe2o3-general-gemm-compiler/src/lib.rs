@@ -15,7 +15,8 @@ use dialect_tile::MaterializeOp;
 use fe2o3_compiler_api::{
     CandidateIdentityV1, CanonicalDiagnosticV1, CompileDispositionV1, CompileOutputV1,
     CompileRequestV1, CompilerStageV1, DiagnosticCodeV1, DiagnosticMessageV1, DiagnosticSeverityV1,
-    DiagnosticSubjectIdentityV1, PipelineSelectorV1,
+    DiagnosticSubjectIdentityV1, ObligationSetIdentityV1, PipelineConfigurationIdentityV1,
+    PipelineSelectorV1, StageSnapshotV1,
 };
 use fe2o3_compiler_driver::{
     AdmittedGemmCompilerBackendV1, CompilerBackendFailureV1, GemmSemanticProgramV1,
@@ -101,6 +102,14 @@ const PLAN_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.plan-fields.v1\0";
 const ABI_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.runtime-abi.v1\0";
 const TOOLCHAIN_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.toolchain-route.v1\0";
 const BINDING_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.compilation-unit.v1\0";
+const SYMBOLIC_OBLIGATION_SET_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.general-gemm.symbolic-obligation-set.v1\0";
+const SYMBOLIC_COMPILATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.general-gemm.symbolic-compilation-unit.v1\0";
+const SYMBOLIC_PIPELINE_CONFIGURATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.general-gemm.symbolic-pipeline-configuration.v1\0";
+const CHECKED_LAUNCH_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.general-gemm.checked-launch-instantiation.v1\0";
 const PROJECTION_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.pliron-projection.v1\0";
 const ARTIFACT_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.artifact-binding.v1\0";
 const PLIRON_MODULE_SYMBOL: &str = "fe2o3_general_gemm";
@@ -164,6 +173,18 @@ identity_type!(
 identity_type!(
     /// Aggregate identity required at the proof-to-lowering boundary.
     GeneralGemmCompilationBindingIdentityV1
+);
+identity_type!(
+    /// Aggregate identity of a runtime-parameterized production compilation.
+    GeneralGemmSymbolicCompilationIdentityV1
+);
+identity_type!(
+    /// Identity of an exact source-bound symbolic machine artifact observation.
+    GeneralGemmSymbolicArtifactIdentityV1
+);
+identity_type!(
+    /// Aggregate identity of one concrete checked launch instantiation.
+    GeneralGemmCheckedLaunchInstantiationIdentityV1
 );
 identity_type!(
     /// Identity of the owner-checked typed Pliron projection.
@@ -720,7 +741,403 @@ impl fmt::Display for GeneralGemmCompilationBindingErrorV1 {
 
 impl std::error::Error for GeneralGemmCompilationBindingErrorV1 {}
 
-/// Complete deterministic binding passed from semantic admission to proof.
+/// Derives the exact symbolic obligation commitment for a runtime-parameterized GEMM source.
+///
+/// The commitment binds the authenticated frontend snapshot and canonical
+/// symbolic plan/KIR schemas. It contains no witness launch dimensions,
+/// strides, storage lengths, alpha, or beta.
+pub fn general_gemm_symbolic_obligation_set_identity_v1(
+    input: &StageSnapshotV1,
+    frontend: &GeneralGemmFrontendSemanticBindingV1,
+) -> ObligationSetIdentityV1 {
+    ObligationSetIdentityV1::from_untrusted_bytes(hash_fields(
+        SYMBOLIC_OBLIGATION_SET_IDENTITY_DOMAIN_V1,
+        &[
+            input.identity().as_bytes(),
+            input.format_identity().as_bytes(),
+            frontend.identity().as_bytes(),
+            frontend.symbolic_plan().identity().as_bytes(),
+            frontend.symbolic_kir().identity().as_bytes(),
+            &encode_pliron_operation_schema(),
+        ],
+    ))
+}
+
+/// Derives the exact request configuration for one closed symbolic schedule.
+///
+/// Cargo/rustc must place this value in the compile request. The symbolic unit
+/// re-derives it from the selected schedule, preventing a caller from relabeling
+/// reference and A-vectorized machine evidence after source collection.
+pub fn general_gemm_symbolic_pipeline_configuration_identity_v1(
+    schedule: GeneralGemmScheduleV1,
+) -> PipelineConfigurationIdentityV1 {
+    PipelineConfigurationIdentityV1::from_untrusted_bytes(hash_fields(
+        SYMBOLIC_PIPELINE_CONFIGURATION_IDENTITY_DOMAIN_V1,
+        &[
+            schedule.identity().as_bytes(),
+            &schedule.encode_canonical(),
+            GENERAL_GEMM_DEVICE_TARGET_V1.as_bytes(),
+            GFX942_AMDHSA_TARGET_TRIPLE_V1.as_bytes(),
+        ],
+    ))
+}
+
+/// A production symbolic compilation input failed closed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralGemmSymbolicCompilationErrorV1 {
+    /// Only the explicit Pliron V1 route is accepted.
+    PipelineSelector,
+    /// One required request commitment is the all-zero sentinel.
+    ZeroRequestCommitment,
+    /// The request kernel differs from the consumed frontend receipt.
+    FrontendKernelSubstitution,
+    /// The request configuration does not name the selected closed schedule.
+    ScheduleSelectionSubstitution,
+    /// The request retained a concrete or unrelated obligation commitment.
+    SymbolicObligationSetSubstitution,
+    /// The authenticated template names another symbolic plan schema.
+    SymbolicPlanSubstitution,
+    /// The authenticated template names another symbolic KIR schema.
+    SymbolicKirSubstitution,
+    /// The symbolic template exceeds the active KIR-byte limit.
+    KirBytesLimit {
+        /// Observed canonical symbolic template bytes.
+        actual: usize,
+        /// Active maximum.
+        maximum: usize,
+    },
+    /// The fixed projection exceeds the active operation limit.
+    PlironOperationsLimit {
+        /// Operations required by the closed projection.
+        required: usize,
+        /// Active maximum.
+        maximum: usize,
+    },
+}
+
+impl fmt::Display for GeneralGemmSymbolicCompilationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "invalid symbolic general GEMM compilation: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GeneralGemmSymbolicCompilationErrorV1 {}
+
+/// Runtime-parameterized production compilation unit derived from positive MIR.
+///
+/// This unit deliberately contains no concrete launch dimensions, strides,
+/// storage lengths, alpha, or beta. The rustc integration must retain its
+/// private non-Clone frontend correspondence while synchronously lowering and
+/// inspecting this structural unit. The public record is descriptive and does
+/// not itself grant source, proof, artifact, publication, load, or launch authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct GeneralGemmSymbolicCompilationUnitV1 {
+    request: CompileRequestV1,
+    frontend_semantics: GeneralGemmFrontendSemanticBindingV1,
+    schedule: GeneralGemmScheduleV1,
+    toolchain: GeneralGemmToolchainRouteV1,
+    identity: GeneralGemmSymbolicCompilationIdentityV1,
+    limits: GeneralGemmLoweringLimitsV1,
+}
+
+impl GeneralGemmSymbolicCompilationUnitV1 {
+    /// Checks the authenticated symbolic source/template and exact compilation route.
+    pub fn checked(
+        request: &CompileRequestV1,
+        frontend_semantics: GeneralGemmFrontendSemanticBindingV1,
+        schedule: GeneralGemmScheduleV1,
+        limits: GeneralGemmLoweringLimitsV1,
+    ) -> Result<Self, GeneralGemmSymbolicCompilationErrorV1> {
+        if request.selector() != PipelineSelectorV1::PlironV1 {
+            return Err(GeneralGemmSymbolicCompilationErrorV1::PipelineSelector);
+        }
+        if request_commitments(request).iter().any(is_zero_identity) {
+            return Err(GeneralGemmSymbolicCompilationErrorV1::ZeroRequestCommitment);
+        }
+        if request.kernel_instance_identity().as_bytes()
+            != frontend_semantics.kernel_instance_identity()
+        {
+            return Err(GeneralGemmSymbolicCompilationErrorV1::FrontendKernelSubstitution);
+        }
+        if request.pipeline_configuration_identity()
+            != general_gemm_symbolic_pipeline_configuration_identity_v1(schedule)
+        {
+            return Err(GeneralGemmSymbolicCompilationErrorV1::ScheduleSelectionSubstitution);
+        }
+        if frontend_semantics.symbolic_plan() != GeneralGemmSymbolicPlanV1::canonical() {
+            return Err(GeneralGemmSymbolicCompilationErrorV1::SymbolicPlanSubstitution);
+        }
+        if frontend_semantics.symbolic_kir() != GeneralGemmSymbolicKirV1::canonical() {
+            return Err(GeneralGemmSymbolicCompilationErrorV1::SymbolicKirSubstitution);
+        }
+        if request.input_obligations_identity()
+            != general_gemm_symbolic_obligation_set_identity_v1(
+                request.input(),
+                &frontend_semantics,
+            )
+        {
+            return Err(GeneralGemmSymbolicCompilationErrorV1::SymbolicObligationSetSubstitution);
+        }
+        let symbolic_bytes = encode_symbolic_kir_template(&frontend_semantics);
+        if symbolic_bytes.len() > limits.max_kir_bytes {
+            return Err(GeneralGemmSymbolicCompilationErrorV1::KirBytesLimit {
+                actual: symbolic_bytes.len(),
+                maximum: limits.max_kir_bytes,
+            });
+        }
+        if GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1 > limits.max_pliron_operations {
+            return Err(
+                GeneralGemmSymbolicCompilationErrorV1::PlironOperationsLimit {
+                    required: GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1,
+                    maximum: limits.max_pliron_operations,
+                },
+            );
+        }
+        let toolchain = GeneralGemmToolchainRouteV1::reviewed_v1();
+        let identity = GeneralGemmSymbolicCompilationIdentityV1(hash_fields(
+            SYMBOLIC_COMPILATION_IDENTITY_DOMAIN_V1,
+            &[
+                GENERAL_GEMM_COMPILATION_BINDING_SCHEMA_V1.as_bytes(),
+                request.identity().as_bytes(),
+                request.kernel_instance_identity().as_bytes(),
+                request.input().identity().as_bytes(),
+                request.input().format_identity().as_bytes(),
+                request.input_obligations_identity().as_bytes(),
+                request.compiler_profile_identity().as_bytes(),
+                request.target_profile_identity().as_bytes(),
+                request.pipeline_configuration_identity().as_bytes(),
+                frontend_semantics.identity().as_bytes(),
+                frontend_semantics.symbolic_plan().identity().as_bytes(),
+                frontend_semantics.symbolic_kir().identity().as_bytes(),
+                schedule.identity().as_bytes(),
+                toolchain.identity().as_bytes(),
+            ],
+        ));
+        Ok(Self {
+            request: request.clone(),
+            frontend_semantics,
+            schedule,
+            toolchain,
+            identity,
+            limits,
+        })
+    }
+
+    /// Returns the exact symbolic compile request.
+    pub const fn request(&self) -> &CompileRequestV1 {
+        &self.request
+    }
+
+    /// Returns identities retained from the consumed authenticated frontend receipt.
+    pub const fn frontend_semantics(&self) -> &GeneralGemmFrontendSemanticBindingV1 {
+        &self.frontend_semantics
+    }
+
+    /// Returns the aggregate frontend semantic observation identity.
+    pub const fn frontend_semantic_binding_identity(
+        &self,
+    ) -> GeneralGemmFrontendSemanticBindingIdentityV1 {
+        self.frontend_semantics.identity()
+    }
+
+    /// Returns the canonical symbolic plan identity.
+    pub const fn symbolic_plan_identity(&self) -> GeneralGemmSymbolicPlanIdentityV1 {
+        self.frontend_semantics.symbolic_plan().identity()
+    }
+
+    /// Returns the canonical symbolic KIR identity.
+    pub const fn symbolic_kir_identity(&self) -> GeneralGemmSymbolicKirIdentityV1 {
+        self.frontend_semantics.symbolic_kir().identity()
+    }
+
+    /// Returns the independently identified machine schedule.
+    pub const fn schedule(&self) -> GeneralGemmScheduleV1 {
+        self.schedule
+    }
+
+    /// Returns the independently identified machine schedule identity.
+    pub fn schedule_identity(&self) -> GeneralGemmScheduleIdentityV1 {
+        self.schedule.identity()
+    }
+
+    /// Returns the exact target/toolchain route identity.
+    pub const fn toolchain_route_identity(&self) -> GeneralGemmToolchainRouteIdentityV1 {
+        self.toolchain.identity()
+    }
+
+    /// Returns the aggregate symbolic compilation identity.
+    pub const fn identity(&self) -> GeneralGemmSymbolicCompilationIdentityV1 {
+        self.identity
+    }
+
+    /// Returns the bounded structural lowering limits.
+    pub const fn limits(&self) -> GeneralGemmLoweringLimitsV1 {
+        self.limits
+    }
+
+    /// Public structural data grants no production authority.
+    pub const fn grants_artifact_authority(&self) -> bool {
+        false
+    }
+}
+
+/// A concrete launch failed to instantiate the exact symbolic artifact schema.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralGemmCheckedLaunchInstantiationErrorV1 {
+    /// No inspected symbolic artifact was supplied.
+    ZeroArtifactIdentity,
+    /// The concrete KIR names another checked host plan.
+    PlanSubstitution,
+    /// The concrete KIR is not the canonical instantiation of the plan.
+    NonCanonicalKir,
+    /// Concrete semantic KIR verification rejected the instantiation.
+    SemanticKir(GeneralGemmKirDiagnosticV1),
+    /// Runtime values differ from the concrete checked host plan.
+    RuntimeAbi(GeneralGemmRuntimeAbiErrorV1),
+}
+
+impl fmt::Display for GeneralGemmCheckedLaunchInstantiationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "invalid general GEMM symbolic-artifact launch instantiation: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GeneralGemmCheckedLaunchInstantiationErrorV1 {}
+
+/// Concrete checked launch values bound to one symbolic machine artifact.
+///
+/// This record rechecks the complete plan/KIR/runtime snapshot relation at
+/// launch time. It is still descriptive: protected runtime admission must
+/// additionally consume the opaque post-link artifact token and compare the
+/// exact symbolic artifact identity before loading or launching code.
+#[derive(Debug, Eq, PartialEq)]
+pub struct GeneralGemmCheckedLaunchInstantiationV1 {
+    symbolic_compilation: GeneralGemmSymbolicCompilationIdentityV1,
+    symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
+    symbolic_plan: GeneralGemmSymbolicPlanIdentityV1,
+    symbolic_kir: GeneralGemmSymbolicKirIdentityV1,
+    plan: GeneralGemmPlanFieldsV1,
+    plan_identity: GeneralGemmPlanIdentityV1,
+    kir: GeneralGemmKirV1,
+    abi: GeneralGemmRuntimeAbiV1,
+    identity: GeneralGemmCheckedLaunchInstantiationIdentityV1,
+}
+
+impl GeneralGemmCheckedLaunchInstantiationV1 {
+    /// Rechecks and binds one concrete runtime snapshot to a symbolic artifact.
+    pub fn checked(
+        unit: &GeneralGemmSymbolicCompilationUnitV1,
+        symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
+        plan: GeneralGemmPlanFieldsV1,
+        kir: GeneralGemmKirV1,
+        snapshot: GeneralGemmRuntimeAbiSnapshotV1,
+    ) -> Result<Self, GeneralGemmCheckedLaunchInstantiationErrorV1> {
+        if is_zero_identity(symbolic_artifact.as_bytes()) {
+            return Err(GeneralGemmCheckedLaunchInstantiationErrorV1::ZeroArtifactIdentity);
+        }
+        if kir.plan() != plan {
+            return Err(GeneralGemmCheckedLaunchInstantiationErrorV1::PlanSubstitution);
+        }
+        verify_general_gemm_kir_v1(&kir)
+            .map_err(GeneralGemmCheckedLaunchInstantiationErrorV1::SemanticKir)?;
+        if kir != GeneralGemmKirV1::canonical(plan) {
+            return Err(GeneralGemmCheckedLaunchInstantiationErrorV1::NonCanonicalKir);
+        }
+        let abi = GeneralGemmRuntimeAbiV1::checked(plan, snapshot)
+            .map_err(GeneralGemmCheckedLaunchInstantiationErrorV1::RuntimeAbi)?;
+        let plan_identity = plan_identity(plan);
+        let identity = GeneralGemmCheckedLaunchInstantiationIdentityV1(hash_fields(
+            CHECKED_LAUNCH_IDENTITY_DOMAIN_V1,
+            &[
+                unit.identity().as_bytes(),
+                symbolic_artifact.as_bytes(),
+                unit.symbolic_plan_identity().as_bytes(),
+                unit.symbolic_kir_identity().as_bytes(),
+                plan_identity.as_bytes(),
+                kir.identity().as_bytes(),
+                abi.identity().as_bytes(),
+            ],
+        ));
+        Ok(Self {
+            symbolic_compilation: unit.identity(),
+            symbolic_artifact,
+            symbolic_plan: unit.symbolic_plan_identity(),
+            symbolic_kir: unit.symbolic_kir_identity(),
+            plan,
+            plan_identity,
+            kir,
+            abi,
+            identity,
+        })
+    }
+
+    /// Returns the symbolic compilation identity.
+    pub const fn symbolic_compilation_identity(&self) -> GeneralGemmSymbolicCompilationIdentityV1 {
+        self.symbolic_compilation
+    }
+
+    /// Returns the exact inspected symbolic artifact identity.
+    pub const fn symbolic_artifact_identity(&self) -> GeneralGemmSymbolicArtifactIdentityV1 {
+        self.symbolic_artifact
+    }
+
+    /// Returns the symbolic checked-plan schema identity.
+    pub const fn symbolic_plan_identity(&self) -> GeneralGemmSymbolicPlanIdentityV1 {
+        self.symbolic_plan
+    }
+
+    /// Returns the symbolic source/KIR schema identity.
+    pub const fn symbolic_kir_identity(&self) -> GeneralGemmSymbolicKirIdentityV1 {
+        self.symbolic_kir
+    }
+
+    /// Returns the concrete checked host plan.
+    pub const fn plan(&self) -> GeneralGemmPlanFieldsV1 {
+        self.plan
+    }
+
+    /// Returns the concrete checked host-plan identity.
+    pub const fn plan_identity(&self) -> GeneralGemmPlanIdentityV1 {
+        self.plan_identity
+    }
+
+    /// Returns the canonical concrete semantic KIR.
+    pub const fn kir(&self) -> &GeneralGemmKirV1 {
+        &self.kir
+    }
+
+    /// Returns the concrete semantic KIR identity.
+    pub fn kir_identity(&self) -> GeneralGemmKirIdentityV1 {
+        self.kir.identity()
+    }
+
+    /// Returns the exact checked runtime ABI.
+    pub const fn runtime_abi(&self) -> GeneralGemmRuntimeAbiV1 {
+        self.abi
+    }
+
+    /// Returns the aggregate launch-instantiation identity.
+    pub const fn identity(&self) -> GeneralGemmCheckedLaunchInstantiationIdentityV1 {
+        self.identity
+    }
+
+    /// Structural launch instantiation grants no load or launch authority.
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Concrete deterministic model binding retained for tests and launch instantiation checks.
+///
+/// This legacy concrete record is not a production source-correspondence or
+/// artifact authority. Production symbolic lowering uses
+/// [`GeneralGemmSymbolicCompilationUnitV1`].
 #[derive(Debug, Eq, PartialEq)]
 pub struct GeneralGemmCompilationUnitV1 {
     request: CompileRequestV1,
@@ -1708,6 +2125,28 @@ fn encode_symbolic_plan() -> Vec<u8> {
     bytes.extend_from_slice(&GENERAL_GEMM_KIR_TILE_EXTENT_V1.to_le_bytes());
     bytes.extend_from_slice(&GENERAL_GEMM_KIR_WAVE_LANES_V1.to_le_bytes());
     bytes
+}
+
+fn encode_symbolic_kir_template(frontend: &GeneralGemmFrontendSemanticBindingV1) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(256);
+    append_identity_field(&mut bytes, frontend.symbolic_plan().identity().as_bytes());
+    append_identity_field(&mut bytes, frontend.symbolic_kir().identity().as_bytes());
+    append_identity_field(&mut bytes, frontend.frontend_abi_identity());
+    for field in [
+        b"wave64-grid-xy16".as_slice(),
+        b"guarded-a-b-positive-zero-tail".as_slice(),
+        b"xor4-single-buffer-stage-publish-mfma-reuse".as_slice(),
+        b"carried-f32x4-phase-accumulator".as_slice(),
+        b"guarded-disjoint-c-alpha-acc-plus-beta-c".as_slice(),
+    ] {
+        append_identity_field(&mut bytes, field);
+    }
+    bytes
+}
+
+fn append_identity_field(bytes: &mut Vec<u8>, field: &[u8]) {
+    bytes.extend_from_slice(&(field.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(field);
 }
 
 const fn symbolic_plan_expressions() -> [GeneralGemmSymbolicPlanExpressionV1; 6] {

@@ -67,6 +67,44 @@ fn frontend_binding() -> GeneralGemmFrontendSemanticBindingV1 {
     .unwrap()
 }
 
+fn symbolic_request_for(
+    frontend: &GeneralGemmFrontendSemanticBindingV1,
+    schedule: GeneralGemmScheduleV1,
+) -> CompileRequestV1 {
+    let input = StageSnapshotV1::new(
+        CompilerStageV1::FrontendInput,
+        SnapshotIdentityV1::from_untrusted_bytes(identity(0x17)),
+        SnapshotFormatIdentityV1::from_untrusted_bytes(identity(0x18)),
+        b"authenticated-general-gemm-symbolic-mir-v1".to_vec(),
+    )
+    .unwrap();
+    let obligations = general_gemm_symbolic_obligation_set_identity_v1(&input, frontend);
+    CompileRequestV1::new(
+        RequestIdentityV1::from_untrusted_bytes(identity(0x11)),
+        KernelInstanceIdentityV1::from_untrusted_bytes(identity(0x12)),
+        CompilerProfileIdentityV1::from_untrusted_bytes(identity(0x13)),
+        TargetProfileIdentityV1::from_untrusted_bytes(identity(0x14)),
+        general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
+        obligations,
+        PipelineSelectorV1::PlironV1,
+        input,
+        CompileLimitsV1::new(16, 16, 16, 4096, 16_384, 4096).unwrap(),
+    )
+    .unwrap()
+}
+
+fn symbolic_unit(schedule: GeneralGemmScheduleV1) -> GeneralGemmSymbolicCompilationUnitV1 {
+    let frontend = frontend_binding();
+    let request = symbolic_request_for(&frontend, schedule);
+    GeneralGemmSymbolicCompilationUnitV1::checked(
+        &request,
+        frontend,
+        schedule,
+        GeneralGemmLoweringLimitsV1::default(),
+    )
+    .unwrap()
+}
+
 fn unit(schedule: GeneralGemmScheduleV1) -> GeneralGemmCompilationUnitV1 {
     unit_with_frontend(schedule, frontend_binding())
 }
@@ -100,6 +138,151 @@ fn admission(request: &CompileRequestV1) -> ProofRequiredGemmAdmissionV1 {
         .collect();
     let report = GemmProofReportV1::new(request.input_obligations_identity(), findings).unwrap();
     admit_proof_required_gemm_v1(request, &requirements, &report).unwrap()
+}
+
+#[test]
+fn symbolic_compilation_binds_template_and_closed_schedule_without_launch_values() {
+    let reference = symbolic_unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let vector = symbolic_unit(GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1);
+
+    assert_eq!(
+        reference.symbolic_plan_identity(),
+        GeneralGemmSymbolicPlanV1::canonical().identity()
+    );
+    assert_eq!(
+        reference.symbolic_kir_identity(),
+        GeneralGemmSymbolicKirV1::canonical().identity()
+    );
+    assert_ne!(reference.schedule_identity(), vector.schedule_identity());
+    assert_ne!(reference.identity(), vector.identity());
+    assert!(!reference.grants_artifact_authority());
+}
+
+#[test]
+fn symbolic_compilation_rejects_concrete_obligations_and_schedule_relabeling() {
+    let schedule = GeneralGemmScheduleV1::ReferenceWave64Xor4V1;
+    let frontend = frontend_binding();
+    let concrete_plan = plan();
+    let concrete_kir = GeneralGemmKirV1::canonical(concrete_plan);
+    let concrete_request = request_for(&concrete_kir, 0x11);
+    let wrong_obligations_request = CompileRequestV1::new(
+        concrete_request.identity(),
+        concrete_request.kernel_instance_identity(),
+        concrete_request.compiler_profile_identity(),
+        concrete_request.target_profile_identity(),
+        general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
+        concrete_request.input_obligations_identity(),
+        PipelineSelectorV1::PlironV1,
+        concrete_request.input().clone(),
+        concrete_request.limits(),
+    )
+    .unwrap();
+    assert_eq!(
+        GeneralGemmSymbolicCompilationUnitV1::checked(
+            &wrong_obligations_request,
+            frontend,
+            schedule,
+            GeneralGemmLoweringLimitsV1::default(),
+        )
+        .unwrap_err(),
+        GeneralGemmSymbolicCompilationErrorV1::SymbolicObligationSetSubstitution
+    );
+
+    let frontend = frontend_binding();
+    let vector_request = symbolic_request_for(
+        &frontend,
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+    );
+    assert_eq!(
+        GeneralGemmSymbolicCompilationUnitV1::checked(
+            &vector_request,
+            frontend,
+            schedule,
+            GeneralGemmLoweringLimitsV1::default(),
+        )
+        .unwrap_err(),
+        GeneralGemmSymbolicCompilationErrorV1::ScheduleSelectionSubstitution
+    );
+}
+
+#[test]
+fn symbolic_compilation_limits_fail_before_projection() {
+    let schedule = GeneralGemmScheduleV1::ReferenceWave64Xor4V1;
+    let frontend = frontend_binding();
+    let request = symbolic_request_for(&frontend, schedule);
+    let limits = GeneralGemmLoweringLimitsV1::new(MAX_GENERAL_GEMM_KIR_BYTES_V1, 10).unwrap();
+    assert_eq!(
+        GeneralGemmSymbolicCompilationUnitV1::checked(&request, frontend, schedule, limits,)
+            .unwrap_err(),
+        GeneralGemmSymbolicCompilationErrorV1::PlironOperationsLimit {
+            required: GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1,
+            maximum: 10,
+        }
+    );
+}
+
+#[test]
+fn checked_launch_instantiation_binds_every_runtime_value_to_symbolic_artifact() {
+    let unit = symbolic_unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let plan = plan();
+    let kir = GeneralGemmKirV1::canonical(plan);
+    let artifact = GeneralGemmSymbolicArtifactIdentityV1(identity(0x55));
+    let launch = GeneralGemmCheckedLaunchInstantiationV1::checked(
+        &unit,
+        artifact,
+        plan,
+        kir,
+        GeneralGemmRuntimeAbiV1::from_plan(plan).snapshot(),
+    )
+    .unwrap();
+
+    assert_eq!(launch.symbolic_compilation_identity(), unit.identity());
+    assert_eq!(launch.symbolic_artifact_identity(), artifact);
+    assert_eq!(launch.plan_identity(), plan_identity(plan));
+    assert_eq!(
+        launch.kir_identity(),
+        GeneralGemmKirV1::canonical(plan).identity()
+    );
+    assert!(!launch.grants_launch_authority());
+}
+
+#[test]
+fn checked_launch_instantiation_rejects_artifact_and_runtime_substitution() {
+    let unit = symbolic_unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let plan = plan();
+    let kir = GeneralGemmKirV1::canonical(plan);
+    let snapshot = GeneralGemmRuntimeAbiV1::from_plan(plan).snapshot();
+    assert_eq!(
+        GeneralGemmCheckedLaunchInstantiationV1::checked(
+            &unit,
+            GeneralGemmSymbolicArtifactIdentityV1([0; 32]),
+            plan,
+            kir.clone(),
+            snapshot,
+        )
+        .unwrap_err(),
+        GeneralGemmCheckedLaunchInstantiationErrorV1::ZeroArtifactIdentity
+    );
+    assert_eq!(
+        GeneralGemmCheckedLaunchInstantiationV1::checked(
+            &unit,
+            GeneralGemmSymbolicArtifactIdentityV1(identity(0x55)),
+            plan,
+            kir,
+            GeneralGemmRuntimeAbiSnapshotV1 {
+                strides: [
+                    snapshot.strides[0] + 1,
+                    snapshot.strides[1],
+                    snapshot.strides[2]
+                ],
+                ..snapshot
+            },
+        )
+        .unwrap_err(),
+        GeneralGemmCheckedLaunchInstantiationErrorV1::RuntimeAbi(
+            GeneralGemmRuntimeAbiErrorV1::Strides,
+        )
+    );
 }
 
 #[test]
