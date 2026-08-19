@@ -433,11 +433,12 @@ protocol. It accepts only a same-process `GeneralGemmVerusRuntimeClosureLeaseV2`
 over the exact protected `/opt/fe2o3/verus-runtime-v2/<version>` closure. It
 revalidates retained path edges, objects, inventories, and its mutation journal
 before and after each process; executes retained `rust_verify`, Z3, toolchain,
-and DSO objects through fixed descriptors; and supplies only immutable sealed
-embedded proof inputs under the authenticated V2 resource bounds and shared
-process-group deadline/output supervisor. Exact positive and expected-negative
-outputs are required before the non-`Clone` schedule evidence is built. The
-legacy launcher-path API remains fail-closed.
+DSO, and exact embedded proof-source objects through fixed descriptors under the
+authenticated V2 resource bounds and shared process-group deadline/output
+supervisor. Proof selection is a closed crate-owned enum; no caller path, digest,
+source bytes, or reported output is accepted. Exact positive and expected-negative
+outputs are required before the non-`Clone` schedule evidence is built. The legacy
+launcher-path API remains fail-closed.
 
 Stock `rust_verify` and Z3 do not implement the V2 nonce/control protocol, and
 Verus must create its reviewed Z3 descendant. This runner therefore does not
