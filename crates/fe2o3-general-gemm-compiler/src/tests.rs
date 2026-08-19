@@ -1141,6 +1141,7 @@ fn machine_sections_and_identities_reject_schedule_and_frontend_abi_substitution
         repeated.compiler_handoff().identity()
     );
     assert_eq!(reference.binding_section(), repeated.binding_section());
+    assert_eq!(reference.compiler_boundary(), repeated.compiler_boundary());
 
     let optimized = lower_general_gemm_structural_machine_v1(&unit(
         GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
@@ -1153,6 +1154,10 @@ fn machine_sections_and_identities_reject_schedule_and_frontend_abi_substitution
     assert_ne!(
         reference.handoff().identity(),
         optimized.handoff().identity()
+    );
+    assert_ne!(
+        reference.compiler_boundary().identity(),
+        optimized.compiler_boundary().identity()
     );
     assert_ne!(reference.assembly().sha256(), optimized.assembly().sha256());
 
@@ -1174,6 +1179,10 @@ fn machine_sections_and_identities_reject_schedule_and_frontend_abi_substitution
     assert_ne!(
         reference.binding_section().identity(),
         substituted.binding_section().identity()
+    );
+    assert_ne!(
+        reference.compiler_boundary().identity(),
+        substituted.compiler_boundary().identity()
     );
     assert_ne!(
         reference.handoff().identity(),
@@ -1285,6 +1294,10 @@ fn symbolic_machine_identity_rejects_schedule_and_frontend_substitution() {
     .unwrap();
     assert_ne!(reference.artifact_identity(), vector.artifact_identity());
     assert_ne!(
+        reference.compiler_boundary().identity(),
+        vector.compiler_boundary().identity()
+    );
+    assert_ne!(
         reference.binding_section().identity(),
         vector.binding_section().identity()
     );
@@ -1313,6 +1326,10 @@ fn symbolic_machine_identity_rejects_schedule_and_frontend_substitution() {
     assert_ne!(
         reference.binding_section().identity(),
         substituted.binding_section().identity()
+    );
+    assert_ne!(
+        reference.compiler_boundary().identity(),
+        substituted.compiler_boundary().identity()
     );
 }
 

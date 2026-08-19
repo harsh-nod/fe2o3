@@ -186,6 +186,22 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
     ] {
         let machine = lower_general_gemm_symbolic_structural_machine_v1(&unit(schedule))
             .expect("lower exact symbolic general-GEMM machine");
+        assert_eq!(
+            machine.compiler_boundary().graph_export().source_handoff(),
+            machine.handoff()
+        );
+        let canonical_source = machine.handoff().encode_canonical();
+        assert!(
+            machine
+                .compiler_boundary()
+                .graph_export()
+                .graph_receipt()
+                .as_bytes()
+                .windows(canonical_source.as_bytes().len())
+                .any(|window| window == canonical_source.as_bytes())
+        );
+        assert_ne!(machine.compiler_boundary().identity().as_bytes(), &[0; 32]);
+        assert!(!machine.compiler_boundary().grants_artifact_authority());
         let directory = TestDirectory::new();
         let consumed = consumed_handoff(&directory, machine.compiler_handoff(), schedule_byte);
         let evidence = execute_symbolic_general_gemm_worker_v2_v1(

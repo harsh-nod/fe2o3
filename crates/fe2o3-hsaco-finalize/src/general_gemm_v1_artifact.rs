@@ -572,7 +572,10 @@ pub fn execute_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
-    if machine.worker_admission().handoff() != machine.handoff()
+    if machine.compiler_boundary().graph_export().source_handoff() != machine.handoff()
+        || machine.compiler_boundary().graph_export().source_identity()
+            != machine.handoff().identity()
+        || machine.worker_admission().handoff() != machine.handoff()
         || machine.worker_admission().handoff_identity() != machine.handoff().identity()
     {
         return Err(GeneralGemmWorkerV2ErrorV1::TypedAdmissionSubstitution);
@@ -615,7 +618,10 @@ pub fn execute_symbolic_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertSymbolicGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
-    if machine.worker_admission().handoff() != machine.handoff()
+    if machine.compiler_boundary().graph_export().source_handoff() != machine.handoff()
+        || machine.compiler_boundary().graph_export().source_identity()
+            != machine.handoff().identity()
+        || machine.worker_admission().handoff() != machine.handoff()
         || machine.worker_admission().handoff_identity() != machine.handoff().identity()
     {
         return Err(GeneralGemmWorkerV2ErrorV1::TypedAdmissionSubstitution);
@@ -1162,6 +1168,7 @@ fn calculate_worker_identity(
     hasher.update(GENERAL_GEMM_WORKER_IDENTITY_DOMAIN_V1);
     hasher.update(machine.projection().identity().as_bytes());
     hasher.update(machine.handoff().identity().as_bytes());
+    hasher.update(machine.compiler_boundary().identity().as_bytes());
     hasher.update(machine.worker_admission().admission_identity().as_bytes());
     hasher.update(machine.assembly().sha256().as_bytes());
     hasher.update(machine.compiler_handoff().identity().sha256());
@@ -1188,6 +1195,8 @@ fn calculate_symbolic_worker_identity(
     hasher.update(machine.artifact_identity().as_bytes());
     hasher.update(machine.projection().identity().as_bytes());
     hasher.update(machine.handoff().identity().as_bytes());
+    hasher.update(machine.compiler_boundary().identity().as_bytes());
+    hasher.update(machine.worker_admission().admission_identity().as_bytes());
     hasher.update(machine.assembly().sha256().as_bytes());
     hasher.update(machine.compiler_handoff().identity().sha256());
     hasher.update(consumed.as_bytes());

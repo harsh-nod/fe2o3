@@ -1182,12 +1182,14 @@ fn inspect_module(
                     .next()
                     .ok_or(InspectionErrorV1::UnexpectedGraph)?;
                 let result = inspect_instruction(
-                    context,
                     actual,
                     instruction,
-                    &values,
-                    &source_value_types,
-                    source.module().globals(),
+                    InstructionInspectionInputs {
+                        context,
+                        values: &values,
+                        source_value_types: &source_value_types,
+                        globals: source.module().globals(),
+                    },
                     &mut facts,
                     &mut strict_float,
                     &mut exact_memory_alignment,
@@ -1475,17 +1477,27 @@ const fn value_type_tag(value_type: ValueTypeV2) -> u8 {
     }
 }
 
+struct InstructionInspectionInputs<'a> {
+    context: &'a Context,
+    values: &'a BTreeMap<ValueIdV2, Value>,
+    source_value_types: &'a BTreeMap<ValueIdV2, ValueTypeV2>,
+    globals: &'a [GlobalV2],
+}
+
 fn inspect_instruction(
-    context: &Context,
     actual: Ptr<Operation>,
     expected: &InstructionV2,
-    values: &BTreeMap<ValueIdV2, Value>,
-    source_value_types: &BTreeMap<ValueIdV2, ValueTypeV2>,
-    globals: &[GlobalV2],
+    inputs: InstructionInspectionInputs<'_>,
     facts: &mut Vec<u8>,
     strict_float: &mut bool,
     exact_memory_alignment: &mut bool,
 ) -> Result<Option<Value>, InspectionErrorV1> {
+    let InstructionInspectionInputs {
+        context,
+        values,
+        source_value_types,
+        globals,
+    } = inputs;
     let operation = actual.deref(context);
     if operation.num_regions() != 0 || operation.get_num_successors() != 0 {
         return Err(InspectionErrorV1::UnexpectedGraph);
