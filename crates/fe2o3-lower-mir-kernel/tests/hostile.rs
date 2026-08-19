@@ -20,7 +20,7 @@ use fe2o3_lower_mir_kernel::{
 use pliron::{
     basic_block::BasicBlock,
     builtin::{attributes::TypeAttr, types::FunctionType, types::UnitType},
-    context::Context,
+    context::{Context, Ptr},
     identifier::Identifier,
     linked_list::ContainsLinkedList,
     op::Op,
@@ -45,6 +45,23 @@ fn module_with_functions(context: &mut Context, count: usize) -> MirModuleOp {
             .expect("valid function");
     }
     module
+}
+
+fn raw_region_head(operation: Ptr<Operation>, context: &Context) -> Ptr<BasicBlock> {
+    operation
+        .deref(context)
+        .get_region(0)
+        .deref(context)
+        .get_head()
+        .expect("operation region has a head block")
+}
+
+fn raw_module_body(module: &MirModuleOp, context: &Context) -> Ptr<BasicBlock> {
+    raw_region_head(module.get_operation(), context)
+}
+
+fn raw_function_entry(function: &MirFunctionOp, context: &Context) -> Ptr<BasicBlock> {
+    raw_region_head(function.get_operation(), context)
 }
 
 fn take_registration_marker(context: &mut Context) -> Box<dyn Any> {
@@ -180,8 +197,7 @@ fn source_counts_and_rewrite_work_are_bounded_terminally() {
 
     let one_function = module_with_functions(&mut context, 1);
     let function = Operation::get_op::<MirFunctionOp>(
-        one_function
-            .body(&context)
+        raw_module_body(&one_function, &context)
             .deref(&context)
             .get_head()
             .expect("function"),
@@ -244,7 +260,7 @@ fn unsupported_and_malformed_sources_never_produce_a_result() {
     AlgorithmOp::new(&mut context, 1)
         .expect("foreign child")
         .get_operation()
-        .insert_at_back(foreign_child.body(&context), &context);
+        .insert_at_back(raw_module_body(&foreign_child, &context), &context);
     assert_eq!(
         pass.run_checked(foreign_child.get_operation(), &mut context),
         Err(LoweringError::UnsupportedModuleChild { ordinal: 1 })
@@ -252,8 +268,7 @@ fn unsupported_and_malformed_sources_never_produce_a_result() {
 
     let unsupported = module_with_functions(&mut context, 1);
     let function = Operation::get_op::<MirFunctionOp>(
-        unsupported
-            .body(&context)
+        raw_module_body(&unsupported, &context)
             .deref(&context)
             .get_head()
             .unwrap(),
@@ -263,7 +278,7 @@ fn unsupported_and_malformed_sources_never_produce_a_result() {
     AlgorithmOp::new(&mut context, 1)
         .expect("foreign body operation")
         .get_operation()
-        .insert_at_back(function.entry_block(&context), &context);
+        .insert_at_back(raw_function_entry(&function, &context), &context);
     assert_eq!(
         pass.run_checked(unsupported.get_operation(), &mut context),
         Err(LoweringError::UnsupportedMirOperation {
@@ -349,7 +364,7 @@ fn verified_foreign_argument_types_are_unsupported_not_erased() {
     MirReturnOp::new(&mut context)
         .get_operation()
         .insert_at_back(entry, &context);
-    operation.insert_at_back(module.body(&context), &context);
+    operation.insert_at_back(raw_module_body(&module, &context), &context);
 
     let mut pass = MirKernelLoweringPass::new(config_with(limits(1, 1, 4, 1)));
     assert_eq!(
@@ -374,13 +389,15 @@ fn verifier_failure_is_terminal_and_clears_prior_success() {
     assert!(pass.last_result().is_some());
 
     let function = Operation::get_op::<MirFunctionOp>(
-        source.body(&context).deref(&context).get_head().unwrap(),
+        raw_module_body(&source, &context)
+            .deref(&context)
+            .get_head()
+            .unwrap(),
         &context,
     )
     .unwrap();
     let marker = MirBlockOp::from_operation(
-        function
-            .entry_block(&context)
+        raw_function_entry(&function, &context)
             .deref(&context)
             .get_head()
             .unwrap(),

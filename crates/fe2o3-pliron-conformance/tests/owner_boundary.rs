@@ -24,11 +24,10 @@ use fe2o3_lower_kernel_gpu as lower_kernel_gpu;
 use fe2o3_lower_mir_kernel as lower_mir_kernel;
 use fe2o3_pliron::{
     CONTEXT_IDENTITY_MARKER_KEY, ContextBuildError, Diagnostic, DiagnosticCode,
-    DialectRegistration, PlironSession, RegistrationHookError, ShellLimits,
+    DialectRegistration, DialectRegistrationService, PlironSession, RegistrationHookError,
+    ShellLimits,
 };
-use pliron::{
-    context::Context, dialect::DialectName, identifier::Identifier, op::Op, operation::Operation,
-};
+use pliron::{context::Context, identifier::Identifier, op::Op, operation::Operation};
 
 fn mir_source(context: &mut Context, identity: &str) -> MirModuleOp {
     let limits = MirDialectLimits::new(2, 2, 64).expect("bounded MIR limits");
@@ -279,8 +278,7 @@ fn erased_owner_handles_return_typed_errors_without_unwinding() {
 }
 
 fn panicking_registration(
-    _context: &mut Context,
-    _name: &DialectName,
+    _service: &mut DialectRegistrationService<'_>,
 ) -> Result<(), RegistrationHookError> {
     panic!("hostile-hook-payload");
 }

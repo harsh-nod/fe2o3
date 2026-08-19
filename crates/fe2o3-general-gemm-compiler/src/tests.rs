@@ -13,6 +13,7 @@ use fe2o3_kernel_ir::{
     GeneralGemmPlanSnapshotV1, GeneralGemmPropertyV1, GeneralGemmSemanticMutationV1,
     GeneralGemmVerificationStageV1, general_gemm_semantic_mutation_kir_v1,
 };
+use fe2o3_lower_amdgcn_llvm::lower_amdgcn_to_pliron_llvm_v1;
 
 fn identity(byte: u8) -> [u8; 32] {
     [byte; 32]
@@ -132,6 +133,58 @@ fn unit_with_frontend(
         GeneralGemmLoweringLimitsV1::default(),
     )
     .unwrap()
+}
+
+#[test]
+fn complete_general_gemm_handoffs_lower_into_live_pliron_llvm_graphs() {
+    for schedule in [
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+    ] {
+        let unit = unit(schedule);
+        let machine = lower_general_gemm_structural_machine_v1(&unit).unwrap();
+        let source = machine.handoff();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(source).unwrap();
+        let inspection = lowered.inspect_live_graph().unwrap();
+        let expected_operations = source
+            .module()
+            .functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .map(|block| {
+                block
+                    .instructions()
+                    .iter()
+                    .filter(|instruction| {
+                        !matches!(
+                            instruction.kind(),
+                            fe2o3_llvm_handoff::InstructionKindV2::Phi { .. }
+                        )
+                    })
+                    .count()
+                    + 1
+            })
+            .sum::<usize>();
+
+        assert_eq!(lowered.source_identity(), source.identity());
+        assert_eq!(inspection, lowered.construction_inspection());
+        assert_eq!(
+            inspection.global_count() as usize,
+            source.module().globals().len()
+        );
+        assert_eq!(
+            inspection.intrinsic_count() as usize,
+            source.module().intrinsics().len()
+        );
+        assert_eq!(
+            inspection.function_count() as usize,
+            source.module().functions().len()
+        );
+        assert_eq!(inspection.operation_count() as usize, expected_operations);
+        assert!(inspection.strict_float());
+        assert!(inspection.exact_memory_alignment());
+        assert!(!lowered.grants_artifact_authority());
+    }
 }
 
 fn admission(request: &CompileRequestV1) -> ProofRequiredGemmAdmissionV1 {
@@ -926,6 +979,24 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
             machine.assembly().source_identity(),
             machine.handoff().identity()
         );
+        assert_eq!(
+            machine.worker_admission().handoff_identity(),
+            machine.handoff().identity()
+        );
+        assert_ne!(
+            machine.worker_admission().admission_identity().as_bytes(),
+            &[0; 32]
+        );
+        assert!(
+            !machine
+                .worker_admission()
+                .authenticates_worker_measurement()
+        );
+        assert!(!machine.worker_admission().grants_object_authority());
+        assert!(!machine.worker_admission().grants_link_authority());
+        assert!(!machine.worker_admission().grants_publication_authority());
+        assert!(!machine.worker_admission().grants_load_authority());
+        assert!(!machine.worker_admission().grants_launch_authority());
         assert!(machine.assembly().has_embedded_source_identity());
         assert!(!machine.grants_artifact_authority());
         assert!(!machine.compiler_handoff().grants_compiler_authority());

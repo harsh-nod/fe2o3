@@ -8,6 +8,7 @@ mod error;
 mod kernel_contract_v1;
 mod model;
 mod monomorphization_dead_v1;
+mod ordinary_rust_scalar_v1;
 
 pub use control_flow_v1::{
     CONTROL_FLOW_CONTRACT_MAGIC_V1, CONTROL_FLOW_CONTRACT_VERSION_V1,
@@ -53,4 +54,17 @@ pub use monomorphization_dead_v1::{
     MAX_DEAD_SUCCESSORS_PER_BRANCH_V1, MonomorphizationDeadEvidenceErrorV1,
     MonomorphizationDeadEvidenceIdentityV1, MonomorphizationDeadEvidenceV1, fold_binary_v1,
     prove_constant_switch_v1,
+};
+pub use ordinary_rust_scalar_v1::{
+    AuthenticatedOrdinaryRustScalarKernelImportV1, CanonicalKernelInstIdV1,
+    CanonicalKernelItemIdV1, ConcreteMonomorphizationIdentityV1, DirectCallObservationV1,
+    FunctionImportRoleV1, KERNEL_INST_ID_CANONICAL_BYTES_V1, KERNEL_ITEM_ID_CANONICAL_BYTES_V1,
+    MAX_SCALAR_IMPORT_ARGUMENTS_V1, MAX_SCALAR_IMPORT_CALLS_V1, MAX_SCALAR_IMPORT_FUNCTIONS_V1,
+    MAX_SCALAR_IMPORT_UNSUPPORTED_OBSERVATIONS_V1, OrdinaryRustScalarDiagnosticCodeV1,
+    OrdinaryRustScalarKernelObservationV1, OrdinaryRustScalarValidationErrorV1,
+    ReachableFunctionObservationV1, RustItemDefinitionIdentityV1, RustcAbiPassModeV1,
+    RustcAbiValueV1, RustcCallingConventionV1, RustcFnAbiFactsV1, RustcFunctionKindV1,
+    RustcMirIdentityV1, RustcSourceIdentityV1, ScalarImportCallChainFrameV1,
+    UnsupportedRustBehaviorKindV1, UnsupportedRustBehaviorObservationV1,
+    authenticate_ordinary_rust_scalar_kernel_v1,
 };

@@ -2,7 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
     hash::{Hash, Hasher},
@@ -12,14 +12,18 @@ use std::{
 };
 
 use pliron::{
+    attribute::Attribute,
     builtin::ops::ModuleOp,
     context::Context,
     context::Ptr,
     dialect::{Dialect, DialectName},
     identifier::Identifier,
-    op::Op,
+    location::Location,
+    op::{Op, OpBox},
     operation::Operation,
+    parsable::Parsable,
     pass::Pass,
+    r#type::{Type, TypedHandle},
     uniqued_any::{self, UniquedKey},
 };
 
@@ -31,6 +35,7 @@ pub const HARD_MAX_DIALECTS: usize = 64;
 pub const HARD_MAX_PASSES: usize = 256;
 pub const HARD_MAX_NAME_BYTES: usize = 96;
 pub const HARD_MAX_DIAGNOSTIC_BYTES: usize = 4_096;
+pub const HARD_MAX_DIALECT_REGISTRATION_ACTIONS: usize = 64;
 
 /// Auxiliary-data key for the fe2o3 context-identity locator.
 pub const CONTEXT_IDENTITY_MARKER_KEY: &str = "fe2o3_pliron_context_identity_v1";
@@ -41,8 +46,22 @@ static NEXT_CONTEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
 ///
 /// The value is descriptive provenance for in-memory handles. It is not a
 /// durable compiler, artifact, proof, publication, or runtime identity.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+/// Its representation cannot be constructed or recovered by callers:
+///
+/// ```compile_fail
+/// use std::num::NonZeroU64;
+/// use fe2o3_pliron::ContextIdentity;
+///
+/// let forged = ContextIdentity(NonZeroU64::new(1).unwrap());
+/// ```
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct ContextIdentity(NonZeroU64);
+
+impl fmt::Debug for ContextIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ContextIdentity(<process-local>)")
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct ContextIdentityAnchor(ContextIdentity);
@@ -105,14 +124,18 @@ pub fn ensure_context_identity(
     }
 
     let proposed_identity = ContextIdentity(next_context_identity()?);
-    let anchor = uniqued_any::save(context, ContextIdentityAnchor(proposed_identity));
-    let identity = uniqued_any::get(context, anchor).0;
+    let (anchor, identity) = catch_unwind(AssertUnwindSafe(|| {
+        let anchor = uniqued_any::save(context, ContextIdentityAnchor(proposed_identity));
+        let identity = uniqued_any::get(context, anchor).0;
+        (anchor, identity)
+    }))
+    .map_err(|_| ContextIdentityError::CorruptMarker)?;
     let marker = context
         .aux_data
         .insert(Box::new(ContextIdentityMarker { anchor, identity }));
     context
         .aux_data_map
-        .insert(context_identity_marker_key(), marker);
+        .insert(context_identity_marker_key()?, marker);
     Ok(identity)
 }
 
@@ -126,11 +149,8 @@ pub fn require_context_identity(
 fn context_identity_state(
     context: &Context,
 ) -> Result<Option<ContextIdentity>, ContextIdentityError> {
-    let Some(index) = context
-        .aux_data_map
-        .get(&context_identity_marker_key())
-        .copied()
-    else {
+    let marker_key = context_identity_marker_key()?;
+    let Some(index) = context.aux_data_map.get(&marker_key).copied() else {
         return Ok(None);
     };
     let Some(marker) = context.aux_data.get(index) else {
@@ -158,10 +178,10 @@ fn next_context_identity() -> Result<NonZeroU64, ContextIdentityError> {
     NonZeroU64::new(value).ok_or(ContextIdentityError::IdentitySpaceExhausted)
 }
 
-fn context_identity_marker_key() -> Identifier {
+fn context_identity_marker_key() -> Result<Identifier, ContextIdentityError> {
     CONTEXT_IDENTITY_MARKER_KEY
         .try_into()
-        .expect("static context identity key is valid")
+        .map_err(|_| ContextIdentityError::CorruptMarker)
 }
 
 /// Resource limits for one context and pass plan.
@@ -323,7 +343,9 @@ fn validate_name(value: &str, kind: NameKind) -> Result<(), NameError> {
         return Err(NameError::TooLong);
     }
     let mut bytes = value.bytes();
-    let first = bytes.next().expect("non-empty name");
+    let Some(first) = bytes.next() else {
+        return Err(NameError::Empty);
+    };
     if !first.is_ascii_lowercase() {
         return Err(NameError::InvalidFirstByte);
     }
@@ -365,9 +387,106 @@ impl fmt::Display for RegistrationHookError {
 
 impl std::error::Error for RegistrationHookError {}
 
-/// Registers types, attributes, or operations after the shell creates a dialect.
-pub type DialectRegistrationHook =
-    fn(&mut Context, &DialectName) -> Result<(), RegistrationHookError>;
+/// A bounded registration capability borrowed from one context construction.
+///
+/// The service cannot be constructed or disassembled outside this crate. It
+/// exposes no context, dialect object, arena pointer, generic callback, or
+/// caller-provided state. Its borrow cannot outlive the registration hook:
+///
+/// ```compile_fail
+/// use fe2o3_pliron::DialectRegistrationService;
+/// use pliron::context::Context;
+///
+/// fn context(service: &mut DialectRegistrationService<'_>) -> &mut Context {
+///     service.context
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_pliron::DialectRegistrationService;
+///
+/// fn retain(
+///     service: &mut DialectRegistrationService<'_>,
+/// ) -> &'static mut DialectRegistrationService<'static> {
+///     service
+/// }
+/// ```
+pub struct DialectRegistrationService<'context> {
+    context: &'context mut Context,
+    dialect_name: &'context DialectName,
+    actions: usize,
+}
+
+impl<'context> DialectRegistrationService<'context> {
+    fn new(context: &'context mut Context, dialect_name: &'context DialectName) -> Self {
+        Self {
+            context,
+            dialect_name,
+            actions: 0,
+        }
+    }
+
+    /// Rejects a hook that was attached to a different dialect name.
+    pub fn require_dialect(&self, expected: &str) -> Result<(), RegistrationHookError> {
+        if self.dialect_name.as_ref() == expected {
+            Ok(())
+        } else {
+            Err(RegistrationHookError::new(
+                "dialect registration hook name mismatch",
+            ))
+        }
+    }
+
+    /// Registers one type owned by this dialect.
+    pub fn register_type<T>(&mut self) -> Result<(), RegistrationHookError>
+    where
+        T: Type + Parsable<Arg = (), Parsed = TypedHandle<T>>,
+    {
+        self.claim_action(&T::get_type_id_static().dialect)?;
+        T::register(self.context);
+        Ok(())
+    }
+
+    /// Registers one attribute owned by this dialect.
+    pub fn register_attribute<A>(&mut self) -> Result<(), RegistrationHookError>
+    where
+        A: Attribute + Parsable<Arg = (), Parsed = A>,
+    {
+        self.claim_action(&A::get_attr_id_static().dialect)?;
+        <A as Attribute>::register::<A>(self.context);
+        Ok(())
+    }
+
+    /// Registers one operation owned by this dialect.
+    pub fn register_operation<O>(&mut self) -> Result<(), RegistrationHookError>
+    where
+        O: Op + Parsable<Arg = Vec<(Identifier, Location)>, Parsed = OpBox>,
+    {
+        self.claim_action(&O::get_opid_static().dialect)?;
+        O::register(self.context);
+        Ok(())
+    }
+
+    fn claim_action(&mut self, entity_dialect: &DialectName) -> Result<(), RegistrationHookError> {
+        if entity_dialect != self.dialect_name {
+            return Err(RegistrationHookError::new(
+                "registered entity belongs to a different dialect",
+            ));
+        }
+        if self.actions == HARD_MAX_DIALECT_REGISTRATION_ACTIONS {
+            return Err(RegistrationHookError::new(
+                "dialect registration action limit exceeded",
+            ));
+        }
+        self.actions += 1;
+        Ok(())
+    }
+}
+
+/// Registers typed entities through a context-custody service.
+pub type DialectRegistrationHook = for<'context> fn(
+    &mut DialectRegistrationService<'context>,
+) -> Result<(), RegistrationHookError>;
 
 /// One explicitly named dialect registration.
 #[derive(Clone)]
@@ -393,6 +512,7 @@ impl DialectRegistration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ContextBuildError {
     TooManyDialects,
+    RegistrationInputPanicked,
     DuplicateDialect(String),
     UpstreamRejectedDialect(String),
     ContextIdentity(ContextIdentityError),
@@ -419,28 +539,53 @@ impl ContextManifest {
 }
 
 /// A real Pliron context behind a fail-closed fe2o3 session boundary.
+///
+/// The owning context is unavailable through the production API:
+///
+/// ```compile_fail
+/// use fe2o3_pliron::PlironSession;
+/// use pliron::context::Context;
+///
+/// fn context(session: &mut PlironSession) -> &mut Context {
+///     &mut session.context
+/// }
+/// ```
 pub struct PlironSession {
     context: Context,
     identity: ContextIdentity,
     manifest: ContextManifest,
+    operations: BTreeMap<OperationHandleIdentity, Ptr<Operation>>,
+    next_operation_handle: Option<NonZeroU64>,
     poisoned: bool,
 }
+
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+struct OperationHandleIdentity(NonZeroU64);
 
 /// An opaque operation capability owned by one [`PlironSession`].
 ///
 /// The upstream pointer and its owner identity are intentionally private. A
 /// handle can only be dereferenced by session methods that authenticate both.
+/// The handle stores no pointer at all, so callers cannot extract one:
+///
+/// ```compile_fail
+/// use fe2o3_pliron::OperationHandle;
+/// use pliron::{context::Ptr, operation::Operation};
+///
+/// fn pointer(handle: &OperationHandle) -> Ptr<Operation> {
+///     handle.pointer
+/// }
+/// ```
 #[derive(Clone)]
 pub struct OperationHandle {
     owner: ContextIdentity,
-    pointer: Ptr<Operation>,
+    identity: OperationHandleIdentity,
 }
 
 impl fmt::Debug for OperationHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("OperationHandle")
-            .field("owner", &self.owner)
             .finish_non_exhaustive()
     }
 }
@@ -453,6 +598,7 @@ pub enum OperationHandleError {
     ContextIdentity(ContextIdentityError),
     ForeignSession,
     StaleHandle,
+    HandleSpaceExhausted,
     UpstreamPanicked,
 }
 
@@ -468,6 +614,9 @@ impl fmt::Display for OperationHandleError {
                 formatter.write_str("operation handle belongs to another session")
             }
             Self::StaleHandle => formatter.write_str("operation handle is stale"),
+            Self::HandleSpaceExhausted => {
+                formatter.write_str("operation handle identity space is exhausted")
+            }
             Self::UpstreamPanicked => formatter.write_str("Pliron operation access panicked"),
         }
     }
@@ -481,9 +630,19 @@ impl PlironSession {
         limits: ShellLimits,
         registrations: impl IntoIterator<Item = DialectRegistration>,
     ) -> Result<Self, ContextBuildError> {
-        let registrations: Vec<_> = registrations.into_iter().collect();
-        if registrations.len() > limits.max_dialects {
-            return Err(ContextBuildError::TooManyDialects);
+        let mut registration_iter = catch_unwind(AssertUnwindSafe(|| registrations.into_iter()))
+            .map_err(|_| ContextBuildError::RegistrationInputPanicked)?;
+        let mut registrations = Vec::with_capacity(limits.max_dialects);
+        loop {
+            let registration = catch_unwind(AssertUnwindSafe(|| registration_iter.next()))
+                .map_err(|_| ContextBuildError::RegistrationInputPanicked)?;
+            let Some(registration) = registration else {
+                break;
+            };
+            if registrations.len() == limits.max_dialects {
+                return Err(ContextBuildError::TooManyDialects);
+            }
+            registrations.push(registration);
         }
 
         let mut seen = BTreeSet::new();
@@ -496,15 +655,17 @@ impl PlironSession {
         }
 
         let mut context = Context::new();
-        let identity =
-            ensure_context_identity(&mut context).map_err(ContextBuildError::ContextIdentity)?;
+        let identity = catch_unwind(AssertUnwindSafe(|| ensure_context_identity(&mut context)))
+            .map_err(|_| ContextBuildError::ContextIdentity(ContextIdentityError::CorruptMarker))?
+            .map_err(ContextBuildError::ContextIdentity)?;
         for registration in &registrations {
             let dialect_name = DialectName::try_new(&registration.name).map_err(|_| {
                 ContextBuildError::UpstreamRejectedDialect(registration.name.clone())
             })?;
-            Dialect::register(&mut context, &dialect_name);
             let hook_result = catch_unwind(AssertUnwindSafe(|| {
-                (registration.hook)(&mut context, &dialect_name)
+                Dialect::register(&mut context, &dialect_name);
+                let mut service = DialectRegistrationService::new(&mut context, &dialect_name);
+                (registration.hook)(&mut service)
             }));
             if !matches!(hook_result, Ok(Ok(()))) {
                 return Err(ContextBuildError::RegistrationFailed(Diagnostic::new(
@@ -531,6 +692,8 @@ impl PlironSession {
                     .map(|registration| registration.name)
                     .collect(),
             },
+            operations: BTreeMap::new(),
+            next_operation_handle: NonZeroU64::new(1),
             poisoned: false,
         })
     }
@@ -556,13 +719,20 @@ impl PlironSession {
         if self.poisoned {
             return Err(SessionPoisoned);
         }
-        Ok(action(&mut self.context))
+        match catch_unwind(AssertUnwindSafe(|| action(&mut self.context))) {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                self.poisoned = true;
+                Err(SessionPoisoned)
+            }
+        }
     }
 
     /// Creates an empty builtin module and returns only its owner-aware handle.
     pub fn create_module(&mut self, name: &str) -> Result<OperationHandle, OperationHandleError> {
         validate_name(name, NameKind::Dialect).map_err(OperationHandleError::InvalidName)?;
         self.validate_identity()?;
+        let identity = self.allocate_operation_handle()?;
         let name = Identifier::try_from(name)
             .map_err(|_| OperationHandleError::InvalidName(NameError::InvalidByte))?;
         let pointer = match catch_unwind(AssertUnwindSafe(|| {
@@ -574,9 +744,10 @@ impl PlironSession {
                 return Err(OperationHandleError::UpstreamPanicked);
             }
         };
+        self.operations.insert(identity, pointer);
         Ok(OperationHandle {
             owner: self.identity,
-            pointer,
+            identity,
         })
     }
 
@@ -595,7 +766,9 @@ impl PlironSession {
         &mut self,
         handle: &OperationHandle,
     ) -> Result<(), OperationHandleError> {
-        self.with_operation(handle, Operation::erase)
+        self.with_operation(handle, Operation::erase)?;
+        self.operations.remove(&handle.identity);
+        Ok(())
     }
 
     fn validate_identity(&self) -> Result<(), OperationHandleError> {
@@ -621,25 +794,41 @@ impl PlironSession {
         if handle.owner != self.identity {
             return Err(OperationHandleError::ForeignSession);
         }
+        let Some(pointer) = self.operations.get(&handle.identity).copied() else {
+            return Err(OperationHandleError::StaleHandle);
+        };
         match catch_unwind(AssertUnwindSafe(|| {
-            handle.pointer.try_deref(&self.context).map(drop)
+            pointer.try_deref(&self.context).map(drop)
         })) {
             Ok(Ok(())) => {}
-            Ok(Err(_)) => return Err(OperationHandleError::StaleHandle),
+            Ok(Err(_)) => {
+                self.operations.remove(&handle.identity);
+                return Err(OperationHandleError::StaleHandle);
+            }
             Err(_) => {
                 self.poisoned = true;
                 return Err(OperationHandleError::UpstreamPanicked);
             }
         }
-        match catch_unwind(AssertUnwindSafe(|| {
-            action(handle.pointer, &mut self.context)
-        })) {
+        match catch_unwind(AssertUnwindSafe(|| action(pointer, &mut self.context))) {
             Ok(result) => Ok(result),
             Err(_) => {
                 self.poisoned = true;
                 Err(OperationHandleError::UpstreamPanicked)
             }
         }
+    }
+
+    fn allocate_operation_handle(
+        &mut self,
+    ) -> Result<OperationHandleIdentity, OperationHandleError> {
+        let identity = self
+            .next_operation_handle
+            .take()
+            .map(OperationHandleIdentity)
+            .ok_or(OperationHandleError::HandleSpaceExhausted)?;
+        self.next_operation_handle = identity.0.get().checked_add(1).and_then(NonZeroU64::new);
+        Ok(identity)
     }
 }
 
@@ -649,6 +838,8 @@ pub struct SessionPoisoned;
 /// Why adding a pass to a deterministic plan failed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PassPlanError {
+    PlanPoisoned,
+    PassInspectionPanicked,
     InvalidName(NameError),
     DuplicatePass(String),
     NestedPassManagerUnsupported(String),
@@ -663,14 +854,24 @@ struct PlannedPass {
 /// A bounded pass plan. Insertion order is preserved as plan metadata.
 ///
 /// This boundary intentionally exposes no generic execution method. Upstream
-/// Pliron operation pointers do not carry context provenance, so a safe API
-/// cannot distinguish a same-slot foreign root from a root owned by the
-/// session. Issue #140 tracks the owner-aware handle required before execution
-/// can be restored.
+/// Pliron operation pointers do not carry context provenance. Session-owned
+/// roots now do, but executing an arbitrary upstream [`Pass`] would hand that
+/// raw pointer and the owning context to caller-supplied code again. Execution
+/// therefore remains absent until compiler passes migrate to a sealed
+/// owner-aware service:
+///
+/// ```compile_fail
+/// use fe2o3_pliron::{OperationHandle, PassPlan, PlironSession};
+///
+/// fn execute(plan: &mut PassPlan, session: &mut PlironSession, root: &OperationHandle) {
+///     plan.run(session, root);
+/// }
+/// ```
 pub struct PassPlan {
     limits: ShellLimits,
     passes: Vec<PlannedPass>,
     names: BTreeSet<String>,
+    poisoned: bool,
 }
 
 impl PassPlan {
@@ -679,16 +880,31 @@ impl PassPlan {
             limits,
             passes: Vec::new(),
             names: BTreeSet::new(),
+            poisoned: false,
         }
     }
 
     pub fn add_pass(&mut self, mut pass: impl Pass + 'static) -> Result<(), PassPlanError> {
-        if self.passes.len() == self.limits.max_passes {
+        if self.poisoned {
+            return Err(PassPlanError::PlanPoisoned);
+        }
+        if self.passes.len() >= self.limits.max_passes {
             return Err(PassPlanError::TooManyPasses);
         }
-        let name = pass.name().to_owned();
+        let inspection = catch_unwind(AssertUnwindSafe(|| {
+            let name = pass.name().to_owned();
+            let nested = pass.as_pass_manager().is_some();
+            (name, nested)
+        }));
+        let (name, nested) = match inspection {
+            Ok(inspection) => inspection,
+            Err(_) => {
+                self.poisoned = true;
+                return Err(PassPlanError::PassInspectionPanicked);
+            }
+        };
         validate_name(&name, NameKind::Pass).map_err(PassPlanError::InvalidName)?;
-        if pass.as_pass_manager().is_some() {
+        if nested {
             return Err(PassPlanError::NestedPassManagerUnsupported(name));
         }
         if !self.names.insert(name.clone()) {
@@ -699,6 +915,10 @@ impl PassPlan {
             _pass: Box::new(pass),
         });
         Ok(())
+    }
+
+    pub const fn is_poisoned(&self) -> bool {
+        self.poisoned
     }
 
     pub fn pass_order(&self) -> impl ExactSizeIterator<Item = &str> {
@@ -721,7 +941,10 @@ mod owner_handle_tests {
         let owner_handle = owner.create_module("owner").expect("owner module");
         let foreign_handle = foreign.create_module("foreign").expect("foreign module");
 
-        assert_eq!(owner_handle.pointer, foreign_handle.pointer);
+        assert_eq!(
+            owner.operations[&owner_handle.identity],
+            foreign.operations[&foreign_handle.identity]
+        );
         assert_eq!(
             foreign.operation_result_count(&owner_handle),
             Err(OperationHandleError::ForeignSession)
@@ -733,7 +956,7 @@ mod owner_handle_tests {
         let mut owner = session();
         let mut foreign = session();
         let foreign_handle = foreign.create_module("foreign").expect("foreign module");
-        let key = context_identity_marker_key();
+        let key = context_identity_marker_key().expect("fixed marker key");
         let owner_index = owner
             .context
             .aux_data_map
@@ -762,6 +985,37 @@ mod owner_handle_tests {
     }
 
     #[test]
+    fn missing_and_colliding_markers_are_rejected_before_pointer_access() {
+        let mut missing = session();
+        let missing_handle = missing.create_module("owner").expect("owner module");
+        let key = context_identity_marker_key().expect("fixed marker key");
+        missing.context.aux_data_map.remove(&key);
+        assert_eq!(
+            missing.operation_result_count(&missing_handle),
+            Err(OperationHandleError::ContextIdentity(
+                ContextIdentityError::CorruptMarker
+            ))
+        );
+
+        let mut collision = session();
+        let collision_handle = collision.create_module("owner").expect("owner module");
+        let marker = collision
+            .context
+            .aux_data_map
+            .remove(&key)
+            .expect("marker index");
+        collision.context.aux_data.remove(marker);
+        let foreign_type = collision.context.aux_data.insert(Box::new(9_u32));
+        collision.context.aux_data_map.insert(key, foreign_type);
+        assert_eq!(
+            collision.operation_result_count(&collision_handle),
+            Err(OperationHandleError::ContextIdentity(
+                ContextIdentityError::MarkerCollision
+            ))
+        );
+    }
+
+    #[test]
     fn operation_panics_are_contained_and_poison_the_session() {
         let mut session = session();
         let handle = session.create_module("owner").expect("owner module");
@@ -773,5 +1027,52 @@ mod owner_handle_tests {
             session.operation_result_count(&handle),
             Err(OperationHandleError::SessionPoisoned)
         );
+    }
+
+    #[test]
+    fn erased_handle_registry_entries_are_not_revived() {
+        let mut session = session();
+        let erased = session.create_module("first").expect("first module");
+        let erased_pointer = session.operations[&erased.identity];
+        let clone = erased.clone();
+
+        session
+            .erase_operation(&erased)
+            .expect("erase first module");
+        assert!(!session.operations.contains_key(&erased.identity));
+
+        let replacement = session.create_module("second").expect("second module");
+        assert!(erased.identity != replacement.identity);
+        assert_ne!(erased_pointer, session.operations[&replacement.identity]);
+        assert_eq!(
+            session.operation_result_count(&clone),
+            Err(OperationHandleError::StaleHandle)
+        );
+    }
+
+    #[test]
+    fn exhausted_handle_identity_fails_before_allocating_an_operation() {
+        let mut session = session();
+        session.next_operation_handle = None;
+
+        assert!(matches!(
+            session.create_module("owner"),
+            Err(OperationHandleError::HandleSpaceExhausted)
+        ));
+        assert!(session.operations.is_empty());
+    }
+
+    #[cfg(feature = "internal-test-context-access")]
+    #[test]
+    fn test_context_action_panics_are_contained_and_poison_the_session() {
+        let mut session = session();
+        let result = session.with_context_mut(|_| panic!("hostile test action"));
+
+        assert_eq!(result, Err(SessionPoisoned));
+        assert!(session.is_poisoned());
+        assert!(matches!(
+            session.create_module("owner"),
+            Err(OperationHandleError::SessionPoisoned)
+        ));
     }
 }

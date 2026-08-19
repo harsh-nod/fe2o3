@@ -386,7 +386,9 @@ fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic
                 && stderr.contains("no artifact authority was issued")
                 && !stderr.contains("published inert Worker V2")
                 && !stderr.contains("launch authority issued")
-                && !stderr.contains("proof authority issued"),
+                && !stderr.contains("proof authority issued")
+                && !stderr.contains("portable MIR identity mismatch")
+                && !stderr.contains("Unknown/Unproved"),
             "safe semantic fixture `{bin}` diagnostic omitted its stable counterexample/root/span/call-chain receipt:\n{stderr}"
         );
     }

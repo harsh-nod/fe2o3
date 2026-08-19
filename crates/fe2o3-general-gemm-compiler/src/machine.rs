@@ -22,6 +22,10 @@ use fe2o3_llvm_handoff::{
     StageIdentitiesV1, TerminatorV2, TypedValueV2, ValueIdV2, ValueTypeV2, WorkgroupSizeRangeV1,
 };
 use fe2o3_llvm_text::{Gfx942LlvmAssemblyV2, SerializeErrorV2, serialize_gfx942_handoff_v2};
+use fe2o3_llvm_worker_handoff::{
+    AdmittedWorkerRequestV2, MeasuredLlvmLldBuildV1, WorkerAdmissionErrorV2,
+    WorkerAdmissionRequestV2,
+};
 
 /// Canonical source-binding section schema retained in every general-GEMM object.
 pub const GENERAL_GEMM_MACHINE_BINDING_SCHEMA_V1: &str = "fe2o3.general-gemm.machine-binding.v1";
@@ -77,6 +81,7 @@ pub struct GeneralGemmStructuralMachineV1 {
     descriptor_source: CompilerDescriptorSourceV1,
     binding_section: GeneralGemmMachineBindingSectionV1,
     handoff: Gfx942HandoffV2,
+    worker_admission: AdmittedWorkerRequestV2,
     assembly: Gfx942LlvmAssemblyV2,
     compiler_handoff: CompilerModuleHandoffV2,
 }
@@ -88,6 +93,7 @@ pub struct GeneralGemmSymbolicStructuralMachineV1 {
     descriptor_source: CompilerDescriptorSourceV1,
     binding_section: GeneralGemmMachineBindingSectionV1,
     handoff: Gfx942HandoffV2,
+    worker_admission: AdmittedWorkerRequestV2,
     assembly: Gfx942LlvmAssemblyV2,
     compiler_handoff: CompilerModuleHandoffV2,
     artifact_identity: GeneralGemmSymbolicArtifactIdentityV1,
@@ -112,6 +118,11 @@ impl GeneralGemmSymbolicStructuralMachineV1 {
     /// Returns the complete typed dynamic gfx942 Handoff V2 graph.
     pub const fn handoff(&self) -> &Gfx942HandoffV2 {
         &self.handoff
+    }
+
+    /// Returns the inert typed pre-LLVM admission bound to this exact handoff.
+    pub const fn worker_admission(&self) -> &AdmittedWorkerRequestV2 {
+        &self.worker_admission
     }
 
     /// Returns the deterministic dynamic LLVM assembly.
@@ -156,6 +167,11 @@ impl GeneralGemmStructuralMachineV1 {
         &self.handoff
     }
 
+    /// Returns the inert typed pre-LLVM admission bound to this exact handoff.
+    pub const fn worker_admission(&self) -> &AdmittedWorkerRequestV2 {
+        &self.worker_admission
+    }
+
     /// Returns the deterministic LLVM assembly derived from the typed graph.
     pub const fn assembly(&self) -> &Gfx942LlvmAssemblyV2 {
         &self.assembly
@@ -187,6 +203,8 @@ pub enum GeneralGemmStructuralMachineErrorV1 {
     Serialize(SerializeErrorV2),
     /// The serializer did not retain the exact Handoff V2 identity.
     SourceIdentity,
+    /// Typed pre-LLVM worker admission rejected the canonical handoff or build policy.
+    WorkerAdmission(WorkerAdmissionErrorV2),
     /// The compiler FFI envelope failed closed.
     CompilerEnvelope(CompilerFfiEnvelopeError),
     /// The exact symbol manifest failed closed.
@@ -248,6 +266,14 @@ fn lower_symbolic_structural_inner(
     let binding_section = symbolic_machine_binding_section(&lowered, &descriptor_source);
     let handoff = build_symbolic_machine_handoff(&lowered, &descriptor_source, &binding_section)?;
     let source_identity = handoff.identity();
+    let canonical_handoff = handoff.encode_canonical();
+    let worker_admission = WorkerAdmissionRequestV2::new(
+        canonical_handoff.as_bytes(),
+        *source_identity.as_bytes(),
+        MeasuredLlvmLldBuildV1::exact(),
+    )
+    .admit()
+    .map_err(GeneralGemmStructuralMachineErrorV1::WorkerAdmission)?;
     let assembly = serialize_gfx942_handoff_v2(&handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::Serialize)?;
     if assembly.source_identity() != source_identity || !assembly.has_embedded_source_identity() {
@@ -283,6 +309,7 @@ fn lower_symbolic_structural_inner(
             lowered.compilation_identity().as_bytes(),
             projection.identity().as_bytes(),
             source_identity.as_bytes(),
+            worker_admission.admission_identity().as_bytes(),
             assembly.sha256().as_bytes(),
             compiler_handoff.identity().sha256(),
             binding_section.identity().as_bytes(),
@@ -294,6 +321,7 @@ fn lower_symbolic_structural_inner(
         descriptor_source,
         binding_section,
         handoff,
+        worker_admission,
         assembly,
         compiler_handoff,
         artifact_identity,
@@ -314,6 +342,14 @@ fn lower_structural_inner(
     let binding_section = machine_binding_section(unit, projection, &descriptor_source);
     let handoff = build_machine_handoff(unit, projection, &descriptor_source, &binding_section)?;
     let source_identity = handoff.identity();
+    let canonical_handoff = handoff.encode_canonical();
+    let worker_admission = WorkerAdmissionRequestV2::new(
+        canonical_handoff.as_bytes(),
+        *source_identity.as_bytes(),
+        MeasuredLlvmLldBuildV1::exact(),
+    )
+    .admit()
+    .map_err(GeneralGemmStructuralMachineErrorV1::WorkerAdmission)?;
     let assembly = serialize_gfx942_handoff_v2(&handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::Serialize)?;
     if assembly.source_identity() != source_identity || !assembly.has_embedded_source_identity() {
@@ -348,6 +384,7 @@ fn lower_structural_inner(
         descriptor_source,
         binding_section,
         handoff,
+        worker_admission,
         assembly,
         compiler_handoff,
     })

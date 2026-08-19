@@ -1,9 +1,13 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::io;
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Instant;
 
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, inotify, open, openat, openat2,
@@ -11,14 +15,53 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::authenticated_verus_execution_v2::{
+    ADDRESS_SPACE_LIMIT_V2, BoundedProcessGroupFailureV2, CORE_LIMIT_V2, DATA_LIMIT_V2,
+    FILE_LIMIT_V2, supervise_bounded_process_group_v2, validate_controller_security_v2,
+};
+
 use super::{
     EntryKindV2, FileSpecV2, GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
-    GeneralGemmRuntimeClosureErrorKindV2, GeneralGemmRuntimeClosureErrorV2, InterpreterSpecV2,
+    GeneralGemmProofSourceV2, GeneralGemmRuntimeClosureErrorKindV2,
+    GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeProcessOutputV2, InterpreterSpecV2,
     MAX_TARGET_FILE_BYTES, ManifestV2,
 };
 
 const MAX_DIRECTORY_ENTRIES: usize = 256;
 const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
+
+const RUST_VERIFY_FD: RawFd = 180;
+const Z3_FD: RawFd = 181;
+const DIST_DIRECTORY_FD: RawFd = 182;
+const TOOLCHAIN_DIRECTORY_FD: RawFd = 183;
+const TOOLCHAIN_LIB_DIRECTORY_FD: RawFd = 184;
+const SYSTEM_LIB_DIRECTORY_FD: RawFd = 185;
+const PROOF_DIRECTORY_FD: RawFd = 186;
+
+const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
+const F_SETFD: i32 = 2;
+const FD_CLOEXEC: i32 = 1;
+const PR_SET_NO_NEW_PRIVS: i32 = 38;
+const RLIMIT_FSIZE: i32 = 1;
+const RLIMIT_DATA: i32 = 2;
+const RLIMIT_CORE: i32 = 4;
+const RLIMIT_AS: i32 = 9;
+
+#[repr(C)]
+struct ResourceLimitV2 {
+    current: u64,
+    maximum: u64,
+}
+
+unsafe extern "C" {
+    fn close_range(first: u32, last: u32, flags: u32) -> i32;
+    fn dup2(old_descriptor: i32, new_descriptor: i32) -> i32;
+    fn fchdir(descriptor: i32) -> i32;
+    fn fcntl(descriptor: i32, command: i32, ...) -> i32;
+    fn prctl(option: i32, ...) -> i32;
+    fn setrlimit(resource: i32, limit: *const ResourceLimitV2) -> i32;
+    fn umask(mask: u32) -> u32;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ObjectSnapshotV2 {
@@ -377,6 +420,31 @@ impl RetainedRuntimeClosureV2 {
         self.journal.ensure_clean()
     }
 
+    fn required_file(&self, path: &Path) -> Result<&File, GeneralGemmRuntimeClosureErrorV2> {
+        self.files
+            .iter()
+            .find(|retained| retained.path == path)
+            .map(|retained| &retained.file)
+            .ok_or_else(|| {
+                error(
+                    GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+                    format!("reviewed runtime manifest lacks {}", path.display()),
+                )
+            })
+    }
+
+    fn required_directory(&self, path: &Path) -> Result<&File, GeneralGemmRuntimeClosureErrorV2> {
+        self.directories
+            .get(path)
+            .map(|retained| &retained.file)
+            .ok_or_else(|| {
+                error(
+                    GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+                    format!("reviewed runtime manifest lacks {}", path.display()),
+                )
+            })
+    }
+
     #[cfg(test)]
     fn open_for_test(
         root: &Path,
@@ -400,6 +468,213 @@ impl RetainedRuntimeClosureV2 {
             },
         )
     }
+}
+
+pub(super) fn execute_rust_verify(
+    runtime: &RetainedRuntimeClosureV2,
+    source: GeneralGemmProofSourceV2,
+    deadline: Instant,
+    output_limit: usize,
+) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+    validate_controller_security_v2().map_err(|failure| {
+        process_error(
+            format!("authenticated controller preflight failed: {failure}"),
+            GeneralGemmRuntimeClosureErrorKindV2::Process,
+        )
+    })?;
+    if output_limit == 0 {
+        return Err(error(
+            GeneralGemmRuntimeClosureErrorKindV2::OutputTooLarge,
+            "proof output bound is zero",
+        ));
+    }
+    if Instant::now() >= deadline {
+        return Err(error(
+            GeneralGemmRuntimeClosureErrorKindV2::TimedOut,
+            "general GEMM proof deadline elapsed before spawn",
+        ));
+    }
+
+    let rust_verify = runtime.required_file(Path::new("dist/rust_verify"))?;
+    let z3 = runtime.required_file(Path::new("dist/z3"))?;
+    let dist = runtime.required_directory(Path::new("dist"))?;
+    let toolchain = runtime.required_directory(Path::new("toolchain"))?;
+    let toolchain_lib = runtime.required_directory(Path::new("toolchain/lib"))?;
+    let system_lib = runtime.required_directory(Path::new("system-lib"))?;
+    let proof = runtime.required_directory(Path::new("proof"))?;
+    let empty = runtime.required_directory(Path::new("empty"))?;
+
+    // Normalize all source descriptors above the fixed child map. This prevents an ambient
+    // descriptor allocation pattern from making one dup2 destination overwrite a later source.
+    let sources = duplicate_child_sources([
+        rust_verify,
+        z3,
+        dist,
+        toolchain,
+        toolchain_lib,
+        system_lib,
+        proof,
+        empty,
+    ])?;
+    let inherited = [
+        (sources[0].as_raw_fd(), RUST_VERIFY_FD, true),
+        (sources[1].as_raw_fd(), Z3_FD, false),
+        (sources[2].as_raw_fd(), DIST_DIRECTORY_FD, false),
+        (sources[3].as_raw_fd(), TOOLCHAIN_DIRECTORY_FD, false),
+        (sources[4].as_raw_fd(), TOOLCHAIN_LIB_DIRECTORY_FD, false),
+        (sources[5].as_raw_fd(), SYSTEM_LIB_DIRECTORY_FD, false),
+        (sources[6].as_raw_fd(), PROOF_DIRECTORY_FD, false),
+    ];
+    let empty_descriptor = sources[7].as_raw_fd();
+
+    let mut command = Command::new(format!("/proc/self/fd/{RUST_VERIFY_FD}"));
+    command
+        .arg(format!(
+            "/proc/self/fd/{PROOF_DIRECTORY_FD}/{}",
+            source.relative_to_proof_directory()
+        ))
+        .args([
+            "--crate-type",
+            "lib",
+            "--triggers-mode",
+            "silent",
+            "--no-cheating",
+            "--num-threads",
+            "1",
+            "--sysroot",
+        ])
+        .arg(format!("/proc/self/fd/{TOOLCHAIN_DIRECTORY_FD}"))
+        .env_clear()
+        .env("VERUS_ROOT", format!("/proc/self/fd/{DIST_DIRECTORY_FD}"))
+        .env("VERUS_Z3_PATH", format!("/proc/self/fd/{Z3_FD}"))
+        .env(
+            "LD_LIBRARY_PATH",
+            format!(
+                "/proc/self/fd/{TOOLCHAIN_LIB_DIRECTORY_FD}:/proc/self/fd/{SYSTEM_LIB_DIRECTORY_FD}"
+            ),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+
+    // SAFETY: the callback uses only async-signal-safe syscalls and raw descriptors captured
+    // above. No allocation, lock, environment lookup, or path lookup occurs after fork.
+    unsafe {
+        command.pre_exec(move || prepare_proof_child(&inherited, empty_descriptor));
+    }
+    let mut child = command.spawn().map_err(|source| {
+        process_error(
+            format!("spawn retained rust_verify: {source}"),
+            GeneralGemmRuntimeClosureErrorKindV2::Process,
+        )
+    })?;
+    let output = supervise_bounded_process_group_v2(&mut child, deadline, output_limit).map_err(
+        |failure| {
+            let kind = match failure.kind() {
+                BoundedProcessGroupFailureV2::TimedOut => {
+                    GeneralGemmRuntimeClosureErrorKindV2::TimedOut
+                }
+                BoundedProcessGroupFailureV2::OutputTooLarge => {
+                    GeneralGemmRuntimeClosureErrorKindV2::OutputTooLarge
+                }
+                BoundedProcessGroupFailureV2::Process => {
+                    GeneralGemmRuntimeClosureErrorKindV2::Process
+                }
+            };
+            process_error(failure.detail(), kind)
+        },
+    )?;
+    Ok(GeneralGemmRuntimeProcessOutputV2 {
+        exit_code: output.exit_code,
+        signal: output.signal,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
+}
+
+fn duplicate_child_sources<const N: usize>(
+    files: [&File; N],
+) -> Result<[OwnedFd; N], GeneralGemmRuntimeClosureErrorV2> {
+    let mut next = 200;
+    let mut descriptors = Vec::with_capacity(files.len());
+    for file in files {
+        let descriptor = rustix::io::fcntl_dupfd_cloexec(file, next)
+            .map_err(|source| io_error("normalize proof child descriptor", source))?;
+        next = descriptor.as_raw_fd().checked_add(1).ok_or_else(|| {
+            error(
+                GeneralGemmRuntimeClosureErrorKindV2::Process,
+                "proof child descriptor space exhausted",
+            )
+        })?;
+        descriptors.push(descriptor);
+    }
+    descriptors.try_into().map_err(|_| {
+        error(
+            GeneralGemmRuntimeClosureErrorKindV2::Process,
+            "proof child descriptor normalization was incomplete",
+        )
+    })
+}
+
+fn prepare_proof_child(
+    inherited: &[(RawFd, RawFd, bool)],
+    empty_descriptor: RawFd,
+) -> io::Result<()> {
+    // SAFETY: close_range only changes close-on-exec flags for descriptors in this process.
+    if unsafe { close_range(3, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    for &(source, destination, close_on_exec) in inherited {
+        // SAFETY: both values are live integer descriptors captured before fork.
+        if unsafe { dup2(source, destination) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fcntl operates on the just-duplicated descriptor and takes an integer flag.
+        if unsafe {
+            fcntl(
+                destination,
+                F_SETFD,
+                if close_on_exec { FD_CLOEXEC } else { 0 },
+            )
+        } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    // SAFETY: the retained empty directory descriptor remains open until exec.
+    if unsafe { fchdir(empty_descriptor) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: umask has no failure mode and accepts the supplied permission bits.
+    unsafe { umask(0o077) };
+    // SAFETY: PR_SET_NO_NEW_PRIVS with argument 1 requires no pointer arguments.
+    if unsafe { prctl(PR_SET_NO_NEW_PRIVS, 1_i32, 0_i32, 0_i32, 0_i32) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    for (resource, value) in [
+        (RLIMIT_AS, ADDRESS_SPACE_LIMIT_V2),
+        (RLIMIT_DATA, DATA_LIMIT_V2),
+        (RLIMIT_FSIZE, FILE_LIMIT_V2),
+        (RLIMIT_CORE, CORE_LIMIT_V2),
+    ] {
+        let limit = ResourceLimitV2 {
+            current: value,
+            maximum: value,
+        };
+        // SAFETY: setrlimit reads one initialized fixed-layout value during pre-exec setup.
+        if unsafe { setrlimit(resource, &limit) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+fn process_error(
+    detail: impl Into<String>,
+    kind: GeneralGemmRuntimeClosureErrorKindV2,
+) -> GeneralGemmRuntimeClosureErrorV2 {
+    error(kind, detail)
 }
 
 impl RetainedInterpreterV2 {
@@ -1320,5 +1595,48 @@ mod tests {
         assert_eq!(snapshot.links, metadata.nlink());
         assert_eq!(snapshot.modified_nanoseconds, metadata.mtime_nsec());
         assert_eq!(snapshot.changed_nanoseconds, metadata.ctime_nsec());
+    }
+
+    #[test]
+    fn proof_child_boundary_clears_environment_and_installs_only_explicit_inputs() {
+        let tree = TestClosure::new();
+        let empty = File::open(tree.root.join("empty")).unwrap();
+        let source = File::open(tree.root.join("lib")).unwrap();
+        let normalized = rustix::io::fcntl_dupfd_cloexec(&source, 200).unwrap();
+        let source_descriptor = normalized.as_raw_fd();
+        let empty_descriptor = empty.as_raw_fd();
+        let empty_path = tree.root.join("empty");
+        let inherited = [(source_descriptor, PROOF_DIRECTORY_FD, false)];
+        let script = format!(
+            "test \"$ONLY_EXACT_ENV\" = retained && \
+             test -z \"${{HOME+x}}\" && \
+             test \"$(pwd -P)\" = \"{}\" && \
+             test \"$(/usr/bin/cat /proc/self/fd/{PROOF_DIRECTORY_FD}/data)\" = vstd-data-v2 && \
+             test ! -e /proc/self/fd/{source_descriptor} && \
+             test \"$(umask)\" = 0077 && \
+             /usr/bin/grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status && \
+             printf prepared",
+            empty_path.display()
+        );
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", &script])
+            .env_clear()
+            .env("ONLY_EXACT_ENV", "retained")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // SAFETY: this is the production async-signal-safe child preparation callback over
+        // descriptors retained for the entire spawn operation.
+        unsafe {
+            command.pre_exec(move || prepare_proof_child(&inherited, empty_descriptor));
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "child preparation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"prepared");
     }
 }

@@ -36,6 +36,10 @@ fn identities_are_idempotent_and_distinguish_fresh_contexts() {
     assert_ne!(first_identity, second_identity);
     assert_eq!(ensure_context_identity(&mut first), Ok(first_identity));
     assert_eq!(require_context_identity(&first), Ok(first_identity));
+    assert_eq!(
+        format!("{first_identity:?}"),
+        "ContextIdentity(<process-local>)"
+    );
 }
 
 #[test]

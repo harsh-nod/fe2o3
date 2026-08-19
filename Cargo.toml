@@ -91,6 +91,7 @@ fe2o3-llvm-handoff = { path = "crates/fe2o3-llvm-handoff" }
 fe2o3-llvm-route-conformance = { path = "crates/fe2o3-llvm-route-conformance" }
 fe2o3-llvm-text = { path = "crates/fe2o3-llvm-text" }
 fe2o3-llvm-worker-handoff = { path = "crates/fe2o3-llvm-worker-handoff" }
+fe2o3-lower-amdgcn-llvm = { path = "crates/fe2o3-lower-amdgcn-llvm" }
 fe2o3-lower-kernel-gpu = { path = "crates/fe2o3-lower-kernel-gpu" }
 fe2o3-lower-mir-kernel = { path = "crates/fe2o3-lower-mir-kernel" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }

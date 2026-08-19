@@ -13,14 +13,14 @@ use dialect_mir::{
     MAX_EXECUTABLE_BLOCK_PARAMETERS, MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_FUNCTIONS,
     MAX_EXECUTABLE_STATEMENTS, MirTypeId,
     pliron::{
-        MirBlockOp, MirFunctionOp, MirModuleOp, MirReturnOp, MirTypeRef, register_mir_dialect,
+        MirBlockOp, MirFunctionOp, MirModuleOp, MirModuleSnapshotError, MirReturnOp,
+        MirSnapshotOperation, register_mir_dialect,
     },
 };
 use fe2o3_pliron::{
     ContextIdentity, ContextIdentityError, ensure_context_identity, require_context_identity,
 };
 use pliron::{
-    builtin::{type_interfaces::FunctionTypeInterface, types::FunctionType},
     context::{Context, Ptr},
     dialect::{Dialect, DialectName},
     identifier::Identifier,
@@ -981,72 +981,47 @@ fn collect_source_evidence(
         .to_owned();
     let mut functions = Vec::with_capacity(counts.functions);
 
-    for (function_index, operation) in module
+    let body = module
         .body(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        let function = Operation::get_op::<MirFunctionOp>(operation, context)
-            .ok_or(LoweringError::SourceVerificationFailed)?;
-        let identity = function
-            .get_attr_function_identity(context)
-            .ok_or(LoweringError::SourceVerificationFailed)?
-            .as_str()
-            .to_owned();
-        let signature = function
-            .signature(context)
-            .ok_or(LoweringError::SourceVerificationFailed)?;
-        let signature_ref = signature.deref(context);
-        let signature = signature_ref
-            .downcast_ref::<FunctionType>()
-            .ok_or(LoweringError::SourceVerificationFailed)?;
-        let argument_types = signature.arg_types().to_vec();
-        drop(signature_ref);
+        .map_err(|_| LoweringError::SourceVerificationFailed)?;
 
-        let mut argument_type_ids = Vec::with_capacity(argument_types.len());
-        for (argument_index, argument_type) in argument_types.into_iter().enumerate() {
-            let argument_type = argument_type.deref(context);
-            let Some(argument_type) = argument_type.downcast_ref::<MirTypeRef>() else {
-                return Err(LoweringError::UnsupportedArgumentType {
-                    function: function_index,
-                    argument: argument_index,
-                });
-            };
-            argument_type_ids.push(argument_type.value());
-        }
-
-        let function_ref = operation.deref(context);
-        let region = function_ref.get_region(0);
-        drop(function_ref);
-        let mut blocks = Vec::new();
-        for (block_index, block) in region.deref(context).iter(context).enumerate() {
-            let mut operations = Vec::new();
-            let mut block_id = None;
-            for block_operation in block.deref(context).iter(context) {
-                if let Some(marker) = Operation::get_op::<MirBlockOp>(block_operation, context) {
-                    let id = marker
-                        .block_id(context)
-                        .ok_or(LoweringError::SourceVerificationFailed)?
-                        .0;
-                    block_id = Some(id);
-                    operations.push(SourceOperationEvidence::BlockMarker { block_id: id });
-                } else if Operation::is_op::<MirReturnOp>(block_operation, context) {
-                    operations.push(SourceOperationEvidence::Return);
-                } else {
-                    return Err(LoweringError::SourceVerificationFailed);
-                }
+    let snapshots = body
+        .semantic_functions(context)
+        .map_err(|error| match error {
+            MirModuleSnapshotError::UnsupportedArgumentType { function, argument } => {
+                LoweringError::UnsupportedArgumentType { function, argument }
             }
-            blocks.push(SourceBlockEvidence {
+            MirModuleSnapshotError::Handle(_) | MirModuleSnapshotError::MalformedModule => {
+                LoweringError::SourceVerificationFailed
+            }
+        })?;
+
+    for (function_index, function) in snapshots.into_iter().enumerate() {
+        let blocks = function
+            .blocks()
+            .iter()
+            .enumerate()
+            .map(|(block_index, block)| SourceBlockEvidence {
                 ordinal: block_index,
-                block_id: block_id.ok_or(LoweringError::SourceVerificationFailed)?,
-                operations,
-            });
-        }
+                block_id: block.block_id().0,
+                operations: block
+                    .operations()
+                    .iter()
+                    .map(|operation| match operation {
+                        MirSnapshotOperation::BlockMarker(block_id) => {
+                            SourceOperationEvidence::BlockMarker {
+                                block_id: block_id.0,
+                            }
+                        }
+                        MirSnapshotOperation::Return => SourceOperationEvidence::Return,
+                    })
+                    .collect(),
+            })
+            .collect();
         functions.push(SourceFunctionEvidence {
             ordinal: function_index,
-            identity,
-            argument_type_ids,
+            identity: function.identity().to_owned(),
+            argument_type_ids: function.argument_type_ids().to_vec(),
             blocks,
         });
     }

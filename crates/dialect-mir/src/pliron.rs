@@ -29,7 +29,6 @@ use ::pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     derive::{op_interface_impl, pliron_attr, pliron_op, pliron_type},
-    dialect::DialectName,
     linked_list::{ContainsLinkedList, LinkedList},
     location::Located,
     op::Op,
@@ -43,8 +42,8 @@ use fe2o3_mir_model::{
     MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_TYPES, MirBlockId, MirTypeId,
 };
 use fe2o3_pliron::{
-    ContextIdentity, ContextIdentityError, DialectRegistration, NameError, RegistrationHookError,
-    ensure_context_identity, require_context_identity,
+    ContextIdentity, ContextIdentityError, DialectRegistration, DialectRegistrationService,
+    NameError, RegistrationHookError, ensure_context_identity, require_context_identity,
 };
 
 use crate::DIALECT;
@@ -292,6 +291,90 @@ pub struct MirModuleBodyHandle {
     parent: Ptr<Operation>,
 }
 
+/// Pointer-independent operation evidence from one verified MIR CFG block.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirSnapshotOperation {
+    /// Canonical block marker carrying its stable MIR block identifier.
+    BlockMarker(MirBlockId),
+    /// Place-based MIR return terminator.
+    Return,
+}
+
+/// Pointer-independent semantic snapshot of one verified MIR CFG block.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirBlockSnapshot {
+    block_id: MirBlockId,
+    operations: Vec<MirSnapshotOperation>,
+}
+
+impl MirBlockSnapshot {
+    /// Returns the verified stable MIR block identifier.
+    pub const fn block_id(&self) -> MirBlockId {
+        self.block_id
+    }
+
+    /// Returns operations in exact block order.
+    pub fn operations(&self) -> &[MirSnapshotOperation] {
+        &self.operations
+    }
+}
+
+/// Pointer-independent semantic snapshot of one verified MIR function.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirFunctionSnapshot {
+    identity: String,
+    argument_type_ids: Vec<MirTypeId>,
+    blocks: Vec<MirBlockSnapshot>,
+}
+
+impl MirFunctionSnapshot {
+    /// Returns the exact verified function identity.
+    pub fn identity(&self) -> &str {
+        &self.identity
+    }
+
+    /// Returns verified MIR type references in argument order.
+    pub fn argument_type_ids(&self) -> &[MirTypeId] {
+        &self.argument_type_ids
+    }
+
+    /// Returns verified blocks in canonical CFG order.
+    pub fn blocks(&self) -> &[MirBlockSnapshot] {
+        &self.blocks
+    }
+}
+
+/// Bounded failures while taking a semantic snapshot through an owned body handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirModuleSnapshotError {
+    /// The owner-aware module-body capability was rejected.
+    Handle(MirBlockHandleError),
+    /// A verified module no longer has the required MIR shape.
+    MalformedModule,
+    /// A function argument is not a MIR type-table reference.
+    UnsupportedArgumentType {
+        /// Function ordinal in module order.
+        function: usize,
+        /// Argument ordinal in signature order.
+        argument: usize,
+    },
+}
+
+impl fmt::Display for MirModuleSnapshotError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Handle(error) => write!(formatter, "MIR module body access failed: {error}"),
+            Self::MalformedModule => formatter.write_str("verified MIR module shape changed"),
+            Self::UnsupportedArgumentType { function, argument } => write!(
+                formatter,
+                "MIR function {function} argument {argument} is not a MIR type reference"
+            ),
+        }
+    }
+}
+
+impl Error for MirModuleSnapshotError {}
+
 impl fmt::Debug for MirModuleBodyHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -312,6 +395,88 @@ impl MirModuleBodyHandle {
             context,
             |body, context| body.deref(context).iter(context).count(),
         )
+    }
+
+    /// Takes a pointer-independent snapshot after authenticating owner and liveness.
+    pub fn semantic_functions(
+        &self,
+        context: &Context,
+    ) -> Result<Vec<MirFunctionSnapshot>, MirModuleSnapshotError> {
+        with_owned_block(
+            self.owner,
+            self.pointer,
+            self.parent,
+            MirBlockRole::ModuleBody,
+            context,
+            |body, context| {
+                let mut functions = Vec::new();
+                for (function_index, operation) in body.deref(context).iter(context).enumerate() {
+                    let function = Operation::get_op::<MirFunctionOp>(operation, context)
+                        .ok_or(MirModuleSnapshotError::MalformedModule)?;
+                    let identity = function
+                        .get_attr_function_identity(context)
+                        .ok_or(MirModuleSnapshotError::MalformedModule)?
+                        .as_str()
+                        .to_owned();
+                    let signature = function
+                        .signature(context)
+                        .ok_or(MirModuleSnapshotError::MalformedModule)?;
+                    let signature_ref = signature.deref(context);
+                    let signature = signature_ref
+                        .downcast_ref::<FunctionType>()
+                        .ok_or(MirModuleSnapshotError::MalformedModule)?;
+                    let argument_types = signature.arg_types().to_vec();
+                    drop(signature_ref);
+
+                    let mut argument_type_ids = Vec::with_capacity(argument_types.len());
+                    for (argument_index, argument_type) in argument_types.into_iter().enumerate() {
+                        let argument_type = argument_type.deref(context);
+                        let Some(argument_type) = argument_type.downcast_ref::<MirTypeRef>() else {
+                            return Err(MirModuleSnapshotError::UnsupportedArgumentType {
+                                function: function_index,
+                                argument: argument_index,
+                            });
+                        };
+                        argument_type_ids.push(argument_type.value());
+                    }
+
+                    let function_ref = operation.deref(context);
+                    let region = function_ref.get_region(0);
+                    drop(function_ref);
+                    let mut blocks = Vec::new();
+                    for block in region.deref(context).iter(context) {
+                        let mut operations = Vec::new();
+                        let mut block_id = None;
+                        for block_operation in block.deref(context).iter(context) {
+                            if let Some(marker) =
+                                Operation::get_op::<MirBlockOp>(block_operation, context)
+                            {
+                                let id = marker
+                                    .block_id(context)
+                                    .ok_or(MirModuleSnapshotError::MalformedModule)?;
+                                block_id = Some(id);
+                                operations.push(MirSnapshotOperation::BlockMarker(id));
+                            } else if Operation::is_op::<MirReturnOp>(block_operation, context) {
+                                operations.push(MirSnapshotOperation::Return);
+                            } else {
+                                return Err(MirModuleSnapshotError::MalformedModule);
+                            }
+                        }
+                        blocks.push(MirBlockSnapshot {
+                            block_id: block_id.ok_or(MirModuleSnapshotError::MalformedModule)?,
+                            operations,
+                        });
+                    }
+                    functions.push(MirFunctionSnapshot {
+                        identity,
+                        argument_type_ids,
+                        blocks,
+                    });
+                }
+                Ok(functions)
+            },
+        )
+        .map_err(MirModuleSnapshotError::Handle)?
     }
 
     /// Verifies the live module containing this body.
@@ -1264,15 +1429,17 @@ pub fn register_mir_dialect(context: &mut Context) {
 }
 
 fn registration_hook(
-    context: &mut Context,
-    name: &DialectName,
+    service: &mut DialectRegistrationService<'_>,
 ) -> Result<(), RegistrationHookError> {
-    if name.as_ref() != DIALECT {
-        return Err(RegistrationHookError::new(
-            "MIR registration hook received the wrong dialect name",
-        ));
-    }
-    register_mir_dialect(context);
+    service.require_dialect(DIALECT)?;
+    service.register_type::<MirTypeRef>()?;
+    service.register_attribute::<MirIdentityAttr>()?;
+    service.register_attribute::<MirLimitsAttr>()?;
+    service.register_attribute::<MirBlockIdAttr>()?;
+    service.register_operation::<MirModuleOp>()?;
+    service.register_operation::<MirFunctionOp>()?;
+    service.register_operation::<MirBlockOp>()?;
+    service.register_operation::<MirReturnOp>()?;
     Ok(())
 }
 

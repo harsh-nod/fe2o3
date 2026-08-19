@@ -1,12 +1,14 @@
 //! Retained filesystem admission for the general-GEMM Verus runtime closure.
 //!
-//! This module does not execute Verus and cannot construct proof evidence. It
-//! only admits the exact reviewed V2 filesystem closure and retains the opened
-//! objects so a later supervised runner can use the same generation.
+//! This module admits the exact reviewed V2 filesystem closure, retains the
+//! opened objects, and owns the internal fixed-descriptor execution boundary.
+//! It cannot construct schedule proof evidence; only the typed general-GEMM
+//! entry point can validate exact outputs and mint non-authoritative evidence.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 
@@ -20,8 +22,8 @@ pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME: &str =
 
 /// SHA-256 of the byte-canonical reviewed runtime manifest.
 pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256: [u8; 32] = [
-    0xbc, 0x5d, 0x19, 0x49, 0x29, 0xee, 0x4a, 0x1b, 0x57, 0xeb, 0x5b, 0xcc, 0x30, 0x36, 0xb4, 0xe9,
-    0x34, 0x14, 0x59, 0x2f, 0x0e, 0xff, 0x5a, 0x75, 0x08, 0x35, 0x58, 0x7e, 0x14, 0xd3, 0x41, 0x98,
+    0x61, 0xa1, 0x5c, 0x5d, 0xa7, 0x75, 0xd9, 0x0f, 0x0b, 0x0c, 0x90, 0x9d, 0x74, 0x38, 0x3d, 0x1c,
+    0x1c, 0xfb, 0xf0, 0xea, 0x9f, 0x0b, 0x20, 0x97, 0xd5, 0x6c, 0x9e, 0xf5, 0xef, 0xf9, 0x54, 0x5f,
 ];
 
 const MANIFEST_BYTES: &[u8] =
@@ -58,6 +60,12 @@ pub enum GeneralGemmRuntimeClosureErrorKindV2 {
     OwnerProcessChanged,
     /// An operating-system operation failed.
     Io,
+    /// A supervised proof child exceeded its one global deadline.
+    TimedOut,
+    /// A supervised proof child exceeded a bounded output stream.
+    OutputTooLarge,
+    /// A supervised proof child could not be spawned, observed, or contained.
+    Process,
 }
 
 /// Failure to admit or revalidate the retained runtime closure.
@@ -120,6 +128,46 @@ pub struct GeneralGemmVerusRuntimeClosureLeaseV2 {
     retained: linux::RetainedRuntimeClosureV2,
 }
 
+/// One exact proof source selected from the reviewed retained closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GeneralGemmProofSourceV2 {
+    Reference,
+    Vectorized,
+    VectorTailWrong,
+    EpilogueWrong,
+    MachineClaimWrong,
+}
+
+impl GeneralGemmProofSourceV2 {
+    pub(crate) const fn relative_to_proof_directory(self) -> &'static str {
+        match self {
+            Self::Reference => "general_gemm_reference_schedule_v1.rs",
+            Self::Vectorized => "general_gemm_vectorized_schedule_v1.rs",
+            Self::VectorTailWrong => "negative/general_gemm_vector_tail_wrong.rs",
+            Self::EpilogueWrong => "negative/general_gemm_epilogue_wrong.rs",
+            Self::MachineClaimWrong => "negative/general_gemm_machine_claim_wrong.rs",
+        }
+    }
+
+    pub(crate) const fn embedded_bytes(self) -> &'static [u8] {
+        match self {
+            Self::Reference => GENERAL_GEMM_REFERENCE_SOURCE,
+            Self::Vectorized => GENERAL_GEMM_VECTORIZED_SOURCE,
+            Self::VectorTailWrong => GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE,
+            Self::EpilogueWrong => GENERAL_GEMM_EPILOGUE_WRONG_SOURCE,
+            Self::MachineClaimWrong => GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
+        }
+    }
+}
+
+/// Bounded output from one directly executed retained `rust_verify` process.
+pub(crate) struct GeneralGemmRuntimeProcessOutputV2 {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) signal: Option<i32>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+}
+
 impl fmt::Debug for GeneralGemmVerusRuntimeClosureLeaseV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -136,6 +184,7 @@ impl GeneralGemmVerusRuntimeClosureLeaseV2 {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
         let root = root.as_ref();
         validate_absolute_path(root)?;
+        validate_runtime_root_path(root)?;
         let manifest = ManifestV2::parse_reviewed()?;
         let identity = closure_identity();
         let owner_process = std::process::id();
@@ -189,6 +238,24 @@ impl GeneralGemmVerusRuntimeClosureLeaseV2 {
             ))
         }
     }
+
+    pub(crate) fn execute_rust_verify(
+        &self,
+        source: GeneralGemmProofSourceV2,
+        deadline: Instant,
+        output_limit: usize,
+    ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+        self.revalidate()?;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let result = linux::execute_rust_verify(&self.retained, source, deadline, output_limit);
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+            "direct retained rust_verify execution requires Linux x86-64",
+        ));
+        self.revalidate()?;
+        result
+    }
 }
 
 fn closure_identity() -> GeneralGemmRuntimeClosureIdentityV2 {
@@ -204,6 +271,46 @@ fn put_blob(digest: &mut Sha256, value: &[u8]) {
     digest.update(value);
 }
 
+const GENERAL_GEMM_MODEL_SOURCE: &[u8] =
+    include_bytes!("../verus/general_gemm_schedule_model_v1.rs");
+const GENERAL_GEMM_REFERENCE_SOURCE: &[u8] =
+    include_bytes!("../verus/general_gemm_reference_schedule_v1.rs");
+const GENERAL_GEMM_VECTORIZED_SOURCE: &[u8] =
+    include_bytes!("../verus/general_gemm_vectorized_schedule_v1.rs");
+const GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_vector_tail_wrong.rs");
+const GENERAL_GEMM_EPILOGUE_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_epilogue_wrong.rs");
+const GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_machine_claim_wrong.rs");
+
+const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 6] = [
+    (
+        "proof/general_gemm_reference_schedule_v1.rs",
+        GENERAL_GEMM_REFERENCE_SOURCE,
+    ),
+    (
+        "proof/general_gemm_schedule_model_v1.rs",
+        GENERAL_GEMM_MODEL_SOURCE,
+    ),
+    (
+        "proof/general_gemm_vectorized_schedule_v1.rs",
+        GENERAL_GEMM_VECTORIZED_SOURCE,
+    ),
+    (
+        "proof/negative/general_gemm_epilogue_wrong.rs",
+        GENERAL_GEMM_EPILOGUE_WRONG_SOURCE,
+    ),
+    (
+        "proof/negative/general_gemm_machine_claim_wrong.rs",
+        GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
+    ),
+    (
+        "proof/negative/general_gemm_vector_tail_wrong.rs",
+        GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE,
+    ),
+];
+
 fn validate_absolute_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
     if !path.is_absolute()
         || path.as_os_str().is_empty()
@@ -215,6 +322,42 @@ fn validate_absolute_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureEr
         return Err(GeneralGemmRuntimeClosureErrorV2::new(
             GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
             "runtime root must be a normalized absolute non-root path",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runtime_root_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    const PARENT: &str = "/opt/fe2o3/verus-runtime-v2";
+    let relative = path.strip_prefix(PARENT).map_err(|_| {
+        GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+            "runtime root must be one canonical child of /opt/fe2o3/verus-runtime-v2",
+        )
+    })?;
+    let mut components = relative.components();
+    let Some(Component::Normal(name)) = components.next() else {
+        return Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+            "runtime root must name one versioned child directory",
+        ));
+    };
+    let Some(name) = name.to_str() else {
+        return Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+            "runtime-root version is not UTF-8",
+        ));
+    };
+    if components.next().is_some()
+        || name.is_empty()
+        || !name.as_bytes()[0].is_ascii_alphanumeric()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+            "runtime root has a noncanonical version component",
         ));
     }
     Ok(())
@@ -316,7 +459,9 @@ impl ManifestV2 {
             sha256: decode_sha256(interpreter_fields[4])?,
             links: Vec::new(),
         };
-        parse_remaining_manifest(lines, interpreter)
+        let manifest = parse_remaining_manifest(lines, interpreter)?;
+        validate_reviewed_general_gemm_sources(&manifest.files)?;
+        Ok(manifest)
     }
 
     #[cfg(test)]
@@ -336,6 +481,26 @@ impl ManifestV2 {
             interpreter: None,
         }
     }
+}
+
+fn validate_reviewed_general_gemm_sources(
+    files: &[FileSpecV2],
+) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    for (path, bytes) in REVIEWED_GENERAL_GEMM_SOURCES {
+        let specification = files
+            .iter()
+            .find(|specification| specification.path == Path::new(path))
+            .ok_or_else(|| invalid_manifest("reviewed general GEMM source is absent"))?;
+        if specification.mode != 0o444
+            || specification.size != Some(bytes.len() as u64)
+            || specification.sha256 != <[u8; 32]>::from(Sha256::digest(bytes))
+        {
+            return Err(invalid_manifest(
+                "reviewed general GEMM source identity differs",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_remaining_manifest(
@@ -583,13 +748,53 @@ mod tests {
     #[test]
     fn reviewed_manifest_and_target_pins_are_canonical() {
         let manifest = ManifestV2::parse_reviewed().unwrap();
-        assert_eq!(manifest.directories.len(), 8);
-        assert_eq!(manifest.files.len(), 80);
+        assert_eq!(manifest.directories.len(), 10);
+        assert_eq!(manifest.files.len(), 86);
         assert!(manifest.interpreter.is_some());
         assert_eq!(
             Sha256::digest(MANIFEST_BYTES).as_slice(),
             GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
         );
         assert_ne!(closure_identity().as_bytes(), [0; 32]);
+    }
+
+    #[test]
+    fn reviewed_proof_source_substitution_invalidates_the_manifest_contract() {
+        let mut manifest = ManifestV2::parse_reviewed().unwrap();
+        let source = manifest
+            .files
+            .iter_mut()
+            .find(|source| source.path == Path::new("proof/general_gemm_reference_schedule_v1.rs"))
+            .unwrap();
+        source.sha256[0] ^= 1;
+        assert_eq!(
+            validate_reviewed_general_gemm_sources(&manifest.files)
+                .unwrap_err()
+                .kind(),
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest
+        );
+    }
+
+    #[test]
+    fn runtime_root_requires_one_canonical_opt_version() {
+        assert!(
+            validate_runtime_root_path(Path::new(
+                "/opt/fe2o3/verus-runtime-v2/0.2026.08.02-b677dd5"
+            ))
+            .is_ok()
+        );
+        for path in [
+            "/tmp/runtime",
+            "/opt/fe2o3/verus-runtime-v2",
+            "/opt/fe2o3/verus-runtime-v2/-invalid",
+            "/opt/fe2o3/verus-runtime-v2/version/extra",
+        ] {
+            assert_eq!(
+                validate_runtime_root_path(Path::new(path))
+                    .unwrap_err()
+                    .kind(),
+                GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest
+            );
+        }
     }
 }

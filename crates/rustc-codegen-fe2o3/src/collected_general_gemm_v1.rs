@@ -819,6 +819,7 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
             },
         )));
     }
+    validate_call_shape(body, surface, &root_calls, lane_conditional_publish)?;
     if surface == TrustedGeneralGemmSurfaceV1::ProofSensitive {
         require_dynamic_terminal_inventory(&root_calls)?;
         require_guarded_dynamic_accesses(tcx, body, &root_calls)?;
@@ -3976,6 +3977,10 @@ fn proof_add(left: ProofSymbolicValueV1, right: ProofSymbolicValueV1) -> ProofSy
     ProofSymbolicValueV1::Add(Box::new(left), Box::new(right))
 }
 
+fn proof_sub(left: ProofSymbolicValueV1, right: ProofSymbolicValueV1) -> ProofSymbolicValueV1 {
+    ProofSymbolicValueV1::Subtract(Box::new(left), Box::new(right))
+}
+
 fn proof_mul(left: ProofSymbolicValueV1, right: ProofSymbolicValueV1) -> ProofSymbolicValueV1 {
     ProofSymbolicValueV1::Multiply(Box::new(left), Box::new(right))
 }
@@ -4016,6 +4021,25 @@ fn local_has_u16_constant_assignment<'tcx>(
             };
             destination.as_local() == Some(local)
                 && constant_u16_from_constant(tcx, constant) == Some(expected)
+        })
+}
+
+fn local_has_nonzero_u16_constant_assignment<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    local: Local,
+) -> bool {
+    body.basic_blocks
+        .iter()
+        .flat_map(|data| &data.statements)
+        .any(|statement| {
+            let Some((destination, Rvalue::Use(Operand::Constant(constant)))) =
+                statement.kind.as_assign()
+            else {
+                return false;
+            };
+            destination.as_local() == Some(local)
+                && constant_u16_from_constant(tcx, constant).is_some_and(|value| value != 0)
         })
 }
 

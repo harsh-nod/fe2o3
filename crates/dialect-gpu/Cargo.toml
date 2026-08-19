@@ -9,4 +9,5 @@ description = "Bounded target-neutral GPU Pliron dialect shell for fe2o3."
 publish = false
 
 [dependencies]
+fe2o3-pliron.workspace = true
 pliron.workspace = true

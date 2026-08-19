@@ -182,6 +182,7 @@ pub struct OpaqueGeneralGemmPostLinkMachineObservationV1 {
     symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
     projection: GeneralGemmPlironProjectionIdentityV1,
     handoff_v2: HandoffIdentityV2,
+    typed_worker_admission: [u8; 32],
     llvm_assembly: LlvmAssemblySha256V2,
     compiler_handoff: CompilerModuleHandoffIdentityV2,
     consumed_handoff: CompilerModuleHandoffIdentityV1,
@@ -235,6 +236,10 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
 
     pub const fn handoff_v2_identity(&self) -> HandoffIdentityV2 {
         self.handoff_v2
+    }
+
+    pub const fn typed_worker_admission_identity(&self) -> &[u8; 32] {
+        &self.typed_worker_admission
     }
 
     pub const fn llvm_assembly_identity(&self) -> LlvmAssemblySha256V2 {
@@ -443,6 +448,8 @@ impl InertGeneralGemmWorkerV2EvidenceV1 {
 #[non_exhaustive]
 pub enum GeneralGemmWorkerV2ErrorV1 {
     HandoffSubstitution,
+    TypedAdmissionSubstitution,
+    WorkerBuildPolicySubstitution,
     FixedLinkOption,
     OutputBound,
     Worker(FirstBuildWorkerV2Error),
@@ -453,6 +460,11 @@ impl fmt::Display for GeneralGemmWorkerV2ErrorV1 {
         match self {
             Self::HandoffSubstitution => formatter.write_str(
                 "consumed compiler handoff differs from the exact general-GEMM machine handoff",
+            ),
+            Self::TypedAdmissionSubstitution => formatter
+                .write_str("typed pre-LLVM admission differs from the exact general-GEMM handoff"),
+            Self::WorkerBuildPolicySubstitution => formatter.write_str(
+                "measured Worker LLVM build differs from typed pre-LLVM admission policy",
             ),
             Self::FixedLinkOption => {
                 formatter.write_str("fixed general-GEMM Worker V2 option is invalid")
@@ -469,7 +481,11 @@ impl Error for GeneralGemmWorkerV2ErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Worker(error) => Some(error),
-            Self::HandoffSubstitution | Self::FixedLinkOption | Self::OutputBound => None,
+            Self::HandoffSubstitution
+            | Self::TypedAdmissionSubstitution
+            | Self::WorkerBuildPolicySubstitution
+            | Self::FixedLinkOption
+            | Self::OutputBound => None,
         }
     }
 }
@@ -556,6 +572,19 @@ pub fn execute_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
+    if machine.worker_admission().handoff() != machine.handoff()
+        || machine.worker_admission().handoff_identity() != machine.handoff().identity()
+    {
+        return Err(GeneralGemmWorkerV2ErrorV1::TypedAdmissionSubstitution);
+    }
+    if machine
+        .worker_admission()
+        .build_identity()
+        .llvm_build_identity()
+        != worker.measurement().llvm_build_identity()
+    {
+        return Err(GeneralGemmWorkerV2ErrorV1::WorkerBuildPolicySubstitution);
+    }
     if consumed.bytes() != machine.compiler_handoff().canonical_bytes() {
         return Err(GeneralGemmWorkerV2ErrorV1::HandoffSubstitution);
     }
@@ -586,6 +615,19 @@ pub fn execute_symbolic_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertSymbolicGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
+    if machine.worker_admission().handoff() != machine.handoff()
+        || machine.worker_admission().handoff_identity() != machine.handoff().identity()
+    {
+        return Err(GeneralGemmWorkerV2ErrorV1::TypedAdmissionSubstitution);
+    }
+    if machine
+        .worker_admission()
+        .build_identity()
+        .llvm_build_identity()
+        != worker.measurement().llvm_build_identity()
+    {
+        return Err(GeneralGemmWorkerV2ErrorV1::WorkerBuildPolicySubstitution);
+    }
     if consumed.bytes() != machine.compiler_handoff().canonical_bytes() {
         return Err(GeneralGemmWorkerV2ErrorV1::HandoffSubstitution);
     }
@@ -699,6 +741,7 @@ pub fn finalize_symbolic_general_gemm_worker_v2_v1(
         symbolic_artifact: machine.artifact_identity(),
         projection: machine.projection().identity(),
         handoff_v2: machine.handoff().identity(),
+        typed_worker_admission: *machine.worker_admission().admission_identity().as_bytes(),
         llvm_assembly: machine.assembly().sha256(),
         compiler_handoff: machine.compiler_handoff().identity(),
         consumed_handoff: consumed_handoff_identity,
@@ -1055,6 +1098,7 @@ fn calculate_post_link_identity(
     hasher.update(machine.projection().symbolic_plan_identity().as_bytes());
     hasher.update(machine.projection().symbolic_kir_identity().as_bytes());
     hasher.update(machine.handoff().identity().as_bytes());
+    hasher.update(machine.worker_admission().admission_identity().as_bytes());
     hasher.update(machine.assembly().sha256().as_bytes());
     hasher.update(machine.compiler_handoff().identity().sha256());
     hasher.update(consumed_handoff.as_bytes());
@@ -1118,6 +1162,7 @@ fn calculate_worker_identity(
     hasher.update(GENERAL_GEMM_WORKER_IDENTITY_DOMAIN_V1);
     hasher.update(machine.projection().identity().as_bytes());
     hasher.update(machine.handoff().identity().as_bytes());
+    hasher.update(machine.worker_admission().admission_identity().as_bytes());
     hasher.update(machine.assembly().sha256().as_bytes());
     hasher.update(machine.compiler_handoff().identity().sha256());
     hasher.update(consumed.as_bytes());

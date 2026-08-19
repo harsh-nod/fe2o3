@@ -25,6 +25,10 @@ use pliron::{
     verify_err, verify_err_noloc,
 };
 
+mod registration;
+
+pub use registration::dialect_registration;
+
 /// Pliron dialect name.
 pub const DIALECT_NAME: &str = "dispatch";
 

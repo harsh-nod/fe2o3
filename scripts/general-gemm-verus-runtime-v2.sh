@@ -28,8 +28,9 @@ usage:
 `provision` must run as root and accepts only a new destination beneath
 /opt/fe2o3/verus-runtime-v2/. The Verus launcher and rustup are audited as
 excluded provenance; neither is copied into the executable closure.
-These commands grant no proof authority; the retained Rust lease must admit
-the installed closure separately.
+These commands grant no proof authority. The typed Rust entry point separately
+admits and retains the installed closure, revalidates it around every bounded
+proof process, and returns only non-authoritative schedule-model evidence.
 EOF
     exit 2
 }
@@ -80,6 +81,7 @@ source_for_file() {
     local toolchain=$3
     case "$relative" in
         dist/*) printf '%s/%s\n' "$distribution" "${relative#dist/}" ;;
+        proof/*) printf '%s/%s\n' "$REPOSITORY_ROOT/crates/fe2o3-verifier/verus" "${relative#proof/}" ;;
         toolchain/*) printf '%s/%s\n' "$toolchain" "${relative#toolchain/}" ;;
         system-lib/*) system_source "$relative" ;;
         *) die "manifest file is outside the closed layout: $relative" ;;
