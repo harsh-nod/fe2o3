@@ -44,6 +44,8 @@ destroy_event=0x40084b09
 set_event=0x40084b0a
 reset_event=0x40084b0b
 wait_events=0xc0184b0c
+runtime_enable=0xc0104b25
+runtime_enable_mask=1
 event_types=0,1,2,3,4,5,6,7,8
 wait_results=0,1,2
 signal_limit=4096
@@ -83,6 +85,10 @@ kfd_context_save_area_header.debug_size=20
 kfd_context_save_area_header.err_payload_addr=24
 kfd_context_save_area_header.err_event_id=32
 kfd_context_save_area_header.reserved1=36
+kfd_ioctl_runtime_enable_args size=16 align=8
+kfd_ioctl_runtime_enable_args.r_debug=0
+kfd_ioctl_runtime_enable_args.mode_mask=8
+kfd_ioctl_runtime_enable_args.capabilities_mask=12
 EOF
 
 diff -u "$expected" "$observed"

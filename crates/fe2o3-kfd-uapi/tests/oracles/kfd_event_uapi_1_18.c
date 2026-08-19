@@ -21,6 +21,8 @@ int main(void) {
   printf("set_event=0x%08lx\n", (unsigned long)AMDKFD_IOC_SET_EVENT);
   printf("reset_event=0x%08lx\n", (unsigned long)AMDKFD_IOC_RESET_EVENT);
   printf("wait_events=0x%08lx\n", (unsigned long)AMDKFD_IOC_WAIT_EVENTS);
+  printf("runtime_enable=0x%08lx\n", (unsigned long)AMDKFD_IOC_RUNTIME_ENABLE);
+  printf("runtime_enable_mask=%u\n", KFD_RUNTIME_ENABLE_MODE_ENABLE_MASK);
   printf("event_types=%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
          KFD_IOC_EVENT_SIGNAL, KFD_IOC_EVENT_NODECHANGE,
          KFD_IOC_EVENT_DEVICESTATECHANGE, KFD_IOC_EVENT_HW_EXCEPTION,
@@ -68,5 +70,9 @@ int main(void) {
   PRINT_OFFSET(kfd_context_save_area_header, err_payload_addr);
   PRINT_OFFSET(kfd_context_save_area_header, err_event_id);
   PRINT_OFFSET(kfd_context_save_area_header, reserved1);
+  PRINT_LAYOUT(kfd_ioctl_runtime_enable_args);
+  PRINT_OFFSET(kfd_ioctl_runtime_enable_args, r_debug);
+  PRINT_OFFSET(kfd_ioctl_runtime_enable_args, mode_mask);
+  PRINT_OFFSET(kfd_ioctl_runtime_enable_args, capabilities_mask);
   return 0;
 }
