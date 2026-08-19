@@ -198,7 +198,7 @@ impl fmt::Display for UnsupportedRustMirDiagnosticV1 {
 
 enum PendingRustMirAdmissionV1 {
     Supported {
-        graph: RetainedRustMirGraphV1,
+        graph: Box<RetainedRustMirGraphV1>,
     },
     Unsupported {
         function: usize,
@@ -312,7 +312,7 @@ impl OwnerControlledRustKernelImportV1 {
 }
 
 pub(crate) enum SameSessionRustKernelOutcomeV1 {
-    Supported(OwnerControlledRustKernelImportV1),
+    Supported(Box<OwnerControlledRustKernelImportV1>),
     Unsupported(UnsupportedRustMirDiagnosticV1),
 }
 
@@ -403,6 +403,7 @@ impl<'tcx> RustcSessionCustodianV1<'tcx> {
         self.consumed = true;
         match captured.admission {
             PendingRustMirAdmissionV1::Supported { graph } => {
+                let graph = *graph;
                 let identity_join = RustMirIdentityJoinBoundaryV1 {
                     item: captured.imported.kernel_item(),
                     instance: captured.imported.kernel_instance(),
@@ -411,7 +412,7 @@ impl<'tcx> RustcSessionCustodianV1<'tcx> {
                     mir_import: captured.semantic.mir_import,
                     pliron_graph: graph.binding,
                 };
-                Ok(SameSessionRustKernelOutcomeV1::Supported(
+                Ok(SameSessionRustKernelOutcomeV1::Supported(Box::new(
                     OwnerControlledRustKernelImportV1 {
                         imported: captured.imported,
                         semantic: captured.semantic,
@@ -419,7 +420,7 @@ impl<'tcx> RustcSessionCustodianV1<'tcx> {
                         graph,
                         identity_join,
                     },
-                ))
+                )))
             }
             PendingRustMirAdmissionV1::Unsupported {
                 function,
@@ -1443,12 +1444,12 @@ fn materialize_and_lower_pliron_mir(
         Ok(result) => {
             let lowering = result.clone();
             Ok(PendingRustMirAdmissionV1::Supported {
-                graph: RetainedRustMirGraphV1 {
+                graph: Box::new(RetainedRustMirGraphV1 {
                     context,
                     body: retained_body,
                     lowering,
                     binding: graph_binding,
-                },
+                }),
             })
         }
         Err(LoweringError::UnsupportedRustSemanticOperation {

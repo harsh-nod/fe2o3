@@ -245,7 +245,7 @@ impl Callbacks for CustodyCallbacks {
 
 fn expect_supported(outcome: SameSessionRustKernelOutcomeV1) -> OwnerControlledRustKernelImportV1 {
     match outcome {
-        SameSessionRustKernelOutcomeV1::Supported(supported) => supported,
+        SameSessionRustKernelOutcomeV1::Supported(supported) => *supported,
         SameSessionRustKernelOutcomeV1::Unsupported(diagnostic) => {
             panic!("expected supported MIR admission, got {diagnostic}")
         }
