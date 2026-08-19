@@ -15,6 +15,10 @@ name = "valid-proof-sensitive"
 path = "src/bin/valid_proof_sensitive.rs"
 
 [[bin]]
+name = "incorrect-alpha-beta-epilogue"
+path = "src/bin/incorrect_alpha_beta_epilogue.rs"
+
+[[bin]]
 name = "missing-publish"
 path = "src/bin/missing_publish.rs"
 

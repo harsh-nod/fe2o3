@@ -708,6 +708,29 @@ pub(crate) struct GeneralGemmIntrinsicSourceFactV1 {
     semantic_component_mask: u16,
 }
 
+impl GeneralGemmIntrinsicSourceFactV1 {
+    pub(crate) const fn kind(self) -> GeneralGemmIntrinsicSourceFactKindV1 {
+        self.kind
+    }
+
+    pub(crate) const fn terminal_role_mask(self) -> u8 {
+        self.terminal_role_mask
+    }
+
+    pub(crate) const fn semantic_component_mask(self) -> u16 {
+        self.semantic_component_mask
+    }
+
+    pub(crate) fn identity(self, semantics: GeneralGemmIntrinsicSemanticsIdentityV1) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"fe2o3.general-gemm.intrinsic-source-fact.v1\0");
+        digest.update(semantics.as_bytes());
+        digest.update([self.kind as u8, self.terminal_role_mask]);
+        digest.update(self.semantic_component_mask.to_le_bytes());
+        digest.finalize().into()
+    }
+}
+
 const SOURCE_FACTS_V1: [GeneralGemmIntrinsicSourceFactV1; 11] = [
     GeneralGemmIntrinsicSourceFactV1 {
         kind: GeneralGemmIntrinsicSourceFactKindV1::AllocationAndProvenance,

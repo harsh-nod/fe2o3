@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use fe2o3_artifact_transaction::{EmitError, ProducerIdentity, emit_artifact_transaction};
+
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -38,7 +40,6 @@ fn managed_build(
     cargo_args: &[&str],
     artifacts: &Path,
 ) -> Output {
-    let _ = std::fs::remove_dir_all(artifacts);
     Command::new(env!("CARGO"))
         .current_dir(workspace)
         .args([
@@ -57,11 +58,53 @@ fn managed_build(
             "FE2O3_BACKEND",
             cargo_target_directory(workspace).join("debug/librustc_codegen_fe2o3.so"),
         )
+        .env("CARGO_TARGET_DIR", cargo_target_directory(workspace))
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
         .env("FE2O3_HSACO_DIR", artifacts)
         .output()
         .expect("run managed general GEMM frontend build")
+}
+
+fn clear_artifacts(path: &Path) {
+    let _ = std::fs::remove_dir_all(path);
+}
+
+fn prepare_committed_generation(
+    workspace: &Path,
+    fixture: &Path,
+    artifacts: &Path,
+    source_bin: &str,
+    kernel: &str,
+) {
+    clear_artifacts(artifacts);
+    let initialized = managed_build(
+        workspace,
+        &workspace.join("Cargo.toml"),
+        &["-p", "fe2o3-device"],
+        artifacts,
+    );
+    assert!(
+        initialized.status.success(),
+        "failed to initialize the broker-owned artifact directory:\n{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    let source = fixture.join(format!("src/bin/{source_bin}.rs"));
+    let producer = ProducerIdentity::from_codegen(kernel, Some(&source))
+        .expect("exact fixture producer identity");
+    emit_artifact_transaction(
+        artifacts,
+        &producer,
+        &[kernel],
+        |name| *name,
+        |_| Ok("must be transactionally removed".to_owned()),
+        |llvm_ir, hsaco| {
+            std::fs::write(hsaco.with_extension("o"), std::fs::read(llvm_ir)?)?;
+            std::fs::write(hsaco, b"must be transactionally removed")?;
+            Ok::<_, EmitError>(())
+        },
+    )
+    .expect("commit an exactly owned stale artifact generation");
 }
 
 fn contains_regular_file(path: &Path) -> bool {
@@ -110,30 +153,44 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
     );
 
     for source in [
+        fixture.join("src/bin/valid_proof_sensitive.rs"),
         fixture.join("src/bin/missing_publish.rs"),
         fixture.join("src/bin/duplicate_store.rs"),
         fixture.join("src/bin/conditional_publish.rs"),
         fixture.join("src/bin/reversed_cycle.rs"),
         fixture.join("src/bin/store_loop.rs"),
+        fixture.join("src/bin/incorrect_alpha_beta_epilogue.rs"),
     ] {
         let source = std::fs::read_to_string(&source).expect("read safe semantic fixture");
         assert!(source.contains("#![forbid(unsafe_code)]"));
         assert!(!source.contains("unsafe {"));
     }
+    let baseline_source = std::fs::read_to_string(fixture.join("src/bin/valid_proof_sensitive.rs"))
+        .expect("read full proof-sensitive baseline");
+    let epilogue_mutation =
+        std::fs::read_to_string(fixture.join("src/bin/incorrect_alpha_beta_epilogue.rs"))
+            .expect("read full epilogue mutation");
+    let restored_epilogue = epilogue_mutation.replacen(
+        "let value = alpha * accumulator0 + initial;",
+        "let value = alpha * accumulator0 + beta * initial;",
+        1,
+    );
+    assert_eq!(
+        restored_epilogue, baseline_source,
+        "epilogue fixture must differ from the full baseline by exactly one named algebra mutation"
+    );
 
     let impostor_fixture =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-impostor");
-    let impostor_artifacts = cargo_target_directory(&workspace).join(format!(
-        "rustc-codegen-fe2o3-test-output/general-gemm-impostor-{}",
-        std::process::id()
-    ));
+    let brokered_artifacts = cargo_target_directory(&workspace).join("fe2o3");
+    clear_artifacts(&brokered_artifacts);
     let impostor = managed_build(
         &workspace,
         &impostor_fixture.join("Cargo.toml"),
         &["-p", "general-gemm-provider-impostor-consumer"],
-        &impostor_artifacts,
+        &brokered_artifacts,
     );
-    let impostor_stderr = assert_failed_without_artifact(&impostor, &impostor_artifacts);
+    let impostor_stderr = assert_failed_without_artifact(&impostor, &brokered_artifacts);
     assert!(
         impostor_stderr.contains(
             "trusted-provider rejection: diagnostic item `fe2o3_device_general_tiled_gemm_proof_acquire_v1`"
@@ -144,43 +201,79 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
         "same-name external general GEMM provider crossed the reviewed source boundary:\n{impostor_stderr}"
     );
 
-    let output_root = cargo_target_directory(&workspace).join(format!(
-        "rustc-codegen-fe2o3-test-output/general-gemm-semantic-{}",
-        std::process::id()
-    ));
-    let positive_artifacts = output_root.join("positive");
+    clear_artifacts(&brokered_artifacts);
     let positive = managed_build(
         &workspace,
         &workspace.join("examples/tiled_gemm_general_v1/Cargo.toml"),
         &["--release", "-p", "fe2o3-tiled-gemm-general-v1", "--lib"],
-        &positive_artifacts,
+        &brokered_artifacts,
     );
-    let positive_stderr = assert_failed_without_artifact(&positive, &positive_artifacts);
+    let positive_stderr = assert_failed_without_artifact(&positive, &brokered_artifacts);
     assert!(
-        positive_stderr.contains(
-            "authenticated Typestate general GEMM MIR reached verified semantic KIR witness"
-        ) && positive_stderr
-            .contains("runtime plan binding, frontend promotion, and lowering are not implemented"),
+        positive_stderr
+            .contains("authenticated general GEMM MIR reached verified symbolic semantic template")
+            && positive_stderr.contains(
+                "checked launch-time plan/KIR instantiation and lowering are not implemented"
+            ),
         "positive safe source missed the authenticated semantic KIR boundary:\n{positive_stderr}"
     );
 
-    for (bin, code, property, stage) in [
-        ("missing-publish", "0x46470103", "initialized", "gpu"),
+    prepare_committed_generation(
+        &workspace,
+        &fixture,
+        &brokered_artifacts,
+        "valid_proof_sensitive",
+        "valid_proof_sensitive",
+    );
+    let baseline = managed_build(
+        &workspace,
+        &fixture.join("Cargo.toml"),
+        &["--release", "--bin", "valid-proof-sensitive"],
+        &brokered_artifacts,
+    );
+    let baseline_stderr = assert_failed_without_artifact(&baseline, &brokered_artifacts);
+    assert!(
+        baseline_stderr.contains(
+            "authenticated general GEMM proof-sensitive mutation-oracle baseline passed its normalized MIR validators"
+        ) && baseline_stderr.contains(
+            "this source is non-executable and cannot issue frontend correspondence or artifact authority"
+        ) && !baseline_stderr.contains("Unknown/Unproved")
+            && !baseline_stderr.contains("reached verified symbolic semantic template"),
+        "full proof-sensitive baseline did not cross authenticated MIR admission without gaining authority:\n{baseline_stderr}"
+    );
+
+    for (bin, root, code, property, stage) in [
+        (
+            "missing-publish",
+            "missing_publish",
+            "0x46470103",
+            "initialized",
+            "gpu",
+        ),
         (
             "duplicate-store",
+            "duplicate_store",
             "0x46470106",
             "output_region_injective",
             "tile",
         ),
+        (
+            "incorrect-alpha-beta-epilogue",
+            "valid_proof_sensitive",
+            "0x4647010a",
+            "epilogue_refinement",
+            "kernel",
+        ),
     ] {
-        let artifacts = output_root.join(bin);
+        let source_bin = bin.replace('-', "_");
+        prepare_committed_generation(&workspace, &fixture, &brokered_artifacts, &source_bin, root);
         let rejected = managed_build(
             &workspace,
             &fixture.join("Cargo.toml"),
             &["--release", "--bin", bin],
-            &artifacts,
+            &brokered_artifacts,
         );
-        let stderr = assert_failed_without_artifact(&rejected, &artifacts);
+        let stderr = assert_failed_without_artifact(&rejected, &brokered_artifacts);
         assert!(
             stderr.contains(&format!(
                 "authenticated general GEMM semantic KIR rejected: general GEMM {property} counterexample at {stage}"
@@ -188,31 +281,42 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
             "safe semantic fixture `{bin}` missed exact {code} diagnostic:\n{stderr}"
         );
         assert!(
-            !stderr.contains("reached verified semantic KIR witness"),
+            !stderr.contains("reached verified symbolic semantic template"),
             "safe semantic fixture `{bin}` acquired a verified witness:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("kind=Counterexample")
+                && stderr.contains(&format!("root symbol={root}"))
+                && stderr.contains(&format!("source span=src/bin/{source_bin}.rs:"))
+                && stderr.contains("terminal spans=")
+                && stderr.contains("reachable call chain: kernel-root ->")
+                && stderr.contains("no artifact authority was issued")
+                && !stderr.contains("published inert Worker V2")
+                && !stderr.contains("launch authority issued")
+                && !stderr.contains("proof authority issued"),
+            "safe semantic fixture `{bin}` diagnostic omitted its stable counterexample/root/span/call-chain receipt:\n{stderr}"
         );
     }
 
     for bin in ["conditional-publish", "reversed-cycle", "store-loop"] {
-        let artifacts = output_root.join(bin);
+        clear_artifacts(&brokered_artifacts);
         let rejected = managed_build(
             &workspace,
             &fixture.join("Cargo.toml"),
             &["--release", "--bin", bin],
-            &artifacts,
+            &brokered_artifacts,
         );
-        let stderr = assert_failed_without_artifact(&rejected, &artifacts);
+        let stderr = assert_failed_without_artifact(&rejected, &brokered_artifacts);
         assert!(
-            stderr.contains(
-                "general GEMM authenticated MIR import failed: proof-sensitive general GEMM"
-            ),
+            stderr.contains("general GEMM authenticated MIR import failed:")
+                && stderr.contains("general GEMM semantic fact is Unknown/Unproved:"),
             "safe hostile CFG fixture `{bin}` missed fail-closed MIR admission:\n{stderr}"
         );
         assert!(
-            !stderr.contains("reached verified semantic KIR witness"),
+            !stderr.contains("reached verified symbolic semantic template"),
             "safe hostile CFG fixture `{bin}` acquired a verified witness:\n{stderr}"
         );
     }
 
-    let _ = std::fs::remove_dir_all(output_root);
+    clear_artifacts(&brokered_artifacts);
 }
