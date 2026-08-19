@@ -86,6 +86,15 @@ impl CanonicalKernelItemIdV1 {
         rust_item_identity: [u8; 32],
         generic_definition_identity: [u8; 32],
     ) -> Result<Self, OrdinaryRustScalarValidationErrorV1> {
+        for (field, identity) in [
+            ("kernel crate", crate_identity),
+            ("Rust item definition", rust_item_identity),
+            ("kernel generic definition", generic_definition_identity),
+        ] {
+            if identity == [0; 32] {
+                return Err(OrdinaryRustScalarValidationErrorV1::ZeroIdentity { field });
+            }
+        }
         let mut bytes = [0_u8; KERNEL_ITEM_ID_CANONICAL_BYTES_V1];
         bytes[..8].copy_from_slice(&KERNEL_ITEM_MAGIC_V1);
         bytes[8..10].copy_from_slice(&KERNEL_IDENTITY_VERSION_V1.to_le_bytes());
@@ -93,7 +102,6 @@ impl CanonicalKernelItemIdV1 {
         bytes[16..48].copy_from_slice(&crate_identity);
         bytes[48..80].copy_from_slice(&rust_item_identity);
         bytes[80..112].copy_from_slice(&generic_definition_identity);
-        RustItemDefinitionIdentityV1::new(rust_item_identity)?;
         Self::new(bytes)
     }
 

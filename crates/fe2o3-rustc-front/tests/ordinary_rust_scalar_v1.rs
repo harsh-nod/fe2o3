@@ -416,6 +416,18 @@ fn canonical_identity_component_constructors_match_frozen_envelopes() {
         OrdinaryRustScalarDiagnosticCodeV1::ZeroIdentity
     );
     assert_eq!(
+        CanonicalKernelItemIdV1::from_components([0; 32], [0x22; 32], [0x23; 32])
+            .unwrap_err()
+            .code(),
+        OrdinaryRustScalarDiagnosticCodeV1::ZeroIdentity
+    );
+    assert_eq!(
+        CanonicalKernelItemIdV1::from_components([0x21; 32], [0x22; 32], [0; 32])
+            .unwrap_err()
+            .code(),
+        OrdinaryRustScalarDiagnosticCodeV1::ZeroIdentity
+    );
+    assert_eq!(
         CanonicalKernelInstIdV1::from_components(item, [0x31; 32], [0; 32], [0x33; 32])
             .unwrap_err()
             .code(),
