@@ -1,9 +1,10 @@
 //! Versioned numerical correspondence for canonical general-GEMM KIR.
 //!
-//! The package proves exact BF16 representation widening and required operation
-//! sequencing in Verus. IEEE FP32 result rounding and gfx942 MFMA numerical
-//! behavior remain explicit contracts. Finite differential fixtures are
-//! regression evidence only and cannot promote a contract to a proof.
+//! The package proves only exact BF16 representation widening. Exact-real
+//! schedule theorems do not establish KIR sequencing, and IEEE FP32 result
+//! rounding plus gfx942 MFMA behavior remain explicit contracts. Finite
+//! differential fixtures are regression evidence only and cannot promote a
+//! model or contract to a proof.
 
 use core::fmt;
 use std::time::{Duration, Instant};
@@ -12,6 +13,11 @@ use sha2::{Digest as _, Sha256};
 
 use crate::general_gemm_runtime_closure_v2::{
     GeneralGemmProofSourceV2, GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeProcessOutputV2,
+};
+use crate::{
+    GENERAL_GEMM_NUMERICAL_PROPERTY_THEOREM_MANIFEST_V1,
+    GeneralGemmNumericalPropertyManifestErrorV1, GeneralGemmNumericalPropertyTheoremManifestV1,
+    reviewed_general_gemm_numerical_property_theorem_manifest_v1,
 };
 use crate::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256, GENERAL_GEMM_VERUS_SHA256_V1,
@@ -31,7 +37,7 @@ pub const GENERAL_GEMM_GFX942_MFMA_INTRINSIC_V1: &str = "llvm.amdgcn.mfma.f32.16
 /// Exact gfx942 ISA mnemonic expected from later post-link inspection.
 pub const GENERAL_GEMM_GFX942_MFMA_MNEMONIC_V1: &str = "v_mfma_f32_16x16x16_bf16";
 /// Number of independently classified numerical properties.
-pub const GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1: usize = 10;
+pub const GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1: usize = 11;
 /// Boundary-biased finite fixtures used only as mutation-sensitive observations.
 pub const GENERAL_GEMM_NUMERICAL_DIFFERENTIAL_FIXTURE_COUNT_V1: usize = 11;
 
@@ -42,18 +48,26 @@ const BF16_EXHAUSTIVE_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-bf16-exhaustive-v1
 const FIXTURE_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-numerical-fixtures-v1\0";
 const SOURCE_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-numerical-source-v1\0";
 const SOURCE_CLOSURE_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-numerical-source-closure-v1\0";
-const THEOREM_SET_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-numerical-theorems-v1\0";
 const TOOL_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-numerical-tool-v1\0";
 const MFMA_CONTRACT_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-gfx942-mfma-contract-v1\0";
+const MACHINE_REFINEMENT_JOIN_DOMAIN_V1: &[u8] =
+    b"fe2o3-general-gemm-future-machine-refinement-join-v1\0";
 
 const NUMERICAL_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_numerical_contract_v1.rs");
 const WIDENING_WRONG_SOURCE: &[u8] =
     include_bytes!("../verus/negative/general_gemm_numerical_widening_wrong.rs");
+const KIR_REFINEMENT_CLAIM_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_numerical_kir_refinement_claim_wrong.rs");
 const MFMA_CLAIM_WRONG_SOURCE: &[u8] =
     include_bytes!("../verus/negative/general_gemm_numerical_mfma_claim_wrong.rs");
+const MFMA_DESCRIPTOR_CLAIM_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_numerical_mfma_descriptor_claim_wrong.rs");
+const ORDER_CLAIM_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_numerical_order_claim_wrong.rs");
 
-const POSITIVE_STDOUT: &[u8] = b"verification results:: 6 verified, 0 errors\n";
+const POSITIVE_STDOUT: &[u8] = b"verification results:: 3 verified, 0 errors\n";
 const NEGATIVE_STDOUT: &[u8] = b"verification results:: 1 verified, 1 errors\n";
+const ORDER_NEGATIVE_STDOUT: &[u8] = b"verification results:: 1 verified, 2 errors\n";
 const WIDENING_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
  --> /proc/self/fd/186/negative/general_gemm_numerical_widening_wrong.rs:7:13
    |
@@ -62,6 +76,17 @@ const WIDENING_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
  6 |     requires bits < 65536,
  7 |     ensures ((bits % 32768) * 65536) / 65536 == bits,
    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+
+error: aborting due to 1 previous error
+
+"#;
+const KIR_REFINEMENT_CLAIM_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
+ --> /proc/self/fd/186/negative/general_gemm_numerical_kir_refinement_claim_wrong.rs:8:13
+  |
+7 | pub proof fn mutated_bf16_bit_placement_claims_rust_kir_refinement_v1()
+  | ----------------------------------------------------------------------- at the end of the function body
+8 |     ensures bf16_rust_kir_refinement_proved_v1(),
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
 
 error: aborting due to 1 previous error
 
@@ -77,21 +102,52 @@ const MFMA_CLAIM_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
 error: aborting due to 1 previous error
 
 "#;
+const MFMA_DESCRIPTOR_CLAIM_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
+ --> /proc/self/fd/186/negative/general_gemm_numerical_mfma_descriptor_claim_wrong.rs:8:13
+  |
+7 | pub proof fn mutated_constant_shape_claims_mfma_descriptor_projection_v1()
+  | -------------------------------------------------------------------------- at the end of the function body
+8 |     ensures gfx942_mfma_descriptor_projection_proved_v1(),
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+
+error: aborting due to 1 previous error
+
+"#;
+const ORDER_CLAIM_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
+ --> /proc/self/fd/186/negative/general_gemm_numerical_order_claim_wrong.rs:9:13
+  |
+8 | pub proof fn mutated_model_order_claims_increasing_k_kir_projection_v1()
+  | ------------------------------------------------------------------------ at the end of the function body
+9 |     ensures increasing_k_kir_projection_proved_v1(),
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+
+error: postcondition not satisfied
+  --> /proc/self/fd/186/negative/general_gemm_numerical_order_claim_wrong.rs:14:13
+   |
+13 | pub proof fn mutated_model_order_claims_epilogue_kir_projection_v1()
+   | -------------------------------------------------------------------- at the end of the function body
+14 |     ensures epilogue_kir_projection_proved_v1(),
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+
+error: aborting due to 2 previous errors
+
+"#;
 
 /// Exact numerical property named by the package.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum GeneralGemmNumericalPropertyV1 {
     ExactBf16ToF32EncodingWidening = 1,
-    Bf16IeeeValueInterpretation = 2,
-    Fp32MultiplyRoundToNearestTiesEven = 3,
-    Fp32AddRoundToNearestTiesEven = 4,
-    IncreasingKSeparateMulAddOrder = 5,
-    SeparateAlphaBetaEpilogueOrder = 6,
-    Gfx942MfmaShapeAndControls = 7,
-    Gfx942MfmaFp32Accumulation = 8,
-    ExceptionalAndSubnormalValues = 9,
-    EmittedMachineNumericalRefinement = 10,
+    Bf16RustKirRefinement = 2,
+    Bf16IeeeValueInterpretation = 3,
+    Fp32MultiplyRoundToNearestTiesEven = 4,
+    Fp32AddRoundToNearestTiesEven = 5,
+    IncreasingKSeparateMulAddOrder = 6,
+    SeparateAlphaBetaEpilogueOrder = 7,
+    Gfx942MfmaShapeAndControls = 8,
+    Gfx942MfmaFp32Accumulation = 9,
+    ExceptionalAndSubnormalValues = 10,
+    EmittedMachineNumericalRefinement = 11,
 }
 
 /// Honest maximum authority for one numerical property.
@@ -100,10 +156,12 @@ pub enum GeneralGemmNumericalPropertyV1 {
 pub enum GeneralGemmNumericalCorrespondenceStatusV1 {
     /// A named theorem in the exact retained Verus source discharges the fact.
     Proved = 1,
+    /// An exact-real retained model theorem exists, but no KIR/IEEE projection does.
+    ModelOnly = 2,
     /// The fact is an explicit typed premise, not a theorem.
-    Contracted = 2,
+    Contracted = 3,
     /// The V1 package rejects or cannot express the behavior.
-    Unsupported = 3,
+    Unsupported = 4,
 }
 
 /// Why one property has its stated authority level.
@@ -111,12 +169,12 @@ pub enum GeneralGemmNumericalCorrespondenceStatusV1 {
 #[repr(u8)]
 pub enum GeneralGemmNumericalCorrespondenceBasisV1 {
     VerusBf16EncodingTheorem = 1,
-    Ieee754Binary32Contract = 2,
-    VerusOperationOrderTheorem = 3,
-    VerusMfmaDescriptorTheorem = 4,
+    OpenRustKirRefinement = 2,
+    Ieee754Binary32Contract = 3,
+    ExactRealScheduleModel = 4,
     Gfx942MfmaInstructionContract = 5,
     FiniteNormalOrZeroPolicy = 6,
-    PostLinkMachineRefinementRequired = 7,
+    FutureGraphWorkerFinalizerJoin = 7,
 }
 
 /// One exact property classification.
@@ -142,6 +200,33 @@ pub struct GeneralGemmGfx942MfmaContractV1 {
     pub numerical_status: GeneralGemmNumericalCorrespondenceStatusV1,
 }
 
+/// Evidence edges required before emitted-machine numerical refinement exists.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum GeneralGemmFutureMachineRefinementInputV1 {
+    OwnerBoundPlironGraph = 1,
+    DirectLlvmWorkerRequestResponse = 2,
+    FinalizerPostLinkIsaResult = 3,
+}
+
+/// Explicitly incomplete future graph/worker/finalizer refinement join.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralGemmFutureMachineRefinementJoinV1 {
+    pub required_inputs: [GeneralGemmFutureMachineRefinementInputV1; 3],
+    pub owner_bound_pliron_graph_identity: Option<GeneralGemmEvidenceIdentityV1>,
+    pub direct_llvm_worker_request_response_identity: Option<GeneralGemmEvidenceIdentityV1>,
+    pub finalizer_post_link_isa_result_identity: Option<GeneralGemmEvidenceIdentityV1>,
+    pub status: GeneralGemmNumericalCorrespondenceStatusV1,
+}
+
+impl GeneralGemmFutureMachineRefinementJoinV1 {
+    pub const fn has_all_required_input_identities(self) -> bool {
+        self.owner_bound_pliron_graph_identity.is_some()
+            && self.direct_llvm_worker_request_response_identity.is_some()
+            && self.finalizer_post_link_isa_result_identity.is_some()
+    }
+}
+
 /// Public transport claim; checking it grants no compiler or runtime authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralGemmNumericalCorrespondenceClaimV1 {
@@ -158,6 +243,9 @@ pub struct GeneralGemmNumericalCorrespondenceClaimV1 {
     pub schedule_theorem_set_identity: GeneralGemmEvidenceIdentityV1,
     pub schedule_source_closure_identity: GeneralGemmEvidenceIdentityV1,
     pub numerical_source_identity: GeneralGemmEvidenceIdentityV1,
+    pub property_theorem_manifest_identity: GeneralGemmEvidenceIdentityV1,
+    pub property_theorem_binding_identities:
+        [GeneralGemmEvidenceIdentityV1; GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1],
     pub numerical_theorem_set_identity: GeneralGemmEvidenceIdentityV1,
     pub numerical_source_closure_identity: GeneralGemmEvidenceIdentityV1,
     pub reviewed_verus_tool_identity: GeneralGemmEvidenceIdentityV1,
@@ -165,6 +253,8 @@ pub struct GeneralGemmNumericalCorrespondenceClaimV1 {
     pub differential_fixture_identity: GeneralGemmEvidenceIdentityV1,
     pub mfma_contract_identity: GeneralGemmEvidenceIdentityV1,
     pub mfma_contract: GeneralGemmGfx942MfmaContractV1,
+    pub machine_refinement_join_identity: GeneralGemmEvidenceIdentityV1,
+    pub machine_refinement_join: GeneralGemmFutureMachineRefinementJoinV1,
     pub properties: [GeneralGemmNumericalPropertyFactV1; GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1],
 }
 
@@ -184,6 +274,8 @@ pub enum GeneralGemmNumericalCorrespondenceFieldV1 {
     ScheduleTheoremSetIdentity,
     ScheduleSourceClosureIdentity,
     NumericalSourceIdentity,
+    PropertyTheoremManifestIdentity,
+    PropertyTheoremBindingIdentities,
     NumericalTheoremSetIdentity,
     NumericalSourceClosureIdentity,
     ReviewedVerusToolIdentity,
@@ -191,6 +283,8 @@ pub enum GeneralGemmNumericalCorrespondenceFieldV1 {
     DifferentialFixtureIdentity,
     MfmaContractIdentity,
     MfmaContract,
+    MachineRefinementJoinIdentity,
+    MachineRefinementJoin,
     Properties,
 }
 
@@ -203,6 +297,8 @@ pub enum GeneralGemmNumericalCorrespondenceErrorV1 {
     InvalidTimeout,
     PositiveProofMismatch,
     NegativeProofMismatch,
+    PropertyManifestAuthenticationMismatch,
+    PropertyManifest(GeneralGemmNumericalPropertyManifestErrorV1),
     RuntimeClosure(GeneralGemmRuntimeClosureErrorV2),
 }
 
@@ -220,6 +316,14 @@ impl std::error::Error for GeneralGemmNumericalCorrespondenceErrorV1 {}
 impl From<GeneralGemmNumericalPolicyErrorV1> for GeneralGemmNumericalCorrespondenceErrorV1 {
     fn from(value: GeneralGemmNumericalPolicyErrorV1) -> Self {
         Self::NumericalPolicy(value)
+    }
+}
+
+impl From<GeneralGemmNumericalPropertyManifestErrorV1>
+    for GeneralGemmNumericalCorrespondenceErrorV1
+{
+    fn from(value: GeneralGemmNumericalPropertyManifestErrorV1) -> Self {
+        Self::PropertyManifest(value)
     }
 }
 
@@ -244,6 +348,7 @@ impl From<GeneralGemmNumericalPolicyErrorV1> for GeneralGemmNumericalCorresponde
 #[must_use = "numerical correspondence remains non-authoritative until machine refinement"]
 pub struct GeneralGemmNumericalCorrespondenceV1 {
     kir_correspondence: GeneralGemmKirModelCorrespondenceV1,
+    property_manifest: GeneralGemmNumericalPropertyTheoremManifestV1,
     claim: GeneralGemmNumericalCorrespondenceClaimV1,
     identity: GeneralGemmEvidenceIdentityV1,
 }
@@ -255,6 +360,10 @@ impl GeneralGemmNumericalCorrespondenceV1 {
 
     pub const fn claim(&self) -> GeneralGemmNumericalCorrespondenceClaimV1 {
         self.claim
+    }
+
+    pub const fn property_manifest(&self) -> &GeneralGemmNumericalPropertyTheoremManifestV1 {
+        &self.property_manifest
     }
 
     pub const fn identity(&self) -> GeneralGemmEvidenceIdentityV1 {
@@ -299,7 +408,7 @@ pub struct ExecutedGeneralGemmNumericalCorrespondenceV1 {
     correspondence: GeneralGemmNumericalCorrespondenceV1,
     runtime_closure_identity: GeneralGemmEvidenceIdentityV1,
     positive_output: GeneralGemmNumericalProofOutputV1,
-    negative_outputs: [GeneralGemmNumericalProofOutputV1; 2],
+    negative_outputs: [GeneralGemmNumericalProofOutputV1; 5],
     identity: GeneralGemmEvidenceIdentityV1,
 }
 
@@ -316,7 +425,7 @@ impl ExecutedGeneralGemmNumericalCorrespondenceV1 {
         self.positive_output
     }
 
-    pub const fn negative_outputs(&self) -> &[GeneralGemmNumericalProofOutputV1; 2] {
+    pub const fn negative_outputs(&self) -> &[GeneralGemmNumericalProofOutputV1; 5] {
         &self.negative_outputs
     }
 
@@ -335,8 +444,11 @@ pub fn derive_general_gemm_numerical_correspondence_claim_v1(
 ) -> Result<GeneralGemmNumericalCorrespondenceClaimV1, GeneralGemmNumericalCorrespondenceErrorV1> {
     let kir_claim = correspondence.claim();
     let request = correspondence.proof_request();
-    let properties = canonical_properties();
+    let property_manifest = reviewed_general_gemm_numerical_property_theorem_manifest_v1()?;
+    let bindings = property_manifest.bindings();
+    let properties = bindings.map(|binding| binding.fact());
     let mfma_contract = canonical_mfma_contract();
+    let machine_refinement_join = canonical_machine_refinement_join();
     Ok(GeneralGemmNumericalCorrespondenceClaimV1 {
         schema_identity: hash_parts(
             SOURCE_DOMAIN_V1,
@@ -354,13 +466,18 @@ pub fn derive_general_gemm_numerical_correspondence_claim_v1(
         schedule_theorem_set_identity: kir_claim.theorem_set_identity,
         schedule_source_closure_identity: kir_claim.source_closure_identity,
         numerical_source_identity: numerical_source_identity(),
-        numerical_theorem_set_identity: numerical_theorem_set_identity(&properties),
+        property_theorem_manifest_identity: property_manifest.identity(),
+        property_theorem_binding_identities: bindings
+            .map(|binding| binding.statement_source_identity()),
+        numerical_theorem_set_identity: property_manifest.theorem_set_identity(),
         numerical_source_closure_identity: numerical_source_closure_identity(),
         reviewed_verus_tool_identity: reviewed_tool_identity(),
         exhaustive_bf16_identity: exhaustive_bf16_identity()?,
         differential_fixture_identity: differential_fixture_identity()?,
         mfma_contract_identity: mfma_contract_identity(mfma_contract),
         mfma_contract,
+        machine_refinement_join_identity: machine_refinement_join_identity(machine_refinement_join),
+        machine_refinement_join,
         properties,
     })
 }
@@ -372,8 +489,10 @@ pub fn check_general_gemm_numerical_correspondence_v1(
 ) -> Result<GeneralGemmNumericalCorrespondenceV1, GeneralGemmNumericalCorrespondenceErrorV1> {
     let expected = derive_general_gemm_numerical_correspondence_claim_v1(&correspondence)?;
     compare_claims(expected, claimed)?;
+    let property_manifest = reviewed_general_gemm_numerical_property_theorem_manifest_v1()?;
     Ok(GeneralGemmNumericalCorrespondenceV1 {
         kir_correspondence: correspondence,
+        property_manifest,
         claim: expected,
         identity: claim_identity(expected),
     })
@@ -392,6 +511,7 @@ pub fn execute_general_gemm_numerical_correspondence_with_runtime_closure_v1(
     runtime
         .revalidate()
         .map_err(GeneralGemmNumericalCorrespondenceErrorV1::RuntimeClosure)?;
+    authenticate_property_manifest(&correspondence)?;
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(u64::from(timeout_seconds)))
         .ok_or(GeneralGemmNumericalCorrespondenceErrorV1::InvalidTimeout)?;
@@ -417,6 +537,48 @@ pub fn execute_general_gemm_numerical_correspondence_with_runtime_closure_v1(
         WIDENING_WRONG_STDERR,
         false,
     )?;
+    let kir_refinement = runtime
+        .execute_rust_verify(
+            GeneralGemmProofSourceV2::NumericalKirRefinementClaimWrong,
+            deadline,
+            MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1,
+        )
+        .map_err(GeneralGemmNumericalCorrespondenceErrorV1::RuntimeClosure)?;
+    require_output(
+        &kir_refinement,
+        Some(1),
+        NEGATIVE_STDOUT,
+        KIR_REFINEMENT_CLAIM_WRONG_STDERR,
+        false,
+    )?;
+    let order = runtime
+        .execute_rust_verify(
+            GeneralGemmProofSourceV2::NumericalOrderClaimWrong,
+            deadline,
+            MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1,
+        )
+        .map_err(GeneralGemmNumericalCorrespondenceErrorV1::RuntimeClosure)?;
+    require_output(
+        &order,
+        Some(1),
+        ORDER_NEGATIVE_STDOUT,
+        ORDER_CLAIM_WRONG_STDERR,
+        false,
+    )?;
+    let mfma_descriptor = runtime
+        .execute_rust_verify(
+            GeneralGemmProofSourceV2::NumericalMfmaDescriptorClaimWrong,
+            deadline,
+            MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1,
+        )
+        .map_err(GeneralGemmNumericalCorrespondenceErrorV1::RuntimeClosure)?;
+    require_output(
+        &mfma_descriptor,
+        Some(1),
+        NEGATIVE_STDOUT,
+        MFMA_DESCRIPTOR_CLAIM_WRONG_STDERR,
+        false,
+    )?;
     let mfma = runtime
         .execute_rust_verify(
             GeneralGemmProofSourceV2::NumericalMfmaClaimWrong,
@@ -434,11 +596,18 @@ pub fn execute_general_gemm_numerical_correspondence_with_runtime_closure_v1(
     runtime
         .revalidate()
         .map_err(GeneralGemmNumericalCorrespondenceErrorV1::RuntimeClosure)?;
+    authenticate_property_manifest(&correspondence)?;
 
     let runtime_closure_identity =
         GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(runtime.identity().as_bytes());
     let positive_output = output_identity(&positive);
-    let negative_outputs = [output_identity(&widening), output_identity(&mfma)];
+    let negative_outputs = [
+        output_identity(&widening),
+        output_identity(&kir_refinement),
+        output_identity(&order),
+        output_identity(&mfma_descriptor),
+        output_identity(&mfma),
+    ];
     let mut hasher = Sha256::new();
     hasher.update(EVIDENCE_DOMAIN_V1);
     hasher.update(correspondence.identity().as_bytes());
@@ -472,75 +641,38 @@ const fn canonical_mfma_contract() -> GeneralGemmGfx942MfmaContractV1 {
     }
 }
 
-const fn canonical_properties()
--> [GeneralGemmNumericalPropertyFactV1; GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1] {
-    use GeneralGemmNumericalCorrespondenceBasisV1 as Basis;
-    use GeneralGemmNumericalCorrespondenceStatusV1 as Status;
-    use GeneralGemmNumericalPropertyV1 as Property;
-    [
-        fact(
-            Property::ExactBf16ToF32EncodingWidening,
-            Status::Proved,
-            Basis::VerusBf16EncodingTheorem,
-        ),
-        fact(
-            Property::Bf16IeeeValueInterpretation,
-            Status::Contracted,
-            Basis::Ieee754Binary32Contract,
-        ),
-        fact(
-            Property::Fp32MultiplyRoundToNearestTiesEven,
-            Status::Contracted,
-            Basis::Ieee754Binary32Contract,
-        ),
-        fact(
-            Property::Fp32AddRoundToNearestTiesEven,
-            Status::Contracted,
-            Basis::Ieee754Binary32Contract,
-        ),
-        fact(
-            Property::IncreasingKSeparateMulAddOrder,
-            Status::Proved,
-            Basis::VerusOperationOrderTheorem,
-        ),
-        fact(
-            Property::SeparateAlphaBetaEpilogueOrder,
-            Status::Proved,
-            Basis::VerusOperationOrderTheorem,
-        ),
-        fact(
-            Property::Gfx942MfmaShapeAndControls,
-            Status::Proved,
-            Basis::VerusMfmaDescriptorTheorem,
-        ),
-        fact(
-            Property::Gfx942MfmaFp32Accumulation,
-            Status::Contracted,
-            Basis::Gfx942MfmaInstructionContract,
-        ),
-        fact(
-            Property::ExceptionalAndSubnormalValues,
-            Status::Unsupported,
-            Basis::FiniteNormalOrZeroPolicy,
-        ),
-        fact(
-            Property::EmittedMachineNumericalRefinement,
-            Status::Unsupported,
-            Basis::PostLinkMachineRefinementRequired,
-        ),
-    ]
+const fn canonical_machine_refinement_join() -> GeneralGemmFutureMachineRefinementJoinV1 {
+    GeneralGemmFutureMachineRefinementJoinV1 {
+        required_inputs: [
+            GeneralGemmFutureMachineRefinementInputV1::OwnerBoundPlironGraph,
+            GeneralGemmFutureMachineRefinementInputV1::DirectLlvmWorkerRequestResponse,
+            GeneralGemmFutureMachineRefinementInputV1::FinalizerPostLinkIsaResult,
+        ],
+        owner_bound_pliron_graph_identity: None,
+        direct_llvm_worker_request_response_identity: None,
+        finalizer_post_link_isa_result_identity: None,
+        status: GeneralGemmNumericalCorrespondenceStatusV1::Unsupported,
+    }
 }
 
-const fn fact(
-    property: GeneralGemmNumericalPropertyV1,
-    status: GeneralGemmNumericalCorrespondenceStatusV1,
-    basis: GeneralGemmNumericalCorrespondenceBasisV1,
-) -> GeneralGemmNumericalPropertyFactV1 {
-    GeneralGemmNumericalPropertyFactV1 {
-        property,
-        status,
-        basis,
+fn authenticate_property_manifest(
+    correspondence: &GeneralGemmNumericalCorrespondenceV1,
+) -> Result<(), GeneralGemmNumericalCorrespondenceErrorV1> {
+    let manifest = reviewed_general_gemm_numerical_property_theorem_manifest_v1()?;
+    let bindings = manifest.bindings();
+    let claim = correspondence.claim;
+    if &manifest != correspondence.property_manifest()
+        || manifest.identity() != claim.property_theorem_manifest_identity
+        || manifest.theorem_set_identity() != claim.numerical_theorem_set_identity
+        || bindings.map(|binding| binding.fact()) != claim.properties
+        || bindings.map(|binding| binding.statement_source_identity())
+            != claim.property_theorem_binding_identities
+    {
+        return Err(
+            GeneralGemmNumericalCorrespondenceErrorV1::PropertyManifestAuthenticationMismatch,
+        );
     }
+    Ok(())
 }
 
 fn exhaustive_bf16_identity()
@@ -780,23 +912,20 @@ fn numerical_source_closure_identity() -> GeneralGemmEvidenceIdentityV1 {
         &[
             b"general_gemm_numerical_contract_v1.rs",
             NUMERICAL_SOURCE,
+            b"negative/general_gemm_numerical_kir_refinement_claim_wrong.rs",
+            KIR_REFINEMENT_CLAIM_WRONG_SOURCE,
             b"negative/general_gemm_numerical_mfma_claim_wrong.rs",
             MFMA_CLAIM_WRONG_SOURCE,
+            b"negative/general_gemm_numerical_mfma_descriptor_claim_wrong.rs",
+            MFMA_DESCRIPTOR_CLAIM_WRONG_SOURCE,
+            b"negative/general_gemm_numerical_order_claim_wrong.rs",
+            ORDER_CLAIM_WRONG_SOURCE,
             b"negative/general_gemm_numerical_widening_wrong.rs",
             WIDENING_WRONG_SOURCE,
+            b"pins/GENERAL_GEMM_NUMERICAL_PROPERTIES_V1.manifest",
+            GENERAL_GEMM_NUMERICAL_PROPERTY_THEOREM_MANIFEST_V1,
         ],
     )
-}
-
-fn numerical_theorem_set_identity(
-    properties: &[GeneralGemmNumericalPropertyFactV1; GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1],
-) -> GeneralGemmEvidenceIdentityV1 {
-    let mut hasher = Sha256::new();
-    hasher.update(THEOREM_SET_DOMAIN_V1);
-    for fact in properties {
-        hasher.update([fact.property as u8, fact.status as u8, fact.basis as u8]);
-    }
-    GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(hasher.finalize().into())
 }
 
 fn reviewed_tool_identity() -> GeneralGemmEvidenceIdentityV1 {
@@ -832,6 +961,31 @@ fn mfma_contract_identity(
     GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(hasher.finalize().into())
 }
 
+fn machine_refinement_join_identity(
+    join: GeneralGemmFutureMachineRefinementJoinV1,
+) -> GeneralGemmEvidenceIdentityV1 {
+    let mut hasher = Sha256::new();
+    hasher.update(MACHINE_REFINEMENT_JOIN_DOMAIN_V1);
+    for required in join.required_inputs {
+        hasher.update([required as u8]);
+    }
+    for identity in [
+        join.owner_bound_pliron_graph_identity,
+        join.direct_llvm_worker_request_response_identity,
+        join.finalizer_post_link_isa_result_identity,
+    ] {
+        match identity {
+            Some(identity) => {
+                hasher.update([1]);
+                hasher.update(identity.as_bytes());
+            }
+            None => hasher.update([0]),
+        }
+    }
+    hasher.update([join.status as u8]);
+    GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(hasher.finalize().into())
+}
+
 fn claim_identity(
     claim: GeneralGemmNumericalCorrespondenceClaimV1,
 ) -> GeneralGemmEvidenceIdentityV1 {
@@ -850,13 +1004,18 @@ fn claim_identity(
         claim.schedule_theorem_set_identity,
         claim.schedule_source_closure_identity,
         claim.numerical_source_identity,
+        claim.property_theorem_manifest_identity,
         claim.numerical_theorem_set_identity,
         claim.numerical_source_closure_identity,
         claim.reviewed_verus_tool_identity,
         claim.exhaustive_bf16_identity,
         claim.differential_fixture_identity,
         claim.mfma_contract_identity,
+        claim.machine_refinement_join_identity,
     ] {
+        hasher.update(identity.as_bytes());
+    }
+    for identity in claim.property_theorem_binding_identities {
         hasher.update(identity.as_bytes());
     }
     hasher.update([claim.schedule as u8]);
@@ -936,6 +1095,18 @@ fn compare_claims(
     require_field!(
         expected,
         claimed,
+        property_theorem_manifest_identity,
+        PropertyTheoremManifestIdentity
+    );
+    require_field!(
+        expected,
+        claimed,
+        property_theorem_binding_identities,
+        PropertyTheoremBindingIdentities
+    );
+    require_field!(
+        expected,
+        claimed,
         numerical_theorem_set_identity,
         NumericalTheoremSetIdentity
     );
@@ -970,6 +1141,18 @@ fn compare_claims(
         MfmaContractIdentity
     );
     require_field!(expected, claimed, mfma_contract, MfmaContract);
+    require_field!(
+        expected,
+        claimed,
+        machine_refinement_join_identity,
+        MachineRefinementJoinIdentity
+    );
+    require_field!(
+        expected,
+        claimed,
+        machine_refinement_join,
+        MachineRefinementJoin
+    );
     require_field!(expected, claimed, properties, Properties);
     Ok(())
 }
@@ -1048,7 +1231,12 @@ mod tests {
             Err(GeneralGemmNumericalCorrespondenceErrorV1::PositiveProofMismatch)
         ));
 
-        for stderr in [WIDENING_WRONG_STDERR, MFMA_CLAIM_WRONG_STDERR] {
+        for stderr in [
+            WIDENING_WRONG_STDERR,
+            KIR_REFINEMENT_CLAIM_WRONG_STDERR,
+            MFMA_DESCRIPTOR_CLAIM_WRONG_STDERR,
+            MFMA_CLAIM_WRONG_STDERR,
+        ] {
             let negative = GeneralGemmRuntimeProcessOutputV2 {
                 exit_code: Some(1),
                 signal: None,
@@ -1057,6 +1245,20 @@ mod tests {
             };
             require_output(&negative, Some(1), NEGATIVE_STDOUT, stderr, false).unwrap();
         }
+        let order = GeneralGemmRuntimeProcessOutputV2 {
+            exit_code: Some(1),
+            signal: None,
+            stdout: ORDER_NEGATIVE_STDOUT.to_vec(),
+            stderr: ORDER_CLAIM_WRONG_STDERR.to_vec(),
+        };
+        require_output(
+            &order,
+            Some(1),
+            ORDER_NEGATIVE_STDOUT,
+            ORDER_CLAIM_WRONG_STDERR,
+            false,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1065,13 +1267,20 @@ mod tests {
             differential_fixture_identity().unwrap().as_bytes(),
             &[0; 32]
         );
-        let properties = canonical_properties();
+        let properties = reviewed_general_gemm_numerical_property_theorem_manifest_v1()
+            .unwrap()
+            .bindings()
+            .map(|binding| binding.fact());
         assert_eq!(
-            properties[7].status,
+            properties[5].status,
+            GeneralGemmNumericalCorrespondenceStatusV1::ModelOnly
+        );
+        assert_eq!(
+            properties[8].status,
             GeneralGemmNumericalCorrespondenceStatusV1::Contracted
         );
         assert_eq!(
-            properties[9].status,
+            properties[10].status,
             GeneralGemmNumericalCorrespondenceStatusV1::Unsupported
         );
     }

@@ -2,23 +2,34 @@ use fe2o3_kernel_ir::{GeneralGemmKirV1, GeneralGemmPlanFieldsV1, GeneralGemmPlan
 use fe2o3_verifier::{
     GENERAL_GEMM_NUMERICAL_CORRESPONDENCE_SCHEMA_V1,
     GENERAL_GEMM_NUMERICAL_DIFFERENTIAL_FIXTURE_COUNT_V1, GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1,
-    GeneralGemmEvidenceIdentityV1, GeneralGemmKirModelCorrespondenceV1,
-    GeneralGemmNumericalCorrespondenceBasisV1, GeneralGemmNumericalCorrespondenceClaimV1,
-    GeneralGemmNumericalCorrespondenceErrorV1, GeneralGemmNumericalCorrespondenceFieldV1,
-    GeneralGemmNumericalCorrespondenceStatusV1, GeneralGemmNumericalPropertyV1,
-    GeneralGemmProofRequestV1, GeneralGemmProofScheduleV1, GeneralGemmVerusRuntimeClosureLeaseV2,
-    check_general_gemm_kir_model_correspondence_v1, check_general_gemm_numerical_correspondence_v1,
+    GeneralGemmEvidenceIdentityV1, GeneralGemmFutureMachineRefinementInputV1,
+    GeneralGemmKirModelCorrespondenceV1, GeneralGemmNumericalCorrespondenceBasisV1,
+    GeneralGemmNumericalCorrespondenceClaimV1, GeneralGemmNumericalCorrespondenceErrorV1,
+    GeneralGemmNumericalCorrespondenceFieldV1, GeneralGemmNumericalCorrespondenceStatusV1,
+    GeneralGemmNumericalPropertyV1, GeneralGemmProofRequestV1, GeneralGemmProofScheduleV1,
+    GeneralGemmVerusRuntimeClosureLeaseV2, check_general_gemm_kir_model_correspondence_v1,
+    check_general_gemm_numerical_correspondence_v1,
     derive_general_gemm_kir_model_correspondence_claim_v1,
     derive_general_gemm_numerical_correspondence_claim_v1,
     execute_general_gemm_numerical_correspondence_with_runtime_closure_v1,
+    reviewed_general_gemm_numerical_property_theorem_manifest_v1,
 };
 
 const POSITIVE_SOURCE: &str = include_str!("../verus/general_gemm_numerical_contract_v1.rs");
+const SCHEDULE_MODEL_SOURCE: &str = include_str!("../verus/general_gemm_schedule_model_v1.rs");
 const WIDENING_NEGATIVE: &str =
     include_str!("../verus/negative/general_gemm_numerical_widening_wrong.rs");
+const KIR_REFINEMENT_NEGATIVE: &str =
+    include_str!("../verus/negative/general_gemm_numerical_kir_refinement_claim_wrong.rs");
 const MFMA_NEGATIVE: &str =
     include_str!("../verus/negative/general_gemm_numerical_mfma_claim_wrong.rs");
+const MFMA_DESCRIPTOR_NEGATIVE: &str =
+    include_str!("../verus/negative/general_gemm_numerical_mfma_descriptor_claim_wrong.rs");
+const ORDER_NEGATIVE: &str =
+    include_str!("../verus/negative/general_gemm_numerical_order_claim_wrong.rs");
 const MANIFEST: &str = include_str!("../verus/pins/GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest");
+const PROPERTY_MANIFEST: &str =
+    include_str!("../verus/pins/GENERAL_GEMM_NUMERICAL_PROPERTIES_V1.manifest");
 
 fn identity(seed: u8) -> GeneralGemmEvidenceIdentityV1 {
     GeneralGemmEvidenceIdentityV1::from_untrusted_bytes([seed; 32])
@@ -115,6 +126,23 @@ fn both_schedules_bind_kir_model_target_tool_and_honest_property_status() {
         assert_ne!(claim.exhaustive_bf16_identity.as_bytes(), &[0; 32]);
         assert_ne!(claim.differential_fixture_identity.as_bytes(), &[0; 32]);
         assert_eq!(GENERAL_GEMM_NUMERICAL_DIFFERENTIAL_FIXTURE_COUNT_V1, 11);
+        assert_eq!(
+            claim.machine_refinement_join.required_inputs,
+            [
+                GeneralGemmFutureMachineRefinementInputV1::OwnerBoundPlironGraph,
+                GeneralGemmFutureMachineRefinementInputV1::DirectLlvmWorkerRequestResponse,
+                GeneralGemmFutureMachineRefinementInputV1::FinalizerPostLinkIsaResult,
+            ]
+        );
+        assert_eq!(
+            claim.machine_refinement_join.status,
+            GeneralGemmNumericalCorrespondenceStatusV1::Unsupported
+        );
+        assert!(
+            !claim
+                .machine_refinement_join
+                .has_all_required_input_identities()
+        );
 
         let checked =
             check_general_gemm_numerical_correspondence_v1(correspondence, claim).unwrap();
@@ -142,6 +170,11 @@ fn both_schedules_bind_kir_model_target_tool_and_honest_property_status() {
                 GeneralGemmNumericalCorrespondenceBasisV1::VerusBf16EncodingTheorem
             ),
             (
+                GeneralGemmNumericalPropertyV1::Bf16RustKirRefinement,
+                GeneralGemmNumericalCorrespondenceStatusV1::Unsupported,
+                GeneralGemmNumericalCorrespondenceBasisV1::OpenRustKirRefinement
+            ),
+            (
                 GeneralGemmNumericalPropertyV1::Bf16IeeeValueInterpretation,
                 GeneralGemmNumericalCorrespondenceStatusV1::Contracted,
                 GeneralGemmNumericalCorrespondenceBasisV1::Ieee754Binary32Contract
@@ -158,18 +191,18 @@ fn both_schedules_bind_kir_model_target_tool_and_honest_property_status() {
             ),
             (
                 GeneralGemmNumericalPropertyV1::IncreasingKSeparateMulAddOrder,
-                GeneralGemmNumericalCorrespondenceStatusV1::Proved,
-                GeneralGemmNumericalCorrespondenceBasisV1::VerusOperationOrderTheorem
+                GeneralGemmNumericalCorrespondenceStatusV1::ModelOnly,
+                GeneralGemmNumericalCorrespondenceBasisV1::ExactRealScheduleModel
             ),
             (
                 GeneralGemmNumericalPropertyV1::SeparateAlphaBetaEpilogueOrder,
-                GeneralGemmNumericalCorrespondenceStatusV1::Proved,
-                GeneralGemmNumericalCorrespondenceBasisV1::VerusOperationOrderTheorem
+                GeneralGemmNumericalCorrespondenceStatusV1::ModelOnly,
+                GeneralGemmNumericalCorrespondenceBasisV1::ExactRealScheduleModel
             ),
             (
                 GeneralGemmNumericalPropertyV1::Gfx942MfmaShapeAndControls,
-                GeneralGemmNumericalCorrespondenceStatusV1::Proved,
-                GeneralGemmNumericalCorrespondenceBasisV1::VerusMfmaDescriptorTheorem
+                GeneralGemmNumericalCorrespondenceStatusV1::Contracted,
+                GeneralGemmNumericalCorrespondenceBasisV1::Gfx942MfmaInstructionContract
             ),
             (
                 GeneralGemmNumericalPropertyV1::Gfx942MfmaFp32Accumulation,
@@ -184,10 +217,41 @@ fn both_schedules_bind_kir_model_target_tool_and_honest_property_status() {
             (
                 GeneralGemmNumericalPropertyV1::EmittedMachineNumericalRefinement,
                 GeneralGemmNumericalCorrespondenceStatusV1::Unsupported,
-                GeneralGemmNumericalCorrespondenceBasisV1::PostLinkMachineRefinementRequired
+                GeneralGemmNumericalCorrespondenceBasisV1::FutureGraphWorkerFinalizerJoin
             ),
         ]
     );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|(_, status, _)| {
+                *status == GeneralGemmNumericalCorrespondenceStatusV1::Proved
+            })
+            .count(),
+        1
+    );
+
+    let theorem_manifest = reviewed_general_gemm_numerical_property_theorem_manifest_v1().unwrap();
+    assert_eq!(
+        claim.property_theorem_manifest_identity,
+        theorem_manifest.identity()
+    );
+    assert_eq!(
+        claim.numerical_theorem_set_identity,
+        theorem_manifest.theorem_set_identity()
+    );
+    for (index, binding) in theorem_manifest.bindings().iter().copied().enumerate() {
+        assert_eq!(binding.fact(), claim.properties[index]);
+        assert_eq!(
+            binding.statement_source_identity(),
+            claim.property_theorem_binding_identities[index]
+        );
+        assert!(!binding.theorem_name().is_empty());
+        assert!(!binding.statement().is_empty());
+        assert_ne!(binding.source_identity().as_bytes(), &[0; 32]);
+        assert_ne!(binding.statement_identity().as_bytes(), &[0; 32]);
+        assert_ne!(binding.record_identity().as_bytes(), &[0; 32]);
+    }
 }
 
 #[test]
@@ -197,7 +261,7 @@ fn every_top_level_claim_field_substitution_fails_closed() {
         GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1,
     ))
     .unwrap();
-    let cases: [(Field, ClaimMutation); 21] = [
+    let cases: [(Field, ClaimMutation); 25] = [
         (Field::SchemaIdentity, |claim| {
             claim.schema_identity = flip(claim.schema_identity)
         }),
@@ -237,6 +301,14 @@ fn every_top_level_claim_field_substitution_fails_closed() {
         (Field::NumericalSourceIdentity, |claim| {
             claim.numerical_source_identity = flip(claim.numerical_source_identity)
         }),
+        (Field::PropertyTheoremManifestIdentity, |claim| {
+            claim.property_theorem_manifest_identity =
+                flip(claim.property_theorem_manifest_identity)
+        }),
+        (Field::PropertyTheoremBindingIdentities, |claim| {
+            claim.property_theorem_binding_identities[0] =
+                flip(claim.property_theorem_binding_identities[0])
+        }),
         (Field::NumericalTheoremSetIdentity, |claim| {
             claim.numerical_theorem_set_identity = flip(claim.numerical_theorem_set_identity)
         }),
@@ -257,6 +329,14 @@ fn every_top_level_claim_field_substitution_fails_closed() {
         }),
         (Field::MfmaContract, |claim| {
             claim.mfma_contract.matrix_shape[0] ^= 1
+        }),
+        (Field::MachineRefinementJoinIdentity, |claim| {
+            claim.machine_refinement_join_identity = flip(claim.machine_refinement_join_identity)
+        }),
+        (Field::MachineRefinementJoin, |claim| {
+            claim
+                .machine_refinement_join
+                .owner_bound_pliron_graph_identity = Some(identity(72))
         }),
         (Field::Properties, |claim| {
             claim.properties[0].status = GeneralGemmNumericalCorrespondenceStatusV1::Contracted
@@ -310,6 +390,64 @@ fn every_mfma_contract_and_property_subfield_substitution_fails_closed() {
     }
 
     for index in 0..GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1 {
+        let mut hostile = exact;
+        hostile.property_theorem_binding_identities[index] =
+            flip(hostile.property_theorem_binding_identities[index]);
+        assert_eq!(
+            mismatch_field(check_general_gemm_numerical_correspondence_v1(
+                correspondence(GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1),
+                hostile,
+            )),
+            GeneralGemmNumericalCorrespondenceFieldV1::PropertyTheoremBindingIdentities
+        );
+    }
+
+    let machine_mutations: [ClaimMutation; 7] = [
+        |claim| {
+            claim.machine_refinement_join.required_inputs[0] =
+                GeneralGemmFutureMachineRefinementInputV1::FinalizerPostLinkIsaResult
+        },
+        |claim| {
+            claim.machine_refinement_join.required_inputs[1] =
+                GeneralGemmFutureMachineRefinementInputV1::OwnerBoundPlironGraph
+        },
+        |claim| {
+            claim.machine_refinement_join.required_inputs[2] =
+                GeneralGemmFutureMachineRefinementInputV1::DirectLlvmWorkerRequestResponse
+        },
+        |claim| {
+            claim
+                .machine_refinement_join
+                .owner_bound_pliron_graph_identity = Some(identity(81))
+        },
+        |claim| {
+            claim
+                .machine_refinement_join
+                .direct_llvm_worker_request_response_identity = Some(identity(82))
+        },
+        |claim| {
+            claim
+                .machine_refinement_join
+                .finalizer_post_link_isa_result_identity = Some(identity(83))
+        },
+        |claim| {
+            claim.machine_refinement_join.status =
+                GeneralGemmNumericalCorrespondenceStatusV1::Contracted
+        },
+    ];
+    for mutate in machine_mutations {
+        let mut hostile = exact;
+        mutate(&mut hostile);
+        assert_eq!(
+            mismatch_field(check_general_gemm_numerical_correspondence_v1(
+                correspondence(GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1),
+                hostile,
+            )),
+            GeneralGemmNumericalCorrespondenceFieldV1::MachineRefinementJoin
+        );
+    }
+
+    for index in 0..GENERAL_GEMM_NUMERICAL_PROPERTY_COUNT_V1 {
         for mutate in 0..3 {
             let mut hostile = exact;
             match mutate {
@@ -342,12 +480,20 @@ fn every_mfma_contract_and_property_subfield_substitution_fails_closed() {
 
 #[test]
 fn retained_sources_are_exact_pinned_and_have_no_trusted_escape() {
-    let tokens = [POSITIVE_SOURCE, WIDENING_NEGATIVE, MFMA_NEGATIVE]
-        .into_iter()
-        .flat_map(|source| {
-            source.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-        })
-        .collect::<Vec<_>>();
+    let tokens = [
+        POSITIVE_SOURCE,
+        SCHEDULE_MODEL_SOURCE,
+        WIDENING_NEGATIVE,
+        KIR_REFINEMENT_NEGATIVE,
+        ORDER_NEGATIVE,
+        MFMA_DESCRIPTOR_NEGATIVE,
+        MFMA_NEGATIVE,
+    ]
+    .into_iter()
+    .flat_map(|source| {
+        source.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+    })
+    .collect::<Vec<_>>();
     for forbidden in ["unsafe", "assume", "admit", "axiom", "external_body"] {
         assert!(
             !tokens.contains(&forbidden),
@@ -356,19 +502,32 @@ fn retained_sources_are_exact_pinned_and_have_no_trusted_escape() {
     }
     for required in [
         "every_bf16_encoding_widens_without_losing_bits_v1",
-        "accumulation_step_preserves_separate_mul_add_order_v1",
-        "epilogue_uses_two_separate_multiplications_then_addition_v1",
-        "gfx942_mfma_numerical_semantics_remain_contracted_v1",
+        "non_bf16_bit_placement_claims_remain_open_v1",
     ] {
         assert!(POSITIVE_SOURCE.contains(required));
     }
+    for rejected_tautology in [
+        "accumulation_step_preserves_separate_mul_add_order_v1",
+        "epilogue_uses_two_separate_multiplications_then_addition_v1",
+        "gfx942_mfma_descriptor_has_reviewed_shape_v1",
+    ] {
+        assert!(!POSITIVE_SOURCE.contains(rejected_tautology));
+    }
     for path in [
         "proof/general_gemm_numerical_contract_v1.rs",
+        "proof/negative/general_gemm_numerical_kir_refinement_claim_wrong.rs",
         "proof/negative/general_gemm_numerical_mfma_claim_wrong.rs",
+        "proof/negative/general_gemm_numerical_mfma_descriptor_claim_wrong.rs",
+        "proof/negative/general_gemm_numerical_order_claim_wrong.rs",
         "proof/negative/general_gemm_numerical_widening_wrong.rs",
+        "proof/pins/GENERAL_GEMM_NUMERICAL_PROPERTIES_V1.manifest",
     ] {
         assert_eq!(MANIFEST.matches(path).count(), 1, "manifest pin for {path}");
     }
+    assert_eq!(PROPERTY_MANIFEST.matches("|proved|").count(), 1);
+    assert_eq!(PROPERTY_MANIFEST.matches("|model-only|").count(), 2);
+    assert!(PROPERTY_MANIFEST.contains("open-rust-kir-refinement"));
+    assert!(PROPERTY_MANIFEST.contains("future-graph-worker-finalizer-join"));
     assert!(GENERAL_GEMM_NUMERICAL_CORRESPONDENCE_SCHEMA_V1.ends_with(".v1"));
 }
 
@@ -388,6 +547,6 @@ fn root_owned_retained_runtime_executes_exact_numerical_suite() {
     assert!(!evidence.can_enter_compiler_proof_gate());
     assert_eq!(evidence.positive_output().stdout_bytes(), 44);
     assert_eq!(evidence.positive_output().stderr_bytes(), 0);
-    assert_eq!(evidence.negative_outputs().len(), 2);
+    assert_eq!(evidence.negative_outputs().len(), 5);
     assert_ne!(evidence.runtime_closure_identity().as_bytes(), &[0; 32]);
 }

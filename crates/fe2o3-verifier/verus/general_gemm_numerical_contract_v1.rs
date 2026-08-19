@@ -22,65 +22,31 @@ pub proof fn every_bf16_encoding_widens_without_losing_bits_v1(bits: nat)
 {
 }
 
-pub open spec fn fp32_mul_rne_operation_v1() -> nat { 1 }
-pub open spec fn fp32_add_rne_operation_v1() -> nat { 2 }
+/// These predicates are deliberately false until proofs consume canonical KIR,
+/// Rust import identities, exact IEEE operations, and emitted-machine evidence.
+pub open spec fn bf16_rust_kir_refinement_proved_v1() -> bool { false }
+pub open spec fn bf16_ieee_value_interpretation_proved_v1() -> bool { false }
+pub open spec fn fp32_mul_rne_semantics_proved_v1() -> bool { false }
+pub open spec fn fp32_add_rne_semantics_proved_v1() -> bool { false }
+pub open spec fn increasing_k_kir_projection_proved_v1() -> bool { false }
+pub open spec fn epilogue_kir_projection_proved_v1() -> bool { false }
+pub open spec fn gfx942_mfma_descriptor_projection_proved_v1() -> bool { false }
+pub open spec fn gfx942_mfma_numerical_semantics_proved_v1() -> bool { false }
+pub open spec fn exceptional_and_subnormal_values_supported_v1() -> bool { false }
+pub open spec fn emitted_machine_refinement_complete_v1() -> bool { false }
 
-/// Operation tags preserve the required non-contracted alpha/beta epilogue
-/// shape. The numerical result of each IEEE operation remains a contract.
-pub open spec fn epilogue_operation_v1(index: nat) -> nat {
-    if index < 2 {
-        fp32_mul_rne_operation_v1()
-    } else if index == 2 {
-        fp32_add_rne_operation_v1()
-    } else {
-        0
-    }
-}
-
-pub proof fn epilogue_uses_two_separate_multiplications_then_addition_v1()
+pub proof fn non_bf16_bit_placement_claims_remain_open_v1()
     ensures
-        epilogue_operation_v1(0) == fp32_mul_rne_operation_v1(),
-        epilogue_operation_v1(1) == fp32_mul_rne_operation_v1(),
-        epilogue_operation_v1(2) == fp32_add_rne_operation_v1(),
-        epilogue_operation_v1(3) == 0,
-{
-}
-
-/// A K step has one multiply result followed by one accumulator addition.
-/// This proves sequencing only, not IEEE rounding or equivalence to MFMA.
-pub open spec fn accumulation_operation_v1(index: nat) -> nat {
-    if index == 0 {
-        fp32_mul_rne_operation_v1()
-    } else if index == 1 {
-        fp32_add_rne_operation_v1()
-    } else {
-        0
-    }
-}
-
-pub proof fn accumulation_step_preserves_separate_mul_add_order_v1()
-    ensures
-        accumulation_operation_v1(0) == fp32_mul_rne_operation_v1(),
-        accumulation_operation_v1(1) == fp32_add_rne_operation_v1(),
-        accumulation_operation_v1(2) == 0,
-{
-}
-
-pub proof fn gfx942_mfma_descriptor_has_reviewed_shape_v1()
-    ensures
-        16nat * 16nat == 64nat * 4nat,
-        16nat == 16nat,
-{
-}
-
-/// Verus does not currently model the target instruction's internal FP32
-/// accumulation and rounding behavior.
-pub open spec fn gfx942_mfma_numerical_semantics_proved_v1() -> bool {
-    false
-}
-
-pub proof fn gfx942_mfma_numerical_semantics_remain_contracted_v1()
-    ensures !gfx942_mfma_numerical_semantics_proved_v1(),
+        !bf16_rust_kir_refinement_proved_v1(),
+        !bf16_ieee_value_interpretation_proved_v1(),
+        !fp32_mul_rne_semantics_proved_v1(),
+        !fp32_add_rne_semantics_proved_v1(),
+        !increasing_k_kir_projection_proved_v1(),
+        !epilogue_kir_projection_proved_v1(),
+        !gfx942_mfma_descriptor_projection_proved_v1(),
+        !gfx942_mfma_numerical_semantics_proved_v1(),
+        !exceptional_and_subnormal_values_supported_v1(),
+        !emitted_machine_refinement_complete_v1(),
 {
 }
 
