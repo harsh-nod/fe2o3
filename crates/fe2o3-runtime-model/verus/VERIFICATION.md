@@ -1,7 +1,7 @@
 # Runtime model verification
 
 This directory contains the initial issue #137 Verus specifications. The
-authenticated runner proves ten obligations over finite abstract traces. The
+authenticated runner proves fifteen obligations over finite abstract traces. The
 sequence lengths are not bounded by these proofs.
 
 `runtime_lifecycle_v1.rs` proves:
@@ -37,7 +37,18 @@ the executable adapter:
 4. appending a later generation preserves its exact predecessor link and the
    single-physical-device history invariant.
 
-Run both proofs and all expected-negative mutations with the exact Verus
+`memory_lifecycle_v1.rs` proves the initial R2 pure memory obligations:
+
+1. a mapping retains the exact VM, physical-device generation, allocation ID,
+   allocation generation, opaque-handle observation, and canonical bounded
+   device set represented in the formal binding;
+2. a failed map records exactly the reported successful device prefix;
+3. a failed unmap advances only by the reported successful prefix and retains
+   the unreported suffix;
+4. a substituted device set produces no map state; and
+5. any non-released mapping or live publication blocks allocation free.
+
+Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
 
@@ -54,8 +65,9 @@ proof result is accepted.
 The mutations must fail at their named postconditions: release while retained,
 VM generation substitution, stale generation reuse, topology/render PCI
 substitution, dropped DRM schema identity, lost history predecessor, mixed
-cross-source identity, and a dropped final reset-fence observation. The launcher
-rejects source substitution, lexically audits all proof files for trusted
+cross-source identity, a dropped final reset-fence observation, allocation free
+while a partial mapping remains, and unmap that drops an unreported suffix. The
+launcher rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
 verification.
@@ -64,8 +76,9 @@ The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
 implements that relation, nor that the adapter observed truthful kernel data.
 The other files prove abstract transition relations, not refinement of
-`src/model.rs` or `src/device_identity.rs`. All receipts remain model-only and
-are not production device authority. A later sealed adapter refinement must
+`src/model.rs`, `src/device_identity.rs`, or `src/memory_lifecycle.rs`. All
+receipts remain model-only and are not production device authority. A later
+sealed adapter refinement must
 authenticate the KFD topology, DRM render, partition, schema, and process XNACK
 observations, bind the dynamically allocated KFD device node to the opened file
 descriptor and sysfs device, and connect concrete ioctl/sysfs results to the
@@ -75,4 +88,11 @@ attest a GPU reset. The reset booleans and wrapping VRAM-loss value are retained
 contracted observations only; these proofs do not establish an all-reset
 generation, ABA freedom, or correctness of the KFD event stream. Firmware
 execution, hardware completion, progress, liveness, coherency, performance, and
-absence of kernel/firmware defects remain outside this proof boundary.
+absence of kernel/firmware defects remain outside this proof boundary. The R2
+proofs do not establish executable-Rust refinement, VA reservation or native
+allocation success, KFD `n_success` truth, syscall rollback, CPU/GPU coherence,
+page-table state, or quiescence. An adapter must turn malformed or uncertain
+side-effecting results into the model's unreleasable ambiguous state. The model
+also does not prove that a copied R1 admission token is still active in a
+separately evolved `DeviceIdentityStateV1`; that state-composition refinement is
+required before a production adapter can consume the memory transitions.

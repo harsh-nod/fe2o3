@@ -538,6 +538,10 @@ impl ModelDeviceAdmissionV1 {
         self.key
     }
 
+    pub const fn domain_id(self) -> DeviceObservationDomainIdV1 {
+        self.domain_id
+    }
+
     pub const fn correlation(self) -> ModelCorrelatedDeviceV1 {
         self.correlation
     }
@@ -557,6 +561,10 @@ impl ModelVmAdmissionV1 {
 
     pub const fn model_key(self) -> VmKeyV1 {
         self.key
+    }
+
+    pub const fn domain_id(self) -> DeviceObservationDomainIdV1 {
+        self.domain_id
     }
 }
 
