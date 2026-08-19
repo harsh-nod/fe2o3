@@ -28,7 +28,7 @@ pub const MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1: usize = 1024 * 1024;
 /// Maximum accepted proof deadline.
 pub const MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1: u32 = 300;
 
-const PROOF_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-schedule-proof-v1\0";
+const PROOF_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-symbolic-schedule-proof-v1\0";
 const PROPERTY_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-property-evidence-v1\0";
 const SOURCE_CLOSURE_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-proof-source-closure-v1\0";
 const EXECUTION_OUTPUT_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-proof-output-v1\0";
@@ -144,25 +144,24 @@ pub const GENERAL_GEMM_PROOF_PROPERTIES_V1: [GeneralGemmProofPropertyV1; 12] = [
     GeneralGemmProofPropertyV1::MachineRefinementBoundary,
 ];
 
-/// Exact identities supplied by compiler and planner integration.
+/// Symbolic template identities supplied by compiler integration.
 ///
-/// These values become proof-evidence inputs. Their producers remain
-/// responsible for deriving them from authenticated source, KIR, and compiler
-/// state and for matching them before consuming any later admission.
+/// The request contains no concrete dimensions, strides, coefficients, plan,
+/// KIR instance, or runtime ABI. Those belong only to a later checked launch
+/// instantiation and cannot be inherited by this parameterized model proof.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralGemmProofRequestV1 {
     schedule: GeneralGemmProofScheduleV1,
     schedule_identity: GeneralGemmEvidenceIdentityV1,
-    plan_identity: GeneralGemmEvidenceIdentityV1,
-    kir_identity: GeneralGemmEvidenceIdentityV1,
-    compilation_binding_identity: GeneralGemmEvidenceIdentityV1,
+    symbolic_plan_identity: GeneralGemmEvidenceIdentityV1,
+    symbolic_kir_identity: GeneralGemmEvidenceIdentityV1,
+    symbolic_compilation_identity: GeneralGemmEvidenceIdentityV1,
     compile_request_identity: GeneralGemmEvidenceIdentityV1,
     obligation_set_identity: GeneralGemmEvidenceIdentityV1,
     compiler_identity: GeneralGemmEvidenceIdentityV1,
     target_identity: GeneralGemmEvidenceIdentityV1,
     toolchain_identity: GeneralGemmEvidenceIdentityV1,
-    runtime_abi_identity: GeneralGemmEvidenceIdentityV1,
-    source_semantics_identity: GeneralGemmEvidenceIdentityV1,
+    source_template_identity: GeneralGemmEvidenceIdentityV1,
     numerical_policy_identity: GeneralGemmEvidenceIdentityV1,
 }
 
@@ -172,30 +171,28 @@ impl GeneralGemmProofRequestV1 {
     pub fn checked(
         schedule: GeneralGemmProofScheduleV1,
         schedule_identity: GeneralGemmEvidenceIdentityV1,
-        plan_identity: GeneralGemmEvidenceIdentityV1,
-        kir_identity: GeneralGemmEvidenceIdentityV1,
-        compilation_binding_identity: GeneralGemmEvidenceIdentityV1,
+        symbolic_plan_identity: GeneralGemmEvidenceIdentityV1,
+        symbolic_kir_identity: GeneralGemmEvidenceIdentityV1,
+        symbolic_compilation_identity: GeneralGemmEvidenceIdentityV1,
         compile_request_identity: GeneralGemmEvidenceIdentityV1,
         obligation_set_identity: GeneralGemmEvidenceIdentityV1,
         compiler_identity: GeneralGemmEvidenceIdentityV1,
         target_identity: GeneralGemmEvidenceIdentityV1,
         toolchain_identity: GeneralGemmEvidenceIdentityV1,
-        runtime_abi_identity: GeneralGemmEvidenceIdentityV1,
-        source_semantics_identity: GeneralGemmEvidenceIdentityV1,
+        source_template_identity: GeneralGemmEvidenceIdentityV1,
         numerical_policy_identity: GeneralGemmEvidenceIdentityV1,
     ) -> Result<Self, GeneralGemmProofExecutionErrorV1> {
         let identities = [
             schedule_identity,
-            plan_identity,
-            kir_identity,
-            compilation_binding_identity,
+            symbolic_plan_identity,
+            symbolic_kir_identity,
+            symbolic_compilation_identity,
             compile_request_identity,
             obligation_set_identity,
             compiler_identity,
             target_identity,
             toolchain_identity,
-            runtime_abi_identity,
-            source_semantics_identity,
+            source_template_identity,
             numerical_policy_identity,
         ];
         if identities.iter().any(|identity| !identity.is_valid()) {
@@ -211,16 +208,15 @@ impl GeneralGemmProofRequestV1 {
         Ok(Self {
             schedule,
             schedule_identity,
-            plan_identity,
-            kir_identity,
-            compilation_binding_identity,
+            symbolic_plan_identity,
+            symbolic_kir_identity,
+            symbolic_compilation_identity,
             compile_request_identity,
             obligation_set_identity,
             compiler_identity,
             target_identity,
             toolchain_identity,
-            runtime_abi_identity,
-            source_semantics_identity,
+            source_template_identity,
             numerical_policy_identity,
         })
     }
@@ -235,19 +231,19 @@ impl GeneralGemmProofRequestV1 {
         self.schedule_identity
     }
 
-    /// Returns the exact host-plan identity.
-    pub const fn plan_identity(self) -> GeneralGemmEvidenceIdentityV1 {
-        self.plan_identity
+    /// Returns the canonical runtime-parameterized plan-schema identity.
+    pub const fn symbolic_plan_identity(self) -> GeneralGemmEvidenceIdentityV1 {
+        self.symbolic_plan_identity
     }
 
-    /// Returns the exact semantic-KIR identity.
-    pub const fn kir_identity(self) -> GeneralGemmEvidenceIdentityV1 {
-        self.kir_identity
+    /// Returns the canonical runtime-parameterized KIR-template identity.
+    pub const fn symbolic_kir_identity(self) -> GeneralGemmEvidenceIdentityV1 {
+        self.symbolic_kir_identity
     }
 
-    /// Returns the exact aggregate compilation binding identity.
-    pub const fn compilation_binding_identity(self) -> GeneralGemmEvidenceIdentityV1 {
-        self.compilation_binding_identity
+    /// Returns the aggregate symbolic compilation identity.
+    pub const fn symbolic_compilation_identity(self) -> GeneralGemmEvidenceIdentityV1 {
+        self.symbolic_compilation_identity
     }
 
     /// Returns the exact compiler request identity.
@@ -275,14 +271,9 @@ impl GeneralGemmProofRequestV1 {
         self.toolchain_identity
     }
 
-    /// Returns the exact dynamic runtime ABI identity.
-    pub const fn runtime_abi_identity(self) -> GeneralGemmEvidenceIdentityV1 {
-        self.runtime_abi_identity
-    }
-
-    /// Returns the exact source-semantics identity.
-    pub const fn source_semantics_identity(self) -> GeneralGemmEvidenceIdentityV1 {
-        self.source_semantics_identity
+    /// Returns the frontend semantic binding for the source template.
+    pub const fn source_template_identity(self) -> GeneralGemmEvidenceIdentityV1 {
+        self.source_template_identity
     }
 
     /// Returns the exact numerical-policy identity.
@@ -290,19 +281,23 @@ impl GeneralGemmProofRequestV1 {
         self.numerical_policy_identity
     }
 
-    fn identities(self) -> [GeneralGemmEvidenceIdentityV1; 12] {
+    /// Symbolic proof inputs never authorize one concrete launch instance.
+    pub const fn grants_concrete_launch_authority(self) -> bool {
+        false
+    }
+
+    fn identities(self) -> [GeneralGemmEvidenceIdentityV1; 11] {
         [
             self.schedule_identity,
-            self.plan_identity,
-            self.kir_identity,
-            self.compilation_binding_identity,
+            self.symbolic_plan_identity,
+            self.symbolic_kir_identity,
+            self.symbolic_compilation_identity,
             self.compile_request_identity,
             self.obligation_set_identity,
             self.compiler_identity,
             self.target_identity,
             self.toolchain_identity,
-            self.runtime_abi_identity,
-            self.source_semantics_identity,
+            self.source_template_identity,
             self.numerical_policy_identity,
         ]
     }

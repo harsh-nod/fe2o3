@@ -36,13 +36,16 @@ fn request(schedule: GeneralGemmProofScheduleV1) -> GeneralGemmProofRequestV1 {
         identity(offset + 9),
         identity(offset + 10),
         identity(offset + 11),
-        identity(offset + 12),
     )
     .unwrap()
 }
 
 #[test]
 fn request_rejects_zero_and_cross_domain_identity_reuse() {
+    assert!(
+        !request(GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1)
+            .grants_concrete_launch_authority()
+    );
     let zero = GeneralGemmEvidenceIdentityV1::from_untrusted_bytes([0; 32]);
     let invalid = GeneralGemmProofRequestV1::checked(
         GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1,
@@ -57,7 +60,6 @@ fn request_rejects_zero_and_cross_domain_identity_reuse() {
         identity(9),
         identity(10),
         identity(11),
-        identity(12),
     );
     assert!(matches!(
         invalid,
@@ -77,7 +79,6 @@ fn request_rejects_zero_and_cross_domain_identity_reuse() {
         identity(9),
         identity(10),
         identity(11),
-        identity(12),
     );
     assert!(matches!(
         duplicate,
@@ -240,9 +241,9 @@ fn proof_numerical_join_preserves_all_open_and_weaker_property_records() {
     let proof = execute_general_gemm_schedule_proof_v1(request, Path::new(&path), 120).unwrap();
     let expected_properties = *proof.properties();
     let numerical_request = GeneralGemmNumericalPolicyRequestV1::checked(
-        request.compilation_binding_identity(),
-        request.plan_identity(),
-        request.kir_identity(),
+        request.symbolic_compilation_identity(),
+        request.symbolic_plan_identity(),
+        request.symbolic_kir_identity(),
         request.numerical_policy_identity(),
     )
     .unwrap();

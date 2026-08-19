@@ -16,23 +16,23 @@ use crate::{
     GeneralGemmProofScheduleV1, GeneralGemmPropertyEvidenceV1,
 };
 
-/// Number of identity domains compared at the eventual three-owner join.
+/// Number of descriptive identity domains compared at the eventual protected join.
 pub const GENERAL_GEMM_FINAL_JOIN_IDENTITY_COUNT_V1: usize = 31;
 
 const PROOF_NUMERICAL_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.proof-numerical-evidence.v1\0";
 
-/// One exact identity domain compared by the eventual rustc-codegen join.
+/// One exact identity domain compared across compile and protected-launch joins.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum GeneralGemmFinalJoinIdentityFieldV1 {
-    /// Aggregate checked compilation-unit binding.
-    CompilationBinding = 0,
+    /// Aggregate runtime-parameterized symbolic compilation.
+    SymbolicCompilation = 0,
     /// Independently domain-separated schedule profile.
     Schedule = 1,
-    /// Checked host plan.
-    Plan = 2,
-    /// Complete semantic KIR.
-    Kir = 3,
+    /// Canonical symbolic host-plan schema.
+    SymbolicPlan = 2,
+    /// Canonical symbolic semantic-KIR template.
+    SymbolicKir = 3,
     /// Compiler request.
     CompileRequest = 4,
     /// Required semantic obligation set.
@@ -43,8 +43,8 @@ pub enum GeneralGemmFinalJoinIdentityFieldV1 {
     TargetProfile = 7,
     /// Reviewed compiler toolchain route.
     ToolchainRoute = 8,
-    /// Exact dynamic runtime ABI.
-    RuntimeAbi = 9,
+    /// Separate concrete plan/KIR/runtime-ABI launch instantiation.
+    CheckedLaunchInstantiation = 9,
     /// Structural frontend binding later authenticated by rustc-codegen.
     FrontendSemanticBinding = 10,
     /// Shared BF16/FP32 numerical policy.
@@ -92,16 +92,16 @@ pub enum GeneralGemmFinalJoinIdentityFieldV1 {
 /// Stable order of every eventual final-join identity field.
 pub const GENERAL_GEMM_FINAL_JOIN_IDENTITY_FIELDS_V1: [GeneralGemmFinalJoinIdentityFieldV1;
     GENERAL_GEMM_FINAL_JOIN_IDENTITY_COUNT_V1] = [
-    GeneralGemmFinalJoinIdentityFieldV1::CompilationBinding,
+    GeneralGemmFinalJoinIdentityFieldV1::SymbolicCompilation,
     GeneralGemmFinalJoinIdentityFieldV1::Schedule,
-    GeneralGemmFinalJoinIdentityFieldV1::Plan,
-    GeneralGemmFinalJoinIdentityFieldV1::Kir,
+    GeneralGemmFinalJoinIdentityFieldV1::SymbolicPlan,
+    GeneralGemmFinalJoinIdentityFieldV1::SymbolicKir,
     GeneralGemmFinalJoinIdentityFieldV1::CompileRequest,
     GeneralGemmFinalJoinIdentityFieldV1::ObligationSet,
     GeneralGemmFinalJoinIdentityFieldV1::CompilerProfile,
     GeneralGemmFinalJoinIdentityFieldV1::TargetProfile,
     GeneralGemmFinalJoinIdentityFieldV1::ToolchainRoute,
-    GeneralGemmFinalJoinIdentityFieldV1::RuntimeAbi,
+    GeneralGemmFinalJoinIdentityFieldV1::CheckedLaunchInstantiation,
     GeneralGemmFinalJoinIdentityFieldV1::FrontendSemanticBinding,
     GeneralGemmFinalJoinIdentityFieldV1::NumericalPolicy,
     GeneralGemmFinalJoinIdentityFieldV1::FrontendAbi,
@@ -369,19 +369,19 @@ fn validate_numerical_request(
 ) -> Result<(), GeneralGemmProofAndNumericalEvidenceErrorV1> {
     for (field, expected, actual) in [
         (
-            GeneralGemmFinalJoinIdentityFieldV1::CompilationBinding,
-            schedule.compilation_binding_identity(),
-            numerical.compilation_binding_identity(),
+            GeneralGemmFinalJoinIdentityFieldV1::SymbolicCompilation,
+            schedule.symbolic_compilation_identity(),
+            numerical.symbolic_compilation_identity(),
         ),
         (
-            GeneralGemmFinalJoinIdentityFieldV1::Plan,
-            schedule.plan_identity(),
-            numerical.plan_identity(),
+            GeneralGemmFinalJoinIdentityFieldV1::SymbolicPlan,
+            schedule.symbolic_plan_identity(),
+            numerical.symbolic_plan_identity(),
         ),
         (
-            GeneralGemmFinalJoinIdentityFieldV1::Kir,
-            schedule.kir_identity(),
-            numerical.kir_identity(),
+            GeneralGemmFinalJoinIdentityFieldV1::SymbolicKir,
+            schedule.symbolic_kir_identity(),
+            numerical.symbolic_kir_identity(),
         ),
         (
             GeneralGemmFinalJoinIdentityFieldV1::NumericalPolicy,
@@ -400,19 +400,18 @@ fn validate_numerical_request(
 
 const fn schedule_request_identities(
     request: GeneralGemmProofRequestV1,
-) -> [GeneralGemmEvidenceIdentityV1; 12] {
+) -> [GeneralGemmEvidenceIdentityV1; 11] {
     [
         request.schedule_identity(),
-        request.plan_identity(),
-        request.kir_identity(),
-        request.compilation_binding_identity(),
+        request.symbolic_plan_identity(),
+        request.symbolic_kir_identity(),
+        request.symbolic_compilation_identity(),
         request.compile_request_identity(),
         request.obligation_set_identity(),
         request.compiler_identity(),
         request.target_identity(),
         request.toolchain_identity(),
-        request.runtime_abi_identity(),
-        request.source_semantics_identity(),
+        request.source_template_identity(),
         request.numerical_policy_identity(),
     ]
 }
@@ -459,16 +458,15 @@ mod tests {
             identity(offset + 9),
             identity(offset + 10),
             identity(offset + 11),
-            identity(offset + 12),
         )
         .unwrap()
     }
 
     fn numerical_request(proof: GeneralGemmProofRequestV1) -> GeneralGemmNumericalPolicyRequestV1 {
         GeneralGemmNumericalPolicyRequestV1::checked(
-            proof.compilation_binding_identity(),
-            proof.plan_identity(),
-            proof.kir_identity(),
+            proof.symbolic_compilation_identity(),
+            proof.symbolic_plan_identity(),
+            proof.symbolic_kir_identity(),
             proof.numerical_policy_identity(),
         )
         .unwrap()
@@ -530,42 +528,42 @@ mod tests {
         let numerical = numerical_request(proof);
         validate_numerical_request(proof, numerical).unwrap();
         for field in [
-            GeneralGemmFinalJoinIdentityFieldV1::CompilationBinding,
-            GeneralGemmFinalJoinIdentityFieldV1::Plan,
-            GeneralGemmFinalJoinIdentityFieldV1::Kir,
+            GeneralGemmFinalJoinIdentityFieldV1::SymbolicCompilation,
+            GeneralGemmFinalJoinIdentityFieldV1::SymbolicPlan,
+            GeneralGemmFinalJoinIdentityFieldV1::SymbolicKir,
             GeneralGemmFinalJoinIdentityFieldV1::NumericalPolicy,
         ] {
             let changed_proof = proof_request(32);
             let changed = match field {
-                GeneralGemmFinalJoinIdentityFieldV1::CompilationBinding => {
+                GeneralGemmFinalJoinIdentityFieldV1::SymbolicCompilation => {
                     GeneralGemmNumericalPolicyRequestV1::checked(
-                        changed_proof.compilation_binding_identity(),
-                        numerical.plan_identity(),
-                        numerical.kir_identity(),
+                        changed_proof.symbolic_compilation_identity(),
+                        numerical.symbolic_plan_identity(),
+                        numerical.symbolic_kir_identity(),
                         numerical.numerical_policy_identity(),
                     )
                 }
-                GeneralGemmFinalJoinIdentityFieldV1::Plan => {
+                GeneralGemmFinalJoinIdentityFieldV1::SymbolicPlan => {
                     GeneralGemmNumericalPolicyRequestV1::checked(
-                        numerical.compilation_binding_identity(),
-                        changed_proof.plan_identity(),
-                        numerical.kir_identity(),
+                        numerical.symbolic_compilation_identity(),
+                        changed_proof.symbolic_plan_identity(),
+                        numerical.symbolic_kir_identity(),
                         numerical.numerical_policy_identity(),
                     )
                 }
-                GeneralGemmFinalJoinIdentityFieldV1::Kir => {
+                GeneralGemmFinalJoinIdentityFieldV1::SymbolicKir => {
                     GeneralGemmNumericalPolicyRequestV1::checked(
-                        numerical.compilation_binding_identity(),
-                        numerical.plan_identity(),
-                        changed_proof.kir_identity(),
+                        numerical.symbolic_compilation_identity(),
+                        numerical.symbolic_plan_identity(),
+                        changed_proof.symbolic_kir_identity(),
                         numerical.numerical_policy_identity(),
                     )
                 }
                 GeneralGemmFinalJoinIdentityFieldV1::NumericalPolicy => {
                     GeneralGemmNumericalPolicyRequestV1::checked(
-                        numerical.compilation_binding_identity(),
-                        numerical.plan_identity(),
-                        numerical.kir_identity(),
+                        numerical.symbolic_compilation_identity(),
+                        numerical.symbolic_plan_identity(),
+                        numerical.symbolic_kir_identity(),
                         changed_proof.numerical_policy_identity(),
                     )
                 }

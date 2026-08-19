@@ -37,6 +37,7 @@ fn exact_witness(offset: u8) -> AuthenticatedGeneralGemmNumericalPolicyV1 {
 
 #[test]
 fn request_rejects_zero_and_cross_domain_identity_reuse() {
+    assert!(!request(0).grants_concrete_launch_authority());
     let zero = GeneralGemmEvidenceIdentityV1::from_untrusted_bytes([0; 32]);
     assert_eq!(
         GeneralGemmNumericalPolicyRequestV1::checked(zero, identity(2), identity(3), identity(4)),
@@ -206,7 +207,7 @@ fn witness_binds_compiler_inputs_and_keeps_mfma_boundary_open() {
             .can_discharge_exact_numerical_refinement()
     );
     assert_eq!(
-        reference.request().compilation_binding_identity(),
+        reference.request().symbolic_compilation_identity(),
         identity(1)
     );
 }

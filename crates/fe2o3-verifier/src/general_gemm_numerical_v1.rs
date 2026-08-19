@@ -19,7 +19,7 @@ pub const MAX_GENERAL_GEMM_NUMERICAL_DEPTH_V1: usize = 1 << 20;
 pub const GENERAL_GEMM_NUMERICAL_POLICY_SCHEMA_V1: &str =
     "fe2o3.general-gemm.bf16-f32-numerical-policy.v1";
 
-const WITNESS_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.numerical-witness.v1\0";
+const WITNESS_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.symbolic-numerical-witness.v1\0";
 const BF16_CLOSURE_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.bf16-closure.v1\0";
 const MUTATION_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.numerical-mutations.v1\0";
 const EVALUATION_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.numerical-evaluation.v1\0";
@@ -160,27 +160,27 @@ impl GeneralGemmNumericalComparisonPolicyV1 {
     }
 }
 
-/// Exact compiler identities bound by the shared numerical witness.
+/// Symbolic compiler identities bound by the parameterized numerical witness.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralGemmNumericalPolicyRequestV1 {
-    compilation_binding_identity: GeneralGemmEvidenceIdentityV1,
-    plan_identity: GeneralGemmEvidenceIdentityV1,
-    kir_identity: GeneralGemmEvidenceIdentityV1,
+    symbolic_compilation_identity: GeneralGemmEvidenceIdentityV1,
+    symbolic_plan_identity: GeneralGemmEvidenceIdentityV1,
+    symbolic_kir_identity: GeneralGemmEvidenceIdentityV1,
     numerical_policy_identity: GeneralGemmEvidenceIdentityV1,
 }
 
 impl GeneralGemmNumericalPolicyRequestV1 {
     /// Requires four nonzero, domain-distinct compiler identities.
     pub fn checked(
-        compilation_binding_identity: GeneralGemmEvidenceIdentityV1,
-        plan_identity: GeneralGemmEvidenceIdentityV1,
-        kir_identity: GeneralGemmEvidenceIdentityV1,
+        symbolic_compilation_identity: GeneralGemmEvidenceIdentityV1,
+        symbolic_plan_identity: GeneralGemmEvidenceIdentityV1,
+        symbolic_kir_identity: GeneralGemmEvidenceIdentityV1,
         numerical_policy_identity: GeneralGemmEvidenceIdentityV1,
     ) -> Result<Self, GeneralGemmNumericalPolicyErrorV1> {
         let identities = [
-            compilation_binding_identity,
-            plan_identity,
-            kir_identity,
+            symbolic_compilation_identity,
+            symbolic_plan_identity,
+            symbolic_kir_identity,
             numerical_policy_identity,
         ];
         if identities
@@ -197,31 +197,36 @@ impl GeneralGemmNumericalPolicyRequestV1 {
             return Err(GeneralGemmNumericalPolicyErrorV1::DuplicateIdentity);
         }
         Ok(Self {
-            compilation_binding_identity,
-            plan_identity,
-            kir_identity,
+            symbolic_compilation_identity,
+            symbolic_plan_identity,
+            symbolic_kir_identity,
             numerical_policy_identity,
         })
     }
 
-    /// Returns the complete compilation-unit identity.
-    pub const fn compilation_binding_identity(self) -> GeneralGemmEvidenceIdentityV1 {
-        self.compilation_binding_identity
+    /// Returns the aggregate symbolic compilation identity.
+    pub const fn symbolic_compilation_identity(self) -> GeneralGemmEvidenceIdentityV1 {
+        self.symbolic_compilation_identity
     }
 
-    /// Returns the exact checked plan identity.
-    pub const fn plan_identity(self) -> GeneralGemmEvidenceIdentityV1 {
-        self.plan_identity
+    /// Returns the canonical symbolic plan-schema identity.
+    pub const fn symbolic_plan_identity(self) -> GeneralGemmEvidenceIdentityV1 {
+        self.symbolic_plan_identity
     }
 
-    /// Returns the exact complete semantic KIR identity.
-    pub const fn kir_identity(self) -> GeneralGemmEvidenceIdentityV1 {
-        self.kir_identity
+    /// Returns the canonical symbolic KIR-template identity.
+    pub const fn symbolic_kir_identity(self) -> GeneralGemmEvidenceIdentityV1 {
+        self.symbolic_kir_identity
     }
 
     /// Returns the frontend-authenticated numerical-policy identity.
     pub const fn numerical_policy_identity(self) -> GeneralGemmEvidenceIdentityV1 {
         self.numerical_policy_identity
+    }
+
+    /// Symbolic numerical policy evidence never authorizes concrete operands.
+    pub const fn grants_concrete_launch_authority(self) -> bool {
+        false
     }
 }
 
@@ -548,7 +553,7 @@ impl AuthenticatedGeneralGemmNumericalPolicyV1 {
 }
 
 /// Runs exhaustive BF16 and mutation-sensitive FP32 policy checks and binds
-/// their outputs to one exact compilation request.
+/// their outputs to one runtime-parameterized symbolic compilation request.
 pub fn execute_general_gemm_numerical_policy_v1(
     request: GeneralGemmNumericalPolicyRequestV1,
     comparison: GeneralGemmNumericalComparisonPolicyV1,
@@ -559,9 +564,9 @@ pub fn execute_general_gemm_numerical_policy_v1(
     hasher.update(WITNESS_DOMAIN_V1);
     hasher.update(GENERAL_GEMM_NUMERICAL_POLICY_SCHEMA_V1.as_bytes());
     for identity in [
-        request.compilation_binding_identity,
-        request.plan_identity,
-        request.kir_identity,
+        request.symbolic_compilation_identity,
+        request.symbolic_plan_identity,
+        request.symbolic_kir_identity,
         request.numerical_policy_identity,
         bf16_closure_identity,
         mutation_identity,
