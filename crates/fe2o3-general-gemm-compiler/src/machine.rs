@@ -239,15 +239,14 @@ fn lower_symbolic_structural_inner(
 ) -> Result<GeneralGemmSymbolicStructuralMachineV1, GeneralGemmStructuralMachineErrorV1> {
     let envelope = project_symbolic_to_pliron(unit)
         .map_err(|_| GeneralGemmStructuralMachineErrorV1::PlironProjection)?;
-    envelope
-        .validate_exact(unit)
+    let lowered = envelope
+        .into_verified_lowered(unit)
         .map_err(|_| GeneralGemmStructuralMachineErrorV1::PlironProjection)?;
-    let projection = envelope.receipt;
-    let descriptor_source = derive_symbolic_descriptor_source(unit, projection)
+    let projection = lowered.projection();
+    let descriptor_source = derive_symbolic_descriptor_source(&lowered)
         .map_err(GeneralGemmStructuralMachineErrorV1::Descriptor)?;
-    let binding_section = symbolic_machine_binding_section(unit, projection, &descriptor_source);
-    let handoff =
-        build_symbolic_machine_handoff(unit, projection, &descriptor_source, &binding_section)?;
+    let binding_section = symbolic_machine_binding_section(&lowered, &descriptor_source);
+    let handoff = build_symbolic_machine_handoff(&lowered, &descriptor_source, &binding_section)?;
     let source_identity = handoff.identity();
     let assembly = serialize_gfx942_handoff_v2(&handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::Serialize)?;
@@ -281,7 +280,7 @@ fn lower_symbolic_structural_inner(
     let artifact_identity = GeneralGemmSymbolicArtifactIdentityV1(hash_fields(
         ARTIFACT_IDENTITY_DOMAIN_V1,
         &[
-            unit.identity().as_bytes(),
+            lowered.compilation_identity().as_bytes(),
             projection.identity().as_bytes(),
             source_identity.as_bytes(),
             assembly.sha256().as_bytes(),
@@ -400,8 +399,7 @@ fn machine_binding_section(
 }
 
 fn symbolic_machine_binding_section(
-    unit: &GeneralGemmSymbolicCompilationUnitV1,
-    projection: GeneralGemmSymbolicPlironProjectionV1,
+    lowered: &GeneralGemmVerifiedLoweredGpuReceiptV1,
     descriptor: &CompilerDescriptorSourceV1,
 ) -> GeneralGemmMachineBindingSectionV1 {
     let mut bytes = Vec::with_capacity(768);
@@ -410,27 +408,24 @@ fn symbolic_machine_binding_section(
         GENERAL_GEMM_MACHINE_BINDING_SCHEMA_V1.as_bytes(),
     );
     for identity in [
-        unit.identity().into_bytes(),
-        unit.request().identity().into_bytes(),
-        unit.request().kernel_instance_identity().into_bytes(),
-        unit.frontend_semantic_binding_identity().into_bytes(),
-        *unit.frontend_semantics().compiled_source_identity(),
-        *unit.frontend_semantics().provider_semantics_identity(),
-        *unit.frontend_semantics().frontend_abi_identity(),
-        unit.symbolic_plan_identity().into_bytes(),
-        unit.symbolic_kir_identity().into_bytes(),
-        unit.schedule_identity().into_bytes(),
-        unit.toolchain_route_identity().into_bytes(),
-        projection.identity().into_bytes(),
+        lowered.compilation_identity().into_bytes(),
+        *lowered.request_identity(),
+        *lowered.kernel_instance_identity(),
+        lowered.frontend_semantic_binding_identity().into_bytes(),
+        *lowered.compiled_source_identity(),
+        *lowered.provider_semantics_identity(),
+        *lowered.frontend_abi_identity(),
+        lowered.symbolic_plan_identity().into_bytes(),
+        lowered.symbolic_kir_identity().into_bytes(),
+        lowered.schedule_identity().into_bytes(),
+        lowered.toolchain_route_identity().into_bytes(),
+        lowered.projection().identity().into_bytes(),
         *descriptor.identity().sha256(),
     ] {
         append_field(&mut bytes, &identity);
     }
-    append_field(&mut bytes, &unit.schedule().encode_canonical());
-    append_field(
-        &mut bytes,
-        &encode_symbolic_kir_template(unit.frontend_semantics()),
-    );
+    append_field(&mut bytes, &lowered.schedule().encode_canonical());
+    append_field(&mut bytes, lowered.symbolic_kir_template());
     let identity = GeneralGemmMachineBindingIdentityV1(hash_fields(
         MACHINE_BINDING_IDENTITY_DOMAIN_V1,
         &[&bytes],
@@ -444,20 +439,9 @@ fn append_field(bytes: &mut Vec<u8>, field: &[u8]) {
 }
 
 fn derive_symbolic_descriptor_source(
-    unit: &GeneralGemmSymbolicCompilationUnitV1,
-    projection: GeneralGemmSymbolicPlironProjectionV1,
+    lowered: &GeneralGemmVerifiedLoweredGpuReceiptV1,
 ) -> Result<CompilerDescriptorSourceV1, GeneralGemmDescriptorSourceErrorV1> {
-    if projection.compilation_identity() != unit.identity()
-        || projection.schedule_identity() != unit.schedule_identity()
-        || projection.symbolic_plan_identity() != unit.symbolic_plan_identity()
-        || projection.symbolic_kir_identity() != unit.symbolic_kir_identity()
-    {
-        return Err(GeneralGemmDescriptorSourceErrorV1::Descriptor(
-            DescriptorValidationError::IdentityMismatch {
-                field: "symbolic general GEMM Pliron projection",
-            },
-        ));
-    }
+    let projection = lowered.projection();
 
     let bf16_slice_type = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(
         DescriptorScalarTypeV1::U16,
@@ -503,15 +487,17 @@ fn derive_symbolic_descriptor_source(
         LogicalArgumentV1::scalar(10, name("beta")?, &f32_type, &f32_layout, 76)?,
     ];
     let source_evidence = BuildEvidenceV1::new(
-        EvidenceIdentity::from_opaque_bytes(unit.frontend_semantic_binding_identity().into_bytes()),
-        EvidenceDigest::from_sha256_bytes(*unit.frontend_semantics().compiled_source_identity()),
+        EvidenceIdentity::from_opaque_bytes(
+            lowered.frontend_semantic_binding_identity().into_bytes(),
+        ),
+        EvidenceDigest::from_sha256_bytes(*lowered.compiled_source_identity()),
     );
     let executable_ir_evidence = BuildEvidenceV1::new(
         EvidenceIdentity::from_opaque_bytes(projection.identity().into_bytes()),
-        EvidenceDigest::from_sha256_bytes(unit.symbolic_kir_identity().into_bytes()),
+        EvidenceDigest::from_sha256_bytes(lowered.symbolic_kir_identity().into_bytes()),
     );
     let kernel = KernelDescriptorV1::new(
-        KernelId::from_bytes(unit.identity().into_bytes()),
+        KernelId::from_bytes(lowered.compilation_identity().into_bytes()),
         name(GENERAL_GEMM_KERNEL_SYMBOL_V1)?,
         name(GENERAL_GEMM_KERNEL_SYMBOL_V1)?,
         name(GENERAL_GEMM_KERNEL_DESCRIPTOR_SYMBOL_V1)?,
@@ -560,12 +546,11 @@ fn derive_symbolic_descriptor_source(
 }
 
 fn build_symbolic_machine_handoff(
-    unit: &GeneralGemmSymbolicCompilationUnitV1,
-    projection: GeneralGemmSymbolicPlironProjectionV1,
+    lowered: &GeneralGemmVerifiedLoweredGpuReceiptV1,
     descriptor: &CompilerDescriptorSourceV1,
     binding: &GeneralGemmMachineBindingSectionV1,
 ) -> Result<Gfx942HandoffV2, GeneralGemmStructuralMachineErrorV1> {
-    let base = build_symbolic_base_handoff(unit, projection)?;
+    let base = build_symbolic_base_handoff(lowered)?;
     let evidence = EvidenceV2::new(
         base.origins()[0].identity(),
         base.obligations()
@@ -616,7 +601,7 @@ fn build_symbolic_machine_handoff(
     .into_iter()
     .map(|intrinsic| IntrinsicReferenceV2::new(intrinsic, evidence.clone()))
     .collect();
-    let function = build_kernel_function(&base, unit.schedule(), evidence.clone())?;
+    let function = build_kernel_function(&base, lowered.schedule(), evidence.clone())?;
     let module = ExecutableModuleV2::new(
         base.module().flags().to_vec(),
         base.module().named_metadata().to_vec(),
@@ -629,9 +614,9 @@ fn build_symbolic_machine_handoff(
 }
 
 fn build_symbolic_base_handoff(
-    unit: &GeneralGemmSymbolicCompilationUnitV1,
-    projection: GeneralGemmSymbolicPlironProjectionV1,
+    lowered: &GeneralGemmVerifiedLoweredGpuReceiptV1,
 ) -> Result<Gfx942HandoffV1, GeneralGemmStructuralMachineErrorV1> {
+    let projection = lowered.projection();
     let origin_source = IdentityV1::new(projection.identity().into_bytes())
         .map_err(GeneralGemmStructuralMachineErrorV1::HandoffV1)?;
     let origin = OriginV1::new(OriginKindV1::KernelIr, origin_source, None);
@@ -645,9 +630,9 @@ fn build_symbolic_base_handoff(
         origin.identity(),
     )
     .map_err(GeneralGemmStructuralMachineErrorV1::HandoffV1)?;
-    let semantic = IdentityV1::new(unit.identity().into_bytes())
+    let semantic = IdentityV1::new(lowered.compilation_identity().into_bytes())
         .map_err(GeneralGemmStructuralMachineErrorV1::HandoffV1)?;
-    let target = IdentityV1::new(unit.toolchain_route_identity().into_bytes())
+    let target = IdentityV1::new(lowered.toolchain_route_identity().into_bytes())
         .map_err(GeneralGemmStructuralMachineErrorV1::HandoffV1)?;
     let obligations = [
         ObligationKindV1::PreserveKernelAbi,
@@ -685,9 +670,9 @@ fn build_symbolic_base_handoff(
     .map_err(GeneralGemmStructuralMachineErrorV1::HandoffV1)?;
     Gfx942HandoffV1::new(Gfx942HandoffInputV1 {
         stage_identities: StageIdentitiesV1::new(
-            unit.identity().into_bytes(),
-            unit.schedule_identity().into_bytes(),
-            unit.toolchain_route_identity().into_bytes(),
+            lowered.compilation_identity().into_bytes(),
+            lowered.schedule_identity().into_bytes(),
+            lowered.toolchain_route_identity().into_bytes(),
         )
         .map_err(GeneralGemmStructuralMachineErrorV1::HandoffV1)?,
         target: Gfx942TargetPolicyV1::canonical(),

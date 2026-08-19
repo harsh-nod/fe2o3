@@ -6,12 +6,17 @@ use core::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, HierarchyAttr, HierarchyIdOp, MemoryOrderAttr, MemoryScopeAttr,
+    AddressSpaceAttr, BarrierOp, GeneralGemmEpilogueAttr, GeneralGemmEpilogueOp,
+    GeneralGemmEpochAttr, GeneralGemmEpochOp, GeneralGemmGlobalTransferAttr,
+    GeneralGemmGlobalTransferOp, GeneralGemmGridMappingAttr, GeneralGemmGridMappingOp,
+    GeneralGemmLdsTransferAttr, GeneralGemmLdsTransferOp, GeneralGemmMfmaAttr, GeneralGemmMfmaOp,
+    GeneralGemmPhaseLoopAttr, GeneralGemmPhaseLoopOp, GeneralGemmRuntimeAbiAttr,
+    GeneralGemmRuntimeAbiOp, HierarchyAttr, HierarchyIdOp, MemoryOrderAttr, MemoryScopeAttr,
     MemorySpaceOp,
 };
-use dialect_kernel::AlgorithmOp;
-use dialect_schedule::PlanOp;
-use dialect_tile::MaterializeOp;
+use dialect_kernel::{AlgorithmOp, GeneralGemmOp};
+use dialect_schedule::{GeneralGemmPlanOp, GeneralGemmScheduleAttr, PlanOp};
+use dialect_tile::{GeneralGemmXor4Op, MaterializeOp};
 use fe2o3_compiler_api::{
     CandidateIdentityV1, CanonicalDiagnosticV1, CompileDispositionV1, CompileOutputV1,
     CompileRequestV1, CompilerStageV1, DiagnosticCodeV1, DiagnosticMessageV1, DiagnosticSeverityV1,
@@ -90,6 +95,10 @@ pub const GENERAL_GEMM_STATIC_LDS_BYTES_V1: u32 = 1024;
 pub const MAX_GENERAL_GEMM_KIR_BYTES_V1: usize = 4 * 1024;
 /// Exact number of typed operations in the current Pliron projection.
 pub const GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1: usize = 11;
+/// Exact high-level operations verified before symbolic schedule lowering.
+pub const GENERAL_GEMM_SYMBOLIC_SOURCE_OPERATION_COUNT_V1: usize = 6;
+/// Exact explicit GPU operations verified after symbolic schedule lowering.
+pub const GENERAL_GEMM_SYMBOLIC_LOWERED_OPERATION_COUNT_V1: usize = 15;
 /// Hard maximum typed operations accepted by this route.
 pub const MAX_GENERAL_GEMM_PLIRON_OPERATIONS_V1: usize = 32;
 
@@ -111,6 +120,11 @@ const SYMBOLIC_PIPELINE_CONFIGURATION_IDENTITY_DOMAIN_V1: &[u8] =
 const CHECKED_LAUNCH_IDENTITY_DOMAIN_V1: &[u8] =
     b"fe2o3.general-gemm.checked-launch-instantiation.v1\0";
 const PROJECTION_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.pliron-projection.v1\0";
+const SOURCE_OPERATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.general-gemm.pliron-source-operations.v1\0";
+const LOWERED_OPERATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.general-gemm.pliron-lowered-operations.v1\0";
+const TRANSFORMATION_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.pliron-transformation.v1\0";
 const ARTIFACT_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.artifact-binding.v1\0";
 const PLIRON_MODULE_SYMBOL: &str = "fe2o3_general_gemm";
 const PLIRON_SCHEMA_ATTR: &str = "fe2o3_general_gemm_schema_v1";
@@ -191,6 +205,18 @@ identity_type!(
     GeneralGemmPlironProjectionIdentityV1
 );
 identity_type!(
+    /// Identity of the verified high-level symbolic operation sequence.
+    GeneralGemmPlironSourceOperationIdentityV1
+);
+identity_type!(
+    /// Identity of the verified explicit lowered GPU operation sequence.
+    GeneralGemmPlironLoweredOperationIdentityV1
+);
+identity_type!(
+    /// Identity of the exact source-to-GPU lowering transformation.
+    GeneralGemmPlironTransformationIdentityV1
+);
+identity_type!(
     /// Identity of all fields required for an eventual executable candidate.
     GeneralGemmArtifactBindingIdentityV1
 );
@@ -253,6 +279,91 @@ pub enum GeneralGemmSymbolicPlanExpressionV1 {
     AqlGridWorkItems,
 }
 
+/// One independently derived source/KIR behavior record.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum GeneralGemmDerivedKirBehaviorV1 {
+    /// A wave64 maps grid X/Y to 16x16 output tiles and four owners per lane.
+    Wave64GridXy16 = 1,
+    /// Checked row-major A/B loads are guarded and false tail lanes produce zero.
+    GuardedAbCheckedRowMajorZeroTail = 2,
+    /// XOR4 single-buffer staging has publish, read, MFMA, and reuse lifecycle events.
+    Xor4SingleBufferPublishReadMfmaReuse = 3,
+    /// The dynamic phase loop carries four f32 accumulator components.
+    CarriedF32x4PhaseAccumulator = 4,
+    /// Disjoint guarded C owners compute `alpha * accumulator + beta * C`.
+    GuardedDisjointCAlphaAccPlusBetaC = 5,
+}
+
+/// A source-derived symbolic schema did not exactly match the closed first slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralGemmDerivedSourceSchemaErrorV1 {
+    /// One of the six plan expressions was missing, reordered, or substituted.
+    PlanExpressions,
+    /// One of the five KIR behavior records was missing, reordered, or substituted.
+    KirBehaviors,
+    /// Re-encoding a checked schema did not reproduce the closed plan identity.
+    PlanIdentity,
+    /// Re-encoding a checked schema did not reproduce the closed KIR identity.
+    KirIdentity,
+}
+
+impl fmt::Display for GeneralGemmDerivedSourceSchemaErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "invalid derived general GEMM source schema: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GeneralGemmDerivedSourceSchemaErrorV1 {}
+
+/// Exact descriptive schema built from independently derived MIR facts.
+///
+/// This value grants no source, proof, artifact, or runtime authority. The
+/// rustc-owned private receipt remains responsible for authenticating each
+/// input record before calling [`Self::checked`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralGemmDerivedSourceSchemaV1 {
+    plan_expressions: [GeneralGemmSymbolicPlanExpressionV1; 6],
+    kir_behaviors: [GeneralGemmDerivedKirBehaviorV1; 5],
+}
+
+impl GeneralGemmDerivedSourceSchemaV1 {
+    /// Checks exact independently derived facts without selecting a canonical schema first.
+    pub fn checked(
+        plan_expressions: [GeneralGemmSymbolicPlanExpressionV1; 6],
+        kir_behaviors: [GeneralGemmDerivedKirBehaviorV1; 5],
+    ) -> Result<Self, GeneralGemmDerivedSourceSchemaErrorV1> {
+        if plan_expressions != symbolic_plan_expressions() {
+            return Err(GeneralGemmDerivedSourceSchemaErrorV1::PlanExpressions);
+        }
+        if kir_behaviors != symbolic_kir_behaviors() {
+            return Err(GeneralGemmDerivedSourceSchemaErrorV1::KirBehaviors);
+        }
+        Ok(Self {
+            plan_expressions,
+            kir_behaviors,
+        })
+    }
+
+    /// Returns the exact ordered source-derived plan expressions.
+    pub const fn plan_expressions(self) -> [GeneralGemmSymbolicPlanExpressionV1; 6] {
+        self.plan_expressions
+    }
+
+    /// Returns the exact ordered source-derived KIR behavior records.
+    pub const fn kir_behaviors(self) -> [GeneralGemmDerivedKirBehaviorV1; 5] {
+        self.kir_behaviors
+    }
+
+    /// Descriptive source schemas never grant authentication or artifact authority.
+    pub const fn grants_authority(self) -> bool {
+        false
+    }
+}
+
 /// Closed runtime-parameterized checked-plan schema derived from positive MIR.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralGemmSymbolicPlanV1 {
@@ -262,12 +373,27 @@ pub struct GeneralGemmSymbolicPlanV1 {
 impl GeneralGemmSymbolicPlanV1 {
     /// Returns the one admitted runtime-derived plan expression schema.
     pub fn canonical() -> Self {
-        Self {
-            identity: GeneralGemmSymbolicPlanIdentityV1(hash_fields(
-                SYMBOLIC_PLAN_IDENTITY_DOMAIN_V1,
-                &[&encode_symbolic_plan()],
-            )),
+        let schema = GeneralGemmDerivedSourceSchemaV1::checked(
+            symbolic_plan_expressions(),
+            symbolic_kir_behaviors(),
+        )
+        .expect("static general GEMM source schema is exact");
+        Self::from_derived_source_schema(&schema)
+            .expect("static general GEMM plan identity is exact")
+    }
+
+    /// Re-encodes a checked independently derived source schema.
+    pub fn from_derived_source_schema(
+        schema: &GeneralGemmDerivedSourceSchemaV1,
+    ) -> Result<Self, GeneralGemmDerivedSourceSchemaErrorV1> {
+        let identity = GeneralGemmSymbolicPlanIdentityV1(hash_fields(
+            SYMBOLIC_PLAN_IDENTITY_DOMAIN_V1,
+            &[&encode_symbolic_plan(schema.plan_expressions)],
+        ));
+        if identity != expected_symbolic_plan_identity() {
+            return Err(GeneralGemmDerivedSourceSchemaErrorV1::PlanIdentity);
         }
+        Ok(Self { identity })
     }
 
     /// Returns the exact symbolic-plan identity.
@@ -290,19 +416,31 @@ pub struct GeneralGemmSymbolicKirV1 {
 impl GeneralGemmSymbolicKirV1 {
     /// Returns the only source template admitted for launch-time instantiation.
     pub fn canonical() -> Self {
-        Self {
-            identity: GeneralGemmSymbolicKirIdentityV1(hash_fields(
-                SYMBOLIC_KIR_IDENTITY_DOMAIN_V1,
-                &[
-                    GeneralGemmSymbolicPlanV1::canonical().identity().as_bytes(),
-                    b"wave64-grid-xy16",
-                    b"guarded-a-b-positive-zero-tail",
-                    b"xor4-single-buffer-stage-publish-mfma-reuse",
-                    b"carried-f32x4-phase-accumulator",
-                    b"guarded-disjoint-c-alpha-acc-plus-beta-c",
-                ],
-            )),
+        let schema = GeneralGemmDerivedSourceSchemaV1::checked(
+            symbolic_plan_expressions(),
+            symbolic_kir_behaviors(),
+        )
+        .expect("static general GEMM source schema is exact");
+        Self::from_derived_source_schema(&schema)
+            .expect("static general GEMM KIR identity is exact")
+    }
+
+    /// Re-encodes a checked independently derived source schema.
+    pub fn from_derived_source_schema(
+        schema: &GeneralGemmDerivedSourceSchemaV1,
+    ) -> Result<Self, GeneralGemmDerivedSourceSchemaErrorV1> {
+        let plan = GeneralGemmSymbolicPlanV1::from_derived_source_schema(schema)?;
+        let plan_identity = plan.identity();
+        let behavior_fields = encode_symbolic_kir_behavior_fields(schema.kir_behaviors);
+        let mut fields = Vec::with_capacity(6);
+        fields.push(plan_identity.as_bytes().as_slice());
+        fields.extend(behavior_fields.iter().map(Vec::as_slice));
+        let identity =
+            GeneralGemmSymbolicKirIdentityV1(hash_fields(SYMBOLIC_KIR_IDENTITY_DOMAIN_V1, &fields));
+        if identity != expected_symbolic_kir_identity() {
+            return Err(GeneralGemmDerivedSourceSchemaErrorV1::KirIdentity);
         }
+        Ok(Self { identity })
     }
 
     /// Returns the exact symbolic semantic-template identity.
@@ -888,10 +1026,10 @@ impl GeneralGemmSymbolicCompilationUnitV1 {
                 maximum: limits.max_kir_bytes,
             });
         }
-        if GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1 > limits.max_pliron_operations {
+        if GENERAL_GEMM_SYMBOLIC_LOWERED_OPERATION_COUNT_V1 > limits.max_pliron_operations {
             return Err(
                 GeneralGemmSymbolicCompilationErrorV1::PlironOperationsLimit {
-                    required: GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1,
+                    required: GENERAL_GEMM_SYMBOLIC_LOWERED_OPERATION_COUNT_V1,
                     maximum: limits.max_pliron_operations,
                 },
             );
@@ -1400,6 +1538,9 @@ pub struct GeneralGemmPlironProjectionV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralGemmSymbolicPlironProjectionV1 {
     identity: GeneralGemmPlironProjectionIdentityV1,
+    source_operation_identity: GeneralGemmPlironSourceOperationIdentityV1,
+    lowered_operation_identity: GeneralGemmPlironLoweredOperationIdentityV1,
+    transformation_identity: GeneralGemmPlironTransformationIdentityV1,
     compilation_identity: GeneralGemmSymbolicCompilationIdentityV1,
     schedule_identity: GeneralGemmScheduleIdentityV1,
     symbolic_plan_identity: GeneralGemmSymbolicPlanIdentityV1,
@@ -1411,6 +1552,21 @@ impl GeneralGemmSymbolicPlironProjectionV1 {
     /// Returns the exact owner-checked projection identity.
     pub const fn identity(self) -> GeneralGemmPlironProjectionIdentityV1 {
         self.identity
+    }
+
+    /// Returns the verified high-level structured operation identity.
+    pub const fn source_operation_identity(self) -> GeneralGemmPlironSourceOperationIdentityV1 {
+        self.source_operation_identity
+    }
+
+    /// Returns the verified explicit GPU operation identity.
+    pub const fn lowered_operation_identity(self) -> GeneralGemmPlironLoweredOperationIdentityV1 {
+        self.lowered_operation_identity
+    }
+
+    /// Returns the exact verified source-to-GPU transformation identity.
+    pub const fn transformation_identity(self) -> GeneralGemmPlironTransformationIdentityV1 {
+        self.transformation_identity
     }
 
     /// Returns the symbolic compilation consumed by projection.
@@ -2085,8 +2241,85 @@ struct GeneralGemmSymbolicPlironEnvelope {
     receipt: GeneralGemmSymbolicPlironProjectionV1,
 }
 
+#[derive(Debug)]
+pub(crate) struct GeneralGemmVerifiedLoweredGpuReceiptV1 {
+    projection: GeneralGemmSymbolicPlironProjectionV1,
+    schedule: GeneralGemmScheduleV1,
+    request_identity: [u8; 32],
+    kernel_instance_identity: [u8; 32],
+    frontend_semantic_binding_identity: GeneralGemmFrontendSemanticBindingIdentityV1,
+    compiled_source_identity: [u8; 32],
+    provider_semantics_identity: [u8; 32],
+    frontend_abi_identity: [u8; 32],
+    toolchain_route_identity: GeneralGemmToolchainRouteIdentityV1,
+    symbolic_kir_template: Vec<u8>,
+}
+
+impl GeneralGemmVerifiedLoweredGpuReceiptV1 {
+    pub(crate) const fn projection(&self) -> GeneralGemmSymbolicPlironProjectionV1 {
+        self.projection
+    }
+
+    pub(crate) const fn schedule(&self) -> GeneralGemmScheduleV1 {
+        self.schedule
+    }
+
+    pub(crate) const fn compilation_identity(&self) -> GeneralGemmSymbolicCompilationIdentityV1 {
+        self.projection.compilation_identity
+    }
+
+    pub(crate) const fn request_identity(&self) -> &[u8; 32] {
+        &self.request_identity
+    }
+
+    pub(crate) const fn kernel_instance_identity(&self) -> &[u8; 32] {
+        &self.kernel_instance_identity
+    }
+
+    pub(crate) const fn frontend_semantic_binding_identity(
+        &self,
+    ) -> GeneralGemmFrontendSemanticBindingIdentityV1 {
+        self.frontend_semantic_binding_identity
+    }
+
+    pub(crate) const fn compiled_source_identity(&self) -> &[u8; 32] {
+        &self.compiled_source_identity
+    }
+
+    pub(crate) const fn provider_semantics_identity(&self) -> &[u8; 32] {
+        &self.provider_semantics_identity
+    }
+
+    pub(crate) const fn frontend_abi_identity(&self) -> &[u8; 32] {
+        &self.frontend_abi_identity
+    }
+
+    pub(crate) const fn symbolic_plan_identity(&self) -> GeneralGemmSymbolicPlanIdentityV1 {
+        self.projection.symbolic_plan_identity
+    }
+
+    pub(crate) const fn symbolic_kir_identity(&self) -> GeneralGemmSymbolicKirIdentityV1 {
+        self.projection.symbolic_kir_identity
+    }
+
+    pub(crate) const fn schedule_identity(&self) -> GeneralGemmScheduleIdentityV1 {
+        self.projection.schedule_identity
+    }
+
+    pub(crate) const fn toolchain_route_identity(&self) -> GeneralGemmToolchainRouteIdentityV1 {
+        self.toolchain_route_identity
+    }
+
+    pub(crate) fn symbolic_kir_template(&self) -> &[u8] {
+        &self.symbolic_kir_template
+    }
+}
+
 impl GeneralGemmSymbolicPlironEnvelope {
-    fn validate_exact(&self, unit: &GeneralGemmSymbolicCompilationUnitV1) -> Result<(), ()> {
+    fn into_verified_lowered(
+        self,
+        unit: &GeneralGemmSymbolicCompilationUnitV1,
+    ) -> Result<GeneralGemmVerifiedLoweredGpuReceiptV1, ()> {
         let current = require_context_identity(&self.context).map_err(|_| ())?;
         if current != self.context_identity
             || verify_operation(self.module.get_operation(), &self.context).is_err()
@@ -2127,11 +2360,35 @@ impl GeneralGemmSymbolicPlironEnvelope {
             return Err(());
         }
         drop(module);
-        validate_symbolic_projection_operations(&self.context, &self.module)
+        validate_symbolic_lowered_operations(&self.context, &self.module, unit.schedule())?;
+        if self.receipt.operation_count != GENERAL_GEMM_SYMBOLIC_LOWERED_OPERATION_COUNT_V1
+            || self.receipt.compilation_identity != unit.identity()
+            || self.receipt.schedule_identity != unit.schedule_identity()
+            || self.receipt.symbolic_plan_identity != unit.symbolic_plan_identity()
+            || self.receipt.symbolic_kir_identity != unit.symbolic_kir_identity()
+        {
+            return Err(());
+        }
+        Ok(GeneralGemmVerifiedLoweredGpuReceiptV1 {
+            projection: self.receipt,
+            schedule: unit.schedule(),
+            request_identity: unit.request().identity().into_bytes(),
+            kernel_instance_identity: unit.request().kernel_instance_identity().into_bytes(),
+            frontend_semantic_binding_identity: unit.frontend_semantic_binding_identity(),
+            compiled_source_identity: *unit.frontend_semantics().compiled_source_identity(),
+            provider_semantics_identity: *unit.frontend_semantics().provider_semantics_identity(),
+            frontend_abi_identity: *unit.frontend_semantics().frontend_abi_identity(),
+            toolchain_route_identity: unit.toolchain_route_identity(),
+            symbolic_kir_template: encode_symbolic_kir_template(unit.frontend_semantics()),
+        })
     }
 }
 
-fn validate_symbolic_projection_operations(context: &Context, module: &ModuleOp) -> Result<(), ()> {
+fn validate_symbolic_source_operations(
+    context: &Context,
+    module: &ModuleOp,
+    expected_schedule: GeneralGemmScheduleV1,
+) -> Result<(), ()> {
     let body = module.get_body(context, 0);
     let body = body.deref(context);
     let mut operations = body.iter(context);
@@ -2142,12 +2399,20 @@ fn validate_symbolic_projection_operations(context: &Context, module: &ModuleOp)
     {
         return Err(());
     }
+    typed_next::<GeneralGemmOp>(&mut operations, context)?;
     let schedule = typed_next::<PlanOp>(&mut operations, context)?;
     if schedule.parameters(context).is_none_or(|parameters| {
         parameters.rank() != 3
             || parameters.tile_extent() != GENERAL_GEMM_KIR_TILE_EXTENT_V1
             || parameters.pipeline_stages() != 1
     }) {
+        return Err(());
+    }
+    let schedule = typed_next::<GeneralGemmPlanOp>(&mut operations, context)?;
+    if schedule
+        .get_attr_general_gemm_kind(context)
+        .is_none_or(|actual| *actual != schedule_attr(expected_schedule))
+    {
         return Err(());
     }
     let tile = typed_next::<MaterializeOp>(&mut operations, context)?;
@@ -2158,51 +2423,116 @@ fn validate_symbolic_projection_operations(context: &Context, module: &ModuleOp)
     }) {
         return Err(());
     }
-    for expected in [
-        HierarchyAttr::Grid,
-        HierarchyAttr::Workgroup,
-        HierarchyAttr::Subgroup,
-        HierarchyAttr::Lane,
-    ] {
-        let operation = typed_next::<HierarchyIdOp>(&mut operations, context)?;
-        if operation
-            .get_attr_gpu_hierarchy_id_hierarchy(context)
-            .is_none_or(|actual| *actual != expected)
-        {
-            return Err(());
-        }
-    }
-    for expected in [AddressSpaceAttr::Global, AddressSpaceAttr::Workgroup] {
-        let operation = typed_next::<MemorySpaceOp>(&mut operations, context)?;
-        if operation
-            .get_attr_gpu_memory_space_address_space(context)
-            .is_none_or(|actual| *actual != expected)
-        {
-            return Err(());
-        }
-    }
-    for _ in 0..2 {
-        let barrier = typed_next::<BarrierOp>(&mut operations, context)?;
-        if barrier
-            .get_attr_gpu_barrier_execution_scope(context)
-            .is_none_or(|value| *value != HierarchyAttr::Workgroup)
-            || barrier
-                .get_attr_gpu_barrier_memory_scope(context)
-                .is_none_or(|value| *value != MemoryScopeAttr::Workgroup)
-            || barrier
-                .get_attr_gpu_barrier_address_space(context)
-                .is_none_or(|value| *value != AddressSpaceAttr::Workgroup)
-            || barrier
-                .get_attr_gpu_barrier_order(context)
-                .is_none_or(|value| *value != MemoryOrderAttr::AcquireRelease)
-        {
-            return Err(());
-        }
-    }
+    typed_next::<GeneralGemmXor4Op>(&mut operations, context)?;
     if operations.next().is_some() {
         return Err(());
     }
     Ok(())
+}
+
+fn validate_symbolic_lowered_operations(
+    context: &Context,
+    module: &ModuleOp,
+    expected_schedule: GeneralGemmScheduleV1,
+) -> Result<(), ()> {
+    let body = module.get_body(context, 0);
+    let body = body.deref(context);
+    let mut operations = body.iter(context);
+    exact_attr(
+        typed_next::<GeneralGemmRuntimeAbiOp>(&mut operations, context)?
+            .get_attr_general_gemm_runtime_abi(context),
+        GeneralGemmRuntimeAbiAttr::DynamicElevenArgumentBf16F32V1,
+    )?;
+    exact_attr(
+        typed_next::<GeneralGemmGridMappingOp>(&mut operations, context)?
+            .get_attr_general_gemm_grid_mapping(context),
+        GeneralGemmGridMappingAttr::GridXy16Wave64FourComponentsV1,
+    )?;
+    exact_attr(
+        typed_next::<GeneralGemmPhaseLoopOp>(&mut operations, context)?
+            .get_attr_general_gemm_phase_loop(context),
+        GeneralGemmPhaseLoopAttr::CheckedCeilDivK16InductionV1,
+    )?;
+    let expected_a = match expected_schedule {
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1 => {
+            GeneralGemmGlobalTransferAttr::AScalarMaskedZeroFillV1
+        }
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 => {
+            GeneralGemmGlobalTransferAttr::AVector4AlignedFullScalarFallbackZeroFillV1
+        }
+    };
+    exact_attr(
+        typed_next::<GeneralGemmGlobalTransferOp>(&mut operations, context)?
+            .get_attr_general_gemm_global_transfer(context),
+        expected_a,
+    )?;
+    exact_attr(
+        typed_next::<GeneralGemmGlobalTransferOp>(&mut operations, context)?
+            .get_attr_general_gemm_global_transfer(context),
+        GeneralGemmGlobalTransferAttr::BScalarMaskedZeroFillV1,
+    )?;
+    for expected in [
+        GeneralGemmLdsTransferAttr::AWriteFourXor4V1,
+        GeneralGemmLdsTransferAttr::BWriteFourXor4V1,
+    ] {
+        exact_attr(
+            typed_next::<GeneralGemmLdsTransferOp>(&mut operations, context)?
+                .get_attr_general_gemm_lds_transfer(context),
+            expected,
+        )?;
+    }
+    exact_attr(
+        typed_next::<GeneralGemmEpochOp>(&mut operations, context)?
+            .get_attr_general_gemm_epoch(context),
+        GeneralGemmEpochAttr::PublishWorkgroupAcquireReleaseV1,
+    )?;
+    for expected in [
+        GeneralGemmLdsTransferAttr::AReadFourXor4V1,
+        GeneralGemmLdsTransferAttr::BReadFourXor4V1,
+    ] {
+        exact_attr(
+            typed_next::<GeneralGemmLdsTransferOp>(&mut operations, context)?
+                .get_attr_general_gemm_lds_transfer(context),
+            expected,
+        )?;
+    }
+    exact_attr(
+        typed_next::<GeneralGemmMfmaOp>(&mut operations, context)?
+            .get_attr_general_gemm_mfma(context),
+        GeneralGemmMfmaAttr::Bf16F32Wave64CarriedF32x4V1,
+    )?;
+    exact_attr(
+        typed_next::<GeneralGemmEpochOp>(&mut operations, context)?
+            .get_attr_general_gemm_epoch(context),
+        GeneralGemmEpochAttr::ReuseWorkgroupAcquireReleaseV1,
+    )?;
+    exact_attr(
+        typed_next::<GeneralGemmGlobalTransferOp>(&mut operations, context)?
+            .get_attr_general_gemm_global_transfer(context),
+        GeneralGemmGlobalTransferAttr::CGuardedDisjointLoadV1,
+    )?;
+    exact_attr(
+        typed_next::<GeneralGemmEpilogueOp>(&mut operations, context)?
+            .get_attr_general_gemm_epilogue(context),
+        GeneralGemmEpilogueAttr::GuardedDisjointAlphaAccPlusBetaCV1,
+    )?;
+    exact_attr(
+        typed_next::<GeneralGemmGlobalTransferOp>(&mut operations, context)?
+            .get_attr_general_gemm_global_transfer(context),
+        GeneralGemmGlobalTransferAttr::CGuardedDisjointStoreV1,
+    )?;
+    if operations.next().is_some() {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn exact_attr<T: Copy + Eq>(actual: Option<std::cell::Ref<'_, T>>, expected: T) -> Result<(), ()> {
+    if actual.is_none_or(|value| *value != expected) {
+        Err(())
+    } else {
+        Ok(())
+    }
 }
 
 fn project_symbolic_to_pliron(
@@ -2214,6 +2544,7 @@ fn project_symbolic_to_pliron(
 fn project_symbolic_to_pliron_inner(
     unit: &GeneralGemmSymbolicCompilationUnitV1,
 ) -> Result<GeneralGemmSymbolicPlironEnvelope, ()> {
+    let source_operation_schema = build_and_verify_symbolic_source_module(unit)?;
     let mut context = Context::new();
     let context_identity = ensure_context_identity(&mut context).map_err(|_| ())?;
     register_dialects(&mut context)?;
@@ -2221,52 +2552,37 @@ fn project_symbolic_to_pliron_inner(
     let module = ModuleOp::new(&mut context, symbol);
     install_symbolic_projection_metadata(&context, &module, unit);
 
-    let algorithm = AlgorithmOp::new(&mut context, 3).map_err(|_| ())?;
-    module.append_operation(&mut context, algorithm.get_operation(), 0);
-    let schedule =
-        PlanOp::new(&mut context, 3, GENERAL_GEMM_KIR_TILE_EXTENT_V1, 1).map_err(|_| ())?;
-    module.append_operation(&mut context, schedule.get_operation(), 0);
-    let tile = MaterializeOp::new(
-        &mut context,
-        2,
-        GENERAL_GEMM_KIR_WAVE_LANES_V1,
-        GENERAL_GEMM_KIR_COMPONENTS_PER_LANE_V1,
-    )
-    .map_err(|_| ())?;
-    module.append_operation(&mut context, tile.get_operation(), 0);
-    for hierarchy in [
-        HierarchyAttr::Grid,
-        HierarchyAttr::Workgroup,
-        HierarchyAttr::Subgroup,
-        HierarchyAttr::Lane,
-    ] {
-        let operation = HierarchyIdOp::new(&mut context, hierarchy);
-        module.append_operation(&mut context, operation.get_operation(), 0);
-    }
-    for address_space in [AddressSpaceAttr::Global, AddressSpaceAttr::Workgroup] {
-        let operation = MemorySpaceOp::new(&mut context, address_space);
-        module.append_operation(&mut context, operation.get_operation(), 0);
-    }
-    for _ in 0..2 {
-        let barrier = BarrierOp::new(
-            &mut context,
-            HierarchyAttr::Workgroup,
-            MemoryScopeAttr::Workgroup,
-            AddressSpaceAttr::Workgroup,
-            MemoryOrderAttr::AcquireRelease,
-        );
-        module.append_operation(&mut context, barrier.get_operation(), 0);
-    }
+    append_symbolic_lowered_operations(&mut context, &module, unit.schedule());
     verify_operation(module.get_operation(), &context).map_err(|_| ())?;
+    validate_symbolic_lowered_operations(&context, &module, unit.schedule())?;
     let operation_count = module
         .get_body(&context, 0)
         .deref(&context)
         .iter(&context)
         .take(unit.limits().max_pliron_operations + 1)
         .count();
-    if operation_count != GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1 {
+    if operation_count != GENERAL_GEMM_SYMBOLIC_LOWERED_OPERATION_COUNT_V1 {
         return Err(());
     }
+    let lowered_operation_schema = encode_symbolic_lowered_operation_schema(unit.schedule());
+    let source_operation_identity = GeneralGemmPlironSourceOperationIdentityV1(hash_fields(
+        SOURCE_OPERATION_IDENTITY_DOMAIN_V1,
+        &[&source_operation_schema],
+    ));
+    let lowered_operation_identity = GeneralGemmPlironLoweredOperationIdentityV1(hash_fields(
+        LOWERED_OPERATION_IDENTITY_DOMAIN_V1,
+        &[&lowered_operation_schema],
+    ));
+    let transformation_identity = GeneralGemmPlironTransformationIdentityV1(hash_fields(
+        TRANSFORMATION_IDENTITY_DOMAIN_V1,
+        &[
+            source_operation_identity.as_bytes(),
+            lowered_operation_identity.as_bytes(),
+            unit.symbolic_plan_identity().as_bytes(),
+            unit.symbolic_kir_identity().as_bytes(),
+            unit.schedule_identity().as_bytes(),
+        ],
+    ));
     let identity = GeneralGemmPlironProjectionIdentityV1(hash_fields(
         PROJECTION_IDENTITY_DOMAIN_V1,
         &[
@@ -2274,7 +2590,9 @@ fn project_symbolic_to_pliron_inner(
             unit.symbolic_plan_identity().as_bytes(),
             unit.symbolic_kir_identity().as_bytes(),
             unit.schedule_identity().as_bytes(),
-            &encode_pliron_operation_schema(),
+            source_operation_identity.as_bytes(),
+            lowered_operation_identity.as_bytes(),
+            transformation_identity.as_bytes(),
         ],
     ));
     Ok(GeneralGemmSymbolicPlironEnvelope {
@@ -2283,6 +2601,9 @@ fn project_symbolic_to_pliron_inner(
         module,
         receipt: GeneralGemmSymbolicPlironProjectionV1 {
             identity,
+            source_operation_identity,
+            lowered_operation_identity,
+            transformation_identity,
             compilation_identity: unit.identity(),
             schedule_identity: unit.schedule_identity(),
             symbolic_plan_identity: unit.symbolic_plan_identity(),
@@ -2290,6 +2611,164 @@ fn project_symbolic_to_pliron_inner(
             operation_count,
         },
     })
+}
+
+fn build_and_verify_symbolic_source_module(
+    unit: &GeneralGemmSymbolicCompilationUnitV1,
+) -> Result<Vec<u8>, ()> {
+    let (context, module) = build_symbolic_source_module(unit)?;
+    verify_operation(module.get_operation(), &context).map_err(|_| ())?;
+    let operation_count = module
+        .get_body(&context, 0)
+        .deref(&context)
+        .iter(&context)
+        .count();
+    if operation_count != GENERAL_GEMM_SYMBOLIC_SOURCE_OPERATION_COUNT_V1 {
+        return Err(());
+    }
+    validate_symbolic_source_operations(&context, &module, unit.schedule())?;
+    Ok(encode_symbolic_source_operation_schema(unit.schedule()))
+}
+
+fn build_symbolic_source_module(
+    unit: &GeneralGemmSymbolicCompilationUnitV1,
+) -> Result<(Context, ModuleOp), ()> {
+    let mut context = Context::new();
+    ensure_context_identity(&mut context).map_err(|_| ())?;
+    register_dialects(&mut context)?;
+    let symbol: Identifier = PLIRON_MODULE_SYMBOL.try_into().map_err(|_| ())?;
+    let module = ModuleOp::new(&mut context, symbol);
+    install_symbolic_projection_metadata(&context, &module, unit);
+    let algorithm = AlgorithmOp::new(&mut context, 3).map_err(|_| ())?;
+    module.append_operation(&mut context, algorithm.get_operation(), 0);
+    let gemm = GeneralGemmOp::canonical(&mut context);
+    module.append_operation(&mut context, gemm.get_operation(), 0);
+    let schedule =
+        PlanOp::new(&mut context, 3, GENERAL_GEMM_KIR_TILE_EXTENT_V1, 1).map_err(|_| ())?;
+    module.append_operation(&mut context, schedule.get_operation(), 0);
+    let gemm_schedule = GeneralGemmPlanOp::new(&mut context, schedule_attr(unit.schedule()));
+    module.append_operation(&mut context, gemm_schedule.get_operation(), 0);
+    let tile = MaterializeOp::new(
+        &mut context,
+        2,
+        GENERAL_GEMM_KIR_WAVE_LANES_V1,
+        GENERAL_GEMM_KIR_COMPONENTS_PER_LANE_V1,
+    )
+    .map_err(|_| ())?;
+    module.append_operation(&mut context, tile.get_operation(), 0);
+    let mapping = GeneralGemmXor4Op::canonical(&mut context);
+    module.append_operation(&mut context, mapping.get_operation(), 0);
+    Ok((context, module))
+}
+
+fn append_symbolic_lowered_operations(
+    context: &mut Context,
+    module: &ModuleOp,
+    schedule: GeneralGemmScheduleV1,
+) {
+    macro_rules! append {
+        ($op:expr) => {{
+            let operation = $op;
+            module.append_operation(context, operation.get_operation(), 0);
+        }};
+    }
+    for operation in canonical_lowered_operations(schedule) {
+        match operation {
+            GeneralGemmLoweredOperationV1::RuntimeAbi(attribute) => {
+                append!(GeneralGemmRuntimeAbiOp::new(context, attribute));
+            }
+            GeneralGemmLoweredOperationV1::GridMapping(attribute) => {
+                append!(GeneralGemmGridMappingOp::new(context, attribute));
+            }
+            GeneralGemmLoweredOperationV1::PhaseLoop(attribute) => {
+                append!(GeneralGemmPhaseLoopOp::new(context, attribute));
+            }
+            GeneralGemmLoweredOperationV1::GlobalTransfer(attribute) => {
+                append!(GeneralGemmGlobalTransferOp::new(context, attribute));
+            }
+            GeneralGemmLoweredOperationV1::LdsTransfer(attribute) => {
+                append!(GeneralGemmLdsTransferOp::new(context, attribute));
+            }
+            GeneralGemmLoweredOperationV1::Epoch(attribute) => {
+                append!(GeneralGemmEpochOp::new(context, attribute));
+            }
+            GeneralGemmLoweredOperationV1::Mfma(attribute) => {
+                append!(GeneralGemmMfmaOp::new(context, attribute));
+            }
+            GeneralGemmLoweredOperationV1::Epilogue(attribute) => {
+                append!(GeneralGemmEpilogueOp::new(context, attribute));
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneralGemmLoweredOperationV1 {
+    RuntimeAbi(GeneralGemmRuntimeAbiAttr),
+    GridMapping(GeneralGemmGridMappingAttr),
+    PhaseLoop(GeneralGemmPhaseLoopAttr),
+    GlobalTransfer(GeneralGemmGlobalTransferAttr),
+    LdsTransfer(GeneralGemmLdsTransferAttr),
+    Epoch(GeneralGemmEpochAttr),
+    Mfma(GeneralGemmMfmaAttr),
+    Epilogue(GeneralGemmEpilogueAttr),
+}
+
+fn canonical_lowered_operations(
+    schedule: GeneralGemmScheduleV1,
+) -> [GeneralGemmLoweredOperationV1; GENERAL_GEMM_SYMBOLIC_LOWERED_OPERATION_COUNT_V1] {
+    let a_transfer = match schedule {
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1 => {
+            GeneralGemmGlobalTransferAttr::AScalarMaskedZeroFillV1
+        }
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 => {
+            GeneralGemmGlobalTransferAttr::AVector4AlignedFullScalarFallbackZeroFillV1
+        }
+    };
+    [
+        GeneralGemmLoweredOperationV1::RuntimeAbi(
+            GeneralGemmRuntimeAbiAttr::DynamicElevenArgumentBf16F32V1,
+        ),
+        GeneralGemmLoweredOperationV1::GridMapping(
+            GeneralGemmGridMappingAttr::GridXy16Wave64FourComponentsV1,
+        ),
+        GeneralGemmLoweredOperationV1::PhaseLoop(
+            GeneralGemmPhaseLoopAttr::CheckedCeilDivK16InductionV1,
+        ),
+        GeneralGemmLoweredOperationV1::GlobalTransfer(a_transfer),
+        GeneralGemmLoweredOperationV1::GlobalTransfer(
+            GeneralGemmGlobalTransferAttr::BScalarMaskedZeroFillV1,
+        ),
+        GeneralGemmLoweredOperationV1::LdsTransfer(GeneralGemmLdsTransferAttr::AWriteFourXor4V1),
+        GeneralGemmLoweredOperationV1::LdsTransfer(GeneralGemmLdsTransferAttr::BWriteFourXor4V1),
+        GeneralGemmLoweredOperationV1::Epoch(
+            GeneralGemmEpochAttr::PublishWorkgroupAcquireReleaseV1,
+        ),
+        GeneralGemmLoweredOperationV1::LdsTransfer(GeneralGemmLdsTransferAttr::AReadFourXor4V1),
+        GeneralGemmLoweredOperationV1::LdsTransfer(GeneralGemmLdsTransferAttr::BReadFourXor4V1),
+        GeneralGemmLoweredOperationV1::Mfma(GeneralGemmMfmaAttr::Bf16F32Wave64CarriedF32x4V1),
+        GeneralGemmLoweredOperationV1::Epoch(GeneralGemmEpochAttr::ReuseWorkgroupAcquireReleaseV1),
+        GeneralGemmLoweredOperationV1::GlobalTransfer(
+            GeneralGemmGlobalTransferAttr::CGuardedDisjointLoadV1,
+        ),
+        GeneralGemmLoweredOperationV1::Epilogue(
+            GeneralGemmEpilogueAttr::GuardedDisjointAlphaAccPlusBetaCV1,
+        ),
+        GeneralGemmLoweredOperationV1::GlobalTransfer(
+            GeneralGemmGlobalTransferAttr::CGuardedDisjointStoreV1,
+        ),
+    ]
+}
+
+const fn schedule_attr(schedule: GeneralGemmScheduleV1) -> GeneralGemmScheduleAttr {
+    match schedule {
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1 => {
+            GeneralGemmScheduleAttr::ReferenceWave64Xor4V1
+        }
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 => {
+            GeneralGemmScheduleAttr::VectorizedAOnlyBf16GlobalTransferV1
+        }
+    }
 }
 
 fn register_dialects(context: &mut Context) -> Result<(), ()> {
@@ -2395,9 +2874,44 @@ fn encode_pliron_operation_schema() -> Vec<u8> {
     vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10]
 }
 
-fn encode_symbolic_plan() -> Vec<u8> {
+fn encode_symbolic_source_operation_schema(schedule: GeneralGemmScheduleV1) -> Vec<u8> {
+    // algorithm, GEMM ABI/epilogue, generic plan, GEMM plan, tile, XOR4 mapping.
+    vec![1, 11, 2, 20 + schedule as u8, 3, 12]
+}
+
+fn encode_symbolic_lowered_operation_schema(schedule: GeneralGemmScheduleV1) -> Vec<u8> {
+    canonical_lowered_operations(schedule)
+        .into_iter()
+        .map(|operation| match operation {
+            GeneralGemmLoweredOperationV1::RuntimeAbi(_) => 21,
+            GeneralGemmLoweredOperationV1::GridMapping(_) => 22,
+            GeneralGemmLoweredOperationV1::PhaseLoop(_) => 23,
+            GeneralGemmLoweredOperationV1::GlobalTransfer(attribute) => match attribute {
+                GeneralGemmGlobalTransferAttr::AScalarMaskedZeroFillV1 => 31,
+                GeneralGemmGlobalTransferAttr::AVector4AlignedFullScalarFallbackZeroFillV1 => 32,
+                GeneralGemmGlobalTransferAttr::BScalarMaskedZeroFillV1 => 33,
+                GeneralGemmGlobalTransferAttr::CGuardedDisjointLoadV1 => 34,
+                GeneralGemmGlobalTransferAttr::CGuardedDisjointStoreV1 => 35,
+            },
+            GeneralGemmLoweredOperationV1::LdsTransfer(attribute) => match attribute {
+                GeneralGemmLdsTransferAttr::AWriteFourXor4V1 => 41,
+                GeneralGemmLdsTransferAttr::BWriteFourXor4V1 => 42,
+                GeneralGemmLdsTransferAttr::AReadFourXor4V1 => 43,
+                GeneralGemmLdsTransferAttr::BReadFourXor4V1 => 44,
+            },
+            GeneralGemmLoweredOperationV1::Epoch(attribute) => match attribute {
+                GeneralGemmEpochAttr::PublishWorkgroupAcquireReleaseV1 => 51,
+                GeneralGemmEpochAttr::ReuseWorkgroupAcquireReleaseV1 => 52,
+            },
+            GeneralGemmLoweredOperationV1::Mfma(_) => 61,
+            GeneralGemmLoweredOperationV1::Epilogue(_) => 71,
+        })
+        .collect()
+}
+
+fn encode_symbolic_plan(expressions: [GeneralGemmSymbolicPlanExpressionV1; 6]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(64);
-    for expression in symbolic_plan_expressions() {
+    for expression in expressions {
         match expression {
             GeneralGemmSymbolicPlanExpressionV1::CheckedRowMajorExtent {
                 rows,
@@ -2414,6 +2928,42 @@ fn encode_symbolic_plan() -> Vec<u8> {
     bytes.extend_from_slice(&GENERAL_GEMM_KIR_TILE_EXTENT_V1.to_le_bytes());
     bytes.extend_from_slice(&GENERAL_GEMM_KIR_WAVE_LANES_V1.to_le_bytes());
     bytes
+}
+
+fn encode_symbolic_kir_behavior_fields(
+    behaviors: [GeneralGemmDerivedKirBehaviorV1; 5],
+) -> [Vec<u8>; 5] {
+    behaviors.map(|behavior| match behavior {
+        GeneralGemmDerivedKirBehaviorV1::Wave64GridXy16 => b"wave64-grid-xy16".to_vec(),
+        GeneralGemmDerivedKirBehaviorV1::GuardedAbCheckedRowMajorZeroTail => {
+            b"guarded-a-b-positive-zero-tail".to_vec()
+        }
+        GeneralGemmDerivedKirBehaviorV1::Xor4SingleBufferPublishReadMfmaReuse => {
+            b"xor4-single-buffer-stage-publish-mfma-reuse".to_vec()
+        }
+        GeneralGemmDerivedKirBehaviorV1::CarriedF32x4PhaseAccumulator => {
+            b"carried-f32x4-phase-accumulator".to_vec()
+        }
+        GeneralGemmDerivedKirBehaviorV1::GuardedDisjointCAlphaAccPlusBetaC => {
+            b"guarded-disjoint-c-alpha-acc-plus-beta-c".to_vec()
+        }
+    })
+}
+
+fn expected_symbolic_plan_identity() -> GeneralGemmSymbolicPlanIdentityV1 {
+    GeneralGemmSymbolicPlanIdentityV1(hash_fields(
+        SYMBOLIC_PLAN_IDENTITY_DOMAIN_V1,
+        &[&encode_symbolic_plan(symbolic_plan_expressions())],
+    ))
+}
+
+fn expected_symbolic_kir_identity() -> GeneralGemmSymbolicKirIdentityV1 {
+    let plan = expected_symbolic_plan_identity();
+    let behavior_fields = encode_symbolic_kir_behavior_fields(symbolic_kir_behaviors());
+    let mut fields = Vec::with_capacity(6);
+    fields.push(plan.as_bytes().as_slice());
+    fields.extend(behavior_fields.iter().map(Vec::as_slice));
+    GeneralGemmSymbolicKirIdentityV1(hash_fields(SYMBOLIC_KIR_IDENTITY_DOMAIN_V1, &fields))
 }
 
 fn encode_symbolic_kir_template(frontend: &GeneralGemmFrontendSemanticBindingV1) -> Vec<u8> {
@@ -2458,6 +3008,16 @@ const fn symbolic_plan_expressions() -> [GeneralGemmSymbolicPlanExpressionV1; 6]
         GeneralGemmSymbolicPlanExpressionV1::CeilDiv16(GeneralGemmAbiArgumentV1::K),
         GeneralGemmSymbolicPlanExpressionV1::OutputBlockCounts,
         GeneralGemmSymbolicPlanExpressionV1::AqlGridWorkItems,
+    ]
+}
+
+const fn symbolic_kir_behaviors() -> [GeneralGemmDerivedKirBehaviorV1; 5] {
+    [
+        GeneralGemmDerivedKirBehaviorV1::Wave64GridXy16,
+        GeneralGemmDerivedKirBehaviorV1::GuardedAbCheckedRowMajorZeroTail,
+        GeneralGemmDerivedKirBehaviorV1::Xor4SingleBufferPublishReadMfmaReuse,
+        GeneralGemmDerivedKirBehaviorV1::CarriedF32x4PhaseAccumulator,
+        GeneralGemmDerivedKirBehaviorV1::GuardedDisjointCAlphaAccPlusBetaC,
     ]
 }
 

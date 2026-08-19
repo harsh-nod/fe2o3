@@ -221,7 +221,7 @@ fn symbolic_compilation_limits_fail_before_projection() {
         GeneralGemmSymbolicCompilationUnitV1::checked(&request, frontend, schedule, limits,)
             .unwrap_err(),
         GeneralGemmSymbolicCompilationErrorV1::PlironOperationsLimit {
-            required: GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1,
+            required: GENERAL_GEMM_SYMBOLIC_LOWERED_OPERATION_COUNT_V1,
             maximum: 10,
         }
     );
@@ -428,6 +428,66 @@ fn symbolic_frontend_schemas_are_deterministic_and_bound_to_launch() {
             GeneralGemmLoweringLimitsV1::default(),
         ),
         Err(GeneralGemmCompilationBindingErrorV1::FrontendKernelSubstitution)
+    );
+}
+
+fn independently_derived_source_schema() -> GeneralGemmDerivedSourceSchemaV1 {
+    GeneralGemmDerivedSourceSchemaV1::checked(
+        [
+            GeneralGemmSymbolicPlanExpressionV1::CheckedRowMajorExtent {
+                rows: GeneralGemmAbiArgumentV1::M,
+                columns: GeneralGemmAbiArgumentV1::K,
+                stride: GeneralGemmAbiArgumentV1::Lda,
+            },
+            GeneralGemmSymbolicPlanExpressionV1::CheckedRowMajorExtent {
+                rows: GeneralGemmAbiArgumentV1::K,
+                columns: GeneralGemmAbiArgumentV1::N,
+                stride: GeneralGemmAbiArgumentV1::Ldb,
+            },
+            GeneralGemmSymbolicPlanExpressionV1::CheckedRowMajorExtent {
+                rows: GeneralGemmAbiArgumentV1::M,
+                columns: GeneralGemmAbiArgumentV1::N,
+                stride: GeneralGemmAbiArgumentV1::Ldc,
+            },
+            GeneralGemmSymbolicPlanExpressionV1::CeilDiv16(GeneralGemmAbiArgumentV1::K),
+            GeneralGemmSymbolicPlanExpressionV1::OutputBlockCounts,
+            GeneralGemmSymbolicPlanExpressionV1::AqlGridWorkItems,
+        ],
+        [
+            GeneralGemmDerivedKirBehaviorV1::Wave64GridXy16,
+            GeneralGemmDerivedKirBehaviorV1::GuardedAbCheckedRowMajorZeroTail,
+            GeneralGemmDerivedKirBehaviorV1::Xor4SingleBufferPublishReadMfmaReuse,
+            GeneralGemmDerivedKirBehaviorV1::CarriedF32x4PhaseAccumulator,
+            GeneralGemmDerivedKirBehaviorV1::GuardedDisjointCAlphaAccPlusBetaC,
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn independently_derived_source_schema_reproduces_closed_identities_without_authority() {
+    let schema = independently_derived_source_schema();
+    let plan = GeneralGemmSymbolicPlanV1::from_derived_source_schema(&schema).unwrap();
+    let kir = GeneralGemmSymbolicKirV1::from_derived_source_schema(&schema).unwrap();
+    assert_eq!(plan, GeneralGemmSymbolicPlanV1::canonical());
+    assert_eq!(kir, GeneralGemmSymbolicKirV1::canonical());
+    assert!(!schema.grants_authority());
+}
+
+#[test]
+fn derived_source_schema_rejects_plan_and_kir_reordering() {
+    let schema = independently_derived_source_schema();
+    let mut plan = schema.plan_expressions();
+    plan.swap(0, 1);
+    assert_eq!(
+        GeneralGemmDerivedSourceSchemaV1::checked(plan, schema.kir_behaviors()),
+        Err(GeneralGemmDerivedSourceSchemaErrorV1::PlanExpressions)
+    );
+    let mut behaviors = schema.kir_behaviors();
+    behaviors.swap(2, 3);
+    assert_eq!(
+        GeneralGemmDerivedSourceSchemaV1::checked(schema.plan_expressions(), behaviors),
+        Err(GeneralGemmDerivedSourceSchemaErrorV1::KirBehaviors)
     );
 }
 
@@ -1062,6 +1122,22 @@ fn symbolic_machine_lowers_dynamic_body_without_concrete_witness_plan() {
             unit.symbolic_kir_identity()
         );
         assert_eq!(
+            machine.projection().operation_count(),
+            GENERAL_GEMM_SYMBOLIC_LOWERED_OPERATION_COUNT_V1
+        );
+        assert_ne!(
+            machine.projection().source_operation_identity().as_bytes(),
+            &[0; 32]
+        );
+        assert_ne!(
+            machine.projection().lowered_operation_identity().as_bytes(),
+            &[0; 32]
+        );
+        assert_ne!(
+            machine.projection().transformation_identity().as_bytes(),
+            &[0; 32]
+        );
+        assert_eq!(
             machine
                 .handoff()
                 .base()
@@ -1126,4 +1202,92 @@ fn symbolic_machine_identity_rejects_schedule_and_frontend_substitution() {
         reference.binding_section().identity(),
         substituted.binding_section().identity()
     );
+}
+
+fn lowered_operation_pointers(
+    envelope: &GeneralGemmSymbolicPlironEnvelope,
+) -> Vec<pliron::context::Ptr<Operation>> {
+    envelope
+        .module
+        .get_body(&envelope.context, 0)
+        .deref(&envelope.context)
+        .iter(&envelope.context)
+        .collect()
+}
+
+#[test]
+fn symbolic_pre_pass_rejects_schedule_substitution() {
+    let unit = symbolic_unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let (context, module) = build_symbolic_source_module(&unit).unwrap();
+    let operations: Vec<_> = module
+        .get_body(&context, 0)
+        .deref(&context)
+        .iter(&context)
+        .collect();
+    let schedule = Operation::get_op::<GeneralGemmPlanOp>(operations[3], &context).unwrap();
+    schedule.set_attr_general_gemm_kind(
+        &context,
+        GeneralGemmScheduleAttr::VectorizedAOnlyBf16GlobalTransferV1,
+    );
+    assert!(verify_operation(module.get_operation(), &context).is_err());
+    assert!(validate_symbolic_source_operations(&context, &module, unit.schedule()).is_err());
+}
+
+#[test]
+fn symbolic_post_pass_rejects_abi_payload_omission() {
+    let unit = symbolic_unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let envelope = project_symbolic_to_pliron_inner(&unit).unwrap();
+    let operations = lowered_operation_pointers(&envelope);
+    operations[0]
+        .deref_mut(&envelope.context)
+        .attributes
+        .0
+        .clear();
+    assert!(envelope.into_verified_lowered(&unit).is_err());
+}
+
+#[test]
+fn symbolic_post_pass_rejects_epilogue_omission() {
+    let unit = symbolic_unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let envelope = project_symbolic_to_pliron_inner(&unit).unwrap();
+    let operations = lowered_operation_pointers(&envelope);
+    operations[13]
+        .deref_mut(&envelope.context)
+        .attributes
+        .0
+        .clear();
+    assert!(envelope.into_verified_lowered(&unit).is_err());
+}
+
+#[test]
+fn symbolic_post_pass_rejects_epoch_reordering() {
+    let unit = symbolic_unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let envelope = project_symbolic_to_pliron_inner(&unit).unwrap();
+    let operations = lowered_operation_pointers(&envelope);
+    let publish =
+        Operation::get_op::<GeneralGemmEpochOp>(operations[7], &envelope.context).unwrap();
+    let reuse = Operation::get_op::<GeneralGemmEpochOp>(operations[11], &envelope.context).unwrap();
+    publish.set_attr_general_gemm_epoch(
+        &envelope.context,
+        GeneralGemmEpochAttr::ReuseWorkgroupAcquireReleaseV1,
+    );
+    reuse.set_attr_general_gemm_epoch(
+        &envelope.context,
+        GeneralGemmEpochAttr::PublishWorkgroupAcquireReleaseV1,
+    );
+    assert!(envelope.into_verified_lowered(&unit).is_err());
+}
+
+#[test]
+fn symbolic_post_pass_rejects_cross_schedule_a_transfer() {
+    let unit = symbolic_unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let envelope = project_symbolic_to_pliron_inner(&unit).unwrap();
+    let operations = lowered_operation_pointers(&envelope);
+    let a_transfer =
+        Operation::get_op::<GeneralGemmGlobalTransferOp>(operations[3], &envelope.context).unwrap();
+    a_transfer.set_attr_general_gemm_global_transfer(
+        &envelope.context,
+        GeneralGemmGlobalTransferAttr::AVector4AlignedFullScalarFallbackZeroFillV1,
+    );
+    assert!(envelope.into_verified_lowered(&unit).is_err());
 }
