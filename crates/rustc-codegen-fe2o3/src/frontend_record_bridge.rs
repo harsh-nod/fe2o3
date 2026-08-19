@@ -64,6 +64,7 @@ pub(crate) enum FrontendRecordBridgeError {
     Validation(ValidationError),
     Decode(DecodeError),
     NonCanonicalRoundTrip,
+    SameSessionRustcCustody,
 }
 
 impl fmt::Display for FrontendRecordBridgeError {
@@ -117,6 +118,8 @@ impl fmt::Display for FrontendRecordBridgeError {
             Self::NonCanonicalRoundTrip => {
                 formatter.write_str("frontend record changed across canonical decode")
             }
+            Self::SameSessionRustcCustody => formatter
+                .write_str("same-session ordinary-Rust custody rejected the typed rustc closure"),
         }
     }
 }
@@ -143,11 +146,23 @@ impl From<DecodeError> for FrontendRecordBridgeError {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompilerFrontendRecordV1 {
     unit: FrontendUnitV1,
     canonical_bytes: Vec<u8>,
     kernel_contracts: Vec<CompilerKernelFrontendContractRecordV1>,
+    ordinary_rust_scalar: Option<crate::same_session_rustc_v1::OwnerControlledRustKernelImportV1>,
+}
+
+impl fmt::Debug for CompilerFrontendRecordV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompilerFrontendRecordV1")
+            .field("unit", &self.unit)
+            .field("canonical_bytes", &self.canonical_bytes.len())
+            .field("kernel_contracts", &self.kernel_contracts.len())
+            .field("ordinary_rust_scalar", &self.ordinary_rust_scalar.is_some())
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,6 +187,12 @@ impl CompilerFrontendRecordV1 {
 
     pub(crate) fn kernel_contracts(&self) -> &[CompilerKernelFrontendContractRecordV1] {
         &self.kernel_contracts
+    }
+
+    pub(crate) fn ordinary_rust_scalar(
+        &self,
+    ) -> Option<&crate::same_session_rustc_v1::OwnerControlledRustKernelImportV1> {
+        self.ordinary_rust_scalar.as_ref()
     }
 }
 
@@ -273,11 +294,59 @@ fn extract_frontend_record_untrimmed_v1<'tcx>(
     if decoded != extracted {
         return Err(FrontendRecordBridgeError::NonCanonicalRoundTrip);
     }
+    let ordinary_rust_scalar = if is_ordinary_scalar_candidate(collection) {
+        let imported = crate::same_session_rustc_v1::import_ordinary_rust_kernel_same_session_v1(
+            tcx, collection,
+        )
+        .map_err(|_| FrontendRecordBridgeError::SameSessionRustcCustody)?;
+        debug_assert_eq!(
+            imported.function_count(),
+            imported.imported().functions().len()
+        );
+        debug_assert_eq!(
+            imported.mir_closure(),
+            imported.imported().mir_closure_identity()
+        );
+        debug_assert_ne!(imported.abi_closure(), &[0; 32]);
+        debug_assert_ne!(imported.custody_binding(), &[0; 32]);
+        debug_assert!(!imported.grants_compiler_authority());
+        Some(imported)
+    } else {
+        None
+    };
     Ok(CompilerFrontendRecordV1 {
         unit: decoded,
         canonical_bytes,
         kernel_contracts,
+        ordinary_rust_scalar,
     })
+}
+
+fn is_ordinary_scalar_candidate(collection: &CollectionResult<'_>) -> bool {
+    let mut roots = collection
+        .functions
+        .iter()
+        .filter(|function| function.is_kernel_entry());
+    let Some(root) = roots.next() else {
+        return false;
+    };
+    if roots.next().is_some() {
+        return false;
+    }
+    let Some(contract) = root
+        .frontend_contract
+        .as_ref()
+        .map(|record| record.contract())
+    else {
+        return false;
+    };
+    let Some(launch) = contract.launch() else {
+        return false;
+    };
+    contract.unsafe_assembly().is_none()
+        && launch.required().map(|value| value.as_array()) == Some([1, 1, 1])
+        && launch.maximum().map(|value| value.as_array()) == Some([1, 1, 1])
+        && launch.min_workgroups_per_compute_unit().is_none()
 }
 
 fn extract_function<'tcx>(
@@ -541,6 +610,9 @@ fn check_bound(
 mod tests {
     use super::*;
     use crate::collector::CollectedFunction;
+    use fe2o3_rustc_front::{
+        FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
+    };
     use rustc_driver::{Callbacks, Compilation};
     use rustc_hir::def::DefKind;
     use rustc_hir::def_id::LocalDefId;
@@ -555,7 +627,7 @@ mod tests {
 #![allow(dead_code)]
 
 fn helper(value: u32) -> u32 {
-    value.wrapping_add(1)
+    value
 }
 
 fn kernel(value: u32) -> u32 {
@@ -631,9 +703,19 @@ fn kernel(value: u32) -> u32 {
             kernel_binding: None,
             typed_layout_identities: None,
             general_typed_contract: None,
-            frontend_contract: None,
+            frontend_contract: is_kernel
+                .then(|| AuthenticatedKernelFrontendContractV1::for_test(scalar_contract())),
             dead_branches: None,
         }
+    }
+
+    fn scalar_contract() -> KernelFrontendContractV1 {
+        let one = FrontendWorkgroupDimensionsV1::new([1, 1, 1]).unwrap();
+        KernelFrontendContractV1::new(
+            Some(FrontendLaunchBoundsV1::new(Some(one), Some(one), None).unwrap()),
+            None,
+        )
+        .unwrap()
     }
 
     fn local_function(tcx: TyCtxt<'_>, name: &str) -> LocalDefId {
@@ -686,6 +768,7 @@ fn kernel(value: u32) -> u32 {
             "2024".to_owned(),
             "--emit".to_owned(),
             "metadata".to_owned(),
+            "-Cpanic=abort".to_owned(),
             "--sysroot".to_owned(),
             sysroot.trim().to_owned(),
             "-o".to_owned(),
@@ -708,6 +791,21 @@ fn kernel(value: u32) -> u32 {
         );
         assert_eq!(results.first.unit, results.reordered.unit);
         assert_eq!(results.first.unit.functions().len(), 2);
+        assert!(results.first.ordinary_rust_scalar().is_some());
+        assert_eq!(
+            results
+                .first
+                .ordinary_rust_scalar()
+                .unwrap()
+                .imported()
+                .import_identity(),
+            results
+                .reordered
+                .ordinary_rust_scalar()
+                .unwrap()
+                .imported()
+                .import_identity()
+        );
         assert!(
             results
                 .first
