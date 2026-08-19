@@ -34,6 +34,7 @@ const RECORD_MAGIC: &[u8] = b"FE2O3-COMPILER-MODULE-HANDOFF-V1\0";
 const RECORD_VERSION: u16 = 1;
 const PRODUCER_DOMAIN: &[u8] = b"fe2o3.compiler-module-handoff.producer.v1\0";
 const SLOT_DOMAIN: &[u8] = b"fe2o3.compiler-module-handoff.slot.v1\0";
+const NAMED_SLOT_DOMAIN: &[u8] = b"fe2o3.compiler-module-handoff.named-slot.v1\0";
 const RECORD_DOMAIN: &[u8] = b"fe2o3.compiler-module-handoff.record.v1\0";
 const MAX_SLOT_ENTRIES: usize = 16;
 const MAX_STALE_SLOTS: usize = 1024;
@@ -49,6 +50,23 @@ static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 /// filesystem crate deliberately does not depend on `fe2o3-compiler-ffi`; integration must keep
 /// the two V1 constants equal.
 pub const MAX_COMPILER_MODULE_HANDOFF_BYTES: usize = (64 * 1024 * 1024) + (512 * 1024) + 128 + 83;
+
+/// Closed attempt-local transport slot for one compiler module handoff.
+///
+/// The default value preserves the original single-module protocol. The two
+/// general-GEMM values let one rustc process transfer the independently built
+/// reference and vectorized schedules while retaining one build attempt and
+/// one non-Clone frontend correspondence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum CompilerModuleHandoffSlotV1 {
+    /// Original one-module transport slot.
+    Default = 0,
+    /// Issue #138 reference wave64 XOR4 schedule.
+    GeneralGemmReference = 1,
+    /// Issue #138 A-only BF16 vector-transfer schedule.
+    GeneralGemmVectorizedAOnly = 2,
+}
 
 /// SHA-256 identity of exact bytes committed by a holder of the named cooperative attempt.
 ///
@@ -74,6 +92,7 @@ impl CompilerModuleHandoffIdentityV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompilerModuleHandoffReceiptV1 {
     attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV1,
     identity: CompilerModuleHandoffIdentityV1,
     length: usize,
 }
@@ -81,6 +100,11 @@ pub struct CompilerModuleHandoffReceiptV1 {
 impl CompilerModuleHandoffReceiptV1 {
     pub const fn attempt(self) -> BuildAttempt {
         self.attempt
+    }
+
+    /// Returns the exact attempt-local transport slot.
+    pub const fn slot(self) -> CompilerModuleHandoffSlotV1 {
+        self.slot
     }
 
     pub const fn identity(self) -> CompilerModuleHandoffIdentityV1 {
@@ -109,6 +133,7 @@ impl CompilerModuleHandoffReceiptV1 {
 #[derive(Clone, Debug)]
 pub struct ConsumedCompilerModuleHandoffV1 {
     attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV1,
     identity: CompilerModuleHandoffIdentityV1,
     bytes: Arc<[u8]>,
 }
@@ -116,6 +141,11 @@ pub struct ConsumedCompilerModuleHandoffV1 {
 impl ConsumedCompilerModuleHandoffV1 {
     pub const fn attempt(&self) -> BuildAttempt {
         self.attempt
+    }
+
+    /// Returns the exact attempt-local transport slot.
+    pub const fn slot(&self) -> CompilerModuleHandoffSlotV1 {
+        self.slot
     }
 
     pub const fn identity(&self) -> CompilerModuleHandoffIdentityV1 {
@@ -244,6 +274,27 @@ pub fn publish_compiler_module_handoff_v1(
     publish_with_hooks(output_dir, producer, attempt, handoff_bytes, &mut NoFaults)
 }
 
+/// Atomically publishes bytes in one closed attempt-local named slot.
+///
+/// Named slots remain inert coordination state. They neither combine the two
+/// modules nor authorize a compiler, finalizer, publication, load, or launch.
+pub fn publish_compiler_module_handoff_in_slot_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV1,
+    handoff_bytes: &[u8],
+) -> Result<CompilerModuleHandoffReceiptV1, CompilerModuleHandoffErrorV1> {
+    publish_in_slot_with_hooks(
+        output_dir,
+        producer,
+        attempt,
+        slot,
+        handoff_bytes,
+        &mut NoFaults,
+    )
+}
+
 /// Consumes one explicit attempt's complete canonical handoff exactly once.
 ///
 /// The durable `consumed` tombstone is committed before bytes are returned. Cleanup of the now
@@ -254,6 +305,16 @@ pub fn consume_compiler_module_handoff_v1(
     attempt: BuildAttempt,
 ) -> Result<ConsumedCompilerModuleHandoffV1, CompilerModuleHandoffErrorV1> {
     consume_with_hooks(output_dir, producer, attempt, &mut NoFaults)
+}
+
+/// Consumes one closed attempt-local named slot exactly once.
+pub fn consume_compiler_module_handoff_in_slot_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV1,
+) -> Result<ConsumedCompilerModuleHandoffV1, CompilerModuleHandoffErrorV1> {
+    consume_in_slot_with_hooks(output_dir, producer, attempt, slot, &mut NoFaults)
 }
 
 #[derive(Clone, Copy)]
@@ -451,20 +512,38 @@ fn publish_with_hooks(
     handoff_bytes: &[u8],
     hooks: &mut impl HandoffHooks,
 ) -> Result<CompilerModuleHandoffReceiptV1, CompilerModuleHandoffErrorV1> {
+    publish_in_slot_with_hooks(
+        output_dir,
+        producer,
+        attempt,
+        CompilerModuleHandoffSlotV1::Default,
+        handoff_bytes,
+        hooks,
+    )
+}
+
+fn publish_in_slot_with_hooks(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    handoff_slot: CompilerModuleHandoffSlotV1,
+    handoff_bytes: &[u8],
+    hooks: &mut impl HandoffHooks,
+) -> Result<CompilerModuleHandoffReceiptV1, CompilerModuleHandoffErrorV1> {
     validate_handoff_size(handoff_bytes.len())?;
     let output = PinnedOutput::open(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
     authorize(&output, producer, attempt)?;
     let producer_id = producer_identity(producer);
-    let slot_id = slot_identity(producer_id, attempt);
+    let slot_id = slot_identity(producer_id, attempt, handoff_slot);
     let parent = open_or_create_private_directory(
         &output.fd,
         &output.display_path,
         &format!("{PARENT_PREFIX}{}", hex(&producer_id)),
         hooks,
     )?;
-    cleanup_stale_slots(&parent, &format!("{SLOT_PREFIX}{}", hex(&slot_id)))?;
+    cleanup_stale_slots(&parent, producer_id, attempt)?;
     let slot = open_or_create_private_directory(
         &parent.fd,
         &parent.path,
@@ -543,6 +622,7 @@ fn publish_with_hooks(
     validate_named_record(&slot, READY_ENTRY, &record_bytes)?;
     Ok(CompilerModuleHandoffReceiptV1 {
         attempt,
+        slot: handoff_slot,
         identity,
         length: handoff_bytes.len(),
     })
@@ -554,19 +634,35 @@ fn consume_with_hooks(
     attempt: BuildAttempt,
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedCompilerModuleHandoffV1, CompilerModuleHandoffErrorV1> {
+    consume_in_slot_with_hooks(
+        output_dir,
+        producer,
+        attempt,
+        CompilerModuleHandoffSlotV1::Default,
+        hooks,
+    )
+}
+
+fn consume_in_slot_with_hooks(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    handoff_slot: CompilerModuleHandoffSlotV1,
+    hooks: &mut impl HandoffHooks,
+) -> Result<ConsumedCompilerModuleHandoffV1, CompilerModuleHandoffErrorV1> {
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
     authorize(&output, producer, attempt)?;
     let producer_id = producer_identity(producer);
-    let slot_id = slot_identity(producer_id, attempt);
+    let slot_id = slot_identity(producer_id, attempt, handoff_slot);
     let parent = open_private_directory(
         &output.fd,
         &output.display_path,
         &format!("{PARENT_PREFIX}{}", hex(&producer_id)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-    cleanup_stale_slots(&parent, &format!("{SLOT_PREFIX}{}", hex(&slot_id)))?;
+    cleanup_stale_slots(&parent, producer_id, attempt)?;
     let slot = open_private_directory(
         &parent.fd,
         &parent.path,
@@ -598,6 +694,7 @@ fn consume_with_hooks(
     cleanup_consumed_payload(&slot);
     Ok(ConsumedCompilerModuleHandoffV1 {
         attempt,
+        slot: handoff_slot,
         identity: record.identity,
         bytes: Arc::from(bytes),
     })
@@ -640,13 +737,28 @@ fn producer_identity(producer: &ProducerIdentity) -> [u8; 32] {
     ])
 }
 
-fn slot_identity(producer: [u8; 32], attempt: BuildAttempt) -> [u8; 32] {
+fn slot_identity(
+    producer: [u8; 32],
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV1,
+) -> [u8; 32] {
+    let generation = attempt.generation().to_le_bytes();
+    if slot == CompilerModuleHandoffSlotV1::Default {
+        return sha256_parts(&[
+            SLOT_DOMAIN,
+            &producer,
+            &generation,
+            attempt.session().as_bytes(),
+            attempt.invocation().as_bytes(),
+        ]);
+    }
     sha256_parts(&[
-        SLOT_DOMAIN,
+        NAMED_SLOT_DOMAIN,
         &producer,
-        &attempt.generation().to_le_bytes(),
+        &generation,
         attempt.session().as_bytes(),
         attempt.invocation().as_bytes(),
+        &[slot as u8],
     ])
 }
 
@@ -713,15 +825,27 @@ fn open_private_directory(
 
 fn cleanup_stale_slots(
     parent: &PinnedDirectory,
-    current: &str,
+    producer: [u8; 32],
+    attempt: BuildAttempt,
 ) -> Result<(), CompilerModuleHandoffErrorV1> {
+    let current = [
+        CompilerModuleHandoffSlotV1::Default,
+        CompilerModuleHandoffSlotV1::GeneralGemmReference,
+        CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
+    ]
+    .map(|slot| {
+        format!(
+            "{SLOT_PREFIX}{}",
+            hex(&slot_identity(producer, attempt, slot))
+        )
+    });
     let scan = rustix::io::fcntl_dupfd_cloexec(&parent.fd, 0).map_err(std::io::Error::from)?;
     let mut entries = Dir::read_from(&scan).map_err(std::io::Error::from)?;
     let mut stale = Vec::new();
     for entry in &mut entries {
         let entry = entry.map_err(std::io::Error::from)?;
         let name = entry.file_name().to_string_lossy();
-        if name == "." || name == ".." || name == current {
+        if name == "." || name == ".." || current.iter().any(|current| name == current.as_str()) {
             continue;
         }
         if !name.starts_with(SLOT_PREFIX) {
@@ -738,7 +862,7 @@ fn cleanup_stale_slots(
     for name in stale {
         remove_slot_entry(parent, &name)?;
     }
-    if parent_entry_count(parent)? > MAX_STALE_SLOTS + 1 {
+    if parent_entry_count(parent)? > current.len() {
         return Err(invalid_slot(
             &parent.path,
             "handoff producer directory exceeds its entry bound",
@@ -1204,11 +1328,25 @@ mod tests {
     }
 
     fn slot_path(path: &Path, producer: &ProducerIdentity, attempt: BuildAttempt) -> PathBuf {
+        slot_path_for(
+            path,
+            producer,
+            attempt,
+            CompilerModuleHandoffSlotV1::Default,
+        )
+    }
+
+    fn slot_path_for(
+        path: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV1,
+    ) -> PathBuf {
         let producer_id = producer_identity(producer);
         path.join(format!("{PARENT_PREFIX}{}", hex(&producer_id)))
             .join(format!(
                 "{SLOT_PREFIX}{}",
-                hex(&slot_identity(producer_id, attempt))
+                hex(&slot_identity(producer_id, attempt, slot))
             ))
     }
 
@@ -1220,6 +1358,7 @@ mod tests {
         let module = b"exact compiler module";
         let receipt =
             publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, module).unwrap();
+        assert_eq!(receipt.slot(), CompilerModuleHandoffSlotV1::Default);
         assert_eq!(receipt.identity().as_bytes(), &sha256(module));
         assert_eq!(receipt.length(), module.len());
         assert!(!receipt.grants_publication_authority());
@@ -1246,6 +1385,7 @@ mod tests {
         }
 
         let consumed = consume_compiler_module_handoff_v1(&temp.0, &producer, attempt).unwrap();
+        assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV1::Default);
         assert_eq!(consumed.bytes(), module);
         assert_eq!(consumed.identity(), receipt.identity());
         assert!(!consumed.grants_publication_authority());
@@ -1263,6 +1403,82 @@ mod tests {
             publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, module),
             Err(CompilerModuleHandoffErrorV1::AlreadyConsumed)
         ));
+    }
+
+    #[test]
+    fn two_general_gemm_slots_transfer_independent_modules_under_one_attempt() {
+        let temp = TestDirectory::new();
+        let producer = producer("general_gemm");
+        let attempt = begin(&temp.0, &producer, 41);
+        let reference_slot = CompilerModuleHandoffSlotV1::GeneralGemmReference;
+        let vector_slot = CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly;
+
+        let reference = publish_compiler_module_handoff_in_slot_v1(
+            &temp.0,
+            &producer,
+            attempt,
+            reference_slot,
+            b"reference module",
+        )
+        .unwrap();
+        assert_eq!(reference.slot(), reference_slot);
+        assert_ne!(
+            slot_path_for(&temp.0, &producer, attempt, reference_slot),
+            slot_path_for(&temp.0, &producer, attempt, vector_slot)
+        );
+        let consumed_reference =
+            consume_compiler_module_handoff_in_slot_v1(&temp.0, &producer, attempt, reference_slot)
+                .unwrap();
+        assert_eq!(consumed_reference.slot(), reference_slot);
+        assert_eq!(consumed_reference.bytes(), b"reference module");
+        assert!(matches!(
+            consume_compiler_module_handoff_in_slot_v1(&temp.0, &producer, attempt, reference_slot,),
+            Err(CompilerModuleHandoffErrorV1::AlreadyConsumed)
+        ));
+
+        let vector = publish_compiler_module_handoff_in_slot_v1(
+            &temp.0,
+            &producer,
+            attempt,
+            vector_slot,
+            b"vectorized module",
+        )
+        .unwrap();
+        assert_eq!(vector.slot(), vector_slot);
+        let consumed_vector =
+            consume_compiler_module_handoff_in_slot_v1(&temp.0, &producer, attempt, vector_slot)
+                .unwrap();
+        assert_eq!(consumed_vector.slot(), vector_slot);
+        assert_eq!(consumed_vector.bytes(), b"vectorized module");
+        assert_ne!(consumed_reference.identity(), consumed_vector.identity());
+        assert_eq!(consumed_reference.attempt(), consumed_vector.attempt());
+    }
+
+    #[test]
+    fn named_slot_cannot_be_replayed_through_the_default_api() {
+        let temp = TestDirectory::new();
+        let producer = producer("general_gemm_slot_substitution");
+        let attempt = begin(&temp.0, &producer, 42);
+        publish_compiler_module_handoff_in_slot_v1(
+            &temp.0,
+            &producer,
+            attempt,
+            CompilerModuleHandoffSlotV1::GeneralGemmReference,
+            b"reference module",
+        )
+        .unwrap();
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(&temp.0, &producer, attempt),
+            Err(CompilerModuleHandoffErrorV1::NotPublished)
+        ));
+        let consumed = consume_compiler_module_handoff_in_slot_v1(
+            &temp.0,
+            &producer,
+            attempt,
+            CompilerModuleHandoffSlotV1::GeneralGemmReference,
+        )
+        .unwrap();
+        assert_eq!(consumed.bytes(), b"reference module");
     }
 
     #[test]

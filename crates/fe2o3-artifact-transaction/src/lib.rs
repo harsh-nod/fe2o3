@@ -56,8 +56,10 @@ pub use attempt_scoped_hsaco_publication::{
 };
 pub use compiler_module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffReceiptV1,
-    ConsumedCompilerModuleHandoffV1, MAX_COMPILER_MODULE_HANDOFF_BYTES,
-    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    CompilerModuleHandoffSlotV1, ConsumedCompilerModuleHandoffV1,
+    MAX_COMPILER_MODULE_HANDOFF_BYTES, consume_compiler_module_handoff_in_slot_v1,
+    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_in_slot_v1,
+    publish_compiler_module_handoff_v1,
 };
 pub use durable_link_publication::{
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
