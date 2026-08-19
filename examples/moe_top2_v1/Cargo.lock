@@ -223,12 +223,14 @@ name = "dialect-amdgcn"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amdgcn-model",
+ "fe2o3-llvm-handoff",
 ]
 
 [[package]]
 name = "dialect-gpu"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-pliron",
  "pliron",
 ]
 
@@ -236,6 +238,7 @@ dependencies = [
 name = "dialect-kernel"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-pliron",
  "pliron",
 ]
 
@@ -243,6 +246,7 @@ dependencies = [
 name = "dialect-schedule"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-pliron",
  "pliron",
 ]
 
@@ -250,6 +254,7 @@ dependencies = [
 name = "dialect-tile"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-pliron",
  "pliron",
 ]
 
@@ -396,6 +401,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-text",
+ "fe2o3-llvm-worker-handoff",
  "fe2o3-pliron",
  "fe2o3-verifier",
  "pliron",
@@ -482,6 +488,14 @@ dependencies = [
 
 [[package]]
 name = "fe2o3-llvm-text"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-llvm-handoff",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-llvm-worker-handoff"
 version = "0.1.0"
 dependencies = [
  "fe2o3-llvm-handoff",
