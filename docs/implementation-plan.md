@@ -82,23 +82,32 @@ seven target-neutral dialect shells, a feature-gated `mir.*` Pliron shell, an
 opaque context-bound exact-byte KIR envelope, bounded detached MIR-to-kernel
 and kernel-to-GPU lowering services, compiler routing
 contracts, and inert host/service contracts. It does not yet connect the
-device path in the diagram.
+general device path in the diagram.
 The working compiler remains the existing `rustc-codegen-fe2o3` composition,
 including the default legacy recognizer and bounded opt-in Kernel IR routes.
-The graph now contains an exact dialect-only `pliron-llvm` smoke dependency
-with `llvm-sys` disabled and the first Pliron-independent #144 canonical
-handoff schema. No production Pliron lowering reaches that handoff yet.
+The closed scalar slice now uses dialect-only `pliron-llvm` with
+`default-features = false`. Live graph-derived extraction (`62e66209e`),
+deterministic bounded LLVM assembly (`3a3b43e90`), the inert attempt-scoped
+request bridge (`cb571012f`), hardened Worker (`fd6520d88`), exact inspector
+(`70f9c5ad7`), measured-HSACO gate (`e016833d3`), move-only custody
+(`c9e8ca702`), sealed join (`62efd243e`), and runtime-alignment correction
+(`228c88ed9`) are implemented. The bridge remains non-authoritative. The
+dedicated join crate consumes one authorized execution and requires ROCr's
+runtime kernarg alignment 16 even though the COV6 descriptor records alignment
+8 for its 280-byte 24+256 layout.
 Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open.
 
-The initial runtime uses HIP's module API:
+The general initial runtime uses HIP's module API:
 
 - `hipModuleLoad` or `hipModuleLoadData`
 - `hipModuleGetFunction`
 - `hipModuleLaunchKernel`
 - `hipMalloc`, `hipMemcpyAsync`, streams, synchronization
 
-A direct HSA/ROCR loader can be added after the compiler path is working.
+The bounded scalar closure additionally uses a dedicated sealed HSA/ROCr
+consumer. It reuses reviewed low-level adapters but does not make that
+profile-specific join a general replacement for the HIP runtime.
 
 ## IR Strategy
 
@@ -116,25 +125,37 @@ standard MLIR dialects:
 - MLIR pass pipelines
 - MLIR verifier coverage
 
-Do not start with Melior unless the MVP blocks on custom Pliron lowering. The
-shortest path to a running kernel is a Pliron-based AMDGPU LLVM IR exporter.
+Do not start with Melior unless the bounded Pliron route blocks on required IR
+semantics. The selected path is typed `pliron-llvm` dialect construction,
+fe2o3 canonical V2 extraction, and fe2o3 deterministic LLVM assembly, not the
+upstream `pliron-llvm` LLVM-C exporter.
 
 The current D0 closure is Pliron v0.17.0 commit
 `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. `fe2o3-pliron` provides a real
 context, private identity anchor, explicit bounded registration, and bounded
 pass-plan validation. It deliberately withholds generic pass execution because
 upstream pointers are contextless. The current graph admits `pliron-llvm` only
-through the dialect smoke closure; no landed Pliron crate compiles a production
-kernel or replaces the direct upstream LLVM and in-process LLD finalizer.
+with `default-features = false`. The bounded scalar crate constructs and
+verifies real dialect operations, but no landed Pliron route completes a
+production kernel or replaces the direct upstream LLVM and in-process LLD
+finalizer.
 
 The target path is a selective `pliron-llvm` integration for the `llvm.*`
-dialect and its lowering only. Ordinary compiler crates must use
-`default-features = false`, keeping optional `llvm-sys` bindings out of their
-processes. fe2o3, not Pliron objects or printer output, owns the canonical
-finalizer handoff, stable identities, receipts, and evidence. The isolated
-pinned upstream LLVM 22.1.8 target machine and in-process LLD remain the sole
-machine authority. The dependency guard and first canonical-handoff schema are
-implemented; typed lowering and worker consumption are not.
+dialect and its lowering only. Every dependency uses
+`default-features = false`; the optional `llvm-sys` converter is excluded from
+the producer and the isolated worker. fe2o3, not Pliron objects or printer
+output, owns canonical V2, stable identities, receipts, evidence, and the
+bounded deterministic LLVM-assembly serializer. The isolated measured
+upstream LLVM 22.1.8 target machine and in-process LLD remain the sole machine
+authority.
+
+For the implemented scalar slice, the embedded backend fixture is structurally
+parsed before its operations, operands, results, types, and CFG become the live
+graph. An exact validated V1 sidecar still supplies the AMD calling convention,
+target attributes, module metadata, and evidence because upstream v0.17.0 lacks
+those dialect properties. The attempt-scoped bridge preserves that combined
+identity chain but grants no worker, object, link, publication, load, or launch
+authority. The backend fixture is not Rust user source.
 
 ## Crate Responsibilities
 
@@ -144,6 +165,9 @@ implemented; typed lowering and worker consumption are not.
 - `fe2o3-compiler-api`: target-neutral compile request/result contracts.
 - `fe2o3-compiler-driver`: fail-closed single-route API dispatch; not yet the
   production selector.
+- `fe2o3-pliron-scalar-add-v1`: exact backend-fixture lineage, checkout policy,
+  scalar finalizer join, and sealed one-shot HSA execution; not a general
+  backend, source frontend, approval service, or runtime policy.
 - `fe2o3-legacy-compiler`: dormant adapter contract for the existing compiler
   owner; it contains no codegen implementation.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
@@ -332,6 +356,15 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   `vecadd-f64` covers double-precision addition; `pipeline` covers two kernels
   emitted from one crate.
 
+The selective Pliron scalar checkpoint is narrower and independent of that
+legacy elementwise coverage. It structurally parses a backend fixture into a
+real dialect load/add/store/return graph, extracts its live operands, results,
+types, and CFG into canonical V2, and emits exact bounded LLVM assembly without
+the `pliron-llvm` converter. Its validated V1 sidecar carries the AMD calling
+convention, target attributes, module metadata, and evidence that the upstream
+dialect cannot represent. The sealed route then finalizes and executes the
+exact scalar once on MI300X. This is not a Rust user-source pipeline.
+
 Remaining generalization:
 
 - Adapt collected MIR from `fe2o3-mir-model` into the feature-gated Pliron
@@ -340,13 +373,23 @@ Remaining generalization:
 - Lower arithmetic, branches, loads/stores, pointer math, calls, and returns.
 - Lower 1D thread-index intrinsics from device API calls instead of a fixed IR
   template.
-- Export AMDGPU LLVM IR for kernels beyond the current elementwise expression
-  template.
-- Lower through the selective `pliron-llvm` dialect with
-  `default-features = false`, then export
-  one bounded fe2o3 canonical handoff and evidence record to the isolated LLVM
-  22.1.8 worker.
+- Export AMDGPU LLVM IR for kernels beyond the legacy elementwise profiles and
+  the closed selective scalar slice.
+- Generalize live-graph-to-V2 extraction and deterministic bounded assembly
+  while keeping `pliron-llvm` at `default-features = false`; do not use its
+  optional converter in either producer or worker.
+- Generalize the exact #159/#161 scalar closure beyond its embedded fixture,
+  fixed checkout policy, singleton geometry, one device lane, and one ROCr
+  image. The current MI300X marker is
+  `evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`
+  with ROCr 1.18 image
+  `7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
 - Preserve more source-level debug metadata beyond kernel argument names.
+
+The embedded checkout policy and success marker are self-consistent repository
+evidence, not an external signature or CI attestation. This closure does not
+establish CUDA-Oxide parity, general illegal-memory-access prevention, memory
+safety, or race freedom.
 
 Acceptance:
 

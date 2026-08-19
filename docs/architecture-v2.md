@@ -52,11 +52,35 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   MIR-to-kernel and kernel-to-GPU lowering services; and an authority-free
   service-host typestate adapter.
   These are representation and composition foundations. They are not connected
-  production compilation or persistent-service execution.
-- The dependency graph now pins dialect-only `pliron-llvm` with `llvm-sys`
-  disabled and tests that closure independently. The first #144 slice provides
-  a Pliron-independent canonical LLVM handoff, but no production Pliron route
-  reaches it yet.
+  to production compilation or persistent-service execution.
+- The selective scalar Pliron slice has a live graph-derived extractor
+  (`62e66209e`), deterministic bounded LLVM-assembly serializer (`3a3b43e90`),
+  and inert attempt-scoped Worker V2 request bridge (`cb571012f`).
+  `pliron-llvm` v0.17.0 is used with
+  `default-features = false` for its typed dialect only. The bridge binds the
+  exact request but grants no object, link, publication, load, or launch
+  authority.
+- The scalar slice still obtains its AMD calling convention, target
+  attributes, module metadata, and origin/obligation evidence from an exact
+  validated V1 sidecar because upstream `pliron-llvm` does not represent those
+  properties. The live graph supplies scalar operations, operands, results,
+  types, and control flow; any graph/sidecar disagreement rejects.
+- The bounded scalar closure comprises hardened Worker profile `fd6520d88`,
+  exact ELF and machine inspection `70f9c5ad7`, measured-HSACO gate
+  `e016833d3`, move-only Worker execution evidence `c9e8ca702`, the dedicated
+  repository-policy/finalizer/runtime join `62efd243e`, and descriptor-versus-
+  runtime alignment correction `228c88ed9`. The descriptor reports a 280-byte
+  COV6 kernarg segment with alignment 8; ROCr reports runtime alignment 16.
+  The dedicated `fe2o3-pliron-scalar-add-v1` consumer uses the stricter runtime
+  alignment and consumes the authorized execution once.
+- The exact MI300X run completed with
+  `evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`
+  against ROCr 1.18 runtime image
+  `7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+  This closes the bounded #159 finalization and #161 execution slices. The
+  embedded backend fixture is structurally parsed into the typed scalar model,
+  but it is not Rust user source. The checkout policy and success marker are
+  repository-consistency records, not an external signature or CI attestation.
 
 This is not general Rust GPU compilation or cuda-oxide parity. The exact
 implemented and missing surfaces are maintained in the
@@ -202,6 +226,7 @@ continue to point downward according to the machine-checked
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
 | `fe2o3-compiler-api` | Target-neutral request, selector, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
 | `fe2o3-compiler-driver`, `fe2o3-legacy-compiler` | Single-route fail-closed API dispatch and dormant adaptation of the existing legacy owner | Production selection, codegen ownership, artifact/runtime authority |
+| `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture lineage, repository policy, scalar finalizer join, and sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
 | `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |
 | `fe2o3-core` | HIP resource wrappers, streams, events, buffers, raw launch | Kernel type discovery |
@@ -298,7 +323,7 @@ pass interfaces independent of Pliron object identity. That boundary permits a
 future MLIR lower half without changing the source API, artifact manifest, or
 verification model.
 
-The current D0 implementation pins Pliron v0.17.0 commit
+The current implementation pins Pliron v0.17.0 commit
 `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and provides a bounded context,
 private context-identity, registration, and pass-plan shell. Generic pass
 execution is intentionally absent because upstream `Ptr<T>` values do not
@@ -306,19 +331,35 @@ carry owner provenance; [#140](https://github.com/harsh-nod/fe2o3/issues/140)
 tracks that prerequisite. Seven target-neutral operation-family shells and the feature-gated
 `dialect-mir` shell construct and verify in-memory Pliron values. They do not
 yet import general rustc MIR, run the target pipeline above, lower to AMDGPU,
-or emit an executable. The current workspace includes `pliron-llvm` only in a
-dialect smoke crate with its default features disabled.
+or emit an executable. Separately, the closed scalar slice constructs real
+`pliron-llvm` operations and derives a canonical executable handoff from their
+live graph; that bounded path is not a general MIR-to-AMDGPU pipeline.
 
 The target architecture is selective rather than a blanket exclusion. Only
-the Pliron LLVM dialect/lowering layer may use `pliron-llvm`, and
-ordinary compiler crates MUST use `default-features = false` so its optional
-`llvm-sys` integration is not linked into those processes. `pliron-llvm` owns
-only transient `llvm.*` representation and dialect verification. fe2o3 owns
-the bounded canonical handoff, stable identities, stage receipts, and evidence
-that cross into finalization; Pliron handles, printer output, and upstream
-diagnostics are not canonical handoff data or authority. The dependency guard
-and first canonical-handoff schema are implemented; typed AMDGCN-to-LLVM
-lowering and worker consumption remain pending.
+the Pliron LLVM dialect/lowering layer may use `pliron-llvm`, and every such
+dependency MUST use `default-features = false`. The optional `llvm-sys`
+converter is not part of the production route, including inside the isolated
+worker. `pliron-llvm` owns only transient `llvm.*` representation and dialect
+verification. fe2o3 owns the bounded canonical V2 handoff, stable identities,
+stage receipts, evidence, and deterministic bounded LLVM-assembly serializer;
+Pliron handles, printer output, and upstream diagnostics are not canonical
+handoff data or authority.
+
+The bounded scalar implementation structurally parses its embedded backend
+fixture and reads operations, operands, results, types, and CFG from the live
+dialect graph. It retains a validated V1 sidecar for the AMDGPU calling
+convention, target attributes, module metadata, and evidence that v0.17.0
+cannot carry, then rejects any mismatch while constructing V2. This fixture is
+not Rust user source and does not establish general Rust-source lowering.
+
+The exact bytes flow through the hardened Worker, exact finalizer, move-only
+execution evidence, and a dedicated sealed consumer in
+`fe2o3-pliron-scalar-add-v1`. Existing low-level HSA adapters were reused, but
+the existing runtime route alone was not sufficient: the join crate adds the
+one-shot policy, artifact, device, ABI, dispatch, result, canary, and unload
+checks for this profile. The descriptor alignment is 8 while ROCr reports 16;
+the consumer requires the stricter runtime value. General typed lowering and
+generalized runtime policy remain future work.
 The pinned surface and missing gfx942 semantics are audited in
 [pliron-llvm-gfx942-coverage.md](pliron-llvm-gfx942-coverage.md).
 
@@ -507,18 +548,26 @@ already loaded. Requests are bounded canonical records with exact input,
 target, option, symbol-resolution, toolchain, and output identities; they do
 not contain shell commands, arbitrary linker flags, or implicit library search
 paths. COMGR is not part of this architecture. Textual LLVM emission may remain
-as an inspection format but is not the semantic IR boundary.
+as an inspection format but is not the semantic IR boundary. For the selective
+scalar slice, deterministic bounded LLVM assembly is the worker transport; the
+canonical V2 handoff remains the semantic boundary, and the exact assembly
+bytes and digest are bound to its identity.
 
 The existing lowering implementation is owned by `fe2o3-amdgcn-model` and
-re-exported by the historical `dialect-amdgcn` facade. A future
+re-exported by the historical `dialect-amdgcn` facade. A future general
 `amdgcn.*` Pliron dialect and its `gpu.*` lowering must preserve this finalizer
-boundary. A future production lowering may use the selective `pliron-llvm`
-dependency to construct and verify transient `llvm.*`, but it must hand
-fe2o3-owned canonical input and evidence to the worker. The isolated pinned
-upstream LLVM 22.1.8 target machine
-and its in-process LLD remain the sole machine-code and HSACO authority; the
-dialect layer must not invoke LLVM code generation, COMGR, or shell-mediated
-GPU linking.
+boundary. The implemented scalar slice uses selective `pliron-llvm` only to
+construct and verify transient `llvm.*`, then uses fe2o3's canonical V2
+handoff and serializer. Neither the producer nor the worker invokes the
+`pliron-llvm` `llvm-sys` converter. The isolated measured upstream LLVM 22.1.8
+target machine and its in-process LLD remain the sole machine-code and HSACO
+authority; the dialect layer must not invoke LLVM code generation, COMGR, or
+shell-mediated GPU linking. The bridge remains a non-authoritative request
+binder. Commits `fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`,
+`62efd243e`, and `228c88ed9` close one exact scalar backend-fixture route
+through MI300X load, dispatch, wait, and unload. Its checkout policy and marker
+are not externally authenticated, and the result makes no CUDA-Oxide parity,
+general memory-safety, or race-freedom claim.
 
 ## Remaining Migration from Bootstrap Paths
 

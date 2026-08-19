@@ -1189,6 +1189,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-pliron-scalar-add-v1"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "fe2o3-amdgcn-pliron-llvm",
+ "fe2o3-artifact-transaction",
+ "fe2o3-artifacts",
+ "fe2o3-core",
+ "fe2o3-host",
+ "fe2o3-hsa-runtime",
+ "fe2o3-hsaco-finalize",
+ "fe2o3-llvm-handoff",
+ "fe2o3-pliron-worker-v2",
+ "sha2 0.11.0",
+ "trybuild",
+]
+
+[[package]]
 name = "fe2o3-pliron-worker-v2"
 version = "0.1.0"
 dependencies = [

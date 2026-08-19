@@ -140,6 +140,7 @@ struct TargetParts {
 
 enum class PostLinkProfile {
   LegacyGfx942G1,
+  ExactPlironScalarAddV1,
   ExactRowSoftmaxV1,
   ExactLdsGemmSlice1,
   ExactGeneralGemmV1,
@@ -152,6 +153,7 @@ enum class PostLinkProfile {
 
 enum class MetadataValidationPolicy {
   Generic,
+  ExactPlironScalarAddV1,
   ExactRowSoftmaxV1,
   ExactLdsGemmSlice1,
   ExactGeneralGemmV1,
@@ -162,6 +164,22 @@ enum class MetadataValidationPolicy {
   ExactMoeTop2V1
 };
 
+constexpr StringLiteral ExactPlironScalarAddV1Entry = "scalar_add";
+constexpr StringLiteral ExactPlironScalarAddV1Descriptor = "scalar_add.kd";
+constexpr StringLiteral ExactPlironScalarAddV1Check =
+    "pliron_scalar_add_v1_profile";
+constexpr StringLiteral ExactPlironScalarAddV1PublishedLlvmBuildIdentity =
+    "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
+constexpr uint64_t ExactPlironScalarAddV1ExplicitKernargSize = 24;
+constexpr uint64_t ExactPlironScalarAddV1HiddenKernargSize = 256;
+constexpr uint64_t ExactPlironScalarAddV1KernargSize =
+    ExactPlironScalarAddV1ExplicitKernargSize +
+    ExactPlironScalarAddV1HiddenKernargSize;
+constexpr StringLiteral ExactPlironScalarAddV1ProducerDataLayout =
+    "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-"
+    "p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-"
+    "i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-"
+    "v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
 constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
 constexpr StringLiteral ExactGeneralGemmV1Entry = "tiled_gemm_general_v1";
@@ -440,6 +458,12 @@ bool isExactGeneralGemmV1SymbolSet(ArrayRef<std::string> Symbols) {
                                ExactGeneralGemmV1Descriptor.str()};
 }
 
+bool isExactPlironScalarAddV1SymbolSet(ArrayRef<std::string> Symbols) {
+  return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
+         std::set<std::string>{ExactPlironScalarAddV1Entry.str(),
+                               ExactPlironScalarAddV1Descriptor.str()};
+}
+
 bool isExactRowSoftmaxV1SymbolSet(ArrayRef<std::string> Symbols) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{ExactRowSoftmaxV1Entry.str(),
@@ -490,6 +514,33 @@ bool isExactLdsGemmSlice1RequestCandidate(const Request &RequestValue) {
          isExactLdsGemmSlice1SymbolSet(RequestValue.RequiredSymbols) &&
          isExactLdsGemmSlice1SymbolSet(RequestValue.ExpectedDefinedSymbols) &&
          isExactLdsGemmSlice1SymbolSet(RequestValue.FinalSymbols);
+}
+
+bool isExactPlironScalarAddV1RequestCandidate(const Request &RequestValue) {
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes == RequestValue.CompilerModule.Bytes;
+  return RequestValue.Protocol == ProtocolVersion::V2 &&
+         RequestValue.Target == "gfx942:xnack-" &&
+         RequestValue.CodeObjectVersion == 6 && CompilerInputMatches &&
+         RequestValue.ExternalProviders.empty() &&
+         RequestValue.ImportSymbols.empty() &&
+         RequestValue.ExportSymbols.empty() &&
+         isExactPlironScalarAddV1SymbolSet(RequestValue.RequiredSymbols) &&
+         isExactPlironScalarAddV1SymbolSet(
+             RequestValue.ExpectedDefinedSymbols) &&
+         isExactPlironScalarAddV1SymbolSet(RequestValue.FinalSymbols);
+}
+
+bool isClosedExactPlironScalarAddV1Request(const Request &RequestValue) {
+  return isExactPlironScalarAddV1RequestCandidate(RequestValue) &&
+         RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
+         RequestValue.LinkOptions.StripDebug &&
+         RequestValue.LinkOptions.VerifyEach;
 }
 
 bool isClosedExactLdsGemmSlice1Request(const Request &RequestValue) {
@@ -692,6 +743,20 @@ bool namesExactWave64CollectivesV1(ArrayRef<std::string> Symbols) {
   });
 }
 
+bool mentionsExactPlironScalarAddV1(const Request &RequestValue) {
+  auto Mentions = [](ArrayRef<std::string> Symbols) {
+    return llvm::any_of(Symbols, [](StringRef Symbol) {
+      return Symbol == ExactPlironScalarAddV1Entry ||
+             Symbol == ExactPlironScalarAddV1Descriptor;
+    });
+  };
+  return Mentions(RequestValue.RequiredSymbols) ||
+         Mentions(RequestValue.ExpectedDefinedSymbols) ||
+         Mentions(RequestValue.ImportSymbols) ||
+         Mentions(RequestValue.ExportSymbols) ||
+         Mentions(RequestValue.FinalSymbols);
+}
+
 bool mentionsExactWave64CollectivesV1(const Request &RequestValue) {
   return namesExactWave64CollectivesV1(RequestValue.RequiredSymbols) ||
          namesExactWave64CollectivesV1(RequestValue.ExpectedDefinedSymbols) ||
@@ -772,6 +837,15 @@ bool mentionsExactMoeTop2V1(const Request &RequestValue) {
 Expected<PostLinkProfile>
 selectPostLinkProfile(const Request &RequestValue,
                       const std::set<std::string> &ExpectedSymbols) {
+  const std::set<std::string> ExactPlironScalarSymbols = {
+      ExactPlironScalarAddV1Entry.str(),
+      ExactPlironScalarAddV1Descriptor.str()};
+  if (ExpectedSymbols == ExactPlironScalarSymbols) {
+    if (!isClosedExactPlironScalarAddV1Request(RequestValue))
+      return pipelineError("exact Pliron scalar-add symbols require the "
+                           "closed Worker V2 profile");
+    return PostLinkProfile::ExactPlironScalarAddV1;
+  }
   const std::set<std::string> ExactRowSymbols = {
       ExactRowSoftmaxV1Entry.str(), ExactRowSoftmaxV1Descriptor.str(),
       ExactRowSoftmaxV1OcmlExp.str()};
@@ -1410,6 +1484,241 @@ Error validateExactMoeTop2V1CompilerInput(StringRef Text,
     return pipelineError(
         "exact MoE top-2 target-machine data-layout identity does not match");
   return Error::success();
+}
+
+Error validateExactPlironScalarAddV1Module(const Module &ModuleValue,
+                                           StringRef CompilerText,
+                                           StringRef InputName) {
+  if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
+      ModuleValue.getDataLayoutStr() !=
+          ExactPlironScalarAddV1ProducerDataLayout ||
+      !ModuleValue.getModuleInlineAsm().empty() ||
+      !ModuleValue.global_empty() || !ModuleValue.alias_empty() ||
+      !ModuleValue.ifunc_empty())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM module envelope does not match");
+  if (ModuleValue.getSourceFileName() != InputName ||
+      CompilerText.starts_with("source_filename =") ||
+      CompilerText.contains("\nsource_filename ="))
+    return pipelineError(
+        Twine("exact Pliron scalar-add LLVM source filename does not match: ") +
+        ModuleValue.getSourceFileName());
+  if (!ModuleValue.getComdatSymbolTable().empty())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM comdat closure does not match");
+
+  const NamedMDNode *HandoffIdentity = nullptr;
+  size_t NamedMetadataCount = 0;
+  for (const NamedMDNode &NamedMetadata : ModuleValue.named_metadata()) {
+    ++NamedMetadataCount;
+    if (NamedMetadata.getName() == "fe2o3.handoff.identity") {
+      HandoffIdentity = &NamedMetadata;
+      continue;
+    }
+    if (NamedMetadata.getName() != "llvm.module.flags")
+      return pipelineError(
+          "exact Pliron scalar-add LLVM module metadata closure does not "
+          "match");
+  }
+  const NamedMDNode *ModuleFlags = ModuleValue.getModuleFlagsMetadata();
+  auto MatchesModuleFlag = [](const MDNode *Flag, uint64_t Behavior,
+                              StringRef Name, uint64_t Value) {
+    if (!Flag || Flag->getNumOperands() != 3)
+      return false;
+    const auto *ObservedBehavior =
+        mdconst::dyn_extract_or_null<ConstantInt>(Flag->getOperand(0));
+    const auto *ObservedName = dyn_cast<MDString>(Flag->getOperand(1));
+    const auto *ObservedValue =
+        mdconst::dyn_extract_or_null<ConstantInt>(Flag->getOperand(2));
+    return ObservedBehavior && ObservedName && ObservedValue &&
+           ObservedBehavior->getZExtValue() == Behavior &&
+           ObservedName->getString() == Name &&
+           ObservedValue->getZExtValue() == Value;
+  };
+  if (NamedMetadataCount != 2 || !ModuleFlags ||
+      ModuleFlags->getNumOperands() != 2 ||
+      !MatchesModuleFlag(ModuleFlags->getOperand(0), 1,
+                         "amdhsa_code_object_version", 600) ||
+      !MatchesModuleFlag(ModuleFlags->getOperand(1), 8, "PIC Level", 2))
+    return pipelineError(
+        "exact Pliron scalar-add LLVM module flags do not match");
+  static constexpr std::array<StringLiteral, 3> ExactModuleFlagLines = {
+      "!llvm.module.flags = !{!0, !1}\n",
+      "!0 = !{i32 1, !\"amdhsa_code_object_version\", i32 600}\n",
+      "!1 = !{i32 8, !\"PIC Level\", i32 2}\n"};
+  for (StringRef Line : ExactModuleFlagLines)
+    if (CompilerText.count(Line) != 1)
+      return pipelineError(
+          "exact Pliron scalar-add LLVM module flags do not match");
+  if (!HandoffIdentity || HandoffIdentity->getNumOperands() != 1 ||
+      HandoffIdentity->getOperand(0)->getNumOperands() != 1)
+    return pipelineError(
+        "exact Pliron scalar-add LLVM handoff identity does not match");
+  const auto *Identity =
+      dyn_cast<MDString>(HandoffIdentity->getOperand(0)->getOperand(0));
+  StringRef IdentityPayload = Identity ? Identity->getString() : StringRef();
+  StringRef IdentityDigest =
+      IdentityPayload.consume_front("sha256:") ? IdentityPayload : StringRef();
+  if (IdentityDigest.size() != 64 ||
+      !llvm::all_of(IdentityDigest, [](char Character) {
+        return (Character >= '0' && Character <= '9') ||
+               (Character >= 'a' && Character <= 'f');
+      }))
+    return pipelineError(
+        "exact Pliron scalar-add LLVM handoff identity does not match");
+
+  const Function *Kernel = nullptr;
+  size_t FunctionCount = 0;
+  for (const Function &FunctionValue : ModuleValue) {
+    ++FunctionCount;
+    if (FunctionValue.getName() != ExactPlironScalarAddV1Entry)
+      return pipelineError(
+          "exact Pliron scalar-add LLVM function closure does not match");
+    Kernel = &FunctionValue;
+  }
+  if (FunctionCount != 1 || !Kernel || Kernel->isDeclaration() ||
+      !Kernel->hasExternalLinkage() ||
+      Kernel->getCallingConv() != CallingConv::AMDGPU_KERNEL ||
+      !Kernel->getReturnType()->isVoidTy() || Kernel->isVarArg() ||
+      Kernel->arg_size() != 3 || Kernel->hasPersonalityFn() ||
+      Kernel->hasPrefixData() || Kernel->hasPrologueData() || Kernel->hasGC())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM kernel ABI does not match");
+  if (Kernel->hasComdat() || Kernel->hasSection() || Kernel->hasPartition() ||
+      Kernel->getVisibility() != GlobalValue::DefaultVisibility ||
+      Kernel->getDLLStorageClass() != GlobalValue::DefaultStorageClass ||
+      Kernel->getUnnamedAddr() != GlobalValue::UnnamedAddr::None ||
+      Kernel->getAlign() || Kernel->getAddressSpace() != 0 ||
+      Kernel->isDSOLocal())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM function envelope does not match");
+
+  static constexpr std::array<StringLiteral, 3> ArgumentNames = {
+      "input", "output", "addend"};
+  size_t ArgumentIndex = 0;
+  for (const Argument &ArgumentValue : Kernel->args()) {
+    Type *ArgumentType = ArgumentValue.getType();
+    bool TypeMatches = ArgumentIndex < 2
+                           ? ArgumentType->isPointerTy() &&
+                                 ArgumentType->getPointerAddressSpace() == 1
+                           : ArgumentType->isFloatTy();
+    if (!TypeMatches ||
+        ArgumentValue.getName() != ArgumentNames[ArgumentIndex] ||
+        Kernel->getAttributes().hasParamAttrs(ArgumentIndex))
+      return pipelineError(
+          "exact Pliron scalar-add LLVM argument ABI does not match");
+    ++ArgumentIndex;
+  }
+  if (Kernel->getAttributes().hasRetAttrs())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM return ABI does not match");
+
+  static constexpr std::array<std::pair<StringLiteral, StringLiteral>, 10>
+      StringAttributes = {
+          {{"amdgpu-flat-work-group-size", "1,64"},
+           {"target-features", "-wavefrontsize32,+wavefrontsize64,-xnack"},
+           {"target-cpu", "gfx942"},
+           {"denormal-fp-math-f32", "ieee,ieee"},
+           {"unsafe-fp-math", "false"},
+           {"no-infs-fp-math", "false"},
+           {"no-nans-fp-math", "false"},
+           {"no-signed-zeros-fp-math", "false"},
+           {"approx-func-fp-math", "false"},
+           {"fp-contract", "off"}}};
+  if (!Kernel->hasFnAttribute(Attribute::NoUnwind) ||
+      Kernel->getAttributes().getFnAttrs().getNumAttributes() !=
+          StringAttributes.size() + 1)
+    return pipelineError(
+        "exact Pliron scalar-add LLVM function attributes do not match");
+  for (const auto &[Name, Value] : StringAttributes) {
+    Attribute AttributeValue = Kernel->getFnAttribute(Name);
+    if (!AttributeValue.isStringAttribute() ||
+        AttributeValue.getValueAsString() != Value)
+      return pipelineError(
+          "exact Pliron scalar-add LLVM function attributes do not match");
+  }
+
+  SmallVector<std::pair<unsigned, MDNode *>, 4> FunctionMetadata;
+  Kernel->getAllMetadata(FunctionMetadata);
+  if (!FunctionMetadata.empty())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM workgroup metadata must be absent");
+  if (Kernel->size() != 1)
+    return pipelineError(
+        "exact Pliron scalar-add LLVM control-flow closure does not match");
+  const BasicBlock &Entry = Kernel->getEntryBlock();
+  if (Entry.getName() != "bb0")
+    return pipelineError(
+        Twine("exact Pliron scalar-add LLVM entry label does not match: ") +
+        Entry.getName());
+  if (Entry.hasAddressTaken())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM control-flow closure does not match");
+
+  SmallVector<const Instruction *, 4> Body;
+  for (const Instruction &InstructionValue : instructions(*Kernel)) {
+    SmallVector<std::pair<unsigned, MDNode *>, 2> InstructionMetadata;
+    InstructionValue.getAllMetadata(InstructionMetadata);
+    if (!InstructionMetadata.empty() || InstructionValue.getDebugLoc())
+      return pipelineError(
+          "exact Pliron scalar-add LLVM instruction metadata closure does "
+          "not match");
+    Body.push_back(&InstructionValue);
+  }
+  if (Body.size() != 4)
+    return pipelineError(
+        "exact Pliron scalar-add LLVM operation closure does not match");
+  const auto *Load = dyn_cast<LoadInst>(Body[0]);
+  const auto *Add = dyn_cast<BinaryOperator>(Body[1]);
+  const auto *Store = dyn_cast<StoreInst>(Body[2]);
+  const auto *Return = dyn_cast<ReturnInst>(Body[3]);
+  if (!Load || !Add || !Store || !Return || Load->getName() != "v3" ||
+      Add->getName() != "v4" || Store->hasName() || Return->hasName())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM local SSA closure does not match");
+  if (!Load->getType()->isFloatTy() ||
+      Load->getPointerOperand() != Kernel->getArg(0) ||
+      Load->getPointerAddressSpace() != 1 || Load->isAtomic() ||
+      Load->isVolatile() || Load->getAlign() != Align(4) || !Load->hasOneUse())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM load effect does not match");
+  if (Add->getOpcode() != Instruction::FAdd || Add->getOperand(0) != Load ||
+      Add->getOperand(1) != Kernel->getArg(2) ||
+      Add->getFastMathFlags().any() || !Add->hasOneUse())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM strict fadd does not match");
+  if (!Store || Store->getValueOperand() != Add ||
+      Store->getPointerOperand() != Kernel->getArg(1) ||
+      Store->getPointerAddressSpace() != 1 || Store->isAtomic() ||
+      Store->isVolatile() || Store->getAlign() != Align(4))
+    return pipelineError(
+        "exact Pliron scalar-add LLVM store effect does not match");
+  if (!Return || Return->getReturnValue())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM return effect does not match");
+  if (!Kernel->getArg(0)->hasOneUse() || !Kernel->getArg(1)->hasOneUse() ||
+      !Kernel->getArg(2)->hasOneUse())
+    return pipelineError(
+        "exact Pliron scalar-add LLVM def-use closure does not match");
+  SmallVector<StringRef, 24> Lines;
+  CompilerText.split(Lines, '\n', -1, true);
+  size_t MetadataLineCount = llvm::count_if(
+      Lines, [](StringRef Line) { return Line.starts_with("!"); });
+  if (MetadataLineCount != 5 ||
+      CompilerText.count("!fe2o3.handoff.identity = !{!2}\n") != 1)
+    return pipelineError(
+        "exact Pliron scalar-add LLVM module metadata closure does not match");
+  return Error::success();
+}
+
+Error validateExactPlironScalarAddV1LlvmBuildIdentity(StringRef Identity) {
+  if (Identity == ExactPlironScalarAddV1PublishedLlvmBuildIdentity)
+    return Error::success();
+  return pipelineError(
+      Twine("exact Pliron scalar-add published machine identity requires LLVM "
+            "build identity '") +
+      ExactPlironScalarAddV1PublishedLlvmBuildIdentity +
+      "', worker measured '" + Identity + "'");
 }
 
 Error validateExactMoeTop2V1Module(const Module &ModuleValue,
@@ -2402,7 +2711,8 @@ Error setAndCheckModuleContract(Module &ModuleValue,
       Triple::normalize(ExistingTriple.getTriple()) != AmdGpuTriple)
     return pipelineError("bitcode target triple does not match AMDHSA");
   bool ExactProducerLayout =
-      (isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
+      (isExactPlironScalarAddV1RequestCandidate(RequestValue) ||
+       isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
        isExactWave64CollectivesV1RequestCandidate(RequestValue) ||
        isExactFlashAttentionV1RequestCandidate(RequestValue) ||
        exactWorkgroupSyncProfile(RequestValue) != nullptr) &&
@@ -2581,7 +2891,8 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
     AcceptedLayout =
         ObservedLayout.empty() ||
         TextModule->getDataLayout() == ExpectedLayout ||
-        ((isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
+        ((isExactPlironScalarAddV1RequestCandidate(RequestValue) ||
+          isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
           isExactWave64CollectivesV1RequestCandidate(RequestValue) ||
           isExactFlashAttentionV1RequestCandidate(RequestValue) ||
           exactWorkgroupSyncProfile(RequestValue) != nullptr) &&
@@ -2594,6 +2905,11 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (!AcceptedLayout)
     return pipelineError(
         "LLVM module data layout does not match target machine");
+  if (!MeasuredBuiltinProvider &&
+      isClosedExactPlironScalarAddV1Request(RequestValue))
+    if (Error E =
+            validateExactPlironScalarAddV1Module(**Parsed, Bytes, InputName))
+      return E;
   if (!MeasuredBuiltinProvider &&
       isClosedExactWave64CollectivesV1Request(RequestValue))
     if (Error E = validateExactWave64CollectivesModule(**Parsed))
@@ -3316,7 +3632,7 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
 
   if (Error E = rejectUnknownExactMetadataKeys(Root, RootKeys, "root", Check))
     return E;
-  if (Check == ExactRowSoftmaxV1Check) {
+  if (Check == ExactRowSoftmaxV1Check || Check == ExactPlironScalarAddV1Check) {
     auto Version = Root.find("amdhsa.version");
     auto Target = Root.find("amdhsa.target");
     if (Version == Root.end() || !Version->second.isArray() ||
@@ -3385,6 +3701,8 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
 
 StringRef exactMetadataCheck(MetadataValidationPolicy Policy) {
   switch (Policy) {
+  case MetadataValidationPolicy::ExactPlironScalarAddV1:
+    return ExactPlironScalarAddV1Check;
   case MetadataValidationPolicy::ExactRowSoftmaxV1:
     return ExactRowSoftmaxV1Check;
   case MetadataValidationPolicy::ExactLdsGemmSlice1:
@@ -3795,6 +4113,92 @@ Error validateExactGeneralGemmV1ElfClosure(
   return validateExactElfClosure(ObjectValue, ExactGeneralGemmV1Check);
 }
 
+Error validateExactPlironScalarAddV1ElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  if (Error E =
+          validateExactElfClosure(ObjectValue, ExactPlironScalarAddV1Check))
+    return E;
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto SectionsOrError = File.sections();
+  if (!SectionsOrError)
+    return SectionsOrError.takeError();
+  ArrayRef<ELF64LE::Shdr> Sections = *SectionsOrError;
+  static const std::set<std::string> ExpectedSections = {"",
+                                                         ".note",
+                                                         ".dynsym",
+                                                         ".gnu.hash",
+                                                         ".hash",
+                                                         ".dynstr",
+                                                         ".rodata",
+                                                         ".text",
+                                                         ".dynamic",
+                                                         ".relro_padding",
+                                                         ".AMDGPU.gpr_maximums",
+                                                         ".comment",
+                                                         ".symtab",
+                                                         ".shstrtab",
+                                                         ".strtab"};
+  std::set<std::string> ObservedSections;
+  for (const ELF64LE::Shdr &Section : Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    if (!ObservedSections.insert(Name->str()).second)
+      return postLinkError(ExactPlironScalarAddV1Check, "duplicate_section");
+  }
+  if (ObservedSections != ExpectedSections)
+    return postLinkError(ExactPlironScalarAddV1Check, "section_closure");
+
+  static const std::set<std::string> ExpectedStaticSymbols = {
+      "_DYNAMIC",
+      "scalar_add",
+      "scalar_add.kd",
+      "scalar_add.has_dyn_sized_stack",
+      "scalar_add.has_recursion",
+      "scalar_add.num_agpr",
+      "scalar_add.num_vgpr",
+      "scalar_add.numbered_sgpr",
+      "scalar_add.private_seg_size",
+      "scalar_add.uses_flat_scratch",
+      "scalar_add.uses_vcc"};
+  static const std::map<std::string, uint64_t> ExpectedZeroResourceSymbols = {
+      {"scalar_add.has_dyn_sized_stack", 0},
+      {"scalar_add.has_recursion", 0},
+      {"scalar_add.private_seg_size", 0},
+      {"scalar_add.uses_flat_scratch", 0}};
+  std::set<std::string> ObservedStaticSymbols;
+  size_t StaticTables = 0;
+  for (const ELF64LE::Shdr &Table : Sections) {
+    if (Table.sh_type != ELF::SHT_SYMTAB)
+      continue;
+    ++StaticTables;
+    auto Symbols = File.symbols(&Table);
+    if (!Symbols)
+      return Symbols.takeError();
+    auto Strings = File.getStringTableForSymtab(Table, Sections);
+    if (!Strings)
+      return Strings.takeError();
+    for (const ELF64LE::Sym &Symbol : *Symbols) {
+      auto Name = Symbol.getName(*Strings);
+      if (!Name)
+        return Name.takeError();
+      if (Name->empty())
+        continue;
+      if (!ObservedStaticSymbols.insert(Name->str()).second)
+        return postLinkError(ExactPlironScalarAddV1Check,
+                             "duplicate_static_symbol");
+      auto ExpectedValue = ExpectedZeroResourceSymbols.find(Name->str());
+      if (ExpectedValue != ExpectedZeroResourceSymbols.end() &&
+          Symbol.st_value != ExpectedValue->second)
+        return postLinkError(ExactPlironScalarAddV1Check,
+                             "resource_symbol_value");
+    }
+  }
+  if (StaticTables != 1 || ObservedStaticSymbols != ExpectedStaticSymbols)
+    return postLinkError(ExactPlironScalarAddV1Check, "static_symbol_closure");
+  return Error::success();
+}
+
 Error validateExactRowSoftmaxV1ElfClosure(
     const ELFObjectFile<ELF64LE> &ObjectValue) {
   return validateExactElfClosure(ObjectValue, ExactRowSoftmaxV1Check);
@@ -4097,6 +4501,112 @@ Error validateExactWave64NoMachineCalls(
   if (InstructionCount == 0)
     return postLinkError("wave64_collectives_v1_profile",
                          "machine_instruction_empty");
+  return Error::success();
+}
+
+Error validateExactPlironScalarAddV1Machine(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto SectionsOrError = File.sections();
+  if (!SectionsOrError)
+    return SectionsOrError.takeError();
+  ArrayRef<ELF64LE::Shdr> Sections = *SectionsOrError;
+  ArrayRef<uint8_t> KernelBytes;
+  uint64_t KernelAddress = 0;
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Table : Sections) {
+    if (Table.sh_type != ELF::SHT_SYMTAB)
+      continue;
+    auto Symbols = File.symbols(&Table);
+    if (!Symbols)
+      return Symbols.takeError();
+    auto Strings = File.getStringTableForSymtab(Table, Sections);
+    if (!Strings)
+      return Strings.takeError();
+    for (const ELF64LE::Sym &Symbol : *Symbols) {
+      auto Name = Symbol.getName(*Strings);
+      if (!Name)
+        return Name.takeError();
+      if (*Name != ExactPlironScalarAddV1Entry)
+        continue;
+      ++Matches;
+      if (Symbol.getType() != ELF::STT_FUNC || Symbol.st_size == 0 ||
+          Symbol.st_shndx == ELF::SHN_XINDEX ||
+          Symbol.st_shndx >= Sections.size())
+        return postLinkError(ExactPlironScalarAddV1Check,
+                             "machine_entry_symbol");
+      const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
+      if ((Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) !=
+              (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR) ||
+          Symbol.st_value < Section.sh_addr)
+        return postLinkError(ExactPlironScalarAddV1Check,
+                             "machine_entry_section");
+      uint64_t Offset = Symbol.st_value - Section.sh_addr;
+      if (Offset > Section.sh_size || Symbol.st_size > Section.sh_size - Offset)
+        return postLinkError(ExactPlironScalarAddV1Check,
+                             "machine_entry_range");
+      auto Contents = File.getSectionContents(Section);
+      if (!Contents)
+        return Contents.takeError();
+      KernelBytes = Contents->slice(Offset, Symbol.st_size);
+      KernelAddress = Symbol.st_value;
+    }
+  }
+  if (Matches != 1)
+    return postLinkError(ExactPlironScalarAddV1Check,
+                         "machine_entry_cardinality");
+
+  auto Scanner = createWave64CallScanner();
+  if (!Scanner)
+    return postLinkError(ExactPlironScalarAddV1Check,
+                         errorToDiagnostic(Scanner.takeError()));
+  static const std::map<std::string, size_t> ExpectedOpcodes = {
+      {"GLOBAL_STORE_DWORD_SADDR_vi", 1},
+      {"S_ENDPGM_vi", 1},
+      {"S_LOAD_DWORDX4_IMM_vi", 1},
+      {"S_LOAD_DWORD_IMM_vi", 2},
+      {"S_WAITCNT_vi", 2},
+      {"V_ADD_F32_e32_vi", 1},
+      {"V_MOV_B32_e32_vi", 2}};
+  std::map<std::string, size_t> Opcodes;
+  uint64_t Offset = 0;
+  while (Offset < KernelBytes.size()) {
+    MCInst Instruction;
+    uint64_t Size = 0;
+    auto Status = Scanner->Disassembler->getInstruction(
+        Instruction, Size, KernelBytes.drop_front(Offset),
+        KernelAddress + Offset, nulls());
+    if (Status != MCDisassembler::Success || Size == 0 ||
+        Size > KernelBytes.size() - Offset)
+      return postLinkError(ExactPlironScalarAddV1Check,
+                           "machine_instruction_decode");
+    const MCInstrDesc &Descriptor =
+        Scanner->Instructions->get(Instruction.getOpcode());
+    StringRef Opcode = Scanner->Instructions->getName(Instruction.getOpcode());
+    if (Descriptor.isCall())
+      return postLinkError(ExactPlironScalarAddV1Check, "machine_call");
+    if (Descriptor.isBranch())
+      return postLinkError(ExactPlironScalarAddV1Check, "machine_branch");
+    if (Opcode.contains("ATOMIC") || Opcode.contains("SCRATCH") ||
+        Opcode.contains("DS_") || Opcode.contains("BARRIER"))
+      return postLinkError(ExactPlironScalarAddV1Check,
+                           "machine_forbidden_effect");
+    ++Opcodes[Opcode.str()];
+    Offset += Size;
+  }
+  if (Opcodes != ExpectedOpcodes) {
+    std::string Actual;
+    raw_string_ostream Stream(Actual);
+    bool First = true;
+    for (const auto &[Opcode, Count] : Opcodes) {
+      Stream << (First ? "" : ",") << Opcode << ':' << Count;
+      First = false;
+    }
+    Stream.flush();
+    return postLinkError(
+        ExactPlironScalarAddV1Check,
+        (Twine("machine_instruction_identity actual=") + Actual).str());
+  }
   return Error::success();
 }
 
@@ -4620,6 +5130,131 @@ Error validateExactMoeTop2V1DescriptorBinding(
   }
   if (Matches != 1)
     return postLinkError(ExactMoeTop2V1Check, "descriptor_section_cardinality");
+  return Error::success();
+}
+
+Error validateExactPlironScalarAddV1Metadata(const MetadataContract &Metadata) {
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 13> RequiredHidden = {{
+      {0, 4, "hidden_block_count_x"},
+      {4, 4, "hidden_block_count_y"},
+      {8, 4, "hidden_block_count_z"},
+      {12, 2, "hidden_group_size_x"},
+      {14, 2, "hidden_group_size_y"},
+      {16, 2, "hidden_group_size_z"},
+      {18, 2, "hidden_remainder_x"},
+      {20, 2, "hidden_remainder_y"},
+      {22, 2, "hidden_remainder_z"},
+      {40, 8, "hidden_global_offset_x"},
+      {48, 8, "hidden_global_offset_y"},
+      {56, 8, "hidden_global_offset_z"},
+      {64, 2, "hidden_grid_dims"},
+  }};
+  static constexpr std::array<HiddenArgumentShape, 10> OptionalHidden = {{
+      {72, 8, "hidden_printf_buffer"},
+      {80, 8, "hidden_hostcall_buffer"},
+      {88, 8, "hidden_multigrid_sync_arg"},
+      {96, 8, "hidden_heap_v1"},
+      {104, 8, "hidden_default_queue"},
+      {112, 8, "hidden_completion_action"},
+      {120, 4, "hidden_dynamic_lds_size"},
+      {192, 4, "hidden_private_base"},
+      {196, 4, "hidden_shared_base"},
+      {200, 8, "hidden_queue_ptr"},
+  }};
+  auto Mismatch = [](StringRef Field) {
+    return postLinkError(ExactPlironScalarAddV1Check,
+                         (Twine("kernel_contract_") + Field).str());
+  };
+  if (Metadata.Kernels.size() != 1)
+    return postLinkError(ExactPlironScalarAddV1Check, "kernel_cardinality");
+  const KernelLaunchContract &Kernel = Metadata.Kernels.front();
+  if (Kernel.Name != ExactPlironScalarAddV1Entry ||
+      Kernel.Symbol != ExactPlironScalarAddV1Descriptor)
+    return Mismatch("symbols");
+  if (Kernel.RequiredWorkgroupSize)
+    return Mismatch("reqd_workgroup_size");
+  if (Kernel.MaxFlatWorkgroupSize != 64)
+    return Mismatch("max_flat_workgroup_size");
+  if (Kernel.WavefrontSize != 64)
+    return Mismatch("wavefront_size");
+  if (Kernel.KernargSegmentSize != ExactPlironScalarAddV1KernargSize)
+    return Mismatch("kernarg_segment_size");
+  if (Kernel.KernargSegmentAlign != 8)
+    return Mismatch("kernarg_segment_align");
+  if (Kernel.GroupSegmentFixedSize != 0)
+    return Mismatch("group_segment_fixed_size");
+  if (Kernel.PrivateSegmentFixedSize != 0)
+    return Mismatch("private_segment_fixed_size");
+  if (!Kernel.SgprSpillCount || *Kernel.SgprSpillCount != 0)
+    return Mismatch("sgpr_spill_count");
+  if (!Kernel.VgprSpillCount || *Kernel.VgprSpillCount != 0)
+    return Mismatch("vgpr_spill_count");
+  if (!Kernel.UsesDynamicStack || *Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack");
+  if ((Kernel.WorkgroupProcessorMode && *Kernel.WorkgroupProcessorMode) ||
+      (Kernel.UniformWorkgroupSize && *Kernel.UniformWorkgroupSize))
+    return Mismatch("workgroup_mode");
+  if (!Kernel.Arguments)
+    return Mismatch("args_missing");
+  const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
+  if (Arguments.size() < 3 + RequiredHidden.size())
+    return Mismatch("args_cardinality");
+
+  auto EmptyOptionalContract = [](const KernelArgumentContract &Argument) {
+    return !Argument.TypeName && !Argument.Align && !Argument.ValueType &&
+           !Argument.Access && !Argument.ActualAccess &&
+           !Argument.PointeeAlign && !Argument.IsConst &&
+           !Argument.IsRestrict && !Argument.IsVolatile && !Argument.IsPipe;
+  };
+  for (size_t Index = 0; Index != 2; ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    StringRef Name = Index == 0 ? "input" : "output";
+    if (!Argument.Name || *Argument.Name != Name ||
+        Argument.Offset != Index * 8 || Argument.Size != 8 ||
+        Argument.ValueKind != "global_buffer" || !Argument.AddressSpace ||
+        *Argument.AddressSpace != "global" || !EmptyOptionalContract(Argument))
+      return Mismatch((Twine("arg") + Twine(Index)).str());
+  }
+  const KernelArgumentContract &Addend = Arguments[2];
+  if (!Addend.Name || *Addend.Name != "addend" || Addend.Offset != 16 ||
+      Addend.Size != 4 || Addend.ValueKind != "by_value" ||
+      Addend.AddressSpace || !EmptyOptionalContract(Addend))
+    return Mismatch("arg2");
+
+  constexpr size_t HiddenBaseIndex = 3;
+  constexpr uint64_t HiddenBase = ExactPlironScalarAddV1ExplicitKernargSize;
+  auto ValidateHidden = [&](const KernelArgumentContract &Argument,
+                            const HiddenArgumentShape &Expected) {
+    return !Argument.Name && !Argument.TypeName &&
+           Argument.Offset == HiddenBase + Expected.Offset &&
+           Argument.Size == Expected.Size &&
+           Argument.ValueKind == Expected.ValueKind && !Argument.Align &&
+           !Argument.ValueType && !Argument.AddressSpace && !Argument.Access &&
+           !Argument.ActualAccess && !Argument.PointeeAlign &&
+           !Argument.IsConst && !Argument.IsRestrict && !Argument.IsVolatile &&
+           !Argument.IsPipe;
+  };
+  for (size_t Index = 0; Index != RequiredHidden.size(); ++Index)
+    if (!ValidateHidden(Arguments[HiddenBaseIndex + Index],
+                        RequiredHidden[Index]))
+      return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
+  for (size_t Index = HiddenBaseIndex + RequiredHidden.size();
+       Index != Arguments.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto Expected = llvm::find_if(OptionalHidden, [&](const auto &Shape) {
+      return Argument.Offset == HiddenBase + Shape.Offset;
+    });
+    if (Expected == OptionalHidden.end() ||
+        Expected->ValueKind == "hidden_dynamic_lds_size" ||
+        !ValidateHidden(Argument, *Expected))
+      return Mismatch(
+          (Twine("hidden_arg") + Twine(Index - HiddenBaseIndex)).str());
+  }
   return Error::success();
 }
 
@@ -5830,6 +6465,18 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   auto Profile = selectPostLinkProfile(RequestValue, ExpectedSymbols);
   if (!Profile)
     return postLinkError("profile", errorToDiagnostic(Profile.takeError()));
+  if (*Profile == PostLinkProfile::ExactPlironScalarAddV1) {
+    if (Error E = validateExactPlironScalarAddV1ElfClosure(*ConcreteElf))
+      return E;
+    if (Error E = validateExactPlironScalarAddV1Machine(*ConcreteElf))
+      return E;
+    if (StaticPublicDefinitions != ExpectedSymbols)
+      return pipelineError(
+          Twine("post_link.check=") + ExactPlironScalarAddV1Check +
+          " status=failed reason=static_symbol_closure expected=" +
+          diagnosticList(ExpectedSymbols) +
+          " actual=" + diagnosticList(StaticPublicDefinitions));
+  }
   if (*Profile == PostLinkProfile::ExactRowSoftmaxV1) {
     if (Error E = validateExactRowSoftmaxV1ElfClosure(*ConcreteElf))
       return E;
@@ -5931,7 +6578,9 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
           " actual=" + diagnosticList(StaticPublicDefinitions));
   }
   MetadataValidationPolicy MetadataPolicy = MetadataValidationPolicy::Generic;
-  if (*Profile == PostLinkProfile::ExactRowSoftmaxV1)
+  if (*Profile == PostLinkProfile::ExactPlironScalarAddV1)
+    MetadataPolicy = MetadataValidationPolicy::ExactPlironScalarAddV1;
+  else if (*Profile == PostLinkProfile::ExactRowSoftmaxV1)
     MetadataPolicy = MetadataValidationPolicy::ExactRowSoftmaxV1;
   else if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     MetadataPolicy = MetadataValidationPolicy::ExactLdsGemmSlice1;
@@ -6008,6 +6657,9 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
             Twine(Kernel.WavefrontSize));
     }
   }
+  if (*Profile == PostLinkProfile::ExactPlironScalarAddV1)
+    if (Error E = validateExactPlironScalarAddV1Metadata(*Metadata))
+      return E;
   if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     if (Error E = validateExactLdsGemmSlice1Metadata(*Metadata))
       return E;
@@ -6047,6 +6699,23 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
        diagnosticAtom(Metadata->Target ? StringRef(*Metadata->Target)
                                        : StringRef("absent")))
           .str());
+  if (*Profile == PostLinkProfile::ExactPlironScalarAddV1)
+    Diagnostics.push_back(
+        (Twine("post_link.check=") + ExactPlironScalarAddV1Check +
+         " status=ok kernel=scalar_add required_workgroup=absent "
+         "max_flat_workgroup_size=64 wavefront_size=64 "
+         "kernarg_size=280 explicit_kernarg_size=24 "
+         "hidden_kernarg_size=256 kernarg_align=8 group_size=0 "
+         "private_size=0 "
+         "sgpr_spills=0 vgpr_spills=0 dynamic_stack=false "
+         "machine_calls=0 machine_branches=0 machine_atomics=0 "
+         "machine_scratch=0 relocations=0 dynamic_dependencies=0 "
+         "llvm_build_identity=" +
+         ExactPlironScalarAddV1PublishedLlvmBuildIdentity +
+         " input_ir_sha256=" +
+         digestHex(SHA256::hash(RequestValue.CompilerModule.Bytes)) +
+         " raw_hsaco_sha256=" + digestHex(SHA256::hash(Bytes)))
+            .str());
   if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     Diagnostics.push_back(
         "post_link.check=lds_gemm_slice1_profile status=ok "
@@ -6677,6 +7346,15 @@ Response executeImpl(const Request &RequestValue,
         {"request worker identity does not match worker measurement"});
   if (Error E = validateRequest(RequestValue))
     return failure(RequestValue, Stage::InputValidation, std::move(E));
+  if (mentionsExactPlironScalarAddV1(RequestValue) &&
+      !isClosedExactPlironScalarAddV1Request(RequestValue))
+    return failure(RequestValue, Stage::InputValidation,
+                   {"exact Pliron scalar-add symbols require the closed "
+                    "Worker V2 profile"});
+  if (isClosedExactPlironScalarAddV1Request(RequestValue))
+    if (Error E =
+            validateExactPlironScalarAddV1LlvmBuildIdentity(LlvmBuildIdentity))
+      return failure(RequestValue, Stage::Toolchain, std::move(E));
   if (mentionsExactWave64CollectivesV1(RequestValue) &&
       !isClosedExactWave64CollectivesV1Request(RequestValue))
     return failure(RequestValue, Stage::InputValidation,

@@ -27,6 +27,8 @@ mod lds_gemm_profile_registry;
 mod link_plan;
 mod moe_top2_v1_artifact;
 mod moe_top2_v1_worker;
+mod pliron_scalar_add_v1_elf;
+mod pliron_scalar_add_v1_finalizer;
 mod request_construction;
 mod row_softmax_authority;
 mod row_softmax_certificate_join;
@@ -127,6 +129,15 @@ pub use moe_top2_v1_worker::{
     MoeTop2V1DirectWorkerPinsV1, MoeTop2V1WorkerErrorV1, MoeTop2V1WorkerExchangeIdentityV1,
     ValidatedMoeTop2V1WorkerExchangeV1, inspect_moe_top2_v1_worker_v2_hsaco_v1,
     validate_moe_top2_v1_worker_exchange_v1,
+};
+pub use pliron_scalar_add_v1_finalizer::{
+    InspectedPlironScalarAddV1Hsaco, PLIRON_SCALAR_ADD_V1_DESCRIPTOR,
+    PLIRON_SCALAR_ADD_V1_EXPLICIT_KERNARG_BYTES, PLIRON_SCALAR_ADD_V1_IMPLICIT_KERNARG_BYTES,
+    PLIRON_SCALAR_ADD_V1_KERNARG_ALIGNMENT, PLIRON_SCALAR_ADD_V1_KERNARG_BYTES,
+    PLIRON_SCALAR_ADD_V1_KERNEL, PLIRON_SCALAR_ADD_V1_LLVM_BUILD_IDENTITY,
+    PLIRON_SCALAR_ADD_V1_TARGET, PlironScalarAddV1AmdhsaDescriptorIdentity,
+    PlironScalarAddV1ElfField, PlironScalarAddV1HsacoField, PlironScalarAddV1InspectionError,
+    PlironScalarAddV1MachineIdentity, inspect_pliron_scalar_add_v1_hsaco,
 };
 pub use request_construction::{
     CompilerHandoffWorkerRequestV2, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,

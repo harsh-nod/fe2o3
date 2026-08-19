@@ -321,7 +321,7 @@ impl InertWorkerExecutionV1 {
 }
 
 /// A sealed V2 response bound to the measured worker with no artifact authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 #[allow(dead_code)]
 pub(crate) struct InertWorkerExecutionV2 {
     worker_executable: ContentIdentityV1,
@@ -331,8 +331,10 @@ pub(crate) struct InertWorkerExecutionV2 {
 /// Verified Worker V2 execution retained with its exact build attempt and one-shot handoff.
 ///
 /// The worker response is measured and request-bound, but this remains inert evidence. In
-/// particular, it cannot publish, load, or launch the returned bytes.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// particular, it cannot publish, load, or launch the returned bytes. The execution is move-only
+/// so a reviewed consumer can establish exclusive custody before granting any separate runtime
+/// capability.
+#[derive(Debug, Eq, PartialEq)]
 pub struct InertCompilerHandoffExecutionV2 {
     attempt: BuildAttempt,
     handoff_identity: CompilerModuleHandoffIdentityV1,

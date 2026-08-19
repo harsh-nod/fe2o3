@@ -16,6 +16,13 @@ pub const KFD_UAPI_SCHEMA_ID: &str = "linux-kfd-uapi-1.18-generic-ioc-v1";
 /// Stable name of the reviewed R2 VM and memory-lifecycle UAPI extension.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.18-generic-ioc-v1";
 
+/// Stable name of the reviewed R4 compute-AQL queue-lifecycle UAPI extension.
+pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID: &str =
+    "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1";
+
+/// Stable name of the reviewed gfx942 CREATE_QUEUE output-observation schema.
+pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID: &str = "linux-kfd-gfx942-queue-resources-1.18-v1";
+
 /// Path of the Linux UAPI header from which this schema was reviewed.
 pub const KFD_UAPI_SOURCE_HEADER: &str = "include/uapi/linux/kfd_ioctl.h";
 
@@ -38,6 +45,74 @@ pub const KFD_UAPI_CHARDEV_SOURCE_SHA256: &str =
 /// SHA-256 of the active driver's KFD GPUVM allocation and mapping implementation.
 pub const KFD_UAPI_GPUVM_SOURCE_SHA256: &str =
     "c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d";
+
+/// SHA-256 of the active driver's queue-buffer acquisition implementation.
+pub const KFD_AQL_QUEUE_BUFFER_SOURCE_SHA256: &str =
+    "fb4b2a5c9e6981222873bcd7aca7e9c1397cba8f1a6b33634d2a48d4427fe062";
+
+/// SHA-256 of the active driver's per-process queue lifecycle implementation.
+pub const KFD_AQL_QUEUE_PQM_SOURCE_SHA256: &str =
+    "8526e258824dbe145e4209cf0fed26463729234ba24369f39e3413e7e6e028db";
+
+/// SHA-256 of the active driver's device queue manager implementation.
+pub const KFD_AQL_QUEUE_DQM_SOURCE_SHA256: &str =
+    "d61e53a78c1855c4badefbebb6c6ec52702be8cfe072253341c277337641c682";
+
+/// SHA-256 of the active gfx9 MQD implementation used by gfx942.
+pub const KFD_AQL_QUEUE_GFX9_MQD_SOURCE_SHA256: &str =
+    "21166e9dbe2a4c24cbcd6f9ff6193aa093230e91fbafc8b4ac4eee1465cd2c9e";
+
+/// SHA-256 of the active driver's internal queue and mmap definitions.
+pub const KFD_AQL_QUEUE_PRIV_SOURCE_SHA256: &str =
+    "f991330031c14725b2be0636ec1896ab530dc3d07d530ebd4f47efff97a82a99";
+
+/// SHA-256 of the active gfx9 device queue manager implementation.
+pub const KFD_AQL_QUEUE_DQM_GFX9_SOURCE_SHA256: &str =
+    "53021a6f8211212f872545403e200d34d2e8c49b1cbdd17e382ae7baa43e52f2";
+
+/// SHA-256 of the active HWS packet manager implementation.
+pub const KFD_AQL_QUEUE_PACKET_MANAGER_SOURCE_SHA256: &str =
+    "1ed642990cbb7d4cdbde211fee571318e233c19744ea1663d8eb68946c1310dd";
+
+/// SHA-256 of the active kernel queue implementation used by packet management.
+pub const KFD_AQL_QUEUE_KERNEL_QUEUE_SOURCE_SHA256: &str =
+    "13e5d3634bcfed2ae871d8da0700cde47d8671eb014831b5d1ca95ed5a22fb36";
+
+/// SHA-256 of the active MQD manager interface definitions.
+pub const KFD_AQL_QUEUE_MQD_MANAGER_HEADER_SHA256: &str =
+    "61ea7d4a13fb3168d0f026ecb13b13cf5846c86f233289043728b62ac9068605";
+
+/// SHA-256 of the active device queue manager interface definitions.
+pub const KFD_AQL_QUEUE_DQM_HEADER_SHA256: &str =
+    "9e43b8f41ad89d1dd21fddf38dff4182f09b01218778f8278a743eacb72ceadd";
+
+/// SHA-256 of the active gfx9 MQD structure definitions.
+pub const KFD_AQL_QUEUE_V9_STRUCTS_HEADER_SHA256: &str =
+    "18f8e59e4cab35d579d2e3f9fc4eadffd81d518d586065de4d9d0ab4fcc131d7";
+
+/// SHA-256 of the active gfx9 KFD-to-KGD implementation.
+pub const KFD_AQL_QUEUE_AMDGPU_GFX9_SOURCE_SHA256: &str =
+    "d112169b3231439086da4943c7675bb4aeddb111b483a687fdd95794710ab27c";
+
+/// SHA-256 of the active gfx9 KFD-to-KGD declarations.
+pub const KFD_AQL_QUEUE_AMDGPU_GFX9_HEADER_SHA256: &str =
+    "97bc6cd046c9c2495962d26d455e5231d95b0503385354177c366ea21fa9ed2e";
+
+/// SHA-256 of the active generic gfx9 register offsets.
+pub const KFD_AQL_QUEUE_GC9_OFFSET_HEADER_SHA256: &str =
+    "dde287260e0b63eecfd7b723c1fdfaf9a3da7155f0ccd331385b9acc09433aa5";
+
+/// SHA-256 of the active generic gfx9 register field definitions.
+pub const KFD_AQL_QUEUE_GC9_SH_MASK_HEADER_SHA256: &str =
+    "f67f3f753231a53e82e39783313605cd382eb9727f2cda775d6e849a7c38063e";
+
+/// SHA-256 of the active gfx9.4.3 register field definitions used by gfx942.
+pub const KFD_AQL_QUEUE_GC943_SH_MASK_HEADER_SHA256: &str =
+    "8ee3fb2c721703a1643c118502e2900bd622b4d8d287103bd53922f92d35611b";
+
+/// SHA-256 of the active driver's doorbell implementation.
+pub const KFD_GFX942_QUEUE_DOORBELL_SOURCE_SHA256: &str =
+    "de30437ee1ed9ccbdaf855899482c0bebb7f55adc120ac712c96cadef1a0ec6d";
 
 /// Canonical content manifest for the frozen R1 discovery and identity schema.
 ///
@@ -108,6 +183,116 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
     0x58, 0xa0, 0x96, 0x24, 0x14, 0x59, 0xe4, 0xcf, 0xdf, 0x90, 0xbd, 0x44, 0x97, 0xf4, 0xd5, 0x8a,
 ];
 
+/// Canonical manifest for the reviewed R4 compute-AQL queue UAPI extension.
+///
+/// Queue requests require the frozen R1 discovery schema and R2 memory schema,
+/// but neither prerequisite authenticates this additional ABI or its driver
+/// semantics. A future queue authority must bind this digest independently to
+/// current kernel, process, device, allocation, and queue-lifecycle evidence.
+/// The manifest pins the exact source set reviewed for gfx942 queue parsing,
+/// lifecycle dispatch, scheduling packets, MQD programming, and register
+/// definitions. It does not claim a complete transitive kernel build closure
+/// or authenticate the code loaded by a running kernel.
+pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1\n",
+    "base_schema_id=linux-kfd-uapi-1.18-generic-ioc-v1\n",
+    "base_schema_manifest_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
+    "memory_schema_manifest_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
+    "target=linux-x86_64-generic-ioc\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "chardev_source=amd/amdkfd/kfd_chardev.c\n",
+    "chardev_source_sha256=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
+    "queue_buffer_source=amd/amdkfd/kfd_queue.c\n",
+    "queue_buffer_source_sha256=fb4b2a5c9e6981222873bcd7aca7e9c1397cba8f1a6b33634d2a48d4427fe062\n",
+    "pqm_source=amd/amdkfd/kfd_process_queue_manager.c\n",
+    "pqm_source_sha256=8526e258824dbe145e4209cf0fed26463729234ba24369f39e3413e7e6e028db\n",
+    "dqm_source=amd/amdkfd/kfd_device_queue_manager.c\n",
+    "dqm_source_sha256=d61e53a78c1855c4badefbebb6c6ec52702be8cfe072253341c277337641c682\n",
+    "gfx9_mqd_source=amd/amdkfd/kfd_mqd_manager_v9.c\n",
+    "gfx9_mqd_source_sha256=21166e9dbe2a4c24cbcd6f9ff6193aa093230e91fbafc8b4ac4eee1465cd2c9e\n",
+    "queue_priv_source=amd/amdkfd/kfd_priv.h\n",
+    "queue_priv_source_sha256=f991330031c14725b2be0636ec1896ab530dc3d07d530ebd4f47efff97a82a99\n",
+    "gfx9_dqm_source=amd/amdkfd/kfd_device_queue_manager_v9.c\n",
+    "gfx9_dqm_source_sha256=53021a6f8211212f872545403e200d34d2e8c49b1cbdd17e382ae7baa43e52f2\n",
+    "packet_manager_source=amd/amdkfd/kfd_packet_manager.c\n",
+    "packet_manager_source_sha256=1ed642990cbb7d4cdbde211fee571318e233c19744ea1663d8eb68946c1310dd\n",
+    "kernel_queue_source=amd/amdkfd/kfd_kernel_queue.c\n",
+    "kernel_queue_source_sha256=13e5d3634bcfed2ae871d8da0700cde47d8671eb014831b5d1ca95ed5a22fb36\n",
+    "mqd_manager_header=amd/amdkfd/kfd_mqd_manager.h\n",
+    "mqd_manager_header_sha256=61ea7d4a13fb3168d0f026ecb13b13cf5846c86f233289043728b62ac9068605\n",
+    "dqm_header=amd/amdkfd/kfd_device_queue_manager.h\n",
+    "dqm_header_sha256=9e43b8f41ad89d1dd21fddf38dff4182f09b01218778f8278a743eacb72ceadd\n",
+    "v9_structs_header=amd/include/v9_structs.h\n",
+    "v9_structs_header_sha256=18f8e59e4cab35d579d2e3f9fc4eadffd81d518d586065de4d9d0ab4fcc131d7\n",
+    "amdgpu_gfx9_source=amd/amdgpu/amdgpu_amdkfd_gfx_v9.c\n",
+    "amdgpu_gfx9_source_sha256=d112169b3231439086da4943c7675bb4aeddb111b483a687fdd95794710ab27c\n",
+    "amdgpu_gfx9_header=amd/amdgpu/amdgpu_amdkfd_gfx_v9.h\n",
+    "amdgpu_gfx9_header_sha256=97bc6cd046c9c2495962d26d455e5231d95b0503385354177c366ea21fa9ed2e\n",
+    "gc9_offset_header=amd/include/asic_reg/gc/gc_9_0_offset.h\n",
+    "gc9_offset_header_sha256=dde287260e0b63eecfd7b723c1fdfaf9a3da7155f0ccd331385b9acc09433aa5\n",
+    "gc9_sh_mask_header=amd/include/asic_reg/gc/gc_9_0_sh_mask.h\n",
+    "gc9_sh_mask_header_sha256=f67f3f753231a53e82e39783313605cd382eb9727f2cda775d6e849a7c38063e\n",
+    "gc943_sh_mask_header=amd/include/asic_reg/gc/gc_9_4_3_sh_mask.h\n",
+    "gc943_sh_mask_header_sha256=8ee3fb2c721703a1643c118502e2900bd622b4d8d287103bd53922f92d35611b\n",
+    "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
+    "kfd_uapi=1.18\n",
+    "semantic_gpu=gfx942\n",
+    "semantic_source_set_scope=exact_reviewed_gfx942_queue_paths_v1_not_transitive_kernel_build_closure\n",
+    "aql_profile=queue_type:00000002,percentage:0..100,priority:0..15,ring_size:power_of_two_and_at_least_1024,sdma_engine_id:0,pad:0\n",
+    "update_profiles=reconfigure:ring_base_nonzero,disable:ring_base_zero_percentage_zero,size:power_of_two_and_at_least_1024,priority:0..15\n",
+    "create_queue=size:96,align:8,ring_base:0,write_pointer:8,read_pointer:16,doorbell_offset:24,ring_size:32,gpu_id:36,queue_type:40,queue_percentage:44,queue_priority:48,queue_id:52,eop_address:56,eop_size:64,ctx_address:72,ctx_size:80,ctl_stack_size:84,sdma_engine_id:88,pad:92,request:c0604b02\n",
+    "destroy_queue=size:8,align:4,queue_id:0,pad:4,request:c0084b03\n",
+    "update_queue=size:24,align:8,ring_base:0,queue_id:8,ring_size:12,queue_percentage:16,queue_priority:20,request:40184b07\n",
+);
+
+/// SHA-256 of [`KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST`].
+pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
+    "b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e";
+
+/// Typed digest bytes of [`KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST`].
+pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0xb1, 0x1f, 0x3c, 0x8c, 0x76, 0x6d, 0xd2, 0x53, 0x94, 0x35, 0x06, 0x46, 0xe3, 0x52, 0x69, 0xe1,
+    0x0c, 0x8a, 0x33, 0xac, 0xb9, 0x8f, 0x74, 0xcb, 0xa2, 0xa8, 0x2e, 0x95, 0xfa, 0x18, 0x5c, 0x4e,
+];
+
+/// Canonical manifest for reviewed gfx942 CREATE_QUEUE output observations.
+///
+/// This composes, but does not modify, the frozen queue-lifecycle schema. It
+/// identifies validation of kernel-written numeric fields only. It grants no
+/// queue ownership, doorbell mapping or MMIO authority, and it does not make a
+/// successful ioctl trustworthy.
+pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-gfx942-queue-resources-1.18-v1\n",
+    "queue_schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1\n",
+    "queue_schema_manifest_sha256=b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e\n",
+    "target=linux-x86_64,gfx942,kfd:1.18,non-mes\n",
+    "pqm_source=amd/amdkfd/kfd_process_queue_manager.c\n",
+    "pqm_source_sha256=8526e258824dbe145e4209cf0fed26463729234ba24369f39e3413e7e6e028db\n",
+    "doorbell_source=amd/amdkfd/kfd_doorbell.c\n",
+    "doorbell_source_sha256=de30437ee1ed9ccbdaf855899482c0bebb7f55adc120ac712c96cadef1a0ec6d\n",
+    "device_source=amd/amdkfd/kfd_device.c\n",
+    "device_source_sha256=ccf20227c5cdd5b258758f50f61bbc1008a09ea776c101f035f83963e7d23037\n",
+    "priv_header=amd/amdkfd/kfd_priv.h\n",
+    "priv_header_sha256=f991330031c14725b2be0636ec1896ab530dc3d07d530ebd4f47efff97a82a99\n",
+    "queue_id=first-zero-slot,range:0..1023,zero-valid,max-sentinel-invalid\n",
+    "doorbell=type:3,type-shift:62,gpu-id-hash-shift:46,gpu-id-hash-bits:16\n",
+    "gfx942_doorbell=width:8,process-slice:8192,offset-alignment:8\n",
+    "doorbell_decomposition=encoded-process-slice-offset:raw&~8191,in-process-byte-offset:raw&8191,not-page-mask\n",
+    "authority=observation-only,no-queue,no-mmap,no-mmio\n",
+);
+
+/// SHA-256 of the gfx942 queue-resource schema manifest.
+pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256: &str =
+    "63753a9c0dcef0f69e0235b95b44fe6ce22cb5b0d1df6f60a971a5ed28f15904";
+
+/// Typed digest bytes of the gfx942 queue-resource schema manifest.
+pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0x63, 0x75, 0x3a, 0x9c, 0x0d, 0xce, 0xf0, 0xf6, 0x9e, 0x02, 0x35, 0xb9, 0x5b, 0x44, 0xfe, 0x6c,
+    0xe2, 0x2c, 0xb5, 0xb0, 0xd1, 0xdf, 0x6f, 0x60, 0xa9, 0x71, 0xa5, 0xed, 0x28, 0xf1, 0x59, 0x04,
+];
+
 /// Major version declared by the reviewed AMDGPU 6.16.13 KFD UAPI header.
 pub const KFD_IOCTL_MAJOR_VERSION: u32 = 1;
 
@@ -158,6 +343,160 @@ pub const KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE: u32 =
 pub const KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE: u32 =
     KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE;
 
+/// Exact UAPI queue type admitted by the R4 builder.
+pub const KFD_IOC_QUEUE_TYPE_COMPUTE_AQL: u32 = 0x2;
+
+/// Maximum low-byte queue percentage accepted by the active driver.
+pub const KFD_MAX_QUEUE_PERCENTAGE: u32 = 100;
+
+/// Maximum relative queue priority accepted by the active driver.
+pub const KFD_MAX_QUEUE_PRIORITY: u32 = 15;
+
+/// Minimum queue ring size declared by KFD UAPI 1.18.
+pub const KFD_MIN_QUEUE_RING_SIZE: u32 = 1024;
+
+/// Number of process queue slots in the active KFD PQM bitmap.
+pub const KFD_MAX_QUEUE_SLOTS_PER_PROCESS: u32 = 1024;
+
+/// gfx942 doorbell width reported by the active non-MES device profile.
+pub const KFD_GFX942_DOORBELL_BYTES: u64 = 8;
+
+/// Non-MES per-process doorbell slice rounded to the active 4096-byte page.
+pub const KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES: u64 = 8192;
+
+/// Internal KFD mmap type used for doorbells.
+pub const KFD_MMAP_TYPE_DOORBELL: u64 = 3;
+
+/// Shift of the two-bit KFD mmap type field.
+pub const KFD_MMAP_TYPE_SHIFT: u32 = 62;
+
+/// Shift of the 16-bit GPU-ID hash in an encoded KFD mmap offset.
+pub const KFD_MMAP_GPU_ID_HASH_SHIFT: u32 = 46;
+
+const KFD_MMAP_GPU_ID_HASH_MASK: u64 = 0xffff;
+const KFD_MMAP_OFFSET_MASK: u64 = (1_u64 << KFD_MMAP_GPU_ID_HASH_SHIFT) - 1;
+
+/// A returned process queue slot admitted under the active PQM source profile.
+///
+/// Slot zero is valid: a zeroed process bitmap allocates it first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdQueueIdObservation(u32);
+
+impl KfdQueueIdObservation {
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// A checked encoded gfx942 doorbell offset observation.
+///
+/// This is still an untrusted integer observation. It does not authorize an
+/// mmap, a doorbell store, or any queue operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdGfx942DoorbellOffsetObservation {
+    raw: u64,
+    encoded_process_slice_offset: u64,
+    in_process_byte_offset: u64,
+}
+
+impl KfdGfx942DoorbellOffsetObservation {
+    pub const fn raw(self) -> u64 {
+        self.raw
+    }
+
+    /// Canonical encoded offset observation for the complete process slice.
+    ///
+    /// On SOC15, active ROCr clears the complete 8192-byte process-slice mask,
+    /// not merely the 4096-byte page mask. The active KFD mmap path requires an
+    /// exact 8192-byte VMA and uses the high mmap-type/GPU-ID fields to select
+    /// the process doorbell allocation. This integer remains non-authoritative.
+    pub const fn encoded_process_slice_offset(self) -> u64 {
+        self.encoded_process_slice_offset
+    }
+
+    pub const fn in_process_byte_offset(self) -> u64 {
+        self.in_process_byte_offset
+    }
+}
+
+/// Checked numeric outputs of a successful gfx942 CREATE_QUEUE ioctl.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdGfx942CreateQueueOutputs {
+    queue_id: KfdQueueIdObservation,
+    doorbell_offset: KfdGfx942DoorbellOffsetObservation,
+}
+
+impl KfdGfx942CreateQueueOutputs {
+    pub const fn queue_id(self) -> KfdQueueIdObservation {
+        self.queue_id
+    }
+
+    pub const fn doorbell_offset(self) -> KfdGfx942DoorbellOffsetObservation {
+        self.doorbell_offset
+    }
+}
+
+/// Why kernel-written gfx942 CREATE_QUEUE outputs were not admitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KfdGfx942CreateQueueOutputError {
+    QueueIdOutOfRange { queue_id: u32 },
+    DoorbellMmapType { observed: u64 },
+    DoorbellGpuIdHash { expected: u16, observed: u16 },
+    DoorbellOffsetOutOfRange { offset: u64 },
+    DoorbellOffsetMisaligned { offset: u64 },
+}
+
+/// Admits the numeric outputs of an already successful CREATE_QUEUE ioctl.
+///
+/// The caller must separately prove syscall success and unchanged inputs. This
+/// function only checks the pinned active-driver slot and encoded-offset
+/// profile. It deliberately does not create authority.
+pub const fn admit_kfd_gfx942_create_queue_outputs(
+    queue_id: u32,
+    raw_doorbell_offset: u64,
+    gpu_id: u32,
+) -> Result<KfdGfx942CreateQueueOutputs, KfdGfx942CreateQueueOutputError> {
+    if queue_id >= KFD_MAX_QUEUE_SLOTS_PER_PROCESS {
+        return Err(KfdGfx942CreateQueueOutputError::QueueIdOutOfRange { queue_id });
+    }
+
+    let observed_type = raw_doorbell_offset >> KFD_MMAP_TYPE_SHIFT;
+    if observed_type != KFD_MMAP_TYPE_DOORBELL {
+        return Err(KfdGfx942CreateQueueOutputError::DoorbellMmapType {
+            observed: observed_type,
+        });
+    }
+
+    let observed_hash =
+        ((raw_doorbell_offset >> KFD_MMAP_GPU_ID_HASH_SHIFT) & KFD_MMAP_GPU_ID_HASH_MASK) as u16;
+    let expected_hash = (gpu_id & KFD_MMAP_GPU_ID_HASH_MASK as u32) as u16;
+    if observed_hash != expected_hash {
+        return Err(KfdGfx942CreateQueueOutputError::DoorbellGpuIdHash {
+            expected: expected_hash,
+            observed: observed_hash,
+        });
+    }
+
+    let offset = raw_doorbell_offset & KFD_MMAP_OFFSET_MASK;
+    if offset >= KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES {
+        return Err(KfdGfx942CreateQueueOutputError::DoorbellOffsetOutOfRange { offset });
+    }
+    if !offset.is_multiple_of(KFD_GFX942_DOORBELL_BYTES) {
+        return Err(KfdGfx942CreateQueueOutputError::DoorbellOffsetMisaligned { offset });
+    }
+
+    Ok(KfdGfx942CreateQueueOutputs {
+        queue_id: KfdQueueIdObservation(queue_id),
+        doorbell_offset: KfdGfx942DoorbellOffsetObservation {
+            raw: raw_doorbell_offset,
+            encoded_process_slice_offset: raw_doorbell_offset
+                & !(KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES - 1),
+            in_process_byte_offset: offset,
+        },
+    })
+}
+
 /// An exact, reviewed allocation-flag profile accepted by fe2o3's R2 builder.
 ///
 /// The private field prevents callers from constructing novel bit
@@ -203,6 +542,140 @@ pub const fn admit_kfd_alloc_memory_flags(
         KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE => Ok(KfdAllocMemoryFlags::EXECUTABLE),
         flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
     }
+}
+
+/// A power-of-two AQL ring size at least [`KFD_MIN_QUEUE_RING_SIZE`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdAqlQueueRingSize(u32);
+
+impl KfdAqlQueueRingSize {
+    pub const fn bytes(self) -> u32 {
+        self.0
+    }
+}
+
+/// A nonzero numeric ring address observation for UPDATE_QUEUE.
+///
+/// This type proves only that the integer is nonzero. It does not prove pointer
+/// provenance, alignment, mapped length, GPU visibility, allocation ownership,
+/// or that the address belongs to the queue identified by the request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdAqlQueueRingAddress(u64);
+
+impl KfdAqlQueueRingAddress {
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// A zero numeric address cannot be used for queue reconfiguration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdAqlQueueRingAddressError;
+
+/// Admits a nonzero numeric ring address observation without making a
+/// provenance or ownership claim.
+pub const fn admit_kfd_aql_queue_ring_address(
+    address: u64,
+) -> Result<KfdAqlQueueRingAddress, KfdAqlQueueRingAddressError> {
+    if address == 0 {
+        return Err(KfdAqlQueueRingAddressError);
+    }
+    Ok(KfdAqlQueueRingAddress(address))
+}
+
+/// Why an AQL ring size was not admitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KfdAqlQueueRingSizeError {
+    BelowMinimum { size: u32, minimum: u32 },
+    NotPowerOfTwo { size: u32 },
+}
+
+/// Admits the exact ring-size range the active queue parser accepts without
+/// clamping or normalizing the caller's input.
+pub const fn admit_kfd_aql_queue_ring_size(
+    size: u32,
+) -> Result<KfdAqlQueueRingSize, KfdAqlQueueRingSizeError> {
+    if size < KFD_MIN_QUEUE_RING_SIZE {
+        return Err(KfdAqlQueueRingSizeError::BelowMinimum {
+            size,
+            minimum: KFD_MIN_QUEUE_RING_SIZE,
+        });
+    }
+    if !size.is_power_of_two() {
+        return Err(KfdAqlQueueRingSizeError::NotPowerOfTwo { size });
+    }
+    Ok(KfdAqlQueueRingSize(size))
+}
+
+/// A queue activity percentage with no repurposed target-XCC bits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdQueuePercentage(u32);
+
+impl KfdQueuePercentage {
+    /// Exact inactive percentage used by the reviewed disable builder.
+    pub const DISABLED: Self = Self(0);
+
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// Why a queue percentage was not admitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdQueuePercentageError {
+    pub percentage: u32,
+    pub maximum: u32,
+}
+
+/// Admits only the unextended 0 through 100 queue-percentage field.
+///
+/// The active driver repurposes bits 8 through 15 as a PM4 target-XCC selector.
+/// This initial compute-AQL profile rejects that extension by accepting only
+/// the ordinary percentage range.
+pub const fn admit_kfd_queue_percentage(
+    percentage: u32,
+) -> Result<KfdQueuePercentage, KfdQueuePercentageError> {
+    if percentage > KFD_MAX_QUEUE_PERCENTAGE {
+        return Err(KfdQueuePercentageError {
+            percentage,
+            maximum: KFD_MAX_QUEUE_PERCENTAGE,
+        });
+    }
+    Ok(KfdQueuePercentage(percentage))
+}
+
+/// A relative queue priority in the KFD UAPI 1.18 range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdQueuePriority(u32);
+
+impl KfdQueuePriority {
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// Why a queue priority was not admitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdQueuePriorityError {
+    pub priority: u32,
+    pub maximum: u32,
+}
+
+/// Admits the complete relative-priority range declared by KFD UAPI 1.18.
+pub const fn admit_kfd_queue_priority(
+    priority: u32,
+) -> Result<KfdQueuePriority, KfdQueuePriorityError> {
+    if priority > KFD_MAX_QUEUE_PRIORITY {
+        return Err(KfdQueuePriorityError {
+            priority,
+            maximum: KFD_MAX_QUEUE_PRIORITY,
+        });
+    }
+    Ok(KfdQueuePriority(priority))
 }
 
 /// Negative input queries the current process XNACK mode without changing it.
@@ -312,6 +785,159 @@ impl KfdIoctlGetVersionArgs {
         KfdUapiVersion {
             major: self.major_version,
             minor: self.minor_version,
+        }
+    }
+}
+
+/// Opaque userspace addresses and device-derived auxiliary sizes for a
+/// compute-AQL queue creation request.
+///
+/// This data-only record does not validate address provenance, mapped length,
+/// alignment, GPU visibility, EOP size, CWSR size, or control-stack size. Those
+/// facts depend on admitted allocations and selected-device topology and must
+/// be established by the future queue adapter before issuing a request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdAqlComputeQueueBuffers {
+    pub ring_base_address: u64,
+    pub write_pointer_address: u64,
+    pub read_pointer_address: u64,
+    pub eop_buffer_address: u64,
+    pub eop_buffer_size: u64,
+    pub ctx_save_restore_address: u64,
+    pub ctx_save_restore_size: u32,
+    pub ctl_stack_size: u32,
+}
+
+/// C layout of `struct kfd_ioctl_create_queue_args`.
+///
+/// The safe constructor fixes the queue kind to compute AQL, zeros SDMA and
+/// padding inputs, and initializes both kernel outputs to fail-closed
+/// sentinels. It does not create a queue or grant authority over any address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlCreateQueueArgs {
+    pub ring_base_address: u64,
+    pub write_pointer_address: u64,
+    pub read_pointer_address: u64,
+    pub doorbell_offset: u64,
+    pub ring_size: u32,
+    pub gpu_id: u32,
+    pub queue_type: u32,
+    pub queue_percentage: u32,
+    pub queue_priority: u32,
+    pub queue_id: u32,
+    pub eop_buffer_address: u64,
+    pub eop_buffer_size: u64,
+    pub ctx_save_restore_address: u64,
+    pub ctx_save_restore_size: u32,
+    pub ctl_stack_size: u32,
+    pub sdma_engine_id: u32,
+    pub pad: u32,
+}
+
+impl KfdIoctlCreateQueueArgs {
+    /// Builds only the reviewed initial compute-AQL input profile.
+    pub const fn new_compute_aql(
+        buffers: KfdAqlComputeQueueBuffers,
+        ring_size: KfdAqlQueueRingSize,
+        gpu_id: u32,
+        queue_percentage: KfdQueuePercentage,
+        queue_priority: KfdQueuePriority,
+    ) -> Self {
+        Self {
+            ring_base_address: buffers.ring_base_address,
+            write_pointer_address: buffers.write_pointer_address,
+            read_pointer_address: buffers.read_pointer_address,
+            doorbell_offset: u64::MAX,
+            ring_size: ring_size.bytes(),
+            gpu_id,
+            queue_type: KFD_IOC_QUEUE_TYPE_COMPUTE_AQL,
+            queue_percentage: queue_percentage.value(),
+            queue_priority: queue_priority.value(),
+            queue_id: u32::MAX,
+            eop_buffer_address: buffers.eop_buffer_address,
+            eop_buffer_size: buffers.eop_buffer_size,
+            ctx_save_restore_address: buffers.ctx_save_restore_address,
+            ctx_save_restore_size: buffers.ctx_save_restore_size,
+            ctl_stack_size: buffers.ctl_stack_size,
+            sdma_engine_id: 0,
+            pad: 0,
+        }
+    }
+}
+
+/// C layout of `struct kfd_ioctl_destroy_queue_args`.
+///
+/// A numeric queue ID is not queue authority. A future adapter must prove that
+/// the ID is live, process-owned, current, and not already being destroyed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlDestroyQueueArgs {
+    pub queue_id: u32,
+    pub pad: u32,
+}
+
+impl KfdIoctlDestroyQueueArgs {
+    pub const fn new(queue_id: u32) -> Self {
+        Self { queue_id, pad: 0 }
+    }
+}
+
+/// C layout of `struct kfd_ioctl_update_queue_args`.
+///
+/// The UAPI record does not carry queue format. This constructor's AQL name
+/// describes the admitted inputs only; a future adapter must bind `queue_id`
+/// to a live compute-AQL queue before issuing the request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlUpdateQueueArgs {
+    pub ring_base_address: u64,
+    pub queue_id: u32,
+    pub ring_size: u32,
+    pub queue_percentage: u32,
+    pub queue_priority: u32,
+}
+
+impl KfdIoctlUpdateQueueArgs {
+    /// Reconfigures a queue with a deliberately nonzero numeric ring address.
+    ///
+    /// The address observation is not allocation or queue authority. The
+    /// adapter must still prove the ring is mapped, sufficiently large, and
+    /// owned by the same live compute-AQL queue.
+    pub const fn reconfigure_compute_aql(
+        queue_id: u32,
+        ring_base_address: KfdAqlQueueRingAddress,
+        ring_size: KfdAqlQueueRingSize,
+        queue_percentage: KfdQueuePercentage,
+        queue_priority: KfdQueuePriority,
+    ) -> Self {
+        Self {
+            ring_base_address: ring_base_address.value(),
+            queue_id,
+            ring_size: ring_size.bytes(),
+            queue_percentage: queue_percentage.value(),
+            queue_priority: queue_priority.value(),
+        }
+    }
+
+    /// Encodes the active driver's deliberate NULL-ring disable operation.
+    ///
+    /// The driver treats a zero ring address as disabled, while still parsing
+    /// and storing ring size and priority and updating the MQD. Therefore this
+    /// builder requires an admitted nonzero size, fixes percentage to zero,
+    /// and admits priority normally. It does not prove queue ownership or that
+    /// a failed ioctl left the queue active or inactive.
+    pub const fn disable_compute_aql(
+        queue_id: u32,
+        ring_size: KfdAqlQueueRingSize,
+        queue_priority: KfdQueuePriority,
+    ) -> Self {
+        Self {
+            ring_base_address: 0,
+            queue_id,
+            ring_size: ring_size.bytes(),
+            queue_percentage: KfdQueuePercentage::DISABLED.value(),
+            queue_priority: queue_priority.value(),
         }
     }
 }
@@ -565,6 +1191,33 @@ pub const AMDKFD_IOC_GET_VERSION: IoctlRequest = encode_admitted_ioctl(
     size_of::<KfdIoctlGetVersionArgs>(),
 );
 
+/// Request for `_IOWR('K', 0x02, struct kfd_ioctl_create_queue_args)`.
+///
+/// This constant is intentionally not exposed through [`AdmittedKfdUapi`]: a
+/// successful version query does not authenticate the separate queue schema.
+pub const AMDKFD_IOC_CREATE_QUEUE: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x02,
+    size_of::<KfdIoctlCreateQueueArgs>(),
+);
+
+/// Request for `_IOWR('K', 0x03, struct kfd_ioctl_destroy_queue_args)`.
+pub const AMDKFD_IOC_DESTROY_QUEUE: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x03,
+    size_of::<KfdIoctlDestroyQueueArgs>(),
+);
+
+/// Request for `_IOW('K', 0x07, struct kfd_ioctl_update_queue_args)`.
+pub const AMDKFD_IOC_UPDATE_QUEUE: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::Write,
+    AMDKFD_IOCTL_BASE,
+    0x07,
+    size_of::<KfdIoctlUpdateQueueArgs>(),
+);
+
 /// Request number for `_IOW('K', 0x15, struct kfd_ioctl_acquire_vm_args)`.
 pub const AMDKFD_IOC_ACQUIRE_VM: IoctlRequest = encode_admitted_ioctl(
     IoctlDirection::Write,
@@ -733,6 +1386,39 @@ const _: () = {
     assert!(offset_of!(KfdIoctlGetVersionArgs, major_version) == 0);
     assert!(offset_of!(KfdIoctlGetVersionArgs, minor_version) == 4);
 
+    assert!(size_of::<KfdIoctlCreateQueueArgs>() == 96);
+    assert!(align_of::<KfdIoctlCreateQueueArgs>() == 8);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, ring_base_address) == 0);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, write_pointer_address) == 8);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, read_pointer_address) == 16);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, doorbell_offset) == 24);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, ring_size) == 32);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, gpu_id) == 36);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, queue_type) == 40);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, queue_percentage) == 44);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, queue_priority) == 48);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, queue_id) == 52);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, eop_buffer_address) == 56);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, eop_buffer_size) == 64);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, ctx_save_restore_address) == 72);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, ctx_save_restore_size) == 80);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, ctl_stack_size) == 84);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, sdma_engine_id) == 88);
+    assert!(offset_of!(KfdIoctlCreateQueueArgs, pad) == 92);
+
+    assert!(size_of::<KfdIoctlDestroyQueueArgs>() == 8);
+    assert!(align_of::<KfdIoctlDestroyQueueArgs>() == 4);
+    assert!(offset_of!(KfdIoctlDestroyQueueArgs, queue_id) == 0);
+    assert!(offset_of!(KfdIoctlDestroyQueueArgs, pad) == 4);
+
+    assert!(size_of::<KfdIoctlUpdateQueueArgs>() == 24);
+    assert!(align_of::<KfdIoctlUpdateQueueArgs>() == 8);
+    assert!(offset_of!(KfdIoctlUpdateQueueArgs, ring_base_address) == 0);
+    assert!(offset_of!(KfdIoctlUpdateQueueArgs, queue_id) == 8);
+    assert!(offset_of!(KfdIoctlUpdateQueueArgs, ring_size) == 12);
+    assert!(offset_of!(KfdIoctlUpdateQueueArgs, queue_percentage) == 16);
+    assert!(offset_of!(KfdIoctlUpdateQueueArgs, queue_priority) == 20);
+
     assert!(size_of::<KfdIoctlAcquireVmArgs>() == 8);
     assert!(align_of::<KfdIoctlAcquireVmArgs>() == 4);
     assert!(offset_of!(KfdIoctlAcquireVmArgs, drm_fd) == 0);
@@ -797,6 +1483,9 @@ const _: () = {
     assert!(offset_of!(KfdIoctlSmiEventsArgs, anon_fd) == 4);
 
     assert!(AMDKFD_IOC_GET_VERSION == 0x8008_4b01);
+    assert!(AMDKFD_IOC_CREATE_QUEUE == 0xc060_4b02);
+    assert!(AMDKFD_IOC_DESTROY_QUEUE == 0xc008_4b03);
+    assert!(AMDKFD_IOC_UPDATE_QUEUE == 0x4018_4b07);
     assert!(AMDKFD_IOC_GET_PROCESS_APERTURES_NEW == 0xc010_4b14);
     assert!(AMDKFD_IOC_ACQUIRE_VM == 0x4008_4b15);
     assert!(AMDKFD_IOC_ALLOC_MEMORY_OF_GPU == 0xc028_4b16);

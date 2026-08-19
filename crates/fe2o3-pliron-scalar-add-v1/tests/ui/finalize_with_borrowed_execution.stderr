@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+  --> tests/ui/finalize_with_borrowed_execution.rs:12:56
+   |
+12 |     let _ = finalize_repository_scalar_add_v1(lineage, execution, policy);
+   |             ---------------------------------          ^^^^^^^^^ expected `InertCompilerHandoffExecutionV2`, found `&InertCompilerHandoffExecutionV2`
+   |             |
+   |             arguments to this function are incorrect
+   |
+note: function defined here
+  --> src/authority.rs
+   |
+   | pub fn finalize_repository_scalar_add_v1(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

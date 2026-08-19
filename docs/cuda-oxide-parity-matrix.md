@@ -55,6 +55,43 @@ until [#140](https://github.com/harsh-nod/fe2o3/issues/140) supplies owner-aware
 operation handles. The authoritative TSV and generated dashboard therefore
 remain unchanged at `0/97/0/12` combined.
 
+The 2026-08-19 [#134](https://github.com/harsh-nod/fe2o3/issues/134)
+bounded scalar-add checkpoint also promotes no parity row. It uses
+`pliron-llvm` only as a typed dialect dependency with default features disabled;
+the optional `llvm-sys` converter is excluded from the compiler and worker.
+A checked-in backend fixture constructs the exact admitted Pliron graph and
+canonical V2 handoff, then deterministic bounded LLVM assembly enters only the
+pinned upstream LLVM 22.1.8 target-machine/in-process-LLD Worker V2 route. The
+fixture is not Rust user source, so this is not Rust frontend or
+source-to-machine evidence. No COMGR or subprocess compiler/linker has artifact
+authority.
+
+The bounded closure comprises `fd6520d88`, `70f9c5ad7`, `e016833d3`,
+`c9e8ca702`, `62efd243e`, and alignment correction `228c88ed9`. Together they
+close the exact Worker machine-effect profile, structural ELF/descriptor/machine
+inspection, measured-HSACO gate, move-only execution custody, repository join,
+and sealed one-shot runtime consumption for this one scalar shape. The exact
+code target is `gfx942:xnack-`, while the qualifying MI300X observation is
+`gfx942:sramecc+:xnack-`. Pinned measurements include Worker executable
+SHA-256 `12c06e0da5d812c1db6f33450f99a8d70087c585eec552f7f8616077704361fd`,
+HSACO SHA-256
+`011671a80384051232fb684c90afadd9b5e9d81c13d216238f15af55dd3880b1`,
+and ROCr HSA 1.18 image SHA-256
+`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+The descriptor kernarg alignment is 8 and the separately observed runtime
+storage alignment is 16, both over the same 280-byte `24+256` layout.
+
+The MI300X run returned bit-exact `3.75f32`, preserved immutable input and all
+guard canaries, and unloaded once. Its
+`FE2O3_REPOSITORY_SCALAR_ADD_V1_MI300X_OK` marker binds the bounded policy,
+artifact, runtime image, device, dispatch, result, canary, and unload
+observations as a self-consistent record. The marker is not externally signed
+or attested, and the compile-time checkout policy is not an external signature
+or separately owned approval. The canonical status TSV and generated dashboard
+remain unchanged at `0/97/0/12` combined. This one scalar slice proves neither
+general CUDA-Oxide parity, memory safety, nor race freedom, and is not evidence
+of general GEMM, attention, or MoE support.
+
 The existing V1 artifact wire format now has a strict `gfx942` profile with two
 canonically ordered entries over one digest-validated native payload. Each
 entry has a separate proof binding over its kernel, ABI, effects, launch,

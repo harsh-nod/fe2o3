@@ -470,6 +470,7 @@ struct DecodedSite {
   uint64_t Size = 0;
   std::string Name;
   std::vector<std::string> RegisterOperands;
+  std::vector<char> OperandKinds;
 };
 
 struct ElfMutationLayout {
@@ -629,13 +630,21 @@ std::vector<DecodedSite> decodeSymbolSites(ArrayRef<uint8_t> Payload,
       return {};
     }
     std::vector<std::string> RegisterOperands;
-    for (const MCOperand &Operand : Instruction)
+    std::vector<char> OperandKinds;
+    for (const MCOperand &Operand : Instruction) {
       RegisterOperands.push_back(
           Operand.isReg() ? Registers->getName(Operand.getReg()) : "");
+      OperandKinds.push_back(Operand.isReg()      ? 'r'
+                             : Operand.isImm()    ? 'i'
+                             : Operand.isExpr()   ? 'e'
+                             : Operand.isSFPImm() ? 's'
+                             : Operand.isDFPImm() ? 'd'
+                                                  : 'x');
+    }
     Result.push_back({BaseOffset + static_cast<size_t>(Offset),
                       Address + Offset, InstructionSize,
                       Instructions->getName(Instruction.getOpcode()).str(),
-                      std::move(RegisterOperands)});
+                      std::move(RegisterOperands), std::move(OperandKinds)});
     Offset += InstructionSize;
   }
   return Result;
@@ -915,6 +924,94 @@ void replaceText(std::vector<uint8_t> &Bytes, StringRef Expected,
   llvm::copy(Replacement, Position);
 }
 
+void exactDynamicSymbolicDeclarationIsAccepted() {
+  std::vector<uint8_t> Payload = finalize(makeKernelBitcode(false));
+  ElfMutationLayout Layout = inspectElfMutationLayout(Payload);
+  auto Flags = Layout.DynamicEntries.find(ELF::DT_FLAGS);
+  require(Flags != Layout.DynamicEntries.end(),
+          "pinned LLVM fixture lacks DT_FLAGS");
+  require(support::endian::read64le(Payload.data() + Flags->second + 8) ==
+              ELF::DF_SYMBOLIC,
+          "pinned LLVM DT_FLAGS is not exactly DF_SYMBOLIC");
+  auto Hash = Layout.DynamicEntries.find(ELF::DT_HASH);
+  auto Terminator = Layout.DynamicEntries.find(ELF::DT_NULL);
+  require(Hash != Layout.DynamicEntries.end() &&
+              Terminator != Layout.DynamicEntries.end(),
+          "pinned LLVM dynamic closure is incomplete");
+
+  auto Accepted = analyzeGfx942PhysicalMachineEffects(directRequest(Payload));
+  if (!Accepted)
+    fail(takeError(Accepted.takeError()));
+
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Flags->second + 8, 0);
+    requireRejectedWith(
+        std::move(Mutated),
+        "dynamic flags are outside exact symbolic-binding profile");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Flags->second + 8,
+                               ELF::DF_SYMBOLIC | ELF::DF_BIND_NOW);
+    requireRejectedWith(
+        std::move(Mutated),
+        "dynamic flags are outside exact symbolic-binding profile");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Flags->second,
+                               ELF::DT_SYMBOLIC);
+    support::endian::write64le(Mutated.data() + Flags->second + 8, 0);
+    requireRejectedWith(std::move(Mutated),
+                        "dynamic declaration is outside bounded profile");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Flags->second, ELF::DT_FLAGS_1);
+    requireRejectedWith(std::move(Mutated),
+                        "dynamic declaration is outside bounded profile");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Flags->second, ELF::DT_NEEDED);
+    support::endian::write64le(Mutated.data() + Flags->second + 8, 1);
+    requireRejectedWith(std::move(Mutated),
+                        "dynamic declaration is outside bounded profile");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Flags->second, ELF::DT_NULL);
+    requireRejectedWith(std::move(Mutated),
+                        "dynamic table has declarations after DT_NULL");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Hash->second, ELF::DT_FLAGS);
+    support::endian::write64le(Mutated.data() + Hash->second + 8,
+                               ELF::DF_SYMBOLIC);
+    requireRejectedWith(std::move(Mutated),
+                        "dynamic table repeats a declaration");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Flags->second, ELF::DT_RELA);
+    support::endian::write64le(Mutated.data() + Flags->second + 8, 0);
+    requireRejectedWith(std::move(Mutated),
+                        "dynamic relocation table is unsupported");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Flags->second, ELF::DT_NULL);
+    support::endian::write64le(Mutated.data() + Terminator->second,
+                               ELF::DT_FLAGS);
+    support::endian::write64le(Mutated.data() + Terminator->second + 8,
+                               ELF::DF_SYMBOLIC);
+    requireRejectedWith(std::move(Mutated),
+                        "dynamic table has declarations after DT_NULL");
+  }
+}
+
 void exactProductionProfileRejectsAlternatives() {
   constexpr StringLiteral MetadataTarget = "amdgcn-amd-amdhsa--gfx942:xnack-";
   require(matchesPhysicalMachineEffectMetadataTargetV1(MetadataTarget),
@@ -990,6 +1087,7 @@ void loaderViewMutationsFailClosed() {
   require(Layout.SectionHeaders.contains(".text") &&
               Layout.SectionHeaders.contains(".note") &&
               Layout.SectionHeaders.contains(".symtab") &&
+              Layout.SectionHeaders.contains(".dynsym") &&
               Layout.SectionIndices.contains(".text"),
           "fixture lacks loader-view mutation sections");
   auto StaticAlpha =
@@ -999,6 +1097,13 @@ void loaderViewMutationsFailClosed() {
   require(StaticAlpha != Layout.Symbols.end() &&
               DynamicAlpha != Layout.Symbols.end(),
           "fixture lacks alpha in both symbol tables");
+
+  const size_t DynsymHeader = Layout.SectionHeaders.at(".dynsym");
+  const uint64_t DynsymOffset =
+      support::endian::read64le(Payload.data() + DynsymHeader + 24);
+  require(DynsymOffset <= Payload.size() &&
+              sizeof(ELF64LE::Sym) <= Payload.size() - DynsymOffset,
+          "fixture .dynsym null entry is outside payload");
 
   const size_t Executable = Layout.ExecutableProgramHeaders.front();
   const size_t NoteProgramHeader =
@@ -1110,6 +1215,38 @@ void loaderViewMutationsFailClosed() {
     support::endian::write64le(Mutated.data() + DynamicAlpha->second + 8,
                                Value + 4);
     requireRejectedWith(std::move(Mutated), ".symtab/.dynsym export mismatch");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    llvm::copy(ArrayRef<uint8_t>(Mutated).slice(DynamicAlpha->second,
+                                                sizeof(ELF64LE::Sym)),
+               Mutated.begin() + DynsymOffset);
+    uint32_t Name = support::endian::read32le(
+        Mutated.data() + static_cast<size_t>(DynsymOffset));
+    require(Name != std::numeric_limits<uint32_t>::max(),
+            "fixture dynamic symbol name cannot be shifted");
+    support::endian::write32le(
+        Mutated.data() + static_cast<size_t>(DynsymOffset), Name + 1);
+    requireRejectedWith(std::move(Mutated), ".dynsym null entry is not exact");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write16le(Mutated.data() + DynamicAlpha->second + 6,
+                               ELF::SHN_UNDEF);
+    requireRejectedWith(
+        std::move(Mutated),
+        ".dynsym defined symbols differ from exact metadata exports");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    uint32_t Name =
+        support::endian::read32le(Mutated.data() + DynamicAlpha->second);
+    require(Name != std::numeric_limits<uint32_t>::max(),
+            "fixture dynamic export name cannot be shifted");
+    support::endian::write32le(Mutated.data() + DynamicAlpha->second, Name + 1);
+    requireRejectedWith(
+        std::move(Mutated),
+        ".dynsym contains a symbol outside exact metadata exports");
   }
   {
     std::vector<uint8_t> Mutated = Payload;
@@ -1235,7 +1372,8 @@ void cfgReviewerReproductionsFailClosed() {
             "return-provenance repro did not encode S_MOV_B64");
     std::string Diagnostic = rejectedDiagnostic(std::move(Payload));
     require(StringRef(Diagnostic).contains("return pair was modified"),
-            "return-provenance repro did not reach dataflow rejection");
+            "return-provenance repro did not reach dataflow rejection: " +
+                Diagnostic);
   }
 
   {
@@ -1277,7 +1415,7 @@ void cfgReviewerReproductionsFailClosed() {
 
 void directCallEdgesAreResolvedExactly() {
   auto Payload = finalize(makeKernelBitcode(true));
-  auto RequestValue = directRequest(std::move(Payload));
+  auto RequestValue = directRequest(Payload);
   auto Result = analyzeGfx942PhysicalMachineEffects(RequestValue);
   if (!Result)
     fail(takeError(Result.takeError()));
@@ -1293,6 +1431,70 @@ void directCallEdgesAreResolvedExactly() {
                          return Function.Symbol == "alpha_helper";
                        }),
           "direct-call closure omitted helper");
+
+  auto Sites = decodeSymbolSites(Payload, "alpha");
+  auto AddLow = llvm::find_if(Sites, [](const DecodedSite &Site) {
+    return Site.Name == "S_ADD_U32_vi";
+  });
+  auto AddHigh = llvm::find_if(Sites, [](const DecodedSite &Site) {
+    return Site.Name == "S_ADDC_U32_vi";
+  });
+  require(AddLow != Sites.end() && AddLow->Size == 8 &&
+              AddHigh != Sites.end() && AddHigh->Size == 8,
+          "direct-call literal pair is not exact");
+  require(
+      AddHigh->OperandKinds.size() == 3 && AddHigh->OperandKinds[2] == 'e' &&
+          support::endian::read32le(Payload.data() + AddHigh->FileOffset + 4) ==
+              std::numeric_limits<uint32_t>::max(),
+      "pinned LLVM high literal does not exercise the expression fallback");
+  for (const DecodedSite *Add : {&*AddLow, &*AddHigh}) {
+    require(Add->OperandKinds.size() == 3 &&
+                (Add->OperandKinds[2] == 'i' || Add->OperandKinds[2] == 'e') &&
+                !llvm::is_contained(Add->OperandKinds, 's') &&
+                !llvm::is_contained(Add->OperandKinds, 'd'),
+            "direct-call literal has an unexpected MC operand shape");
+    uint32_t Encoding =
+        support::endian::read32le(Payload.data() + Add->FileOffset);
+    require((Encoding & 0xc0000000) == 0x80000000 &&
+                ((Encoding >> 8) & 0xff) == 0xff,
+            "direct-call source-1 selector is not a trailing literal");
+  }
+
+  for (const DecodedSite *Add : {&*AddLow, &*AddHigh}) {
+    std::vector<uint8_t> Mutated = Payload;
+    uint32_t Literal =
+        support::endian::read32le(Mutated.data() + Add->FileOffset + 4);
+    support::endian::write32le(Mutated.data() + Add->FileOffset + 4,
+                               Literal ^ 1);
+    requireRejectedWith(std::move(Mutated),
+                        "call target is not one exact function");
+  }
+
+  for (const DecodedSite *Add : {&*AddLow, &*AddHigh}) {
+    std::vector<uint8_t> Mutated = Payload;
+    uint32_t Encoding =
+        support::endian::read32le(Mutated.data() + Add->FileOffset);
+    Encoding &= ~(0xffu << 8);
+    Encoding |= 0xfeu << 8;
+    support::endian::write32le(Mutated.data() + Add->FileOffset, Encoding);
+    (void)rejectedDiagnostic(std::move(Mutated));
+  }
+
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    constexpr uint32_t Sop2OpcodeMask = 0x3f800000;
+    uint32_t LowEncoding =
+        support::endian::read32le(Mutated.data() + AddLow->FileOffset);
+    uint32_t HighEncoding =
+        support::endian::read32le(Mutated.data() + AddHigh->FileOffset);
+    HighEncoding =
+        (HighEncoding & ~Sop2OpcodeMask) | (LowEncoding & Sop2OpcodeMask);
+    support::endian::write32le(Mutated.data() + AddHigh->FileOffset,
+                               HighEncoding);
+    requireRejectedWith(
+        std::move(Mutated),
+        "direct-call target has ambiguous or skipped definitions");
+  }
 }
 
 void everyCallEncodingUsesTheAbiReturnPair() {
@@ -1427,6 +1629,7 @@ void scalarLoadWidthsUseExactMcEncodings() {
 int main() {
   identityProbeBindsFreshChallenge();
   exactProductionProfileRejectsAlternatives();
+  exactDynamicSymbolicDeclarationIsAccepted();
   physicalAnalysisDerivesDeterministicClosedEffects();
   decoderBindsBytesSymbolsAndIdentities();
   targetDescriptorAndEffectExpansionFailClosed();

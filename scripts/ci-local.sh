@@ -281,7 +281,9 @@ run_runtime_pure_rust_policy() {
       cargo build --locked -p fe2o3-kfd \
         --example kfd-version \
         --example kfd-topology \
-        --example kfd-device-identity
+        --example kfd-device-identity \
+        --example kfd-host-visible-memory-policy \
+        --example kfd-queue-resources
   run_step runtime-pure-rust-kfd-version-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
@@ -294,6 +296,14 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-device-identity"
+  run_step runtime-pure-rust-kfd-memory-policy-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-host-visible-memory-policy"
+  run_step runtime-pure-rust-kfd-queue-resources-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-queue-resources"
 }
 
 run_runtime_identity_oracle() {

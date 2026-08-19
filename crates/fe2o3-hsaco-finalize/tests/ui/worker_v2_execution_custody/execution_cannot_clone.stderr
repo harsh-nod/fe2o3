@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `InertCompilerHandoffExecutionV2: Clone` is not satisfied
+ --> tests/ui/worker_v2_execution_custody/execution_cannot_clone.rs:6:21
+  |
+6 |     require_clone::<InertCompilerHandoffExecutionV2>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `InertCompilerHandoffExecutionV2`
+  |
+note: required by a bound in `require_clone`
+ --> tests/ui/worker_v2_execution_custody/execution_cannot_clone.rs:3:21
+  |
+3 | fn require_clone<T: Clone>() {}
+  |                     ^^^^^ required by this bound in `require_clone`

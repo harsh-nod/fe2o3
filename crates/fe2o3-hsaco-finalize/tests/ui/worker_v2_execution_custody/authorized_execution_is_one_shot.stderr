@@ -1,0 +1,16 @@
+error[E0382]: use of moved value: `evidence`
+  --> tests/ui/worker_v2_execution_custody/authorized_execution_is_one_shot.rs:12:18
+   |
+ 6 |     evidence: InertFirstBuildWorkerV2EvidenceV1,
+   |     -------- move occurs because `evidence` has type `InertFirstBuildWorkerV2EvidenceV1`, which does not implement the `Copy` trait
+...
+11 |     let first = evidence.into_authorized_execution();
+   |                          --------------------------- `evidence` moved due to this method call
+12 |     let second = evidence.into_authorized_execution();
+   |                  ^^^^^^^^ value used here after move
+   |
+note: `InertFirstBuildWorkerV2EvidenceV1::into_authorized_execution` takes ownership of the receiver `self`, which moves `evidence`
+  --> src/first_build_worker_v2.rs
+   |
+   |     pub fn into_authorized_execution(self) -> InertCompilerHandoffExecutionV2 {
+   |                                      ^^^^

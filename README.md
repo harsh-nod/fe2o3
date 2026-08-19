@@ -43,6 +43,47 @@ source path still stops before an authenticated HSACO. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
+The 2026-08-19 [#134](https://github.com/harsh-nod/fe2o3/issues/134)
+checkpoint completes one deliberately bounded Pliron scalar-add vertical
+slice. `pliron-llvm` is used only as a typed dialect dependency with default
+features disabled; its optional `llvm-sys` converter is excluded from both the
+compiler and worker. The route starts from a checked-in backend fixture,
+constructs the exact admitted Pliron graph and canonical V2 handoff, serializes
+deterministic bounded LLVM assembly, and uses the pinned upstream LLVM 22.1.8
+target-machine plus in-process LLD worker. The backend fixture is not Rust user
+source and this checkpoint does not establish a Rust-source frontend or
+source-to-machine refinement proof. No COMGR or subprocess compiler/linker has
+artifact authority on this route.
+
+The closure landed in `fd6520d88` (exact Worker machine effects), `70f9c5ad7`
+(structural ELF, descriptor, and decoded-machine inspection), `e016833d3`
+(measured-HSACO gate), `c9e8ca702` (move-only Worker execution evidence),
+`62efd243e` (repository policy, finalizer join, and sealed one-shot HSA
+consumer), and `228c88ed9` (descriptor-versus-runtime kernarg alignment). The
+code target is exactly `gfx942:xnack-`; the qualifying MI300X reported
+`gfx942:sramecc+:xnack-`. The repository pins Worker executable SHA-256
+`12c06e0da5d812c1db6f33450f99a8d70087c585eec552f7f8616077704361fd`,
+HSACO SHA-256
+`011671a80384051232fb684c90afadd9b5e9d81c13d216238f15af55dd3880b1`,
+and ROCr HSA 1.18 image SHA-256
+`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
+The COV6 descriptor requires 280 kernarg bytes aligned to 8; the observed HSA
+kernel requires the same 280 bytes in runtime storage aligned to 16.
+
+The successful run consumed the finalized bytes through the sole typed,
+move-only runtime transition, produced bit-exact `3.75f32`, preserved the input
+and all allocation canaries, and reached terminal unload. Its
+`FE2O3_REPOSITORY_SCALAR_ADD_V1_MI300X_OK` marker is a canonically serialized,
+self-consistent record of the bounded policy, artifact, runtime image, device,
+dispatch, result, canary, and unload observations. It is not a signature or CI
+attestation; process-local runtime, agent, executable, dispatch, and kernarg
+identities may differ between runs. Likewise, the compile-time checkout policy
+is repository/build provenance, not an externally signed or separately
+authenticated approval.
+This checkpoint changes no CUDA-Oxide parity row or count and proves neither
+general memory safety nor race freedom; it also does not establish general
+GEMM, attention, or MoE support.
+
 The Wave64 and workgroup-synchronization slices now start from ordinary
 `#[kernel(typed)]` Rust sources rather than explanatory pseudocode. They include
 deterministic CPU oracles, hostile source tests, and bounded Verus models for a

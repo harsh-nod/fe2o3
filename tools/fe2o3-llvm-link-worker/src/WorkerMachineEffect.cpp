@@ -10,6 +10,7 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/MCInstrDesc.h"
@@ -701,6 +702,32 @@ readSymbols(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader,
   if (!Dynamic)
     return Dynamic.takeError();
 
+  std::set<std::string> ExpectedDynamicNames;
+  for (const MetadataKernel &Kernel : Metadata) {
+    ExpectedDynamicNames.insert(Kernel.Name);
+    ExpectedDynamicNames.insert(Kernel.Descriptor);
+  }
+  auto RawDynamic = File.symbols(DynamicTable);
+  if (!RawDynamic)
+    return RawDynamic.takeError();
+  if (RawDynamic->size() != ExpectedDynamicNames.size() + 1)
+    return analysisError(
+        ".dynsym entry count differs from exact metadata exports");
+  const ELF64LE::Sym &NullSymbol = (*RawDynamic)[0];
+  if (NullSymbol.st_name != 0 || NullSymbol.st_info != 0 ||
+      NullSymbol.st_other != 0 || NullSymbol.st_shndx != ELF::SHN_UNDEF ||
+      NullSymbol.st_value != 0 || NullSymbol.st_size != 0)
+    return analysisError(".dynsym null entry is not exact");
+  if (Dynamic->size() != ExpectedDynamicNames.size())
+    return analysisError(
+        ".dynsym defined symbols differ from exact metadata exports");
+  for (const SymbolRecord &Symbol : *Dynamic)
+    if (ExpectedDynamicNames.erase(Symbol.Name) == 0)
+      return analysisError(
+          ".dynsym contains a symbol outside exact metadata exports");
+  if (!ExpectedDynamicNames.empty())
+    return analysisError(".dynsym omits a symbol from exact metadata exports");
+
   for (const MetadataKernel &Kernel : Metadata) {
     for (StringRef Name :
          {StringRef(Kernel.Name), StringRef(Kernel.Descriptor)}) {
@@ -907,18 +934,22 @@ validateDynamicLoaderView(const ELFObjectFile<ELF64LE> &Object,
       return analysisError("dynamic relocation table is unsupported");
     if (Tag != ELF::DT_SYMTAB && Tag != ELF::DT_SYMENT &&
         Tag != ELF::DT_STRTAB && Tag != ELF::DT_STRSZ &&
-        Tag != ELF::DT_GNU_HASH && Tag != ELF::DT_HASH)
+        Tag != ELF::DT_GNU_HASH && Tag != ELF::DT_HASH && Tag != ELF::DT_FLAGS)
       return analysisError("dynamic declaration is outside bounded profile");
+    if (Tag == ELF::DT_FLAGS && Entry.getVal() != ELF::DF_SYMBOLIC)
+      return analysisError(
+          "dynamic flags are outside exact symbolic-binding profile");
     if (!Tags.emplace(Tag, Entry.getVal()).second)
       return analysisError("dynamic table repeats a declaration");
   }
-  if (!Terminated || Tags.size() != 6 ||
+  if (!Terminated || Tags.size() != 7 ||
       Tags[ELF::DT_SYMTAB] != DynsymSection.sh_addr ||
       Tags[ELF::DT_SYMENT] != sizeof(ELF64LE::Sym) ||
       Tags[ELF::DT_STRTAB] != DynstrSection.sh_addr ||
       Tags[ELF::DT_STRSZ] != DynstrSection.sh_size ||
       Tags[ELF::DT_GNU_HASH] != GnuHashSection.sh_addr ||
-      Tags[ELF::DT_HASH] != HashSection.sh_addr)
+      Tags[ELF::DT_HASH] != HashSection.sh_addr ||
+      Tags[ELF::DT_FLAGS] != ELF::DF_SYMBOLIC)
     return analysisError(
         "dynamic declarations disagree with loadable sections");
 
@@ -995,6 +1026,7 @@ struct DecodedInstruction {
   uint64_t Size = 0;
   MCInst Inst;
   std::string Name;
+  std::vector<uint8_t> Encoding;
 };
 
 struct LocalEffect {
@@ -1096,7 +1128,10 @@ decodeFunction(const SymbolRecord &Function, McState &Mc) {
       return analysisError(Twine("cannot decode instruction in ") +
                            Function.Name);
     StringRef Name = Mc.Instructions->getName(Inst.getOpcode());
-    Result.push_back({Function.Address + Offset, Size, Inst, Name.str()});
+    std::vector<uint8_t> Encoding(Bytes->begin() + Offset,
+                                  Bytes->begin() + Offset + Size);
+    Result.push_back({Function.Address + Offset, Size, Inst, Name.str(),
+                      std::move(Encoding)});
     Offset += Size;
     if (Result.size() > MaxPhysicalMachineEffectEffects)
       return analysisError("instruction count exceeds bound");
@@ -1221,6 +1256,14 @@ std::string instructionDescription(const DecodedInstruction &Instruction,
       Stream << Mc.Registers->getName(Operand.getReg());
     else if (Operand.isImm())
       Stream << Operand.getImm();
+    else if (Operand.isSFPImm())
+      Stream << "sfp:" << Operand.getSFPImm();
+    else if (Operand.isDFPImm())
+      Stream << "dfp:" << Operand.getDFPImm();
+    else if (Operand.isExpr())
+      Stream << "expr";
+    else if (Operand.isInst())
+      Stream << "inst";
     else
       Stream << "unsupported";
   }
@@ -1257,8 +1300,37 @@ bool isRegisterOperand(const MCInst &Instruction, size_t Index,
          Instruction.getOperand(Index).getReg() == Register;
 }
 
-bool isImmediateOperand(const MCInst &Instruction, size_t Index) {
-  return Index < Instruction.size() && Instruction.getOperand(Index).isImm();
+std::optional<uint32_t>
+u32Sop2Source1Literal(const DecodedInstruction &Instruction) {
+  if (Instruction.Inst.size() != 3 || Instruction.Size != 8 ||
+      Instruction.Encoding.size() != 8)
+    return std::nullopt;
+  const MCOperand &Operand = Instruction.Inst.getOperand(2);
+  if (!Operand.isImm() && !Operand.isExpr())
+    return std::nullopt;
+  uint32_t Encoding = support::endian::read32le(Instruction.Encoding.data());
+  constexpr uint32_t Sop2ClassMask = 0xc0000000;
+  constexpr uint32_t Sop2Class = 0x80000000;
+  constexpr uint32_t LiteralSelector = 0xff;
+  if ((Encoding & Sop2ClassMask) != Sop2Class ||
+      ((Encoding >> 8) & 0xff) != LiteralSelector)
+    return std::nullopt;
+  uint32_t Literal = support::endian::read32le(Instruction.Encoding.data() + 4);
+  int64_t Value = 0;
+  if (Operand.isImm())
+    Value = Operand.getImm();
+  else if (!Operand.getExpr()->evaluateAsAbsolute(Value))
+    return std::nullopt;
+  // LLVM 22 wraps inlinable trailing values in a target `lit(...)` expression.
+  // Its public MC API exposes the absolute value but not the private AMDGPU
+  // variant. The exact SOP2 class, source selector, width, operand count, and
+  // retained bytes establish the hardware literal independently of that
+  // wrapper; only an absolute value equal to those bytes is accepted.
+  if (Value < 0 ||
+      static_cast<uint64_t>(Value) > std::numeric_limits<uint32_t>::max() ||
+      static_cast<uint32_t>(Value) != Literal)
+    return std::nullopt;
+  return Literal;
 }
 
 bool isEndProgram(const DecodedInstruction &Instruction) {
@@ -1650,14 +1722,14 @@ Expected<uint64_t> directCallTargets(ArrayRef<DecodedInstruction> Instructions,
   size_t AddHighIndex = *HighAtCall->Instructions.begin();
   const DecodedInstruction *AddLow = &Instructions[AddLowIndex];
   const DecodedInstruction *AddHigh = &Instructions[AddHighIndex];
+  auto LowImmediate = u32Sop2Source1Literal(*AddLow);
+  auto HighImmediate = u32Sop2Source1Literal(*AddHigh);
   if (AddLow->Name != "S_ADD_U32_vi" ||
       !isRegisterOperand(AddLow->Inst, 0, LowRegister) ||
-      !isRegisterOperand(AddLow->Inst, 1, LowRegister) ||
-      !isImmediateOperand(AddLow->Inst, 2) ||
+      !isRegisterOperand(AddLow->Inst, 1, LowRegister) || !LowImmediate ||
       AddHigh->Name != "S_ADDC_U32_vi" ||
       !isRegisterOperand(AddHigh->Inst, 0, HighRegister) ||
-      !isRegisterOperand(AddHigh->Inst, 1, HighRegister) ||
-      !isImmediateOperand(AddHigh->Inst, 2))
+      !isRegisterOperand(AddHigh->Inst, 1, HighRegister) || !HighImmediate)
     return analysisError(
         "direct-call target has ambiguous or skipped definitions");
   auto LowAtAdd =
@@ -1690,20 +1762,11 @@ Expected<uint64_t> directCallTargets(ArrayRef<DecodedInstruction> Instructions,
     return analysisError(
         "direct-call target definitions do not uniquely dominate call");
 
-  int64_t LowImmediate = AddLow->Inst.getOperand(2).getImm();
-  int64_t HighImmediate = AddHigh->Inst.getOperand(2).getImm();
-  if (LowImmediate < 0 || HighImmediate < 0 ||
-      static_cast<uint64_t>(LowImmediate) >
-          std::numeric_limits<uint32_t>::max() ||
-      static_cast<uint64_t>(HighImmediate) >
-          std::numeric_limits<uint32_t>::max())
-    return analysisError("direct-call materialization immediate is not u32");
-
   auto Materialize = [&](uint64_t Pc) {
-    uint64_t LowSum = static_cast<uint64_t>(static_cast<uint32_t>(Pc)) +
-                      static_cast<uint32_t>(LowImmediate);
-    uint64_t HighSum = static_cast<uint32_t>(Pc >> 32) +
-                       static_cast<uint32_t>(HighImmediate) + (LowSum >> 32);
+    uint64_t LowSum =
+        static_cast<uint64_t>(static_cast<uint32_t>(Pc)) + *LowImmediate;
+    uint64_t HighSum =
+        static_cast<uint32_t>(Pc >> 32) + *HighImmediate + (LowSum >> 32);
     return (static_cast<uint64_t>(static_cast<uint32_t>(HighSum)) << 32) |
            static_cast<uint32_t>(LowSum);
   };

@@ -22,6 +22,22 @@ mod currentness;
 mod device;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod memory;
+
+#[cfg(target_os = "linux")]
+mod queue_resources;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[allow(unsafe_code)]
+mod memory_linux;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use memory::*;
+
+#[cfg(target_os = "linux")]
+pub use queue_resources::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use currentness::ObservableDeviceCurrentnessV1;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
