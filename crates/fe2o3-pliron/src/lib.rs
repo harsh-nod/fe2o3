@@ -12,14 +12,18 @@ use std::{
 };
 
 use pliron::{
+    attribute::Attribute,
     builtin::ops::ModuleOp,
     context::Context,
     context::Ptr,
     dialect::{Dialect, DialectName},
     identifier::Identifier,
-    op::Op,
+    location::Location,
+    op::{Op, OpBox},
     operation::Operation,
+    parsable::Parsable,
     pass::Pass,
+    r#type::{Type, TypedHandle},
     uniqued_any::{self, UniquedKey},
 };
 
@@ -31,6 +35,7 @@ pub const HARD_MAX_DIALECTS: usize = 64;
 pub const HARD_MAX_PASSES: usize = 256;
 pub const HARD_MAX_NAME_BYTES: usize = 96;
 pub const HARD_MAX_DIAGNOSTIC_BYTES: usize = 4_096;
+pub const HARD_MAX_DIALECT_REGISTRATION_ACTIONS: usize = 64;
 
 /// Auxiliary-data key for the fe2o3 context-identity locator.
 pub const CONTEXT_IDENTITY_MARKER_KEY: &str = "fe2o3_pliron_context_identity_v1";
@@ -382,9 +387,106 @@ impl fmt::Display for RegistrationHookError {
 
 impl std::error::Error for RegistrationHookError {}
 
-/// Registers types, attributes, or operations after the shell creates a dialect.
-pub type DialectRegistrationHook =
-    fn(&mut Context, &DialectName) -> Result<(), RegistrationHookError>;
+/// A bounded registration capability borrowed from one context construction.
+///
+/// The service cannot be constructed or disassembled outside this crate. It
+/// exposes no context, dialect object, arena pointer, generic callback, or
+/// caller-provided state. Its borrow cannot outlive the registration hook:
+///
+/// ```compile_fail
+/// use fe2o3_pliron::DialectRegistrationService;
+/// use pliron::context::Context;
+///
+/// fn context(service: &mut DialectRegistrationService<'_>) -> &mut Context {
+///     service.context
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_pliron::DialectRegistrationService;
+///
+/// fn retain(
+///     service: &mut DialectRegistrationService<'_>,
+/// ) -> &'static mut DialectRegistrationService<'static> {
+///     service
+/// }
+/// ```
+pub struct DialectRegistrationService<'context> {
+    context: &'context mut Context,
+    dialect_name: &'context DialectName,
+    actions: usize,
+}
+
+impl<'context> DialectRegistrationService<'context> {
+    fn new(context: &'context mut Context, dialect_name: &'context DialectName) -> Self {
+        Self {
+            context,
+            dialect_name,
+            actions: 0,
+        }
+    }
+
+    /// Rejects a hook that was attached to a different dialect name.
+    pub fn require_dialect(&self, expected: &str) -> Result<(), RegistrationHookError> {
+        if self.dialect_name.as_ref() == expected {
+            Ok(())
+        } else {
+            Err(RegistrationHookError::new(
+                "dialect registration hook name mismatch",
+            ))
+        }
+    }
+
+    /// Registers one type owned by this dialect.
+    pub fn register_type<T>(&mut self) -> Result<(), RegistrationHookError>
+    where
+        T: Type + Parsable<Arg = (), Parsed = TypedHandle<T>>,
+    {
+        self.claim_action(&T::get_type_id_static().dialect)?;
+        T::register(self.context);
+        Ok(())
+    }
+
+    /// Registers one attribute owned by this dialect.
+    pub fn register_attribute<A>(&mut self) -> Result<(), RegistrationHookError>
+    where
+        A: Attribute + Parsable<Arg = (), Parsed = A>,
+    {
+        self.claim_action(&A::get_attr_id_static().dialect)?;
+        <A as Attribute>::register::<A>(self.context);
+        Ok(())
+    }
+
+    /// Registers one operation owned by this dialect.
+    pub fn register_operation<O>(&mut self) -> Result<(), RegistrationHookError>
+    where
+        O: Op + Parsable<Arg = Vec<(Identifier, Location)>, Parsed = OpBox>,
+    {
+        self.claim_action(&O::get_opid_static().dialect)?;
+        O::register(self.context);
+        Ok(())
+    }
+
+    fn claim_action(&mut self, entity_dialect: &DialectName) -> Result<(), RegistrationHookError> {
+        if entity_dialect != self.dialect_name {
+            return Err(RegistrationHookError::new(
+                "registered entity belongs to a different dialect",
+            ));
+        }
+        if self.actions == HARD_MAX_DIALECT_REGISTRATION_ACTIONS {
+            return Err(RegistrationHookError::new(
+                "dialect registration action limit exceeded",
+            ));
+        }
+        self.actions += 1;
+        Ok(())
+    }
+}
+
+/// Registers typed entities through a context-custody service.
+pub type DialectRegistrationHook = for<'context> fn(
+    &mut DialectRegistrationService<'context>,
+) -> Result<(), RegistrationHookError>;
 
 /// One explicitly named dialect registration.
 #[derive(Clone)]
@@ -562,7 +664,8 @@ impl PlironSession {
             })?;
             let hook_result = catch_unwind(AssertUnwindSafe(|| {
                 Dialect::register(&mut context, &dialect_name);
-                (registration.hook)(&mut context, &dialect_name)
+                let mut service = DialectRegistrationService::new(&mut context, &dialect_name);
+                (registration.hook)(&mut service)
             }));
             if !matches!(hook_result, Ok(Ok(()))) {
                 return Err(ContextBuildError::RegistrationFailed(Diagnostic::new(

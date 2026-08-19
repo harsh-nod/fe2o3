@@ -1,20 +1,20 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fe2o3_pliron::{
-    ContextBuildError, DiagnosticCode, DialectRegistration, OperationHandleError, PLIRON_REVISION,
-    PassPlan, PassPlanError, PlironSession, RegistrationHookError, ShellLimits,
+    ContextBuildError, DiagnosticCode, DialectRegistration, DialectRegistrationService,
+    HARD_MAX_DIALECT_REGISTRATION_ACTIONS, OperationHandleError, PLIRON_REVISION, PassPlan,
+    PassPlanError, PlironSession, RegistrationHookError, ShellLimits,
 };
 use pliron::{
+    builtin::attributes::UnitAttr,
     context::Context,
-    dialect::DialectName,
     operation::Operation,
     pass::{AnalysisManager, Pass, PassResult, Passes},
     result::Result as PlironResult,
 };
 
 fn empty_registration(
-    _context: &mut Context,
-    _name: &DialectName,
+    _service: &mut DialectRegistrationService<'_>,
 ) -> Result<(), RegistrationHookError> {
     Ok(())
 }
@@ -82,8 +82,7 @@ fn fresh_contexts_and_pass_plans_have_deterministic_metadata() {
 static REGISTRATION_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 fn counted_registration(
-    _context: &mut Context,
-    _name: &DialectName,
+    _service: &mut DialectRegistrationService<'_>,
 ) -> Result<(), RegistrationHookError> {
     REGISTRATION_CALLS.fetch_add(1, Ordering::SeqCst);
     Ok(())
@@ -102,8 +101,7 @@ fn duplicate_registration_fails_before_any_hook_runs() {
 }
 
 fn oversized_failure(
-    _context: &mut Context,
-    _name: &DialectName,
+    _service: &mut DialectRegistrationService<'_>,
 ) -> Result<(), RegistrationHookError> {
     Err(RegistrationHookError::new(
         "failure:".to_owned() + &"x".repeat(4_096),
@@ -288,10 +286,45 @@ fn foreign_and_stale_operation_handles_fail_without_unwinding() {
 }
 
 fn panicking_registration(
-    _context: &mut Context,
-    _name: &DialectName,
+    _service: &mut DialectRegistrationService<'_>,
 ) -> Result<(), RegistrationHookError> {
     panic!("unbounded hostile payload")
+}
+
+fn mismatched_entity_registration(
+    service: &mut DialectRegistrationService<'_>,
+) -> Result<(), RegistrationHookError> {
+    service.register_attribute::<UnitAttr>()
+}
+
+fn over_budget_registration(
+    service: &mut DialectRegistrationService<'_>,
+) -> Result<(), RegistrationHookError> {
+    service.require_dialect("builtin")?;
+    for _ in 0..=HARD_MAX_DIALECT_REGISTRATION_ACTIONS {
+        service.register_attribute::<UnitAttr>()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn registration_service_rejects_foreign_entities_and_excess_work() {
+    for registration in [
+        DialectRegistration::new("hostile", mismatched_entity_registration)
+            .expect("valid hostile registration"),
+        DialectRegistration::new("builtin", over_budget_registration)
+            .expect("valid bounded registration"),
+    ] {
+        let outcome =
+            std::panic::catch_unwind(|| PlironSession::new(ShellLimits::default(), [registration]))
+                .expect("registration service rejection must not unwind");
+        assert!(matches!(
+            outcome,
+            Err(ContextBuildError::RegistrationFailed(diagnostic))
+                if diagnostic.code() == DiagnosticCode::DialectHookFailed
+                    && diagnostic.message() == "the explicit dialect registration hook failed"
+        ));
+    }
 }
 
 #[test]
