@@ -6,6 +6,8 @@ workspace. It provides:
 - construction of a real Pliron `Context`;
 - opaque process-local context identities backed by Pliron's private uniqued
   store rather than transferable auxiliary marker data;
+- opaque operation handles whose upstream pointers remain in a private
+  session registry;
 - explicit, bounded dialect-registration hooks;
 - deterministic, bounded pass plans over real Pliron `Pass` values.
 
@@ -32,20 +34,47 @@ production compiler, publish artifacts, grant proof or launch authority, or
 use COMGR. Pliron pointers, arena identities, printer text, and diagnostics
 are never used as canonical fe2o3 identities.
 
-The shell bounds registration count, pass-plan count, names, and diagnostics.
-It does not execute a generic pass plan. Upstream Pliron `Ptr<T>` values are
-contextless arena indexes, so the previous safe execution API could not
-authenticate its root against the supplied session. Generic execution remains
-disabled until issue #140 provides an owner-aware handle. Hook and upstream
-diagnostic text is not copied into stable diagnostics; the shell emits fixed
-fe2o3 codes and messages instead.
+The shell bounds registration count before collecting caller input, pass-plan
+count, names, and diagnostics. Operation creation returns an opaque handle
+containing only a process-local owner identity and session-local registry ID.
+The corresponding upstream `Ptr<Operation>` remains in the private session
+registry. Every query or erase authenticates the context anchor, owner, live
+registry entry, and upstream pointee in that order. Erasure removes the
+registry entry, so cloned stale handles cannot be revived by later arena
+allocation. Handle identities and their debug representations are not
+canonical data.
+
+The crate does not execute a generic pass plan. Although an authenticated root
+now exists, invoking an arbitrary caller-provided Pliron `Pass` would give that
+pass a contextless pointer and `&mut Context`. Generic execution remains
+disabled until compiler transformations use a sealed owner-aware service.
+Hook and upstream diagnostic text is not copied into stable diagnostics; the
+shell emits fixed fe2o3 codes and messages instead.
 
 Context identities protect fe2o3-owned envelopes and results from being
 validated against a different context, including when public Pliron auxiliary
 marker boxes are moved between contexts. They do not add provenance to
 upstream Pliron `Ptr<T>` values. Raw pointers remain contextless arena indexes
 inside the Pliron trusted computing base and must not be exposed as a safe
-cross-context capability.
+cross-context capability. `ContextIdentity` intentionally hides its numeric
+debug value but remains only process-local in-memory provenance; equality or
+hashing must never become an artifact, cache, proof, publication, or runtime
+identity.
+
+## Remaining trusted surfaces
+
+Two feature or integration surfaces still expose a raw `&mut Context`:
+
+- `DialectRegistrationHook` is the compatibility boundary used by existing
+  dialect crates to register their Pliron types, attributes, and operations.
+- `with_context_mut` exists only behind the disabled-by-default
+  `internal-test-context-access` feature for cross-crate conformance tests.
+
+Both are compiler-internal trusted-computing-base surfaces, not production
+operation capabilities. Removing them requires coordinated migration of the
+dialect and conformance crates to sealed registration and test services; that
+work cannot be completed inside this crate alone. Neither surface changes the
+rule that ordinary operation APIs return only owner-authenticated handles.
 
 ## Upstream API findings
 
@@ -57,13 +86,20 @@ cross-context capability.
   constructing a context or invoking any hook.
 - D0 plans only a flat list of leaf passes. Nested pass-manager values are
   rejected because their hidden children would evade the shell's pass-count
-  bound. The plan is metadata only and cannot be executed through this crate.
+  bound. Pass name and manager inspection panics poison the plan and return a
+  typed error. The plan is metadata only and cannot be executed through this
+  crate.
 - Pliron arena pointers and diagnostic display values are context-internal and
   are not suitable canonical identities. They are absent from manifests
   produced here.
 - The v0.17.0 pass API has neither owner-aware operation handles nor a
-  cooperative work or cancellation budget. Restoring execution requires both
-  authenticated roots and future pass-work accounting or process containment.
+  cooperative work or cancellation budget. fe2o3 now authenticates roots in
+  its own session registry, but restoring execution still requires sealed pass
+  access plus pass-work accounting or process containment.
+- Upstream, hook, registration-input, pointer-access, and test-context callback
+  unwinds are converted to typed errors under unwind-enabled builds. As with
+  all `catch_unwind` boundaries, `panic=abort`, allocator aborts, and a panic in
+  hostile destructor code cannot be converted into a Rust error.
 
 The root workspace owns the exact Pliron revision so every dialect and lowering
 crate resolves one audited upstream implementation. The selective
