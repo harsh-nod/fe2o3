@@ -15,8 +15,9 @@
 //!
 //! This lane does not compile, link, publish, load, or execute code.
 
+mod extract_v2;
 mod lower;
 mod model;
 
-pub use lower::{LoweredScalarKernelV1, lower_scalar_kernel_v1};
+pub use lower::{LoweredScalarKernelV1, lower_scalar_kernel_v1, lower_scalar_kernel_v2};
 pub use model::*;

@@ -719,6 +719,89 @@ impl fmt::Display for DialectModuleInspectionErrorV1 {
 
 impl Error for DialectModuleInspectionErrorV1 {}
 
+/// Bounded failure from extracting the closed live Pliron graph into LLVM handoff V2.
+///
+/// Diagnostics classify the rejected semantic dimension without exposing
+/// upstream diagnostics, printer text, arena handles, or hostile input data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HandoffExtractionDiagnosticV2 {
+    /// The retained context identity is absent, corrupt, or changed.
+    ContextIdentityInvalid,
+    /// The private module handle belongs to a different context owner.
+    ForeignOwner,
+    /// The private module arena entry is no longer live.
+    StaleModule,
+    /// Recursive Pliron verification rejected the live module.
+    DialectVerificationFailed,
+    /// The module or kernel symbol does not match the committed V1 boundary.
+    SymbolMismatch,
+    /// The live graph has an unexpected operation, region, block, or attribute shape.
+    OperationShapeMismatch,
+    /// The live function signature or one SSA value has an unexpected type.
+    TypeMismatch,
+    /// A live pointer carries an unexpected AMDGPU address space.
+    AddressSpaceMismatch,
+    /// A live operand does not reference the one admitted definition.
+    DefUseMismatch,
+    /// A live basic block or terminator carries an unexpected CFG edge.
+    ControlFlowMismatch,
+    /// A live memory operation does not carry explicit four-byte alignment.
+    AlignmentMismatch,
+    /// The floating-point add does not carry the exact strict FP policy.
+    StrictFpMismatch,
+    /// V1 origins, obligations, metadata, or their receipt commitment do not match.
+    EvidenceMismatch,
+    /// Construction of the checked V2 handoff rejected the extracted facts.
+    HandoffConstructionFailed,
+    /// An upstream Pliron access panicked and was contained.
+    UpstreamPanicked,
+}
+
+impl fmt::Display for HandoffExtractionDiagnosticV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::ContextIdentityInvalid => "V2 extraction context identity is invalid",
+            Self::ForeignOwner => "V2 extraction module has a foreign owner",
+            Self::StaleModule => "V2 extraction module handle is stale",
+            Self::DialectVerificationFailed => "V2 extraction dialect verification failed",
+            Self::SymbolMismatch => "V2 extraction symbol mismatch",
+            Self::OperationShapeMismatch => "V2 extraction operation shape mismatch",
+            Self::TypeMismatch => "V2 extraction type mismatch",
+            Self::AddressSpaceMismatch => "V2 extraction address-space mismatch",
+            Self::DefUseMismatch => "V2 extraction def-use mismatch",
+            Self::ControlFlowMismatch => "V2 extraction control-flow mismatch",
+            Self::AlignmentMismatch => "V2 extraction alignment mismatch",
+            Self::StrictFpMismatch => "V2 extraction strict floating-point mismatch",
+            Self::EvidenceMismatch => "V2 extraction evidence mismatch",
+            Self::HandoffConstructionFailed => "V2 handoff construction failed",
+            Self::UpstreamPanicked => "V2 extraction contained an upstream panic",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl Error for HandoffExtractionDiagnosticV2 {}
+
+/// Failure from the additive scalar-kernel-to-handoff-V2 boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScalarKernelHandoffDiagnosticV2 {
+    /// The source request was rejected by the preserved V1 lowering contract.
+    Lowering(LoweringDiagnosticV1),
+    /// The constructed private live graph failed exact V2 extraction.
+    Extraction(HandoffExtractionDiagnosticV2),
+}
+
+impl fmt::Display for ScalarKernelHandoffDiagnosticV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lowering(error) => write!(formatter, "V2 boundary lowering failed: {error}"),
+            Self::Extraction(error) => write!(formatter, "V2 boundary extraction failed: {error}"),
+        }
+    }
+}
+
+impl Error for ScalarKernelHandoffDiagnosticV2 {}
+
 /// Fe2o3-owned canonical structural receipt bytes.
 ///
 /// The bytes commit the module name, reviewed dialect operation inventory, and

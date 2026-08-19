@@ -3,9 +3,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use fe2o3_amdgcn_model::{AMDGPU_TRIPLE, AddressSpace};
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, FunctionAttributeV1, GFX942_AMDHSA_TARGET_TRIPLE_V1, Gfx942HandoffInputV1,
-    Gfx942HandoffV1, Gfx942TargetPolicyV1, IdentityV1, KernelEntryV1, KernelParameterV1,
-    KernelValueTypeV1, ModuleFlagV1, ModuleMetadataV1, ObligationKindV1, ObligationV1, OriginV1,
-    ScalarTypeV1,
+    Gfx942HandoffV1, Gfx942HandoffV2, Gfx942TargetPolicyV1, IdentityV1, KernelEntryV1,
+    KernelParameterV1, KernelValueTypeV1, ModuleFlagV1, ModuleMetadataV1, ObligationKindV1,
+    ObligationV1, OriginV1, ScalarTypeV1,
 };
 use fe2o3_pliron::{ContextIdentity, ensure_context_identity, require_context_identity};
 use pliron::{
@@ -23,7 +23,7 @@ use pliron::{
 };
 use pliron_llvm::{
     attributes::FastmathFlagsAttr,
-    op_interfaces::{FastMathFlags, FloatBinArithOpWithFastMathFlags},
+    op_interfaces::{AlignableOpInterface, FastMathFlags, FloatBinArithOpWithFastMathFlags},
     ops::{FAddOp, FuncOp, LoadOp, ReturnOp, StoreOp},
     types::{FuncType, PointerType, VoidType},
 };
@@ -31,11 +31,12 @@ use pliron_llvm::{
 use crate::model::{
     CanonicalLoweringReceiptV1, ConstructionStageV1, DialectArgumentInspectionV1,
     DialectModuleInspectionErrorV1, DialectModuleInspectionV1, FunctionAttributeKindV1,
-    InputFieldV1, LoweringDiagnosticV1, MAX_CANONICAL_RECEIPT_BYTES_V1, MAX_DEVICE_LIBRARIES_V1,
-    MAX_FUNCTION_ATTRIBUTES_V1, MAX_MODULE_FLAGS_V1, MAX_NAME_BYTES_V1, MAX_NAMED_METADATA_V1,
-    MAX_OBLIGATIONS_V1, MAX_OPERATIONS_V1, MAX_PARAMETER_ATTRIBUTES_V1, MetadataKindV1,
-    NameRejectionV1, ResourceKindV1, SUPPORT_MATRIX_V1, ScalarKernelModuleV1, SupportStatusV1,
-    VERIFIED_DIALECT_BODY_OPERATIONS_V1, VERIFIED_DIALECT_OPERATIONS_V1,
+    HandoffExtractionDiagnosticV2, InputFieldV1, LoweringDiagnosticV1,
+    MAX_CANONICAL_RECEIPT_BYTES_V1, MAX_DEVICE_LIBRARIES_V1, MAX_FUNCTION_ATTRIBUTES_V1,
+    MAX_MODULE_FLAGS_V1, MAX_NAME_BYTES_V1, MAX_NAMED_METADATA_V1, MAX_OBLIGATIONS_V1,
+    MAX_OPERATIONS_V1, MAX_PARAMETER_ATTRIBUTES_V1, MetadataKindV1, NameRejectionV1,
+    ResourceKindV1, SUPPORT_MATRIX_V1, ScalarKernelHandoffDiagnosticV2, ScalarKernelModuleV1,
+    SupportStatusV1, VERIFIED_DIALECT_BODY_OPERATIONS_V1, VERIFIED_DIALECT_OPERATIONS_V1,
     VerifiedDialectOperationV1, admitted_obligations_v1, admitted_operations_v1,
     function_attribute_kind, metadata_kind,
 };
@@ -71,6 +72,7 @@ pub struct LoweredScalarKernelV1 {
     context: Context,
     module: OwnedDialectModuleV1,
     context_identity: ContextIdentity,
+    module_name: String,
     handoff: Gfx942HandoffV1,
     receipt: CanonicalLoweringReceiptV1,
 }
@@ -94,6 +96,27 @@ impl LoweredScalarKernelV1 {
     /// Returns the exact dialect operation inventory committed by the receipt.
     pub const fn operation_inventory(&self) -> &'static [VerifiedDialectOperationV1; 5] {
         &VERIFIED_DIALECT_OPERATIONS_V1
+    }
+
+    /// Extracts the exact private live graph into a validated typed LLVM handoff V2.
+    ///
+    /// The traversal revalidates owner identity, liveness, recursive Pliron
+    /// verification, symbols, types, address spaces, alignment, strict FP,
+    /// def-use wiring, CFG edges, and the committed V1 evidence. Every upstream
+    /// access is panic-contained, and no raw Pliron object crosses this boundary.
+    pub fn extract_handoff_v2(&self) -> Result<Gfx942HandoffV2, HandoffExtractionDiagnosticV2> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::extract_v2::extract_handoff_v2(
+                &self.context,
+                self.context_identity,
+                self.module.owner,
+                &self.module.module,
+                &self.module_name,
+                &self.handoff,
+                &self.receipt,
+            )
+        }))
+        .unwrap_or(Err(HandoffExtractionDiagnosticV2::UpstreamPanicked))
     }
 
     /// Revalidates private owner identity, arena liveness, recursive dialect
@@ -141,7 +164,7 @@ pub fn lower_scalar_kernel_v1(
 ) -> Result<LoweredScalarKernelV1, LoweringDiagnosticV1> {
     validate_input(input)?;
     let handoff = build_handoff(input)?;
-    let receipt = encode_receipt(input, &handoff)?;
+    let receipt = encode_receipt(&input.module_name, &handoff)?;
 
     let mut context = Context::new();
     let context_identity = ensure_context_identity(&mut context).map_err(|_| {
@@ -159,9 +182,25 @@ pub fn lower_scalar_kernel_v1(
             module,
         },
         context_identity,
+        module_name: input.module_name.clone(),
         handoff,
         receipt,
     })
+}
+
+/// Lowers through the private live Pliron graph and returns only typed LLVM handoff V2.
+///
+/// This additive boundary preserves [`lower_scalar_kernel_v1`] while making V2
+/// the complete semantic result. The temporary Pliron context and arena handles
+/// are dropped before this function returns.
+pub fn lower_scalar_kernel_v2(
+    input: &ScalarKernelModuleV1,
+) -> Result<Gfx942HandoffV2, ScalarKernelHandoffDiagnosticV2> {
+    let lowered =
+        lower_scalar_kernel_v1(input).map_err(ScalarKernelHandoffDiagnosticV2::Lowering)?;
+    lowered
+        .extract_handoff_v2()
+        .map_err(ScalarKernelHandoffDiagnosticV2::Extraction)
 }
 
 fn inspect_live_module(
@@ -588,7 +627,32 @@ fn build_dialect_module(
     let input_pointer = entry.deref(context).get_argument(0);
     let output_pointer = entry.deref(context).get_argument(1);
     let addend = entry.deref(context).get_argument(2);
+    input_pointer.set_name(
+        context,
+        Some(
+            Identifier::try_from(input.input_parameter.as_str()).map_err(|_| {
+                LoweringDiagnosticV1::ConstructionFailed(ConstructionStageV1::DialectVerification)
+            })?,
+        ),
+    );
+    output_pointer.set_name(
+        context,
+        Some(
+            Identifier::try_from(input.output_parameter.as_str()).map_err(|_| {
+                LoweringDiagnosticV1::ConstructionFailed(ConstructionStageV1::DialectVerification)
+            })?,
+        ),
+    );
+    addend.set_name(
+        context,
+        Some(
+            Identifier::try_from(input.addend_parameter.as_str()).map_err(|_| {
+                LoweringDiagnosticV1::ConstructionFailed(ConstructionStageV1::DialectVerification)
+            })?,
+        ),
+    );
     let load = LoadOp::new(context, input_pointer, f32_type);
+    load.set_alignment(context, 4);
     let loaded = load.get_result(context);
     load.get_operation().insert_at_back(entry, context);
 
@@ -598,18 +662,19 @@ fn build_dialect_module(
     add.get_operation().insert_at_back(entry, context);
 
     let store = StoreOp::new(context, computed, output_pointer);
+    store.set_alignment(context, 4);
     store.get_operation().insert_at_back(entry, context);
     let return_op = ReturnOp::new(context, None);
     return_op.get_operation().insert_at_back(entry, context);
     Ok(module)
 }
 
-fn encode_receipt(
-    input: &ScalarKernelModuleV1,
+pub(crate) fn encode_receipt(
+    module_name: &str,
     handoff: &Gfx942HandoffV1,
 ) -> Result<CanonicalLoweringReceiptV1, LoweringDiagnosticV1> {
     let handoff_bytes = handoff.encode_canonical();
-    let module_name_len = u16::try_from(input.module_name.len()).map_err(|_| {
+    let module_name_len = u16::try_from(module_name.len()).map_err(|_| {
         LoweringDiagnosticV1::ConstructionFailed(ConstructionStageV1::ReceiptEncoding)
     })?;
     let handoff_len = u32::try_from(handoff_bytes.len()).map_err(|_| {
@@ -618,7 +683,7 @@ fn encode_receipt(
     let capacity = RECEIPT_MAGIC_V1
         .len()
         .checked_add(2)
-        .and_then(|value| value.checked_add(input.module_name.len()))
+        .and_then(|value| value.checked_add(module_name.len()))
         .and_then(|value| value.checked_add(1 + VERIFIED_DIALECT_OPERATIONS_V1.len()))
         .and_then(|value| value.checked_add(4 + handoff_bytes.len()))
         .ok_or(LoweringDiagnosticV1::ConstructionFailed(
@@ -632,7 +697,7 @@ fn encode_receipt(
     let mut bytes = Vec::with_capacity(capacity);
     bytes.extend_from_slice(RECEIPT_MAGIC_V1);
     bytes.extend_from_slice(&module_name_len.to_le_bytes());
-    bytes.extend_from_slice(input.module_name.as_bytes());
+    bytes.extend_from_slice(module_name.as_bytes());
     bytes.push(VERIFIED_DIALECT_OPERATIONS_V1.len() as u8);
     for operation in VERIFIED_DIALECT_OPERATIONS_V1 {
         bytes.push(dialect_operation_tag(operation));
@@ -659,7 +724,16 @@ const fn dialect_operation_tag(operation: VerifiedDialectOperationV1) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use fe2o3_llvm_handoff::{IdentityV1, StageIdentitiesV1};
+    use fe2o3_llvm_handoff::{
+        Gfx942HandoffInputV1, Gfx942HandoffV1, IdentityV1, ObligationKindV1, ObligationV1,
+        StageIdentitiesV1,
+    };
+    use pliron::{
+        basic_block::BasicBlock,
+        builtin::{op_interfaces::SymbolOpInterface, types::FP64Type},
+        context::Ptr,
+    };
+    use pliron_llvm::attributes::FastmathFlags;
 
     use super::*;
 
@@ -670,6 +744,32 @@ mod tests {
             IdentityV1::new([0x61; 32]).unwrap(),
             StageIdentitiesV1::new([0x11; 32], [0x22; 32], [0x33; 32]).unwrap(),
         )
+    }
+
+    fn private_function(lowered: &LoweredScalarKernelV1) -> FuncOp {
+        let module_body = lowered.module.module.get_body(&lowered.context, 0);
+        let operations = module_body
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .collect::<Vec<_>>();
+        let [function] = operations.as_slice() else {
+            panic!("expected one private function")
+        };
+        Operation::get_op::<FuncOp>(*function, &lowered.context)
+            .expect("private operation must be llvm.func")
+    }
+
+    fn private_entry(lowered: &LoweredScalarKernelV1) -> Ptr<BasicBlock> {
+        private_function(lowered)
+            .get_entry_block(&lowered.context)
+            .expect("private function must have an entry block")
+    }
+
+    fn private_body(lowered: &LoweredScalarKernelV1) -> Vec<Ptr<Operation>> {
+        private_entry(lowered)
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .collect()
     }
 
     #[test]
@@ -709,6 +809,10 @@ mod tests {
             owner.inspect_dialect_module(),
             Err(DialectModuleInspectionErrorV1::ForeignOwner)
         );
+        assert_eq!(
+            owner.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::ForeignOwner)
+        );
     }
 
     #[test]
@@ -718,6 +822,10 @@ mod tests {
         assert_eq!(
             lowered.inspect_dialect_module(),
             Err(DialectModuleInspectionErrorV1::StaleModule)
+        );
+        assert_eq!(
+            lowered.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::StaleModule)
         );
     }
 
@@ -731,6 +839,212 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             Err(DialectModuleInspectionErrorV1::StaleModule)
+        );
+    }
+
+    #[test]
+    fn exact_extractor_accepts_the_admitted_private_graph() {
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let handoff = lowered.extract_handoff_v2().unwrap();
+        assert_eq!(handoff.base(), lowered.handoff());
+        assert_eq!(handoff.module().functions().len(), 1);
+    }
+
+    #[test]
+    fn renamed_function_and_parameter_symbols_are_rejected() {
+        let mut function_name = lower_scalar_kernel_v1(&request()).unwrap();
+        private_function(&function_name).set_symbol_name(
+            &mut function_name.context,
+            Identifier::try_from("substituted_kernel").unwrap(),
+        );
+        assert_eq!(
+            function_name.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::SymbolMismatch)
+        );
+
+        let parameter_name = lower_scalar_kernel_v1(&request()).unwrap();
+        let entry = private_entry(&parameter_name);
+        let input = entry.deref(&parameter_name.context).get_argument(0);
+        input.set_name(
+            &parameter_name.context,
+            Some(Identifier::try_from("substituted_input").unwrap()),
+        );
+        assert_eq!(
+            parameter_name.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::SymbolMismatch)
+        );
+    }
+
+    #[test]
+    fn same_typed_hostile_def_use_edges_are_rejected() {
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let entry = private_entry(&lowered);
+        let output = entry.deref(&lowered.context).get_argument(1);
+        let body = private_body(&lowered);
+        Operation::replace_operand(body[0], &lowered.context, 0, output);
+        verify_operation(lowered.module.module.get_operation(), &lowered.context).unwrap();
+        assert_eq!(
+            lowered.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::DefUseMismatch)
+        );
+
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let entry = private_entry(&lowered);
+        let addend = entry.deref(&lowered.context).get_argument(2);
+        let body = private_body(&lowered);
+        Operation::replace_operand(body[2], &lowered.context, 0, addend);
+        verify_operation(lowered.module.module.get_operation(), &lowered.context).unwrap();
+        assert_eq!(
+            lowered.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::DefUseMismatch)
+        );
+    }
+
+    #[test]
+    fn coherent_wrong_value_type_is_rejected_after_dialect_verification() {
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let body = private_body(&lowered);
+        let loaded = body[0].deref(&lowered.context).get_result(0);
+        let computed = body[1].deref(&lowered.context).get_result(0);
+        let f64_type = FP64Type::get(&lowered.context).into();
+        loaded.set_type(&lowered.context, f64_type);
+        computed.set_type(&lowered.context, f64_type);
+        Operation::replace_operand(body[1], &lowered.context, 1, loaded);
+        verify_operation(lowered.module.module.get_operation(), &lowered.context).unwrap();
+        assert_eq!(
+            lowered.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::TypeMismatch)
+        );
+    }
+
+    #[test]
+    fn hostile_pointer_address_space_is_rejected() {
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let input = private_entry(&lowered)
+            .deref(&lowered.context)
+            .get_argument(0);
+        input.set_type(
+            &lowered.context,
+            PointerType::get(&lowered.context, AddressSpace::Local.llvm_id()).into(),
+        );
+        verify_operation(lowered.module.module.get_operation(), &lowered.context).unwrap();
+        assert_eq!(
+            lowered.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::AddressSpaceMismatch)
+        );
+    }
+
+    #[test]
+    fn hostile_alignment_and_fast_math_are_rejected() {
+        let alignment = lower_scalar_kernel_v1(&request()).unwrap();
+        let body = private_body(&alignment);
+        Operation::get_op::<LoadOp>(body[0], &alignment.context)
+            .unwrap()
+            .set_alignment(&alignment.context, 8);
+        verify_operation(alignment.module.module.get_operation(), &alignment.context).unwrap();
+        assert_eq!(
+            alignment.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::AlignmentMismatch)
+        );
+
+        let fast_math = lower_scalar_kernel_v1(&request()).unwrap();
+        let body = private_body(&fast_math);
+        Operation::get_op::<FAddOp>(body[1], &fast_math.context)
+            .unwrap()
+            .set_fast_math_flags(&fast_math.context, FastmathFlagsAttr(FastmathFlags::NNAN));
+        verify_operation(fast_math.module.module.get_operation(), &fast_math.context).unwrap();
+        assert_eq!(
+            fast_math.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::StrictFpMismatch)
+        );
+    }
+
+    #[test]
+    fn hostile_terminator_edge_and_extra_operation_are_rejected() {
+        let edge = lower_scalar_kernel_v1(&request()).unwrap();
+        let entry = private_entry(&edge);
+        let body = private_body(&edge);
+        Operation::push_successor(body[3], &edge.context, entry);
+        verify_operation(edge.module.module.get_operation(), &edge.context).unwrap();
+        assert_eq!(
+            edge.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch)
+        );
+
+        let mut extra = lower_scalar_kernel_v1(&request()).unwrap();
+        let entry = private_entry(&extra);
+        let body = private_body(&extra);
+        let computed = body[1].deref(&extra.context).get_result(0);
+        let output = entry.deref(&extra.context).get_argument(1);
+        let extra_store = StoreOp::new(&mut extra.context, computed, output);
+        extra_store.set_alignment(&extra.context, 4);
+        extra_store
+            .get_operation()
+            .insert_before(&extra.context, body[3]);
+        verify_operation(extra.module.module.get_operation(), &extra.context).unwrap();
+        assert_eq!(
+            extra.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch)
+        );
+    }
+
+    #[test]
+    fn hostile_origin_receipt_and_obligation_evidence_are_rejected() {
+        let mut origin = lower_scalar_kernel_v1(&request()).unwrap();
+        let mut substituted = request();
+        substituted.origin_source_identity = IdentityV1::new([0x91; 32]).unwrap();
+        origin.handoff = build_handoff(&substituted).unwrap();
+        assert_eq!(
+            origin.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::EvidenceMismatch)
+        );
+
+        let mut receipt = lower_scalar_kernel_v1(&request()).unwrap();
+        receipt.receipt.bytes[0] ^= 0xff;
+        assert_eq!(
+            receipt.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::EvidenceMismatch)
+        );
+
+        let mut obligation = lower_scalar_kernel_v1(&request()).unwrap();
+        let base = obligation.handoff.clone();
+        let origin_identity = base.origins()[0].identity();
+        let mut obligations = base.obligations().to_vec();
+        let preserve_abi = obligations
+            .iter_mut()
+            .find(|candidate| candidate.kind() == ObligationKindV1::PreserveKernelAbi)
+            .unwrap();
+        *preserve_abi = ObligationV1::new(
+            ObligationKindV1::PreserveKernelAbi,
+            IdentityV1::new([0xa1; 32]).unwrap(),
+            origin_identity,
+        );
+        obligation.handoff = Gfx942HandoffV1::new(Gfx942HandoffInputV1 {
+            stage_identities: *base.stage_identities(),
+            target: base.target().clone(),
+            kernels: base.kernels().to_vec(),
+            module: base.module().clone(),
+            origins: base.origins().to_vec(),
+            obligations,
+        })
+        .unwrap();
+        obligation.receipt = encode_receipt(&obligation.module_name, &obligation.handoff).unwrap();
+        assert_eq!(
+            obligation.extract_handoff_v2(),
+            Err(HandoffExtractionDiagnosticV2::EvidenceMismatch)
+        );
+    }
+
+    #[test]
+    fn child_operation_borrow_panic_is_contained() {
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let body = private_body(&lowered);
+        let _borrow = body[1].deref_mut(&lowered.context);
+        let result = catch_unwind(AssertUnwindSafe(|| lowered.extract_handoff_v2()));
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            Err(HandoffExtractionDiagnosticV2::UpstreamPanicked)
         );
     }
 }
