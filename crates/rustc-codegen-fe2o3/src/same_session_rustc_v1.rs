@@ -701,7 +701,7 @@ fn capture_in_session<'tcx>(
         } else {
             monomorphization_identity(tcx, function.instance)?
         };
-        let item = item_definition_identity(tcx, function.instance);
+        let item = item_definition_identity(tcx, function.instance)?;
         let fn_abi = observe_fn_abi(tcx, function.instance)?;
         let source_span = source_span(tcx, body.span)?;
         let source_crate =
@@ -877,12 +877,12 @@ fn generic_arg_identities(tcx: TyCtxt<'_>, instance: Instance<'_>) -> ([u8; 32],
 fn item_definition_identity(
     tcx: TyCtxt<'_>,
     instance: Instance<'_>,
-) -> RustItemDefinitionIdentityV1 {
+) -> Result<RustItemDefinitionIdentityV1, SameSessionRustcErrorV1> {
     RustItemDefinitionIdentityV1::new(domain_identity(
         ITEM_DEFINITION_DOMAIN,
         &[&tcx.def_path_hash(instance.def_id()).0.to_le_bytes()],
     ))
-    .expect("SHA-256 item identity is nonzero")
+    .map_err(Into::into)
 }
 
 fn function_identity(
@@ -1271,7 +1271,9 @@ fn semantic_source_span(
 fn operation_identity_words(bytes: [u8; 32]) -> [u64; 4] {
     let mut words = [0_u64; 4];
     for (word, bytes) in words.iter_mut().zip(bytes.chunks_exact(8)) {
-        *word = u64::from_le_bytes(bytes.try_into().expect("exact eight-byte identity word"));
+        let mut fixed = [0_u8; 8];
+        fixed.copy_from_slice(bytes);
+        *word = u64::from_le_bytes(fixed);
     }
     words
 }
@@ -1809,10 +1811,11 @@ fn append_digest_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update(bytes);
 }
 
-fn bounded_usize_identity(value: usize) -> [u8; 8] {
-    u64::try_from(value)
-        .expect("bounded compiler identity component fits u64")
-        .to_le_bytes()
+fn bounded_usize_identity(value: usize) -> [u8; 16] {
+    let native = value.to_le_bytes();
+    let mut fixed = [0_u8; 16];
+    fixed[..native.len()].copy_from_slice(&native);
+    fixed
 }
 
 fn encode_hex(bytes: &[u8]) -> String {

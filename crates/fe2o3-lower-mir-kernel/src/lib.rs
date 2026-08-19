@@ -117,14 +117,14 @@ enum RegistrationState {
     Registered(ContextIdentity),
 }
 
-fn registration_marker_key() -> Identifier {
+fn registration_marker_key() -> Result<Identifier, PassRegistrationError> {
     PASS_REGISTRATION_MARKER_KEY
         .try_into()
-        .expect("constant pass marker is a valid identifier")
+        .map_err(|_| PassRegistrationError::InvalidDialectName)
 }
 
 fn registration_state(context: &Context) -> Result<RegistrationState, PassRegistrationError> {
-    let key = registration_marker_key();
+    let key = registration_marker_key()?;
     let Some(index) = context.aux_data_map.get(&key).copied() else {
         return Ok(RegistrationState::Absent);
     };
@@ -182,7 +182,7 @@ pub fn register_pass(
         .insert(Box::new(PassRegistrationMarker { context_identity }));
     context
         .aux_data_map
-        .insert(registration_marker_key(), marker);
+        .insert(registration_marker_key()?, marker);
     Ok(PassRegistrationOutcome::Registered)
 }
 
@@ -823,11 +823,7 @@ impl MirKernelLoweringPass {
         result
             .validate(context)
             .map_err(LoweringError::Postcondition)?;
-        self.last_result = Some(result);
-        Ok(self
-            .last_result
-            .as_ref()
-            .expect("successful lowering stores a result"))
+        Ok(self.last_result.insert(result))
     }
 }
 
@@ -1090,39 +1086,52 @@ fn collect_source_evidence(
         })?;
 
     for (function_index, function) in snapshots.into_iter().enumerate() {
-        let blocks = function
-            .blocks()
-            .iter()
-            .enumerate()
-            .map(|(block_index, block)| SourceBlockEvidence {
+        let mut blocks = Vec::with_capacity(function.blocks().len());
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            let mut operations = Vec::with_capacity(block.operations().len());
+            for operation in block.operations() {
+                let evidence = match operation {
+                    MirSnapshotOperation::BlockMarker(block_id) => {
+                        SourceOperationEvidence::BlockMarker {
+                            block_id: block_id.0,
+                        }
+                    }
+                    MirSnapshotOperation::Return => SourceOperationEvidence::Return,
+                    MirSnapshotOperation::SemanticStatement(semantic) => {
+                        return Err(LoweringError::UnsupportedRustSemanticOperation {
+                            function: function_index,
+                            block: block_index,
+                            ordinal: semantic.ordinal(),
+                            kind: semantic.kind(),
+                            provenance: semantic.provenance(),
+                        });
+                    }
+                    MirSnapshotOperation::SemanticTerminator(semantic) => {
+                        if semantic.kind() != MirSemanticOperationKind::TerminatorReturn
+                            || !semantic.successors().is_empty()
+                        {
+                            return Err(LoweringError::UnsupportedRustSemanticOperation {
+                                function: function_index,
+                                block: block_index,
+                                ordinal: semantic.ordinal(),
+                                kind: semantic.kind(),
+                                provenance: semantic.provenance(),
+                            });
+                        }
+                        SourceOperationEvidence::SemanticReturn {
+                            identity: semantic.identity(),
+                            provenance: semantic.provenance(),
+                        }
+                    }
+                };
+                operations.push(evidence);
+            }
+            blocks.push(SourceBlockEvidence {
                 ordinal: block_index,
                 block_id: block.block_id().0,
-                operations: block
-                    .operations()
-                    .iter()
-                    .map(|operation| match operation {
-                        MirSnapshotOperation::BlockMarker(block_id) => {
-                            SourceOperationEvidence::BlockMarker {
-                                block_id: block_id.0,
-                            }
-                        }
-                        MirSnapshotOperation::Return => SourceOperationEvidence::Return,
-                        MirSnapshotOperation::SemanticStatement(semantic) => {
-                            unreachable!(
-                                "semantic statements fail closed during bounded preflight: {:?}",
-                                semantic.kind()
-                            )
-                        }
-                        MirSnapshotOperation::SemanticTerminator(semantic) => {
-                            SourceOperationEvidence::SemanticReturn {
-                                identity: semantic.identity(),
-                                provenance: semantic.provenance(),
-                            }
-                        }
-                    })
-                    .collect(),
-            })
-            .collect();
+                operations,
+            });
+        }
         functions.push(SourceFunctionEvidence {
             ordinal: function_index,
             identity: function.identity().to_owned(),
