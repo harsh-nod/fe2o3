@@ -965,7 +965,6 @@ dependencies = [
  "dialect-amdgcn",
  "fe2o3-artifact-transaction",
  "fe2o3-compiler-api",
- "fe2o3-compiler-driver",
  "fe2o3-compiler-ffi",
  "fe2o3-general-gemm-compiler",
  "fe2o3-hsaco",

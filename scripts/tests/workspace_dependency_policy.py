@@ -25,6 +25,7 @@ def policy() -> dict:
             {"name": "fixture", "packages": []},
         ],
         "path_layers": [{"prefix": "examples/", "layer": "fixture"}],
+        "allowed_dependency_edges": [],
         "forbidden_dependency_directions": [
             {"from": "contract", "to": ["runtime", "fixture"]},
             {"from": "runtime", "to": ["fixture"]},
@@ -105,6 +106,36 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
             ["unclassified workspace member: unowned (crates/unowned/Cargo.toml)"],
             violations,
         )
+
+    def test_allows_only_the_exact_package_and_dependency_kind_exception(self) -> None:
+        reviewed = policy()
+        reviewed["allowed_dependency_edges"] = [
+            {"from": "contract", "to": "runtime", "kinds": ["normal"]}
+        ]
+        packages = [
+            package(
+                "contract",
+                "crates/contract",
+                [
+                    dependency("runtime", "crates/runtime"),
+                    dependency("runtime", "crates/runtime", "dev"),
+                ],
+            ),
+            package("runtime", "crates/runtime"),
+        ]
+        violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
+        self.assertEqual(1, len(violations))
+        self.assertIn("(dev;", violations[0])
+
+    def test_rejects_exception_that_does_not_cross_a_forbidden_direction(self) -> None:
+        invalid = policy()
+        invalid["allowed_dependency_edges"] = [
+            {"from": "runtime", "to": "contract", "kinds": ["normal"]}
+        ]
+        with self.assertRaisesRegex(
+            CHECKER.PolicyConfigurationError, "does not cross a forbidden layer direction"
+        ):
+            CHECKER.check_policy(metadata([]), invalid)
 
     def test_rejects_duplicate_package_ownership(self) -> None:
         invalid = policy()

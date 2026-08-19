@@ -96,10 +96,12 @@
         "fe2o3-amdgcn-pliron-llvm",
         "fe2o3-compiler-driver",
         "fe2o3-differential",
+        "fe2o3-general-gemm-compiler",
         "fe2o3-legacy-compiler",
         "fe2o3-llvm-route-conformance",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
+        "fe2o3-pliron-worker-v2",
         "rustc-codegen-fe2o3"
       ]
     },
@@ -120,6 +122,15 @@
     {
       "prefix": "examples/",
       "layer": "fixture"
+    }
+  ],
+  "allowed_dependency_edges": [
+    {
+      "from": "fe2o3-hsaco-finalize",
+      "to": "fe2o3-general-gemm-compiler",
+      "kinds": [
+        "normal"
+      ]
     }
   ],
   "forbidden_dependency_directions": [

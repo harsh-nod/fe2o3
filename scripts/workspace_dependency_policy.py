@@ -44,7 +44,13 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _parse_policy(
     raw: dict[str, Any],
-) -> tuple[dict[str, str], list[tuple[str, str]], set[tuple[str, str]], int]:
+) -> tuple[
+    dict[str, str],
+    list[tuple[str, str]],
+    set[tuple[str, str]],
+    set[tuple[str, str, str]],
+    int,
+]:
     if raw.get("schema_version") != 1:
         raise PolicyConfigurationError("policy schema_version must be 1")
 
@@ -125,7 +131,44 @@ def _parse_policy(
                 )
             forbidden.add(direction)
 
-    return package_layers, path_layers, forbidden, len(layer_names)
+    allowed_edges: set[tuple[str, str, str]] = set()
+    for index, entry in enumerate(
+        _require_list(raw.get("allowed_dependency_edges", []), "policy allowed_dependency_edges")
+    ):
+        if not isinstance(entry, dict):
+            raise PolicyConfigurationError(
+                f"allowed_dependency_edges[{index}] must be an object"
+            )
+        source = _require_string(
+            entry.get("from"), f"allowed_dependency_edges[{index}].from"
+        )
+        target = _require_string(
+            entry.get("to"), f"allowed_dependency_edges[{index}].to"
+        )
+        if source not in package_layers or target not in package_layers:
+            raise PolicyConfigurationError(
+                f"allowed dependency edge {source!r} -> {target!r} must name explicitly classified packages"
+            )
+        if (package_layers[source], package_layers[target]) not in forbidden:
+            raise PolicyConfigurationError(
+                f"allowed dependency edge {source!r} -> {target!r} does not cross a forbidden layer direction"
+            )
+        for kind in _require_list(
+            entry.get("kinds"), f"allowed dependency edge {source!r} -> {target!r} kinds"
+        ):
+            kind = _require_string(kind, f"dependency kind for {source!r} -> {target!r}")
+            if kind not in {"normal", "build", "dev"}:
+                raise PolicyConfigurationError(
+                    f"allowed dependency edge {source!r} -> {target!r} has unknown kind {kind!r}"
+                )
+            edge = (source, target, kind)
+            if edge in allowed_edges:
+                raise PolicyConfigurationError(
+                    f"duplicate allowed dependency edge {source!r} -> {target!r} ({kind})"
+                )
+            allowed_edges.add(edge)
+
+    return package_layers, path_layers, forbidden, allowed_edges, len(layer_names)
 
 
 def _relative_manifest(manifest: str, workspace_root: str) -> str:
@@ -166,7 +209,9 @@ def _classify(
 def check_policy(
     metadata: dict[str, Any], policy: dict[str, Any]
 ) -> tuple[list[str], dict[str, int]]:
-    package_layers, path_layers, forbidden, layer_count = _parse_policy(policy)
+    package_layers, path_layers, forbidden, allowed_edges, layer_count = _parse_policy(
+        policy
+    )
     workspace_root = _require_string(
         metadata.get("workspace_root"), "metadata workspace_root"
     )
@@ -244,6 +289,8 @@ def check_policy(
             kind = dependency.get("kind") or "normal"
             if not isinstance(kind, str):
                 kind = str(kind)
+            if (package["name"], target_package["name"], kind) in allowed_edges:
+                continue
             target_condition = dependency.get("target")
             condition = f", target {target_condition}" if target_condition else ""
             violations.append(
