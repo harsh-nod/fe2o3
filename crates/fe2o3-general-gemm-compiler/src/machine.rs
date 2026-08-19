@@ -26,12 +26,18 @@ use fe2o3_llvm_worker_handoff::{
     AdmittedWorkerRequestV2, MeasuredLlvmLldBuildV1, WorkerAdmissionErrorV2,
     WorkerAdmissionRequestV2,
 };
+use fe2o3_lower_amdgcn_llvm::{
+    CanonicalPlironLlvmGraphExportV1, GraphExportErrorV1, GraphExportRequestV1, LoweringErrorV1,
+    lower_amdgcn_to_pliron_llvm_v1,
+};
 
 /// Canonical source-binding section schema retained in every general-GEMM object.
 pub const GENERAL_GEMM_MACHINE_BINDING_SCHEMA_V1: &str = "fe2o3.general-gemm.machine-binding.v1";
 
 const MACHINE_BINDING_IDENTITY_DOMAIN_V1: &[u8] =
     b"fe2o3.general-gemm.machine-binding.identity.v1\0";
+const COMPILER_BOUNDARY_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.general-gemm.compiler-boundary.identity.v1\0";
 const LDS_A_SYMBOL_V1: &str = "general_gemm_a_lds";
 const LDS_B_SYMBOL_V1: &str = "general_gemm_b_lds";
 const DESCRIPTOR_SOURCE_SYMBOL_V1: &str = "general_gemm_descriptor_source";
@@ -62,6 +68,47 @@ pub struct GeneralGemmMachineBindingSectionV1 {
     identity: GeneralGemmMachineBindingIdentityV1,
 }
 
+/// SHA-256 identity binding a live Pliron graph export to exact worker policy admission.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GeneralGemmCompilerBoundaryIdentityV1([u8; 32]);
+
+impl GeneralGemmCompilerBoundaryIdentityV1 {
+    /// Returns the exact digest bytes.
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Inert owner-controlled General GEMM graph-to-worker correspondence boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneralGemmCompilerBoundaryV1 {
+    graph_export: CanonicalPlironLlvmGraphExportV1,
+    worker_admission: AdmittedWorkerRequestV2,
+    identity: GeneralGemmCompilerBoundaryIdentityV1,
+}
+
+impl GeneralGemmCompilerBoundaryV1 {
+    /// Returns the freshly inspected canonical Pliron LLVM graph export.
+    pub const fn graph_export(&self) -> &CanonicalPlironLlvmGraphExportV1 {
+        &self.graph_export
+    }
+
+    /// Returns worker policy admission performed after live-graph correspondence.
+    pub const fn worker_admission(&self) -> &AdmittedWorkerRequestV2 {
+        &self.worker_admission
+    }
+
+    /// Returns the identity binding graph, source, target/build policy, and worker admission.
+    pub const fn identity(&self) -> GeneralGemmCompilerBoundaryIdentityV1 {
+        self.identity
+    }
+
+    /// Reports that this boundary grants no artifact or runtime authority.
+    pub const fn grants_artifact_authority(&self) -> bool {
+        false
+    }
+}
+
 impl GeneralGemmMachineBindingSectionV1 {
     /// Returns the exact retained section bytes.
     pub fn canonical_bytes(&self) -> &[u8] {
@@ -81,7 +128,7 @@ pub struct GeneralGemmStructuralMachineV1 {
     descriptor_source: CompilerDescriptorSourceV1,
     binding_section: GeneralGemmMachineBindingSectionV1,
     handoff: Gfx942HandoffV2,
-    worker_admission: AdmittedWorkerRequestV2,
+    compiler_boundary: GeneralGemmCompilerBoundaryV1,
     assembly: Gfx942LlvmAssemblyV2,
     compiler_handoff: CompilerModuleHandoffV2,
 }
@@ -93,7 +140,7 @@ pub struct GeneralGemmSymbolicStructuralMachineV1 {
     descriptor_source: CompilerDescriptorSourceV1,
     binding_section: GeneralGemmMachineBindingSectionV1,
     handoff: Gfx942HandoffV2,
-    worker_admission: AdmittedWorkerRequestV2,
+    compiler_boundary: GeneralGemmCompilerBoundaryV1,
     assembly: Gfx942LlvmAssemblyV2,
     compiler_handoff: CompilerModuleHandoffV2,
     artifact_identity: GeneralGemmSymbolicArtifactIdentityV1,
@@ -122,7 +169,12 @@ impl GeneralGemmSymbolicStructuralMachineV1 {
 
     /// Returns the inert typed pre-LLVM admission bound to this exact handoff.
     pub const fn worker_admission(&self) -> &AdmittedWorkerRequestV2 {
-        &self.worker_admission
+        self.compiler_boundary.worker_admission()
+    }
+
+    /// Returns the owner-controlled live-graph-to-worker correspondence boundary.
+    pub const fn compiler_boundary(&self) -> &GeneralGemmCompilerBoundaryV1 {
+        &self.compiler_boundary
     }
 
     /// Returns the deterministic dynamic LLVM assembly.
@@ -169,7 +221,12 @@ impl GeneralGemmStructuralMachineV1 {
 
     /// Returns the inert typed pre-LLVM admission bound to this exact handoff.
     pub const fn worker_admission(&self) -> &AdmittedWorkerRequestV2 {
-        &self.worker_admission
+        self.compiler_boundary.worker_admission()
+    }
+
+    /// Returns the owner-controlled live-graph-to-worker correspondence boundary.
+    pub const fn compiler_boundary(&self) -> &GeneralGemmCompilerBoundaryV1 {
+        &self.compiler_boundary
     }
 
     /// Returns the deterministic LLVM assembly derived from the typed graph.
@@ -201,6 +258,10 @@ pub enum GeneralGemmStructuralMachineErrorV1 {
     HandoffV2(HandoffDiagnosticV2),
     /// LLVM assembly serialization failed.
     Serialize(SerializeErrorV2),
+    /// Typed AMDGPU construction into the owner-bound Pliron LLVM graph failed.
+    PlironLlvmLowering(LoweringErrorV1),
+    /// Fresh owner-controlled live-graph export failed closed.
+    GraphExport(GraphExportErrorV1),
     /// The serializer did not retain the exact Handoff V2 identity.
     SourceIdentity,
     /// Typed pre-LLVM worker admission rejected the canonical handoff or build policy.
@@ -266,14 +327,8 @@ fn lower_symbolic_structural_inner(
     let binding_section = symbolic_machine_binding_section(&lowered, &descriptor_source);
     let handoff = build_symbolic_machine_handoff(&lowered, &descriptor_source, &binding_section)?;
     let source_identity = handoff.identity();
-    let canonical_handoff = handoff.encode_canonical();
-    let worker_admission = WorkerAdmissionRequestV2::new(
-        canonical_handoff.as_bytes(),
-        *source_identity.as_bytes(),
-        MeasuredLlvmLldBuildV1::exact(),
-    )
-    .admit()
-    .map_err(GeneralGemmStructuralMachineErrorV1::WorkerAdmission)?;
+    let compiler_boundary =
+        admit_general_gemm_compiler_boundary_v1(&handoff, MeasuredLlvmLldBuildV1::exact())?;
     let assembly = serialize_gfx942_handoff_v2(&handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::Serialize)?;
     if assembly.source_identity() != source_identity || !assembly.has_embedded_source_identity() {
@@ -309,7 +364,11 @@ fn lower_symbolic_structural_inner(
             lowered.compilation_identity().as_bytes(),
             projection.identity().as_bytes(),
             source_identity.as_bytes(),
-            worker_admission.admission_identity().as_bytes(),
+            compiler_boundary.identity().as_bytes(),
+            compiler_boundary
+                .worker_admission()
+                .admission_identity()
+                .as_bytes(),
             assembly.sha256().as_bytes(),
             compiler_handoff.identity().sha256(),
             binding_section.identity().as_bytes(),
@@ -321,7 +380,7 @@ fn lower_symbolic_structural_inner(
         descriptor_source,
         binding_section,
         handoff,
-        worker_admission,
+        compiler_boundary,
         assembly,
         compiler_handoff,
         artifact_identity,
@@ -342,14 +401,8 @@ fn lower_structural_inner(
     let binding_section = machine_binding_section(unit, projection, &descriptor_source);
     let handoff = build_machine_handoff(unit, projection, &descriptor_source, &binding_section)?;
     let source_identity = handoff.identity();
-    let canonical_handoff = handoff.encode_canonical();
-    let worker_admission = WorkerAdmissionRequestV2::new(
-        canonical_handoff.as_bytes(),
-        *source_identity.as_bytes(),
-        MeasuredLlvmLldBuildV1::exact(),
-    )
-    .admit()
-    .map_err(GeneralGemmStructuralMachineErrorV1::WorkerAdmission)?;
+    let compiler_boundary =
+        admit_general_gemm_compiler_boundary_v1(&handoff, MeasuredLlvmLldBuildV1::exact())?;
     let assembly = serialize_gfx942_handoff_v2(&handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::Serialize)?;
     if assembly.source_identity() != source_identity || !assembly.has_embedded_source_identity() {
@@ -384,9 +437,66 @@ fn lower_structural_inner(
         descriptor_source,
         binding_section,
         handoff,
-        worker_admission,
+        compiler_boundary,
         assembly,
         compiler_handoff,
+    })
+}
+
+/// Reconstructs, freshly inspects, and admits one canonical General GEMM graph for a worker build.
+///
+/// The result is inert. It does not measure or invoke LLVM, LLD, a finalizer, loader, or runtime.
+pub fn admit_general_gemm_compiler_boundary_v1(
+    handoff: &Gfx942HandoffV2,
+    build: MeasuredLlvmLldBuildV1<'_>,
+) -> Result<GeneralGemmCompilerBoundaryV1, GeneralGemmStructuralMachineErrorV1> {
+    catch_unwind(AssertUnwindSafe(|| {
+        admit_compiler_boundary_inner(handoff, build)
+    }))
+    .unwrap_or(Err(GeneralGemmStructuralMachineErrorV1::Construction))
+}
+
+fn admit_compiler_boundary_inner(
+    handoff: &Gfx942HandoffV2,
+    build: MeasuredLlvmLldBuildV1<'_>,
+) -> Result<GeneralGemmCompilerBoundaryV1, GeneralGemmStructuralMachineErrorV1> {
+    let lowered = lower_amdgcn_to_pliron_llvm_v1(handoff)
+        .map_err(GeneralGemmStructuralMachineErrorV1::PlironLlvmLowering)?;
+    let graph_export = lowered
+        .export_graph_v1(GraphExportRequestV1::new(
+            handoff.identity(),
+            lowered.receipt().identity(),
+        ))
+        .map_err(GeneralGemmStructuralMachineErrorV1::GraphExport)?;
+    if graph_export.source_handoff() != handoff
+        || graph_export.source_identity() != handoff.identity()
+        || graph_export.graph_inspection() != lowered.construction_inspection()
+    {
+        return Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity);
+    }
+
+    let canonical_handoff = graph_export.source_handoff().encode_canonical();
+    let worker_admission = WorkerAdmissionRequestV2::new(
+        canonical_handoff.as_bytes(),
+        *graph_export.source_identity().as_bytes(),
+        build,
+    )
+    .admit()
+    .map_err(GeneralGemmStructuralMachineErrorV1::WorkerAdmission)?;
+    let graph_export_identity = graph_export.identity().as_bytes();
+    let source_identity = graph_export.source_identity();
+    let identity = GeneralGemmCompilerBoundaryIdentityV1(hash_fields(
+        COMPILER_BOUNDARY_IDENTITY_DOMAIN_V1,
+        &[
+            &graph_export_identity,
+            source_identity.as_bytes(),
+            worker_admission.admission_identity().as_bytes(),
+        ],
+    ));
+    Ok(GeneralGemmCompilerBoundaryV1 {
+        graph_export,
+        worker_admission,
+        identity,
     })
 }
 

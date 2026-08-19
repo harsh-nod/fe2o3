@@ -13,6 +13,10 @@ use fe2o3_kernel_ir::{
     GeneralGemmPlanSnapshotV1, GeneralGemmPropertyV1, GeneralGemmSemanticMutationV1,
     GeneralGemmVerificationStageV1, general_gemm_semantic_mutation_kir_v1,
 };
+use fe2o3_llvm_worker_handoff::{
+    EXACT_LLD_BUILD_IDENTITY_V1, EXACT_LLD_VERSION_V1, EXACT_LLVM_BUILD_IDENTITY_V1,
+    MeasuredLlvmLldBuildV1,
+};
 use fe2o3_lower_amdgcn_llvm::lower_amdgcn_to_pliron_llvm_v1;
 
 fn identity(byte: u8) -> [u8; 32] {
@@ -184,6 +188,15 @@ fn complete_general_gemm_handoffs_lower_into_live_pliron_llvm_graphs() {
         assert!(inspection.strict_float());
         assert!(inspection.exact_memory_alignment());
         assert!(!lowered.grants_artifact_authority());
+        let boundary = machine.compiler_boundary();
+        assert_eq!(boundary.graph_export().source_handoff(), source);
+        assert_eq!(boundary.graph_export().graph_inspection(), inspection);
+        assert_eq!(
+            boundary.worker_admission().handoff_identity(),
+            source.identity()
+        );
+        assert_ne!(boundary.identity().as_bytes(), &[0; 32]);
+        assert!(!boundary.grants_artifact_authority());
     }
 }
 
@@ -987,6 +1000,15 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
             machine.worker_admission().admission_identity().as_bytes(),
             &[0; 32]
         );
+        assert_eq!(
+            machine.compiler_boundary().graph_export().source_handoff(),
+            machine.handoff()
+        );
+        assert_eq!(
+            machine.compiler_boundary().graph_export().source_identity(),
+            machine.handoff().identity()
+        );
+        assert!(!machine.compiler_boundary().grants_artifact_authority());
         assert!(
             !machine
                 .worker_admission()
@@ -1005,6 +1027,25 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
         assert!(!machine.compiler_handoff().grants_load_authority());
         assert!(!machine.compiler_handoff().grants_launch_authority());
     }
+}
+
+#[test]
+fn compiler_boundary_rejects_substituted_worker_build_policy() {
+    let machine = lower_general_gemm_structural_machine_v1(&unit(
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+    ))
+    .unwrap();
+    let substituted = MeasuredLlvmLldBuildV1::new(
+        "22.1.9",
+        EXACT_LLVM_BUILD_IDENTITY_V1,
+        EXACT_LLD_VERSION_V1,
+        EXACT_LLD_BUILD_IDENTITY_V1,
+        true,
+    );
+    assert!(matches!(
+        admit_general_gemm_compiler_boundary_v1(machine.handoff(), substituted),
+        Err(GeneralGemmStructuralMachineErrorV1::WorkerAdmission(_))
+    ));
 }
 
 fn occurrences(haystack: &str, needle: &str) -> usize {

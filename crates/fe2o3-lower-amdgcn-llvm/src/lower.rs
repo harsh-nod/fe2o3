@@ -1129,7 +1129,12 @@ fn inspect_module(
                 }
             }
         }
-        for (source_block, actual_block) in source_blocks.into_iter().zip(actual_blocks) {
+        let mut pending_terminators = Vec::with_capacity(source_blocks.len());
+        for (source_block, actual_block) in source_blocks
+            .iter()
+            .copied()
+            .zip(actual_blocks.iter().copied())
+        {
             block_count = block_count
                 .checked_add(1)
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
@@ -1201,6 +1206,15 @@ fn inspect_module(
             let terminator = actual_operations
                 .next()
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            if actual_operations.next().is_some() {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            pending_terminators.push((source_block, terminator));
+            operation_count = operation_count
+                .checked_add(1)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+        }
+        for (source_block, terminator) in pending_terminators {
             inspect_terminator(
                 context,
                 terminator,
@@ -1210,12 +1224,6 @@ fn inspect_module(
                 &values,
                 &mut facts,
             )?;
-            if actual_operations.next().is_some() {
-                return Err(InspectionErrorV1::UnexpectedGraph);
-            }
-            operation_count = operation_count
-                .checked_add(1)
-                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
         }
     }
     let graph_sha256: [u8; 32] = Sha256::digest(&facts).into();
