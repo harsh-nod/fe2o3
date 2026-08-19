@@ -998,6 +998,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-llvm-handoff"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-lower-kernel-gpu"
 version = "0.1.0"
 dependencies = [
