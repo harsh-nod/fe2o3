@@ -297,7 +297,16 @@ fn exact_text_and_numeric_boundaries_are_enforced() {
         ),
         Err(HandoffDiagnosticV1::InvalidDeviceLibrarySize)
     );
-    WorkgroupSizeRangeV1::new(64, 1_024).unwrap();
+    WorkgroupSizeRangeV1::new(1, 64).unwrap();
+    WorkgroupSizeRangeV1::new(63, 1_024).unwrap();
+    assert_eq!(
+        WorkgroupSizeRangeV1::new(0, 64),
+        Err(HandoffDiagnosticV1::InvalidWorkgroupSizeRange)
+    );
+    assert_eq!(
+        WorkgroupSizeRangeV1::new(65, 64),
+        Err(HandoffDiagnosticV1::InvalidWorkgroupSizeRange)
+    );
     assert_eq!(
         WorkgroupSizeRangeV1::new(64, 1_025),
         Err(HandoffDiagnosticV1::InvalidWorkgroupSizeRange)
