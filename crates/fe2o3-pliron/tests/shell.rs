@@ -158,6 +158,115 @@ fn pass_plan_rejects_hidden_nested_passes() {
     assert_eq!(pipeline.pass_order().count(), 0);
 }
 
+struct PanickingNamePass;
+
+impl Pass for PanickingNamePass {
+    fn name(&self) -> &str {
+        panic!("hostile pass name")
+    }
+
+    fn run(
+        &mut self,
+        _operation: pliron::context::Ptr<Operation>,
+        _context: &mut Context,
+        _analyses: &mut AnalysisManager,
+    ) -> PlironResult<PassResult> {
+        unreachable!("a plan never executes passes")
+    }
+}
+
+struct PanickingManagerInspectionPass;
+
+impl Pass for PanickingManagerInspectionPass {
+    fn name(&self) -> &str {
+        "hostile"
+    }
+
+    fn run(
+        &mut self,
+        _operation: pliron::context::Ptr<Operation>,
+        _context: &mut Context,
+        _analyses: &mut AnalysisManager,
+    ) -> PlironResult<PassResult> {
+        unreachable!("a plan never executes passes")
+    }
+
+    fn as_pass_manager(&mut self) -> Option<&mut dyn pliron::pass::PassManager> {
+        panic!("hostile manager inspection")
+    }
+}
+
+#[test]
+fn pass_inspection_panics_are_contained_and_poison_the_plan() {
+    for hostile in [
+        PassPlan::add_pass(
+            &mut PassPlan::new(ShellLimits::default()),
+            PanickingNamePass,
+        ),
+        PassPlan::add_pass(
+            &mut PassPlan::new(ShellLimits::default()),
+            PanickingManagerInspectionPass,
+        ),
+    ] {
+        assert_eq!(hostile, Err(PassPlanError::PassInspectionPanicked));
+    }
+
+    let mut plan = PassPlan::new(ShellLimits::default());
+    assert_eq!(
+        plan.add_pass(PanickingNamePass),
+        Err(PassPlanError::PassInspectionPanicked)
+    );
+    assert!(plan.is_poisoned());
+    assert_eq!(
+        plan.add_pass(RecordingPass { name: "later" }),
+        Err(PassPlanError::PlanPoisoned)
+    );
+    assert_eq!(plan.pass_order().count(), 0);
+}
+
+struct PanickingRegistrationInput;
+
+impl Iterator for PanickingRegistrationInput {
+    type Item = DialectRegistration;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        panic!("hostile registration iterator")
+    }
+}
+
+#[test]
+fn registration_input_panics_are_contained() {
+    let result = std::panic::catch_unwind(|| {
+        PlironSession::new(ShellLimits::default(), PanickingRegistrationInput)
+    });
+    assert!(matches!(
+        result.expect("registration iterator panic is contained"),
+        Err(ContextBuildError::RegistrationInputPanicked)
+    ));
+}
+
+struct CountedUnboundedRegistrations {
+    polls: usize,
+}
+
+impl Iterator for CountedUnboundedRegistrations {
+    type Item = DialectRegistration;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.polls += 1;
+        assert!(self.polls <= 3, "registration input was over-consumed");
+        let name = format!("d{}", self.polls);
+        Some(DialectRegistration::new(&name, empty_registration).expect("valid dialect"))
+    }
+}
+
+#[test]
+fn registration_collection_stops_at_the_configured_bound() {
+    let limits = ShellLimits::new(2, 1, 64).expect("valid limits");
+    let result = PlironSession::new(limits, CountedUnboundedRegistrations { polls: 0 });
+    assert!(matches!(result, Err(ContextBuildError::TooManyDialects)));
+}
+
 #[test]
 fn foreign_and_stale_operation_handles_fail_without_unwinding() {
     let limits = ShellLimits::default();
