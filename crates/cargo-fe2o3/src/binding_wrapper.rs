@@ -1243,6 +1243,9 @@ fn materialize_reviewed_child_environment(
         Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942) => {
             materialize_row_softmax_v1_child_environment(command, inherited).map(Some)
         }
+        Some(WorkerV2CompileEnvironmentProfileV1::GeneralGemmV1Gfx942) => {
+            materialize_general_gemm_v1_child_environment(command, inherited).map(Some)
+        }
         None => Ok(None),
     }
 }
@@ -1501,6 +1504,113 @@ fn materialize_scalar_gemm_v1_child_environment(
     })
 }
 
+fn materialize_general_gemm_v1_child_environment(
+    command: &mut Command,
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
+    let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
+    for (name, value) in &inherited {
+        let Some(name_text) = name.to_str() else {
+            return Err(BindingWrapperError::BuildObservation(
+                "general GEMM child environment contains a non-UTF-8 variable name".to_owned(),
+            ));
+        };
+        if value.to_str().is_none() {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "general GEMM child environment variable {name_text} has a non-UTF-8 value"
+            )));
+        }
+        if rejected_s09_inherited_environment(name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "general GEMM child environment rejects inherited variable {name_text}"
+            )));
+        }
+        if name_text.starts_with("FE2O3_") && !reviewed_scalar_inherited_environment(name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "general GEMM child environment rejects unreviewed inherited variable {name_text}"
+            )));
+        }
+    }
+
+    let required = |name: &'static str| {
+        inherited.get(OsStr::new(name)).ok_or_else(|| {
+            BindingWrapperError::BuildObservation(format!(
+                "general GEMM child environment is missing required {name}"
+            ))
+        })
+    };
+    let manifest_dir = required("CARGO_MANIFEST_DIR")?;
+    if !canonical_absolute_utf8_path(manifest_dir) {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM child environment has invalid CARGO_MANIFEST_DIR".to_owned(),
+        ));
+    }
+    if required("FE2O3_CODEGEN_PIPELINE")? != crate::worker_v2::GENERAL_GEMM_V1_PIPELINE {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM child environment has changed FE2O3_CODEGEN_PIPELINE".to_owned(),
+        ));
+    }
+    if required(TARGET_ENV)? != "gfx942:xnack-" {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM child environment has missing or changed FE2O3_TARGET".to_owned(),
+        ));
+    }
+    let verification = inherited
+        .get(OsStr::new(VERIFY_KERNEL_IR_ENV))
+        .map_or(OsStr::new("0"), OsString::as_os_str);
+    if !matches!(verification.to_str(), Some("0" | "1")) {
+        return Err(BindingWrapperError::BuildObservation(format!(
+            "general GEMM child environment has invalid {VERIFY_KERNEL_IR_ENV}"
+        )));
+    }
+
+    let mut final_environment = BTreeMap::from([
+        (OsString::from("CARGO_MANIFEST_DIR"), manifest_dir.clone()),
+        (
+            OsString::from("FE2O3_CODEGEN_PIPELINE"),
+            OsString::from(crate::worker_v2::GENERAL_GEMM_V1_PIPELINE),
+        ),
+        (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
+        (
+            OsString::from(VERIFY_KERNEL_IR_ENV),
+            verification.to_owned(),
+        ),
+    ]);
+    let explicit = command
+        .get_envs()
+        .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
+        .collect::<Vec<_>>();
+    for (name, value) in explicit {
+        if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
+            continue;
+        }
+        if !managed_s09_child_environment(&name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "general GEMM command has unreviewed explicit environment mutation {name:?}"
+            )));
+        }
+        if name == WORKER_V2_SOURCE_DEBUG_PROFILE_ENV && value.is_some() {
+            return Err(BindingWrapperError::BuildObservation(
+                "general GEMM command cannot select an S09 source-debug profile".to_owned(),
+            ));
+        }
+        match value {
+            Some(value) => {
+                final_environment.insert(name, value);
+            }
+            None => {
+                final_environment.remove(&name);
+            }
+        }
+    }
+    validate_general_gemm_v1_final_environment(&final_environment)?;
+    command.env_clear();
+    command.envs(&final_environment);
+    Ok(CompleteReviewedChildEnvironmentV2 {
+        entries: final_environment.into_iter().collect(),
+    })
+}
+
 fn apply_managed_loader_environment(
     environment: &mut BTreeMap<OsString, OsString>,
     name: &OsStr,
@@ -1597,6 +1707,48 @@ fn validate_scalar_gemm_v1_final_environment(
     {
         return Err(BindingWrapperError::BuildObservation(
             "scalar GEMM final environment has invalid backend observation".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_general_gemm_v1_final_environment(
+    environment: &BTreeMap<OsString, OsString>,
+) -> Result<(), BindingWrapperError> {
+    let required = |name: &'static str| {
+        environment
+            .get(OsStr::new(name))
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                BindingWrapperError::BuildObservation(format!(
+                    "general GEMM final environment is missing valid {name}"
+                ))
+            })
+    };
+    if required(HSACO_DIR_ENV)? != format!("/proc/self/fd/{ARTIFACT_CHILD_FD}") {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM final environment has changed FE2O3_HSACO_DIR".to_owned(),
+        ));
+    }
+    let attempt = BuildAttempt::from_env_value(required(BUILD_ATTEMPT_ENV)?).map_err(|_| {
+        BindingWrapperError::BuildObservation(
+            "general GEMM final environment has invalid FE2O3_BUILD_ATTEMPT_V1".to_owned(),
+        )
+    })?;
+    if attempt.session() == BuildSession::DIRECT {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM final environment has invalid FE2O3_BUILD_ATTEMPT_V1".to_owned(),
+        ));
+    }
+    let backend = required(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)?;
+    if backend.len() != 64
+        || backend.bytes().all(|byte| byte == b'0')
+        || !backend
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM final environment has invalid backend observation".to_owned(),
         ));
     }
     Ok(())
@@ -2204,6 +2356,9 @@ struct RowSoftmaxReleaseContext {
 }
 
 enum ManagedWorkerV2 {
+    InProcessGeneralGemm {
+        config: Box<PreparedWorkerV2Config>,
+    },
     Fresh {
         config: Box<PreparedWorkerV2Config>,
         envelope_inputs: Option<WorkerV2EnvelopeInputsV1>,
@@ -2227,6 +2382,9 @@ impl ManagedAttempt {
 
     fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
         match &self.worker_v2 {
+            Some(ManagedWorkerV2::InProcessGeneralGemm { config, .. }) => {
+                config.source_debug_profile()
+            }
             Some(ManagedWorkerV2::Fresh { config, .. }) => config.source_debug_profile(),
             Some(ManagedWorkerV2::Recovery { .. }) | None => None,
         }
@@ -2267,9 +2425,10 @@ impl ManagedAttempt {
                     observation.observed_parent_start_time_ticks,
                 )))
             }
-            Some(ManagedWorkerV2::Fresh { .. }) | Some(ManagedWorkerV2::Recovery { .. }) | None => {
-                Ok(None)
-            }
+            Some(ManagedWorkerV2::InProcessGeneralGemm { .. })
+            | Some(ManagedWorkerV2::Fresh { .. })
+            | Some(ManagedWorkerV2::Recovery { .. })
+            | None => Ok(None),
         }
     }
 }
@@ -2353,39 +2512,55 @@ fn prepare_managed_attempt(
         ));
     }
     let (attempt, worker_v2) = if let Some(config) = worker_v2 {
-        let resume = WorkerV2ResumeStoreV1::open(output_dir, &producer)
-            .map_err(BindingWrapperError::WorkerV2Restart)?;
-        if let Some(state) = resume
-            .load()
-            .map_err(BindingWrapperError::WorkerV2Restart)?
-        {
-            let attempt = state.attempt();
-            if attempt.session() != session || attempt.invocation() != invocation {
-                return Err(BindingWrapperError::WorkerV2Restart(
-                    ResumeMarkerErrorV1::StaleInvocation,
-                ));
-            }
-            (
-                attempt,
-                Some(ManagedWorkerV2::Recovery {
-                    resume,
-                    state: Box::new(state),
-                }),
-            )
-        } else {
-            let envelope_inputs = config
-                .load_envelope_inputs()
-                .map_err(BindingWrapperError::WorkerV2Configuration)?;
+        if config.executes_worker_in_rustc() {
+            let pair = config
+                .general_gemm_v1()
+                .expect("in-process general GEMM has parsed qualification-pair pins");
+            debug_assert!(pair.verus_path().is_absolute());
+            debug_assert_ne!(pair.proof_timeout_seconds(), 0);
             let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
                 .map_err(BindingWrapperError::Artifact)?;
             (
                 attempt,
-                Some(ManagedWorkerV2::Fresh {
+                Some(ManagedWorkerV2::InProcessGeneralGemm {
                     config: Box::new(config),
-                    envelope_inputs,
-                    resume,
                 }),
             )
+        } else {
+            let resume = WorkerV2ResumeStoreV1::open(output_dir, &producer)
+                .map_err(BindingWrapperError::WorkerV2Restart)?;
+            if let Some(state) = resume
+                .load()
+                .map_err(BindingWrapperError::WorkerV2Restart)?
+            {
+                let attempt = state.attempt();
+                if attempt.session() != session || attempt.invocation() != invocation {
+                    return Err(BindingWrapperError::WorkerV2Restart(
+                        ResumeMarkerErrorV1::StaleInvocation,
+                    ));
+                }
+                (
+                    attempt,
+                    Some(ManagedWorkerV2::Recovery {
+                        resume,
+                        state: Box::new(state),
+                    }),
+                )
+            } else {
+                let envelope_inputs = config
+                    .load_envelope_inputs()
+                    .map_err(BindingWrapperError::WorkerV2Configuration)?;
+                let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
+                    .map_err(BindingWrapperError::Artifact)?;
+                (
+                    attempt,
+                    Some(ManagedWorkerV2::Fresh {
+                        config: Box::new(config),
+                        envelope_inputs,
+                        resume,
+                    }),
+                )
+            }
         }
     } else {
         let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
@@ -2423,6 +2598,14 @@ fn complete_managed_attempt(mut managed: ManagedAttempt) -> Result<(), BindingWr
         }
         if let Some(worker_v2) = managed.worker_v2.take() {
             return match worker_v2 {
+                ManagedWorkerV2::InProcessGeneralGemm { config } => {
+                    debug_assert!(config.executes_worker_in_rustc());
+                    debug_assert!(config.general_gemm_v1().is_some());
+                    Err(CompletionFailure::Uncommitted(
+                        "in-process general-GEMM qualification remains inert until rustc's private frontend correspondence and final join are connected"
+                            .to_owned(),
+                    ))
+                }
                 ManagedWorkerV2::Fresh {
                     config,
                     envelope_inputs,

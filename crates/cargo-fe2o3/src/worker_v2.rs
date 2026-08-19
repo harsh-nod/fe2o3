@@ -20,6 +20,7 @@ use fe2o3_hsaco_finalize::{
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     execute_reproducible_first_build_worker_v2,
 };
+use fe2o3_verifier::MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1;
 use fe2o3_worker_v2_bundle::{MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, WorkerV2EnvelopeInputsV1};
 use rustix::fs::{FileType, Mode, OFlags, fstat, open};
 use serde_json::{Map, Value};
@@ -35,6 +36,7 @@ pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
+pub(crate) const GENERAL_GEMM_V1_PIPELINE: &str = "collected-general-gemm-v1";
 const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
 const S09_ALPHA_DEBUG_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
@@ -104,6 +106,8 @@ const ROW_SOFTMAX_V1_KEYS: &[&str] = &[
     "provider_stable_crate_id",
     "row_elements",
 ];
+const GENERAL_GEMM_V1_KEYS: &[&str] = &["profile", "proof_timeout_seconds", "verus_path"];
+const GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1: &str = "qualification-pair-v1";
 const REQUIRED_OPTIONS: &[(&str, &[&str])] = &[
     ("code-object-version", &["4", "5", "6"]),
     ("opt-level", &["0", "1", "2", "3"]),
@@ -148,7 +152,24 @@ pub(crate) struct PreparedWorkerV2Config {
     limits: WorkerExecutionLimitsV1,
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
     row_softmax_v1: Option<PreparedRowSoftmaxV1Config>,
+    general_gemm_v1: Option<PreparedGeneralGemmV1Config>,
     units: Vec<ConfiguredUnit>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedGeneralGemmV1Config {
+    verus_path: PathBuf,
+    proof_timeout_seconds: u32,
+}
+
+impl PreparedGeneralGemmV1Config {
+    pub(crate) fn verus_path(&self) -> &Path {
+        &self.verus_path
+    }
+
+    pub(crate) const fn proof_timeout_seconds(&self) -> u32 {
+        self.proof_timeout_seconds
+    }
 }
 
 pub(crate) struct PreparedRowSoftmaxV1Config {
@@ -199,6 +220,7 @@ enum WorkerV2PipelineV1 {
     General,
     ScalarGemmV1,
     RowSoftmaxV1,
+    GeneralGemmV1,
 }
 
 impl WorkerV2PipelineV1 {
@@ -209,6 +231,8 @@ impl WorkerV2PipelineV1 {
             Some(Self::ScalarGemmV1)
         } else if value == ROW_SOFTMAX_V1_PIPELINE {
             Some(Self::RowSoftmaxV1)
+        } else if value == GENERAL_GEMM_V1_PIPELINE {
+            Some(Self::GeneralGemmV1)
         } else {
             None
         }
@@ -219,6 +243,7 @@ impl WorkerV2PipelineV1 {
             Self::General => WORKER_V2_PIPELINE,
             Self::ScalarGemmV1 => SCALAR_GEMM_V1_PIPELINE,
             Self::RowSoftmaxV1 => ROW_SOFTMAX_V1_PIPELINE,
+            Self::GeneralGemmV1 => GENERAL_GEMM_V1_PIPELINE,
         }
     }
 }
@@ -228,6 +253,7 @@ pub(crate) enum WorkerV2CompileEnvironmentProfileV1 {
     S09AlphaGfx942O0,
     ScalarGemmV1Gfx942,
     RowSoftmaxV1Gfx942,
+    GeneralGemmV1Gfx942,
 }
 
 impl WorkerV2SourceDebugProfileV1 {
@@ -332,6 +358,15 @@ impl PreparedWorkerV2Config {
             envelope_mode,
             &candidate_output,
         )?;
+        let general_gemm_v1 = parse_general_gemm_v1(
+            root,
+            pipeline,
+            &providers,
+            &link_options,
+            source_debug_profile,
+            envelope_mode,
+            &candidate_output,
+        )?;
 
         let identity = transitive_identity(
             pipeline,
@@ -352,6 +387,7 @@ impl PreparedWorkerV2Config {
             limits,
             source_debug_profile,
             row_softmax_v1,
+            general_gemm_v1,
             units,
         })
     }
@@ -372,12 +408,22 @@ impl PreparedWorkerV2Config {
         self.source_debug_profile.is_some()
             || matches!(
                 self.pipeline,
-                WorkerV2PipelineV1::ScalarGemmV1 | WorkerV2PipelineV1::RowSoftmaxV1
+                WorkerV2PipelineV1::ScalarGemmV1
+                    | WorkerV2PipelineV1::RowSoftmaxV1
+                    | WorkerV2PipelineV1::GeneralGemmV1
             )
     }
 
     pub(crate) const fn row_softmax_v1(&self) -> Option<&PreparedRowSoftmaxV1Config> {
         self.row_softmax_v1.as_ref()
+    }
+
+    pub(crate) const fn general_gemm_v1(&self) -> Option<&PreparedGeneralGemmV1Config> {
+        self.general_gemm_v1.as_ref()
+    }
+
+    pub(crate) const fn executes_worker_in_rustc(&self) -> bool {
+        matches!(self.pipeline, WorkerV2PipelineV1::GeneralGemmV1)
     }
 
     pub(crate) fn row_softmax_v1_worker_pins(
@@ -413,6 +459,8 @@ impl PreparedWorkerV2Config {
             Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
         } else if self.pipeline == WorkerV2PipelineV1::RowSoftmaxV1 {
             Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
+        } else if self.pipeline == WorkerV2PipelineV1::GeneralGemmV1 {
+            Some(WorkerV2CompileEnvironmentProfileV1::GeneralGemmV1Gfx942)
         } else {
             None
         }
@@ -496,6 +544,85 @@ impl PreparedWorkerV2Config {
             self.limits,
         )
     }
+}
+
+fn parse_general_gemm_v1(
+    root: &Map<String, Value>,
+    pipeline: WorkerV2PipelineV1,
+    providers: &[WorkerInputV1],
+    options: &[LinkOptionV1],
+    source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
+    envelope_mode: WorkerV2EnvelopeModeV1,
+    candidate_output: &WorkerOutputConstraintsV1,
+) -> Result<Option<PreparedGeneralGemmV1Config>, WorkerV2ConfigError> {
+    let Some(value) = root.get("general_gemm_v1") else {
+        if pipeline == WorkerV2PipelineV1::GeneralGemmV1 {
+            return Err(WorkerV2ConfigError::Invalid(
+                "general-GEMM Worker V2 configuration requires general_gemm_v1 qualification-pair pins"
+                    .to_owned(),
+            ));
+        }
+        return Ok(None);
+    };
+    if pipeline != WorkerV2PipelineV1::GeneralGemmV1 {
+        return Err(WorkerV2ConfigError::Invalid(
+            "general_gemm_v1 pins are valid only for collected-general-gemm-v1".to_owned(),
+        ));
+    }
+    if !providers.is_empty() {
+        return Err(WorkerV2ConfigError::Invalid(
+            "general-GEMM synchronous worker rejects request-side link providers".to_owned(),
+        ));
+    }
+    if source_debug_profile.is_some() || envelope_mode != WorkerV2EnvelopeModeV1::NonAuthoritative {
+        return Err(WorkerV2ConfigError::Invalid(
+            "general-GEMM synchronous worker rejects source-debug and load-envelope fields"
+                .to_owned(),
+        ));
+    }
+    let option = |name: &str| {
+        options
+            .iter()
+            .find(|option| option.name() == name)
+            .map(LinkOptionV1::value)
+    };
+    if option("code-object-version") != Some("6")
+        || option("opt-level") != Some("2")
+        || option("strip-debug") != Some("true")
+        || option("verify-each") != Some("true")
+    {
+        return Err(WorkerV2ConfigError::Invalid(
+            "general-GEMM production policy requires COV6, O2, stripped debug, and verify-each"
+                .to_owned(),
+        ));
+    }
+    if candidate_output.max_bytes() != fe2o3_hsaco::MAX_HSACO_BYTES as u64 {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "general-GEMM candidate_output_max_bytes must be exactly {}",
+            fe2o3_hsaco::MAX_HSACO_BYTES
+        )));
+    }
+    let object = exact_object(value, GENERAL_GEMM_V1_KEYS, "general_gemm_v1")?;
+    let profile = required_string(object, "profile", "general_gemm_v1")?;
+    if profile != GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1 {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "general_gemm_v1.profile has unsupported value {profile:?}"
+        )));
+    }
+    let proof_timeout_seconds = required_u64(object, "proof_timeout_seconds", "general_gemm_v1")?;
+    if proof_timeout_seconds == 0
+        || proof_timeout_seconds > u64::from(MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1)
+    {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "general_gemm_v1.proof_timeout_seconds must be in 1..={MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1}"
+        )));
+    }
+    let verus_path = PathBuf::from(required_string(object, "verus_path", "general_gemm_v1")?);
+    require_absolute_path(&verus_path, "general_gemm_v1.verus_path")?;
+    Ok(Some(PreparedGeneralGemmV1Config {
+        verus_path,
+        proof_timeout_seconds: proof_timeout_seconds as u32,
+    }))
 }
 
 fn parse_row_softmax_v1(
@@ -783,7 +910,7 @@ impl fmt::Display for WorkerV2ConfigError {
             ),
             Self::UnexpectedConfiguration => write!(
                 formatter,
-                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, or {ROW_SOFTMAX_V1_PIPELINE}"
+                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
             ),
             Self::Io { kind, path, error } => {
                 write!(
@@ -1031,7 +1158,12 @@ fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, WorkerV2Confi
     let profile_neutral_keys = keys
         .iter()
         .copied()
-        .filter(|key| !matches!(*key, "source_debug_profile" | "row_softmax_v1"))
+        .filter(|key| {
+            !matches!(
+                *key,
+                "source_debug_profile" | "row_softmax_v1" | "general_gemm_v1"
+            )
+        })
         .collect::<Vec<_>>();
     if profile_neutral_keys != ROOT_KEYS
         && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE_MODE
@@ -1091,9 +1223,14 @@ fn absolute_json_path(value: &str, context: &str) -> Result<PathBuf, WorkerV2Con
 }
 
 fn require_absolute_path(path: &Path, context: &str) -> Result<(), WorkerV2ConfigError> {
-    if !path.is_absolute() || path.as_os_str().is_empty() {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    if !path.is_absolute()
+        || bytes.is_empty()
+        || bytes.len() > MAX_CONFIG_PATH_BYTES
+        || bytes.contains(&0)
+    {
         return Err(WorkerV2ConfigError::Invalid(format!(
-            "{context} path must be absolute"
+            "{context} path must be a bounded absolute path"
         )));
     }
     Ok(())
@@ -1376,6 +1513,21 @@ mod tests {
         path
     }
 
+    fn general_gemm_manifest(directory: &TestDirectory) -> PathBuf {
+        let generic = manifest(directory);
+        let mut value: Value = serde_json::from_slice(&fs::read(&generic).unwrap()).unwrap();
+        value["candidate_output_max_bytes"] = json!(fe2o3_hsaco::MAX_HSACO_BYTES);
+        value["providers"] = json!([]);
+        value["general_gemm_v1"] = json!({
+            "profile": GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1,
+            "proof_timeout_seconds": 120,
+            "verus_path": "/opt/fe2o3/verus"
+        });
+        let path = directory.0.join("general-gemm-qualification-pair.json");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        path
+    }
+
     #[test]
     fn requires_configuration_exactly_for_the_worker_v2_pipeline() {
         assert!(
@@ -1391,6 +1543,13 @@ mod tests {
             PreparedWorkerV2Config::from_selection(Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)), None),
             Err(WorkerV2ConfigError::MissingConfiguration)
         ));
+        assert!(matches!(
+            PreparedWorkerV2Config::from_selection(
+                Some(OsStr::new(GENERAL_GEMM_V1_PIPELINE)),
+                None
+            ),
+            Err(WorkerV2ConfigError::MissingConfiguration)
+        ));
         assert!(
             PreparedWorkerV2Config::from_selection(Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)), None)
                 .unwrap()
@@ -1399,6 +1558,100 @@ mod tests {
         assert!(matches!(
             PreparedWorkerV2Config::from_selection(None, Some(OsStr::new("/config"))),
             Err(WorkerV2ConfigError::UnexpectedConfiguration)
+        ));
+    }
+
+    #[test]
+    fn general_gemm_manifest_selects_only_the_closed_qualification_pair() {
+        let directory = TestDirectory::new();
+        let path = general_gemm_manifest(&directory);
+        let config = PreparedWorkerV2Config::from_manifest_for_pipeline(
+            &path,
+            WorkerV2PipelineV1::GeneralGemmV1,
+        )
+        .unwrap();
+        let pair = config.general_gemm_v1().unwrap();
+        assert_eq!(pair.verus_path(), Path::new("/opt/fe2o3/verus"));
+        assert_eq!(pair.proof_timeout_seconds(), 120);
+        assert!(config.executes_worker_in_rustc());
+        assert!(config.requires_expected_identity());
+        assert!(config.providers.is_empty());
+
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["general_gemm_v1"]["profile"] = json!("single-schedule-v1");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest_for_pipeline(
+                &path,
+                WorkerV2PipelineV1::GeneralGemmV1,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("unsupported value")
+        ));
+    }
+
+    #[test]
+    fn general_gemm_manifest_rejects_profile_and_field_substitution() {
+        let directory = TestDirectory::new();
+        let path = general_gemm_manifest(&directory);
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let reference_identity = PreparedWorkerV2Config::from_manifest_for_pipeline(
+            &path,
+            WorkerV2PipelineV1::GeneralGemmV1,
+        )
+        .unwrap()
+        .identity();
+        value["general_gemm_v1"]["proof_timeout_seconds"] = json!(121);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let substituted = PreparedWorkerV2Config::from_manifest_for_pipeline(
+            &path,
+            WorkerV2PipelineV1::GeneralGemmV1,
+        )
+        .unwrap();
+        assert_eq!(
+            substituted
+                .general_gemm_v1()
+                .map(PreparedGeneralGemmV1Config::proof_timeout_seconds),
+            Some(121)
+        );
+        assert_ne!(substituted.identity(), reference_identity);
+
+        value["general_gemm_v1"]["custom"] = json!(true);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest_for_pipeline(
+                &path,
+                WorkerV2PipelineV1::GeneralGemmV1,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("must contain exactly")
+        ));
+
+        value["general_gemm_v1"]
+            .as_object_mut()
+            .unwrap()
+            .remove("custom");
+        value["general_gemm_v1"]["proof_timeout_seconds"] = json!(0);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest_for_pipeline(
+                &path,
+                WorkerV2PipelineV1::GeneralGemmV1,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("proof_timeout_seconds")
+        ));
+
+        value["general_gemm_v1"]["proof_timeout_seconds"] = json!(120);
+        value["general_gemm_v1"]["verus_path"] = json!("relative/verus");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest_for_pipeline(
+                &path,
+                WorkerV2PipelineV1::GeneralGemmV1,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("absolute")
         ));
     }
 
