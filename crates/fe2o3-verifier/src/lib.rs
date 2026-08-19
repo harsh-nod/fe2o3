@@ -21,6 +21,7 @@ mod authenticated_verus_execution_v2;
 mod control_flow_binding;
 mod executor;
 mod flash_attention_memory_v1;
+mod general_gemm_proof_v1;
 mod model;
 mod moe_expert_compact_plan_v1;
 mod moe_routing_memory_v1;
@@ -115,6 +116,7 @@ pub use executor::{
     ExecutionSuccess, MAX_CAPTURE_BYTES, OutputStream, ProcessOutput, execute_recorder,
 };
 pub use flash_attention_memory_v1::*;
+pub use general_gemm_proof_v1::*;
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,
