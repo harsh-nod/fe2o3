@@ -89,3 +89,15 @@ path = "src/bin/reversed_cycle.rs"
 [[bin]]
 name = "store-loop"
 path = "src/bin/store_loop.rs"
+
+[[bin]]
+name = "positive-early-return"
+path = "src/bin/positive_early_return.rs"
+
+[[bin]]
+name = "positive-split-loader-provenance"
+path = "src/bin/positive_split_loader_provenance.rs"
+
+[[bin]]
+name = "positive-store-backedge"
+path = "src/bin/positive_store_backedge.rs"

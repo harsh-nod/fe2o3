@@ -1330,6 +1330,7 @@ fn derive_positive_receipt<'tcx>(
 ) -> Result<AuthenticatedGeneralGemmSemanticReceiptV1, GeneralGemmMirImportErrorV1> {
     let abi = require_positive_abi(tcx, root)?;
     require_terminal_abi_binding(body, calls)?;
+    require_positive_root_lifecycle_coverage(tcx, body, calls)?;
     let (source_properties, symbolic_plan, symbolic_kir) =
         derive_typestate_source_property_receipts(tcx, root, body, calls, &abi)?;
 
@@ -1365,6 +1366,101 @@ fn derive_positive_receipt<'tcx>(
             symbolic_kir,
         }),
     })
+}
+
+fn require_positive_root_lifecycle_coverage<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    calls: &[GeneralGemmCallV1],
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    let acquire = unique_call(calls, TrustedGeneralGemmOperationV1::Acquire)?;
+    let stage = unique_call(calls, TrustedGeneralGemmOperationV1::Stage)?;
+    let store = unique_call(calls, TrustedGeneralGemmOperationV1::Store)?;
+    require_all_nontrapping_paths_reach(
+        tcx,
+        body,
+        START_BLOCK,
+        acquire.block,
+        "the canonical acquire before any normal return",
+    )?;
+    require_all_nontrapping_paths_reach(
+        tcx,
+        body,
+        START_BLOCK,
+        store.block,
+        "the canonical store before every normal return",
+    )?;
+    if !dominates(body, acquire.block, stage.block) || !dominates(body, acquire.block, store.block)
+    {
+        return Err(unproved(
+            "the exact acquire dominates both phase entry and the canonical store",
+        ));
+    }
+    if reachable(body, store.return_target, acquire.block)
+        || reachable(body, store.return_target, stage.block)
+    {
+        return Err(unproved(
+            "the canonical store has no backedge to acquire or phase entry",
+        ));
+    }
+    Ok(())
+}
+
+fn require_all_nontrapping_paths_reach<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    from: BasicBlock,
+    required: BasicBlock,
+    property: &str,
+) -> Result<(), GeneralGemmMirImportErrorV1> {
+    let mut pending = VecDeque::from([from]);
+    let mut visited = BTreeSet::new();
+    let mut reached_required = false;
+    while let Some(block) = pending.pop_front() {
+        if block == required {
+            reached_required = true;
+            continue;
+        }
+        if !visited.insert(block) || is_trusted_trap_block(tcx, body, block) {
+            continue;
+        }
+        let terminator = body.basic_blocks[block]
+            .terminator
+            .as_ref()
+            .ok_or_else(|| missing_terminator(block))?;
+        if matches!(terminator.kind, TerminatorKind::Return) {
+            return Err(unproved(property));
+        }
+        let successors = normal_successors(body, block)?;
+        if successors.is_empty() {
+            return Err(unproved(property));
+        }
+        pending.extend(successors);
+    }
+    if !reached_required {
+        return Err(unproved(property));
+    }
+    Ok(())
+}
+
+fn is_trusted_trap_block(tcx: TyCtxt<'_>, body: &Body<'_>, block: BasicBlock) -> bool {
+    matches!(
+        body.basic_blocks[block]
+            .terminator
+            .as_ref()
+            .map(|terminator| &terminator.kind),
+        Some(TerminatorKind::Call {
+            func: Operand::Constant(function),
+            ..
+        }) if matches!(
+            function.const_.ty().kind(),
+            TyKind::FnDef(definition, _)
+                if trusted_device_items::classify(tcx, *definition)
+                    == Some(TrustedDeviceItem::AmdGpuDiagnostic(
+                        TrustedAmdGpuDiagnosticOperation::Trap,
+                    ))
+        )
+    )
 }
 
 fn derive_typestate_source_property_receipts<'tcx>(
@@ -2607,7 +2703,7 @@ fn require_guarded_row_major_helper(
     let mut trap = None;
     let mut dataflow = Vec::new();
     for (block, data) in body.basic_blocks.iter_enumerated() {
-        for statement in &data.statements {
+        for (statement_index, statement) in data.statements.iter().enumerate() {
             let Some((destination, value)) = statement.kind.as_assign() else {
                 continue;
             };
@@ -2713,7 +2809,7 @@ fn require_guarded_row_major_helper(
                             .iter()
                             .any(|projection| matches!(projection, ProjectionElem::Deref)) =>
                 {
-                    if load.replace((block, *place)).is_some() {
+                    if load.replace((block, statement_index, *place)).is_some() {
                         return Err(unproved("loader has one in-bounds dereference result"));
                     }
                     dataflow.push(5);
@@ -2747,7 +2843,7 @@ fn require_guarded_row_major_helper(
         row_major.ok_or_else(|| unproved("loader has an exact row-major offset"))?;
     let (extent_guard, extent_discriminant, extent_index) =
         extent_guard.ok_or_else(|| unproved("loader checks the slice extent"))?;
-    let (load, load_place) =
+    let (load, load_statement_index, load_place) =
         load.ok_or_else(|| unproved("loader returns the in-bounds slice element"))?;
     let trap =
         trap.ok_or_else(|| unproved("loader traps when the slice extent is insufficient"))?;
@@ -2762,7 +2858,7 @@ fn require_guarded_row_major_helper(
             "loader column guard has exact false/true branch polarity",
         ));
     };
-    let Some((extent_decision, extent_out_of_bounds, extent_in_bounds)) =
+    let Some((extent_decision, extent_out_of_bounds, extent_in_bounds, extent_option)) =
         find_exact_option_decision(
             tcx,
             body,
@@ -2831,7 +2927,14 @@ fn require_guarded_row_major_helper(
         ),
         (
             "load derives from slice and index",
-            place_is_derived_from_loader_index(body, &load_place, row_major_local),
+            load_place_is_exact_option_payload(
+                tcx,
+                body,
+                &load_place,
+                extent_option,
+                load,
+                load_statement_index,
+            ),
         ),
     ];
     let failed = checks
@@ -2891,7 +2994,7 @@ fn find_exact_option_decision<'tcx>(
     false_boundary: BasicBlock,
     true_boundary: BasicBlock,
     index: Local,
-) -> Option<(BasicBlock, BasicBlock, BasicBlock)> {
+) -> Option<(BasicBlock, BasicBlock, BasicBlock, Local)> {
     let TerminatorKind::SwitchInt {
         discr: comparison_operand,
         targets: comparison_targets,
@@ -2948,7 +3051,7 @@ fn find_exact_option_decision<'tcx>(
             let (false_target, true_target) = boolean_switch_targets(targets)?;
             (all_paths_reach_before(body, false_target, false_boundary, true_boundary)
                 && all_paths_reach_before(body, true_target, true_boundary, false_boundary))
-            .then_some((block, false_target, true_target))
+            .then_some((block, false_target, true_target, *option))
         })
         .collect::<Vec<_>>();
     let [decision] = candidates.as_slice() else {
@@ -2973,12 +3076,12 @@ fn option_arm_has_exact_definition<'tcx>(
         if block == decision || !visited.insert(block) || visited.len() > 64 {
             continue;
         }
-        for statement in &body.basic_blocks[block].statements {
+        for (statement_index, statement) in body.basic_blocks[block].statements.iter().enumerate() {
             let Some((destination, value)) = statement.kind.as_assign() else {
                 continue;
             };
             if destination.as_local() == Some(option) {
-                definitions.push(value);
+                definitions.push((block, statement_index, value));
             }
         }
         let Ok(successors) = normal_successors(body, block) else {
@@ -2986,7 +3089,8 @@ fn option_arm_has_exact_definition<'tcx>(
         };
         pending.extend(successors);
     }
-    let [definition] = definitions.as_slice() else {
+    let [(definition_block, definition_statement_index, definition)] = definitions.as_slice()
+    else {
         return false;
     };
     let TyKind::Adt(option_adt, _) = body.local_decls[option].ty.kind() else {
@@ -3021,80 +3125,108 @@ fn option_arm_has_exact_definition<'tcx>(
     let [payload] = &operands.raw[..] else {
         return false;
     };
-    let index_tainted = loader_taint_closure(body, index);
-    let source_tainted = loader_taint_closure(body, Local::from_usize(1));
-    loader_operand_uses_tainted(payload, &index_tainted)
-        && loader_operand_uses_tainted(payload, &source_tainted)
+    loader_operand_is_exact_indexed_reference(
+        body,
+        payload,
+        index,
+        *definition_block,
+        *definition_statement_index,
+    )
 }
 
-fn place_is_derived_from_loader_index(
+fn loader_operand_is_exact_indexed_reference(
     body: &Body<'_>,
-    place: &rustc_middle::mir::Place<'_>,
+    operand: &Operand<'_>,
     index: Local,
+    use_block: BasicBlock,
+    use_statement_index: usize,
 ) -> bool {
-    let index_tainted = loader_taint_closure(body, index);
-    let source_tainted = loader_taint_closure(body, Local::from_usize(1));
-    loader_place_uses_tainted(place, &index_tainted)
-        && loader_place_uses_tainted(place, &source_tainted)
+    let Some(reference) = operand_local(operand) else {
+        return false;
+    };
+    let Some((_, _, Rvalue::Ref(_, _, place))) =
+        unique_assignment_before(body, reference, use_block, use_statement_index)
+    else {
+        return false;
+    };
+    let [ProjectionElem::Deref, ProjectionElem::Index(actual_index)] = &place.projection[..] else {
+        return false;
+    };
+    place.local == Local::from_usize(1)
+        && canonical_local_alias_root(body, *actual_index)
+            == canonical_local_alias_root(body, index)
 }
 
-fn loader_taint_closure(body: &Body<'_>, source: Local) -> BTreeSet<Local> {
-    let mut tainted = BTreeSet::from([source]);
-    for _ in 0..64 {
-        let before = tainted.len();
-        for data in body.basic_blocks.iter() {
-            for statement in &data.statements {
-                let Some((destination, value)) = statement.kind.as_assign() else {
-                    continue;
-                };
-                let Some(destination) = destination.as_local() else {
-                    continue;
-                };
-                if loader_rvalue_uses_tainted(value, &tainted) {
-                    tainted.insert(destination);
-                }
-            }
-        }
-        if tainted.len() == before {
-            break;
-        }
-    }
-    tainted
-}
-
-fn loader_rvalue_uses_tainted(value: &Rvalue<'_>, tainted: &BTreeSet<Local>) -> bool {
-    match value {
-        Rvalue::Use(operand)
-        | Rvalue::Repeat(operand, _)
-        | Rvalue::Cast(_, operand, _)
-        | Rvalue::UnaryOp(_, operand) => loader_operand_uses_tainted(operand, tainted),
-        Rvalue::BinaryOp(_, operands) => {
-            loader_operand_uses_tainted(&operands.0, tainted)
-                || loader_operand_uses_tainted(&operands.1, tainted)
-        }
-        Rvalue::Aggregate(_, operands) => operands
-            .iter()
-            .any(|operand| loader_operand_uses_tainted(operand, tainted)),
-        Rvalue::Ref(_, _, place) => loader_place_uses_tainted(place, tainted),
-        _ => false,
-    }
-}
-
-fn loader_operand_uses_tainted(operand: &Operand<'_>, tainted: &BTreeSet<Local>) -> bool {
-    match operand {
-        Operand::Copy(place) | Operand::Move(place) => loader_place_uses_tainted(place, tainted),
-        Operand::Constant(_) | Operand::RuntimeChecks(_) => false,
-    }
-}
-
-fn loader_place_uses_tainted(
+fn load_place_is_exact_option_payload<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
     place: &rustc_middle::mir::Place<'_>,
-    tainted: &BTreeSet<Local>,
+    option: Local,
+    use_block: BasicBlock,
+    use_statement_index: usize,
 ) -> bool {
-    tainted.contains(&place.local)
-        || place.projection.iter().any(
-            |projection| matches!(projection, ProjectionElem::Index(local) if tainted.contains(&local)),
-        )
+    if !matches!(&place.projection[..], [ProjectionElem::Deref]) {
+        return false;
+    }
+    let Some((_, _, Rvalue::Use(Operand::Copy(extracted) | Operand::Move(extracted)))) =
+        unique_assignment_before(body, place.local, use_block, use_statement_index)
+    else {
+        return false;
+    };
+    if extracted.local != option {
+        return false;
+    }
+    let TyKind::Adt(option_adt, _) = body.local_decls[option].ty.kind() else {
+        return false;
+    };
+    if !tcx.is_diagnostic_item(sym::Option, option_adt.did()) {
+        return false;
+    }
+    let mut some_downcast = false;
+    let mut payload_field = false;
+    for projection in extracted.projection {
+        match projection {
+            ProjectionElem::Downcast(_, variant)
+                if option_adt.discriminant_for_variant(tcx, variant).val == 1 =>
+            {
+                some_downcast = true;
+            }
+            ProjectionElem::Field(field, _) if field.index() == 0 => payload_field = true,
+            _ => return false,
+        }
+    }
+    some_downcast && payload_field
+}
+
+fn unique_assignment_before<'a, 'tcx>(
+    body: &'a Body<'tcx>,
+    local: Local,
+    use_block: BasicBlock,
+    use_statement_index: usize,
+) -> Option<(BasicBlock, usize, &'a Rvalue<'tcx>)> {
+    let definitions =
+        body.basic_blocks
+            .iter_enumerated()
+            .flat_map(|(block, data)| {
+                data.statements.iter().enumerate().filter_map(
+                    move |(statement_index, statement)| {
+                        let (destination, value) = statement.kind.as_assign()?;
+                        (destination.as_local() == Some(local)).then_some((
+                            block,
+                            statement_index,
+                            value,
+                        ))
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+    let [definition] = definitions.as_slice() else {
+        return None;
+    };
+    let (definition_block, definition_statement_index, _) = *definition;
+    ((definition_block == use_block && definition_statement_index < use_statement_index)
+        || (definition_block != use_block && dominates(body, definition_block, use_block)))
+    .then_some(*definition)
 }
 
 fn switches_on_local(body: &Body<'_>, block: BasicBlock, local: Option<Local>) -> bool {
