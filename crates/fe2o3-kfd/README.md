@@ -114,10 +114,22 @@ flag mismatch.
 GPU VA, the opaque allocation handle, and the CPU VMA remain separate private
 authorities. After successful ALLOC, the temporary address reservation is
 unmapped. The BO is then mapped through the retained selected render file at a
-kernel-selected CPU address with MAP_SHARED; MADV_DONTFORK must succeed
-before a safe closure-scoped byte borrow can be formed. Every borrow rechecks
-the opener PID, and CPU borrows are unavailable while the BO is mapped to the
-GPU. No pointer, GPU VA, handle, or descriptor is exported.
+kernel-selected CPU address with MAP_SHARED and PROT_NONE. MADV_DONTFORK must
+succeed before mprotect enables read/write access and before any safe
+closure-scoped byte borrow can be formed. Failed madvise or mprotect setup is
+synchronously unmapped; failed cleanup is process-fatal rather than returning
+an ambiguously inheritable VMA.
+
+The mmap-to-DONTFORK step is not atomic. Absence of an external raw fork or
+clone during that interval is Contracted; this API does not claim atomic
+no-inheritance. Every borrow requires mutable session authority and checks the
+opener PID and observable currentness before and after the closure. A reset
+concurrent with the closure remains Contracted. CPU borrows are unavailable
+while the BO is mapped to the GPU. Native KFD handles, GPU virtual addresses,
+and descriptors remain private. Safe byte borrows cannot escape their closure,
+but safe code can observe and retain a raw address derived from a slice;
+dereferencing it outside the borrow requires unsafe code and is an external
+contract.
 
 MAP and UNMAP always use an immutable one-element `[selected_gpu_id]` array.
 The returned n_success is cumulative and must satisfy old <= new <= 1.
@@ -133,10 +145,12 @@ driver process teardown.
 HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1 composes the frozen KFD memory schema
 with the R1 device profile, active module digest, 4096-byte page profile, and
 the reviewed transitive driver-source closure. The source-to-loaded-binary
-relationship and kernel behavior remain Contracted. The session mirrors only
-successful concrete transitions into MemoryLifecycleStateV1; this journal is
-model-only evidence, not production authority or a Verus/concrete refinement
-proof.
+relationship and kernel behavior remain Contracted. The completion-only model
+journal records only fully committed adapter transitions. It is not a history
+of every concrete syscall side effect: a
+quarantined ALLOC, MAP, or UNMAP path can have unmodeled kernel effects. The
+journal is model-only evidence, not production authority or a Verus/concrete
+refinement proof.
 
 AQL, executable, kernarg, VRAM, USERPTR, peer-device mapping, multiple
 allocations, retry, queues, and dispatch are rejected or absent. The

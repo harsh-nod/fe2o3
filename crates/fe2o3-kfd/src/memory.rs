@@ -13,9 +13,10 @@ use crate::{CheckedGfx942XnackMinusDevice, DeviceBindingError, InclusiveAperture
 use fe2o3_runtime_model::{
     AllocationGenerationV1, AllocationIdV1, GpuVaRangeV1, MappingIdV1, MemoryAccessV1,
     MemoryAllocationKeyV1, MemoryAllocationSpecV1, MemoryCoherenceV1, MemoryKindV1,
-    MemoryLifecycleStateV1, MemoryMappingKeyV1, MemoryTransitionV1, ModelDeviceAdmissionV1,
-    PartialOperationStatusV1, PartialProgressObservationV1, UntrustedAllocationHandleObservationV1,
-    UntrustedVmHandleObservationV1, VaReservationIdV1, VaReservationKeyV1, VmIdV1,
+    MemoryLifecycleStateV1, MemoryMappingKeyV1, MemoryTransitionErrorV1, MemoryTransitionV1,
+    ModelDeviceAdmissionV1, PartialOperationStatusV1, PartialProgressObservationV1,
+    UntrustedAllocationHandleObservationV1, UntrustedVmHandleObservationV1, VaReservationIdV1,
+    VaReservationKeyV1, VmIdV1,
 };
 
 pub const HOST_VISIBLE_MEMORY_PAGE_BYTES_V1: u64 = 4_096;
@@ -632,6 +633,113 @@ fn validate_reserved_range(
     Ok(())
 }
 
+fn project_allocation_completion(
+    model: &MemoryLifecycleStateV1,
+    reservation_key: VaReservationKeyV1,
+    allocation_key: MemoryAllocationKeyV1,
+    base: u64,
+    layout: HostVisibleAllocationLayout,
+    handle: u64,
+) -> Result<MemoryLifecycleStateV1, MemoryTransitionErrorV1> {
+    model
+        .next(MemoryTransitionV1::ReserveVa {
+            key: reservation_key,
+            range: GpuVaRangeV1 {
+                base,
+                byte_len: layout.backing_bytes() as u64,
+            },
+            alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+        })
+        .and_then(|state| {
+            state.next(MemoryTransitionV1::Allocate {
+                key: allocation_key,
+                reservation: reservation_key,
+                handle: UntrustedAllocationHandleObservationV1(handle),
+                spec: MemoryAllocationSpecV1 {
+                    byte_len: layout.backing_bytes() as u64,
+                    alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+                    kind: MemoryKindV1::HostVisibleCoherent,
+                    coherence: MemoryCoherenceV1::HostCoherent,
+                },
+            })
+        })
+}
+
+fn project_map_completion(
+    model: &MemoryLifecycleStateV1,
+    mapping_key: MemoryMappingKeyV1,
+    device: ModelDeviceAdmissionV1,
+) -> Result<MemoryLifecycleStateV1, MemoryTransitionErrorV1> {
+    model
+        .next(MemoryTransitionV1::BeginMap {
+            key: mapping_key,
+            target_devices: vec![device.model_key()],
+            access: MemoryAccessV1::ReadWrite,
+        })
+        .and_then(|state| {
+            state.next(MemoryTransitionV1::ObserveMap {
+                key: mapping_key,
+                progress: PartialProgressObservationV1 {
+                    n_success: 1,
+                    status: PartialOperationStatusV1::Succeeded,
+                },
+            })
+        })
+}
+
+fn project_unmap_completion(
+    model: &MemoryLifecycleStateV1,
+    mapping_key: MemoryMappingKeyV1,
+) -> Result<MemoryLifecycleStateV1, MemoryTransitionErrorV1> {
+    model
+        .next(MemoryTransitionV1::BeginUnmap { key: mapping_key })
+        .and_then(|state| {
+            state.next(MemoryTransitionV1::ObserveUnmap {
+                key: mapping_key,
+                progress: PartialProgressObservationV1 {
+                    n_success: 1,
+                    status: PartialOperationStatusV1::Succeeded,
+                },
+            })
+        })
+}
+
+fn project_release_completion(
+    model: &MemoryLifecycleStateV1,
+    mapping_key: MemoryMappingKeyV1,
+    allocation_key: MemoryAllocationKeyV1,
+    reservation_key: VaReservationKeyV1,
+) -> Result<MemoryLifecycleStateV1, MemoryTransitionErrorV1> {
+    let mut projected = model.clone();
+    if !projected.mappings().is_empty() {
+        projected = projected.next(MemoryTransitionV1::ReleaseMapping { key: mapping_key })?;
+    }
+    projected
+        .next(MemoryTransitionV1::ReleaseAllocation {
+            key: allocation_key,
+        })
+        .and_then(|state| {
+            state.next(MemoryTransitionV1::ReleaseVaReservation {
+                key: reservation_key,
+            })
+        })
+}
+
+fn commit_model_projection<B: MemoryBackend>(
+    engine: &mut MemoryEngine<B>,
+    model: &mut MemoryLifecycleStateV1,
+    projected: Result<MemoryLifecycleStateV1, MemoryTransitionErrorV1>,
+    detail: &'static str,
+) -> Result<(), MemorySessionError> {
+    match projected {
+        Ok(next) => {
+            *model = next;
+            Ok(())
+        }
+        Err(_) => engine.quarantine(MemorySessionError::Model(detail)),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessVmState {
     Fresh,
@@ -769,6 +877,13 @@ impl HostVisibleMemorySession {
         }
     }
 
+    /// Allocates and prepares the one admitted host-visible BO.
+    ///
+    /// Linux cannot atomically combine file-backed `mmap` with
+    /// `MADV_DONTFORK`. The new VMA remains `PROT_NONE` until DONTFORK is set,
+    /// but the caller must Contract that no external raw `fork` or `clone`
+    /// occurs during that setup interval. A failed setup is synchronously
+    /// unmapped, with cleanup failure treated as process-fatal.
     pub fn allocate(
         &mut self,
         requested_bytes: usize,
@@ -784,38 +899,21 @@ impl HostVisibleMemorySession {
                 .engine
                 .quarantine(MemorySessionError::Model("missing allocation handle"));
         };
-        let projected = self
-            .model
-            .next(MemoryTransitionV1::ReserveVa {
-                key: self.reservation_key,
-                range: GpuVaRangeV1 {
-                    base,
-                    byte_len: layout.backing_bytes() as u64,
-                },
-                alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
-            })
-            .and_then(|state| {
-                state.next(MemoryTransitionV1::Allocate {
-                    key: self.allocation_key,
-                    reservation: self.reservation_key,
-                    handle: UntrustedAllocationHandleObservationV1(handle),
-                    spec: MemoryAllocationSpecV1 {
-                        byte_len: layout.backing_bytes() as u64,
-                        alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
-                        kind: MemoryKindV1::HostVisibleCoherent,
-                        coherence: MemoryCoherenceV1::HostCoherent,
-                    },
-                })
-            });
-        match projected {
-            Ok(model) => {
-                self.model = model;
-                Ok(layout)
-            }
-            Err(_) => self
-                .engine
-                .quarantine(MemorySessionError::Model("allocation projection")),
-        }
+        let projected = project_allocation_completion(
+            &self.model,
+            self.reservation_key,
+            self.allocation_key,
+            base,
+            layout,
+            handle,
+        );
+        commit_model_projection(
+            &mut self.engine,
+            &mut self.model,
+            projected,
+            "allocation projection",
+        )?;
+        Ok(layout)
     }
 
     /// Runs a phase-exclusive CPU borrow between currentness observations.
@@ -866,79 +964,34 @@ impl HostVisibleMemorySession {
 
     pub fn map_to_gpu(&mut self) -> Result<(), MemorySessionError> {
         self.engine.map_to_gpu()?;
-        let projected = self
-            .model
-            .next(MemoryTransitionV1::BeginMap {
-                key: self.mapping_key,
-                target_devices: vec![self.model_device.model_key()],
-                access: MemoryAccessV1::ReadWrite,
-            })
-            .and_then(|state| {
-                state.next(MemoryTransitionV1::ObserveMap {
-                    key: self.mapping_key,
-                    progress: PartialProgressObservationV1 {
-                        n_success: 1,
-                        status: PartialOperationStatusV1::Succeeded,
-                    },
-                })
-            });
-        match projected {
-            Ok(model) => {
-                self.model = model;
-                Ok(())
-            }
-            Err(_) => self
-                .engine
-                .quarantine(MemorySessionError::Model("map projection")),
-        }
+        let projected = project_map_completion(&self.model, self.mapping_key, self.model_device);
+        commit_model_projection(
+            &mut self.engine,
+            &mut self.model,
+            projected,
+            "map projection",
+        )
     }
 
     pub fn unmap_from_gpu(&mut self) -> Result<(), MemorySessionError> {
         self.engine.unmap_from_gpu()?;
-        let projected = self
-            .model
-            .next(MemoryTransitionV1::BeginUnmap {
-                key: self.mapping_key,
-            })
-            .and_then(|state| {
-                state.next(MemoryTransitionV1::ObserveUnmap {
-                    key: self.mapping_key,
-                    progress: PartialProgressObservationV1 {
-                        n_success: 1,
-                        status: PartialOperationStatusV1::Succeeded,
-                    },
-                })
-            });
-        match projected {
-            Ok(model) => {
-                self.model = model;
-                Ok(())
-            }
-            Err(_) => self
-                .engine
-                .quarantine(MemorySessionError::Model("unmap projection")),
-        }
+        let projected = project_unmap_completion(&self.model, self.mapping_key);
+        commit_model_projection(
+            &mut self.engine,
+            &mut self.model,
+            projected,
+            "unmap projection",
+        )
     }
 
     pub fn release(&mut self) -> Result<(), MemorySessionError> {
-        let mut projected = self.model.clone();
-        if !projected.mappings().is_empty() {
-            projected = projected
-                .next(MemoryTransitionV1::ReleaseMapping {
-                    key: self.mapping_key,
-                })
-                .map_err(|_| MemorySessionError::Model("mapping release projection"))?;
-        }
-        projected = projected
-            .next(MemoryTransitionV1::ReleaseAllocation {
-                key: self.allocation_key,
-            })
-            .and_then(|state| {
-                state.next(MemoryTransitionV1::ReleaseVaReservation {
-                    key: self.reservation_key,
-                })
-            })
-            .map_err(|_| MemorySessionError::Model("allocation release projection"))?;
+        let projected = project_release_completion(
+            &self.model,
+            self.mapping_key,
+            self.allocation_key,
+            self.reservation_key,
+        )
+        .map_err(|_| MemorySessionError::Model("allocation release projection"))?;
         self.engine.release()?;
         self.model = projected;
         Ok(())
@@ -950,6 +1003,10 @@ const _: () = {
     assert!(KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT.bits() == 0x8400_0002);
     assert!(KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256.len() == 64);
 };
+
+#[cfg(test)]
+#[path = "memory_model_tests.rs"]
+mod memory_model_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1203,6 +1260,22 @@ mod tests {
         let _ = unmap.allocate(4096).unwrap();
         unmap.map_to_gpu().unwrap();
         unmap.backend.unmap_progress = 2;
+        assert!(unmap.unmap_from_gpu().is_err());
+        assert_eq!(unmap.phase(), HostVisibleMemoryPhase::Quarantined);
+    }
+
+    #[test]
+    fn successful_ioctl_without_full_prefix_quarantines_map_and_unmap() {
+        let mut map = acquired();
+        let _ = map.allocate(4096).unwrap();
+        map.backend.map_progress = 0;
+        assert!(map.map_to_gpu().is_err());
+        assert_eq!(map.phase(), HostVisibleMemoryPhase::Quarantined);
+
+        let mut unmap = acquired();
+        let _ = unmap.allocate(4096).unwrap();
+        unmap.map_to_gpu().unwrap();
+        unmap.backend.unmap_progress = 0;
         assert!(unmap.unmap_from_gpu().is_err());
         assert_eq!(unmap.phase(), HostVisibleMemoryPhase::Quarantined);
     }
