@@ -137,7 +137,7 @@ fn assert_failed_without_artifact(output: &Output, artifacts: &Path) -> String {
 }
 
 #[test]
-fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() {
+fn safe_general_gemm_mir_reaches_kir_and_exact_mutation_corpus_is_diagnostic() {
     let _lock = backend_test_lock();
     let workspace = workspace();
     let fixture = fixture(&workspace);
@@ -244,6 +244,55 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
 
     for (bin, root, code, property, stage) in [
         (
+            "unguarded-a-tail-load",
+            "valid_proof_sensitive",
+            "0x46470102",
+            "bounds_safe",
+            "tile",
+        ),
+        (
+            "unguarded-b-tail-load",
+            "valid_proof_sensitive",
+            "0x46470102",
+            "bounds_safe",
+            "tile",
+        ),
+        (
+            "out-of-bounds-c-store",
+            "valid_proof_sensitive",
+            "0x46470102",
+            "bounds_safe",
+            "tile",
+        ),
+        (
+            "lane-output-collision",
+            "valid_proof_sensitive",
+            "0x46470106",
+            "output_region_injective",
+            "tile",
+        ),
+        (
+            "workgroup-output-collision",
+            "valid_proof_sensitive",
+            "0x46470106",
+            "output_region_injective",
+            "tile",
+        ),
+        (
+            "lds-write-collision",
+            "valid_proof_sensitive",
+            "0x46470104",
+            "race_free",
+            "gpu",
+        ),
+        (
+            "missing-b-stage-initialization",
+            "valid_proof_sensitive",
+            "0x46470103",
+            "initialized",
+            "gpu",
+        ),
+        (
             "missing-publish",
             "valid_proof_sensitive",
             "0x46470103",
@@ -251,11 +300,46 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
             "gpu",
         ),
         (
-            "duplicate-store",
-            "duplicate_store",
-            "0x46470106",
-            "output_region_injective",
-            "tile",
+            "divergent-publish",
+            "valid_proof_sensitive",
+            "0x46470105",
+            "barrier_convergent",
+            "gpu",
+        ),
+        (
+            "missing-reuse",
+            "valid_proof_sensitive",
+            "0x46470107",
+            "lds_epoch_correct",
+            "gpu",
+        ),
+        (
+            "expired-lds-epoch",
+            "valid_proof_sensitive",
+            "0x46470107",
+            "lds_epoch_correct",
+            "gpu",
+        ),
+        (
+            "read-before-wait",
+            "valid_proof_sensitive",
+            "0x46470103",
+            "initialized",
+            "gpu",
+        ),
+        (
+            "reset-accumulator",
+            "valid_proof_sensitive",
+            "0x46470108",
+            "accumulator_phase_refinement",
+            "kernel",
+        ),
+        (
+            "incorrect-k-tail-zero-fill",
+            "valid_proof_sensitive",
+            "0x46470109",
+            "tail_refinement",
+            "kernel",
         ),
         (
             "incorrect-alpha-beta-epilogue",
@@ -293,7 +377,9 @@ fn safe_general_gemm_mir_reaches_kir_and_two_semantic_failures_are_diagnostic() 
                 && stderr.contains("no artifact authority was issued")
                 && !stderr.contains("published inert Worker V2")
                 && !stderr.contains("launch authority issued")
-                && !stderr.contains("proof authority issued"),
+                && !stderr.contains("proof authority issued")
+                && !stderr.contains("portable MIR identity mismatch")
+                && !stderr.contains("Unknown/Unproved"),
             "safe semantic fixture `{bin}` diagnostic omitted its stable counterexample/root/span/call-chain receipt:\n{stderr}"
         );
     }
