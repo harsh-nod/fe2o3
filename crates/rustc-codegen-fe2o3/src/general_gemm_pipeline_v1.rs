@@ -34,8 +34,10 @@ use fe2o3_hsaco_finalize::{
     finalize_symbolic_general_gemm_worker_v2_v1,
 };
 use fe2o3_verifier::{
-    GeneralGemmNumericalComparisonPolicyV1, GeneralGemmNumericalPolicyRequestV1,
-    GeneralGemmPropertyClosureEvaluationV1, evaluate_general_gemm_property_closure_v1,
+    GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256, GeneralGemmNumericalComparisonPolicyV1,
+    GeneralGemmNumericalPolicyRequestV1, GeneralGemmPropertyClosureEvaluationV1,
+    GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeClosureIdentityV2,
+    GeneralGemmVerusRuntimeClosureLeaseV2, evaluate_general_gemm_property_closure_v1,
     execute_general_gemm_numerical_policy_v1, execute_general_gemm_schedule_proof_v1,
     join_general_gemm_proof_and_numerical_evidence_v1,
 };
@@ -46,6 +48,9 @@ pub(crate) const GENERAL_GEMM_PIPELINE_V1: &str = "collected-general-gemm-v1";
 const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 const WORKER_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 const EXPECTED_CONFIG_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
+const RUNTIME_CLOSURE_V2_ROOT_ENV: &str = "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT";
+const RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
+    "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256";
 const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_CONFIG_PATH_BYTES: usize = 4096;
@@ -69,11 +74,24 @@ const WORKER_KEYS: &[&str] = &[
 const LIMIT_KEYS: &[&str] = &["stderr_bytes", "stdout_bytes", "timeout_ms"];
 const UNIT_KEYS: &[&str] = &["crate_name", "source", "working_directory"];
 const OPTION_KEYS: &[&str] = &["name", "value"];
-const GENERAL_GEMM_KEYS: &[&str] = &["profile", "proof_timeout_seconds", "verus_path"];
+const GENERAL_GEMM_KEYS: &[&str] = &[
+    "profile",
+    "proof_timeout_seconds",
+    "runtime_closure_v2_manifest_sha256",
+    "runtime_closure_v2_root",
+];
 const GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1: &str = "qualification-pair-v1";
 const GENERAL_GEMM_QUALIFICATION_SCHEDULES_V1: [GeneralGemmScheduleV1; 2] = [
     GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
     GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+];
+const RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES: [&str; 6] = [
+    "post-admission before the qualification pair",
+    "before the reference schedule",
+    "between schedule proof evaluations",
+    "after schedule proof evaluations",
+    "between schedule machine evaluations",
+    "after the qualification pair",
 ];
 const FIXED_OPTIONS: &[(&str, &str)] = &[
     ("code-object-version", "6"),
@@ -91,13 +109,20 @@ impl GeneralGemmPipelineConfigIdentityV1 {
     }
 }
 
-/// Independently pinned, closed configuration retained by synchronous rustc execution.
-pub(crate) struct PreparedGeneralGemmPipelineV1 {
+struct ParsedGeneralGemmPipelineV1 {
     identity: GeneralGemmPipelineConfigIdentityV1,
-    verus_path: PathBuf,
+    runtime_closure_v2_root: PathBuf,
+    runtime_closure_v2_manifest_sha256: [u8; 32],
     proof_timeout_seconds: u32,
     worker: PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
+}
+
+/// Independently pinned configuration and one retained runtime generation.
+pub(crate) struct PreparedGeneralGemmPipelineV1 {
+    parsed: ParsedGeneralGemmPipelineV1,
+    runtime_closure_v2: GeneralGemmVerusRuntimeClosureLeaseV2,
+    runtime_closure_v2_identity: GeneralGemmRuntimeClosureIdentityV2,
 }
 
 impl PreparedGeneralGemmPipelineV1 {
@@ -123,117 +148,232 @@ impl PreparedGeneralGemmPipelineV1 {
                 "{EXPECTED_CONFIG_ID_ENV} is required for in-process general GEMM"
             ))
         })?;
-        Self::from_manifest(&path, &expected, crate_name, source, working_directory)
+        let runtime_root = env::var_os(RUNTIME_CLOSURE_V2_ROOT_ENV).ok_or_else(|| {
+            GeneralGemmPipelineErrorV1::Configuration(format!(
+                "{RUNTIME_CLOSURE_V2_ROOT_ENV} is required for in-process general GEMM"
+            ))
+        })?;
+        let runtime_manifest = env::var(RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV).map_err(|_| {
+            GeneralGemmPipelineErrorV1::Configuration(format!(
+                "{RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV} is required for in-process general GEMM"
+            ))
+        })?;
+        Self::from_manifest(
+            &path,
+            &expected,
+            Path::new(&runtime_root),
+            &runtime_manifest,
+            crate_name,
+            source,
+            working_directory,
+        )
     }
 
     fn from_manifest(
         path: &Path,
         expected_identity: &str,
+        expected_runtime_closure_v2_root: &Path,
+        expected_runtime_closure_v2_manifest_sha256: &str,
         crate_name: &str,
         source: &Path,
         working_directory: &Path,
     ) -> Result<Self, GeneralGemmPipelineErrorV1> {
-        require_absolute_path(path, "configuration")?;
-        require_closed_child_manifest_path(path, "configuration")?;
-        let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
-        let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
-            GeneralGemmPipelineErrorV1::Configuration(format!("invalid JSON: {error}"))
-        })?;
-        if serde_json::to_vec(&value).map_err(|error| {
-            GeneralGemmPipelineErrorV1::Configuration(format!("cannot canonicalize JSON: {error}"))
-        })? != bytes
-        {
-            return Err(GeneralGemmPipelineErrorV1::Configuration(
-                "configuration is not compact canonical JSON".to_owned(),
-            ));
-        }
-        let root = exact_object(&value, ROOT_KEYS, "configuration")?;
-        if required_string(root, "format", "configuration")? != CONFIG_FORMAT {
-            return Err(GeneralGemmPipelineErrorV1::Configuration(
-                "configuration format differs".to_owned(),
-            ));
-        }
-        if required_u64(root, "candidate_output_max_bytes", "configuration")?
-            != fe2o3_hsaco::MAX_HSACO_BYTES as u64
-        {
-            return Err(GeneralGemmPipelineErrorV1::Configuration(
-                "candidate output bound differs from the closed general-GEMM profile".to_owned(),
-            ));
-        }
-        let providers = required_value(root, "providers", "configuration")?
-            .as_array()
-            .ok_or_else(|| {
-                GeneralGemmPipelineErrorV1::Configuration("providers must be an array".to_owned())
-            })?;
-        if !providers.is_empty() {
-            return Err(GeneralGemmPipelineErrorV1::Configuration(
-                "general GEMM rejects request-side providers".to_owned(),
-            ));
-        }
-        parse_fixed_options(required_value(root, "link_options", "configuration")?)?;
-        require_selected_unit(
-            required_value(root, "units", "configuration")?,
+        let parsed = parse_general_gemm_manifest_v1(
+            path,
+            expected_identity,
+            expected_runtime_closure_v2_root,
+            expected_runtime_closure_v2_manifest_sha256,
             crate_name,
             source,
             working_directory,
         )?;
-        let schedule_object = exact_object(
-            required_value(root, "general_gemm_v1", "configuration")?,
-            GENERAL_GEMM_KEYS,
-            "general_gemm_v1",
-        )?;
-        let profile = required_string(schedule_object, "profile", "general_gemm_v1")?;
-        if profile != GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1 {
-            return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
-                "unsupported general_gemm_v1.profile {profile:?}"
-            )));
-        }
-        let proof_timeout_seconds =
-            required_u64(schedule_object, "proof_timeout_seconds", "general_gemm_v1")?;
-        if proof_timeout_seconds == 0
-            || proof_timeout_seconds
-                > u64::from(fe2o3_verifier::MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1)
-        {
-            return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
-                "general_gemm_v1.proof_timeout_seconds must be in 1..={}",
-                fe2o3_verifier::MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1
-            )));
-        }
-        let verus_path = PathBuf::from(required_string(
-            schedule_object,
-            "verus_path",
-            "general_gemm_v1",
-        )?);
-        require_absolute_path(&verus_path, "general_gemm_v1.verus_path")?;
-        let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
-        let worker = parse_worker(required_value(root, "worker", "configuration")?)?;
-        let identity = calculate_config_identity(&bytes, &worker);
-        if decode_sha256(expected_identity, EXPECTED_CONFIG_ID_ENV)? != identity.0 {
-            return Err(GeneralGemmPipelineErrorV1::Configuration(
-                "managed expected configuration identity differs from the independently pinned manifest"
-                    .to_owned(),
-            ));
-        }
-        Ok(Self {
-            identity,
-            verus_path,
-            proof_timeout_seconds: proof_timeout_seconds as u32,
-            worker,
-            limits,
-        })
+        let runtime_closure_v2 = GeneralGemmVerusRuntimeClosureLeaseV2::open(
+            &parsed.runtime_closure_v2_root,
+        )
+        .map_err(|error| GeneralGemmPipelineErrorV1::RuntimeClosure {
+            boundary: "admission before the qualification pair",
+            error,
+        })?;
+        let runtime_closure_v2_identity = runtime_closure_v2.identity();
+        let prepared = Self {
+            parsed,
+            runtime_closure_v2,
+            runtime_closure_v2_identity,
+        };
+        prepared.revalidate_runtime_closure_v2(RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES[0])?;
+        Ok(prepared)
     }
 
     pub(crate) const fn identity(&self) -> GeneralGemmPipelineConfigIdentityV1 {
-        self.identity
+        self.parsed.identity
     }
 
-    pub(crate) fn verus_path(&self) -> &Path {
-        &self.verus_path
+    pub(crate) fn runtime_closure_v2_root(&self) -> &Path {
+        &self.parsed.runtime_closure_v2_root
+    }
+
+    pub(crate) const fn runtime_closure_v2_manifest_sha256(&self) -> [u8; 32] {
+        self.parsed.runtime_closure_v2_manifest_sha256
     }
 
     pub(crate) const fn proof_timeout_seconds(&self) -> u32 {
-        self.proof_timeout_seconds
+        self.parsed.proof_timeout_seconds
     }
+
+    fn revalidate_runtime_closure_v2(
+        &self,
+        boundary: &'static str,
+    ) -> Result<(), GeneralGemmPipelineErrorV1> {
+        if self.runtime_closure_v2.root() != self.parsed.runtime_closure_v2_root
+            || self.runtime_closure_v2.identity() != self.runtime_closure_v2_identity
+        {
+            return Err(GeneralGemmPipelineErrorV1::RuntimeClosureBindingSubstitution);
+        }
+        self.runtime_closure_v2
+            .revalidate()
+            .map_err(|error| GeneralGemmPipelineErrorV1::RuntimeClosure { boundary, error })
+    }
+}
+
+fn parse_general_gemm_manifest_v1(
+    path: &Path,
+    expected_identity: &str,
+    expected_runtime_closure_v2_root: &Path,
+    expected_runtime_closure_v2_manifest_sha256: &str,
+    crate_name: &str,
+    source: &Path,
+    working_directory: &Path,
+) -> Result<ParsedGeneralGemmPipelineV1, GeneralGemmPipelineErrorV1> {
+    require_absolute_path(path, "configuration")?;
+    require_closed_child_manifest_path(path, "configuration")?;
+    let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        GeneralGemmPipelineErrorV1::Configuration(format!("invalid JSON: {error}"))
+    })?;
+    if serde_json::to_vec(&value).map_err(|error| {
+        GeneralGemmPipelineErrorV1::Configuration(format!("cannot canonicalize JSON: {error}"))
+    })? != bytes
+    {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(
+            "configuration is not compact canonical JSON".to_owned(),
+        ));
+    }
+    let root = exact_object(&value, ROOT_KEYS, "configuration")?;
+    if required_string(root, "format", "configuration")? != CONFIG_FORMAT {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(
+            "configuration format differs".to_owned(),
+        ));
+    }
+    if required_u64(root, "candidate_output_max_bytes", "configuration")?
+        != fe2o3_hsaco::MAX_HSACO_BYTES as u64
+    {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(
+            "candidate output bound differs from the closed general-GEMM profile".to_owned(),
+        ));
+    }
+    let providers = required_value(root, "providers", "configuration")?
+        .as_array()
+        .ok_or_else(|| {
+            GeneralGemmPipelineErrorV1::Configuration("providers must be an array".to_owned())
+        })?;
+    if !providers.is_empty() {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(
+            "general GEMM rejects request-side providers".to_owned(),
+        ));
+    }
+    parse_fixed_options(required_value(root, "link_options", "configuration")?)?;
+    require_selected_unit(
+        required_value(root, "units", "configuration")?,
+        crate_name,
+        source,
+        working_directory,
+    )?;
+    let schedule_object = exact_object(
+        required_value(root, "general_gemm_v1", "configuration")?,
+        GENERAL_GEMM_KEYS,
+        "general_gemm_v1",
+    )?;
+    let profile = required_string(schedule_object, "profile", "general_gemm_v1")?;
+    if profile != GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1 {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
+            "unsupported general_gemm_v1.profile {profile:?}"
+        )));
+    }
+    let proof_timeout_seconds =
+        required_u64(schedule_object, "proof_timeout_seconds", "general_gemm_v1")?;
+    if proof_timeout_seconds == 0
+        || proof_timeout_seconds
+            > u64::from(fe2o3_verifier::MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1)
+    {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
+            "general_gemm_v1.proof_timeout_seconds must be in 1..={}",
+            fe2o3_verifier::MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1
+        )));
+    }
+    let runtime_closure_v2_root = PathBuf::from(required_string(
+        schedule_object,
+        "runtime_closure_v2_root",
+        "general_gemm_v1",
+    )?);
+    require_absolute_path(
+        &runtime_closure_v2_root,
+        "general_gemm_v1.runtime_closure_v2_root",
+    )?;
+    require_closed_child_manifest_path(
+        &runtime_closure_v2_root,
+        "general_gemm_v1.runtime_closure_v2_root",
+    )?;
+    require_absolute_path(
+        expected_runtime_closure_v2_root,
+        RUNTIME_CLOSURE_V2_ROOT_ENV,
+    )?;
+    require_closed_child_manifest_path(
+        expected_runtime_closure_v2_root,
+        RUNTIME_CLOSURE_V2_ROOT_ENV,
+    )?;
+    if runtime_closure_v2_root != expected_runtime_closure_v2_root {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(
+            "runtime-closure V2 root differs from the parent-authenticated child environment"
+                .to_owned(),
+        ));
+    }
+    let runtime_closure_v2_manifest_sha256 = decode_sha256(
+        required_string(
+            schedule_object,
+            "runtime_closure_v2_manifest_sha256",
+            "general_gemm_v1",
+        )?,
+        "general_gemm_v1.runtime_closure_v2_manifest_sha256",
+    )?;
+    let expected_runtime_closure_v2_manifest_sha256 = decode_sha256(
+        expected_runtime_closure_v2_manifest_sha256,
+        RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV,
+    )?;
+    if runtime_closure_v2_manifest_sha256 != GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
+        || expected_runtime_closure_v2_manifest_sha256
+            != GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
+    {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(
+            "runtime-closure V2 manifest differs from the compiled-in reviewed manifest".to_owned(),
+        ));
+    }
+    let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
+    let worker = parse_worker(required_value(root, "worker", "configuration")?)?;
+    let identity = calculate_config_identity(&bytes, &worker);
+    if decode_sha256(expected_identity, EXPECTED_CONFIG_ID_ENV)? != identity.0 {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(
+                "managed expected configuration identity differs from the independently pinned manifest"
+                    .to_owned(),
+            ));
+    }
+    Ok(ParsedGeneralGemmPipelineV1 {
+        identity,
+        runtime_closure_v2_root,
+        runtime_closure_v2_manifest_sha256,
+        proof_timeout_seconds: proof_timeout_seconds as u32,
+        worker,
+        limits,
+    })
 }
 
 /// One schedule-local executable proof/numerical evaluation retained for the final owner join.
@@ -272,7 +412,7 @@ fn execute_general_gemm_verifier_closure_v1(
     .map_err(|error| GeneralGemmPipelineErrorV1::Verifier(error.to_string()))?;
     let proof = execute_general_gemm_schedule_proof_v1(
         request,
-        configuration.verus_path(),
+        configuration.runtime_closure_v2_root(),
         configuration.proof_timeout_seconds(),
     )
     .map_err(|error| GeneralGemmPipelineErrorV1::Verifier(error.to_string()))?;
@@ -405,19 +545,15 @@ pub(crate) fn execute_general_gemm_pipeline_v1<FrontendCorrespondence>(
             "general GEMM requires the managed artifact output".to_owned(),
         ));
     }
-    if units[0].schedule() != GENERAL_GEMM_QUALIFICATION_SCHEDULES_V1[0]
-        || units[1].schedule() != GENERAL_GEMM_QUALIFICATION_SCHEDULES_V1[1]
-    {
-        return Err(GeneralGemmPipelineErrorV1::ScheduleSubstitution);
-    }
-    if units[0].frontend_semantics() != units[1].frontend_semantics() {
-        return Err(GeneralGemmPipelineErrorV1::FrontendBindingSubstitution);
-    }
+    validate_general_gemm_pair_inputs_v1(&units)?;
+    configuration.revalidate_runtime_closure_v2(RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES[1])?;
 
     let [reference, vectorized_a] = units;
     let reference_verifier = execute_general_gemm_verifier_closure_v1(&reference, &configuration)?;
+    configuration.revalidate_runtime_closure_v2(RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES[2])?;
     let vectorized_a_verifier =
         execute_general_gemm_verifier_closure_v1(&vectorized_a, &configuration)?;
+    configuration.revalidate_runtime_closure_v2(RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES[3])?;
     let reference = execute_general_gemm_schedule_machine_v1(
         reference,
         reference_verifier,
@@ -427,6 +563,7 @@ pub(crate) fn execute_general_gemm_pipeline_v1<FrontendCorrespondence>(
         attempt,
         CompilerModuleHandoffSlotV1::GeneralGemmReference,
     )?;
+    configuration.revalidate_runtime_closure_v2(RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES[4])?;
     let vectorized_a = execute_general_gemm_schedule_machine_v1(
         vectorized_a,
         vectorized_a_verifier,
@@ -436,12 +573,27 @@ pub(crate) fn execute_general_gemm_pipeline_v1<FrontendCorrespondence>(
         attempt,
         CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
     )?;
+    configuration.revalidate_runtime_closure_v2(RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES[5])?;
 
     Ok(InertSynchronousGeneralGemmPipelineV1 {
         frontend_correspondence,
         configuration,
         qualifications: [reference, vectorized_a],
     })
+}
+
+fn validate_general_gemm_pair_inputs_v1(
+    units: &[GeneralGemmSymbolicCompilationUnitV1; 2],
+) -> Result<(), GeneralGemmPipelineErrorV1> {
+    if units[0].schedule() != GENERAL_GEMM_QUALIFICATION_SCHEDULES_V1[0]
+        || units[1].schedule() != GENERAL_GEMM_QUALIFICATION_SCHEDULES_V1[1]
+    {
+        return Err(GeneralGemmPipelineErrorV1::ScheduleSubstitution);
+    }
+    if units[0].frontend_semantics() != units[1].frontend_semantics() {
+        return Err(GeneralGemmPipelineErrorV1::FrontendBindingSubstitution);
+    }
+    Ok(())
 }
 
 fn execute_general_gemm_schedule_machine_v1(
@@ -458,7 +610,7 @@ fn execute_general_gemm_schedule_machine_v1(
     }
     let (unit, managed, observation) = execute_general_gemm_schedule_machine_core_v1(
         unit,
-        configuration,
+        &configuration.parsed,
         output_directory,
         producer,
         attempt,
@@ -474,7 +626,7 @@ fn execute_general_gemm_schedule_machine_v1(
 
 fn execute_general_gemm_schedule_machine_core_v1(
     unit: GeneralGemmSymbolicCompilationUnitV1,
-    configuration: &PreparedGeneralGemmPipelineV1,
+    configuration: &ParsedGeneralGemmPipelineV1,
     output_directory: &Path,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
@@ -591,6 +743,11 @@ fn validate_observation(
 #[derive(Debug)]
 pub(crate) enum GeneralGemmPipelineErrorV1 {
     Configuration(String),
+    RuntimeClosure {
+        boundary: &'static str,
+        error: GeneralGemmRuntimeClosureErrorV2,
+    },
+    RuntimeClosureBindingSubstitution,
     ManagedBinding(String),
     ScheduleSubstitution,
     FrontendBindingSubstitution,
@@ -607,6 +764,15 @@ impl fmt::Display for GeneralGemmPipelineErrorV1 {
         match self {
             Self::Configuration(reason) => {
                 write!(formatter, "invalid general-GEMM configuration: {reason}")
+            }
+            Self::RuntimeClosure { boundary, error } => {
+                write!(
+                    formatter,
+                    "general-GEMM runtime closure failed at {boundary}: {error}"
+                )
+            }
+            Self::RuntimeClosureBindingSubstitution => {
+                formatter.write_str("general-GEMM retained runtime closure binding substitution")
             }
             Self::ManagedBinding(reason) => {
                 write!(formatter, "invalid general-GEMM managed binding: {reason}")

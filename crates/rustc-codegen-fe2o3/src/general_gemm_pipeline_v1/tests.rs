@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_artifact_transaction::{
     BuildInvocation, begin_build_attempt, consume_compiler_module_handoff_v1, fail_build_attempt,
-    finish_build_attempt, publish_compiler_module_handoff_v1,
+    publish_compiler_module_handoff_v1,
 };
 use fe2o3_compiler_api::{
     CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
@@ -20,7 +20,7 @@ use fe2o3_general_gemm_compiler::{
 use serde_json::json;
 
 const MEASURED_WORKER: &str = "/home/harsh/fe2o3-general-gemm-worker-llvm22/fe2o3-llvm-link-worker";
-const MEASURED_VERUS: &str = "/home/harsh/.cache/fe2o3-verus-0.2026.08.02/verus-x86-linux/verus";
+const TEST_RUNTIME_CLOSURE_V2_ROOT: &str = "/opt/fe2o3/verus-runtime-v2/0.2026.08.02-test";
 const MEASURED_WORKER_SHA256: &str =
     "0b4936777b08d7d9d864bf357ab4f14cac33a0bb0a13c479209a26c1da808d35";
 const MEASURED_WORKER_BUILD_ID: &str =
@@ -146,7 +146,7 @@ fn unit_with_frontend(
 fn manifest(
     directory: &TestDirectory,
     worker_path: &Path,
-    verus_path: &Path,
+    runtime_closure_v2_root: &Path,
     worker_sha256: [u8; 32],
     worker_length: u64,
     worker_build: &str,
@@ -158,7 +158,8 @@ fn manifest(
         "general_gemm_v1": {
             "profile": GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1,
             "proof_timeout_seconds": 120,
-            "verus_path": verus_path
+            "runtime_closure_v2_manifest_sha256": hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
+            "runtime_closure_v2_root": runtime_closure_v2_root
         },
         "limits": {
             "stderr_bytes": 64 * 1024,
@@ -205,11 +206,43 @@ fn local_manifest(directory: &TestDirectory) -> (PathBuf, String) {
     manifest(
         directory,
         &worker,
-        &worker,
+        Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
         sha256,
         bytes.len() as u64,
         "test-worker-v1",
         "test-llvm-v1",
+    )
+}
+
+fn parse_test_manifest(
+    path: &Path,
+    expected_identity: &str,
+    directory: &TestDirectory,
+) -> Result<ParsedGeneralGemmPipelineV1, GeneralGemmPipelineErrorV1> {
+    parse_general_gemm_manifest_v1(
+        path,
+        expected_identity,
+        Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
+        &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
+        "general_gemm_test",
+        Path::new("src/lib.rs"),
+        &directory.0,
+    )
+}
+
+fn prepare_test_manifest(
+    path: &Path,
+    expected_identity: &str,
+    directory: &TestDirectory,
+) -> Result<PreparedGeneralGemmPipelineV1, GeneralGemmPipelineErrorV1> {
+    PreparedGeneralGemmPipelineV1::from_manifest(
+        path,
+        expected_identity,
+        Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
+        &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
+        "general_gemm_test",
+        Path::new("src/lib.rs"),
+        &directory.0,
     )
 }
 
@@ -225,59 +258,67 @@ fn producer() -> ProducerIdentity {
 fn parser_accepts_only_the_closed_qualification_pair_and_exact_fields() {
     let directory = TestDirectory::new("hostile");
     let (path, expected) = local_manifest(&directory);
-    let config = PreparedGeneralGemmPipelineV1::from_manifest(
-        &path,
-        &expected,
-        "general_gemm_test",
-        Path::new("src/lib.rs"),
-        &directory.0,
-    )
-    .unwrap();
-    assert_eq!(config.verus_path(), Path::new("/usr/bin/true"));
-    assert_eq!(config.proof_timeout_seconds(), 120);
-    assert_eq!(hex(&config.identity().as_bytes()), expected);
+    let config = parse_test_manifest(&path, &expected, &directory).unwrap();
+    assert_eq!(
+        config.runtime_closure_v2_root,
+        Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT)
+    );
+    assert_eq!(
+        config.runtime_closure_v2_manifest_sha256,
+        GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
+    );
+    assert_eq!(config.proof_timeout_seconds, 120);
+    assert_eq!(hex(&config.identity.as_bytes()), expected);
 
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     value["general_gemm_v1"]["profile"] = json!("single-schedule-v1");
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(matches!(
-        PreparedGeneralGemmPipelineV1::from_manifest(
-            &path,
-            &expected,
-            "general_gemm_test",
-            Path::new("src/lib.rs"),
-            &directory.0,
-        ),
+        parse_test_manifest(&path, &expected, &directory),
         Err(GeneralGemmPipelineErrorV1::Configuration(reason))
             if reason.contains("unsupported")
     ));
     value["general_gemm_v1"]["extra"] = json!(true);
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(matches!(
-        PreparedGeneralGemmPipelineV1::from_manifest(
-            &path,
-            &expected,
-            "general_gemm_test",
-            Path::new("src/lib.rs"),
-            &directory.0,
-        ),
+        parse_test_manifest(&path, &expected, &directory),
         Err(GeneralGemmPipelineErrorV1::Configuration(reason))
             if reason.contains("unknown, missing, or reordered")
     ));
 }
 
 #[test]
+fn runtime_pair_retention_uses_one_lease_and_exact_boundaries() {
+    assert_eq!(
+        RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES,
+        [
+            "post-admission before the qualification pair",
+            "before the reference schedule",
+            "between schedule proof evaluations",
+            "after schedule proof evaluations",
+            "between schedule machine evaluations",
+            "after the qualification pair",
+        ]
+    );
+    let source = include_str!("../general_gemm_pipeline_v1.rs");
+    assert_eq!(
+        source
+            .matches("runtime_closure_v2: GeneralGemmVerusRuntimeClosureLeaseV2")
+            .count(),
+        1
+    );
+    assert!(!source.contains("runtime_closure_v2.clone()"));
+    assert_eq!(
+        source
+            .matches("GeneralGemmVerusRuntimeClosureLeaseV2::open(")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn reordered_schedule_pair_is_rejected_before_any_handoff() {
     let directory = TestDirectory::new("schedule-reorder");
-    let (path, expected) = local_manifest(&directory);
-    let config = PreparedGeneralGemmPipelineV1::from_manifest(
-        &path,
-        &expected,
-        "general_gemm_test",
-        Path::new("src/lib.rs"),
-        &directory.0,
-    )
-    .unwrap();
     let producer = producer();
     let attempt = begin_build_attempt(
         &directory.0,
@@ -287,17 +328,10 @@ fn reordered_schedule_pair_is_rejected_before_any_handoff() {
     )
     .unwrap();
     assert!(matches!(
-        execute_general_gemm_pipeline_v1(
-            OpaqueFrontendToken(1),
-            [
-                unit(GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1),
-                unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1),
-            ],
-            config,
-            &directory.0,
-            &producer,
-            attempt,
-        ),
+        validate_general_gemm_pair_inputs_v1(&[
+            unit(GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1),
+            unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1),
+        ]),
         Err(GeneralGemmPipelineErrorV1::ScheduleSubstitution)
     ));
     for slot in [
@@ -315,15 +349,6 @@ fn reordered_schedule_pair_is_rejected_before_any_handoff() {
 #[test]
 fn frontend_binding_substitution_is_rejected_before_proof_or_handoff() {
     let directory = TestDirectory::new("frontend-substitution");
-    let (path, expected) = local_manifest(&directory);
-    let config = PreparedGeneralGemmPipelineV1::from_manifest(
-        &path,
-        &expected,
-        "general_gemm_test",
-        Path::new("src/lib.rs"),
-        &directory.0,
-    )
-    .unwrap();
     let producer = producer();
     let attempt = begin_build_attempt(
         &directory.0,
@@ -333,37 +358,22 @@ fn frontend_binding_substitution_is_rejected_before_proof_or_handoff() {
     )
     .unwrap();
     assert!(matches!(
-        execute_general_gemm_pipeline_v1(
-            OpaqueFrontendToken(2),
-            [
-                unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1),
-                unit_with_frontend(
-                    GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
-                    frontend_with_provider(0x44),
-                ),
-            ],
-            config,
-            &directory.0,
-            &producer,
-            attempt,
-        ),
+        validate_general_gemm_pair_inputs_v1(&[
+            unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1),
+            unit_with_frontend(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_with_provider(0x44),
+            ),
+        ]),
         Err(GeneralGemmPipelineErrorV1::FrontendBindingSubstitution)
     ));
     fail_build_attempt(&directory.0, &producer, attempt).unwrap();
 }
 
 #[test]
-fn unreviewed_verus_is_rejected_before_any_handoff() {
-    let directory = TestDirectory::new("verus-substitution");
+fn runtime_closure_open_failure_is_rejected_before_any_handoff() {
+    let directory = TestDirectory::new("runtime-closure-open-failure");
     let (path, expected) = local_manifest(&directory);
-    let config = PreparedGeneralGemmPipelineV1::from_manifest(
-        &path,
-        &expected,
-        "general_gemm_test",
-        Path::new("src/lib.rs"),
-        &directory.0,
-    )
-    .unwrap();
     let producer = producer();
     let attempt = begin_build_attempt(
         &directory.0,
@@ -372,20 +382,15 @@ fn unreviewed_verus_is_rejected_before_any_handoff() {
         BuildSession::from_bytes([0x79; 16]),
     )
     .unwrap();
+    let error = match prepare_test_manifest(&path, &expected, &directory) {
+        Ok(_) => panic!("missing runtime closure was admitted"),
+        Err(error) => error,
+    };
     assert!(matches!(
-        execute_general_gemm_pipeline_v1(
-            OpaqueFrontendToken(3),
-            [
-                unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1),
-                unit(GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1),
-            ],
-            config,
-            &directory.0,
-            &producer,
-            attempt,
-        ),
-        Err(GeneralGemmPipelineErrorV1::Verifier(reason))
-            if reason.contains("AuthenticatedRuntimeClosureUnavailable")
+        error,
+        GeneralGemmPipelineErrorV1::RuntimeClosure { boundary, error }
+            if boundary.contains("before the qualification pair")
+                && error.kind() == fe2o3_verifier::GeneralGemmRuntimeClosureErrorKindV2::ObjectType
     ));
     for slot in [
         CompilerModuleHandoffSlotV1::GeneralGemmReference,
@@ -403,14 +408,7 @@ fn unreviewed_verus_is_rejected_before_any_handoff() {
 fn worker_rejection_after_consumption_is_removed_with_the_failed_generation() {
     let directory = TestDirectory::new("post-consumption-failure");
     let (path, expected) = local_manifest(&directory);
-    let config = PreparedGeneralGemmPipelineV1::from_manifest(
-        &path,
-        &expected,
-        "general_gemm_test",
-        Path::new("src/lib.rs"),
-        &directory.0,
-    )
-    .unwrap();
+    let config = parse_test_manifest(&path, &expected, &directory).unwrap();
     let producer = producer();
     let session = BuildSession::from_bytes([0x74; 16]);
     let attempt = begin_build_attempt(
@@ -487,21 +485,73 @@ fn manifest_profile_mutation_cannot_reuse_the_managed_config_identity() {
     value["general_gemm_v1"]["proof_timeout_seconds"] = json!(121);
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(matches!(
-        PreparedGeneralGemmPipelineV1::from_manifest(
-            &path,
-            &expected,
-            "general_gemm_test",
-            Path::new("src/lib.rs"),
-            &directory.0,
-        ),
+        parse_test_manifest(&path, &expected, &directory),
         Err(GeneralGemmPipelineErrorV1::Configuration(reason))
             if reason.contains("expected configuration identity differs")
     ));
 }
 
 #[test]
-#[ignore = "requires the measured upstream LLVM 22.1.8 worker"]
-fn measured_worker_runs_both_schedules_inside_the_live_attempt() {
+fn runtime_root_path_environment_and_manifest_substitution_are_rejected() {
+    let directory = TestDirectory::new("runtime-pin-substitution");
+    let (path, expected) = local_manifest(&directory);
+    let manifest_sha256 = hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256);
+
+    for (expected_root, expected_manifest, reason) in [
+        (
+            Path::new("/opt/fe2o3/verus-runtime-v2/substituted"),
+            manifest_sha256.as_str(),
+            "parent-authenticated child environment",
+        ),
+        (
+            Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
+            "77",
+            "64 lowercase hexadecimal",
+        ),
+        (
+            Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
+            "77f16c7b1b2c68b3fa5a16f8efdfc48b98022165c7829a567118a380f916c213",
+            "compiled-in reviewed manifest",
+        ),
+    ] {
+        let error = match parse_general_gemm_manifest_v1(
+            &path,
+            &expected,
+            expected_root,
+            expected_manifest,
+            "general_gemm_test",
+            Path::new("src/lib.rs"),
+            &directory.0,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("substituted runtime pin was admitted"),
+        };
+        assert!(error.to_string().contains(reason), "{error}");
+    }
+
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["general_gemm_v1"]["runtime_closure_v2_root"] =
+        json!("/opt/fe2o3/verus-runtime-v2/../substituted");
+    fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let error = match parse_test_manifest(&path, &expected, &directory) {
+        Err(error) => error,
+        Ok(_) => panic!("lexical runtime-root alias was admitted"),
+    };
+    assert!(error.to_string().contains("canonical absolute UTF-8"));
+
+    value["general_gemm_v1"]["runtime_closure_v2_root"] = json!(TEST_RUNTIME_CLOSURE_V2_ROOT);
+    value["general_gemm_v1"]["runtime_closure_v2_manifest_sha256"] = json!("77".repeat(32));
+    fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let error = match parse_test_manifest(&path, &expected, &directory) {
+        Err(error) => error,
+        Ok(_) => panic!("substituted runtime manifest was admitted"),
+    };
+    assert!(error.to_string().contains("compiled-in reviewed manifest"));
+}
+
+#[test]
+#[ignore = "requires the measured worker and provisioned root-owned runtime closure V2"]
+fn measured_pair_retains_one_runtime_generation_and_proof_execution_stays_closed() {
     let worker_path = PathBuf::from(MEASURED_WORKER);
     let worker_length = fs::metadata(&worker_path).unwrap().len();
     let worker_sha256 = decode_sha256(MEASURED_WORKER_SHA256, "measured worker").unwrap();
@@ -509,7 +559,7 @@ fn measured_worker_runs_both_schedules_inside_the_live_attempt() {
     let (path, expected) = manifest(
         &directory,
         &worker_path,
-        Path::new(MEASURED_VERUS),
+        Path::new("/opt/fe2o3/verus-runtime-v2/0.2026.08.02"),
         worker_sha256,
         worker_length,
         MEASURED_WORKER_BUILD_ID,
@@ -518,6 +568,8 @@ fn measured_worker_runs_both_schedules_inside_the_live_attempt() {
     let config = PreparedGeneralGemmPipelineV1::from_manifest(
         &path,
         &expected,
+        Path::new("/opt/fe2o3/verus-runtime-v2/0.2026.08.02"),
+        &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
         "general_gemm_test",
         Path::new("src/lib.rs"),
         &directory.0,
@@ -541,56 +593,20 @@ fn measured_worker_runs_both_schedules_inside_the_live_attempt() {
         &directory.0,
         &producer,
         attempt,
-    )
-    .unwrap();
-    let (frontend, config, qualifications) = result.into_join_inputs();
-    assert_eq!(frontend.0, 0x91);
-    assert_eq!(config.proof_timeout_seconds(), 120);
-    for (qualification, schedule, slot) in [
-        (
-            &qualifications[0],
-            GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
-            CompilerModuleHandoffSlotV1::GeneralGemmReference,
-        ),
-        (
-            &qualifications[1],
-            GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
-            CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
-        ),
-    ] {
-        assert_eq!(qualification.unit.schedule(), schedule);
-        assert_eq!(qualification.verifier.schedule(), schedule);
-        assert!(
-            !qualification
-                .verifier
-                .closure()
-                .can_enter_compiler_proof_gate()
-        );
-        assert_eq!(qualification.managed.output_directory, directory.0);
-        assert_eq!(qualification.managed.producer, producer);
-        assert_eq!(qualification.managed.attempt, attempt);
-        assert_eq!(qualification.managed.slot, slot);
-        assert_eq!(qualification.managed.handoff_receipt.attempt(), attempt);
-        assert_eq!(qualification.managed.handoff_receipt.slot(), slot);
-        assert_eq!(
-            qualification.managed.handoff_receipt.identity(),
-            qualification.managed.consumed_handoff
-        );
-        assert_eq!(qualification.observation.schedule(), schedule);
-        assert_eq!(
-            qualification.observation.vector_global_load_count(),
-            u32::from(schedule == GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1)
-        );
-        assert!(!qualification.observation.grants_artifact_authority());
-        assert!(!qualification.observation.grants_publication_authority());
-        assert!(!qualification.observation.grants_load_authority());
-        assert!(!qualification.observation.grants_launch_authority());
-    }
-    let error = finish_build_attempt(&directory.0, &producer, attempt).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("without an authorized device backend")
     );
+    assert!(matches!(
+        result,
+        Err(GeneralGemmPipelineErrorV1::Verifier(reason))
+            if reason.contains("AuthenticatedRuntimeClosureUnavailable")
+    ));
+    for slot in [
+        CompilerModuleHandoffSlotV1::GeneralGemmReference,
+        CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
+    ] {
+        assert!(
+            consume_compiler_module_handoff_in_slot_v1(&directory.0, &producer, attempt, slot)
+                .is_err()
+        );
+    }
     fail_build_attempt(&directory.0, &producer, attempt).unwrap();
 }
