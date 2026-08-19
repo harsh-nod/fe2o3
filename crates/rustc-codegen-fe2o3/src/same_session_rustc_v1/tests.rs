@@ -41,8 +41,13 @@ struct DriverResults {
     mir_mismatch: SameSessionRustcErrorV1,
     abi_mismatch: SameSessionRustcErrorV1,
     binding_mismatch: SameSessionRustcErrorV1,
+    semantic_identity_mismatch: SameSessionRustcErrorV1,
+    semantic_order_mismatch: SameSessionRustcErrorV1,
+    semantic_span_mismatch: SameSessionRustcErrorV1,
+    semantic_successor_mismatch: SameSessionRustcErrorV1,
     foreign: SameSessionRustcErrorV1,
     stale: SameSessionRustcErrorV1,
+    deterministic_mir_import: bool,
 }
 
 #[derive(Default)]
@@ -81,6 +86,71 @@ impl Callbacks for CustodyCallbacks {
         binding.custody_binding[0] ^= 1;
         let binding_mismatch = expect_error(binding_owner.release(binding));
 
+        let mut semantic_identity_owner = RustcSessionCustodianV1::new(tcx);
+        let mut semantic_identity = semantic_identity_owner.capture(tcx, &collection).unwrap();
+        semantic_identity.semantic.functions[0].ordered_blocks[0].operations[0].identity[0] ^= 1;
+        let semantic_identity_mismatch =
+            expect_error(semantic_identity_owner.release(semantic_identity));
+
+        let mut semantic_order_owner = RustcSessionCustodianV1::new(tcx);
+        let mut semantic_order = semantic_order_owner.capture(tcx, &collection).unwrap();
+        if let Some(operations) = semantic_order
+            .semantic
+            .functions
+            .iter_mut()
+            .flat_map(|function| &mut function.ordered_blocks)
+            .map(|block| &mut block.operations)
+            .find(|operations| operations.len() >= 2)
+        {
+            operations.swap(0, 1);
+        } else if let Some(blocks) = semantic_order
+            .semantic
+            .functions
+            .iter_mut()
+            .map(|function| &mut function.ordered_blocks)
+            .find(|blocks| blocks.len() >= 2)
+        {
+            blocks.swap(0, 1);
+        } else {
+            semantic_order.semantic.functions.swap(0, 1);
+        }
+        let semantic_order_mismatch = expect_error(semantic_order_owner.release(semantic_order));
+
+        let mut semantic_span_owner = RustcSessionCustodianV1::new(tcx);
+        let mut semantic_span = semantic_span_owner.capture(tcx, &collection).unwrap();
+        let operation = &mut semantic_span.semantic.functions[0].ordered_blocks[0].operations[0];
+        let [start_line, start_column, end_line, end_column] = operation.span.coordinates();
+        operation.span = MirSemanticSourceSpan::new(
+            operation.span.file_identity(),
+            start_line,
+            start_column,
+            end_line,
+            end_column.saturating_add(1),
+        )
+        .unwrap();
+        let semantic_span_mismatch = expect_error(semantic_span_owner.release(semantic_span));
+
+        let mut semantic_successor_owner = RustcSessionCustodianV1::new(tcx);
+        let mut semantic_successor = semantic_successor_owner.capture(tcx, &collection).unwrap();
+        let operation = semantic_successor
+            .semantic
+            .functions
+            .iter_mut()
+            .flat_map(|function| &mut function.ordered_blocks)
+            .flat_map(|block| &mut block.operations)
+            .find(|operation| !operation.successors.is_empty())
+            .expect("fixture requires one MIR successor");
+        operation.successors[0] ^= 1;
+        let semantic_successor_mismatch =
+            expect_error(semantic_successor_owner.release(semantic_successor));
+
+        let deterministic_left = import_ordinary_rust_kernel_same_session_v1(tcx, &collection)
+            .expect("first deterministic import");
+        let deterministic_right = import_ordinary_rust_kernel_same_session_v1(tcx, &collection)
+            .expect("second deterministic import");
+        let deterministic_mir_import =
+            deterministic_left.mir_import_identity() == deterministic_right.mir_import_identity();
+
         let mut first_owner = RustcSessionCustodianV1::new(tcx);
         let foreign_receipt = first_owner.capture(tcx, &collection).unwrap();
         let mut second_owner = RustcSessionCustodianV1::new(tcx);
@@ -99,8 +169,13 @@ impl Callbacks for CustodyCallbacks {
             mir_mismatch,
             abi_mismatch,
             binding_mismatch,
+            semantic_identity_mismatch,
+            semantic_order_mismatch,
+            semantic_span_mismatch,
+            semantic_successor_mismatch,
             foreign,
             stale,
+            deterministic_mir_import,
         });
         Compilation::Stop
     }
@@ -238,6 +313,12 @@ fn releases_only_owned_authenticated_data_after_same_session_join() {
     );
     assert_ne!(results.positive.abi_closure(), &[0; 32]);
     assert_ne!(results.positive.custody_binding(), &[0; 32]);
+    assert_ne!(results.positive.mir_import_identity(), &[0; 32]);
+    assert!(matches!(
+        results.positive.semantic.lower_outcome,
+        RustMirLowerOutcomeV1::Unsupported { .. }
+    ));
+    assert!(results.deterministic_mir_import);
     assert!(!results.positive.grants_compiler_authority());
     assert!(!results.positive.imported().grants_execution_authority());
 }
@@ -263,6 +344,22 @@ fn rejects_every_session_custody_substitution_axis() {
     ));
     assert!(matches!(
         results.binding_mismatch,
+        SameSessionRustcErrorV1::CustodyBindingMismatch
+    ));
+    assert!(matches!(
+        results.semantic_identity_mismatch,
+        SameSessionRustcErrorV1::CustodyBindingMismatch
+    ));
+    assert!(matches!(
+        results.semantic_order_mismatch,
+        SameSessionRustcErrorV1::CustodyBindingMismatch
+    ));
+    assert!(matches!(
+        results.semantic_span_mismatch,
+        SameSessionRustcErrorV1::CustodyBindingMismatch
+    ));
+    assert!(matches!(
+        results.semantic_successor_mismatch,
         SameSessionRustcErrorV1::CustodyBindingMismatch
     ));
     assert!(matches!(

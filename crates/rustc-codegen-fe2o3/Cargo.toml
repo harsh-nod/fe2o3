@@ -13,7 +13,7 @@ row-softmax-metadata-mutation-test-only = []
 
 [dependencies]
 dialect-amdgcn.workspace = true
-dialect-mir.workspace = true
+dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-amd-target.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-artifact-transaction.workspace = true
@@ -24,6 +24,7 @@ fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
+fe2o3-lower-mir-kernel.workspace = true
 fe2o3-process-identity.workspace = true
 fe2o3-rustc-front.workspace = true
 fe2o3-verifier.workspace = true
@@ -32,6 +33,7 @@ reserved-fe2o3-symbols.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2.workspace = true
+pliron.workspace = true
 
 [dev-dependencies]
 object = { version = "0.39.1", default-features = false, features = ["elf", "read_core"] }

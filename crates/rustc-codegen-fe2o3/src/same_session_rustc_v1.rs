@@ -9,6 +9,13 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use dialect_mir::pliron::{
+    MAX_IMPORTED_MIR_SUCCESSORS, MirDialectLimits, MirModuleOp, MirSemanticOperationKind,
+    MirSemanticSourceSpan, MirSnapshotOperation,
+};
+use fe2o3_lower_mir_kernel::{
+    LoweringConfig, LoweringError, LoweringLimits, MirKernelLoweringPass, register_pass,
+};
 use fe2o3_rustc_front::{
     AuthenticatedOrdinaryRustScalarKernelImportV1, BasicBlockV1, BlockIdV1,
     CanonicalKernelInstIdV1, CanonicalKernelItemIdV1, ConcreteMonomorphizationIdentityV1,
@@ -20,10 +27,11 @@ use fe2o3_rustc_front::{
     SourceFileIdentityV1, SourceLocationV1, StableTypeIdentityV1, TypedSignatureV1,
     authenticate_ordinary_rust_scalar_kernel_v1,
 };
+use pliron::{context::Context, op::Op};
 use rustc_abi::CanonAbi;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
-use rustc_middle::mir::{Body, Operand, TerminatorKind};
+use rustc_middle::mir::{Body, Operand, StatementKind, TerminatorKind};
 use rustc_middle::ty::{
     self, EarlyBinder, GenericArgKind, Instance, InstanceKind, Ty, TyCtxt, TyKind,
     TypeVisitableExt, TypingEnv,
@@ -44,6 +52,8 @@ const FUNCTION_DOMAIN: &[u8] = b"fe2o3/rustc-session/function/v1";
 const MONOMORPHIZATION_DOMAIN: &[u8] = b"fe2o3/rustc-session/monomorphization/v1";
 const SOURCE_DOMAIN: &[u8] = b"fe2o3/rustc-session/source/v1";
 const MIR_DOMAIN: &[u8] = b"fe2o3/rustc-session/optimized-mir/v1";
+const MIR_OPERATION_DOMAIN: &[u8] = b"fe2o3/rustc-session/optimized-mir-operation/v1";
+const MIR_IMPORT_DOMAIN: &[u8] = b"fe2o3/rustc-session/pliron-mir-import/v1";
 const CFG_DOMAIN: &[u8] = b"fe2o3/rustc-session/cfg/v1";
 const TYPE_DOMAIN: &[u8] = b"fe2o3/rustc-session/type/v1";
 const ABI_VALUE_DOMAIN: &[u8] = b"fe2o3/rustc-session/abi-value/v1";
@@ -65,7 +75,7 @@ macro_rules! stable_fingerprint {
     }};
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct FunctionSemanticSnapshotV1 {
     function: FunctionIdentityV1,
     monomorphization: ConcreteMonomorphizationIdentityV1,
@@ -74,6 +84,23 @@ struct FunctionSemanticSnapshotV1 {
     cfg: [u8; 32],
     blocks: u32,
     edges: u32,
+    ordered_blocks: Vec<RustMirBlockSnapshotV1>,
+    argument_count: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RustMirBlockSnapshotV1 {
+    block: u32,
+    operations: Vec<RustMirOperationSnapshotV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RustMirOperationSnapshotV1 {
+    ordinal: u32,
+    kind: MirSemanticOperationKind,
+    identity: [u64; 4],
+    span: MirSemanticSourceSpan,
+    successors: Vec<u32>,
 }
 
 #[derive(Debug)]
@@ -81,6 +108,20 @@ struct RustKernelSemanticSnapshotV1 {
     functions: Vec<FunctionSemanticSnapshotV1>,
     mir_closure: [u8; 32],
     abi_closure: [u8; 32],
+    mir_import: [u8; 32],
+    lower_outcome: RustMirLowerOutcomeV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RustMirLowerOutcomeV1 {
+    Supported,
+    Unsupported {
+        function: usize,
+        block: usize,
+        ordinal: u32,
+        kind: MirSemanticOperationKind,
+        span: MirSemanticSourceSpan,
+    },
 }
 
 /// Owned, inert data released by the private same-session custodian.
@@ -112,6 +153,10 @@ impl OwnerControlledRustKernelImportV1 {
 
     pub(crate) const fn abi_closure(&self) -> &[u8; 32] {
         &self.semantic.abi_closure
+    }
+
+    pub(crate) const fn mir_import_identity(&self) -> &[u8; 32] {
+        &self.semantic.mir_import
     }
 
     pub(crate) const fn grants_compiler_authority(&self) -> bool {
@@ -221,6 +266,11 @@ pub(crate) enum SameSessionRustcErrorV1 {
     MissingMir,
     MissingKernelContract,
     MissingTerminator,
+    MirOperationBound,
+    MirSuccessorBound,
+    PlironImportFailed,
+    PlironSchemaMismatch,
+    UnexpectedMirLoweringFailure,
     UnsupportedDirectCall,
     UnknownCallee,
     RustcQuery(&'static str),
@@ -271,6 +321,21 @@ impl fmt::Display for SameSessionRustcErrorV1 {
             ),
             Self::MissingTerminator => formatter
                 .write_str("same-session optimized MIR contains a block without a terminator"),
+            Self::MirOperationBound => {
+                formatter.write_str("same-session optimized MIR operation bound exceeded")
+            }
+            Self::MirSuccessorBound => {
+                formatter.write_str("same-session optimized MIR successor bound exceeded")
+            }
+            Self::PlironImportFailed => {
+                formatter.write_str("same-session typed Pliron MIR import failed")
+            }
+            Self::PlironSchemaMismatch => {
+                formatter.write_str("same-session typed Pliron MIR schema mismatch")
+            }
+            Self::UnexpectedMirLoweringFailure => {
+                formatter.write_str("same-session MIR-to-kernel boundary failed unexpectedly")
+            }
             Self::UnsupportedDirectCall => formatter
                 .write_str("same-session import encountered a non-direct or unresolved call"),
             Self::UnknownCallee => formatter
@@ -344,6 +409,7 @@ struct FunctionDraftV1<'tcx> {
     cfg: [u8; 32],
     blocks: u32,
     edges: u32,
+    ordered_blocks: Vec<RustMirBlockSnapshotV1>,
 }
 
 fn capture_in_session<'tcx>(
@@ -426,6 +492,7 @@ fn capture_in_session<'tcx>(
             &fn_abi,
             instance_fingerprint,
         )?;
+        let ordered_blocks = ordered_semantic_blocks(tcx, body, instance_fingerprint)?;
         drafts.push(FunctionDraftV1 {
             instance: function.instance,
             role,
@@ -439,6 +506,7 @@ fn capture_in_session<'tcx>(
             cfg,
             blocks,
             edges,
+            ordered_blocks,
         });
     }
 
@@ -481,23 +549,35 @@ fn capture_in_session<'tcx>(
     let imported = authenticate_ordinary_rust_scalar_kernel_v1(observation)?;
     let mut functions = drafts
         .iter()
-        .map(|draft| FunctionSemanticSnapshotV1 {
-            function: draft.frontend.identity(),
-            monomorphization: draft.monomorphization,
-            mir: draft.mir,
-            fn_abi: *draft.fn_abi.identity(),
-            cfg: draft.cfg,
-            blocks: draft.blocks,
-            edges: draft.edges,
+        .map(|draft| {
+            Ok(FunctionSemanticSnapshotV1 {
+                function: draft.frontend.identity(),
+                monomorphization: draft.monomorphization,
+                mir: draft.mir,
+                fn_abi: *draft.fn_abi.identity(),
+                cfg: draft.cfg,
+                blocks: draft.blocks,
+                edges: draft.edges,
+                ordered_blocks: draft.ordered_blocks.clone(),
+                argument_count: u32::try_from(draft.fn_abi.arguments().len()).map_err(|_| {
+                    SameSessionRustcErrorV1::InvalidTypedObservation(
+                        "FnAbi argument count overflow",
+                    )
+                })?,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, SameSessionRustcErrorV1>>()?;
     functions.sort_by_key(|function| function.monomorphization);
     let mir_closure = *imported.mir_closure_identity();
     let abi_closure = abi_closure(&functions);
+    let mir_import = mir_import_identity(&functions);
+    let lower_outcome = materialize_and_lower_pliron_mir(&functions, mir_import)?;
     let semantic = RustKernelSemanticSnapshotV1 {
         functions,
         mir_closure,
         abi_closure,
+        mir_import,
+        lower_outcome,
     };
     let custody_binding = custody_binding(owner, &imported, &semantic);
     Ok(SessionBoundRustKernelImportV1 {
@@ -756,6 +836,332 @@ fn frontend_function<'tcx>(
     ))
 }
 
+fn ordered_semantic_blocks<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    instance_fingerprint: [u8; 16],
+) -> Result<Vec<RustMirBlockSnapshotV1>, SameSessionRustcErrorV1> {
+    let operation_count = body
+        .basic_blocks
+        .iter()
+        .try_fold(0_usize, |count, block| {
+            count.checked_add(block.statements.len().saturating_add(1))
+        })
+        .ok_or(SameSessionRustcErrorV1::MirOperationBound)?;
+    if operation_count > dialect_mir::MAX_EXECUTABLE_STATEMENTS {
+        return Err(SameSessionRustcErrorV1::MirOperationBound);
+    }
+
+    body.basic_blocks
+        .iter_enumerated()
+        .map(|(block_id, block)| {
+            let block_index = u32::try_from(block_id.as_usize()).map_err(|_| {
+                SameSessionRustcErrorV1::InvalidTypedObservation("MIR block index overflow")
+            })?;
+            let mut operations = Vec::with_capacity(block.statements.len().saturating_add(1));
+            for (statement_index, statement) in block.statements.iter().enumerate() {
+                let ordinal = u32::try_from(statement_index).map_err(|_| {
+                    SameSessionRustcErrorV1::InvalidTypedObservation(
+                        "MIR statement ordinal overflow",
+                    )
+                })?;
+                let kind = semantic_statement_kind(&statement.kind);
+                operations.push(RustMirOperationSnapshotV1 {
+                    ordinal,
+                    kind,
+                    identity: operation_identity_words(domain_identity(
+                        MIR_OPERATION_DOMAIN,
+                        &[
+                            &instance_fingerprint,
+                            &block_index.to_le_bytes(),
+                            &ordinal.to_le_bytes(),
+                            &(kind as u16).to_le_bytes(),
+                            &stable_fingerprint!(tcx, statement),
+                        ],
+                    )),
+                    span: semantic_source_span(tcx, statement.source_info.span)?,
+                    successors: Vec::new(),
+                });
+            }
+            let terminator = block
+                .terminator
+                .as_ref()
+                .ok_or(SameSessionRustcErrorV1::MissingTerminator)?;
+            let ordinal = u32::try_from(block.statements.len()).map_err(|_| {
+                SameSessionRustcErrorV1::InvalidTypedObservation("MIR terminator ordinal overflow")
+            })?;
+            let kind = semantic_terminator_kind(&terminator.kind);
+            let successors = terminator
+                .successors()
+                .map(|successor| {
+                    u32::try_from(successor.as_usize()).map_err(|_| {
+                        SameSessionRustcErrorV1::InvalidTypedObservation(
+                            "MIR successor index overflow",
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if successors.len() > MAX_IMPORTED_MIR_SUCCESSORS {
+                return Err(SameSessionRustcErrorV1::MirSuccessorBound);
+            }
+            operations.push(RustMirOperationSnapshotV1 {
+                ordinal,
+                kind,
+                identity: operation_identity_words(domain_identity(
+                    MIR_OPERATION_DOMAIN,
+                    &[
+                        &instance_fingerprint,
+                        &block_index.to_le_bytes(),
+                        &ordinal.to_le_bytes(),
+                        &(kind as u16).to_le_bytes(),
+                        &stable_fingerprint!(tcx, terminator),
+                    ],
+                )),
+                span: semantic_source_span(tcx, terminator.source_info.span)?,
+                successors,
+            });
+            Ok(RustMirBlockSnapshotV1 {
+                block: block_index,
+                operations,
+            })
+        })
+        .collect()
+}
+
+fn semantic_statement_kind(kind: &StatementKind<'_>) -> MirSemanticOperationKind {
+    match kind {
+        StatementKind::Assign(_) => MirSemanticOperationKind::StatementAssign,
+        StatementKind::FakeRead(..) => MirSemanticOperationKind::StatementFakeRead,
+        StatementKind::SetDiscriminant { .. } => MirSemanticOperationKind::StatementSetDiscriminant,
+        StatementKind::StorageLive(_) => MirSemanticOperationKind::StatementStorageLive,
+        StatementKind::StorageDead(_) => MirSemanticOperationKind::StatementStorageDead,
+        StatementKind::Retag(..) => MirSemanticOperationKind::StatementRetag,
+        StatementKind::PlaceMention(_) => MirSemanticOperationKind::StatementPlaceMention,
+        StatementKind::AscribeUserType(..) => MirSemanticOperationKind::StatementAscribeUserType,
+        StatementKind::Coverage(_) => MirSemanticOperationKind::StatementCoverage,
+        StatementKind::Intrinsic(_) => MirSemanticOperationKind::StatementIntrinsic,
+        StatementKind::ConstEvalCounter => MirSemanticOperationKind::StatementConstEvalCounter,
+        StatementKind::Nop => MirSemanticOperationKind::StatementNop,
+        _ => MirSemanticOperationKind::StatementOther,
+    }
+}
+
+fn semantic_terminator_kind(kind: &TerminatorKind<'_>) -> MirSemanticOperationKind {
+    match kind {
+        TerminatorKind::Goto { .. } => MirSemanticOperationKind::TerminatorGoto,
+        TerminatorKind::SwitchInt { .. } => MirSemanticOperationKind::TerminatorSwitchInt,
+        TerminatorKind::Return => MirSemanticOperationKind::TerminatorReturn,
+        TerminatorKind::Unreachable => MirSemanticOperationKind::TerminatorUnreachable,
+        TerminatorKind::Drop { .. } => MirSemanticOperationKind::TerminatorDrop,
+        TerminatorKind::Call { .. } => MirSemanticOperationKind::TerminatorCall,
+        TerminatorKind::Assert { .. } => MirSemanticOperationKind::TerminatorAssert,
+        _ => MirSemanticOperationKind::TerminatorOther,
+    }
+}
+
+fn semantic_source_span(
+    tcx: TyCtxt<'_>,
+    span: Span,
+) -> Result<MirSemanticSourceSpan, SameSessionRustcErrorV1> {
+    let observed = span_observation(tcx, span)?;
+    MirSemanticSourceSpan::new(
+        operation_identity_words(observed.file_identity),
+        observed.start_line,
+        observed.start_column,
+        observed.end_line,
+        observed.end_column,
+    )
+    .map_err(|_| SameSessionRustcErrorV1::InvalidTypedObservation("MIR semantic source span"))
+}
+
+fn operation_identity_words(bytes: [u8; 32]) -> [u64; 4] {
+    let mut words = [0_u64; 4];
+    for (word, bytes) in words.iter_mut().zip(bytes.chunks_exact(8)) {
+        *word = u64::from_le_bytes(bytes.try_into().expect("exact eight-byte identity word"));
+    }
+    words
+}
+
+fn materialize_and_lower_pliron_mir(
+    functions: &[FunctionSemanticSnapshotV1],
+    mir_import: [u8; 32],
+) -> Result<RustMirLowerOutcomeV1, SameSessionRustcErrorV1> {
+    let block_count = functions
+        .iter()
+        .try_fold(0_usize, |count, function| {
+            count.checked_add(function.ordered_blocks.len())
+        })
+        .ok_or(SameSessionRustcErrorV1::MirOperationBound)?;
+    let operation_count = functions
+        .iter()
+        .flat_map(|function| &function.ordered_blocks)
+        .try_fold(1_usize.saturating_add(functions.len()), |count, block| {
+            count.checked_add(block.operations.len().saturating_add(1))
+        })
+        .ok_or(SameSessionRustcErrorV1::MirOperationBound)?;
+    let max_blocks_per_function = functions
+        .iter()
+        .map(|function| function.ordered_blocks.len())
+        .max()
+        .ok_or(SameSessionRustcErrorV1::PlironImportFailed)?;
+    let limits = MirDialectLimits::new(
+        functions.len(),
+        max_blocks_per_function,
+        dialect_mir::MAX_EXECUTABLE_IDENTITY_BYTES,
+    )
+    .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
+
+    let mut context = Context::new();
+    register_pass(&mut context).map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
+    let module = MirModuleOp::try_new(&mut context, encode_hex(&mir_import), limits)
+        .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
+
+    let mut expected_function_identities = Vec::with_capacity(functions.len());
+    for function in functions {
+        let identity = format!(
+            "{}:{}:{}:{}",
+            encode_hex(function.function.as_bytes()),
+            encode_hex(function.monomorphization.as_bytes()),
+            encode_hex(function.mir.as_bytes()),
+            encode_hex(&function.fn_abi),
+        );
+        let arguments = (0..function.argument_count)
+            .map(dialect_mir::MirTypeId)
+            .collect::<Vec<_>>();
+        let operation = module
+            .append_function(&mut context, identity.clone(), &arguments)
+            .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
+        let mut blocks = vec![
+            operation
+                .entry_block(&context)
+                .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?,
+        ];
+        for _ in 1..function.ordered_blocks.len() {
+            blocks.push(
+                operation
+                    .append_block(&mut context)
+                    .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?,
+            );
+        }
+        for (expected_block, (block, handle)) in
+            function.ordered_blocks.iter().zip(&blocks).enumerate()
+        {
+            if block.block as usize != expected_block || block.operations.is_empty() {
+                return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
+            }
+            for (operation_index, semantic) in block.operations.iter().enumerate() {
+                if semantic.ordinal as usize != operation_index {
+                    return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
+                }
+                if semantic.kind.is_terminator() {
+                    if operation_index + 1 != block.operations.len() {
+                        return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
+                    }
+                    handle
+                        .replace_with_semantic_terminator(
+                            &mut context,
+                            semantic.ordinal,
+                            semantic.kind,
+                            semantic.identity,
+                            semantic.span,
+                            &semantic.successors,
+                        )
+                        .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
+                } else {
+                    handle
+                        .append_semantic_statement(
+                            &mut context,
+                            semantic.ordinal,
+                            semantic.kind,
+                            semantic.identity,
+                            semantic.span,
+                        )
+                        .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
+                }
+            }
+        }
+        expected_function_identities.push(identity);
+    }
+
+    let imported = module
+        .body(&context)
+        .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?
+        .semantic_functions(&context)
+        .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
+    if imported.len() != functions.len() {
+        return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
+    }
+    for ((source, imported), expected_identity) in functions
+        .iter()
+        .zip(&imported)
+        .zip(&expected_function_identities)
+    {
+        if imported.identity() != expected_identity
+            || imported.argument_type_ids().len() != source.argument_count as usize
+            || imported.blocks().len() != source.ordered_blocks.len()
+        {
+            return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
+        }
+        for (source_block, imported_block) in source.ordered_blocks.iter().zip(imported.blocks()) {
+            if imported_block.block_id().0 != source_block.block
+                || imported_block.operations().len() != source_block.operations.len() + 1
+            {
+                return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
+            }
+            for (source_operation, imported_operation) in source_block
+                .operations
+                .iter()
+                .zip(imported_block.operations().iter().skip(1))
+            {
+                let imported_semantic = match imported_operation {
+                    MirSnapshotOperation::SemanticStatement(semantic)
+                    | MirSnapshotOperation::SemanticTerminator(semantic) => semantic,
+                    MirSnapshotOperation::BlockMarker(_) | MirSnapshotOperation::Return => {
+                        return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
+                    }
+                };
+                if imported_semantic.ordinal() != source_operation.ordinal
+                    || imported_semantic.kind() != source_operation.kind
+                    || imported_semantic.identity() != source_operation.identity
+                    || imported_semantic.span() != source_operation.span
+                    || imported_semantic.successors() != source_operation.successors
+                {
+                    return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
+                }
+            }
+        }
+    }
+
+    let lowering_limits = LoweringLimits::new(
+        1,
+        functions.len(),
+        block_count,
+        operation_count,
+        functions.len(),
+    )
+    .map_err(|_| SameSessionRustcErrorV1::UnexpectedMirLoweringFailure)?;
+    let config = LoweringConfig::new(lowering_limits, 1)
+        .map_err(|_| SameSessionRustcErrorV1::UnexpectedMirLoweringFailure)?;
+    let mut lowering = MirKernelLoweringPass::new(config);
+    match lowering.run_checked(module.get_operation(), &mut context) {
+        Ok(_) => Ok(RustMirLowerOutcomeV1::Supported),
+        Err(LoweringError::UnsupportedRustSemanticOperation {
+            function,
+            block,
+            ordinal,
+            kind,
+            span,
+        }) => Ok(RustMirLowerOutcomeV1::Unsupported {
+            function,
+            block,
+            ordinal,
+            kind,
+            span,
+        }),
+        Err(_) => Err(SameSessionRustcErrorV1::UnexpectedMirLoweringFailure),
+    }
+}
+
 fn direct_calls<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: Instance<'tcx>,
@@ -885,6 +1291,39 @@ fn abi_closure(functions: &[FunctionSemanticSnapshotV1]) -> [u8; 32] {
     digest.finalize().into()
 }
 
+fn mir_import_identity(functions: &[FunctionSemanticSnapshotV1]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    append_digest_field(&mut digest, MIR_IMPORT_DOMAIN);
+    for function in functions {
+        append_digest_field(&mut digest, function.function.as_bytes());
+        append_digest_field(&mut digest, function.monomorphization.as_bytes());
+        append_digest_field(&mut digest, function.mir.as_bytes());
+        append_digest_field(&mut digest, &function.fn_abi);
+        append_digest_field(&mut digest, &function.cfg);
+        append_digest_field(&mut digest, &function.argument_count.to_le_bytes());
+        for block in &function.ordered_blocks {
+            append_digest_field(&mut digest, &block.block.to_le_bytes());
+            for operation in &block.operations {
+                append_digest_field(&mut digest, &operation.ordinal.to_le_bytes());
+                append_digest_field(&mut digest, &(operation.kind as u16).to_le_bytes());
+                for word in operation.identity {
+                    append_digest_field(&mut digest, &word.to_le_bytes());
+                }
+                for word in operation.span.file_identity() {
+                    append_digest_field(&mut digest, &word.to_le_bytes());
+                }
+                for coordinate in operation.span.coordinates() {
+                    append_digest_field(&mut digest, &coordinate.to_le_bytes());
+                }
+                for successor in &operation.successors {
+                    append_digest_field(&mut digest, &successor.to_le_bytes());
+                }
+            }
+        }
+    }
+    digest.finalize().into()
+}
+
 fn custody_binding(
     owner: u64,
     imported: &AuthenticatedOrdinaryRustScalarKernelImportV1,
@@ -898,6 +1337,29 @@ fn custody_binding(
     append_digest_field(&mut digest, imported.import_identity());
     append_digest_field(&mut digest, &semantic.mir_closure);
     append_digest_field(&mut digest, &semantic.abi_closure);
+    append_digest_field(&mut digest, &semantic.mir_import);
+    match semantic.lower_outcome {
+        RustMirLowerOutcomeV1::Supported => append_digest_field(&mut digest, &[0]),
+        RustMirLowerOutcomeV1::Unsupported {
+            function,
+            block,
+            ordinal,
+            kind,
+            span,
+        } => {
+            append_digest_field(&mut digest, &[1]);
+            append_digest_field(&mut digest, &function.to_le_bytes());
+            append_digest_field(&mut digest, &block.to_le_bytes());
+            append_digest_field(&mut digest, &ordinal.to_le_bytes());
+            append_digest_field(&mut digest, &(kind as u16).to_le_bytes());
+            for word in span.file_identity() {
+                append_digest_field(&mut digest, &word.to_le_bytes());
+            }
+            for coordinate in span.coordinates() {
+                append_digest_field(&mut digest, &coordinate.to_le_bytes());
+            }
+        }
+    }
     for function in &semantic.functions {
         append_digest_field(&mut digest, function.function.as_bytes());
         append_digest_field(&mut digest, function.monomorphization.as_bytes());
@@ -906,6 +1368,25 @@ fn custody_binding(
         append_digest_field(&mut digest, &function.cfg);
         append_digest_field(&mut digest, &function.blocks.to_le_bytes());
         append_digest_field(&mut digest, &function.edges.to_le_bytes());
+        for block in &function.ordered_blocks {
+            append_digest_field(&mut digest, &block.block.to_le_bytes());
+            for operation in &block.operations {
+                append_digest_field(&mut digest, &operation.ordinal.to_le_bytes());
+                append_digest_field(&mut digest, &(operation.kind as u16).to_le_bytes());
+                for word in operation.identity {
+                    append_digest_field(&mut digest, &word.to_le_bytes());
+                }
+                for word in operation.span.file_identity() {
+                    append_digest_field(&mut digest, &word.to_le_bytes());
+                }
+                for coordinate in operation.span.coordinates() {
+                    append_digest_field(&mut digest, &coordinate.to_le_bytes());
+                }
+                for successor in &operation.successors {
+                    append_digest_field(&mut digest, &successor.to_le_bytes());
+                }
+            }
+        }
     }
     digest.finalize().into()
 }

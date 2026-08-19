@@ -379,11 +379,12 @@ fn dump_authenticated_frontend_contracts(
 ) {
     if let Some(imported) = frontend.ordinary_rust_scalar() {
         eprintln!(
-            "[rustc-codegen-fe2o3] same-session ordinary-Rust custody: {} function(s), import {}, optimized-MIR closure {}, FnAbi closure {}; inert owner-controlled data only",
+            "[rustc-codegen-fe2o3] same-session ordinary-Rust custody: {} function(s), import {}, optimized-MIR closure {}, FnAbi closure {}, typed MIR import {}; inert owner-controlled data only",
             imported.function_count(),
             encode_hex(imported.imported().import_identity()),
             encode_hex(imported.mir_closure()),
             encode_hex(imported.abi_closure()),
+            encode_hex(imported.mir_import_identity()),
         );
     }
     let contracts = frontend.kernel_contracts();
