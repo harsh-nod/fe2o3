@@ -445,13 +445,13 @@ pub struct WorkgroupSizeRangeV1 {
 }
 
 impl WorkgroupSizeRangeV1 {
+    /// Constructs an inclusive flat-workgroup-size range in workitems.
+    ///
+    /// The bounds are not wave counts and therefore need not be multiples of
+    /// the target wavefront size. Wave32/wave64 selection is carried by the
+    /// independent target-feature policy.
     pub fn new(minimum: u16, maximum: u16) -> Result<Self, HandoffDiagnosticV1> {
-        if minimum == 0
-            || minimum > maximum
-            || maximum > 1_024
-            || !minimum.is_multiple_of(64)
-            || !maximum.is_multiple_of(64)
-        {
+        if minimum == 0 || minimum > maximum || maximum > 1_024 {
             return Err(HandoffDiagnosticV1::InvalidWorkgroupSizeRange);
         }
         Ok(Self { minimum, maximum })
