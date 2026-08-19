@@ -34,6 +34,7 @@ mod compiler_ffi_adapter;
 mod device_ffi;
 pub mod executable_scalar_control_flow_v1;
 mod frontend_record_bridge;
+mod general_gemm_intrinsic_semantics_v1;
 mod host_object;
 mod kernel_ir_codegen;
 mod kernel_ir_lowering;
