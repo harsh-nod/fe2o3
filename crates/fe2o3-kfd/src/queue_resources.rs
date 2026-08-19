@@ -54,6 +54,7 @@ pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
     "source.rocr.topology.c=97269f0baf231d490032fc47ea8fe9e1101232477e10f74ff15e616d8e54ad86\n",
     "source.rocr.fmm.c=a2addccabb82e0ca184eaaf722e976e254a898ccfc945d4d956c4e273e196aef\n",
     "source.rocr.memory.c=4376e4bc6980299efc0fb79cfa497d5758171980ce80b04632882537866e977a\n",
+    "source.rocr.libhsakmt.h=f957d592df9541bef7d0e21b507c95f5046f2fb380da3d64525bc4770a5a1b93\n",
     "source.rocr.hsakamttypes.h=fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e\n",
     "source.rocr.amd_aql_queue.cpp=291f2521e2a4758e852ed20c578aca79e379d1effe4dfd83c62e11347eef2b14\n",
     "source.rocr.amd_gpu_agent.cpp=c39d5f922e855ce57d3c1903beef325e6004431c2ee66ae000aac72a0e5999da\n",
@@ -77,12 +78,12 @@ pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1: &str =
-    "cf50595943b8bde61c6a9346769249e6ab9c7e0055cdad4cda8f679832277bb7";
+    "b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f";
 
 /// Typed digest bytes of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0xcf, 0x50, 0x59, 0x59, 0x43, 0xb8, 0xbd, 0xe6, 0x1c, 0x6a, 0x93, 0x46, 0x76, 0x92, 0x49, 0xe6,
-    0xab, 0x9c, 0x7e, 0x00, 0x55, 0xcd, 0xad, 0x4c, 0xda, 0x8f, 0x67, 0x98, 0x32, 0x27, 0x7b, 0xb7,
+    0xb8, 0x31, 0x7e, 0x42, 0x88, 0xe1, 0x4c, 0x6d, 0x75, 0x46, 0xb5, 0x38, 0x87, 0xec, 0x2a, 0x10,
+    0xe1, 0x93, 0x8f, 0xfb, 0xa9, 0x59, 0x52, 0x71, 0xd1, 0x74, 0xa2, 0xa6, 0x52, 0x32, 0x0f, 0x4f,
 ];
 
 /// Resource role names shared with the abstract queue lifecycle model.
@@ -729,6 +730,9 @@ mod tests {
         );
         assert!(GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.contains(
             "device_profile_digest_role=compositional-prerequisite-identifier-only,no-device-token-or-xnack-evidence"
+        ));
+        assert!(GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.contains(
+            "source.rocr.libhsakmt.h=f957d592df9541bef7d0e21b507c95f5046f2fb380da3d64525bc4770a5a1b93"
         ));
     }
 

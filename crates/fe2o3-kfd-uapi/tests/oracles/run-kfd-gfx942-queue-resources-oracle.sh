@@ -29,6 +29,7 @@ check b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b "$rocr_so
 check 97269f0baf231d490032fc47ea8fe9e1101232477e10f74ff15e616d8e54ad86 "$rocr_source/projects/rocr-runtime/libhsakmt/src/topology.c"
 check a2addccabb82e0ca184eaaf722e976e254a898ccfc945d4d956c4e273e196aef "$rocr_source/projects/rocr-runtime/libhsakmt/src/fmm.c"
 check 4376e4bc6980299efc0fb79cfa497d5758171980ce80b04632882537866e977a "$rocr_source/projects/rocr-runtime/libhsakmt/src/memory.c"
+check f957d592df9541bef7d0e21b507c95f5046f2fb380da3d64525bc4770a5a1b93 "$rocr_source/projects/rocr-runtime/libhsakmt/src/libhsakmt.h"
 check fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e "$rocr_source/projects/rocr-runtime/libhsakmt/include/hsakmt/hsakmttypes.h"
 check 291f2521e2a4758e852ed20c578aca79e379d1effe4dfd83c62e11347eef2b14 "$rocr_source/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/amd_aql_queue.cpp"
 check c39d5f922e855ce57d3c1903beef325e6004431c2ee66ae000aac72a0e5999da "$rocr_source/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/amd_gpu_agent.cpp"

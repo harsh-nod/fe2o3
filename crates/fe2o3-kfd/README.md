@@ -183,8 +183,9 @@ On the reviewed branches, ring and control produce fine-grained USERPTR
 profiles, EOP produces executable coarse VRAM, and CWSR requests anonymous host
 SVM attributes with a USERPTR fallback. The manifest pins the queue call sites,
 runtime allocator dispatch, KFD driver flag translation, KMT allocation
-translation, and CWSR/EOP expressions needed to derive those values. This is an
-exact expression set, not a transitive ROCr policy implementation closure or
+translation, the header definitions of page and huge-page alignment, and
+CWSR/EOP expressions needed to derive those values. This is an exact
+expression set, not a transitive ROCr policy implementation closure or
 evidence that an invocation selected a particular branch. These observations
 are not allocations accepted by the current fe2o3 memory authority. USERPTR,
 VRAM, SVM, queue creation, doorbell mmap and doorbell stores remain
