@@ -23,7 +23,9 @@ use fe2o3_hsaco_finalize::{
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     execute_reproducible_first_build_worker_v2,
 };
-use fe2o3_verifier::MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1;
+use fe2o3_verifier::{
+    GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256, MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1,
+};
 use fe2o3_worker_v2_bundle::{MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, WorkerV2EnvelopeInputsV1};
 use rustix::fs::{FileType, Mode, OFlags, fstat, open};
 use serde_json::{Map, Value};
@@ -34,6 +36,10 @@ pub(crate) use crate::worker_v2_restart::WorkerV2EnvelopeModeV1;
 pub(crate) const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
+pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV: &str =
+    "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT";
+pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
+    "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256";
 pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
@@ -109,7 +115,12 @@ const ROW_SOFTMAX_V1_KEYS: &[&str] = &[
     "provider_stable_crate_id",
     "row_elements",
 ];
-const GENERAL_GEMM_V1_KEYS: &[&str] = &["profile", "proof_timeout_seconds", "verus_path"];
+const GENERAL_GEMM_V1_KEYS: &[&str] = &[
+    "profile",
+    "proof_timeout_seconds",
+    "runtime_closure_v2_manifest_sha256",
+    "runtime_closure_v2_root",
+];
 const GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1: &str = "qualification-pair-v1";
 const REQUIRED_OPTIONS: &[(&str, &[&str])] = &[
     ("code-object-version", &["4", "5", "6"]),
@@ -162,13 +173,18 @@ pub(crate) struct PreparedWorkerV2Config {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedGeneralGemmV1Config {
-    verus_path: PathBuf,
+    runtime_closure_v2_root: PathBuf,
+    runtime_closure_v2_manifest_sha256: [u8; 32],
     proof_timeout_seconds: u32,
 }
 
 impl PreparedGeneralGemmV1Config {
-    pub(crate) fn verus_path(&self) -> &Path {
-        &self.verus_path
+    pub(crate) fn runtime_closure_v2_root(&self) -> &Path {
+        &self.runtime_closure_v2_root
+    }
+
+    pub(crate) const fn runtime_closure_v2_manifest_sha256(&self) -> [u8; 32] {
+        self.runtime_closure_v2_manifest_sha256
     }
 
     pub(crate) const fn proof_timeout_seconds(&self) -> u32 {
@@ -629,10 +645,31 @@ fn parse_general_gemm_v1(
             "general_gemm_v1.proof_timeout_seconds must be in 1..={MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1}"
         )));
     }
-    let verus_path = PathBuf::from(required_string(object, "verus_path", "general_gemm_v1")?);
-    require_absolute_path(&verus_path, "general_gemm_v1.verus_path")?;
+    let runtime_closure_v2_root = absolute_json_path(
+        required_string(object, "runtime_closure_v2_root", "general_gemm_v1")?,
+        "general_gemm_v1.runtime_closure_v2_root",
+    )?;
+    require_closed_child_manifest_path(
+        &runtime_closure_v2_root,
+        "general_gemm_v1.runtime_closure_v2_root",
+    )?;
+    let runtime_closure_v2_manifest_sha256 = decode_sha256(
+        required_string(
+            object,
+            "runtime_closure_v2_manifest_sha256",
+            "general_gemm_v1",
+        )?,
+        "general_gemm_v1.runtime_closure_v2_manifest_sha256",
+    )?;
+    if runtime_closure_v2_manifest_sha256 != GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256 {
+        return Err(WorkerV2ConfigError::Invalid(
+            "general_gemm_v1.runtime_closure_v2_manifest_sha256 differs from the compiled-in reviewed manifest"
+                .to_owned(),
+        ));
+    }
     Ok(Some(PreparedGeneralGemmV1Config {
-        verus_path,
+        runtime_closure_v2_root,
+        runtime_closure_v2_manifest_sha256,
         proof_timeout_seconds: proof_timeout_seconds as u32,
     }))
 }
@@ -1596,7 +1633,8 @@ mod tests {
         value["general_gemm_v1"] = json!({
             "profile": GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1,
             "proof_timeout_seconds": 120,
-            "verus_path": "/opt/fe2o3/verus"
+            "runtime_closure_v2_manifest_sha256": hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
+            "runtime_closure_v2_root": "/opt/fe2o3/verus-runtime-v2/0.2026.08.02"
         });
         let path = directory.0.join("general-gemm-qualification-pair.json");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -1647,7 +1685,14 @@ mod tests {
         .unwrap();
         let pair = config.general_gemm_v1().unwrap();
         assert_eq!(config.manifest_path(), path);
-        assert_eq!(pair.verus_path(), Path::new("/opt/fe2o3/verus"));
+        assert_eq!(
+            pair.runtime_closure_v2_root(),
+            Path::new("/opt/fe2o3/verus-runtime-v2/0.2026.08.02")
+        );
+        assert_eq!(
+            pair.runtime_closure_v2_manifest_sha256(),
+            GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
+        );
         assert_eq!(pair.proof_timeout_seconds(), 120);
         assert!(config.executes_worker_in_rustc());
         assert!(config.requires_expected_identity());
@@ -1692,6 +1737,25 @@ mod tests {
         );
         assert_ne!(substituted.identity(), reference_identity);
 
+        value["general_gemm_v1"]["proof_timeout_seconds"] = json!(120);
+        value["general_gemm_v1"]["runtime_closure_v2_root"] =
+            json!("/opt/fe2o3/verus-runtime-v2/0.2026.08.02-substituted");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let substituted = PreparedWorkerV2Config::from_manifest_for_pipeline(
+            &path,
+            WorkerV2PipelineV1::GeneralGemmV1,
+        )
+        .unwrap();
+        assert_eq!(
+            substituted
+                .general_gemm_v1()
+                .map(PreparedGeneralGemmV1Config::runtime_closure_v2_root),
+            Some(Path::new(
+                "/opt/fe2o3/verus-runtime-v2/0.2026.08.02-substituted"
+            ))
+        );
+        assert_ne!(substituted.identity(), reference_identity);
+
         value["general_gemm_v1"]["custom"] = json!(true);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
@@ -1719,7 +1783,7 @@ mod tests {
         ));
 
         value["general_gemm_v1"]["proof_timeout_seconds"] = json!(120);
-        value["general_gemm_v1"]["verus_path"] = json!("relative/verus");
+        value["general_gemm_v1"]["runtime_closure_v2_root"] = json!("relative/runtime");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
             PreparedWorkerV2Config::from_manifest_for_pipeline(
@@ -1728,6 +1792,19 @@ mod tests {
             ),
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("absolute")
+        ));
+
+        value["general_gemm_v1"]["runtime_closure_v2_root"] =
+            json!("/opt/fe2o3/verus-runtime-v2/0.2026.08.02");
+        value["general_gemm_v1"]["runtime_closure_v2_manifest_sha256"] = json!("77".repeat(32));
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest_for_pipeline(
+                &path,
+                WorkerV2PipelineV1::GeneralGemmV1,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("compiled-in reviewed manifest")
         ));
     }
 

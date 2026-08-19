@@ -50,6 +50,7 @@ use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
 use crate::worker_v2::{
+    GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
     PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
     WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
     WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigError, WorkerV2ConfigIdentity,
@@ -1287,6 +1288,8 @@ fn materialize_reviewed_child_environment(
 struct GeneralGemmChildPinsV1<'a> {
     manifest_path: &'a Path,
     expected_identity: WorkerV2ConfigIdentity,
+    runtime_closure_v2_root: &'a Path,
+    runtime_closure_v2_manifest_sha256: [u8; 32],
 }
 
 fn materialize_row_softmax_v1_child_environment(
@@ -1606,6 +1609,26 @@ fn materialize_general_gemm_v1_child_environment(
             "general GEMM child environment has changed FE2O3_WORKER_V2_EXPECTED_ID_V1".to_owned(),
         ));
     }
+    let runtime_closure_v2_manifest_sha256 = hex(&pins.runtime_closure_v2_manifest_sha256);
+    for (name, expected) in [
+        (
+            GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
+            pins.runtime_closure_v2_root.as_os_str(),
+        ),
+        (
+            GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV,
+            OsStr::new(&runtime_closure_v2_manifest_sha256),
+        ),
+    ] {
+        if inherited
+            .get(OsStr::new(name))
+            .is_some_and(|actual| actual != expected)
+        {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "general GEMM child environment has changed {name}"
+            )));
+        }
+    }
     let verification = inherited
         .get(OsStr::new(VERIFY_KERNEL_IR_ENV))
         .map_or(OsStr::new("0"), OsString::as_os_str);
@@ -1633,6 +1656,14 @@ fn materialize_general_gemm_v1_child_environment(
         (
             OsString::from(WORKER_V2_EXPECTED_ID_ENV),
             OsString::from(expected_identity),
+        ),
+        (
+            OsString::from(GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV),
+            pins.runtime_closure_v2_root.as_os_str().to_owned(),
+        ),
+        (
+            OsString::from(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV),
+            OsString::from(runtime_closure_v2_manifest_sha256),
         ),
     ]);
     let explicit = command
@@ -1708,6 +1739,8 @@ fn reviewed_scalar_inherited_environment(name: &OsStr) -> bool {
             | b"FE2O3_HOST_PASSTHROUGH"
             | b"FE2O3_WORKER_V2_CONFIG_V2"
             | b"FE2O3_WORKER_V2_EXPECTED_ID_V1"
+            | b"FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT"
+            | b"FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256"
     )
 }
 
@@ -1802,6 +1835,19 @@ fn validate_general_gemm_v1_final_environment(
     {
         return Err(BindingWrapperError::BuildObservation(
             "general GEMM final environment has invalid FE2O3_WORKER_V2_EXPECTED_ID_V1".to_owned(),
+        ));
+    }
+    if !canonical_absolute_utf8_path(OsStr::new(required(
+        GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
+    )?)) {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM final environment has invalid runtime-closure V2 root".to_owned(),
+        ));
+    }
+    let runtime_manifest = required(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV)?;
+    if runtime_manifest != hex(&fe2o3_verifier::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256) {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM final environment has changed the runtime-closure V2 manifest".to_owned(),
         ));
     }
     let attempt = BuildAttempt::from_env_value(required(BUILD_ATTEMPT_ENV)?).map_err(|_| {
@@ -2524,9 +2570,14 @@ impl ManagedAttempt {
     fn general_gemm_child_pins(&self) -> Option<GeneralGemmChildPinsV1<'_>> {
         match &self.worker_v2 {
             Some(ManagedWorkerV2::InProcessGeneralGemm { config }) => {
+                let pair = config
+                    .general_gemm_v1()
+                    .expect("in-process general GEMM has runtime-closure pins");
                 Some(GeneralGemmChildPinsV1 {
                     manifest_path: config.manifest_path(),
                     expected_identity: config.identity(),
+                    runtime_closure_v2_root: pair.runtime_closure_v2_root(),
+                    runtime_closure_v2_manifest_sha256: pair.runtime_closure_v2_manifest_sha256(),
                 })
             }
             Some(ManagedWorkerV2::Fresh { .. }) | Some(ManagedWorkerV2::Recovery { .. }) | None => {
@@ -2657,7 +2708,11 @@ fn prepare_managed_attempt(
             let pair = config
                 .general_gemm_v1()
                 .expect("in-process general GEMM has parsed qualification-pair pins");
-            debug_assert!(pair.verus_path().is_absolute());
+            debug_assert!(pair.runtime_closure_v2_root().is_absolute());
+            debug_assert_eq!(
+                pair.runtime_closure_v2_manifest_sha256(),
+                fe2o3_verifier::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
+            );
             debug_assert_ne!(pair.proof_timeout_seconds(), 0);
             let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
                 .map_err(BindingWrapperError::Artifact)?;
@@ -3672,7 +3727,7 @@ mod tests {
         canonicalize_rustc_metadata, configure_build_observation_environment,
         configure_build_observation_environment_with_test_mutation,
         configure_worker_build_observation_environment, decode_managed_rustc_args,
-        derive_build_attempt_input_with_config_identity, is_cargo_stdin_probe,
+        derive_build_attempt_input_with_config_identity, hex, is_cargo_stdin_probe,
         materialize_general_gemm_v1_child_environment, materialize_reviewed_child_environment,
         materialize_row_softmax_v1_child_environment, materialize_s09_child_environment,
         materialize_scalar_gemm_v1_child_environment, measure_build_executable,
@@ -3685,7 +3740,9 @@ mod tests {
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_executable::PinnedExecutable;
     use crate::worker_v2::{
-        WorkerV2BuildObservation, WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigIdentity,
+        GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV,
+        GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV, WorkerV2BuildObservation,
+        WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigIdentity,
     };
     use crate::worker_v2_restart::{
         WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1,
@@ -4677,6 +4734,8 @@ mod tests {
 
     fn general_gemm_environment() -> Vec<(OsString, OsString)> {
         let expected = WorkerV2ConfigIdentity::for_test([0x66; 32]).to_hex();
+        let runtime_manifest =
+            hex(&fe2o3_verifier::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256);
         [
             ("CARGO_MANIFEST_DIR", "/workspace/general"),
             (
@@ -4690,6 +4749,14 @@ mod tests {
                 "/workspace/general/worker-v2.json",
             ),
             ("FE2O3_WORKER_V2_EXPECTED_ID_V1", expected.as_str()),
+            (
+                GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
+                "/opt/fe2o3/verus-runtime-v2/0.2026.08.02",
+            ),
+            (
+                GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV,
+                runtime_manifest.as_str(),
+            ),
         ]
         .map(|(name, value)| (OsString::from(name), OsString::from(value)))
         .into()
@@ -4720,6 +4787,9 @@ mod tests {
         GeneralGemmChildPinsV1 {
             manifest_path: Path::new("/workspace/general/worker-v2.json"),
             expected_identity: WorkerV2ConfigIdentity::for_test([0x66; 32]),
+            runtime_closure_v2_root: Path::new("/opt/fe2o3/verus-runtime-v2/0.2026.08.02"),
+            runtime_closure_v2_manifest_sha256:
+                fe2o3_verifier::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256,
         }
     }
 
@@ -4743,6 +4813,18 @@ mod tests {
         assert_eq!(
             effective.get(OsStr::new("FE2O3_WORKER_V2_EXPECTED_ID_V1")),
             Some(&OsString::from("66".repeat(32)))
+        );
+        assert_eq!(
+            effective.get(OsStr::new(GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV)),
+            Some(&OsString::from("/opt/fe2o3/verus-runtime-v2/0.2026.08.02"))
+        );
+        assert_eq!(
+            effective.get(OsStr::new(
+                GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV
+            )),
+            Some(&OsString::from(hex(
+                &fe2o3_verifier::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
+            )))
         );
         assert!(!effective.contains_key(OsStr::new("HOME")));
     }
@@ -4768,6 +4850,11 @@ mod tests {
         for (name, value) in [
             ("FE2O3_WORKER_V2_CONFIG_V2", "/workspace/other.json"),
             ("FE2O3_WORKER_V2_EXPECTED_ID_V1", "77"),
+            (
+                GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
+                "/opt/fe2o3/verus-runtime-v2/substituted",
+            ),
+            (GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, "77"),
         ] {
             let mut inherited = general_gemm_environment();
             inherited
