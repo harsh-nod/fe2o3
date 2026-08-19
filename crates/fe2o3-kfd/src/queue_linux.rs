@@ -7,20 +7,33 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use core::sync::atomic::{Ordering, fence};
-use std::os::fd::BorrowedFd;
+use core::sync::atomic::{AtomicBool, Ordering, fence};
+use std::os::fd::{AsRawFd, BorrowedFd};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 use fe2o3_kfd_uapi::{
-    AMDKFD_IOC_CREATE_QUEUE, AMDKFD_IOC_DESTROY_QUEUE, AMDKFD_IOC_UPDATE_QUEUE,
-    KFD_GFX942_DOORBELL_BYTES, KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES,
-    KfdGfx942CreateQueueOutputs, KfdIoctlCreateQueueArgs, KfdIoctlDestroyQueueArgs,
-    KfdIoctlUpdateQueueArgs,
+    AMDKFD_IOC_CREATE_EVENT, AMDKFD_IOC_CREATE_QUEUE, AMDKFD_IOC_DESTROY_EVENT,
+    AMDKFD_IOC_DESTROY_QUEUE, AMDKFD_IOC_RUNTIME_ENABLE, AMDKFD_IOC_UPDATE_QUEUE,
+    AMDKFD_IOC_WAIT_EVENTS, KFD_GFX942_DOORBELL_BYTES, KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES,
+    KfdEventDataArrayAddressV1, KfdEventDataV1, KfdGfx942CreateQueueOutputs,
+    KfdIoctlCreateEventArgsV1, KfdIoctlCreateQueueArgs, KfdIoctlDestroyEventArgsV1,
+    KfdIoctlDestroyQueueArgs, KfdIoctlRuntimeEnableArgsV1, KfdIoctlUpdateQueueArgs,
+    KfdIoctlWaitEventsArgsV1, KfdQueueExceptionPayloadAddressV1, KfdQueueExceptionReasonV1,
+    KfdSignalEventIdV1, KfdWaitResultV1,
 };
 use rustix::ioctl::{Opcode, Setter, Updater};
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
 const CREATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_CREATE_QUEUE as Opcode;
 const DESTROY_QUEUE_OPCODE: Opcode = AMDKFD_IOC_DESTROY_QUEUE as Opcode;
+const CREATE_EVENT_OPCODE: Opcode = AMDKFD_IOC_CREATE_EVENT as Opcode;
+const DESTROY_EVENT_OPCODE: Opcode = AMDKFD_IOC_DESTROY_EVENT as Opcode;
+const WAIT_EVENTS_OPCODE: Opcode = AMDKFD_IOC_WAIT_EVENTS as Opcode;
+const RUNTIME_ENABLE_OPCODE: Opcode = AMDKFD_IOC_RUNTIME_ENABLE as Opcode;
+const QUEUE_EXCEPTION_PAYLOAD_OFFSET: usize = 64;
+const MAX_QUEUE_EXCEPTION_WAIT_MS: u32 = 1_000;
+static KFD_RUNTIME_GATE: Mutex<()> = Mutex::new(());
+static KFD_RUNTIME_GATE_POISONED: AtomicBool = AtomicBool::new(false);
 #[allow(dead_code)]
 const UPDATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_UPDATE_QUEUE as Opcode;
 
@@ -39,6 +52,23 @@ pub(super) enum LinuxDoorbellErrorV1 {
     ChildProbe(&'static str),
     #[cfg(feature = "live-validation")]
     MappingInherited,
+    Event(&'static str),
+    EventSyscall {
+        operation: &'static str,
+        source: rustix::io::Errno,
+    },
+    Runtime(&'static str),
+    RuntimeSyscall {
+        operation: &'static str,
+        source: rustix::io::Errno,
+    },
+    Shadow(&'static str),
+    ShadowSyscall {
+        operation: &'static str,
+        source: rustix::io::Errno,
+    },
+    #[cfg(feature = "live-validation")]
+    ShadowMappingInherited,
 }
 
 impl core::fmt::Display for LinuxDoorbellErrorV1 {
@@ -64,11 +94,834 @@ impl core::fmt::Display for LinuxDoorbellErrorV1 {
             Self::MappingInherited => {
                 formatter.write_str("doorbell VMA was inherited despite MADV_DONTFORK")
             }
+            Self::Event(detail) => write!(formatter, "queue exception event invalid: {detail}"),
+            Self::EventSyscall { operation, source } => {
+                write!(formatter, "{operation} failed: {source}")
+            }
+            Self::Runtime(detail) => write!(formatter, "KFD runtime state invalid: {detail}"),
+            Self::RuntimeSyscall { operation, source } => {
+                write!(formatter, "{operation} failed: {source}")
+            }
+            Self::Shadow(detail) => write!(formatter, "CWSR shadow invalid: {detail}"),
+            Self::ShadowSyscall { operation, source } => {
+                write!(formatter, "{operation} failed: {source}")
+            }
+            #[cfg(feature = "live-validation")]
+            Self::ShadowMappingInherited => {
+                formatter.write_str("CWSR shadow VMA was inherited despite MADV_DONTFORK")
+            }
         }
     }
 }
 
 impl std::error::Error for LinuxDoorbellErrorV1 {}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CwsrShadowPlanV1 {
+    base: u64,
+    bytes: usize,
+    page_bytes: usize,
+}
+
+impl CwsrShadowPlanV1 {
+    pub(crate) fn from_owned_reservation(
+        base: u64,
+        bytes: usize,
+        page_bytes: usize,
+    ) -> Result<Self, LinuxDoorbellErrorV1> {
+        use crate::queue::submit::{
+            GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_TOTAL_BYTES_V1,
+            GFX942_CWSR_XCC_COUNT_V1,
+        };
+        if bytes != GFX942_CWSR_TOTAL_BYTES_V1 || page_bytes != 4096 {
+            return Err(LinuxDoorbellErrorV1::Shadow("reservation geometry"));
+        }
+        if !base.is_multiple_of(page_bytes as u64) {
+            return Err(LinuxDoorbellErrorV1::Shadow("reservation alignment"));
+        }
+        let end = base
+            .checked_add(bytes as u64)
+            .ok_or(LinuxDoorbellErrorV1::Shadow("reservation overflow"))?;
+        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
+            let offset = xcc
+                .checked_mul(GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1)
+                .ok_or(LinuxDoorbellErrorV1::Shadow("XCC offset"))?;
+            let page_end = base
+                .checked_add(offset as u64)
+                .and_then(|address| address.checked_add(page_bytes as u64))
+                .ok_or(LinuxDoorbellErrorV1::Shadow("XCC page overflow"))?;
+            if page_end > end {
+                return Err(LinuxDoorbellErrorV1::Shadow("XCC page range"));
+            }
+        }
+        Ok(Self {
+            base,
+            bytes,
+            page_bytes,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QueueExceptionWaitObservationV1 {
+    NoExceptionAtObservation,
+    Exception(KfdQueueExceptionReasonV1),
+}
+
+fn admit_queue_exception_wait(
+    wait: KfdWaitResultV1,
+    reason: KfdQueueExceptionReasonV1,
+) -> Result<QueueExceptionWaitObservationV1, LinuxDoorbellErrorV1> {
+    match (wait, reason.is_empty()) {
+        (KfdWaitResultV1::Timeout, true) => {
+            Ok(QueueExceptionWaitObservationV1::NoExceptionAtObservation)
+        }
+        (KfdWaitResultV1::Complete, false) => {
+            Ok(QueueExceptionWaitObservationV1::Exception(reason))
+        }
+        _ => Err(LinuxDoorbellErrorV1::Event("wait/payload disagreement")),
+    }
+}
+
+fn begin_one_shot_observation(used: &mut bool) -> Result<(), LinuxDoorbellErrorV1> {
+    if *used {
+        Err(LinuxDoorbellErrorV1::Event(
+            "queue exception observation is one-shot",
+        ))
+    } else {
+        *used = true;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KfdRuntimeBindingV1 {
+    opener_pid: u32,
+    raw_fd: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KfdRuntimeLifecyclePhaseV1 {
+    EnabledBeforeQueue,
+    QueueLive,
+    QueueDestroyed,
+    EventDestroyed,
+    Disabled,
+}
+
+fn admit_runtime_transition(
+    current: KfdRuntimeLifecyclePhaseV1,
+    required: KfdRuntimeLifecyclePhaseV1,
+    next: KfdRuntimeLifecyclePhaseV1,
+) -> Result<KfdRuntimeLifecyclePhaseV1, LinuxDoorbellErrorV1> {
+    if current == required {
+        Ok(next)
+    } else {
+        Err(LinuxDoorbellErrorV1::Runtime(
+            "runtime/queue/event ordering",
+        ))
+    }
+}
+
+/// Process-global, linear ownership of the KFD runtime-enabled state.
+///
+/// The static guard excludes other fe2o3 queue sessions in this process. A
+/// foreign KFD client in the same process is outside this authority boundary.
+pub(crate) struct LinuxKfdRuntimeEnabledV1 {
+    binding: KfdRuntimeBindingV1,
+    gate: Option<MutexGuard<'static, ()>>,
+    active: bool,
+    poisoned: bool,
+    phase: KfdRuntimeLifecyclePhaseV1,
+}
+
+pub(crate) struct LinuxKfdRuntimeDisabledV1 {
+    binding: KfdRuntimeBindingV1,
+    gate: Option<MutexGuard<'static, ()>>,
+}
+
+impl LinuxKfdRuntimeEnabledV1 {
+    pub(crate) fn enable(
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<Self, LinuxDoorbellErrorV1> {
+        if opener_pid != std::process::id() || kfd.as_raw_fd() < 0 {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        if KFD_RUNTIME_GATE_POISONED.load(Ordering::Acquire) {
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "process-global gate poisoned",
+            ));
+        }
+        let gate = match KFD_RUNTIME_GATE.try_lock() {
+            Ok(gate) => gate,
+            Err(TryLockError::WouldBlock) => {
+                return Err(LinuxDoorbellErrorV1::Runtime(
+                    "another fe2o3 runtime owner is live",
+                ));
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+                return Err(LinuxDoorbellErrorV1::Runtime(
+                    "process-global mutex poisoned",
+                ));
+            }
+        };
+        if KFD_RUNTIME_GATE_POISONED.load(Ordering::Acquire) {
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "process-global gate poisoned",
+            ));
+        }
+
+        let expected = KfdIoctlRuntimeEnableArgsV1::new_queue_exception_enable();
+        let mut args = expected;
+        // SAFETY: the exact 16-byte in/out record remains exclusively borrowed
+        // for the complete ioctl. No pointer is embedded in this profile.
+        let request = unsafe { Updater::<RUNTIME_ENABLE_OPCODE, _>::new(&mut args) };
+        // SAFETY: the retained process-bound fd and exact record satisfy the
+        // reviewed request. Every error is treated as an ambiguous transition.
+        if let Err(source) = unsafe { rustix::ioctl::ioctl(kfd, request) } {
+            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            return Err(LinuxDoorbellErrorV1::RuntimeSyscall {
+                operation: "AMDKFD_IOC_RUNTIME_ENABLE(enable)",
+                source,
+            });
+        }
+        if args != expected || !args.is_exact_queue_exception_enable() {
+            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "RUNTIME_ENABLE enable output drift",
+            ));
+        }
+        Ok(Self {
+            binding: KfdRuntimeBindingV1 {
+                opener_pid,
+                raw_fd: kfd.as_raw_fd(),
+            },
+            gate: Some(gate),
+            active: true,
+            poisoned: false,
+            phase: KfdRuntimeLifecyclePhaseV1::EnabledBeforeQueue,
+        })
+    }
+
+    fn check_binding(
+        &self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        if opener_pid != std::process::id()
+            || self.binding.opener_pid != opener_pid
+            || self.binding.raw_fd != kfd.as_raw_fd()
+        {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        if !self.active || self.poisoned || self.gate.is_none() {
+            return Err(LinuxDoorbellErrorV1::Runtime("linear runtime state"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_active(
+        &self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        self.check_binding(kfd, opener_pid)
+    }
+
+    pub(crate) fn validate_queue_live(
+        &self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        self.check_binding(kfd, opener_pid)?;
+        if self.phase != KfdRuntimeLifecyclePhaseV1::QueueLive {
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "runtime does not own one live queue",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn mark_queue_created(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.phase = admit_runtime_transition(
+            self.phase,
+            KfdRuntimeLifecyclePhaseV1::EnabledBeforeQueue,
+            KfdRuntimeLifecyclePhaseV1::QueueLive,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn mark_queue_destroyed(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.phase = admit_runtime_transition(
+            self.phase,
+            KfdRuntimeLifecyclePhaseV1::QueueLive,
+            KfdRuntimeLifecyclePhaseV1::QueueDestroyed,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn mark_event_destroyed(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.phase = admit_runtime_transition(
+            self.phase,
+            KfdRuntimeLifecyclePhaseV1::QueueDestroyed,
+            KfdRuntimeLifecyclePhaseV1::EventDestroyed,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn disable(
+        mut self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<LinuxKfdRuntimeDisabledV1, LinuxDoorbellErrorV1> {
+        if let Err(error) = self.check_binding(kfd, opener_pid) {
+            self.poisoned = true;
+            return Err(error);
+        }
+        if self.phase != KfdRuntimeLifecyclePhaseV1::EventDestroyed {
+            self.poisoned = true;
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "disable before queue and event destruction",
+            ));
+        }
+        let expected = KfdIoctlRuntimeEnableArgsV1::new_queue_exception_disable();
+        let mut args = expected;
+        // SAFETY: exact pointer-free 16-byte transition record.
+        let request = unsafe { Updater::<RUNTIME_ENABLE_OPCODE, _>::new(&mut args) };
+        // SAFETY: matching process-bound fd and exclusive record. Any error is
+        // ambiguous, poisons the global owner, and permits no later cleanup.
+        if let Err(source) = unsafe { rustix::ioctl::ioctl(kfd, request) } {
+            self.poisoned = true;
+            return Err(LinuxDoorbellErrorV1::RuntimeSyscall {
+                operation: "AMDKFD_IOC_RUNTIME_ENABLE(disable)",
+                source,
+            });
+        }
+        if args != expected || !args.is_exact_queue_exception_disable() {
+            self.poisoned = true;
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "RUNTIME_ENABLE disable output drift",
+            ));
+        }
+        self.active = false;
+        self.phase = admit_runtime_transition(
+            self.phase,
+            KfdRuntimeLifecyclePhaseV1::EventDestroyed,
+            KfdRuntimeLifecyclePhaseV1::Disabled,
+        )?;
+        Ok(LinuxKfdRuntimeDisabledV1 {
+            binding: self.binding,
+            gate: Some(self.gate.take().expect("validated runtime gate")),
+        })
+    }
+}
+
+impl Drop for LinuxKfdRuntimeEnabledV1 {
+    fn drop(&mut self) {
+        if self.active || self.poisoned {
+            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+        }
+        // Deliberately no implicit ioctl.
+    }
+}
+
+impl LinuxKfdRuntimeDisabledV1 {
+    fn complete(mut self) {
+        let _ = self.gate.take();
+    }
+}
+
+impl Drop for LinuxKfdRuntimeDisabledV1 {
+    fn drop(&mut self) {
+        if self.gate.is_some() {
+            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+        }
+        // Deliberately no implicit ioctl.
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct QueueExceptionBindingV1 {
+    event_id: KfdSignalEventIdV1,
+    opener_pid: u32,
+    raw_fd: i32,
+}
+
+pub(crate) struct LinuxQueueExceptionEventV1 {
+    binding: QueueExceptionBindingV1,
+    active: bool,
+    poisoned: bool,
+    observation_used: bool,
+}
+
+pub(crate) struct LinuxDestroyedQueueExceptionEventV1 {
+    binding: QueueExceptionBindingV1,
+}
+
+impl LinuxQueueExceptionEventV1 {
+    pub(crate) fn create(
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<Self, LinuxDoorbellErrorV1> {
+        if opener_pid != std::process::id() || kfd.as_raw_fd() < 0 {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        let mut args = KfdIoctlCreateEventArgsV1::new_queue_exception_signal(None);
+        // SAFETY: event layout/opcode are frozen by the independent KFD 1.18
+        // oracle and the initialized exclusive record spans the complete call.
+        let request = unsafe { Updater::<CREATE_EVENT_OPCODE, _>::new(&mut args) };
+        // SAFETY: the retained fd and exclusive in/out record satisfy the
+        // request contract. Every output remains untrusted until admission.
+        unsafe { rustix::ioctl::ioctl(kfd, request) }.map_err(|source| {
+            LinuxDoorbellErrorV1::EventSyscall {
+                operation: "AMDKFD_IOC_CREATE_EVENT",
+                source,
+            }
+        })?;
+        let observation = args
+            .admit_first_internal_queue_exception_signal_output()
+            .map_err(|_| LinuxDoorbellErrorV1::Event("CREATE_EVENT output"))?;
+        Ok(Self {
+            binding: QueueExceptionBindingV1 {
+                event_id: observation.id(),
+                opener_pid,
+                raw_fd: kfd.as_raw_fd(),
+            },
+            active: true,
+            poisoned: false,
+            observation_used: false,
+        })
+    }
+
+    pub(crate) fn event_id_observation(&self) -> u32 {
+        self.binding.event_id.get()
+    }
+
+    fn check_binding(
+        &self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        if opener_pid != std::process::id()
+            || self.binding.opener_pid != opener_pid
+            || self.binding.raw_fd != kfd.as_raw_fd()
+        {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        if !self.active || self.poisoned {
+            return Err(LinuxDoorbellErrorV1::Event("linear event state"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_live_with_shadows(
+        &self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+        shadows: &LinuxCwsrShadowPagesV1,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        self.check_binding(kfd, opener_pid)?;
+        if !shadows.matches(self.binding) {
+            return Err(LinuxDoorbellErrorV1::Event("event/shadow substitution"));
+        }
+        shadows.validate_readback()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn wait_and_observe(
+        &mut self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+        shadows: &LinuxCwsrShadowPagesV1,
+        timeout_ms: u32,
+    ) -> Result<QueueExceptionWaitObservationV1, LinuxDoorbellErrorV1> {
+        if timeout_ms > MAX_QUEUE_EXCEPTION_WAIT_MS {
+            self.poisoned = true;
+            return Err(LinuxDoorbellErrorV1::Event("wait timeout bound"));
+        }
+        if let Err(error) = begin_one_shot_observation(&mut self.observation_used) {
+            self.poisoned = true;
+            return Err(error);
+        }
+        if let Err(error) = self.check_binding(kfd, opener_pid) {
+            self.poisoned = true;
+            return Err(error);
+        }
+        if !shadows.matches(self.binding) {
+            self.poisoned = true;
+            return Err(LinuxDoorbellErrorV1::Event("event/shadow substitution"));
+        }
+        let mut event_data = KfdEventDataV1::new_signal(self.binding.event_id, 0);
+        let address = match KfdEventDataArrayAddressV1::new(
+            (&mut event_data as *mut KfdEventDataV1) as usize as u64,
+            1,
+        ) {
+            Some(address) => address,
+            None => {
+                self.poisoned = true;
+                return Err(LinuxDoorbellErrorV1::Event("event-data address"));
+            }
+        };
+        let mut args = KfdIoctlWaitEventsArgsV1::new_one_signal(address, timeout_ms);
+        // SAFETY: the exact wait record and nested single event_data value stay
+        // live and exclusively located for the complete ioctl.
+        let request = unsafe { Updater::<WAIT_EVENTS_OPCODE, _>::new(&mut args) };
+        // SAFETY: the nested pointer, count, opcode, and exclusive output
+        // borrow are established above. Error is treated as ambiguous.
+        if let Err(source) = unsafe { rustix::ioctl::ioctl(kfd, request) } {
+            self.poisoned = true;
+            return Err(LinuxDoorbellErrorV1::EventSyscall {
+                operation: "AMDKFD_IOC_WAIT_EVENTS",
+                source,
+            });
+        }
+        let wait = match args.admit_successful_result(address, timeout_ms) {
+            Ok(wait) => wait,
+            Err(_) => {
+                self.poisoned = true;
+                return Err(LinuxDoorbellErrorV1::Event("WAIT_EVENTS output"));
+            }
+        };
+        let reason = match shadows.observe_reason() {
+            Ok(reason) => reason,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        match admit_queue_exception_wait(wait, reason) {
+            Ok(observation) => {
+                // A bounded wait and payload read are not an atomic absence
+                // proof. The one-shot observation is terminal either way.
+                self.poisoned = true;
+                Ok(observation)
+            }
+            Err(error) => {
+                self.poisoned = true;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn destroy(
+        mut self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<LinuxDestroyedQueueExceptionEventV1, LinuxDoorbellErrorV1> {
+        self.check_binding(kfd, opener_pid)?;
+        let args = KfdIoctlDestroyEventArgsV1::new(self.binding.event_id);
+        // SAFETY: Setter must own the exact 8-byte record. Passing `&args`
+        // would make its input type a reference and send reference bytes.
+        let request = unsafe { Setter::<DESTROY_EVENT_OPCODE, _>::new(args) };
+        // SAFETY: the retained matching fd and input record satisfy the
+        // reviewed request. Any error is ambiguous and no cleanup follows.
+        unsafe { rustix::ioctl::ioctl(kfd, request) }.map_err(|source| {
+            LinuxDoorbellErrorV1::EventSyscall {
+                operation: "AMDKFD_IOC_DESTROY_EVENT",
+                source,
+            }
+        })?;
+        self.active = false;
+        Ok(LinuxDestroyedQueueExceptionEventV1 {
+            binding: self.binding,
+        })
+    }
+}
+
+impl Drop for LinuxQueueExceptionEventV1 {
+    fn drop(&mut self) {
+        // Deliberately no implicit event ioctl.
+    }
+}
+
+pub(crate) struct LinuxCwsrShadowPagesV1 {
+    pages: [NonNull<c_void>; crate::queue::submit::GFX942_CWSR_XCC_COUNT_V1],
+    payload: NonNull<u64>,
+    binding: QueueExceptionBindingV1,
+    #[cfg(feature = "live-validation")]
+    page_bytes: usize,
+    active: bool,
+}
+
+pub(crate) struct LinuxCwsrShadowsReadyForReleaseV1 {
+    shadows: LinuxCwsrShadowPagesV1,
+    runtime: LinuxKfdRuntimeDisabledV1,
+}
+
+impl LinuxCwsrShadowPagesV1 {
+    pub(crate) fn install(
+        plan: CwsrShadowPlanV1,
+        event: &LinuxQueueExceptionEventV1,
+    ) -> Result<Self, LinuxDoorbellErrorV1> {
+        use crate::queue::submit::{
+            CWSR_HEADER_BYTES, GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_XCC_COUNT_V1,
+            gfx942_cwsr_header_bytes,
+        };
+        if !event.active || event.poisoned || event.binding.opener_pid != std::process::id() {
+            return Err(LinuxDoorbellErrorV1::Event("shadow event state"));
+        }
+        let mut pages = Vec::with_capacity(GFX942_CWSR_XCC_COUNT_V1);
+        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
+            let offset = xcc
+                .checked_mul(GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1)
+                .ok_or(LinuxDoorbellErrorV1::Shadow("XCC offset"))?;
+            let requested = plan
+                .base
+                .checked_add(offset as u64)
+                .ok_or(LinuxDoorbellErrorV1::Shadow("XCC address"))?;
+            let pointer = usize::try_from(requested)
+                .map_err(|_| LinuxDoorbellErrorV1::Shadow("XCC address width"))?
+                as *mut c_void;
+            // SAFETY: the plan was minted only for this exact owned PROT_NONE
+            // reservation. MAP_FIXED replaces exactly one page and starts it
+            // PROT_NONE, without exposing a setup window.
+            let mapped = unsafe {
+                rustix::mm::mmap_anonymous(
+                    pointer,
+                    plan.page_bytes,
+                    ProtFlags::empty(),
+                    MapFlags::PRIVATE | MapFlags::FIXED | MapFlags::NORESERVE,
+                )
+            }
+            .map_err(|source| LinuxDoorbellErrorV1::ShadowSyscall {
+                operation: "mmap fixed CWSR shadow page",
+                source,
+            })?;
+            if mapped != pointer {
+                std::process::abort();
+            }
+            let page = NonNull::new(mapped).ok_or(LinuxDoorbellErrorV1::Shadow("zero page"))?;
+            // SAFETY: exact new page remains PROT_NONE and exclusively owned.
+            unsafe { rustix::mm::madvise(page.as_ptr(), plan.page_bytes, Advice::LinuxDontFork) }
+                .map_err(|source| LinuxDoorbellErrorV1::ShadowSyscall {
+                operation: "madvise CWSR shadow MADV_DONTFORK",
+                source,
+            })?;
+            // SAFETY: DONTFORK is installed before the page gains access.
+            unsafe {
+                rustix::mm::mprotect(
+                    page.as_ptr(),
+                    plan.page_bytes,
+                    MprotectFlags::READ | MprotectFlags::WRITE,
+                )
+            }
+            .map_err(|source| LinuxDoorbellErrorV1::ShadowSyscall {
+                operation: "mprotect CWSR shadow read/write",
+                source,
+            })?;
+            pages.push(page);
+        }
+        let pages: [NonNull<c_void>; GFX942_CWSR_XCC_COUNT_V1] = pages
+            .try_into()
+            .map_err(|_| LinuxDoorbellErrorV1::Shadow("shadow page count"))?;
+        // SAFETY: offset 64 selects an aligned u64 wholly inside page zero.
+        let payload_pointer = unsafe {
+            pages[0]
+                .as_ptr()
+                .cast::<u8>()
+                .add(QUEUE_EXCEPTION_PAYLOAD_OFFSET)
+                .cast::<u64>()
+        };
+        let payload =
+            NonNull::new(payload_pointer).ok_or(LinuxDoorbellErrorV1::Shadow("payload address"))?;
+        let payload_observation =
+            KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64)
+                .ok_or(LinuxDoorbellErrorV1::Shadow("payload admission"))?;
+        // SAFETY: the exact aligned payload word is exclusively owned and was
+        // not previously initialized as a Rust object.
+        unsafe { core::ptr::write_volatile(payload.as_ptr(), 0_u64) };
+        for (xcc, page) in pages.iter().enumerate() {
+            let header = gfx942_cwsr_header_bytes(xcc, payload_observation, event.binding.event_id)
+                .map_err(|_| LinuxDoorbellErrorV1::Shadow("typed header"))?;
+            debug_assert_eq!(header.len(), CWSR_HEADER_BYTES);
+            // SAFETY: each exact page has at least 40 writable bytes and no
+            // reference or pointer escapes this boundary.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    header.as_ptr(),
+                    page.as_ptr().cast::<u8>(),
+                    CWSR_HEADER_BYTES,
+                )
+            };
+        }
+        let owner = Self {
+            pages,
+            payload,
+            binding: event.binding,
+            #[cfg(feature = "live-validation")]
+            page_bytes: plan.page_bytes,
+            active: true,
+        };
+        owner.validate_readback()?;
+        Ok(owner)
+    }
+
+    pub(crate) fn initialize_and_validate_bo_headers(
+        &self,
+        bytes: &mut [u8],
+    ) -> Result<(), crate::queue::submit::NativeAqlSubmissionErrorV1> {
+        let payload = KfdQueueExceptionPayloadAddressV1::new(self.payload.as_ptr() as usize as u64)
+            .ok_or(
+                crate::queue::submit::NativeAqlSubmissionErrorV1::InvalidCwsr("payload readback"),
+            )?;
+        crate::queue::submit::initialize_gfx942_cwsr_headers(
+            bytes,
+            payload,
+            self.binding.event_id,
+        )?;
+        for xcc in 0..crate::queue::submit::GFX942_CWSR_XCC_COUNT_V1 {
+            let offset = xcc * crate::queue::submit::GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1;
+            let expected = crate::queue::submit::gfx942_cwsr_header_bytes(
+                xcc,
+                payload,
+                self.binding.event_id,
+            )?;
+            if bytes.get(offset..offset + expected.len()) != Some(expected.as_slice()) {
+                return Err(
+                    crate::queue::submit::NativeAqlSubmissionErrorV1::InvalidCwsr(
+                        "BO header readback",
+                    ),
+                );
+            }
+        }
+        self.validate_readback().map_err(|_| {
+            crate::queue::submit::NativeAqlSubmissionErrorV1::InvalidCwsr("shadow readback")
+        })
+    }
+
+    fn matches(&self, binding: QueueExceptionBindingV1) -> bool {
+        self.active && self.binding == binding && self.binding.opener_pid == std::process::id()
+    }
+
+    fn validate_readback(&self) -> Result<(), LinuxDoorbellErrorV1> {
+        let payload = KfdQueueExceptionPayloadAddressV1::new(self.payload.as_ptr() as usize as u64)
+            .ok_or(LinuxDoorbellErrorV1::Shadow("payload readback"))?;
+        for (xcc, page) in self.pages.iter().enumerate() {
+            let expected =
+                crate::queue::submit::gfx942_cwsr_header_bytes(xcc, payload, self.binding.event_id)
+                    .map_err(|_| LinuxDoorbellErrorV1::Shadow("typed header readback"))?;
+            for (index, expected_byte) in expected.iter().enumerate() {
+                // SAFETY: exact owned live page and bounded header byte.
+                let observed =
+                    unsafe { core::ptr::read_volatile(page.as_ptr().cast::<u8>().add(index)) };
+                if observed != *expected_byte {
+                    return Err(LinuxDoorbellErrorV1::Shadow("header readback"));
+                }
+            }
+        }
+        if self.observe_reason()?.get() != 0 {
+            return Err(LinuxDoorbellErrorV1::Shadow("initial payload"));
+        }
+        Ok(())
+    }
+
+    fn observe_reason(&self) -> Result<KfdQueueExceptionReasonV1, LinuxDoorbellErrorV1> {
+        if !self.active || self.binding.opener_pid != std::process::id() {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        // SAFETY: the aligned payload remains within owned live page zero.
+        let observed = u64::from_le(unsafe { core::ptr::read_volatile(self.payload.as_ptr()) });
+        KfdQueueExceptionReasonV1::from_untrusted_wire(observed)
+            .ok_or(LinuxDoorbellErrorV1::Shadow("queue exception reason"))
+    }
+
+    pub(crate) fn after_event_and_runtime_destroy(
+        mut self,
+        destroyed: LinuxDestroyedQueueExceptionEventV1,
+        runtime: LinuxKfdRuntimeDisabledV1,
+    ) -> Result<LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1> {
+        if !self.matches(destroyed.binding)
+            || runtime.binding.opener_pid != self.binding.opener_pid
+            || runtime.binding.raw_fd != self.binding.raw_fd
+        {
+            return Err(LinuxDoorbellErrorV1::Shadow("destroyed event substitution"));
+        }
+        self.active = false;
+        Ok(LinuxCwsrShadowsReadyForReleaseV1 {
+            shadows: self,
+            runtime,
+        })
+    }
+
+    #[cfg(feature = "live-validation")]
+    pub(crate) fn verify_dontfork_child_negative(&self) -> Result<(), LinuxDoorbellErrorV1> {
+        if !self.active || self.binding.opener_pid != std::process::id() {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        let tasks = std::fs::read_dir("/proc/self/task")
+            .map_err(|_| LinuxDoorbellErrorV1::ChildProbe("read /proc/self/task"))?
+            .take(2)
+            .count();
+        if tasks != 1 {
+            return Err(LinuxDoorbellErrorV1::IsolationRequired);
+        }
+        // SAFETY: isolated child probes VMA existence only, then exits.
+        match unsafe { rustix::runtime::kernel_fork() }.map_err(|source| {
+            LinuxDoorbellErrorV1::ShadowSyscall {
+                operation: "fork CWSR shadow DONTFORK probe",
+                source,
+            }
+        })? {
+            rustix::runtime::Fork::Child(_) => {
+                let mut residency = [0_u8; 1];
+                for page in self.pages {
+                    // SAFETY: mincore does not dereference an absent child VMA.
+                    let result =
+                        unsafe { mincore(page.as_ptr(), self.page_bytes, residency.as_mut_ptr()) };
+                    if result != -1 || std::io::Error::last_os_error().raw_os_error() != Some(12) {
+                        rustix::runtime::exit_group(if result == 0 { 1 } else { 2 });
+                    }
+                }
+                rustix::runtime::exit_group(0);
+            }
+            rustix::runtime::Fork::ParentOf(child) => {
+                let (_, status) =
+                    rustix::process::waitpid(Some(child), rustix::process::WaitOptions::empty())
+                        .map_err(|source| LinuxDoorbellErrorV1::ShadowSyscall {
+                            operation: "wait CWSR shadow DONTFORK probe",
+                            source,
+                        })?
+                        .ok_or(LinuxDoorbellErrorV1::ChildProbe("child was not waitable"))?;
+                match status.exit_status() {
+                    Some(0) => Ok(()),
+                    Some(1) => Err(LinuxDoorbellErrorV1::ShadowMappingInherited),
+                    _ => Err(LinuxDoorbellErrorV1::ChildProbe("child mincore protocol")),
+                }
+            }
+        }
+    }
+}
+
+impl LinuxCwsrShadowsReadyForReleaseV1 {
+    pub(crate) fn validate_for_release(&self) -> Result<(), LinuxDoorbellErrorV1> {
+        let gate_is_held = self.runtime.gate.is_some();
+        if self.shadows.active
+            || !gate_is_held
+            || self.shadows.binding.opener_pid != std::process::id()
+            || self.runtime.binding.opener_pid != self.shadows.binding.opener_pid
+            || self.runtime.binding.raw_fd != self.shadows.binding.raw_fd
+        {
+            Err(LinuxDoorbellErrorV1::Shadow("release state"))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn complete(self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.validate_for_release()?;
+        self.runtime.complete();
+        Ok(())
+    }
+}
+
+impl Drop for LinuxCwsrShadowPagesV1 {
+    fn drop(&mut self) {
+        // No implicit munmap. Full reservation release remains explicit and
+        // is admitted only after queue and event destruction.
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DoorbellMmapPlanV1 {
@@ -357,8 +1210,9 @@ pub fn update_queue(
 ) -> Result<(), rustix::io::Errno> {
     // SAFETY: the exact write-only opcode and initialized input lifetime are
     // fixed here. Numeric queue/address fields are not authority by themselves.
-    let request = unsafe { Setter::<UPDATE_QUEUE_OPCODE, _>::new(args) };
-    // SAFETY: the setter borrows the initialized record for the complete call.
+    let request = unsafe { Setter::<UPDATE_QUEUE_OPCODE, _>::new(*args) };
+    // SAFETY: the setter owns the exact record for the complete call. Passing
+    // the reference itself would send reference bytes rather than UAPI bytes.
     unsafe { rustix::ioctl::ioctl(kfd, request) }.map(|_| ())
 }
 
@@ -373,4 +1227,109 @@ pub fn destroy_queue(
     let request = unsafe { Updater::<DESTROY_QUEUE_OPCODE, _>::new(args) };
     // SAFETY: request construction establishes the exclusive in/out borrow.
     unsafe { rustix::ioctl::ioctl(kfd, request) }.map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::submit::{
+        GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_TOTAL_BYTES_V1, GFX942_CWSR_XCC_COUNT_V1,
+    };
+
+    #[test]
+    fn shadow_plan_is_exact_and_hostile_geometry_fails_closed() {
+        let plan = CwsrShadowPlanV1::from_owned_reservation(
+            0x1_0000_0000,
+            GFX942_CWSR_TOTAL_BYTES_V1,
+            4096,
+        )
+        .unwrap();
+        assert_eq!(plan.bytes, 0xb16_7000);
+        assert_eq!(plan.page_bytes, 4096);
+        let mut addresses = [0_u64; GFX942_CWSR_XCC_COUNT_V1];
+        for (xcc, address) in addresses.iter_mut().enumerate() {
+            *address = plan.base + (xcc * GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1) as u64;
+            assert!(address.is_multiple_of(4096));
+        }
+        assert!(addresses.windows(2).all(|pair| pair[0] < pair[1]));
+
+        for result in [
+            CwsrShadowPlanV1::from_owned_reservation(
+                plan.base + 1,
+                GFX942_CWSR_TOTAL_BYTES_V1,
+                4096,
+            ),
+            CwsrShadowPlanV1::from_owned_reservation(
+                plan.base,
+                GFX942_CWSR_TOTAL_BYTES_V1 - 4096,
+                4096,
+            ),
+            CwsrShadowPlanV1::from_owned_reservation(plan.base, GFX942_CWSR_TOTAL_BYTES_V1, 8192),
+            CwsrShadowPlanV1::from_owned_reservation(
+                u64::MAX - 4095,
+                GFX942_CWSR_TOTAL_BYTES_V1,
+                4096,
+            ),
+        ] {
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn wait_and_payload_must_agree_and_unknown_reasons_are_rejected() {
+        let empty = KfdQueueExceptionReasonV1::from_untrusted_wire(0).unwrap();
+        let fault = KfdQueueExceptionReasonV1::from_untrusted_wire(1).unwrap();
+        assert_eq!(
+            admit_queue_exception_wait(KfdWaitResultV1::Timeout, empty).unwrap(),
+            QueueExceptionWaitObservationV1::NoExceptionAtObservation
+        );
+        assert_eq!(
+            admit_queue_exception_wait(KfdWaitResultV1::Complete, fault).unwrap(),
+            QueueExceptionWaitObservationV1::Exception(fault)
+        );
+        assert!(admit_queue_exception_wait(KfdWaitResultV1::Complete, empty).is_err());
+        assert!(admit_queue_exception_wait(KfdWaitResultV1::Timeout, fault).is_err());
+        assert!(KfdQueueExceptionReasonV1::from_untrusted_wire(1 << 63).is_none());
+    }
+
+    #[test]
+    fn runtime_queue_event_order_is_linear_and_hostile_reordering_fails() {
+        use KfdRuntimeLifecyclePhaseV1 as P;
+        let mut phase = P::EnabledBeforeQueue;
+        phase = admit_runtime_transition(phase, P::EnabledBeforeQueue, P::QueueLive).unwrap();
+        phase = admit_runtime_transition(phase, P::QueueLive, P::QueueDestroyed).unwrap();
+        phase = admit_runtime_transition(phase, P::QueueDestroyed, P::EventDestroyed).unwrap();
+        phase = admit_runtime_transition(phase, P::EventDestroyed, P::Disabled).unwrap();
+        assert_eq!(phase, P::Disabled);
+
+        assert!(
+            admit_runtime_transition(P::EnabledBeforeQueue, P::QueueLive, P::QueueDestroyed)
+                .is_err()
+        );
+        assert!(admit_runtime_transition(P::QueueLive, P::EventDestroyed, P::Disabled).is_err());
+        assert!(
+            admit_runtime_transition(P::QueueDestroyed, P::EventDestroyed, P::Disabled).is_err()
+        );
+        assert!(
+            admit_runtime_transition(P::Disabled, P::EnabledBeforeQueue, P::QueueLive).is_err()
+        );
+    }
+
+    #[test]
+    fn queue_exception_observation_cannot_be_reused() {
+        let mut used = false;
+        assert!(begin_one_shot_observation(&mut used).is_ok());
+        assert!(used);
+        assert!(begin_one_shot_observation(&mut used).is_err());
+    }
+
+    #[test]
+    fn destroy_event_setter_owns_the_wire_record_not_reference_bytes() {
+        let source = include_str!("queue_linux.rs");
+        let production = source.split("\n#[cfg(test)]\nmod tests").next().unwrap();
+        assert!(production.contains("Setter::<DESTROY_EVENT_OPCODE, _>::new(args)"));
+        assert!(!production.contains("Setter::<DESTROY_EVENT_OPCODE, _>::new(&args)"));
+        assert!(production.contains("Setter::<UPDATE_QUEUE_OPCODE, _>::new(*args)"));
+        assert!(!production.contains("Setter::<UPDATE_QUEUE_OPCODE, _>::new(args)"));
+    }
 }

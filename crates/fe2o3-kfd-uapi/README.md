@@ -55,6 +55,15 @@ exact ROCr 7.2.4 event/queue composition sources. The source set supports the
 listed observations but is not a complete transitive kernel or ROCr build
 closure and does not authenticate the running module.
 
+The separate additive runtime-transition schema is
+`KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST`, under schema ID
+`linux-kfd-runtime-enable-1.18-queue-exception-v1`, with SHA-256
+`4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1`.
+It composes the frozen event schema and pins the exact active header,
+`kfd_chardev.c`, `kfd_debug.c`, and `kfd_process.c` paths needed for the
+process-global enable-before-any-queue predicate and context-save exception
+routing. It grants no process-global owner or ioctl authority.
+
 The committed slice contains only:
 
 - `kfd_ioctl_get_version_args` and `AMDKFD_IOC_GET_VERSION`
@@ -84,6 +93,10 @@ The committed slice contains only:
   hardware exception records, and queue context-save header
 - a signal-only, auto-reset queue-exception event profile; one-event wait
   admission; and a fail-closed gfx942 queue-exception reason mask
+- exact pointer-free RUNTIME_ENABLE records for only enable mode 1 and disable
+  mode 0, both with zero `r_debug` and capability mask; TTMP-save is excluded
+- a narrowed first-internal-signal-page admission of event IDs 1 through 255;
+  the generic signal event type remains 1 through 4095
 
 Reviewed event and memory behavior is pinned to these active implementation
 sources:

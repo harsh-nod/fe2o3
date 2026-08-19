@@ -312,26 +312,44 @@ canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
 one acquire-release write-pointer fetch-add, INVALID packet copy, aligned
 release header, and one release-fenced x86-SFENCE volatile `u64` doorbell
 store. Counter divergence/regression and every possible side-effect failure
-poison the non-Clone owner; only an ordinary full ring is retryable. No mapped
-slice or raw mapping pointer escapes the private Linux backend. Explicit
-destroy confirms the ioctl, unmaps the doorbell, releases model publications,
-restores the shared-memory model owner, then explicitly unmaps and frees all
-four resources. Drop performs none of those native operations. The isolated
-`kfd-compute-aql-queue` live example checks queue ID zero, the DONTFORK child
-negative, direct DESTROY, and resource return without publishing a packet or
-performing an MMIO store. `kfd-compute-aql-queue-policy` links the default
+poison the non-Clone owner; only an ordinary full ring is retryable. The
+private publication path revalidates the live process-global runtime
+transition, event, all shadow headers, payload, and currentness before
+publication. There is still no public launch API in this slice.
+
+Before event or queue creation, the composition takes a crate-global linear
+owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
+capabilities, and TTMP-save. Success is required while the process has no user
+queue. It then creates one first-internal-page auto-reset signal event, admits
+only IDs 1 through 255, and replaces exactly the eight owned PROT_NONE CWSR
+reservation pages at `base + xcc * 0x1621000` with private anonymous pages.
+Each page transitions PROT_NONE, MADV_DONTFORK, then read/write. The same exact
+40-byte header is read back from the executable-GTT BO and CPU shadow; every
+header names the event and one aligned zero reason word in the first shadow.
+No mapping address, pointer, fd, event handle, or MMIO capability is public.
+
+Explicit cleanup confirms queue DESTROY, event DESTROY, runtime disable,
+doorbell unmap, then CWSR/full-resource unmap and FREE. The process-global
+guard remains held through resource return. Drop performs none of those native
+operations. The isolated `kfd-compute-aql-queue` example confirms this lifecycle
+live on the selected MI300X while publishing zero packets and performing zero
+MMIO stores. It also forks to confirm the doorbell and all eight shadow VMAs
+are absent in the child. `kfd-compute-aql-queue-policy` links the default
 production closure for the no-ROCm ELF audit.
 
-The private submission call is nevertheless structurally gated by an
-unconstructible CWSR fault-policy admission. The executable-GTT CPU VMA is
-distinct from the PROT_NONE GPU VA passed to CREATE, while active KFD fault
-handling reads the header through that CREATE address. The current slice does
-not claim same-address USERPTR/SVM semantics or dispatch-ready exception
-delivery. The reviewed bounded next gate is eight owned DONTFORK anonymous
-header shadow pages plus a KFD event and aligned shared error payload. It does
-not cover wave-state/debug/eviction control-stack copies, which remain
-unsupported. Live packet publication stays disabled until that slice is
-admitted; zero event fields are not general dispatch authority.
+The private bounded exception wait is one-shot and terminal. WAIT result and
+volatile payload must agree, but timeout plus zero is only a racy observation,
+not proof that no exception occurred. Timeout, an exception, disagreement,
+unknown reason, reuse, or syscall uncertainty forbids later publication and
+in-process cleanup; recovery is process teardown. Foreign KFD clients in the
+same process remain outside the crate-global ownership claim.
+
+This is queue-exception preparation, not actual fault-delivery evidence.
+CPU-visible debug suspend and checkpoint/wave-state control-stack copies remain
+unsupported because only the eight header pages are CPU shadows. Ordinary
+hardware CWSR preemption and restore use the GPUVM BO and remain Contracted,
+not excluded. Live kernel dispatch, completion, code/kernarg authority, and an
+injected-fault observation remain separate gates.
 
 The abstract Verus relation proves Active and Disabled are the only direct
 destroy sources and that failed-no-effect restores the exact retained source.

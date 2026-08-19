@@ -148,28 +148,29 @@ are pinned to ROCr 7.2.4 `queues.c`
 and `hsakmttypes.h`
 `fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e`.
 
-Zero event fields are sufficient only because this slice launches no kernel.
-The first isolated launch may use them only with a process fail-stop rule: any
-timeout, unexpected completion, or currentness loss terminates without queue
-destroy, unmap/free, or further KFD use. A KFD event plus writable error payload
-and observable queue exceptions is a required production R4 follow-up, not a
-current property.
+The pre-dispatch composition now owns the process-global RUNTIME_ENABLE
+transition before creating an event or queue. It admits one first-internal-page
+auto-reset signal event with ID 1 through 255. Exactly eight owned PROT_NONE
+reservation pages at the gfx942 XCC stride are replaced by private anonymous
+pages, marked DONTFORK before read/write access, and initialized with the same
+exact 40-byte header as the executable-GTT BO. Every header names the event and
+one aligned zero error-reason word in shadow page zero. Addresses, fd values,
+and event authority remain private.
 
-There is also a distinct address-semantics blocker. The headers above are
-written through the kernel-selected BO CPU VMA, while the retained GPU VA is a
-separate PROT_NONE reservation. Active KFD fault handling uses `get_user` and
-`put_user` against the CREATE context-save address. Source review supports a
-bounded next step: replace exactly the eight owned header guard pages with
-DONTFORK anonymous shadow pages and bind a KFD event ID plus shared aligned
-error payload. That would cover queue creation and exception delivery only.
-It is not full CWSR equivalence: wave-state/debug/eviction control-stack
-`copy_to_user` would observe the shadow or remaining PROT_NONE range and must
-stay explicitly unsupported. The active `kfd_process.c` source is pinned as
-`d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409`.
+Cleanup is typed and ordered: confirmed queue DESTROY, event DESTROY, runtime
+disable, then doorbell and complete CWSR/resource release. Drop performs none
+of those effects. A bounded wait is one-shot and terminal because a timeout and
+zero payload are only a racy snapshot. No later publish or in-process cleanup
+is admitted after any wait attempt or ambiguity.
 
-Consequently, the native submission method requires a private fault-policy
-admission value for which no constructor exists. Live packet publication
-remains structurally gated until that separate shadow/event slice is admitted.
+This still is not full CWSR equivalence. CPU-visible debug suspend and
+checkpoint/wave-state control-stack `copy_to_user` paths observe the shadow or
+remaining PROT_NONE range and stay unsupported. Ordinary hardware CWSR
+preemption and restore use the GPUVM BO and remain Contracted, not excluded.
+The live evidence creates and destroys the prepared queue with zero packets and
+MMIO stores; it does not inject a fault or prove actual exception delivery.
+Foreign KFD clients in the same process are also outside the crate-global
+runtime ownership claim.
 
 R4 still needs a dispatch authority that binds kernarg, code object, queue,
 dispatch, and completion generations. The existing inert packet carries only
@@ -178,13 +179,11 @@ rollback evidence and remains process-teardown-only poison.
 
 ## Missing completion-signal boundary
 
-The current UAPI crate pins only reset SMI events, not dispatch completion. The
-completion slice must add and independently oracle the KFD 1.18
-`CREATE_EVENT`, `DESTROY_EVENT`, `SET_EVENT`, `RESET_EVENT`, and `WAIT_EVENTS`
-request numbers, C layouts, nested event-data arrays, timeout/result values,
-event-page offset, event ID/slot/trigger-data outputs, and their mutation and
-partial-failure semantics. It must also pin the gfx942/ROCr signal-memory
-layout and atomics that bind an AQL completion signal to the KFD event wakeup.
+The UAPI crate now independently oracles the KFD 1.18 event requests, layouts,
+nested event data, results, and queue context-save header. The owned event in
+this composition is only the queue-exception route. A completion slice must
+still pin the gfx942/ROCr signal-memory layout and atomics that bind an AQL
+completion signal to a specific dispatch and KFD wakeup.
 
 The safe API must own a dedicated generation-bound signal for each admitted
 dispatch, initialize it before packet publication, wait against the exact
