@@ -2,12 +2,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallTargetV2, CastOperationV2,
-    ComparePredicateV2, ExecutableModuleV2, FloatBinaryOperationV2, FunctionIdV2, FunctionV2,
-    GENERAL_GEMM_LDS_ELEMENTS_V2, Gfx942HandoffV2, GlobalLinkageV2, GlobalV2, InstructionKindV2,
-    InstructionV2, IntegerBinaryOperationV2, IntrinsicReferenceV2, IntrinsicV2,
-    MAX_FUNCTION_BLOCKS_V2, MAX_FUNCTIONS_V2, MAX_GLOBALS_V2, MAX_INSTRUCTIONS_PER_FUNCTION_V2,
-    MAX_INTRINSICS_V2, MAX_VALUES_PER_FUNCTION_V2, ReturnTypeV2, ScalarConstantV2, ScalarTypeV1,
-    TerminatorV2, TypedValueV2, ValueTypeV2,
+    ComparePredicateV2, ExecutableModuleV2, FloatBinaryOperationV2, FunctionAttributeV1,
+    FunctionAttributeV2, FunctionIdV2, FunctionKindV2, FunctionV2, GENERAL_GEMM_LDS_ELEMENTS_V2,
+    Gfx942HandoffInputV1, Gfx942HandoffV1, Gfx942HandoffV2, Gfx942TargetPolicyV1, GlobalLinkageV2,
+    GlobalV2, InstructionKindV2, InstructionV2, IntegerBinaryOperationV2, IntrinsicReferenceV2,
+    IntrinsicV2, KernelEntryV1, KernelParameterV1, KernelValueTypeV1, MAX_FUNCTION_BLOCKS_V2,
+    MAX_FUNCTIONS_V2, MAX_GLOBALS_V2, MAX_INSTRUCTIONS_PER_FUNCTION_V2, MAX_INTRINSICS_V2,
+    MAX_SYMBOL_BYTES_V2, MAX_VALUES_PER_FUNCTION_V2, ModuleMetadataV1, ReturnTypeV2,
+    ScalarConstantV2, ScalarTypeV1, TerminatorV2, TypedValueV2, ValueTypeV2,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -110,7 +112,12 @@ pub(crate) fn derive_graph_handoff(
         let function = Operation::get_op::<FuncOp>(*operation, context)
             .ok_or(InspectionErrorV1::UnexpectedGraph)?;
         let policy = decode_function_policy(context, *operation)?;
-        let symbol = function.get_symbol_name(context).as_ref().to_owned();
+        let symbol_attribute = function.get_symbol_name(context);
+        let symbol = symbol_attribute.as_ref();
+        if symbol.len() > MAX_SYMBOL_BYTES_V2 {
+            return Err(InspectionErrorV1::UnexpectedGraph);
+        }
+        let symbol = symbol.to_owned();
         if function_symbols.insert(symbol, policy.id).is_some()
             || function_symbols
                 .values()
@@ -155,8 +162,105 @@ pub(crate) fn derive_graph_handoff(
         functions,
     )
     .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
-    Gfx942HandoffV2::new(lowered.source.base().clone(), module)
-        .map_err(|_| InspectionErrorV1::UnexpectedGraph)
+    let base = derive_graph_base(&lowered.source, &module)?;
+    Gfx942HandoffV2::new(base, module).map_err(|_| InspectionErrorV1::UnexpectedGraph)
+}
+
+fn derive_graph_base(
+    source: &Gfx942HandoffV2,
+    module: &ExecutableModuleV2,
+) -> Result<Gfx942HandoffV1, InspectionErrorV1> {
+    let kernels = module
+        .functions()
+        .iter()
+        .filter(|function| function.kind() == FunctionKindV2::Kernel)
+        .map(derive_graph_kernel)
+        .collect::<Result<Vec<_>, _>>()?;
+    let metadata = ModuleMetadataV1::new(
+        module.flags().to_vec(),
+        module.named_metadata().to_vec(),
+        source.base().module().device_libraries().to_vec(),
+    )
+    .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+    Gfx942HandoffV1::new(Gfx942HandoffInputV1 {
+        stage_identities: *source.base().stage_identities(),
+        target: Gfx942TargetPolicyV1::canonical(),
+        kernels,
+        module: metadata,
+        origins: source.base().origins().to_vec(),
+        obligations: source.base().obligations().to_vec(),
+    })
+    .map_err(|_| InspectionErrorV1::UnexpectedGraph)
+}
+
+fn derive_graph_kernel(function: &FunctionV2) -> Result<KernelEntryV1, InspectionErrorV1> {
+    let parameters = function
+        .parameters()
+        .iter()
+        .map(|parameter| {
+            let value_type = match parameter.value().value_type() {
+                ValueTypeV2::Scalar(scalar) => KernelValueTypeV1::Scalar(scalar),
+                ValueTypeV2::Pointer {
+                    pointee,
+                    address_space,
+                } => KernelValueTypeV1::Pointer {
+                    pointee,
+                    address_space,
+                },
+                _ => return Err(InspectionErrorV1::UnexpectedGraph),
+            };
+            KernelParameterV1::new(
+                parameter.name(),
+                value_type,
+                parameter.attributes().to_vec(),
+            )
+            .map_err(|_| InspectionErrorV1::UnexpectedGraph)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let attributes = function
+        .attributes()
+        .iter()
+        .filter_map(|attribute| match attribute {
+            FunctionAttributeV2::NoUnwind => Some(Ok(FunctionAttributeV1::NoUnwind)),
+            FunctionAttributeV2::FlatWorkgroupSize(range) => {
+                Some(Ok(FunctionAttributeV1::FlatWorkgroupSize(*range)))
+            }
+            FunctionAttributeV2::WavesPerEu(range) => {
+                Some(Ok(FunctionAttributeV1::WavesPerEu(*range)))
+            }
+            FunctionAttributeV2::DenormalFpMathF32Ieee => {
+                Some(Ok(FunctionAttributeV1::DenormalFpMathF32Ieee))
+            }
+            FunctionAttributeV2::UnsafeFpMathDisabled => {
+                Some(Ok(FunctionAttributeV1::UnsafeFpMathDisabled))
+            }
+            FunctionAttributeV2::NoInfsFpMathDisabled => {
+                Some(Ok(FunctionAttributeV1::NoInfsFpMathDisabled))
+            }
+            FunctionAttributeV2::NoNansFpMathDisabled => {
+                Some(Ok(FunctionAttributeV1::NoNansFpMathDisabled))
+            }
+            FunctionAttributeV2::NoSignedZerosFpMathDisabled => {
+                Some(Ok(FunctionAttributeV1::NoSignedZerosFpMathDisabled))
+            }
+            FunctionAttributeV2::ApproxFuncFpMathDisabled => {
+                Some(Ok(FunctionAttributeV1::ApproxFuncFpMathDisabled))
+            }
+            FunctionAttributeV2::FpContractOff => Some(Ok(FunctionAttributeV1::FpContractOff)),
+            FunctionAttributeV2::RequiredWorkgroupSize(_) => None,
+            FunctionAttributeV2::AlwaysInline
+            | FunctionAttributeV2::NoInline
+            | FunctionAttributeV2::ReadNone
+            | FunctionAttributeV2::WillReturn => Some(Err(InspectionErrorV1::UnexpectedGraph)),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    KernelEntryV1::new(
+        function.symbol(),
+        parameters,
+        attributes,
+        function.evidence().origin(),
+    )
+    .map_err(|_| InspectionErrorV1::UnexpectedGraph)
 }
 
 fn derive_global(
@@ -187,7 +291,12 @@ fn derive_global(
     if global.get_initializer_region(context).is_some() {
         return Err(InspectionErrorV1::UnexpectedGraph);
     }
-    let symbol = global.get_symbol_name(context).as_ref().to_owned();
+    let symbol_attribute = global.get_symbol_name(context);
+    let symbol = symbol_attribute.as_ref();
+    if symbol.len() > MAX_SYMBOL_BYTES_V2 {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
+    let symbol = symbol.to_owned();
     let (value_type, elements) = decode_global_type(context, global.get_type(context))?;
     match global.get_initializer_value(context) {
         Some(initializer) if initializer.downcast_ref::<BytesAttr>().is_some() => {
@@ -263,6 +372,9 @@ fn derive_intrinsic(
         || declaration.get_type(context)
             != intrinsic_function_type(context, intrinsic)
                 .map_err(|_| InspectionErrorV1::UnexpectedGraph)?
+        || declaration
+            .get_attr_llvm_function_linkage(context)
+            .is_some()
     {
         return Err(InspectionErrorV1::UnexpectedGraph);
     }
@@ -292,6 +404,9 @@ fn derive_function(
         .iter()
         .find(|candidate| candidate.id() == policy.id)
         .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+    if function.get_attr_llvm_function_linkage(context).is_some() {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
     let evidence = source_function.evidence().clone();
     let function_type = function.get_type(context);
     let function_type = function_type.deref(context);
@@ -542,6 +657,9 @@ fn derive_phis(
                 .get_terminator(context)
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
             let operation = terminator.deref(context);
+            if operation.get_num_successors() > 2 {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
             for successor_index in 0..operation.get_num_successors() {
                 if operation.get_successor(successor_index) != target {
                     continue;
@@ -551,6 +669,9 @@ fn derive_phis(
                     .get(phi_index)
                     .and_then(|value| values.get(value))
                     .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                if incoming.len() == 2 * MAX_FUNCTION_BLOCKS_V2 {
+                    return Err(InspectionErrorV1::UnexpectedGraph);
+                }
                 incoming.push((
                     value.id(),
                     *block_ids
@@ -584,6 +705,11 @@ fn successor_operands(
     terminator: Ptr<Operation>,
     successor_index: usize,
 ) -> Result<Vec<Value>, InspectionErrorV1> {
+    if terminator.deref(context).get_num_operands()
+        > 1 + 2 * fe2o3_llvm_handoff::MAX_FUNCTION_PARAMETERS_V2
+    {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
     if let Some(branch) = Operation::get_op::<BrOp>(terminator, context) {
         return Ok(branch.successor_operands(context, successor_index));
     }
@@ -775,6 +901,12 @@ fn derive_instruction_kind(
         if gep.src_elem_type(context) != source_element_type(context, base.value_type())? {
             return Err(InspectionErrorV1::UnexpectedGraph);
         }
+        if gep
+            .get_attr_gep_indices(context)
+            .is_none_or(|indices| indices.0.len() > fe2o3_llvm_handoff::MAX_GEP_INDICES_V2)
+        {
+            return Err(InspectionErrorV1::UnexpectedGraph);
+        }
         let mut indices = Vec::new();
         for index in gep.indices(context) {
             if indices.len() == fe2o3_llvm_handoff::MAX_GEP_INDICES_V2 {
@@ -824,6 +956,9 @@ fn derive_instruction_kind(
         });
     }
     if let Some(call) = Operation::get_op::<CallOp>(actual, context) {
+        if operation.get_num_operands() > fe2o3_llvm_handoff::MAX_FUNCTION_PARAMETERS_V2 {
+            return Err(InspectionErrorV1::UnexpectedGraph);
+        }
         if !call
             .get_attr_llvm_call_fastmath_flags(context)
             .is_none_or(|flags| *flags == FastmathFlagsAttr::default())

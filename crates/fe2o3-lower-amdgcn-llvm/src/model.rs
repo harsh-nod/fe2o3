@@ -103,7 +103,7 @@ impl LoweringReceiptIdentityV1 {
     }
 }
 
-/// SHA-256 identity binding one live graph receipt to one admitted worker request.
+/// SHA-256 identity binding one live graph export to retained construction provenance.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GraphExportIdentityV1(pub(crate) [u8; 32]);
 
@@ -114,7 +114,7 @@ impl GraphExportIdentityV1 {
     }
 }
 
-/// Untrusted identity and build claims presented to the owner-controlled export boundary.
+/// Untrusted source and construction-receipt identities presented to the export boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GraphExportRequestV1 {
     pub(crate) source_identity: HandoffIdentityV2,
@@ -136,9 +136,10 @@ impl GraphExportRequestV1 {
 
 /// Inert canonical export produced only after fresh live-graph correspondence inspection.
 ///
-/// This value binds the exact Handoff V2 source, graph receipt, gfx942 target policy,
-/// measured LLVM/LLD build policy, and worker admission. It grants no compiler-worker,
-/// artifact, link, publication, load, or launch authority.
+/// This value binds retained source provenance, a graph-derived Handoff V2, its
+/// fresh graph receipt, and gfx942 target policy. Worker build policy and worker
+/// admission are bound only by a subsequent compiler boundary. This export grants
+/// no compiler-worker, artifact, link, publication, load, or launch authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalPlironLlvmGraphExportV1 {
     pub(crate) graph_handoff: Gfx942HandoffV2,
@@ -298,7 +299,7 @@ impl LoweredAmdgcnPlironLlvmV1 {
         self.context_identity
     }
 
-    /// Returns the exact canonical typed source retained as policy authority.
+    /// Returns the exact construction source retained as identity-bound provenance.
     pub const fn source_handoff(&self) -> &Gfx942HandoffV2 {
         &self.source
     }

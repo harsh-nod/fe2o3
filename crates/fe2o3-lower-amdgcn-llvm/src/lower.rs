@@ -9,8 +9,9 @@ use fe2o3_llvm_handoff::{
     AddressSpaceV1, AxisV2, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallTargetV2,
     CastOperationV2, ComparePredicateV2, FloatBinaryOperationV2, FunctionV2, Gfx942HandoffV2,
     GlobalIdV2, GlobalLinkageV2, GlobalV2, InstructionKindV2, InstructionV2,
-    IntegerBinaryOperationV2, IntrinsicReferenceV2, IntrinsicV2, ReturnTypeV2, ScalarConstantV2,
-    ScalarTypeV1, TerminatorV2, ValueIdV2, ValueTypeV2,
+    IntegerBinaryOperationV2, IntrinsicReferenceV2, IntrinsicV2, MAX_FUNCTION_BLOCKS_V2,
+    MAX_FUNCTIONS_V2, MAX_GLOBALS_V2, MAX_INSTRUCTIONS_PER_FUNCTION_V2, MAX_INTRINSICS_V2,
+    ReturnTypeV2, ScalarConstantV2, ScalarTypeV1, TerminatorV2, ValueIdV2, ValueTypeV2,
 };
 use fe2o3_pliron::{ensure_context_identity, require_context_identity};
 use pliron::{
@@ -138,6 +139,15 @@ pub(crate) fn inspect_lowered(
 }
 
 pub(crate) fn export_graph(
+    lowered: &LoweredAmdgcnPlironLlvmV1,
+    request: GraphExportRequestV1,
+) -> Result<CanonicalPlironLlvmGraphExportV1, GraphExportErrorV1> {
+    catch_unwind(AssertUnwindSafe(|| export_graph_inner(lowered, request))).unwrap_or(Err(
+        GraphExportErrorV1::Inspection(InspectionErrorV1::UpstreamPanicked),
+    ))
+}
+
+fn export_graph_inner(
     lowered: &LoweredAmdgcnPlironLlvmV1,
     request: GraphExportRequestV1,
 ) -> Result<CanonicalPlironLlvmGraphExportV1, GraphExportErrorV1> {
@@ -1058,12 +1068,14 @@ fn inspect_module(
     verify_operation(module_pointer, context)
         .map_err(|_| InspectionErrorV1::DialectVerification)?;
     inspect_module_policy(context, module_pointer, source)?;
-    let actual_module_operations = owned
-        .module
-        .get_body(context, 0)
-        .deref(context)
-        .iter(context)
-        .collect::<Vec<_>>();
+    let actual_module_operations = bounded_graph_collect(
+        owned
+            .module
+            .get_body(context, 0)
+            .deref(context)
+            .iter(context),
+        MAX_GLOBALS_V2 + MAX_INTRINSICS_V2 + MAX_FUNCTIONS_V2,
+    )?;
     let global_count = source.module().globals().len();
     let intrinsic_count = source.module().intrinsics().len();
     if actual_module_operations.len()
@@ -1124,7 +1136,9 @@ fn inspect_module(
                 .collect::<Result<Vec<_>, _>>()?,
             false,
         );
-        if function.get_type(context) != expected_function_type || function.is_declaration(context)
+        if function.get_type(context) != expected_function_type
+            || function.is_declaration(context)
+            || function.get_attr_llvm_function_linkage(context).is_some()
         {
             return Err(InspectionErrorV1::UnexpectedGraph);
         }
@@ -1132,12 +1146,14 @@ fn inspect_module(
             .checked_add(1)
             .ok_or(InspectionErrorV1::UnexpectedGraph)?;
         facts.push(1);
-        let actual_blocks = function
-            .get_region(context)
-            .ok_or(InspectionErrorV1::UnexpectedGraph)?
-            .deref(context)
-            .iter(context)
-            .collect::<Vec<_>>();
+        let actual_blocks = bounded_graph_collect(
+            function
+                .get_region(context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?
+                .deref(context)
+                .iter(context),
+            MAX_FUNCTION_BLOCKS_V2,
+        )?;
         let source_blocks = ordered_blocks(source_function);
         if actual_blocks.len() != source_blocks.len() {
             return Err(InspectionErrorV1::UnexpectedGraph);
@@ -1211,10 +1227,10 @@ fn inspect_module(
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
             facts.push(2);
             facts.extend_from_slice(&(actual_argument_count as u32).to_le_bytes());
-            let actual_operations = actual_block
-                .deref(context)
-                .iter(context)
-                .collect::<Vec<_>>();
+            let actual_operations = bounded_graph_collect(
+                actual_block.deref(context).iter(context),
+                MAX_INSTRUCTIONS_PER_FUNCTION_V2 + 1,
+            )?;
             let expected_operations = source_block
                 .instructions()
                 .iter()
@@ -1320,6 +1336,9 @@ fn inspect_intrinsic(
     if declaration.get_symbol_name(context) != symbol
         || declaration.get_type(context) != expected_type
         || !declaration.is_declaration(context)
+        || declaration
+            .get_attr_llvm_function_linkage(context)
+            .is_some()
     {
         return Err(InspectionErrorV1::UnexpectedGraph);
     }
@@ -1545,6 +1564,20 @@ const fn value_type_tag(value_type: ValueTypeV2) -> u8 {
     }
 }
 
+fn bounded_graph_collect<T>(
+    iterator: impl IntoIterator<Item = T>,
+    maximum: usize,
+) -> Result<Vec<T>, InspectionErrorV1> {
+    let mut values = Vec::new();
+    for value in iterator {
+        if values.len() == maximum {
+            return Err(InspectionErrorV1::UnexpectedGraph);
+        }
+        values.push(value);
+    }
+    Ok(values)
+}
+
 struct InstructionInspectionInputs<'a> {
     context: &'a Context,
     values: &'a BTreeMap<ValueIdV2, Value>,
@@ -1744,6 +1777,12 @@ fn inspect_instruction(
             if operation.src_elem_type(context) != expected_source_type {
                 return Err(InspectionErrorV1::UnexpectedGraph);
             }
+            if operation
+                .get_attr_gep_indices(context)
+                .is_none_or(|encoded| encoded.0.len() != indices.len())
+            {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
             let actual_indices = operation.indices(context);
             if actual_indices.len() != indices.len()
                 || actual_indices.iter().zip(indices).any(|(actual, expected)| {
@@ -1882,6 +1921,7 @@ fn inspect_terminator(
                 .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
             if operation.get_num_successors() != 1
                 || operation.get_successor(0) != expected_target
+                || operation.get_num_operands() != expected_operands.len()
                 || branch.successor_operands(context, 0) != expected_operands
             {
                 return Err(InspectionErrorV1::UnexpectedGraph);
@@ -1913,7 +1953,7 @@ fn inspect_terminator(
                 .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
             let else_operands = phi_operands(function, *else_block, source_block.id(), values)
                 .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
-            if operation.get_num_operands() == 0
+            if operation.get_num_operands() != 1 + then_operands.len() + else_operands.len()
                 || operation.get_operand(0) != expected_condition
                 || operation.get_num_successors() != 2
                 || operation.get_successor(0) != then_target
@@ -1984,18 +2024,33 @@ fn encode_receipt(
 #[cfg(test)]
 mod tests {
     use fe2o3_amdgcn_pliron_llvm::{ScalarKernelModuleV1, lower_scalar_kernel_v2};
-    use fe2o3_llvm_handoff::{IdentityV1, StageIdentitiesV1};
+    use fe2o3_llvm_handoff::{IdentityV1, StageIdentitiesV1, TypedValueV2};
     use pliron::{
-        basic_block::BasicBlock, builtin::attributes::BytesAttr, context::Ptr,
-        identifier::Identifier, linked_list::ContainsLinkedList, op::Op, operation::Operation,
+        basic_block::BasicBlock,
+        builtin::attributes::{BytesAttr, IdentifierAttr, TypeAttr},
+        context::Ptr,
+        identifier::Identifier,
+        linked_list::ContainsLinkedList,
+        op::Op,
+        operation::Operation,
     };
     use pliron_llvm::{
-        op_interfaces::AlignableOpInterface,
-        ops::{FuncOp, LoadOp, StoreOp},
+        attributes::{FastmathFlags, FastmathFlagsAttr, IntegerOverflowFlagsAttr, LinkageAttr},
+        op_interfaces::{
+            AlignableOpInterface, FastMathFlags, IntBinArithOpWithOverflowFlag, IsDeclaration,
+        },
+        ops::{
+            AddOp, BrOp, CallOp, CondBrOp, ConstantOp, FAddOp, FuncOp, GetElementPtrOp, GlobalOp,
+            LoadOp, StoreOp,
+        },
     };
 
     use super::*;
-    use crate::graph_policy::{FUNCTION_ATTRIBUTES_ATTR_V1, MODULE_FLAGS_ATTR_V1};
+    use crate::graph_policy::{
+        FUNCTION_ABI_ATTR_V1, FUNCTION_ATTRIBUTES_ATTR_V1, FUNCTION_PARAMETERS_ATTR_V1,
+        GLOBAL_POLICY_ATTR_V1, MODULE_FLAGS_ATTR_V1, MODULE_METADATA_ATTR_V1,
+        MODULE_TARGET_POLICY_ATTR_V1,
+    };
     use crate::{GraphExportErrorV1, GraphExportRequestV1};
 
     fn scalar_source() -> Gfx942HandoffV2 {
@@ -2015,7 +2070,10 @@ mod tests {
             .get_body(&lowered.context, 0)
             .deref(&lowered.context)
             .iter(&lowered.context)
-            .find_map(|operation| Operation::get_op::<FuncOp>(operation, &lowered.context))
+            .find_map(|operation| {
+                Operation::get_op::<FuncOp>(operation, &lowered.context)
+                    .filter(|function| !function.is_declaration(&lowered.context))
+            })
             .unwrap()
     }
 
@@ -2038,6 +2096,22 @@ mod tests {
         operation: Ptr<Operation>,
         name: &str,
     ) {
+        let length = operation
+            .deref(&lowered.context)
+            .attributes
+            .get::<BytesAttr>(&Identifier::try_from(name).unwrap())
+            .unwrap()
+            .as_ref()
+            .len();
+        substitute_policy_byte(lowered, operation, name, length - 1);
+    }
+
+    fn substitute_policy_byte(
+        lowered: &LoweredAmdgcnPlironLlvmV1,
+        operation: Ptr<Operation>,
+        name: &str,
+        index: usize,
+    ) {
         let key = Identifier::try_from(name).unwrap();
         let mut bytes = operation
             .deref(&lowered.context)
@@ -2046,7 +2120,7 @@ mod tests {
             .unwrap()
             .as_ref()
             .clone();
-        *bytes.last_mut().unwrap() ^= 1;
+        bytes[index] ^= 1;
         operation
             .deref_mut(&lowered.context)
             .attributes
@@ -2116,6 +2190,291 @@ mod tests {
                     InspectionErrorV1::UnexpectedGraph
                 ))
             ));
+        }
+    }
+
+    fn assert_export_rejected(lowered: &LoweredAmdgcnPlironLlvmV1) {
+        assert!(lowered.export_graph_v1(request(lowered)).is_err());
+    }
+
+    fn tiled_with_integer_add() -> Gfx942HandoffV2 {
+        let source = crate::integration_test_support::tiled_data_handoff();
+        let function = &source.module().functions()[0];
+        let mut instructions = function.blocks()[0].instructions().to_vec();
+        instructions.push(
+            InstructionV2::new(
+                Some(TypedValueV2::new(
+                    ValueIdV2::new(15),
+                    ValueTypeV2::Scalar(ScalarTypeV1::I64),
+                )),
+                InstructionKindV2::Binary {
+                    operation: BinaryOperationV2::Integer(IntegerBinaryOperationV2::Add),
+                    left: ValueIdV2::new(6),
+                    right: ValueIdV2::new(6),
+                },
+                function.evidence().clone(),
+            )
+            .unwrap(),
+        );
+        let function = FunctionV2::new(
+            function.id(),
+            function.symbol(),
+            function.kind(),
+            function.calling_convention(),
+            function.return_type(),
+            function.parameters().to_vec(),
+            function.attributes().to_vec(),
+            function.entry(),
+            vec![BasicBlockV2::new(
+                function.entry(),
+                instructions,
+                TerminatorV2::Return(None),
+            )],
+            function.evidence().clone(),
+        )
+        .unwrap();
+        let module = fe2o3_llvm_handoff::ExecutableModuleV2::new(
+            source.module().flags().to_vec(),
+            source.module().named_metadata().to_vec(),
+            source.module().globals().to_vec(),
+            source.module().intrinsics().to_vec(),
+            vec![function],
+        )
+        .unwrap();
+        Gfx942HandoffV2::new(source.base().clone(), module).unwrap()
+    }
+
+    #[test]
+    fn result_fast_math_and_overflow_mutations_fail_closed() {
+        let source = scalar_source();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let add = entry_block(&lowered, first_function(&lowered))
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| Operation::get_op::<FAddOp>(operation, &lowered.context))
+            .unwrap();
+        add.set_fast_math_flags(&lowered.context, FastmathFlagsAttr(FastmathFlags::NNAN));
+        assert_export_rejected(&lowered);
+
+        let source = scalar_source();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let add = entry_block(&lowered, first_function(&lowered))
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| Operation::get_op::<FAddOp>(operation, &lowered.context))
+            .unwrap();
+        Operation::push_result(
+            add.get_operation(),
+            &lowered.context,
+            IntegerType::get(&lowered.context, 32, Signedness::Signless).into(),
+        );
+        assert_export_rejected(&lowered);
+
+        let source = tiled_with_integer_add();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let add = entry_block(&lowered, first_function(&lowered))
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| Operation::get_op::<AddOp>(operation, &lowered.context))
+            .unwrap();
+        add.set_integer_overflow_flag(
+            &lowered.context,
+            IntegerOverflowFlagsAttr {
+                nsw: true,
+                nuw: false,
+            },
+        );
+        assert_export_rejected(&lowered);
+    }
+
+    #[test]
+    fn constant_and_callee_mutations_are_the_exported_authority() {
+        let source = crate::integration_test_support::tiled_data_handoff();
+        let mut lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let constant = entry_block(&lowered, first_function(&lowered))
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| Operation::get_op::<ConstantOp>(operation, &lowered.context))
+            .unwrap();
+        let old = constant.get_value(&lowered.context);
+        let replacement = if let Some(integer) = old.downcast_ref::<IntegerAttr>() {
+            let scalar = match integer.get_type().deref(&lowered.context).width() {
+                1 => ScalarTypeV1::I1,
+                8 => ScalarTypeV1::I8,
+                16 => ScalarTypeV1::I16,
+                32 => ScalarTypeV1::I32,
+                64 => ScalarTypeV1::I64,
+                _ => unreachable!(),
+            };
+            ScalarConstantV2::new(scalar, integer.value().to_u64() ^ 1).unwrap()
+        } else {
+            let single = old.downcast_ref::<FPSingleAttr>().unwrap();
+            ScalarConstantV2::new(
+                ScalarTypeV1::F32,
+                u64::from(f32::from(single.clone()).to_bits() ^ 1),
+            )
+            .unwrap()
+        };
+        let replacement = constant_attribute(&mut lowered.context, replacement).unwrap();
+        constant.set_attr_llvm_constant_value(&lowered.context, replacement);
+        let exported = lowered.export_graph_v1(request(&lowered)).unwrap();
+        assert_ne!(exported.graph_handoff(), &source);
+
+        let source = crate::integration_test_support::intrinsic_handoff();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let function = first_function(&lowered);
+        let call = entry_block(&lowered, function)
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| Operation::get_op::<CallOp>(operation, &lowered.context))
+            .unwrap();
+        call.set_attr_llvm_call_callee(
+            &lowered.context,
+            IdentifierAttr::new(
+                Identifier::try_from(intrinsic_symbol(IntrinsicV2::AmdGpuWorkitemId(AxisV2::Y)))
+                    .unwrap(),
+            ),
+        );
+        let exported = lowered.export_graph_v1(request(&lowered)).unwrap();
+        assert_ne!(exported.graph_handoff(), &source);
+    }
+
+    #[test]
+    fn cfg_phi_and_gep_mutations_fail_closed() {
+        let source = crate::integration_test_support::gemm_control_flow_handoff();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let function = first_function(&lowered);
+        let conditional = function
+            .get_region(&lowered.context)
+            .unwrap()
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .flat_map(|block| block.deref(&lowered.context).iter(&lowered.context))
+            .find_map(|operation| Operation::get_op::<CondBrOp>(operation, &lowered.context))
+            .unwrap();
+        let extra = conditional
+            .get_operation()
+            .deref(&lowered.context)
+            .get_successor(0);
+        Operation::push_successor(conditional.get_operation(), &lowered.context, extra);
+        assert_export_rejected(&lowered);
+
+        let source = crate::integration_test_support::gemm_control_flow_handoff();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let function = first_function(&lowered);
+        let branch = function
+            .get_region(&lowered.context)
+            .unwrap()
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .flat_map(|block| block.deref(&lowered.context).iter(&lowered.context))
+            .find_map(|operation| {
+                (operation.deref(&lowered.context).get_num_operands() != 0)
+                    .then(|| Operation::get_op::<BrOp>(operation, &lowered.context))
+                    .flatten()
+            })
+            .unwrap();
+        Operation::remove_operand(branch.get_operation(), &lowered.context, 0);
+        assert_export_rejected(&lowered);
+
+        let source = crate::integration_test_support::tiled_data_handoff();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let gep = entry_block(&lowered, first_function(&lowered))
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| Operation::get_op::<GetElementPtrOp>(operation, &lowered.context))
+            .unwrap();
+        gep.set_attr_gep_src_elem_type(
+            &lowered.context,
+            TypeAttr::new(IntegerType::get(&lowered.context, 32, Signedness::Signless).into()),
+        );
+        assert_export_rejected(&lowered);
+    }
+
+    #[test]
+    fn every_module_function_and_global_policy_class_fails_closed_on_substitution() {
+        for attribute in [
+            MODULE_TARGET_POLICY_ATTR_V1,
+            MODULE_FLAGS_ATTR_V1,
+            MODULE_METADATA_ATTR_V1,
+        ] {
+            let source = crate::integration_test_support::tiled_data_handoff();
+            let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+            substitute_policy_bytes(&lowered, lowered.module.module.get_operation(), attribute);
+            assert_export_rejected(&lowered);
+        }
+        for attribute in [
+            FUNCTION_ABI_ATTR_V1,
+            FUNCTION_ATTRIBUTES_ATTR_V1,
+            FUNCTION_PARAMETERS_ATTR_V1,
+        ] {
+            let source = crate::integration_test_support::tiled_data_handoff();
+            let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+            substitute_policy_bytes(
+                &lowered,
+                first_function(&lowered).get_operation(),
+                attribute,
+            );
+            assert_export_rejected(&lowered);
+        }
+
+        let source = crate::integration_test_support::tiled_data_handoff();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        first_function(&lowered)
+            .set_attr_llvm_function_linkage(&lowered.context, LinkageAttr::InternalLinkage);
+        assert_export_rejected(&lowered);
+
+        let source = crate::integration_test_support::intrinsic_handoff();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let declaration = lowered
+            .module
+            .module
+            .get_body(&lowered.context, 0)
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| {
+                Operation::get_op::<FuncOp>(operation, &lowered.context)
+                    .filter(|function| function.is_declaration(&lowered.context))
+            })
+            .unwrap();
+        declaration.set_attr_llvm_function_linkage(&lowered.context, LinkageAttr::ExternalLinkage);
+        assert_export_rejected(&lowered);
+
+        for mutation in 0..6 {
+            let source = crate::integration_test_support::tiled_data_handoff();
+            let mut lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+            let globals = lowered
+                .module
+                .module
+                .get_body(&lowered.context, 0)
+                .deref(&lowered.context)
+                .iter(&lowered.context)
+                .filter_map(|operation| Operation::get_op::<GlobalOp>(operation, &lowered.context))
+                .collect::<Vec<_>>();
+            let global = if mutation == 4 {
+                globals[1]
+            } else {
+                globals[0]
+            };
+            match mutation {
+                0 => global
+                    .set_attr_llvm_global_linkage(&lowered.context, LinkageAttr::ExternalLinkage),
+                1 => global.set_address_space(&mut lowered.context, 1),
+                2 => global
+                    .set_initializer_value(&lowered.context, BytesAttr::new(vec![0; 4]).into()),
+                3 => substitute_policy_byte(
+                    &lowered,
+                    global.get_operation(),
+                    GLOBAL_POLICY_ATTR_V1,
+                    5,
+                ),
+                4 => {
+                    substitute_policy_bytes(&lowered, global.get_operation(), GLOBAL_POLICY_ATTR_V1)
+                }
+                5 => global.set_alignment(&lowered.context, 8),
+                _ => unreachable!(),
+            }
+            assert_export_rejected(&lowered);
         }
     }
 }
