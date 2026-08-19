@@ -28,8 +28,9 @@ usage:
 `provision` must run as root and accepts only a new destination beneath
 /opt/fe2o3/verus-runtime-v2/. The Verus launcher and rustup are audited as
 excluded provenance; neither is copied into the executable closure.
-These commands grant no proof authority; the retained Rust lease must admit
-the installed closure separately.
+These commands grant no proof authority. The typed Rust entry point separately
+admits and retains the installed closure, revalidates it around every bounded
+proof process, and returns only non-authoritative schedule-model evidence.
 EOF
     exit 2
 }

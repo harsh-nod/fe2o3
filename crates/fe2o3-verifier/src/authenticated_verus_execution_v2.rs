@@ -1279,8 +1279,8 @@ pub(crate) fn supervise_bounded_process_group_v2(
 /// Applies the authenticated V2 controller credential, capability, seccomp, and thread preflight
 /// before a retained tool is allowed to fork.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn validate_bounded_execution_controller_v2(
-) -> Result<(), AuthenticatedVerusExecutionErrorV2> {
+pub(crate) fn validate_bounded_execution_controller_v2()
+-> Result<(), AuthenticatedVerusExecutionErrorV2> {
     platform::validate_controller_security()
 }
 

@@ -428,6 +428,24 @@ caller-provided and its two direct stages do not prove a real Verus-to-solver
 invocation relationship. Both sealed paths currently require Linux
 `memfd_create`, `fcntl` seals, ptrace/pidfd support, and `/proc`.
 
+The general-GEMM V2 runner is narrower than the public authenticated V2
+protocol. It accepts only a same-process `GeneralGemmVerusRuntimeClosureLeaseV2`
+over the exact protected `/opt/fe2o3/verus-runtime-v2/<version>` closure. It
+revalidates retained path edges, objects, inventories, and its mutation journal
+before and after each process; executes retained `rust_verify`, Z3, toolchain,
+and DSO objects through fixed descriptors; and supplies only immutable sealed
+embedded proof inputs under the authenticated V2 resource bounds and shared
+process-group deadline/output supervisor. Exact positive and expected-negative
+outputs are required before the non-`Clone` schedule evidence is built. The
+legacy launcher-path API remains fail-closed.
+
+Stock `rust_verify` and Z3 do not implement the V2 nonce/control protocol, and
+Verus must create its reviewed Z3 descendant. This runner therefore does not
+produce `AuthenticatedVerusExecutionReceiptV2`, does not claim the V2 frozen
+mapping/checkpoint properties, and grants no compiler, artifact, publication,
+load, or launch authority. Authenticated KIR-to-model correspondence and emitted
+machine refinement remain separate open obligations.
+
 The control-flow binding does not yet prove optimized MIR or machine CFG
 equivalence. It gives those later compiler-refinement checks a canonical exact
 identity to match; the source sidecar alone remains non-authoritative.

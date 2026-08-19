@@ -1,8 +1,9 @@
 //! Retained filesystem admission for the general-GEMM Verus runtime closure.
 //!
-//! This module does not execute Verus and cannot construct proof evidence. It
-//! only admits the exact reviewed V2 filesystem closure and retains the opened
-//! objects so a later supervised runner can use the same generation.
+//! This module admits the exact reviewed V2 filesystem closure, retains the
+//! opened objects, and owns the internal fixed-descriptor execution boundary.
+//! It cannot construct schedule proof evidence; only the typed general-GEMM
+//! entry point can validate exact outputs and mint non-authoritative evidence.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
