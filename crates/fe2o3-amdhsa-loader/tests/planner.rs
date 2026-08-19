@@ -144,6 +144,35 @@ fn rejects_bad_alignment_and_congruence() {
 }
 
 #[test]
+fn rejects_descriptor_file_to_virtual_translation_mismatch() {
+    let mut note_virtual_address = fixture();
+    write_phdr_u64(&mut note_virtual_address, 7, 16, 0x204);
+    write_phdr_u64(&mut note_virtual_address, 7, 24, 0x204);
+    assert_eq!(
+        plan(&note_virtual_address, AdmittedProfile::Gfx942XnackOffCov6),
+        Err(PlanError::DescriptorLoadMappingMismatch { index: 7 })
+    );
+
+    let mut dynamic_virtual_address = fixture();
+    write_phdr_u64(&mut dynamic_virtual_address, 4, 16, 0x4008);
+    write_phdr_u64(&mut dynamic_virtual_address, 4, 24, 0x4008);
+    assert_eq!(
+        plan(
+            &dynamic_virtual_address,
+            AdmittedProfile::Gfx942XnackOffCov6
+        ),
+        Err(PlanError::DescriptorLoadMappingMismatch { index: 4 })
+    );
+
+    let mut dynamic_file_offset = fixture();
+    write_phdr_u64(&mut dynamic_file_offset, 4, 8, 0x2008);
+    assert_eq!(
+        plan(&dynamic_file_offset, AdmittedProfile::Gfx942XnackOffCov6),
+        Err(PlanError::DescriptorLoadMappingMismatch { index: 4 })
+    );
+}
+
+#[test]
 fn rejects_file_memory_and_page_mapping_overlap() {
     let mut file_overlap = fixture();
     write_phdr_u64(&mut file_overlap, 2, 8, 0x200);

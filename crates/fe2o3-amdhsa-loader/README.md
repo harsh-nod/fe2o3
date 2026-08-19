@@ -17,8 +17,9 @@ pinned LLVM/LLD finalizer:
 - exactly one each of the reviewed `PT_PHDR`, `PT_DYNAMIC`, `PT_NOTE`,
   `PT_GNU_STACK`, and `PT_GNU_RELRO` records, plus exactly three `PT_LOAD`
   records with `R`, `R|X`, and `R|W` permissions;
-- 4 KiB-congruent load segments, checked file and virtual ranges, checked
-  page-rounded mapping ranges, no overlap, and no writable-executable load;
+- 4 KiB-congruent load segments, checked file and virtual ranges, exact
+  descriptor file-to-virtual translation deltas, checked page-rounded mapping
+  ranges, no overlap, and no writable-executable load;
 - one bounded `AMDGPU` / `NT_AMDGPU_METADATA` note;
 - the finalizer's non-relocating dynamic-tag profile. Relocation sections,
   relocation tags, dependencies, constructors, and unknown dynamic features

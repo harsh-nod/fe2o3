@@ -318,6 +318,8 @@ pub enum PlanError {
     ProgramHeaderDescriptorMismatch,
     ProgramHeaderNotReadOnlyLoaded,
     DynamicSegmentNotWritableLoaded,
+    DescriptorLoadMappingMismatch { index: usize },
+    AmbiguousDescriptorLoadMapping { index: usize },
     RelroSegmentMismatch,
     InvalidStackDescriptor,
     MetadataNoteNotReadOnlyLoaded,
@@ -807,10 +809,12 @@ fn validate_program_descriptor(
     {
         return Err(PlanError::ProgramHeaderDescriptorMismatch);
     }
-    if !contained_in_segment(raw, segments, SegmentPermissions::ReadOnly, true) {
-        return Err(PlanError::ProgramHeaderNotReadOnlyLoaded);
-    }
-    Ok(())
+    validate_descriptor_load_mapping(
+        raw,
+        segments,
+        SegmentPermissions::ReadOnly,
+        PlanError::ProgramHeaderNotReadOnlyLoaded,
+    )
 }
 
 fn validate_dynamic_descriptor(
@@ -825,10 +829,12 @@ fn validate_dynamic_descriptor(
     {
         return Err(PlanError::UnsupportedProgramHeaderProfile);
     }
-    if !contained_in_segment(raw, segments, SegmentPermissions::ReadWrite, true) {
-        return Err(PlanError::DynamicSegmentNotWritableLoaded);
-    }
-    Ok(())
+    validate_descriptor_load_mapping(
+        raw,
+        segments,
+        SegmentPermissions::ReadWrite,
+        PlanError::DynamicSegmentNotWritableLoaded,
+    )
 }
 
 fn validate_relro_descriptor(
@@ -848,7 +854,12 @@ fn validate_relro_descriptor(
     {
         return Err(PlanError::RelroSegmentMismatch);
     }
-    Ok(())
+    validate_descriptor_load_mapping(
+        raw,
+        segments,
+        SegmentPermissions::ReadWrite,
+        PlanError::RelroSegmentMismatch,
+    )
 }
 
 fn validate_stack_descriptor(raw: ProgramHeader) -> Result<(), PlanError> {
@@ -876,36 +887,66 @@ fn validate_note_descriptor(
     {
         return Err(PlanError::UnsupportedProgramHeaderProfile);
     }
-    if !contained_in_segment(raw, segments, SegmentPermissions::ReadOnly, true) {
-        return Err(PlanError::MetadataNoteNotReadOnlyLoaded);
-    }
-    Ok(())
+    validate_descriptor_load_mapping(
+        raw,
+        segments,
+        SegmentPermissions::ReadOnly,
+        PlanError::MetadataNoteNotReadOnlyLoaded,
+    )
 }
 
-fn contained_in_segment(
+fn validate_descriptor_load_mapping(
     raw: ProgramHeader,
     segments: &[LoadSegment; LOAD_SEGMENT_COUNT],
     permissions: SegmentPermissions,
-    require_file_backing: bool,
-) -> bool {
-    segments.iter().any(|segment| {
+    not_contained: PlanError,
+) -> Result<(), PlanError> {
+    let mut file_segment = None;
+    let mut memory_segment = None;
+    for (index, segment) in segments.iter().enumerate() {
         if segment.permissions != permissions {
-            return false;
+            continue;
         }
-        let memory_contains = range_contains(
+        if range_contains(
             segment.virtual_address,
             segment.memory_size,
             raw.virtual_address,
             raw.memory_size,
-        );
-        let file_contains = range_contains(
+        ) && memory_segment.replace(index).is_some()
+        {
+            return Err(PlanError::AmbiguousDescriptorLoadMapping { index: raw.index });
+        }
+        if range_contains(
             segment.file_offset,
             segment.file_size,
             raw.offset,
             raw.file_size,
-        );
-        memory_contains && (!require_file_backing || file_contains)
-    })
+        ) && file_segment.replace(index).is_some()
+        {
+            return Err(PlanError::AmbiguousDescriptorLoadMapping { index: raw.index });
+        }
+    }
+
+    let (Some(file_segment), Some(memory_segment)) = (file_segment, memory_segment) else {
+        return Err(not_contained);
+    };
+    if file_segment != memory_segment {
+        return Err(PlanError::DescriptorLoadMappingMismatch { index: raw.index });
+    }
+
+    let segment = segments[file_segment];
+    let file_delta = raw
+        .offset
+        .checked_sub(segment.file_offset)
+        .ok_or(PlanError::DescriptorLoadMappingMismatch { index: raw.index })?;
+    let memory_delta = raw
+        .virtual_address
+        .checked_sub(segment.virtual_address)
+        .ok_or(PlanError::DescriptorLoadMappingMismatch { index: raw.index })?;
+    if file_delta != memory_delta {
+        return Err(PlanError::DescriptorLoadMappingMismatch { index: raw.index });
+    }
+    Ok(())
 }
 
 fn range_contains(outer_start: u64, outer_len: u64, inner_start: u64, inner_len: u64) -> bool {
