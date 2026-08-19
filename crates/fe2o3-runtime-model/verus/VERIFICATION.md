@@ -1,7 +1,8 @@
 # Runtime model verification
 
 This directory contains the initial issue #137 Verus specifications. The
-authenticated runner proves fifteen obligations over finite abstract traces. The
+authenticated runner proves nineteen obligations over finite abstract values
+and traces. The
 sequence lengths are not bounded by these proofs.
 
 `runtime_lifecycle_v1.rs` proves:
@@ -50,6 +51,17 @@ the executable adapter:
 5. a substituted device set produces no map state; and
 6. any non-released mapping or live publication blocks allocation free.
 
+`load_plan_v1.rs` proves the initial R3 abstract load-plan relation:
+
+1. every admitted segment retains the exact 4 KiB page-rounding equations,
+   checked `u64` file, memory, and mapping ranges, containing mapping range,
+   and the plan retains a checked image span no larger than 64 MiB;
+2. the three segments are in canonical increasing virtual-address order, are
+   pairwise disjoint in file, memory, and page-rounded mapping ranges, and have
+   exactly one each of read-only, read-execute, and read-write permissions; and
+3. an admitted descriptor has the same file-to-virtual-address delta within
+   exactly one same-permission containing `PT_LOAD` segment.
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -69,7 +81,9 @@ VM generation substitution, stale generation reuse, topology/render PCI
 substitution, dropped DRM schema identity, lost history predecessor, mixed
 cross-source identity, a dropped final reset-fence observation, allocation free
 while a partial mapping remains, cumulative unmap progress incorrectly added to
-prior progress, and a failed full-prefix unmap treated as releasable. The launcher
+prior progress, a failed full-prefix unmap treated as releasable, load segments
+whose memory bytes are disjoint but whose rounded pages overlap, and descriptor
+containment that substitutes a different file-to-virtual-address delta. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
@@ -78,7 +92,7 @@ verification.
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
 implements that relation, nor that the adapter observed truthful kernel data.
-The other files prove abstract transition relations, not refinement of
+The lifecycle and memory files prove abstract transition relations, not refinement of
 `src/model.rs`, `src/device_identity.rs`, or `src/memory_lifecycle.rs`. All
 receipts remain model-only and are not production device authority. A later
 sealed adapter refinement must
@@ -99,3 +113,12 @@ side-effecting results into the model's unreleasable ambiguous state. The model
 also does not prove that a copied R1 admission token is still active in a
 separately evolved `DeviceIdentityStateV1`; that state-composition refinement is
 required before a production adapter can consume the memory transitions.
+
+The R3 load-plan proof establishes only the stated mathematical relation over
+already-formed abstract segment and descriptor records. It does not prove that
+`fe2o3-amdhsa-loader::plan` implements that relation or that its untrusted ELF
+byte parser constructs the modeled records. It does not verify metadata or
+symbols, copied or zero-filled bytes, relocations, authentication, allocation,
+mapping permissions, W^X transitions, or materialization on a GPU. Those need
+separate executable-to-model refinement and loaded-image proofs before any
+`loader_refined` authority claim.
