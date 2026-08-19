@@ -37,6 +37,10 @@ use fe2o3_pliron::{
     ContextIdentity, ContextIdentityError, PLIRON_REVISION, ensure_context_identity,
     require_context_identity,
 };
+use fe2o3_verifier::{
+    GeneralGemmEvidenceIdentityV1, GeneralGemmProofExecutionErrorV1, GeneralGemmProofRequestV1,
+    GeneralGemmProofScheduleV1,
+};
 use pliron::{
     builtin::{
         attributes::{BytesAttr, IdentifierAttr},
@@ -855,6 +859,39 @@ impl GeneralGemmCompilationUnitV1 {
     pub const fn identity(&self) -> GeneralGemmCompilationBindingIdentityV1 {
         self.identity
     }
+
+    /// Derives the model-local schedule proof request from this complete binding.
+    ///
+    /// No caller-supplied identity enters this mapping. The returned request
+    /// remains non-admitting until authenticated KIR correspondence and machine
+    /// refinement are joined by their owning verifier layers.
+    pub fn schedule_proof_request(
+        &self,
+    ) -> Result<GeneralGemmProofRequestV1, GeneralGemmProofExecutionErrorV1> {
+        let schedule = match self.schedule {
+            GeneralGemmScheduleV1::ReferenceWave64Xor4V1 => {
+                GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1
+            }
+            GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 => {
+                GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1
+            }
+        };
+        GeneralGemmProofRequestV1::checked(
+            schedule,
+            proof_identity(self.schedule_identity().into_bytes()),
+            proof_identity(self.plan_identity.into_bytes()),
+            proof_identity(*self.kir_identity().as_bytes()),
+            proof_identity(self.identity.into_bytes()),
+            proof_identity(self.request.identity().into_bytes()),
+            proof_identity(self.request.input_obligations_identity().into_bytes()),
+            proof_identity(self.request.compiler_profile_identity().into_bytes()),
+            proof_identity(self.request.target_profile_identity().into_bytes()),
+            proof_identity(self.toolchain.identity().into_bytes()),
+            proof_identity(self.abi.identity().into_bytes()),
+            proof_identity(self.frontend_semantics.identity().into_bytes()),
+            proof_identity(*self.frontend_semantics.provider_semantics_identity()),
+        )
+    }
 }
 
 /// Missing typed machine contracts that prevent honest Handoff V2 emission.
@@ -1573,6 +1610,10 @@ fn request_commitments(request: &CompileRequestV1) -> [[u8; 32]; 9] {
 
 fn is_zero_identity(identity: &[u8; 32]) -> bool {
     identity == &[0; 32]
+}
+
+const fn proof_identity(identity: [u8; 32]) -> GeneralGemmEvidenceIdentityV1 {
+    GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(identity)
 }
 
 fn hash_fields(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {

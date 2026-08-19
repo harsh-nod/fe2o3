@@ -258,6 +258,72 @@ fn compiled_source_and_provider_substitution_change_the_aggregate_identity() {
 }
 
 #[test]
+fn verifier_request_is_derived_only_from_the_checked_compilation_unit() {
+    for (schedule, expected) in [
+        (
+            GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+            GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1,
+        ),
+        (
+            GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+            GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+        ),
+    ] {
+        let unit = unit(schedule);
+        let proof = unit.schedule_proof_request().unwrap();
+        assert_eq!(proof.schedule(), expected);
+        assert_eq!(
+            proof.schedule_identity().as_bytes(),
+            unit.schedule_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.plan_identity().as_bytes(),
+            unit.plan_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.kir_identity().as_bytes(),
+            unit.kir_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.compilation_binding_identity().as_bytes(),
+            unit.identity().as_bytes()
+        );
+        assert_eq!(
+            proof.compile_request_identity().as_bytes(),
+            unit.request().identity().as_bytes()
+        );
+        assert_eq!(
+            proof.obligation_set_identity().as_bytes(),
+            unit.request().input_obligations_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.compiler_identity().as_bytes(),
+            unit.request().compiler_profile_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.target_identity().as_bytes(),
+            unit.request().target_profile_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.toolchain_identity().as_bytes(),
+            unit.toolchain_route_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.runtime_abi_identity().as_bytes(),
+            unit.runtime_abi_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.source_semantics_identity().as_bytes(),
+            unit.frontend_semantic_binding_identity().as_bytes()
+        );
+        assert_eq!(
+            proof.numerical_policy_identity().as_bytes(),
+            unit.frontend_semantics().provider_semantics_identity()
+        );
+    }
+}
+
+#[test]
 fn hostile_kir_retains_exact_property_stage_and_code() {
     let plan = plan();
     let hostile = general_gemm_semantic_mutation_kir_v1(
