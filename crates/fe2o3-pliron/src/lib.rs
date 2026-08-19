@@ -46,6 +46,7 @@ pub const HARD_MAX_OPERATION_CHILDREN: usize = 4_096;
 pub const HARD_MAX_OPERATION_IMPORT_BYTES: usize = 1_048_576;
 pub const HARD_MAX_OPERATION_IMPORT_NESTING: usize = 256;
 pub const HARD_MAX_OPERATION_TREE_ITEMS: usize = 16_384;
+pub const HARD_MAX_SESSION_OPERATION_IMPORT_BYTES: usize = 1_048_576;
 pub const HARD_MAX_SESSION_OPERATION_TREE_ITEMS: usize = 65_536;
 
 /// Auxiliary-data key for the fe2o3 context-identity locator.
@@ -566,7 +567,9 @@ pub struct PlironSession {
     identity: ContextIdentity,
     manifest: ContextManifest,
     operations: BTreeMap<OperationHandleIdentity, Ptr<Operation>>,
+    operation_roots: BTreeMap<OperationHandleIdentity, OperationHandleIdentity>,
     owned_tree_work: BTreeMap<OperationHandleIdentity, usize>,
+    operation_import_bytes: usize,
     operation_tree_work: usize,
     next_operation_handle: Option<NonZeroU64>,
     poisoned: bool,
@@ -646,6 +649,7 @@ pub enum OperationHandleError {
     ContextIdentity(ContextIdentityError),
     ForeignSession,
     StaleHandle,
+    OperationGraphOwnershipMismatch,
     HandleSpaceExhausted,
     TooManyOperationHandles,
     TooManyOperationRegions,
@@ -654,6 +658,7 @@ pub enum OperationHandleError {
     EmptyOperationImport,
     OperationImportTooLarge,
     OperationImportNestingTooDeep,
+    SessionOperationImportLimitExceeded,
     OperationImportRejected,
     OperationVerificationRejected,
     OperationTreeLimitExceeded,
@@ -673,6 +678,9 @@ impl fmt::Display for OperationHandleError {
                 formatter.write_str("operation handle belongs to another session")
             }
             Self::StaleHandle => formatter.write_str("operation handle is stale"),
+            Self::OperationGraphOwnershipMismatch => {
+                formatter.write_str("operation handle has inconsistent root ownership")
+            }
             Self::HandleSpaceExhausted => {
                 formatter.write_str("operation handle identity space is exhausted")
             }
@@ -694,6 +702,9 @@ impl fmt::Display for OperationHandleError {
             }
             Self::OperationImportNestingTooDeep => {
                 formatter.write_str("operation import exceeds the hard nesting limit")
+            }
+            Self::SessionOperationImportLimitExceeded => {
+                formatter.write_str("session operation imports exceed the hard byte limit")
             }
             Self::OperationImportRejected => formatter.write_str("operation import was rejected"),
             Self::OperationVerificationRejected => {
@@ -781,7 +792,9 @@ impl PlironSession {
                     .collect(),
             },
             operations: BTreeMap::new(),
+            operation_roots: BTreeMap::new(),
             owned_tree_work: BTreeMap::new(),
+            operation_import_bytes: 0,
             operation_tree_work: 0,
             next_operation_handle: NonZeroU64::new(1),
             poisoned: false,
@@ -840,6 +853,7 @@ impl PlironSession {
             }
         };
         self.operations.insert(identity, pointer);
+        self.operation_roots.insert(identity, identity);
         self.owned_tree_work.insert(identity, 3);
         self.operation_tree_work = session_work;
         Ok(OperationHandle {
@@ -869,6 +883,11 @@ impl PlironSession {
         }
         preflight_operation_import_nesting(text)?;
         self.validate_identity()?;
+        let session_import_bytes = self
+            .operation_import_bytes
+            .checked_add(text.len())
+            .filter(|bytes| *bytes <= HARD_MAX_SESSION_OPERATION_IMPORT_BYTES)
+            .ok_or(OperationHandleError::SessionOperationImportLimitExceeded)?;
         if self.operation_tree_work >= HARD_MAX_SESSION_OPERATION_TREE_ITEMS {
             return Err(OperationHandleError::SessionOperationTreeLimitExceeded);
         }
@@ -926,7 +945,9 @@ impl PlironSession {
         }
 
         self.operations.insert(identity, pointer);
+        self.operation_roots.insert(identity, identity);
         self.owned_tree_work.insert(identity, tree_work);
+        self.operation_import_bytes = session_import_bytes;
         self.operation_tree_work = session_work;
         Ok(OperationHandle {
             owner: self.identity,
@@ -975,7 +996,12 @@ impl PlironSession {
         let (_, children) = self
             .with_operation(handle, inspect_operation)
             .and_then(|inspection| inspection)?;
-        self.register_operation_pointers(&children)
+        let root = self
+            .operation_roots
+            .get(&handle.identity)
+            .copied()
+            .ok_or(OperationHandleError::OperationGraphOwnershipMismatch)?;
+        self.register_operation_pointers(&children, root)
     }
 
     /// Erases an authenticated operation, invalidating all clones of its handle.
@@ -983,15 +1009,63 @@ impl PlironSession {
         &mut self,
         handle: &OperationHandle,
     ) -> Result<(), OperationHandleError> {
-        let subtree = self
+        let (subtree_work, subtree) = self
             .with_operation(handle, inspect_operation_tree_details)
-            .and_then(|inspection| inspection.map(|(_, operations)| operations))?;
-        self.with_operation(handle, Operation::erase)?;
-        self.operations
-            .retain(|_, registered| !subtree.contains(registered));
-        if let Some(work) = self.owned_tree_work.remove(&handle.identity) {
-            self.operation_tree_work = self.operation_tree_work.saturating_sub(work);
+            .and_then(|inspection| inspection)?;
+        let root = self
+            .operation_roots
+            .get(&handle.identity)
+            .copied()
+            .ok_or(OperationHandleError::OperationGraphOwnershipMismatch)?;
+        let removed = self
+            .operations
+            .iter()
+            .filter_map(|(identity, pointer)| subtree.contains(pointer).then_some(*identity))
+            .collect::<Vec<_>>();
+        if removed.is_empty()
+            || removed
+                .iter()
+                .any(|identity| self.operation_roots.get(identity).copied() != Some(root))
+        {
+            return Err(OperationHandleError::OperationGraphOwnershipMismatch);
         }
+        let charged_root_work = self
+            .owned_tree_work
+            .get(&root)
+            .copied()
+            .ok_or(OperationHandleError::OperationGraphOwnershipMismatch)?;
+        let refunded_work = if handle.identity == root {
+            if charged_root_work != subtree_work {
+                return Err(OperationHandleError::OperationGraphOwnershipMismatch);
+            }
+            charged_root_work
+        } else {
+            subtree_work
+                .checked_add(1)
+                .ok_or(OperationHandleError::OperationGraphOwnershipMismatch)?
+        };
+        let remaining_root_work = charged_root_work
+            .checked_sub(refunded_work)
+            .ok_or(OperationHandleError::OperationGraphOwnershipMismatch)?;
+        let remaining_session_work = self
+            .operation_tree_work
+            .checked_sub(refunded_work)
+            .ok_or(OperationHandleError::OperationGraphOwnershipMismatch)?;
+
+        self.with_operation(handle, Operation::erase)?;
+        for identity in removed {
+            self.operations.remove(&identity);
+            self.operation_roots.remove(&identity);
+        }
+        if handle.identity == root {
+            self.owned_tree_work.remove(&root);
+        } else if let Some(root_work) = self.owned_tree_work.get_mut(&root) {
+            *root_work = remaining_root_work;
+        } else {
+            self.poisoned = true;
+            return Err(OperationHandleError::OperationGraphOwnershipMismatch);
+        }
+        self.operation_tree_work = remaining_session_work;
         Ok(())
     }
 
@@ -1061,14 +1135,20 @@ impl PlironSession {
     fn register_operation_pointers(
         &mut self,
         pointers: &[Ptr<Operation>],
+        root: OperationHandleIdentity,
     ) -> Result<Vec<OperationHandle>, OperationHandleError> {
         let mut unseen = Vec::new();
         for pointer in pointers {
             let registered = self
                 .operations
-                .values()
-                .any(|registered| registered == pointer);
-            if !registered && !unseen.contains(pointer) {
+                .iter()
+                .find_map(|(identity, registered)| (registered == pointer).then_some(*identity));
+            if let Some(identity) = registered
+                && self.operation_roots.get(&identity) != Some(&root)
+            {
+                return Err(OperationHandleError::OperationGraphOwnershipMismatch);
+            }
+            if registered.is_none() && !unseen.contains(pointer) {
                 unseen.push(*pointer);
             }
         }
@@ -1096,6 +1176,7 @@ impl PlironSession {
         for pointer in unseen {
             let identity = self.allocate_operation_handle()?;
             self.operations.insert(identity, pointer);
+            self.operation_roots.insert(identity, root);
         }
 
         pointers
@@ -1105,7 +1186,10 @@ impl PlironSession {
                     .operations
                     .iter()
                     .find_map(|(identity, registered)| (registered == pointer).then_some(*identity))
-                    .expect("preflighted operation pointer is registered");
+                    .ok_or(OperationHandleError::OperationGraphOwnershipMismatch)?;
+                if self.operation_roots.get(&identity) != Some(&root) {
+                    return Err(OperationHandleError::OperationGraphOwnershipMismatch);
+                }
                 Ok(OperationHandle {
                     owner: self.identity,
                     identity,
@@ -1116,9 +1200,11 @@ impl PlironSession {
 }
 
 fn preflight_operation_import_nesting(text: &str) -> Result<(), OperationHandleError> {
+    let mut delimiters = [0_u8; HARD_MAX_OPERATION_IMPORT_NESTING];
     let mut depth = 0_usize;
     let mut quoted = false;
     let mut escaped = false;
+    let mut previous = None;
 
     for byte in text.bytes() {
         if quoted {
@@ -1128,20 +1214,39 @@ fn preflight_operation_import_nesting(text: &str) -> Result<(), OperationHandleE
                 escaped = true;
             } else if byte == b'"' {
                 quoted = false;
+                previous = Some(byte);
             }
             continue;
         }
 
         match byte {
-            b'"' => quoted = true,
-            b'(' | b'[' | b'{' | b'<' => {
-                depth = depth
-                    .checked_add(1)
-                    .filter(|depth| *depth <= HARD_MAX_OPERATION_IMPORT_NESTING)
-                    .ok_or(OperationHandleError::OperationImportNestingTooDeep)?;
+            b'"' => {
+                quoted = true;
+                previous = Some(byte);
             }
-            b')' | b']' | b'}' | b'>' => depth = depth.saturating_sub(1),
-            _ => {}
+            b'(' | b'[' | b'{' | b'<' => {
+                if depth == HARD_MAX_OPERATION_IMPORT_NESTING {
+                    return Err(OperationHandleError::OperationImportNestingTooDeep);
+                }
+                delimiters[depth] = byte;
+                depth += 1;
+                previous = Some(byte);
+            }
+            b')' | b']' | b'}' | b'>' => {
+                let arrow = byte == b'>' && previous == Some(b'-');
+                let expected = match byte {
+                    b')' => b'(',
+                    b']' => b'[',
+                    b'}' => b'{',
+                    b'>' => b'<',
+                    _ => unreachable!(),
+                };
+                if !arrow && depth != 0 && delimiters[depth - 1] == expected {
+                    depth -= 1;
+                }
+                previous = Some(byte);
+            }
+            _ => previous = Some(byte),
         }
     }
 
@@ -1544,6 +1649,36 @@ mod owner_handle_tests {
     }
 
     #[test]
+    fn descendant_erasure_refunds_subtree_and_parent_edge_work() {
+        let mut session = session();
+        let root = session
+            .import_operation_text_v1(
+                "builtin.module @imported { ^entry(): builtin.module @child { ^entry(): } }",
+            )
+            .expect("verified module import");
+        let child = session.operation_children(&root).unwrap().remove(0);
+        assert_eq!(session.operation_tree_work, 7);
+
+        session
+            .erase_operation(&child)
+            .expect("erase child subtree");
+        assert_eq!(session.operation_tree_work, 3);
+        assert_eq!(session.owned_tree_work.get(&root.identity), Some(&3));
+        assert!(session.operation_children(&root).unwrap().is_empty());
+        assert_eq!(
+            session.operation_shape(&child),
+            Err(OperationHandleError::StaleHandle)
+        );
+
+        session
+            .erase_operation(&root)
+            .expect("erase remaining root");
+        assert_eq!(session.operation_tree_work, 0);
+        assert!(session.owned_tree_work.is_empty());
+        assert!(session.operation_roots.is_empty());
+    }
+
+    #[test]
     fn textual_import_rejects_trailing_input_and_poisons_partial_context() {
         let mut session = session();
 
@@ -1590,6 +1725,29 @@ mod owner_handle_tests {
     }
 
     #[test]
+    fn textual_import_session_bytes_are_monotonic_and_preflighted() {
+        let text = "builtin.module @imported { ^entry(): }";
+        let mut session = session();
+        let root = session
+            .import_operation_text_v1(text)
+            .expect("bounded import");
+        assert_eq!(session.operation_import_bytes, text.len());
+
+        session.erase_operation(&root).expect("erase imported root");
+        assert_eq!(session.operation_import_bytes, text.len());
+        session.operation_import_bytes = HARD_MAX_SESSION_OPERATION_IMPORT_BYTES;
+        let next = session.next_operation_handle;
+
+        assert!(matches!(
+            session.import_operation_text_v1(text),
+            Err(OperationHandleError::SessionOperationImportLimitExceeded)
+        ));
+        assert_eq!(session.next_operation_handle, next);
+        assert!(session.operations.is_empty());
+        assert!(!session.is_poisoned());
+    }
+
+    #[test]
     fn textual_import_nesting_preflight_does_not_allocate_or_poison() {
         let mut session = session();
         let next = session.next_operation_handle;
@@ -1611,6 +1769,24 @@ mod owner_handle_tests {
             "{".repeat(HARD_MAX_OPERATION_IMPORT_NESTING + 1)
         );
         assert_eq!(preflight_operation_import_nesting(&quoted), Ok(()));
+    }
+
+    #[test]
+    fn nesting_preflight_does_not_treat_function_arrows_as_closers() {
+        let nested = "{builtin.function <() -> ()>".repeat(HARD_MAX_OPERATION_IMPORT_NESTING + 1);
+        assert_eq!(
+            preflight_operation_import_nesting(&nested),
+            Err(OperationHandleError::OperationImportNestingTooDeep)
+        );
+
+        let mut session = session();
+        let imported = session.import_operation_text_v1(
+            "builtin.module @root { ^entry(): builtin.func @f: builtin.function <() -> ()> {} }",
+        );
+        assert!(
+            imported.is_ok(),
+            "valid function import failed: {imported:?}"
+        );
     }
 
     #[test]

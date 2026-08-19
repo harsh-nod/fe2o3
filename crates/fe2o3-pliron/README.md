@@ -47,8 +47,10 @@ Textual operation import is a noncanonical construction bridge for dialect
 integration. Input bytes, parser text, and printer output cannot become
 artifact, cache, proof, publication, or runtime identities. Imports are
 bounded by byte length and structural nesting before parsing, then across the
-complete operation tree. A parse or verification rejection poisons the session
-because upstream arena allocation is not transactional.
+complete operation tree. Successful import bytes are charged monotonically to
+the session because interned parser data can outlive an erased operation. A
+parse or verification rejection poisons the session because upstream arena
+allocation is not transactional.
 This bridge is transitional: a production compiler path that depends on a
 printer/text round trip remains unsupported until it uses an owner-held typed
 dialect construction service.
