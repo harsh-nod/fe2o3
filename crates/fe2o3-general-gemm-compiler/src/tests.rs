@@ -15,7 +15,7 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_llvm_worker_handoff::{
     EXACT_LLD_BUILD_IDENTITY_V1, EXACT_LLD_VERSION_V1, EXACT_LLVM_BUILD_IDENTITY_V1,
-    MeasuredLlvmLldBuildV1,
+    EXACT_LLVM_VERSION_V1,
 };
 use fe2o3_lower_amdgcn_llvm::lower_amdgcn_to_pliron_llvm_v1;
 
@@ -189,8 +189,10 @@ fn complete_general_gemm_handoffs_lower_into_live_pliron_llvm_graphs() {
         assert!(inspection.exact_memory_alignment());
         assert!(!lowered.grants_artifact_authority());
         let boundary = machine.compiler_boundary();
-        assert_eq!(boundary.graph_export().graph_handoff(), source);
-        assert_eq!(boundary.graph_export().graph_inspection(), inspection);
+        assert_eq!(
+            boundary.serialization_receipt().graph_inspection(),
+            inspection
+        );
         assert_eq!(
             boundary.worker_admission().handoff_identity(),
             source.identity()
@@ -1001,12 +1003,11 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
             &[0; 32]
         );
         assert_eq!(
-            machine.compiler_boundary().graph_export().graph_handoff(),
-            machine.graph_handoff()
-        );
-        assert_eq!(
-            machine.compiler_boundary().graph_export().source_identity(),
-            machine.handoff().identity()
+            machine
+                .compiler_boundary()
+                .serialization_receipt()
+                .graph_handoff_identity(),
+            machine.graph_handoff().identity()
         );
         assert!(!machine.compiler_boundary().grants_artifact_authority());
         assert!(
@@ -1030,41 +1031,35 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
 }
 
 #[test]
-fn canonical_graph_export_has_a_direct_non_authoritative_worker_admission_path() {
+fn compiler_boundary_retains_only_post_serialization_graph_evidence() {
     let machine = lower_general_gemm_structural_machine_v1(&unit(
         GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
     ))
     .unwrap();
-    let export = machine.compiler_boundary().graph_export().clone();
-    let expected_graph_identity = export.graph_handoff_identity();
-    let boundary =
-        admit_general_gemm_graph_export_v1(export, MeasuredLlvmLldBuildV1::exact()).unwrap();
+    let boundary = machine.compiler_boundary();
+    let receipt = boundary.serialization_receipt();
 
     assert_eq!(
         boundary.worker_admission().handoff_identity(),
-        expected_graph_identity
+        receipt.graph_handoff_identity()
     );
+    assert_eq!(machine.assembly().sha256(), receipt.assembly_sha256());
     assert!(!boundary.grants_artifact_authority());
     assert!(!boundary.worker_admission().grants_object_authority());
 }
 
 #[test]
-fn compiler_boundary_rejects_substituted_worker_build_policy() {
+fn compiler_boundary_retains_exact_worker_build_policy() {
     let machine = lower_general_gemm_structural_machine_v1(&unit(
         GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
     ))
     .unwrap();
-    let substituted = MeasuredLlvmLldBuildV1::new(
-        "22.1.9",
-        EXACT_LLVM_BUILD_IDENTITY_V1,
-        EXACT_LLD_VERSION_V1,
-        EXACT_LLD_BUILD_IDENTITY_V1,
-        true,
-    );
-    assert!(matches!(
-        admit_general_gemm_compiler_boundary_v1(machine.handoff(), substituted),
-        Err(GeneralGemmStructuralMachineErrorV1::WorkerAdmission(_))
-    ));
+    let build = machine.worker_admission().build_identity();
+    assert_eq!(build.llvm_version(), EXACT_LLVM_VERSION_V1);
+    assert_eq!(build.llvm_build_identity(), EXACT_LLVM_BUILD_IDENTITY_V1);
+    assert_eq!(build.lld_version(), EXACT_LLD_VERSION_V1);
+    assert_eq!(build.lld_build_identity(), EXACT_LLD_BUILD_IDENTITY_V1);
+    assert!(build.in_process_lld());
 }
 
 fn occurrences(haystack: &str, needle: &str) -> usize {
