@@ -14,15 +14,17 @@ use std::{
 use pliron::{
     attribute::Attribute,
     builtin::ops::ModuleOp,
+    combine::{Parser, eof},
     context::Context,
     context::Ptr,
     dialect::{Dialect, DialectName},
     identifier::Identifier,
+    irfmt::parsers::spaced,
     linked_list::ContainsLinkedList,
     location::Location,
     op::{Op, OpBox},
-    operation::Operation,
-    parsable::Parsable,
+    operation::{Operation, verify_operation},
+    parsable::{Parsable, parse_from_str},
     pass::Pass,
     r#type::{Type, TypedHandle},
     uniqued_any::{self, UniquedKey},
@@ -41,6 +43,9 @@ pub const HARD_MAX_OPERATION_HANDLES: usize = 4_096;
 pub const HARD_MAX_OPERATION_REGIONS: usize = 64;
 pub const HARD_MAX_OPERATION_BLOCKS: usize = 4_096;
 pub const HARD_MAX_OPERATION_CHILDREN: usize = 4_096;
+pub const HARD_MAX_OPERATION_IMPORT_BYTES: usize = 1_048_576;
+pub const HARD_MAX_OPERATION_TREE_ITEMS: usize = 16_384;
+pub const HARD_MAX_SESSION_OPERATION_TREE_ITEMS: usize = 65_536;
 
 /// Auxiliary-data key for the fe2o3 context-identity locator.
 pub const CONTEXT_IDENTITY_MARKER_KEY: &str = "fe2o3_pliron_context_identity_v1";
@@ -560,6 +565,8 @@ pub struct PlironSession {
     identity: ContextIdentity,
     manifest: ContextManifest,
     operations: BTreeMap<OperationHandleIdentity, Ptr<Operation>>,
+    owned_tree_work: BTreeMap<OperationHandleIdentity, usize>,
+    operation_tree_work: usize,
     next_operation_handle: Option<NonZeroU64>,
     poisoned: bool,
 }
@@ -643,6 +650,12 @@ pub enum OperationHandleError {
     TooManyOperationRegions,
     TooManyOperationBlocks,
     TooManyOperationChildren,
+    EmptyOperationImport,
+    OperationImportTooLarge,
+    OperationImportRejected,
+    OperationVerificationRejected,
+    OperationTreeLimitExceeded,
+    SessionOperationTreeLimitExceeded,
     UpstreamPanicked,
 }
 
@@ -672,6 +685,20 @@ impl fmt::Display for OperationHandleError {
             }
             Self::TooManyOperationChildren => {
                 formatter.write_str("child operation count exceeds the hard limit")
+            }
+            Self::EmptyOperationImport => formatter.write_str("operation import is empty"),
+            Self::OperationImportTooLarge => {
+                formatter.write_str("operation import exceeds the hard byte limit")
+            }
+            Self::OperationImportRejected => formatter.write_str("operation import was rejected"),
+            Self::OperationVerificationRejected => {
+                formatter.write_str("imported operation failed recursive verification")
+            }
+            Self::OperationTreeLimitExceeded => {
+                formatter.write_str("operation tree exceeds the hard work limit")
+            }
+            Self::SessionOperationTreeLimitExceeded => {
+                formatter.write_str("session operation trees exceed the hard work limit")
             }
             Self::UpstreamPanicked => formatter.write_str("Pliron operation access panicked"),
         }
@@ -749,6 +776,8 @@ impl PlironSession {
                     .collect(),
             },
             operations: BTreeMap::new(),
+            owned_tree_work: BTreeMap::new(),
+            operation_tree_work: 0,
             next_operation_handle: NonZeroU64::new(1),
             poisoned: false,
         })
@@ -788,6 +817,11 @@ impl PlironSession {
     pub fn create_module(&mut self, name: &str) -> Result<OperationHandle, OperationHandleError> {
         validate_name(name, NameKind::Dialect).map_err(OperationHandleError::InvalidName)?;
         self.validate_identity()?;
+        let session_work = self
+            .operation_tree_work
+            .checked_add(3)
+            .filter(|work| *work <= HARD_MAX_SESSION_OPERATION_TREE_ITEMS)
+            .ok_or(OperationHandleError::SessionOperationTreeLimitExceeded)?;
         let identity = self.allocate_operation_handle()?;
         let name = Identifier::try_from(name)
             .map_err(|_| OperationHandleError::InvalidName(NameError::InvalidByte))?;
@@ -801,6 +835,91 @@ impl PlironSession {
             }
         };
         self.operations.insert(identity, pointer);
+        self.owned_tree_work.insert(identity, 3);
+        self.operation_tree_work = session_work;
+        Ok(OperationHandle {
+            owner: self.identity,
+            identity,
+        })
+    }
+
+    /// Imports one bounded textual Pliron root into this owner session.
+    ///
+    /// Text is a noncanonical construction bridge only. It must never be used
+    /// as an artifact, proof, cache, publication, or runtime identity. Parsing
+    /// requires exact end-of-input and recursive verification; after parsing
+    /// starts, any rejection poisons the session because upstream allocation is
+    /// not transactional.
+    pub fn import_operation_text_v1(
+        &mut self,
+        text: &str,
+    ) -> Result<OperationHandle, OperationHandleError> {
+        if text.is_empty() {
+            return Err(OperationHandleError::EmptyOperationImport);
+        }
+        if text.len() > HARD_MAX_OPERATION_IMPORT_BYTES {
+            return Err(OperationHandleError::OperationImportTooLarge);
+        }
+        self.validate_identity()?;
+        if self.operation_tree_work >= HARD_MAX_SESSION_OPERATION_TREE_ITEMS {
+            return Err(OperationHandleError::SessionOperationTreeLimitExceeded);
+        }
+        let identity = self.allocate_operation_handle()?;
+        let pointer = match catch_unwind(AssertUnwindSafe(|| {
+            parse_from_str(
+                spaced(Operation::top_level_parser()).skip(eof()),
+                &mut self.context,
+                text,
+            )
+        })) {
+            Ok(Ok(pointer)) => pointer,
+            Ok(Err(_)) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::OperationImportRejected);
+            }
+            Err(_) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::UpstreamPanicked);
+            }
+        };
+        let tree_work = match catch_unwind(AssertUnwindSafe(|| {
+            inspect_operation_tree(pointer, &mut self.context)
+        })) {
+            Ok(Ok(tree_work)) => tree_work,
+            Ok(Err(error)) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+            Err(_) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::UpstreamPanicked);
+            }
+        };
+        let session_work = self
+            .operation_tree_work
+            .checked_add(tree_work)
+            .filter(|work| *work <= HARD_MAX_SESSION_OPERATION_TREE_ITEMS);
+        let Some(session_work) = session_work else {
+            self.poisoned = true;
+            return Err(OperationHandleError::SessionOperationTreeLimitExceeded);
+        };
+        match catch_unwind(AssertUnwindSafe(|| {
+            verify_operation(pointer, &self.context)
+        })) {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::OperationVerificationRejected);
+            }
+            Err(_) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::UpstreamPanicked);
+            }
+        }
+
+        self.operations.insert(identity, pointer);
+        self.owned_tree_work.insert(identity, tree_work);
+        self.operation_tree_work = session_work;
         Ok(OperationHandle {
             owner: self.identity,
             identity,
@@ -856,8 +975,15 @@ impl PlironSession {
         &mut self,
         handle: &OperationHandle,
     ) -> Result<(), OperationHandleError> {
+        let subtree = self
+            .with_operation(handle, inspect_operation_tree_details)
+            .and_then(|inspection| inspection.map(|(_, operations)| operations))?;
         self.with_operation(handle, Operation::erase)?;
-        self.operations.remove(&handle.identity);
+        self.operations
+            .retain(|_, registered| !subtree.contains(registered));
+        if let Some(work) = self.owned_tree_work.remove(&handle.identity) {
+            self.operation_tree_work = self.operation_tree_work.saturating_sub(work);
+        }
         Ok(())
     }
 
@@ -1020,6 +1146,37 @@ fn inspect_operation(
         },
         children,
     ))
+}
+
+fn inspect_operation_tree(
+    pointer: Ptr<Operation>,
+    context: &mut Context,
+) -> Result<usize, OperationHandleError> {
+    inspect_operation_tree_details(pointer, context).map(|(work, _)| work)
+}
+
+fn inspect_operation_tree_details(
+    pointer: Ptr<Operation>,
+    context: &mut Context,
+) -> Result<(usize, Vec<Ptr<Operation>>), OperationHandleError> {
+    let mut pending = vec![pointer];
+    let mut operations = Vec::new();
+    let mut work = 0_usize;
+    while let Some(operation) = pending.pop() {
+        let (shape, children) = inspect_operation(operation, context)?;
+        let local_work = 1_usize
+            .checked_add(shape.region_count)
+            .and_then(|value| value.checked_add(shape.block_count))
+            .and_then(|value| value.checked_add(children.len()))
+            .ok_or(OperationHandleError::OperationTreeLimitExceeded)?;
+        work = work
+            .checked_add(local_work)
+            .filter(|work| *work <= HARD_MAX_OPERATION_TREE_ITEMS)
+            .ok_or(OperationHandleError::OperationTreeLimitExceeded)?;
+        operations.push(operation);
+        pending.extend(children.into_iter().rev());
+    }
+    Ok((work, operations))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1306,6 +1463,89 @@ mod owner_handle_tests {
         assert_eq!(session.operations.len(), 1);
         assert!(!session.is_poisoned());
         assert_eq!(session.operation_result_count(&root), Ok(0));
+    }
+
+    #[test]
+    fn textual_import_returns_only_a_verified_owner_handle() {
+        let mut session = session();
+        let root = session
+            .import_operation_text_v1(
+                "builtin.module @imported { ^entry(): builtin.module @child { ^entry(): } }",
+            )
+            .expect("verified module import");
+
+        assert_eq!(session.operation_is::<ModuleOp>(&root), Ok(true));
+        assert_eq!(
+            session.operation_shape(&root),
+            Ok(OperationShapeV1 {
+                operand_count: 0,
+                result_count: 0,
+                region_count: 1,
+                block_count: 1,
+                child_operation_count: 1,
+            })
+        );
+        let children = session.operation_children(&root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(session.operation_is::<ModuleOp>(&children[0]), Ok(true));
+        assert_eq!(session.operation_tree_work, 7);
+
+        session.erase_operation(&root).expect("erase imported root");
+        assert_eq!(session.operation_tree_work, 0);
+        assert_eq!(
+            session.operation_shape(&root),
+            Err(OperationHandleError::StaleHandle)
+        );
+        assert_eq!(
+            session.operation_shape(&children[0]),
+            Err(OperationHandleError::StaleHandle)
+        );
+    }
+
+    #[test]
+    fn textual_import_rejects_trailing_input_and_poisons_partial_context() {
+        let mut session = session();
+
+        assert!(matches!(
+            session.import_operation_text_v1("builtin.module @imported { ^entry(): } trailing"),
+            Err(OperationHandleError::OperationImportRejected)
+        ));
+        assert!(session.is_poisoned());
+        assert!(matches!(
+            session.create_module("later"),
+            Err(OperationHandleError::SessionPoisoned)
+        ));
+    }
+
+    #[test]
+    fn textual_import_verification_failure_poisons_partial_context() {
+        let mut session = session();
+
+        assert!(matches!(
+            session.import_operation_text_v1("builtin.module @invalid {}"),
+            Err(OperationHandleError::OperationVerificationRejected)
+        ));
+        assert!(session.is_poisoned());
+        assert!(session.operations.is_empty());
+    }
+
+    #[test]
+    fn textual_import_size_preflight_does_not_mutate_or_poison() {
+        let mut session = session();
+        let next = session.next_operation_handle;
+
+        assert!(matches!(
+            session.import_operation_text_v1(""),
+            Err(OperationHandleError::EmptyOperationImport)
+        ));
+        let oversized = "x".repeat(HARD_MAX_OPERATION_IMPORT_BYTES + 1);
+        assert!(matches!(
+            session.import_operation_text_v1(&oversized),
+            Err(OperationHandleError::OperationImportTooLarge)
+        ));
+        assert_eq!(session.next_operation_handle, next);
+        assert!(session.operations.is_empty());
+        assert!(!session.is_poisoned());
     }
 
     #[cfg(feature = "internal-test-context-access")]

@@ -8,6 +8,8 @@ workspace. It provides:
   store rather than transferable auxiliary marker data;
 - opaque operation handles whose upstream pointers remain in a private
   session registry;
+- bounded textual operation import that requires exact end-of-input and
+  recursive verification before returning an owner handle;
 - owner-scoped dialect-registration services with bounded typed actions;
 - deterministic, bounded pass plans over real Pliron `Pass` values.
 
@@ -41,6 +43,12 @@ operations owned by its assigned dialect namespace. Its private context and
 dialect fields cannot be extracted or retained by safe callers. Operation
 creation returns an opaque handle containing only a process-local owner
 identity and session-local registry ID.
+Textual operation import is a noncanonical construction bridge for dialect
+integration. Input bytes, parser text, and printer output cannot become
+artifact, cache, proof, publication, or runtime identities. Imports are
+bounded before parsing and across the complete operation tree. A parse or
+verification rejection poisons the session because upstream arena allocation
+is not transactional.
 The corresponding upstream `Ptr<Operation>` remains in the private session
 registry. Every query or erase authenticates the context anchor, owner, live
 registry entry, and upstream pointee in that order. Erasure removes the
