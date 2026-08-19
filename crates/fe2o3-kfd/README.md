@@ -140,8 +140,13 @@ proof.
 
 AQL, executable, kernarg, VRAM, USERPTR, peer-device mapping, multiple
 allocations, retry, queues, and dispatch are rejected or absent. The
-live-validation feature is non-production only. It enables the
-kfd-host-visible-memory example and a single-threaded fork/mincore negative
+default-feature `kfd-host-visible-memory-policy` example links and reaches the
+complete production memory adapter without enabling process/fork support. CI
+builds and ELF-audits that executable under the pure-Rust runtime policy so
+dead-code elimination cannot hide the production syscall closure.
+
+The `live-validation` feature is non-production only. It enables the
+`kfd-host-visible-memory` example and a single-threaded fork/mincore negative
 that verifies the DONTFORK VMA is absent in the child. The example always
 launches the selected-GPU transaction in an isolated subprocess and creates no
 queue or reset.

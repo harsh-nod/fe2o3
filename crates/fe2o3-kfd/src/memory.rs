@@ -52,21 +52,23 @@ pub const HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "ordinary_backing=checked-page-align-4096,aql-executable-kernarg-vram-peer=unsupported\n",
     "allocation=host-visible-coherent-gtt-writable,checked-fixed-gpu-va,whole-bo-map\n",
     "mapping=one-immutable-gpu-id,cumulative-n-success,no-retry\n",
-    "cpu_vma=release-gpu-va-reservation,kernel-selected-map-shared,madv-dontfork-before-borrow\n",
+    "cpu_vma=release-gpu-va-reservation,kernel-selected-map-shared-prot-none,dontfork-then-mprotect-rw\n",
+    "fork_setup_gap=contracted,no-raw-fork-or-clone-during-mmap-to-dontfork\n",
     "cleanup=munmap-before-free,free-exactly-once,no-drop-retry,owned-fds-still-close\n",
-    "currentness=contracted-composite,post-mutation-failure-quarantines\n",
-    "authority=retained-kfd-and-render-fds,no-raw-handle-va-vma-or-fd-export\n",
+    "currentness=contracted-composite,borrows-sandwiched,concurrent-reset-unexcluded,post-failure-quarantines\n",
+    "authority=retained-kfd-and-render-fds,no-native-handle-gpu-va-or-fd-export,closure-borrows-do-not-escape\n",
+    "cpu_address=closure-can-observe-retain-raw-address,external-unsafe-dereference-contracted\n",
     "proof=model-only-success-journal-and-hostile-tests,no-concrete-or-verus-refinement\n",
 );
 
 /// SHA-256 of [`HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1`].
 pub const HOST_VISIBLE_MEMORY_PROFILE_SHA256_V1: &str =
-    "02da8014e7f51d9519613736b9e677ec9533b4c098b421452f5300e27ffdb7f4";
+    "7bdca672c4921ee56a850d41040045f4a8fbe5a20176628a4ea982dd80fbe8ec";
 
 /// Typed digest bytes of [`HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1`].
 pub const HOST_VISIBLE_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x02, 0xda, 0x80, 0x14, 0xe7, 0xf5, 0x1d, 0x95, 0x19, 0x61, 0x37, 0x36, 0xb9, 0xe6, 0x77, 0xec,
-    0x95, 0x33, 0xb4, 0xc0, 0x98, 0xb4, 0x21, 0x45, 0x2f, 0x53, 0x00, 0xe2, 0x7f, 0xfd, 0xb7, 0xf4,
+    0x7b, 0xdc, 0xa6, 0x72, 0xc4, 0x92, 0x1e, 0xe5, 0x6a, 0x85, 0x0d, 0x41, 0x04, 0x00, 0x45, 0xf4,
+    0xa8, 0xfb, 0xe5, 0xa2, 0x01, 0x76, 0x62, 0x8a, 0x4e, 0xa9, 0x82, 0xdd, 0x80, 0xfb, 0xe8, 0xec,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,7 +236,10 @@ pub(super) trait MemoryBackend {
         mmap_offset: u64,
         bytes: usize,
     ) -> Result<Self::Mapping, MemorySessionError>;
-    fn advise_dontfork(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError>;
+    fn prepare_cpu_mapping(
+        &mut self,
+        mapping: &mut Self::Mapping,
+    ) -> Result<(), MemorySessionError>;
     fn map_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32>;
     fn unmap_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32>;
     fn with_bytes<R>(
@@ -373,7 +378,7 @@ impl<B: MemoryBackend> MemoryEngine<B> {
             Ok(value) => value,
             Err(error) => return self.quarantine(error),
         };
-        if let Err(error) = self.backend.advise_dontfork(&mut mapping) {
+        if let Err(error) = self.backend.prepare_cpu_mapping(&mut mapping) {
             self.mapping = Some(mapping);
             return self.quarantine(error);
         }
@@ -390,10 +395,18 @@ impl<B: MemoryBackend> MemoryEngine<B> {
         Ok(layout)
     }
 
-    fn with_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Result<R, MemorySessionError> {
+    fn check_borrow_currentness(&mut self) -> Result<(), MemorySessionError> {
         if self.backend.opener_pid() != std::process::id() {
-            return Err(MemorySessionError::ProcessChanged);
+            return self.quarantine(MemorySessionError::ProcessChanged);
         }
+        if let Err(error) = self.backend.check_currentness() {
+            return self.quarantine(error);
+        }
+        Ok(())
+    }
+
+    fn with_bytes<R>(&mut self, f: impl FnOnce(&[u8]) -> R) -> Result<R, MemorySessionError> {
+        self.check_borrow_currentness()?;
         self.require_phase(
             "borrow CPU bytes",
             &[
@@ -401,28 +414,41 @@ impl<B: MemoryBackend> MemoryEngine<B> {
                 HostVisibleMemoryPhase::CpuAccessibleAfterUnmap,
             ],
         )?;
-        let mapping = self
-            .mapping
-            .as_ref()
-            .ok_or(MemorySessionError::KernelResultMalformed(
-                "CPU mapping ownership",
-            ))?;
         let requested = self
             .layout
             .ok_or(MemorySessionError::KernelResultMalformed(
                 "allocation layout",
             ))?
             .requested_bytes;
-        Ok(B::with_bytes(mapping, requested, f))
+        let outcome = {
+            let mapping =
+                self.mapping
+                    .as_ref()
+                    .ok_or(MemorySessionError::KernelResultMalformed(
+                        "CPU mapping ownership",
+                    ))?;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                B::with_bytes(mapping, requested, f)
+            }))
+        };
+        let post_currentness = self.check_borrow_currentness();
+        match outcome {
+            Ok(value) => {
+                post_currentness?;
+                Ok(value)
+            }
+            Err(payload) => {
+                let _ = post_currentness;
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 
     fn with_bytes_mut<R>(
         &mut self,
         f: impl FnOnce(&mut [u8]) -> R,
     ) -> Result<R, MemorySessionError> {
-        if self.backend.opener_pid() != std::process::id() {
-            return self.quarantine(MemorySessionError::ProcessChanged);
-        }
+        self.check_borrow_currentness()?;
         self.require_phase(
             "borrow mutable CPU bytes",
             &[
@@ -430,19 +456,34 @@ impl<B: MemoryBackend> MemoryEngine<B> {
                 HostVisibleMemoryPhase::CpuAccessibleAfterUnmap,
             ],
         )?;
-        let mapping = self
-            .mapping
-            .as_mut()
-            .ok_or(MemorySessionError::KernelResultMalformed(
-                "CPU mapping ownership",
-            ))?;
         let requested = self
             .layout
             .ok_or(MemorySessionError::KernelResultMalformed(
                 "allocation layout",
             ))?
             .requested_bytes;
-        Ok(B::with_bytes_mut(mapping, requested, f))
+        let outcome = {
+            let mapping =
+                self.mapping
+                    .as_mut()
+                    .ok_or(MemorySessionError::KernelResultMalformed(
+                        "CPU mapping ownership",
+                    ))?;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                B::with_bytes_mut(mapping, requested, f)
+            }))
+        };
+        let post_currentness = self.check_borrow_currentness();
+        match outcome {
+            Ok(value) => {
+                post_currentness?;
+                Ok(value)
+            }
+            Err(payload) => {
+                let _ = post_currentness;
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 
     fn map_to_gpu(&mut self) -> Result<(), MemorySessionError> {
@@ -777,10 +818,20 @@ impl HostVisibleMemorySession {
         }
     }
 
-    pub fn with_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Result<R, MemorySessionError> {
+    /// Runs a phase-exclusive CPU borrow between currentness observations.
+    ///
+    /// No safe borrow can escape the closure. A reset concurrent with the
+    /// closure remains a named external contract, and a retained raw address
+    /// cannot be used safely after the closure returns.
+    pub fn with_bytes<R>(&mut self, f: impl FnOnce(&[u8]) -> R) -> Result<R, MemorySessionError> {
         self.engine.with_bytes(f)
     }
 
+    /// Runs a phase-exclusive mutable CPU borrow between currentness checks.
+    ///
+    /// No safe borrow can escape the closure. A reset concurrent with the
+    /// closure remains a named external contract, and a retained raw address
+    /// cannot be dereferenced safely after the closure returns.
     pub fn with_bytes_mut<R>(
         &mut self,
         f: impl FnOnce(&mut [u8]) -> R,
@@ -906,6 +957,13 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     #[derive(Debug)]
+    struct ScriptedMapping {
+        bytes: Vec<u8>,
+        active: bool,
+        accessible: bool,
+    }
+
+    #[derive(Debug)]
     struct ScriptedBackend {
         calls: usize,
         fail_at: Option<usize>,
@@ -915,6 +973,7 @@ mod tests {
         free_calls: usize,
         unmap_cpu_calls: usize,
         alloc_override: Option<KfdIoctlAllocMemoryOfGpuArgs>,
+        setup_cleanup_calls: usize,
     }
 
     impl ScriptedBackend {
@@ -928,6 +987,7 @@ mod tests {
                 free_calls: 0,
                 unmap_cpu_calls: 0,
                 alloc_override: None,
+                setup_cleanup_calls: 0,
             }
         }
 
@@ -954,7 +1014,7 @@ mod tests {
 
     impl MemoryBackend for ScriptedBackend {
         type Reservation = u64;
-        type Mapping = Vec<u8>;
+        type Mapping = ScriptedMapping;
 
         fn opener_pid(&self) -> u32 {
             std::process::id()
@@ -1000,12 +1060,31 @@ mod tests {
             _reservation: &mut u64,
             _offset: u64,
             bytes: usize,
-        ) -> Result<Vec<u8>, MemorySessionError> {
+        ) -> Result<ScriptedMapping, MemorySessionError> {
             self.tick("map_cpu")?;
-            Ok(vec![0; bytes])
+            Ok(ScriptedMapping {
+                bytes: vec![0; bytes],
+                active: true,
+                accessible: false,
+            })
         }
-        fn advise_dontfork(&mut self, _mapping: &mut Vec<u8>) -> Result<(), MemorySessionError> {
-            self.tick("madvise_dontfork")
+        fn prepare_cpu_mapping(
+            &mut self,
+            mapping: &mut ScriptedMapping,
+        ) -> Result<(), MemorySessionError> {
+            debug_assert!(mapping.active && !mapping.accessible);
+            if let Err(error) = self.tick("madvise_dontfork") {
+                mapping.active = false;
+                self.setup_cleanup_calls += 1;
+                return Err(error);
+            }
+            if let Err(error) = self.tick("mprotect_rw") {
+                mapping.active = false;
+                self.setup_cleanup_calls += 1;
+                return Err(error);
+            }
+            mapping.accessible = true;
+            Ok(())
         }
         fn map_gpu(&mut self, _handle: u64, _old: u32) -> KernelOutcome<u32> {
             self.outcome("map_gpu", self.map_progress)
@@ -1013,19 +1092,28 @@ mod tests {
         fn unmap_gpu(&mut self, _handle: u64, _old: u32) -> KernelOutcome<u32> {
             self.outcome("unmap_gpu", self.unmap_progress)
         }
-        fn with_bytes<R>(mapping: &Vec<u8>, requested: usize, f: impl FnOnce(&[u8]) -> R) -> R {
-            f(&mapping[..requested])
+        fn with_bytes<R>(
+            mapping: &ScriptedMapping,
+            requested: usize,
+            f: impl FnOnce(&[u8]) -> R,
+        ) -> R {
+            debug_assert!(mapping.active && mapping.accessible);
+            f(&mapping.bytes[..requested])
         }
         fn with_bytes_mut<R>(
-            mapping: &mut Vec<u8>,
+            mapping: &mut ScriptedMapping,
             requested: usize,
             f: impl FnOnce(&mut [u8]) -> R,
         ) -> R {
-            f(&mut mapping[..requested])
+            debug_assert!(mapping.active && mapping.accessible);
+            f(&mut mapping.bytes[..requested])
         }
-        fn unmap_cpu(&mut self, _mapping: &mut Vec<u8>) -> Result<(), MemorySessionError> {
+        fn unmap_cpu(&mut self, mapping: &mut ScriptedMapping) -> Result<(), MemorySessionError> {
             self.unmap_cpu_calls += 1;
-            self.tick("munmap")
+            self.tick("munmap")?;
+            mapping.active = false;
+            mapping.accessible = false;
+            Ok(())
         }
         fn free(&mut self, _handle: u64) -> Result<(), MemorySessionError> {
             self.free_calls += 1;
@@ -1040,11 +1128,17 @@ mod tests {
     #[test]
     fn memory_profile_manifest_is_frozen() {
         let digest = Sha256::digest(HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1);
+        let mut digest_hex = String::with_capacity(64);
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for byte in digest.iter().copied() {
+            digest_hex.push(char::from(HEX[usize::from(byte >> 4)]));
+            digest_hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
         assert_eq!(
             digest.as_slice(),
             HOST_VISIBLE_MEMORY_PROFILE_SHA256_BYTES_V1
         );
-        assert_eq!(HOST_VISIBLE_MEMORY_PROFILE_SHA256_V1.len(), 64);
+        assert_eq!(HOST_VISIBLE_MEMORY_PROFILE_SHA256_V1, digest_hex);
         assert!(
             HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1
                 .contains(crate::DEVICE_ADMISSION_PROFILE_SHA256_V1)
@@ -1126,12 +1220,76 @@ mod tests {
 
     #[test]
     fn every_allocation_stage_failure_quarantines() {
-        for relative_failure in 1..=7 {
+        for relative_failure in 1..=8 {
             let mut engine = acquired();
             engine.backend.fail_at = Some(engine.backend.calls + relative_failure);
             assert!(engine.allocate(4096).is_err(), "failure {relative_failure}");
             assert_eq!(engine.phase(), HostVisibleMemoryPhase::Quarantined);
         }
+    }
+
+    #[test]
+    fn failed_dontfork_or_mprotect_discards_inaccessible_mapping() {
+        for relative_failure in [6, 7] {
+            let mut engine = acquired();
+            engine.backend.fail_at = Some(engine.backend.calls + relative_failure);
+            assert!(engine.allocate(4096).is_err());
+            assert_eq!(engine.backend.setup_cleanup_calls, 1);
+            let mapping = engine.mapping.as_ref().unwrap();
+            assert!(!mapping.active);
+            assert!(!mapping.accessible);
+            assert_eq!(engine.phase(), HostVisibleMemoryPhase::Quarantined);
+        }
+    }
+
+    #[test]
+    fn immutable_borrow_checks_currentness_before_and_after() {
+        let mut before = acquired();
+        let _ = before.allocate(4096).unwrap();
+        before.backend.fail_at = Some(before.backend.calls + 1);
+        let mut ran = false;
+        assert!(before.with_bytes(|_| ran = true).is_err());
+        assert!(!ran);
+        assert_eq!(before.phase(), HostVisibleMemoryPhase::Quarantined);
+
+        let mut after = acquired();
+        let _ = after.allocate(4096).unwrap();
+        after.backend.fail_at = Some(after.backend.calls + 2);
+        let mut ran = false;
+        assert!(after.with_bytes(|_| ran = true).is_err());
+        assert!(ran);
+        assert_eq!(after.phase(), HostVisibleMemoryPhase::Quarantined);
+    }
+
+    #[test]
+    fn mutable_borrow_checks_currentness_before_and_after() {
+        let mut before = acquired();
+        let _ = before.allocate(4096).unwrap();
+        before.backend.fail_at = Some(before.backend.calls + 1);
+        let mut ran = false;
+        assert!(before.with_bytes_mut(|_| ran = true).is_err());
+        assert!(!ran);
+        assert_eq!(before.phase(), HostVisibleMemoryPhase::Quarantined);
+
+        let mut after = acquired();
+        let _ = after.allocate(4096).unwrap();
+        after.backend.fail_at = Some(after.backend.calls + 2);
+        let mut ran = false;
+        assert!(after.with_bytes_mut(|_| ran = true).is_err());
+        assert!(ran);
+        assert_eq!(after.phase(), HostVisibleMemoryPhase::Quarantined);
+    }
+
+    #[test]
+    fn panicking_borrow_still_runs_post_currentness_and_quarantines_on_failure() {
+        let mut engine = acquired();
+        let _ = engine.allocate(4096).unwrap();
+        engine.backend.fail_at = Some(engine.backend.calls + 2);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = engine.with_bytes(|_| panic!("borrow panic"));
+        }));
+        assert!(result.is_err());
+        assert_eq!(engine.phase(), HostVisibleMemoryPhase::Quarantined);
     }
 
     #[test]

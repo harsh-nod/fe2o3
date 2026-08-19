@@ -12,7 +12,7 @@ use fe2o3_kfd_uapi::{
 };
 use fe2o3_runtime_model::{ModelDeviceAdmissionV1, ModelVmAdmissionV1, VmIdV1};
 use rustix::ioctl::{Opcode, Setter, Updater};
-use rustix::mm::{Advice, MapFlags, ProtFlags};
+use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
 use super::memory::{KernelOutcome, MemoryBackend, MemorySessionError};
 use crate::{CheckedGfx942XnackMinusDevice, InclusiveAperture};
@@ -44,6 +44,7 @@ pub(super) struct LinuxCpuMapping {
     address: NonNull<c_void>,
     bytes: usize,
     active: bool,
+    accessible: bool,
 }
 
 impl LinuxMemoryBackend {
@@ -66,6 +67,20 @@ impl LinuxMemoryBackend {
 
     pub(super) fn model_aperture(&self) -> InclusiveAperture {
         self.device.observation().aperture().gpuvm()
+    }
+
+    fn discard_unprepared_mapping_or_abort(mapping: &mut LinuxCpuMapping) {
+        if !mapping.active {
+            return;
+        }
+        // SAFETY: no readable/writable access has been enabled and no slice has
+        // been formed. Returning an ambiguously inheritable VMA would violate
+        // the safe API contract, so failed synchronous cleanup is fail-stop.
+        if unsafe { rustix::mm::munmap(mapping.address.as_ptr(), mapping.bytes) }.is_err() {
+            std::process::abort();
+        }
+        mapping.active = false;
+        mapping.accessible = false;
     }
 
     #[cfg(feature = "live-validation")]
@@ -310,45 +325,77 @@ impl MemoryBackend for LinuxMemoryBackend {
         unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
             .map_err(|source| Self::syscall("release anonymous GPU VA reservation", source))?;
         reservation.replaced = true;
-        // SAFETY: null requests a kernel-selected CPU VMA.
+        // SAFETY: null requests a kernel-selected CPU VMA. It is deliberately
+        // PROT_NONE until DONTFORK succeeds, so the setup gap cannot expose BO
+        // bytes even if an external raw fork violates the named contract.
         let mapped = unsafe {
             rustix::mm::mmap(
                 core::ptr::null_mut(),
                 bytes,
-                ProtFlags::READ | ProtFlags::WRITE,
+                ProtFlags::empty(),
                 MapFlags::SHARED,
                 &self.device.render_fd,
                 mmap_offset,
             )
         }
         .map_err(|source| Self::syscall("mmap AMDGPU BO", source))?;
-        let address = NonNull::new(mapped).ok_or(MemorySessionError::KernelResultMalformed(
-            "AMDGPU BO mmap address",
-        ))?;
+        let Some(address) = NonNull::new(mapped) else {
+            // A mapping at address zero is outside the admitted profile. It is
+            // still a live VMA and must not be returned ambiguously.
+            // SAFETY: `mapped` and `bytes` are the exact successful mmap range.
+            if unsafe { rustix::mm::munmap(mapped, bytes) }.is_err() {
+                std::process::abort();
+            }
+            return Err(MemorySessionError::KernelResultMalformed(
+                "AMDGPU BO mmap address",
+            ));
+        };
         Ok(LinuxCpuMapping {
             address,
             bytes,
             active: true,
+            accessible: false,
         })
     }
 
-    fn advise_dontfork(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
-        if !mapping.active {
+    fn prepare_cpu_mapping(
+        &mut self,
+        mapping: &mut Self::Mapping,
+    ) -> Result<(), MemorySessionError> {
+        if !mapping.active || mapping.accessible {
             return Err(MemorySessionError::KernelResultMalformed(
-                "CPU mapping state",
+                "CPU mapping setup state",
             ));
         }
         // SAFETY: the mapping is live, page-aligned, exclusively borrowed, and
-        // has no safe slice yet. DONTFORK is mandatory because TTM lacks
-        // VM_DONTCOPY and would otherwise create a child VMA/BO reference.
-        unsafe {
+        // PROT_NONE. DONTFORK is mandatory because TTM lacks VM_DONTCOPY and
+        // would otherwise create a child VMA/BO reference.
+        let advised = unsafe {
             rustix::mm::madvise(
                 mapping.address.as_ptr(),
                 mapping.bytes,
                 Advice::LinuxDontFork,
             )
+        };
+        if let Err(source) = advised {
+            Self::discard_unprepared_mapping_or_abort(mapping);
+            return Err(Self::syscall("madvise MADV_DONTFORK", source));
         }
-        .map_err(|source| Self::syscall("madvise MADV_DONTFORK", source))
+        // SAFETY: the exact still-live VMA has DONTFORK installed and no slice
+        // exists. Read/write access is enabled only after that ordering point.
+        let protected = unsafe {
+            rustix::mm::mprotect(
+                mapping.address.as_ptr(),
+                mapping.bytes,
+                MprotectFlags::READ | MprotectFlags::WRITE,
+            )
+        };
+        if let Err(source) = protected {
+            Self::discard_unprepared_mapping_or_abort(mapping);
+            return Err(Self::syscall("mprotect AMDGPU BO read/write", source));
+        }
+        mapping.accessible = true;
+        Ok(())
     }
 
     fn map_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
@@ -378,7 +425,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         requested_bytes: usize,
         f: impl FnOnce(&[u8]) -> R,
     ) -> R {
-        debug_assert!(mapping.active && requested_bytes <= mapping.bytes);
+        debug_assert!(mapping.active && mapping.accessible && requested_bytes <= mapping.bytes);
         // SAFETY: the live mapping covers this range. The safe engine checks
         // phase and process before entering this boundary.
         let bytes = unsafe {
@@ -392,7 +439,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         requested_bytes: usize,
         f: impl FnOnce(&mut [u8]) -> R,
     ) -> R {
-        debug_assert!(mapping.active && requested_bytes <= mapping.bytes);
+        debug_assert!(mapping.active && mapping.accessible && requested_bytes <= mapping.bytes);
         // SAFETY: the exclusive mapping borrow covers the slice, and the safe
         // engine checks phase and process before entering this boundary.
         let bytes = unsafe {
@@ -402,7 +449,7 @@ impl MemoryBackend for LinuxMemoryBackend {
     }
 
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
-        if !mapping.active {
+        if !mapping.active || !mapping.accessible {
             return Err(MemorySessionError::KernelResultMalformed(
                 "CPU mapping state",
             ));
@@ -412,6 +459,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         unsafe { rustix::mm::munmap(mapping.address.as_ptr(), mapping.bytes) }
             .map_err(|source| Self::syscall("munmap AMDGPU BO", source))?;
         mapping.active = false;
+        mapping.accessible = false;
         Ok(())
     }
 
