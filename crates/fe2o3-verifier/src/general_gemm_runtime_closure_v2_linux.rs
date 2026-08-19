@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::authenticated_verus_execution_v2::{
     ADDRESS_SPACE_LIMIT_V2, BoundedProcessGroupFailureV2, CORE_LIMIT_V2, DATA_LIMIT_V2,
-    FILE_LIMIT_V2, supervise_bounded_process_group_v2, validate_bounded_execution_controller_v2,
+    FILE_LIMIT_V2, supervise_bounded_process_group_v2, validate_controller_security_v2,
 };
 
 use super::{
@@ -526,7 +526,7 @@ pub(super) fn execute_rust_verify(
     deadline: Instant,
     output_limit: usize,
 ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
-    validate_bounded_execution_controller_v2().map_err(|failure| {
+    validate_controller_security_v2().map_err(|failure| {
         process_error(
             format!("authenticated controller preflight failed: {failure}"),
             GeneralGemmRuntimeClosureErrorKindV2::Process,
