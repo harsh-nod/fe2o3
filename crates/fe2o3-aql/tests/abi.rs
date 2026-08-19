@@ -1,12 +1,15 @@
 use core::mem::{align_of, size_of};
 use fe2o3_aql::{
-    AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1,
-    AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1, AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1,
-    AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
-    AmdBusyCompletionSignalV1, AqlAddressObservationError, AqlCompletionObservationV1,
-    AqlDispatchGeometryV1, AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
+    AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AMD_SIGNAL_KIND_USER_V1,
+    AMD_SIGNAL_VALUE_COMPLETE_V1, AMD_SIGNAL_VALUE_PENDING_V1,
+    AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1, AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
+    AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+    AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1, AmdBusyCompletionSignalV1,
+    AqlAddressObservationError, AqlCompletionObservationV1, AqlDispatchGeometryV1,
+    AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
     AqlPacketPublicationTargetV1, AqlRingCapacityError, AqlRingCapacityV1, AqlRingReservationError,
-    AqlSingleProducerRingModelV1, ObservedGpuAddressV1,
+    AqlSingleProducerRingModelV1, ObservedGpuAddressV1, classify_acquired_completion_value_v1,
+    encode_pending_completion_signal_bytes_v1, initialize_pending_completion_signal_bytes_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -167,6 +170,44 @@ fn busy_signal_starts_pending() {
         signal.observe_acquire(),
         AqlCompletionObservationV1::Pending
     );
+}
+
+#[test]
+fn pending_signal_byte_initializer_overwrites_every_byte_exactly() {
+    let mut expected = [0_u8; AMD_SIGNAL_BYTES_V1];
+    expected[0..8].copy_from_slice(&AMD_SIGNAL_KIND_USER_V1.to_le_bytes());
+    expected[8..16].copy_from_slice(&AMD_SIGNAL_VALUE_PENDING_V1.to_le_bytes());
+
+    let encoded = encode_pending_completion_signal_bytes_v1();
+    assert_eq!(encoded, expected);
+    assert_eq!(&encoded[0..8], &1_i64.to_le_bytes());
+    assert_eq!(&encoded[8..16], &1_i64.to_le_bytes());
+    assert!(encoded[16..].iter().all(|byte| *byte == 0));
+
+    let mut destination = [0xa5_u8; AMD_SIGNAL_BYTES_V1];
+    initialize_pending_completion_signal_bytes_v1(&mut destination);
+    assert_eq!(destination, expected);
+}
+
+#[test]
+fn pure_completion_classifier_is_exact_and_preserves_unexpected_values() {
+    assert_eq!(AMD_SIGNAL_VALUE_PENDING_V1, 1);
+    assert_eq!(AMD_SIGNAL_VALUE_COMPLETE_V1, 0);
+    assert_eq!(
+        classify_acquired_completion_value_v1(AMD_SIGNAL_VALUE_PENDING_V1),
+        AqlCompletionObservationV1::Pending
+    );
+    assert_eq!(
+        classify_acquired_completion_value_v1(AMD_SIGNAL_VALUE_COMPLETE_V1),
+        AqlCompletionObservationV1::Completed
+    );
+
+    for unexpected in [i64::MIN, -7, -1, 2, i64::MAX] {
+        assert_eq!(
+            classify_acquired_completion_value_v1(unexpected),
+            AqlCompletionObservationV1::Unexpected(unexpected)
+        );
+    }
 }
 
 #[test]

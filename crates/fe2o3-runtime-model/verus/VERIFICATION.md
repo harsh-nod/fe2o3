@@ -1,7 +1,7 @@
 # Runtime model verification
 
 This directory contains the initial issue #137 Verus specifications. The
-authenticated runner proves forty-six obligations over finite abstract values
+authenticated runner proves forty-eight obligations over finite abstract values
 and traces. The materialization input and image sequences are capped at 64 MiB
 and its phase trace has exactly four entries. The lifecycle-history sequence
 lengths are not bounded by these proofs.
@@ -126,8 +126,8 @@ invariants, or proves that its mapping starts and sizes use 4096-byte rounding.
 The 4 KiB and page-rounded properties listed above remain claims of the separate
 `load_plan_v1.rs` proof only.
 
-`aql_publication_v1.rs` proves the initial R4 abstract packet-publication and
-single-producer reservation relations:
+`aql_publication_v1.rs` proves the initial R4 abstract packet-publication,
+single-producer reservation, and completion-signal relations:
 
 1. copying one canonical 64-byte INVALID packet body into a checked bounded ring
    slot writes every exact source byte to the corresponding destination and
@@ -145,17 +145,28 @@ single-producer reservation relations:
    distinct consecutive packet IDs and advance the initial write counter by two;
 6. an accepted read observation is nondecreasing from the prior observation;
 7. a full ring produces the exact Full rejection and no reservation;
-8. every rejection branch returns the exact input state unchanged; and
-9. concrete packet, ring, two-reservation, and full-ring witnesses inhabit the
-   predicates, including a nonzero copied byte and a preserved byte outside the
+8. every rejection branch returns the exact input state unchanged;
+9. the pending completion-signal image is exactly 64 bytes, has little-endian
+   USER kind one at byte zero and pending value one at byte eight, and has zero
+   in every other byte;
+10. classification of every supplied `i64` maps one to Pending, zero to
+    Completed, and preserves every other value as Unexpected; and
+11. concrete packet, ring, signal-image, classification, two-reservation, and
+   full-ring witnesses inhabit the predicates, including a nonzero copied byte
+   and a preserved byte outside the
    destination frame.
 
-The AQL model operates only on mathematical byte sequences, natural-number
-counter states, and explicit successor relations. `release-u32` names one
-abstract state transition; it is not evidence of a CPU atomic operation,
-ordering, coherence, device visibility, or firmware consumption. No theorem
-imports or refines `fe2o3-aql`, its callback trait, the executable Rust ring
-model, native queue memory, a doorbell, or an observed hardware read pointer.
+The AQL model operates only on mathematical byte sequences, integer and
+natural-number counter states, and explicit successor relations. `release-u32`
+names one abstract state transition; it is not evidence of a CPU atomic
+operation, ordering, coherence, device visibility, or firmware consumption. No
+theorem imports or refines `fe2o3-aql`, its byte encoder, initializer,
+classifier, callback trait, or executable Rust ring model, native queue memory,
+a doorbell, or an observed hardware read pointer.
+The classifier's acquired-value name is only an input label; the proof performs
+no load and establishes neither atomic object initialization nor CPU/GPU
+visibility.
+
 The two-step theorem proves linearity only along one supplied mathematical
 successor chain. It does not establish uniqueness among independently
 constructed Rust values, counter truth, completion, liveness, or performance.

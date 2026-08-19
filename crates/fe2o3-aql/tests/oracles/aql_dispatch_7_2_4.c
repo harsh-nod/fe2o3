@@ -6,6 +6,22 @@
 #include "hsa.h"
 #include "amd_hsa_signal.h"
 
+enum completion_classification {
+  COMPLETION_COMPLETE = 0,
+  COMPLETION_PENDING = 1,
+  COMPLETION_UNEXPECTED = 2,
+};
+
+static enum completion_classification classify_completion_value(int64_t value) {
+  if (value == 1) {
+    return COMPLETION_PENDING;
+  }
+  if (value == 0) {
+    return COMPLETION_COMPLETE;
+  }
+  return COMPLETION_UNEXPECTED;
+}
+
 int main(void) {
   _Static_assert(sizeof(hsa_kernel_dispatch_packet_t) == 64, "packet size");
   _Static_assert(_Alignof(hsa_kernel_dispatch_packet_t) == 8, "packet align");
@@ -49,21 +65,28 @@ int main(void) {
   __atomic_store_n(&published, final_word, __ATOMIC_RELEASE);
 
   amd_signal_t signal;
+  memset(&signal, 0xa5, sizeof(signal));
   memset(&signal, 0, sizeof(signal));
   signal.kind = AMD_SIGNAL_KIND_USER;
   signal.value = 1;
-  const unsigned char *signal_bytes = (const unsigned char *)&signal;
-  int reserved_zero = 1;
-  for (size_t i = 16; i < sizeof(signal); ++i) {
-    reserved_zero &= signal_bytes[i] == 0;
-  }
+  unsigned char expected_signal[sizeof(signal)] = {0};
+  expected_signal[0] = 1;
+  expected_signal[8] = 1;
+  const int signal_exact =
+      memcmp(&signal, expected_signal, sizeof(signal)) == 0;
+  const int classifier_exact =
+      classify_completion_value(1) == COMPLETION_PENDING &&
+      classify_completion_value(0) == COMPLETION_COMPLETE &&
+      classify_completion_value(-7) == COMPLETION_UNEXPECTED &&
+      classify_completion_value(INT64_MAX) == COMPLETION_UNEXPECTED;
 
-  printf("packet=64/8 signal=64/64 invalid=%d initial=0x%08x published=0x%08x kind=%d reserved-zero=%d\n",
+  printf("packet=64/8 signal=64/64 invalid=%d initial=0x%08x published=0x%08x kind=%d signal-exact=%d classifier-exact=%d\n",
          HSA_PACKET_TYPE_INVALID, initial_word, published, AMD_SIGNAL_KIND_USER,
-         reserved_zero);
+         signal_exact, classifier_exact);
   return HSA_PACKET_TYPE_INVALID == 1 && initial_word == 0x00010001u &&
                  header == 0x1402 && published == 0x00011402u &&
-                 AMD_SIGNAL_KIND_USER == 1 && signal.value == 1 && reserved_zero
+                 AMD_SIGNAL_KIND_USER == 1 && signal.value == 1 &&
+                 signal_exact && classifier_exact
              ? 0
              : 1;
 }

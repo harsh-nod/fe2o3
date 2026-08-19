@@ -324,7 +324,7 @@ check_positive "$memory_proof" 'verification results:: 6 verified, 0 errors' mem
 check_positive "$queue_proof" 'verification results:: 11 verified, 0 errors' queue-lifecycle
 check_positive "$load_plan_proof" 'verification results:: 3 verified, 0 errors' load-plan
 check_positive "$materialization_proof" 'verification results:: 8 verified, 0 errors' materialization
-check_positive "$aql_proof" 'verification results:: 9 verified, 0 errors' aql-publication
+check_positive "$aql_proof" 'verification results:: 11 verified, 0 errors' aql-publication
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -363,7 +363,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=9 mutations=32'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 mutations=32'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

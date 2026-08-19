@@ -11,7 +11,9 @@ It provides:
 - a linear prepared value that exposes only the invariant system-scoped final
   header after the exact INVALID body;
 - checked monotonic single-producer reservation arithmetic and slot wrapping;
-- the exact 64-byte, 64-aligned busy-wait completion signal initialized to one;
+- the exact 64-byte, 64-aligned busy-wait completion signal initialized to one,
+  plus an exact inert pending-signal byte image;
+- pure classification of a completion value already acquired elsewhere;
 - typed numeric address observations with the required descriptor, kernarg,
   and signal alignment checks;
 - a canonical source and ABI manifest.
@@ -22,6 +24,12 @@ not reserve a ring slot, copy a packet, perform the release atomic publication,
 map or store a doorbell, poll with a timeout, create or destroy a queue, or
 establish hardware completion. Those operations require the KFD memory and
 queue authority layers.
+
+The byte encoder and exact-array initializer produce bytes only. They do not
+start a typed Rust object's lifetime, establish atomic storage, initialize an
+allocation, or authorize interpreting arbitrary storage as
+`AmdBusyCompletionSignalV1`. The pure classifier performs no load and does not
+authenticate where its supplied value came from.
 
 The mutable reservation model prevents duplicate slots only within one model
 instance. It is not a native ring lease. A later queue authority layer must own
@@ -45,8 +53,9 @@ evidence for this crate's required INVALID-body discipline.
 The authenticated
 [`aql_publication_v1.rs`](../fe2o3-runtime-model/verus/aql_publication_v1.rs)
 Verus model proves the corresponding bounded mathematical body-copy,
-release-word, frame, and single-producer counter relations, including concrete
-non-vacuity witnesses and five expected-negative mutations. It does not refine
+release-word, frame, pending-signal byte-image, supplied-value classification,
+and single-producer counter relations, including concrete non-vacuity witnesses
+and five expected-negative mutations. It does not refine
 this crate's executable Rust, establish that a publication target performs a
 CPU release atomic, authenticate a read pointer, or prove device visibility,
 firmware consumption, native slot ownership, completion, liveness, or

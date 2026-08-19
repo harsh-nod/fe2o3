@@ -34,25 +34,27 @@ legacy_release_u32_reference.fe2o3_hsa_runtime.native.runtime.c=99dc188ad8b12561
 packet=size:64,align:8,header:0,setup:2,workgroup:4,grid:12,private:24,group:28,kernel-object:32,kernarg:40,reserved2:48,completion-signal:56
 publication=initial-type:invalid-1,initial-setup-dimensions:1..3,prepared-api-exposes-invariant-final-header-only,backend-preserves-copied-setup,single-release-u32-at-offset-0,type:2,barrier:0,acquire:system-2,release:system-2,header:0x1402
 ring-reservation=mutable-single-producer-model,packet-bytes:64,ring-bytes:4096..2147483648-power-of-two,capacity:64..33554432,monotonic-u64-no-wrap,nondecreasing-read,read<=write,distance<=capacity,slot:packet-id&(capacity-1)
-signal=size:64,align:64,kind-offset:0,value-offset:8,kind:user-1,pending:1,complete:0,event-fields:zero,busy-poll-only
+signal=size:64,align:64,kind-offset:0,value-offset:8,kind:user-1,pending:1,complete:0,event-fields:zero,byte-encoder:exact-64,classifier:1-pending|0-completed|other-unexpected-preserved,busy-poll-only
 address-observations=nonzero,kernel-object-align:64,completion-signal-align:64,kernarg-align:caller-supplied-power-of-two-1..4096
-authority=inert-wire-values-only,no-address-provenance,no-allocation,no-queue,no-publication,no-doorbell,no-execution
+authority=inert-wire-values-only,no-address-provenance,no-allocation,no-typed-object-placement,no-queue,no-publication,no-doorbell,no-execution
 "#;
 
 /// SHA-256 of [`AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1`].
 pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1: &str =
-    "d420be8e3da6f9d473273648659f9ed00260eaf597c7ccaa742ff6c33d816369";
+    "b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf";
 
 /// Typed SHA-256 bytes of [`AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1`].
 pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
-    0xd4, 0x20, 0xbe, 0x8e, 0x3d, 0xa6, 0xf9, 0xd4, 0x73, 0x27, 0x36, 0x48, 0x65, 0x9f, 0x9e, 0xd0,
-    0x02, 0x60, 0xea, 0xf5, 0x97, 0xc7, 0xcc, 0xaa, 0x74, 0x2f, 0xf6, 0xc3, 0x3d, 0x81, 0x63, 0x69,
+    0xb6, 0x91, 0xe0, 0xdf, 0x36, 0xe2, 0xc1, 0xf0, 0x69, 0x5f, 0x49, 0xa1, 0x9d, 0x49, 0xd3, 0xfb,
+    0xbe, 0x43, 0x80, 0xe8, 0xe9, 0x99, 0x9b, 0x01, 0x36, 0x8d, 0xf0, 0x27, 0x83, 0x95, 0x2e, 0xdf,
 ];
 
 pub const AQL_KERNEL_DISPATCH_PACKET_BYTES_V1: usize = 64;
 pub const AMD_SIGNAL_BYTES_V1: usize = 64;
 pub const AMD_SIGNAL_ALIGNMENT_V1: usize = 64;
 pub const AMD_SIGNAL_KIND_USER_V1: i64 = 1;
+pub const AMD_SIGNAL_VALUE_PENDING_V1: i64 = 1;
+pub const AMD_SIGNAL_VALUE_COMPLETE_V1: i64 = 0;
 pub const AQL_INVALID_PACKET_HEADER_V1: u16 = 1;
 pub const AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1402;
 pub const AQL_MIN_RING_BYTES_V1: u32 = 4096;
@@ -461,6 +463,45 @@ pub trait AqlPacketPublicationTargetV1 {
     fn publish_release_header(&mut self, header: u16) -> Result<(), Self::Error>;
 }
 
+/// Encode the exact inert 64-byte image of a pending ROCr user signal.
+///
+/// The user kind occupies bytes 0 through 7 and the pending value occupies
+/// bytes 8 through 15, both little-endian. Every other byte is zero. The
+/// returned array is only a wire image; it does not construct an atomic Rust
+/// object, validate storage, or grant memory or GPU authority.
+pub const fn encode_pending_completion_signal_bytes_v1() -> [u8; AMD_SIGNAL_BYTES_V1] {
+    let kind = AMD_SIGNAL_KIND_USER_V1.to_le_bytes();
+    let value = AMD_SIGNAL_VALUE_PENDING_V1.to_le_bytes();
+    let mut bytes = [0_u8; AMD_SIGNAL_BYTES_V1];
+    let mut index = 0;
+    while index < size_of::<i64>() {
+        bytes[index] = kind[index];
+        bytes[8 + index] = value[index];
+        index += 1;
+    }
+    bytes
+}
+
+/// Replace an exact-size caller-provided byte array with the pending image.
+///
+/// This initializes bytes only. In particular, it does not start the lifetime
+/// of [`AmdBusyCompletionSignalV1`] in that storage.
+pub fn initialize_pending_completion_signal_bytes_v1(destination: &mut [u8; AMD_SIGNAL_BYTES_V1]) {
+    *destination = encode_pending_completion_signal_bytes_v1();
+}
+
+/// Classify one completion value already obtained by an acquiring observer.
+///
+/// This pure function performs no memory access and makes no claim that its
+/// argument came from an atomic load, a GPU, or a retained completion signal.
+pub const fn classify_acquired_completion_value_v1(value: i64) -> AqlCompletionObservationV1 {
+    match value {
+        AMD_SIGNAL_VALUE_PENDING_V1 => AqlCompletionObservationV1::Pending,
+        AMD_SIGNAL_VALUE_COMPLETE_V1 => AqlCompletionObservationV1::Completed,
+        unexpected => AqlCompletionObservationV1::Unexpected(unexpected),
+    }
+}
+
 /// Exact 64-byte ROCr user-signal prefix used by AQL completion packets.
 ///
 /// Event fields stay zero, so this value only supports bounded busy polling.
@@ -484,7 +525,7 @@ impl AmdBusyCompletionSignalV1 {
     pub const fn new_pending() -> Self {
         Self {
             kind: AMD_SIGNAL_KIND_USER_V1,
-            value: AtomicI64::new(1),
+            value: AtomicI64::new(AMD_SIGNAL_VALUE_PENDING_V1),
             event_mailbox_ptr: 0,
             event_id: 0,
             reserved1: 0,
@@ -495,12 +536,9 @@ impl AmdBusyCompletionSignalV1 {
         }
     }
 
+    /// Acquire one value and delegate only its pure classification.
     pub fn observe_acquire(&self) -> AqlCompletionObservationV1 {
-        match self.value.load(Ordering::Acquire) {
-            1 => AqlCompletionObservationV1::Pending,
-            0 => AqlCompletionObservationV1::Completed,
-            value => AqlCompletionObservationV1::Unexpected(value),
-        }
+        classify_acquired_completion_value_v1(self.value.load(Ordering::Acquire))
     }
 }
 

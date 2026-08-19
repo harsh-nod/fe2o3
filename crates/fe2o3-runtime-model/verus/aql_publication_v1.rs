@@ -222,6 +222,66 @@ pub proof fn canonical_invalid_then_release_transition_v1(
     );
 }
 
+pub open spec fn completion_signal_bytes_v1() -> nat {
+    64
+}
+
+pub open spec fn pending_completion_signal_image_v1() -> Seq<u8> {
+    Seq::new(completion_signal_bytes_v1(), |index: int|
+        if index == 0 || index == 8 {
+            1u8
+        } else {
+            0u8
+        }
+    )
+}
+
+#[derive(PartialEq, Eq)]
+pub enum AqlCompletionObservationV1 {
+    Pending,
+    Completed,
+    Unexpected { value: i64 },
+}
+
+pub open spec fn classify_acquired_completion_value_v1(
+    value: i64,
+) -> AqlCompletionObservationV1 {
+    if value == 1 {
+        AqlCompletionObservationV1::Pending
+    } else if value == 0 {
+        AqlCompletionObservationV1::Completed
+    } else {
+        AqlCompletionObservationV1::Unexpected { value }
+    }
+}
+
+pub proof fn pending_completion_signal_image_is_exact_v1()
+    ensures
+        pending_completion_signal_image_v1().len() == completion_signal_bytes_v1(),
+        forall|index: int| 0 <= index < completion_signal_bytes_v1() ==>
+            #[trigger] pending_completion_signal_image_v1()[index]
+                == if index == 0 || index == 8 { 1u8 } else { 0u8 },
+        pending_completion_signal_image_v1()[0] == 1u8,
+        pending_completion_signal_image_v1()[8] == 1u8,
+        forall|index: int| 16 <= index < completion_signal_bytes_v1() ==>
+            #[trigger] pending_completion_signal_image_v1()[index] == 0u8,
+{
+}
+
+pub proof fn completion_observation_classifier_is_exact_v1(value: i64)
+    ensures
+        value == 1 ==>
+            classify_acquired_completion_value_v1(value)
+                == AqlCompletionObservationV1::Pending,
+        value == 0 ==>
+            classify_acquired_completion_value_v1(value)
+                == AqlCompletionObservationV1::Completed,
+        value != 1 && value != 0 ==>
+            classify_acquired_completion_value_v1(value)
+                == (AqlCompletionObservationV1::Unexpected { value }),
+{
+}
+
 #[derive(PartialEq, Eq)]
 pub struct AqlRingStateV1 {
     pub capacity: nat,
@@ -517,6 +577,15 @@ pub proof fn aql_publication_and_reservation_model_is_inhabited_v1()
             published_ring_v1(witness_packet_v1(), witness_ring_v1(), 1),
             64,
         ) == 0x0002_1402,
+        pending_completion_signal_image_v1().len() == 64,
+        pending_completion_signal_image_v1()[0] == 1u8,
+        pending_completion_signal_image_v1()[8] == 1u8,
+        pending_completion_signal_image_v1()[1] == 0u8,
+        pending_completion_signal_image_v1()[16] == 0u8,
+        classify_acquired_completion_value_v1(1) == AqlCompletionObservationV1::Pending,
+        classify_acquired_completion_value_v1(0) == AqlCompletionObservationV1::Completed,
+        classify_acquired_completion_value_v1(-7i64)
+            == (AqlCompletionObservationV1::Unexpected { value: -7i64 }),
         canonical_ring_state_v1(witness_state_v1()),
         accepted_reservation_v1(
             witness_state_v1(),
@@ -537,6 +606,10 @@ pub proof fn aql_publication_and_reservation_model_is_inhabited_v1()
                 reason: AqlReservationRejectionV1::Full,
             }),
 {
+    pending_completion_signal_image_is_exact_v1();
+    completion_observation_classifier_is_exact_v1(1);
+    completion_observation_classifier_is_exact_v1(0);
+    completion_observation_classifier_is_exact_v1(-7i64);
     canonical_invalid_then_release_transition_v1(
         witness_packet_v1(),
         witness_ring_v1(),
