@@ -28,6 +28,17 @@ mod memory;
 mod queue_resources;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+// Deliberately dormant until the memory owner can mint the private resource
+// authority; scripted tests instantiate and execute the complete engine.
+#[allow(dead_code)]
+mod queue;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+// The shims are intentionally unreachable until that backend exists.
+#[allow(dead_code, unsafe_code)]
+mod queue_linux;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod memory_linux;
 
@@ -36,6 +47,11 @@ pub use memory::*;
 
 #[cfg(target_os = "linux")]
 pub use queue_resources::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use queue::{
+    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1,
+};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use currentness::ObservableDeviceCurrentnessV1;

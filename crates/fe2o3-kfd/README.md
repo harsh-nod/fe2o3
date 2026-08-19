@@ -198,3 +198,31 @@ device-profile digest is only a compositional prerequisite identifier, not
 evidence that R1 admission occurred. A future queue authority must pair the
 plan with a live checked device token that establishes XNACK-disabled
 admission and currentness.
+
+## R4 native queue adapter foundation
+
+The crate now contains a crate-private process-level CREATE/UPDATE/DISABLE/
+DESTROY engine and narrow private Linux ioctl shims. Every lifecycle ioctl is
+surrounded by opener-PID and contracted device-currentness checks, enters the
+existing queue model's pending phase before the call, validates immutable and
+output fields, and projects the observation before the trailing check. Linux
+errno, malformed output, projection failure, process change, and currentness
+loss fail closed. Queue ID zero remains valid; process-global unknown-create
+poison and known-ID collision behavior come from the shared queue model.
+
+The backend-specific resource authority is private and linearly retained by
+the adapter through every phase that may have a native queue. Model
+publications are returned only by an explicit non-syscall release after
+confirmed DESTROY. Engine Drop performs no queue ioctl or retry. Scripted tests
+cover success, every per-operation
+failure/ambiguity class, hostile CREATE outputs, request mutation,
+currentness/process loss, multi-queue collisions, global create poison, and
+no-Drop-call behavior.
+
+There is intentionally no production constructor or public queue authority.
+R2 cannot yet provide exact mapped ring/control/EOP/CWSR capabilities, and the
+doorbell mmap/store, AQL packet publication, and completion-event/signal UAPI
+are not implemented. The exact memory-owner handoff and missing boundaries are
+specified in [native-queue-adapter-foundation-v1.md](docs/native-queue-adapter-foundation-v1.md).
+The engine is executable projection evidence, not a Verus proof of the Rust
+adapter or a syscall/kernel refinement.
