@@ -38,6 +38,7 @@ readonly CPU_TEST_PACKAGES=(
   dialect-tile
   fe2o3-amd-target
   fe2o3-amdgcn-model
+  fe2o3-amdhsa-loader
   fe2o3-artifact-transaction
   fe2o3-completion
   fe2o3-compiler-api
@@ -273,6 +274,7 @@ run_runtime_pure_rust_policy() {
       --root fe2o3-kfd \
       --root fe2o3-drm-uapi \
       --root fe2o3-kfd-uapi \
+      --root fe2o3-amdhsa-loader \
       --root fe2o3-runtime-model
   run_step runtime-pure-rust-kfd-examples-build \
     env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
