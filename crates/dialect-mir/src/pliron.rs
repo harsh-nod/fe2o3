@@ -48,6 +48,9 @@ use fe2o3_pliron::{
 
 use crate::DIALECT;
 
+/// Maximum ordered CFG targets retained on one imported rustc terminator.
+pub const MAX_IMPORTED_MIR_SUCCESSORS: usize = 256;
+
 /// Hard limit categories for the in-memory MIR shell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MirDialectLimitKind {
@@ -159,6 +162,14 @@ pub enum MirDialectBuildError {
         limit: usize,
     },
     TypeIdOutOfRange(MirTypeId),
+    InvalidSemanticIdentity,
+    InvalidSemanticKind(u16),
+    InvalidSemanticSpan,
+    TooManySemanticSuccessors {
+        count: usize,
+        limit: usize,
+    },
+    InvalidSemanticOperationOrder,
     FunctionLimitExceeded {
         limit: usize,
     },
@@ -192,6 +203,20 @@ impl fmt::Display for MirDialectBuildError {
             ),
             Self::TypeIdOutOfRange(id) => {
                 write!(formatter, "MIR type id {} is outside the model table", id.0)
+            }
+            Self::InvalidSemanticIdentity => {
+                formatter.write_str("MIR semantic identity must be nonzero")
+            }
+            Self::InvalidSemanticKind(kind) => {
+                write!(formatter, "MIR semantic operation kind {kind} is invalid")
+            }
+            Self::InvalidSemanticSpan => formatter.write_str("MIR semantic source span is invalid"),
+            Self::TooManySemanticSuccessors { count, limit } => write!(
+                formatter,
+                "MIR semantic terminator has {count} successors, exceeding {limit}"
+            ),
+            Self::InvalidSemanticOperationOrder => {
+                formatter.write_str("MIR semantic operation order is invalid")
             }
             Self::FunctionLimitExceeded { limit } => {
                 write!(formatter, "MIR module function limit {limit} is exhausted")
@@ -291,11 +316,196 @@ pub struct MirModuleBodyHandle {
     parent: Ptr<Operation>,
 }
 
-/// Pointer-independent operation evidence from one verified MIR CFG block.
+/// Pointer-independent source coordinates retained from rustc.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MirSemanticSourceSpan {
+    file_identity: [u64; 4],
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+}
+
+impl MirSemanticSourceSpan {
+    /// Creates one exact, non-empty source span.
+    pub fn new(
+        file_identity: [u64; 4],
+        start_line: u32,
+        start_column: u32,
+        end_line: u32,
+        end_column: u32,
+    ) -> Result<Self, MirDialectBuildError> {
+        let span = Self {
+            file_identity,
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+        };
+        span.validate()?;
+        Ok(span)
+    }
+
+    /// Returns the stable source-file identity as four little-endian words.
+    pub const fn file_identity(self) -> [u64; 4] {
+        self.file_identity
+    }
+
+    /// Returns `(start_line, start_column, end_line, end_column)`.
+    pub const fn coordinates(self) -> [u32; 4] {
+        [
+            self.start_line,
+            self.start_column,
+            self.end_line,
+            self.end_column,
+        ]
+    }
+
+    fn validate(self) -> Result<(), MirDialectBuildError> {
+        if self.file_identity == [0; 4]
+            || self.start_line == 0
+            || self.start_column == 0
+            || self.end_line == 0
+            || self.end_column == 0
+            || (self.start_line, self.start_column) > (self.end_line, self.end_column)
+        {
+            return Err(MirDialectBuildError::InvalidSemanticSpan);
+        }
+        Ok(())
+    }
+}
+
+/// Typed classification of an exact rustc MIR operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum MirSemanticOperationKind {
+    StatementAssign = 1,
+    StatementFakeRead = 2,
+    StatementSetDiscriminant = 3,
+    StatementDeinit = 4,
+    StatementStorageLive = 5,
+    StatementStorageDead = 6,
+    StatementRetag = 7,
+    StatementPlaceMention = 8,
+    StatementAscribeUserType = 9,
+    StatementCoverage = 10,
+    StatementIntrinsic = 11,
+    StatementConstEvalCounter = 12,
+    StatementNop = 13,
+    StatementOther = 255,
+    TerminatorGoto = 256,
+    TerminatorSwitchInt = 257,
+    TerminatorReturn = 258,
+    TerminatorUnreachable = 259,
+    TerminatorDrop = 260,
+    TerminatorCall = 261,
+    TerminatorAssert = 262,
+    TerminatorUnwind = 263,
+    TerminatorYield = 264,
+    TerminatorCoroutineDrop = 265,
+    TerminatorFalseEdge = 266,
+    TerminatorInlineAsm = 267,
+    TerminatorTailCall = 268,
+    TerminatorOther = 511,
+}
+
+impl MirSemanticOperationKind {
+    const fn from_raw(value: u16) -> Option<Self> {
+        Some(match value {
+            1 => Self::StatementAssign,
+            2 => Self::StatementFakeRead,
+            3 => Self::StatementSetDiscriminant,
+            4 => Self::StatementDeinit,
+            5 => Self::StatementStorageLive,
+            6 => Self::StatementStorageDead,
+            7 => Self::StatementRetag,
+            8 => Self::StatementPlaceMention,
+            9 => Self::StatementAscribeUserType,
+            10 => Self::StatementCoverage,
+            11 => Self::StatementIntrinsic,
+            12 => Self::StatementConstEvalCounter,
+            13 => Self::StatementNop,
+            255 => Self::StatementOther,
+            256 => Self::TerminatorGoto,
+            257 => Self::TerminatorSwitchInt,
+            258 => Self::TerminatorReturn,
+            259 => Self::TerminatorUnreachable,
+            260 => Self::TerminatorDrop,
+            261 => Self::TerminatorCall,
+            262 => Self::TerminatorAssert,
+            263 => Self::TerminatorUnwind,
+            264 => Self::TerminatorYield,
+            265 => Self::TerminatorCoroutineDrop,
+            266 => Self::TerminatorFalseEdge,
+            267 => Self::TerminatorInlineAsm,
+            268 => Self::TerminatorTailCall,
+            511 => Self::TerminatorOther,
+            _ => return None,
+        })
+    }
+
+    /// Returns whether this classification is a terminator.
+    pub const fn is_terminator(self) -> bool {
+        self as u16 >= Self::TerminatorGoto as u16
+    }
+}
+
+/// Exact inert evidence extracted from a typed MIR operation.
+///
+/// Callers cannot forge semantic evidence because all fields are private:
+///
+/// ```compile_fail
+/// use dialect_mir::pliron::{MirSemanticOperationKind, MirSemanticOperationSnapshot};
+///
+/// let forged = MirSemanticOperationSnapshot {
+///     ordinal: 0,
+///     kind: MirSemanticOperationKind::StatementNop,
+///     identity: [1, 2, 3, 4],
+///     span: panic!(),
+///     successors: Vec::new(),
+/// };
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirSemanticOperationSnapshot {
+    ordinal: u32,
+    kind: MirSemanticOperationKind,
+    identity: [u64; 4],
+    span: MirSemanticSourceSpan,
+    successors: Vec<u32>,
+}
+
+impl MirSemanticOperationSnapshot {
+    pub const fn ordinal(&self) -> u32 {
+        self.ordinal
+    }
+
+    pub const fn kind(&self) -> MirSemanticOperationKind {
+        self.kind
+    }
+
+    pub const fn identity(&self) -> [u64; 4] {
+        self.identity
+    }
+
+    pub const fn span(&self) -> MirSemanticSourceSpan {
+        self.span
+    }
+
+    pub fn successors(&self) -> &[u32] {
+        &self.successors
+    }
+}
+
+/// Pointer-independent operation evidence from one verified MIR CFG block.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MirSnapshotOperation {
     /// Canonical block marker carrying its stable MIR block identifier.
     BlockMarker(MirBlockId),
+    /// One exact optimized-rustc statement observation.
+    SemanticStatement(MirSemanticOperationSnapshot),
+    /// One exact optimized-rustc terminator observation not yet admitted by
+    /// the target-neutral lowering.
+    SemanticTerminator(MirSemanticOperationSnapshot),
     /// Place-based MIR return terminator.
     Return,
 }
@@ -456,6 +666,26 @@ impl MirModuleBodyHandle {
                                     .ok_or(MirModuleSnapshotError::MalformedModule)?;
                                 block_id = Some(id);
                                 operations.push(MirSnapshotOperation::BlockMarker(id));
+                            } else if let Some(statement) = Operation::get_op::<
+                                MirSemanticStatementOp,
+                            >(
+                                block_operation, context
+                            ) {
+                                operations.push(MirSnapshotOperation::SemanticStatement(
+                                    statement
+                                        .semantic_snapshot(context)
+                                        .ok_or(MirModuleSnapshotError::MalformedModule)?,
+                                ));
+                            } else if let Some(terminator) = Operation::get_op::<
+                                MirSemanticTerminatorOp,
+                            >(
+                                block_operation, context
+                            ) {
+                                operations.push(MirSnapshotOperation::SemanticTerminator(
+                                    terminator
+                                        .semantic_snapshot(context)
+                                        .ok_or(MirModuleSnapshotError::MalformedModule)?,
+                                ));
                             } else if Operation::is_op::<MirReturnOp>(block_operation, context) {
                                 operations.push(MirSnapshotOperation::Return);
                             } else {
@@ -518,6 +748,67 @@ impl MirBlockHandle {
                 .and_then(|marker| marker.block_id(context))
         })?
         .ok_or(MirBlockHandleError::MalformedBlock)
+    }
+
+    /// Inserts one exact statement immediately before this block's terminator.
+    pub fn append_semantic_statement(
+        &self,
+        context: &mut Context,
+        ordinal: u32,
+        kind: MirSemanticOperationKind,
+        identity: [u64; 4],
+        span: MirSemanticSourceSpan,
+    ) -> Result<(), MirDialectBuildError> {
+        self.authenticate(context)
+            .map_err(|_| MirDialectBuildError::MalformedOperation("invalid block handle"))?;
+        catch_unwind(AssertUnwindSafe(|| {
+            let tail = self.pointer.deref(context).get_tail().ok_or(
+                MirDialectBuildError::MalformedOperation("block terminator is missing"),
+            )?;
+            if !Operation::is_op::<MirReturnOp>(tail, context)
+                && !Operation::is_op::<MirSemanticTerminatorOp>(tail, context)
+            {
+                return Err(MirDialectBuildError::MalformedOperation(
+                    "block tail is not a MIR terminator",
+                ));
+            }
+            let statement =
+                MirSemanticStatementOp::try_new(context, ordinal, kind, identity, span)?;
+            statement.get_operation().insert_before(context, tail);
+            Ok(())
+        }))
+        .unwrap_or(Err(MirDialectBuildError::UpstreamPanicked))
+    }
+
+    /// Replaces the synthetic return with one exact optimized-rustc terminator.
+    pub fn replace_with_semantic_terminator(
+        &self,
+        context: &mut Context,
+        ordinal: u32,
+        kind: MirSemanticOperationKind,
+        identity: [u64; 4],
+        span: MirSemanticSourceSpan,
+        successors: &[u32],
+    ) -> Result<(), MirDialectBuildError> {
+        self.authenticate(context)
+            .map_err(|_| MirDialectBuildError::MalformedOperation("invalid block handle"))?;
+        catch_unwind(AssertUnwindSafe(|| {
+            let tail = self.pointer.deref(context).get_tail().ok_or(
+                MirDialectBuildError::MalformedOperation("block terminator is missing"),
+            )?;
+            if !Operation::is_op::<MirReturnOp>(tail, context) {
+                return Err(MirDialectBuildError::MalformedOperation(
+                    "synthetic MIR return is missing",
+                ));
+            }
+            let terminator = MirSemanticTerminatorOp::try_new(
+                context, ordinal, kind, identity, span, successors,
+            )?;
+            terminator.get_operation().insert_before(context, tail);
+            Operation::erase(tail, context);
+            Ok(())
+        }))
+        .unwrap_or(Err(MirDialectBuildError::UpstreamPanicked))
     }
 
     /// Verifies the live parent function containing this block.
@@ -676,6 +967,15 @@ pub enum MirDialectVerifyError {
     InvalidLimits,
     InvalidTypeId(u32),
     InvalidBlockId(u32),
+    InvalidSemanticIdentity,
+    InvalidSemanticKind(u16),
+    InvalidSemanticSpan,
+    InvalidSemanticSuccessors,
+    InvalidSemanticOperationOrder,
+    SemanticStatementOutsideFunction,
+    SemanticTerminatorOutsideFunction,
+    SemanticStatementKindMismatch,
+    SemanticTerminatorKindMismatch,
     UnexpectedModuleChild,
     DuplicateFunctionIdentity(String),
     FunctionLimitExceeded,
@@ -704,6 +1004,29 @@ impl fmt::Display for MirDialectVerifyError {
             Self::InvalidLimits => formatter.write_str("invalid MIR limits attribute"),
             Self::InvalidTypeId(id) => write!(formatter, "invalid MIR type id {id}"),
             Self::InvalidBlockId(id) => write!(formatter, "invalid MIR block id {id}"),
+            Self::InvalidSemanticIdentity => formatter.write_str("invalid MIR semantic identity"),
+            Self::InvalidSemanticKind(kind) => {
+                write!(formatter, "invalid MIR semantic operation kind {kind}")
+            }
+            Self::InvalidSemanticSpan => formatter.write_str("invalid MIR semantic source span"),
+            Self::InvalidSemanticSuccessors => {
+                formatter.write_str("invalid MIR semantic successor list")
+            }
+            Self::InvalidSemanticOperationOrder => {
+                formatter.write_str("invalid MIR semantic operation order")
+            }
+            Self::SemanticStatementOutsideFunction => {
+                formatter.write_str("mir.semantic_statement must be nested in mir.func")
+            }
+            Self::SemanticTerminatorOutsideFunction => {
+                formatter.write_str("mir.semantic_terminator must be nested in mir.func")
+            }
+            Self::SemanticStatementKindMismatch => {
+                formatter.write_str("mir.semantic_statement requires a statement kind")
+            }
+            Self::SemanticTerminatorKindMismatch => {
+                formatter.write_str("mir.semantic_terminator requires a terminator kind")
+            }
             Self::UnexpectedModuleChild => {
                 formatter.write_str("mir.module may contain only mir.func operations")
             }
@@ -864,6 +1187,216 @@ impl Verify for MirBlockIdAttr {
     fn verify(&self, _context: &Context) -> PlironResult<()> {
         if self.0 as usize >= MAX_EXECUTABLE_BLOCKS {
             return verify_err_noloc!(MirDialectVerifyError::InvalidBlockId(self.0));
+        }
+        Ok(())
+    }
+}
+
+/// Fixed-width identity of one exact optimized-rustc MIR operation.
+#[pliron_attr(
+    name = "mir.semantic_identity",
+    format = "`<` $word0 `,` $word1 `,` $word2 `,` $word3 `>`"
+)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MirSemanticIdentityAttr {
+    word0: u64,
+    word1: u64,
+    word2: u64,
+    word3: u64,
+}
+
+impl MirSemanticIdentityAttr {
+    /// Creates a nonzero semantic identity.
+    pub fn new(words: [u64; 4]) -> Result<Self, MirDialectBuildError> {
+        if words == [0; 4] {
+            return Err(MirDialectBuildError::InvalidSemanticIdentity);
+        }
+        Ok(Self {
+            word0: words[0],
+            word1: words[1],
+            word2: words[2],
+            word3: words[3],
+        })
+    }
+
+    /// Returns the identity words.
+    pub const fn words(&self) -> [u64; 4] {
+        [self.word0, self.word1, self.word2, self.word3]
+    }
+}
+
+impl Verify for MirSemanticIdentityAttr {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if self.words() == [0; 4] {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidSemanticIdentity);
+        }
+        Ok(())
+    }
+}
+
+/// Typed rustc MIR statement or terminator classification.
+#[pliron_attr(name = "mir.semantic_kind", format = "$0")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct MirSemanticKindAttr(u16);
+
+impl MirSemanticKindAttr {
+    /// Creates a typed classification attribute.
+    pub const fn new(kind: MirSemanticOperationKind) -> Self {
+        Self(kind as u16)
+    }
+
+    /// Returns the validated operation classification.
+    pub const fn kind(self) -> Option<MirSemanticOperationKind> {
+        MirSemanticOperationKind::from_raw(self.0)
+    }
+}
+
+impl Verify for MirSemanticKindAttr {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if self.kind().is_none() {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidSemanticKind(self.0));
+        }
+        Ok(())
+    }
+}
+
+/// Exact source coordinates attached to one imported rustc MIR operation.
+#[pliron_attr(
+    name = "mir.semantic_span",
+    format = "`<` $file_word0 `,` $file_word1 `,` $file_word2 `,` $file_word3 `,` $start_line `,` $start_column `,` $end_line `,` $end_column `>`"
+)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MirSemanticSpanAttr {
+    file_word0: u64,
+    file_word1: u64,
+    file_word2: u64,
+    file_word3: u64,
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+}
+
+impl MirSemanticSpanAttr {
+    /// Creates a typed span from checked source coordinates.
+    pub const fn new(span: MirSemanticSourceSpan) -> Self {
+        Self {
+            file_word0: span.file_identity[0],
+            file_word1: span.file_identity[1],
+            file_word2: span.file_identity[2],
+            file_word3: span.file_identity[3],
+            start_line: span.start_line,
+            start_column: span.start_column,
+            end_line: span.end_line,
+            end_column: span.end_column,
+        }
+    }
+
+    /// Returns the checked source coordinates.
+    pub fn span(&self) -> Result<MirSemanticSourceSpan, MirDialectBuildError> {
+        MirSemanticSourceSpan::new(
+            [
+                self.file_word0,
+                self.file_word1,
+                self.file_word2,
+                self.file_word3,
+            ],
+            self.start_line,
+            self.start_column,
+            self.end_line,
+            self.end_column,
+        )
+    }
+}
+
+impl Verify for MirSemanticSpanAttr {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if self.span().is_err() {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidSemanticSpan);
+        }
+        Ok(())
+    }
+}
+
+/// Exact operation ordinal within its optimized-rustc basic block.
+#[pliron_attr(name = "mir.semantic_ordinal", format = "$0")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct MirSemanticOrdinalAttr(u32);
+
+impl MirSemanticOrdinalAttr {
+    /// Creates an ordinal attribute.
+    pub const fn new(ordinal: u32) -> Self {
+        Self(ordinal)
+    }
+
+    /// Returns the operation ordinal.
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+impl Verify for MirSemanticOrdinalAttr {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        Ok(())
+    }
+}
+
+/// Ordered CFG targets attached to one imported rustc MIR terminator.
+#[pliron_attr(name = "mir.semantic_successors", format = "$0")]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MirSemanticSuccessorsAttr(StringAttr);
+
+impl MirSemanticSuccessorsAttr {
+    /// Creates a bounded, order-preserving target list.
+    pub fn new(targets: &[u32]) -> Result<Self, MirDialectBuildError> {
+        if targets.len() > MAX_IMPORTED_MIR_SUCCESSORS {
+            return Err(MirDialectBuildError::TooManySemanticSuccessors {
+                count: targets.len(),
+                limit: MAX_IMPORTED_MIR_SUCCESSORS,
+            });
+        }
+        Ok(Self(StringAttr::new(
+            targets
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        )))
+    }
+
+    /// Returns targets in exact rustc successor order.
+    pub fn targets(&self) -> Result<Vec<u32>, MirDialectBuildError> {
+        if self.0.as_str().is_empty() {
+            return Ok(Vec::new());
+        }
+        let targets = self
+            .0
+            .as_str()
+            .split(',')
+            .map(|target| {
+                target
+                    .parse::<u32>()
+                    .map_err(|_| MirDialectBuildError::MalformedOperation("invalid successor"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let canonical = targets
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        if targets.len() > MAX_IMPORTED_MIR_SUCCESSORS || canonical != self.0.as_str() {
+            return Err(MirDialectBuildError::MalformedOperation(
+                "non-canonical successor list",
+            ));
+        }
+        Ok(targets)
+    }
+}
+
+impl Verify for MirSemanticSuccessorsAttr {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if self.targets().is_err() {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidSemanticSuccessors);
         }
         Ok(())
     }
@@ -1319,6 +1852,53 @@ impl Verify for MirFunctionOp {
                     MirDialectVerifyError::NonCanonicalBlockId { expected, found }
                 );
             }
+            let operations = block.deref(context).iter(context).collect::<Vec<_>>();
+            let mut expected_ordinal = 0_u32;
+            for (operation_index, operation) in operations.iter().copied().enumerate().skip(1) {
+                if let Some(statement) =
+                    Operation::get_op::<MirSemanticStatementOp>(operation, context)
+                {
+                    let Some(snapshot) = statement.semantic_snapshot(context) else {
+                        return verify_err!(
+                            location,
+                            MirDialectVerifyError::InvalidSemanticOperationOrder
+                        );
+                    };
+                    if snapshot.ordinal() != expected_ordinal
+                        || operation_index + 1 == operations.len()
+                    {
+                        return verify_err!(
+                            location,
+                            MirDialectVerifyError::InvalidSemanticOperationOrder
+                        );
+                    }
+                    expected_ordinal += 1;
+                } else if let Some(terminator) =
+                    Operation::get_op::<MirSemanticTerminatorOp>(operation, context)
+                {
+                    let Some(snapshot) = terminator.semantic_snapshot(context) else {
+                        return verify_err!(
+                            location,
+                            MirDialectVerifyError::InvalidSemanticOperationOrder
+                        );
+                    };
+                    if snapshot.ordinal() != expected_ordinal
+                        || operation_index + 1 != operations.len()
+                    {
+                        return verify_err!(
+                            location,
+                            MirDialectVerifyError::InvalidSemanticOperationOrder
+                        );
+                    }
+                } else if Operation::is_op::<MirReturnOp>(operation, context)
+                    && (operation_index + 1 != operations.len() || expected_ordinal != 0)
+                {
+                    return verify_err!(
+                        location,
+                        MirDialectVerifyError::InvalidSemanticOperationOrder
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -1378,6 +1958,192 @@ impl Verify for MirBlockOp {
 }
 
 #[pliron_op(
+    name = "mir.semantic_statement",
+    format,
+    interfaces = [NRegionsInterface<0>, NOpdsInterface<0>, NResultsInterface<0>],
+    attributes = (
+        semantic_statement_ordinal: MirSemanticOrdinalAttr,
+        semantic_statement_kind: MirSemanticKindAttr,
+        semantic_statement_identity: MirSemanticIdentityAttr,
+        semantic_statement_span: MirSemanticSpanAttr
+    )
+)]
+/// One exact optimized-rustc statement retained as typed inert Pliron IR.
+pub struct MirSemanticStatementOp;
+
+impl MirSemanticStatementOp {
+    fn try_new(
+        context: &mut Context,
+        ordinal: u32,
+        kind: MirSemanticOperationKind,
+        identity: [u64; 4],
+        span: MirSemanticSourceSpan,
+    ) -> Result<Self, MirDialectBuildError> {
+        if kind.is_terminator() {
+            return Err(MirDialectBuildError::InvalidSemanticKind(kind as u16));
+        }
+        let identity = MirSemanticIdentityAttr::new(identity)?;
+        span.validate()?;
+        let op = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            0,
+        );
+        let statement = Self { op };
+        statement
+            .set_attr_semantic_statement_ordinal(context, MirSemanticOrdinalAttr::new(ordinal));
+        statement.set_attr_semantic_statement_kind(context, MirSemanticKindAttr::new(kind));
+        statement.set_attr_semantic_statement_identity(context, identity);
+        statement.set_attr_semantic_statement_span(context, MirSemanticSpanAttr::new(span));
+        Ok(statement)
+    }
+
+    /// Returns exact pointer-independent semantic evidence when all typed
+    /// attributes are present and valid.
+    pub fn semantic_snapshot(&self, context: &Context) -> Option<MirSemanticOperationSnapshot> {
+        Some(MirSemanticOperationSnapshot {
+            ordinal: self.get_attr_semantic_statement_ordinal(context)?.value(),
+            kind: self.get_attr_semantic_statement_kind(context)?.kind()?,
+            identity: self.get_attr_semantic_statement_identity(context)?.words(),
+            span: self
+                .get_attr_semantic_statement_span(context)?
+                .span()
+                .ok()?,
+            successors: Vec::new(),
+        })
+    }
+}
+
+impl Verify for MirSemanticStatementOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        let op = self.get_operation();
+        let location = op.deref(context).loc();
+        if !op
+            .deref(context)
+            .get_parent_op(context)
+            .is_some_and(|parent| Operation::is_op::<MirFunctionOp>(parent, context))
+        {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::SemanticStatementOutsideFunction
+            );
+        }
+        let Some(snapshot) = self.semantic_snapshot(context) else {
+            return verify_err!(location, MirDialectVerifyError::InvalidSemanticIdentity);
+        };
+        if snapshot.kind().is_terminator() {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::SemanticStatementKindMismatch
+            );
+        }
+        Ok(())
+    }
+}
+
+#[pliron_op(
+    name = "mir.semantic_terminator",
+    format,
+    interfaces = [
+        IsTerminatorInterface,
+        NRegionsInterface<0>,
+        NOpdsInterface<0>,
+        NResultsInterface<0>
+    ],
+    attributes = (
+        semantic_terminator_ordinal: MirSemanticOrdinalAttr,
+        semantic_terminator_kind: MirSemanticKindAttr,
+        semantic_terminator_identity: MirSemanticIdentityAttr,
+        semantic_terminator_span: MirSemanticSpanAttr,
+        semantic_terminator_successors: MirSemanticSuccessorsAttr
+    )
+)]
+/// One exact optimized-rustc terminator retained as typed inert Pliron IR.
+pub struct MirSemanticTerminatorOp;
+
+impl MirSemanticTerminatorOp {
+    fn try_new(
+        context: &mut Context,
+        ordinal: u32,
+        kind: MirSemanticOperationKind,
+        identity: [u64; 4],
+        span: MirSemanticSourceSpan,
+        successors: &[u32],
+    ) -> Result<Self, MirDialectBuildError> {
+        if !kind.is_terminator() {
+            return Err(MirDialectBuildError::InvalidSemanticKind(kind as u16));
+        }
+        let identity = MirSemanticIdentityAttr::new(identity)?;
+        let successors = MirSemanticSuccessorsAttr::new(successors)?;
+        span.validate()?;
+        let op = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            0,
+        );
+        let terminator = Self { op };
+        terminator
+            .set_attr_semantic_terminator_ordinal(context, MirSemanticOrdinalAttr::new(ordinal));
+        terminator.set_attr_semantic_terminator_kind(context, MirSemanticKindAttr::new(kind));
+        terminator.set_attr_semantic_terminator_identity(context, identity);
+        terminator.set_attr_semantic_terminator_span(context, MirSemanticSpanAttr::new(span));
+        terminator.set_attr_semantic_terminator_successors(context, successors);
+        Ok(terminator)
+    }
+
+    /// Returns exact pointer-independent semantic evidence when all typed
+    /// attributes are present and valid.
+    pub fn semantic_snapshot(&self, context: &Context) -> Option<MirSemanticOperationSnapshot> {
+        Some(MirSemanticOperationSnapshot {
+            ordinal: self.get_attr_semantic_terminator_ordinal(context)?.value(),
+            kind: self.get_attr_semantic_terminator_kind(context)?.kind()?,
+            identity: self.get_attr_semantic_terminator_identity(context)?.words(),
+            span: self
+                .get_attr_semantic_terminator_span(context)?
+                .span()
+                .ok()?,
+            successors: self
+                .get_attr_semantic_terminator_successors(context)?
+                .targets()
+                .ok()?,
+        })
+    }
+}
+
+impl Verify for MirSemanticTerminatorOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        let op = self.get_operation();
+        let location = op.deref(context).loc();
+        if !op
+            .deref(context)
+            .get_parent_op(context)
+            .is_some_and(|parent| Operation::is_op::<MirFunctionOp>(parent, context))
+        {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::SemanticTerminatorOutsideFunction
+            );
+        }
+        let Some(snapshot) = self.semantic_snapshot(context) else {
+            return verify_err!(location, MirDialectVerifyError::InvalidSemanticIdentity);
+        };
+        if !snapshot.kind().is_terminator() {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::SemanticTerminatorKindMismatch
+            );
+        }
+        Ok(())
+    }
+}
+
+#[pliron_op(
     name = "mir.return",
     format,
     interfaces = [
@@ -1422,9 +2188,16 @@ pub fn register_mir_dialect(context: &mut Context) {
     MirIdentityAttr::register(context);
     MirLimitsAttr::register(context);
     MirBlockIdAttr::register(context);
+    MirSemanticIdentityAttr::register(context);
+    MirSemanticKindAttr::register(context);
+    MirSemanticSpanAttr::register(context);
+    MirSemanticOrdinalAttr::register(context);
+    MirSemanticSuccessorsAttr::register(context);
     MirModuleOp::register(context);
     MirFunctionOp::register(context);
     MirBlockOp::register(context);
+    MirSemanticStatementOp::register(context);
+    MirSemanticTerminatorOp::register(context);
     MirReturnOp::register(context);
 }
 
@@ -1436,9 +2209,16 @@ fn registration_hook(
     service.register_attribute::<MirIdentityAttr>()?;
     service.register_attribute::<MirLimitsAttr>()?;
     service.register_attribute::<MirBlockIdAttr>()?;
+    service.register_attribute::<MirSemanticIdentityAttr>()?;
+    service.register_attribute::<MirSemanticKindAttr>()?;
+    service.register_attribute::<MirSemanticSpanAttr>()?;
+    service.register_attribute::<MirSemanticOrdinalAttr>()?;
+    service.register_attribute::<MirSemanticSuccessorsAttr>()?;
     service.register_operation::<MirModuleOp>()?;
     service.register_operation::<MirFunctionOp>()?;
     service.register_operation::<MirBlockOp>()?;
+    service.register_operation::<MirSemanticStatementOp>()?;
+    service.register_operation::<MirSemanticTerminatorOp>()?;
     service.register_operation::<MirReturnOp>()?;
     Ok(())
 }
