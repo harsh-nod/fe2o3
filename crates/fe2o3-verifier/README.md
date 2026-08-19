@@ -490,6 +490,31 @@ request/response identity, and a finalizer post-link ISA/result refinement.
 This package supplies none of those identities and does not depend on a
 provisional graph-export path, so the join and property remain `Unsupported`.
 
+`GeneralGemmNumericalLateMachineBindingV1` is a verifier-only, identity-level
+sidecar for a later owner-retaining join. Its fixed-size transport binds the
+exact retained numerical correspondence and claim, schedule, KIR/model,
+property/theorem manifest and all eleven statement/source identities, numerical
+theorem/source closure, MFMA contract, and the exact
+`v_mfma_f32_16x16x16_bf16` mnemonic. It then requires three present, nonzero
+identities: owner-bound Pliron graph serialization, direct LLVM worker
+request/response, and finalizer post-link ISA/result. Each missing, zero,
+substituted, or cross-correspondence value fails separately. No caller strings,
+variable-length collections, graph objects, or finalizer objects enter this
+bounded check.
+
+The returned record is private-field, non-`Clone`, and has a domain-separated
+identity, but it remains explicitly non-authoritative:
+`grants_compiler_authority()`, `can_enter_compiler_proof_gate()`, and
+`grants_artifact_or_runtime_authority()` all return `false`. Identity bytes do
+not authenticate their producer or retain the objects they name. In particular,
+the verifier cannot detect a stale external object if a caller consistently
+relabels it with the current correspondence identity. Only the existing rustc
+final join may promote this sidecar, and only after deriving the identities from
+and retaining the concrete graph, worker request/response, and finalizer
+post-link owners. The original emitted-machine property remains `Unsupported`;
+the one `Proved`, two `ModelOnly`, five `Contracted`, and three `Unsupported`
+property classifications are unchanged.
+
 Stock `rust_verify` and Z3 do not implement the V2 nonce/control protocol, and
 Verus must create its reviewed Z3 descendant. This runner therefore does not
 produce `AuthenticatedVerusExecutionReceiptV2`, does not claim the V2 frozen
