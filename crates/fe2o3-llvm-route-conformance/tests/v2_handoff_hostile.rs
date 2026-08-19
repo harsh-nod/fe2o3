@@ -24,13 +24,11 @@ const I32: ValueTypeV2 = ValueTypeV2::Scalar(ScalarTypeV1::I32);
 const I64: ValueTypeV2 = ValueTypeV2::Scalar(ScalarTypeV1::I64);
 const F32: ValueTypeV2 = ValueTypeV2::Scalar(ScalarTypeV1::F32);
 
-const PUBLIC_V2_UNREPRESENTABLE_GAPS: [&str; 6] = [
+const PUBLIC_V2_UNREPRESENTABLE_GAPS: [&str; 4] = [
     "arbitrary intrinsic declarations and calls",
     "atomic instructions and memory orderings",
-    "phi nodes and incoming edges",
     "switch terminators and cases",
     "aggregate values and operations",
-    "vector values and operations",
 ];
 
 #[test]
@@ -234,9 +232,7 @@ fn v2_handoff_def_use_is_function_local_ordered_and_entry_seeded() {
     );
     assert_eq!(
         module_from_parts(&base, vec![], vec![], vec![forward_function]),
-        Err(HandoffDiagnosticV2::MissingValueReference(ValueIdV2::new(
-            2
-        )))
+        Err(HandoffDiagnosticV2::UnsupportedInstruction)
     );
 
     let missing_return_value = FunctionV2::new(
@@ -317,9 +313,7 @@ fn v2_handoff_def_use_is_function_local_ordered_and_entry_seeded() {
     .unwrap();
     assert_eq!(
         module_from_parts(&base, vec![], vec![], vec![sibling_function]),
-        Err(HandoffDiagnosticV2::MissingValueReference(ValueIdV2::new(
-            7
-        )))
+        Err(HandoffDiagnosticV2::UnsupportedInstruction)
     );
 
     let entry_definition = constant_instruction(&base, 7, ScalarTypeV1::I32, 1);
@@ -1016,9 +1010,12 @@ fn v2_handoff_wire_rejects_unknown_intrinsics_opcodes_and_missing_terminator() {
 }
 
 #[test]
-fn v2_handoff_public_schema_records_unrepresentable_families_as_gaps() {
+fn v2_handoff_public_schema_records_supported_families_and_remaining_gaps() {
     let instructions = [
         InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I32, 0).unwrap()),
+        InstructionKindV2::VectorZero {
+            element_type: ScalarTypeV1::I16,
+        },
         InstructionKindV2::GlobalAddress(GlobalIdV2::new(1)),
         InstructionKindV2::Binary {
             operation: BinaryOperationV2::Integer(IntegerBinaryOperationV2::Add),
@@ -1044,6 +1041,11 @@ fn v2_handoff_public_schema_records_unrepresentable_families_as_gaps() {
             value_type: ScalarTypeV1::I32,
             alignment: 4,
         },
+        InstructionKindV2::VectorLoad4 {
+            pointer: ValueIdV2::new(1),
+            element_type: ScalarTypeV1::I16,
+            alignment: 8,
+        },
         InstructionKindV2::Store {
             pointer: ValueIdV2::new(1),
             value: ValueIdV2::new(2),
@@ -1054,6 +1056,18 @@ fn v2_handoff_public_schema_records_unrepresentable_families_as_gaps() {
             target: CallTargetV2::Intrinsic(IntrinsicV2::AmdGpuBarrier),
             arguments: vec![],
         },
+        InstructionKindV2::Phi {
+            incoming: vec![(ValueIdV2::new(1), BlockIdV2::new(0))],
+        },
+        InstructionKindV2::InsertElement {
+            vector: ValueIdV2::new(1),
+            element: ValueIdV2::new(2),
+            index: ValueIdV2::new(3),
+        },
+        InstructionKindV2::ExtractElement {
+            vector: ValueIdV2::new(1),
+            index: ValueIdV2::new(2),
+        },
     ];
     assert_eq!(
         instructions
@@ -1062,14 +1076,19 @@ fn v2_handoff_public_schema_records_unrepresentable_families_as_gaps() {
             .collect::<Vec<_>>(),
         [
             "constant",
+            "vector-zero",
             "global-address",
             "binary",
             "compare",
             "cast",
             "getelementptr",
             "load",
+            "vector-load4",
             "store",
             "call",
+            "phi",
+            "insert-element",
+            "extract-element",
         ]
     );
 
@@ -1079,6 +1098,8 @@ fn v2_handoff_public_schema_records_unrepresentable_families_as_gaps() {
         IntrinsicV2::AmdGpuBarrier,
         IntrinsicV2::FmaF32,
         IntrinsicV2::SqrtF32,
+        IntrinsicV2::Trap,
+        IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k,
     ];
     assert_eq!(
         intrinsics.map(public_intrinsic_family),
@@ -1087,18 +1108,29 @@ fn v2_handoff_public_schema_records_unrepresentable_families_as_gaps() {
             "workgroup-id",
             "barrier",
             "fma-f32",
-            "sqrt-f32"
+            "sqrt-f32",
+            "trap",
+            "amdgcn-mfma-f32-16x16x16bf16-1k",
         ]
     );
     assert_eq!(
         [
             public_value_shape(I32),
+            public_value_shape(ValueTypeV2::Vector {
+                element: ScalarTypeV1::I16,
+                lanes: 4,
+            }),
             public_value_shape(ValueTypeV2::Pointer {
                 pointee: ScalarTypeV1::I32,
                 address_space: AddressSpaceV1::Global,
             }),
+            public_value_shape(ValueTypeV2::ArrayPointer {
+                element: ScalarTypeV1::I16,
+                elements: 256,
+                address_space: AddressSpaceV1::Local,
+            }),
         ],
-        ["scalar", "pointer"]
+        ["scalar", "vector", "pointer", "array-pointer"]
     );
 
     assert_eq!(
@@ -1106,10 +1138,8 @@ fn v2_handoff_public_schema_records_unrepresentable_families_as_gaps() {
         [
             "arbitrary intrinsic declarations and calls",
             "atomic instructions and memory orderings",
-            "phi nodes and incoming edges",
             "switch terminators and cases",
             "aggregate values and operations",
-            "vector values and operations",
         ]
     );
 }
@@ -1472,14 +1502,19 @@ fn instruction_graph_error(
 fn public_instruction_family(instruction: &InstructionKindV2) -> &'static str {
     match instruction {
         InstructionKindV2::Constant(_) => "constant",
+        InstructionKindV2::VectorZero { .. } => "vector-zero",
         InstructionKindV2::GlobalAddress(_) => "global-address",
         InstructionKindV2::Binary { .. } => "binary",
         InstructionKindV2::Compare { .. } => "compare",
         InstructionKindV2::Cast { .. } => "cast",
         InstructionKindV2::GetElementPtr { .. } => "getelementptr",
         InstructionKindV2::Load { .. } => "load",
+        InstructionKindV2::VectorLoad4 { .. } => "vector-load4",
         InstructionKindV2::Store { .. } => "store",
         InstructionKindV2::Call { .. } => "call",
+        InstructionKindV2::Phi { .. } => "phi",
+        InstructionKindV2::InsertElement { .. } => "insert-element",
+        InstructionKindV2::ExtractElement { .. } => "extract-element",
     }
 }
 
@@ -1490,13 +1525,17 @@ fn public_intrinsic_family(intrinsic: IntrinsicV2) -> &'static str {
         IntrinsicV2::AmdGpuBarrier => "barrier",
         IntrinsicV2::FmaF32 => "fma-f32",
         IntrinsicV2::SqrtF32 => "sqrt-f32",
+        IntrinsicV2::Trap => "trap",
+        IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k => "amdgcn-mfma-f32-16x16x16bf16-1k",
     }
 }
 
 fn public_value_shape(value_type: ValueTypeV2) -> &'static str {
     match value_type {
         ValueTypeV2::Scalar(_) => "scalar",
+        ValueTypeV2::Vector { .. } => "vector",
         ValueTypeV2::Pointer { .. } => "pointer",
+        ValueTypeV2::ArrayPointer { .. } => "array-pointer",
     }
 }
 

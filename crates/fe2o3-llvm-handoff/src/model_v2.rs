@@ -1236,14 +1236,7 @@ impl ExecutableModuleV2 {
                 }
                 self.validate_terminator(function, &block.terminator, &available)?;
             }
-            if function.blocks.iter().any(|block| {
-                block
-                    .instructions
-                    .iter()
-                    .any(|instruction| matches!(instruction.kind, InstructionKindV2::Phi { .. }))
-            }) {
-                validate_function_ssa_v2(function)?;
-            }
+            validate_function_ssa_v2(function)?;
         }
         Ok(())
     }
