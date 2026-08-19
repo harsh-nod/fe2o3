@@ -93,29 +93,88 @@ in-slice 8-byte offset, installs MADV_DONTFORK while PROT_NONE, then enables
 the VMA. No pointer, address, fd, or store API is public. The live lane checks
 that the VMA is absent in an isolated child without reading or writing MMIO.
 
-Dispatch still requires all of the following:
+The private submission owner binds the mapping to the retained active queue,
+process, device generation, and CREATE observation. No raw pointer or general
+MMIO write escapes. The store width/value and CPU ordering sequence are tested,
+but GPU coherence, firmware observation, reset races, and write-combining MMIO
+semantics remain Contracted rather than proved.
 
-1. Bind the existing mapping to the exact active queue ID, process incarnation, device
-   generation, and CREATE observation. No raw pointer or general MMIO write may
-   escape.
-2. Pin and test the required CPU/device ordering, store width, value encoding,
-   cache attributes, teardown order, fork behavior, and reset/currentness
-   policy. The current source pins validate geometry, not these executable
-   mmap/store semantics.
+## Private packet publication boundary
 
-## Missing packet publication boundary
+The production composition now depends canonically on `fe2o3-aql` and retains
+one crate-private, non-`Clone` single-producer submission owner. Before CREATE,
+every logical 64-byte ring slot contains the exact little-endian `u32` INVALID
+header value `1`; an all-zero slot would encode VENDOR_SPECIFIC and is rejected
+by the initialization contract. Each slot header is explicitly initialized as
+an `AtomicU32`, and both control counters are explicitly initialized as
+`AtomicU64`, before GPU mapping.
 
-`fe2o3-kfd-uapi` has no AQL packet or ring-publication schema. R4 still needs a
-single-producer reservation token, monotonic read/write index rules, checked
-wraparound, complete 64-byte packet definitions, and a typestate sequence that
-initializes every non-header field before publishing a valid header with the
-reviewed release ordering. Kernarg, code object, mapping, queue, dispatch, and
-completion generations must be embedded in that token. Publication must prove
-slot uniqueness and initialization-before-validity; the subsequent write-index
-and doorbell operations must preserve the required host-to-device ordering.
-Fault injection is required before and after reservation, field initialization,
-header publication, write-index publication, and doorbell store. A doorbell
-failure after publication is not rollback evidence.
+Submission acquire-loads the actual shared write and read counters, requires
+the write observation to equal the retained model, and applies
+`AqlSingleProducerRingModelV1` to reject full, replayed, regressed, impossible,
+or exhausted observations. After a second PID/device-currentness check it
+performs one acquire-release fetch-add on the actual write pointer. It selects
+the exact masked slot, copies the complete still-INVALID packet body, and uses
+`AqlPreparedKernelDispatchV1` to release-store one aligned little-endian `u32`
+full header. A one-dimensional packet publishes exactly `0x00011402`. A final
+currentness check precedes one release fence, x86 SFENCE, and one volatile
+little-endian `u64` doorbell store of the packet ID.
+
+Any error after the pure reservation or any possible shared-memory side effect
+permanently poisons the submission owner. Counter mismatch, read regression,
+impossible distance, exhaustion, or currentness loss also poison it; only an
+ordinary full-ring observation remains retryable. The mapped production path
+never creates an encompassing Rust slice or exposes a raw mapping pointer. Its
+private Linux backend performs only checked exact atomic/copy operations on the
+retained `NonNull` mapping. `Drop` performs no
+counter, packet, doorbell, ioctl, unmap, or free operation. The callable method
+is crate-private and exposes no counter reference, address, pointer, ring
+slice, or general MMIO primitive.
+
+Rust atomic ordering does not specify concurrent GPU accesses, system-scope
+AQL publication, GTT cache coherence, write-combining MMIO ordering, or
+firmware consumption. Those links are **Contracted**, backed by pinned source
+and hostile CPU tests; they are not Verus-proven or Rust-memory-model-proven.
+
+## CWSR initialization and first-launch limit
+
+The context-save allocation is zeroed, then receives exactly eight 40-byte
+`HsaUserContextSaveAreaHeader` encodings at
+`base + xcc * 0x1621000`. `DebugOffset` is
+`(8 - xcc) * 0x1621000`, `DebugSize` is `0x5f000`, and the no-event
+`ErrorReason` and `ErrorEventId` fields remain zero. The layout and behavior
+are pinned to ROCr 7.2.4 `queues.c`
+`b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b`
+and `hsakmttypes.h`
+`fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e`.
+
+Zero event fields are sufficient only because this slice launches no kernel.
+The first isolated launch may use them only with a process fail-stop rule: any
+timeout, unexpected completion, or currentness loss terminates without queue
+destroy, unmap/free, or further KFD use. A KFD event plus writable error payload
+and observable queue exceptions is a required production R4 follow-up, not a
+current property.
+
+There is also a distinct address-semantics blocker. The headers above are
+written through the kernel-selected BO CPU VMA, while the retained GPU VA is a
+separate PROT_NONE reservation. Active KFD fault handling uses `get_user` and
+`put_user` against the CREATE context-save address. Source review supports a
+bounded next step: replace exactly the eight owned header guard pages with
+DONTFORK anonymous shadow pages and bind a KFD event ID plus shared aligned
+error payload. That would cover queue creation and exception delivery only.
+It is not full CWSR equivalence: wave-state/debug/eviction control-stack
+`copy_to_user` would observe the shadow or remaining PROT_NONE range and must
+stay explicitly unsupported. The active `kfd_process.c` source is pinned as
+`d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409`.
+
+Consequently, the native submission method requires a private fault-policy
+admission value for which no constructor exists. Live packet publication
+remains structurally gated until that separate shadow/event slice is admitted.
+
+R4 still needs a dispatch authority that binds kernarg, code object, queue,
+dispatch, and completion generations. The existing inert packet carries only
+numeric address observations. A doorbell failure after publication is not
+rollback evidence and remains process-teardown-only poison.
 
 ## Missing completion-signal boundary
 

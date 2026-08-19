@@ -2,8 +2,13 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
+use fe2o3_aql::{
+    AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+    AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+};
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
     AMDKFD_IOC_MAP_MEMORY_TO_GPU, AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU, KfdAllocMemoryFlags,
@@ -476,6 +481,102 @@ impl MemoryBackend for LinuxMemoryBackend {
         f(bytes)
     }
 
+    fn observe_aql_counters(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+    ) -> Result<(u64, u64), MemorySessionError> {
+        let write = checked_atomic_u64(mapping, requested_bytes, 0)?.load(Ordering::Acquire);
+        let read = checked_atomic_u64(mapping, requested_bytes, 8)?.load(Ordering::Acquire);
+        Ok((write, read))
+    }
+
+    fn fetch_add_aql_write(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        increment: u64,
+    ) -> Result<u64, MemorySessionError> {
+        Ok(checked_atomic_u64(mapping, requested_bytes, 0)?.fetch_add(increment, Ordering::AcqRel))
+    }
+
+    fn write_aql_slot(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        let unpublished = u32::from_le_bytes(
+            packet[..4]
+                .try_into()
+                .map_err(|_| malformed_aql_mapping("packet header"))?,
+        );
+        let setup = unpublished >> 16;
+        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
+            || !(1..=3).contains(&setup)
+        {
+            return Err(malformed_aql_mapping("unpublished packet header"));
+        }
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("packet slot offset"))?;
+        let pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            core::mem::align_of::<AtomicU32>(),
+        )?;
+        // SAFETY: each header AtomicU32 was initialized before GPU mapping;
+        // the checked slot is aligned and remains owned by this mapping.
+        unsafe { &*pointer.cast::<AtomicU32>() }.store(unpublished.to_le(), Ordering::Relaxed);
+        // SAFETY: the checked slot contains 64 bytes. Offset zero remains an
+        // AtomicU32 and the remaining 60 bytes are the unpublished body.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                packet.as_ptr().add(4),
+                pointer.add(4),
+                AQL_KERNEL_DISPATCH_PACKET_BYTES_V1 - 4,
+            );
+        }
+        Ok(())
+    }
+
+    fn publish_aql_header(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+        header: u16,
+    ) -> Result<(), MemorySessionError> {
+        if header != AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 {
+            return Err(malformed_aql_mapping("release header"));
+        }
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("packet slot offset"))?;
+        let pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            core::mem::size_of::<AtomicU32>(),
+            core::mem::align_of::<AtomicU32>(),
+        )?;
+        // SAFETY: this is the exact initialized header AtomicU32.
+        let atomic = unsafe { &*pointer.cast::<AtomicU32>() };
+        let unpublished = u32::from_le(atomic.load(Ordering::Relaxed));
+        let setup = unpublished >> 16;
+        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
+            || !(1..=3).contains(&setup)
+        {
+            return Err(malformed_aql_mapping("packet no longer unpublished"));
+        }
+        atomic.store(
+            ((setup << 16) | u32::from(header)).to_le(),
+            Ordering::Release,
+        );
+        Ok(())
+    }
+
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
         if !mapping.active || !mapping.accessible {
             return Err(MemorySessionError::KernelResultMalformed(
@@ -517,6 +618,56 @@ impl MemoryBackend for LinuxMemoryBackend {
         unsafe { rustix::ioctl::ioctl(&self.device.kfd.opened.fd, request) }
             .map_err(|source| Self::syscall("AMDKFD_IOC_FREE_MEMORY_OF_GPU", source))
     }
+}
+
+fn malformed_aql_mapping(detail: &'static str) -> MemorySessionError {
+    MemorySessionError::KernelResultMalformed(detail)
+}
+
+fn checked_mapping_pointer(
+    mapping: &mut LinuxCpuMapping,
+    requested_bytes: usize,
+    offset: usize,
+    byte_len: usize,
+    alignment: usize,
+) -> Result<*mut u8, MemorySessionError> {
+    let end = offset
+        .checked_add(byte_len)
+        .ok_or_else(|| malformed_aql_mapping("mapped range overflow"))?;
+    if !mapping.active
+        || !mapping.accessible
+        || requested_bytes > mapping.bytes
+        || end > requested_bytes
+        || alignment == 0
+        || !alignment.is_power_of_two()
+    {
+        return Err(malformed_aql_mapping("mapped range"));
+    }
+    // SAFETY: offset is bounded by the live retained mapping above. The raw
+    // pointer remains inside this private backend and no slice/reference is
+    // returned to safe queue code.
+    let pointer = unsafe { mapping.address.as_ptr().cast::<u8>().add(offset) };
+    if !(pointer as usize).is_multiple_of(alignment) {
+        return Err(malformed_aql_mapping("mapped alignment"));
+    }
+    Ok(pointer)
+}
+
+fn checked_atomic_u64(
+    mapping: &mut LinuxCpuMapping,
+    requested_bytes: usize,
+    offset: usize,
+) -> Result<&AtomicU64, MemorySessionError> {
+    let pointer = checked_mapping_pointer(
+        mapping,
+        requested_bytes,
+        offset,
+        core::mem::size_of::<AtomicU64>(),
+        core::mem::align_of::<AtomicU64>(),
+    )?;
+    // SAFETY: both control AtomicU64 objects were explicitly initialized
+    // before GPU mapping and the exact object remains live until teardown.
+    Ok(unsafe { &*pointer.cast::<AtomicU64>() })
 }
 
 impl Drop for LinuxVaReservation {

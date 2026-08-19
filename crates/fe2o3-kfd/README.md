@@ -305,7 +305,15 @@ engine and remain there until confirmed direct DESTROY.
 CREATE returns an admitted process-local queue ID, including zero, and the
 adapter maps the exact complete 8192-byte KFD process doorbell slice. It checks
 the encoded returned offset, installs MADV_DONTFORK before enabling the VMA,
-and exposes neither an address, pointer, fd, handle, nor MMIO store. Explicit
+and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
+private submission foundation initializes every ring header to exact INVALID
+type 1 and the two control counters as atomics before GPU mapping. It uses the
+canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
+one acquire-release write-pointer fetch-add, INVALID packet copy, aligned
+release header, and one release-fenced x86-SFENCE volatile `u64` doorbell
+store. Counter divergence/regression and every possible side-effect failure
+poison the non-Clone owner; only an ordinary full ring is retryable. No mapped
+slice or raw mapping pointer escapes the private Linux backend. Explicit
 destroy confirms the ioctl, unmaps the doorbell, releases model publications,
 restores the shared-memory model owner, then explicitly unmaps and frees all
 four resources. Drop performs none of those native operations. The isolated
@@ -314,8 +322,20 @@ negative, direct DESTROY, and resource return without publishing a packet or
 performing an MMIO store. `kfd-compute-aql-queue-policy` links the default
 production closure for the no-ROCm ELF audit.
 
+The private submission call is nevertheless structurally gated by an
+unconstructible CWSR fault-policy admission. The executable-GTT CPU VMA is
+distinct from the PROT_NONE GPU VA passed to CREATE, while active KFD fault
+handling reads the header through that CREATE address. The current slice does
+not claim same-address USERPTR/SVM semantics or dispatch-ready exception
+delivery. The reviewed bounded next gate is eight owned DONTFORK anonymous
+header shadow pages plus a KFD event and aligned shared error payload. It does
+not cover wave-state/debug/eviction control-stack copies, which remain
+unsupported. Live packet publication stays disabled until that slice is
+admitted; zero event fields are not general dispatch authority.
+
 The abstract Verus relation proves Active and Disabled are the only direct
 destroy sources and that failed-no-effect restores the exact retained source.
 It does not prove the Rust adapter, ioctl/mmap implementation, kernel, firmware,
-hardware, or concrete-to-model refinement. Packet publication, doorbell stores,
-dispatch, and completion remain excluded.
+hardware, CPU/GPU atomic coherence, or concrete-to-model refinement. The
+private CPU publication sequence is implemented and hostile-tested, but live
+dispatch and completion remain excluded.

@@ -7,6 +7,7 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
+use core::sync::atomic::{Ordering, fence};
 use std::os::fd::BorrowedFd;
 
 use fe2o3_kfd_uapi::{
@@ -197,6 +198,49 @@ impl LinuxDoorbellSliceV1 {
 
     pub(super) const fn queue_byte_offset(&self) -> u64 {
         self.plan.queue_byte_offset
+    }
+
+    pub(super) fn store_packet_id_release(
+        &mut self,
+        packet_id: u64,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        if self.opener_pid != std::process::id() {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        if !self.active {
+            return Err(LinuxDoorbellErrorV1::InvalidObservation(
+                "doorbell store state",
+            ));
+        }
+        let offset = usize::try_from(self.plan.queue_byte_offset)
+            .map_err(|_| LinuxDoorbellErrorV1::InvalidObservation("doorbell store offset"))?;
+        let end = offset.checked_add(core::mem::size_of::<u64>()).ok_or(
+            LinuxDoorbellErrorV1::InvalidObservation("doorbell store range"),
+        )?;
+        if end > self.plan.slice_bytes || !offset.is_multiple_of(core::mem::align_of::<u64>()) {
+            return Err(LinuxDoorbellErrorV1::InvalidObservation(
+                "doorbell store range",
+            ));
+        }
+        // This is one deliberately narrow CPU-memory/MMIO ordering boundary:
+        // release-published packet bytes precede the WC MMIO notification.
+        fence(Ordering::Release);
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: SFENCE has no memory operand and is universally available on
+        // the admitted x86_64 platform.
+        unsafe {
+            core::arch::x86_64::_mm_sfence();
+        }
+        // SAFETY: the retained capability uniquely owns the live complete
+        // process slice, the checked offset selects its exact aligned 8-byte
+        // queue doorbell, and no pointer or reference escapes this call.
+        unsafe {
+            core::ptr::write_volatile(
+                self.address.as_ptr().cast::<u8>().add(offset).cast::<u64>(),
+                packet_id.to_le(),
+            );
+        }
+        Ok(())
     }
 
     pub(super) fn release(mut self) -> Result<(), LinuxDoorbellErrorV1> {

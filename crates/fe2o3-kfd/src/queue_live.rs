@@ -15,6 +15,10 @@ use fe2o3_runtime_model::{
 };
 use sha2::{Digest, Sha256};
 
+use super::submit::{
+    NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
+    initialize_control_atomics, initialize_gfx942_cwsr_headers, initialize_invalid_ring,
+};
 use super::*;
 use crate::queue_linux::{LinuxDoorbellErrorV1, LinuxDoorbellSliceV1};
 use crate::shared_memory::{
@@ -28,6 +32,7 @@ use crate::{
     Gfx942AqlQueueResourcePlanV1, Gfx942QueueResourcePlanningError, MemorySessionError,
     SHARED_GTT_MEMORY_PROFILE_SHA256_V1, plan_gfx942_aql_queue_resources,
 };
+use fe2o3_aql::{AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchV1};
 
 const CONTROL_BYTES: usize = 4_096;
 static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
@@ -38,19 +43,27 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=1054b1c31ad143c7218eee24bcc529b17851338a152ed0cf028c46898c6a17a4\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
+    "aql_dispatch_schema_sha256=d420be8e3da6f9d473273648659f9ed00260eaf597c7ccaa742ff6c33d816369\n",
+    "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
+    "source.rocr.hsakamttypes.h=fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e\n",
+    "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
     "resources=linear-private-ring-control-eop-cwsr-authorities,exact-one-vm,transferred-model-ownership\n",
     "gtt_policy=ring:aql-queue,control:host-visible-coherent,eop-and-cwsr:executable;fe2o3-policy-not-rocr-equivalence\n",
-    "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-address-or-mmio-accessor\n",
+    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;8-cwsr-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,error-event-and-reason-zero\n",
+    "submission=crate-private-non-clone-single-producer,no-mapped-slice-or-raw-pointer-escape,actual-wptr-acq-rel-fetch-add,rptr-wptr-acquire,invalid-body-copy,u32-release-header,release-fence-x86-sfence,one-volatile-u64-doorbell-store\n",
+    "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=explicit-create,active-or-disabled-direct-destroy,explicit-resource-return,no-drop-ioctl-store-munmap-or-free\n",
-    "currentness=pid-and-device-before-and-after-ioctls-and-doorbell-boundaries\n",
-    "failure=errno-indeterminate,retained-or-quarantined-authority,process-teardown-recovery-only\n",
-    "proof=queue-model-obligations-only,concrete-ioctl-mmap-driver-firmware-refinement-contracted\n",
-    "excluded=packet-publication,doorbell-store,dispatch,completion,update,multi-queue-concurrency\n",
+    "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
+    "failure=counter-divergence-regression-currentness-and-any-post-reservation-error-poison;only-ordinary-full-retryable;process-teardown-recovery-only\n",
+    "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
+    "zero-cwsr-event-scope=no-kernel-launch;first-launch-requires-isolated-fail-stop-on-timeout-unexpected-completion-or-currentness-loss\n",
+    "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;next-gate-is-8-owned-dontfork-shadow-pages-plus-event-error-payload;full-wave-debug-eviction-copy-unsupported;native-submission-live-gated\n",
+    "excluded=public-submission,kernel-launch,code-kernarg-signal-authority,completion,exception-observability,update,multi-producer\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "b850dfe51698c97fa35f6faff22339844d454b6a220f3643e3bf886187097518";
+    "b7d4c9e8c6f191dccc90c540fd99fe0ee73cddcfe859a21bbe95244b0fdc2600";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -79,6 +92,62 @@ struct QueueResourceAuthorityV1 {
     eop: EopAuthority,
     context_save: ContextSaveAuthority,
     view: NativeQueueResourceViewV1,
+}
+
+struct LinuxAqlSubmissionBackendV1<'a> {
+    memory: &'a mut SharedGttMemorySessionV1,
+    ring: &'a mut RingAuthority,
+    control: &'a mut ControlAuthority,
+    doorbell: &'a mut LinuxDoorbellSliceV1,
+}
+
+impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
+    fn check_currentness(&mut self) -> Result<(), NativeAqlSubmissionErrorV1> {
+        self.memory
+            .check_queue_currentness()
+            .map_err(|_| NativeAqlSubmissionErrorV1::Currentness)
+    }
+
+    fn observe_counters_acquire(&mut self) -> Result<(u64, u64), NativeAqlSubmissionErrorV1> {
+        self.memory
+            .observe_aql_control_counters(self.control)
+            .map_err(|_| NativeAqlSubmissionErrorV1::Currentness)
+    }
+
+    fn fetch_add_write_acq_rel(
+        &mut self,
+        increment: u64,
+    ) -> Result<u64, NativeAqlSubmissionErrorV1> {
+        self.memory
+            .fetch_add_aql_control_write(self.control, increment)
+            .map_err(|_| NativeAqlSubmissionErrorV1::Currentness)
+    }
+
+    fn write_unpublished(
+        &mut self,
+        slot: u32,
+        packet: &AqlKernelDispatchPacketV1,
+    ) -> Result<(), NativeAqlSubmissionErrorV1> {
+        self.memory
+            .write_aql_ring_slot(self.ring, slot, &packet.encode_unpublished_le())
+            .map_err(|_| NativeAqlSubmissionErrorV1::PacketBody)
+    }
+
+    fn publish_release_header(
+        &mut self,
+        slot: u32,
+        header: u16,
+    ) -> Result<(), NativeAqlSubmissionErrorV1> {
+        self.memory
+            .publish_aql_ring_header(self.ring, slot, header)
+            .map_err(|_| NativeAqlSubmissionErrorV1::PacketHeader)
+    }
+
+    fn ring_doorbell_release(&mut self, packet_id: u64) -> Result<(), NativeAqlSubmissionErrorV1> {
+        self.doorbell
+            .store_packet_id_release(packet_id)
+            .map_err(|_| NativeAqlSubmissionErrorV1::Doorbell)
+    }
 }
 
 struct LinuxNativeQueueBackendV1 {
@@ -246,7 +315,14 @@ pub struct ComputeAqlQueueSessionV1 {
     engine: Option<NativeQueueEngineV1<LinuxNativeQueueBackendV1>>,
     key: QueueKeyV1,
     doorbell: Option<LinuxDoorbellSliceV1>,
+    submission: Option<NativeAqlSubmissionOwnerV1>,
     observation: ComputeAqlQueueObservationV1,
+}
+
+/// Deliberately unconstructible until CWSR fault-header address semantics and
+/// the first-launch fail-stop policy have a separate reviewed admission.
+pub(crate) struct CwsrDispatchFaultPolicyAdmissionV1 {
+    _private: (),
 }
 
 impl fmt::Debug for ComputeAqlQueueSessionV1 {
@@ -287,10 +363,22 @@ impl CheckedGfx942XnackMinusDevice {
                 ComputeAqlQueueSessionErrorV1::Contract("context-save size conversion")
             })?,
         )?;
-        memory.with_bytes_mut(&mut ring, |bytes| bytes.fill(0))?;
-        memory.with_bytes_mut(&mut control, |bytes| bytes.fill(0))?;
+        let ring_initialization = memory.with_bytes_mut(&mut ring, initialize_invalid_ring)?;
+        ring_initialization
+            .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization"))?;
+        let control_initialization =
+            memory.with_bytes_mut(&mut control, initialize_control_atomics)?;
+        control_initialization.map_err(|_| {
+            ComputeAqlQueueSessionErrorV1::Contract("AQL control atomic initialization")
+        })?;
         memory.with_bytes_mut(&mut eop, |bytes| bytes.fill(0))?;
-        memory.with_bytes_mut(&mut context_save, |bytes| bytes.fill(0))?;
+        let cwsr_initialization = memory.with_bytes_mut(&mut context_save, |bytes| {
+            bytes.fill(0);
+            initialize_gfx942_cwsr_headers(bytes)
+        })?;
+        cwsr_initialization.map_err(|_| {
+            ComputeAqlQueueSessionErrorV1::Contract("gfx942 CWSR header initialization")
+        })?;
         let eop = memory.seal_executable(eop)?;
         let context_save = memory.seal_executable(context_save)?;
         let ring = memory.map_to_gpu(ring)?;
@@ -333,6 +421,9 @@ impl CheckedGfx942XnackMinusDevice {
             engine: Some(engine),
             key,
             doorbell: None,
+            submission: Some(NativeAqlSubmissionOwnerV1::new(ring_bytes).map_err(|_| {
+                ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model")
+            })?),
             observation: ComputeAqlQueueObservationV1 {
                 queue_id,
                 ring_bytes,
@@ -356,6 +447,58 @@ impl CheckedGfx942XnackMinusDevice {
 impl ComputeAqlQueueSessionV1 {
     pub const fn observation(&self) -> ComputeAqlQueueObservationV1 {
         self.observation
+    }
+
+    /// Private bridge for the later dispatch composition. The public queue API
+    /// cannot submit packets or access counters, slots, addresses, or MMIO.
+    #[allow(dead_code)]
+    pub(crate) fn submit_prepared(
+        &mut self,
+        packet: AqlPreparedKernelDispatchV1,
+        _fault_policy: &CwsrDispatchFaultPolicyAdmissionV1,
+    ) -> Result<u64, NativeAqlSubmissionErrorV1> {
+        let owner = self
+            .submission
+            .as_mut()
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "missing submission owner",
+            ))?;
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "missing queue engine",
+            ))?;
+        if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+            return Err(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "queue is not active",
+            ));
+        }
+        let (backend, resources) = (&mut engine.backend, &mut engine.resources);
+        let resource = resources
+            .iter_mut()
+            .find(|resource| resource.key == self.key)
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "missing queue resources",
+            ))?;
+        let authority =
+            resource
+                .authority
+                .as_mut()
+                .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                    "released queue resources",
+                ))?;
+        let doorbell = self
+            .doorbell
+            .as_mut()
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue("missing doorbell"))?;
+        let mut native = LinuxAqlSubmissionBackendV1 {
+            memory: &mut backend.session,
+            ring: &mut authority.ring,
+            control: &mut authority.control,
+            doorbell,
+        };
+        owner.submit(packet, &mut native)
     }
 
     #[cfg(feature = "live-validation")]
@@ -670,6 +813,10 @@ mod tests {
 
     #[test]
     fn session_manifest_digest_is_frozen() {
+        assert_eq!(
+            fe2o3_aql::AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
+            "d420be8e3da6f9d473273648659f9ed00260eaf597c7ccaa742ff6c33d816369"
+        );
         let digest = Sha256::digest(GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1);
         let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(rendered, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1);

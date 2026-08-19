@@ -24,6 +24,10 @@ use fe2o3_runtime_model::{
 #[path = "queue_live.rs"]
 mod live;
 
+#[allow(unsafe_code)]
+#[path = "queue_submit.rs"]
+mod submit;
+
 pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
@@ -41,14 +45,15 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "release=explicit-only-after-confirmed-destroy,no-drop-ioctl\n",
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
     "composition=shared-gtt-linear-role-authorities,transferred-model-foundation,whole-slice-doorbell-mmap\n",
-    "missing=packet-publication,doorbell-store,dispatch,completion-signals\n",
-    "proof=model-projection-and-hostile-tests-only,no-concrete-verus-or-kernel-refinement\n",
+    "submission=crate-private-single-producer-actual-counters-invalid-body-release-header-and-one-doorbell-store\n",
+    "missing=public-dispatch,kernel-launch,code-kernarg-signal-binding,completion-and-exception-observation\n",
+    "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
     "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
 );
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "f31d06a7760dc7cb751c3d0c35b80a5ef6aa1a023f5a8063fa5cf09e34b8d5f9";
+    "680382f9b50e8ee9574e36bd2a6032ea6610967dcf4c882e563b7c0aaf46eb67";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

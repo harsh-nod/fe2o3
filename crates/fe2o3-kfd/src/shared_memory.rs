@@ -683,6 +683,73 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         }
     }
 
+    fn observe_aql_counters<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+    ) -> Result<(u64, u64), MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        let value = B::observe_aql_counters(mapping, requested)?;
+        self.check_currentness()?;
+        Ok(value)
+    }
+
+    fn fetch_add_aql_write<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        increment: u64,
+    ) -> Result<u64, MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        let value = B::fetch_add_aql_write(mapping, requested, increment)?;
+        self.check_currentness()?;
+        Ok(value)
+    }
+
+    fn write_aql_slot<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        B::write_aql_slot(mapping, requested, slot_index, packet)?;
+        self.check_currentness()
+    }
+
+    fn publish_aql_header<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+        header: u16,
+    ) -> Result<(), MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        B::publish_aql_header(mapping, requested, slot_index, header)?;
+        self.check_currentness()
+    }
+
     fn seal_executable(
         &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttCpuWritableV1>,
@@ -1245,6 +1312,62 @@ impl SharedGttMemorySessionV1 {
         f: impl FnOnce(&mut [u8]) -> R,
     ) -> Result<R, MemorySessionError> {
         self.engine.with_bytes_mut(token, f)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn observe_aql_control_counters(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlControlResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+    ) -> Result<(u64, u64), MemorySessionError> {
+        self.engine.observe_aql_counters(&mut authority.token)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn fetch_add_aql_control_write(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlControlResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        increment: u64,
+    ) -> Result<u64, MemorySessionError> {
+        self.engine
+            .fetch_add_aql_write(&mut authority.token, increment)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn write_aql_ring_slot(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlRingResourceRoleV1,
+            AqlQueueGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .write_aql_slot(&mut authority.token, slot_index, packet)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn publish_aql_ring_header(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlRingResourceRoleV1,
+            AqlQueueGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+        header: u16,
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .publish_aql_header(&mut authority.token, slot_index, header)
     }
 
     pub fn seal_executable(

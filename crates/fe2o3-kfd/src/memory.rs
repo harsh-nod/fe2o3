@@ -300,6 +300,43 @@ pub(super) trait MemoryBackend {
         requested_bytes: usize,
         f: impl FnOnce(&mut [u8]) -> R,
     ) -> R;
+    fn observe_aql_counters(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+    ) -> Result<(u64, u64), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL mapped counter backend",
+        ))
+    }
+    fn fetch_add_aql_write(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _increment: u64,
+    ) -> Result<u64, MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL mapped write backend",
+        ))
+    }
+    fn write_aql_slot(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+        _packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL mapped slot backend",
+        ))
+    }
+    fn publish_aql_header(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+        _header: u16,
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL mapped publication backend",
+        ))
+    }
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError>;
     fn release_va_reservation(
         &mut self,
