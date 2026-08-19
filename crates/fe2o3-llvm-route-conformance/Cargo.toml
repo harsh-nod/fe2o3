@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Differential and hostile conformance tests for the Pliron LLVM route."
+readme = "README.md"
 publish = false
 
 [dependencies]
