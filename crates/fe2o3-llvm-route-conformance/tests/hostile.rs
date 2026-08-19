@@ -268,10 +268,16 @@ fn nonzero_device_library_digest_mutation_creates_a_new_canonical_handoff_identi
 }
 
 #[test]
-fn every_declared_expected_rejection_has_an_exercised_hostile_case() {
+fn every_declared_handoff_rejection_has_an_exercised_hostile_case() {
     let declared = GFX942_CONFORMANCE_CORPUS_V1
         .iter()
-        .filter(|case| case.semantic() != ConformanceSemanticV1::WorkerAdmissionLane)
+        .filter(|case| {
+            !matches!(
+                case.semantic(),
+                ConformanceSemanticV1::WorkerAdmissionLane
+                    | ConformanceSemanticV1::PlironLoweringLane
+            )
+        })
         .filter_map(|case| match case.expectation() {
             ConformanceExpectationV1::ExpectedRejection(rejection) => Some(rejection),
             _ => None,

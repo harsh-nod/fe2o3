@@ -4,7 +4,7 @@ use core::fmt;
 pub const CONFORMANCE_CASE_NAME_MAX_BYTES_V1: usize = 64;
 
 /// Maximum number of cases admitted by the V1 conformance corpus.
-pub const MAX_CONFORMANCE_CASES_V1: usize = 40;
+pub const MAX_CONFORMANCE_CASES_V1: usize = 48;
 
 /// A semantic family tracked by the generic-CI corpus.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -86,6 +86,14 @@ pub enum ExpectedRejectionV1 {
     WorkerBuildFieldTooLong,
     /// A handoff device-library kind outside the worker's closed set.
     WorkerUnsupportedDeviceLibrary,
+    /// A function call outside the scalar Pliron lowering vocabulary.
+    PlironLoweringUnsupportedCall,
+    /// A scalar type outside the scalar Pliron lowering vocabulary.
+    PlironLoweringUnsupportedType,
+    /// An address space outside the scalar Pliron lowering vocabulary.
+    PlironLoweringUnsupportedAddressSpace,
+    /// A target policy outside the scalar Pliron lowering vocabulary.
+    PlironLoweringUnsupportedTargetPolicy,
 }
 
 /// A semantic that cannot yet be exercised through a current public API.
@@ -99,14 +107,12 @@ pub enum CoverageGapV1 {
     AtomicScopeRepresentation,
     /// Handoff V1 has no intrinsic declaration or call field.
     IntrinsicRepresentation,
-    /// The Pliron LLVM lane crate has no public lowering API at this revision.
-    PlironLoweringApiUnavailable,
 }
 
 /// The expected generic-CI disposition for one named case.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ConformanceExpectationV1 {
-    /// The public handoff V1 API represents and canonicalizes the property.
+    /// A public handoff or lane API represents and canonicalizes the property.
     Represented,
     /// The public handoff V1 API must return the named typed rejection.
     ExpectedRejection(ExpectedRejectionV1),
@@ -327,6 +333,30 @@ pub const GFX942_CONFORMANCE_CORPUS_V1: &[ConformanceCaseV1] = &[
         ConformanceSemanticV1::WorkerAdmissionLane,
         ExpectedRejectionV1::WorkerUnsupportedDeviceLibrary,
     ),
+    represented(
+        "lane.pliron-lowering.canonical-deterministic",
+        ConformanceSemanticV1::PlironLoweringLane,
+    ),
+    rejected(
+        "lane.pliron-lowering.unsupported-call",
+        ConformanceSemanticV1::PlironLoweringLane,
+        ExpectedRejectionV1::PlironLoweringUnsupportedCall,
+    ),
+    rejected(
+        "lane.pliron-lowering.unsupported-type",
+        ConformanceSemanticV1::PlironLoweringLane,
+        ExpectedRejectionV1::PlironLoweringUnsupportedType,
+    ),
+    rejected(
+        "lane.pliron-lowering.unsupported-address-space",
+        ConformanceSemanticV1::PlironLoweringLane,
+        ExpectedRejectionV1::PlironLoweringUnsupportedAddressSpace,
+    ),
+    rejected(
+        "lane.pliron-lowering.unsupported-target-policy",
+        ConformanceSemanticV1::PlironLoweringLane,
+        ExpectedRejectionV1::PlironLoweringUnsupportedTargetPolicy,
+    ),
     gap(
         "atomic.operation.unrepresented",
         ConformanceSemanticV1::AtomicOperation,
@@ -346,11 +376,6 @@ pub const GFX942_CONFORMANCE_CORPUS_V1: &[ConformanceCaseV1] = &[
         "intrinsic.unrepresented",
         ConformanceSemanticV1::Intrinsic,
         CoverageGapV1::IntrinsicRepresentation,
-    ),
-    gap(
-        "lane.pliron-lowering-api-unavailable",
-        ConformanceSemanticV1::PlironLoweringLane,
-        CoverageGapV1::PlironLoweringApiUnavailable,
     ),
 ];
 

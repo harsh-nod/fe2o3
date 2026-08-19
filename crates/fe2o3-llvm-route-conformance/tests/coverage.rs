@@ -59,11 +59,6 @@ fn unavailable_semantics_are_named_gaps_not_false_passes() {
             ConformanceSemanticV1::Intrinsic,
             CoverageGapV1::IntrinsicRepresentation,
         ),
-        (
-            "lane.pliron-lowering-api-unavailable",
-            ConformanceSemanticV1::PlironLoweringLane,
-            CoverageGapV1::PlironLoweringApiUnavailable,
-        ),
     ];
 
     for (name, semantic, gap) in expected {
@@ -96,5 +91,5 @@ fn represented_cases_are_only_handoff_representation_claims() {
         .filter(|case| matches!(case.expectation(), ConformanceExpectationV1::CoverageGap(_)))
         .count();
 
-    assert_eq!((represented, rejected, gaps), (10, 22, 5));
+    assert_eq!((represented, rejected, gaps), (11, 26, 4));
 }

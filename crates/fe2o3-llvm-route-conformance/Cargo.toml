@@ -10,6 +10,7 @@ readme = "README.md"
 publish = false
 
 [dependencies]
+fe2o3-amdgcn-model.workspace = true
 fe2o3-amdgcn-pliron-llvm.workspace = true
 fe2o3-llvm-handoff.workspace = true
 fe2o3-llvm-worker-handoff.workspace = true
