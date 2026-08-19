@@ -4,8 +4,8 @@ Status: upstream source audit at Pliron commit
 [`2610651306ea3ba670f68d5d8b1e1159bcd521ed`](https://github.com/pliron-org/pliron/tree/2610651306ea3ba670f68d5d8b1e1159bcd521ed),
 the commit published as `pliron`/`pliron-llvm` v0.17.0. fe2o3 implementation
 status includes one bounded backend-fixture-to-MI300X scalar closure at
-`fce35b087`, `8190f8ae0`, `ee581c3c2`, `41f78f414`, `ff8311fcf`, and
-`0fa9c6249`.
+`fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`, `62efd243e`, and
+`228c88ed9`.
 
 ## Scope and conclusion
 
@@ -48,16 +48,16 @@ upstream v0.17.0 has no lossless dialect representation for them. V2
 construction requires exact graph/sidecar agreement. The fixture is not Rust
 user source and does not demonstrate a Rust frontend-to-machine path.
 
-The graph-derived extractor (`81918dfa2`), V2 serializer (`db06813ef`), and
-attempt-scoped bridge (`17baa5b1f`) are implemented. The serializer produces
+The graph-derived extractor (`62e66209e`), V2 serializer (`3a3b43e90`), and
+attempt-scoped bridge (`cb571012f`) are implemented. The serializer produces
 deterministic bounded LLVM assembly and binds its digest to the source handoff
 identity. The bridge binds those bytes through the compiler handoff, symbol
 manifest, link plan, measured worker identity, and sealed Worker V2 request. It
 is inert and grants no object, link, publication, load, or launch authority.
-The closed route adds hardened Worker `fce35b087`, exact ELF and machine
-inspection `8190f8ae0`, measured-HSACO admission `ee581c3c2`, move-only Worker
-execution evidence `41f78f414`, dedicated repository-policy/finalizer/runtime
-join `ff8311fcf`, and alignment correction `0fa9c6249`. Existing low-level HSA
+The closed route adds hardened Worker `fd6520d88`, exact ELF and machine
+inspection `70f9c5ad7`, measured-HSACO admission `e016833d3`, move-only Worker
+execution evidence `c9e8ca702`, dedicated repository-policy/finalizer/runtime
+join `62efd243e`, and alignment correction `228c88ed9`. Existing low-level HSA
 adapters were reused, but a dedicated sealed consumer was required. The COV6
 descriptor reports a 280-byte kernarg segment (24 explicit plus 256 hidden)
 with alignment 8; ROCr reports runtime alignment 16, which the consumer

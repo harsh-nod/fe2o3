@@ -66,8 +66,8 @@ fixture is not Rust user source, so this is not Rust frontend or
 source-to-machine evidence. No COMGR or subprocess compiler/linker has artifact
 authority.
 
-The bounded closure comprises `fce35b087`, `8190f8ae0`, `ee581c3c2`,
-`41f78f414`, `ff8311fcf`, and alignment correction `0fa9c6249`. Together they
+The bounded closure comprises `fd6520d88`, `70f9c5ad7`, `e016833d3`,
+`c9e8ca702`, `62efd243e`, and alignment correction `228c88ed9`. Together they
 close the exact Worker machine-effect profile, structural ELF/descriptor/machine
 inspection, measured-HSACO gate, move-only execution custody, repository join,
 and sealed one-shot runtime consumption for this one scalar shape. The exact

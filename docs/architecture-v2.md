@@ -54,8 +54,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   These are representation and composition foundations. They are not connected
   to production compilation or persistent-service execution.
 - The selective scalar Pliron slice has a live graph-derived extractor
-  (`81918dfa2`), deterministic bounded LLVM-assembly serializer (`db06813ef`),
-  and inert attempt-scoped Worker V2 request bridge (`17baa5b1f`).
+  (`62e66209e`), deterministic bounded LLVM-assembly serializer (`3a3b43e90`),
+  and inert attempt-scoped Worker V2 request bridge (`cb571012f`).
   `pliron-llvm` v0.17.0 is used with
   `default-features = false` for its typed dialect only. The bridge binds the
   exact request but grants no object, link, publication, load, or launch
@@ -65,11 +65,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   validated V1 sidecar because upstream `pliron-llvm` does not represent those
   properties. The live graph supplies scalar operations, operands, results,
   types, and control flow; any graph/sidecar disagreement rejects.
-- The bounded scalar closure comprises hardened Worker profile `fce35b087`,
-  exact ELF and machine inspection `8190f8ae0`, measured-HSACO gate
-  `ee581c3c2`, move-only Worker execution evidence `41f78f414`, the dedicated
-  repository-policy/finalizer/runtime join `ff8311fcf`, and descriptor-versus-
-  runtime alignment correction `0fa9c6249`. The descriptor reports a 280-byte
+- The bounded scalar closure comprises hardened Worker profile `fd6520d88`,
+  exact ELF and machine inspection `70f9c5ad7`, measured-HSACO gate
+  `e016833d3`, move-only Worker execution evidence `c9e8ca702`, the dedicated
+  repository-policy/finalizer/runtime join `62efd243e`, and descriptor-versus-
+  runtime alignment correction `228c88ed9`. The descriptor reports a 280-byte
   COV6 kernarg segment with alignment 8; ROCr reports runtime alignment 16.
   The dedicated `fe2o3-pliron-scalar-add-v1` consumer uses the stricter runtime
   alignment and consumes the authorized execution once.
@@ -563,8 +563,8 @@ handoff and serializer. Neither the producer nor the worker invokes the
 target machine and its in-process LLD remain the sole machine-code and HSACO
 authority; the dialect layer must not invoke LLVM code generation, COMGR, or
 shell-mediated GPU linking. The bridge remains a non-authoritative request
-binder. Commits `fce35b087`, `8190f8ae0`, `ee581c3c2`, `41f78f414`,
-`ff8311fcf`, and `0fa9c6249` close one exact scalar backend-fixture route
+binder. Commits `fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`,
+`62efd243e`, and `228c88ed9` close one exact scalar backend-fixture route
 through MI300X load, dispatch, wait, and unload. Its checkout policy and marker
 are not externally authenticated, and the result makes no CUDA-Oxide parity,
 general memory-safety, or race-freedom claim.

@@ -55,11 +55,11 @@ source and this checkpoint does not establish a Rust-source frontend or
 source-to-machine refinement proof. No COMGR or subprocess compiler/linker has
 artifact authority on this route.
 
-The closure landed in `fce35b087` (exact Worker machine effects), `8190f8ae0`
-(structural ELF, descriptor, and decoded-machine inspection), `ee581c3c2`
-(measured-HSACO gate), `41f78f414` (move-only Worker execution evidence),
-`ff8311fcf` (repository policy, finalizer join, and sealed one-shot HSA
-consumer), and `0fa9c6249` (descriptor-versus-runtime kernarg alignment). The
+The closure landed in `fd6520d88` (exact Worker machine effects), `70f9c5ad7`
+(structural ELF, descriptor, and decoded-machine inspection), `e016833d3`
+(measured-HSACO gate), `c9e8ca702` (move-only Worker execution evidence),
+`62efd243e` (repository policy, finalizer join, and sealed one-shot HSA
+consumer), and `228c88ed9` (descriptor-versus-runtime kernarg alignment). The
 code target is exactly `gfx942:xnack-`; the qualifying MI300X reported
 `gfx942:sramecc+:xnack-`. The repository pins Worker executable SHA-256
 `8576808284ea9dc56fcf075ebcf0a97410302b76f34e1090b2ea6d15e9f3340a`,

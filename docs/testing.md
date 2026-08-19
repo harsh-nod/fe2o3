@@ -237,8 +237,8 @@ execution.
 
 ## Bounded Pliron scalar-add MI300X slice
 
-Commits `fce35b087`, `8190f8ae0`, `ee581c3c2`, `41f78f414`, `ff8311fcf`, and
-`0fa9c6249` close one exact backend-fixture-to-MI300X scalar-add route. The code
+Commits `fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`, `62efd243e`, and
+`228c88ed9` close one exact backend-fixture-to-MI300X scalar-add route. The code
 target is `gfx942:xnack-`; the qualifying device reports
 `gfx942:sramecc+:xnack-`. The backend fixture is not Rust user source. Run the
 ignored test on `mi300x` with the exact qualified files and lane variables:

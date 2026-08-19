@@ -2,8 +2,8 @@
 
 Status: normative architecture decision for issue
 [#134](https://github.com/harsh-nod/fe2o3/issues/134) Wave 0, updated through
-the bounded scalar closure at `fce35b087`, `8190f8ae0`, `ee581c3c2`,
-`41f78f414`, `ff8311fcf`, and `0fa9c6249`. Issue #134 remains open. The current
+the bounded scalar closure at `fd6520d88`, `70f9c5ad7`, `e016833d3`,
+`c9e8ca702`, `62efd243e`, and `228c88ed9`. Issue #134 remains open. The current
 repository implements bounded contracts, representation shells, and one exact
 backend-fixture-to-MI300X scalar route described below. The repository does not
 implement the complete Pliron pipeline, general Rust-source lowering, proof
@@ -131,11 +131,11 @@ The following infrastructure is implemented:
   attempt-scoped compiler handoff into a sealed Worker V2 request. This record
   is inert: it authenticates no compiler executable and grants no worker,
   object, link, publication, load, or launch authority.
-- The graph-derived extractor (`81918dfa2`), serializer (`db06813ef`), bridge
-  (`17baa5b1f`), hardened Worker (`fce35b087`), exact inspector (`8190f8ae0`),
-  measured-HSACO gate (`ee581c3c2`), move-only execution evidence
-  (`41f78f414`), sealed join (`ff8311fcf`), and runtime-alignment correction
-  (`0fa9c6249`) are implemented.
+- The graph-derived extractor (`62e66209e`), serializer (`3a3b43e90`), bridge
+  (`cb571012f`), hardened Worker (`fd6520d88`), exact inspector (`70f9c5ad7`),
+  measured-HSACO gate (`e016833d3`), move-only execution evidence
+  (`c9e8ca702`), sealed join (`62efd243e`), and runtime-alignment correction
+  (`228c88ed9`) are implemented.
 - `fe2o3-pliron-scalar-add-v1` is the dedicated join crate for this exact
   profile. It combines compile-time checkout policy, finalization, and a sealed
   one-shot HSA consumer; it is not a general backend, approval service, or

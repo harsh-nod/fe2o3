@@ -86,12 +86,12 @@ general device path in the diagram.
 The working compiler remains the existing `rustc-codegen-fe2o3` composition,
 including the default legacy recognizer and bounded opt-in Kernel IR routes.
 The closed scalar slice now uses dialect-only `pliron-llvm` with
-`default-features = false`. Live graph-derived extraction (`81918dfa2`),
-deterministic bounded LLVM assembly (`db06813ef`), the inert attempt-scoped
-request bridge (`17baa5b1f`), hardened Worker (`fce35b087`), exact inspector
-(`8190f8ae0`), measured-HSACO gate (`ee581c3c2`), move-only custody
-(`41f78f414`), sealed join (`ff8311fcf`), and runtime-alignment correction
-(`0fa9c6249`) are implemented. The bridge remains non-authoritative. The
+`default-features = false`. Live graph-derived extraction (`62e66209e`),
+deterministic bounded LLVM assembly (`3a3b43e90`), the inert attempt-scoped
+request bridge (`cb571012f`), hardened Worker (`fd6520d88`), exact inspector
+(`70f9c5ad7`), measured-HSACO gate (`e016833d3`), move-only custody
+(`c9e8ca702`), sealed join (`62efd243e`), and runtime-alignment correction
+(`228c88ed9`) are implemented. The bridge remains non-authoritative. The
 dedicated join crate consumes one authorized execution and requires ROCr's
 runtime kernarg alignment 16 even though the COV6 descriptor records alignment
 8 for its 280-byte 24+256 layout.

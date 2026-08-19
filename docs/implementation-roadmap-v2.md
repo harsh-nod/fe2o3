@@ -54,12 +54,12 @@ but both issues remain open.
   that general route.
 - The graph pins dialect-only `pliron-llvm` with
   `default-features = false`. The bounded scalar slice has live graph-derived
-  V2 extraction (`81918dfa2`), deterministic bounded LLVM assembly
-  (`db06813ef`), an inert attempt-scoped request bridge (`17baa5b1f`), and an
-  exact closed execution route: hardened Worker `fce35b087`, exact ELF and
-  machine inspector `8190f8ae0`, measured-HSACO gate `ee581c3c2`, move-only
-  Worker evidence `41f78f414`, sealed finalizer/runtime join `ff8311fcf`, and
-  runtime-alignment correction `0fa9c6249`. The bridge grants no
+  V2 extraction (`62e66209e`), deterministic bounded LLVM assembly
+  (`3a3b43e90`), an inert attempt-scoped request bridge (`cb571012f`), and an
+  exact closed execution route: hardened Worker `fd6520d88`, exact ELF and
+  machine inspector `70f9c5ad7`, measured-HSACO gate `e016833d3`, move-only
+  Worker evidence `c9e8ca702`, sealed finalizer/runtime join `62efd243e`, and
+  runtime-alignment correction `228c88ed9`. The bridge grants no
   artifact/runtime authority by itself.
 - `fe2o3-service-host` consumes the service and host models through
   authority-free, borrow-retaining typestates. It has no HSA/HIP handles and
