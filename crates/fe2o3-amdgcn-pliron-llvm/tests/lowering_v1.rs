@@ -12,7 +12,7 @@ use fe2o3_amdgcn_pliron_llvm::{
 use fe2o3_llvm_handoff::{
     FunctionAttributeV1, GFX942_AMDHSA_DATA_LAYOUT_V1, GFX942_AMDHSA_TARGET_TRIPLE_V1, IdentityV1,
     ModuleFlagV1, NamedMetadataV1, ObligationKindV1, OriginKindV1, ParameterAttributeV1,
-    ScalarTypeV1, StageIdentitiesV1, TargetFeatureV1, WavesPerEuV1,
+    ScalarTypeV1, StageIdentitiesV1, TargetFeatureV1, WavesPerEuV1, WorkgroupSizeRangeV1,
 };
 
 fn request() -> ScalarKernelModuleV1 {
@@ -184,6 +184,18 @@ fn support_matrix_is_explicit_for_every_policy_dimension() {
         SupportStatusV1::Rejected
     );
     assert_eq!(
+        SUPPORT_MATRIX_V1.function_attribute(FunctionAttributeV1::FlatWorkgroupSize(
+            WorkgroupSizeRangeV1::new(1, 64).unwrap(),
+        )),
+        SupportStatusV1::Supported
+    );
+    assert_eq!(
+        SUPPORT_MATRIX_V1.function_attribute(FunctionAttributeV1::FlatWorkgroupSize(
+            WorkgroupSizeRangeV1::new(64, 64).unwrap(),
+        )),
+        SupportStatusV1::Rejected
+    );
+    assert_eq!(
         SUPPORT_MATRIX_V1.parameter_attribute(ParameterAttributeV1::NoAlias),
         SupportStatusV1::Rejected
     );
@@ -274,6 +286,21 @@ fn hostile_function_and_parameter_attributes_are_rejected_by_name() {
     assert_rejected(
         &function,
         LoweringDiagnosticV1::UnsupportedFunctionAttribute(FunctionAttributeKindV1::WavesPerEu),
+    );
+
+    let mut workgroup = request();
+    let flat_workgroup = workgroup
+        .function_attributes
+        .iter_mut()
+        .find(|attribute| matches!(attribute, FunctionAttributeV1::FlatWorkgroupSize(_)))
+        .unwrap();
+    *flat_workgroup =
+        FunctionAttributeV1::FlatWorkgroupSize(WorkgroupSizeRangeV1::new(64, 64).unwrap());
+    assert_rejected(
+        &workgroup,
+        LoweringDiagnosticV1::UnsupportedFunctionAttribute(
+            FunctionAttributeKindV1::FlatWorkgroupSize,
+        ),
     );
 
     let mut parameter = request();

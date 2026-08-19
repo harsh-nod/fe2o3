@@ -419,7 +419,7 @@ impl SupportMatrixV1 {
             | FunctionAttributeV1::ApproxFuncFpMathDisabled
             | FunctionAttributeV1::FpContractOff => SupportStatusV1::Supported,
             FunctionAttributeV1::FlatWorkgroupSize(range)
-                if range.minimum() == 64 && range.maximum() == 64 =>
+                if range.minimum() == 1 && range.maximum() == 64 =>
             {
                 SupportStatusV1::Supported
             }
@@ -535,8 +535,8 @@ impl ScalarKernelModuleV1 {
         origin_source_identity: IdentityV1,
         stage_identities: StageIdentitiesV1,
     ) -> Self {
-        let workgroup =
-            WorkgroupSizeRangeV1::new(64, 64).expect("the static wave64 workgroup range is valid");
+        let workgroup = WorkgroupSizeRangeV1::new(1, 64)
+            .expect("the static scalar-kernel workgroup range is valid");
         Self {
             module_name: module_name.into(),
             kernel_symbol: kernel_symbol.into(),
