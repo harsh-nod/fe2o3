@@ -5,6 +5,7 @@ use fe2o3_aql::{
     AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
     AmdBusyCompletionSignalV1, AqlAddressObservationError, AqlCompletionObservationV1,
     AqlDispatchGeometryV1, AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
+    AqlRingCapacityError, AqlRingCapacityV1, AqlRingCounterSnapshotV1, AqlRingReservationError,
     ObservedGpuAddressV1,
 };
 use sha2::{Digest, Sha256};
@@ -135,6 +136,78 @@ fn busy_signal_starts_pending() {
         signal.observe_acquire(),
         AqlCompletionObservationV1::Pending
     );
+}
+
+#[test]
+fn ring_capacity_and_reservation_are_exact() {
+    assert_eq!(
+        AqlRingCapacityV1::from_ring_bytes(2048),
+        Err(AqlRingCapacityError::BelowMinimum)
+    );
+    assert_eq!(
+        AqlRingCapacityV1::from_ring_bytes(6144),
+        Err(AqlRingCapacityError::NotPowerOfTwo)
+    );
+    let capacity = AqlRingCapacityV1::from_ring_bytes(4096).unwrap();
+    assert_eq!(capacity.packets(), 64);
+    let reservation = AqlRingCounterSnapshotV1::new(65, 64)
+        .reserve_one(capacity)
+        .unwrap();
+    assert_eq!(reservation.packet_id(), 65);
+    assert_eq!(reservation.slot_index(), 1);
+    assert_eq!(reservation.observed_read(), 64);
+    assert_eq!(reservation.next_write(), 66);
+}
+
+#[test]
+fn ring_reservation_fails_closed_on_counter_anomalies() {
+    let capacity = AqlRingCapacityV1::from_ring_bytes(4096).unwrap();
+    assert_eq!(
+        AqlRingCounterSnapshotV1::new(1, 2).reserve_one(capacity),
+        Err(AqlRingReservationError::ReadAfterWrite)
+    );
+    assert_eq!(
+        AqlRingCounterSnapshotV1::new(65, 0).reserve_one(capacity),
+        Err(AqlRingReservationError::CounterDistanceExceedsCapacity)
+    );
+    assert_eq!(
+        AqlRingCounterSnapshotV1::new(64, 0).reserve_one(capacity),
+        Err(AqlRingReservationError::Full)
+    );
+    assert_eq!(
+        AqlRingCounterSnapshotV1::new(u64::MAX, u64::MAX).reserve_one(capacity),
+        Err(AqlRingReservationError::WriteCounterExhausted)
+    );
+}
+
+#[test]
+fn a_full_window_uses_each_slot_once() {
+    let capacity = AqlRingCapacityV1::from_ring_bytes(4096).unwrap();
+    for write in 0_u64..64 {
+        let reservation = AqlRingCounterSnapshotV1::new(write, 0)
+            .reserve_one(capacity)
+            .unwrap();
+        assert_eq!(reservation.slot_index(), write as u32);
+    }
+    assert_eq!(
+        AqlRingCounterSnapshotV1::new(64, 0).reserve_one(capacity),
+        Err(AqlRingReservationError::Full)
+    );
+}
+
+#[test]
+fn one_hundred_thousand_completed_reservations_wrap_slots_exactly() {
+    let capacity = AqlRingCapacityV1::from_ring_bytes(4096).unwrap();
+    let mut write = 0_u64;
+    for expected in 0_u64..100_000 {
+        let reservation = AqlRingCounterSnapshotV1::new(write, write)
+            .reserve_one(capacity)
+            .unwrap();
+        assert_eq!(reservation.packet_id(), expected);
+        assert_eq!(reservation.slot_index(), (expected & 63) as u32);
+        write = reservation.next_write();
+    }
+    assert_eq!(write, 100_000);
 }
 
 fn hex(bytes: &[u8]) -> String {

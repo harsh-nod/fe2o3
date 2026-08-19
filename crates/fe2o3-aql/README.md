@@ -9,6 +9,7 @@ It provides:
 - bounded one-, two-, and three-dimensional dispatch geometry;
 - the exact unpublished 64-byte kernel-dispatch packet layout;
 - the system-scoped header/setup publication word;
+- checked monotonic single-producer reservation arithmetic and slot wrapping;
 - the exact 64-byte, 64-aligned busy-wait completion signal initialized to one;
 - typed numeric address observations with the required descriptor, kernarg,
   and signal alignment checks;
@@ -20,6 +21,11 @@ not reserve a ring slot, copy a packet, perform the release atomic publication,
 map or store a doorbell, poll with a timeout, create or destroy a queue, or
 establish hardware completion. Those operations require the KFD memory and
 queue authority layers.
+
+The arithmetic reservation type is not a native ring lease. A later queue
+authority layer must acquire the read pointer, serialize the producer, retain
+the memory publication, copy the packet body, release-publish the header,
+advance the write pointer, and ring the exact admitted doorbell in that order.
 
 GPU writes to the signal value and their visibility to a Rust atomic load are
 contracted platform/coherency facts. Rust's language memory model alone does
