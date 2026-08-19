@@ -93,8 +93,20 @@ numeric_identity!(
     AllocationIdV1
 );
 numeric_identity!(
+    /// Monotonic incarnation of one allocation identity within an exact VM.
+    AllocationGenerationV1
+);
+numeric_identity!(
+    /// Process-lifetime GPU virtual-address reservation identity.
+    VaReservationIdV1
+);
+numeric_identity!(
     /// GPU virtual mapping identity.
     MappingIdV1
+);
+numeric_identity!(
+    /// Identity of one model publication retaining a mapping.
+    MemoryPublicationIdV1
 );
 numeric_identity!(
     /// Loaded code identity.
