@@ -432,14 +432,10 @@ fn extract_function<'tcx>(
             .unwrap_or(terminator.source_info.span);
         let block_location =
             source_location(tcx, &function_name, primary_span, Some(fallback_span))?;
-        let successors = terminator
-            .successors()
-            .map(|successor| successor.as_usize())
-            .collect::<BTreeSet<_>>();
-        check_bound(
-            "CFG block successors",
-            successors.len(),
-            MAX_SUCCESSORS_PER_BLOCK_V1,
+        let successors = collect_bounded_cfg_successors(
+            terminator
+                .successors()
+                .map(|successor| successor.as_usize()),
         )?;
         let successors = successors
             .into_iter()
@@ -476,6 +472,35 @@ fn extract_function<'tcx>(
         blocks,
     )
     .map_err(Into::into)
+}
+
+fn collect_bounded_cfg_successors(
+    successors: impl IntoIterator<Item = usize>,
+) -> Result<BTreeSet<usize>, FrontendRecordBridgeError> {
+    let mut successor_work = 0_usize;
+    let mut collected = BTreeSet::new();
+    for successor in successors {
+        successor_work =
+            successor_work
+                .checked_add(1)
+                .ok_or(FrontendRecordBridgeError::IntegerOverflow {
+                    field: "CFG successor work",
+                })?;
+        check_bound(
+            "CFG successor work",
+            successor_work,
+            MAX_SUCCESSORS_PER_BLOCK_V1,
+        )?;
+        if !collected.contains(&successor) && collected.len() >= MAX_SUCCESSORS_PER_BLOCK_V1 {
+            return Err(FrontendRecordBridgeError::BoundExceeded {
+                field: "CFG block successors",
+                actual: collected.len().saturating_add(1),
+                max: MAX_SUCCESSORS_PER_BLOCK_V1,
+            });
+        }
+        collected.insert(successor);
+    }
+    Ok(collected)
 }
 
 fn extract_signature<'tcx>(
@@ -685,6 +710,20 @@ fn kernel(value: u32) -> u32 {
 "#;
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn successor_work_bound_counts_duplicates_before_insertion() {
+        let actual = MAX_SUCCESSORS_PER_BLOCK_V1 + 1;
+        let error = collect_bounded_cfg_successors(std::iter::repeat_n(7, actual)).unwrap_err();
+        assert_eq!(
+            error,
+            FrontendRecordBridgeError::BoundExceeded {
+                field: "CFG successor work",
+                actual,
+                max: MAX_SUCCESSORS_PER_BLOCK_V1,
+            }
+        );
+    }
 
     #[derive(Debug)]
     struct DriverResults {

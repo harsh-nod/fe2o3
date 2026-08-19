@@ -744,7 +744,7 @@ fn capture_in_session<'tcx>(
     let mut total_calls = 0_usize;
     let mut observations = Vec::with_capacity(drafts.len());
     for draft in &drafts {
-        let calls = direct_calls(tcx, draft.instance, draft.body, &drafts)?;
+        let calls = direct_calls(tcx, draft.instance, draft.body, &drafts, total_calls)?;
         total_calls =
             total_calls
                 .checked_add(calls.len())
@@ -1010,14 +1010,21 @@ fn frontend_function<'tcx>(
             .terminator
             .as_ref()
             .ok_or(SameSessionRustcErrorV1::MissingTerminator)?;
-        let successor_count = terminator.successors().count();
-        if successor_count > MAX_IMPORTED_MIR_SUCCESSORS {
-            return Err(SameSessionRustcErrorV1::MirSuccessorBound);
+        let mut successor_work = 0_usize;
+        let mut successors = BTreeSet::new();
+        for successor in terminator.successors() {
+            successor_work = successor_work
+                .checked_add(1)
+                .ok_or(SameSessionRustcErrorV1::MirSuccessorBound)?;
+            if successor_work > MAX_IMPORTED_MIR_SUCCESSORS {
+                return Err(SameSessionRustcErrorV1::MirSuccessorBound);
+            }
+            let successor = successor.as_usize();
+            if !successors.contains(&successor) && successors.len() >= MAX_IMPORTED_MIR_SUCCESSORS {
+                return Err(SameSessionRustcErrorV1::MirSuccessorBound);
+            }
+            successors.insert(successor);
         }
-        let successors = terminator
-            .successors()
-            .map(|successor| successor.as_usize())
-            .collect::<BTreeSet<_>>();
         edge_count = edge_count
             .checked_add(successors.len())
             .ok_or(SameSessionRustcErrorV1::MirSuccessorBound)?;
@@ -1154,12 +1161,16 @@ fn ordered_semantic_blocks<'tcx>(
                 SameSessionRustcErrorV1::InvalidTypedObservation("MIR terminator ordinal overflow")
             })?;
             let kind = semantic_terminator_kind(&terminator.kind);
-            let successor_count = terminator.successors().count();
-            if successor_count > MAX_IMPORTED_MIR_SUCCESSORS {
-                return Err(SameSessionRustcErrorV1::MirSuccessorBound);
-            }
-            let mut successors = Vec::with_capacity(successor_count);
+            let successor_capacity = terminator
+                .successors()
+                .size_hint()
+                .0
+                .min(MAX_IMPORTED_MIR_SUCCESSORS);
+            let mut successors = Vec::with_capacity(successor_capacity);
             for successor in terminator.successors() {
+                if successors.len() >= MAX_IMPORTED_MIR_SUCCESSORS {
+                    return Err(SameSessionRustcErrorV1::MirSuccessorBound);
+                }
                 successors.push(u32::try_from(successor.as_usize()).map_err(|_| {
                     SameSessionRustcErrorV1::InvalidTypedObservation("MIR successor index overflow")
                 })?);
@@ -1488,8 +1499,16 @@ fn direct_calls<'tcx>(
     caller: Instance<'tcx>,
     body: &Body<'tcx>,
     drafts: &[FunctionDraftV1<'tcx>],
+    observed_calls: usize,
 ) -> Result<Vec<DirectCallObservationV1>, SameSessionRustcErrorV1> {
-    let mut calls = Vec::new();
+    let remaining_calls =
+        MAX_CALLS
+            .checked_sub(observed_calls)
+            .ok_or(SameSessionRustcErrorV1::CallBound {
+                actual: observed_calls,
+                maximum: MAX_CALLS,
+            })?;
+    let mut calls = Vec::with_capacity(body.basic_blocks.len().min(remaining_calls));
     for block in body.basic_blocks.iter() {
         let terminator = block
             .terminator
@@ -1516,12 +1535,30 @@ fn direct_calls<'tcx>(
             .iter()
             .find(|draft| draft.instance == resolved)
             .ok_or(SameSessionRustcErrorV1::UnknownCallee)?;
+        ensure_call_push_within_bound(observed_calls, calls.len())?;
         calls.push(DirectCallObservationV1::new(
             callee.monomorphization,
             source_span(tcx, terminator.source_info.span)?,
         ));
     }
     Ok(calls)
+}
+
+fn ensure_call_push_within_bound(
+    observed_calls: usize,
+    pending_calls: usize,
+) -> Result<(), SameSessionRustcErrorV1> {
+    let actual = observed_calls
+        .checked_add(pending_calls)
+        .and_then(|value| value.checked_add(1))
+        .unwrap_or(usize::MAX);
+    if actual > MAX_CALLS {
+        return Err(SameSessionRustcErrorV1::CallBound {
+            actual,
+            maximum: MAX_CALLS,
+        });
+    }
+    Ok(())
 }
 
 fn source_location(

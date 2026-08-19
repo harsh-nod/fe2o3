@@ -520,3 +520,17 @@ fn rejects_every_session_custody_substitution_axis() {
         SameSessionRustcErrorV1::StaleCustodian
     ));
 }
+
+#[test]
+fn direct_call_bound_rejects_the_next_record_before_push() {
+    assert!(matches!(
+        ensure_call_push_within_bound(MAX_CALLS, 0),
+        Err(SameSessionRustcErrorV1::CallBound { actual, maximum })
+            if actual == MAX_CALLS + 1 && maximum == MAX_CALLS
+    ));
+    assert!(matches!(
+        ensure_call_push_within_bound(0, MAX_CALLS),
+        Err(SameSessionRustcErrorV1::CallBound { actual, maximum })
+            if actual == MAX_CALLS + 1 && maximum == MAX_CALLS
+    ));
+}
