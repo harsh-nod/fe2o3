@@ -51,6 +51,7 @@ pub const REQUIRED_MI300X_PHYSICAL_DEVICE_IDENTITY_V1: [u8; 16] = [
 const GRID: [u32; 3] = [1, 1, 1];
 const WORKGROUP: [u32; 3] = [1, 1, 1];
 const DYNAMIC_LDS_BYTES: u32 = 0;
+const REQUIRED_RUNTIME_KERNARG_ALIGNMENT: u64 = 16;
 const CANARY_ELEMENTS: usize = 32;
 const INPUT_VALUE: f32 = 1.25;
 const ADDEND: f32 = 2.5;
@@ -99,7 +100,7 @@ pub enum RuntimeObservationFieldV1 {
     KernelIdentity,
     /// Runtime-reported kernarg size was not exactly 280 bytes.
     KernargSize,
-    /// Runtime-reported kernarg alignment was not exactly 8 bytes.
+    /// Runtime-reported kernarg alignment was not exactly 16 bytes.
     KernargAlignment,
     /// Runtime-reported static group segment was not exactly zero.
     StaticGroupSegment,
@@ -377,7 +378,7 @@ impl RuntimeEvidenceV1 {
     /// attestation. External acceptance must authenticate the producing job.
     pub fn success_marker_v1(&self) -> String {
         format!(
-            "{SUCCESS_MARKER_V1} evidence={} finalization={} lineage={} approval={} observation={} load_sha256={} load_bytes={} runtime={} runtime_version={REQUIRED_RUNTIME_VERSION} runtime_image_sha256={} device={} target={REQUIRED_OBSERVED_TARGET} agent={:016x} executable={} kernel={} dispatch={} kernarg_sha256={} kernarg={},{},{},{} segments={},{},{} grid={},{},{} workgroup={},{},{} input_sha256={} output_sha256={} output_bits={:08x} unload_runtime={} unload_agent={:016x} unload_executable={} unload_released={} device_validation={DEVICE_VALIDATION_SCOPE_V1}",
+            "{SUCCESS_MARKER_V1} evidence={} finalization={} lineage={} approval={} observation={} load_sha256={} load_bytes={} runtime={} runtime_version={REQUIRED_RUNTIME_VERSION} runtime_image_sha256={} device={} target={REQUIRED_OBSERVED_TARGET} agent={:016x} executable={} kernel={} dispatch={} kernarg_sha256={} kernarg={},{},{},{},{} segments={},{},{} grid={},{},{} workgroup={},{},{} input_sha256={} output_sha256={} output_bits={:08x} unload_runtime={} unload_agent={:016x} unload_executable={} unload_released={} device_validation={DEVICE_VALIDATION_SCOPE_V1}",
             hex_bytes(self.identity.as_bytes()),
             hex_bytes(self.finalization.as_bytes()),
             hex_bytes(self.lineage.as_bytes()),
@@ -396,6 +397,7 @@ impl RuntimeEvidenceV1 {
             self.explicit_kernarg_bytes,
             self.implicit_kernarg_bytes,
             self.kernarg_size,
+            PLIRON_SCALAR_ADD_V1_KERNARG_ALIGNMENT,
             self.kernarg_alignment,
             self.static_group_segment,
             self.private_segment,
@@ -439,7 +441,7 @@ impl RuntimeEvidenceV1 {
     }
 }
 
-#[repr(align(8))]
+#[repr(align(16))]
 struct AlignedKernarg([u8; PLIRON_SCALAR_ADD_V1_KERNARG_BYTES as usize]);
 
 #[derive(Clone, Copy)]
@@ -979,7 +981,7 @@ fn validate_kernel(
             RuntimeObservationFieldV1::KernargSize,
         ));
     }
-    if facts.kernarg_alignment != PLIRON_SCALAR_ADD_V1_KERNARG_ALIGNMENT {
+    if facts.kernarg_alignment != REQUIRED_RUNTIME_KERNARG_ALIGNMENT {
         return Err(RuntimeExecutionErrorV1::Observation(
             RuntimeObservationFieldV1::KernargAlignment,
         ));
@@ -1148,6 +1150,7 @@ fn calculate_runtime_evidence_identity(
     digest.update(facts.dispatch);
     digest.update(facts.kernarg_sha256);
     digest.update(facts.kernarg_size.to_le_bytes());
+    digest.update(PLIRON_SCALAR_ADD_V1_KERNARG_ALIGNMENT.to_le_bytes());
     digest.update(facts.kernarg_alignment.to_le_bytes());
     digest.update(facts.explicit_kernarg_bytes.to_le_bytes());
     digest.update(facts.implicit_kernarg_bytes.to_le_bytes());
@@ -1231,7 +1234,7 @@ fn parse_success_marker_v1(
         marker_value(&tokens, 17, "kernarg_sha256")?,
         "kernarg_sha256",
     )?;
-    if marker_value(&tokens, 18, "kernarg")? != "24,256,280,8" {
+    if marker_value(&tokens, 18, "kernarg")? != "24,256,280,8,16" {
         return Err(RuntimeEvidenceMarkerErrorV1::Field("kernarg"));
     }
     if marker_value(&tokens, 19, "segments")? != "0,0,0" {
@@ -1300,7 +1303,7 @@ fn parse_success_marker_v1(
         dispatch,
         kernarg_sha256,
         kernarg_size: PLIRON_SCALAR_ADD_V1_KERNARG_BYTES,
-        kernarg_alignment: PLIRON_SCALAR_ADD_V1_KERNARG_ALIGNMENT,
+        kernarg_alignment: REQUIRED_RUNTIME_KERNARG_ALIGNMENT,
         explicit_kernarg_bytes: PLIRON_SCALAR_ADD_V1_EXPLICIT_KERNARG_BYTES,
         implicit_kernarg_bytes: PLIRON_SCALAR_ADD_V1_IMPLICIT_KERNARG_BYTES,
         static_group_segment: 0,
@@ -1426,7 +1429,7 @@ mod tests {
             kernel: [2; 32],
             symbol_is_exact: true,
             kernarg_size: 280,
-            kernarg_alignment: 8,
+            kernarg_alignment: REQUIRED_RUNTIME_KERNARG_ALIGNMENT,
             static_group_segment: 0,
             private_segment: 0,
             resource_observation_is_exact: true,
@@ -1460,7 +1463,7 @@ mod tests {
             dispatch: [10; 16],
             kernarg_sha256: [13; 32],
             kernarg_size: PLIRON_SCALAR_ADD_V1_KERNARG_BYTES,
-            kernarg_alignment: PLIRON_SCALAR_ADD_V1_KERNARG_ALIGNMENT,
+            kernarg_alignment: REQUIRED_RUNTIME_KERNARG_ALIGNMENT,
             explicit_kernarg_bytes: PLIRON_SCALAR_ADD_V1_EXPLICIT_KERNARG_BYTES,
             implicit_kernarg_bytes: PLIRON_SCALAR_ADD_V1_IMPLICIT_KERNARG_BYTES,
             static_group_segment: 0,
@@ -1623,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_kernel_contract_accepts_only_280_bytes_aligned_to_eight() {
+    fn exact_kernel_contract_accepts_only_280_bytes_aligned_to_sixteen() {
         validate_kernel(kernel_facts(), [1; 32]).unwrap();
         for size in [279, 281] {
             let mut facts = kernel_facts();
@@ -1635,7 +1638,7 @@ mod tests {
                 ))
             ));
         }
-        for alignment in [1, 4, 16] {
+        for alignment in [1, 4, 8, 32] {
             let mut facts = kernel_facts();
             facts.kernarg_alignment = alignment;
             assert!(matches!(
@@ -1819,8 +1822,14 @@ mod tests {
                 0x64, 0x5b,
             ]
         );
-        assert_eq!(core::mem::align_of::<AlignedKernarg>(), 8);
-        assert_eq!(core::mem::size_of::<AlignedKernarg>(), 280);
+        assert_eq!(core::mem::align_of::<AlignedKernarg>(), 16);
+        assert_eq!(core::mem::size_of::<AlignedKernarg>(), 288);
+        assert_eq!(
+            AlignedKernarg([0; PLIRON_SCALAR_ADD_V1_KERNARG_BYTES as usize])
+                .0
+                .len(),
+            280
+        );
         assert_eq!(PLIRON_SCALAR_ADD_V1_EXPLICIT_KERNARG_BYTES, 24);
         assert_eq!(PLIRON_SCALAR_ADD_V1_IMPLICIT_KERNARG_BYTES, 256);
         assert_eq!(

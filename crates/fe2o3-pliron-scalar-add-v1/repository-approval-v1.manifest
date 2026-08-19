@@ -36,6 +36,7 @@ kernarg_explicit=24
 kernarg_implicit=256
 kernarg_total=280
 kernarg_alignment=8
+runtime_kernarg_alignment=16
 grid=1,1,1
 workgroup=1,1,1
 dynamic_lds=0
