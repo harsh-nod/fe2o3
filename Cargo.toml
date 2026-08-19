@@ -73,6 +73,7 @@ fe2o3-device = { path = "crates/fe2o3-device" }
 fe2o3-differential = { path = "crates/fe2o3-differential" }
 fe2o3-drm-uapi = { path = "crates/fe2o3-drm-uapi" }
 fe2o3-external-anchor-protocol = { path = "crates/fe2o3-external-anchor-protocol" }
+fe2o3-general-gemm-compiler = { path = "crates/fe2o3-general-gemm-compiler" }
 fe2o3-hip-sys = { path = "crates/fe2o3-hip-sys" }
 fe2o3-hsaco = { path = "crates/fe2o3-hsaco" }
 fe2o3-hsaco-finalize = { path = "crates/fe2o3-hsaco-finalize" }

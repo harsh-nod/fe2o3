@@ -848,6 +848,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-general-gemm-compiler"
+version = "0.1.0"
+dependencies = [
+ "dialect-gpu",
+ "dialect-kernel",
+ "dialect-schedule",
+ "dialect-tile",
+ "fe2o3-compiler-api",
+ "fe2o3-compiler-driver",
+ "fe2o3-compiler-ffi",
+ "fe2o3-kernel-ir",
+ "fe2o3-llvm-handoff",
+ "fe2o3-llvm-text",
+ "fe2o3-pliron",
+ "pliron",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-half-math-compiler-fixture"
 version = "0.0.0"
 dependencies = [
