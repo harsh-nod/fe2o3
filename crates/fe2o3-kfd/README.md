@@ -97,3 +97,51 @@ evidence schema, CI separation, and limitations are documented in
 The evidence marks contracted currentness and the VRAM-loss counter as
 pure-Rust-only observations; neither is represented as an HSA differential
 match.
+
+## R2 host-visible memory slice
+
+CheckedGfx942XnackMinusDevice::acquire_host_visible_memory_session consumes
+the selected device and makes one irreversible ACQUIRE_VM attempt for the
+process. A successful HostVisibleMemorySession owns the retained KFD/render
+files and admits one ordinary, single-device, host-visible coherent GTT
+allocation. The adapter rounds a nonzero requested length to a checked
+4096-byte footprint, obtains a temporary anonymous address reservation, checks
+the entire half-open interval against the selected process GPUVM aperture, and
+passes that fixed GPU VA to ALLOC_MEMORY_OF_GPU. It rejects any mutation of
+the input fields, zero handle/offset, unaligned offset, overflow, or profile
+flag mismatch.
+
+GPU VA, the opaque allocation handle, and the CPU VMA remain separate private
+authorities. After successful ALLOC, the temporary address reservation is
+unmapped. The BO is then mapped through the retained selected render file at a
+kernel-selected CPU address with MAP_SHARED; MADV_DONTFORK must succeed
+before a safe closure-scoped byte borrow can be formed. Every borrow rechecks
+the opener PID, and CPU borrows are unavailable while the BO is mapped to the
+GPU. No pointer, GPU VA, handle, or descriptor is exported.
+
+MAP and UNMAP always use an immutable one-element `[selected_gpu_id]` array.
+The returned n_success is cumulative and must satisfy old <= new <= 1.
+Only ioctl success plus the full prefix commits a phase transition. An errno
+with n_success == 1, malformed output, or a failed currentness check after
+any mutation permanently quarantines the session. Cleanup requires successful
+UNMAP, then CPU munmap, then exactly one FREE attempt. Any FREE error is
+terminal because the pinned driver removes validation-list state before all
+interruptible failure points. Drop performs no memory ioctl, munmap, FREE, or
+retry; normal Rust ownership still closes the retained descriptors and invokes
+driver process teardown.
+
+HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1 composes the frozen KFD memory schema
+with the R1 device profile, active module digest, 4096-byte page profile, and
+the reviewed transitive driver-source closure. The source-to-loaded-binary
+relationship and kernel behavior remain Contracted. The session mirrors only
+successful concrete transitions into MemoryLifecycleStateV1; this journal is
+model-only evidence, not production authority or a Verus/concrete refinement
+proof.
+
+AQL, executable, kernarg, VRAM, USERPTR, peer-device mapping, multiple
+allocations, retry, queues, and dispatch are rejected or absent. The
+live-validation feature is non-production only. It enables the
+kfd-host-visible-memory example and a single-threaded fork/mincore negative
+that verifies the DONTFORK VMA is absent in the child. The example always
+launches the selected-GPU transaction in an isolated subprocess and creates no
+queue or reset.
