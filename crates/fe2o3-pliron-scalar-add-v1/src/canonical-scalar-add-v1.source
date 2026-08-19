@@ -1,0 +1,16 @@
+FE2O3_PLIRON_SCALAR_ADD_SOURCE_V1
+module=scalar_module
+kernel=scalar_add
+target=gfx942:xnack-
+code_object_version=6
+calling_convention=amdgpu_kernel
+parameter.0=input:global_ptr_f32
+parameter.1=output:global_ptr_f32
+parameter.2=addend:f32
+operation.0=load_f32 input align=4
+operation.1=fadd_f32 operation.0 addend
+operation.2=store_f32 operation.1 output align=4
+operation.3=return_void
+workgroup_size_range=1..64
+floating_point=ieee_strict
+device_libraries=none

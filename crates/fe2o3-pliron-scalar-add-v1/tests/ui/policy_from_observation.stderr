@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `RepositoryScalarAddProfileV1: From<ObservedRepositoryScalarAddV1>` is not satisfied
+ --> tests/ui/policy_from_observation.rs:4:14
+  |
+4 |     observed.into()
+  |              ^^^^ the trait `From<ObservedRepositoryScalarAddV1>` is not implemented for `RepositoryScalarAddProfileV1`
+  |
+  = note: required for `ObservedRepositoryScalarAddV1` to implement `Into<RepositoryScalarAddProfileV1>`

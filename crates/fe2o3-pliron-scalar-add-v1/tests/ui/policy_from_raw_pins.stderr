@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `from_observed_pins` found for struct `RepositoryScalarAddProfileV1` in the current scope
+ --> tests/ui/policy_from_raw_pins.rs:4:43
+  |
+4 |     let _ = RepositoryScalarAddProfileV1::from_observed_pins();
+  |                                           ^^^^^^^^^^^^^^^^^^ associated function or constant not found in `RepositoryScalarAddProfileV1`
