@@ -109,15 +109,24 @@ pub open spec fn observe_failed_map_prefix_v1(
     }
 }
 
-pub open spec fn observe_failed_unmap_prefix_v1(
+pub open spec fn observe_failed_unmap_cumulative_v1(
     old: MappingProgressV1,
     n_success: nat,
 ) -> MappingProgressV1 {
-    MappingProgressV1 {
-        device_count: old.device_count,
-        mapped_start: old.mapped_start + n_success,
-        mapped_end: old.mapped_end,
-        state: MappingProgressStateV1::UnmapFailed,
+    if old.mapped_start <= n_success && n_success < old.mapped_end {
+        MappingProgressV1 {
+            device_count: old.device_count,
+            mapped_start: n_success,
+            mapped_end: old.mapped_end,
+            state: MappingProgressStateV1::UnmapFailed,
+        }
+    } else {
+        MappingProgressV1 {
+            device_count: old.device_count,
+            mapped_start: old.mapped_start,
+            mapped_end: old.mapped_end,
+            state: MappingProgressStateV1::Ambiguous,
+        }
     }
 }
 
@@ -190,20 +199,36 @@ pub proof fn failed_map_records_exact_success_prefix_v1(
 {
 }
 
-pub proof fn failed_unmap_removes_only_reported_prefix_v1(
+pub proof fn failed_unmap_uses_absolute_cumulative_progress_v1(
     old: MappingProgressV1,
     n_success: nat,
 )
     requires
         mapping_progress_valid_v1(old),
         old.state == MappingProgressStateV1::UnmapPending,
-        n_success <= old.mapped_end - old.mapped_start,
+        old.mapped_start <= n_success < old.mapped_end,
     ensures
-        mapping_progress_valid_v1(observe_failed_unmap_prefix_v1(old, n_success)),
-        observe_failed_unmap_prefix_v1(old, n_success).mapped_start
-            == old.mapped_start + n_success,
-        observe_failed_unmap_prefix_v1(old, n_success).mapped_end == old.mapped_end,
-        observe_failed_unmap_prefix_v1(old, n_success).device_count == old.device_count,
+        mapping_progress_valid_v1(observe_failed_unmap_cumulative_v1(old, n_success)),
+        observe_failed_unmap_cumulative_v1(old, n_success).mapped_start == n_success,
+        observe_failed_unmap_cumulative_v1(old, n_success).mapped_end == old.mapped_end,
+        observe_failed_unmap_cumulative_v1(old, n_success).device_count == old.device_count,
+{
+}
+
+pub proof fn failed_full_cumulative_unmap_is_ambiguous_v1(old: MappingProgressV1)
+    requires
+        mapping_progress_valid_v1(old),
+        old.state == MappingProgressStateV1::UnmapPending,
+    ensures
+        mapping_progress_valid_v1(
+            observe_failed_unmap_cumulative_v1(old, old.mapped_end),
+        ),
+        observe_failed_unmap_cumulative_v1(old, old.mapped_end).state
+            == MappingProgressStateV1::Ambiguous,
+        observe_failed_unmap_cumulative_v1(old, old.mapped_end).mapped_start
+            == old.mapped_start,
+        observe_failed_unmap_cumulative_v1(old, old.mapped_end).mapped_end
+            == old.mapped_end,
 {
 }
 

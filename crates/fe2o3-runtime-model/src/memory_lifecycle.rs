@@ -106,8 +106,9 @@ pub enum MemoryAllocationStateV1 {
 ///
 /// The retained indices describe the conservative device subrange that may
 /// still be mapped. Map progress establishes `[0, mapped_end)`. Unmap progress
-/// removes only a reported prefix and advances `mapped_start`. `Ambiguous`
-/// never permits release, regardless of the retained range.
+/// reports an absolute cumulative prefix boundary and assigns `mapped_start`
+/// to that boundary. `Ambiguous` never permits release, regardless of the
+/// retained range.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryMappingStateV1 {
     MapPending,
@@ -745,14 +746,17 @@ impl MemoryLifecycleStateV1 {
         if mapping.state != MemoryMappingStateV1::UnmapPending {
             return Err(MemoryTransitionErrorV1::IllegalState(reference));
         }
-        let count = mapping.mapped_end - mapping.mapped_start;
+        let previous_start = mapping.mapped_start;
+        let mapped_end = mapping.mapped_end;
         match progress.status {
-            PartialOperationStatusV1::Succeeded if progress.n_success == count => {
-                mapping.mapped_start = mapping.mapped_end;
+            PartialOperationStatusV1::Succeeded if progress.n_success == mapped_end => {
+                mapping.mapped_start = mapped_end;
                 mapping.state = MemoryMappingStateV1::Unmapped;
             }
-            PartialOperationStatusV1::Failed if progress.n_success <= count => {
-                mapping.mapped_start += progress.n_success;
+            PartialOperationStatusV1::Failed
+                if previous_start <= progress.n_success && progress.n_success < mapped_end =>
+            {
+                mapping.mapped_start = progress.n_success;
                 mapping.state = MemoryMappingStateV1::UnmapFailed;
             }
             PartialOperationStatusV1::Succeeded

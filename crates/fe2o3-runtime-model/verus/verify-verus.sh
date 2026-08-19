@@ -17,6 +17,7 @@ negative_projection_identity="$script_dir/negative/device_projection_refinement_
 negative_projection_currentness="$script_dir/negative/device_projection_refinement_v1_currentness_drop.rs"
 negative_memory_free="$script_dir/negative/memory_lifecycle_v1_free_while_partial.rs"
 negative_memory_unmap="$script_dir/negative/memory_lifecycle_v1_unmap_prefix.rs"
+negative_memory_failed_full="$script_dir/negative/memory_lifecycle_v1_failed_full_release.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -54,6 +55,7 @@ expected_negative_projection_identity=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_I
 expected_negative_projection_currentness=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_CURRENTNESS_SHA256")
 expected_negative_memory_free=$(read_pin "$pin_dir/NEGATIVE_MEMORY_FREE_SHA256")
 expected_negative_memory_unmap=$(read_pin "$pin_dir/NEGATIVE_MEMORY_UNMAP_SHA256")
+expected_negative_memory_failed_full=$(read_pin "$pin_dir/NEGATIVE_MEMORY_FAILED_FULL_SHA256")
 expected_verus=$(read_pin "$pin_dir/VERUS_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
@@ -94,6 +96,7 @@ check_sources() {
     check_digest "$expected_negative_projection_currentness" "$negative_projection_currentness"
     check_digest "$expected_negative_memory_free" "$negative_memory_free"
     check_digest "$expected_negative_memory_unmap" "$negative_memory_unmap"
+    check_digest "$expected_negative_memory_failed_full" "$negative_memory_failed_full"
     check_digest "$expected_closure" "$closure_manifest"
     check_digest 'c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c' "$closure_checker"
     check_digest "$expected_source_checker" "$source_checker"
@@ -114,7 +117,8 @@ check_sources
     "$negative_projection_identity" \
     "$negative_projection_currentness" \
     "$negative_memory_free" \
-    "$negative_memory_unmap"
+    "$negative_memory_unmap" \
+    "$negative_memory_failed_full"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -216,7 +220,7 @@ check_negative() {
 check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
 check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
 check_positive "$projection_proof" 'verification results:: 4 verified, 0 errors' device-projection-refinement
-check_positive "$memory_proof" 'verification results:: 5 verified, 0 errors' memory-lifecycle
+check_positive "$memory_proof" 'verification results:: 6 verified, 0 errors' memory-lifecycle
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -226,14 +230,15 @@ check_negative "$negative_projection_history" mutated_history_forgets_predecesso
 check_negative "$negative_projection_identity" mutated_cross_source_identity_mix_is_equal_v1 projection-identity-mix
 check_negative "$negative_projection_currentness" mutated_projection_drops_reset_fence_v1 projection-currentness-drop
 check_negative "$negative_memory_free" mutated_free_while_partial_is_safe_v1 memory-free-while-partial
-check_negative "$negative_memory_unmap" mutated_unmap_retains_unreported_suffix_v1 memory-unmap-prefix
+check_negative "$negative_memory_unmap" mutated_unmap_uses_absolute_cumulative_progress_v1 memory-unmap-cumulative
+check_negative "$negative_memory_failed_full" mutated_failed_full_unmap_is_unreleasable_v1 memory-unmap-failed-full
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=5 mutations=10'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 mutations=11'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

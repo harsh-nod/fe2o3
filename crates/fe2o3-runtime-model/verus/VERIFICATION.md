@@ -43,10 +43,12 @@ the executable adapter:
    allocation generation, opaque-handle observation, and canonical bounded
    device set represented in the formal binding;
 2. a failed map records exactly the reported successful device prefix;
-3. a failed unmap advances only by the reported successful prefix and retains
-   the unreported suffix;
-4. a substituted device set produces no map state; and
-5. any non-released mapping or live publication blocks allocation free.
+3. a failed unmap treats `n_success` as an absolute cumulative prefix, assigns
+   that value without adding prior progress, and retains the unreported suffix;
+4. a failed unmap reporting the full prefix remains ambiguous and retains its
+   prior conservative range;
+5. a substituted device set produces no map state; and
+6. any non-released mapping or live publication blocks allocation free.
 
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
@@ -66,8 +68,9 @@ The mutations must fail at their named postconditions: release while retained,
 VM generation substitution, stale generation reuse, topology/render PCI
 substitution, dropped DRM schema identity, lost history predecessor, mixed
 cross-source identity, a dropped final reset-fence observation, allocation free
-while a partial mapping remains, and unmap that drops an unreported suffix. The
-launcher rejects source substitution, lexically audits all proof files for trusted
+while a partial mapping remains, cumulative unmap progress incorrectly added to
+prior progress, and a failed full-prefix unmap treated as releasable. The launcher
+rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
 verification.

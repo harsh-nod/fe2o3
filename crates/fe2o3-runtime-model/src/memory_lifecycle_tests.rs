@@ -391,6 +391,112 @@ fn publications_block_unmap_and_partial_unmap_retains_the_unreported_suffix() {
 }
 
 #[test]
+fn unchanged_cumulative_unmap_retry_does_not_advance_twice() {
+    let devices = admissions();
+    let (state, _, allocation) = live_allocation(devices);
+    let mapping = mapping(allocation, 42);
+    let targets = vec![devices.first.model_key(), devices.second.model_key()];
+    let state = advance(
+        state,
+        MemoryTransitionV1::BeginMap {
+            key: mapping,
+            target_devices: targets.clone(),
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    let state = advance(
+        state,
+        MemoryTransitionV1::ObserveMap {
+            key: mapping,
+            progress: PartialProgressObservationV1 {
+                n_success: targets.len(),
+                status: PartialOperationStatusV1::Succeeded,
+            },
+        },
+    );
+    let state = advance(state, MemoryTransitionV1::BeginUnmap { key: mapping });
+    let state = advance(
+        state,
+        MemoryTransitionV1::ObserveUnmap {
+            key: mapping,
+            progress: PartialProgressObservationV1 {
+                n_success: 1,
+                status: PartialOperationStatusV1::Failed,
+            },
+        },
+    );
+    assert_eq!(state.mappings()[0].mapped_start, 1);
+    let state = advance(state, MemoryTransitionV1::BeginUnmap { key: mapping });
+    let state = advance(
+        state,
+        MemoryTransitionV1::ObserveUnmap {
+            key: mapping,
+            progress: PartialProgressObservationV1 {
+                n_success: 1,
+                status: PartialOperationStatusV1::Failed,
+            },
+        },
+    );
+    assert_eq!(state.mappings()[0].mapped_start, 1);
+    assert_eq!(
+        state.mappings()[0].retained_device_superset(),
+        &targets[1..]
+    );
+    assert!(matches!(
+        state.next(MemoryTransitionV1::ReleaseMapping { key: mapping }),
+        Err(MemoryTransitionErrorV1::IllegalState(_))
+    ));
+}
+
+#[test]
+fn failed_full_cumulative_unmap_progress_remains_ambiguous_and_unreleasable() {
+    let devices = admissions();
+    let (state, _, allocation) = live_allocation(devices);
+    let mapping = mapping(allocation, 43);
+    let targets = vec![devices.first.model_key(), devices.second.model_key()];
+    let state = advance(
+        state,
+        MemoryTransitionV1::BeginMap {
+            key: mapping,
+            target_devices: targets.clone(),
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    let state = advance(
+        state,
+        MemoryTransitionV1::ObserveMap {
+            key: mapping,
+            progress: PartialProgressObservationV1 {
+                n_success: targets.len(),
+                status: PartialOperationStatusV1::Succeeded,
+            },
+        },
+    );
+    let state = advance(state, MemoryTransitionV1::BeginUnmap { key: mapping });
+    let state = advance(
+        state,
+        MemoryTransitionV1::ObserveUnmap {
+            key: mapping,
+            progress: PartialProgressObservationV1 {
+                n_success: targets.len(),
+                status: PartialOperationStatusV1::Failed,
+            },
+        },
+    );
+    assert_eq!(state.mappings()[0].state, MemoryMappingStateV1::Ambiguous);
+    assert_eq!(state.mappings()[0].mapped_start, 0);
+    assert_eq!(state.mappings()[0].retained_device_superset(), targets);
+    assert!(matches!(
+        state.next(MemoryTransitionV1::ReleaseMapping { key: mapping }),
+        Err(MemoryTransitionErrorV1::IllegalState(_))
+    ));
+    assert!(matches!(
+        state.next(MemoryTransitionV1::ReleaseAllocation { key: allocation }),
+        Err(MemoryTransitionErrorV1::ResourceInUse(_))
+    ));
+}
+
+#[test]
 fn malformed_or_indeterminate_progress_is_fail_closed_and_unreleasable() {
     let devices = admissions();
     let (state, _, allocation) = live_allocation(devices);
