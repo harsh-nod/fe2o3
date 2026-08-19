@@ -385,7 +385,7 @@ fn unreviewed_verus_is_rejected_before_any_handoff() {
             attempt,
         ),
         Err(GeneralGemmPipelineErrorV1::Verifier(reason))
-            if reason.contains("VerusDigestMismatch")
+            if reason.contains("AuthenticatedRuntimeClosureUnavailable")
     ));
     for slot in [
         CompilerModuleHandoffSlotV1::GeneralGemmReference,
