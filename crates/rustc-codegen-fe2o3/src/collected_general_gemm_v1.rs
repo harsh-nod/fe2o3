@@ -682,6 +682,7 @@ enum ProofSymbolicValueV1 {
     Component,
     Constant(u128),
     Add(Box<Self>, Box<Self>),
+    Subtract(Box<Self>, Box<Self>),
     Multiply(Box<Self>, Box<Self>),
     Divide(Box<Self>, Box<Self>),
     Remainder(Box<Self>, Box<Self>),
@@ -732,10 +733,14 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
     let root_function = root_function.expect("recognized terminal root has collected metadata");
     require_positive_abi(tcx, root_function.instance.def_id())?;
     let lane_conditional_publish = publish_is_lane_conditional(body, &root_calls)?;
-    validate_call_shape(body, surface, &root_calls, lane_conditional_publish)?;
-    if let Some((diagnostic, call_chain)) =
+    let counterexample = if let Some(counterexample) =
         derived_counterexample(&root_calls, lane_conditional_publish)
     {
+        Some(counterexample)
+    } else {
+        derive_dynamic_counterexample(tcx, body, surface, &root_calls, lane_conditional_publish)?
+    };
+    if let Some((diagnostic, call_chain)) = counterexample {
         require_counterexample_abi_binding(body, &root_calls)?;
         if !call_chain
             .iter()
@@ -788,6 +793,7 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
             },
         )));
     }
+    validate_call_shape(body, surface, &root_calls, lane_conditional_publish)?;
     if surface == TrustedGeneralGemmSurfaceV1::ProofSensitive {
         require_counterexample_abi_binding(body, &root_calls)?;
         require_dynamic_terminal_inventory(&root_calls)?;
@@ -864,6 +870,310 @@ fn derived_counterexample(
         ));
     }
     None
+}
+
+fn derive_dynamic_counterexample<'a, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    surface: TrustedGeneralGemmSurfaceV1,
+    calls: &'a [GeneralGemmCallV1],
+    lane_conditional_publish: bool,
+) -> Result<
+    Option<(GeneralGemmKirDiagnosticV1, Vec<&'a GeneralGemmCallV1>)>,
+    GeneralGemmMirImportErrorV1,
+> {
+    if surface != TrustedGeneralGemmSurfaceV1::ProofSensitive
+        || call_count(calls, TrustedGeneralGemmOperationV1::MfmaValue) != 4
+        || call_count(calls, TrustedGeneralGemmOperationV1::StoreEpilogue) != 4
+    {
+        return Ok(None);
+    }
+
+    // The mutation oracle admits only the closed dynamic baseline inventory.
+    // Three operations may be absent because their absence is itself one of the
+    // semantic findings; every other terminal must retain its exact role/count.
+    for (operation, count) in [
+        (TrustedGeneralGemmOperationV1::Acquire, 1),
+        (TrustedGeneralGemmOperationV1::Lane, 1),
+        (TrustedGeneralGemmOperationV1::WorkgroupX, 1),
+        (TrustedGeneralGemmOperationV1::WorkgroupY, 1),
+        (TrustedGeneralGemmOperationV1::LoadA, 1),
+        (TrustedGeneralGemmOperationV1::LoadB, 1),
+        (TrustedGeneralGemmOperationV1::Stage, 1),
+        (TrustedGeneralGemmOperationV1::WaitStage, 1),
+        (TrustedGeneralGemmOperationV1::ReadStage, 8),
+        (TrustedGeneralGemmOperationV1::MfmaValue, 4),
+        (TrustedGeneralGemmOperationV1::LoadC, 4),
+        (TrustedGeneralGemmOperationV1::StoreEpilogue, 4),
+    ] {
+        if call_count(calls, operation) != count {
+            return Ok(None);
+        }
+    }
+    if call_count(calls, TrustedGeneralGemmOperationV1::Mfma) != 0
+        || call_count(calls, TrustedGeneralGemmOperationV1::Store) != 0
+        || call_count(calls, TrustedGeneralGemmOperationV1::StageValue) > 2
+        || call_count(calls, TrustedGeneralGemmOperationV1::Publish) > 1
+        || call_count(calls, TrustedGeneralGemmOperationV1::Reuse) > 1
+    {
+        return Ok(None);
+    }
+
+    let first = |operation| {
+        calls
+            .iter()
+            .find(|call| call.operation == operation)
+            .expect("the closed dynamic inventory checked this operation")
+    };
+    if call_count(calls, TrustedGeneralGemmOperationV1::StageValue) == 1 {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::Initialized),
+            vec![first(TrustedGeneralGemmOperationV1::StageValue)],
+        )));
+    }
+    if call_count(calls, TrustedGeneralGemmOperationV1::Reuse) == 0 {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::LdsEpochCorrect),
+            vec![
+                calls
+                    .iter()
+                    .rfind(|call| call.operation == TrustedGeneralGemmOperationV1::MfmaValue)
+                    .expect("the dynamic inventory has four MFMA values"),
+            ],
+        )));
+    }
+    if lane_conditional_publish {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::BarrierConvergent),
+            vec![first(TrustedGeneralGemmOperationV1::Publish)],
+        )));
+    }
+
+    for operation in [
+        TrustedGeneralGemmOperationV1::LoadA,
+        TrustedGeneralGemmOperationV1::LoadB,
+    ] {
+        let call = first(operation);
+        let args = call_args(body, call.block)?;
+        if !has_true_lt_guard(tcx, body, call.block, &args[2].node, &args[4].node)
+            || !has_true_lt_guard(tcx, body, call.block, &args[3].node, &args[5].node)
+        {
+            return Ok(Some((
+                diagnostic(GeneralGemmPropertyV1::BoundsSafe),
+                vec![call],
+            )));
+        }
+    }
+
+    for operation in [
+        TrustedGeneralGemmOperationV1::LoadA,
+        TrustedGeneralGemmOperationV1::LoadB,
+    ] {
+        let call = first(operation);
+        let result = call
+            .result_local
+            .ok_or_else(|| unproved("guarded A/B load returns one value local"))?;
+        if !local_has_u16_constant_assignment(tcx, body, result, 0)
+            && local_has_nonzero_u16_constant_assignment(tcx, body, result)
+        {
+            return Ok(Some((
+                diagnostic(GeneralGemmPropertyV1::TailRefinement),
+                vec![call],
+            )));
+        }
+    }
+
+    let phase = dynamic_phase_local(body, calls)?;
+    if let Some(call) = dynamic_lds_write_collision(tcx, body, calls, phase)? {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::RaceFree),
+            vec![call],
+        )));
+    }
+    if let Some((property, call)) = dynamic_read_violation(tcx, body, calls, phase)? {
+        return Ok(Some((diagnostic(property), vec![call])));
+    }
+    if let Some((property, call)) = dynamic_store_violation(tcx, body, calls, phase)? {
+        return Ok(Some((diagnostic(property), vec![call])));
+    }
+    if let Some(call) = dynamic_accumulator_reset(tcx, body, calls)? {
+        return Ok(Some((
+            diagnostic(GeneralGemmPropertyV1::AccumulatorPhaseRefinement),
+            vec![call],
+        )));
+    }
+    Ok(None)
+}
+
+fn dynamic_phase_local(
+    body: &Body<'_>,
+    calls: &[GeneralGemmCallV1],
+) -> Result<Local, GeneralGemmMirImportErrorV1> {
+    let stage = calls
+        .iter()
+        .find(|call| call.operation == TrustedGeneralGemmOperationV1::StageValue)
+        .ok_or_else(|| unproved("at least one dynamic stage write is present"))?;
+    call_args(body, stage.block)?
+        .get(2)
+        .and_then(|argument| operand_local(&argument.node))
+        .map(|local| canonical_local_alias_root(body, local))
+        .ok_or_else(|| unproved("stage epoch has one loop-carried local"))
+}
+
+fn dynamic_lds_write_collision<'a, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    calls: &'a [GeneralGemmCallV1],
+    phase: Local,
+) -> Result<Option<&'a GeneralGemmCallV1>, GeneralGemmMirImportErrorV1> {
+    let stages = calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::StageValue)
+        .collect::<Vec<_>>();
+    let lane = ProofSymbolicValueV1::Lane;
+    let lane_row = proof_rem(lane.clone(), proof_constant(16));
+    let depth_base = proof_mul(proof_constant(4), proof_div(lane, proof_constant(16)));
+    let tile_depth = proof_add(depth_base, ProofSymbolicValueV1::Component);
+    let swizzle = proof_xor(
+        tile_depth,
+        proof_mul(
+            proof_constant(4),
+            proof_rem(lane_row.clone(), proof_constant(4)),
+        ),
+    );
+    let expected = [
+        proof_add(
+            proof_mul(proof_constant(16), lane_row.clone()),
+            swizzle.clone(),
+        ),
+        proof_add(
+            proof_add(proof_constant(256), proof_mul(proof_constant(16), lane_row)),
+            swizzle,
+        ),
+    ];
+    for (stage, expected) in stages.into_iter().zip(expected) {
+        let args = call_args(body, stage.block)?;
+        let slot = proof_symbolic_operand(tcx, body, calls, phase, &args[1].node)?;
+        if slot != expected {
+            return Ok(Some(stage));
+        }
+    }
+    Ok(None)
+}
+
+fn dynamic_read_violation<'a, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    calls: &'a [GeneralGemmCallV1],
+    phase: Local,
+) -> Result<Option<(GeneralGemmPropertyV1, &'a GeneralGemmCallV1)>, GeneralGemmMirImportErrorV1> {
+    let wait = unique_call(calls, TrustedGeneralGemmOperationV1::WaitStage)?;
+    for read in calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::ReadStage)
+    {
+        let args = call_args(body, read.block)?;
+        let epoch = proof_symbolic_operand(tcx, body, calls, phase, &args[2].node)?;
+        if epoch != ProofSymbolicValueV1::Phase {
+            return Ok(Some((GeneralGemmPropertyV1::LdsEpochCorrect, read)));
+        }
+        if !block_dominates(body, wait.return_target, read.block) {
+            return Ok(Some((GeneralGemmPropertyV1::Initialized, read)));
+        }
+    }
+    Ok(None)
+}
+
+fn dynamic_store_violation<'a, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    calls: &'a [GeneralGemmCallV1],
+    phase: Local,
+) -> Result<Option<(GeneralGemmPropertyV1, &'a GeneralGemmCallV1)>, GeneralGemmMirImportErrorV1> {
+    let lane = ProofSymbolicValueV1::Lane;
+    let lane_row = proof_rem(lane.clone(), proof_constant(16));
+    let row_base = proof_add(
+        proof_mul(ProofSymbolicValueV1::WorkgroupY, proof_constant(16)),
+        proof_mul(proof_constant(4), proof_div(lane, proof_constant(16))),
+    );
+    let column = proof_add(
+        proof_mul(ProofSymbolicValueV1::WorkgroupX, proof_constant(16)),
+        lane_row,
+    );
+    for (component, store) in calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::StoreEpilogue)
+        .enumerate()
+    {
+        let args = call_args(body, store.block)?;
+        let row = proof_symbolic_operand(tcx, body, calls, phase, &args[2].node)?;
+        let observed_column = proof_symbolic_operand(tcx, body, calls, phase, &args[3].node)?;
+        if row == ProofSymbolicValueV1::KernelArgument(3)
+            || observed_column == ProofSymbolicValueV1::KernelArgument(4)
+        {
+            return Ok(Some((GeneralGemmPropertyV1::BoundsSafe, store)));
+        }
+        let expected_row = if component == 0 {
+            row_base.clone()
+        } else {
+            proof_add(row_base.clone(), proof_constant(component as u128))
+        };
+        if row != expected_row || observed_column != column {
+            return Ok(Some((GeneralGemmPropertyV1::OutputRegionInjective, store)));
+        }
+        if !has_true_lt_guard(tcx, body, store.block, &args[2].node, &args[4].node)
+            || !has_true_lt_guard(tcx, body, store.block, &args[3].node, &args[5].node)
+        {
+            return Ok(Some((GeneralGemmPropertyV1::BoundsSafe, store)));
+        }
+    }
+    Ok(None)
+}
+
+fn dynamic_accumulator_reset<'a, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    calls: &'a [GeneralGemmCallV1],
+) -> Result<Option<&'a GeneralGemmCallV1>, GeneralGemmMirImportErrorV1> {
+    let mfmas = calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::MfmaValue)
+        .collect::<Vec<_>>();
+    let reads = calls
+        .iter()
+        .filter(|call| call.operation == TrustedGeneralGemmOperationV1::ReadStage)
+        .collect::<Vec<_>>();
+    for (component, mfma) in mfmas.into_iter().enumerate() {
+        let args = call_args(body, mfma.block)?;
+        if !same_result_operand(&args[1].node, reads[component * 2].result_local)
+            || !same_result_operand(&args[2].node, reads[component * 2 + 1].result_local)
+        {
+            return Err(unproved("MFMA inputs retain their paired LDS read results"));
+        }
+        let Some(prior) = args
+            .get(3)
+            .and_then(|argument| operand_local(&argument.node))
+        else {
+            if args.get(3).is_some_and(|argument| {
+                symbolic_f32_operand(tcx, body, &argument.node, 0, &mut BTreeSet::new())
+                    == Some(SymbolicF32ValueV1::Constant(0.0_f32.to_bits()))
+            }) {
+                return Ok(Some(mfma));
+            }
+            return Err(unproved(
+                "MFMA prior accumulator has bounded carried provenance",
+            ));
+        };
+        let result = mfma
+            .result_local
+            .ok_or_else(|| unproved("MFMA returns one accumulator result local"))?;
+        if local_has_f32_constant_assignment(tcx, body, prior, 0.0)
+            && !local_is_assigned_from(body, prior, result)
+        {
+            return Ok(Some(mfma));
+        }
+    }
+    Ok(None)
 }
 
 fn diagnostic(property: GeneralGemmPropertyV1) -> GeneralGemmKirDiagnosticV1 {
@@ -2962,6 +3272,7 @@ fn proof_symbolic_rvalue<'tcx>(
             )?;
             match operation {
                 BinOp::Add => Some(proof_add(left, right)),
+                BinOp::Sub => Some(proof_sub(left, right)),
                 BinOp::Mul => Some(proof_mul(left, right)),
                 BinOp::Div => Some(proof_div(left, right)),
                 BinOp::Rem => Some(proof_rem(left, right)),
@@ -3013,6 +3324,10 @@ fn proof_add(left: ProofSymbolicValueV1, right: ProofSymbolicValueV1) -> ProofSy
     ProofSymbolicValueV1::Add(Box::new(left), Box::new(right))
 }
 
+fn proof_sub(left: ProofSymbolicValueV1, right: ProofSymbolicValueV1) -> ProofSymbolicValueV1 {
+    ProofSymbolicValueV1::Subtract(Box::new(left), Box::new(right))
+}
+
 fn proof_mul(left: ProofSymbolicValueV1, right: ProofSymbolicValueV1) -> ProofSymbolicValueV1 {
     ProofSymbolicValueV1::Multiply(Box::new(left), Box::new(right))
 }
@@ -3053,6 +3368,25 @@ fn local_has_u16_constant_assignment<'tcx>(
             };
             destination.as_local() == Some(local)
                 && constant_u16_from_constant(tcx, constant) == Some(expected)
+        })
+}
+
+fn local_has_nonzero_u16_constant_assignment<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    local: Local,
+) -> bool {
+    body.basic_blocks
+        .iter()
+        .flat_map(|data| &data.statements)
+        .any(|statement| {
+            let Some((destination, Rvalue::Use(Operand::Constant(constant)))) =
+                statement.kind.as_assign()
+            else {
+                return false;
+            };
+            destination.as_local() == Some(local)
+                && constant_u16_from_constant(tcx, constant).is_some_and(|value| value != 0)
         })
 }
 
@@ -3112,7 +3446,9 @@ fn publish_is_lane_conditional(
         .result_local
         .ok_or_else(|| unproved("lane identity reaches the barrier condition"))?;
     let stage = unique_call(calls, TrustedGeneralGemmOperationV1::Stage)?;
-    let publish = unique_call(calls, TrustedGeneralGemmOperationV1::Publish)?;
+    let Some(publish) = optional_call(calls, TrustedGeneralGemmOperationV1::Publish)? else {
+        return Ok(false);
+    };
     if all_paths_reach(body, stage.return_target, publish.block) {
         return Ok(false);
     }
