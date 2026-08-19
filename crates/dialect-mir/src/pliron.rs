@@ -9,7 +9,7 @@
 use std::{
     collections::BTreeSet,
     error::Error,
-    fmt::{self, Write as _},
+    fmt,
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
@@ -26,6 +26,7 @@ use ::pliron::{
         type_interfaces::FunctionTypeInterface,
         types::FunctionType,
     },
+    combine::Parser,
     common_traits::Verify,
     context::{Context, Ptr},
     derive::{op_interface_impl, pliron_attr, pliron_op, pliron_type},
@@ -33,6 +34,8 @@ use ::pliron::{
     location::Located,
     op::Op,
     operation::{Operation, verify_operation},
+    parsable::{Parsable, ParseResult, StateStream},
+    printable::{self, Printable},
     result::Result as PlironResult,
     r#type::{Type, TypeHandle, Typed, TypedHandle},
     verify_err, verify_err_noloc,
@@ -1462,9 +1465,9 @@ impl Verify for MirSemanticOrdinalAttr {
 }
 
 /// Ordered CFG targets attached to one imported rustc MIR terminator.
-#[pliron_attr(name = "mir.semantic_successors", format = "$0")]
+#[pliron_attr(name = "mir.semantic_successors")]
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct MirSemanticSuccessorsAttr(StringAttr);
+pub struct MirSemanticSuccessorsAttr(Option<Vec<u32>>);
 
 impl MirSemanticSuccessorsAttr {
     /// Creates a bounded, order-preserving target list.
@@ -1475,99 +1478,128 @@ impl MirSemanticSuccessorsAttr {
                 limit: MAX_IMPORTED_MIR_SUCCESSORS,
             });
         }
-        let bytes = targets.iter().try_fold(0_usize, |bytes, target| {
-            bytes.checked_add(decimal_digits(*target))
-        });
-        let bytes = bytes
-            .and_then(|bytes| bytes.checked_add(targets.len().saturating_sub(1)))
-            .ok_or(MirDialectBuildError::SemanticSuccessorTextTooLong {
-                bytes: usize::MAX,
-                limit: MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES,
-            })?;
-        if bytes > MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES {
-            return Err(MirDialectBuildError::SemanticSuccessorTextTooLong {
-                bytes,
-                limit: MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES,
-            });
-        }
-        let mut text = String::with_capacity(bytes);
-        for (index, target) in targets.iter().enumerate() {
-            if index != 0 {
-                text.push(',');
-            }
-            write!(&mut text, "{target}").expect("writing into a String cannot fail");
-        }
-        Ok(Self(StringAttr::new(text)))
+        Ok(Self(Some(targets.to_vec())))
     }
 
-    /// Returns targets in exact rustc successor order.
-    pub fn targets(&self) -> Result<Vec<u32>, MirDialectBuildError> {
-        let text = self.0.as_str();
-        if text.len() > MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES {
-            return Err(MirDialectBuildError::SemanticSuccessorTextTooLong {
-                bytes: text.len(),
-                limit: MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES,
-            });
-        }
-        if text.is_empty() {
-            return Ok(Vec::new());
-        }
-        let count = text.bytes().try_fold(1_usize, |count, byte| {
-            if byte == b',' {
-                count.checked_add(1)
-            } else {
-                Some(count)
-            }
-        });
-        let count = count.ok_or(MirDialectBuildError::TooManySemanticSuccessors {
-            count: usize::MAX,
-            limit: MAX_IMPORTED_MIR_SUCCESSORS,
-        })?;
-        if count > MAX_IMPORTED_MIR_SUCCESSORS {
+    /// Returns typed targets in exact rustc successor order.
+    pub fn targets(&self) -> Result<&[u32], MirDialectBuildError> {
+        let targets = self
+            .0
+            .as_deref()
+            .ok_or(MirDialectBuildError::MalformedOperation(
+                "non-canonical successor list",
+            ))?;
+        if targets.len() > MAX_IMPORTED_MIR_SUCCESSORS {
             return Err(MirDialectBuildError::TooManySemanticSuccessors {
-                count,
+                count: targets.len(),
                 limit: MAX_IMPORTED_MIR_SUCCESSORS,
             });
         }
-        let mut targets = Vec::with_capacity(count);
-        for target in text.split(',') {
-            if target.is_empty()
-                || (target.len() > 1 && target.starts_with('0'))
-                || !target.bytes().all(|byte| byte.is_ascii_digit())
-            {
-                return Err(MirDialectBuildError::MalformedOperation(
-                    "non-canonical successor list",
-                ));
-            }
-            targets.push(
-                target
-                    .parse::<u32>()
-                    .map_err(|_| MirDialectBuildError::MalformedOperation("invalid successor"))?,
-            );
+        Ok(targets)
+    }
+
+    fn from_text(text: &str) -> Self {
+        Self(parse_semantic_successor_text(text).ok())
+    }
+}
+
+fn parse_semantic_successor_text(text: &str) -> Result<Vec<u32>, MirDialectBuildError> {
+    if text.len() > MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES {
+        return Err(MirDialectBuildError::SemanticSuccessorTextTooLong {
+            bytes: text.len(),
+            limit: MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES,
+        });
+    }
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    let count = text.bytes().try_fold(1_usize, |count, byte| {
+        if byte == b',' {
+            count.checked_add(1)
+        } else {
+            Some(count)
         }
-        if targets.len() != count {
+    });
+    let count = count.ok_or(MirDialectBuildError::TooManySemanticSuccessors {
+        count: usize::MAX,
+        limit: MAX_IMPORTED_MIR_SUCCESSORS,
+    })?;
+    if count > MAX_IMPORTED_MIR_SUCCESSORS {
+        return Err(MirDialectBuildError::TooManySemanticSuccessors {
+            count,
+            limit: MAX_IMPORTED_MIR_SUCCESSORS,
+        });
+    }
+    let mut targets = Vec::with_capacity(count);
+    for target in text.split(',') {
+        if target.is_empty()
+            || (target.len() > 1 && target.starts_with('0'))
+            || !target.bytes().all(|byte| byte.is_ascii_digit())
+        {
             return Err(MirDialectBuildError::MalformedOperation(
                 "non-canonical successor list",
             ));
         }
-        Ok(targets)
+        targets.push(
+            target
+                .parse::<u32>()
+                .map_err(|_| MirDialectBuildError::MalformedOperation("invalid successor"))?,
+        );
+    }
+    if targets.len() != count {
+        return Err(MirDialectBuildError::MalformedOperation(
+            "non-canonical successor list",
+        ));
+    }
+    Ok(targets)
+}
+
+impl Printable for MirSemanticSuccessorsAttr {
+    fn fmt(
+        &self,
+        _context: &Context,
+        _state: &printable::State,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        #[cfg(test)]
+        SEMANTIC_SUCCESSOR_TEXT_PRINT_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        formatter.write_str("\"")?;
+        let Some(targets) = &self.0 else {
+            return formatter.write_str("<invalid>\"");
+        };
+        for (index, target) in targets.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str(",")?;
+            }
+            write!(formatter, "{target}")?;
+        }
+        formatter.write_str("\"")
     }
 }
 
-const fn decimal_digits(value: u32) -> usize {
-    match value {
-        0..=9 => 1,
-        10..=99 => 2,
-        100..=999 => 3,
-        1_000..=9_999 => 4,
-        10_000..=99_999 => 5,
-        100_000..=999_999 => 6,
-        1_000_000..=9_999_999 => 7,
-        10_000_000..=99_999_999 => 8,
-        100_000_000..=999_999_999 => 9,
-        _ => 10,
+impl Parsable for MirSemanticSuccessorsAttr {
+    type Arg = ();
+    type Parsed = Self;
+
+    fn parse<'a>(
+        state_stream: &mut StateStream<'a>,
+        _arg: Self::Arg,
+    ) -> ParseResult<'a, Self::Parsed> {
+        #[cfg(test)]
+        SEMANTIC_SUCCESSOR_TEXT_PARSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        StringAttr::parser(())
+            .map(|text| Self::from_text(text.as_str()))
+            .parse_stream(state_stream)
+            .into()
     }
 }
+
+#[cfg(test)]
+static SEMANTIC_SUCCESSOR_TEXT_PARSE_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+static SEMANTIC_SUCCESSOR_TEXT_PRINT_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 impl Verify for MirSemanticSuccessorsAttr {
     fn verify(&self, _context: &Context) -> PlironResult<()> {
@@ -2348,7 +2380,8 @@ impl MirSemanticTerminatorOp {
             successors: self
                 .get_attr_semantic_terminator_successors(context)?
                 .targets()
-                .ok()?,
+                .ok()?
+                .to_vec(),
         })
     }
 }
@@ -2463,4 +2496,59 @@ fn registration_hook(
 /// Returns the explicit MIR registration consumed by [`fe2o3_pliron`].
 pub fn mir_dialect_registration() -> Result<DialectRegistration, NameError> {
     DialectRegistration::new(DIALECT, registration_hook)
+}
+
+#[cfg(test)]
+mod direct_semantic_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn span(seed: u64) -> MirSemanticSourceSpan {
+        MirSemanticSourceSpan::new([seed, seed + 1, seed + 2, seed + 3], 1, 1, 1, 2).unwrap()
+    }
+
+    #[test]
+    fn direct_snapshot_never_consults_successor_text_parser() {
+        SEMANTIC_SUCCESSOR_TEXT_PARSE_COUNT.store(0, Ordering::Relaxed);
+        SEMANTIC_SUCCESSOR_TEXT_PRINT_COUNT.store(0, Ordering::Relaxed);
+
+        let mut context = Context::new();
+        register_mir_dialect(&mut context);
+        let module =
+            MirModuleOp::try_new(&mut context, "typed", MirDialectLimits::default()).unwrap();
+        let function = module.append_function(&mut context, "kernel", &[]).unwrap();
+        let entry = function.entry_block(&context).unwrap();
+        let block1 = function.append_block(&mut context).unwrap();
+        let block2 = function.append_block(&mut context).unwrap();
+        entry
+            .replace_with_semantic_terminator(
+                &mut context,
+                0,
+                MirSemanticOperationKind::TerminatorSwitchInt,
+                [1, 2, 3, 4],
+                MirSemanticSpanProvenance::new(span(1), span(11)).unwrap(),
+                &[block2.clone(), block1, block2],
+            )
+            .unwrap();
+
+        let snapshot = module
+            .body(&context)
+            .unwrap()
+            .semantic_functions(&context)
+            .unwrap();
+        let MirSnapshotOperation::SemanticTerminator(terminator) =
+            &snapshot[0].blocks()[0].operations()[1]
+        else {
+            panic!("expected semantic terminator");
+        };
+        assert_eq!(terminator.successors(), &[2, 1, 2]);
+        assert_eq!(
+            SEMANTIC_SUCCESSOR_TEXT_PARSE_COUNT.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            SEMANTIC_SUCCESSOR_TEXT_PRINT_COUNT.load(Ordering::Relaxed),
+            0
+        );
+    }
 }
