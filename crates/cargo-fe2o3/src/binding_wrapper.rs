@@ -50,9 +50,10 @@ use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
 use crate::worker_v2::{
-    PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
-    WorkerV2BuildObservation, WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigError,
-    WorkerV2ConfigIdentity, WorkerV2SourceDebugProfileV1,
+    PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
+    WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
+    WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigError, WorkerV2ConfigIdentity,
+    WorkerV2SourceDebugProfileV1,
 };
 use crate::worker_v2_artifact_container::assemble_recovered_worker_v2_load_envelope_v1;
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -439,6 +440,12 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         return Ok(success_exit_status());
     }
 
+    // From this point until rustc is spawned, every early return must revoke the live attempt.
+    // Spawn and completion paths below take over explicit lifecycle handling once disarmed.
+    let mut pre_spawn_attempt_guard = managed_attempt
+        .as_ref()
+        .map(ManagedAttemptRevocationGuard::arm);
+
     let execution_directory = match &rustc_working_directory {
         Some(directory) => directory.clone(),
         None => std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?,
@@ -522,6 +529,9 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         compile_environment_profile,
         command.as_command_mut(),
         std::env::vars_os(),
+        managed_attempt
+            .as_ref()
+            .and_then(ManagedAttempt::general_gemm_child_pins),
     )?;
     let inert_rustc_invocation = complete_reviewed_environment
         .as_ref()
@@ -622,6 +632,9 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             .prepare_invocation_authority(claim)?;
     }
     let status = command.status();
+    if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
+        guard.disarm();
+    }
     // Keep the in-memory descriptor alive across the exact spawn it describes.
     drop(inert_rustc_invocation);
     let status = match status {
@@ -1232,6 +1245,7 @@ fn materialize_reviewed_child_environment(
     profile: Option<WorkerV2CompileEnvironmentProfileV1>,
     command: &mut Command,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    general_gemm_pins: Option<GeneralGemmChildPinsV1<'_>>,
 ) -> Result<Option<CompleteReviewedChildEnvironmentV2>, BindingWrapperError> {
     match profile {
         Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0) => {
@@ -1244,10 +1258,22 @@ fn materialize_reviewed_child_environment(
             materialize_row_softmax_v1_child_environment(command, inherited).map(Some)
         }
         Some(WorkerV2CompileEnvironmentProfileV1::GeneralGemmV1Gfx942) => {
-            materialize_general_gemm_v1_child_environment(command, inherited).map(Some)
+            let pins = general_gemm_pins.ok_or_else(|| {
+                BindingWrapperError::BuildObservation(
+                    "general GEMM child environment has no parent-authenticated Worker V2 pins"
+                        .to_owned(),
+                )
+            })?;
+            materialize_general_gemm_v1_child_environment(command, inherited, pins).map(Some)
         }
         None => Ok(None),
     }
+}
+
+#[derive(Clone, Copy)]
+struct GeneralGemmChildPinsV1<'a> {
+    manifest_path: &'a Path,
+    expected_identity: WorkerV2ConfigIdentity,
 }
 
 fn materialize_row_softmax_v1_child_environment(
@@ -1507,6 +1533,7 @@ fn materialize_scalar_gemm_v1_child_environment(
 fn materialize_general_gemm_v1_child_environment(
     command: &mut Command,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    pins: GeneralGemmChildPinsV1<'_>,
 ) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
     let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
     for (name, value) in &inherited {
@@ -1555,6 +1582,17 @@ fn materialize_general_gemm_v1_child_environment(
             "general GEMM child environment has missing or changed FE2O3_TARGET".to_owned(),
         ));
     }
+    if required(WORKER_V2_CONFIG_ENV)? != pins.manifest_path.as_os_str() {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM child environment has changed FE2O3_WORKER_V2_CONFIG_V2".to_owned(),
+        ));
+    }
+    let expected_identity = pins.expected_identity.to_hex();
+    if required(WORKER_V2_EXPECTED_ID_ENV)? != OsStr::new(&expected_identity) {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM child environment has changed FE2O3_WORKER_V2_EXPECTED_ID_V1".to_owned(),
+        ));
+    }
     let verification = inherited
         .get(OsStr::new(VERIFY_KERNEL_IR_ENV))
         .map_or(OsStr::new("0"), OsString::as_os_str);
@@ -1574,6 +1612,14 @@ fn materialize_general_gemm_v1_child_environment(
         (
             OsString::from(VERIFY_KERNEL_IR_ENV),
             verification.to_owned(),
+        ),
+        (
+            OsString::from(WORKER_V2_CONFIG_ENV),
+            pins.manifest_path.as_os_str().to_owned(),
+        ),
+        (
+            OsString::from(WORKER_V2_EXPECTED_ID_ENV),
+            OsString::from(expected_identity),
         ),
     ]);
     let explicit = command
@@ -1728,6 +1774,21 @@ fn validate_general_gemm_v1_final_environment(
     if required(HSACO_DIR_ENV)? != format!("/proc/self/fd/{ARTIFACT_CHILD_FD}") {
         return Err(BindingWrapperError::BuildObservation(
             "general GEMM final environment has changed FE2O3_HSACO_DIR".to_owned(),
+        ));
+    }
+    if !canonical_absolute_utf8_path(OsStr::new(required(WORKER_V2_CONFIG_ENV)?)) {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM final environment has invalid FE2O3_WORKER_V2_CONFIG_V2".to_owned(),
+        ));
+    }
+    let expected_worker = required(WORKER_V2_EXPECTED_ID_ENV)?;
+    if expected_worker.len() != 64
+        || expected_worker
+            .bytes()
+            .any(|byte| !(byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    {
+        return Err(BindingWrapperError::BuildObservation(
+            "general GEMM final environment has invalid FE2O3_WORKER_V2_EXPECTED_ID_V1".to_owned(),
         ));
     }
     let attempt = BuildAttempt::from_env_value(required(BUILD_ATTEMPT_ENV)?).map_err(|_| {
@@ -2350,6 +2411,40 @@ struct ManagedAttempt {
     compiler_handoff_observation: Option<crate::compiler_handoff_observation::Request>,
 }
 
+struct ManagedAttemptRevocationGuard {
+    output_dir: PathBuf,
+    producer: ProducerIdentity,
+    attempt: BuildAttempt,
+    armed: bool,
+}
+
+impl ManagedAttemptRevocationGuard {
+    fn arm(managed: &ManagedAttempt) -> Self {
+        Self {
+            output_dir: managed.output_dir.clone(),
+            producer: managed.producer.clone(),
+            attempt: managed.attempt,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ManagedAttemptRevocationGuard {
+    fn drop(&mut self) {
+        if self.armed
+            && let Err(error) = fail_build_attempt(&self.output_dir, &self.producer, self.attempt)
+        {
+            eprintln!(
+                "[cargo-fe2o3] failed to revoke managed build attempt after pre-spawn error: {error}"
+            );
+        }
+    }
+}
+
 struct RowSoftmaxReleaseContext {
     authority: RowSoftmaxV1AuthorityPolicyV1,
     workload: Option<AdmittedRowSoftmaxV1WorkloadV1>,
@@ -2392,6 +2487,20 @@ impl ManagedAttempt {
 
     const fn compile_environment_profile(&self) -> Option<WorkerV2CompileEnvironmentProfileV1> {
         self.compile_environment_profile
+    }
+
+    fn general_gemm_child_pins(&self) -> Option<GeneralGemmChildPinsV1<'_>> {
+        match &self.worker_v2 {
+            Some(ManagedWorkerV2::InProcessGeneralGemm { config }) => {
+                Some(GeneralGemmChildPinsV1 {
+                    manifest_path: config.manifest_path(),
+                    expected_identity: config.identity(),
+                })
+            }
+            Some(ManagedWorkerV2::Fresh { .. }) | Some(ManagedWorkerV2::Recovery { .. }) | None => {
+                None
+            }
+        }
     }
 
     fn protected_source_path(&self) -> Option<&Path> {
@@ -2567,6 +2676,12 @@ fn prepare_managed_attempt(
             .map_err(BindingWrapperError::Artifact)?;
         (attempt, None)
     };
+    let mut begin_attempt_guard = ManagedAttemptRevocationGuard {
+        output_dir: output_dir.to_path_buf(),
+        producer: producer.clone(),
+        attempt,
+        armed: true,
+    };
     let row_softmax_release = row_softmax_release
         .map(|(provider, workload)| {
             compiler_capabilities
@@ -2577,7 +2692,7 @@ fn prepare_managed_attempt(
                 })
         })
         .transpose()?;
-    Ok(ManagedAttempt {
+    let managed = ManagedAttempt {
         output_dir: output_dir.to_path_buf(),
         producer,
         attempt,
@@ -2588,7 +2703,9 @@ fn prepare_managed_attempt(
         row_softmax_provision,
         #[cfg(feature = "compiler-handoff-observation-test-only")]
         compiler_handoff_observation,
-    })
+    };
+    begin_attempt_guard.disarm();
+    Ok(managed)
 }
 
 fn complete_managed_attempt(mut managed: ManagedAttempt) -> Result<(), BindingWrapperError> {
@@ -3508,8 +3625,8 @@ mod tests {
         CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
         CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, CompileBuildObservationV2,
         CompleteReviewedChildEnvironmentV2, DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
-        OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
+        GeneralGemmChildPinsV1, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
+        ManagedAttemptRevocationGuard, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
         ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1, ROW_SOFTMAX_V1_PIPELINE,
@@ -3519,13 +3636,13 @@ mod tests {
         configure_build_observation_environment_with_test_mutation,
         configure_worker_build_observation_environment, decode_managed_rustc_args,
         derive_build_attempt_input_with_config_identity, is_cargo_stdin_probe,
-        materialize_reviewed_child_environment, materialize_row_softmax_v1_child_environment,
-        materialize_s09_child_environment, materialize_scalar_gemm_v1_child_environment,
-        measure_build_executable, observe_pinned_cargo_image_and_parent, ordered_metadata_values,
-        os_bytes, prepared_rustc_command_sha256, process_start_time_ticks,
-        reject_authority_linker_arguments, reject_uninspectable_rustc_args,
-        resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
-        row_softmax_provider_observation_json,
+        materialize_general_gemm_v1_child_environment, materialize_reviewed_child_environment,
+        materialize_row_softmax_v1_child_environment, materialize_s09_child_environment,
+        materialize_scalar_gemm_v1_child_environment, measure_build_executable,
+        observe_pinned_cargo_image_and_parent, ordered_metadata_values, os_bytes,
+        prepared_rustc_command_sha256, process_start_time_ticks, reject_authority_linker_arguments,
+        reject_uninspectable_rustc_args, resolve_command_executable_with_path,
+        row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_executable::PinnedExecutable;
@@ -3542,8 +3659,8 @@ mod tests {
         KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
         PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
         UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
-        persist_worker_v2_publication_intent_v1, publish_exact_hsaco_evidence_for_attempt_v1,
-        recover_worker_v2_publication_intent_v1,
+        finish_build_attempt, persist_worker_v2_publication_intent_v1,
+        publish_exact_hsaco_evidence_for_attempt_v1, recover_worker_v2_publication_intent_v1,
     };
     use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
     use sha2::Digest;
@@ -4423,6 +4540,7 @@ mod tests {
             Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0),
             &mut command,
             inherited,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -4517,6 +4635,161 @@ mod tests {
             .env("FE2O3_CRATE_BINDING_ID_V1", "55".repeat(32))
             .env_remove("FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1");
         command
+    }
+
+    fn general_gemm_environment() -> Vec<(OsString, OsString)> {
+        let expected = WorkerV2ConfigIdentity::for_test([0x66; 32]).to_hex();
+        [
+            ("CARGO_MANIFEST_DIR", "/workspace/general"),
+            (
+                "FE2O3_CODEGEN_PIPELINE",
+                crate::worker_v2::GENERAL_GEMM_V1_PIPELINE,
+            ),
+            ("FE2O3_TARGET", "gfx942:xnack-"),
+            ("FE2O3_VERIFY_KERNEL_IR", "1"),
+            (
+                "FE2O3_WORKER_V2_CONFIG_V2",
+                "/workspace/general/worker-v2.json",
+            ),
+            ("FE2O3_WORKER_V2_EXPECTED_ID_V1", expected.as_str()),
+        ]
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+        .into()
+    }
+
+    fn general_gemm_command() -> Command {
+        let attempt = format!("1:{}:{}", "11".repeat(16), "22".repeat(32));
+        let mut command = command_with_production_managed_arguments(&[
+            "--crate-name",
+            "tiled_gemm_general_v1_gpu",
+            "/workspace/general/src/lib.rs",
+        ]);
+        command
+            .env("LANG", "C.UTF-8")
+            .env("PATH", "/usr/bin")
+            .env("TMPDIR", "/proc/self/fd/197/private")
+            .env("FE2O3_HSACO_DIR", "/proc/self/fd/197")
+            .env("FE2O3_BUILD_ATTEMPT_V1", attempt)
+            .env(
+                "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
+                "44".repeat(32),
+            )
+            .env_remove("FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1");
+        command
+    }
+
+    fn general_gemm_pins() -> GeneralGemmChildPinsV1<'static> {
+        GeneralGemmChildPinsV1 {
+            manifest_path: Path::new("/workspace/general/worker-v2.json"),
+            expected_identity: WorkerV2ConfigIdentity::for_test([0x66; 32]),
+        }
+    }
+
+    #[test]
+    fn general_gemm_environment_retains_only_parent_authenticated_worker_pins() {
+        let mut inherited = general_gemm_environment();
+        inherited.push((OsString::from("HOME"), OsString::from("/discarded")));
+        let mut command = general_gemm_command();
+        let complete = materialize_general_gemm_v1_child_environment(
+            &mut command,
+            inherited,
+            general_gemm_pins(),
+        )
+        .unwrap();
+        let effective = complete.entries.into_iter().collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            effective.get(OsStr::new("FE2O3_WORKER_V2_CONFIG_V2")),
+            Some(&OsString::from("/workspace/general/worker-v2.json"))
+        );
+        assert_eq!(
+            effective.get(OsStr::new("FE2O3_WORKER_V2_EXPECTED_ID_V1")),
+            Some(&OsString::from("66".repeat(32)))
+        );
+        assert!(!effective.contains_key(OsStr::new("HOME")));
+    }
+
+    #[test]
+    fn general_gemm_environment_rejects_missing_or_substituted_worker_pins() {
+        for name in [
+            "FE2O3_WORKER_V2_CONFIG_V2",
+            "FE2O3_WORKER_V2_EXPECTED_ID_V1",
+        ] {
+            let mut inherited = general_gemm_environment();
+            inherited.retain(|(candidate, _)| candidate != name);
+            assert!(
+                materialize_general_gemm_v1_child_environment(
+                    &mut general_gemm_command(),
+                    inherited,
+                    general_gemm_pins(),
+                )
+                .is_err()
+            );
+        }
+
+        for (name, value) in [
+            ("FE2O3_WORKER_V2_CONFIG_V2", "/workspace/other.json"),
+            ("FE2O3_WORKER_V2_EXPECTED_ID_V1", "77"),
+        ] {
+            let mut inherited = general_gemm_environment();
+            inherited
+                .iter_mut()
+                .find(|(candidate, _)| candidate == name)
+                .unwrap()
+                .1 = OsString::from(value);
+            assert!(
+                materialize_general_gemm_v1_child_environment(
+                    &mut general_gemm_command(),
+                    inherited,
+                    general_gemm_pins(),
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn general_gemm_pre_spawn_materialization_failure_revokes_attempt() {
+        let directory = std::env::temp_dir().join(format!(
+            "cargo-fe2o3-general-gemm-pre-spawn-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let producer = ProducerIdentity::from_codegen(
+            "tiled_gemm_general_v1_gpu",
+            Some(Path::new("/workspace/general/src/lib.rs")),
+        )
+        .unwrap();
+        let attempt = begin_build_attempt(
+            &directory,
+            &producer,
+            BuildInvocation::from_bytes([0x81; 32]),
+            BuildSession::from_bytes([0x82; 16]),
+        )
+        .unwrap();
+        let guard = ManagedAttemptRevocationGuard {
+            output_dir: directory.clone(),
+            producer: producer.clone(),
+            attempt,
+            armed: true,
+        };
+        let mut inherited = general_gemm_environment();
+        inherited.retain(|(name, _)| name != "FE2O3_TARGET");
+
+        assert!(
+            materialize_general_gemm_v1_child_environment(
+                &mut general_gemm_command(),
+                inherited,
+                general_gemm_pins(),
+            )
+            .is_err()
+        );
+        drop(guard);
+
+        assert!(finish_build_attempt(&directory, &producer, attempt).is_err());
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -4683,6 +4956,7 @@ mod tests {
                     OsString::from("ignored"),
                 ),
             ],
+            None,
         )
         .unwrap();
 

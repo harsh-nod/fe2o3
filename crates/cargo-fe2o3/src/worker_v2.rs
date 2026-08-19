@@ -141,6 +141,7 @@ struct ConfiguredUnit {
 }
 
 pub(crate) struct PreparedWorkerV2Config {
+    manifest_path: PathBuf,
     identity: WorkerV2ConfigIdentity,
     pipeline: WorkerV2PipelineV1,
     envelope_mode: WorkerV2EnvelopeModeV1,
@@ -376,6 +377,7 @@ impl PreparedWorkerV2Config {
             envelope_inputs.as_ref(),
         );
         Ok(Self {
+            manifest_path: path.to_path_buf(),
             identity,
             pipeline,
             envelope_mode,
@@ -394,6 +396,10 @@ impl PreparedWorkerV2Config {
 
     pub(crate) const fn identity(&self) -> WorkerV2ConfigIdentity {
         self.identity
+    }
+
+    pub(crate) fn manifest_path(&self) -> &Path {
+        &self.manifest_path
     }
 
     pub(crate) const fn envelope_mode(&self) -> WorkerV2EnvelopeModeV1 {
@@ -1571,6 +1577,7 @@ mod tests {
         )
         .unwrap();
         let pair = config.general_gemm_v1().unwrap();
+        assert_eq!(config.manifest_path(), path);
         assert_eq!(pair.verus_path(), Path::new("/opt/fe2o3/verus"));
         assert_eq!(pair.proof_timeout_seconds(), 120);
         assert!(config.executes_worker_in_rustc());
