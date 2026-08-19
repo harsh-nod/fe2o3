@@ -58,6 +58,18 @@ const REQUIRED_FUNCTION_ATTRIBUTE_KINDS_V1: [FunctionAttributeKindV1; 9] = [
 const REQUIRED_MODULE_FLAGS_V1: [ModuleFlagV1; 2] =
     [ModuleFlagV1::CodeObjectVersion6, ModuleFlagV1::PicLevel2];
 
+#[cfg(test)]
+std::thread_local! {
+    static INJECT_V2_CONSTRUCTION_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn v2_construction_panic_test_seam() {
+    INJECT_V2_CONSTRUCTION_PANIC.with(|inject| {
+        assert!(!inject.replace(false), "injected V2 construction panic");
+    });
+}
+
 #[derive(Clone)]
 struct OwnedDialectModuleV1 {
     owner: ContextIdentity,
@@ -102,8 +114,11 @@ impl LoweredScalarKernelV1 {
     ///
     /// The traversal revalidates owner identity, liveness, recursive Pliron
     /// verification, symbols, types, address spaces, alignment, strict FP,
-    /// def-use wiring, CFG edges, and the committed V1 evidence. Every upstream
-    /// access is panic-contained, and no raw Pliron object crosses this boundary.
+    /// def-use wiring, and CFG edges before translating those live facts. Target
+    /// and ABI policy, module flags, origins, and obligations are absent from
+    /// pliron-llvm and enter only through the validated retained V1 sidecar.
+    /// Every upstream access is panic-contained, and no raw Pliron object crosses
+    /// this boundary.
     pub fn extract_handoff_v2(&self) -> Result<Gfx942HandoffV2, HandoffExtractionDiagnosticV2> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::extract_v2::extract_handoff_v2(
@@ -191,16 +206,26 @@ pub fn lower_scalar_kernel_v1(
 /// Lowers through the private live Pliron graph and returns only typed LLVM handoff V2.
 ///
 /// This additive boundary preserves [`lower_scalar_kernel_v1`] while making V2
-/// the complete semantic result. The temporary Pliron context and arena handles
-/// are dropped before this function returns.
+/// the combination of graph-derived executable facts and receipt-validated V1
+/// policy facts. The temporary Pliron context and arena handles are dropped
+/// before this function returns. Panics from V1 construction and verification
+/// are contained separately from typed validation errors and extraction panics.
 pub fn lower_scalar_kernel_v2(
     input: &ScalarKernelModuleV1,
 ) -> Result<Gfx942HandoffV2, ScalarKernelHandoffDiagnosticV2> {
-    let lowered =
-        lower_scalar_kernel_v1(input).map_err(ScalarKernelHandoffDiagnosticV2::Lowering)?;
-    lowered
-        .extract_handoff_v2()
-        .map_err(ScalarKernelHandoffDiagnosticV2::Extraction)
+    catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        v2_construction_panic_test_seam();
+
+        let lowered =
+            lower_scalar_kernel_v1(input).map_err(ScalarKernelHandoffDiagnosticV2::Lowering)?;
+        lowered
+            .extract_handoff_v2()
+            .map_err(ScalarKernelHandoffDiagnosticV2::Extraction)
+    }))
+    .unwrap_or(Err(
+        ScalarKernelHandoffDiagnosticV2::UpstreamConstructionPanicked,
+    ))
 }
 
 fn inspect_live_module(
@@ -772,6 +797,45 @@ mod tests {
             .collect()
     }
 
+    #[derive(Clone, Copy)]
+    enum PrivateValue {
+        Input,
+        Output,
+        Addend,
+        Loaded,
+        Computed,
+    }
+
+    fn private_value(lowered: &LoweredScalarKernelV1, value: PrivateValue) -> pliron::value::Value {
+        let entry = private_entry(lowered);
+        let body = private_body(lowered);
+        match value {
+            PrivateValue::Input => entry.deref(&lowered.context).get_argument(0),
+            PrivateValue::Output => entry.deref(&lowered.context).get_argument(1),
+            PrivateValue::Addend => entry.deref(&lowered.context).get_argument(2),
+            PrivateValue::Loaded => body[0].deref(&lowered.context).get_result(0),
+            PrivateValue::Computed => body[1].deref(&lowered.context).get_result(0),
+        }
+    }
+
+    fn assert_same_typed_operand_rejected(
+        operation_index: usize,
+        operand_index: usize,
+        replacement: PrivateValue,
+        expected: HandoffExtractionDiagnosticV2,
+    ) {
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let body = private_body(&lowered);
+        let replacement = private_value(&lowered, replacement);
+        Operation::replace_operand(
+            body[operation_index],
+            &lowered.context,
+            operand_index,
+            replacement,
+        );
+        assert_eq!(lowered.extract_handoff_v2(), Err(expected));
+    }
+
     #[test]
     fn raw_operation_downcasts_remain_crate_private() {
         let lowered = lower_scalar_kernel_v1(&request()).unwrap();
@@ -876,28 +940,145 @@ mod tests {
     }
 
     #[test]
-    fn same_typed_hostile_def_use_edges_are_rejected() {
-        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
-        let entry = private_entry(&lowered);
-        let output = entry.deref(&lowered.context).get_argument(1);
-        let body = private_body(&lowered);
-        Operation::replace_operand(body[0], &lowered.context, 0, output);
-        verify_operation(lowered.module.module.get_operation(), &lowered.context).unwrap();
+    fn every_same_typed_operand_substitution_is_rejected() {
+        for (operation, operand, replacement, expected) in [
+            (
+                0,
+                0,
+                PrivateValue::Output,
+                HandoffExtractionDiagnosticV2::DefUseMismatch,
+            ),
+            (
+                1,
+                0,
+                PrivateValue::Addend,
+                HandoffExtractionDiagnosticV2::DefUseMismatch,
+            ),
+            (
+                1,
+                0,
+                PrivateValue::Computed,
+                HandoffExtractionDiagnosticV2::DialectVerificationFailed,
+            ),
+            (
+                1,
+                1,
+                PrivateValue::Loaded,
+                HandoffExtractionDiagnosticV2::DefUseMismatch,
+            ),
+            (
+                1,
+                1,
+                PrivateValue::Computed,
+                HandoffExtractionDiagnosticV2::DialectVerificationFailed,
+            ),
+            (
+                2,
+                0,
+                PrivateValue::Addend,
+                HandoffExtractionDiagnosticV2::DefUseMismatch,
+            ),
+            (
+                2,
+                0,
+                PrivateValue::Loaded,
+                HandoffExtractionDiagnosticV2::DefUseMismatch,
+            ),
+            (
+                2,
+                1,
+                PrivateValue::Input,
+                HandoffExtractionDiagnosticV2::DefUseMismatch,
+            ),
+        ] {
+            assert_same_typed_operand_rejected(operation, operand, replacement, expected);
+        }
+    }
+
+    #[test]
+    fn coherent_same_typed_use_permutations_are_rejected() {
+        let pointer_swap = lower_scalar_kernel_v1(&request()).unwrap();
+        let body = private_body(&pointer_swap);
+        Operation::replace_operand(
+            body[0],
+            &pointer_swap.context,
+            0,
+            private_value(&pointer_swap, PrivateValue::Output),
+        );
+        Operation::replace_operand(
+            body[2],
+            &pointer_swap.context,
+            1,
+            private_value(&pointer_swap, PrivateValue::Input),
+        );
         assert_eq!(
-            lowered.extract_handoff_v2(),
+            pointer_swap.extract_handoff_v2(),
             Err(HandoffExtractionDiagnosticV2::DefUseMismatch)
         );
 
-        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
-        let entry = private_entry(&lowered);
-        let addend = entry.deref(&lowered.context).get_argument(2);
-        let body = private_body(&lowered);
-        Operation::replace_operand(body[2], &lowered.context, 0, addend);
-        verify_operation(lowered.module.module.get_operation(), &lowered.context).unwrap();
-        assert_eq!(
-            lowered.extract_handoff_v2(),
-            Err(HandoffExtractionDiagnosticV2::DefUseMismatch)
-        );
+        for (permutation, expected) in [
+            (
+                [
+                    PrivateValue::Loaded,
+                    PrivateValue::Computed,
+                    PrivateValue::Addend,
+                ],
+                HandoffExtractionDiagnosticV2::DialectVerificationFailed,
+            ),
+            (
+                [
+                    PrivateValue::Addend,
+                    PrivateValue::Loaded,
+                    PrivateValue::Computed,
+                ],
+                HandoffExtractionDiagnosticV2::DefUseMismatch,
+            ),
+            (
+                [
+                    PrivateValue::Addend,
+                    PrivateValue::Computed,
+                    PrivateValue::Loaded,
+                ],
+                HandoffExtractionDiagnosticV2::DialectVerificationFailed,
+            ),
+            (
+                [
+                    PrivateValue::Computed,
+                    PrivateValue::Loaded,
+                    PrivateValue::Addend,
+                ],
+                HandoffExtractionDiagnosticV2::DialectVerificationFailed,
+            ),
+            (
+                [
+                    PrivateValue::Computed,
+                    PrivateValue::Addend,
+                    PrivateValue::Loaded,
+                ],
+                HandoffExtractionDiagnosticV2::DialectVerificationFailed,
+            ),
+        ] {
+            let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+            let body = private_body(&lowered);
+            for ((operation, operand), replacement) in
+                [(1, 0), (1, 1), (2, 0)].into_iter().zip(permutation)
+            {
+                Operation::replace_operand(
+                    body[operation],
+                    &lowered.context,
+                    operand,
+                    private_value(&lowered, replacement),
+                );
+            }
+            for value in [
+                PrivateValue::Loaded,
+                PrivateValue::Addend,
+                PrivateValue::Computed,
+            ] {
+                assert_eq!(private_value(&lowered, value).num_uses(&lowered.context), 1);
+            }
+            assert_eq!(lowered.extract_handoff_v2(), Err(expected));
+        }
     }
 
     #[test]
@@ -1045,6 +1226,29 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             Err(HandoffExtractionDiagnosticV2::UpstreamPanicked)
+        );
+    }
+
+    #[test]
+    fn public_v2_pipeline_contains_upstream_construction_panic() {
+        INJECT_V2_CONSTRUCTION_PANIC.with(|inject| inject.set(true));
+        let result = catch_unwind(AssertUnwindSafe(|| lower_scalar_kernel_v2(&request())));
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            Err(ScalarKernelHandoffDiagnosticV2::UpstreamConstructionPanicked)
+        );
+    }
+
+    #[test]
+    fn public_v2_pipeline_preserves_typed_validation_errors() {
+        let mut input = request();
+        input.operations[1] = crate::ScalarOperationV1::Call;
+        assert_eq!(
+            lower_scalar_kernel_v2(&input),
+            Err(ScalarKernelHandoffDiagnosticV2::Lowering(
+                LoweringDiagnosticV1::UnsupportedOperation(crate::ScalarOperationV1::Call)
+            ))
         );
     }
 }

@@ -1,14 +1,17 @@
+use std::collections::HashMap;
+
 use fe2o3_amdgcn_model::AddressSpace;
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallingConventionV2, EvidenceV2,
     ExecutableModuleV2, FloatBinaryOperationV2, FunctionAttributeV1, FunctionAttributeV2,
     FunctionIdV2, FunctionKindV2, FunctionParameterV2, FunctionV2, Gfx942HandoffV1,
-    Gfx942HandoffV2, InstructionKindV2, InstructionV2, KernelValueTypeV1, ModuleFlagV1,
-    ObligationKindV1, ReturnTypeV2, ScalarTypeV1, TerminatorV2, TypedValueV2, ValueIdV2,
-    ValueTypeV2,
+    Gfx942HandoffV2, Gfx942TargetPolicyV1, InstructionKindV2, InstructionV2, KernelValueTypeV1,
+    ModuleFlagV1, NamedMetadataV1, ObligationKindV1, ParameterAttributeV1, ReturnTypeV2,
+    ScalarTypeV1, TerminatorV2, TypedValueV2, ValueIdV2, ValueTypeV2,
 };
 use fe2o3_pliron::{ContextIdentity, require_context_identity};
 use pliron::{
+    basic_block::BasicBlock,
     builtin::{
         op_interfaces::{SingleBlockRegionInterface, SymbolOpInterface},
         type_interfaces::FunctionTypeInterface,
@@ -24,7 +27,7 @@ use pliron::{
 };
 use pliron_llvm::{
     attributes::FastmathFlagsAttr,
-    op_interfaces::{AlignableOpInterface, BinArithOp, FastMathFlags, LlvmSymbolName},
+    op_interfaces::{AlignableOpInterface, FastMathFlags, LlvmSymbolName},
     ops::{FAddOp, FuncOp, LoadOp, ReturnOp, StoreOp},
     types::{PointerType, VoidType},
 };
@@ -34,18 +37,92 @@ use crate::{
     model::{CanonicalLoweringReceiptV1, HandoffExtractionDiagnosticV2, admitted_obligations_v1},
 };
 
-const FUNCTION_ID: FunctionIdV2 = FunctionIdV2::new(0);
-const ENTRY_BLOCK_ID: BlockIdV2 = BlockIdV2::new(0);
-const INPUT_VALUE_ID: ValueIdV2 = ValueIdV2::new(0);
-const OUTPUT_VALUE_ID: ValueIdV2 = ValueIdV2::new(1);
-const ADDEND_VALUE_ID: ValueIdV2 = ValueIdV2::new(2);
-const LOADED_VALUE_ID: ValueIdV2 = ValueIdV2::new(3);
-const COMPUTED_VALUE_ID: ValueIdV2 = ValueIdV2::new(4);
 const F32_ALIGNMENT: u32 = 4;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LiveValueType {
+    F32,
+    OpaquePointer { address_space: AddressSpaceV1 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LiveTypedValue {
+    id: ValueIdV2,
+    value_type: LiveValueType,
+}
+
+struct LiveParameterFacts {
+    value: LiveTypedValue,
+    name: String,
+}
+
+enum LiveInstructionKind {
+    Load {
+        pointer: LiveTypedValue,
+        value_type: LiveValueType,
+        alignment: u16,
+    },
+    FloatAdd {
+        left: LiveTypedValue,
+        right: LiveTypedValue,
+        strict_fp: bool,
+    },
+    Store {
+        pointer: LiveTypedValue,
+        value: LiveTypedValue,
+        value_type: LiveValueType,
+        alignment: u16,
+    },
+}
+
+struct LiveInstructionFacts {
+    result: Option<LiveTypedValue>,
+    kind: LiveInstructionKind,
+    successors: Vec<BlockIdV2>,
+}
+
+enum LiveTerminatorFacts {
+    Return {
+        value: Option<LiveTypedValue>,
+        successors: Vec<BlockIdV2>,
+    },
+}
+
+struct LiveBlockFacts {
+    id: BlockIdV2,
+    instructions: Vec<LiveInstructionFacts>,
+    terminator: LiveTerminatorFacts,
+}
+
 struct LiveFunctionFacts {
+    id: FunctionIdV2,
     symbol: String,
-    parameter_names: [String; 3],
+    return_type: ReturnTypeV2,
+    parameters: Vec<LiveParameterFacts>,
+    entry: BlockIdV2,
+    blocks: Vec<LiveBlockFacts>,
+}
+
+/// Policy retained outside the live Pliron graph because pliron-llvm has no
+/// representation for it. Construction receives this only after exact receipt,
+/// target, ABI, metadata, origin, and obligation validation.
+struct ValidatedV1Sidecar<'a> {
+    base: &'a Gfx942HandoffV1,
+    function_kind: FunctionKindV2,
+    calling_convention: CallingConventionV2,
+    parameter_types: Vec<KernelValueTypeV1>,
+    parameter_attributes: Vec<Vec<ParameterAttributeV1>>,
+    function_attributes: Vec<FunctionAttributeV2>,
+    module_flags: Vec<ModuleFlagV1>,
+    named_metadata: Vec<NamedMetadataV1>,
+    evidence: EvidenceV2,
+}
+
+struct LiveGraphTranslator<'a> {
+    context: &'a Context,
+    values: HashMap<Value, LiveTypedValue>,
+    blocks: HashMap<Ptr<BasicBlock>, BlockIdV2>,
+    next_value_id: u32,
 }
 
 pub(crate) fn extract_handoff_v2(
@@ -58,10 +135,10 @@ pub(crate) fn extract_handoff_v2(
     receipt: &CanonicalLoweringReceiptV1,
 ) -> Result<Gfx942HandoffV2, HandoffExtractionDiagnosticV2> {
     validate_owner(context, retained_identity, module_owner, module)?;
-    validate_policy_and_receipt(expected_module_name, base, receipt)?;
-    let evidence = validate_evidence(base)?;
-    let facts = inspect_live_graph(context, module, expected_module_name, base)?;
-    build_handoff_v2(base, evidence, facts)
+    let sidecar = validate_retained_v1_sidecar(expected_module_name, base, receipt)?;
+    let facts = inspect_live_graph(context, module, expected_module_name)?;
+    validate_graph_sidecar_bridge(&facts, &sidecar)?;
+    build_handoff_v2(sidecar, facts)
 }
 
 fn validate_owner(
@@ -87,18 +164,19 @@ fn validate_owner(
         .map_err(|_| HandoffExtractionDiagnosticV2::DialectVerificationFailed)
 }
 
-fn validate_policy_and_receipt(
+fn validate_retained_v1_sidecar<'a>(
     module_name: &str,
-    base: &Gfx942HandoffV1,
+    base: &'a Gfx942HandoffV1,
     receipt: &CanonicalLoweringReceiptV1,
-) -> Result<(), HandoffExtractionDiagnosticV2> {
+) -> Result<ValidatedV1Sidecar<'a>, HandoffExtractionDiagnosticV2> {
     let expected_receipt = encode_receipt(module_name, base)
         .map_err(|_| HandoffExtractionDiagnosticV2::EvidenceMismatch)?;
     if expected_receipt != *receipt {
         return Err(HandoffExtractionDiagnosticV2::EvidenceMismatch);
     }
 
-    if base.kernels().len() != 1
+    if base.target() != &Gfx942TargetPolicyV1::canonical()
+        || base.kernels().len() != 1
         || base.module().flags() != [ModuleFlagV1::CodeObjectVersion6, ModuleFlagV1::PicLevel2]
         || !base.module().named_metadata().is_empty()
         || !base.module().device_libraries().is_empty()
@@ -126,7 +204,31 @@ fn validate_policy_and_receipt(
     {
         return Err(HandoffExtractionDiagnosticV2::EvidenceMismatch);
     }
-    Ok(())
+    let evidence = validate_evidence(base)?;
+    Ok(ValidatedV1Sidecar {
+        base,
+        function_kind: FunctionKindV2::Kernel,
+        calling_convention: CallingConventionV2::AmdGpuKernel,
+        parameter_types: kernel
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.value_type())
+            .collect(),
+        parameter_attributes: kernel
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.attributes().to_vec())
+            .collect(),
+        function_attributes: kernel
+            .function_attributes()
+            .iter()
+            .copied()
+            .map(FunctionAttributeV2::from)
+            .collect(),
+        module_flags: base.module().flags().to_vec(),
+        named_metadata: base.module().named_metadata().to_vec(),
+        evidence,
+    })
 }
 
 fn has_exact_function_attributes(attributes: &[FunctionAttributeV1]) -> bool {
@@ -224,110 +326,64 @@ fn inspect_live_graph(
     context: &Context,
     module: &pliron::builtin::ops::ModuleOp,
     expected_module_name: &str,
-    base: &Gfx942HandoffV1,
 ) -> Result<LiveFunctionFacts, HandoffExtractionDiagnosticV2> {
     validate_module_shape(context, module, expected_module_name)?;
     let module_body = module.get_body(context, 0);
     let module_operations = module_body.deref(context).iter(context).collect::<Vec<_>>();
-    let [function_pointer] = module_operations.as_slice() else {
+    if module_operations.len() != 1 {
         return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
-    };
-    let function = Operation::get_op::<FuncOp>(*function_pointer, context)
+    }
+    let (function_index, function_pointer) =
+        module_operations
+            .iter()
+            .copied()
+            .enumerate()
+            .next()
+            .ok_or(HandoffExtractionDiagnosticV2::OperationShapeMismatch)?;
+    let function = Operation::get_op::<FuncOp>(function_pointer, context)
         .ok_or(HandoffExtractionDiagnosticV2::OperationShapeMismatch)?;
-    validate_function_shape(context, &function, *function_pointer, base)?;
+    let (return_type, blocks) = validate_function_shape(context, &function, function_pointer)?;
 
     let symbol = function.get_symbol_name(context);
-    if symbol.as_ref() != base.kernels()[0].symbol() || function.llvm_symbol_name(context).is_some()
-    {
+    if function.llvm_symbol_name(context).is_some() {
         return Err(HandoffExtractionDiagnosticV2::SymbolMismatch);
     }
 
     let entry = function
         .get_entry_block(context)
         .ok_or(HandoffExtractionDiagnosticV2::ControlFlowMismatch)?;
+    let mut translator = LiveGraphTranslator::new(context, &blocks)?;
     let arguments = entry.deref(context).arguments().collect::<Vec<_>>();
-    let [input, output, addend] = arguments.as_slice() else {
-        return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
-    };
-    let parameter_names = validate_parameters(context, [*input, *output, *addend], base)?;
-
-    let body = entry.deref(context).iter(context).collect::<Vec<_>>();
-    let [load_pointer, add_pointer, store_pointer, return_pointer] = body.as_slice() else {
-        return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
-    };
-    let load = Operation::get_op::<LoadOp>(*load_pointer, context)
-        .ok_or(HandoffExtractionDiagnosticV2::OperationShapeMismatch)?;
-    let add = Operation::get_op::<FAddOp>(*add_pointer, context)
-        .ok_or(HandoffExtractionDiagnosticV2::OperationShapeMismatch)?;
-    let store = Operation::get_op::<StoreOp>(*store_pointer, context)
-        .ok_or(HandoffExtractionDiagnosticV2::OperationShapeMismatch)?;
-    let return_op = Operation::get_op::<ReturnOp>(*return_pointer, context)
-        .ok_or(HandoffExtractionDiagnosticV2::OperationShapeMismatch)?;
-
-    validate_leaf_shape(context, *load_pointer, 1, 1)?;
-    validate_leaf_shape(context, *add_pointer, 1, 2)?;
-    validate_leaf_shape(context, *store_pointer, 0, 2)?;
-    validate_leaf_shape(context, *return_pointer, 0, 0)?;
-    if body
-        .iter()
-        .any(|operation| operation.deref(context).get_num_successors() != 0)
-    {
-        return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+    let mut parameters = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+        let value = translator.define_value(argument)?;
+        let name = argument
+            .given_name(context)
+            .ok_or(HandoffExtractionDiagnosticV2::SymbolMismatch)?;
+        parameters.push(LiveParameterFacts {
+            value,
+            name: name.as_ref().to_owned(),
+        });
     }
 
-    if load.alignment(context) != Some(F32_ALIGNMENT)
-        || store.alignment(context) != Some(F32_ALIGNMENT)
-    {
-        return Err(HandoffExtractionDiagnosticV2::AlignmentMismatch);
+    let entry_id = translator.block_id(entry)?;
+    let mut live_blocks = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        live_blocks.push(translator.translate_block(block)?);
     }
-    if load_pointer.deref(context).attributes.0.len() != 1
-        || store_pointer.deref(context).attributes.0.len() != 1
-    {
-        return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
-    }
-    if add.fast_math_flags(context) != FastmathFlagsAttr::default() {
-        return Err(HandoffExtractionDiagnosticV2::StrictFpMismatch);
-    }
-    if add_pointer.deref(context).attributes.0.len() != 1
-        || !return_pointer.deref(context).attributes.0.is_empty()
-    {
-        return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
-    }
-
-    let loaded = load_pointer.deref(context).get_result(0);
-    let computed = add_pointer.deref(context).get_result(0);
-    require_f32_value(context, loaded)?;
-    require_f32_value(context, computed)?;
-    for operand in add_pointer.deref(context).operands() {
-        require_f32_value(context, operand)?;
-    }
-    require_f32_value(context, store_pointer.deref(context).get_operand(0))?;
-
-    if load_pointer.deref(context).get_operand(0) != *input
-        || add.lhs(context) != loaded
-        || add.rhs(context) != *addend
-        || store_pointer.deref(context).get_operand(0) != computed
-        || store_pointer.deref(context).get_operand(1) != *output
-        || input.num_uses(context) != 1
-        || output.num_uses(context) != 1
-        || addend.num_uses(context) != 1
-        || loaded.num_uses(context) != 1
-        || computed.num_uses(context) != 1
-    {
-        return Err(HandoffExtractionDiagnosticV2::DefUseMismatch);
-    }
-
-    if return_op.retval(context).is_some()
-        || entry.deref(context).get_terminator(context) != Some(*return_pointer)
-        || entry.deref(context).num_succ(context) != 0
-    {
-        return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
-    }
-
-    Ok(LiveFunctionFacts {
+    let facts = LiveFunctionFacts {
+        id: FunctionIdV2::new(
+            u32::try_from(function_index)
+                .map_err(|_| HandoffExtractionDiagnosticV2::OperationShapeMismatch)?,
+        ),
         symbol: symbol.as_ref().to_owned(),
-        parameter_names,
-    })
+        return_type,
+        parameters,
+        entry: entry_id,
+        blocks: live_blocks,
+    };
+    validate_closed_live_graph(&facts)?;
+    Ok(facts)
 }
 
 fn validate_module_shape(
@@ -364,8 +420,7 @@ fn validate_function_shape(
     context: &Context,
     function: &FuncOp,
     function_pointer: Ptr<Operation>,
-    base: &Gfx942HandoffV1,
-) -> Result<(), HandoffExtractionDiagnosticV2> {
+) -> Result<(ReturnTypeV2, Vec<Ptr<BasicBlock>>), HandoffExtractionDiagnosticV2> {
     let operation = function_pointer.deref(context);
     if operation.get_num_results() != 0
         || operation.get_num_operands() != 0
@@ -403,44 +458,11 @@ fn validate_function_shape(
     {
         return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
     }
-    let argument_types = function_type_ref.arg_types();
-    drop(function_type_ref);
-    let [input, output, addend] = argument_types.as_slice() else {
+    if function_type_ref.arg_types().len() != 3 {
         return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
-    };
-    require_global_pointer_type(context, *input)?;
-    require_global_pointer_type(context, *output)?;
-    require_f32_type(context, *addend)?;
-
-    if base.kernels()[0].function_attributes().len() != 9 {
-        return Err(HandoffExtractionDiagnosticV2::EvidenceMismatch);
     }
-    Ok(())
-}
-
-fn validate_parameters(
-    context: &Context,
-    arguments: [Value; 3],
-    base: &Gfx942HandoffV1,
-) -> Result<[String; 3], HandoffExtractionDiagnosticV2> {
-    require_global_pointer_value(context, arguments[0])?;
-    require_global_pointer_value(context, arguments[1])?;
-    require_f32_value(context, arguments[2])?;
-
-    let kernel = &base.kernels()[0];
-    let mut names = Vec::with_capacity(arguments.len());
-    for (argument, parameter) in arguments.into_iter().zip(kernel.parameters()) {
-        let name = argument
-            .given_name(context)
-            .ok_or(HandoffExtractionDiagnosticV2::SymbolMismatch)?;
-        if name.as_ref() != parameter.name() {
-            return Err(HandoffExtractionDiagnosticV2::SymbolMismatch);
-        }
-        names.push(name.as_ref().to_owned());
-    }
-    names
-        .try_into()
-        .map_err(|_| HandoffExtractionDiagnosticV2::SymbolMismatch)
+    drop(function_type_ref);
+    Ok((ReturnTypeV2::Void, blocks))
 }
 
 fn validate_leaf_shape(
@@ -459,130 +481,561 @@ fn validate_leaf_shape(
     Ok(())
 }
 
-fn require_global_pointer_value(
-    context: &Context,
-    value: Value,
-) -> Result<(), HandoffExtractionDiagnosticV2> {
-    require_global_pointer_type(context, value.get_type(context))
-}
-
-fn require_global_pointer_type(
+fn translate_live_type(
     context: &Context,
     value_type: TypeHandle,
-) -> Result<(), HandoffExtractionDiagnosticV2> {
+) -> Result<LiveValueType, HandoffExtractionDiagnosticV2> {
     let value_type = value_type.deref(context);
-    let pointer = value_type
-        .downcast_ref::<PointerType>()
-        .ok_or(HandoffExtractionDiagnosticV2::TypeMismatch)?;
-    if pointer.address_space() != AddressSpace::Global.llvm_id() {
-        return Err(HandoffExtractionDiagnosticV2::AddressSpaceMismatch);
+    if value_type.downcast_ref::<FP32Type>().is_some() {
+        return Ok(LiveValueType::F32);
     }
-    Ok(())
+    if let Some(pointer) = value_type.downcast_ref::<PointerType>() {
+        if pointer.address_space() != AddressSpace::Global.llvm_id() {
+            return Err(HandoffExtractionDiagnosticV2::AddressSpaceMismatch);
+        }
+        return Ok(LiveValueType::OpaquePointer {
+            address_space: AddressSpaceV1::Global,
+        });
+    }
+    Err(HandoffExtractionDiagnosticV2::TypeMismatch)
 }
 
-fn require_f32_value(context: &Context, value: Value) -> Result<(), HandoffExtractionDiagnosticV2> {
-    require_f32_type(context, value.get_type(context))
+impl<'a> LiveGraphTranslator<'a> {
+    fn new(
+        context: &'a Context,
+        blocks: &[Ptr<BasicBlock>],
+    ) -> Result<Self, HandoffExtractionDiagnosticV2> {
+        let mut block_ids = HashMap::with_capacity(blocks.len());
+        for (index, block) in blocks.iter().copied().enumerate() {
+            let id = BlockIdV2::new(
+                u32::try_from(index)
+                    .map_err(|_| HandoffExtractionDiagnosticV2::ControlFlowMismatch)?,
+            );
+            if block_ids.insert(block, id).is_some() {
+                return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+            }
+        }
+        Ok(Self {
+            context,
+            values: HashMap::new(),
+            blocks: block_ids,
+            next_value_id: 0,
+        })
+    }
+
+    fn block_id(&self, block: Ptr<BasicBlock>) -> Result<BlockIdV2, HandoffExtractionDiagnosticV2> {
+        self.blocks
+            .get(&block)
+            .copied()
+            .ok_or(HandoffExtractionDiagnosticV2::ControlFlowMismatch)
+    }
+
+    fn define_value(
+        &mut self,
+        value: Value,
+    ) -> Result<LiveTypedValue, HandoffExtractionDiagnosticV2> {
+        if self.values.contains_key(&value) {
+            return Err(HandoffExtractionDiagnosticV2::DefUseMismatch);
+        }
+        let mapped = LiveTypedValue {
+            id: ValueIdV2::new(self.next_value_id),
+            value_type: translate_live_type(self.context, value.get_type(self.context))?,
+        };
+        self.next_value_id = self
+            .next_value_id
+            .checked_add(1)
+            .ok_or(HandoffExtractionDiagnosticV2::OperationShapeMismatch)?;
+        self.values.insert(value, mapped);
+        Ok(mapped)
+    }
+
+    fn mapped_value(&self, value: Value) -> Result<LiveTypedValue, HandoffExtractionDiagnosticV2> {
+        let mapped = self
+            .values
+            .get(&value)
+            .copied()
+            .ok_or(HandoffExtractionDiagnosticV2::DefUseMismatch)?;
+        if mapped.value_type != translate_live_type(self.context, value.get_type(self.context))? {
+            return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
+        }
+        Ok(mapped)
+    }
+
+    fn successors(
+        &self,
+        operation: Ptr<Operation>,
+    ) -> Result<Vec<BlockIdV2>, HandoffExtractionDiagnosticV2> {
+        operation
+            .deref(self.context)
+            .successors()
+            .map(|successor| self.block_id(successor))
+            .collect()
+    }
+
+    fn translate_block(
+        &mut self,
+        block: Ptr<BasicBlock>,
+    ) -> Result<LiveBlockFacts, HandoffExtractionDiagnosticV2> {
+        let id = self.block_id(block)?;
+        let body = block
+            .deref(self.context)
+            .iter(self.context)
+            .collect::<Vec<_>>();
+        let mut instructions = Vec::with_capacity(body.len());
+        let mut terminator = None;
+        let mut terminator_pointer = None;
+
+        for operation in body {
+            if terminator.is_some() {
+                return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+            }
+            if let Some(load) = Operation::get_op::<LoadOp>(operation, self.context) {
+                instructions.push(self.translate_load(operation, &load)?);
+            } else if let Some(add) = Operation::get_op::<FAddOp>(operation, self.context) {
+                instructions.push(self.translate_float_add(operation, &add)?);
+            } else if let Some(store) = Operation::get_op::<StoreOp>(operation, self.context) {
+                instructions.push(self.translate_store(operation, &store)?);
+            } else if let Some(return_op) = Operation::get_op::<ReturnOp>(operation, self.context) {
+                terminator = Some(self.translate_return(operation, &return_op)?);
+                terminator_pointer = Some(operation);
+            } else {
+                return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+            }
+        }
+
+        let terminator = terminator.ok_or(HandoffExtractionDiagnosticV2::ControlFlowMismatch)?;
+        if block.deref(self.context).get_terminator(self.context) != terminator_pointer {
+            return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+        }
+        Ok(LiveBlockFacts {
+            id,
+            instructions,
+            terminator,
+        })
+    }
+
+    fn translate_load(
+        &mut self,
+        operation: Ptr<Operation>,
+        load: &LoadOp,
+    ) -> Result<LiveInstructionFacts, HandoffExtractionDiagnosticV2> {
+        validate_leaf_shape(self.context, operation, 1, 1)?;
+        let operation_ref = operation.deref(self.context);
+        if operation_ref.attributes.0.len() != 1 {
+            return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+        }
+        let pointer = operation_ref.get_operand(0);
+        let result = operation_ref.get_result(0);
+        drop(operation_ref);
+        let pointer = self.mapped_value(pointer)?;
+        let result = self.define_value(result)?;
+        Ok(LiveInstructionFacts {
+            result: Some(result),
+            kind: LiveInstructionKind::Load {
+                pointer,
+                value_type: result.value_type,
+                alignment: translate_alignment(load.alignment(self.context))?,
+            },
+            successors: self.successors(operation)?,
+        })
+    }
+
+    fn translate_float_add(
+        &mut self,
+        operation: Ptr<Operation>,
+        add: &FAddOp,
+    ) -> Result<LiveInstructionFacts, HandoffExtractionDiagnosticV2> {
+        validate_leaf_shape(self.context, operation, 1, 2)?;
+        let operation_ref = operation.deref(self.context);
+        if operation_ref.attributes.0.len() != 1 {
+            return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+        }
+        let left = operation_ref.get_operand(0);
+        let right = operation_ref.get_operand(1);
+        let result = operation_ref.get_result(0);
+        drop(operation_ref);
+        let left = self.mapped_value(left)?;
+        let right = self.mapped_value(right)?;
+        let result = self.define_value(result)?;
+        Ok(LiveInstructionFacts {
+            result: Some(result),
+            kind: LiveInstructionKind::FloatAdd {
+                left,
+                right,
+                strict_fp: add.fast_math_flags(self.context) == FastmathFlagsAttr::default(),
+            },
+            successors: self.successors(operation)?,
+        })
+    }
+
+    fn translate_store(
+        &self,
+        operation: Ptr<Operation>,
+        store: &StoreOp,
+    ) -> Result<LiveInstructionFacts, HandoffExtractionDiagnosticV2> {
+        validate_leaf_shape(self.context, operation, 0, 2)?;
+        let operation_ref = operation.deref(self.context);
+        if operation_ref.attributes.0.len() != 1 {
+            return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+        }
+        let value = operation_ref.get_operand(0);
+        let pointer = operation_ref.get_operand(1);
+        drop(operation_ref);
+        let value = self.mapped_value(value)?;
+        let pointer = self.mapped_value(pointer)?;
+        Ok(LiveInstructionFacts {
+            result: None,
+            kind: LiveInstructionKind::Store {
+                pointer,
+                value,
+                value_type: value.value_type,
+                alignment: translate_alignment(store.alignment(self.context))?,
+            },
+            successors: self.successors(operation)?,
+        })
+    }
+
+    fn translate_return(
+        &self,
+        operation: Ptr<Operation>,
+        return_op: &ReturnOp,
+    ) -> Result<LiveTerminatorFacts, HandoffExtractionDiagnosticV2> {
+        let operation_ref = operation.deref(self.context);
+        if operation_ref.get_num_results() != 0
+            || operation_ref.get_num_operands() > 1
+            || operation_ref.num_regions() != 0
+            || !operation_ref.attributes.0.is_empty()
+        {
+            return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+        }
+        drop(operation_ref);
+        let value = return_op
+            .retval(self.context)
+            .map(|value| self.mapped_value(value))
+            .transpose()?;
+        Ok(LiveTerminatorFacts::Return {
+            value,
+            successors: self.successors(operation)?,
+        })
+    }
 }
 
-fn require_f32_type(
-    context: &Context,
-    value_type: TypeHandle,
+fn translate_alignment(alignment: Option<u32>) -> Result<u16, HandoffExtractionDiagnosticV2> {
+    let alignment = alignment.ok_or(HandoffExtractionDiagnosticV2::AlignmentMismatch)?;
+    u16::try_from(alignment).map_err(|_| HandoffExtractionDiagnosticV2::AlignmentMismatch)
+}
+
+fn validate_closed_live_graph(
+    facts: &LiveFunctionFacts,
 ) -> Result<(), HandoffExtractionDiagnosticV2> {
-    if value_type
-        .deref(context)
-        .downcast_ref::<FP32Type>()
-        .is_none()
+    let [input, output, addend] = facts.parameters.as_slice() else {
+        return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
+    };
+    let pointer_type = LiveValueType::OpaquePointer {
+        address_space: AddressSpaceV1::Global,
+    };
+    if input.value.value_type != pointer_type
+        || output.value.value_type != pointer_type
+        || addend.value.value_type != LiveValueType::F32
     {
         return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
     }
+    let [block] = facts.blocks.as_slice() else {
+        return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+    };
+    if facts.entry != block.id {
+        return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+    }
+    let [load, add, store] = block.instructions.as_slice() else {
+        return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+    };
+    if load
+        .successors
+        .iter()
+        .chain(&add.successors)
+        .chain(&store.successors)
+        .next()
+        .is_some()
+    {
+        return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+    }
+
+    let Some(loaded) = load.result else {
+        return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+    };
+    match load.kind {
+        LiveInstructionKind::Load {
+            pointer,
+            value_type,
+            alignment,
+        } => {
+            if pointer != input.value {
+                return Err(HandoffExtractionDiagnosticV2::DefUseMismatch);
+            }
+            if pointer.value_type != pointer_type
+                || loaded.value_type != LiveValueType::F32
+                || value_type != LiveValueType::F32
+            {
+                return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
+            }
+            if alignment != F32_ALIGNMENT as u16 {
+                return Err(HandoffExtractionDiagnosticV2::AlignmentMismatch);
+            }
+        }
+        _ => return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch),
+    }
+
+    let Some(computed) = add.result else {
+        return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+    };
+    match add.kind {
+        LiveInstructionKind::FloatAdd {
+            left,
+            right,
+            strict_fp,
+        } => {
+            if left != loaded || right != addend.value {
+                return Err(HandoffExtractionDiagnosticV2::DefUseMismatch);
+            }
+            if left.value_type != LiveValueType::F32
+                || right.value_type != LiveValueType::F32
+                || computed.value_type != LiveValueType::F32
+            {
+                return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
+            }
+            if !strict_fp {
+                return Err(HandoffExtractionDiagnosticV2::StrictFpMismatch);
+            }
+        }
+        _ => return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch),
+    }
+
+    if store.result.is_some() {
+        return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch);
+    }
+    match store.kind {
+        LiveInstructionKind::Store {
+            pointer,
+            value,
+            value_type,
+            alignment,
+        } => {
+            if pointer != output.value || value != computed {
+                return Err(HandoffExtractionDiagnosticV2::DefUseMismatch);
+            }
+            if pointer.value_type != pointer_type
+                || value.value_type != LiveValueType::F32
+                || value_type != LiveValueType::F32
+            {
+                return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
+            }
+            if alignment != F32_ALIGNMENT as u16 {
+                return Err(HandoffExtractionDiagnosticV2::AlignmentMismatch);
+            }
+        }
+        _ => return Err(HandoffExtractionDiagnosticV2::OperationShapeMismatch),
+    }
+
+    match &block.terminator {
+        LiveTerminatorFacts::Return { value, successors } => {
+            if value.is_some() || !successors.is_empty() {
+                return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+            }
+        }
+    }
     Ok(())
 }
 
+fn validate_graph_sidecar_bridge(
+    facts: &LiveFunctionFacts,
+    sidecar: &ValidatedV1Sidecar<'_>,
+) -> Result<(), HandoffExtractionDiagnosticV2> {
+    let kernel = &sidecar.base.kernels()[0];
+    if facts.symbol != kernel.symbol() || facts.parameters.len() != kernel.parameters().len() {
+        return Err(HandoffExtractionDiagnosticV2::SymbolMismatch);
+    }
+    for (live, retained) in facts.parameters.iter().zip(kernel.parameters()) {
+        if live.name != retained.name() {
+            return Err(HandoffExtractionDiagnosticV2::SymbolMismatch);
+        }
+        if !live_type_matches_retained(live.value.value_type, retained.value_type()) {
+            return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn live_type_matches_retained(live: LiveValueType, retained: KernelValueTypeV1) -> bool {
+    matches!(
+        (live, retained),
+        (
+            LiveValueType::F32,
+            KernelValueTypeV1::Scalar(ScalarTypeV1::F32)
+        ) | (
+            LiveValueType::OpaquePointer {
+                address_space: AddressSpaceV1::Global
+            },
+            KernelValueTypeV1::Pointer {
+                pointee: ScalarTypeV1::F32,
+                address_space: AddressSpaceV1::Global
+            }
+        )
+    )
+}
+
+fn combine_parameter_type(
+    live: LiveValueType,
+    retained: KernelValueTypeV1,
+) -> Result<ValueTypeV2, HandoffExtractionDiagnosticV2> {
+    if !live_type_matches_retained(live, retained) {
+        return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
+    }
+    Ok(retained.into())
+}
+
+fn build_block_v2(
+    block: LiveBlockFacts,
+    evidence: &EvidenceV2,
+) -> Result<BasicBlockV2, HandoffExtractionDiagnosticV2> {
+    let instructions = block
+        .instructions
+        .into_iter()
+        .map(|instruction| build_instruction_v2(instruction, evidence))
+        .collect::<Result<Vec<_>, _>>()?;
+    let terminator = match block.terminator {
+        LiveTerminatorFacts::Return { value, successors } => {
+            if !successors.is_empty() {
+                return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+            }
+            TerminatorV2::Return(value.map(|value| value.id))
+        }
+    };
+    Ok(BasicBlockV2::new(block.id, instructions, terminator))
+}
+
+fn build_instruction_v2(
+    instruction: LiveInstructionFacts,
+    evidence: &EvidenceV2,
+) -> Result<InstructionV2, HandoffExtractionDiagnosticV2> {
+    if !instruction.successors.is_empty() {
+        return Err(HandoffExtractionDiagnosticV2::ControlFlowMismatch);
+    }
+    let result = instruction.result.map(translate_result).transpose()?;
+    let kind = match instruction.kind {
+        LiveInstructionKind::Load {
+            pointer,
+            value_type,
+            alignment,
+        } => InstructionKindV2::Load {
+            pointer: pointer.id,
+            value_type: translate_scalar_type(value_type)?,
+            alignment,
+        },
+        LiveInstructionKind::FloatAdd {
+            left,
+            right,
+            strict_fp,
+        } => {
+            if !strict_fp {
+                return Err(HandoffExtractionDiagnosticV2::StrictFpMismatch);
+            }
+            InstructionKindV2::Binary {
+                operation: BinaryOperationV2::Float(FloatBinaryOperationV2::Add),
+                left: left.id,
+                right: right.id,
+            }
+        }
+        LiveInstructionKind::Store {
+            pointer,
+            value,
+            value_type,
+            alignment,
+        } => InstructionKindV2::Store {
+            pointer: pointer.id,
+            value: value.id,
+            value_type: translate_scalar_type(value_type)?,
+            alignment,
+        },
+    };
+    InstructionV2::new(result, kind, evidence.clone())
+        .map_err(|_| HandoffExtractionDiagnosticV2::HandoffConstructionFailed)
+}
+
+fn translate_result(value: LiveTypedValue) -> Result<TypedValueV2, HandoffExtractionDiagnosticV2> {
+    let value_type = match value.value_type {
+        LiveValueType::F32 => ValueTypeV2::Scalar(ScalarTypeV1::F32),
+        LiveValueType::OpaquePointer { .. } => {
+            return Err(HandoffExtractionDiagnosticV2::TypeMismatch);
+        }
+    };
+    Ok(TypedValueV2::new(value.id, value_type))
+}
+
+fn translate_scalar_type(
+    value_type: LiveValueType,
+) -> Result<ScalarTypeV1, HandoffExtractionDiagnosticV2> {
+    match value_type {
+        LiveValueType::F32 => Ok(ScalarTypeV1::F32),
+        LiveValueType::OpaquePointer { .. } => Err(HandoffExtractionDiagnosticV2::TypeMismatch),
+    }
+}
+
 fn build_handoff_v2(
-    base: &Gfx942HandoffV1,
-    evidence: EvidenceV2,
+    sidecar: ValidatedV1Sidecar<'_>,
     facts: LiveFunctionFacts,
 ) -> Result<Gfx942HandoffV2, HandoffExtractionDiagnosticV2> {
-    let pointer_type = ValueTypeV2::Pointer {
-        pointee: ScalarTypeV1::F32,
-        address_space: AddressSpaceV1::Global,
-    };
-    let f32_type = ValueTypeV2::Scalar(ScalarTypeV1::F32);
-    let parameters = [
-        (INPUT_VALUE_ID, pointer_type),
-        (OUTPUT_VALUE_ID, pointer_type),
-        (ADDEND_VALUE_ID, f32_type),
-    ]
-    .into_iter()
-    .zip(facts.parameter_names)
-    .map(|((id, value_type), name)| {
-        FunctionParameterV2::new(TypedValueV2::new(id, value_type), &name, vec![])
+    let LiveFunctionFacts {
+        id,
+        symbol,
+        return_type,
+        parameters: live_parameters,
+        entry,
+        blocks: live_blocks,
+    } = facts;
+    let parameters = live_parameters
+        .into_iter()
+        .zip(
+            sidecar
+                .parameter_types
+                .iter()
+                .copied()
+                .zip(&sidecar.parameter_attributes),
+        )
+        .map(|(parameter, (retained_type, retained_attributes))| {
+            let value_type = combine_parameter_type(parameter.value.value_type, retained_type)?;
+            FunctionParameterV2::new(
+                TypedValueV2::new(parameter.value.id, value_type),
+                &parameter.name,
+                retained_attributes.clone(),
+            )
             .map_err(|_| HandoffExtractionDiagnosticV2::HandoffConstructionFailed)
-    })
-    .collect::<Result<Vec<_>, _>>()?;
-
-    let load = InstructionV2::new(
-        Some(TypedValueV2::new(LOADED_VALUE_ID, f32_type)),
-        InstructionKindV2::Load {
-            pointer: INPUT_VALUE_ID,
-            value_type: ScalarTypeV1::F32,
-            alignment: F32_ALIGNMENT as u16,
-        },
-        evidence.clone(),
-    )
-    .map_err(|_| HandoffExtractionDiagnosticV2::HandoffConstructionFailed)?;
-    let add = InstructionV2::new(
-        Some(TypedValueV2::new(COMPUTED_VALUE_ID, f32_type)),
-        InstructionKindV2::Binary {
-            operation: BinaryOperationV2::Float(FloatBinaryOperationV2::Add),
-            left: LOADED_VALUE_ID,
-            right: ADDEND_VALUE_ID,
-        },
-        evidence.clone(),
-    )
-    .map_err(|_| HandoffExtractionDiagnosticV2::HandoffConstructionFailed)?;
-    let store = InstructionV2::new(
-        None,
-        InstructionKindV2::Store {
-            pointer: OUTPUT_VALUE_ID,
-            value: COMPUTED_VALUE_ID,
-            value_type: ScalarTypeV1::F32,
-            alignment: F32_ALIGNMENT as u16,
-        },
-        evidence.clone(),
-    )
-    .map_err(|_| HandoffExtractionDiagnosticV2::HandoffConstructionFailed)?;
-    let block = BasicBlockV2::new(
-        ENTRY_BLOCK_ID,
-        vec![load, add, store],
-        TerminatorV2::Return(None),
-    );
+        })
+        .collect::<Result<Vec<_>, HandoffExtractionDiagnosticV2>>()?;
+    let blocks = live_blocks
+        .into_iter()
+        .map(|block| build_block_v2(block, &sidecar.evidence))
+        .collect::<Result<Vec<_>, _>>()?;
     let function = FunctionV2::new(
-        FUNCTION_ID,
-        &facts.symbol,
-        FunctionKindV2::Kernel,
-        CallingConventionV2::AmdGpuKernel,
-        ReturnTypeV2::Void,
+        id,
+        &symbol,
+        sidecar.function_kind,
+        sidecar.calling_convention,
+        return_type,
         parameters,
-        base.kernels()[0]
-            .function_attributes()
-            .iter()
-            .copied()
-            .map(FunctionAttributeV2::from)
-            .collect(),
-        ENTRY_BLOCK_ID,
-        vec![block],
-        evidence,
+        sidecar.function_attributes,
+        entry,
+        blocks,
+        sidecar.evidence.clone(),
     )
     .map_err(|_| HandoffExtractionDiagnosticV2::HandoffConstructionFailed)?;
     let module = ExecutableModuleV2::new(
-        base.module().flags().to_vec(),
-        base.module().named_metadata().to_vec(),
+        sidecar.module_flags,
+        sidecar.named_metadata,
         vec![],
         vec![],
         vec![function],
     )
     .map_err(|_| HandoffExtractionDiagnosticV2::HandoffConstructionFailed)?;
-    Gfx942HandoffV2::new(base.clone(), module)
+    Gfx942HandoffV2::new(sidecar.base.clone(), module)
         .map_err(|_| HandoffExtractionDiagnosticV2::HandoffConstructionFailed)
 }
