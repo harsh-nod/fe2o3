@@ -926,6 +926,24 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
             machine.assembly().source_identity(),
             machine.handoff().identity()
         );
+        assert_eq!(
+            machine.worker_admission().handoff_identity(),
+            machine.handoff().identity()
+        );
+        assert_ne!(
+            machine.worker_admission().admission_identity().as_bytes(),
+            &[0; 32]
+        );
+        assert!(
+            !machine
+                .worker_admission()
+                .authenticates_worker_measurement()
+        );
+        assert!(!machine.worker_admission().grants_object_authority());
+        assert!(!machine.worker_admission().grants_link_authority());
+        assert!(!machine.worker_admission().grants_publication_authority());
+        assert!(!machine.worker_admission().grants_load_authority());
+        assert!(!machine.worker_admission().grants_launch_authority());
         assert!(machine.assembly().has_embedded_source_identity());
         assert!(!machine.grants_artifact_authority());
         assert!(!machine.compiler_handoff().grants_compiler_authority());
