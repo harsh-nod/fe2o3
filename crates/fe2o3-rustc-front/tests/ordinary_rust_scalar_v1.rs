@@ -340,7 +340,7 @@ fn canonical_identity_envelopes_reject_mutation_and_substitution() {
     );
 
     let selected = kernel_item(0x21, 0x99, 0x23);
-    let observation = OrdinaryRustScalarKernelObservationV1::new(
+    let substituted = OrdinaryRustScalarKernelObservationV1::new(
         observation().clone_frontend_for_test(),
         selected,
         kernel_instance(good_item, 0x31, 0x32, 0x33),
@@ -348,12 +348,54 @@ fn canonical_identity_envelopes_reject_mutation_and_substitution() {
         observation().clone_functions_for_test(),
         vec![],
     );
-    assert!(observation.is_ok());
+    assert!(substituted.is_ok());
     assert_eq!(
-        authenticate_ordinary_rust_scalar_kernel_v1(observation.unwrap())
+        authenticate_ordinary_rust_scalar_kernel_v1(substituted.unwrap())
             .unwrap_err()
             .code(),
         OrdinaryRustScalarDiagnosticCodeV1::KernelItemMismatch
+    );
+
+    let imported = authenticate(observation());
+    let root = imported
+        .functions()
+        .iter()
+        .find(|function| function.role() == FunctionImportRoleV1::Kernel)
+        .unwrap();
+    let wrong_root = ReachableFunctionObservationV1::new(
+        root.frontend_identity(),
+        root.role(),
+        RustItemDefinitionIdentityV1::new([0xee; 32]).unwrap(),
+        root.monomorphization(),
+        root.source_identity(),
+        root.mir_identity(),
+        root.source_span().clone(),
+        root.function_kind(),
+        root.is_concrete(),
+        root.fn_abi().clone(),
+        root.calls().to_vec(),
+    )
+    .unwrap();
+    let functions = imported
+        .functions()
+        .iter()
+        .map(|function| {
+            if function.role() == FunctionImportRoleV1::Kernel {
+                wrong_root.clone()
+            } else {
+                function.clone()
+            }
+        })
+        .collect();
+    let error = authenticate_ordinary_rust_scalar_kernel_v1(observation_from_import(
+        &imported,
+        imported.frontend_unit().clone(),
+        functions,
+    ))
+    .unwrap_err();
+    assert_eq!(
+        error.code(),
+        OrdinaryRustScalarDiagnosticCodeV1::KernelRootIdentityMismatch
     );
 }
 

@@ -683,6 +683,7 @@ pub enum OrdinaryRustScalarDiagnosticCodeV1 {
     InvalidIdentityEnvelope = 1001,
     KernelItemMismatch = 1002,
     ZeroIdentity = 1003,
+    KernelRootIdentityMismatch = 1004,
     BoundExceeded = 1101,
     KernelRootCount = 1102,
     FunctionSetMismatch = 1103,
@@ -708,6 +709,7 @@ pub enum OrdinaryRustScalarValidationErrorV1 {
         field: &'static str,
     },
     KernelItemMismatch,
+    KernelRootIdentityMismatch,
     ZeroIdentity {
         field: &'static str,
     },
@@ -777,6 +779,9 @@ impl OrdinaryRustScalarValidationErrorV1 {
                 OrdinaryRustScalarDiagnosticCodeV1::InvalidIdentityEnvelope
             }
             Self::KernelItemMismatch => OrdinaryRustScalarDiagnosticCodeV1::KernelItemMismatch,
+            Self::KernelRootIdentityMismatch => {
+                OrdinaryRustScalarDiagnosticCodeV1::KernelRootIdentityMismatch
+            }
             Self::ZeroIdentity { .. } => OrdinaryRustScalarDiagnosticCodeV1::ZeroIdentity,
             Self::BoundExceeded { .. } => OrdinaryRustScalarDiagnosticCodeV1::BoundExceeded,
             Self::KernelRootCount { .. } => OrdinaryRustScalarDiagnosticCodeV1::KernelRootCount,
@@ -823,6 +828,9 @@ impl fmt::Display for OrdinaryRustScalarValidationErrorV1 {
             }
             Self::KernelItemMismatch => formatter.write_str(
                 "kernel instance does not embed the selected kernel item identity",
+            ),
+            Self::KernelRootIdentityMismatch => formatter.write_str(
+                "kernel root does not match the selected concrete instance and Rust item identity",
             ),
             Self::ZeroIdentity { field } => write!(formatter, "{field} identity is all zero"),
             Self::BoundExceeded { field, actual, max } => {
@@ -943,7 +951,7 @@ pub fn authenticate_ordinary_rust_scalar_kernel_v1(
     if root != ConcreteMonomorphizationIdentityV1::for_kernel_instance(observation.kernel_instance)
         || roots[0].item_identity != observation.kernel_item.rust_item_identity()
     {
-        return Err(OrdinaryRustScalarValidationErrorV1::KernelItemMismatch);
+        return Err(OrdinaryRustScalarValidationErrorV1::KernelRootIdentityMismatch);
     }
 
     reconcile_frontend_functions(&observation.frontend_unit, &observation.functions)?;
