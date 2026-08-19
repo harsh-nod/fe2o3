@@ -16,8 +16,9 @@ use crate::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME,
     FinalizationError, FinalizedHsaco, FirstBuildWorkerV2IdentityV1,
     InspectedRawWorkerV2HsacoIdentityV1, InspectedRawWorkerV2HsacoV1,
-    ObservedWorkerV2KernelSymbolsV1, WorkerV2RawHsacoPolicyIdentityV1, finalize_unfinalized,
-    verify_finalized,
+    ObservedWorkerV2KernelSymbolsV1, WorkerV2RawHsacoPolicyIdentityV1,
+    finalize_allocated_read_only_unfinalized, finalize_unfinalized,
+    verify_allocated_read_only_finalized, verify_finalized,
 };
 
 const FINALIZED_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-CANONICAL-FINALIZATION/V1\0";
@@ -284,6 +285,19 @@ impl Error for WorkerV2HsacoFinalizationError {
 pub fn finalize_inspected_worker_v2_hsaco_v1(
     raw: InspectedRawWorkerV2HsacoV1,
 ) -> Result<PreparedFinalizedWorkerV2HsacoV1, WorkerV2HsacoFinalizationError> {
+    finalize_inspected_worker_v2_hsaco_with_placement_v1(raw, false)
+}
+
+pub(crate) fn finalize_allocated_general_gemm_worker_v2_hsaco_v1(
+    raw: InspectedRawWorkerV2HsacoV1,
+) -> Result<PreparedFinalizedWorkerV2HsacoV1, WorkerV2HsacoFinalizationError> {
+    finalize_inspected_worker_v2_hsaco_with_placement_v1(raw, true)
+}
+
+fn finalize_inspected_worker_v2_hsaco_with_placement_v1(
+    raw: InspectedRawWorkerV2HsacoV1,
+    allocated_read_only: bool,
+) -> Result<PreparedFinalizedWorkerV2HsacoV1, WorkerV2HsacoFinalizationError> {
     let raw_bytes = raw.exact_bytes();
     if !raw.linked_output_identity().matches(raw_bytes) {
         return Err(WorkerV2HsacoFinalizationError::RawOutputIdentityMismatch);
@@ -297,10 +311,18 @@ pub fn finalize_inspected_worker_v2_hsaco_v1(
         );
     }
 
-    let finalized = finalize_unfinalized(raw_bytes)
-        .map_err(WorkerV2HsacoFinalizationError::CanonicalFinalization)?;
-    let verified = verify_finalized(finalized.as_bytes())
-        .map_err(WorkerV2HsacoFinalizationError::FinalizedVerification)?;
+    let finalized = if allocated_read_only {
+        finalize_allocated_read_only_unfinalized(raw_bytes)
+    } else {
+        finalize_unfinalized(raw_bytes)
+    }
+    .map_err(WorkerV2HsacoFinalizationError::CanonicalFinalization)?;
+    let verified = if allocated_read_only {
+        verify_allocated_read_only_finalized(finalized.as_bytes())
+    } else {
+        verify_finalized(finalized.as_bytes())
+    }
+    .map_err(WorkerV2HsacoFinalizationError::FinalizedVerification)?;
     if &verified != finalized.inspection() {
         return Err(WorkerV2HsacoFinalizationError::FinalizedInspectionMismatch);
     }

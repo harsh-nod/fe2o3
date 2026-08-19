@@ -12,22 +12,24 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_api::{
     CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
-    KernelInstanceIdentityV1, PipelineConfigurationIdentityV1, PipelineSelectorV1,
-    RequestIdentityV1, SnapshotFormatIdentityV1, SnapshotIdentityV1, StageSnapshotV1,
-    TargetProfileIdentityV1,
+    KernelInstanceIdentityV1, PipelineSelectorV1, RequestIdentityV1, SnapshotFormatIdentityV1,
+    SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
 };
-use fe2o3_compiler_driver::general_gemm_semantic_obligation_set_identity_v1;
 use fe2o3_compiler_ffi::CompilerModuleHandoffV2;
 use fe2o3_general_gemm_compiler::{
-    GeneralGemmCompilationUnitV1, GeneralGemmFrontendSemanticBindingV1,
-    GeneralGemmLoweringLimitsV1, GeneralGemmRuntimeAbiV1, GeneralGemmScheduleV1,
-    GeneralGemmSymbolicKirV1, GeneralGemmSymbolicPlanV1, lower_general_gemm_structural_machine_v1,
+    GeneralGemmFrontendSemanticBindingV1, GeneralGemmLoweringLimitsV1, GeneralGemmScheduleV1,
+    GeneralGemmSymbolicCompilationUnitV1, GeneralGemmSymbolicKirV1, GeneralGemmSymbolicPlanV1,
+    general_gemm_symbolic_obligation_set_identity_v1,
+    general_gemm_symbolic_pipeline_configuration_identity_v1,
+    lower_general_gemm_symbolic_structural_machine_v1,
 };
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, PinnedWorkerV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
-    execute_general_gemm_worker_v2_v1,
+    ContentIdentityV1, GeneralGemmBarrierRefinementV1, PinnedWorkerV1, WorkerExecutionLimitsV1,
+    WorkerMeasurementV1, execute_symbolic_general_gemm_worker_v2_v1,
+    finalize_symbolic_general_gemm_worker_v2_v1,
 };
-use fe2o3_kernel_ir::{GeneralGemmKirV1, GeneralGemmPlanFieldsV1, GeneralGemmPlanSnapshotV1};
+use fe2o3_kernel_descriptor::CANONICAL_CODE_OBJECT_DIGEST_OFFSET;
+use object::{Object as _, ObjectSection as _};
 
 const WORKER_PATH: &str = "/home/harsh/fe2o3-general-gemm-worker-llvm22/fe2o3-llvm-link-worker";
 const WORKER_SHA256: &str = "0b4936777b08d7d9d864bf357ab4f14cac33a0bb0a13c479209a26c1da808d35";
@@ -61,21 +63,22 @@ fn identity(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
 
-fn plan() -> GeneralGemmPlanFieldsV1 {
-    GeneralGemmPlanFieldsV1::checked(GeneralGemmPlanSnapshotV1 {
-        dimensions: [17, 19, 18],
-        strides: [23, 29, 31],
-        storage_elements: [386, 512, 515],
-        block_counts: [2, 2, 1],
-        aql_grid_work_items: [128, 2, 1],
-        reduction_phases: 2,
-        alpha_bits: 2.0_f32.to_bits(),
-        beta_bits: (-1.0_f32).to_bits(),
-    })
-    .expect("valid measurement plan")
+fn frontend() -> GeneralGemmFrontendSemanticBindingV1 {
+    GeneralGemmFrontendSemanticBindingV1::from_consumed_frontend_receipt_observation(
+        identity(0x12),
+        identity(0x41),
+        identity(0x42),
+        identity(0x43),
+        GeneralGemmSymbolicPlanV1::canonical(),
+        GeneralGemmSymbolicKirV1::canonical(),
+    )
+    .expect("descriptive symbolic measurement binding")
 }
 
-fn request(kir: &GeneralGemmKirV1) -> CompileRequestV1 {
+fn request(
+    frontend: &GeneralGemmFrontendSemanticBindingV1,
+    schedule: GeneralGemmScheduleV1,
+) -> CompileRequestV1 {
     let input = StageSnapshotV1::new(
         CompilerStageV1::FrontendInput,
         SnapshotIdentityV1::from_untrusted_bytes(identity(0x17)),
@@ -83,13 +86,13 @@ fn request(kir: &GeneralGemmKirV1) -> CompileRequestV1 {
         b"inert-general-gemm-worker-measurement".to_vec(),
     )
     .expect("bounded measurement input");
-    let obligations = general_gemm_semantic_obligation_set_identity_v1(input.identity(), kir);
+    let obligations = general_gemm_symbolic_obligation_set_identity_v1(&input, frontend);
     CompileRequestV1::new(
         RequestIdentityV1::from_untrusted_bytes(identity(0x11)),
         KernelInstanceIdentityV1::from_untrusted_bytes(identity(0x12)),
         CompilerProfileIdentityV1::from_untrusted_bytes(identity(0x13)),
         TargetProfileIdentityV1::from_untrusted_bytes(identity(0x14)),
-        PipelineConfigurationIdentityV1::from_untrusted_bytes(identity(0x15)),
+        general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
         obligations,
         PipelineSelectorV1::PlironV1,
         input,
@@ -98,30 +101,16 @@ fn request(kir: &GeneralGemmKirV1) -> CompileRequestV1 {
     .expect("valid measurement request")
 }
 
-fn unit(schedule: GeneralGemmScheduleV1) -> GeneralGemmCompilationUnitV1 {
-    let plan = plan();
-    let kir = GeneralGemmKirV1::canonical(plan);
-    let request = request(&kir);
-    let frontend =
-        GeneralGemmFrontendSemanticBindingV1::from_consumed_frontend_receipt_observation(
-            identity(0x12),
-            identity(0x41),
-            identity(0x42),
-            identity(0x43),
-            GeneralGemmSymbolicPlanV1::canonical(),
-            GeneralGemmSymbolicKirV1::canonical(),
-        )
-        .expect("descriptive measurement binding");
-    GeneralGemmCompilationUnitV1::checked(
+fn unit(schedule: GeneralGemmScheduleV1) -> GeneralGemmSymbolicCompilationUnitV1 {
+    let frontend = frontend();
+    let request = request(&frontend, schedule);
+    GeneralGemmSymbolicCompilationUnitV1::checked(
         &request,
         frontend,
-        plan,
-        kir,
         schedule,
-        GeneralGemmRuntimeAbiV1::from_plan(plan),
         GeneralGemmLoweringLimitsV1::default(),
     )
-    .expect("checked descriptive measurement unit")
+    .expect("checked symbolic measurement unit")
 }
 
 fn consumed_handoff(
@@ -195,11 +184,11 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
             0x52,
         ),
     ] {
-        let machine = lower_general_gemm_structural_machine_v1(&unit(schedule))
-            .expect("lower exact general-GEMM machine");
+        let machine = lower_general_gemm_symbolic_structural_machine_v1(&unit(schedule))
+            .expect("lower exact symbolic general-GEMM machine");
         let directory = TestDirectory::new();
         let consumed = consumed_handoff(&directory, machine.compiler_handoff(), schedule_byte);
-        let evidence = execute_general_gemm_worker_v2_v1(
+        let evidence = execute_symbolic_general_gemm_worker_v2_v1(
             machine,
             consumed,
             &worker,
@@ -207,18 +196,60 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
         )
         .unwrap_or_else(|error| panic!("{label} Worker V2 execution failed: {error:?}"));
         assert!(!evidence.grants_artifact_authority());
-        assert!(!evidence.grants_publication_authority());
-        assert!(!evidence.grants_load_authority());
-        assert!(!evidence.grants_launch_authority());
+        let raw_bytes = evidence.worker_evidence().output_bytes().to_vec();
         fs::write(
             output_directory.join(format!("general-gemm-{label}.raw.hsaco")),
-            evidence.worker_evidence().output_bytes(),
+            &raw_bytes,
         )
         .expect("write inert raw HSACO for audit");
+        let observation = finalize_symbolic_general_gemm_worker_v2_v1(evidence)
+            .unwrap_or_else(|error| panic!("{label} post-link inspection failed: {error:?}"));
+        assert_eq!(observation.schedule(), schedule);
+        assert_eq!(
+            observation.vector_global_load_count(),
+            u32::from(schedule == GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1)
+        );
+        assert_eq!(observation.barriers_ir(), 2);
+        assert_eq!(observation.barriers_isa(), 0);
+        assert_eq!(
+            observation.barrier_refinement(),
+            GeneralGemmBarrierRefinementV1::SingleWaveElision
+        );
+        assert_eq!(observation.mfma_numerical_refinement().count(), 1);
+        assert!(observation.mfma_numerical_refinement().fp_contract_is_off());
+        assert!(!observation.grants_artifact_authority());
+        assert!(!observation.grants_publication_authority());
+        assert!(!observation.grants_load_authority());
+        assert!(!observation.grants_launch_authority());
+        let raw_object = object::File::parse(raw_bytes.as_slice()).expect("parse raw HSACO");
+        let descriptor = raw_object
+            .sections()
+            .find(|section| section.name().ok() == Some(".fe2o3.kd.v1"))
+            .expect("exact descriptor section");
+        let (descriptor_offset, _) = descriptor.file_range().expect("file-backed descriptor");
+        let digest_start = descriptor_offset as usize + CANONICAL_CODE_OBJECT_DIGEST_OFFSET;
+        let digest_end = digest_start + 32;
+        assert_eq!(raw_bytes.len(), observation.exact_finalized_bytes().len());
+        for (index, (before, after)) in raw_bytes
+            .iter()
+            .zip(observation.exact_finalized_bytes())
+            .enumerate()
+        {
+            assert!(
+                before == after || (digest_start..digest_end).contains(&index),
+                "{label} finalizer changed byte {index} outside the canonical digest field"
+            );
+        }
+        fs::write(
+            output_directory.join(format!("general-gemm-{label}.finalized.hsaco")),
+            observation.exact_finalized_bytes(),
+        )
+        .expect("write finalized inert HSACO for audit");
         eprintln!(
-            "{label}: worker_evidence={:02x?} raw={:02x?}",
-            evidence.identity().as_bytes(),
-            evidence.raw_output_identity().sha256()
+            "{label}: machine={:02x?} raw={:02x?} finalized={:02x?}",
+            observation.identity().as_bytes(),
+            observation.raw_output_identity().sha256(),
+            observation.finalized_output_identity().sha256()
         );
     }
 }

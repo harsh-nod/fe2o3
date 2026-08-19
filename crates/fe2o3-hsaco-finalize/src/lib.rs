@@ -93,8 +93,13 @@ pub use flash_attention_v1_finalizer::{
     finalize_flash_attention_v1_worker_v2_hsaco_v1,
 };
 pub use general_gemm_v1_artifact::{
-    GeneralGemmWorkerV2ErrorV1, GeneralGemmWorkerV2IdentityV1, InertGeneralGemmWorkerV2EvidenceV1,
-    execute_general_gemm_worker_v2_v1,
+    GeneralGemmBarrierRefinementV1, GeneralGemmMfmaNumericalRefinementIdentityV1,
+    GeneralGemmMfmaNumericalRefinementV1, GeneralGemmPostLinkMachineErrorV1,
+    GeneralGemmPostLinkMachineIdentityV1, GeneralGemmWorkerV2ErrorV1,
+    GeneralGemmWorkerV2IdentityV1, InertGeneralGemmWorkerV2EvidenceV1,
+    InertSymbolicGeneralGemmWorkerV2EvidenceV1, OpaqueGeneralGemmPostLinkMachineObservationV1,
+    execute_general_gemm_worker_v2_v1, execute_symbolic_general_gemm_worker_v2_v1,
+    finalize_symbolic_general_gemm_worker_v2_v1,
 };
 pub use lds_gemm_finalizer::{
     ExactLdsGemmFinalizationErrorV1, FinalizedExactLdsGemmHsacoIdentityV1,
@@ -248,9 +253,16 @@ const ELF64_SECTION_FLAGS_OFFSET: usize = 8;
 const ELF64_SECTION_FILE_OFFSET: usize = 24;
 const ELF64_SECTION_SIZE_OFFSET: usize = 32;
 const ELF64_SECTION_ALIGNMENT_OFFSET: usize = 48;
+const ELF64_PROGRAM_TYPE_OFFSET: usize = 0;
+const ELF64_PROGRAM_FLAGS_OFFSET: usize = 4;
+const ELF64_PROGRAM_FILE_OFFSET: usize = 8;
+const ELF64_PROGRAM_FILE_SIZE_OFFSET: usize = 32;
 const SHT_PROGBITS: u32 = 1;
 const SHT_STRTAB: u32 = 3;
 const SHT_NOBITS: u32 = 8;
+const PT_LOAD: u32 = 1;
+const PF_R: u32 = 4;
+const SHF_ALLOC: u64 = 2;
 const GENERAL_V3_COV6_COMPILER_NAME_V1: &str = "rustc-codegen-fe2o3";
 const GENERAL_V3_COV6_PRODUCER_NAME_V1: &str = "rustc-codegen-fe2o3-worker-v2";
 const GENERAL_V3_COV6_PRODUCER_VERSION_V1: &str = "typed-general-gfx942-cov6-v1";
@@ -637,7 +649,14 @@ impl FinalizedHsaco {
 pub fn inspect_unfinalized(
     bytes: &[u8],
 ) -> Result<UnfinalizedDescriptorInspection, FinalizationError> {
-    let parsed = inspect_embedded_table(bytes)?;
+    inspect_unfinalized_with_placement(bytes, DescriptorPlacementV1::Detached)
+}
+
+fn inspect_unfinalized_with_placement(
+    bytes: &[u8],
+    placement: DescriptorPlacementV1,
+) -> Result<UnfinalizedDescriptorInspection, FinalizationError> {
+    let parsed = inspect_embedded_table_with_placement(bytes, placement)?;
     if parsed.table.canonical_code_object_digest().as_bytes() != &[0; 32] {
         return Err(FinalizationError::ExpectedZeroDigest);
     }
@@ -652,7 +671,20 @@ pub fn inspect_unfinalized(
 ///
 /// The output is independently reparsed, reinspected, decoded, and rehashed before return.
 pub fn finalize_unfinalized(bytes: &[u8]) -> Result<FinalizedHsaco, FinalizationError> {
-    let unfinalized = inspect_unfinalized(bytes)?;
+    finalize_unfinalized_with_placement(bytes, DescriptorPlacementV1::Detached)
+}
+
+pub(crate) fn finalize_allocated_read_only_unfinalized(
+    bytes: &[u8],
+) -> Result<FinalizedHsaco, FinalizationError> {
+    finalize_unfinalized_with_placement(bytes, DescriptorPlacementV1::AllocatedReadOnly)
+}
+
+fn finalize_unfinalized_with_placement(
+    bytes: &[u8],
+    placement: DescriptorPlacementV1,
+) -> Result<FinalizedHsaco, FinalizationError> {
+    let unfinalized = inspect_unfinalized_with_placement(bytes, placement)?;
     let digest = CanonicalCodeObjectDigest::calculate_from_canonicalized_hsaco(bytes);
     let digest_start = unfinalized.location.digest_offset;
     let digest_end = digest_start
@@ -673,7 +705,7 @@ pub fn finalize_unfinalized(bytes: &[u8]) -> Result<FinalizedHsaco, Finalization
         }
     }
 
-    let inspection = inspect_finalized(&output)?;
+    let inspection = inspect_finalized_with_placement(&output, placement)?;
     if inspection.digest != digest {
         return Err(FinalizationError::OutputVerification(
             "reinspected digest differs from the patched digest",
@@ -689,7 +721,14 @@ pub fn finalize_unfinalized(bytes: &[u8]) -> Result<FinalizedHsaco, Finalization
 ///
 /// Verification here establishes byte integrity only. It grants no load or launch authority.
 pub fn inspect_finalized(bytes: &[u8]) -> Result<FinalizedDescriptorInspection, FinalizationError> {
-    let parsed = inspect_embedded_table(bytes)?;
+    inspect_finalized_with_placement(bytes, DescriptorPlacementV1::Detached)
+}
+
+fn inspect_finalized_with_placement(
+    bytes: &[u8],
+    placement: DescriptorPlacementV1,
+) -> Result<FinalizedDescriptorInspection, FinalizationError> {
+    let parsed = inspect_embedded_table_with_placement(bytes, placement)?;
     let declared = parsed.table.canonical_code_object_digest();
     if declared.as_bytes() == &[0; 32] {
         return Err(FinalizationError::ExpectedFinalizedDigest);
@@ -727,18 +766,27 @@ pub fn verify_finalized(bytes: &[u8]) -> Result<FinalizedDescriptorInspection, F
     inspect_finalized(bytes)
 }
 
+pub(crate) fn verify_allocated_read_only_finalized(
+    bytes: &[u8],
+) -> Result<FinalizedDescriptorInspection, FinalizationError> {
+    inspect_finalized_with_placement(bytes, DescriptorPlacementV1::AllocatedReadOnly)
+}
+
 struct ParsedEmbeddedTable {
     bindings: InspectedKernelBindings,
     table: DeviceDescriptorTableV1,
     location: DescriptorSectionLocation,
 }
 
-fn inspect_embedded_table(bytes: &[u8]) -> Result<ParsedEmbeddedTable, FinalizationError> {
+fn inspect_embedded_table_with_placement(
+    bytes: &[u8],
+    placement: DescriptorPlacementV1,
+) -> Result<ParsedEmbeddedTable, FinalizationError> {
     if bytes.len() > MAX_HSACO_BYTES {
         return Err(FinalizationError::InputTooLarge);
     }
     let bindings = inspect_and_bind_kernel_descriptors(bytes)?;
-    let section = locate_descriptor_section(bytes)?;
+    let section = locate_descriptor_section_with_placement(bytes, placement)?;
     if section.range.len() > MAX_DESCRIPTOR_TABLE_BYTES {
         return Err(FinalizationError::DescriptorTableTooLarge);
     }
@@ -1207,7 +1255,16 @@ struct ElfSection {
     alignment: u64,
 }
 
-fn locate_descriptor_section(bytes: &[u8]) -> Result<ElfSection, FinalizationError> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DescriptorPlacementV1 {
+    Detached,
+    AllocatedReadOnly,
+}
+
+fn locate_descriptor_section_with_placement(
+    bytes: &[u8],
+    placement: DescriptorPlacementV1,
+) -> Result<ElfSection, FinalizationError> {
     if bytes.len() < ELF64_HEADER_BYTES {
         return Err(FinalizationError::InvalidElf("ELF header is truncated"));
     }
@@ -1304,7 +1361,11 @@ fn locate_descriptor_section(bytes: &[u8]) -> Result<ElfSection, FinalizationErr
     if candidate.section_type != SHT_PROGBITS {
         return Err(FinalizationError::InvalidDescriptorSectionType);
     }
-    if candidate.flags != 0 {
+    let expected_flags = match placement {
+        DescriptorPlacementV1::Detached => 0,
+        DescriptorPlacementV1::AllocatedReadOnly => SHF_ALLOC,
+    };
+    if candidate.flags != expected_flags {
         return Err(FinalizationError::InvalidDescriptorSectionFlags(
             candidate.flags,
         ));
@@ -1346,22 +1407,37 @@ fn locate_descriptor_section(bytes: &[u8]) -> Result<ElfSection, FinalizationErr
             ));
         }
     }
+    let mut containing_read_only_loads = 0_usize;
     if let Some(program_table) = program_table {
         let count = program_table.len() / ELF64_PROGRAM_HEADER_BYTES;
         for index in 0..count {
             let header = program_table.start + index * ELF64_PROGRAM_HEADER_BYTES;
             let segment_range = checked_range(
                 bytes.len(),
-                read_u64(bytes, header + 8)?,
-                read_u64(bytes, header + 32)?,
+                read_u64(bytes, header + ELF64_PROGRAM_FILE_OFFSET)?,
+                read_u64(bytes, header + ELF64_PROGRAM_FILE_SIZE_OFFSET)?,
                 "program segment file range is invalid",
             )?;
             if !segment_range.is_empty() && ranges_overlap(&candidate.range, &segment_range) {
-                return Err(FinalizationError::DescriptorSectionOverlaps(
-                    "a program segment",
-                ));
+                if placement == DescriptorPlacementV1::AllocatedReadOnly
+                    && read_u32(bytes, header + ELF64_PROGRAM_TYPE_OFFSET)? == PT_LOAD
+                    && read_u32(bytes, header + ELF64_PROGRAM_FLAGS_OFFSET)? == PF_R
+                    && segment_range.start <= candidate.range.start
+                    && candidate.range.end <= segment_range.end
+                {
+                    containing_read_only_loads += 1;
+                } else {
+                    return Err(FinalizationError::DescriptorSectionOverlaps(
+                        "a program segment",
+                    ));
+                }
             }
         }
+    }
+    if placement == DescriptorPlacementV1::AllocatedReadOnly && containing_read_only_loads != 1 {
+        return Err(FinalizationError::DescriptorSectionOverlaps(
+            "exactly one read-only PT_LOAD is required",
+        ));
     }
     Ok(candidate.clone())
 }
@@ -1496,4 +1572,157 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, FinalizationError> {
     Ok(u64::from_le_bytes(value.try_into().map_err(|_| {
         FinalizationError::InvalidElf("u64 field is malformed")
     })?))
+}
+
+#[cfg(test)]
+mod allocated_descriptor_placement_tests {
+    use super::*;
+
+    const DESCRIPTOR_OFFSET: usize = 0x100;
+    const DESCRIPTOR_SIZE: usize = 64;
+    const SHSTRTAB_OFFSET: usize = 0x180;
+    const SECTION_TABLE_OFFSET: usize = 0x200;
+
+    fn write_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn allocated_elf(program_count: u16) -> Vec<u8> {
+        let mut bytes = vec![0; SECTION_TABLE_OFFSET + 3 * ELF64_SECTION_HEADER_BYTES];
+        write_u64(&mut bytes, 32, ELF64_HEADER_BYTES as u64);
+        write_u64(&mut bytes, 40, SECTION_TABLE_OFFSET as u64);
+        write_u16(&mut bytes, 52, ELF64_HEADER_BYTES as u16);
+        write_u16(&mut bytes, 54, ELF64_PROGRAM_HEADER_BYTES as u16);
+        write_u16(&mut bytes, 56, program_count);
+        write_u16(&mut bytes, 58, ELF64_SECTION_HEADER_BYTES as u16);
+        write_u16(&mut bytes, 60, 3);
+        write_u16(&mut bytes, 62, 2);
+
+        let first_program = ELF64_HEADER_BYTES;
+        write_u32(
+            &mut bytes,
+            first_program + ELF64_PROGRAM_TYPE_OFFSET,
+            PT_LOAD,
+        );
+        write_u32(&mut bytes, first_program + ELF64_PROGRAM_FLAGS_OFFSET, PF_R);
+        write_u64(&mut bytes, first_program + ELF64_PROGRAM_FILE_OFFSET, 0);
+        write_u64(
+            &mut bytes,
+            first_program + ELF64_PROGRAM_FILE_SIZE_OFFSET,
+            (DESCRIPTOR_OFFSET + DESCRIPTOR_SIZE) as u64,
+        );
+
+        let names = b"\0.fe2o3.kd.v1\0.shstrtab\0";
+        bytes[SHSTRTAB_OFFSET..SHSTRTAB_OFFSET + names.len()].copy_from_slice(names);
+        let descriptor = SECTION_TABLE_OFFSET + ELF64_SECTION_HEADER_BYTES;
+        write_u32(&mut bytes, descriptor + ELF64_SECTION_NAME_OFFSET, 1);
+        write_u32(
+            &mut bytes,
+            descriptor + ELF64_SECTION_TYPE_OFFSET,
+            SHT_PROGBITS,
+        );
+        write_u64(
+            &mut bytes,
+            descriptor + ELF64_SECTION_FLAGS_OFFSET,
+            SHF_ALLOC,
+        );
+        write_u64(
+            &mut bytes,
+            descriptor + ELF64_SECTION_FILE_OFFSET,
+            DESCRIPTOR_OFFSET as u64,
+        );
+        write_u64(
+            &mut bytes,
+            descriptor + ELF64_SECTION_SIZE_OFFSET,
+            DESCRIPTOR_SIZE as u64,
+        );
+        write_u64(
+            &mut bytes,
+            descriptor + ELF64_SECTION_ALIGNMENT_OFFSET,
+            DEVICE_DESCRIPTOR_SECTION_ALIGNMENT,
+        );
+        let shstr = descriptor + ELF64_SECTION_HEADER_BYTES;
+        write_u32(&mut bytes, shstr + ELF64_SECTION_NAME_OFFSET, 15);
+        write_u32(&mut bytes, shstr + ELF64_SECTION_TYPE_OFFSET, SHT_STRTAB);
+        write_u64(
+            &mut bytes,
+            shstr + ELF64_SECTION_FILE_OFFSET,
+            SHSTRTAB_OFFSET as u64,
+        );
+        write_u64(
+            &mut bytes,
+            shstr + ELF64_SECTION_SIZE_OFFSET,
+            names.len() as u64,
+        );
+        write_u64(&mut bytes, shstr + ELF64_SECTION_ALIGNMENT_OFFSET, 1);
+        bytes
+    }
+
+    #[test]
+    fn allocated_placement_is_distinct_from_detached_and_requires_read_only_load() {
+        let bytes = allocated_elf(1);
+        assert_eq!(
+            locate_descriptor_section_with_placement(&bytes, DescriptorPlacementV1::Detached)
+                .unwrap_err(),
+            FinalizationError::InvalidDescriptorSectionFlags(SHF_ALLOC)
+        );
+        let section = locate_descriptor_section_with_placement(
+            &bytes,
+            DescriptorPlacementV1::AllocatedReadOnly,
+        )
+        .unwrap();
+        assert_eq!(
+            section.range,
+            DESCRIPTOR_OFFSET..DESCRIPTOR_OFFSET + DESCRIPTOR_SIZE
+        );
+
+        for flags in [PF_R | 2, PF_R | 1] {
+            let mut hostile = bytes.clone();
+            write_u32(
+                &mut hostile,
+                ELF64_HEADER_BYTES + ELF64_PROGRAM_FLAGS_OFFSET,
+                flags,
+            );
+            assert!(matches!(
+                locate_descriptor_section_with_placement(
+                    &hostile,
+                    DescriptorPlacementV1::AllocatedReadOnly
+                ),
+                Err(FinalizationError::DescriptorSectionOverlaps(
+                    "a program segment"
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn allocated_placement_rejects_multiple_read_only_load_containment() {
+        let mut bytes = allocated_elf(2);
+        let second = ELF64_HEADER_BYTES + ELF64_PROGRAM_HEADER_BYTES;
+        write_u32(&mut bytes, second + ELF64_PROGRAM_TYPE_OFFSET, PT_LOAD);
+        write_u32(&mut bytes, second + ELF64_PROGRAM_FLAGS_OFFSET, PF_R);
+        write_u64(&mut bytes, second + ELF64_PROGRAM_FILE_OFFSET, 0);
+        write_u64(
+            &mut bytes,
+            second + ELF64_PROGRAM_FILE_SIZE_OFFSET,
+            (DESCRIPTOR_OFFSET + DESCRIPTOR_SIZE) as u64,
+        );
+        assert!(matches!(
+            locate_descriptor_section_with_placement(
+                &bytes,
+                DescriptorPlacementV1::AllocatedReadOnly
+            ),
+            Err(FinalizationError::DescriptorSectionOverlaps(
+                "exactly one read-only PT_LOAD is required"
+            ))
+        ));
+    }
 }
