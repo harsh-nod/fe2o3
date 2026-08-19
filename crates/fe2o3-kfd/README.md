@@ -169,8 +169,8 @@ queue or reset.
 
 plan_gfx942_aql_queue_resources turns one selected, correlated topology
 observation into bounded resource geometry for the exact gfx942,
-XNACK-disabled, SPX/NPS1 profile. It checks every topology field used by the
-active KFD/ROCr CWSR formula, the 4096-byte host page, a conservative
+SPX/NPS1 topology profile. It checks every topology field used by the active
+KFD/ROCr CWSR formula, the 4096-byte host page, a conservative
 ROCr-compatible power-of-two ring range, exact EOP and context-save sizes,
 counter mapping geometry, and non-MES doorbell geometry. The plan requires
 read-only module-parameter observations mes=0, sched_policy=0, and
@@ -178,12 +178,22 @@ cwsr_enable=1; missing or changed values fail closed. Queue ID zero is
 explicitly valid: the pinned KFD process queue manager allocates the first zero
 bit from a zero-initialized 1024-slot bitmap.
 
-The plan also names the exact active ROCr 7.2.4 backing policies. Ring and
-control use fine-grained USERPTR system mappings, EOP uses executable coarse
-VRAM, and CWSR prefers anonymous host SVM with a USERPTR fallback. These are
-source-pinned policy observations, not allocations accepted by the current
-fe2o3 memory authority. USERPTR, VRAM, SVM, queue creation, doorbell mmap and
-doorbell stores remain unsupported. The topology does not export CWSR sizes on
-the admitted host, so the plan uses and tests the exact pinned fallback
-formula. The read-only kfd-queue-resources example validates these facts on
-every visible MI300X without opening /dev/kfd or creating a queue.
+The plan also names the exact reviewed ROCr 7.2.4 backing-policy expressions.
+On the reviewed branches, ring and control produce fine-grained USERPTR
+profiles, EOP produces executable coarse VRAM, and CWSR requests anonymous host
+SVM attributes with a USERPTR fallback. The manifest pins the queue call sites,
+runtime allocator dispatch, KFD driver flag translation, KMT allocation
+translation, and CWSR/EOP expressions needed to derive those values. This is an
+exact expression set, not a transitive ROCr policy implementation closure or
+evidence that an invocation selected a particular branch. These observations
+are not allocations accepted by the current fe2o3 memory authority. USERPTR,
+VRAM, SVM, queue creation, doorbell mmap and doorbell stores remain
+unsupported. The topology does not export CWSR sizes on the admitted host, so
+the plan uses and tests the exact pinned fallback formula. The read-only
+kfd-queue-resources example validates the topology-derived facts on every
+visible MI300X without opening /dev/kfd or creating a queue.
+This topology-only result does not observe process XNACK mode. Its embedded R1
+device-profile digest is only a compositional prerequisite identifier, not
+evidence that R1 admission occurred. A future queue authority must pair the
+plan with a live checked device token that establishes XNACK-disabled
+admission and currentness.

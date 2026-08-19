@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for gpu in snapshot.topology().gpu_nodes() {
         let plan = plan_gfx942_aql_queue_resources(&snapshot, gpu.unique_id(), 4096)?;
         println!(
-            "authority=none profile_sha256={} node={} gpu_id={} unique_id={:016x} generation={} mes={} sched_policy={} cwsr_enable={} ring={} control_page={} eop={} cwsr={} ctl_per_xcc={} ctx_per_xcc={} debug_per_xcc={} xcc={} doorbell_width={} doorbell_slice={} backing=rocr-policy-observation",
+            "authority=none profile_sha256={} node={} gpu_id={} unique_id={:016x} generation={} mes={} sched_policy={} cwsr_enable={} ring={} control_page={} eop={} cwsr={} ctl_per_xcc={} ctx_per_xcc={} debug_per_xcc={} xcc={} doorbell_width={} doorbell_slice={} backing=reviewed-rocr-expression",
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
             gpu.node_id(),
             plan.target().gpu_id(),

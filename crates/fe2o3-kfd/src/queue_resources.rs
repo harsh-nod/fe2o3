@@ -32,8 +32,9 @@ const EXPECTED_COMPUTE_QUEUE_COUNT: u32 = 24;
 
 /// Canonical contract for read-only gfx942 queue-resource planning.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-xnack-minus-spx-nps1-queue-resources-r4-v1\n",
+    "profile=fe2o3-mi300x-gfx942-spx-nps1-topology-queue-resources-r4-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
+    "device_profile_digest_role=compositional-prerequisite-identifier-only,no-device-token-or-xnack-evidence\n",
     "kfd_queue_output_schema_sha256=63753a9c0dcef0f69e0235b95b44fe6ce22cb5b0d1df6f60a971a5ed28f15904\n",
     "platform=linux-x86_64,kernel:6.8.0-124-generic,amdgpu:6.16.13,page:4096\n",
     "module_zst_sha256=e5a327a8f46459e07ee3f59cc991d16feee17103e199d39149823879b7fcff0b\n",
@@ -52,29 +53,36 @@ pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
     "source.rocr.topology.c=97269f0baf231d490032fc47ea8fe9e1101232477e10f74ff15e616d8e54ad86\n",
     "source.rocr.fmm.c=a2addccabb82e0ca184eaaf722e976e254a898ccfc945d4d956c4e273e196aef\n",
+    "source.rocr.memory.c=4376e4bc6980299efc0fb79cfa497d5758171980ce80b04632882537866e977a\n",
     "source.rocr.hsakamttypes.h=fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e\n",
     "source.rocr.amd_aql_queue.cpp=291f2521e2a4758e852ed20c578aca79e379d1effe4dfd83c62e11347eef2b14\n",
     "source.rocr.amd_gpu_agent.cpp=c39d5f922e855ce57d3c1903beef325e6004431c2ee66ae000aac72a0e5999da\n",
     "source.rocr.amd_kfd_driver.cpp=c6f961251ebc0ceb3da5107964fa34bb5dacf0d3973a0e179fcb06cf5ca98cb3\n",
-    "target=gfx942:90402,xnack-minus,SPX/NPS1,simd:1216,simd-per-cu:4,xcc:8,array:32,arrays-per-engine:1,lds-kib:64,max-waves-per-simd:8,cp-queues:24\n",
+    "source.rocr.runtime.cpp=d54a0e36a3403c13f4af0b0fc6552dfcf24a2d42df7e36d23752cb1e00c11469\n",
+    "source.rocr.amd_memory_region.cpp=37e11dd281156b80972c25cea9bd924beb0da1a2e6a2b55be0117955ea5249d3\n",
+    "source.rocr.memory_region.h=5b7e6ff1ae24d61baf806b8bb33433b5462c8247555f1e5ba7ed944793072ddf\n",
+    "source.rocr.amd_memory_region.h=7a28a882fc7b391079601b1ce78b612599440e52c1b0f6bba7ac38214c68b2e9\n",
+    "target=gfx942:90402,SPX/NPS1,simd:1216,simd-per-cu:4,xcc:8,array:32,arrays-per-engine:1,lds-kib:64,max-waves-per-simd:8,cp-queues:24\n",
+    "later_queue_authority_requirement=pair-with-live-checked-device-token-including-xnack-disabled-currentness\n",
     "ring=power-of-two:4096..2147483648,alignment:4096,packet:64,exact-mapping\n",
     "control=counter-width:8,counter-alignment:8,exact-page-mapping-per-pointer:4096\n",
     "eop=size:4096,alignment:4096,exact-mapping\n",
     "cwsr=ctl-per-xcc:12288,wg-per-xcc:23191552,ctx-per-xcc:23203840,debug-per-xcc:48640,xcc:8,mapping:186019840,kfd-min-align:4096,rocr-primary-svm-align:2097152,rocr-fallback-align:4096\n",
     "doorbell=width:8,process-slice:8192,exact-whole-slice-mmap-required,encoded-base-mask:8191-not-page-mask\n",
     "rocr_backing=ring:userptr-writable-executable-coherent:0xc4000004,control:userptr-writable-coherent:0x84000004,eop:vram-writable-executable:0xc0000001,cwsr:host-svm-host-access-gpu-exec-or-userptr-0xc4000004\n",
+    "rocr_expression_scope=exact-reviewed-allocation-flags-and-svm-attribute-expressions,not-transitive-policy-implementation-closure,not-runtime-branch-attestation\n",
     "source_linkage=contracted,source-hashes-do-not-prove-loaded-binary\n",
     "authority=observation-and-planning-only,no-create,no-allocation,no-mmap,no-doorbell-store\n",
 );
 
 /// SHA-256 of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1: &str =
-    "164032a5fb946676291446ba52ee2b9b461fbbe5c0023f8cae86e4b3a07dd2f6";
+    "cf50595943b8bde61c6a9346769249e6ab9c7e0055cdad4cda8f679832277bb7";
 
 /// Typed digest bytes of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x16, 0x40, 0x32, 0xa5, 0xfb, 0x94, 0x66, 0x76, 0x29, 0x14, 0x46, 0xba, 0x52, 0xee, 0x2b, 0x9b,
-    0x46, 0x1f, 0xbb, 0xe5, 0xc0, 0x02, 0x3f, 0x8c, 0xae, 0x86, 0xe4, 0xb3, 0xa0, 0x7d, 0xd2, 0xf6,
+    0xcf, 0x50, 0x59, 0x59, 0x43, 0xb8, 0xbd, 0xe6, 0x1c, 0x6a, 0x93, 0x46, 0x76, 0x92, 0x49, 0xe6,
+    0xab, 0x9c, 0x7e, 0x00, 0x55, 0xcd, 0xad, 0x4c, 0xda, 0x8f, 0x67, 0x98, 0x32, 0x27, 0x7b, 0xb7,
 ];
 
 /// Resource role names shared with the abstract queue lifecycle model.
@@ -86,7 +94,11 @@ pub enum QueueResourceRoleV1 {
     ContextSave,
 }
 
-/// Exact active ROCr policy observation, not an admitted allocation kind.
+/// Exact reviewed ROCr policy expression, not an admitted allocation kind.
+///
+/// These variants summarize the pinned expressions on the reviewed paths. They
+/// are not a transitive implementation closure or evidence that a runtime
+/// invocation selected those paths.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RocrQueueBackingPolicyV1 {
     UserptrWritableExecutableCoherent,
@@ -96,7 +108,7 @@ pub enum RocrQueueBackingPolicyV1 {
 }
 
 impl RocrQueueBackingPolicyV1 {
-    /// Raw KFD flags observed for policies implemented through ALLOC_MEMORY.
+    /// Raw KFD flags yielded by the reviewed ALLOC_MEMORY expressions.
     ///
     /// None denotes the primary CWSR SVM-attribute path. These values are not
     /// accepted by fe2o3's current memory authority and grant no authority.
@@ -707,6 +719,17 @@ mod tests {
             GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1
                 .contains(fe2o3_kfd_uapi::KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256)
         );
+        assert_eq!(
+            crate::DEVICE_ADMISSION_PROFILE_SHA256_V1,
+            "e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de"
+        );
+        assert!(
+            GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1
+                .contains(crate::DEVICE_ADMISSION_PROFILE_SHA256_V1)
+        );
+        assert!(GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.contains(
+            "device_profile_digest_role=compositional-prerequisite-identifier-only,no-device-token-or-xnack-evidence"
+        ));
     }
 
     fn hex(bytes: &[u8]) -> String {
