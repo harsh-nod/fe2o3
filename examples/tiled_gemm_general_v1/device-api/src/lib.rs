@@ -509,10 +509,60 @@ impl ProofSensitiveGeneralGemmWave64V1 {
         proof_acquire_gfx942_tiled_gemm_wave64_v1(k)
     }
 
+    /// Returns the compiler-issued physical lane used by source control flow.
+    #[inline(always)]
+    pub fn lane(&self) -> u32 {
+        proof_lane_gfx942_tiled_gemm_wave64_v1(self)
+    }
+
+    /// Returns the compiler-issued workgroup X coordinate.
+    #[inline(always)]
+    pub fn workgroup_x(&self) -> u32 {
+        proof_workgroup_x_gfx942_tiled_gemm_wave64_v1(self)
+    }
+
+    /// Returns the compiler-issued workgroup Y coordinate.
+    #[inline(always)]
+    pub fn workgroup_y(&self) -> u32 {
+        proof_workgroup_y_gfx942_tiled_gemm_wave64_v1(self)
+    }
+
+    /// Performs one proof-required A load at the supplied logical coordinate.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn load_a(&self, a: &[u16], row: u32, depth: u32, m: u32, k: u32, lda: u32) -> u16 {
+        proof_load_a_gfx942_tiled_gemm_wave64_v1(self, a, row, depth, m, k, lda)
+    }
+
+    /// Performs one proof-required B load at the supplied logical coordinate.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn load_b(&self, b: &[u16], depth: u32, column: u32, k: u32, n: u32, ldb: u32) -> u16 {
+        proof_load_b_gfx942_tiled_gemm_wave64_v1(self, b, depth, column, k, n, ldb)
+    }
+
     /// Names complete guarded, zero-filled A/B staging obligations.
     #[inline(always)]
     pub fn stage(&mut self, a_bits: [u16; 4], b_bits: [u16; 4]) {
         proof_stage_gfx942_tiled_gemm_wave64_v1(self, a_bits, b_bits)
+    }
+
+    /// Stages one executable value whose K-tail refinement must be proved.
+    #[inline(always)]
+    pub fn stage_value(&mut self, slot: u32, epoch: u32, depth: u32, k: u32, value: u16) {
+        proof_stage_value_gfx942_tiled_gemm_wave64_v1(self, slot, epoch, depth, k, value)
+    }
+
+    /// Waits for every stage write in the supplied epoch before LDS reads.
+    #[inline(always)]
+    pub fn wait_stage(&mut self, epoch: u32) {
+        proof_wait_stage_gfx942_tiled_gemm_wave64_v1(self, epoch)
+    }
+
+    /// Reads one physical LDS slot from the supplied live epoch.
+    #[inline(always)]
+    pub fn read_stage(&self, slot: u32, epoch: u32) -> u16 {
+        proof_read_stage_gfx942_tiled_gemm_wave64_v1(self, slot, epoch)
     }
 
     /// Names a convergent publish-barrier obligation for the current phase.
@@ -525,6 +575,12 @@ impl ProofSensitiveGeneralGemmWave64V1 {
     #[inline(always)]
     pub fn multiply_accumulate(&mut self) {
         proof_mfma_gfx942_tiled_gemm_wave64_v1(self)
+    }
+
+    /// Computes one elemental MFMA contribution while carrying the prior accumulator.
+    #[inline(always)]
+    pub fn multiply_accumulate_value(&mut self, lhs: u16, rhs: u16, prior: f32) -> f32 {
+        proof_mfma_value_gfx942_tiled_gemm_wave64_v1(self, lhs, rhs, prior)
     }
 
     /// Names a convergent LDS reuse-barrier obligation for the current phase.
@@ -545,6 +601,54 @@ impl ProofSensitiveGeneralGemmWave64V1 {
         beta: f32,
     ) {
         proof_store_gfx942_tiled_gemm_wave64_v1(self, c, m, n, ldc, alpha, beta)
+    }
+
+    /// Loads one guarded C value used by the dynamic alpha/beta epilogue.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn load_c(
+        &self,
+        c: &DisjointSlice<f32>,
+        row: u32,
+        column: u32,
+        m: u32,
+        n: u32,
+        ldc: u32,
+    ) -> f32 {
+        proof_load_c_gfx942_tiled_gemm_wave64_v1(self, c, row, column, m, n, ldc)
+    }
+
+    /// Stores an executable epilogue value with its dynamic algebra operands.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn store_epilogue(
+        &mut self,
+        c: &mut DisjointSlice<f32>,
+        row: u32,
+        column: u32,
+        m: u32,
+        n: u32,
+        ldc: u32,
+        value: f32,
+        alpha: f32,
+        accumulator: f32,
+        beta: f32,
+        initial: f32,
+    ) {
+        proof_store_epilogue_gfx942_tiled_gemm_wave64_v1(
+            self,
+            c,
+            row,
+            column,
+            m,
+            n,
+            ldc,
+            value,
+            alpha,
+            accumulator,
+            beta,
+            initial,
+        )
     }
 }
 
@@ -623,7 +727,7 @@ include!("proof_sensitive_terminals.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     #[test]
     fn profile_constants_and_phase_ceiling_are_exact() {

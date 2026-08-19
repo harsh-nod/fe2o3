@@ -11,6 +11,10 @@ fe2o3-device = { path = "../../../../../crates/fe2o3-device" }
 fe2o3-gemm-device-v1 = { path = "../../../../../examples/tiled_gemm_general_v1/device-api" }
 
 [[bin]]
+name = "valid-proof-sensitive"
+path = "src/bin/valid_proof_sensitive.rs"
+
+[[bin]]
 name = "missing-publish"
 path = "src/bin/missing_publish.rs"
 

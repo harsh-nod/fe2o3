@@ -61,16 +61,16 @@ const GENERAL_GEMM_DEPENDENCY_SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] =
 // Exact reviewed Rust source tree for the compiler-issued semantic surface.
 // The Cargo manifest/package that selected this source is not authenticated.
 const REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_TREE_V1: [u8; 32] = [
-    0x47, 0x8d, 0xa9, 0x34, 0xa4, 0xb8, 0x9c, 0x5e, 0x00, 0x32, 0x51, 0x99, 0x93, 0x73, 0x74, 0x0d,
-    0xbb, 0x07, 0x91, 0xdf, 0x3c, 0x3e, 0xa1, 0x65, 0xbf, 0xe3, 0x96, 0x86, 0x00, 0x91, 0x81, 0x81,
+    0xee, 0x5d, 0xcd, 0xb5, 0x44, 0x12, 0xc9, 0x5e, 0xe8, 0x2e, 0xa3, 0x2e, 0x0a, 0x46, 0x9f, 0x31,
+    0xc3, 0xb3, 0xb7, 0xd8, 0xe1, 0x76, 0x5c, 0xf3, 0xa7, 0xf4, 0xac, 0x4f, 0x3d, 0xab, 0xa5, 0x7b,
 ];
 const REVIEWED_GENERAL_GEMM_TYPESTATE_DEFINITION_SOURCE_V1: [u8; 32] = [
-    0xe3, 0xf4, 0x16, 0xc3, 0xc1, 0x6a, 0x4f, 0xc5, 0xd0, 0x6c, 0x40, 0x3e, 0x25, 0x88, 0x04, 0xe8,
-    0x94, 0x87, 0x89, 0x15, 0xd6, 0x13, 0xca, 0xc7, 0x4e, 0x0f, 0x59, 0x78, 0xff, 0x32, 0x3a, 0x4a,
+    0x6e, 0x25, 0xc4, 0xfc, 0xfc, 0x64, 0xc2, 0xc4, 0xd2, 0x2c, 0xa8, 0x0a, 0x6b, 0xbe, 0x6a, 0xe6,
+    0x56, 0x73, 0x6a, 0xae, 0x66, 0x49, 0xab, 0x12, 0x17, 0xad, 0xc5, 0x2e, 0x47, 0x92, 0xcf, 0xe4,
 ];
 const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
-    0x0a, 0xd9, 0x34, 0xd8, 0x81, 0x19, 0x3d, 0x56, 0x3b, 0x79, 0xb2, 0xad, 0xf3, 0xcf, 0x74, 0x70,
-    0xca, 0x85, 0x9f, 0x3e, 0x14, 0x34, 0x4b, 0xd0, 0x62, 0x09, 0x94, 0xc6, 0x29, 0x55, 0xd4, 0xe4,
+    0x5d, 0xdf, 0x25, 0xf8, 0x70, 0x03, 0x3a, 0x57, 0xfe, 0xd7, 0x7b, 0xd2, 0xd7, 0xf9, 0x63, 0x1c,
+    0x0b, 0xbd, 0xb7, 0x86, 0x11, 0x8f, 0x8c, 0x37, 0x28, 0x3e, 0x76, 0x09, 0xd9, 0x35, 0x2d, 0x18,
 ];
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
@@ -78,6 +78,16 @@ const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
     0x50, 0x41, 0x84, 0x08, 0x68, 0x78, 0xc4, 0x3c, 0x3e, 0x3f, 0xaa, 0x49, 0x83, 0xce, 0x36, 0xba,
     0xde, 0xaa, 0xb8, 0x1a, 0x74, 0x91, 0x72, 0xcb, 0x6e, 0xa2, 0x41, 0xa5, 0xdd, 0x15, 0x56, 0xec,
 ];
+
+pub(crate) fn reviewed_general_gemm_provider_semantics_identity_v1() -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"FE2O3/GENERAL-GEMM-PROVIDER-SEMANTICS/V1\0");
+    digest.update(REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_TREE_V1);
+    digest.update(REVIEWED_GENERAL_GEMM_TYPESTATE_DEFINITION_SOURCE_V1);
+    digest.update(REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1);
+    digest.update(REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1);
+    digest.finalize().into()
+}
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PROVIDER-SEMANTIC-DEFINITION-TRANSCRIPT/V1\0";
 const PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -398,11 +408,22 @@ pub(crate) enum TrustedGeneralGemmSurfaceV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedGeneralGemmOperationV1 {
     Acquire,
+    Lane,
+    WorkgroupX,
+    WorkgroupY,
+    LoadA,
+    LoadB,
+    LoadC,
     Stage,
+    StageValue,
+    WaitStage,
+    ReadStage,
     Publish,
     Mfma,
+    MfmaValue,
     Reuse,
     Store,
+    StoreEpilogue,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -751,10 +772,82 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
     (
         TrustedDeviceItem::GeneralGemm(
             TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::Lane,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_lane_v1",
+        "fe2o3_gemm_device_v1::proof_lane_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::WorkgroupX,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_workgroup_x_v1",
+        "fe2o3_gemm_device_v1::proof_workgroup_x_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::WorkgroupY,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_workgroup_y_v1",
+        "fe2o3_gemm_device_v1::proof_workgroup_y_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::LoadA,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_load_a_v1",
+        "fe2o3_gemm_device_v1::proof_load_a_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::LoadB,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_load_b_v1",
+        "fe2o3_gemm_device_v1::proof_load_b_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::LoadC,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_load_c_v1",
+        "fe2o3_gemm_device_v1::proof_load_c_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
             TrustedGeneralGemmOperationV1::Stage,
         ),
         "fe2o3_device_general_tiled_gemm_proof_stage_v1",
         "fe2o3_gemm_device_v1::proof_stage_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::StageValue,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_stage_value_v1",
+        "fe2o3_gemm_device_v1::proof_stage_value_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::WaitStage,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_wait_stage_v1",
+        "fe2o3_gemm_device_v1::proof_wait_stage_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::ReadStage,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_read_stage_v1",
+        "fe2o3_gemm_device_v1::proof_read_stage_gfx942_tiled_gemm_wave64_v1",
     ),
     (
         TrustedDeviceItem::GeneralGemm(
@@ -775,6 +868,14 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
     (
         TrustedDeviceItem::GeneralGemm(
             TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::MfmaValue,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_mfma_value_v1",
+        "fe2o3_gemm_device_v1::proof_mfma_value_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
             TrustedGeneralGemmOperationV1::Reuse,
         ),
         "fe2o3_device_general_tiled_gemm_proof_reuse_v1",
@@ -787,6 +888,14 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         ),
         "fe2o3_device_general_tiled_gemm_proof_store_v1",
         "fe2o3_gemm_device_v1::proof_store_gfx942_tiled_gemm_wave64_v1",
+    ),
+    (
+        TrustedDeviceItem::GeneralGemm(
+            TrustedGeneralGemmSurfaceV1::ProofSensitive,
+            TrustedGeneralGemmOperationV1::StoreEpilogue,
+        ),
+        "fe2o3_device_general_tiled_gemm_proof_store_epilogue_v1",
+        "fe2o3_gemm_device_v1::proof_store_epilogue_gfx942_tiled_gemm_wave64_v1",
     ),
     (
         TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
@@ -1211,9 +1320,13 @@ fn validate_reviewed_general_gemm_surface_v1(
         )?;
         validate_reviewed_general_gemm_definition_source_v1(surface, definition_source)?;
     }
-    if terminal_count != 6 {
+    let expected_terminal_count = match surface {
+        TrustedGeneralGemmSurfaceV1::Typestate => 6,
+        TrustedGeneralGemmSurfaceV1::ProofSensitive => 17,
+    };
+    if terminal_count != expected_terminal_count {
         return Err(format!(
-            "reviewed general-GEMM surface has {terminal_count} terminals, expected 6"
+            "reviewed general-GEMM surface has {terminal_count} terminals, expected {expected_terminal_count}"
         ));
     }
     Ok(())
@@ -2893,7 +3006,23 @@ mod tests {
             ),
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::Lane,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::LoadA,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::LoadB,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
                 TrustedGeneralGemmOperationV1::Stage,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::StageValue,
             ),
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,
@@ -2910,6 +3039,10 @@ mod tests {
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,
                 TrustedGeneralGemmOperationV1::Store,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::StoreEpilogue,
             ),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
