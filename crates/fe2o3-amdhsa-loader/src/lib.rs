@@ -3,11 +3,18 @@
 #![doc = include_str!("../README.md")]
 
 mod kernel_closure;
+mod vecadd_cov6;
 
 pub use kernel_closure::{
     CLOSED_RELOCATION_POLICY_ID, ClosedRelocationEvidenceV1, KernelClosureError,
     KernelIdentityInputsV1, SelectedKernelResourceBindingV1, UnsupportedKernelSemantic,
     ValidatedKernelEnvelope,
+};
+pub use vecadd_cov6::{
+    LoadedImageAddressPlanV1, UnboundGpuF32SliceV1, VECADD_COV6_ARTIFACT_SHA256,
+    VECADD_COV6_KERNARG_ALIGNMENT, VECADD_COV6_KERNARG_BYTES, VECADD_COV6_KERNARG_PROFILE_ID,
+    ValidatedVecaddCov6Kernel, VecaddCov6BindError, VecaddCov6KernargError,
+    VecaddCov6KernargInputsV1, VecaddCov6KernargV1,
 };
 
 const ELF_HEADER_BYTES: usize = 64;

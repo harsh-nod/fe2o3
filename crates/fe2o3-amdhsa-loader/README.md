@@ -102,6 +102,52 @@ name, and symbol. These deterministic values are identity inputs for a later
 loaded-kernel authority; they are neither an authenticated compiler identity
 nor proof that the entry implements its source semantics.
 
+## Exact vecadd COV6 kernarg profile
+
+`ValidatedKernelEnvelope::bind_vecadd_cov6` consumes the selected closure and
+admits only the immutable durable vecadd object with SHA-256
+`c4547fe045f839711f1f022a485f50c7c1eafed7f5e4a7e96598e0d1c825908c`.
+It independently checks the selected index, `vecadd` / `vecadd.kd` names, the
+complete explicit and hidden metadata argument lists, exact qualifier omission,
+the 304-byte/8-byte-aligned kernarg contract, required `256x1x1` workgroup,
+zero static group/private memory, and the selected descriptor/entry/image
+locations. Any metadata or object-content drift rejects.
+
+The pinned byte manifest is:
+
+| Bytes | Source and policy |
+| --- | --- |
+| `0..48` | `arg0`, `arg1`, and `arg2` fat slices, each GPU address `u64` then element count `u64`, in exact parsed metadata order |
+| `48..60` | required block counts `u32[3]`; X is `ceil(output_len / 256)`, Y/Z are one |
+| `60..66` | required group sizes `u16[3]` = `[256, 1, 1]` |
+| `66..72` | required partial-group remainders `u16[3]` = zero because the AQL grid is padded to complete groups |
+| `72..88` | COV6 geometry padding, zero |
+| `88..112` | required global offsets `u64[3]` = zero |
+| `112..114` | required grid dimensionality `u16` = one |
+| `114..120` | COV6 grid padding, zero |
+| `120..128` | absent optional printf-buffer slot, zero |
+| `128..168` | compiler-declared hostcall, multigrid, heap, default-queue, and completion pointers, all zero for this kernel/profile |
+| `168..240` | absent dynamic-LDS slot and COV6 reserved bytes, zero |
+| `240..248` | absent GFX8-only private/shared aperture slots, zero on gfx942 |
+| `248..256` | compiler-declared queue pointer, zero; the ABI requires it only before GFX9 and this kernel does not consume it |
+| `256..304` | reserved tail completing the exact 256-byte implicit block, zero |
+
+`VecaddCov6KernargV1` is represented at alignment 8 and initializes all 304
+bytes. The encoder checks nonzero, four-byte-aligned numeric slice addresses,
+checked `f32` byte ranges, nonempty output, output length no greater than either
+input, and a padded AQL grid representable in `u32`. It returns the exact AQL
+grid/workgroup dimensions needed by the encoded geometry. An independent test
+decoder reads every populated field without using the production writer.
+
+`UnboundGpuF32SliceV1` deliberately carries only numeric descriptions. It does
+not prove allocation ownership, lifetime, device accessibility, mapping,
+aliasing, or read/write permissions. Likewise, `LoadedImageAddressPlanV1`
+exposes checked descriptor and entry offsets relative to the materialized image
+base, but cannot resolve them against a native allocation address. The KFD
+composition must bind these descriptions to live allocation capabilities,
+preserve the object and kernarg bytes, apply permissions, and retain all
+resources through observed completion.
+
 ## Proof and implementation gaps
 
 - The authenticated runtime-model Verus lane proves a narrow abstract relation
@@ -129,3 +175,7 @@ nor proof that the entry implements its source semantics.
   lifecycle enforcement, immutable loaded-image transition, compiler/manifest
   ABI binding, observed-device compatibility, KFD/HSA comparison, dispatch
   packet construction, and hardware behavior remain outside this crate.
+- The vecadd encoder has exhaustive executable checks and independent decode
+  tests, but no Verus refinement proof from parsed metadata plus typed inputs to
+  the 304 output bytes. Its numeric GPU addresses and image offsets are not
+  allocation or native-address authorities.
