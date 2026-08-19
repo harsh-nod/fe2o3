@@ -274,7 +274,7 @@ struct ScriptedOutcome {
 }
 
 struct FakeBackend {
-    foundation: QueueModelFoundationV1,
+    foundation: Option<QueueModelFoundationV1>,
     opener_pid: Rc<Cell<u32>>,
     currentness_calls: usize,
     fail_currentness_at: Option<usize>,
@@ -285,7 +285,7 @@ struct FakeBackend {
 impl FakeBackend {
     fn new(foundation: QueueModelFoundationV1, outcomes: Vec<ScriptedOutcome>) -> Self {
         Self {
-            foundation,
+            foundation: Some(foundation),
             opener_pid: Rc::new(Cell::new(std::process::id())),
             currentness_calls: 0,
             fail_currentness_at: None,
@@ -306,8 +306,12 @@ impl NativeQueueBackendV1 for FakeBackend {
         self.opener_pid.get()
     }
 
-    fn model_foundation(&self) -> QueueModelFoundationV1 {
-        self.foundation.clone()
+    fn take_model_foundation(
+        &mut self,
+    ) -> Result<QueueModelFoundationV1, NativeQueueAdapterErrorV1> {
+        self.foundation
+            .take()
+            .ok_or(NativeQueueAdapterErrorV1::ModelProjection)
     }
 
     fn resource_view(
@@ -418,8 +422,7 @@ fn active_engine(tail: Vec<ScriptedOutcome>) -> (NativeQueueEngineV1<FakeBackend
     let mut script = vec![success(Mutation::CreateId(23))];
     script.extend(tail);
     let mut engine =
-        NativeQueueEngineV1::new(FakeBackend::new(first_fixture.foundation.clone(), script))
-            .unwrap();
+        NativeQueueEngineV1::new(FakeBackend::new(first_fixture.foundation, script)).unwrap();
     engine.admit(authority).unwrap();
     engine.create(key).unwrap();
     (engine, key)
@@ -479,7 +482,7 @@ fn queue_id_zero_and_positive_max_profile_id_are_both_admitted() {
         let mut fixture = fixture();
         let authority = fixture.authority(10);
         let key = authority.0.plan.queue;
-        let backend = FakeBackend::new(fixture.foundation.clone(), vec![success(mutation)]);
+        let backend = FakeBackend::new(fixture.foundation, vec![success(mutation)]);
         let mut engine = NativeQueueEngineV1::new(backend).unwrap();
         engine.admit(authority).unwrap();
         engine.create(key).unwrap();
@@ -578,8 +581,7 @@ fn create_errno_semantics_and_malformed_outputs_fail_closed() {
         let authority = fixture.authority(10);
         let key = authority.0.plan.queue;
         let mut engine =
-            NativeQueueEngineV1::new(FakeBackend::new(fixture.foundation.clone(), vec![script]))
-                .unwrap();
+            NativeQueueEngineV1::new(FakeBackend::new(fixture.foundation, vec![script])).unwrap();
         engine.admit(authority).unwrap();
         assert_eq!(engine.create(key), Err(expected_error));
         assert_eq!(engine.phase(key), Some(expected_phase));
@@ -755,7 +757,7 @@ fn process_and_currentness_loss_never_issue_or_retry_lifecycle_calls() {
     let authority = first_fixture.authority(10);
     let key = authority.0.plan.queue;
     let backend = FakeBackend::new(
-        first_fixture.foundation.clone(),
+        first_fixture.foundation,
         vec![success(Mutation::CreateId(5))],
     );
     let calls = backend.calls.clone();
@@ -777,7 +779,7 @@ fn process_and_currentness_loss_never_issue_or_retry_lifecycle_calls() {
     let authority = precheck_fixture.authority(12);
     let key = authority.0.plan.queue;
     let mut backend = FakeBackend::new(
-        precheck_fixture.foundation.clone(),
+        precheck_fixture.foundation,
         vec![success(Mutation::CreateId(7))],
     );
     backend.fail_currentness_at = Some(1);
@@ -795,7 +797,7 @@ fn process_and_currentness_loss_never_issue_or_retry_lifecycle_calls() {
     let authority = second_fixture.authority(11);
     let key = authority.0.plan.queue;
     let mut backend = FakeBackend::new(
-        second_fixture.foundation.clone(),
+        second_fixture.foundation,
         vec![success(Mutation::CreateId(6))],
     );
     backend.fail_currentness_at = Some(2);
@@ -825,7 +827,7 @@ fn ambiguous_unknown_id_globally_poisons_create_and_known_id_collision_is_retain
     let first_key = first.0.plan.queue;
     let second_key = second.0.plan.queue;
     let mut engine = NativeQueueEngineV1::new(FakeBackend::new(
-        first_fixture.foundation.clone(),
+        first_fixture.foundation,
         vec![outcome(QueueSyscallStatusV1::Indeterminate, Mutation::None)],
     ))
     .unwrap();
@@ -845,7 +847,7 @@ fn ambiguous_unknown_id_globally_poisons_create_and_known_id_collision_is_retain
     let first_key = first.0.plan.queue;
     let second_key = second.0.plan.queue;
     let mut engine = NativeQueueEngineV1::new(FakeBackend::new(
-        second_fixture.foundation.clone(),
+        second_fixture.foundation,
         vec![
             outcome(QueueSyscallStatusV1::Indeterminate, Mutation::CreateId(31)),
             success(Mutation::CreateId(31)),

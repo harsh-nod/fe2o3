@@ -24,6 +24,7 @@ negative_memory_unmap="$script_dir/negative/memory_lifecycle_v1_unmap_prefix.rs"
 negative_memory_failed_full="$script_dir/negative/memory_lifecycle_v1_failed_full_release.rs"
 negative_queue_resource_substitution="$script_dir/negative/queue_lifecycle_v1_resource_substitution.rs"
 negative_queue_destroy_ambiguity="$script_dir/negative/queue_lifecycle_v1_destroy_ambiguity.rs"
+negative_queue_destroy_source_restore="$script_dir/negative/queue_lifecycle_v1_destroy_source_restore.rs"
 negative_queue_history_prefix="$script_dir/negative/queue_lifecycle_v1_history_prefix.rs"
 negative_queue_sentinel_returned="$script_dir/negative/queue_lifecycle_v1_sentinel_returned.rs"
 negative_queue_publication_owner="$script_dir/negative/queue_lifecycle_v1_publication_owner.rs"
@@ -86,6 +87,7 @@ expected_negative_memory_unmap=$(read_pin "$pin_dir/NEGATIVE_MEMORY_UNMAP_SHA256
 expected_negative_memory_failed_full=$(read_pin "$pin_dir/NEGATIVE_MEMORY_FAILED_FULL_SHA256")
 expected_negative_queue_resource_substitution=$(read_pin "$pin_dir/NEGATIVE_QUEUE_RESOURCE_SUBSTITUTION_SHA256")
 expected_negative_queue_destroy_ambiguity=$(read_pin "$pin_dir/NEGATIVE_QUEUE_DESTROY_AMBIGUITY_SHA256")
+expected_negative_queue_destroy_source_restore=$(read_pin "$pin_dir/NEGATIVE_QUEUE_DESTROY_SOURCE_RESTORE_SHA256")
 expected_negative_queue_history_prefix=$(read_pin "$pin_dir/NEGATIVE_QUEUE_HISTORY_PREFIX_SHA256")
 expected_negative_queue_sentinel_returned=$(read_pin "$pin_dir/NEGATIVE_QUEUE_SENTINEL_RETURNED_SHA256")
 expected_negative_queue_publication_owner=$(read_pin "$pin_dir/NEGATIVE_QUEUE_PUBLICATION_OWNER_SHA256")
@@ -151,6 +153,7 @@ check_sources() {
     check_digest "$expected_negative_memory_failed_full" "$negative_memory_failed_full"
     check_digest "$expected_negative_queue_resource_substitution" "$negative_queue_resource_substitution"
     check_digest "$expected_negative_queue_destroy_ambiguity" "$negative_queue_destroy_ambiguity"
+    check_digest "$expected_negative_queue_destroy_source_restore" "$negative_queue_destroy_source_restore"
     check_digest "$expected_negative_queue_history_prefix" "$negative_queue_history_prefix"
     check_digest "$expected_negative_queue_sentinel_returned" "$negative_queue_sentinel_returned"
     check_digest "$expected_negative_queue_publication_owner" "$negative_queue_publication_owner"
@@ -197,6 +200,7 @@ check_sources
     "$negative_memory_failed_full" \
     "$negative_queue_resource_substitution" \
     "$negative_queue_destroy_ambiguity" \
+    "$negative_queue_destroy_source_restore" \
     "$negative_queue_history_prefix" \
     "$negative_queue_sentinel_returned" \
     "$negative_queue_publication_owner" \
@@ -317,7 +321,7 @@ check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' 
 check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
 check_positive "$projection_proof" 'verification results:: 4 verified, 0 errors' device-projection-refinement
 check_positive "$memory_proof" 'verification results:: 6 verified, 0 errors' memory-lifecycle
-check_positive "$queue_proof" 'verification results:: 10 verified, 0 errors' queue-lifecycle
+check_positive "$queue_proof" 'verification results:: 11 verified, 0 errors' queue-lifecycle
 check_positive "$load_plan_proof" 'verification results:: 3 verified, 0 errors' load-plan
 check_positive "$materialization_proof" 'verification results:: 8 verified, 0 errors' materialization
 check_positive "$aql_proof" 'verification results:: 9 verified, 0 errors' aql-publication
@@ -334,6 +338,7 @@ check_negative "$negative_memory_unmap" mutated_unmap_uses_absolute_cumulative_p
 check_negative "$negative_memory_failed_full" mutated_failed_full_unmap_is_unreleasable_v1 memory-unmap-failed-full
 check_negative "$negative_queue_resource_substitution" mutated_queue_resource_substitution_preserves_roles_v1 queue-resource-substitution
 check_negative "$negative_queue_destroy_ambiguity" mutated_indeterminate_destroy_remains_retaining_v1 queue-destroy-ambiguity
+check_negative "$negative_queue_destroy_source_restore" mutated_active_destroy_failure_restores_exact_source_v1 queue-destroy-source-restore
 check_negative "$negative_queue_history_prefix" mutated_queue_history_overwrite_preserves_prefix_v1 queue-history-prefix
 check_negative "$negative_queue_sentinel_returned" mutated_returned_sentinel_is_rejected_v1 queue-sentinel-returned
 check_negative "$negative_queue_publication_owner" mutated_generic_release_rejects_queue_owner_v1 queue-publication-owner
@@ -358,7 +363,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=10 load_plan_obligations=3 materialization_obligations=8 aql_obligations=9 mutations=31'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=9 mutations=32'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

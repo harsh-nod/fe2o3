@@ -2,10 +2,9 @@
 
 This R4 slice executes the compute-AQL queue lifecycle against a private
 backend and projects every attempted lifecycle operation into the existing
-bounded `QueueLifecycleStateV1`. It does not expose a production queue API.
-The current memory owner cannot yet mint the exact retained mapping
-capabilities required by CREATE_QUEUE, so constructing a Linux backend would
-fabricate authority from numeric addresses.
+bounded `QueueLifecycleStateV1`. The production composition consumes the
+checked device and exact shared-GTT capabilities; callers cannot construct a
+backend from numeric addresses.
 
 ## Executable transition contract
 
@@ -28,11 +27,12 @@ model's process-global poison rules.
 
 UPDATE and DISABLE are the same KFD request with different typed inputs.
 UPDATE can only reuse the retained ring authority; it cannot introduce a raw
-address. DISABLE uses the reviewed null-ring encoding. DESTROY is allowed only
-after a confirmed DISABLE. Any changed write-only/in-out request record is
-indeterminate.
+address. DISABLE uses the reviewed null-ring encoding. DESTROY accepts exactly
+Active or Disabled, stores that source in DestroyPending, and restores it after
+a source-justified FailedNoEffect observation. Any changed write-only/in-out
+request record is indeterminate.
 
-The future Linux backend must translate success to `Succeeded` and every errno
+The Linux backend translates success to `Succeeded` and every errno
 to `Indeterminate`: an errno does not prove rollback. `FailedNoEffect` exists
 for a future source-justified semantic backend and scripted tests, but no Linux
 errno is currently mapped to it. A malformed result or post-call projection
@@ -54,17 +54,17 @@ forbids cleanup syscalls from their `Drop` implementations.
 
 ## Memory-owner integration contract
 
-A production constructor remains blocked until the R2 memory owner can consume
-its retained checked device/VM session and provide one unforgeable authority
-with all of these properties:
+The production constructor consumes the R2 checked device/VM session and
+requires one unforgeable authority with all of these properties:
 
 - exact current device, VM, process incarnation, allocation generation,
   mapping key, and queue generation bindings;
 - an AQL ring mapping with the admitted power-of-two size, 4096-byte base
-  alignment, packet geometry, required double-map/wrap policy, and GPU/CPU
-  visibility;
-- distinct, live read/write control-pointer mappings with 8-byte alignment and
-  sufficient mapped length;
+alignment, packet geometry, required double-map/wrap policy, and GPU/CPU
+visibility;
+- one exact page control mapping containing distinct 8-byte aligned read/write
+  counters; KFD truncates each pointer to its containing GPU page and requires
+  that GPUVM mapping to be exactly one page;
 - the exact 4096-byte EOP mapping and exact gfx942 SPX/NPS1 CWSR address,
   mapping length, context-save size, and control-stack size derived by the
   reviewed resource plan;
@@ -79,24 +79,26 @@ with all of these properties:
 - no cleanup syscall in capability `Drop`; explicit release remains
   fail-closed and at most once.
 
-The existing host-visible coherent allocation session does not satisfy these
-requirements. In particular, the reviewed queue resource observations name
-USERPTR/SVM and VRAM policies that R2 deliberately does not admit.
+The production V1 composition satisfies these ownership requirements with a
+separately named fe2o3 GTT-only policy: AQL_QUEUE for the ring,
+HOST_VISIBLE_COHERENT for control, and EXECUTABLE GTT for EOP/CWSR. Live MI300X
+measurement confirms KFD accepts all four concurrently. This does not claim
+equivalence with ROCr's USERPTR/SVM/VRAM policy.
 
-## Missing doorbell boundary
+## Doorbell mapping boundary
 
-Successful CREATE currently retains only the validated numeric output. The
-next doorbell slice must implement all of the following before dispatch:
+Successful CREATE maps and owns the exact complete 8192-byte process slice
+from the retained KFD file description. It validates the encoded base and
+in-slice 8-byte offset, installs MADV_DONTFORK while PROT_NONE, then enables
+the VMA. No pointer, address, fd, or store API is public. The live lane checks
+that the VMA is absent in an isolated child without reading or writing MMIO.
 
-1. Map exactly 8192 bytes from the retained KFD file description using the
-   validated `encoded_process_slice_offset`; clearing only a 4096-byte page
-   mask is incorrect for offsets in the second half of the process slice.
-2. Establish an owned, DONTFORK, lifetime-bound mapping and derive the selected
-   8-byte doorbell location only from the checked in-slice offset.
-3. Bind that mapping to the exact active queue ID, process incarnation, device
+Dispatch still requires all of the following:
+
+1. Bind the existing mapping to the exact active queue ID, process incarnation, device
    generation, and CREATE observation. No raw pointer or general MMIO write may
    escape.
-4. Pin and test the required CPU/device ordering, store width, value encoding,
+2. Pin and test the required CPU/device ordering, store width, value encoding,
    cache attributes, teardown order, fork behavior, and reset/currentness
    policy. The current source pins validate geometry, not these executable
    mmap/store semantics.
@@ -134,9 +136,11 @@ event ID alone is completion authority.
 
 ## Verification boundary
 
-The existing Verus queue proofs establish properties of the pure lifecycle
-model. This adapter adds an executable projection discipline and hostile fake
-backend tests, but there is no Verus proof of this Rust implementation, no
+The Verus queue proof now also establishes that direct destroy begins only
+from Active or Disabled and failed-no-effect restores the exact retained source
+phase; an expected-negative mutation rejects restoring Active as Disabled.
+This adapter adds an executable projection discipline and hostile fake backend
+tests, but there is no Verus proof of this Rust implementation, no
 syscall-to-model refinement, and no proof of the kernel, firmware, mappings,
 atomics, or hardware memory model. A later refinement must relate each concrete
 request/observation pair to the exact `Begin*`/`Observe*` history edge and prove

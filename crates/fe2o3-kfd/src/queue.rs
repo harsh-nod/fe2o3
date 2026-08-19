@@ -21,6 +21,15 @@ use fe2o3_runtime_model::{
     UntrustedQueueIdObservationV1,
 };
 
+#[path = "queue_live.rs"]
+mod live;
+
+pub use live::{
+    ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
+    ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
+    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1,
+};
+
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r4-v1\n",
@@ -30,16 +39,18 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "currentness=opener-pid-and-contracted-device-check-before-and-after-every-lifecycle-ioctl\n",
     "failure=linux-errno-must-map-indeterminate,malformed-output-global-poison,post-call-projection-failure-global-poison\n",
     "release=explicit-only-after-confirmed-destroy,no-drop-ioctl\n",
-    "linux-boundary=private-create-update-destroy-ioctl-shims,no-production-constructor\n",
-    "missing=memory-resource-capabilities,doorbell-mmap,packet-publication,completion-signals\n",
+    "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
+    "composition=shared-gtt-linear-role-authorities,transferred-model-foundation,whole-slice-doorbell-mmap\n",
+    "missing=packet-publication,doorbell-store,dispatch,completion-signals\n",
     "proof=model-projection-and-hostile-tests-only,no-concrete-verus-or-kernel-refinement\n",
-    "authority=none-public,no-queue-id-fd-gpu-address-doorbell-or-dispatch-export\n",
+    "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
 );
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "bd1a49bab5f56d26f994254c637b1d1409a3ba41bd9026105d2406b6340e4a7e";
+    "f31d06a7760dc7cb751c3d0c35b80a5ef6aa1a023f5a8063fa5cf09e34b8d5f9";
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NativeQueueOperationV1 {
     Create,
@@ -48,6 +59,7 @@ enum NativeQueueOperationV1 {
     Destroy,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct NativeQueueJournalSummaryV1 {
     queues: usize,
@@ -82,7 +94,6 @@ impl std::error::Error for NativeQueueAdapterErrorV1 {}
 /// Model foundation supplied by the backend that owns the checked device/VM.
 /// These model values are not concrete authority; the private backend resource
 /// type is what prevents callers from presenting numeric addresses directly.
-#[derive(Clone)]
 struct QueueModelFoundationV1 {
     identity: DeviceIdentityStateV1,
     memory: MemoryLifecycleStateV1,
@@ -105,11 +116,14 @@ struct QueueKernelOutcomeV1<T> {
 
 /// Private substitution point. Its associated authority type is retained by
 /// the engine and cannot be manufactured through the public crate API.
+#[allow(dead_code)]
 trait NativeQueueBackendV1 {
     type ResourceAuthority;
 
     fn opener_pid(&self) -> u32;
-    fn model_foundation(&self) -> QueueModelFoundationV1;
+    fn take_model_foundation(
+        &mut self,
+    ) -> Result<QueueModelFoundationV1, NativeQueueAdapterErrorV1>;
     fn resource_view(
         &self,
         authority: &Self::ResourceAuthority,
@@ -146,13 +160,14 @@ struct NativeQueueEngineV1<B: NativeQueueBackendV1> {
     authority_poisoned: bool,
 }
 
+#[allow(dead_code)]
 impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
-    fn new(backend: B) -> Result<Self, NativeQueueAdapterErrorV1> {
+    fn new(mut backend: B) -> Result<Self, NativeQueueAdapterErrorV1> {
         let opener_pid = backend.opener_pid();
         if opener_pid != std::process::id() {
             return Err(NativeQueueAdapterErrorV1::ProcessChanged);
         }
-        let foundation = backend.model_foundation();
+        let foundation = backend.take_model_foundation()?;
         let domain = foundation.identity.domain_id();
         if foundation.memory.domain_id() != domain {
             return Err(NativeQueueAdapterErrorV1::InvalidResource(
@@ -244,6 +259,13 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
             .find(|queue| queue.plan.queue == key)
             .and_then(|queue| queue.queue_id)
             .map(|queue_id| queue_id.0)
+    }
+
+    fn create_outputs(&self, key: QueueKeyV1) -> Option<KfdGfx942CreateQueueOutputs> {
+        self.resources
+            .iter()
+            .find(|resource| resource.key == key && resource.authority.is_some())
+            .and_then(|resource| resource.create_outputs)
     }
 
     fn create(&mut self, key: QueueKeyV1) -> Result<(), NativeQueueAdapterErrorV1> {

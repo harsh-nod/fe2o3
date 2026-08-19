@@ -2,7 +2,7 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
@@ -10,7 +10,9 @@ use fe2o3_kfd_uapi::{
     KfdIoctlAcquireVmArgs, KfdIoctlAllocMemoryOfGpuArgs, KfdIoctlFreeMemoryOfGpuArgs,
     KfdIoctlMapMemoryToGpuArgs, KfdIoctlUnmapMemoryFromGpuArgs,
 };
-use fe2o3_runtime_model::{ModelDeviceAdmissionV1, ModelVmAdmissionV1, VmIdV1};
+use fe2o3_runtime_model::{
+    DeviceIdentityStateV1, ModelDeviceAdmissionV1, ModelVmAdmissionV1, VmIdV1,
+};
 use rustix::ioctl::{Opcode, Setter, Updater};
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
@@ -55,10 +57,14 @@ impl LinuxMemoryBackend {
     pub(super) fn bind_model_vm(
         &mut self,
         vm_id: VmIdV1,
-    ) -> Result<ModelVmAdmissionV1, MemorySessionError> {
+    ) -> Result<(DeviceIdentityStateV1, ModelVmAdmissionV1), MemorySessionError> {
         self.device
             .register_memory_vm_model_only(vm_id)
             .map_err(MemorySessionError::Device)
+    }
+
+    pub(super) fn kfd_fd(&self) -> BorrowedFd<'_> {
+        self.device.kfd.opened.fd.as_fd()
     }
 
     pub(super) fn model_device(&self) -> ModelDeviceAdmissionV1 {

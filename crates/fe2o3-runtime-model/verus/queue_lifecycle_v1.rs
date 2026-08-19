@@ -119,6 +119,7 @@ pub struct QueueRecordV1 {
     pub phase: QueuePhaseV1,
     pub native_queue_id: Option<nat>,
     pub configuration_id: nat,
+    pub resume_phase: Option<QueuePhaseV1>,
 }
 
 pub open spec fn queue_retains_resources_v1(phase: QueuePhaseV1) -> bool {
@@ -166,6 +167,7 @@ pub open spec fn observe_create_v1(
             phase: QueuePhaseV1::Active,
             native_queue_id: classified,
             configuration_id: old.configuration_id,
+            resume_phase: None,
         }
     } else if status == QueueStatusV1::FailedNoEffect
         && field == CreateQueueIdFieldV1::SentinelUnchanged
@@ -175,6 +177,7 @@ pub open spec fn observe_create_v1(
             phase: QueuePhaseV1::Planned,
             native_queue_id: None,
             configuration_id: old.configuration_id,
+            resume_phase: None,
         }
     } else {
         QueueRecordV1 {
@@ -186,6 +189,7 @@ pub open spec fn observe_create_v1(
                 classified
             },
             configuration_id: old.configuration_id,
+            resume_phase: None,
         }
     }
 }
@@ -212,6 +216,7 @@ pub open spec fn observe_non_create_indeterminate_v1(
             phase: QueuePhaseV1::Ambiguous,
             native_queue_id: old.native_queue_id,
             configuration_id: old.configuration_id,
+            resume_phase: old.resume_phase,
         }
     } else {
         old
@@ -225,6 +230,7 @@ pub open spec fn cancel_plan_v1(old: QueueRecordV1) -> QueueRecordV1 {
             phase: QueuePhaseV1::CancelledBeforeCreate,
             native_queue_id: None,
             configuration_id: old.configuration_id,
+            resume_phase: None,
         }
     } else {
         old
@@ -238,6 +244,42 @@ pub open spec fn observe_destroy_success_v1(old: QueueRecordV1) -> QueueRecordV1
             phase: QueuePhaseV1::Destroyed,
             native_queue_id: old.native_queue_id,
             configuration_id: old.configuration_id,
+            resume_phase: None,
+        }
+    } else {
+        old
+    }
+}
+
+pub open spec fn legal_destroy_source_v1(phase: QueuePhaseV1) -> bool {
+    phase == QueuePhaseV1::Active || phase == QueuePhaseV1::Disabled
+}
+
+pub open spec fn begin_destroy_v1(old: QueueRecordV1) -> QueueRecordV1 {
+    if legal_destroy_source_v1(old.phase) && old.native_queue_id.is_some() {
+        QueueRecordV1 {
+            plan: old.plan,
+            phase: QueuePhaseV1::DestroyPending,
+            native_queue_id: old.native_queue_id,
+            configuration_id: old.configuration_id,
+            resume_phase: Some(old.phase),
+        }
+    } else {
+        old
+    }
+}
+
+pub open spec fn observe_destroy_failed_no_effect_v1(old: QueueRecordV1) -> QueueRecordV1 {
+    if old.phase == QueuePhaseV1::DestroyPending
+        && old.resume_phase.is_some()
+        && legal_destroy_source_v1(old.resume_phase.unwrap())
+    {
+        QueueRecordV1 {
+            plan: old.plan,
+            phase: old.resume_phase.unwrap(),
+            native_queue_id: old.native_queue_id,
+            configuration_id: old.configuration_id,
+            resume_phase: None,
         }
     } else {
         old
@@ -590,6 +632,28 @@ pub proof fn cancel_and_destroy_are_the_exact_nonretaining_terminals_v1(
         !queue_retains_resources_v1(phase)
             <==> phase == QueuePhaseV1::CancelledBeforeCreate
                 || phase == QueuePhaseV1::Destroyed,
+{
+}
+
+pub proof fn direct_destroy_retains_exact_source_for_failed_no_effect_v1(
+    old: QueueRecordV1,
+)
+    requires
+        legal_destroy_source_v1(old.phase),
+        old.native_queue_id.is_some(),
+        old.resume_phase.is_none(),
+    ensures
+        begin_destroy_v1(old).phase == QueuePhaseV1::DestroyPending,
+        begin_destroy_v1(old).resume_phase == Some(old.phase),
+        observe_destroy_failed_no_effect_v1(begin_destroy_v1(old)).phase == old.phase,
+        observe_destroy_failed_no_effect_v1(begin_destroy_v1(old)).resume_phase.is_none(),
+        observe_destroy_failed_no_effect_v1(begin_destroy_v1(old)).plan.resources
+            =~= old.plan.resources,
+        observe_destroy_failed_no_effect_v1(begin_destroy_v1(old)).native_queue_id
+            == old.native_queue_id,
+        observe_destroy_failed_no_effect_v1(begin_destroy_v1(old)).configuration_id
+            == old.configuration_id,
+        observe_destroy_success_v1(begin_destroy_v1(old)).phase == QueuePhaseV1::Destroyed,
 {
 }
 

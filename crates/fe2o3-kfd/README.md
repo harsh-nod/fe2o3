@@ -293,10 +293,29 @@ failure/ambiguity class, hostile CREATE outputs, request mutation,
 currentness/process loss, multi-queue collisions, global create poison, and
 no-Drop-call behavior.
 
-There is intentionally no production constructor or public queue authority.
-R2 cannot yet provide exact mapped ring/control/EOP/CWSR capabilities, and the
-doorbell mmap/store, AQL packet publication, and completion-event/signal UAPI
-are not implemented. The exact memory-owner handoff and missing boundaries are
-specified in [native-queue-adapter-foundation-v1.md](docs/native-queue-adapter-foundation-v1.md).
-The engine is executable projection evidence, not a Verus proof of the Rust
-adapter or a syscall/kernel refinement.
+The first production composition consumes one checked gfx942:xnack- device and
+creates a redacted, non-Clone queue session. It allocates one exact 4 KiB AQL
+ring with the required doubled GPUVA, one exact 4 KiB control mapping with
+distinct aligned write/read counters in the same page, a 4 KiB EOP mapping,
+and the exact 0xb167000-byte CWSR mapping. EOP and CWSR use the separately named
+fe2o3 executable-GTT policy; this is not ROCr policy equivalence. All four
+linear role authorities and the shared model owner transfer into the queue
+engine and remain there until confirmed direct DESTROY.
+
+CREATE returns an admitted process-local queue ID, including zero, and the
+adapter maps the exact complete 8192-byte KFD process doorbell slice. It checks
+the encoded returned offset, installs MADV_DONTFORK before enabling the VMA,
+and exposes neither an address, pointer, fd, handle, nor MMIO store. Explicit
+destroy confirms the ioctl, unmaps the doorbell, releases model publications,
+restores the shared-memory model owner, then explicitly unmaps and frees all
+four resources. Drop performs none of those native operations. The isolated
+`kfd-compute-aql-queue` live example checks queue ID zero, the DONTFORK child
+negative, direct DESTROY, and resource return without publishing a packet or
+performing an MMIO store. `kfd-compute-aql-queue-policy` links the default
+production closure for the no-ROCm ELF audit.
+
+The abstract Verus relation proves Active and Disabled are the only direct
+destroy sources and that failed-no-effect restores the exact retained source.
+It does not prove the Rust adapter, ioctl/mmap implementation, kernel, firmware,
+hardware, or concrete-to-model refinement. Packet publication, doorbell stores,
+dispatch, and completion remain excluded.

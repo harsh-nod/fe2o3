@@ -865,7 +865,7 @@ impl CheckedGfx942XnackMinusDevice {
                 MemoryEngine::acquire(crate::memory_linux::LinuxMemoryBackend::new(self))?;
             let model_device = engine.backend.model_device();
             let aperture = engine.backend.model_aperture();
-            let model_vm = engine.backend.bind_model_vm(VmIdV1(vm_id))?;
+            let (_, model_vm) = engine.backend.bind_model_vm(VmIdV1(vm_id))?;
             let byte_len = aperture
                 .limit()
                 .checked_sub(aperture.base())

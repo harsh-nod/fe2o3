@@ -71,14 +71,17 @@ the executable adapter:
    relation and is covered only by the field/status-aware relation above;
 6. CancelledBeforeCreate and Destroyed are exactly the two non-retaining
    terminals, reached by plan cancellation and successful destroy respectively;
-7. generic memory release cannot discharge a live publication structurally
+7. direct destroy begins only from Active or Disabled, retains that exact source
+   in the pending record, and a failed-no-effect observation restores the same
+   source while success reaches Destroyed;
+8. generic memory release cannot discharge a live publication structurally
    owned by an exact queue VM, instance, and generation;
-8. every retaining queue blocks release of each exact composite mapping in its
+9. every retaining queue blocks release of each exact composite mapping in its
    plan;
-9. an ambiguous known queue ID remains reserved, while CreatePending or any
+10. an ambiguous known queue ID remains reserved, while CreatePending or any
    number of Ambiguous states with no known ID poison process-level future
    CREATE; only CreatePending itself is globally single-flight; and
-10. appending a history event preserves the exact prior sequence as a prefix
+11. appending a history event preserves the exact prior sequence as a prefix
     and places the new event at the next index.
 
 `load_plan_v1.rs` proves the initial R3 abstract load-plan relation:

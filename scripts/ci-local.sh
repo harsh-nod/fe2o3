@@ -286,7 +286,8 @@ run_runtime_pure_rust_policy() {
         --example kfd-device-identity \
         --example kfd-host-visible-memory-policy \
         --example kfd-shared-gtt-memory-policy \
-        --example kfd-queue-resources
+        --example kfd-queue-resources \
+        --example kfd-compute-aql-queue-policy
   run_step runtime-pure-rust-kfd-version-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
@@ -311,6 +312,10 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-queue-resources"
+  run_step runtime-pure-rust-kfd-compute-aql-queue-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-compute-aql-queue-policy"
 }
 
 run_runtime_identity_oracle() {

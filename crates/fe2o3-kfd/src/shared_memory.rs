@@ -2,6 +2,7 @@
 
 use core::fmt;
 use core::marker::PhantomData;
+use std::os::fd::BorrowedFd;
 use std::sync::atomic::Ordering;
 
 use fe2o3_kfd_uapi::{
@@ -10,11 +11,11 @@ use fe2o3_kfd_uapi::{
     KfdAllocMemoryFlags,
 };
 use fe2o3_runtime_model::{
-    AllocationGenerationV1, AllocationIdV1, GpuVaRangeV1, MappingIdV1, MemoryAccessV1,
-    MemoryAllocationKeyV1, MemoryAllocationSpecV1, MemoryCoherenceV1, MemoryKindV1,
+    AllocationGenerationV1, AllocationIdV1, DeviceIdentityStateV1, GpuVaRangeV1, MappingIdV1,
+    MemoryAccessV1, MemoryAllocationKeyV1, MemoryAllocationSpecV1, MemoryCoherenceV1, MemoryKindV1,
     MemoryLifecycleStateV1, MemoryMappingKeyV1, MemoryPublicationIdV1, MemoryPublicationKeyV1,
-    MemoryTransitionErrorV1, MemoryTransitionV1, ModelDeviceAdmissionV1, PartialOperationStatusV1,
-    PartialProgressObservationV1, UntrustedAllocationHandleObservationV1,
+    MemoryTransitionErrorV1, MemoryTransitionV1, ModelAdmissionStatusV1, ModelDeviceAdmissionV1,
+    PartialOperationStatusV1, PartialProgressObservationV1, UntrustedAllocationHandleObservationV1,
     UntrustedVmHandleObservationV1, VaReservationIdV1, VaReservationKeyV1, VmIdV1, VmKeyV1,
 };
 
@@ -933,9 +934,11 @@ fn ranges_overlap(left: u64, left_len: u64, right: u64, right_len: u64) -> bool 
 #[must_use = "dropping the shared session performs no munmap, FREE, or retry"]
 pub struct SharedGttMemorySessionV1 {
     engine: SharedMemoryEngine<crate::memory_linux::LinuxMemoryBackend>,
+    identity: DeviceIdentityStateV1,
     model: MemoryLifecycleStateV1,
     model_device: ModelDeviceAdmissionV1,
     vm: VmKeyV1,
+    model_transferred: bool,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -957,7 +960,7 @@ impl CheckedGfx942XnackMinusDevice {
                 SharedMemoryEngine::acquire(crate::memory_linux::LinuxMemoryBackend::new(self))?;
             let model_device = engine.backend.model_device();
             let aperture = engine.backend.model_aperture();
-            let model_vm = engine.backend.bind_model_vm(VmIdV1(vm_id))?;
+            let (identity, model_vm) = engine.backend.bind_model_vm(VmIdV1(vm_id))?;
             let byte_len = aperture
                 .limit()
                 .checked_sub(aperture.base())
@@ -976,9 +979,11 @@ impl CheckedGfx942XnackMinusDevice {
                 .map_err(|_| MemorySessionError::Model("VM acquisition projection"))?;
             Ok(SharedGttMemorySessionV1 {
                 engine,
+                identity,
                 model,
                 model_device,
                 vm: model_vm.model_key(),
+                model_transferred: false,
             })
         })();
         finish_process_vm_attempt(result.is_ok(), pid, gpu_id);
@@ -1002,6 +1007,72 @@ impl SharedGttMemorySessionV1 {
 
     pub fn model_journal_summary(&self) -> MemoryModelJournalSummary {
         MemoryModelJournalSummary::from_model(&self.model)
+    }
+
+    pub(crate) fn opener_pid(&self) -> u32 {
+        self.engine.backend.opener_pid()
+    }
+
+    pub(crate) fn kfd_fd(&self) -> BorrowedFd<'_> {
+        self.engine.backend.kfd_fd()
+    }
+
+    pub(crate) fn check_queue_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.engine.require_active()?;
+        self.engine.check_currentness()
+    }
+
+    pub(crate) const fn queue_model_device(&self) -> ModelDeviceAdmissionV1 {
+        self.model_device
+    }
+
+    pub(crate) fn take_queue_model_foundation(
+        &mut self,
+    ) -> Result<(DeviceIdentityStateV1, MemoryLifecycleStateV1), MemorySessionError> {
+        self.check_queue_currentness()?;
+        if self.model_transferred {
+            return Err(MemorySessionError::Model(
+                "shared queue model ownership already transferred",
+            ));
+        }
+        let domain = self.model.domain_id();
+        self.model_transferred = true;
+        Ok((
+            core::mem::replace(&mut self.identity, DeviceIdentityStateV1::new(domain)),
+            core::mem::replace(&mut self.model, MemoryLifecycleStateV1::new(domain)),
+        ))
+    }
+
+    pub(crate) fn restore_queue_model_foundation(
+        &mut self,
+        identity: DeviceIdentityStateV1,
+        model: MemoryLifecycleStateV1,
+    ) -> Result<(), MemorySessionError> {
+        if !self.model_transferred
+            || identity.domain_id() != self.model_device.domain_id()
+            || model.domain_id() != self.model_device.domain_id()
+            || identity.validate_global_invariants().is_err()
+            || model.validate_global_invariants().is_err()
+            || !identity.devices().iter().any(|record| {
+                record.key == self.model_device.model_key()
+                    && record.status == ModelAdmissionStatusV1::Active
+            })
+            || !identity.vms().iter().any(|record| {
+                record.key == self.vm && record.status == ModelAdmissionStatusV1::Active
+            })
+            || !model.vms().iter().any(|record| {
+                record.admission.model_key() == self.vm
+                    && record.state == fe2o3_runtime_model::MemoryVmStateV1::Active
+            })
+        {
+            return self.engine.quarantine(MemorySessionError::Model(
+                "shared queue model ownership restoration",
+            ));
+        }
+        self.identity = identity;
+        self.model = model;
+        self.model_transferred = false;
+        Ok(())
     }
 
     #[allow(dead_code)]

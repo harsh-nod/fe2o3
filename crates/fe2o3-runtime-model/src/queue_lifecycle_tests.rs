@@ -555,6 +555,61 @@ fn malformed_or_indeterminate_create_is_terminal_and_unreleasable() {
 }
 
 #[test]
+fn active_queue_can_be_destroyed_directly_and_failed_no_effect_restores_active() {
+    let fixture = fixture();
+    let (queue, memory) = admit(&fixture).into_states();
+    let key = fixture.plan.queue;
+    let active = create_active(queue, &fixture, &memory);
+
+    let pending = active
+        .next(
+            &fixture.identity,
+            &memory,
+            QueueTransitionV1::BeginDestroy { queue: key },
+        )
+        .unwrap();
+    assert_eq!(
+        pending.queues()[0].phase,
+        ComputeAqlQueuePhaseV1::DestroyPending
+    );
+    let restored = pending
+        .next(
+            &fixture.identity,
+            &memory,
+            QueueTransitionV1::ObserveDestroy {
+                queue: key,
+                status: QueueSyscallStatusV1::FailedNoEffect,
+            },
+        )
+        .unwrap();
+    assert_eq!(restored.queues()[0].phase, ComputeAqlQueuePhaseV1::Active);
+    assert!(!restored.can_release_mapping(fixture.plan.resources.ring.mapping));
+
+    let pending = active
+        .next(
+            &fixture.identity,
+            &memory,
+            QueueTransitionV1::BeginDestroy { queue: key },
+        )
+        .unwrap();
+    let destroyed = pending
+        .next(
+            &fixture.identity,
+            &memory,
+            QueueTransitionV1::ObserveDestroy {
+                queue: key,
+                status: QueueSyscallStatusV1::Succeeded,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        destroyed.queues()[0].phase,
+        ComputeAqlQueuePhaseV1::Destroyed
+    );
+    assert!(destroyed.can_release_mapping(fixture.plan.resources.ring.mapping));
+}
+
+#[test]
 fn returned_queue_id_zero_is_valid_and_unchanged_sentinel_is_not_an_id() {
     let zero_id_fixture = fixture();
     let (queue, memory) = admit(&zero_id_fixture).into_states();
