@@ -22,8 +22,8 @@ pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME: &str =
 
 /// SHA-256 of the byte-canonical reviewed runtime manifest.
 pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256: [u8; 32] = [
-    0x61, 0xa1, 0x5c, 0x5d, 0xa7, 0x75, 0xd9, 0x0f, 0x0b, 0x0c, 0x90, 0x9d, 0x74, 0x38, 0x3d, 0x1c,
-    0x1c, 0xfb, 0xf0, 0xea, 0x9f, 0x0b, 0x20, 0x97, 0xd5, 0x6c, 0x9e, 0xf5, 0xef, 0xf9, 0x54, 0x5f,
+    0xbe, 0x2d, 0x4e, 0x63, 0xab, 0x4f, 0x74, 0x56, 0x92, 0xc0, 0x3b, 0xe6, 0xac, 0x2a, 0x5e, 0x98,
+    0x54, 0xf4, 0xaa, 0xec, 0x56, 0xed, 0x4e, 0x3e, 0xd9, 0x8e, 0x63, 0xb3, 0xe9, 0x2e, 0xc0, 0xad,
 ];
 
 const MANIFEST_BYTES: &[u8] =
@@ -133,9 +133,12 @@ pub struct GeneralGemmVerusRuntimeClosureLeaseV2 {
 pub(crate) enum GeneralGemmProofSourceV2 {
     Reference,
     Vectorized,
+    NumericalContract,
     VectorTailWrong,
     EpilogueWrong,
     MachineClaimWrong,
+    NumericalMfmaClaimWrong,
+    NumericalWideningWrong,
 }
 
 impl GeneralGemmProofSourceV2 {
@@ -143,9 +146,12 @@ impl GeneralGemmProofSourceV2 {
         match self {
             Self::Reference => "general_gemm_reference_schedule_v1.rs",
             Self::Vectorized => "general_gemm_vectorized_schedule_v1.rs",
+            Self::NumericalContract => "general_gemm_numerical_contract_v1.rs",
             Self::VectorTailWrong => "negative/general_gemm_vector_tail_wrong.rs",
             Self::EpilogueWrong => "negative/general_gemm_epilogue_wrong.rs",
             Self::MachineClaimWrong => "negative/general_gemm_machine_claim_wrong.rs",
+            Self::NumericalMfmaClaimWrong => "negative/general_gemm_numerical_mfma_claim_wrong.rs",
+            Self::NumericalWideningWrong => "negative/general_gemm_numerical_widening_wrong.rs",
         }
     }
 
@@ -153,9 +159,12 @@ impl GeneralGemmProofSourceV2 {
         match self {
             Self::Reference => GENERAL_GEMM_REFERENCE_SOURCE,
             Self::Vectorized => GENERAL_GEMM_VECTORIZED_SOURCE,
+            Self::NumericalContract => GENERAL_GEMM_NUMERICAL_CONTRACT_SOURCE,
             Self::VectorTailWrong => GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE,
             Self::EpilogueWrong => GENERAL_GEMM_EPILOGUE_WRONG_SOURCE,
             Self::MachineClaimWrong => GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
+            Self::NumericalMfmaClaimWrong => GENERAL_GEMM_NUMERICAL_MFMA_CLAIM_WRONG_SOURCE,
+            Self::NumericalWideningWrong => GENERAL_GEMM_NUMERICAL_WIDENING_WRONG_SOURCE,
         }
     }
 }
@@ -277,14 +286,24 @@ const GENERAL_GEMM_REFERENCE_SOURCE: &[u8] =
     include_bytes!("../verus/general_gemm_reference_schedule_v1.rs");
 const GENERAL_GEMM_VECTORIZED_SOURCE: &[u8] =
     include_bytes!("../verus/general_gemm_vectorized_schedule_v1.rs");
+const GENERAL_GEMM_NUMERICAL_CONTRACT_SOURCE: &[u8] =
+    include_bytes!("../verus/general_gemm_numerical_contract_v1.rs");
 const GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE: &[u8] =
     include_bytes!("../verus/negative/general_gemm_vector_tail_wrong.rs");
 const GENERAL_GEMM_EPILOGUE_WRONG_SOURCE: &[u8] =
     include_bytes!("../verus/negative/general_gemm_epilogue_wrong.rs");
 const GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE: &[u8] =
     include_bytes!("../verus/negative/general_gemm_machine_claim_wrong.rs");
+const GENERAL_GEMM_NUMERICAL_MFMA_CLAIM_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_numerical_mfma_claim_wrong.rs");
+const GENERAL_GEMM_NUMERICAL_WIDENING_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_numerical_widening_wrong.rs");
 
-const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 6] = [
+const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 9] = [
+    (
+        "proof/general_gemm_numerical_contract_v1.rs",
+        GENERAL_GEMM_NUMERICAL_CONTRACT_SOURCE,
+    ),
     (
         "proof/general_gemm_reference_schedule_v1.rs",
         GENERAL_GEMM_REFERENCE_SOURCE,
@@ -304,6 +323,14 @@ const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 6] = [
     (
         "proof/negative/general_gemm_machine_claim_wrong.rs",
         GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
+    ),
+    (
+        "proof/negative/general_gemm_numerical_mfma_claim_wrong.rs",
+        GENERAL_GEMM_NUMERICAL_MFMA_CLAIM_WRONG_SOURCE,
+    ),
+    (
+        "proof/negative/general_gemm_numerical_widening_wrong.rs",
+        GENERAL_GEMM_NUMERICAL_WIDENING_WRONG_SOURCE,
     ),
     (
         "proof/negative/general_gemm_vector_tail_wrong.rs",
@@ -749,7 +776,7 @@ mod tests {
     fn reviewed_manifest_and_target_pins_are_canonical() {
         let manifest = ManifestV2::parse_reviewed().unwrap();
         assert_eq!(manifest.directories.len(), 10);
-        assert_eq!(manifest.files.len(), 86);
+        assert_eq!(manifest.files.len(), 89);
         assert!(manifest.interpreter.is_some());
         assert_eq!(
             Sha256::digest(MANIFEST_BYTES).as_slice(),
