@@ -68,12 +68,19 @@ fn frontend_binding() -> GeneralGemmFrontendSemanticBindingV1 {
 }
 
 fn unit(schedule: GeneralGemmScheduleV1) -> GeneralGemmCompilationUnitV1 {
+    unit_with_frontend(schedule, frontend_binding())
+}
+
+fn unit_with_frontend(
+    schedule: GeneralGemmScheduleV1,
+    frontend: GeneralGemmFrontendSemanticBindingV1,
+) -> GeneralGemmCompilationUnitV1 {
     let plan = plan();
     let kir = GeneralGemmKirV1::canonical(plan);
     let request = request_for(&kir, 0x11);
     GeneralGemmCompilationUnitV1::checked(
         &request,
-        frontend_binding(),
+        frontend,
         plan,
         kir,
         schedule,
@@ -682,4 +689,172 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
         assert!(!machine.compiler_handoff().grants_load_authority());
         assert!(!machine.compiler_handoff().grants_launch_authority());
     }
+}
+
+fn occurrences(haystack: &str, needle: &str) -> usize {
+    haystack.match_indices(needle).count()
+}
+
+#[test]
+fn structural_machine_text_has_the_exact_tiled_gemm_profile() {
+    let reference = lower_general_gemm_structural_machine_v1(&unit(
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+    ))
+    .unwrap();
+    let optimized = lower_general_gemm_structural_machine_v1(&unit(
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+    ))
+    .unwrap();
+
+    for machine in [&reference, &optimized] {
+        let text = machine.assembly().as_str();
+        assert_eq!(
+            occurrences(text, "addrspace(3) global [256 x i16] undef, align 16"),
+            2
+        );
+        assert_eq!(occurrences(text, "call void @llvm.amdgcn.s.barrier()"), 2);
+        assert_eq!(
+            occurrences(
+                text,
+                "call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k"
+            ),
+            1
+        );
+        assert_eq!(occurrences(text, "  store float "), 4);
+        assert!(text.contains("!reqd_work_group_size"));
+        assert!(text.contains("!{i32 64, i32 1, i32 1}"));
+        assert!(text.contains("section \".fe2o3.kd.v1\", align 8"));
+        assert!(text.contains("section \".fe2o3.general-gemm.binding.v1\", align 16"));
+        assert!(text.contains("@llvm.compiler.used = appending global [2 x ptr]"));
+        assert!(text.contains("@general_gemm_descriptor_source to ptr"));
+        assert!(text.contains("@general_gemm_compilation_binding to ptr"));
+        assert_eq!(
+            occurrences(text, "load <4 x i16>"),
+            usize::from(core::ptr::eq(machine, &optimized))
+        );
+
+        let function = &machine.handoff().module().functions()[0];
+        let mut vector_load_bases = Vec::new();
+        let instructions = function
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .collect::<Vec<_>>();
+        for instruction in &instructions {
+            let fe2o3_llvm_handoff::InstructionKindV2::VectorLoad4 { pointer, .. } =
+                instruction.kind()
+            else {
+                continue;
+            };
+            let producer = instructions
+                .iter()
+                .find(|candidate| {
+                    candidate
+                        .result()
+                        .is_some_and(|result| result.id() == *pointer)
+                })
+                .expect("vector pointer must be defined by the same function");
+            let fe2o3_llvm_handoff::InstructionKindV2::GetElementPtr { base, .. } = producer.kind()
+            else {
+                panic!("vector load pointer must be derived by GEP");
+            };
+            vector_load_bases.push(*base);
+        }
+        let expected = if core::ptr::eq(machine, &optimized) {
+            vec![fe2o3_llvm_handoff::ValueIdV2::new(1)]
+        } else {
+            vec![]
+        };
+        assert_eq!(vector_load_bases, expected, "B must remain scalar");
+    }
+}
+
+#[test]
+fn machine_sections_and_identities_reject_schedule_and_frontend_abi_substitution() {
+    let reference_unit = unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1);
+    let reference = lower_general_gemm_structural_machine_v1(&reference_unit).unwrap();
+    let repeated = lower_general_gemm_structural_machine_v1(&reference_unit).unwrap();
+    assert_eq!(
+        reference.handoff().identity(),
+        repeated.handoff().identity()
+    );
+    assert_eq!(reference.assembly().sha256(), repeated.assembly().sha256());
+    assert_eq!(
+        reference.compiler_handoff().identity(),
+        repeated.compiler_handoff().identity()
+    );
+    assert_eq!(reference.binding_section(), repeated.binding_section());
+
+    let optimized = lower_general_gemm_structural_machine_v1(&unit(
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+    ))
+    .unwrap();
+    assert_ne!(
+        reference.binding_section().identity(),
+        optimized.binding_section().identity()
+    );
+    assert_ne!(
+        reference.handoff().identity(),
+        optimized.handoff().identity()
+    );
+    assert_ne!(reference.assembly().sha256(), optimized.assembly().sha256());
+
+    let substituted_frontend =
+        GeneralGemmFrontendSemanticBindingV1::from_consumed_frontend_receipt_observation(
+            identity(0x12),
+            identity(0x41),
+            identity(0x42),
+            identity(0x99),
+            GeneralGemmSymbolicPlanV1::canonical(),
+            GeneralGemmSymbolicKirV1::canonical(),
+        )
+        .unwrap();
+    let substituted = lower_general_gemm_structural_machine_v1(&unit_with_frontend(
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+        substituted_frontend,
+    ))
+    .unwrap();
+    assert_ne!(
+        reference.binding_section().identity(),
+        substituted.binding_section().identity()
+    );
+    assert_ne!(
+        reference.handoff().identity(),
+        substituted.handoff().identity()
+    );
+
+    let decoded = fe2o3_llvm_handoff::Gfx942HandoffV2::decode_canonical(
+        reference.handoff().encode_canonical().as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(decoded, *reference.handoff());
+    let globals = reference.handoff().module().globals();
+    assert_eq!(
+        globals
+            .iter()
+            .filter(|global| {
+                global.address_space() == fe2o3_llvm_handoff::AddressSpaceV1::Local
+                    && global.array_elements() == Some(256)
+            })
+            .count(),
+        2
+    );
+    let descriptor = globals
+        .iter()
+        .find(|global| global.section() == Some(fe2o3_llvm_handoff::KERNEL_DESCRIPTOR_SECTION_V2))
+        .unwrap();
+    assert_eq!(
+        descriptor.byte_initializer(),
+        Some(reference.descriptor_source().canonical_bytes())
+    );
+    let binding = globals
+        .iter()
+        .find(|global| {
+            global.section() == Some(fe2o3_llvm_handoff::GENERAL_GEMM_BINDING_SECTION_V2)
+        })
+        .unwrap();
+    assert_eq!(
+        binding.byte_initializer(),
+        Some(reference.binding_section().canonical_bytes())
+    );
 }
