@@ -982,6 +982,37 @@ impl GeneralGemmSymbolicCompilationUnitV1 {
     pub const fn grants_artifact_authority(&self) -> bool {
         false
     }
+
+    /// Derives the parameterized schedule-proof request from this symbolic unit.
+    ///
+    /// Concrete launch dimensions, strides, coefficients, plan, KIR, and ABI
+    /// values cannot enter this mapping. No caller-supplied identity is accepted.
+    pub fn symbolic_schedule_proof_request(
+        &self,
+    ) -> Result<GeneralGemmProofRequestV1, GeneralGemmProofExecutionErrorV1> {
+        let schedule = match self.schedule {
+            GeneralGemmScheduleV1::ReferenceWave64Xor4V1 => {
+                GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1
+            }
+            GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 => {
+                GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1
+            }
+        };
+        GeneralGemmProofRequestV1::checked(
+            schedule,
+            proof_identity(self.schedule_identity().into_bytes()),
+            proof_identity(self.symbolic_plan_identity().into_bytes()),
+            proof_identity(self.symbolic_kir_identity().into_bytes()),
+            proof_identity(self.identity.into_bytes()),
+            proof_identity(self.request.identity().into_bytes()),
+            proof_identity(self.request.input_obligations_identity().into_bytes()),
+            proof_identity(self.request.compiler_profile_identity().into_bytes()),
+            proof_identity(self.request.target_profile_identity().into_bytes()),
+            proof_identity(self.toolchain.identity().into_bytes()),
+            proof_identity(self.frontend_semantics.identity().into_bytes()),
+            proof_identity(*self.frontend_semantics.provider_semantics_identity()),
+        )
+    }
 }
 
 /// A concrete launch failed to instantiate the exact symbolic artifact schema.
@@ -1311,39 +1342,6 @@ impl GeneralGemmCompilationUnitV1 {
     /// Returns the aggregate proof-to-lowering binding identity.
     pub const fn identity(&self) -> GeneralGemmCompilationBindingIdentityV1 {
         self.identity
-    }
-
-    /// Derives the model-local schedule proof request from this complete binding.
-    ///
-    /// No caller-supplied identity enters this mapping. The returned request
-    /// remains non-admitting until authenticated KIR correspondence and machine
-    /// refinement are joined by their owning verifier layers.
-    pub fn schedule_proof_request(
-        &self,
-    ) -> Result<GeneralGemmProofRequestV1, GeneralGemmProofExecutionErrorV1> {
-        let schedule = match self.schedule {
-            GeneralGemmScheduleV1::ReferenceWave64Xor4V1 => {
-                GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1
-            }
-            GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 => {
-                GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1
-            }
-        };
-        GeneralGemmProofRequestV1::checked(
-            schedule,
-            proof_identity(self.schedule_identity().into_bytes()),
-            proof_identity(self.plan_identity.into_bytes()),
-            proof_identity(*self.kir_identity().as_bytes()),
-            proof_identity(self.identity.into_bytes()),
-            proof_identity(self.request.identity().into_bytes()),
-            proof_identity(self.request.input_obligations_identity().into_bytes()),
-            proof_identity(self.request.compiler_profile_identity().into_bytes()),
-            proof_identity(self.request.target_profile_identity().into_bytes()),
-            proof_identity(self.toolchain.identity().into_bytes()),
-            proof_identity(self.abi.identity().into_bytes()),
-            proof_identity(self.frontend_semantics.identity().into_bytes()),
-            proof_identity(*self.frontend_semantics.provider_semantics_identity()),
-        )
     }
 }
 

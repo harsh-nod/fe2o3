@@ -459,7 +459,7 @@ fn compiled_source_and_provider_substitution_change_the_aggregate_identity() {
 }
 
 #[test]
-fn verifier_request_is_derived_only_from_the_checked_compilation_unit() {
+fn verifier_request_is_derived_only_from_the_symbolic_compilation_unit() {
     for (schedule, expected) in [
         (
             GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
@@ -470,23 +470,23 @@ fn verifier_request_is_derived_only_from_the_checked_compilation_unit() {
             GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
         ),
     ] {
-        let unit = unit(schedule);
-        let proof = unit.schedule_proof_request().unwrap();
+        let unit = symbolic_unit(schedule);
+        let proof = unit.symbolic_schedule_proof_request().unwrap();
         assert_eq!(proof.schedule(), expected);
         assert_eq!(
             proof.schedule_identity().as_bytes(),
             unit.schedule_identity().as_bytes()
         );
         assert_eq!(
-            proof.plan_identity().as_bytes(),
-            unit.plan_identity().as_bytes()
+            proof.symbolic_plan_identity().as_bytes(),
+            unit.symbolic_plan_identity().as_bytes()
         );
         assert_eq!(
-            proof.kir_identity().as_bytes(),
-            unit.kir_identity().as_bytes()
+            proof.symbolic_kir_identity().as_bytes(),
+            unit.symbolic_kir_identity().as_bytes()
         );
         assert_eq!(
-            proof.compilation_binding_identity().as_bytes(),
+            proof.symbolic_compilation_identity().as_bytes(),
             unit.identity().as_bytes()
         );
         assert_eq!(
@@ -510,11 +510,7 @@ fn verifier_request_is_derived_only_from_the_checked_compilation_unit() {
             unit.toolchain_route_identity().as_bytes()
         );
         assert_eq!(
-            proof.runtime_abi_identity().as_bytes(),
-            unit.runtime_abi_identity().as_bytes()
-        );
-        assert_eq!(
-            proof.source_semantics_identity().as_bytes(),
+            proof.source_template_identity().as_bytes(),
             unit.frontend_semantic_binding_identity().as_bytes()
         );
         assert_eq!(
