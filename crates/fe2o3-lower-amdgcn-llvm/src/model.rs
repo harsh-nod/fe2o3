@@ -61,6 +61,29 @@ pub enum InspectionErrorV1 {
     UpstreamPanicked,
 }
 
+/// Failure while sealing a freshly inspected graph for worker admission.
+#[derive(Debug)]
+pub enum GraphExportErrorV1 {
+    /// Fresh owner-controlled live-graph inspection failed.
+    Inspection(InspectionErrorV1),
+    /// The caller substituted the retained canonical Handoff V2 identity.
+    SourceIdentitySubstitution,
+    /// The caller substituted the construction receipt identity.
+    ReceiptIdentitySubstitution,
+    /// The live graph no longer corresponds to its construction receipt.
+    LiveGraphSubstitution,
+    /// Fresh canonical receipt construction failed closed.
+    ReceiptConstruction,
+}
+
+impl fmt::Display for GraphExportErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "Pliron LLVM worker export failed: {self:?}")
+    }
+}
+
+impl Error for GraphExportErrorV1 {}
+
 impl fmt::Display for InspectionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "typed Pliron LLVM inspection failed: {self:?}")
@@ -77,6 +100,82 @@ impl LoweringReceiptIdentityV1 {
     /// Returns the exact digest bytes.
     pub const fn as_bytes(self) -> [u8; 32] {
         self.0
+    }
+}
+
+/// SHA-256 identity binding one live graph receipt to one admitted worker request.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GraphExportIdentityV1(pub(crate) [u8; 32]);
+
+impl GraphExportIdentityV1 {
+    /// Returns the exact digest bytes.
+    pub const fn as_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+/// Untrusted identity and build claims presented to the owner-controlled export boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GraphExportRequestV1 {
+    pub(crate) source_identity: HandoffIdentityV2,
+    pub(crate) receipt_identity: LoweringReceiptIdentityV1,
+}
+
+impl GraphExportRequestV1 {
+    /// Constructs one untrusted export request.
+    pub const fn new(
+        source_identity: HandoffIdentityV2,
+        receipt_identity: LoweringReceiptIdentityV1,
+    ) -> Self {
+        Self {
+            source_identity,
+            receipt_identity,
+        }
+    }
+}
+
+/// Inert canonical export produced only after fresh live-graph correspondence inspection.
+///
+/// This value binds the exact Handoff V2 source, graph receipt, gfx942 target policy,
+/// measured LLVM/LLD build policy, and worker admission. It grants no compiler-worker,
+/// artifact, link, publication, load, or launch authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanonicalPlironLlvmGraphExportV1 {
+    pub(crate) source: Gfx942HandoffV2,
+    pub(crate) receipt: CanonicalLoweringReceiptV1,
+    pub(crate) inspection: LiveGraphInspectionV1,
+    pub(crate) identity: GraphExportIdentityV1,
+}
+
+impl CanonicalPlironLlvmGraphExportV1 {
+    /// Returns the exact canonical typed source admitted after graph inspection.
+    pub const fn source_handoff(&self) -> &Gfx942HandoffV2 {
+        &self.source
+    }
+
+    /// Returns the recomputed canonical source identity.
+    pub fn source_identity(&self) -> HandoffIdentityV2 {
+        self.source.identity()
+    }
+
+    /// Returns the freshly constructed source-and-live-graph receipt.
+    pub const fn graph_receipt(&self) -> &CanonicalLoweringReceiptV1 {
+        &self.receipt
+    }
+
+    /// Returns facts recovered by the fresh owner-controlled inspection.
+    pub const fn graph_inspection(&self) -> LiveGraphInspectionV1 {
+        self.inspection
+    }
+
+    /// Returns the identity binding the exact graph receipt and canonical source envelope.
+    pub const fn identity(&self) -> GraphExportIdentityV1 {
+        self.identity
+    }
+
+    /// Reports that this structural export grants no artifact or runtime authority.
+    pub const fn grants_artifact_authority(&self) -> bool {
+        false
     }
 }
 
@@ -215,6 +314,14 @@ impl LoweredAmdgcnPlironLlvmV1 {
     /// Revalidates ownership, liveness, recursive verification, and typed graph facts.
     pub fn inspect_live_graph(&self) -> Result<LiveGraphInspectionV1, InspectionErrorV1> {
         crate::lower::inspect_lowered(self)
+    }
+
+    /// Re-inspects and seals this exact live graph before typed worker admission.
+    pub fn export_graph_v1(
+        &self,
+        request: GraphExportRequestV1,
+    ) -> Result<CanonicalPlironLlvmGraphExportV1, GraphExportErrorV1> {
+        crate::lower::export_graph(self, request)
     }
 
     /// This structural lowering grants no artifact or runtime authority.

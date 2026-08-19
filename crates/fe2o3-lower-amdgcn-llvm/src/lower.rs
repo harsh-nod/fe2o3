@@ -8,9 +8,9 @@ use dialect_amdgcn::{AdmittedAmdgcnPlironLlvmV1, admit_amdgcn_pliron_llvm_v1};
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, AxisV2, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallTargetV2,
     CastOperationV2, ComparePredicateV2, FloatBinaryOperationV2, FunctionV2, Gfx942HandoffV2,
-    GlobalIdV2, GlobalLinkageV2, GlobalV2, InstructionKindV2, IntegerBinaryOperationV2,
-    IntrinsicReferenceV2, IntrinsicV2, ReturnTypeV2, ScalarConstantV2, ScalarTypeV1, TerminatorV2,
-    ValueIdV2, ValueTypeV2,
+    GlobalIdV2, GlobalLinkageV2, GlobalV2, InstructionKindV2, InstructionV2,
+    IntegerBinaryOperationV2, IntrinsicReferenceV2, IntrinsicV2, ReturnTypeV2, ScalarConstantV2,
+    ScalarTypeV1, TerminatorV2, ValueIdV2, ValueTypeV2,
 };
 use fe2o3_pliron::{ensure_context_identity, require_context_identity};
 use pliron::{
@@ -18,8 +18,8 @@ use pliron::{
     builtin::{
         attributes::{BytesAttr, FPSingleAttr, IntegerAttr},
         op_interfaces::{
-            AtMostOneRegionInterface, CallOpCallable, CallOpInterface, OneResultInterface,
-            SingleBlockRegionInterface, SymbolOpInterface,
+            AtMostOneRegionInterface, BranchOpInterface, CallOpCallable, CallOpInterface,
+            OneResultInterface, SingleBlockRegionInterface, SymbolOpInterface,
         },
         ops::ModuleOp,
         types::{FP32Type, IntegerType, Signedness},
@@ -54,14 +54,17 @@ use pliron_llvm::{
 use sha2::{Digest as _, Sha256};
 
 use crate::model::{
-    CanonicalLoweringReceiptV1, ConstructionStageV1, InspectionErrorV1, LiveGraphInspectionV1,
-    LoweredAmdgcnPlironLlvmV1, LoweringErrorV1, LoweringReceiptIdentityV1,
+    CanonicalLoweringReceiptV1, CanonicalPlironLlvmGraphExportV1, ConstructionStageV1,
+    GraphExportErrorV1, GraphExportIdentityV1, GraphExportRequestV1, InspectionErrorV1,
+    LiveGraphInspectionV1, LoweredAmdgcnPlironLlvmV1, LoweringErrorV1, LoweringReceiptIdentityV1,
     MAX_LOWERING_RECEIPT_BYTES_V1, OwnedDialectModuleV1,
 };
 
 const MODULE_NAME_V1: &str = "fe2o3_amdgcn_pliron_llvm_v1";
 const RECEIPT_MAGIC_V1: &[u8] = b"fe2o3.lower-amdgcn-llvm.receipt.v1\0";
 const RECEIPT_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.lower-amdgcn-llvm.identity.v1\0";
+const WORKER_EXPORT_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.lower-amdgcn-llvm.worker-export.identity.v1\0";
 
 /// Lowers one canonical gfx942 typed handoff into a private verified Pliron LLVM graph.
 ///
@@ -116,6 +119,42 @@ pub(crate) fn inspect_lowered(
         inspect_module(&lowered.context, &lowered.module, &lowered.source)
     }))
     .unwrap_or(Err(InspectionErrorV1::UpstreamPanicked))
+}
+
+pub(crate) fn export_graph(
+    lowered: &LoweredAmdgcnPlironLlvmV1,
+    request: GraphExportRequestV1,
+) -> Result<CanonicalPlironLlvmGraphExportV1, GraphExportErrorV1> {
+    if request.source_identity != lowered.source_identity {
+        return Err(GraphExportErrorV1::SourceIdentitySubstitution);
+    }
+    if request.receipt_identity != lowered.receipt.identity {
+        return Err(GraphExportErrorV1::ReceiptIdentitySubstitution);
+    }
+    if lowered.source.identity() != lowered.source_identity {
+        return Err(GraphExportErrorV1::SourceIdentitySubstitution);
+    }
+
+    let inspection = inspect_lowered(lowered).map_err(GraphExportErrorV1::Inspection)?;
+    let receipt = encode_receipt(&lowered.source, lowered.profile, inspection)
+        .map_err(|_| GraphExportErrorV1::ReceiptConstruction)?;
+    if inspection != lowered.inspection || receipt != lowered.receipt {
+        return Err(GraphExportErrorV1::LiveGraphSubstitution);
+    }
+
+    let identity: [u8; 32] = Sha256::new()
+        .chain_update(WORKER_EXPORT_IDENTITY_DOMAIN_V1)
+        .chain_update(lowered.source_identity.as_bytes())
+        .chain_update(receipt.identity.as_bytes())
+        .chain_update(inspection.graph_sha256)
+        .finalize()
+        .into();
+    Ok(CanonicalPlironLlvmGraphExportV1 {
+        source: lowered.source.clone(),
+        receipt,
+        inspection,
+        identity: GraphExportIdentityV1(identity),
+    })
 }
 
 fn build_module(
@@ -1016,6 +1055,23 @@ fn inspect_module(
         if function.get_symbol_name(context) != source_symbol {
             return Err(InspectionErrorV1::UnexpectedGraph);
         }
+        let expected_function_type = FuncType::get(
+            context,
+            VoidType::get(context).into(),
+            source_function
+                .parameters()
+                .iter()
+                .map(|parameter| {
+                    type_for(context, parameter.value().value_type())
+                        .map_err(|_| InspectionErrorV1::UnexpectedGraph)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            false,
+        );
+        if function.get_type(context) != expected_function_type || function.is_declaration(context)
+        {
+            return Err(InspectionErrorV1::UnexpectedGraph);
+        }
         function_count = function_count
             .checked_add(1)
             .ok_or(InspectionErrorV1::UnexpectedGraph)?;
@@ -1029,6 +1085,49 @@ fn inspect_module(
         let source_blocks = ordered_blocks(source_function);
         if actual_blocks.len() != source_blocks.len() {
             return Err(InspectionErrorV1::UnexpectedGraph);
+        }
+        let block_bindings = source_blocks
+            .iter()
+            .zip(actual_blocks.iter())
+            .map(|(source_block, actual_block)| (source_block.id(), *actual_block))
+            .collect::<BTreeMap<_, _>>();
+        let source_value_types =
+            collect_value_types(source_function).map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+        let mut values = BTreeMap::new();
+        for (source_block, actual_block) in source_blocks.iter().zip(actual_blocks.iter()) {
+            if source_block.id() == source_function.entry() {
+                for (index, parameter) in source_function.parameters().iter().enumerate() {
+                    let actual_argument = actual_block.deref(context).get_argument(index);
+                    if !value_type_matches(
+                        context,
+                        actual_argument.get_type(context),
+                        parameter.value().value_type(),
+                    ) {
+                        return Err(InspectionErrorV1::UnexpectedGraph);
+                    }
+                    values.insert(parameter.value().id(), actual_argument);
+                }
+            } else {
+                for (index, phi) in source_block
+                    .instructions()
+                    .iter()
+                    .filter(|instruction| {
+                        matches!(instruction.kind(), InstructionKindV2::Phi { .. })
+                    })
+                    .enumerate()
+                {
+                    let result = phi.result().ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                    let actual_argument = actual_block.deref(context).get_argument(index);
+                    if !value_type_matches(
+                        context,
+                        actual_argument.get_type(context),
+                        result.value_type(),
+                    ) {
+                        return Err(InspectionErrorV1::UnexpectedGraph);
+                    }
+                    values.insert(result.id(), actual_argument);
+                }
+            }
         }
         for (source_block, actual_block) in source_blocks.into_iter().zip(actual_blocks) {
             block_count = block_count
@@ -1068,19 +1167,33 @@ fn inspect_module(
             for instruction in source_block.instructions() {
                 if matches!(instruction.kind(), InstructionKindV2::Phi { .. }) {
                     facts.push(3);
+                    let result = instruction
+                        .result()
+                        .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                    facts.extend_from_slice(&result.id().get().to_le_bytes());
                     continue;
                 }
                 let actual = actual_operations
                     .next()
                     .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-                inspect_instruction(
+                let result = inspect_instruction(
                     context,
                     actual,
-                    instruction.kind(),
+                    instruction,
+                    &values,
+                    &source_value_types,
+                    source.module().globals(),
                     &mut facts,
                     &mut strict_float,
                     &mut exact_memory_alignment,
                 )?;
+                match (instruction.result(), result) {
+                    (Some(expected), Some(actual)) => {
+                        values.insert(expected.id(), actual);
+                    }
+                    (None, None) => {}
+                    _ => return Err(InspectionErrorV1::UnexpectedGraph),
+                }
                 operation_count = operation_count
                     .checked_add(1)
                     .ok_or(InspectionErrorV1::UnexpectedGraph)?;
@@ -1088,7 +1201,15 @@ fn inspect_module(
             let terminator = actual_operations
                 .next()
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-            inspect_terminator(context, terminator, source_block.terminator(), &mut facts)?;
+            inspect_terminator(
+                context,
+                terminator,
+                source_block,
+                source_function,
+                &block_bindings,
+                &values,
+                &mut facts,
+            )?;
             if actual_operations.next().is_some() {
                 return Err(InspectionErrorV1::UnexpectedGraph);
             }
@@ -1155,7 +1276,10 @@ fn inspect_global(
     {
         return Err(InspectionErrorV1::UnexpectedGraph);
     }
-    *exact_memory_alignment &= global.alignment(context) == Some(u32::from(expected.alignment()));
+    if global.alignment(context) != Some(u32::from(expected.alignment())) {
+        *exact_memory_alignment = false;
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
 
     let global_type = global.get_type(context);
     let global_type = global_type.deref(context);
@@ -1212,14 +1336,171 @@ fn scalar_type_matches(context: &Context, actual: TypeHandle, expected: ScalarTy
     }
 }
 
+fn value_type_matches(context: &Context, actual: TypeHandle, expected: ValueTypeV2) -> bool {
+    match expected {
+        ValueTypeV2::Scalar(scalar) => scalar_type_matches(context, actual, scalar),
+        ValueTypeV2::Pointer { address_space, .. }
+        | ValueTypeV2::ArrayPointer { address_space, .. } => actual
+            .deref(context)
+            .downcast_ref::<PointerType>()
+            .is_some_and(|pointer| pointer.address_space() == address_space_id(address_space)),
+        ValueTypeV2::Vector { element, lanes } => actual
+            .deref(context)
+            .downcast_ref::<VectorType>()
+            .is_some_and(|vector| {
+                vector.kind() == VectorTypeKind::Fixed
+                    && vector.num_elements() == u32::from(lanes)
+                    && scalar_type_matches(context, vector.elem_type(), element)
+            }),
+    }
+}
+
+fn instruction_operands(instruction: &InstructionKindV2) -> Vec<ValueIdV2> {
+    match instruction {
+        InstructionKindV2::Constant(_)
+        | InstructionKindV2::VectorZero { .. }
+        | InstructionKindV2::GlobalAddress(_) => Vec::new(),
+        InstructionKindV2::Binary { left, right, .. }
+        | InstructionKindV2::Compare { left, right, .. } => vec![*left, *right],
+        InstructionKindV2::Cast { value, .. } => vec![*value],
+        InstructionKindV2::GetElementPtr { base, indices } => {
+            let mut operands = Vec::with_capacity(indices.len() + 1);
+            operands.push(*base);
+            operands.extend(indices.iter().copied());
+            operands
+        }
+        InstructionKindV2::Load { pointer, .. }
+        | InstructionKindV2::VectorLoad4 { pointer, .. } => vec![*pointer],
+        InstructionKindV2::Store { pointer, value, .. } => vec![*value, *pointer],
+        InstructionKindV2::Call { arguments, .. } => arguments.clone(),
+        InstructionKindV2::InsertElement {
+            vector,
+            element,
+            index,
+        } => vec![*vector, *element, *index],
+        InstructionKindV2::ExtractElement { vector, index } => vec![*vector, *index],
+        InstructionKindV2::Phi { .. } => Vec::new(),
+    }
+}
+
+fn constant_matches(actual: pliron::attribute::AttrObj, expected: ScalarConstantV2) -> bool {
+    match expected.scalar_type() {
+        ScalarTypeV1::I1
+        | ScalarTypeV1::I8
+        | ScalarTypeV1::I16
+        | ScalarTypeV1::I32
+        | ScalarTypeV1::I64 => actual
+            .downcast_ref::<IntegerAttr>()
+            .is_some_and(|integer| integer.value().to_u64() == expected.bits()),
+        ScalarTypeV1::F32 => actual
+            .downcast_ref::<FPSingleAttr>()
+            .is_some_and(|single| f32::from(single.clone()).to_bits() == expected.bits() as u32),
+        ScalarTypeV1::F16 | ScalarTypeV1::Bf16 | ScalarTypeV1::F64 => false,
+    }
+}
+
+fn integer_predicate(predicate: ComparePredicateV2) -> ICmpPredicateAttr {
+    match predicate {
+        ComparePredicateV2::IntegerEqual => ICmpPredicateAttr::EQ,
+        ComparePredicateV2::IntegerNotEqual => ICmpPredicateAttr::NE,
+        ComparePredicateV2::UnsignedLessThan => ICmpPredicateAttr::ULT,
+        ComparePredicateV2::UnsignedLessOrEqual => ICmpPredicateAttr::ULE,
+        ComparePredicateV2::SignedLessThan => ICmpPredicateAttr::SLT,
+        ComparePredicateV2::SignedLessOrEqual => ICmpPredicateAttr::SLE,
+        ComparePredicateV2::OrderedEqual
+        | ComparePredicateV2::OrderedNotEqual
+        | ComparePredicateV2::OrderedLessThan
+        | ComparePredicateV2::OrderedLessOrEqual => unreachable!("float predicate"),
+    }
+}
+
+fn float_predicate(predicate: ComparePredicateV2) -> FCmpPredicateAttr {
+    match predicate {
+        ComparePredicateV2::OrderedEqual => FCmpPredicateAttr::OEQ,
+        ComparePredicateV2::OrderedNotEqual => FCmpPredicateAttr::ONE,
+        ComparePredicateV2::OrderedLessThan => FCmpPredicateAttr::OLT,
+        ComparePredicateV2::OrderedLessOrEqual => FCmpPredicateAttr::OLE,
+        ComparePredicateV2::IntegerEqual
+        | ComparePredicateV2::IntegerNotEqual
+        | ComparePredicateV2::UnsignedLessThan
+        | ComparePredicateV2::UnsignedLessOrEqual
+        | ComparePredicateV2::SignedLessThan
+        | ComparePredicateV2::SignedLessOrEqual => unreachable!("integer predicate"),
+    }
+}
+
+const fn compare_tag(predicate: ComparePredicateV2) -> u8 {
+    match predicate {
+        ComparePredicateV2::IntegerEqual => 1,
+        ComparePredicateV2::IntegerNotEqual => 2,
+        ComparePredicateV2::UnsignedLessThan => 3,
+        ComparePredicateV2::UnsignedLessOrEqual => 4,
+        ComparePredicateV2::SignedLessThan => 5,
+        ComparePredicateV2::SignedLessOrEqual => 6,
+        ComparePredicateV2::OrderedEqual => 7,
+        ComparePredicateV2::OrderedNotEqual => 8,
+        ComparePredicateV2::OrderedLessThan => 9,
+        ComparePredicateV2::OrderedLessOrEqual => 10,
+    }
+}
+
+const fn scalar_tag(scalar: ScalarTypeV1) -> u8 {
+    match scalar {
+        ScalarTypeV1::I1 => 1,
+        ScalarTypeV1::I8 => 2,
+        ScalarTypeV1::I16 => 3,
+        ScalarTypeV1::I32 => 4,
+        ScalarTypeV1::I64 => 5,
+        ScalarTypeV1::F16 => 6,
+        ScalarTypeV1::Bf16 => 7,
+        ScalarTypeV1::F32 => 8,
+        ScalarTypeV1::F64 => 9,
+    }
+}
+
+const fn value_type_tag(value_type: ValueTypeV2) -> u8 {
+    match value_type {
+        ValueTypeV2::Scalar(_) => 1,
+        ValueTypeV2::Pointer { .. } => 2,
+        ValueTypeV2::Vector { .. } => 3,
+        ValueTypeV2::ArrayPointer { .. } => 4,
+    }
+}
+
 fn inspect_instruction(
     context: &Context,
     actual: Ptr<Operation>,
-    expected: &InstructionKindV2,
+    expected: &InstructionV2,
+    values: &BTreeMap<ValueIdV2, Value>,
+    source_value_types: &BTreeMap<ValueIdV2, ValueTypeV2>,
+    globals: &[GlobalV2],
     facts: &mut Vec<u8>,
     strict_float: &mut bool,
     exact_memory_alignment: &mut bool,
-) -> Result<(), InspectionErrorV1> {
+) -> Result<Option<Value>, InspectionErrorV1> {
+    let operation = actual.deref(context);
+    if operation.num_regions() != 0 || operation.get_num_successors() != 0 {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
+    let expected_operands = instruction_operands(expected.kind())
+        .into_iter()
+        .map(|id| {
+            values
+                .get(&id)
+                .copied()
+                .ok_or(InspectionErrorV1::UnexpectedGraph)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if operation.get_num_operands() != expected_operands.len()
+        || expected_operands
+            .iter()
+            .enumerate()
+            .any(|(index, expected)| operation.get_operand(index) != *expected)
+    {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
+    drop(operation);
+
     macro_rules! typed {
         ($operation:ty, $tag:expr) => {{
             Operation::get_op::<$operation>(actual, context)
@@ -1231,22 +1512,67 @@ fn inspect_instruction(
         ($operation:ty, $tag:expr) => {{
             let operation = Operation::get_op::<$operation>(actual, context)
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-            *strict_float &= operation.fast_math_flags(context) == FastmathFlagsAttr::default();
+            if operation.fast_math_flags(context) != FastmathFlagsAttr::default() {
+                *strict_float = false;
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
             facts.push($tag);
         }};
     }
-    match expected {
-        InstructionKindV2::Constant(_) => typed!(ConstantOp, 10),
-        InstructionKindV2::VectorZero { .. } => typed!(ZeroOp, 39),
-        InstructionKindV2::GlobalAddress(_) => typed!(AddressOfOp, 40),
+    macro_rules! overflow {
+        ($operation:ty, $tag:expr) => {{
+            let operation = Operation::get_op::<$operation>(actual, context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            if operation.integer_overflow_flag(context) != IntegerOverflowFlagsAttr::default() {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            facts.push($tag);
+        }};
+    }
+    match expected.kind() {
+        InstructionKindV2::Constant(constant) => {
+            let operation = Operation::get_op::<ConstantOp>(actual, context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            if !constant_matches(operation.get_value(context), *constant) {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            facts.push(10);
+            facts.push(scalar_tag(constant.scalar_type()));
+            facts.extend_from_slice(&constant.bits().to_le_bytes());
+        }
+        InstructionKindV2::VectorZero { element_type } => {
+            typed!(ZeroOp, 39);
+            facts.push(scalar_tag(*element_type));
+        }
+        InstructionKindV2::GlobalAddress(global) => {
+            let operation = Operation::get_op::<AddressOfOp>(actual, context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let expected_global = globals
+                .iter()
+                .find(|candidate| candidate.id() == *global)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let symbol = Identifier::try_from(expected_global.symbol())
+                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+            if operation.get_global_name(context) != symbol {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            facts.push(40);
+            facts.extend_from_slice(&global.get().to_le_bytes());
+        }
         InstructionKindV2::Binary { operation, .. } => match operation {
-            BinaryOperationV2::Integer(IntegerBinaryOperationV2::Add) => typed!(AddOp, 11),
-            BinaryOperationV2::Integer(IntegerBinaryOperationV2::Subtract) => typed!(SubOp, 12),
-            BinaryOperationV2::Integer(IntegerBinaryOperationV2::Multiply) => typed!(MulOp, 13),
+            BinaryOperationV2::Integer(IntegerBinaryOperationV2::Add) => overflow!(AddOp, 11),
+            BinaryOperationV2::Integer(IntegerBinaryOperationV2::Subtract) => {
+                overflow!(SubOp, 12)
+            }
+            BinaryOperationV2::Integer(IntegerBinaryOperationV2::Multiply) => {
+                overflow!(MulOp, 13)
+            }
             BinaryOperationV2::Integer(IntegerBinaryOperationV2::And) => typed!(AndOp, 14),
             BinaryOperationV2::Integer(IntegerBinaryOperationV2::Or) => typed!(OrOp, 15),
             BinaryOperationV2::Integer(IntegerBinaryOperationV2::Xor) => typed!(XorOp, 16),
-            BinaryOperationV2::Integer(IntegerBinaryOperationV2::ShiftLeft) => typed!(ShlOp, 17),
+            BinaryOperationV2::Integer(IntegerBinaryOperationV2::ShiftLeft) => {
+                overflow!(ShlOp, 17)
+            }
             BinaryOperationV2::Integer(IntegerBinaryOperationV2::LogicalShiftRight) => {
                 typed!(LShrOp, 18)
             }
@@ -1264,57 +1590,109 @@ fn inspect_instruction(
             | ComparePredicateV2::UnsignedLessThan
             | ComparePredicateV2::UnsignedLessOrEqual
             | ComparePredicateV2::SignedLessThan
-            | ComparePredicateV2::SignedLessOrEqual => typed!(ICmpOp, 24),
+            | ComparePredicateV2::SignedLessOrEqual => {
+                let operation = Operation::get_op::<ICmpOp>(actual, context)
+                    .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                if operation.predicate(context) != integer_predicate(*predicate) {
+                    return Err(InspectionErrorV1::UnexpectedGraph);
+                }
+                facts.push(24);
+                facts.push(compare_tag(*predicate));
+            }
             ComparePredicateV2::OrderedEqual
             | ComparePredicateV2::OrderedNotEqual
             | ComparePredicateV2::OrderedLessThan
-            | ComparePredicateV2::OrderedLessOrEqual => typed!(FCmpOp, 25),
-        },
-        InstructionKindV2::Cast { operation, .. } => match operation {
-            CastOperationV2::ZeroExtend => {
-                let operation = Operation::get_op::<ZExtOp>(actual, context)
+            | ComparePredicateV2::OrderedLessOrEqual => {
+                let operation = Operation::get_op::<FCmpOp>(actual, context)
                     .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-                if operation.nneg(context) {
+                if operation.predicate(context) != float_predicate(*predicate)
+                    || operation.fast_math_flags(context) != FastmathFlagsAttr::default()
+                {
                     return Err(InspectionErrorV1::UnexpectedGraph);
                 }
-                facts.push(26);
+                facts.push(25);
+                facts.push(compare_tag(*predicate));
             }
-            CastOperationV2::SignExtend => typed!(SExtOp, 27),
-            CastOperationV2::Truncate => typed!(TruncOp, 28),
-            CastOperationV2::FloatExtend => typed!(FPExtOp, 29),
-            CastOperationV2::FloatTruncate => typed!(FPTruncOp, 30),
-            CastOperationV2::UnsignedIntToFloat => {
-                let operation = Operation::get_op::<UIToFPOp>(actual, context)
-                    .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-                if operation.nneg(context) {
-                    return Err(InspectionErrorV1::UnexpectedGraph);
-                }
-                facts.push(31);
-            }
-            CastOperationV2::SignedIntToFloat => typed!(SIToFPOp, 32),
-            CastOperationV2::FloatToUnsignedInt => typed!(FPToUIOp, 33),
-            CastOperationV2::FloatToSignedInt => typed!(FPToSIOp, 34),
-            CastOperationV2::PointerToInt => typed!(PtrToIntOp, 35),
         },
-        InstructionKindV2::GetElementPtr { .. } => typed!(GetElementPtrOp, 36),
+        InstructionKindV2::Cast { operation, to, .. } => {
+            facts.push(value_type_tag(*to));
+            match operation {
+                CastOperationV2::ZeroExtend => {
+                    let operation = Operation::get_op::<ZExtOp>(actual, context)
+                        .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                    if operation.nneg(context) {
+                        return Err(InspectionErrorV1::UnexpectedGraph);
+                    }
+                    facts.push(26);
+                }
+                CastOperationV2::SignExtend => typed!(SExtOp, 27),
+                CastOperationV2::Truncate => typed!(TruncOp, 28),
+                CastOperationV2::FloatExtend => typed!(FPExtOp, 29),
+                CastOperationV2::FloatTruncate => typed!(FPTruncOp, 30),
+                CastOperationV2::UnsignedIntToFloat => {
+                    let operation = Operation::get_op::<UIToFPOp>(actual, context)
+                        .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                    if operation.nneg(context) {
+                        return Err(InspectionErrorV1::UnexpectedGraph);
+                    }
+                    facts.push(31);
+                }
+                CastOperationV2::SignedIntToFloat => typed!(SIToFPOp, 32),
+                CastOperationV2::FloatToUnsignedInt => typed!(FPToUIOp, 33),
+                CastOperationV2::FloatToSignedInt => typed!(FPToSIOp, 34),
+                CastOperationV2::PointerToInt => typed!(PtrToIntOp, 35),
+            }
+        }
+        InstructionKindV2::GetElementPtr { base, indices } => {
+            let operation = Operation::get_op::<GetElementPtrOp>(actual, context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let expected_source_type = source_element_type(
+                context,
+                *source_value_types
+                    .get(base)
+                    .ok_or(InspectionErrorV1::UnexpectedGraph)?,
+            )
+            .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+            if operation.src_elem_type(context) != expected_source_type {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            let actual_indices = operation.indices(context);
+            if actual_indices.len() != indices.len()
+                || actual_indices.iter().zip(indices).any(|(actual, expected)| {
+                    !matches!(actual, GepIndex::Value(value) if values.get(expected) == Some(value))
+                })
+            {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            facts.push(36);
+        }
         InstructionKindV2::Load { alignment, .. } => {
             let operation = Operation::get_op::<LoadOp>(actual, context)
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-            *exact_memory_alignment &= operation.alignment(context) == Some(u32::from(*alignment));
+            if operation.alignment(context) != Some(u32::from(*alignment)) {
+                *exact_memory_alignment = false;
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
             facts.push(37);
             facts.extend_from_slice(&alignment.to_le_bytes());
         }
         InstructionKindV2::VectorLoad4 { alignment, .. } => {
             let operation = Operation::get_op::<LoadOp>(actual, context)
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-            *exact_memory_alignment &= operation.alignment(context) == Some(u32::from(*alignment));
+            if operation.alignment(context) != Some(u32::from(*alignment)) {
+                *exact_memory_alignment = false;
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
             facts.push(41);
             facts.extend_from_slice(&alignment.to_le_bytes());
         }
         InstructionKindV2::Store { alignment, .. } => {
             let operation = Operation::get_op::<StoreOp>(actual, context)
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-            *exact_memory_alignment &= operation.alignment(context) == Some(u32::from(*alignment));
+            if operation.alignment(context) != Some(u32::from(*alignment)) {
+                *exact_memory_alignment = false;
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
             facts.push(38);
             facts.extend_from_slice(&alignment.to_le_bytes());
         }
@@ -1329,12 +1707,20 @@ fn inspect_instruction(
             let symbol = Identifier::try_from(intrinsic_symbol(*intrinsic))
                 .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
             if !matches!(operation.callee(context), CallOpCallable::Direct(actual) if actual == symbol)
+                || operation.callee_type(context)
+                    != intrinsic_function_type(context, *intrinsic)
+                        .map_err(|_| InspectionErrorV1::UnexpectedGraph)?
+                        .into()
             {
                 return Err(InspectionErrorV1::UnexpectedGraph);
             }
-            *strict_float &= operation
+            if !operation
                 .get_attr_llvm_call_fastmath_flags(context)
-                .is_none_or(|flags| *flags == FastmathFlagsAttr::default());
+                .is_none_or(|flags| *flags == FastmathFlagsAttr::default())
+            {
+                *strict_float = false;
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
             facts.push(44);
             facts.push(intrinsic_tag(*intrinsic));
         }
@@ -1346,27 +1732,118 @@ fn inspect_instruction(
             return Err(InspectionErrorV1::UnexpectedGraph);
         }
     }
-    Ok(())
+
+    let operation = actual.deref(context);
+    let result = match expected.result() {
+        Some(expected_result) => {
+            if operation.get_num_results() != 1
+                || !value_type_matches(context, operation.get_type(0), expected_result.value_type())
+            {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            facts.extend_from_slice(&expected_result.id().get().to_le_bytes());
+            facts.push(value_type_tag(expected_result.value_type()));
+            Some(operation.get_result(0))
+        }
+        None if matches!(expected.kind(), InstructionKindV2::Call { .. }) => {
+            if operation.get_num_results() != 1
+                || !operation.get_type(0).deref(context).is::<VoidType>()
+            {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            None
+        }
+        None => {
+            if operation.get_num_results() != 0 {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            None
+        }
+    };
+    Ok(result)
 }
 
 fn inspect_terminator(
     context: &Context,
     actual: Ptr<Operation>,
-    expected: &TerminatorV2,
+    source_block: &BasicBlockV2,
+    function: &FunctionV2,
+    blocks: &BTreeMap<BlockIdV2, Ptr<BasicBlock>>,
+    values: &BTreeMap<ValueIdV2, Value>,
     facts: &mut Vec<u8>,
 ) -> Result<(), InspectionErrorV1> {
-    let tag = match expected {
-        TerminatorV2::Return(None) if Operation::get_op::<ReturnOp>(actual, context).is_some() => {
+    let operation = actual.deref(context);
+    if operation.get_num_results() != 0 || operation.num_regions() != 0 {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
+    let tag = match source_block.terminator() {
+        TerminatorV2::Return(None)
+            if Operation::get_op::<ReturnOp>(actual, context).is_some()
+                && operation.get_num_operands() == 0
+                && operation.get_num_successors() == 0 =>
+        {
             50
         }
-        TerminatorV2::Branch(_) if Operation::get_op::<BrOp>(actual, context).is_some() => 51,
-        TerminatorV2::ConditionalBranch { .. }
-            if Operation::get_op::<CondBrOp>(actual, context).is_some() =>
-        {
+        TerminatorV2::Branch(target) => {
+            let branch = Operation::get_op::<BrOp>(actual, context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let expected_target = *blocks
+                .get(target)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let expected_operands = phi_operands(function, *target, source_block.id(), values)
+                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+            if operation.get_num_successors() != 1
+                || operation.get_successor(0) != expected_target
+                || branch.successor_operands(context, 0) != expected_operands
+            {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            facts.extend_from_slice(&target.get().to_le_bytes());
+            51
+        }
+        TerminatorV2::ConditionalBranch { .. } => {
+            let TerminatorV2::ConditionalBranch {
+                condition,
+                then_block,
+                else_block,
+            } = source_block.terminator()
+            else {
+                unreachable!()
+            };
+            let branch = Operation::get_op::<CondBrOp>(actual, context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let expected_condition = *values
+                .get(condition)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let then_target = *blocks
+                .get(then_block)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let else_target = *blocks
+                .get(else_block)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let then_operands = phi_operands(function, *then_block, source_block.id(), values)
+                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+            let else_operands = phi_operands(function, *else_block, source_block.id(), values)
+                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+            if operation.get_num_operands() == 0
+                || operation.get_operand(0) != expected_condition
+                || operation.get_num_successors() != 2
+                || operation.get_successor(0) != then_target
+                || operation.get_successor(1) != else_target
+                || branch.successor_operands(context, 0) != then_operands
+                || branch.successor_operands(context, 1) != else_operands
+            {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            facts.extend_from_slice(&condition.get().to_le_bytes());
+            facts.extend_from_slice(&then_block.get().to_le_bytes());
+            facts.extend_from_slice(&else_block.get().to_le_bytes());
             52
         }
         TerminatorV2::Unreachable
-            if Operation::get_op::<UnreachableOp>(actual, context).is_some() =>
+            if Operation::get_op::<UnreachableOp>(actual, context).is_some()
+                && operation.get_num_operands() == 0
+                && operation.get_num_successors() == 0 =>
         {
             53
         }
@@ -1414,4 +1891,98 @@ fn encode_receipt(
         bytes,
         identity: LoweringReceiptIdentityV1(identity),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use fe2o3_amdgcn_pliron_llvm::{ScalarKernelModuleV1, lower_scalar_kernel_v2};
+    use fe2o3_llvm_handoff::{IdentityV1, StageIdentitiesV1};
+    use pliron::{
+        basic_block::BasicBlock, context::Ptr, linked_list::ContainsLinkedList,
+        operation::Operation,
+    };
+    use pliron_llvm::{
+        op_interfaces::AlignableOpInterface,
+        ops::{FuncOp, LoadOp, StoreOp},
+    };
+
+    use super::*;
+    use crate::{GraphExportErrorV1, GraphExportRequestV1};
+
+    fn scalar_source() -> Gfx942HandoffV2 {
+        lower_scalar_kernel_v2(&ScalarKernelModuleV1::canonical(
+            "graph_export_mutation_module",
+            "graph_export_mutation_kernel",
+            IdentityV1::new([0x31; 32]).unwrap(),
+            StageIdentitiesV1::new([0x41; 32], [0x42; 32], [0x43; 32]).unwrap(),
+        ))
+        .unwrap()
+    }
+
+    fn first_function(lowered: &LoweredAmdgcnPlironLlvmV1) -> FuncOp {
+        lowered
+            .module
+            .module
+            .get_body(&lowered.context, 0)
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| Operation::get_op::<FuncOp>(operation, &lowered.context))
+            .unwrap()
+    }
+
+    fn request(lowered: &LoweredAmdgcnPlironLlvmV1) -> GraphExportRequestV1 {
+        GraphExportRequestV1::new(lowered.source_identity(), lowered.receipt().identity())
+    }
+
+    fn entry_block(lowered: &LoweredAmdgcnPlironLlvmV1, function: FuncOp) -> Ptr<BasicBlock> {
+        function
+            .get_region(&lowered.context)
+            .unwrap()
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .next()
+            .unwrap()
+    }
+
+    #[test]
+    fn live_operand_substitution_fails_closed() {
+        let source = scalar_source();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let function = first_function(&lowered);
+        let entry = entry_block(&lowered, function);
+        let replacement = entry.deref(&lowered.context).get_argument(0);
+        let store = entry
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find(|operation| Operation::get_op::<StoreOp>(*operation, &lowered.context).is_some())
+            .unwrap();
+        Operation::replace_operand(store, &lowered.context, 1, replacement);
+
+        assert!(matches!(
+            lowered.export_graph_v1(request(&lowered)),
+            Err(GraphExportErrorV1::Inspection(
+                InspectionErrorV1::UnexpectedGraph
+            ))
+        ));
+    }
+
+    #[test]
+    fn live_alignment_substitution_fails_closed() {
+        let source = scalar_source();
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let function = first_function(&lowered);
+        let load = entry_block(&lowered, function)
+            .deref(&lowered.context)
+            .iter(&lowered.context)
+            .find_map(|operation| Operation::get_op::<LoadOp>(operation, &lowered.context))
+            .unwrap();
+        load.set_alignment(&lowered.context, 8);
+
+        assert!(matches!(
+            lowered.export_graph_v1(request(&lowered)),
+            Err(GraphExportErrorV1::Inspection(
+                InspectionErrorV1::UnexpectedGraph
+            ))
+        ));
+    }
 }
