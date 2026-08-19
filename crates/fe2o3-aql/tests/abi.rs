@@ -5,8 +5,8 @@ use fe2o3_aql::{
     AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
     AmdBusyCompletionSignalV1, AqlAddressObservationError, AqlCompletionObservationV1,
     AqlDispatchGeometryV1, AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
-    AqlRingCapacityError, AqlRingCapacityV1, AqlRingCounterSnapshotV1, AqlRingReservationError,
-    ObservedGpuAddressV1,
+    AqlPacketPublicationTargetV1, AqlRingCapacityError, AqlRingCapacityV1, AqlRingReservationError,
+    AqlSingleProducerRingModelV1, ObservedGpuAddressV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -35,7 +35,7 @@ fn packet_and_signal_layouts_are_exact() {
 }
 
 #[test]
-fn exact_unpublished_packet_and_publication_word() {
+fn exact_unpublished_packet_and_final_header() {
     let geometry = AqlDispatchGeometryV1::new([1024, 1, 1], [64, 1, 1]).unwrap();
     let prepared = AqlKernelDispatchPacketV1::new_unpublished(
         geometry,
@@ -48,13 +48,44 @@ fn exact_unpublished_packet_and_publication_word() {
     )
     .unwrap();
 
-    let packet = prepared.packet();
-    assert!(packet.is_unpublished());
-    assert_eq!(packet.kernel_object(), 0x1000);
-    assert_eq!(packet.kernarg_address(), 0x2080);
-    assert_eq!(packet.completion_signal(), 0x3000);
-    assert_eq!(prepared.publication_word(), 0x0001_1402);
+    let mut target = CaptureTarget::default();
+    prepared.publish_with(&mut target).unwrap();
+    let packet = target.unpublished.unwrap();
+    assert_eq!(&packet[0..4], &0x0001_0001_u32.to_le_bytes());
+    assert_eq!(&packet[32..40], &0x1000_u64.to_le_bytes());
+    assert_eq!(&packet[40..48], &0x2080_u64.to_le_bytes());
+    assert_eq!(&packet[56..64], &0x3000_u64.to_le_bytes());
+    assert_eq!(target.publication_header, Some(0x1402));
     assert_eq!(AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1, 0x1402);
+}
+
+#[test]
+fn prepared_publication_keeps_each_setup_dimension_paired() {
+    for dimensions in 1_u16..=3 {
+        let grid = match dimensions {
+            1 => [64, 1, 1],
+            2 => [64, 2, 1],
+            _ => [64, 2, 3],
+        };
+        let prepared = AqlKernelDispatchPacketV1::new_unpublished(
+            AqlDispatchGeometryV1::new(grid, [64, 1, 1]).unwrap(),
+            0,
+            0,
+            ObservedGpuAddressV1::new(0x1000).unwrap(),
+            ObservedGpuAddressV1::new(0x2000).unwrap(),
+            16,
+            ObservedGpuAddressV1::new(0x3000).unwrap(),
+        )
+        .unwrap();
+        let mut target = CaptureTarget::default();
+        prepared.publish_with(&mut target).unwrap();
+        let body = target.unpublished.unwrap();
+        assert_eq!(
+            u32::from_le_bytes(body[0..4].try_into().unwrap()),
+            (u32::from(dimensions) << 16) | 1
+        );
+        assert_eq!(target.publication_header, Some(0x1402));
+    }
 }
 
 #[test]
@@ -150,64 +181,83 @@ fn ring_capacity_and_reservation_are_exact() {
     );
     let capacity = AqlRingCapacityV1::from_ring_bytes(4096).unwrap();
     assert_eq!(capacity.packets(), 64);
-    let reservation = AqlRingCounterSnapshotV1::new(65, 64)
-        .reserve_one(capacity)
-        .unwrap();
+    let mut model = AqlSingleProducerRingModelV1::new(capacity, 65, 64).unwrap();
+    let reservation = model.reserve_one(64).unwrap();
     assert_eq!(reservation.packet_id(), 65);
     assert_eq!(reservation.slot_index(), 1);
     assert_eq!(reservation.observed_read(), 64);
     assert_eq!(reservation.next_write(), 66);
+    assert_eq!(model.write(), 66);
+    assert_eq!(model.last_read(), 64);
 }
 
 #[test]
 fn ring_reservation_fails_closed_on_counter_anomalies() {
     let capacity = AqlRingCapacityV1::from_ring_bytes(4096).unwrap();
     assert_eq!(
-        AqlRingCounterSnapshotV1::new(1, 2).reserve_one(capacity),
+        AqlSingleProducerRingModelV1::new(capacity, 1, 2),
         Err(AqlRingReservationError::ReadAfterWrite)
     );
     assert_eq!(
-        AqlRingCounterSnapshotV1::new(65, 0).reserve_one(capacity),
+        AqlSingleProducerRingModelV1::new(capacity, 65, 0),
         Err(AqlRingReservationError::CounterDistanceExceedsCapacity)
     );
+    let mut full = AqlSingleProducerRingModelV1::new(capacity, 64, 0).unwrap();
+    assert_eq!(full.reserve_one(0), Err(AqlRingReservationError::Full));
+    let mut exhausted = AqlSingleProducerRingModelV1::new(capacity, u64::MAX, u64::MAX).unwrap();
     assert_eq!(
-        AqlRingCounterSnapshotV1::new(64, 0).reserve_one(capacity),
-        Err(AqlRingReservationError::Full)
-    );
-    assert_eq!(
-        AqlRingCounterSnapshotV1::new(u64::MAX, u64::MAX).reserve_one(capacity),
+        exhausted.reserve_one(u64::MAX),
         Err(AqlRingReservationError::WriteCounterExhausted)
+    );
+    let mut regressed = AqlSingleProducerRingModelV1::new(capacity, 10, 5).unwrap();
+    regressed.reserve_one(5).unwrap();
+    assert_eq!(
+        regressed.reserve_one(4),
+        Err(AqlRingReservationError::ReadRegressed)
     );
 }
 
 #[test]
 fn a_full_window_uses_each_slot_once() {
     let capacity = AqlRingCapacityV1::from_ring_bytes(4096).unwrap();
+    let mut model = AqlSingleProducerRingModelV1::new(capacity, 0, 0).unwrap();
     for write in 0_u64..64 {
-        let reservation = AqlRingCounterSnapshotV1::new(write, 0)
-            .reserve_one(capacity)
-            .unwrap();
+        let reservation = model.reserve_one(0).unwrap();
         assert_eq!(reservation.slot_index(), write as u32);
     }
-    assert_eq!(
-        AqlRingCounterSnapshotV1::new(64, 0).reserve_one(capacity),
-        Err(AqlRingReservationError::Full)
-    );
+    assert_eq!(model.reserve_one(0), Err(AqlRingReservationError::Full));
 }
 
 #[test]
 fn one_hundred_thousand_completed_reservations_wrap_slots_exactly() {
     let capacity = AqlRingCapacityV1::from_ring_bytes(4096).unwrap();
-    let mut write = 0_u64;
+    let mut model = AqlSingleProducerRingModelV1::new(capacity, 0, 0).unwrap();
     for expected in 0_u64..100_000 {
-        let reservation = AqlRingCounterSnapshotV1::new(write, write)
-            .reserve_one(capacity)
-            .unwrap();
+        let reservation = model.reserve_one(expected).unwrap();
         assert_eq!(reservation.packet_id(), expected);
         assert_eq!(reservation.slot_index(), (expected & 63) as u32);
-        write = reservation.next_write();
     }
-    assert_eq!(write, 100_000);
+    assert_eq!(model.write(), 100_000);
+}
+
+#[derive(Default)]
+struct CaptureTarget {
+    unpublished: Option<[u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]>,
+    publication_header: Option<u16>,
+}
+
+impl AqlPacketPublicationTargetV1 for CaptureTarget {
+    type Error = ();
+
+    fn write_unpublished(&mut self, packet: &AqlKernelDispatchPacketV1) -> Result<(), Self::Error> {
+        self.unpublished = Some(packet.encode_unpublished_le());
+        Ok(())
+    }
+
+    fn publish_release_header(&mut self, header: u16) -> Result<(), Self::Error> {
+        self.publication_header = Some(header);
+        Ok(())
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

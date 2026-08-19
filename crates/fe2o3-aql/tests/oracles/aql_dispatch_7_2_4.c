@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "hsa.h"
 #include "amd_hsa_signal.h"
@@ -23,12 +24,46 @@ int main(void) {
   _Static_assert(_Alignof(amd_signal_t) == 64, "signal align");
   _Static_assert(offsetof(amd_signal_t, kind) == 0, "signal kind");
   _Static_assert(offsetof(amd_signal_t, value) == 8, "signal value");
+  _Static_assert(offsetof(amd_signal_t, event_mailbox_ptr) == 16, "signal mailbox");
+  _Static_assert(offsetof(amd_signal_t, event_id) == 24, "signal event id");
+  _Static_assert(offsetof(amd_signal_t, reserved1) == 28, "signal reserved1");
+  _Static_assert(offsetof(amd_signal_t, start_ts) == 32, "signal start timestamp");
+  _Static_assert(offsetof(amd_signal_t, end_ts) == 40, "signal end timestamp");
+  _Static_assert(offsetof(amd_signal_t, reserved2) == 48, "signal reserved2");
+  _Static_assert(offsetof(amd_signal_t, reserved3) == 56, "signal reserved3");
+
+  hsa_kernel_dispatch_packet_t packet;
+  memset(&packet, 0, sizeof(packet));
+  packet.header = HSA_PACKET_TYPE_INVALID << HSA_PACKET_HEADER_TYPE;
+  packet.setup = 1u << HSA_KERNEL_DISPATCH_PACKET_SETUP_DIMENSIONS;
+
+  uint32_t initial_word = 0;
+  memcpy(&initial_word, &packet, sizeof(initial_word));
 
   uint16_t header =
       (uint16_t)(HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE) |
       (uint16_t)(HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_SCACQUIRE_FENCE_SCOPE) |
       (uint16_t)(HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_SCRELEASE_FENCE_SCOPE);
-  printf("packet=64/8 signal=64/64 header=0x%04x kind=%d\n", header,
-         AMD_SIGNAL_KIND_USER);
-  return header == 0x1402 && AMD_SIGNAL_KIND_USER == 1 ? 0 : 1;
+  uint32_t final_word = (1u << 16) | header;
+  uint32_t published = initial_word;
+  __atomic_store_n(&published, final_word, __ATOMIC_RELEASE);
+
+  amd_signal_t signal;
+  memset(&signal, 0, sizeof(signal));
+  signal.kind = AMD_SIGNAL_KIND_USER;
+  signal.value = 1;
+  const unsigned char *signal_bytes = (const unsigned char *)&signal;
+  int reserved_zero = 1;
+  for (size_t i = 16; i < sizeof(signal); ++i) {
+    reserved_zero &= signal_bytes[i] == 0;
+  }
+
+  printf("packet=64/8 signal=64/64 invalid=%d initial=0x%08x published=0x%08x kind=%d reserved-zero=%d\n",
+         HSA_PACKET_TYPE_INVALID, initial_word, published, AMD_SIGNAL_KIND_USER,
+         reserved_zero);
+  return HSA_PACKET_TYPE_INVALID == 1 && initial_word == 0x00010001u &&
+                 header == 0x1402 && published == 0x00011402u &&
+                 AMD_SIGNAL_KIND_USER == 1 && signal.value == 1 && reserved_zero
+             ? 0
+             : 1;
 }

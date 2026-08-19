@@ -7,8 +7,9 @@ reviewed for the first gfx942 runtime path.
 It provides:
 
 - bounded one-, two-, and three-dimensional dispatch geometry;
-- the exact unpublished 64-byte kernel-dispatch packet layout;
-- the system-scoped header/setup publication word;
+- the exact INVALID unpublished 64-byte kernel-dispatch packet layout;
+- a linear prepared value that exposes only the invariant system-scoped final
+  header after the exact INVALID body;
 - checked monotonic single-producer reservation arithmetic and slot wrapping;
 - the exact 64-byte, 64-aligned busy-wait completion signal initialized to one;
 - typed numeric address observations with the required descriptor, kernarg,
@@ -22,9 +23,11 @@ map or store a doorbell, poll with a timeout, create or destroy a queue, or
 establish hardware completion. Those operations require the KFD memory and
 queue authority layers.
 
-The arithmetic reservation type is not a native ring lease. A later queue
-authority layer must acquire the read pointer, serialize the producer, retain
-the memory publication, copy the packet body, release-publish the header,
+The mutable reservation model prevents duplicate slots only within one model
+instance. It is not a native ring lease. A later queue authority layer must own
+the only instance, acquire the read pointer, retain the memory publication,
+copy the INVALID packet body, combine its already-copied setup halfword with
+the invariant final header in one release `u32` publication,
 advance the write pointer, and ring the exact admitted doorbell in that order.
 
 GPU writes to the signal value and their visibility to a Rust atomic load are
@@ -34,3 +37,7 @@ not prove firmware completion semantics or device/host cache coherence.
 The signal event fields are zero. The first profile therefore supports bounded
 busy polling only; interrupt-backed waits remain a later, separately admitted
 extension.
+
+The pinned legacy `fe2o3-hsa-runtime/native/runtime.c` path is only a reference
+for its final release-`u32` operation. It zeroes a packet body and is not
+evidence for this crate's required INVALID-body discipline.

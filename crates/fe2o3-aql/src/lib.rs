@@ -24,10 +24,16 @@ source.hsa.h=51ea864cc3e83a9ce824c294dd98a5724eeec87b76fafded1a01d406206ce0f5
 source.amd_hsa_signal.h=ba429b422e91fe370e4241ce8c8d934738b6e3c59b10c1eefd2370d76afe5020
 source.signal.h=615199b8f8321de9f766d3be4d17caaec58e5057c6113767f6181c455fb7667a
 source.signal.cpp=2faa5a0a554a4c15d9a83991f02717afb0436eceedaf51040b74defbb61c5c73
+source.default_signal.h=440c98decfaa80db761ca5ec0add6f8956e4bbbaeff1ff9b185096c9852629ce
+source.default_signal.cpp=8bc963899a366b4de8745c88939b9f9ab2d779cecffe42f4171a8e6a796a3cd2
 source.amd_aql_queue.cpp=291f2521e2a4758e852ed20c578aca79e379d1effe4dfd83c62e11347eef2b14
+source.amd_blit_kernel.cpp=e6ce094b32e4f300bd574db1a056fdd91740dbcae722da0824eb119a7e6490a2
+source.queue.h=aa1cd1acea3405e8c18076b406dd91b5433438792f7cbe8ac5bc3d46df25a9ca
+source.amd_hsa_kernel_code.h=2f48b1fff5432fb96aa460d3c5ac0bccb2e8996adfa5ecdb508722f3911ff9d0
+legacy_release_u32_reference.fe2o3_hsa_runtime.native.runtime.c=99dc188ad8b12561b66ac4a156fdbcfec068c1797fad75afa43a45d3a830554f,not-invalid-body-evidence
 packet=size:64,align:8,header:0,setup:2,workgroup:4,grid:12,private:24,group:28,kernel-object:32,kernarg:40,reserved2:48,completion-signal:56
-publication=single-release-u32-at-offset-0,type:2,barrier:0,acquire:system-2,release:system-2,header:0x1402,setup-dimensions:1..3
-ring-reservation=packet-bytes:64,ring-bytes:4096..2147483648-power-of-two,capacity:64..33554432,monotonic-u64-no-wrap,read<=write,distance<=capacity,slot:packet-id&(capacity-1)
+publication=initial-type:invalid-1,initial-setup-dimensions:1..3,prepared-api-exposes-invariant-final-header-only,backend-preserves-copied-setup,single-release-u32-at-offset-0,type:2,barrier:0,acquire:system-2,release:system-2,header:0x1402
+ring-reservation=mutable-single-producer-model,packet-bytes:64,ring-bytes:4096..2147483648-power-of-two,capacity:64..33554432,monotonic-u64-no-wrap,nondecreasing-read,read<=write,distance<=capacity,slot:packet-id&(capacity-1)
 signal=size:64,align:64,kind-offset:0,value-offset:8,kind:user-1,pending:1,complete:0,event-fields:zero,busy-poll-only
 address-observations=nonzero,kernel-object-align:64,completion-signal-align:64,kernarg-align:caller-supplied-power-of-two-1..4096
 authority=inert-wire-values-only,no-address-provenance,no-allocation,no-queue,no-publication,no-doorbell,no-execution
@@ -35,18 +41,19 @@ authority=inert-wire-values-only,no-address-provenance,no-allocation,no-queue,no
 
 /// SHA-256 of [`AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1`].
 pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1: &str =
-    "fac47d309307e25ea464b9a0ae1253b4cf49c653df8958d1ee6f0cee5df05e7e";
+    "d420be8e3da6f9d473273648659f9ed00260eaf597c7ccaa742ff6c33d816369";
 
 /// Typed SHA-256 bytes of [`AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1`].
 pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
-    0xfa, 0xc4, 0x7d, 0x30, 0x93, 0x07, 0xe2, 0x5e, 0xa4, 0x64, 0xb9, 0xa0, 0xae, 0x12, 0x53, 0xb4,
-    0xcf, 0x49, 0xc6, 0x53, 0xdf, 0x89, 0x58, 0xd1, 0xee, 0x6f, 0x0c, 0xee, 0x5d, 0xf0, 0x5e, 0x7e,
+    0xd4, 0x20, 0xbe, 0x8e, 0x3d, 0xa6, 0xf9, 0xd4, 0x73, 0x27, 0x36, 0x48, 0x65, 0x9f, 0x9e, 0xd0,
+    0x02, 0x60, 0xea, 0xf5, 0x97, 0xc7, 0xcc, 0xaa, 0x74, 0x2f, 0xf6, 0xc3, 0x3d, 0x81, 0x63, 0x69,
 ];
 
 pub const AQL_KERNEL_DISPATCH_PACKET_BYTES_V1: usize = 64;
 pub const AMD_SIGNAL_BYTES_V1: usize = 64;
 pub const AMD_SIGNAL_ALIGNMENT_V1: usize = 64;
 pub const AMD_SIGNAL_KIND_USER_V1: i64 = 1;
+pub const AQL_INVALID_PACKET_HEADER_V1: u16 = 1;
 pub const AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1402;
 pub const AQL_MIN_RING_BYTES_V1: u32 = 4096;
 pub const AQL_MAX_RING_BYTES_V1: u32 = 1 << 31;
@@ -130,39 +137,62 @@ impl AqlRingCapacityV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqlRingReservationError {
     ReadAfterWrite,
+    ReadRegressed,
     CounterDistanceExceedsCapacity,
     Full,
     WriteCounterExhausted,
 }
 
-/// One observed pair of monotonic queue counters.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AqlRingCounterSnapshotV1 {
+/// Mutable single-producer reservation model for one logical queue.
+///
+/// The object prevents duplicate reservations within this model instance. It
+/// is not native queue authority; a later sealed queue owner must ensure that
+/// exactly one instance is bound to the retained native queue.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlSingleProducerRingModelV1 {
+    capacity: AqlRingCapacityV1,
     write: u64,
-    read: u64,
+    last_read: u64,
 }
 
-impl AqlRingCounterSnapshotV1 {
-    pub const fn new(write: u64, read: u64) -> Self {
-        Self { write, read }
+impl AqlSingleProducerRingModelV1 {
+    pub const fn new(
+        capacity: AqlRingCapacityV1,
+        write: u64,
+        read: u64,
+    ) -> Result<Self, AqlRingReservationError> {
+        let Some(distance) = write.checked_sub(read) else {
+            return Err(AqlRingReservationError::ReadAfterWrite);
+        };
+        if distance > capacity.packets as u64 {
+            return Err(AqlRingReservationError::CounterDistanceExceedsCapacity);
+        }
+        Ok(Self {
+            capacity,
+            write,
+            last_read: read,
+        })
     }
 
-    pub const fn write(self) -> u64 {
+    pub const fn write(&self) -> u64 {
         self.write
     }
 
-    pub const fn read(self) -> u64 {
-        self.read
+    pub const fn last_read(&self) -> u64 {
+        self.last_read
     }
 
     pub const fn reserve_one(
-        self,
-        capacity: AqlRingCapacityV1,
+        &mut self,
+        observed_read: u64,
     ) -> Result<AqlRingReservationV1, AqlRingReservationError> {
-        let Some(distance) = self.write.checked_sub(self.read) else {
+        if observed_read < self.last_read {
+            return Err(AqlRingReservationError::ReadRegressed);
+        }
+        let Some(distance) = self.write.checked_sub(observed_read) else {
             return Err(AqlRingReservationError::ReadAfterWrite);
         };
-        let capacity_u64 = capacity.packets as u64;
+        let capacity_u64 = self.capacity.packets as u64;
         if distance > capacity_u64 {
             return Err(AqlRingReservationError::CounterDistanceExceedsCapacity);
         }
@@ -172,20 +202,23 @@ impl AqlRingCounterSnapshotV1 {
         let Some(next_write) = self.write.checked_add(1) else {
             return Err(AqlRingReservationError::WriteCounterExhausted);
         };
-        Ok(AqlRingReservationV1 {
+        let reservation = AqlRingReservationV1 {
             packet_id: self.write,
-            slot_index: (self.write & capacity.mask()) as u32,
-            observed_read: self.read,
+            slot_index: (self.write & self.capacity.mask()) as u32,
+            observed_read,
             next_write,
-        })
+        };
+        self.write = next_write;
+        self.last_read = observed_read;
+        Ok(reservation)
     }
 }
 
-/// Unique slot selected from one admitted counter snapshot.
+/// One slot selected by one mutable arithmetic-model transition.
 ///
 /// This remains an inert arithmetic result. It is not a lease on native ring
 /// memory and cannot publish or advance a write pointer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct AqlRingReservationV1 {
     packet_id: u64,
     slot_index: u32,
@@ -194,19 +227,19 @@ pub struct AqlRingReservationV1 {
 }
 
 impl AqlRingReservationV1 {
-    pub const fn packet_id(self) -> u64 {
+    pub const fn packet_id(&self) -> u64 {
         self.packet_id
     }
 
-    pub const fn slot_index(self) -> u32 {
+    pub const fn slot_index(&self) -> u32 {
         self.slot_index
     }
 
-    pub const fn observed_read(self) -> u64 {
+    pub const fn observed_read(&self) -> u64 {
         self.observed_read
     }
 
-    pub const fn next_write(self) -> u64 {
+    pub const fn next_write(&self) -> u64 {
         self.next_write
     }
 }
@@ -293,11 +326,10 @@ pub enum AqlDispatchPacketError {
 
 /// Exact unpublished 64-byte AMDHSA kernel-dispatch packet.
 ///
-/// `full_header` is always zero. A queue implementation must first copy this
-/// complete value into an exclusively owned slot and only then publish
-/// [`AqlPreparedKernelDispatchV1::publication_word`] with one release atomic
-/// store.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The packet starts with type `INVALID` and its exact setup dimensions. A
+/// queue implementation must copy the complete value into an exclusively
+/// owned slot before the paired release publication.
+#[derive(Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct AqlKernelDispatchPacketV1 {
     full_header: u32,
@@ -340,7 +372,8 @@ impl AqlKernelDispatchPacketV1 {
         let grid = geometry.grid();
 
         let packet = Self {
-            full_header: 0,
+            full_header: (u32::from(geometry.dimensions()) << 16)
+                | u32::from(AQL_INVALID_PACKET_HEADER_V1),
             workgroup_size_x: workgroup[0],
             workgroup_size_y: workgroup[1],
             workgroup_size_z: workgroup[2],
@@ -355,45 +388,77 @@ impl AqlKernelDispatchPacketV1 {
             reserved2: 0,
             completion_signal: completion_signal.raw(),
         };
-        Ok(AqlPreparedKernelDispatchV1 {
-            packet,
-            publication_word: (AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 as u32)
-                | ((geometry.dimensions() as u32) << 16),
-        })
+        Ok(AqlPreparedKernelDispatchV1 { packet })
     }
 
-    pub const fn is_unpublished(self) -> bool {
-        self.full_header == 0
+    pub const fn is_unpublished(&self) -> bool {
+        self.full_header & 0xff == AQL_INVALID_PACKET_HEADER_V1 as u32
     }
 
-    pub const fn kernel_object(self) -> u64 {
+    pub const fn setup_dimensions(&self) -> u16 {
+        (self.full_header >> 16) as u16
+    }
+
+    pub const fn kernel_object(&self) -> u64 {
         self.kernel_object
     }
 
-    pub const fn kernarg_address(self) -> u64 {
+    pub const fn kernarg_address(&self) -> u64 {
         self.kernarg_address
     }
 
-    pub const fn completion_signal(self) -> u64 {
+    pub const fn completion_signal(&self) -> u64 {
         self.completion_signal
+    }
+
+    pub fn encode_unpublished_le(&self) -> [u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1] {
+        let mut bytes = [0_u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1];
+        bytes[0..4].copy_from_slice(&self.full_header.to_le_bytes());
+        bytes[4..6].copy_from_slice(&self.workgroup_size_x.to_le_bytes());
+        bytes[6..8].copy_from_slice(&self.workgroup_size_y.to_le_bytes());
+        bytes[8..10].copy_from_slice(&self.workgroup_size_z.to_le_bytes());
+        bytes[10..12].copy_from_slice(&self.reserved0.to_le_bytes());
+        bytes[12..16].copy_from_slice(&self.grid_size_x.to_le_bytes());
+        bytes[16..20].copy_from_slice(&self.grid_size_y.to_le_bytes());
+        bytes[20..24].copy_from_slice(&self.grid_size_z.to_le_bytes());
+        bytes[24..28].copy_from_slice(&self.private_segment_size.to_le_bytes());
+        bytes[28..32].copy_from_slice(&self.group_segment_size.to_le_bytes());
+        bytes[32..40].copy_from_slice(&self.kernel_object.to_le_bytes());
+        bytes[40..48].copy_from_slice(&self.kernarg_address.to_le_bytes());
+        bytes[48..56].copy_from_slice(&self.reserved2.to_le_bytes());
+        bytes[56..64].copy_from_slice(&self.completion_signal.to_le_bytes());
+        bytes
     }
 }
 
-/// An unpublished packet paired with its non-substitutable release word.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// A linear unpublished packet paired with the invariant release header.
+#[derive(Debug, Eq, PartialEq)]
 pub struct AqlPreparedKernelDispatchV1 {
     packet: AqlKernelDispatchPacketV1,
-    publication_word: u32,
 }
 
 impl AqlPreparedKernelDispatchV1 {
-    pub const fn packet(self) -> AqlKernelDispatchPacketV1 {
-        self.packet
+    pub fn publish_with<T: AqlPacketPublicationTargetV1>(
+        self,
+        target: &mut T,
+    ) -> Result<(), T::Error> {
+        target.write_unpublished(&self.packet)?;
+        target.publish_release_header(AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1)
     }
+}
 
-    pub const fn publication_word(self) -> u32 {
-        self.publication_word
-    }
+/// Backend boundary used to keep one packet body and final header paired.
+///
+/// Implementing this trait grants no ring or doorbell authority. A production
+/// implementation must remain private to the sealed native queue owner. It
+/// must construct one release `u32` from this invariant header and the setup
+/// halfword already copied into the selected slot.
+pub trait AqlPacketPublicationTargetV1 {
+    type Error;
+
+    fn write_unpublished(&mut self, packet: &AqlKernelDispatchPacketV1) -> Result<(), Self::Error>;
+
+    fn publish_release_header(&mut self, header: u16) -> Result<(), Self::Error>;
 }
 
 /// Exact 64-byte ROCr user-signal prefix used by AQL completion packets.
