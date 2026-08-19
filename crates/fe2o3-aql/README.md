@@ -41,3 +41,13 @@ extension.
 The pinned legacy `fe2o3-hsa-runtime/native/runtime.c` path is only a reference
 for its final release-`u32` operation. It zeroes a packet body and is not
 evidence for this crate's required INVALID-body discipline.
+
+The authenticated
+[`aql_publication_v1.rs`](../fe2o3-runtime-model/verus/aql_publication_v1.rs)
+Verus model proves the corresponding bounded mathematical body-copy,
+release-word, frame, and single-producer counter relations, including concrete
+non-vacuity witnesses and five expected-negative mutations. It does not refine
+this crate's executable Rust, establish that a publication target performs a
+CPU release atomic, authenticate a read pointer, or prove device visibility,
+firmware consumption, native slot ownership, completion, liveness, or
+performance.
