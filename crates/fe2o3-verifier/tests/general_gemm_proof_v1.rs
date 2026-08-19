@@ -6,7 +6,8 @@ use fe2o3_verifier::{
     GeneralGemmNumericalComparisonPolicyV1, GeneralGemmNumericalPolicyRequestV1,
     GeneralGemmProofExecutionErrorV1, GeneralGemmProofPropertyV1, GeneralGemmProofRequestV1,
     GeneralGemmProofScheduleV1, GeneralGemmPropertyEvidenceBasisV1,
-    GeneralGemmPropertyEvidenceStatusV1, execute_general_gemm_numerical_policy_v1,
+    GeneralGemmPropertyEvidenceStatusV1, GeneralGemmSourcePropertyConfirmationKindV1,
+    evaluate_general_gemm_property_closure_v1, execute_general_gemm_numerical_policy_v1,
     execute_general_gemm_schedule_proof_v1, join_general_gemm_proof_and_numerical_evidence_v1,
 };
 
@@ -266,4 +267,35 @@ fn proof_numerical_join_preserves_all_open_and_weaker_property_records() {
     }));
     assert!(!evidence.can_enter_compiler_proof_gate());
     assert!(!evidence.grants_artifact_or_runtime_authority());
+
+    let closure = evaluate_general_gemm_property_closure_v1(evidence).unwrap();
+    assert_eq!(closure.requests().len(), 12);
+    assert_eq!(closure.proof_request(), request);
+    for ((closure_request, expected_evidence), expected_property) in closure
+        .requests()
+        .iter()
+        .zip(expected_properties)
+        .zip(GENERAL_GEMM_PROOF_PROPERTIES_V1)
+    {
+        assert_eq!(closure_request.schedule_evidence(), expected_evidence);
+        assert_eq!(
+            closure_request.schedule_evidence().property(),
+            expected_property
+        );
+        assert_eq!(
+            closure_request.schedule_evidence().status(),
+            expected_evidence.status()
+        );
+        assert_eq!(
+            closure_request.schedule_evidence().basis(),
+            expected_evidence.basis()
+        );
+    }
+    assert_eq!(
+        closure.requests()[1].source_confirmation(),
+        Some(GeneralGemmSourcePropertyConfirmationKindV1::GuardedGlobalAccesses)
+    );
+    assert!(closure.requests().iter().all(|record| !record.is_closed()));
+    assert!(!closure.can_enter_compiler_proof_gate());
+    assert!(!closure.grants_artifact_or_runtime_authority());
 }

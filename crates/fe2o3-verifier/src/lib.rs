@@ -24,6 +24,7 @@ mod flash_attention_memory_v1;
 mod general_gemm_numerical_v1;
 mod general_gemm_proof_numerical_evidence_v1;
 mod general_gemm_proof_v1;
+mod general_gemm_property_closure_v1;
 mod model;
 mod moe_expert_compact_plan_v1;
 mod moe_routing_memory_v1;
@@ -121,6 +122,7 @@ pub use flash_attention_memory_v1::*;
 pub use general_gemm_numerical_v1::*;
 pub use general_gemm_proof_numerical_evidence_v1::*;
 pub use general_gemm_proof_v1::*;
+pub use general_gemm_property_closure_v1::*;
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,
