@@ -464,11 +464,22 @@ fn missing_terminator(block: BasicBlock) -> GeneralGemmMirImportErrorV1 {
 const fn operation_name(operation: TrustedGeneralGemmOperationV1) -> &'static str {
     match operation {
         TrustedGeneralGemmOperationV1::Acquire => "acquire",
+        TrustedGeneralGemmOperationV1::Lane => "lane",
+        TrustedGeneralGemmOperationV1::WorkgroupX => "workgroup_x",
+        TrustedGeneralGemmOperationV1::WorkgroupY => "workgroup_y",
+        TrustedGeneralGemmOperationV1::LoadA => "load_a",
+        TrustedGeneralGemmOperationV1::LoadB => "load_b",
+        TrustedGeneralGemmOperationV1::LoadC => "load_c",
         TrustedGeneralGemmOperationV1::Stage => "stage",
+        TrustedGeneralGemmOperationV1::StageValue => "stage_value",
+        TrustedGeneralGemmOperationV1::WaitStage => "wait_stage",
+        TrustedGeneralGemmOperationV1::ReadStage => "read_stage",
         TrustedGeneralGemmOperationV1::Publish => "publish",
         TrustedGeneralGemmOperationV1::Mfma => "MFMA",
+        TrustedGeneralGemmOperationV1::MfmaValue => "MFMA_value",
         TrustedGeneralGemmOperationV1::Reuse => "reuse",
         TrustedGeneralGemmOperationV1::Store => "store",
+        TrustedGeneralGemmOperationV1::StoreEpilogue => "store_epilogue",
     }
 }
 
