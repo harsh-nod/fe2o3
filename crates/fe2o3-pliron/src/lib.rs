@@ -44,6 +44,7 @@ pub const HARD_MAX_OPERATION_REGIONS: usize = 64;
 pub const HARD_MAX_OPERATION_BLOCKS: usize = 4_096;
 pub const HARD_MAX_OPERATION_CHILDREN: usize = 4_096;
 pub const HARD_MAX_OPERATION_IMPORT_BYTES: usize = 1_048_576;
+pub const HARD_MAX_OPERATION_IMPORT_NESTING: usize = 256;
 pub const HARD_MAX_OPERATION_TREE_ITEMS: usize = 16_384;
 pub const HARD_MAX_SESSION_OPERATION_TREE_ITEMS: usize = 65_536;
 
@@ -652,6 +653,7 @@ pub enum OperationHandleError {
     TooManyOperationChildren,
     EmptyOperationImport,
     OperationImportTooLarge,
+    OperationImportNestingTooDeep,
     OperationImportRejected,
     OperationVerificationRejected,
     OperationTreeLimitExceeded,
@@ -689,6 +691,9 @@ impl fmt::Display for OperationHandleError {
             Self::EmptyOperationImport => formatter.write_str("operation import is empty"),
             Self::OperationImportTooLarge => {
                 formatter.write_str("operation import exceeds the hard byte limit")
+            }
+            Self::OperationImportNestingTooDeep => {
+                formatter.write_str("operation import exceeds the hard nesting limit")
             }
             Self::OperationImportRejected => formatter.write_str("operation import was rejected"),
             Self::OperationVerificationRejected => {
@@ -849,7 +854,9 @@ impl PlironSession {
     /// as an artifact, proof, cache, publication, or runtime identity. Parsing
     /// requires exact end-of-input and recursive verification; after parsing
     /// starts, any rejection poisons the session because upstream allocation is
-    /// not transactional.
+    /// not transactional. A printer/text round trip cannot grant a supported
+    /// production compiler capability; typed owner-held construction must
+    /// replace this bridge first.
     pub fn import_operation_text_v1(
         &mut self,
         text: &str,
@@ -860,6 +867,7 @@ impl PlironSession {
         if text.len() > HARD_MAX_OPERATION_IMPORT_BYTES {
             return Err(OperationHandleError::OperationImportTooLarge);
         }
+        preflight_operation_import_nesting(text)?;
         self.validate_identity()?;
         if self.operation_tree_work >= HARD_MAX_SESSION_OPERATION_TREE_ITEMS {
             return Err(OperationHandleError::SessionOperationTreeLimitExceeded);
@@ -1105,6 +1113,39 @@ impl PlironSession {
             })
             .collect()
     }
+}
+
+fn preflight_operation_import_nesting(text: &str) -> Result<(), OperationHandleError> {
+    let mut depth = 0_usize;
+    let mut quoted = false;
+    let mut escaped = false;
+
+    for byte in text.bytes() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => quoted = true,
+            b'(' | b'[' | b'{' | b'<' => {
+                depth = depth
+                    .checked_add(1)
+                    .filter(|depth| *depth <= HARD_MAX_OPERATION_IMPORT_NESTING)
+                    .ok_or(OperationHandleError::OperationImportNestingTooDeep)?;
+            }
+            b')' | b']' | b'}' | b'>' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 fn inspect_operation(
@@ -1546,6 +1587,30 @@ mod owner_handle_tests {
         assert_eq!(session.next_operation_handle, next);
         assert!(session.operations.is_empty());
         assert!(!session.is_poisoned());
+    }
+
+    #[test]
+    fn textual_import_nesting_preflight_does_not_allocate_or_poison() {
+        let mut session = session();
+        let next = session.next_operation_handle;
+        let nested = "{".repeat(HARD_MAX_OPERATION_IMPORT_NESTING + 1);
+
+        assert!(matches!(
+            session.import_operation_text_v1(&nested),
+            Err(OperationHandleError::OperationImportNestingTooDeep)
+        ));
+        assert_eq!(session.next_operation_handle, next);
+        assert!(session.operations.is_empty());
+        assert!(!session.is_poisoned());
+    }
+
+    #[test]
+    fn nesting_preflight_ignores_escaped_quoted_delimiters() {
+        let quoted = format!(
+            "\"\\\"{}\"",
+            "{".repeat(HARD_MAX_OPERATION_IMPORT_NESTING + 1)
+        );
+        assert_eq!(preflight_operation_import_nesting(&quoted), Ok(()));
     }
 
     #[test]

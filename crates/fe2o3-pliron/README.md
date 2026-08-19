@@ -46,9 +46,12 @@ identity and session-local registry ID.
 Textual operation import is a noncanonical construction bridge for dialect
 integration. Input bytes, parser text, and printer output cannot become
 artifact, cache, proof, publication, or runtime identities. Imports are
-bounded before parsing and across the complete operation tree. A parse or
-verification rejection poisons the session because upstream arena allocation
-is not transactional.
+bounded by byte length and structural nesting before parsing, then across the
+complete operation tree. A parse or verification rejection poisons the session
+because upstream arena allocation is not transactional.
+This bridge is transitional: a production compiler path that depends on a
+printer/text round trip remains unsupported until it uses an owner-held typed
+dialect construction service.
 The corresponding upstream `Ptr<Operation>` remains in the private session
 registry. Every query or erase authenticates the context anchor, owner, live
 registry entry, and upstream pointee in that order. Erasure removes the
