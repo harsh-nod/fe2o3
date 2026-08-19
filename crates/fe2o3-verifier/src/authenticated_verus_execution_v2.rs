@@ -1276,6 +1276,14 @@ pub(crate) fn supervise_bounded_process_group_v2(
     bounded_process_group::supervise(child, deadline, output_limit)
 }
 
+/// Applies the authenticated V2 controller credential, capability, seccomp, and thread preflight
+/// before a retained tool is allowed to fork.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn validate_bounded_execution_controller_v2(
+) -> Result<(), AuthenticatedVerusExecutionErrorV2> {
+    platform::validate_controller_security()
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod bounded_process_group {
     use super::{
@@ -3165,7 +3173,7 @@ mod platform {
         }
     }
 
-    fn validate_controller_security() -> Result<(), AuthenticatedVerusExecutionErrorV2> {
+    pub(super) fn validate_controller_security() -> Result<(), AuthenticatedVerusExecutionErrorV2> {
         if child_clone_launcher_bytes_v2().is_empty() || child_trampoline_bytes_v2().is_empty() {
             return Err(AuthenticatedVerusExecutionErrorV2::plain(process_error(
                 VerusExecutionRoleV2::Verus,

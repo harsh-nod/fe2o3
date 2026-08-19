@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 
@@ -58,6 +59,12 @@ pub enum GeneralGemmRuntimeClosureErrorKindV2 {
     OwnerProcessChanged,
     /// An operating-system operation failed.
     Io,
+    /// A supervised proof child exceeded its one global deadline.
+    TimedOut,
+    /// A supervised proof child exceeded a bounded output stream.
+    OutputTooLarge,
+    /// A supervised proof child could not be spawned, observed, or contained.
+    Process,
 }
 
 /// Failure to admit or revalidate the retained runtime closure.
@@ -120,6 +127,21 @@ pub struct GeneralGemmVerusRuntimeClosureLeaseV2 {
     retained: linux::RetainedRuntimeClosureV2,
 }
 
+/// One immutable wrapper, model, and proof-body input set.
+pub(crate) struct GeneralGemmSealedProofInputV2 {
+    identity: [u8; 32],
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    sealed: linux::SealedProofInputV2,
+}
+
+/// Bounded output from one directly executed retained `rust_verify` process.
+pub(crate) struct GeneralGemmRuntimeProcessOutputV2 {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) signal: Option<i32>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+}
+
 impl fmt::Debug for GeneralGemmVerusRuntimeClosureLeaseV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -136,6 +158,7 @@ impl GeneralGemmVerusRuntimeClosureLeaseV2 {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
         let root = root.as_ref();
         validate_absolute_path(root)?;
+        validate_runtime_root_path(root)?;
         let manifest = ManifestV2::parse_reviewed()?;
         let identity = closure_identity();
         let owner_process = std::process::id();
@@ -189,6 +212,70 @@ impl GeneralGemmVerusRuntimeClosureLeaseV2 {
             ))
         }
     }
+
+    pub(crate) fn seal_proof_input(
+        wrapper: &[u8],
+        model: &[u8],
+        proof: &[u8],
+    ) -> Result<GeneralGemmSealedProofInputV2, GeneralGemmRuntimeClosureErrorV2> {
+        let identity = proof_input_identity(wrapper, model, proof);
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            let sealed = linux::SealedProofInputV2::new(wrapper, model, proof)?;
+            let input = GeneralGemmSealedProofInputV2 { identity, sealed };
+            input.revalidate()?;
+            Ok(input)
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            let _ = (wrapper, model, proof, identity);
+            Err(GeneralGemmRuntimeClosureErrorV2::new(
+                GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+                "sealed general GEMM proof inputs require Linux x86-64",
+            ))
+        }
+    }
+
+    pub(crate) fn execute_rust_verify(
+        &self,
+        input: &GeneralGemmSealedProofInputV2,
+        deadline: Instant,
+        output_limit: usize,
+    ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+        self.revalidate()?;
+        input.revalidate()?;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let result =
+            linux::execute_rust_verify(&self.retained, &input.sealed, deadline, output_limit);
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+            "direct retained rust_verify execution requires Linux x86-64",
+        ));
+        self.revalidate()?;
+        input.revalidate()?;
+        result
+    }
+}
+
+impl GeneralGemmSealedProofInputV2 {
+    pub(crate) const fn identity(&self) -> [u8; 32] {
+        self.identity
+    }
+
+    fn revalidate(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            self.sealed.revalidate(self.identity)
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            Err(GeneralGemmRuntimeClosureErrorV2::new(
+                GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+                "sealed general GEMM proof inputs require Linux x86-64",
+            ))
+        }
+    }
 }
 
 fn closure_identity() -> GeneralGemmRuntimeClosureIdentityV2 {
@@ -197,6 +284,15 @@ fn closure_identity() -> GeneralGemmRuntimeClosureIdentityV2 {
     put_blob(&mut digest, MANIFEST_BYTES);
     put_blob(&mut digest, RUST_TARGET_PINS);
     GeneralGemmRuntimeClosureIdentityV2(digest.finalize().into())
+}
+
+fn proof_input_identity(wrapper: &[u8], model: &[u8], proof: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-general-gemm-sealed-proof-input-v2\0");
+    put_blob(&mut digest, wrapper);
+    put_blob(&mut digest, model);
+    put_blob(&mut digest, proof);
+    digest.finalize().into()
 }
 
 fn put_blob(digest: &mut Sha256, value: &[u8]) {
@@ -215,6 +311,42 @@ fn validate_absolute_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureEr
         return Err(GeneralGemmRuntimeClosureErrorV2::new(
             GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
             "runtime root must be a normalized absolute non-root path",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runtime_root_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    const PARENT: &str = "/opt/fe2o3/verus-runtime-v2";
+    let relative = path.strip_prefix(PARENT).map_err(|_| {
+        GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+            "runtime root must be one canonical child of /opt/fe2o3/verus-runtime-v2",
+        )
+    })?;
+    let mut components = relative.components();
+    let Some(Component::Normal(name)) = components.next() else {
+        return Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+            "runtime root must name one versioned child directory",
+        ));
+    };
+    let Some(name) = name.to_str() else {
+        return Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+            "runtime-root version is not UTF-8",
+        ));
+    };
+    if components.next().is_some()
+        || name.is_empty()
+        || !name.as_bytes()[0].is_ascii_alphanumeric()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+            "runtime root has a noncanonical version component",
         ));
     }
     Ok(())
@@ -591,5 +723,28 @@ mod tests {
             GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
         );
         assert_ne!(closure_identity().as_bytes(), [0; 32]);
+    }
+
+    #[test]
+    fn runtime_root_requires_one_canonical_opt_version() {
+        assert!(
+            validate_runtime_root_path(Path::new(
+                "/opt/fe2o3/verus-runtime-v2/0.2026.08.02-b677dd5"
+            ))
+            .is_ok()
+        );
+        for path in [
+            "/tmp/runtime",
+            "/opt/fe2o3/verus-runtime-v2",
+            "/opt/fe2o3/verus-runtime-v2/-invalid",
+            "/opt/fe2o3/verus-runtime-v2/version/extra",
+        ] {
+            assert_eq!(
+                validate_runtime_root_path(Path::new(path))
+                    .unwrap_err()
+                    .kind(),
+                GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest
+            );
+        }
     }
 }
