@@ -44,6 +44,8 @@ pub enum UnsupportedInstructionV1 {
     InsertElement,
     /// A fixed-vector extraction.
     ExtractElement,
+    /// A GEP shape outside the one-index scalar-pointer V1 rule.
+    GetElementPtrShape,
 }
 
 /// Stable, typed rejection categories for the bounded V1 lane.
@@ -292,7 +294,7 @@ fn validate_value_type(value_type: ValueTypeV2) -> Result<(), AmdgcnPlironLlvmRe
     };
     let supported = match value_type {
         ValueTypeV2::Scalar(scalar) => scalar_supported(scalar),
-        ValueTypeV2::Pointer { pointee, .. } => scalar_supported(pointee),
+        ValueTypeV2::Pointer { pointee, .. } => pointee == ScalarTypeV1::F32,
         ValueTypeV2::Vector { .. } | ValueTypeV2::ArrayPointer { .. } => false,
     };
     if supported {
@@ -346,10 +348,15 @@ fn validate_instruction(
                 | CastOperationV2::PointerToInt,
             ..
         }
-        | InstructionKindV2::GetElementPtr { .. }
         | InstructionKindV2::Load { .. }
         | InstructionKindV2::Store { .. }
         | InstructionKindV2::Phi { .. } => Ok(()),
+        InstructionKindV2::GetElementPtr { indices, .. } if indices.len() == 1 => Ok(()),
+        InstructionKindV2::GetElementPtr { .. } => {
+            Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
+                UnsupportedInstructionV1::GetElementPtrShape,
+            ))
+        }
         InstructionKindV2::GlobalAddress(_) => {
             Err(AmdgcnPlironLlvmRejectionV1::UnsupportedInstruction(
                 UnsupportedInstructionV1::GlobalAddress,
