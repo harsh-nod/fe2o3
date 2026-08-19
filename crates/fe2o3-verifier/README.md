@@ -440,12 +440,24 @@ source bytes, or reported output is accepted. Exact positive and expected-negati
 outputs are required before the non-`Clone` schedule evidence is built. The legacy
 launcher-path API remains fail-closed.
 
+`GeneralGemmKirModelCorrespondenceV1` now checks one exact canonical
+`GeneralGemmKirV1` against its kernel-IR verifier and binds the KIR identity,
+ordered semantic properties, dimensions, strides, storage extents, derived grid,
+tail shape, coefficients, schedule parameters, symbolic proof request, embedded
+model, schedule-specific theorem/source, and complete retained source closure.
+Every field is recomputed from typed APIs; the checked record is private-field,
+non-`Clone`, and can be consumed by the retained-root execution entry point. It
+does not accept caller paths, source bytes, digests, theorem names, or proof
+output. The numerical binding stops at the exact-real model, and machine
+refinement remains explicitly open.
+
 Stock `rust_verify` and Z3 do not implement the V2 nonce/control protocol, and
 Verus must create its reviewed Z3 descendant. This runner therefore does not
 produce `AuthenticatedVerusExecutionReceiptV2`, does not claim the V2 frozen
 mapping/checkpoint properties, and grants no compiler, artifact, publication,
-load, or launch authority. Authenticated KIR-to-model correspondence and emitted
-machine refinement remain separate open obligations.
+load, or launch authority. Compiler-owned authentication of the KIR producer,
+BF16/FP32/MFMA machine-rounding correspondence, and emitted LLVM/ISA refinement
+remain separate open obligations.
 
 The control-flow binding does not yet prove optimized MIR or machine CFG
 equivalence. It gives those later compiler-refinement checks a canonical exact
