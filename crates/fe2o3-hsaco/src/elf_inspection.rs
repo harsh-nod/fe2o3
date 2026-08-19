@@ -1,8 +1,3 @@
-use object::{
-    Endianness, elf,
-    read::elf::{ElfFile64, FileHeader, NoteIterator, ProgramHeader, SectionHeader},
-};
-
 use crate::{
     CodeObjectVersion, InspectionError, MAX_ELF_NOTES, MAX_ELF_SECTIONS, MAX_ELF_SEGMENTS,
     MAX_HSACO_BYTES, MAX_MESSAGEPACK_STRING_BYTES, MAX_METADATA_BYTES,
@@ -11,12 +6,21 @@ use crate::{
 const ELF64_HEADER_BYTES: usize = 64;
 const ELF64_PROGRAM_HEADER_BYTES: usize = 56;
 const ELF64_SECTION_HEADER_BYTES: usize = 64;
+const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
+const ELFCLASS64: u8 = 2;
+const ELFDATA2LSB: u8 = 1;
+const EV_CURRENT: u8 = 1;
 const ELFOSABI_AMDGPU_HSA: u8 = 64;
+const ET_DYN: u16 = 3;
+const EM_AMDGPU: u16 = 224;
+const PT_NOTE: u32 = 4;
+const SHT_NOTE: u32 = 7;
 const NT_AMDGPU_METADATA: u32 = 32;
 
 pub(crate) struct InspectedEnvelope<'a> {
     pub(crate) code_object_version: CodeObjectVersion,
     pub(crate) e_flags: u32,
+    pub(crate) metadata_offset: usize,
     pub(crate) metadata: &'a [u8],
 }
 
@@ -28,82 +32,122 @@ struct MetadataNote<'a> {
 
 pub(crate) fn inspect_envelope(bytes: &[u8]) -> Result<InspectedEnvelope<'_>, InspectionError> {
     let code_object_version = preflight_header(bytes)?;
-    let file = ElfFile64::<Endianness>::parse(bytes)
-        .map_err(|_| InspectionError::InvalidElf("object parser rejected the file"))?;
-    let endian = file.endian();
-    if endian != Endianness::Little {
-        return Err(InspectionError::UnsupportedEndianness);
-    }
-    let header = file.elf_header();
-    if header.e_type(endian) != elf::ET_DYN {
-        return Err(InspectionError::InvalidElf("HSACO ELF type must be ET_DYN"));
-    }
-    if header.e_machine(endian) != elf::EM_AMDGPU {
-        return Err(InspectionError::UnsupportedMachine);
-    }
-    if header.e_version(endian) != u32::from(elf::EV_CURRENT) {
-        return Err(InspectionError::InvalidElf("unsupported object version"));
-    }
-
     let mut metadata = None;
     let mut note_count = 0usize;
-    for section in file.elf_section_table().iter() {
-        let Some(notes) = section
-            .notes(endian, bytes)
-            .map_err(|_| InspectionError::InvalidElf("invalid note section"))?
-        else {
+    let section_offset = read_u64(bytes, 40)?;
+    let section_count = usize::from(read_u16(bytes, 60)?);
+    for index in 0..section_count {
+        let base = table_entry_base(section_offset, ELF64_SECTION_HEADER_BYTES, index)?;
+        if read_u32(bytes, base + 4)? != SHT_NOTE {
             continue;
-        };
-        scan_notes(notes, endian, bytes, &mut note_count, &mut metadata)?;
+        }
+        scan_notes(
+            bytes,
+            read_u64(bytes, base + 24)?,
+            read_u64(bytes, base + 32)?,
+            &mut note_count,
+            &mut metadata,
+        )?;
     }
-    for segment in file.elf_program_headers() {
-        let Some(notes) = segment
-            .notes(endian, bytes)
-            .map_err(|_| InspectionError::InvalidElf("invalid note segment"))?
-        else {
+
+    let program_offset = read_u64(bytes, 32)?;
+    let program_count = usize::from(read_u16(bytes, 56)?);
+    for index in 0..program_count {
+        let base = table_entry_base(program_offset, ELF64_PROGRAM_HEADER_BYTES, index)?;
+        if read_u32(bytes, base)? != PT_NOTE {
             continue;
-        };
-        scan_notes(notes, endian, bytes, &mut note_count, &mut metadata)?;
+        }
+        scan_notes(
+            bytes,
+            read_u64(bytes, base + 8)?,
+            read_u64(bytes, base + 32)?,
+            &mut note_count,
+            &mut metadata,
+        )?;
     }
 
     let metadata = metadata.ok_or(InspectionError::MissingMetadataNote)?;
     Ok(InspectedEnvelope {
         code_object_version,
-        e_flags: header.e_flags(endian),
+        e_flags: read_u32(bytes, 48)?,
+        metadata_offset: metadata.descriptor_offset,
         metadata: metadata.descriptor,
     })
 }
 
 fn scan_notes<'data>(
-    mut notes: NoteIterator<'data, object::elf::FileHeader64<Endianness>>,
-    endian: Endianness,
     bytes: &'data [u8],
+    file_offset: u64,
+    byte_len: u64,
     note_count: &mut usize,
     metadata: &mut Option<MetadataNote<'data>>,
 ) -> Result<(), InspectionError> {
-    while let Some(note) = notes
-        .next()
-        .map_err(|_| InspectionError::InvalidElf("malformed ELF note"))?
-    {
+    let region_end = file_offset
+        .checked_add(byte_len)
+        .ok_or(InspectionError::InvalidElf("ELF note range overflow"))?;
+    let mut cursor = usize::try_from(file_offset)
+        .map_err(|_| InspectionError::InvalidElf("ELF note offset overflows usize"))?;
+    let region_end = usize::try_from(region_end)
+        .map_err(|_| InspectionError::InvalidElf("ELF note end overflows usize"))?;
+    if region_end > bytes.len() {
+        return Err(InspectionError::InvalidElf(
+            "ELF note range is out of bounds",
+        ));
+    }
+
+    while cursor < region_end {
+        let header_end = cursor
+            .checked_add(12)
+            .filter(|end| *end <= region_end)
+            .ok_or(InspectionError::InvalidElf("malformed ELF note"))?;
+        let name_len = usize::try_from(read_u32(bytes, cursor)?)
+            .map_err(|_| InspectionError::InvalidElf("ELF note owner length overflows usize"))?;
+        let descriptor_len = usize::try_from(read_u32(bytes, cursor + 4)?).map_err(|_| {
+            InspectionError::InvalidElf("ELF note descriptor length overflows usize")
+        })?;
+        let note_type = read_u32(bytes, cursor + 8)?;
+        let name_end = header_end
+            .checked_add(name_len)
+            .filter(|end| *end <= region_end)
+            .ok_or(InspectionError::InvalidElf("malformed ELF note owner"))?;
+        let descriptor_offset = header_end
+            .checked_add(aligned_len4(name_len)?)
+            .filter(|offset| *offset <= region_end)
+            .ok_or(InspectionError::InvalidElf(
+                "malformed ELF note owner padding",
+            ))?;
+        let descriptor_end = descriptor_offset
+            .checked_add(descriptor_len)
+            .filter(|end| *end <= region_end)
+            .ok_or(InspectionError::InvalidElf("malformed ELF note descriptor"))?;
+        let next = descriptor_offset
+            .checked_add(aligned_len4(descriptor_len)?)
+            .ok_or(InspectionError::InvalidElf("ELF note record overflow"))?;
+        if next > region_end {
+            return Err(InspectionError::InvalidElf("malformed ELF note padding"));
+        }
+
         *note_count = note_count
             .checked_add(1)
             .ok_or(InspectionError::TooManyNotes)?;
         if *note_count > MAX_ELF_NOTES {
             return Err(InspectionError::TooManyNotes);
         }
-        if note.name_bytes().len() > MAX_MESSAGEPACK_STRING_BYTES {
+        if name_len > MAX_MESSAGEPACK_STRING_BYTES {
             return Err(InspectionError::InvalidElf("ELF note owner is too long"));
         }
-        if note.name() != b"AMDGPU" || note.n_type(endian) != NT_AMDGPU_METADATA {
+        let owner = &bytes[header_end..name_end];
+        let owner = owner.strip_suffix(&[0]).unwrap_or(owner);
+        if owner != b"AMDGPU" || note_type != NT_AMDGPU_METADATA {
+            cursor = next;
             continue;
         }
-        if note.desc().len() > MAX_METADATA_BYTES {
+        if descriptor_len > MAX_METADATA_BYTES {
             return Err(InspectionError::MetadataNoteTooLarge);
         }
-        let descriptor_offset = slice_offset(bytes, note.desc())?;
         let candidate = MetadataNote {
             descriptor_offset,
-            descriptor: note.desc(),
+            descriptor: &bytes[descriptor_offset..descriptor_end],
         };
         if let Some(existing) = metadata {
             let same_physical_descriptor = existing.descriptor_offset == descriptor_offset
@@ -115,27 +159,31 @@ fn scan_notes<'data>(
         } else {
             *metadata = Some(candidate);
         }
+        cursor = next;
     }
     Ok(())
 }
 
-fn slice_offset(container: &[u8], slice: &[u8]) -> Result<usize, InspectionError> {
-    let offset = (slice.as_ptr() as usize)
-        .checked_sub(container.as_ptr() as usize)
-        .ok_or(InspectionError::InvalidElf(
-            "note descriptor is outside the file",
-        ))?;
-    let end = offset
-        .checked_add(slice.len())
-        .ok_or(InspectionError::InvalidElf(
-            "note descriptor range overflow",
-        ))?;
-    if end > container.len() {
-        return Err(InspectionError::InvalidElf(
-            "note descriptor is outside the file",
-        ));
-    }
-    Ok(offset)
+fn table_entry_base(
+    table_offset: u64,
+    entry_size: usize,
+    index: usize,
+) -> Result<usize, InspectionError> {
+    let table_offset = usize::try_from(table_offset)
+        .map_err(|_| InspectionError::InvalidElf("ELF table offset overflows usize"))?;
+    let relative = entry_size
+        .checked_mul(index)
+        .ok_or(InspectionError::InvalidElf("ELF table index overflow"))?;
+    table_offset
+        .checked_add(relative)
+        .ok_or(InspectionError::InvalidElf("ELF table entry overflow"))
+}
+
+fn aligned_len4(value: usize) -> Result<usize, InspectionError> {
+    value
+        .checked_add(3)
+        .map(|value| value & !3)
+        .ok_or(InspectionError::InvalidElf("ELF note alignment overflow"))
 }
 
 fn preflight_header(bytes: &[u8]) -> Result<CodeObjectVersion, InspectionError> {
@@ -145,16 +193,16 @@ fn preflight_header(bytes: &[u8]) -> Result<CodeObjectVersion, InspectionError> 
     if bytes.len() < ELF64_HEADER_BYTES {
         return Err(InspectionError::InvalidElf("truncated ELF header"));
     }
-    if bytes[..4] != elf::ELFMAG {
+    if bytes[..4] != *ELF_MAGIC {
         return Err(InspectionError::InvalidElf("invalid ELF magic"));
     }
-    if bytes[4] != elf::ELFCLASS64 {
+    if bytes[4] != ELFCLASS64 {
         return Err(InspectionError::UnsupportedElfClass);
     }
-    if bytes[5] != elf::ELFDATA2LSB {
+    if bytes[5] != ELFDATA2LSB {
         return Err(InspectionError::UnsupportedEndianness);
     }
-    if bytes[6] != elf::EV_CURRENT {
+    if bytes[6] != EV_CURRENT {
         return Err(InspectionError::InvalidElf("unsupported ident version"));
     }
     if bytes[7] != ELFOSABI_AMDGPU_HSA {
@@ -166,13 +214,13 @@ fn preflight_header(bytes: &[u8]) -> Result<CodeObjectVersion, InspectionError> 
         4 => CodeObjectVersion::V6,
         _ => return Err(InspectionError::UnsupportedCodeObjectVersion),
     };
-    if read_u16(bytes, 16)? != elf::ET_DYN {
+    if read_u16(bytes, 16)? != ET_DYN {
         return Err(InspectionError::InvalidElf("HSACO ELF type must be ET_DYN"));
     }
-    if read_u16(bytes, 18)? != elf::EM_AMDGPU {
+    if read_u16(bytes, 18)? != EM_AMDGPU {
         return Err(InspectionError::UnsupportedMachine);
     }
-    if read_u32(bytes, 20)? != u32::from(elf::EV_CURRENT) {
+    if read_u32(bytes, 20)? != u32::from(EV_CURRENT) {
         return Err(InspectionError::InvalidElf("unsupported object version"));
     }
     if usize::from(read_u16(bytes, 52)?) != ELF64_HEADER_BYTES {

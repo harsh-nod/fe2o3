@@ -73,6 +73,29 @@ pub struct MetadataVersion {
     minor: u32,
 }
 
+/// Exact file range of the MessagePack descriptor selected by inspection.
+///
+/// This range lets a composing loader confirm that its independently parsed
+/// AMDGPU note refers to the same physical bytes. It carries no metadata,
+/// symbol, load, or launch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MetadataDescriptorRange {
+    file_offset: u64,
+    byte_len: u64,
+}
+
+impl MetadataDescriptorRange {
+    /// Byte offset of the descriptor in the inspected input.
+    pub const fn file_offset(self) -> u64 {
+        self.file_offset
+    }
+
+    /// Exact descriptor length in bytes.
+    pub const fn byte_len(self) -> u64 {
+        self.byte_len
+    }
+}
+
 impl MetadataVersion {
     pub(crate) const fn new(major: u32, minor: u32) -> Self {
         Self { major, minor }
@@ -532,6 +555,7 @@ impl InspectedKernel {
 pub struct InspectedHsaco {
     code_object_version: CodeObjectVersion,
     metadata_version: MetadataVersion,
+    metadata_descriptor_range: MetadataDescriptorRange,
     target: AmdTargetId,
     has_printf_metadata: bool,
     kernels: Vec<InspectedKernel>,
@@ -546,6 +570,11 @@ impl InspectedHsaco {
     /// Returns the metadata schema version.
     pub const fn metadata_version(&self) -> MetadataVersion {
         self.metadata_version
+    }
+
+    /// Returns the exact file range of the decoded metadata descriptor.
+    pub const fn metadata_descriptor_range(&self) -> MetadataDescriptorRange {
+        self.metadata_descriptor_range
     }
 
     /// Returns the target ID parsed from the metadata note.
@@ -570,6 +599,10 @@ pub fn inspect(bytes: &[u8]) -> Result<InspectedHsaco, InspectionError> {
     metadata::inspect_metadata(
         envelope.code_object_version,
         envelope.e_flags,
+        MetadataDescriptorRange {
+            file_offset: envelope.metadata_offset as u64,
+            byte_len: envelope.metadata.len() as u64,
+        },
         envelope.metadata,
     )
 }
@@ -641,6 +674,7 @@ pub(crate) const fn hidden_argument(
 pub(crate) fn inspected_hsaco(
     code_object_version: CodeObjectVersion,
     metadata_version: MetadataVersion,
+    metadata_descriptor_range: MetadataDescriptorRange,
     target: AmdTargetId,
     has_printf_metadata: bool,
     kernels: Vec<InspectedKernel>,
@@ -648,6 +682,7 @@ pub(crate) fn inspected_hsaco(
     InspectedHsaco {
         code_object_version,
         metadata_version,
+        metadata_descriptor_range,
         target,
         has_printf_metadata,
         kernels,

@@ -2,6 +2,14 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod kernel_closure;
+
+pub use kernel_closure::{
+    CLOSED_RELOCATION_POLICY_ID, ClosedRelocationEvidenceV1, KernelClosureError,
+    KernelIdentityInputsV1, SelectedKernelResourceBindingV1, UnsupportedKernelSemantic,
+    ValidatedKernelEnvelope,
+};
+
 const ELF_HEADER_BYTES: usize = 64;
 const PROGRAM_HEADER_BYTES: usize = 56;
 const SECTION_HEADER_BYTES: usize = 64;

@@ -1,7 +1,5 @@
 use core::str;
 
-use object::elf;
-
 use crate::{
     CodeObjectVersion, InspectedHsaco, InspectedKernel, KernelBindingError, MAX_ELF_SECTIONS,
     MAX_ELF_SEGMENTS, MAX_ELF_SYMBOLS, MAX_HSACO_BYTES, MAX_MESSAGEPACK_STRING_BYTES,
@@ -13,6 +11,10 @@ const ELF64_SECTION_HEADER_BYTES: usize = 64;
 const ELF64_SYMBOL_BYTES: usize = 24;
 const AMDHSA_KERNEL_DESCRIPTOR_BYTES: usize = 64;
 const AMDHSA_KERNEL_ENTRY_ALIGNMENT: u64 = 256;
+const PT_LOAD: u32 = 1;
+const SHT_PROGBITS: u32 = 1;
+const SHT_SYMTAB: u32 = 2;
+const SHT_STRTAB: u32 = 3;
 const SHF_ALLOC: u64 = 0x2;
 const SHF_EXECINSTR: u64 = 0x4;
 
@@ -328,7 +330,7 @@ fn parse_load_segments(bytes: &[u8]) -> Result<Vec<LoadSegment>, KernelBindingEr
             .ok_or(KernelBindingError::InvalidLoadMapping(
                 "program offset overflow",
             ))?;
-        if read_u32(bytes, base)? != elf::PT_LOAD {
+        if read_u32(bytes, base)? != PT_LOAD {
             continue;
         }
         let segment = LoadSegment {
@@ -389,7 +391,7 @@ fn parse_symbols<'a>(
     let mut found_table = false;
 
     for section in sections {
-        if section.section_type != elf::SHT_SYMTAB {
+        if section.section_type != SHT_SYMTAB {
             continue;
         }
         found_table = true;
@@ -432,7 +434,7 @@ fn parse_symbols<'a>(
                 .ok_or(KernelBindingError::InvalidSymbolTable(
                     "symbol string-table link is out of bounds",
                 ))?;
-        if string_section.section_type != elf::SHT_STRTAB {
+        if string_section.section_type != SHT_STRTAB {
             return Err(KernelBindingError::InvalidSymbolTable(
                 "symbol table does not link to SHT_STRTAB",
             ));
@@ -716,7 +718,7 @@ fn validate_descriptor_symbol(
         ));
     }
     let section = ordinary_symbol_section(symbol, sections, true)?;
-    if section.section_type != elf::SHT_PROGBITS || section.flags != SHF_ALLOC {
+    if section.section_type != SHT_PROGBITS || section.flags != SHF_ALLOC {
         return Err(KernelBindingError::InvalidDescriptorSymbol(
             "descriptor section is not uncompressed read-only allocated PROGBITS",
         ));
@@ -756,7 +758,7 @@ fn validate_entry_symbol(
         ));
     }
     let section = ordinary_symbol_section(symbol, sections, false)?;
-    if section.section_type != elf::SHT_PROGBITS || section.flags != SHF_ALLOC | SHF_EXECINSTR {
+    if section.section_type != SHT_PROGBITS || section.flags != SHF_ALLOC | SHF_EXECINSTR {
         return Err(KernelBindingError::InvalidEntrySymbol(
             "entry section is not uncompressed read-only executable PROGBITS",
         ));

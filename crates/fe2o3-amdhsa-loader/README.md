@@ -5,8 +5,10 @@ loader. It accepts an untrusted byte slice and either returns a canonical,
 inert load plan or rejects the object. A lifetime-bound validated envelope can
 deterministically materialize that plan into an exact caller-provided,
 exclusively borrowed byte slice.
-The crate performs no file access, allocation, GPU mapping, relocation, symbol
-lookup, permission transition, or dispatch.
+The crate performs no file access, GPU mapping, permission transition, or
+dispatch. Envelope planning and materialization allocate nothing; the optional
+semantic closure composes the repository's bounded, allocating
+`fe2o3-hsaco` inspector instead of maintaining a second metadata parser.
 
 ## Admitted foundation profile
 
@@ -65,11 +67,40 @@ mapping, permission, W^X, relocation, symbol, kernel, loaded-code, launch, or
 execution authority. A later adapter must bind the image to one allocation
 without substitution and enforce the remaining lifecycle.
 
-`fe2o3-hsaco` remains the repository's existing descriptive MessagePack,
-kernel metadata, symbol, and descriptor inspector. This crate does not copy
-that parser. It owns the stricter load-planning boundary and records only the
-metadata note's file range. A later composition must require both surfaces (or
-refactor a shared validated envelope) before granting loader authority.
+## Exact semantic and selected-kernel closure
+
+`ValidatedEnvelope::bind_kernel` consumes the content-bound envelope and runs
+the repository's existing bounded `fe2o3-hsaco` MessagePack, symbol, descriptor,
+and resource inspector over the same retained byte slice. The composition
+requires COV6 metadata 1.2 for exact `gfx942:xnack-`; rejects unknown metadata
+fields and malformed or over-limit documents through the inspector; and
+requires both parsers to identify the same physical metadata descriptor offset
+and length. `printf` roots, init/fini kernels, dynamic stacks, and device
+enqueue reject because their runtime lifecycle is absent from this slice.
+
+Every metadata kernel must bind to one bounded static ELF descriptor and entry
+symbol before one exact metadata kernel name can be selected. The selected
+64-byte descriptor must translate into exactly one canonical read-only load;
+the complete nonempty entry-symbol range must independently translate into
+exactly one canonical read-execute load. Descriptor fields and encoded
+register capacities are cross-checked against metadata by `fe2o3-hsaco`.
+`SelectedKernelResourceBindingV1` retains the selected kernarg, group/private
+memory, wavefront, register, spill, workgroup, cluster, and raw descriptor
+evidence without turning it into launch authority.
+
+Successful closure returns `ClosedRelocationEvidenceV1`. Its private
+construction records that envelope validation admitted no `SHT_REL` or
+`SHT_RELA` section, no dynamic relocation tag, and no unknown section or
+dynamic-tag extension. The policy applies zero relocations; it does not provide
+a relocation engine.
+
+`KernelIdentityInputsV1` hashes the exact input object, physical metadata
+descriptor, selected descriptor, and selected entry-symbol bytes. A
+domain-separated, length-delimited closure digest additionally binds the loader
+and relocation profiles, physical ranges and addresses, metadata kernel index,
+name, and symbol. These deterministic values are identity inputs for a later
+loaded-kernel authority; they are neither an authenticated compiler identity
+nor proof that the entry implements its source semantics.
 
 ## Proof and implementation gaps
 
@@ -79,18 +110,22 @@ refactor a shared validated envelope) before granting loader authority.
   executable byte parser or the materialization instructions to that relation;
   these checks remain covered by hostile unit tests rather than an executable
   Verus refinement proof.
-- The metadata descriptor is not decoded here, so its `amdhsa.version` and
-  `amdhsa.target` fields are not yet bound to the ELF ABI and flags by this
-  crate. The exact ELF-side profile and note identity are checked.
-- Static and dynamic symbol contents, undefined symbols, kernel descriptors,
-  resource metadata, origin maps, and selected-kernel identity are not loader
-  authority in this foundation.
+- The executable parsers now bind the exact metadata note, schema and target,
+  every metadata kernel's static descriptor/entry symbols, descriptor resources,
+  and one deterministic selected-kernel identity. Verus does not yet prove
+  refinement from those executable checks to a semantic loader model.
+- Static symbols and the complete selected entry-symbol byte range are bound,
+  but no disassembler, control-flow closure, machine-code verifier, source-to-
+  ISA refinement, undefined-symbol policy beyond the no-relocation envelope,
+  or code/data origin map is claimed.
 - Relocations are rejected rather than executed. No relocated byte-image
   refinement is claimed.
-- Borrow identity prevents construction of a validated envelope from a plan and
-  unrelated bytes, but it is not a digest, signature, authenticated content
-  identity, or proof about bytes after an external copy.
+- Borrow identity prevents construction from a plan and unrelated bytes, and
+  closure hashes detect content substitution when a later authority rechecks
+  them. A SHA-256 value is not a signature, trusted producer identity, or proof
+  about bytes after an unchecked external copy.
 - The executable zero/copy method is not proved to refine the runtime-model
   Verus materialization relation. Allocation identity, mapping permissions, W^X
-  lifecycle enforcement, immutable loaded-image transition, KFD/HSA comparison,
-  and hardware behavior remain outside this crate.
+  lifecycle enforcement, immutable loaded-image transition, compiler/manifest
+  ABI binding, observed-device compatibility, KFD/HSA comparison, dispatch
+  packet construction, and hardware behavior remain outside this crate.
