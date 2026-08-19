@@ -1103,6 +1103,8 @@ dependencies = [
  "dialect-amdgcn",
  "fe2o3-amdgcn-pliron-llvm",
  "fe2o3-llvm-handoff",
+ "fe2o3-llvm-text",
+ "fe2o3-llvm-worker-handoff",
  "fe2o3-pliron",
  "pliron",
  "pliron-llvm",

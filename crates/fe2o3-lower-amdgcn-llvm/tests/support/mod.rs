@@ -10,6 +10,50 @@ pub fn scalar_handoff_permuted() -> Gfx942HandoffV2 {
     build_handoff(Fixture::ScalarPermuted, OriginKindV1::AmdgcnIr, None)
 }
 
+pub fn scalar_handoff_with_empty_item_evidence() -> Gfx942HandoffV2 {
+    let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
+    let graph_evidence = EvidenceV2::new(canonical.evidence.origin(), Vec::new()).unwrap();
+    let source = canonical.function;
+    let blocks = source
+        .blocks()
+        .iter()
+        .map(|block| {
+            let instructions = block
+                .instructions()
+                .iter()
+                .map(|instruction| {
+                    InstructionV2::new(
+                        instruction.result(),
+                        instruction.kind().clone(),
+                        graph_evidence.clone(),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            BasicBlockV2::new(block.id(), instructions, block.terminator().clone())
+        })
+        .collect();
+    let function = FunctionV2::new(
+        source.id(),
+        source.symbol(),
+        source.kind(),
+        source.calling_convention(),
+        source.return_type(),
+        source.parameters().to_vec(),
+        source.attributes().to_vec(),
+        source.entry(),
+        blocks,
+        graph_evidence,
+    )
+    .unwrap();
+    finish_handoff(
+        canonical.base,
+        canonical.flags,
+        canonical.named_metadata,
+        vec![function],
+    )
+}
+
 pub fn gemm_control_flow_handoff() -> Gfx942HandoffV2 {
     build_handoff(Fixture::GemmControlFlow, OriginKindV1::KernelIr, None)
 }

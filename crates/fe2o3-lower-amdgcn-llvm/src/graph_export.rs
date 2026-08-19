@@ -2,14 +2,15 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallTargetV2, CastOperationV2,
-    ComparePredicateV2, ExecutableModuleV2, FloatBinaryOperationV2, FunctionAttributeV1,
-    FunctionAttributeV2, FunctionIdV2, FunctionKindV2, FunctionV2, GENERAL_GEMM_LDS_ELEMENTS_V2,
-    Gfx942HandoffInputV1, Gfx942HandoffV1, Gfx942HandoffV2, Gfx942TargetPolicyV1, GlobalLinkageV2,
-    GlobalV2, InstructionKindV2, InstructionV2, IntegerBinaryOperationV2, IntrinsicReferenceV2,
-    IntrinsicV2, KernelEntryV1, KernelParameterV1, KernelValueTypeV1, MAX_FUNCTION_BLOCKS_V2,
-    MAX_FUNCTIONS_V2, MAX_GLOBALS_V2, MAX_INSTRUCTIONS_PER_FUNCTION_V2, MAX_INTRINSICS_V2,
-    MAX_SYMBOL_BYTES_V2, MAX_VALUES_PER_FUNCTION_V2, ModuleMetadataV1, ReturnTypeV2,
-    ScalarConstantV2, ScalarTypeV1, TerminatorV2, TypedValueV2, ValueTypeV2,
+    ComparePredicateV2, EvidenceV2, ExecutableModuleV2, FloatBinaryOperationV2,
+    FunctionAttributeV1, FunctionAttributeV2, FunctionIdV2, FunctionKindV2, FunctionV2,
+    GENERAL_GEMM_LDS_ELEMENTS_V2, Gfx942HandoffInputV1, Gfx942HandoffV1, Gfx942HandoffV2,
+    Gfx942TargetPolicyV1, GlobalLinkageV2, GlobalV2, InstructionKindV2, InstructionV2,
+    IntegerBinaryOperationV2, IntrinsicReferenceV2, IntrinsicV2, KernelEntryV1, KernelParameterV1,
+    KernelValueTypeV1, MAX_FUNCTION_BLOCKS_V2, MAX_FUNCTIONS_V2, MAX_GLOBALS_V2,
+    MAX_INSTRUCTIONS_PER_FUNCTION_V2, MAX_INTRINSICS_V2, MAX_SYMBOL_BYTES_V2,
+    MAX_VALUES_PER_FUNCTION_V2, ModuleMetadataV1, ReturnTypeV2, ScalarConstantV2, ScalarTypeV1,
+    TerminatorV2, TypedValueV2, ValueTypeV2,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -48,6 +49,7 @@ use pliron_llvm::{
 };
 
 use crate::{
+    CanonicalNonGraphEnvelopeV1,
     graph_policy::{
         BlockGraphPolicyV1, FunctionGraphPolicyV1, InstructionGraphBindingV1,
         decode_function_policy, decode_global_policy, decode_instruction_binding,
@@ -70,7 +72,8 @@ pub(crate) fn derive_graph_handoff(
         .map_err(|_| InspectionErrorV1::StaleModule)?;
     verify_operation(module_pointer, context)
         .map_err(|_| InspectionErrorV1::DialectVerification)?;
-    let policy = decode_module_policy(context, module.get_operation(), &lowered.source)?;
+    let policy = decode_module_policy(context, module.get_operation())?;
+    let evidence = &lowered.non_graph_envelope.graph_evidence;
     let operations = bounded_collect(
         module.get_body(context, 0).deref(context).iter(context),
         MAX_MODULE_OPERATIONS_V1,
@@ -84,7 +87,7 @@ pub(crate) fn derive_graph_handoff(
             if globals.len() == MAX_GLOBALS_V2 {
                 return Err(InspectionErrorV1::UnexpectedGraph);
             }
-            globals.push(derive_global(context, operation, &lowered.source)?);
+            globals.push(derive_global(context, operation, evidence)?);
         } else if let Some(function) = Operation::get_op::<FuncOp>(operation, context) {
             if function.is_declaration(context) {
                 if intrinsic_operations.len() == MAX_INTRINSICS_V2 {
@@ -104,7 +107,7 @@ pub(crate) fn derive_graph_handoff(
 
     let mut intrinsics = Vec::new();
     for operation in intrinsic_operations {
-        intrinsics.push(derive_intrinsic(context, operation, &lowered.source)?);
+        intrinsics.push(derive_intrinsic(context, operation, evidence)?);
     }
 
     let mut function_symbols = BTreeMap::new();
@@ -150,7 +153,7 @@ pub(crate) fn derive_graph_handoff(
             &globals,
             &intrinsic_symbols,
             &function_symbols,
-            &lowered.source,
+            evidence,
         )?);
     }
 
@@ -162,12 +165,12 @@ pub(crate) fn derive_graph_handoff(
         functions,
     )
     .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
-    let base = derive_graph_base(&lowered.source, &module)?;
+    let base = derive_graph_base(&lowered.non_graph_envelope, &module)?;
     Gfx942HandoffV2::new(base, module).map_err(|_| InspectionErrorV1::UnexpectedGraph)
 }
 
 fn derive_graph_base(
-    source: &Gfx942HandoffV2,
+    envelope: &CanonicalNonGraphEnvelopeV1,
     module: &ExecutableModuleV2,
 ) -> Result<Gfx942HandoffV1, InspectionErrorV1> {
     let kernels = module
@@ -179,16 +182,21 @@ fn derive_graph_base(
     let metadata = ModuleMetadataV1::new(
         module.flags().to_vec(),
         module.named_metadata().to_vec(),
-        source.base().module().device_libraries().to_vec(),
+        envelope.device_libraries.clone(),
     )
     .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
     Gfx942HandoffV1::new(Gfx942HandoffInputV1 {
-        stage_identities: *source.base().stage_identities(),
+        stage_identities: envelope.stage_identities,
         target: Gfx942TargetPolicyV1::canonical(),
         kernels,
         module: metadata,
-        origins: source.base().origins().to_vec(),
-        obligations: source.base().obligations().to_vec(),
+        origins: envelope
+            .origins
+            .iter()
+            .cloned()
+            .chain(core::iter::once(envelope.graph_origin.clone()))
+            .collect(),
+        obligations: envelope.obligations.clone(),
     })
     .map_err(|_| InspectionErrorV1::UnexpectedGraph)
 }
@@ -266,18 +274,11 @@ fn derive_graph_kernel(function: &FunctionV2) -> Result<KernelEntryV1, Inspectio
 fn derive_global(
     context: &Context,
     operation: Ptr<Operation>,
-    source: &Gfx942HandoffV2,
+    evidence: &EvidenceV2,
 ) -> Result<GlobalV2, InspectionErrorV1> {
     let global = Operation::get_op::<GlobalOp>(operation, context)
         .ok_or(InspectionErrorV1::UnexpectedGraph)?;
     let policy = decode_global_policy(context, operation)?;
-    let evidence = source
-        .module()
-        .globals()
-        .iter()
-        .find(|candidate| candidate.id() == policy.id)
-        .map(|candidate| candidate.evidence().clone())
-        .ok_or(InspectionErrorV1::UnexpectedGraph)?;
     let linkage = match global.get_attr_llvm_global_linkage(context).as_deref() {
         Some(LinkageAttr::InternalLinkage) => GlobalLinkageV2::Internal,
         Some(LinkageAttr::ExternalLinkage) => GlobalLinkageV2::External,
@@ -318,7 +319,7 @@ fn derive_global(
                     .ok_or(InspectionErrorV1::UnexpectedGraph)?,
                 bytes.clone(),
                 alignment,
-                evidence,
+                evidence.clone(),
             )
             .map_err(|_| InspectionErrorV1::UnexpectedGraph)
         }
@@ -330,7 +331,7 @@ fn derive_global(
             policy.mutable,
             value_type,
             Some(decode_constant(context, initializer)?),
-            evidence,
+            evidence.clone(),
         )
         .map_err(|_| InspectionErrorV1::UnexpectedGraph),
         None if elements == Some(GENERAL_GEMM_LDS_ELEMENTS_V2)
@@ -341,7 +342,7 @@ fn derive_global(
             && policy.section.is_none()
             && alignment == 16 =>
         {
-            GlobalV2::new_lds_bf16_array_256(policy.id, &symbol, evidence)
+            GlobalV2::new_lds_bf16_array_256(policy.id, &symbol, evidence.clone())
                 .map_err(|_| InspectionErrorV1::UnexpectedGraph)
         }
         None if elements.is_none() && linkage == GlobalLinkageV2::External => GlobalV2::new(
@@ -352,7 +353,7 @@ fn derive_global(
             policy.mutable,
             value_type,
             None,
-            evidence,
+            evidence.clone(),
         )
         .map_err(|_| InspectionErrorV1::UnexpectedGraph),
         _ => Err(InspectionErrorV1::UnexpectedGraph),
@@ -362,7 +363,7 @@ fn derive_global(
 fn derive_intrinsic(
     context: &Context,
     operation: Ptr<Operation>,
-    source: &Gfx942HandoffV2,
+    evidence: &EvidenceV2,
 ) -> Result<IntrinsicReferenceV2, InspectionErrorV1> {
     let declaration = Operation::get_op::<FuncOp>(operation, context)
         .ok_or(InspectionErrorV1::UnexpectedGraph)?;
@@ -378,14 +379,7 @@ fn derive_intrinsic(
     {
         return Err(InspectionErrorV1::UnexpectedGraph);
     }
-    let evidence = source
-        .module()
-        .intrinsics()
-        .iter()
-        .find(|candidate| candidate.intrinsic() == intrinsic)
-        .map(|candidate| candidate.evidence().clone())
-        .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-    Ok(IntrinsicReferenceV2::new(intrinsic, evidence))
+    Ok(IntrinsicReferenceV2::new(intrinsic, evidence.clone()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -396,18 +390,11 @@ fn derive_function(
     globals: &[GlobalV2],
     intrinsic_symbols: &BTreeMap<String, IntrinsicV2>,
     function_symbols: &BTreeMap<String, FunctionIdV2>,
-    source: &Gfx942HandoffV2,
+    evidence: &EvidenceV2,
 ) -> Result<FunctionV2, InspectionErrorV1> {
-    let source_function = source
-        .module()
-        .functions()
-        .iter()
-        .find(|candidate| candidate.id() == policy.id)
-        .ok_or(InspectionErrorV1::UnexpectedGraph)?;
     if function.get_attr_llvm_function_linkage(context).is_some() {
         return Err(InspectionErrorV1::UnexpectedGraph);
     }
-    let evidence = source_function.evidence().clone();
     let function_type = function.get_type(context);
     let function_type = function_type.deref(context);
     if function_type.is_var_arg() || function_type.arg_types().len() != policy.parameters.len() {
@@ -531,7 +518,7 @@ fn derive_function(
             &actual_blocks,
             &block_ids,
             &values,
-            source_function,
+            evidence,
         )?;
         let mut ordinals = BTreeSet::new();
         let operations = bounded_collect(
@@ -549,15 +536,11 @@ fn derive_function(
             let binding = *operation_bindings
                 .get(&actual)
                 .ok_or(InspectionErrorV1::UnexpectedGraph)?;
-            if !ordinals.insert(binding.ordinal) {
+            if binding.ordinal as usize >= MAX_INSTRUCTIONS_PER_FUNCTION_V2
+                || !ordinals.insert(binding.ordinal)
+            {
                 return Err(InspectionErrorV1::UnexpectedGraph);
             }
-            let source_instruction = source_function
-                .blocks()
-                .iter()
-                .find(|candidate| candidate.id() == block_policy.id)
-                .and_then(|source_block| source_block.instructions().get(binding.ordinal as usize))
-                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
             let kind = derive_instruction_kind(
                 context,
                 actual,
@@ -568,7 +551,7 @@ fn derive_function(
                 function_symbols,
             )?;
             instructions.push(
-                InstructionV2::new(binding.result, kind, source_instruction.evidence().clone())
+                InstructionV2::new(binding.result, kind, evidence.clone())
                     .map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
             );
         }
@@ -589,7 +572,7 @@ fn derive_function(
         policy.attributes,
         policy.entry,
         blocks,
-        evidence,
+        evidence.clone(),
     )
     .map_err(|_| InspectionErrorV1::UnexpectedGraph)
 }
@@ -646,7 +629,7 @@ fn derive_phis(
     blocks: &[Ptr<BasicBlock>],
     block_ids: &HashMap<Ptr<BasicBlock>, BlockIdV2>,
     values: &HashMap<Value, TypedValueV2>,
-    source_function: &FunctionV2,
+    evidence: &EvidenceV2,
 ) -> Result<Vec<InstructionV2>, InspectionErrorV1> {
     let mut result = Vec::new();
     for (phi_index, phi) in policy.phis.iter().copied().enumerate() {
@@ -681,20 +664,13 @@ fn derive_phis(
             }
         }
         incoming.sort_unstable_by_key(|(_, block)| *block);
-        let evidence = source_function
-            .blocks()
-            .iter()
-            .flat_map(|block| block.instructions())
-            .find(|instruction| {
-                instruction
-                    .result()
-                    .is_some_and(|value| value.id() == phi.id())
-            })
-            .map(|instruction| instruction.evidence().clone())
-            .ok_or(InspectionErrorV1::UnexpectedGraph)?;
         result.push(
-            InstructionV2::new(Some(phi), InstructionKindV2::Phi { incoming }, evidence)
-                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
+            InstructionV2::new(
+                Some(phi),
+                InstructionKindV2::Phi { incoming },
+                evidence.clone(),
+            )
+            .map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
         );
     }
     Ok(result)

@@ -87,6 +87,7 @@ pub fn lower_amdgcn_to_pliron_llvm_v1(
 
 fn lower_inner(source: &Gfx942HandoffV2) -> Result<LoweredAmdgcnPlironLlvmV1, LoweringErrorV1> {
     let admitted = admit_amdgcn_pliron_llvm_v1(source).map_err(LoweringErrorV1::Admission)?;
+    let non_graph_envelope = crate::CanonicalNonGraphEnvelopeV1::from_source(source)?;
     let mut context = Context::new();
     let context_identity = ensure_context_identity(&mut context)
         .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::ContextIdentity))?;
@@ -104,16 +105,17 @@ fn lower_inner(source: &Gfx942HandoffV2) -> Result<LoweredAmdgcnPlironLlvmV1, Lo
         context,
         module: owned,
         context_identity,
-        source: source.clone(),
         source_identity: source.identity(),
+        non_graph_envelope,
         profile: admitted.profile(),
         inspection,
         receipt,
     };
-    if derive_graph_handoff(&lowered)
-        .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectInspection))?
-        != *source
-    {
+    let graph_handoff = derive_graph_handoff(&lowered)
+        .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectInspection))?;
+    let graph_inspection = inspect_module(&lowered.context, &lowered.module, &graph_handoff)
+        .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectInspection))?;
+    if graph_inspection != inspection {
         return Err(LoweringErrorV1::Construction(
             ConstructionStageV1::DialectInspection,
         ));
@@ -133,7 +135,8 @@ pub(crate) fn inspect_lowered(
         if lowered.module.owner != current {
             return Err(InspectionErrorV1::ForeignOwner);
         }
-        inspect_module(&lowered.context, &lowered.module, &lowered.source)
+        let graph_handoff = derive_graph_handoff(lowered)?;
+        inspect_module(&lowered.context, &lowered.module, &graph_handoff)
     }))
     .unwrap_or(Err(InspectionErrorV1::UpstreamPanicked))
 }
@@ -151,16 +154,12 @@ fn export_graph_inner(
     lowered: &LoweredAmdgcnPlironLlvmV1,
     request: GraphExportRequestV1,
 ) -> Result<CanonicalPlironLlvmGraphExportV1, GraphExportErrorV1> {
-    if request.source_identity != lowered.source_identity {
-        return Err(GraphExportErrorV1::SourceIdentitySubstitution);
-    }
     if request.receipt_identity != lowered.receipt.identity {
         return Err(GraphExportErrorV1::ReceiptIdentitySubstitution);
     }
-    if lowered.source.identity() != lowered.source_identity {
-        return Err(GraphExportErrorV1::SourceIdentitySubstitution);
+    if request.non_graph_envelope_identity != lowered.non_graph_envelope.identity {
+        return Err(GraphExportErrorV1::NonGraphEnvelopeIdentitySubstitution);
     }
-
     let current = require_context_identity(&lowered.context)
         .map_err(|_| GraphExportErrorV1::Inspection(InspectionErrorV1::ContextIdentity))?;
     if current != lowered.context_identity || lowered.module.owner != current {
@@ -170,9 +169,9 @@ fn export_graph_inner(
     }
     let graph_handoff = derive_graph_handoff(lowered).map_err(GraphExportErrorV1::Inspection)?;
     let admitted = admit_amdgcn_pliron_llvm_v1(&graph_handoff)
-        .map_err(|_| GraphExportErrorV1::LiveGraphSubstitution)?;
+        .map_err(|_| GraphExportErrorV1::GraphAdmission)?;
     if admitted.profile() != lowered.profile {
-        return Err(GraphExportErrorV1::LiveGraphSubstitution);
+        return Err(GraphExportErrorV1::GraphAdmission);
     }
     let inspection = inspect_module(&lowered.context, &lowered.module, &graph_handoff)
         .map_err(GraphExportErrorV1::Inspection)?;
@@ -182,7 +181,7 @@ fn export_graph_inner(
 
     let identity: [u8; 32] = Sha256::new()
         .chain_update(WORKER_EXPORT_IDENTITY_DOMAIN_V1)
-        .chain_update(lowered.source_identity.as_bytes())
+        .chain_update(lowered.non_graph_envelope.identity.as_bytes())
         .chain_update(receipt.identity.as_bytes())
         .chain_update(inspection.graph_sha256)
         .chain_update(graph_handoff_identity.as_bytes())
@@ -190,8 +189,7 @@ fn export_graph_inner(
         .into();
     Ok(CanonicalPlironLlvmGraphExportV1 {
         graph_handoff,
-        source_identity: lowered.source_identity,
-        construction_receipt_identity: lowered.receipt.identity,
+        non_graph_envelope_identity: lowered.non_graph_envelope.identity,
         receipt,
         inspection,
         identity: GraphExportIdentityV1(identity),
@@ -2025,6 +2023,7 @@ fn encode_receipt(
 mod tests {
     use fe2o3_amdgcn_pliron_llvm::{ScalarKernelModuleV1, lower_scalar_kernel_v2};
     use fe2o3_llvm_handoff::{IdentityV1, StageIdentitiesV1, TypedValueV2};
+    use fe2o3_llvm_worker_handoff::MeasuredLlvmLldBuildV1;
     use pliron::{
         basic_block::BasicBlock,
         builtin::attributes::{BytesAttr, IdentifierAttr, TypeAttr},
@@ -2051,7 +2050,10 @@ mod tests {
         GLOBAL_POLICY_ATTR_V1, MODULE_FLAGS_ATTR_V1, MODULE_METADATA_ATTR_V1,
         MODULE_TARGET_POLICY_ATTR_V1,
     };
-    use crate::{GraphExportErrorV1, GraphExportRequestV1};
+    use crate::{
+        AdmittedLiveGraphSerializationV1, GraphExportErrorV1, LiveGraphSerializationErrorV1,
+        LiveGraphSerializationRequestV1,
+    };
 
     fn scalar_source() -> Gfx942HandoffV2 {
         lower_scalar_kernel_v2(&ScalarKernelModuleV1::canonical(
@@ -2077,8 +2079,18 @@ mod tests {
             .unwrap()
     }
 
-    fn request(lowered: &LoweredAmdgcnPlironLlvmV1) -> GraphExportRequestV1 {
-        GraphExportRequestV1::new(lowered.source_identity(), lowered.receipt().identity())
+    fn serialize(
+        lowered: &LoweredAmdgcnPlironLlvmV1,
+    ) -> Result<AdmittedLiveGraphSerializationV1, LiveGraphSerializationErrorV1> {
+        lowered
+            .acquire_worker_serialization_v1(
+                LiveGraphSerializationRequestV1::new(
+                    lowered.receipt().identity(),
+                    lowered.non_graph_envelope().identity(),
+                ),
+                MeasuredLlvmLldBuildV1::exact(),
+            )
+            .serialize_and_admit_v1()
     }
 
     fn entry_block(lowered: &LoweredAmdgcnPlironLlvmV1, function: FuncOp) -> Ptr<BasicBlock> {
@@ -2131,6 +2143,7 @@ mod tests {
     fn admitted_live_operand_transformation_changes_exported_output() {
         let source = scalar_source();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let before = serialize(&lowered).unwrap().receipt();
         let function = first_function(&lowered);
         let entry = entry_block(&lowered, function);
         let replacement = entry.deref(&lowered.context).get_argument(0);
@@ -2141,18 +2154,19 @@ mod tests {
             .unwrap();
         Operation::replace_operand(store, &lowered.context, 1, replacement);
 
-        let exported = lowered.export_graph_v1(request(&lowered)).unwrap();
-        assert_ne!(exported.graph_handoff(), &source);
+        let serialized = serialize(&lowered).unwrap();
         assert_ne!(
-            exported.graph_receipt().identity(),
-            lowered.receipt().identity()
+            serialized.receipt().graph_handoff_identity(),
+            before.graph_handoff_identity()
         );
+        assert_ne!(serialized.receipt().identity(), before.identity());
     }
 
     #[test]
     fn admitted_live_alignment_transformation_changes_exported_output() {
         let source = scalar_source();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let before = serialize(&lowered).unwrap().receipt();
         let function = first_function(&lowered);
         let load = entry_block(&lowered, function)
             .deref(&lowered.context)
@@ -2161,12 +2175,12 @@ mod tests {
             .unwrap();
         load.set_alignment(&lowered.context, 8);
 
-        let exported = lowered.export_graph_v1(request(&lowered)).unwrap();
-        assert_ne!(exported.graph_handoff(), &source);
+        let serialized = serialize(&lowered).unwrap();
         assert_ne!(
-            exported.graph_receipt().identity(),
-            lowered.receipt().identity()
+            serialized.receipt().graph_handoff_identity(),
+            before.graph_handoff_identity()
         );
+        assert_ne!(serialized.receipt().identity(), before.identity());
     }
 
     #[test]
@@ -2185,16 +2199,16 @@ mod tests {
             substitute_policy_bytes(&lowered, operation, attribute);
 
             assert!(matches!(
-                lowered.export_graph_v1(request(&lowered)),
-                Err(GraphExportErrorV1::Inspection(
-                    InspectionErrorV1::UnexpectedGraph
+                serialize(&lowered),
+                Err(LiveGraphSerializationErrorV1::Graph(
+                    GraphExportErrorV1::Inspection(InspectionErrorV1::UnexpectedGraph)
                 ))
             ));
         }
     }
 
     fn assert_export_rejected(lowered: &LoweredAmdgcnPlironLlvmV1) {
-        assert!(lowered.export_graph_v1(request(lowered)).is_err());
+        assert!(serialize(lowered).is_err());
     }
 
     fn tiled_with_integer_add() -> Gfx942HandoffV2 {
@@ -2291,6 +2305,7 @@ mod tests {
     fn constant_and_callee_mutations_are_the_exported_authority() {
         let source = crate::integration_test_support::tiled_data_handoff();
         let mut lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let before = serialize(&lowered).unwrap().receipt();
         let constant = entry_block(&lowered, first_function(&lowered))
             .deref(&lowered.context)
             .iter(&lowered.context)
@@ -2317,11 +2332,15 @@ mod tests {
         };
         let replacement = constant_attribute(&mut lowered.context, replacement).unwrap();
         constant.set_attr_llvm_constant_value(&lowered.context, replacement);
-        let exported = lowered.export_graph_v1(request(&lowered)).unwrap();
-        assert_ne!(exported.graph_handoff(), &source);
+        let serialized = serialize(&lowered).unwrap();
+        assert_ne!(
+            serialized.receipt().graph_handoff_identity(),
+            before.graph_handoff_identity()
+        );
 
         let source = crate::integration_test_support::intrinsic_handoff();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let before = serialize(&lowered).unwrap().receipt();
         let function = first_function(&lowered);
         let call = entry_block(&lowered, function)
             .deref(&lowered.context)
@@ -2335,8 +2354,11 @@ mod tests {
                     .unwrap(),
             ),
         );
-        let exported = lowered.export_graph_v1(request(&lowered)).unwrap();
-        assert_ne!(exported.graph_handoff(), &source);
+        let serialized = serialize(&lowered).unwrap();
+        assert_ne!(
+            serialized.receipt().graph_handoff_identity(),
+            before.graph_handoff_identity()
+        );
     }
 
     #[test]

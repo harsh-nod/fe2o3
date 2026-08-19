@@ -66,12 +66,12 @@ pub enum InspectionErrorV1 {
 pub enum GraphExportErrorV1 {
     /// Fresh owner-controlled live-graph inspection failed.
     Inspection(InspectionErrorV1),
-    /// The caller substituted the retained canonical Handoff V2 identity.
-    SourceIdentitySubstitution,
+    /// The caller substituted the independently bound non-graph envelope identity.
+    NonGraphEnvelopeIdentitySubstitution,
     /// The caller substituted the construction receipt identity.
     ReceiptIdentitySubstitution,
-    /// The live graph no longer corresponds to its construction receipt.
-    LiveGraphSubstitution,
+    /// The graph-derived canonical model failed the closed AMDGPU profile.
+    GraphAdmission,
     /// Fresh canonical receipt construction failed closed.
     ReceiptConstruction,
 }
@@ -103,7 +103,7 @@ impl LoweringReceiptIdentityV1 {
     }
 }
 
-/// SHA-256 identity binding one live graph export to retained construction provenance.
+/// SHA-256 identity binding one fresh live-graph export to its non-graph envelope.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GraphExportIdentityV1(pub(crate) [u8; 32]);
 
@@ -114,37 +114,41 @@ impl GraphExportIdentityV1 {
     }
 }
 
-/// Untrusted source and construction-receipt identities presented to the export boundary.
+/// SHA-256 identity of exactly the bounded immutable non-graph envelope.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct NonGraphEnvelopeIdentityV1(pub(crate) [u8; 32]);
+
+impl NonGraphEnvelopeIdentityV1 {
+    /// Returns the exact identity bytes.
+    pub const fn as_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+/// Internal owner-receipt and non-graph-envelope identities used during fresh traversal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GraphExportRequestV1 {
-    pub(crate) source_identity: HandoffIdentityV2,
+pub(crate) struct GraphExportRequestV1 {
     pub(crate) receipt_identity: LoweringReceiptIdentityV1,
+    pub(crate) non_graph_envelope_identity: NonGraphEnvelopeIdentityV1,
 }
 
 impl GraphExportRequestV1 {
-    /// Constructs one untrusted export request.
-    pub const fn new(
-        source_identity: HandoffIdentityV2,
+    pub(crate) const fn new(
         receipt_identity: LoweringReceiptIdentityV1,
+        non_graph_envelope_identity: NonGraphEnvelopeIdentityV1,
     ) -> Self {
         Self {
-            source_identity,
             receipt_identity,
+            non_graph_envelope_identity,
         }
     }
 }
 
-/// Inert canonical export produced only after fresh live-graph correspondence inspection.
-///
-/// This value binds retained source provenance, a graph-derived Handoff V2, its
-/// fresh graph receipt, and gfx942 target policy. Worker build policy and worker
-/// admission are bound only by a subsequent compiler boundary. This export grants
-/// no compiler-worker, artifact, link, publication, load, or launch authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CanonicalPlironLlvmGraphExportV1 {
+/// Internal canonical export produced by fresh bounded live-graph traversal.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CanonicalPlironLlvmGraphExportV1 {
     pub(crate) graph_handoff: Gfx942HandoffV2,
-    pub(crate) source_identity: HandoffIdentityV2,
-    pub(crate) construction_receipt_identity: LoweringReceiptIdentityV1,
+    pub(crate) non_graph_envelope_identity: NonGraphEnvelopeIdentityV1,
     pub(crate) receipt: CanonicalLoweringReceiptV1,
     pub(crate) inspection: LiveGraphInspectionV1,
     pub(crate) identity: GraphExportIdentityV1,
@@ -152,43 +156,33 @@ pub struct CanonicalPlironLlvmGraphExportV1 {
 
 impl CanonicalPlironLlvmGraphExportV1 {
     /// Returns a fresh typed handoff reconstructed from the live Pliron graph.
-    pub const fn graph_handoff(&self) -> &Gfx942HandoffV2 {
+    pub(crate) const fn graph_handoff(&self) -> &Gfx942HandoffV2 {
         &self.graph_handoff
     }
 
-    /// Returns the retained construction-source identity bound as provenance.
-    pub const fn source_identity(&self) -> HandoffIdentityV2 {
-        self.source_identity
-    }
-
     /// Returns the identity of the graph-derived canonical worker handoff.
-    pub fn graph_handoff_identity(&self) -> HandoffIdentityV2 {
+    pub(crate) fn graph_handoff_identity(&self) -> HandoffIdentityV2 {
         self.graph_handoff.identity()
     }
 
-    /// Returns the retained construction receipt identity accepted by the export request.
-    pub const fn construction_receipt_identity(&self) -> LoweringReceiptIdentityV1 {
-        self.construction_receipt_identity
+    /// Returns the independent non-graph-envelope identity bound to this export.
+    pub(crate) const fn non_graph_envelope_identity(&self) -> NonGraphEnvelopeIdentityV1 {
+        self.non_graph_envelope_identity
     }
 
-    /// Returns the freshly constructed source-and-live-graph receipt.
-    pub const fn graph_receipt(&self) -> &CanonicalLoweringReceiptV1 {
+    /// Returns the freshly constructed graph-derived receipt.
+    pub(crate) const fn graph_receipt(&self) -> &CanonicalLoweringReceiptV1 {
         &self.receipt
     }
 
     /// Returns facts recovered by the fresh owner-controlled inspection.
-    pub const fn graph_inspection(&self) -> LiveGraphInspectionV1 {
+    pub(crate) const fn graph_inspection(&self) -> LiveGraphInspectionV1 {
         self.inspection
     }
 
     /// Returns the identity binding the exact graph receipt and canonical source envelope.
-    pub const fn identity(&self) -> GraphExportIdentityV1 {
+    pub(crate) const fn identity(&self) -> GraphExportIdentityV1 {
         self.identity
-    }
-
-    /// Reports that this structural export grants no artifact or runtime authority.
-    pub const fn grants_artifact_authority(&self) -> bool {
-        false
     }
 }
 
@@ -286,8 +280,8 @@ pub struct LoweredAmdgcnPlironLlvmV1 {
     pub(crate) context: pliron::context::Context,
     pub(crate) module: OwnedDialectModuleV1,
     pub(crate) context_identity: ContextIdentity,
-    pub(crate) source: Gfx942HandoffV2,
     pub(crate) source_identity: HandoffIdentityV2,
+    pub(crate) non_graph_envelope: crate::CanonicalNonGraphEnvelopeV1,
     pub(crate) profile: AmdgcnPlironLlvmProfileV1,
     pub(crate) inspection: LiveGraphInspectionV1,
     pub(crate) receipt: CanonicalLoweringReceiptV1,
@@ -299,14 +293,14 @@ impl LoweredAmdgcnPlironLlvmV1 {
         self.context_identity
     }
 
-    /// Returns the exact construction source retained as identity-bound provenance.
-    pub const fn source_handoff(&self) -> &Gfx942HandoffV2 {
-        &self.source
-    }
-
-    /// Returns the exact canonical source identity.
+    /// Returns the construction-source identity; the source object itself is not retained.
     pub const fn source_identity(&self) -> HandoffIdentityV2 {
         self.source_identity
+    }
+
+    /// Returns the explicit immutable non-graph envelope retained by this owner.
+    pub const fn non_graph_envelope(&self) -> &crate::CanonicalNonGraphEnvelopeV1 {
+        &self.non_graph_envelope
     }
 
     /// Returns the closed admitted source profile.
@@ -327,14 +321,6 @@ impl LoweredAmdgcnPlironLlvmV1 {
     /// Revalidates ownership, liveness, recursive verification, and typed graph facts.
     pub fn inspect_live_graph(&self) -> Result<LiveGraphInspectionV1, InspectionErrorV1> {
         crate::lower::inspect_lowered(self)
-    }
-
-    /// Re-inspects and seals this exact live graph before typed worker admission.
-    pub fn export_graph_v1(
-        &self,
-        request: GraphExportRequestV1,
-    ) -> Result<CanonicalPlironLlvmGraphExportV1, GraphExportErrorV1> {
-        crate::lower::export_graph(self, request)
     }
 
     /// This structural lowering grants no artifact or runtime authority.

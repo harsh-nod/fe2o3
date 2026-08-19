@@ -14,10 +14,7 @@ fn lowers_scalar_memory_arithmetic_into_a_live_verified_graph() {
         AmdgcnPlironLlvmProfileV1::ScalarMemoryArithmetic
     );
     assert_eq!(lowered.source_identity(), source.identity());
-    assert_eq!(
-        lowered.source_handoff().encode_canonical(),
-        source.encode_canonical()
-    );
+    assert_ne!(lowered.non_graph_envelope().identity().as_bytes(), [0; 32]);
     let inspection = lowered.inspect_live_graph().expect("live graph inspection");
     assert_eq!(inspection, lowered.construction_inspection());
     assert_eq!(inspection.function_count(), 1);

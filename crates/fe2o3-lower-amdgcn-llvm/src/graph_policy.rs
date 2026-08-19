@@ -1,8 +1,8 @@
 use fe2o3_llvm_handoff::{
     BlockIdV2, CallingConventionV2, FunctionAttributeV2, FunctionIdV2, FunctionKindV2,
-    FunctionParameterV2, FunctionV2, Gfx942HandoffV2, GlobalIdV2, GlobalV2, IdentityV1,
-    IntrinsicReferenceV2, IntrinsicV2, MAX_FUNCTION_ATTRIBUTES_V2, MAX_FUNCTION_BLOCKS_V2,
-    MAX_FUNCTION_PARAMETERS_V2, MAX_MODULE_FLAGS_V2, MAX_NAMED_METADATA_V2,
+    FunctionParameterV2, FunctionV2, Gfx942HandoffV2, Gfx942TargetPolicyV1, GlobalIdV2, GlobalV2,
+    IdentityV1, IntrinsicReferenceV2, IntrinsicV2, MAX_FUNCTION_ATTRIBUTES_V2,
+    MAX_FUNCTION_BLOCKS_V2, MAX_FUNCTION_PARAMETERS_V2, MAX_MODULE_FLAGS_V2, MAX_NAMED_METADATA_V2,
     MAX_PARAMETER_ATTRIBUTES_V2, MAX_SYMBOL_BYTES_V2, ModuleFlagV1, NamedMetadataV1,
     ParameterAttributeV1, TargetFeatureV1, TypedValueV2, ValueIdV2, ValueTypeV2, WavesPerEuV1,
     WorkgroupSizeRangeV1,
@@ -73,7 +73,7 @@ pub(crate) fn install_module_policy(
         context,
         operation,
         MODULE_TARGET_POLICY_ATTR_V1,
-        target_policy(source),
+        target_policy(source.base().target()),
     )?;
     set_bytes(
         context,
@@ -173,7 +173,7 @@ pub(crate) fn inspect_module_policy(
         context,
         operation,
         MODULE_TARGET_POLICY_ATTR_V1,
-        &target_policy(source),
+        &target_policy(source.base().target()),
     )?;
     require_bytes(
         context,
@@ -270,13 +270,12 @@ pub(crate) fn inspect_instruction_binding(
 pub(crate) fn decode_module_policy(
     context: &Context,
     operation: pliron::context::Ptr<Operation>,
-    source: &Gfx942HandoffV2,
 ) -> Result<ModuleGraphPolicyV1, InspectionErrorV1> {
     require_bytes(
         context,
         operation,
         MODULE_TARGET_POLICY_ATTR_V1,
-        &target_policy(source),
+        &target_policy(&Gfx942TargetPolicyV1::canonical()),
     )?;
     let flag_bytes = attribute_bytes(context, operation, MODULE_FLAGS_ATTR_V1)?;
     let mut flags = ReaderV1::new(&flag_bytes);
@@ -702,8 +701,7 @@ fn require_bytes(
     Ok(())
 }
 
-fn target_policy(source: &Gfx942HandoffV2) -> Vec<u8> {
-    let target = source.base().target();
+fn target_policy(target: &Gfx942TargetPolicyV1) -> Vec<u8> {
     let mut bytes = vec![POLICY_VERSION_V1];
     put_str(&mut bytes, target.target_triple());
     put_str(&mut bytes, target.data_layout());
