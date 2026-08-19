@@ -43,7 +43,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=1054b1c31ad143c7218eee24bcc529b17851338a152ed0cf028c46898c6a17a4\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
-    "aql_dispatch_schema_sha256=d420be8e3da6f9d473273648659f9ed00260eaf597c7ccaa742ff6c33d816369\n",
+    "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
     "source.rocr.hsakamttypes.h=fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e\n",
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
@@ -63,7 +63,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "b7d4c9e8c6f191dccc90c540fd99fe0ee73cddcfe859a21bbe95244b0fdc2600";
+    "04ca0148c489e903bd3bb81bf897b1d2d9d6d79812779ac2bbd71158a23ecea9";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -815,7 +815,7 @@ mod tests {
     fn session_manifest_digest_is_frozen() {
         assert_eq!(
             fe2o3_aql::AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
-            "d420be8e3da6f9d473273648659f9ed00260eaf597c7ccaa742ff6c33d816369"
+            "b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf"
         );
         let digest = Sha256::digest(GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1);
         let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
