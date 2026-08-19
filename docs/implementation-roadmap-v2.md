@@ -51,6 +51,9 @@ but both issues remain open.
 - Existing AMDGPU lowering is owned by `fe2o3-amdgcn-model` and re-exported by
   the historical `dialect-amdgcn` facade. A production `gpu.*` to `amdgcn.*`
   Pliron route has not landed.
+- The graph now pins dialect-only `pliron-llvm` with `llvm-sys` disabled and
+  includes the first Pliron-independent #144 canonical-handoff schema. Typed
+  AMDGCN lowering and worker consumption have not landed.
 - `fe2o3-service-host` consumes the service and host models through
   authority-free, borrow-retaining typestates. It has no HSA/HIP handles and
   performs no allocation, publication, load, launch, execution, wait,
@@ -59,8 +62,27 @@ but both issues remain open.
 This checkpoint changes ownership and representation contracts, not parity
 status. It does not establish production compilation, persistent service
 execution, proof promotion, GPU execution, or performance qualification. The
-production-directed finalizer remains the isolated pinned-upstream-LLVM
-target-machine and in-process LLD path, with no COMGR or shell GPU linker.
+production-directed finalizer remains the isolated pinned upstream LLVM 22.1.8
+target-machine and in-process LLD path, with no COMGR or shell GPU linker. It
+remains the sole machine authority.
+
+## Selective Pliron LLVM Target State
+
+The integration permits `pliron-llvm` only in the Pliron LLVM
+dialect/lowering layer. Ordinary compiler crates must use
+`default-features = false` so the optional `llvm-sys` dependency is not loaded
+into their processes. The dialect layer may own transient `llvm.*`
+construction, transformation, verification, and deterministic export; it may
+not own LLVM code generation, object emission, LLD linking, canonical identity,
+or evidence.
+
+fe2o3 owns the bounded canonical handoff into finalization and all stable stage
+receipts and evidence around that handoff. The isolated pinned upstream LLVM
+22.1.8 target machine and in-process LLD remain the sole machine-code and HSACO
+authority. The dialect-only closure and first canonical-handoff schema are
+implemented; the production lowering and worker adapters remain target work.
+See [pliron-llvm-gfx942-coverage.md](pliron-llvm-gfx942-coverage.md) for the
+pinned operation, attribute, metadata, exporter, and finalizer gap audit.
 
 ## Program Rules
 
@@ -393,9 +415,9 @@ earlier authority transition.
    static `fe2o3-host-lld`, descriptor-sealed `HostLinkClosureV1`, exact
    `execveat` launch, receiver-owned sealed output, and Landlock/seccomp boundary
    have passed the bounded evidence described above. Keep the GPU code-object
-   path separate: pinned upstream LLVM 22 and in-process `lld::lldMain`, with no
-   COMGR or shell GPU linker. W0 remains measured/no-authority and grants no
-   publication, runtime, load, launch, or GPU authority.
+   path separate: pinned upstream LLVM 22.1.8 and in-process `lld::lldMain`,
+   with no COMGR or shell GPU linker. W0 remains measured/no-authority and
+   grants no publication, runtime, load, launch, or GPU authority.
 2. **Next blocker W1/P0: Broker V4 executable identity and handoff.** Derive the
    `cargo-fe2o3` broker identity from the accepted command and host-link closure,
    bind the release request and completed host-link transcript, and consume the
@@ -843,8 +865,10 @@ G5 passes when:
 
 - Add AMDGPU bitcode/relocatable device linking through a pinned worker that
   calls LLVM and LLD library APIs directly, plus bidirectional device FFI.
-- Keep the LLVM worker out of rustc's process, use one exact LLVM build for
-  parse/link/optimize/codegen/native link, and do not use COMGR.
+- Keep the LLVM worker out of rustc's process, use pinned upstream LLVM 22.1.8
+  for parse/link/optimize/codegen/native link, and do not use COMGR. Selective
+  `pliron-llvm` remains a dialect-only producer of fe2o3 canonical handoff data
+  and evidence, never a machine-code authority.
 - Support standalone device exports and external libraries through reviewed ABI
   and effect contracts.
 - Add cooperative grid launch where HIP and hardware support it.

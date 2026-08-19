@@ -53,10 +53,13 @@ rustc frontend: parse, typecheck, MIR, monomorphization
      canonical MIR model -> Pliron mir.* -> target-neutral dialect ladder
         |
         v
-     gpu.* -> AMDGPU lowering -> LLVM IR for amdgcn-amd-amdhsa
+     gpu.* -> AMDGPU lowering -> dialect-only Pliron llvm.*
         |
         v
-     pinned upstream LLVM target-machine APIs -> relocatable ELF
+     fe2o3 canonical finalizer handoff and evidence
+        |
+        v
+     pinned upstream LLVM 22.1.8 target-machine APIs -> relocatable ELF
         |
         v
      in-process LLD library APIs -> HSACO
@@ -66,11 +69,12 @@ rustc frontend: parse, typecheck, MIR, monomorphization
 ```
 
 The production-directed device finalizer runs in the isolated LLVM worker and
-uses one pinned upstream LLVM build for parsing, linking, optimization, target-
-machine code generation, and native LLD linking. It does not use COMGR and does
-not shell out to `clang`, `llc`, or `ld.lld`. Early elementwise prototypes used
-ROCm command-line clang and `ld.lld`; references to that path below are
-historical compatibility notes, not the target architecture.
+uses pinned upstream LLVM 22.1.8 for parsing, linking, optimization, target-
+machine code generation, and native in-process LLD linking. It is the sole
+machine authority. It does not use COMGR and does not shell out to `clang`,
+`llc`, or `ld.lld`. Early elementwise prototypes used ROCm command-line clang
+and `ld.lld`; references to that path below are historical compatibility notes,
+not the target architecture.
 
 The 2026-08-18 ownership refactor implements the canonical model/API boundaries,
 the pinned Pliron D0 context, identity, registration, and pass-plan shell,
@@ -81,6 +85,9 @@ contracts, and inert host/service contracts. It does not yet connect the
 device path in the diagram.
 The working compiler remains the existing `rustc-codegen-fe2o3` composition,
 including the default legacy recognizer and bounded opt-in Kernel IR routes.
+The graph now contains an exact dialect-only `pliron-llvm` smoke dependency
+with `llvm-sys` disabled and the first Pliron-independent #144 canonical
+handoff schema. No production Pliron lowering reaches that handoff yet.
 Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open.
 
@@ -116,9 +123,18 @@ The current D0 closure is Pliron v0.17.0 commit
 `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. `fe2o3-pliron` provides a real
 context, private identity anchor, explicit bounded registration, and bounded
 pass-plan validation. It deliberately withholds generic pass execution because
-upstream pointers are contextless and excludes `pliron-llvm`; no landed Pliron
-crate compiles a production kernel or replaces the direct upstream LLVM and
-in-process LLD finalizer.
+upstream pointers are contextless. The current graph admits `pliron-llvm` only
+through the dialect smoke closure; no landed Pliron crate compiles a production
+kernel or replaces the direct upstream LLVM and in-process LLD finalizer.
+
+The target path is a selective `pliron-llvm` integration for the `llvm.*`
+dialect and its lowering only. Ordinary compiler crates must use
+`default-features = false`, keeping optional `llvm-sys` bindings out of their
+processes. fe2o3, not Pliron objects or printer output, owns the canonical
+finalizer handoff, stable identities, receipts, and evidence. The isolated
+pinned upstream LLVM 22.1.8 target machine and in-process LLD remain the sole
+machine authority. The dependency guard and first canonical-handoff schema are
+implemented; typed lowering and worker consumption are not.
 
 ## Crate Responsibilities
 
@@ -326,6 +342,10 @@ Remaining generalization:
   template.
 - Export AMDGPU LLVM IR for kernels beyond the current elementwise expression
   template.
+- Lower through the selective `pliron-llvm` dialect with
+  `default-features = false`, then export
+  one bounded fe2o3 canonical handoff and evidence record to the isolated LLVM
+  22.1.8 worker.
 - Preserve more source-level debug metadata beyond kernel argument names.
 
 Acceptance:
@@ -343,8 +363,10 @@ artifacts; superseded by the production-directed direct LLVM/LLD worker.
 - The historical `legacy-v1` sidecar path compiled generated LLVM IR with ROCm
   command-line clang and linked with command-line `ld.lld -shared`.
 - The current production-directed path parses and links modules, optimizes,
-  emits the relocatable object with pinned upstream LLVM target-machine APIs,
-  and links HSACO through in-process LLD library APIs in the isolated worker.
+  emits the relocatable object with pinned upstream LLVM 22.1.8 target-machine
+  APIs, and links HSACO through in-process LLD library APIs in the isolated
+  worker. This worker remains the sole machine authority even after the
+  dialect-only `pliron-llvm` integration.
 - The current path uses neither COMGR nor shell compiler/linker invocations.
 - The artifact is written under `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
   `target/fe2o3`.

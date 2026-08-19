@@ -28,10 +28,12 @@ authority.
 The Wave 0 dependency baseline is the single Pliron workspace release
 `v0.17.0`, commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. Every
 implementation dependency on `pliron` or `pliron-derive` MUST resolve to that
-same source revision through one centralized workspace configuration.
-`pliron-llvm` is outside this architecture; LLVM emission and linking use
-pinned upstream LLVM and in-process LLD APIs directly. A dependency may land
-only after the D0 license, advisory,
+same source revision through one centralized workspace configuration. The
+workspace now pins `pliron-llvm` at that revision with
+`default-features = false`; a dedicated smoke crate proves that ordinary
+compiler crates do not enable `llvm-sys`. Production use remains confined to
+the future LLVM dialect/lowering layer. Any such dependency may land only after
+the D0 license, advisory,
 build-closure, duplicate-package, and LLVM-integration review. Updating the
 revision is an architecture migration with golden identity and pipeline tests,
 not a routine semver update.
@@ -44,7 +46,7 @@ The permanent decisions are:
 3. The default device path is the verified Pliron ladder defined below. There
    is no second production lowering route from Rust to LLVM.
 4. fe2o3-owned canonical records, not Pliron objects or text, define durable
-   identities and cache keys.
+   identities, cache keys, finalizer handoff, and evidence.
 5. Proof is a non-executable, separately serialized overlay. Proof evidence
    grants authority only for its exact property statement and covered boundary.
 6. Unknown, unsupported, unauthenticated, unmodeled, or over-budget input fails
@@ -91,8 +93,8 @@ The following infrastructure is implemented:
   `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. It does not expose generic pass
   execution because upstream `Ptr<T>` values carry no owner provenance.
   The workspace policy rejects another Pliron revision, duplicate Pliron
-  package identities, unexpected packages from that source, and
-  `pliron-llvm`, which remains outside the D0 dependency closure.
+  package identities, unexpected packages from that source, `llvm-sys`, and
+  COMGR. The exact dialect-only `pliron-llvm` package is now required.
 - Seven target-neutral Pliron shells implement bounded `kernel.*`,
   `schedule.*`, `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`
   types, attributes, operations, interfaces, registration, and verification.
@@ -129,10 +131,10 @@ execute a host operation, or create a persistent GPU scheduler. Their validated
 records describe representation and attempted transformations only.
 
 The existing production-directed GPU finalizer remains separate: an isolated
-worker uses pinned upstream LLVM target-machine APIs for object emission and
-in-process LLD library APIs for HSACO. COMGR is not used. Shell-mediated GPU
-compilation/linking is historical compatibility behavior, not the target
-architecture.
+worker uses pinned upstream LLVM 22.1.8 target-machine APIs for object emission
+and in-process LLD library APIs for HSACO. It is the sole machine authority.
+COMGR is not used. Shell-mediated GPU compilation/linking is historical
+compatibility behavior, not the target architecture.
 
 ## Rust-First Source Contract
 
@@ -245,10 +247,11 @@ gpu.*        executable target-neutral SIMT CFG, memory, barriers, and epochs
 amdgcn.*     selected AMD semantics and target legalization
   |
   v
-llvm.*       future Pliron/LLVM representation
+llvm.*       future selective pliron-llvm dialect representation
   |
   v
-deterministic export -> pinned LLVM target machine -> object -> LLD -> HSACO
+fe2o3 canonical handoff/evidence -> pinned LLVM 22.1.8 target machine
+                                 -> object -> in-process LLD -> HSACO
 
 dispatch.*   optional admitted graph around exact kernel variants
 autotune.*   inert selection among already admitted variants
@@ -262,10 +265,15 @@ without premature scalarization. `gpu.*` is the target-neutral executable
 boundary and has a lossless, versioned bridge to `fe2o3-kernel-ir`.
 AMD-specific operations first appear in `amdgcn.*`.
 
-The D0 dependency closure deliberately excludes `pliron-llvm`. Adding an LLVM
-dialect adapter is a later reviewed integration; native object emission and
-HSACO linking continue to use the isolated pinned-upstream-LLVM worker and
-in-process LLD boundary described above.
+The D0 dependency closure contains a reviewed, dialect-only `pliron-llvm`
+dependency with `default-features = false` in ordinary compiler crates, keeping
+the optional `llvm-sys` feature out of those processes. That
+layer may build, transform, verify, and deterministically export transient
+`llvm.*` operations; it does not own stable identity, evidence, LLVM code
+generation, object emission, or linking. fe2o3 canonical records and receipts
+own the handoff to the isolated worker. Pinned upstream LLVM 22.1.8 and
+in-process LLD remain the sole machine authority. The closure guard and first
+canonical-handoff schema are landed; production lowering is not.
 
 Every operation family defines its typed operands and results, effects,
 capabilities, canonical identity payload, verifier, lowering contract, source
@@ -675,16 +683,17 @@ Input: verified D5 `gpu.*`, exact `ScheduleId`, property policy and any proof
 results that policy requires, versioned target feature/primitive tables,
 resource policy, and pinned LLVM/LLD closure.
 
-Output: `TargetPlanId`, verified `amdgcn.*` and `llvm.*`, deterministic LLVM
-export, object, inspected HSACO, stable origin map, resource/ISA reconciliation,
-and `ExecutableId`.
+Output: `TargetPlanId`, verified `amdgcn.*` and dialect-only `llvm.*`, a
+fe2o3-owned canonical finalizer handoff and evidence record, object, inspected
+HSACO, stable origin map, resource/ISA reconciliation, and `ExecutableId`.
 
 Gate: unsupported instruction/type/wave/async/numerical combinations reject;
 the intended transfer, wait, barrier, and matrix sequence is present; estimates
 and observed resources disagree loudly; unexpected scratch, spills, stack,
 calls, symbols, or control flow block qualification; finalization uses the
-existing pinned LLVM target-machine and in-process LLD authority with no COMGR
-or shell compiler fallback; `machine_refined` ends at the exact validated
+existing isolated pinned upstream LLVM 22.1.8 target-machine and in-process LLD
+as the sole machine authority, with no `pliron-llvm` code generation, COMGR, or
+shell compiler fallback; `machine_refined` ends at the exact validated
 boundary.
 
 ### D8: Autotuning and variant dispatch
@@ -763,6 +772,7 @@ stable intent labels; owning crates may choose local Rust test function names.
 |---|---|
 | `W0-DEP-001-single-revision` | The resolved graph contains exactly one source revision and one crate identity for each Pliron workspace package; a mixed revision fails CI. |
 | `W0-DEP-002-closure-review` | License, advisory, feature, transitive dependency, proc-macro, and LLVM linkage reports are complete and identity-bound. |
+| `W0-DEP-003-selective-llvm` | Any target graph containing `pliron-llvm` confines it to reviewed dialect/lowering crates at the pinned revision, uses `default-features = false`, and contains no `llvm-sys` in ordinary compiler crates. |
 | `W0-SRC-001-one-body` | Macro expansion contains one executable algorithm body; generated entry, descriptor, and proof harness contain only permitted delegation/support code. |
 | `W0-SRC-002-cross-crate-mono` | One generic library kernel and helper graph produce one stable `KernelItemId` and distinct deterministic `KernelInstId` values for concrete type/const configurations in a final crate. |
 | `W0-SRC-003-authentication` | Forged attributes, symbols, paths, marker traits, device operations, helper metadata, and proof-only markers reject with stable source diagnostics. |

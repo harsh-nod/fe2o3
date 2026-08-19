@@ -53,6 +53,10 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   service-host typestate adapter.
   These are representation and composition foundations. They are not connected
   production compilation or persistent-service execution.
+- The dependency graph now pins dialect-only `pliron-llvm` with `llvm-sys`
+  disabled and tests that closure independently. The first #144 slice provides
+  a Pliron-independent canonical LLVM handoff, but no production Pliron route
+  reaches it yet.
 
 This is not general Rust GPU compilation or cuda-oxide parity. The exact
 implemented and missing surfaces are maintained in the
@@ -302,9 +306,21 @@ carry owner provenance; [#140](https://github.com/harsh-nod/fe2o3/issues/140)
 tracks that prerequisite. Seven target-neutral operation-family shells and the feature-gated
 `dialect-mir` shell construct and verify in-memory Pliron values. They do not
 yet import general rustc MIR, run the target pipeline above, lower to AMDGPU,
-or emit an executable. `pliron-llvm` is deliberately outside the architecture;
-AMDGPU emission and HSACO linking use pinned upstream LLVM and in-process LLD
-library APIs directly.
+or emit an executable. The current workspace includes `pliron-llvm` only in a
+dialect smoke crate with its default features disabled.
+
+The target architecture is selective rather than a blanket exclusion. Only
+the Pliron LLVM dialect/lowering layer may use `pliron-llvm`, and
+ordinary compiler crates MUST use `default-features = false` so its optional
+`llvm-sys` integration is not linked into those processes. `pliron-llvm` owns
+only transient `llvm.*` representation and dialect verification. fe2o3 owns
+the bounded canonical handoff, stable identities, stage receipts, and evidence
+that cross into finalization; Pliron handles, printer output, and upstream
+diagnostics are not canonical handoff data or authority. The dependency guard
+and first canonical-handoff schema are implemented; typed AMDGCN-to-LLVM
+lowering and worker consumption remain pending.
+The pinned surface and missing gfx942 semantics are audited in
+[pliron-llvm-gfx942-coverage.md](pliron-llvm-gfx942-coverage.md).
 
 ## Capabilities, Not CUDA Vocabulary
 
@@ -484,7 +500,7 @@ libraries:
 
 The historical compatibility path used ROCm command-line clang and `ld.lld`.
 The production-directed link path uses an out-of-process, pinned fe2o3 worker
-that calls LLVM module-linking,
+with upstream LLVM 22.1.8 that calls LLVM module-linking,
 optimization, target-machine, and LLD library APIs directly. The worker keeps
 ROCm LLVM out of rustc's process, where rustc's independently built LLVM is
 already loaded. Requests are bounded canonical records with exact input,
@@ -496,7 +512,13 @@ as an inspection format but is not the semantic IR boundary.
 The existing lowering implementation is owned by `fe2o3-amdgcn-model` and
 re-exported by the historical `dialect-amdgcn` facade. A future
 `amdgcn.*` Pliron dialect and its `gpu.*` lowering must preserve this finalizer
-boundary; it must not introduce COMGR or shell-mediated GPU linking.
+boundary. A future production lowering may use the selective `pliron-llvm`
+dependency to construct and verify transient `llvm.*`, but it must hand
+fe2o3-owned canonical input and evidence to the worker. The isolated pinned
+upstream LLVM 22.1.8 target machine
+and its in-process LLD remain the sole machine-code and HSACO authority; the
+dialect layer must not invoke LLVM code generation, COMGR, or shell-mediated
+GPU linking.
 
 ## Remaining Migration from Bootstrap Paths
 
