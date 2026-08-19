@@ -1,0 +1,16 @@
+error[E0382]: use of moved value: `published`
+  --> tests/ui/fail/semantic_expired_lds_epoch.rs:14:20
+   |
+ 8 |     let published = staged.publish();
+   |         --------- move occurs because `published` has type `Gfx942TiledGemmWave64V1<GemmPublished>`, which does not implement the `Copy` trait
+ 9 |     let consumed = published.multiply_accumulate();
+   |                              --------------------- `published` moved due to this method call
+...
+14 |     let _expired = published.multiply_accumulate();
+   |                    ^^^^^^^^^ value used here after move
+   |
+note: `Gfx942TiledGemmWave64V1::<GemmPublished>::multiply_accumulate` takes ownership of the receiver `self`, which moves `published`
+  --> device-api/src/lib.rs
+   |
+   |     pub fn multiply_accumulate(self) -> Gfx942TiledGemmWave64V1<GemmConsumed> {
+   |                                ^^^^

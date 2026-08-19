@@ -18,6 +18,25 @@ use fe2o3_compiler_api::{
     DiagnosticCodeV1, DiagnosticMessageV1, DiagnosticSeverityV1, PipelineSelectorV1,
 };
 
+mod gemm_proof_required;
+mod gemm_semantic_check;
+
+pub use gemm_proof_required::{
+    AdmittedGemmCompilerBackendV1, GEMM_REQUIRED_SAFETY_PROPERTIES_V1,
+    GemmExpectedUnsafeObligationV1, GemmObligationFindingErrorV1, GemmObligationFindingV1,
+    GemmObligationOriginV1, GemmObligationOutcomeV1, GemmProofDiagnosticV1,
+    GemmProofEvaluationFailureV1, GemmProofRejectionKindV1, GemmProofReportErrorV1,
+    GemmProofReportProviderV1, GemmProofReportV1, GemmProofRequirementsErrorV1,
+    GemmProofRequirementsV1, GemmSafetyPropertyV1, MAX_GEMM_OBLIGATION_FINDINGS_V1,
+    MAX_GEMM_UNSAFE_OBLIGATIONS_V1, ProofRequiredGemmAdmissionV1, ProofRequiredGemmBackendV1,
+    admit_proof_required_gemm_v1,
+};
+pub use gemm_semantic_check::{
+    GemmSemanticAnalysisErrorV1, GemmSemanticCheckingBackendV1, GemmSemanticCounterexampleV1,
+    GemmSemanticProgramBindingErrorV1, GemmSemanticProgramV1, analyze_gemm_semantics_v1,
+    general_gemm_semantic_obligation_set_identity_v1,
+};
+
 /// Bounded reason that a selected backend could not complete a transaction.
 ///
 /// Source-program rejection should normally be represented by a validated

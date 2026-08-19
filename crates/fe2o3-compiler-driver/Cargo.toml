@@ -10,6 +10,8 @@ publish = false
 
 [dependencies]
 fe2o3-compiler-api.workspace = true
+fe2o3-kernel-ir.workspace = true
+sha2.workspace = true
 
 [lib]
 name = "fe2o3_compiler_driver"

@@ -21,6 +21,7 @@
         "fe2o3-kfd-uapi",
         "fe2o3-kernel-descriptor",
         "fe2o3-kernel-ir",
+        "fe2o3-llvm-handoff",
         "fe2o3-mir-model",
         "fe2o3-process-identity",
         "fe2o3-proof-contracts",
@@ -63,6 +64,8 @@
         "dialect-amdgcn",
         "fe2o3-amdgcn-model",
         "fe2o3-hsaco-finalize",
+        "fe2o3-llvm-text",
+        "fe2o3-llvm-worker-handoff",
         "fe2o3-lower-gpu-amdgcn"
       ]
     },
@@ -90,10 +93,13 @@
       "name": "integration",
       "packages": [
         "cargo-fe2o3",
+        "fe2o3-amdgcn-pliron-llvm",
         "fe2o3-compiler-driver",
         "fe2o3-differential",
         "fe2o3-legacy-compiler",
+        "fe2o3-llvm-route-conformance",
         "fe2o3-pliron-conformance",
+        "fe2o3-pliron-llvm-smoke",
         "rustc-codegen-fe2o3"
       ]
     },

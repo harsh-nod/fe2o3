@@ -245,6 +245,43 @@ refinement [#106](https://github.com/harsh-nod/fe2o3/issues/106) and
 [#107](https://github.com/harsh-nod/fe2o3/issues/107), and the remaining Slice
 2-4 issue graph stay open.
 
+## General planning and semantic corpus
+
+`src/general_plan.rs` adds the inert checked plan for the conservative general
+profile coordinated by issue #138. It accepts dynamic `M/N/K`, independent
+row-major `lda/ldb/ldc`, M/N/K tails, runtime `alpha/beta` bits, and explicit
+device/allocation ceilings. It derives `ceil(N/16) x ceil(M/16)` output tiles,
+`ceil(K/16)` phases, WG64 AQL geometry, exact accessed storage extents, and the
+1,024-byte single-buffered XOR4 LDS requirement. Empty output is no-dispatch
+with no storage or device-resource requirement. Nonempty `K=0` dispatches the
+epilogue so `beta*C` is preserved.
+
+Every plan is privately constructed and has a domain-separated SHA-256 over
+the target, problem, coefficient bits, storage extents, grid, phase count,
+wave/tile shape, LDS bytes, numerical semantics, and reference schedule. It is
+not a compiler descriptor, artifact, proof, or launch authority.
+
+`src/general_reference.rs` executes the same schedule as a CPU model: guarded
+BF16 loads, positive-zero tail fill, XOR4 A and transposed-B staging,
+publication/reuse barriers in the event trace, accumulator carry, predicated C
+stores, and the recorded alpha/beta epilogue. Exhaustive small-shape tests and
+representative padded/tail shapes compare its output bits with the shared
+profile-neutral scalar numerical contract.
+
+The standalone package under
+`tests/fixtures/general_tiled_gemm_corpus` typechecks one positive and fifteen
+negative ordinary safe-Rust `#[kernel]` sources with `#![forbid(unsafe_code)]`.
+`src/semantic_corpus.rs` binds every negative fixture to the production
+property spellings, numeric diagnostics `0x4647_0101..0x4647_010c`, and the
+matching `Kernel`, `Tile`, `Gpu`, or `Amdgcn` compiler stage.
+
+These are compiler-integration expectations, not semantic verification. The
+current Pliron path does not yet derive the expected failures from authenticated
+MIR, attach source spans/call chains, or prove transactional removal of stale
+descriptor/object/HSACO outputs. The general source model also does not lower
+or execute on MI300X. Those gates remain fail closed until the #134 compiler
+pipeline consumes this plan and corpus.
+
 ## Observed direct-global tile
 
 The repository also contains an ignored, opt-in HSA harness for an externally
@@ -271,5 +308,8 @@ cargo test --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml
 cargo test --release --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml
 cargo clippy --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml \
   --all-targets --all-features -- -D warnings
+cargo clippy --locked \
+  --manifest-path examples/tiled_gemm_v1/tests/fixtures/general_tiled_gemm_corpus/Cargo.toml \
+  --all-targets -- -D warnings
 VERUS=/absolute/path/to/pinned/verus examples/tiled_gemm_v1/run-verus.sh
 ```

@@ -1788,6 +1788,16 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         ),
                     ));
                 }
+                Some(TrustedDeviceItem::GeneralGemm(_, _)) => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedCall,
+                        location,
+                        format!(
+                            "trusted device item `{}` requires authenticated general GEMM MIR import",
+                            callee.identity()
+                        ),
+                    ));
+                }
                 Some(TrustedDeviceItem::DeviceValue(_)) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,

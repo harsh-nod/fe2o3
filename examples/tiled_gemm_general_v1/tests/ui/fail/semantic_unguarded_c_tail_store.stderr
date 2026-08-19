@@ -1,0 +1,17 @@
+error[E0599]: no method named `store_c_at` found for struct `Gfx942TiledGemmWave64V1<State>` in the current scope
+ --> tests/ui/fail/semantic_unguarded_c_tail_store.rs:7:10
+  |
+7 |     wave.store_c_at(&mut c, usize::MAX, 1.0);
+  |          ^^^^^^^^^^
+  |
+help: there is a method `store_c_fragment` with a similar name, but with different arguments
+ --> device-api/src/lib.rs
+  |
+  | /     pub fn store_c_fragment(
+  | |         self,
+  | |         c: &mut DisjointSlice<f32>,
+  | |         m: u32,
+... |
+  | |         beta: f32,
+  | |     ) {
+  | |_____^

@@ -2721,9 +2721,10 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Err(self.reachable_error(
                 caller,
                 &format!(
-                    "trusted-provider rejection: diagnostic item `{}` is defined by `{}` but is not bound to the reviewed `fe2o3_device` compilation unit: {}",
+                    "trusted-provider rejection: diagnostic item `{}` is defined by `{}` but is not bound to the reviewed `{}` compilation unit: {}",
                     rejection.marker,
                     self.tcx.def_path_str(*def_id),
+                    rejection.expected_provider_crate,
                     rejection.reason,
                 ),
                 None,
@@ -2949,9 +2950,10 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Err(self.reachable_error(
                 caller,
                 &format!(
-                    "trusted-provider rejection: diagnostic item `{}` is defined by `{}` but is not bound to the reviewed `fe2o3_device` compilation unit: {}",
+                    "trusted-provider rejection: diagnostic item `{}` is defined by `{}` but is not bound to the reviewed `{}` compilation unit: {}",
                     rejection.marker,
                     self.tcx.def_path_str(resolved.def_id()),
+                    rejection.expected_provider_crate,
                     rejection.reason,
                 ),
                 None,

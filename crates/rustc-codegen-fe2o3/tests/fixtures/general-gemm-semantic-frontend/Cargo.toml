@@ -1,0 +1,31 @@
+[package]
+name = "fe2o3-general-gemm-semantic-frontend-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+fe2o3-device = { path = "../../../../../crates/fe2o3-device" }
+fe2o3-gemm-device-v1 = { path = "../../../../../examples/tiled_gemm_general_v1/device-api" }
+
+[[bin]]
+name = "missing-publish"
+path = "src/bin/missing_publish.rs"
+
+[[bin]]
+name = "duplicate-store"
+path = "src/bin/duplicate_store.rs"
+
+[[bin]]
+name = "conditional-publish"
+path = "src/bin/conditional_publish.rs"
+
+[[bin]]
+name = "reversed-cycle"
+path = "src/bin/reversed_cycle.rs"
+
+[[bin]]
+name = "store-loop"
+path = "src/bin/store_loop.rs"
