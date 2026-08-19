@@ -44,7 +44,7 @@ pub fn valid_proof_sensitive(
             let row = group_y * 16 + lane_row;
             let column = group_x * 16 + lane_column;
             let depth = phase * 16 + depth_base + component;
-            let a_value = if row < m && depth < k {
+            let a_value = if depth < k {
                 context.load_a(a, row, depth, m, k, lda)
             } else {
                 0
@@ -64,6 +64,7 @@ pub fn valid_proof_sensitive(
 
         context.stage([0; 4], [0; 4]);
         context.wait_stage(phase);
+        context.publish();
         let swizzled0 = depth_base ^ (4 * (lane_row % 4));
         let lhs0 = context.read_stage(16 * lane_row + swizzled0, phase);
         let rhs0 = context.read_stage(256 + 16 * lane_column + swizzled0, phase);

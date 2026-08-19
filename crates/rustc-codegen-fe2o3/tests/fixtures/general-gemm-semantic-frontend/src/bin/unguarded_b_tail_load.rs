@@ -49,7 +49,7 @@ pub fn valid_proof_sensitive(
             } else {
                 0
             };
-            let b_value = if depth < k && column < n {
+            let b_value = if column < n {
                 context.load_b(b, depth, column, k, n, ldb)
             } else {
                 0
@@ -64,6 +64,7 @@ pub fn valid_proof_sensitive(
 
         context.stage([0; 4], [0; 4]);
         context.wait_stage(phase);
+        context.publish();
         let swizzled0 = depth_base ^ (4 * (lane_row % 4));
         let lhs0 = context.read_stage(16 * lane_row + swizzled0, phase);
         let rhs0 = context.read_stage(256 + 16 * lane_column + swizzled0, phase);

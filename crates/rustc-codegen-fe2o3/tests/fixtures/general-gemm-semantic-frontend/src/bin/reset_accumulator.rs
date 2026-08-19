@@ -64,10 +64,11 @@ pub fn valid_proof_sensitive(
 
         context.stage([0; 4], [0; 4]);
         context.wait_stage(phase);
+        context.publish();
         let swizzled0 = depth_base ^ (4 * (lane_row % 4));
         let lhs0 = context.read_stage(16 * lane_row + swizzled0, phase);
         let rhs0 = context.read_stage(256 + 16 * lane_column + swizzled0, phase);
-        accumulator0 = context.multiply_accumulate_value(lhs0, rhs0, accumulator0);
+        accumulator0 = context.multiply_accumulate_value(lhs0, rhs0, 0.0);
         let swizzled1 = (depth_base + 1) ^ (4 * (lane_row % 4));
         let lhs1 = context.read_stage(16 * lane_row + swizzled1, phase);
         let rhs1 = context.read_stage(256 + 16 * lane_column + swizzled1, phase);

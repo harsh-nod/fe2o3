@@ -57,13 +57,14 @@ pub fn valid_proof_sensitive(
             let tile_depth = depth_base + component;
             let a_slot = 16 * lane_row + (tile_depth ^ (4 * (lane_row % 4)));
             let b_slot = 256 + 16 * lane_column + (tile_depth ^ (4 * (lane_column % 4)));
-            context.stage_value(a_slot, phase, depth, k, a_value);
+            context.stage_value(lane_row, phase, depth, k, a_value);
             context.stage_value(b_slot, phase, depth, k, b_value);
             component += 1;
         }
 
         context.stage([0; 4], [0; 4]);
         context.wait_stage(phase);
+        context.publish();
         let swizzled0 = depth_base ^ (4 * (lane_row % 4));
         let lhs0 = context.read_stage(16 * lane_row + swizzled0, phase);
         let rhs0 = context.read_stage(256 + 16 * lane_column + swizzled0, phase);

@@ -15,12 +15,64 @@ name = "valid-proof-sensitive"
 path = "src/bin/valid_proof_sensitive.rs"
 
 [[bin]]
-name = "incorrect-alpha-beta-epilogue"
-path = "src/bin/incorrect_alpha_beta_epilogue.rs"
+name = "unguarded-a-tail-load"
+path = "src/bin/unguarded_a_tail_load.rs"
+
+[[bin]]
+name = "unguarded-b-tail-load"
+path = "src/bin/unguarded_b_tail_load.rs"
+
+[[bin]]
+name = "out-of-bounds-c-store"
+path = "src/bin/out_of_bounds_c_store.rs"
+
+[[bin]]
+name = "lane-output-collision"
+path = "src/bin/lane_output_collision.rs"
+
+[[bin]]
+name = "workgroup-output-collision"
+path = "src/bin/workgroup_output_collision.rs"
+
+[[bin]]
+name = "lds-write-collision"
+path = "src/bin/lds_write_collision.rs"
+
+[[bin]]
+name = "missing-b-stage-initialization"
+path = "src/bin/missing_b_stage_initialization.rs"
 
 [[bin]]
 name = "missing-publish"
 path = "src/bin/missing_publish.rs"
+
+[[bin]]
+name = "divergent-publish"
+path = "src/bin/divergent_publish.rs"
+
+[[bin]]
+name = "missing-reuse"
+path = "src/bin/missing_reuse.rs"
+
+[[bin]]
+name = "expired-lds-epoch"
+path = "src/bin/expired_lds_epoch.rs"
+
+[[bin]]
+name = "read-before-wait"
+path = "src/bin/read_before_wait.rs"
+
+[[bin]]
+name = "reset-accumulator"
+path = "src/bin/reset_accumulator.rs"
+
+[[bin]]
+name = "incorrect-k-tail-zero-fill"
+path = "src/bin/incorrect_k_tail_zero_fill.rs"
+
+[[bin]]
+name = "incorrect-alpha-beta-epilogue"
+path = "src/bin/incorrect_alpha_beta_epilogue.rs"
 
 [[bin]]
 name = "duplicate-store"
