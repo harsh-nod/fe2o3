@@ -446,195 +446,208 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         .as_ref()
         .map(ManagedAttemptRevocationGuard::arm);
 
-    let execution_directory = match &rustc_working_directory {
-        Some(directory) => directory.clone(),
-        None => std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?,
-    };
-    let compile_environment_profile = managed_attempt
-        .as_ref()
-        .and_then(ManagedAttempt::compile_environment_profile);
-    let pinned_execution_directory = PinnedWorkingDirectoryV3::open(&execution_directory)
-        .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?;
-    let mut command = pinned_rustc.command()?;
-    configure_managed_rustc_loader(command.as_command_mut());
-    append_prepared_rustc_arguments(
-        command.as_command_mut(),
-        invocation.forwarded_args(),
-        &managed_rustc_args,
-    )?;
-    pinned_execution_directory.configure_child_fchdir(command.as_command_mut());
-    if let Some(capabilities) = &compiler_capabilities {
-        capabilities.prepare_command(command.as_command_mut())?;
-    }
-    configure_build_observation_environment(command.as_command_mut(), build_observation);
-    if let Some(managed) = &managed_attempt {
-        command
-            .as_command_mut()
-            .env(BUILD_ATTEMPT_ENV, managed.attempt.to_env_value());
-    } else {
-        command.as_command_mut().env_remove(BUILD_ATTEMPT_ENV);
-    }
-    match managed_attempt
-        .as_ref()
-        .and_then(ManagedAttempt::source_debug_profile)
-    {
-        Some(profile) => {
-            command
-                .as_command_mut()
-                .env(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, profile.env_value());
-        }
-        None => {
-            command
-                .as_command_mut()
-                .env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
-        }
-    }
-    let mut worker_build_observation = match managed_attempt.as_ref() {
-        Some(managed) if managed.source_debug_profile().is_some() => {
-            let pinned_cargo_image_sha256 = compiler_capabilities
-                .as_ref()
-                .and_then(CompilerCapabilities::pinned_cargo_image_sha256)
-                .ok_or_else(|| {
-                    BindingWrapperError::BuildObservation(
-                        "S09 build has no brokered pinned Cargo image observation".to_owned(),
-                    )
-                })?;
-            managed.worker_build_observation(pinned_cargo_image_sha256)?
-        }
-        Some(_) | None => None,
-    };
-    if compile_environment_profile.is_some() {
-        let managed = managed_attempt.as_ref().ok_or_else(|| {
-            BindingWrapperError::BuildObservation(
-                "reviewed compile environment has no managed build attempt".to_owned(),
-            )
-        })?;
-        let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
-            BindingWrapperError::BuildObservation(
-                "reviewed compile environment has no compiler capabilities".to_owned(),
-            )
-        })?;
-        let private_tmpdir = capabilities.create_reviewed_private_tmpdir(managed.attempt)?;
-        command
-            .as_command_mut()
-            .env("LANG", "C.UTF-8")
-            .env("PATH", "/usr/bin")
-            .env("TMPDIR", private_tmpdir);
-    }
-    configure_worker_build_observation_environment(
-        command.as_command_mut(),
-        worker_build_observation,
-    );
-    let complete_reviewed_environment = materialize_reviewed_child_environment(
-        compile_environment_profile,
-        command.as_command_mut(),
-        std::env::vars_os(),
-        managed_attempt
+    let pre_spawn_result = (|| -> Result<_, BindingWrapperError> {
+        let execution_directory = match &rustc_working_directory {
+            Some(directory) => directory.clone(),
+            None => std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?,
+        };
+        let compile_environment_profile = managed_attempt
             .as_ref()
-            .and_then(ManagedAttempt::general_gemm_child_pins),
-    )?;
-    let inert_rustc_invocation = complete_reviewed_environment
-        .as_ref()
-        .map(|environment| {
+            .and_then(ManagedAttempt::compile_environment_profile);
+        let pinned_execution_directory = PinnedWorkingDirectoryV3::open(&execution_directory)
+            .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?;
+        let mut command = pinned_rustc.command()?;
+        configure_managed_rustc_loader(command.as_command_mut());
+        append_prepared_rustc_arguments(
+            command.as_command_mut(),
+            invocation.forwarded_args(),
+            &managed_rustc_args,
+        )?;
+        pinned_execution_directory.configure_child_fchdir(command.as_command_mut());
+        if let Some(capabilities) = &compiler_capabilities {
+            capabilities.prepare_command(command.as_command_mut())?;
+        }
+        configure_build_observation_environment(command.as_command_mut(), build_observation);
+        if let Some(managed) = &managed_attempt {
+            command
+                .as_command_mut()
+                .env(BUILD_ATTEMPT_ENV, managed.attempt.to_env_value());
+        } else {
+            command.as_command_mut().env_remove(BUILD_ATTEMPT_ENV);
+        }
+        match managed_attempt
+            .as_ref()
+            .and_then(ManagedAttempt::source_debug_profile)
+        {
+            Some(profile) => {
+                command
+                    .as_command_mut()
+                    .env(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, profile.env_value());
+            }
+            None => {
+                command
+                    .as_command_mut()
+                    .env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
+            }
+        }
+        let mut worker_build_observation = match managed_attempt.as_ref() {
+            Some(managed) if managed.source_debug_profile().is_some() => {
+                let pinned_cargo_image_sha256 = compiler_capabilities
+                    .as_ref()
+                    .and_then(CompilerCapabilities::pinned_cargo_image_sha256)
+                    .ok_or_else(|| {
+                        BindingWrapperError::BuildObservation(
+                            "S09 build has no brokered pinned Cargo image observation".to_owned(),
+                        )
+                    })?;
+                managed.worker_build_observation(pinned_cargo_image_sha256)?
+            }
+            Some(_) | None => None,
+        };
+        if compile_environment_profile.is_some() {
+            let managed = managed_attempt.as_ref().ok_or_else(|| {
+                BindingWrapperError::BuildObservation(
+                    "reviewed compile environment has no managed build attempt".to_owned(),
+                )
+            })?;
             let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
                 BindingWrapperError::BuildObservation(
-                    "reviewed invocation capture has no compiler capabilities".to_owned(),
+                    "reviewed compile environment has no compiler capabilities".to_owned(),
                 )
             })?;
-            let capture = InertRustcInvocationCaptureV2::capture(
+            let private_tmpdir = capabilities.create_reviewed_private_tmpdir(managed.attempt)?;
+            command
+                .as_command_mut()
+                .env("LANG", "C.UTF-8")
+                .env("PATH", "/usr/bin")
+                .env("TMPDIR", private_tmpdir);
+        }
+        configure_worker_build_observation_environment(
+            command.as_command_mut(),
+            worker_build_observation,
+        );
+        let complete_reviewed_environment = materialize_reviewed_child_environment(
+            compile_environment_profile,
+            command.as_command_mut(),
+            std::env::vars_os(),
+            managed_attempt
+                .as_ref()
+                .and_then(ManagedAttempt::general_gemm_child_pins),
+        )?;
+        let inert_rustc_invocation = complete_reviewed_environment
+            .as_ref()
+            .map(|environment| {
+                let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
+                    BindingWrapperError::BuildObservation(
+                        "reviewed invocation capture has no compiler capabilities".to_owned(),
+                    )
+                })?;
+                let capture = InertRustcInvocationCaptureV2::capture(
+                    command.as_command(),
+                    command.configured_argv0(),
+                    &execution_directory,
+                    &environment.entries,
+                    *pinned_rustc.sha256(),
+                    capabilities.backend_sha256(),
+                )
+                .map_err(|error| {
+                    BindingWrapperError::BuildObservation(format!(
+                        "cannot capture inert prepared rustc invocation: {error}"
+                    ))
+                })?;
+                debug_assert_eq!(capture.descriptor().amd_target(), "gfx942:xnack-");
+                Ok::<_, BindingWrapperError>((capture.digest(), capture))
+            })
+            .transpose()?;
+        if let Some((digest, _)) = inert_rustc_invocation.as_ref()
+            && std::env::var_os("FE2O3_VERBOSE").as_deref() == Some(OsStr::new("1"))
+        {
+            eprintln!(
+                "[cargo-fe2o3] inert prepared RustcInvocationDescriptorV2 observation sha256={digest}; no execution or authority claim"
+            );
+        }
+        let protected_source_tree_sha256 = if worker_build_observation.is_some() {
+            let source = managed_attempt
+                .as_ref()
+                .and_then(ManagedAttempt::protected_source_path)
+                .ok_or_else(|| {
+                    BindingWrapperError::BuildObservation(
+                        "S09 process consistency has no protected source path".to_owned(),
+                    )
+                })?;
+            Some(
+                pinned_execution_directory
+                    .measure_protected_source_tree(source)
+                    .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?
+                    .identity_sha256(),
+            )
+        } else {
+            None
+        };
+        let mut prepared_consistency_expectation = if worker_build_observation.is_some() {
+            Some(PreparedRustcConsistencyExpectation::attach(
+                command.as_command_mut(),
+            )?)
+        } else {
+            None
+        };
+        if let Some(observation) = worker_build_observation.as_mut() {
+            observation.prepared_rustc_command_sha256 = prepared_rustc_command_sha256(
                 command.as_command(),
                 command.configured_argv0(),
-                &execution_directory,
-                &environment.entries,
+                pinned_rustc.object_identity(),
                 *pinned_rustc.sha256(),
-                capabilities.backend_sha256(),
-            )
-            .map_err(|error| {
-                BindingWrapperError::BuildObservation(format!(
-                    "cannot capture inert prepared rustc invocation: {error}"
-                ))
-            })?;
-            debug_assert_eq!(capture.descriptor().amd_target(), "gfx942:xnack-");
-            Ok::<_, BindingWrapperError>((capture.digest(), capture))
-        })
-        .transpose()?;
-    if let Some((digest, _)) = inert_rustc_invocation.as_ref()
-        && std::env::var_os("FE2O3_VERBOSE").as_deref() == Some(OsStr::new("1"))
-    {
-        eprintln!(
-            "[cargo-fe2o3] inert prepared RustcInvocationDescriptorV2 observation sha256={digest}; no execution or authority claim"
-        );
-    }
-    let protected_source_tree_sha256 = if worker_build_observation.is_some() {
-        let source = managed_attempt
-            .as_ref()
-            .and_then(ManagedAttempt::protected_source_path)
-            .ok_or_else(|| {
-                BindingWrapperError::BuildObservation(
-                    "S09 process consistency has no protected source path".to_owned(),
-                )
-            })?;
-        Some(
-            pinned_execution_directory
-                .measure_protected_source_tree(source)
-                .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?
-                .identity_sha256(),
-        )
-    } else {
-        None
-    };
-    let mut prepared_consistency_expectation = if worker_build_observation.is_some() {
-        Some(PreparedRustcConsistencyExpectation::attach(
-            command.as_command_mut(),
-        )?)
-    } else {
-        None
-    };
-    if let Some(observation) = worker_build_observation.as_mut() {
-        observation.prepared_rustc_command_sha256 = prepared_rustc_command_sha256(
-            command.as_command(),
-            command.configured_argv0(),
-            pinned_rustc.object_identity(),
-            *pinned_rustc.sha256(),
-            pinned_execution_directory.object_identity(),
-            protected_source_tree_sha256.expect("S09 protected source-tree observation exists"),
-            complete_reviewed_environment
-                .as_ref()
-                .expect("S09 complete child environment exists"),
-        )?;
-        prepared_consistency_expectation
-            .as_mut()
-            .expect("S09 process-consistency expectation exists")
-            .finalize(observation.prepared_rustc_command_sha256)?;
-    }
-    if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
-        == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
-        && let Some(managed) = managed_attempt.as_ref()
-    {
-        let mut effective_argv = Vec::with_capacity(command.as_command().get_args().len() + 1);
-        effective_argv.push(command.configured_argv0().to_owned());
-        effective_argv.extend(command.as_command().get_args().map(OsString::from));
-        let observed = row_softmax_effective_rustc_argv_identity(&effective_argv);
-        if managed.attempt.invocation() != observed {
-            return Err(BindingWrapperError::BuildObservation(
-                "row-softmax build attempt does not bind the exact prepared rustc argv".to_owned(),
-            ));
+                pinned_execution_directory.object_identity(),
+                protected_source_tree_sha256.expect("S09 protected source-tree observation exists"),
+                complete_reviewed_environment
+                    .as_ref()
+                    .expect("S09 complete child environment exists"),
+            )?;
+            prepared_consistency_expectation
+                .as_mut()
+                .expect("S09 process-consistency expectation exists")
+                .finalize(observation.prepared_rustc_command_sha256)?;
         }
-        let claim = BrokeredInvocationCapabilityClaimV1::new(managed.attempt, *observed.as_bytes())
-            .map_err(|error| BindingWrapperError::CapabilityBroker(error.to_string()))?;
-        compiler_capabilities
-            .as_ref()
-            .ok_or_else(|| {
-                BindingWrapperError::CapabilityBroker(
-                    "row-softmax invocation has no brokered compiler capabilities".to_owned(),
-                )
-            })?
-            .prepare_invocation_authority(claim)?;
-    }
-    let status = command.status();
-    if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
-        guard.disarm();
-    }
+        if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+            == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+            && let Some(managed) = managed_attempt.as_ref()
+        {
+            let mut effective_argv = Vec::with_capacity(command.as_command().get_args().len() + 1);
+            effective_argv.push(command.configured_argv0().to_owned());
+            effective_argv.extend(command.as_command().get_args().map(OsString::from));
+            let observed = row_softmax_effective_rustc_argv_identity(&effective_argv);
+            if managed.attempt.invocation() != observed {
+                return Err(BindingWrapperError::BuildObservation(
+                    "row-softmax build attempt does not bind the exact prepared rustc argv"
+                        .to_owned(),
+                ));
+            }
+            let claim =
+                BrokeredInvocationCapabilityClaimV1::new(managed.attempt, *observed.as_bytes())
+                    .map_err(|error| BindingWrapperError::CapabilityBroker(error.to_string()))?;
+            compiler_capabilities
+                .as_ref()
+                .ok_or_else(|| {
+                    BindingWrapperError::CapabilityBroker(
+                        "row-softmax invocation has no brokered compiler capabilities".to_owned(),
+                    )
+                })?
+                .prepare_invocation_authority(claim)?;
+        }
+        let status = command.status();
+        Ok((status, inert_rustc_invocation))
+    })();
+    let (status, inert_rustc_invocation) = match pre_spawn_result {
+        Ok(prepared) => {
+            if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
+                guard.disarm();
+            }
+            prepared
+        }
+        Err(primary) => {
+            return Err(pre_spawn_failure(pre_spawn_attempt_guard.as_mut(), primary));
+        }
+    };
     // Keep the in-memory descriptor alive across the exact spawn it describes.
     drop(inert_rustc_invocation);
     let status = match status {
@@ -2431,6 +2444,11 @@ impl ManagedAttemptRevocationGuard {
     fn disarm(&mut self) {
         self.armed = false;
     }
+
+    fn revoke(&mut self) -> Result<(), EmitError> {
+        self.armed = false;
+        fail_build_attempt(&self.output_dir, &self.producer, self.attempt)
+    }
 }
 
 impl Drop for ManagedAttemptRevocationGuard {
@@ -2442,6 +2460,20 @@ impl Drop for ManagedAttemptRevocationGuard {
                 "[cargo-fe2o3] failed to revoke managed build attempt after pre-spawn error: {error}"
             );
         }
+    }
+}
+
+fn pre_spawn_failure(
+    guard: Option<&mut ManagedAttemptRevocationGuard>,
+    primary: BindingWrapperError,
+) -> BindingWrapperError {
+    let Some(guard) = guard else {
+        return primary;
+    };
+    let cleanup = guard.revoke().err();
+    BindingWrapperError::ManagedCompletion {
+        primary: primary.to_string(),
+        cleanup,
     }
 }
 
@@ -2620,7 +2652,7 @@ fn prepare_managed_attempt(
             "protected row-softmax release action has no exact row pin contract".to_owned(),
         ));
     }
-    let (attempt, worker_v2) = if let Some(config) = worker_v2 {
+    let (attempt, worker_v2, began_attempt) = if let Some(config) = worker_v2 {
         if config.executes_worker_in_rustc() {
             let pair = config
                 .general_gemm_v1()
@@ -2634,6 +2666,7 @@ fn prepare_managed_attempt(
                 Some(ManagedWorkerV2::InProcessGeneralGemm {
                     config: Box::new(config),
                 }),
+                true,
             )
         } else {
             let resume = WorkerV2ResumeStoreV1::open(output_dir, &producer)
@@ -2654,6 +2687,7 @@ fn prepare_managed_attempt(
                         resume,
                         state: Box::new(state),
                     }),
+                    false,
                 )
             } else {
                 let envelope_inputs = config
@@ -2668,20 +2702,21 @@ fn prepare_managed_attempt(
                         envelope_inputs,
                         resume,
                     }),
+                    true,
                 )
             }
         }
     } else {
         let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
             .map_err(BindingWrapperError::Artifact)?;
-        (attempt, None)
+        (attempt, None, true)
     };
-    let mut begin_attempt_guard = ManagedAttemptRevocationGuard {
+    let mut begin_attempt_guard = began_attempt.then(|| ManagedAttemptRevocationGuard {
         output_dir: output_dir.to_path_buf(),
         producer: producer.clone(),
         attempt,
         armed: true,
-    };
+    });
     let row_softmax_release = row_softmax_release
         .map(|(provider, workload)| {
             compiler_capabilities
@@ -2704,7 +2739,9 @@ fn prepare_managed_attempt(
         #[cfg(feature = "compiler-handoff-observation-test-only")]
         compiler_handoff_observation,
     };
-    begin_attempt_guard.disarm();
+    if let Some(guard) = begin_attempt_guard.as_mut() {
+        guard.disarm();
+    }
     Ok(managed)
 }
 
@@ -3640,9 +3677,10 @@ mod tests {
         materialize_row_softmax_v1_child_environment, materialize_s09_child_environment,
         materialize_scalar_gemm_v1_child_environment, measure_build_executable,
         observe_pinned_cargo_image_and_parent, ordered_metadata_values, os_bytes,
-        prepared_rustc_command_sha256, process_start_time_ticks, reject_authority_linker_arguments,
-        reject_uninspectable_rustc_args, resolve_command_executable_with_path,
-        row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
+        pre_spawn_failure, prepared_rustc_command_sha256, process_start_time_ticks,
+        reject_authority_linker_arguments, reject_uninspectable_rustc_args,
+        resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
+        row_softmax_provider_observation_json,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_executable::PinnedExecutable;
@@ -4790,6 +4828,51 @@ mod tests {
 
         assert!(finish_build_attempt(&directory, &producer, attempt).is_err());
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn general_gemm_pre_spawn_cleanup_failure_is_reported() {
+        let directory = std::env::temp_dir().join(format!(
+            "cargo-fe2o3-general-gemm-cleanup-error-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let producer = ProducerIdentity::from_codegen(
+            "tiled_gemm_general_v1_gpu",
+            Some(Path::new("/workspace/general/src/lib.rs")),
+        )
+        .unwrap();
+        let attempt = begin_build_attempt(
+            &directory,
+            &producer,
+            BuildInvocation::from_bytes([0x91; 32]),
+            BuildSession::from_bytes([0x92; 16]),
+        )
+        .unwrap();
+        let mut guard = ManagedAttemptRevocationGuard {
+            output_dir: directory.clone(),
+            producer,
+            attempt,
+            armed: true,
+        };
+        fs::remove_dir_all(&directory).unwrap();
+        fs::write(&directory, b"not a directory").unwrap();
+
+        let error = pre_spawn_failure(
+            Some(&mut guard),
+            BindingWrapperError::BuildObservation("forced pre-spawn failure".to_owned()),
+        );
+        assert!(matches!(
+            error,
+            BindingWrapperError::ManagedCompletion {
+                cleanup: Some(_),
+                ..
+            }
+        ));
+        assert!(!guard.armed);
+        let _ = fs::remove_file(directory);
     }
 
     #[test]

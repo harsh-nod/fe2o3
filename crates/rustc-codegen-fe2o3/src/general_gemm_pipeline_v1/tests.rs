@@ -1,5 +1,6 @@
 use super::*;
 
+use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_artifact_transaction::{
@@ -46,6 +47,33 @@ impl Drop for TestDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn manifest_reader_rejects_symlinks_oversized_files_and_lexical_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let directory = TestDirectory::new("manifest-objects");
+    let regular = directory.0.join("config.json");
+    fs::write(&regular, b"{}").unwrap();
+
+    let symlink_path = directory.0.join("config-link.json");
+    symlink(&regular, &symlink_path).unwrap();
+    assert!(read_bounded(&symlink_path, MAX_CONFIG_BYTES, "configuration").is_err());
+
+    let oversized = directory.0.join("oversized.json");
+    fs::File::create(&oversized)
+        .unwrap()
+        .set_len((MAX_CONFIG_BYTES + 1) as u64)
+        .unwrap();
+    assert!(read_bounded(&oversized, MAX_CONFIG_BYTES, "configuration").is_err());
+
+    let lexical_alias = regular
+        .parent()
+        .unwrap()
+        .join(".")
+        .join(regular.file_name().unwrap());
+    assert!(require_closed_child_manifest_path(&lexical_alias, "configuration").is_err());
 }
 
 struct OpaqueFrontendToken(u8);

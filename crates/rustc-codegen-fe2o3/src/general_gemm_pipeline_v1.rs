@@ -13,7 +13,9 @@
 
 use std::env;
 use std::fmt;
-use std::fs;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -132,6 +134,7 @@ impl PreparedGeneralGemmPipelineV1 {
         working_directory: &Path,
     ) -> Result<Self, GeneralGemmPipelineErrorV1> {
         require_absolute_path(path, "configuration")?;
+        require_closed_child_manifest_path(path, "configuration")?;
         let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
         let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
             GeneralGemmPipelineErrorV1::Configuration(format!("invalid JSON: {error}"))
@@ -856,20 +859,85 @@ fn require_absolute_path(path: &Path, context: &str) -> Result<(), GeneralGemmPi
     Ok(())
 }
 
+fn require_closed_child_manifest_path(
+    path: &Path,
+    context: &str,
+) -> Result<(), GeneralGemmPipelineErrorV1> {
+    let Some(value) = path.to_str() else {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
+            "{context} path must be canonical absolute UTF-8"
+        )));
+    };
+    if value != "/"
+        && value[1..]
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
+            "{context} path must be canonical absolute UTF-8"
+        )));
+    }
+    Ok(())
+}
+
 fn read_bounded(
     path: &Path,
     maximum: usize,
     context: &str,
 ) -> Result<Vec<u8>, GeneralGemmPipelineErrorV1> {
-    let bytes = fs::read(path).map_err(|error| {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| {
+            GeneralGemmPipelineErrorV1::Configuration(format!(
+                "cannot open {context} {}: {error}",
+                path.display()
+            ))
+        })?;
+    let initial = file.metadata().map_err(|error| {
         GeneralGemmPipelineErrorV1::Configuration(format!(
-            "cannot read {context} {}: {error}",
+            "cannot inspect {context} {}: {error}",
             path.display()
         ))
     })?;
-    if bytes.is_empty() || bytes.len() > maximum {
+    let initial_len = usize::try_from(initial.len()).ok();
+    if !initial.file_type().is_file()
+        || initial_len.is_none_or(|length| length == 0 || length > maximum)
+    {
         return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
-            "{context} must contain 1..={maximum} bytes"
+            "{context} must be a regular file containing 1..={maximum} bytes"
+        )));
+    }
+    let mut bytes = Vec::with_capacity(initial_len.expect("validated bounded length"));
+    Read::by_ref(&mut file)
+        .take((maximum + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            GeneralGemmPipelineErrorV1::Configuration(format!(
+                "cannot read {context} {}: {error}",
+                path.display()
+            ))
+        })?;
+    let final_metadata = file.metadata().map_err(|error| {
+        GeneralGemmPipelineErrorV1::Configuration(format!(
+            "cannot re-inspect {context} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if Some(bytes.len()) != initial_len
+        || final_metadata.dev() != initial.dev()
+        || final_metadata.ino() != initial.ino()
+        || final_metadata.mode() != initial.mode()
+        || final_metadata.nlink() != initial.nlink()
+        || final_metadata.len() != initial.len()
+        || final_metadata.mtime() != initial.mtime()
+        || final_metadata.mtime_nsec() != initial.mtime_nsec()
+        || final_metadata.ctime() != initial.ctime()
+        || final_metadata.ctime_nsec() != initial.ctime_nsec()
+    {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
+            "{context} changed while it was read"
         )));
     }
     Ok(bytes)

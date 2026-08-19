@@ -3,8 +3,11 @@
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs::{self, File};
+#[cfg(test)]
+use std::fs;
+use std::fs::{File, OpenOptions};
 use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -317,6 +320,9 @@ impl PreparedWorkerV2Config {
         pipeline: WorkerV2PipelineV1,
     ) -> Result<Self, WorkerV2ConfigError> {
         require_absolute_path(path, "configuration")?;
+        if pipeline == WorkerV2PipelineV1::GeneralGemmV1 {
+            require_closed_child_manifest_path(path, "configuration")?;
+        }
         let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
         let value: Value = serde_json::from_slice(&bytes)
             .map_err(|error| WorkerV2ConfigError::Json(error.to_string()))?;
@@ -1242,19 +1248,82 @@ fn require_absolute_path(path: &Path, context: &str) -> Result<(), WorkerV2Confi
     Ok(())
 }
 
+fn require_closed_child_manifest_path(
+    path: &Path,
+    context: &str,
+) -> Result<(), WorkerV2ConfigError> {
+    let Some(value) = path.to_str() else {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "{context} path must be canonical absolute UTF-8 for the reviewed child"
+        )));
+    };
+    if value != "/"
+        && value[1..]
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "{context} path must be canonical absolute UTF-8 for the reviewed child"
+        )));
+    }
+    Ok(())
+}
+
 fn read_bounded(
     path: &Path,
     maximum: usize,
     kind: &'static str,
 ) -> Result<Vec<u8>, WorkerV2ConfigError> {
-    let bytes = fs::read(path).map_err(|error| WorkerV2ConfigError::Io {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| WorkerV2ConfigError::Io {
+            kind,
+            path: path.to_owned(),
+            error,
+        })?;
+    let initial = file.metadata().map_err(|error| WorkerV2ConfigError::Io {
         kind,
         path: path.to_owned(),
         error,
     })?;
-    if bytes.is_empty() || bytes.len() > maximum {
+    let initial_len = usize::try_from(initial.len()).ok();
+    if !initial.file_type().is_file()
+        || initial_len.is_none_or(|length| length == 0 || length > maximum)
+    {
         return Err(WorkerV2ConfigError::Invalid(format!(
-            "Worker V2 {kind} {} must contain 1..={maximum} bytes",
+            "Worker V2 {kind} {} must be a regular file containing 1..={maximum} bytes",
+            path.display()
+        )));
+    }
+    let mut bytes = Vec::with_capacity(initial_len.expect("validated bounded length"));
+    Read::by_ref(&mut file)
+        .take((maximum + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| WorkerV2ConfigError::Io {
+            kind,
+            path: path.to_owned(),
+            error,
+        })?;
+    let final_metadata = file.metadata().map_err(|error| WorkerV2ConfigError::Io {
+        kind,
+        path: path.to_owned(),
+        error,
+    })?;
+    if Some(bytes.len()) != initial_len
+        || final_metadata.dev() != initial.dev()
+        || final_metadata.ino() != initial.ino()
+        || final_metadata.mode() != initial.mode()
+        || final_metadata.nlink() != initial.nlink()
+        || final_metadata.len() != initial.len()
+        || final_metadata.mtime() != initial.mtime()
+        || final_metadata.mtime_nsec() != initial.mtime_nsec()
+        || final_metadata.ctime() != initial.ctime()
+        || final_metadata.ctime_nsec() != initial.ctime_nsec()
+    {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "Worker V2 {kind} {} changed while it was read",
             path.display()
         )));
     }
@@ -1660,6 +1729,37 @@ mod tests {
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("absolute")
         ));
+    }
+
+    #[test]
+    fn general_gemm_manifest_rejects_lexical_aliases_and_unbounded_objects() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TestDirectory::new();
+        let path = general_gemm_manifest(&directory);
+        let lexical_alias = path
+            .parent()
+            .unwrap()
+            .join(".")
+            .join(path.file_name().unwrap());
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest_for_pipeline(
+                &lexical_alias,
+                WorkerV2PipelineV1::GeneralGemmV1,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason)) if reason.contains("canonical absolute UTF-8")
+        ));
+
+        let symlink_path = directory.0.join("manifest-link.json");
+        symlink(&path, &symlink_path).unwrap();
+        assert!(read_bounded(&symlink_path, MAX_CONFIG_BYTES, "configuration").is_err());
+
+        let oversized = directory.0.join("oversized.json");
+        File::create(&oversized)
+            .unwrap()
+            .set_len((MAX_CONFIG_BYTES + 1) as u64)
+            .unwrap();
+        assert!(read_bounded(&oversized, MAX_CONFIG_BYTES, "configuration").is_err());
     }
 
     #[test]
