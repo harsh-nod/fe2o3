@@ -67,6 +67,7 @@
         "fe2o3-hsaco-finalize",
         "fe2o3-llvm-text",
         "fe2o3-llvm-worker-handoff",
+        "fe2o3-lower-amdgcn-llvm",
         "fe2o3-lower-gpu-amdgcn"
       ]
     },
@@ -132,6 +133,13 @@
       "to": "fe2o3-general-gemm-compiler",
       "kinds": [
         "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-lower-amdgcn-llvm",
+      "to": "fe2o3-amdgcn-pliron-llvm",
+      "kinds": [
+        "dev"
       ]
     }
   ],
