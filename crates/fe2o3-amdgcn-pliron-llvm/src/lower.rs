@@ -1,3 +1,5 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use fe2o3_amdgcn_model::{AMDGPU_TRIPLE, AddressSpace};
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, FunctionAttributeV1, GFX942_AMDHSA_TARGET_TRIPLE_V1, Gfx942HandoffInputV1,
@@ -5,7 +7,7 @@ use fe2o3_llvm_handoff::{
     KernelValueTypeV1, ModuleFlagV1, ModuleMetadataV1, ObligationKindV1, ObligationV1, OriginV1,
     ScalarTypeV1,
 };
-use fe2o3_pliron::{ContextIdentity, ensure_context_identity};
+use fe2o3_pliron::{ContextIdentity, ensure_context_identity, require_context_identity};
 use pliron::{
     builtin::{
         op_interfaces::{OneResultInterface, SingleBlockRegionInterface},
@@ -14,24 +16,28 @@ use pliron::{
     },
     context::Context,
     identifier::Identifier,
+    linked_list::ContainsLinkedList,
     op::Op,
-    operation::verify_operation,
+    operation::{Operation, verify_operation},
+    r#type::Typed,
 };
 use pliron_llvm::{
     attributes::FastmathFlagsAttr,
-    op_interfaces::FloatBinArithOpWithFastMathFlags,
+    op_interfaces::{FastMathFlags, FloatBinArithOpWithFastMathFlags},
     ops::{FAddOp, FuncOp, LoadOp, ReturnOp, StoreOp},
     types::{FuncType, PointerType, VoidType},
 };
 
 use crate::model::{
-    CanonicalLoweringReceiptV1, ConstructionStageV1, FunctionAttributeKindV1, InputFieldV1,
-    LoweringDiagnosticV1, MAX_CANONICAL_RECEIPT_BYTES_V1, MAX_DEVICE_LIBRARIES_V1,
+    CanonicalLoweringReceiptV1, ConstructionStageV1, DialectArgumentInspectionV1,
+    DialectModuleInspectionErrorV1, DialectModuleInspectionV1, FunctionAttributeKindV1,
+    InputFieldV1, LoweringDiagnosticV1, MAX_CANONICAL_RECEIPT_BYTES_V1, MAX_DEVICE_LIBRARIES_V1,
     MAX_FUNCTION_ATTRIBUTES_V1, MAX_MODULE_FLAGS_V1, MAX_NAME_BYTES_V1, MAX_NAMED_METADATA_V1,
     MAX_OBLIGATIONS_V1, MAX_OPERATIONS_V1, MAX_PARAMETER_ATTRIBUTES_V1, MetadataKindV1,
     NameRejectionV1, ResourceKindV1, SUPPORT_MATRIX_V1, ScalarKernelModuleV1, SupportStatusV1,
-    VERIFIED_DIALECT_OPERATIONS_V1, VerifiedDialectOperationV1, admitted_obligations_v1,
-    admitted_operations_v1, function_attribute_kind, metadata_kind,
+    VERIFIED_DIALECT_BODY_OPERATIONS_V1, VERIFIED_DIALECT_OPERATIONS_V1,
+    VerifiedDialectOperationV1, admitted_obligations_v1, admitted_operations_v1,
+    function_attribute_kind, metadata_kind,
 };
 
 const RECEIPT_MAGIC_V1: &[u8] = b"fe2o3.amdgcn-pliron-llvm.receipt.v1\0";
@@ -51,33 +57,25 @@ const REQUIRED_FUNCTION_ATTRIBUTE_KINDS_V1: [FunctionAttributeKindV1; 9] = [
 const REQUIRED_MODULE_FLAGS_V1: [ModuleFlagV1; 2] =
     [ModuleFlagV1::CodeObjectVersion6, ModuleFlagV1::PicLevel2];
 
-/// One verified Pliron LLVM tree and its authoritative canonical handoff.
+#[derive(Clone)]
+struct OwnedDialectModuleV1 {
+    owner: ContextIdentity,
+    module: ModuleOp,
+}
+
+/// One privately owned verified Pliron LLVM tree and its authoritative canonical handoff.
 ///
-/// The context identity and [`ModuleOp`] arena handle are process-local
-/// provenance only. Durable comparison must use [`Self::receipt`] or
-/// [`Self::handoff`].
+/// Raw Pliron context and arena handles never cross this crate boundary.
+/// Durable comparison must use [`Self::receipt`] or [`Self::handoff`].
 pub struct LoweredScalarKernelV1 {
     context: Context,
-    module: ModuleOp,
+    module: OwnedDialectModuleV1,
     context_identity: ContextIdentity,
     handoff: Gfx942HandoffV1,
     receipt: CanonicalLoweringReceiptV1,
 }
 
 impl LoweredScalarKernelV1 {
-    /// Returns the context containing the verified dialect tree.
-    pub const fn context(&self) -> &Context {
-        &self.context
-    }
-
-    /// Returns the verified root operation.
-    ///
-    /// Its arena pointer is valid only with [`Self::context`] and is not an
-    /// artifact, compiler, or publication identity.
-    pub const fn module_op(&self) -> &ModuleOp {
-        &self.module
-    }
-
     /// Returns non-durable process-local provenance for the owning context.
     pub const fn context_identity(&self) -> ContextIdentity {
         self.context_identity
@@ -96,6 +94,41 @@ impl LoweredScalarKernelV1 {
     /// Returns the exact dialect operation inventory committed by the receipt.
     pub const fn operation_inventory(&self) -> &'static [VerifiedDialectOperationV1; 5] {
         &VERIFIED_DIALECT_OPERATIONS_V1
+    }
+
+    /// Revalidates private owner identity, arena liveness, recursive dialect
+    /// verification, and the complete closed V1 shape before returning typed
+    /// inspection facts.
+    ///
+    /// Every upstream access is panic-contained. No context, pointer,
+    /// operation wrapper, or printer text is returned.
+    pub fn inspect_dialect_module(
+        &self,
+    ) -> Result<DialectModuleInspectionV1, DialectModuleInspectionErrorV1> {
+        catch_unwind(AssertUnwindSafe(|| self.inspect_dialect_module_inner()))
+            .unwrap_or(Err(DialectModuleInspectionErrorV1::UpstreamPanicked))
+    }
+
+    fn inspect_dialect_module_inner(
+        &self,
+    ) -> Result<DialectModuleInspectionV1, DialectModuleInspectionErrorV1> {
+        let current = require_context_identity(&self.context)
+            .map_err(|_| DialectModuleInspectionErrorV1::ContextIdentityInvalid)?;
+        if current != self.context_identity {
+            return Err(DialectModuleInspectionErrorV1::ContextIdentityInvalid);
+        }
+        if self.module.owner != current {
+            return Err(DialectModuleInspectionErrorV1::ForeignOwner);
+        }
+
+        let module_pointer = self.module.module.get_operation();
+        let module_ref = module_pointer
+            .try_deref(&self.context)
+            .map_err(|_| DialectModuleInspectionErrorV1::StaleModule)?;
+        drop(module_ref);
+        verify_operation(module_pointer, &self.context)
+            .map_err(|_| DialectModuleInspectionErrorV1::DialectVerificationFailed)?;
+        inspect_live_module(&self.context, &self.module.module)
     }
 }
 
@@ -121,11 +154,97 @@ pub fn lower_scalar_kernel_v1(
 
     Ok(LoweredScalarKernelV1 {
         context,
-        module,
+        module: OwnedDialectModuleV1 {
+            owner: context_identity,
+            module,
+        },
         context_identity,
         handoff,
         receipt,
     })
+}
+
+fn inspect_live_module(
+    context: &Context,
+    module: &ModuleOp,
+) -> Result<DialectModuleInspectionV1, DialectModuleInspectionErrorV1> {
+    let module_body = module.get_body(context, 0);
+    let module_operations = module_body.deref(context).iter(context).collect::<Vec<_>>();
+    let [function_pointer] = module_operations.as_slice() else {
+        return Err(DialectModuleInspectionErrorV1::UnexpectedModuleShape);
+    };
+    let function = Operation::get_op::<FuncOp>(*function_pointer, context)
+        .ok_or(DialectModuleInspectionErrorV1::UnexpectedModuleShape)?;
+    let function_type = function.get_type(context);
+    let result_type = function_type.deref(context).result_type();
+    let returns_void = result_type
+        .deref(context)
+        .downcast_ref::<VoidType>()
+        .is_some();
+    let entry = function
+        .get_entry_block(context)
+        .ok_or(DialectModuleInspectionErrorV1::UnexpectedModuleShape)?;
+    let arguments = entry.deref(context).arguments().collect::<Vec<_>>();
+    let [input, output, addend] = arguments.as_slice() else {
+        return Err(DialectModuleInspectionErrorV1::UnexpectedModuleShape);
+    };
+    let arguments = [
+        inspect_argument(context, *input)?,
+        inspect_argument(context, *output)?,
+        inspect_argument(context, *addend)?,
+    ];
+    let expected_arguments = [
+        DialectArgumentInspectionV1::OpaquePointer {
+            address_space: AddressSpace::Global.llvm_id(),
+        },
+        DialectArgumentInspectionV1::OpaquePointer {
+            address_space: AddressSpace::Global.llvm_id(),
+        },
+        DialectArgumentInspectionV1::F32,
+    ];
+    if !returns_void || arguments != expected_arguments {
+        return Err(DialectModuleInspectionErrorV1::UnexpectedModuleShape);
+    }
+
+    let body = entry.deref(context).iter(context).collect::<Vec<_>>();
+    let [load, add, store, return_op] = body.as_slice() else {
+        return Err(DialectModuleInspectionErrorV1::UnexpectedModuleShape);
+    };
+    if Operation::get_op::<LoadOp>(*load, context).is_none()
+        || Operation::get_op::<StoreOp>(*store, context).is_none()
+        || Operation::get_op::<ReturnOp>(*return_op, context).is_none()
+    {
+        return Err(DialectModuleInspectionErrorV1::UnexpectedModuleShape);
+    }
+    let add = Operation::get_op::<FAddOp>(*add, context)
+        .ok_or(DialectModuleInspectionErrorV1::UnexpectedModuleShape)?;
+    let strict_fast_math = add.fast_math_flags(context) == FastmathFlagsAttr::default();
+
+    Ok(DialectModuleInspectionV1 {
+        function_count: 1,
+        function_operation: VerifiedDialectOperationV1::Func,
+        returns_void,
+        arguments,
+        body_operations: VERIFIED_DIALECT_BODY_OPERATIONS_V1,
+        strict_fast_math,
+    })
+}
+
+fn inspect_argument(
+    context: &Context,
+    argument: pliron::value::Value,
+) -> Result<DialectArgumentInspectionV1, DialectModuleInspectionErrorV1> {
+    let value_type = argument.get_type(context);
+    let value_type = value_type.deref(context);
+    if let Some(pointer) = value_type.downcast_ref::<PointerType>() {
+        return Ok(DialectArgumentInspectionV1::OpaquePointer {
+            address_space: pointer.address_space(),
+        });
+    }
+    if value_type.downcast_ref::<FP32Type>().is_some() {
+        return Ok(DialectArgumentInspectionV1::F32);
+    }
+    Err(DialectModuleInspectionErrorV1::UnexpectedModuleShape)
 }
 
 fn validate_input(input: &ScalarKernelModuleV1) -> Result<(), LoweringDiagnosticV1> {
@@ -535,5 +654,83 @@ const fn dialect_operation_tag(operation: VerifiedDialectOperationV1) -> u8 {
         VerifiedDialectOperationV1::FAdd => 3,
         VerifiedDialectOperationV1::Store => 4,
         VerifiedDialectOperationV1::Return => 5,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fe2o3_llvm_handoff::{IdentityV1, StageIdentitiesV1};
+
+    use super::*;
+
+    fn request() -> ScalarKernelModuleV1 {
+        ScalarKernelModuleV1::canonical(
+            "private_module",
+            "private_add",
+            IdentityV1::new([0x61; 32]).unwrap(),
+            StageIdentitiesV1::new([0x11; 32], [0x22; 32], [0x33; 32]).unwrap(),
+        )
+    }
+
+    #[test]
+    fn raw_operation_downcasts_remain_crate_private() {
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let context = &lowered.context;
+        let module = &lowered.module.module;
+        verify_operation(module.get_operation(), context).unwrap();
+
+        let module_body = module.get_body(context, 0);
+        let module_operations = module_body.deref(context).iter(context).collect::<Vec<_>>();
+        let [function] = module_operations.as_slice() else {
+            panic!("expected one private llvm.func")
+        };
+        let function = Operation::get_op::<FuncOp>(*function, context)
+            .expect("private root must be llvm.func");
+        let entry = function.get_entry_block(context).unwrap();
+        let operations = entry.deref(context).iter(context).collect::<Vec<_>>();
+        assert_eq!(operations.len(), 4);
+        assert!(Operation::get_op::<LoadOp>(operations[0], context).is_some());
+        assert!(Operation::get_op::<FAddOp>(operations[1], context).is_some());
+        assert!(Operation::get_op::<StoreOp>(operations[2], context).is_some());
+        assert!(Operation::get_op::<ReturnOp>(operations[3], context).is_some());
+    }
+
+    #[test]
+    fn equal_arena_slots_do_not_transfer_module_ownership() {
+        let mut owner = lower_scalar_kernel_v1(&request()).unwrap();
+        let foreign = lower_scalar_kernel_v1(&request()).unwrap();
+        assert_eq!(
+            owner.module.module.get_operation(),
+            foreign.module.module.get_operation()
+        );
+
+        owner.module = foreign.module.clone();
+        assert_eq!(
+            owner.inspect_dialect_module(),
+            Err(DialectModuleInspectionErrorV1::ForeignOwner)
+        );
+    }
+
+    #[test]
+    fn stale_module_is_rejected_without_dereference_panic() {
+        let mut lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        Operation::erase(lowered.module.module.get_operation(), &mut lowered.context);
+        assert_eq!(
+            lowered.inspect_dialect_module(),
+            Err(DialectModuleInspectionErrorV1::StaleModule)
+        );
+    }
+
+    #[test]
+    fn conflicting_upstream_borrow_is_contained() {
+        let lowered = lower_scalar_kernel_v1(&request()).unwrap();
+        let pointer = lowered.module.module.get_operation();
+        let _borrow = pointer.deref_mut(&lowered.context);
+        let result = catch_unwind(AssertUnwindSafe(|| lowered.inspect_dialect_module()));
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            Err(DialectModuleInspectionErrorV1::StaleModule)
+        );
     }
 }

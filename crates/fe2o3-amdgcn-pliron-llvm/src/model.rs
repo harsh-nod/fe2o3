@@ -611,6 +611,114 @@ pub const VERIFIED_DIALECT_OPERATIONS_V1: [VerifiedDialectOperationV1; 5] = [
     VerifiedDialectOperationV1::Return,
 ];
 
+/// Body-only operation sequence required by the V1 dialect module.
+pub const VERIFIED_DIALECT_BODY_OPERATIONS_V1: [VerifiedDialectOperationV1; 4] = [
+    VerifiedDialectOperationV1::Load,
+    VerifiedDialectOperationV1::FAdd,
+    VerifiedDialectOperationV1::Store,
+    VerifiedDialectOperationV1::Return,
+];
+
+/// One typed function-argument fact recovered from the live dialect module.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DialectArgumentInspectionV1 {
+    /// An opaque LLVM pointer carrying its exact numeric address space.
+    OpaquePointer {
+        /// LLVM address-space number recovered from the pointer type.
+        address_space: u32,
+    },
+    /// A builtin 32-bit floating-point scalar.
+    F32,
+}
+
+/// Owner-checked facts recovered from the live V1 Pliron LLVM module.
+///
+/// This value contains no Pliron context, pointer, operation wrapper, printer
+/// text, or process-local identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DialectModuleInspectionV1 {
+    pub(crate) function_count: u8,
+    pub(crate) function_operation: VerifiedDialectOperationV1,
+    pub(crate) returns_void: bool,
+    pub(crate) arguments: [DialectArgumentInspectionV1; 3],
+    pub(crate) body_operations: [VerifiedDialectOperationV1; 4],
+    pub(crate) strict_fast_math: bool,
+}
+
+impl DialectModuleInspectionV1 {
+    /// Returns the number of top-level LLVM functions.
+    pub const fn function_count(self) -> u8 {
+        self.function_count
+    }
+
+    /// Returns the typed top-level function operation kind.
+    pub const fn function_operation(self) -> VerifiedDialectOperationV1 {
+        self.function_operation
+    }
+
+    /// Returns whether the function has the LLVM void return type.
+    pub const fn returns_void(self) -> bool {
+        self.returns_void
+    }
+
+    /// Returns the exact fixed argument facts in ABI order.
+    pub const fn arguments(self) -> [DialectArgumentInspectionV1; 3] {
+        self.arguments
+    }
+
+    /// Returns the exact body operation facts in execution order.
+    pub const fn body_operations(self) -> [VerifiedDialectOperationV1; 4] {
+        self.body_operations
+    }
+
+    /// Returns whether the `llvm.fadd` carries empty fast-math flags.
+    pub const fn strict_fast_math(self) -> bool {
+        self.strict_fast_math
+    }
+}
+
+/// Bounded failure from owner-checked live dialect-module inspection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DialectModuleInspectionErrorV1 {
+    /// The retained context identity is absent, corrupt, or changed.
+    ContextIdentityInvalid,
+    /// The private module handle belongs to a different context owner.
+    ForeignOwner,
+    /// The private module arena entry is no longer live.
+    StaleModule,
+    /// Recursive Pliron verification rejected the live module.
+    DialectVerificationFailed,
+    /// The live module does not have the closed V1 typed shape.
+    UnexpectedModuleShape,
+    /// An upstream Pliron access panicked and was contained.
+    UpstreamPanicked,
+}
+
+impl fmt::Display for DialectModuleInspectionErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ContextIdentityInvalid => {
+                formatter.write_str("dialect inspection context identity is invalid")
+            }
+            Self::ForeignOwner => {
+                formatter.write_str("dialect module belongs to a different context owner")
+            }
+            Self::StaleModule => formatter.write_str("dialect module handle is stale"),
+            Self::DialectVerificationFailed => {
+                formatter.write_str("dialect module verification failed")
+            }
+            Self::UnexpectedModuleShape => {
+                formatter.write_str("dialect module has an unexpected typed shape")
+            }
+            Self::UpstreamPanicked => {
+                formatter.write_str("dialect module inspection contained an upstream panic")
+            }
+        }
+    }
+}
+
+impl Error for DialectModuleInspectionErrorV1 {}
+
 /// Fe2o3-owned canonical structural receipt bytes.
 ///
 /// The bytes commit the module name, reviewed dialect operation inventory, and

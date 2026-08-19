@@ -2,28 +2,17 @@
 
 use fe2o3_amdgcn_model::AddressSpace;
 use fe2o3_amdgcn_pliron_llvm::{
-    ConstructionStageV1, FunctionAttributeKindV1, InputFieldV1, LoweringDiagnosticV1,
-    MAX_CANONICAL_RECEIPT_BYTES_V1, MAX_DIAGNOSTIC_BYTES_V1, MetadataKindV1, NameRejectionV1,
-    SUPPORT_MATRIX_V1, ScalarKernelModuleV1, ScalarOperationV1, SourceCallingConventionV1,
-    SupportStatusV1, TargetFeaturePolicyV1, VERIFIED_DIALECT_OPERATIONS_V1, lower_scalar_kernel_v1,
+    ConstructionStageV1, DialectArgumentInspectionV1, FunctionAttributeKindV1, InputFieldV1,
+    LoweringDiagnosticV1, MAX_CANONICAL_RECEIPT_BYTES_V1, MAX_DIAGNOSTIC_BYTES_V1, MetadataKindV1,
+    NameRejectionV1, SUPPORT_MATRIX_V1, ScalarKernelModuleV1, ScalarOperationV1,
+    SourceCallingConventionV1, SupportStatusV1, TargetFeaturePolicyV1,
+    VERIFIED_DIALECT_BODY_OPERATIONS_V1, VERIFIED_DIALECT_OPERATIONS_V1,
+    VerifiedDialectOperationV1, lower_scalar_kernel_v1,
 };
 use fe2o3_llvm_handoff::{
     FunctionAttributeV1, GFX942_AMDHSA_DATA_LAYOUT_V1, GFX942_AMDHSA_TARGET_TRIPLE_V1, IdentityV1,
     ModuleFlagV1, NamedMetadataV1, ObligationKindV1, OriginKindV1, ParameterAttributeV1,
     ScalarTypeV1, StageIdentitiesV1, TargetFeatureV1, WavesPerEuV1,
-};
-use pliron::{
-    builtin::{op_interfaces::SingleBlockRegionInterface, type_interfaces::FunctionTypeInterface},
-    linked_list::ContainsLinkedList,
-    op::Op,
-    operation::{Operation, verify_operation},
-    r#type::Typed,
-};
-use pliron_llvm::{
-    attributes::FastmathFlagsAttr,
-    op_interfaces::FastMathFlags,
-    ops::{FAddOp, FuncOp, LoadOp, ReturnOp, StoreOp},
-    types::PointerType,
 };
 
 fn request() -> ScalarKernelModuleV1 {
@@ -60,36 +49,31 @@ fn fresh_contexts_build_real_verified_ops_with_deterministic_receipts() {
     );
     assert_eq!(first.operation_inventory(), &VERIFIED_DIALECT_OPERATIONS_V1);
 
-    let context = first.context();
-    verify_operation(first.module_op().get_operation(), context).unwrap();
-    let module_body = first.module_op().get_body(context, 0);
-    let module_operations = module_body.deref(context).iter(context).collect::<Vec<_>>();
-    assert_eq!(module_operations.len(), 1);
-    let function = Operation::get_op::<FuncOp>(module_operations[0], context)
-        .expect("module must contain a real llvm.func");
-    let function_type = function.get_type(context);
-    assert_eq!(function_type.deref(context).arg_types().len(), 3);
-    let entry = function
-        .get_entry_block(context)
-        .expect("defined function must have an entry block");
-    let arguments = entry.deref(context).arguments().collect::<Vec<_>>();
-    for argument in &arguments[..2] {
-        let argument_type = argument.get_type(context);
-        let argument_type = argument_type.deref(context);
-        let pointer = argument_type
-            .downcast_ref::<PointerType>()
-            .expect("first two arguments must be opaque LLVM pointers");
-        assert_eq!(pointer.address_space(), AddressSpace::Global.llvm_id());
-    }
-
-    let operations = entry.deref(context).iter(context).collect::<Vec<_>>();
-    assert_eq!(operations.len(), 4);
-    assert!(Operation::get_op::<LoadOp>(operations[0], context).is_some());
-    let add = Operation::get_op::<FAddOp>(operations[1], context)
-        .expect("second body operation must be a real llvm.fadd");
-    assert_eq!(add.fast_math_flags(context), FastmathFlagsAttr::default());
-    assert!(Operation::get_op::<StoreOp>(operations[2], context).is_some());
-    assert!(Operation::get_op::<ReturnOp>(operations[3], context).is_some());
+    let inspection = first.inspect_dialect_module().unwrap();
+    assert_eq!(inspection.function_count(), 1);
+    assert_eq!(
+        inspection.function_operation(),
+        VerifiedDialectOperationV1::Func
+    );
+    assert!(inspection.returns_void());
+    assert_eq!(
+        inspection.arguments(),
+        [
+            DialectArgumentInspectionV1::OpaquePointer {
+                address_space: AddressSpace::Global.llvm_id(),
+            },
+            DialectArgumentInspectionV1::OpaquePointer {
+                address_space: AddressSpace::Global.llvm_id(),
+            },
+            DialectArgumentInspectionV1::F32,
+        ]
+    );
+    assert_eq!(
+        inspection.body_operations(),
+        VERIFIED_DIALECT_BODY_OPERATIONS_V1
+    );
+    assert!(inspection.strict_fast_math());
+    assert_eq!(inspection, second.inspect_dialect_module().unwrap());
 }
 
 #[test]
