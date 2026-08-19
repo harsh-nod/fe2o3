@@ -10,16 +10,20 @@
 use core::fmt;
 
 use fe2o3_llvm_handoff::{
-    CodeModelV1, CodeObjectVersionV1, DecodeHandoffErrorV1, DeviceLibraryKindV1,
-    GFX942_AMDHSA_DATA_LAYOUT_V1, GFX942_AMDHSA_TARGET_TRIPLE_V1, Gfx942HandoffV1,
-    Gfx942TargetPolicyV1, HandoffIdentityV1, OptimizationLevelV1, RelocationModelV1,
-    TargetFeatureStateV1, TargetFeatureV1,
+    CodeModelV1, CodeObjectVersionV1, DecodeHandoffErrorV1, DecodeHandoffErrorV2,
+    DeviceLibraryKindV1, GFX942_AMDHSA_DATA_LAYOUT_V1, GFX942_AMDHSA_TARGET_TRIPLE_V1,
+    Gfx942HandoffV1, Gfx942HandoffV2, Gfx942TargetPolicyV1, HandoffIdentityV1, HandoffIdentityV2,
+    OptimizationLevelV1, RelocationModelV1, TargetFeatureStateV1, TargetFeatureV1,
 };
 use sha2::{Digest as _, Sha256};
 
 /// Maximum canonical handoff bytes accepted by this worker boundary.
 pub const MAX_WORKER_ADMISSION_REQUEST_BYTES_V1: usize =
     fe2o3_llvm_handoff::MAX_CANONICAL_HANDOFF_BYTES_V1;
+
+/// Maximum canonical V2 handoff bytes accepted by this worker boundary.
+pub const MAX_WORKER_ADMISSION_REQUEST_BYTES_V2: usize =
+    fe2o3_llvm_handoff::MAX_CANONICAL_HANDOFF_BYTES_V2;
 
 /// Maximum bytes in an observed LLVM or LLD version.
 pub const MAX_WORKER_BUILD_VERSION_BYTES_V1: usize = 16;
@@ -57,6 +61,7 @@ pub const SUPPORTED_DEVICE_LIBRARY_CLOSURE_V1: &[DeviceLibraryKindV1] = &[
 ];
 
 const ADMISSION_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.llvm-worker.admission.identity.v1";
+const ADMISSION_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.llvm-worker.admission.identity.v2";
 
 const EXACT_TARGET_FEATURES_V1: [TargetFeatureStateV1; 3] = [
     TargetFeatureStateV1::new(TargetFeatureV1::WavefrontSize32, false),
@@ -218,6 +223,59 @@ impl core::error::Error for WorkerAdmissionErrorV1 {
     }
 }
 
+/// Typed, bounded V2 worker-boundary admission failure.
+///
+/// Build-policy failures wrap the existing V1 policy error because both wire
+/// versions are admitted against the same exact LLVM/LLD closure. This value
+/// records policy admission only; it is not worker measurement or attestation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorkerAdmissionErrorV2 {
+    /// The canonical V2 request exceeded its hard byte bound.
+    RequestTooLong {
+        /// Received byte count.
+        observed: usize,
+        /// Maximum admitted byte count.
+        maximum: usize,
+    },
+    /// The claimed V2 identity used the reserved all-zero value.
+    ZeroHandoffIdentity,
+    /// Canonical V2 decoding failed.
+    Decode(DecodeHandoffErrorV2),
+    /// The recomputed V2 identity differs from the claim.
+    HandoffIdentityMismatch,
+    /// Exact build, target, or device-library policy admission failed.
+    Policy(WorkerAdmissionErrorV1),
+}
+
+impl fmt::Display for WorkerAdmissionErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RequestTooLong { observed, maximum } => write!(
+                formatter,
+                "LLVM worker V2 admission request has {observed} bytes, maximum is {maximum}"
+            ),
+            Self::ZeroHandoffIdentity => {
+                formatter.write_str("claimed LLVM V2 handoff identity is zero")
+            }
+            Self::Decode(error) => write!(formatter, "LLVM V2 handoff decode failed: {error}"),
+            Self::HandoffIdentityMismatch => {
+                formatter.write_str("recomputed LLVM V2 handoff identity does not match the claim")
+            }
+            Self::Policy(error) => write!(formatter, "LLVM V2 handoff policy rejected: {error}"),
+        }
+    }
+}
+
+impl core::error::Error for WorkerAdmissionErrorV2 {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Decode(error) => Some(error),
+            Self::Policy(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for WorkerBuildFieldV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -321,6 +379,37 @@ pub struct WorkerAdmissionRequestV1<'a> {
     measured_build: MeasuredLlvmLldBuildV1<'a>,
 }
 
+/// Borrowed canonical V2 bytes and identity claims presented to admission.
+///
+/// The build observation is caller-supplied and remains untrusted. Successful
+/// admission proves only agreement with the exact configured policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkerAdmissionRequestV2<'a> {
+    handoff_bytes: &'a [u8],
+    claimed_handoff_identity: [u8; 32],
+    measured_build: MeasuredLlvmLldBuildV1<'a>,
+}
+
+impl<'a> WorkerAdmissionRequestV2<'a> {
+    /// Constructs one untrusted V2 admission request.
+    pub const fn new(
+        handoff_bytes: &'a [u8],
+        claimed_handoff_identity: [u8; 32],
+        measured_build: MeasuredLlvmLldBuildV1<'a>,
+    ) -> Self {
+        Self {
+            handoff_bytes,
+            claimed_handoff_identity,
+            measured_build,
+        }
+    }
+
+    /// Admits this request into inert typed V2 worker-boundary data.
+    pub fn admit(self) -> Result<AdmittedWorkerRequestV2, WorkerAdmissionErrorV2> {
+        admit_worker_request_v2(self)
+    }
+}
+
 impl<'a> WorkerAdmissionRequestV1<'a> {
     /// Constructs one untrusted admission request.
     pub const fn new(
@@ -383,6 +472,26 @@ impl WorkerAdmissionIdentityV1 {
     }
 }
 
+/// Domain-separated identity of an admitted V2 handoff and exact build policy.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct WorkerAdmissionIdentityV2([u8; 32]);
+
+impl WorkerAdmissionIdentityV2 {
+    /// Returns the SHA-256 identity bytes.
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Display for WorkerAdmissionIdentityV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for WorkerAdmissionIdentityV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in self.0 {
@@ -442,6 +551,71 @@ impl AdmittedWorkerRequestV1 {
     }
 }
 
+/// Inert typed V2 data admitted before the LLVM worker boundary.
+///
+/// This retains the complete validated executable graph and exact build
+/// policy. It does not measure or execute a worker and grants no machine-code,
+/// publication, loading, or launch authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdmittedWorkerRequestV2 {
+    handoff: Gfx942HandoffV2,
+    handoff_identity: HandoffIdentityV2,
+    build_identity: ExactLlvmLldBuildIdentityV1,
+    admission_identity: WorkerAdmissionIdentityV2,
+}
+
+impl AdmittedWorkerRequestV2 {
+    /// Returns the validated typed V2 handoff.
+    pub const fn handoff(&self) -> &Gfx942HandoffV2 {
+        &self.handoff
+    }
+
+    /// Returns the recomputed canonical V2 identity.
+    pub const fn handoff_identity(&self) -> HandoffIdentityV2 {
+        self.handoff_identity
+    }
+
+    /// Returns the exact LLVM/LLD policy retained by admission.
+    pub const fn build_identity(&self) -> ExactLlvmLldBuildIdentityV1 {
+        self.build_identity
+    }
+
+    /// Returns the identity binding the V2 handoff and exact build policy.
+    pub const fn admission_identity(&self) -> WorkerAdmissionIdentityV2 {
+        self.admission_identity
+    }
+
+    /// Reports that policy admission is not worker measurement.
+    pub const fn authenticates_worker_measurement(&self) -> bool {
+        false
+    }
+
+    /// Reports that admission grants no object-emission authority.
+    pub const fn grants_object_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that admission grants no link authority.
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that admission grants no publication authority.
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that admission grants no load authority.
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that admission grants no launch authority.
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Validates one canonical handoff before the worker may dereference LLVM data.
 pub fn admit_worker_request_v1(
     request: WorkerAdmissionRequestV1<'_>,
@@ -470,6 +644,40 @@ pub fn admit_worker_request_v1(
     let build_identity = ExactLlvmLldBuildIdentityV1;
     let admission_identity = calculate_admission_identity(handoff_identity, build_identity);
     Ok(AdmittedWorkerRequestV1 {
+        handoff,
+        handoff_identity,
+        build_identity,
+        admission_identity,
+    })
+}
+
+/// Validates one canonical typed V2 handoff before LLVM bytes are produced.
+pub fn admit_worker_request_v2(
+    request: WorkerAdmissionRequestV2<'_>,
+) -> Result<AdmittedWorkerRequestV2, WorkerAdmissionErrorV2> {
+    if request.handoff_bytes.len() > MAX_WORKER_ADMISSION_REQUEST_BYTES_V2 {
+        return Err(WorkerAdmissionErrorV2::RequestTooLong {
+            observed: request.handoff_bytes.len(),
+            maximum: MAX_WORKER_ADMISSION_REQUEST_BYTES_V2,
+        });
+    }
+    if request.claimed_handoff_identity == [0; 32] {
+        return Err(WorkerAdmissionErrorV2::ZeroHandoffIdentity);
+    }
+    validate_measured_build(request.measured_build).map_err(WorkerAdmissionErrorV2::Policy)?;
+
+    let handoff = Gfx942HandoffV2::decode_canonical(request.handoff_bytes)
+        .map_err(WorkerAdmissionErrorV2::Decode)?;
+    let handoff_identity = handoff.identity();
+    if handoff_identity.as_bytes() != &request.claimed_handoff_identity {
+        return Err(WorkerAdmissionErrorV2::HandoffIdentityMismatch);
+    }
+    validate_target_policy(handoff.base().target()).map_err(WorkerAdmissionErrorV2::Policy)?;
+    validate_device_libraries(handoff.base()).map_err(WorkerAdmissionErrorV2::Policy)?;
+
+    let build_identity = ExactLlvmLldBuildIdentityV1;
+    let admission_identity = calculate_admission_identity_v2(handoff_identity, build_identity);
+    Ok(AdmittedWorkerRequestV2 {
         handoff,
         handoff_identity,
         build_identity,
@@ -622,6 +830,21 @@ fn calculate_admission_identity(
     hash_field(&mut hasher, build_identity.lld_build_identity().as_bytes());
     hasher.update([u8::from(build_identity.in_process_lld())]);
     WorkerAdmissionIdentityV1(hasher.finalize().into())
+}
+
+fn calculate_admission_identity_v2(
+    handoff_identity: HandoffIdentityV2,
+    build_identity: ExactLlvmLldBuildIdentityV1,
+) -> WorkerAdmissionIdentityV2 {
+    let mut hasher = Sha256::new();
+    hash_field(&mut hasher, ADMISSION_IDENTITY_DOMAIN_V2);
+    hash_field(&mut hasher, handoff_identity.as_bytes());
+    hash_field(&mut hasher, build_identity.llvm_version().as_bytes());
+    hash_field(&mut hasher, build_identity.llvm_build_identity().as_bytes());
+    hash_field(&mut hasher, build_identity.lld_version().as_bytes());
+    hash_field(&mut hasher, build_identity.lld_build_identity().as_bytes());
+    hasher.update([u8::from(build_identity.in_process_lld())]);
+    WorkerAdmissionIdentityV2(hasher.finalize().into())
 }
 
 fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
