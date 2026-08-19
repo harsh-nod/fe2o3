@@ -1089,6 +1089,58 @@ impl SharedGttMemorySessionV1 {
         self.engine.check_currentness()
     }
 
+    pub(crate) fn quarantine_queue_composition(
+        &mut self,
+        detail: &'static str,
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .quarantine(MemorySessionError::KernelResultMalformed(detail))
+    }
+
+    pub(crate) fn cwsr_shadow_plan(
+        &mut self,
+        token: &SharedGttAllocationV1<ExecutableGttV1, GttCpuWritableV1>,
+    ) -> Result<crate::queue_linux::CwsrShadowPlanV1, MemorySessionError> {
+        self.engine.check_currentness()?;
+        let index = self
+            .engine
+            .index(token, SharedAllocationPhaseV1::CpuWritable)?;
+        let record = &self.engine.allocations[index];
+        let reservation = record
+            .reservation
+            .as_ref()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        let reservation_address =
+            <crate::memory_linux::LinuxMemoryBackend as MemoryBackend>::reservation_address(
+                reservation,
+            );
+        if record.profile != SharedGttProfileV1::Executable
+            || reservation_address != record.gpu_va
+            || record.layout.requested_bytes != crate::queue::submit::GFX942_CWSR_TOTAL_BYTES_V1
+            || record.layout.cpu_mapping_bytes != crate::queue::submit::GFX942_CWSR_TOTAL_BYTES_V1
+            || record.layout.gpu_va_bytes != crate::queue::submit::GFX942_CWSR_TOTAL_BYTES_V1 as u64
+        {
+            return self
+                .engine
+                .quarantine(MemorySessionError::KernelResultMalformed(
+                    "owned CWSR reservation geometry",
+                ));
+        }
+        let plan = crate::queue_linux::CwsrShadowPlanV1::from_owned_reservation(
+            record.gpu_va,
+            record.layout.requested_bytes,
+            self.engine.backend.page_size(),
+        )
+        .map_err(|_| MemorySessionError::KernelResultMalformed("CWSR shadow plan"));
+        match plan {
+            Ok(plan) => {
+                self.engine.check_currentness()?;
+                Ok(plan)
+            }
+            Err(error) => self.engine.quarantine(error),
+        }
+    }
+
     pub(crate) const fn queue_model_device(&self) -> ModelDeviceAdmissionV1 {
         self.model_device
     }

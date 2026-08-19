@@ -26,7 +26,7 @@ mod live;
 
 #[allow(unsafe_code)]
 #[path = "queue_submit.rs"]
-mod submit;
+pub(crate) mod submit;
 
 pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,

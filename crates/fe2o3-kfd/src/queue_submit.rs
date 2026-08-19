@@ -16,15 +16,18 @@ use fe2o3_aql::{
     AqlPacketPublicationTargetV1, AqlPreparedKernelDispatchV1, AqlRingCapacityV1,
     AqlRingReservationError, AqlSingleProducerRingModelV1,
 };
+use fe2o3_kfd_uapi::{
+    KfdContextSaveAreaHeaderV1, KfdQueueExceptionPayloadAddressV1, KfdSignalEventIdV1,
+};
 
 #[cfg(test)]
 use fe2o3_aql::AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1;
 
-pub(super) const GFX942_CWSR_XCC_COUNT_V1: usize = 8;
-pub(super) const GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1: usize = 0x162_1000;
-pub(super) const GFX942_CWSR_TOTAL_BYTES_V1: usize = 0xb16_7000;
-pub(super) const GFX942_CWSR_DEBUG_BYTES_TOTAL_V1: u32 = 0x5_f000;
-const CWSR_HEADER_BYTES: usize = 40;
+pub(crate) const GFX942_CWSR_XCC_COUNT_V1: usize = 8;
+pub(crate) const GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1: usize = 0x162_1000;
+pub(crate) const GFX942_CWSR_TOTAL_BYTES_V1: usize = 0xb16_7000;
+pub(crate) const GFX942_CWSR_DEBUG_BYTES_TOTAL_V1: u32 = 0x5_f000;
+pub(crate) const CWSR_HEADER_BYTES: usize = 40;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SubmissionPhaseV1 {
@@ -61,6 +64,10 @@ pub(super) struct NativeAqlSubmissionOwnerV1 {
 impl NativeAqlSubmissionOwnerV1 {
     pub(super) fn new(ring_bytes: u32) -> Result<Self, NativeAqlSubmissionErrorV1> {
         Self::from_counters(ring_bytes, 0, 0)
+    }
+
+    pub(super) fn poison(&mut self) {
+        self.phase = SubmissionPhaseV1::Poisoned;
     }
 
     fn from_counters(
@@ -225,10 +232,45 @@ pub(super) fn initialize_control_atomics(
     Ok(())
 }
 
-/// Reproduces the pinned ROCr `fill_cwsr_header` layout for no event payload.
-/// Zero event fields are admitted only for the current non-launching slice.
-pub(super) fn initialize_gfx942_cwsr_headers(
+pub(crate) fn gfx942_cwsr_header_bytes(
+    xcc: usize,
+    payload: KfdQueueExceptionPayloadAddressV1,
+    event_id: KfdSignalEventIdV1,
+) -> Result<[u8; CWSR_HEADER_BYTES], NativeAqlSubmissionErrorV1> {
+    if xcc >= GFX942_CWSR_XCC_COUNT_V1 {
+        return Err(NativeAqlSubmissionErrorV1::InvalidCwsr("XCC index"));
+    }
+    let debug_offset = u32::try_from(
+        (GFX942_CWSR_XCC_COUNT_V1 - xcc)
+            .checked_mul(GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1)
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidCwsr("debug offset"))?,
+    )
+    .map_err(|_| NativeAqlSubmissionErrorV1::InvalidCwsr("debug offset width"))?;
+    let header = KfdContextSaveAreaHeaderV1::new_queue_exception(
+        debug_offset,
+        GFX942_CWSR_DEBUG_BYTES_TOTAL_V1,
+        payload,
+        event_id,
+    )
+    .map_err(|_| NativeAqlSubmissionErrorV1::InvalidCwsr("typed header"))?;
+    let mut bytes = [0_u8; CWSR_HEADER_BYTES];
+    for (index, word) in header.wave_state_words().iter().enumerate() {
+        let offset = index * 4;
+        bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    bytes[16..20].copy_from_slice(&header.debug_offset().to_le_bytes());
+    bytes[20..24].copy_from_slice(&header.debug_size().to_le_bytes());
+    bytes[24..32].copy_from_slice(&header.error_payload_address().to_le_bytes());
+    bytes[32..36].copy_from_slice(&header.error_event_id().to_le_bytes());
+    bytes[36..40].copy_from_slice(&header.reserved().to_le_bytes());
+    Ok(bytes)
+}
+
+/// Reproduces the pinned ROCr `fill_cwsr_header` layout with one exact event.
+pub(crate) fn initialize_gfx942_cwsr_headers(
     bytes: &mut [u8],
+    payload: KfdQueueExceptionPayloadAddressV1,
+    event_id: KfdSignalEventIdV1,
 ) -> Result<(), NativeAqlSubmissionErrorV1> {
     if bytes.len() != GFX942_CWSR_TOTAL_BYTES_V1 {
         return Err(NativeAqlSubmissionErrorV1::InvalidCwsr("mapping length"));
@@ -240,22 +282,10 @@ pub(super) fn initialize_gfx942_cwsr_headers(
         let end = offset
             .checked_add(CWSR_HEADER_BYTES)
             .ok_or(NativeAqlSubmissionErrorV1::InvalidCwsr("header end"))?;
-        let header = bytes
+        let destination = bytes
             .get_mut(offset..end)
             .ok_or(NativeAqlSubmissionErrorV1::InvalidCwsr("header range"))?;
-        let debug_offset = u32::try_from(
-            (GFX942_CWSR_XCC_COUNT_V1 - xcc)
-                .checked_mul(GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1)
-                .ok_or(NativeAqlSubmissionErrorV1::InvalidCwsr("debug offset"))?,
-        )
-        .map_err(|_| NativeAqlSubmissionErrorV1::InvalidCwsr("debug offset width"))?;
-
-        // Control/wave fields stay zero until the kernel writes save state.
-        header.fill(0);
-        header[16..20].copy_from_slice(&debug_offset.to_le_bytes());
-        header[20..24].copy_from_slice(&GFX942_CWSR_DEBUG_BYTES_TOTAL_V1.to_le_bytes());
-        // ErrorReason (24..32), ErrorEventId (32..36), and Reserved1
-        // (36..40) remain exactly zero because this slice has no event.
+        destination.copy_from_slice(&gfx942_cwsr_header_bytes(xcc, payload, event_id)?);
     }
     Ok(())
 }
@@ -586,7 +616,9 @@ mod tests {
     #[test]
     fn cwsr_headers_match_pinned_rocr_layout() {
         let mut bytes = vec![0xff; GFX942_CWSR_TOTAL_BYTES_V1];
-        initialize_gfx942_cwsr_headers(&mut bytes).unwrap();
+        let payload = KfdQueueExceptionPayloadAddressV1::new(0x1000).unwrap();
+        let event = KfdSignalEventIdV1::new(7).unwrap();
+        initialize_gfx942_cwsr_headers(&mut bytes, payload, event).unwrap();
         for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
             let offset = xcc * GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1;
             let header = &bytes[offset..offset + CWSR_HEADER_BYTES];
@@ -599,13 +631,19 @@ mod tests {
                 u32::from_le_bytes(header[20..24].try_into().unwrap()),
                 GFX942_CWSR_DEBUG_BYTES_TOTAL_V1
             );
-            assert_eq!(&header[24..40], &[0; 16]);
+            assert_eq!(
+                u64::from_le_bytes(header[24..32].try_into().unwrap()),
+                0x1000
+            );
+            assert_eq!(u32::from_le_bytes(header[32..36].try_into().unwrap()), 7);
+            assert_eq!(&header[36..40], &[0; 4]);
         }
         assert!(
             bytes[CWSR_HEADER_BYTES..GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1]
                 .iter()
                 .all(|byte| *byte == 0xff)
         );
-        assert!(initialize_gfx942_cwsr_headers(&mut [0; 4096]).is_err());
+        assert!(initialize_gfx942_cwsr_headers(&mut [0; 4096], payload, event).is_err());
+        assert!(gfx942_cwsr_header_bytes(8, payload, event).is_err());
     }
 }

@@ -22,6 +22,18 @@ pub const KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_SHA256_BYTES: [u8; 32] = [
     0xb0, 0x53, 0xf4, 0x4f, 0xc5, 0xd6, 0x13, 0xb2, 0x27, 0xfd, 0xcd, 0xd6, 0x16, 0xfc, 0xc8, 0x49,
 ];
 
+/// Stable name of the additive process-runtime exception-routing schema.
+pub const KFD_RUNTIME_ENABLE_SCHEMA_ID: &str = "linux-kfd-runtime-enable-1.18-queue-exception-v1";
+
+/// SHA-256 over [`KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST`].
+pub const KFD_RUNTIME_ENABLE_SCHEMA_SHA256: &str =
+    "4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1";
+
+pub const KFD_RUNTIME_ENABLE_SCHEMA_SHA256_BYTES: [u8; 32] = [
+    0x4c, 0x76, 0x2d, 0x1e, 0x35, 0xa5, 0x94, 0x0f, 0x09, 0x72, 0x29, 0x01, 0x51, 0xde, 0x51, 0xe6,
+    0xe1, 0x97, 0x22, 0xf8, 0x18, 0x74, 0xa6, 0x44, 0x6c, 0x66, 0xdd, 0xc7, 0x0a, 0x06, 0x2a, 0xc1,
+];
+
 /// The frozen schemas this additive schema composes without changing their identities.
 pub const KFD_EVENT_PARENT_SCHEMA_BINDINGS: [(&str, &str); 4] = [
     (
@@ -59,6 +71,8 @@ pub const KFD_EVENT_ROCR_AQL_QUEUE_SOURCE_SHA256: &str =
 pub const KFD_EVENT_ROCR_TYPES_HEADER_SHA256: &str =
     "fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e";
 
+pub const KFD_RUNTIME_ENABLE_MODE_ENABLE_MASK: u32 = 1;
+
 pub const KFD_IOC_EVENT_SIGNAL: u32 = 0;
 pub const KFD_IOC_EVENT_NODECHANGE: u32 = 1;
 pub const KFD_IOC_EVENT_DEVICESTATECHANGE: u32 = 2;
@@ -79,6 +93,8 @@ pub const KFD_EVENT_PAGE_MMAP_OFFSET: u64 = 2_u64 << 62;
 pub const KFD_EVENT_PAGE_SLOT_COUNT: usize = KFD_SIGNAL_EVENT_LIMIT as usize;
 pub const KFD_EVENT_PAGE_BYTES: usize = KFD_EVENT_PAGE_SLOT_COUNT * size_of::<u64>();
 pub const KFD_EVENT_SLOT_UNSIGNALED: u64 = u64::MAX;
+/// Exact compatibility slot count when KFD allocates the first signal page.
+pub const KFD_INTERNAL_SIGNAL_PAGE_SLOT_COUNT: u32 = 256;
 
 /// Queue exception codes admitted from `enum kfd_dbg_trap_exception_code`.
 pub const KFD_QUEUE_EXCEPTION_CODES: [u32; 16] =
@@ -264,6 +280,69 @@ pub enum KfdCreateSignalAdmissionErrorV1 {
     NodeId,
     EventId,
     SlotIndex,
+    InternalSignalPageId,
+}
+
+/// Exact `struct kfd_ioctl_runtime_enable_args` wire layout.
+///
+/// Both constructors deliberately exclude a debugger address, TTMP setup, and
+/// capability claims. They describe only the process-global transition needed
+/// to route queue exceptions through a context-save header.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlRuntimeEnableArgsV1 {
+    r_debug: u64,
+    mode_mask: u32,
+    capabilities_mask: u32,
+}
+
+impl KfdIoctlRuntimeEnableArgsV1 {
+    pub const fn new_queue_exception_enable() -> Self {
+        Self {
+            r_debug: 0,
+            mode_mask: KFD_RUNTIME_ENABLE_MODE_ENABLE_MASK,
+            capabilities_mask: 0,
+        }
+    }
+
+    pub const fn new_queue_exception_disable() -> Self {
+        Self {
+            r_debug: 0,
+            mode_mask: 0,
+            capabilities_mask: 0,
+        }
+    }
+
+    pub const fn r_debug(self) -> u64 {
+        self.r_debug
+    }
+
+    pub const fn mode_mask(self) -> u32 {
+        self.mode_mask
+    }
+
+    pub const fn capabilities_mask(self) -> u32 {
+        self.capabilities_mask
+    }
+
+    pub const fn is_exact_queue_exception_enable(self) -> bool {
+        self.r_debug == 0
+            && self.mode_mask == KFD_RUNTIME_ENABLE_MODE_ENABLE_MASK
+            && self.capabilities_mask == 0
+    }
+
+    pub const fn is_exact_queue_exception_disable(self) -> bool {
+        self.r_debug == 0 && self.mode_mask == 0 && self.capabilities_mask == 0
+    }
+
+    /// Reconstructs untrusted bytes for hostile admission tests.
+    pub const fn from_untrusted_wire(r_debug: u64, mode_mask: u32, capabilities_mask: u32) -> Self {
+        Self {
+            r_debug,
+            mode_mask,
+            capabilities_mask,
+        }
+    }
 }
 
 /// Exact `struct kfd_ioctl_create_event_args` wire layout.
@@ -351,6 +430,23 @@ impl KfdIoctlCreateEventArgsV1 {
             trigger_data: self.event_trigger_data,
             slot_index: self.event_slot_index,
         })
+    }
+
+    /// Narrows admission to the active driver's first internally allocated
+    /// signal page, whose compatibility size is exactly 256 slots with zero
+    /// reserved. This does not prove that no foreign KFD client used the
+    /// process first; the live adapter separately owns that process policy.
+    pub const fn admit_first_internal_queue_exception_signal_output(
+        self,
+    ) -> Result<KfdCreatedSignalEventObservationV1, KfdCreateSignalAdmissionErrorV1> {
+        let observation = match self.admit_queue_exception_signal_output() {
+            Ok(observation) => observation,
+            Err(error) => return Err(error),
+        };
+        if observation.id.get() >= KFD_INTERNAL_SIGNAL_PAGE_SLOT_COUNT {
+            return Err(KfdCreateSignalAdmissionErrorV1::InternalSignalPageId);
+        }
+        Ok(observation)
     }
 
     pub const fn event_page_offset(self) -> u64 {
@@ -845,7 +941,20 @@ pub const AMDKFD_IOC_WAIT_EVENTS: IoctlRequest = encode_admitted_ioctl(
     size_of::<KfdIoctlWaitEventsArgsV1>(),
 );
 
+/// Exact Linux generic-IOC encoding of `AMDKFD_IOC_RUNTIME_ENABLE`.
+pub const AMDKFD_IOC_RUNTIME_ENABLE: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    super::AMDKFD_IOCTL_BASE,
+    0x25,
+    size_of::<KfdIoctlRuntimeEnableArgsV1>(),
+);
+
 const _: () = {
+    assert!(size_of::<KfdIoctlRuntimeEnableArgsV1>() == 16);
+    assert!(align_of::<KfdIoctlRuntimeEnableArgsV1>() == 8);
+    assert!(offset_of!(KfdIoctlRuntimeEnableArgsV1, r_debug) == 0);
+    assert!(offset_of!(KfdIoctlRuntimeEnableArgsV1, mode_mask) == 8);
+    assert!(offset_of!(KfdIoctlRuntimeEnableArgsV1, capabilities_mask) == 12);
     assert!(size_of::<KfdIoctlCreateEventArgsV1>() == 32);
     assert!(align_of::<KfdIoctlCreateEventArgsV1>() == 8);
     assert!(offset_of!(KfdIoctlCreateEventArgsV1, event_page_offset) == 0);
@@ -941,4 +1050,34 @@ pub const KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_MANIFEST: &str = concat!(
     "create_signal=auto-reset;node-zero;optional-opaque-first-page-handle;output-mmap-token;id=trigger=slot:1..4095\n",
     "surface=create,destroy,set,reset,wait,signal-data,csa-header,queue-reason\n",
     "authority=wire-only;opaque-addresses;no-fd;no-ioctl;no-mmap;no-deref;no-event;no-queue\n",
+);
+
+/// Canonical identity input for the process-global exception-routing schema.
+///
+/// This composes the frozen event schema without modifying its identity. The
+/// source set is the exact reviewed path for the transition, the queue-trap
+/// routing predicate, and the context-save header/event write. It is not a
+/// transitive kernel-build closure or native operation authority.
+pub const KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-runtime-enable-1.18-queue-exception-v1\n",
+    "target=linux-x86_64-generic-ioc;gfx942\n",
+    "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
+    "parent.event.schema_id=linux-kfd-event-and-queue-exception-1.18-gfx942-v1\n",
+    "parent.event.sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
+    "linux.uapi.path=include/uapi/linux/kfd_ioctl.h\n",
+    "linux.uapi.sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "linux.chardev.path=amd/amdkfd/kfd_chardev.c\n",
+    "linux.chardev.sha256=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
+    "linux.debug.path=amd/amdkfd/kfd_debug.c\n",
+    "linux.debug.sha256=f6c688b75fd25ead43ce3c3961bd0af210f873bad1b29dce8e84bb7fb968fe4d\n",
+    "linux.process.path=amd/amdkfd/kfd_process.c\n",
+    "linux.process.sha256=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
+    "runtime_enable=size:16,align:8,offsets:0,8,12,request:c0104b25\n",
+    "enable=r_debug:0,mode:1,capabilities:0;ttmp-save-excluded\n",
+    "disable=r_debug:0,mode:0,capabilities:0\n",
+    "first-internal-signal-page=256-slots;event-id:1..255\n",
+    "ordering=process-global-enable-before-any-user-queue;queue-destroy-before-event-destroy-before-runtime-disable\n",
+    "failure=all-ioctl-errors-ambiguous;interrupt-retry-excluded;process-fail-stop\n",
+    "scope=queue-exception-routing-preparation;actual-fault-and-delivery-evidence-excluded\n",
+    "authority=wire-only;no-fd;no-ioctl;no-process-or-queue-ownership\n",
 );

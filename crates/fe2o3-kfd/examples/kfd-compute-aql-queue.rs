@@ -29,14 +29,19 @@ fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(observation.doorbell_slice_bytes(), 8192);
     assert!(observation.doorbell_byte_offset() < 8192);
     assert_eq!(observation.doorbell_byte_offset() % 8, 0);
+    assert!((1..=255).contains(&observation.event_id()));
+    assert_eq!(observation.cwsr_shadow_pages(), 8);
     queue.verify_doorbell_dontfork()?;
+    queue.verify_exception_shadows_dontfork()?;
     let destroyed = queue.destroy()?;
     assert_eq!(destroyed.queue_id(), 0);
     assert_eq!(destroyed.released_resources(), 4);
     println!(
-        "profile_sha256={} unique_id={unique_id:016x} queue_id={} ring=4096 roles=ring,control,eop,cwsr gtt_policy=accepted doorbell_slice={} doorbell_byte_offset={} dontfork=confirmed mmio_stores=0 packets=0 destroy=confirmed resources_returned={}",
+        "profile_sha256={} unique_id={unique_id:016x} queue_id={} event_id={} cwsr_shadow_pages={} runtime=enabled-before-create-then-disabled ring=4096 roles=ring,control,eop,cwsr gtt_policy=accepted doorbell_slice={} doorbell_byte_offset={} dontfork=confirmed mmio_stores=0 packets=0 destroy=queue-then-event-then-runtime-confirmed resources_returned={}",
         GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
         observation.queue_id(),
+        observation.event_id(),
+        observation.cwsr_shadow_pages(),
         observation.doorbell_slice_bytes(),
         observation.doorbell_byte_offset(),
         destroyed.released_resources(),

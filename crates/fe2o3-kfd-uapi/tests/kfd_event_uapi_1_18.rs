@@ -57,6 +57,18 @@ fn event_schema_composes_without_mutating_frozen_parents() {
 }
 
 #[test]
+fn runtime_schema_composes_the_frozen_event_schema() {
+    assert_eq!(
+        KFD_RUNTIME_ENABLE_SCHEMA_ID,
+        "linux-kfd-runtime-enable-1.18-queue-exception-v1"
+    );
+    assert!(KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST.contains(KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_SHA256));
+    let digest = Sha256::digest(KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST);
+    assert_eq!(hex(&digest), KFD_RUNTIME_ENABLE_SCHEMA_SHA256);
+    assert_eq!(&digest[..], &KFD_RUNTIME_ENABLE_SCHEMA_SHA256_BYTES);
+}
+
+#[test]
 fn c_layouts_and_ioctl_encodings_are_exact() {
     assert_eq!(
         (
@@ -145,6 +157,45 @@ fn c_layouts_and_ioctl_encodings_are_exact() {
     assert_eq!(AMDKFD_IOC_SET_EVENT, 0x4008_4b0a);
     assert_eq!(AMDKFD_IOC_RESET_EVENT, 0x4008_4b0b);
     assert_eq!(AMDKFD_IOC_WAIT_EVENTS, 0xc018_4b0c);
+    assert_eq!(
+        (
+            size_of::<KfdIoctlRuntimeEnableArgsV1>(),
+            align_of::<KfdIoctlRuntimeEnableArgsV1>()
+        ),
+        (16, 8)
+    );
+    assert_eq!(AMDKFD_IOC_RUNTIME_ENABLE, 0xc010_4b25);
+}
+
+#[test]
+fn runtime_transition_profiles_reject_reserved_or_unmodeled_inputs() {
+    let enable = KfdIoctlRuntimeEnableArgsV1::new_queue_exception_enable();
+    assert_eq!(
+        (
+            enable.r_debug(),
+            enable.mode_mask(),
+            enable.capabilities_mask()
+        ),
+        (0, KFD_RUNTIME_ENABLE_MODE_ENABLE_MASK, 0)
+    );
+    assert!(enable.is_exact_queue_exception_enable());
+    assert!(!enable.is_exact_queue_exception_disable());
+
+    let disable = KfdIoctlRuntimeEnableArgsV1::new_queue_exception_disable();
+    assert!(disable.is_exact_queue_exception_disable());
+    assert!(!disable.is_exact_queue_exception_enable());
+
+    for hostile in [
+        KfdIoctlRuntimeEnableArgsV1::from_untrusted_wire(8, 1, 0),
+        KfdIoctlRuntimeEnableArgsV1::from_untrusted_wire(0, 2, 0),
+        KfdIoctlRuntimeEnableArgsV1::from_untrusted_wire(0, 3, 0),
+        KfdIoctlRuntimeEnableArgsV1::from_untrusted_wire(0, 1, 1),
+        KfdIoctlRuntimeEnableArgsV1::from_untrusted_wire(8, 0, 0),
+        KfdIoctlRuntimeEnableArgsV1::from_untrusted_wire(0, 0, 1),
+    ] {
+        assert!(!hostile.is_exact_queue_exception_enable());
+        assert!(!hostile.is_exact_queue_exception_disable());
+    }
 }
 
 #[test]
@@ -199,6 +250,20 @@ fn queue_exception_signal_creation_binds_every_input_and_output() {
         assert_eq!(created.slot_index(), id);
         assert_eq!(created.event_page_mmap_offset(), KFD_EVENT_PAGE_MMAP_OFFSET);
     }
+    for id in [1, 255] {
+        assert_eq!(
+            created_wire(id)
+                .admit_first_internal_queue_exception_signal_output()
+                .unwrap()
+                .id()
+                .get(),
+            id
+        );
+    }
+    assert_eq!(
+        created_wire(256).admit_first_internal_queue_exception_signal_output(),
+        Err(KfdCreateSignalAdmissionErrorV1::InternalSignalPageId)
+    );
 }
 
 #[test]
