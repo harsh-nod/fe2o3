@@ -18,6 +18,7 @@ use pliron::{
     context::Ptr,
     dialect::{Dialect, DialectName},
     identifier::Identifier,
+    linked_list::ContainsLinkedList,
     location::Location,
     op::{Op, OpBox},
     operation::Operation,
@@ -36,6 +37,10 @@ pub const HARD_MAX_PASSES: usize = 256;
 pub const HARD_MAX_NAME_BYTES: usize = 96;
 pub const HARD_MAX_DIAGNOSTIC_BYTES: usize = 4_096;
 pub const HARD_MAX_DIALECT_REGISTRATION_ACTIONS: usize = 64;
+pub const HARD_MAX_OPERATION_HANDLES: usize = 4_096;
+pub const HARD_MAX_OPERATION_REGIONS: usize = 64;
+pub const HARD_MAX_OPERATION_BLOCKS: usize = 4_096;
+pub const HARD_MAX_OPERATION_CHILDREN: usize = 4_096;
 
 /// Auxiliary-data key for the fe2o3 context-identity locator.
 pub const CONTEXT_IDENTITY_MARKER_KEY: &str = "fe2o3_pliron_context_identity_v1";
@@ -590,6 +595,41 @@ impl fmt::Debug for OperationHandle {
     }
 }
 
+/// A bounded, pointer-free description of one authenticated operation.
+///
+/// Counts describe the operation and its immediate regions, blocks, and child
+/// operations. They do not recursively traverse child operations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OperationShapeV1 {
+    operand_count: usize,
+    result_count: usize,
+    region_count: usize,
+    block_count: usize,
+    child_operation_count: usize,
+}
+
+impl OperationShapeV1 {
+    pub const fn operand_count(self) -> usize {
+        self.operand_count
+    }
+
+    pub const fn result_count(self) -> usize {
+        self.result_count
+    }
+
+    pub const fn region_count(self) -> usize {
+        self.region_count
+    }
+
+    pub const fn block_count(self) -> usize {
+        self.block_count
+    }
+
+    pub const fn child_operation_count(self) -> usize {
+        self.child_operation_count
+    }
+}
+
 /// Bounded failures from an owner-aware operation handle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationHandleError {
@@ -599,6 +639,10 @@ pub enum OperationHandleError {
     ForeignSession,
     StaleHandle,
     HandleSpaceExhausted,
+    TooManyOperationHandles,
+    TooManyOperationRegions,
+    TooManyOperationBlocks,
+    TooManyOperationChildren,
     UpstreamPanicked,
 }
 
@@ -616,6 +660,18 @@ impl fmt::Display for OperationHandleError {
             Self::StaleHandle => formatter.write_str("operation handle is stale"),
             Self::HandleSpaceExhausted => {
                 formatter.write_str("operation handle identity space is exhausted")
+            }
+            Self::TooManyOperationHandles => {
+                formatter.write_str("operation handle count exceeds the hard limit")
+            }
+            Self::TooManyOperationRegions => {
+                formatter.write_str("operation region count exceeds the hard limit")
+            }
+            Self::TooManyOperationBlocks => {
+                formatter.write_str("operation block count exceeds the hard limit")
+            }
+            Self::TooManyOperationChildren => {
+                formatter.write_str("child operation count exceeds the hard limit")
             }
             Self::UpstreamPanicked => formatter.write_str("Pliron operation access panicked"),
         }
@@ -761,6 +817,40 @@ impl PlironSession {
         })
     }
 
+    /// Returns a bounded, pointer-free description of an authenticated operation.
+    pub fn operation_shape(
+        &mut self,
+        handle: &OperationHandle,
+    ) -> Result<OperationShapeV1, OperationHandleError> {
+        self.with_operation(handle, inspect_operation)
+            .and_then(|inspection| inspection.map(|(shape, _)| shape))
+    }
+
+    /// Tests an authenticated operation's concrete Pliron type without exposing it.
+    pub fn operation_is<O: Op>(
+        &mut self,
+        handle: &OperationHandle,
+    ) -> Result<bool, OperationHandleError> {
+        self.with_operation(handle, |pointer, context| {
+            Operation::is_op::<O>(pointer, context)
+        })
+    }
+
+    /// Returns stable owner-aware handles for immediate child operations.
+    ///
+    /// Children are ordered by region, block, and operation order. Traversal and
+    /// handle allocation are preflighted, so a limit failure changes no registry
+    /// state.
+    pub fn operation_children(
+        &mut self,
+        handle: &OperationHandle,
+    ) -> Result<Vec<OperationHandle>, OperationHandleError> {
+        let (_, children) = self
+            .with_operation(handle, inspect_operation)
+            .and_then(|inspection| inspection)?;
+        self.register_operation_pointers(&children)
+    }
+
     /// Erases an authenticated operation, invalidating all clones of its handle.
     pub fn erase_operation(
         &mut self,
@@ -822,6 +912,9 @@ impl PlironSession {
     fn allocate_operation_handle(
         &mut self,
     ) -> Result<OperationHandleIdentity, OperationHandleError> {
+        if self.operations.len() >= HARD_MAX_OPERATION_HANDLES {
+            return Err(OperationHandleError::TooManyOperationHandles);
+        }
         let identity = self
             .next_operation_handle
             .take()
@@ -830,6 +923,103 @@ impl PlironSession {
         self.next_operation_handle = identity.0.get().checked_add(1).and_then(NonZeroU64::new);
         Ok(identity)
     }
+
+    fn register_operation_pointers(
+        &mut self,
+        pointers: &[Ptr<Operation>],
+    ) -> Result<Vec<OperationHandle>, OperationHandleError> {
+        let mut unseen = Vec::new();
+        for pointer in pointers {
+            let registered = self
+                .operations
+                .values()
+                .any(|registered| registered == pointer);
+            if !registered && !unseen.contains(pointer) {
+                unseen.push(*pointer);
+            }
+        }
+
+        let final_count = self
+            .operations
+            .len()
+            .checked_add(unseen.len())
+            .ok_or(OperationHandleError::TooManyOperationHandles)?;
+        if final_count > HARD_MAX_OPERATION_HANDLES {
+            return Err(OperationHandleError::TooManyOperationHandles);
+        }
+        if let Some(required_offset) = unseen.len().checked_sub(1) {
+            let start = self
+                .next_operation_handle
+                .ok_or(OperationHandleError::HandleSpaceExhausted)?;
+            let required_offset = u64::try_from(required_offset)
+                .map_err(|_| OperationHandleError::HandleSpaceExhausted)?;
+            start
+                .get()
+                .checked_add(required_offset)
+                .ok_or(OperationHandleError::HandleSpaceExhausted)?;
+        }
+
+        for pointer in unseen {
+            let identity = self.allocate_operation_handle()?;
+            self.operations.insert(identity, pointer);
+        }
+
+        pointers
+            .iter()
+            .map(|pointer| {
+                let identity = self
+                    .operations
+                    .iter()
+                    .find_map(|(identity, registered)| (registered == pointer).then_some(*identity))
+                    .expect("preflighted operation pointer is registered");
+                Ok(OperationHandle {
+                    owner: self.identity,
+                    identity,
+                })
+            })
+            .collect()
+    }
+}
+
+fn inspect_operation(
+    pointer: Ptr<Operation>,
+    context: &mut Context,
+) -> Result<(OperationShapeV1, Vec<Ptr<Operation>>), OperationHandleError> {
+    let operation = pointer.deref(context);
+    let region_count = operation.num_regions();
+    if region_count > HARD_MAX_OPERATION_REGIONS {
+        return Err(OperationHandleError::TooManyOperationRegions);
+    }
+
+    let mut block_count = 0_usize;
+    let mut children = Vec::new();
+    for region in operation.regions() {
+        for block in region.deref(context).iter(context) {
+            block_count = block_count
+                .checked_add(1)
+                .ok_or(OperationHandleError::TooManyOperationBlocks)?;
+            if block_count > HARD_MAX_OPERATION_BLOCKS {
+                return Err(OperationHandleError::TooManyOperationBlocks);
+            }
+            for child in block.deref(context).iter(context) {
+                if children.len() == HARD_MAX_OPERATION_CHILDREN {
+                    return Err(OperationHandleError::TooManyOperationChildren);
+                }
+                children.push(child);
+            }
+        }
+    }
+
+    Ok((
+        OperationShapeV1 {
+            operand_count: operation.get_num_operands(),
+            result_count: operation.get_num_results(),
+            region_count,
+            block_count,
+            child_operation_count: children.len(),
+        },
+        children,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -929,6 +1119,7 @@ impl PassPlan {
 #[cfg(test)]
 mod owner_handle_tests {
     use super::*;
+    use pliron::builtin::op_interfaces::SingleBlockRegionInterface;
 
     fn session() -> PlironSession {
         PlironSession::new(ShellLimits::default(), []).expect("fresh session")
@@ -1060,6 +1251,61 @@ mod owner_handle_tests {
             Err(OperationHandleError::HandleSpaceExhausted)
         ));
         assert!(session.operations.is_empty());
+    }
+
+    #[test]
+    fn typed_graph_inspection_returns_stable_owner_handles() {
+        let mut session = session();
+        let root = session.create_module("root").expect("root module");
+        let child_pointer = session
+            .with_operation(&root, |pointer, context| {
+                let root = ModuleOp::from_operation(pointer);
+                let child = ModuleOp::new(context, "child".try_into().expect("valid name"));
+                root.append_operation(context, child.get_operation(), 0);
+                child.get_operation()
+            })
+            .expect("append child");
+
+        assert_eq!(
+            session.operation_shape(&root),
+            Ok(OperationShapeV1 {
+                operand_count: 0,
+                result_count: 0,
+                region_count: 1,
+                block_count: 1,
+                child_operation_count: 1,
+            })
+        );
+        assert_eq!(session.operation_is::<ModuleOp>(&root), Ok(true));
+
+        let first = session.operation_children(&root).expect("first traversal");
+        let second = session.operation_children(&root).expect("second traversal");
+        assert_eq!(first.len(), 1);
+        assert!(first[0].identity == second[0].identity);
+        assert_eq!(session.operations[&first[0].identity], child_pointer);
+        assert_eq!(session.operation_is::<ModuleOp>(&first[0]), Ok(true));
+    }
+
+    #[test]
+    fn child_handle_allocation_is_preflighted() {
+        let mut session = session();
+        let root = session.create_module("root").expect("root module");
+        session
+            .with_operation(&root, |pointer, context| {
+                let root = ModuleOp::from_operation(pointer);
+                let child = ModuleOp::new(context, "child".try_into().expect("valid name"));
+                root.append_operation(context, child.get_operation(), 0);
+            })
+            .expect("append child");
+        session.next_operation_handle = None;
+
+        assert!(matches!(
+            session.operation_children(&root),
+            Err(OperationHandleError::HandleSpaceExhausted)
+        ));
+        assert_eq!(session.operations.len(), 1);
+        assert!(!session.is_poisoned());
+        assert_eq!(session.operation_result_count(&root), Ok(0));
     }
 
     #[cfg(feature = "internal-test-context-access")]
