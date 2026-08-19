@@ -1,20 +1,33 @@
-#![forbid(unsafe_code)]
 #![deny(missing_docs)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 //! Guarded case preparation and fail-closed protected-execution contracts for
 //! the issue #138 general tiled GEMM.
 //!
-//! This package performs no device execution. The authority and argument types
-//! intentionally have no constructors until the source, proof, artifact, and
-//! protected runtime joins exist.
+//! This package cannot yet perform device execution because the authority type
+//! intentionally has no constructor. The generated user kernel remains safe
+//! Rust; only the private reviewed host adapter contains documented native HSA
+//! calls, behind the unavailable final authority.
 
-use core::{fmt, marker::PhantomData, ops::Range};
+use core::{fmt, ops::Range};
 
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_general_gemm_compiler::{
-    GENERAL_GEMM_DEVICE_TARGET_V1, GeneralGemmArtifactBindingIdentityV1,
-    GeneralGemmCompilationBindingIdentityV1, GeneralGemmRuntimeAbiIdentityV1,
-    GeneralGemmRuntimeAbiSnapshotV1, GeneralGemmScheduleIdentityV1, GeneralGemmScheduleV1,
+    GENERAL_GEMM_DEVICE_TARGET_V1, GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1,
+    GENERAL_GEMM_KERNEL_SYMBOL_V1, GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1,
+    GeneralGemmArtifactBindingIdentityV1, GeneralGemmCompilationBindingIdentityV1,
+    GeneralGemmRuntimeAbiIdentityV1, GeneralGemmRuntimeAbiSnapshotV1,
+    GeneralGemmScheduleIdentityV1, GeneralGemmScheduleV1,
+};
+use fe2o3_host::{
+    HsaDispatchObservationV1, HsaExecutableObjectIdentityV1,
+    HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
+    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, ReviewedHsaExecutableLifecycleAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1,
+};
+use fe2o3_hsa_runtime::{
+    HsaRuntimeAdapterError, ReviewedHsaExecutableV1, ReviewedHsaHardwareTestBufferV1,
+    ReviewedHsaKernelV1, ReviewedHsaRuntimeAdapterV1,
 };
 use fe2o3_tiled_gemm_v1::{
     GeneralGemmPlanV1, GeneralGemmRequestV1, GeneralLaunchLimitsV1, GeneralPlanErrorV1,
@@ -30,6 +43,14 @@ pub const GENERAL_GEMM_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 pub const GENERAL_GEMM_LDS_BYTES_V1: u32 = 1_024;
 /// Number of typed runtime arguments in the safe source ABI.
 pub const GENERAL_GEMM_ARGUMENT_COUNT_V1: usize = 11;
+/// Number of physical kernarg components after lowering three slice pairs.
+pub const GENERAL_GEMM_PHYSICAL_ARGUMENT_COUNT_V1: usize = 14;
+/// Fixed AMDHSA code-object V6 implicit kernarg suffix.
+pub const GENERAL_GEMM_IMPLICIT_KERNARG_BYTES_V1: usize = 256;
+/// Stack alignment used for the complete generated kernarg image.
+pub const GENERAL_GEMM_KERNARG_STORAGE_ALIGNMENT_V1: usize = 16;
+/// Exact HSA kernarg-segment alignment in the compiler-generated descriptor.
+pub const GENERAL_GEMM_KERNARG_SEGMENT_ALIGNMENT_V1: u64 = 8;
 /// The protected execution join is intentionally unavailable at this checkpoint.
 pub const GENERAL_GEMM_PROTECTED_EXECUTION_AVAILABLE_V1: bool = false;
 
@@ -481,6 +502,85 @@ impl GeneralGemmProtectedLaunchContractV1 {
     }
 }
 
+/// Physical role of one compiler-generated kernarg component.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralGemmPhysicalArgumentKindV1 {
+    /// Global device pointer from a logical slice.
+    SlicePointer,
+    /// `u64` element count from a logical slice.
+    SliceLength,
+    /// By-value `u32` scalar.
+    U32,
+    /// By-value FP32 bit pattern.
+    F32,
+}
+
+/// One exact component in the generated 11-logical/14-physical ABI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralGemmPhysicalArgumentLayoutV1 {
+    logical_index: u8,
+    kind: GeneralGemmPhysicalArgumentKindV1,
+    offset: u8,
+    size: u8,
+}
+
+impl GeneralGemmPhysicalArgumentLayoutV1 {
+    const fn new(
+        logical_index: u8,
+        kind: GeneralGemmPhysicalArgumentKindV1,
+        offset: u8,
+        size: u8,
+    ) -> Self {
+        Self {
+            logical_index,
+            kind,
+            offset,
+            size,
+        }
+    }
+
+    /// Returns the source-level argument position in `0..11`.
+    pub const fn logical_index(self) -> u8 {
+        self.logical_index
+    }
+
+    /// Returns the lowered physical component role.
+    pub const fn kind(self) -> GeneralGemmPhysicalArgumentKindV1 {
+        self.kind
+    }
+
+    /// Returns `[byte offset, byte size]` in the explicit kernarg prefix.
+    pub const fn byte_layout(self) -> [u8; 2] {
+        [self.offset, self.size]
+    }
+}
+
+const SLICE_POINTER: GeneralGemmPhysicalArgumentKindV1 =
+    GeneralGemmPhysicalArgumentKindV1::SlicePointer;
+const SLICE_LENGTH: GeneralGemmPhysicalArgumentKindV1 =
+    GeneralGemmPhysicalArgumentKindV1::SliceLength;
+const U32_ARGUMENT: GeneralGemmPhysicalArgumentKindV1 = GeneralGemmPhysicalArgumentKindV1::U32;
+const F32_ARGUMENT: GeneralGemmPhysicalArgumentKindV1 = GeneralGemmPhysicalArgumentKindV1::F32;
+
+/// Canonical physical ABI emitted by the generated general-GEMM adapter.
+pub const GENERAL_GEMM_PHYSICAL_ARGUMENT_LAYOUT_V1: [GeneralGemmPhysicalArgumentLayoutV1;
+    GENERAL_GEMM_PHYSICAL_ARGUMENT_COUNT_V1] = [
+    GeneralGemmPhysicalArgumentLayoutV1::new(0, SLICE_POINTER, 0, 8),
+    GeneralGemmPhysicalArgumentLayoutV1::new(0, SLICE_LENGTH, 8, 8),
+    GeneralGemmPhysicalArgumentLayoutV1::new(1, SLICE_POINTER, 16, 8),
+    GeneralGemmPhysicalArgumentLayoutV1::new(1, SLICE_LENGTH, 24, 8),
+    GeneralGemmPhysicalArgumentLayoutV1::new(2, SLICE_POINTER, 32, 8),
+    GeneralGemmPhysicalArgumentLayoutV1::new(2, SLICE_LENGTH, 40, 8),
+    GeneralGemmPhysicalArgumentLayoutV1::new(3, U32_ARGUMENT, 48, 4),
+    GeneralGemmPhysicalArgumentLayoutV1::new(4, U32_ARGUMENT, 52, 4),
+    GeneralGemmPhysicalArgumentLayoutV1::new(5, U32_ARGUMENT, 56, 4),
+    GeneralGemmPhysicalArgumentLayoutV1::new(6, U32_ARGUMENT, 60, 4),
+    GeneralGemmPhysicalArgumentLayoutV1::new(7, U32_ARGUMENT, 64, 4),
+    GeneralGemmPhysicalArgumentLayoutV1::new(8, U32_ARGUMENT, 68, 4),
+    GeneralGemmPhysicalArgumentLayoutV1::new(9, F32_ARGUMENT, 72, 4),
+    GeneralGemmPhysicalArgumentLayoutV1::new(10, F32_ARGUMENT, 76, 4),
+];
+
 /// Linear protected authority required by the future real hardware harness.
 ///
 /// Fields are private and there is no constructor. In particular, raw artifact
@@ -490,14 +590,18 @@ pub struct GeneralGemmProtectedHardwareAuthorityV1 {
     compilation_binding: GeneralGemmCompilationBindingIdentityV1,
     schedule: GeneralGemmScheduleIdentityV1,
     schedule_proof: GeneralGemmEvidenceIdentityV1,
-    machine_refinement: [u8; 32],
-    final_proof_admission: [u8; 32],
+    proof_and_numerical: [u8; 32],
+    machine_inspection: [u8; 32],
+    rustc_final_join: [u8; 32],
     artifact: GeneralGemmArtifactBindingIdentityV1,
     runtime_abi: GeneralGemmRuntimeAbiIdentityV1,
+    runtime_abi_snapshot: GeneralGemmRuntimeAbiSnapshotV1,
     publication: [u8; 32],
     application: [u8; 32],
     observed_device: [u8; 32],
     reviewed_runtime: [u8; 32],
+    hsa_executable: HsaExecutableObjectIdentityV1,
+    hsa_kernel: HsaKernelObjectIdentityV1,
 }
 
 impl GeneralGemmProtectedHardwareAuthorityV1 {
@@ -516,14 +620,14 @@ impl GeneralGemmProtectedHardwareAuthorityV1 {
         self.schedule_proof
     }
 
-    /// Returns the exact post-artifact machine-refinement evidence identity.
-    pub const fn machine_refinement_identity(&self) -> &[u8; 32] {
-        &self.machine_refinement
+    /// Returns the verifier-owned schedule/numerical evidence identity.
+    pub const fn proof_and_numerical_identity(&self) -> &[u8; 32] {
+        &self.proof_and_numerical
     }
 
-    /// Returns the verifier-owned final admission identity.
-    pub const fn final_proof_admission_identity(&self) -> &[u8; 32] {
-        &self.final_proof_admission
+    /// Returns finalizer machine inspection and rustc three-owner join identities.
+    pub const fn final_authority_identities(&self) -> [[u8; 32]; 2] {
+        [self.machine_inspection, self.rustc_final_join]
     }
 
     /// Returns the exact source-bound artifact identity.
@@ -536,6 +640,11 @@ impl GeneralGemmProtectedHardwareAuthorityV1 {
         self.runtime_abi
     }
 
+    /// Returns exact launch-time values joined to the runtime ABI identity.
+    pub const fn runtime_abi_snapshot(&self) -> GeneralGemmRuntimeAbiSnapshotV1 {
+        self.runtime_abi_snapshot
+    }
+
     /// Returns publication, application, device, and runtime identities.
     pub const fn protected_runtime_identities(&self) -> [[u8; 32]; 4] {
         [
@@ -545,23 +654,89 @@ impl GeneralGemmProtectedHardwareAuthorityV1 {
             self.reviewed_runtime,
         ]
     }
+
+    /// Returns the exact loaded executable identity.
+    pub const fn hsa_executable_identity(&self) -> HsaExecutableObjectIdentityV1 {
+        self.hsa_executable
+    }
+
+    /// Returns the exact resolved-kernel identity.
+    pub const fn hsa_kernel_identity(&self) -> HsaKernelObjectIdentityV1 {
+        self.hsa_kernel
+    }
 }
 
-/// Linear eleven-slot arguments required by the future protected adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneralGemmPhysicalArgumentsV1 {
+    a_address: u64,
+    b_address: u64,
+    c_address: u64,
+}
+
+/// Linear eleven-slot arguments required by the protected adapter.
 ///
-/// The lifetime markers preserve shared A/B and unique C ownership. There is
-/// no public constructor until generated device views and the checked runtime
-/// ABI are joined by the protected host layer.
-#[derive(Debug)]
+/// Construction requires the unforgeable final authority. Shared A/B and
+/// unique C borrows retain all three HSA allocations through synchronous
+/// completion; no pointer or raw kernarg accessor is exposed.
 pub struct GeneralGemmProtectedArgumentsV1<'buffers> {
     snapshot: GeneralGemmRuntimeAbiSnapshotV1,
+    runtime_abi_identity: GeneralGemmRuntimeAbiIdentityV1,
+    schedule_identity: GeneralGemmScheduleIdentityV1,
     launch: GeneralGemmProtectedLaunchContractV1,
-    _a: PhantomData<&'buffers [u16]>,
-    _b: PhantomData<&'buffers [u16]>,
-    _c: PhantomData<&'buffers mut [f32]>,
+    physical: GeneralGemmPhysicalArgumentsV1,
+    _a: &'buffers ReviewedHsaHardwareTestBufferV1,
+    _b: &'buffers ReviewedHsaHardwareTestBufferV1,
+    _c: &'buffers mut ReviewedHsaHardwareTestBufferV1,
 }
 
-impl GeneralGemmProtectedArgumentsV1<'_> {
+impl<'buffers> GeneralGemmProtectedArgumentsV1<'buffers> {
+    /// Checks exact guarded buffer extents and derives all 14 physical values.
+    pub fn checked_hardware_buffers(
+        authority: &GeneralGemmProtectedHardwareAuthorityV1,
+        prepared: &PreparedGeneralGemmHardwareCaseV1,
+        a: &'buffers ReviewedHsaHardwareTestBufferV1,
+        b: &'buffers ReviewedHsaHardwareTestBufferV1,
+        c: &'buffers mut ReviewedHsaHardwareTestBufferV1,
+    ) -> Result<Self, GeneralGemmProtectedLaunchErrorV1> {
+        let snapshot = runtime_snapshot(prepared)?;
+        if snapshot != authority.runtime_abi_snapshot
+            || prepared.case.schedule.identity() != authority.schedule
+        {
+            return Err(GeneralGemmProtectedLaunchErrorV1::AuthoritySubstitution);
+        }
+        let a_bytes = checked_element_bytes(prepared.a.allocation().len(), 2, "A")?;
+        let b_bytes = checked_element_bytes(prepared.b.allocation().len(), 2, "B")?;
+        let c_bytes = checked_element_bytes(prepared.c_initial.allocation().len(), 4, "C")?;
+        for (actual, expected, role) in [
+            (a.byte_len(), a_bytes, "A"),
+            (b.byte_len(), b_bytes, "B"),
+            (c.byte_len(), c_bytes, "C"),
+        ] {
+            if actual != expected {
+                return Err(GeneralGemmProtectedLaunchErrorV1::BufferExtent { role });
+            }
+        }
+        let physical = GeneralGemmPhysicalArgumentsV1 {
+            a_address: a.device_address(checked_element_bytes(prepared.a.body.start, 2, "A")?)?,
+            b_address: b.device_address(checked_element_bytes(prepared.b.body.start, 2, "B")?)?,
+            c_address: c.device_address(checked_element_bytes(
+                prepared.c_initial.body.start,
+                4,
+                "C",
+            )?)?,
+        };
+        Ok(Self {
+            snapshot,
+            runtime_abi_identity: authority.runtime_abi,
+            schedule_identity: authority.schedule,
+            launch: GeneralGemmProtectedLaunchContractV1::from_prepared(prepared),
+            physical,
+            _a: a,
+            _b: b,
+            _c: c,
+        })
+    }
+
     /// Returns exact lengths, dimensions, strides, and coefficient bits.
     pub const fn runtime_abi(&self) -> GeneralGemmRuntimeAbiSnapshotV1 {
         self.snapshot
@@ -571,6 +746,350 @@ impl GeneralGemmProtectedArgumentsV1<'_> {
     pub const fn launch_contract(&self) -> GeneralGemmProtectedLaunchContractV1 {
         self.launch
     }
+}
+
+/// Failure before or during the one-shot protected HSA dispatch.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum GeneralGemmProtectedLaunchErrorV1 {
+    /// A runtime value conflicted with the consumed final authority.
+    AuthoritySubstitution,
+    /// A guarded HSA allocation did not have the exact host allocation extent.
+    BufferExtent {
+        /// Matrix whose allocation extent differed.
+        role: &'static str,
+    },
+    /// An element-to-byte conversion overflowed before any native operation.
+    BufferExtentOverflow {
+        /// Matrix whose byte conversion overflowed.
+        role: &'static str,
+    },
+    /// The reviewed HSA adapter rejected an allocation, kernarg, or dispatch.
+    Hsa(HsaRuntimeAdapterError),
+    /// A loaded-object or resolved-kernel observation conflicted with authority.
+    ResolutionSubstitution(&'static str),
+    /// The reviewed implicit-kernarg observation conflicted with the exact call.
+    ImplicitObservationSubstitution(&'static str),
+    /// Implicit-kernarg preparation or dispatch changed the generated prefix.
+    ExplicitKernargMutation,
+    /// The synchronous dispatch observation conflicted with the exact call.
+    DispatchObservationSubstitution(&'static str),
+}
+
+impl fmt::Display for GeneralGemmProtectedLaunchErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AuthoritySubstitution => {
+                formatter.write_str("general GEMM runtime values substituted final authority")
+            }
+            Self::BufferExtent { role } => {
+                write!(
+                    formatter,
+                    "general GEMM {role} HSA allocation has the wrong extent"
+                )
+            }
+            Self::BufferExtentOverflow { role } => {
+                write!(
+                    formatter,
+                    "general GEMM {role} allocation byte extent overflowed"
+                )
+            }
+            Self::Hsa(error) => write!(formatter, "reviewed HSA operation failed: {error}"),
+            Self::ResolutionSubstitution(field) => {
+                write!(formatter, "general GEMM HSA resolution substituted {field}")
+            }
+            Self::ImplicitObservationSubstitution(field) => {
+                write!(
+                    formatter,
+                    "general GEMM implicit kernarg substituted {field}"
+                )
+            }
+            Self::ExplicitKernargMutation => {
+                formatter.write_str("reviewed HSA operation mutated explicit general GEMM kernargs")
+            }
+            Self::DispatchObservationSubstitution(field) => {
+                write!(formatter, "general GEMM HSA dispatch substituted {field}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GeneralGemmProtectedLaunchErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Hsa(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<HsaRuntimeAdapterError> for GeneralGemmProtectedLaunchErrorV1 {
+    fn from(error: HsaRuntimeAdapterError) -> Self {
+        Self::Hsa(error)
+    }
+}
+
+/// Typed completion of one authority-bound synchronous HSA dispatch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralGemmProtectedDispatchCompletionV1 {
+    compilation_binding: GeneralGemmCompilationBindingIdentityV1,
+    artifact: GeneralGemmArtifactBindingIdentityV1,
+    schedule: GeneralGemmScheduleIdentityV1,
+    dispatch: [u8; 16],
+}
+
+impl GeneralGemmProtectedDispatchCompletionV1 {
+    /// Returns the compilation unit bound by the consumed authority.
+    pub const fn compilation_binding_identity(&self) -> GeneralGemmCompilationBindingIdentityV1 {
+        self.compilation_binding
+    }
+
+    /// Returns the finalized artifact binding bound by the consumed authority.
+    pub const fn artifact_identity(&self) -> GeneralGemmArtifactBindingIdentityV1 {
+        self.artifact
+    }
+
+    /// Returns the independently qualified schedule identity.
+    pub const fn schedule_identity(&self) -> GeneralGemmScheduleIdentityV1 {
+        self.schedule
+    }
+
+    /// Returns the reviewed synchronous HSA dispatch identity.
+    pub const fn dispatch_identity(&self) -> [u8; 16] {
+        self.dispatch
+    }
+
+    /// Dispatch completion alone is not bitwise CPU-oracle evidence.
+    pub const fn grants_protected_execution_evidence(&self) -> bool {
+        false
+    }
+}
+
+#[repr(C, align(16))]
+struct GeneralGemmAlignedKernargV1([u8; GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1 as usize]);
+
+/// Packs and synchronously dispatches the exact generated general-GEMM ABI.
+///
+/// This is the only launch surface in this package. It consumes the opaque
+/// final authority, accepts only reviewed HSA objects, and exposes neither
+/// device addresses nor the generated kernarg bytes. The authority currently
+/// has no constructor; rustc-codegen will own that final construction join.
+pub fn launch_general_gemm_protected_v1(
+    authority: GeneralGemmProtectedHardwareAuthorityV1,
+    arguments: GeneralGemmProtectedArgumentsV1<'_>,
+    runtime: &mut ReviewedHsaRuntimeAdapterV1,
+    executable: &ReviewedHsaExecutableV1,
+    kernel: &ReviewedHsaKernelV1,
+    resolution: &HsaKernelResolutionObservationV1,
+) -> Result<GeneralGemmProtectedDispatchCompletionV1, GeneralGemmProtectedLaunchErrorV1> {
+    if arguments.runtime_abi_identity != authority.runtime_abi
+        || arguments.snapshot != authority.runtime_abi_snapshot
+        || arguments.schedule_identity != authority.schedule
+        || arguments.launch.workgroup != GENERAL_GEMM_WORKGROUP_V1
+        || arguments.launch.lds_bytes != GENERAL_GEMM_LDS_BYTES_V1
+        || arguments.launch.grid.contains(&0)
+    {
+        return Err(GeneralGemmProtectedLaunchErrorV1::AuthoritySubstitution);
+    }
+    validate_resolution(&authority, resolution)?;
+
+    let geometry = HsaLaunchGeometryV1::new(arguments.launch.grid, arguments.launch.workgroup, 0);
+    let explicit = pack_explicit_kernarg(arguments.snapshot, arguments.physical);
+    let mut kernarg =
+        GeneralGemmAlignedKernargV1([0; GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1 as usize]);
+    kernarg.0[..explicit.len()].copy_from_slice(&explicit);
+    let explicit_before = explicit;
+
+    // SAFETY: the only safe entry consumes final rustc-owned authority and
+    // retains all three checked HSA allocations in `arguments` until both
+    // reviewed operations return. The exact handles, geometry, and complete
+    // compiler-generated COV6 kernarg are independently checked here.
+    let implicit = unsafe {
+        runtime.initialize_implicit_kernarg(
+            executable,
+            kernel,
+            geometry,
+            GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1 as usize,
+            GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1 as usize,
+            GENERAL_GEMM_IMPLICIT_KERNARG_BYTES_V1,
+            &mut kernarg.0,
+        )
+    }?;
+    if kernarg.0[..explicit_before.len()] != explicit_before {
+        return Err(GeneralGemmProtectedLaunchErrorV1::ExplicitKernargMutation);
+    }
+    validate_implicit_observation(&authority, geometry, &implicit)?;
+
+    // SAFETY: implicit initialization succeeded for the same retained handles,
+    // geometry, and byte-exact kernarg. The reviewed adapter contract returns
+    // only before submission or after every device effect has quiesced.
+    let dispatch =
+        unsafe { runtime.launch_and_wait(executable, kernel, geometry, &mut kernarg.0) }?;
+    if kernarg.0[..explicit_before.len()] != explicit_before {
+        return Err(GeneralGemmProtectedLaunchErrorV1::ExplicitKernargMutation);
+    }
+    validate_dispatch_observation(&authority, geometry, &dispatch)?;
+
+    Ok(GeneralGemmProtectedDispatchCompletionV1 {
+        compilation_binding: authority.compilation_binding,
+        artifact: authority.artifact,
+        schedule: authority.schedule,
+        dispatch: dispatch.dispatch_identity(),
+    })
+}
+
+fn runtime_snapshot(
+    prepared: &PreparedGeneralGemmHardwareCaseV1,
+) -> Result<GeneralGemmRuntimeAbiSnapshotV1, GeneralGemmProtectedLaunchErrorV1> {
+    let [a_elements, b_elements, c_elements] = prepared.plan.storage().elements();
+    let request = prepared.plan.request();
+    Ok(GeneralGemmRuntimeAbiSnapshotV1 {
+        a_elements: u64::try_from(a_elements)
+            .map_err(|_| GeneralGemmProtectedLaunchErrorV1::BufferExtentOverflow { role: "A" })?,
+        b_elements: u64::try_from(b_elements)
+            .map_err(|_| GeneralGemmProtectedLaunchErrorV1::BufferExtentOverflow { role: "B" })?,
+        c_elements: u64::try_from(c_elements)
+            .map_err(|_| GeneralGemmProtectedLaunchErrorV1::BufferExtentOverflow { role: "C" })?,
+        dimensions: request.dimensions(),
+        strides: request.strides(),
+        alpha_bits: request.alpha_bits(),
+        beta_bits: request.beta_bits(),
+    })
+}
+
+fn checked_element_bytes(
+    elements: usize,
+    element_bytes: usize,
+    role: &'static str,
+) -> Result<usize, GeneralGemmProtectedLaunchErrorV1> {
+    elements
+        .checked_mul(element_bytes)
+        .ok_or(GeneralGemmProtectedLaunchErrorV1::BufferExtentOverflow { role })
+}
+
+fn pack_explicit_kernarg(
+    snapshot: GeneralGemmRuntimeAbiSnapshotV1,
+    physical: GeneralGemmPhysicalArgumentsV1,
+) -> [u8; GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1 as usize] {
+    let mut bytes = [0; GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1 as usize];
+    put_u64(&mut bytes, 0, physical.a_address);
+    put_u64(&mut bytes, 8, snapshot.a_elements);
+    put_u64(&mut bytes, 16, physical.b_address);
+    put_u64(&mut bytes, 24, snapshot.b_elements);
+    put_u64(&mut bytes, 32, physical.c_address);
+    put_u64(&mut bytes, 40, snapshot.c_elements);
+    for (offset, value) in [48, 52, 56].into_iter().zip(snapshot.dimensions) {
+        put_u32(&mut bytes, offset, value);
+    }
+    for (offset, value) in [60, 64, 68].into_iter().zip(snapshot.strides) {
+        put_u32(&mut bytes, offset, value);
+    }
+    put_u32(&mut bytes, 72, snapshot.alpha_bits);
+    put_u32(&mut bytes, 76, snapshot.beta_bits);
+    bytes
+}
+
+fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn validate_resolution(
+    authority: &GeneralGemmProtectedHardwareAuthorityV1,
+    resolution: &HsaKernelResolutionObservationV1,
+) -> Result<(), GeneralGemmProtectedLaunchErrorV1> {
+    for (matches, field) in [
+        (
+            resolution.executable_object() == authority.hsa_executable,
+            "executable object",
+        ),
+        (
+            resolution.kernel_object() == authority.hsa_kernel,
+            "kernel object",
+        ),
+        (
+            resolution.export_symbol() == GENERAL_GEMM_KERNEL_SYMBOL_V1,
+            "export symbol",
+        ),
+        (
+            resolution.kernarg_segment_size() == u64::from(GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1),
+            "kernarg segment size",
+        ),
+        (
+            resolution.kernarg_segment_alignment() == GENERAL_GEMM_KERNARG_SEGMENT_ALIGNMENT_V1,
+            "kernarg segment alignment",
+        ),
+    ] {
+        if !matches {
+            return Err(GeneralGemmProtectedLaunchErrorV1::ResolutionSubstitution(
+                field,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_implicit_observation(
+    authority: &GeneralGemmProtectedHardwareAuthorityV1,
+    geometry: HsaLaunchGeometryV1,
+    observation: &HsaImplicitKernargInitializationObservationV1,
+) -> Result<(), GeneralGemmProtectedLaunchErrorV1> {
+    for (matches, field) in [
+        (
+            observation.executable_object() == authority.hsa_executable,
+            "executable object",
+        ),
+        (
+            observation.kernel_object() == authority.hsa_kernel,
+            "kernel object",
+        ),
+        (observation.geometry() == geometry, "launch geometry"),
+        (
+            observation.explicit_byte_len() == u64::from(GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1),
+            "explicit byte length",
+        ),
+        (
+            observation.implicit_byte_offset() == u64::from(GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1),
+            "implicit byte offset",
+        ),
+        (
+            observation.implicit_byte_len() == GENERAL_GEMM_IMPLICIT_KERNARG_BYTES_V1 as u64,
+            "implicit byte length",
+        ),
+        (observation.initialized(), "initialization completion"),
+    ] {
+        if !matches {
+            return Err(GeneralGemmProtectedLaunchErrorV1::ImplicitObservationSubstitution(field));
+        }
+    }
+    Ok(())
+}
+
+fn validate_dispatch_observation(
+    authority: &GeneralGemmProtectedHardwareAuthorityV1,
+    geometry: HsaLaunchGeometryV1,
+    observation: &HsaDispatchObservationV1,
+) -> Result<(), GeneralGemmProtectedLaunchErrorV1> {
+    for (matches, field) in [
+        (
+            observation.executable_object() == authority.hsa_executable,
+            "executable object",
+        ),
+        (
+            observation.kernel_object() == authority.hsa_kernel,
+            "kernel object",
+        ),
+        (observation.geometry() == geometry, "launch geometry"),
+        (observation.completed(), "synchronous completion"),
+    ] {
+        if !matches {
+            return Err(GeneralGemmProtectedLaunchErrorV1::DispatchObservationSubstitution(field));
+        }
+    }
+    Ok(())
 }
 
 /// No protected hardware authority can be constructed at this checkpoint.
@@ -697,6 +1216,75 @@ mod tests {
             assert!(cases.iter().any(|case| case.name().contains("zero-k")));
         }
         assert_ne!(REFERENCE.identity(), VECTOR_A.identity());
+    }
+
+    #[test]
+    fn generated_physical_layout_is_exactly_eleven_logical_and_fourteen_physical() {
+        assert_eq!(GENERAL_GEMM_ARGUMENT_COUNT_V1, 11);
+        assert_eq!(GENERAL_GEMM_PHYSICAL_ARGUMENT_LAYOUT_V1.len(), 14);
+        let logical: BTreeSet<_> = GENERAL_GEMM_PHYSICAL_ARGUMENT_LAYOUT_V1
+            .iter()
+            .map(|component| component.logical_index())
+            .collect();
+        assert_eq!(logical, (0_u8..11).collect());
+
+        let mut next_offset = 0_u8;
+        for component in GENERAL_GEMM_PHYSICAL_ARGUMENT_LAYOUT_V1 {
+            let [offset, size] = component.byte_layout();
+            assert_eq!(offset, next_offset);
+            next_offset = next_offset.checked_add(size).unwrap();
+        }
+        assert_eq!(next_offset, GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1 as u8);
+        assert_eq!(
+            GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1 as usize
+                + GENERAL_GEMM_IMPLICIT_KERNARG_BYTES_V1,
+            GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1 as usize
+        );
+        assert_eq!(
+            core::mem::size_of::<GeneralGemmAlignedKernargV1>(),
+            GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1 as usize
+        );
+        assert_eq!(
+            core::mem::align_of::<GeneralGemmAlignedKernargV1>(),
+            GENERAL_GEMM_KERNARG_STORAGE_ALIGNMENT_V1
+        );
+    }
+
+    #[test]
+    fn generated_packer_writes_all_fourteen_components_at_exact_offsets() {
+        let snapshot = GeneralGemmRuntimeAbiSnapshotV1 {
+            a_elements: 0x0102_0304_0506_0708,
+            b_elements: 0x1112_1314_1516_1718,
+            c_elements: 0x2122_2324_2526_2728,
+            dimensions: [0x3132_3334, 0x4142_4344, 0x5152_5354],
+            strides: [0x6162_6364, 0x7172_7374, 0x8182_8384],
+            alpha_bits: 0x9192_9394,
+            beta_bits: 0xa1a2_a3a4,
+        };
+        let physical = GeneralGemmPhysicalArgumentsV1 {
+            a_address: 0xb1b2_b3b4_b5b6_b7b8,
+            b_address: 0xc1c2_c3c4_c5c6_c7c8,
+            c_address: 0xd1d2_d3d4_d5d6_d7d8,
+        };
+        let packed = pack_explicit_kernarg(snapshot, physical);
+        let expected = [
+            physical.a_address.to_le_bytes().as_slice(),
+            snapshot.a_elements.to_le_bytes().as_slice(),
+            physical.b_address.to_le_bytes().as_slice(),
+            snapshot.b_elements.to_le_bytes().as_slice(),
+            physical.c_address.to_le_bytes().as_slice(),
+            snapshot.c_elements.to_le_bytes().as_slice(),
+            snapshot.dimensions[0].to_le_bytes().as_slice(),
+            snapshot.dimensions[1].to_le_bytes().as_slice(),
+            snapshot.dimensions[2].to_le_bytes().as_slice(),
+            snapshot.strides[0].to_le_bytes().as_slice(),
+            snapshot.strides[1].to_le_bytes().as_slice(),
+            snapshot.strides[2].to_le_bytes().as_slice(),
+            snapshot.alpha_bits.to_le_bytes().as_slice(),
+            snapshot.beta_bits.to_le_bytes().as_slice(),
+        ]
+        .concat();
+        assert_eq!(packed.as_slice(), expected);
     }
 
     #[test]

@@ -4,13 +4,21 @@ This standalone package contains the deterministic, guarded MI300X case matrix
 and independent CPU-oracle comparison for the issue #138 general tiled GEMM.
 It covers the reference and A-only-vectorized schedules independently.
 
-There is intentionally no executable entry point yet. The public protected
-authority and argument types have private fields and no constructors. They
-record the exact future join: compiler binding, schedule proof, artifact,
-publication, application, observed `gfx942:xnack-` device, runtime, eleven-slot
-ABI, 64x1x1 workgroup, 2D tiled grid, and 1024-byte LDS allocation. No raw
-HSACO, path, native handle, generic launch, or caller-supplied authority bridge
-is available.
+The package now contains a generated, checked HSA dispatch adapter for the
+11-logical/14-physical ABI. It packs the exact 80-byte explicit prefix, retains
+guarded A/B/C allocations through synchronous completion, initializes the
+256-byte COV6 implicit suffix through the reviewed HSA adapter, and checks the
+executable, kernel, geometry, ABI, initialization, and dispatch observations.
+The adapter accepts no raw HSACO, path, native handle, generic launch, packed
+byte, or caller-supplied authority bridge.
+
+There is intentionally no constructible execution entry point at this
+checkpoint. The protected authority has private fields and no constructor. It
+must eventually come from a same-process rustc-codegen join that consumes the
+opaque frontend correspondence, verifier proof/numerical evidence, and
+finalizer machine inspection, then binds the symbolic artifact to a checked
+concrete launch-time plan and runtime ABI snapshot. The current concrete
+compiler unit is model evidence, not that production artifact authority.
 
 Run the independent preparation and oracle checks with:
 
@@ -19,5 +27,5 @@ cargo test --manifest-path examples/tiled_gemm_general_v1/hardware-harness/Cargo
 ```
 
 Passing these tests is not GPU execution evidence. Protected hardware evidence
-remains blocked until the compiler emits an exact source-bound artifact and the
-runtime consumes the verifier-owned final admission.
+remains blocked on the symbolic lowering/finalization route and the one-shot
+rustc-owned three-party join. The full 14-case matrix has not run on MI300X.

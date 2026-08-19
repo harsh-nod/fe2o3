@@ -387,7 +387,20 @@ dependencies = [
  "fe2o3-worker-v2-bundle",
  "libc",
  "reserved-fe2o3-symbols",
+ "rmpv",
  "rustix",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-hsa-runtime"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "fe2o3-amd-target",
+ "fe2o3-artifacts",
+ "fe2o3-core",
+ "fe2o3-host",
  "sha2",
 ]
 
@@ -487,6 +500,8 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
  "fe2o3-general-gemm-compiler",
+ "fe2o3-host",
+ "fe2o3-hsa-runtime",
  "fe2o3-tiled-gemm-v1",
  "fe2o3-verifier",
 ]

@@ -1106,8 +1106,39 @@ impl HsaImplicitKernargInitializationObservationV1 {
         }
     }
 
+    /// Returns whether the reviewed adapter reported complete initialization.
     pub const fn initialized(&self) -> bool {
         self.initialized
+    }
+
+    /// Returns the executable identity used for initialization.
+    pub const fn executable_object(&self) -> HsaExecutableObjectIdentityV1 {
+        self.executable_object
+    }
+
+    /// Returns the kernel identity used for initialization.
+    pub const fn kernel_object(&self) -> HsaKernelObjectIdentityV1 {
+        self.kernel_object
+    }
+
+    /// Returns the exact launch geometry used to initialize hidden arguments.
+    pub const fn geometry(&self) -> HsaLaunchGeometryV1 {
+        self.geometry
+    }
+
+    /// Returns the preserved explicit prefix length.
+    pub const fn explicit_byte_len(&self) -> u64 {
+        self.explicit_byte_len
+    }
+
+    /// Returns the first byte of the initialized implicit suffix.
+    pub const fn implicit_byte_offset(&self) -> u64 {
+        self.implicit_byte_offset
+    }
+
+    /// Returns the complete initialized implicit suffix length.
+    pub const fn implicit_byte_len(&self) -> u64 {
+        self.implicit_byte_len
     }
 }
 
