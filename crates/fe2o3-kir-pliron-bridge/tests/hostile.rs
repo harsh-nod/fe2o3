@@ -525,7 +525,12 @@ fn transplanted_marker_cannot_transfer_an_envelope_to_an_anchored_context() {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         recover_projected(&foreign, &envelope, &record, BridgeLimits::default())
     }));
-    assert!(matches!(outcome, Ok(Err(BridgeError::ContextMismatch))));
+    assert!(matches!(
+        outcome,
+        Ok(Err(BridgeError::ContextIdentity(
+            ContextIdentityError::CorruptMarker
+        )))
+    ));
 }
 
 #[test]
