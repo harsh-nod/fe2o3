@@ -103,6 +103,7 @@ impl CanonicalLoweringReceiptV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LiveGraphInspectionV1 {
     pub(crate) global_count: u32,
+    pub(crate) intrinsic_count: u32,
     pub(crate) function_count: u32,
     pub(crate) block_count: u32,
     pub(crate) block_argument_count: u32,
@@ -116,6 +117,11 @@ impl LiveGraphInspectionV1 {
     /// Returns the number of live `llvm.global` operations.
     pub const fn global_count(self) -> u32 {
         self.global_count
+    }
+
+    /// Returns the number of live intrinsic `llvm.func` declarations.
+    pub const fn intrinsic_count(self) -> u32 {
+        self.intrinsic_count
     }
 
     /// Returns the number of live `llvm.func` operations.

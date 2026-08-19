@@ -66,6 +66,26 @@ fn lowers_tiled_data_representation_into_a_live_verified_graph() {
 }
 
 #[test]
+fn lowers_every_typed_intrinsic_declaration_and_call() {
+    let source = support::intrinsic_handoff();
+    let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).expect("typed intrinsic lowering");
+    assert_eq!(
+        lowered.profile(),
+        AmdgcnPlironLlvmProfileV1::TiledDataRepresentationGemm
+    );
+    let inspection = lowered.inspect_live_graph().expect("live graph inspection");
+    assert_eq!(inspection, lowered.construction_inspection());
+    assert_eq!(inspection.global_count(), 0);
+    assert_eq!(inspection.intrinsic_count(), 11);
+    assert_eq!(inspection.function_count(), 1);
+    assert_eq!(inspection.block_count(), 1);
+    assert_eq!(inspection.block_argument_count(), 3);
+    assert_eq!(inspection.operation_count(), 21);
+    assert!(inspection.strict_float());
+    assert!(inspection.exact_memory_alignment());
+}
+
+#[test]
 fn receipt_contains_the_exact_canonical_typed_source() {
     let source = support::scalar_handoff();
     let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();

@@ -264,6 +264,155 @@ pub fn tiled_data_handoff() -> Gfx942HandoffV2 {
     Gfx942HandoffV2::new(canonical.base, module).unwrap()
 }
 
+pub fn intrinsic_handoff() -> Gfx942HandoffV2 {
+    let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
+    let source = &canonical.function;
+    let mut instructions = source.blocks()[0].instructions().to_vec();
+    for (next_value, intrinsic) in (6_u32..).zip([
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::X),
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::Y),
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::Z),
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::X),
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::Y),
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::Z),
+    ]) {
+        instructions.push(instruction(
+            Some(TypedValueV2::new(
+                ValueIdV2::new(next_value),
+                ValueTypeV2::Scalar(ScalarTypeV1::I32),
+            )),
+            InstructionKindV2::Call {
+                target: CallTargetV2::Intrinsic(intrinsic),
+                arguments: vec![],
+            },
+            &canonical.evidence,
+        ));
+    }
+    instructions.extend([
+        instruction(
+            Some(TypedValueV2::new(
+                ValueIdV2::new(12),
+                ValueTypeV2::Scalar(ScalarTypeV1::F32),
+            )),
+            InstructionKindV2::Call {
+                target: CallTargetV2::Intrinsic(IntrinsicV2::FmaF32),
+                arguments: vec![ValueIdV2::new(4), ValueIdV2::new(3), ValueIdV2::new(3)],
+            },
+            &canonical.evidence,
+        ),
+        instruction(
+            Some(TypedValueV2::new(
+                ValueIdV2::new(13),
+                ValueTypeV2::Scalar(ScalarTypeV1::F32),
+            )),
+            InstructionKindV2::Call {
+                target: CallTargetV2::Intrinsic(IntrinsicV2::SqrtF32),
+                arguments: vec![ValueIdV2::new(12)],
+            },
+            &canonical.evidence,
+        ),
+        instruction(
+            None,
+            InstructionKindV2::Call {
+                target: CallTargetV2::Intrinsic(IntrinsicV2::AmdGpuBarrier),
+                arguments: vec![],
+            },
+            &canonical.evidence,
+        ),
+        instruction(
+            None,
+            InstructionKindV2::Call {
+                target: CallTargetV2::Intrinsic(IntrinsicV2::Trap),
+                arguments: vec![],
+            },
+            &canonical.evidence,
+        ),
+    ]);
+    let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16);
+    let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32);
+    for (id, element_type) in [(14, ScalarTypeV1::I16), (15, ScalarTypeV1::I16)] {
+        instructions.push(instruction(
+            Some(TypedValueV2::new(ValueIdV2::new(id), i16x4)),
+            InstructionKindV2::VectorZero { element_type },
+            &canonical.evidence,
+        ));
+    }
+    instructions.push(instruction(
+        Some(TypedValueV2::new(ValueIdV2::new(16), f32x4)),
+        InstructionKindV2::VectorZero {
+            element_type: ScalarTypeV1::F32,
+        },
+        &canonical.evidence,
+    ));
+    for id in 17..=19 {
+        instructions.push(instruction(
+            Some(TypedValueV2::new(
+                ValueIdV2::new(id),
+                ValueTypeV2::Scalar(ScalarTypeV1::I32),
+            )),
+            InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I32, 0).unwrap()),
+            &canonical.evidence,
+        ));
+    }
+    instructions.push(instruction(
+        Some(TypedValueV2::new(ValueIdV2::new(20), f32x4)),
+        InstructionKindV2::Call {
+            target: CallTargetV2::Intrinsic(IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k),
+            arguments: vec![
+                ValueIdV2::new(14),
+                ValueIdV2::new(15),
+                ValueIdV2::new(16),
+                ValueIdV2::new(17),
+                ValueIdV2::new(18),
+                ValueIdV2::new(19),
+            ],
+        },
+        &canonical.evidence,
+    ));
+    let function = FunctionV2::new(
+        source.id(),
+        source.symbol(),
+        source.kind(),
+        source.calling_convention(),
+        source.return_type(),
+        source.parameters().to_vec(),
+        source.attributes().to_vec(),
+        source.entry(),
+        vec![BasicBlockV2::new(
+            source.entry(),
+            instructions,
+            TerminatorV2::Return(None),
+        )],
+        canonical.evidence.clone(),
+    )
+    .unwrap();
+    let intrinsics = [
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::X),
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::Y),
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::Z),
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::X),
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::Y),
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::Z),
+        IntrinsicV2::AmdGpuBarrier,
+        IntrinsicV2::FmaF32,
+        IntrinsicV2::SqrtF32,
+        IntrinsicV2::Trap,
+        IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k,
+    ]
+    .into_iter()
+    .map(|intrinsic| IntrinsicReferenceV2::new(intrinsic, canonical.evidence.clone()))
+    .collect();
+    let module = ExecutableModuleV2::new(
+        canonical.flags,
+        canonical.named_metadata,
+        vec![],
+        intrinsics,
+        vec![function],
+    )
+    .unwrap();
+    Gfx942HandoffV2::new(canonical.base, module).unwrap()
+}
+
 pub fn handoff_with_scalar_global() -> Gfx942HandoffV2 {
     let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
     let global = GlobalV2::new(

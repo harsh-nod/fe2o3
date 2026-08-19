@@ -6,10 +6,11 @@ use std::{
 
 use dialect_amdgcn::{AdmittedAmdgcnPlironLlvmV1, admit_amdgcn_pliron_llvm_v1};
 use fe2o3_llvm_handoff::{
-    AddressSpaceV1, BasicBlockV2, BinaryOperationV2, BlockIdV2, CastOperationV2,
-    ComparePredicateV2, FloatBinaryOperationV2, FunctionV2, Gfx942HandoffV2, GlobalIdV2,
-    GlobalLinkageV2, GlobalV2, InstructionKindV2, IntegerBinaryOperationV2, ScalarConstantV2,
-    ScalarTypeV1, TerminatorV2, ValueIdV2, ValueTypeV2,
+    AddressSpaceV1, AxisV2, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallTargetV2,
+    CastOperationV2, ComparePredicateV2, FloatBinaryOperationV2, FunctionV2, Gfx942HandoffV2,
+    GlobalIdV2, GlobalLinkageV2, GlobalV2, InstructionKindV2, IntegerBinaryOperationV2,
+    IntrinsicReferenceV2, IntrinsicV2, ReturnTypeV2, ScalarConstantV2, ScalarTypeV1, TerminatorV2,
+    ValueIdV2, ValueTypeV2,
 };
 use fe2o3_pliron::{ensure_context_identity, require_context_identity};
 use pliron::{
@@ -17,8 +18,8 @@ use pliron::{
     builtin::{
         attributes::{BytesAttr, FPSingleAttr, IntegerAttr},
         op_interfaces::{
-            AtMostOneRegionInterface, OneResultInterface, SingleBlockRegionInterface,
-            SymbolOpInterface,
+            AtMostOneRegionInterface, CallOpCallable, CallOpInterface, OneResultInterface,
+            SingleBlockRegionInterface, SymbolOpInterface,
         },
         ops::ModuleOp,
         types::{FP32Type, IntegerType, Signedness},
@@ -28,7 +29,7 @@ use pliron::{
     linked_list::ContainsLinkedList,
     op::Op,
     operation::{Operation, verify_operation},
-    r#type::{TypeHandle, Typed},
+    r#type::{TypeHandle, Typed, TypedHandle},
     utils::apint::APInt,
     value::Value,
 };
@@ -38,13 +39,13 @@ use pliron_llvm::{
         LinkageAttr,
     },
     op_interfaces::{
-        AlignableOpInterface, BinArithOp, CastOpInterface, FastMathFlags,
-        FloatBinArithOpWithFastMathFlags, IntBinArithOpWithOverflowFlag,
+        AlignableOpInterface, BinArithOp, CastOpInterface, CastOpWithNNegInterface, FastMathFlags,
+        FloatBinArithOpWithFastMathFlags, IntBinArithOpWithOverflowFlag, IsDeclaration, NNegFlag,
     },
     ops::{
-        AShrOp, AddOp, AddressOfOp, AndOp, BrOp, CondBrOp, ConstantOp, ExtractElementOp, FAddOp,
-        FCmpOp, FDivOp, FMulOp, FPExtOp, FPToSIOp, FPToUIOp, FPTruncOp, FSubOp, FuncOp, GepIndex,
-        GetElementPtrOp, GlobalOp, ICmpOp, InsertElementOp, LShrOp, LoadOp, MulOp, OrOp,
+        AShrOp, AddOp, AddressOfOp, AndOp, BrOp, CallOp, CondBrOp, ConstantOp, ExtractElementOp,
+        FAddOp, FCmpOp, FDivOp, FMulOp, FPExtOp, FPToSIOp, FPToUIOp, FPTruncOp, FSubOp, FuncOp,
+        GepIndex, GetElementPtrOp, GlobalOp, ICmpOp, InsertElementOp, LShrOp, LoadOp, MulOp, OrOp,
         PtrToIntOp, ReturnOp, SExtOp, SIToFPOp, ShlOp, StoreOp, SubOp, TruncOp, UIToFPOp,
         UnreachableOp, XorOp, ZExtOp, ZeroOp,
     },
@@ -131,8 +132,18 @@ fn build_module(
         .iter()
         .map(|global| build_global(context, &module, global).map(|binding| (global.id(), binding)))
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let intrinsics = admitted
+        .handoff()
+        .module()
+        .intrinsics()
+        .iter()
+        .map(|intrinsic| {
+            build_intrinsic(context, &module, intrinsic)
+                .map(|binding| (intrinsic.intrinsic(), binding))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     for function in admitted.handoff().module().functions() {
-        build_function(context, &module, function, &globals)?;
+        build_function(context, &module, function, &globals, &intrinsics)?;
     }
     Ok(module)
 }
@@ -141,6 +152,28 @@ fn build_module(
 struct GlobalBinding {
     symbol: Identifier,
     address_space: u32,
+}
+
+#[derive(Clone)]
+struct IntrinsicBinding {
+    symbol: Identifier,
+    function_type: TypedHandle<FuncType>,
+}
+
+fn build_intrinsic(
+    context: &mut Context,
+    module: &ModuleOp,
+    source: &IntrinsicReferenceV2,
+) -> Result<IntrinsicBinding, LoweringErrorV1> {
+    let symbol = Identifier::try_from(intrinsic_symbol(source.intrinsic()))
+        .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph))?;
+    let function_type = intrinsic_function_type(context, source.intrinsic())?;
+    let declaration = FuncOp::new(context, symbol.clone(), function_type);
+    module.append_operation(context, declaration.get_operation(), 0);
+    Ok(IntrinsicBinding {
+        symbol,
+        function_type,
+    })
 }
 
 fn build_global(
@@ -185,6 +218,7 @@ fn build_function(
     module: &ModuleOp,
     source: &FunctionV2,
     globals: &BTreeMap<GlobalIdV2, GlobalBinding>,
+    intrinsics: &BTreeMap<IntrinsicV2, IntrinsicBinding>,
 ) -> Result<(), LoweringErrorV1> {
     let symbol = Identifier::try_from(source.symbol())
         .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph))?;
@@ -258,7 +292,8 @@ fn build_function(
         }
     }
 
-    for block in ordered_blocks(source) {
+    let ordered_blocks = ordered_blocks(source);
+    for block in &ordered_blocks {
         let target = *blocks
             .get(&block.id())
             .ok_or(LoweringErrorV1::Construction(
@@ -275,6 +310,7 @@ fn build_function(
                 &values,
                 &value_types,
                 globals,
+                intrinsics,
             )?;
             match (instruction.result(), result) {
                 (Some(expected), Some(value)) => {
@@ -288,6 +324,13 @@ fn build_function(
                 }
             }
         }
+    }
+    for block in ordered_blocks {
+        let target = *blocks
+            .get(&block.id())
+            .ok_or(LoweringErrorV1::Construction(
+                ConstructionStageV1::DialectGraph,
+            ))?;
         build_terminator(context, target, block, source, &blocks, &values)?;
     }
     Ok(())
@@ -354,6 +397,7 @@ fn build_instruction(
     values: &BTreeMap<ValueIdV2, Value>,
     value_types: &BTreeMap<ValueIdV2, ValueTypeV2>,
     globals: &BTreeMap<GlobalIdV2, GlobalBinding>,
+    intrinsics: &BTreeMap<IntrinsicV2, IntrinsicBinding>,
 ) -> Result<Option<Value>, LoweringErrorV1> {
     let value = |id: ValueIdV2| {
         values
@@ -489,7 +533,38 @@ fn build_instruction(
             let operation = ExtractElementOp::new(context, value(*vector)?, value(*index)?);
             Some(append_result(context, block, operation))
         }
-        InstructionKindV2::Phi { .. } | InstructionKindV2::Call { .. } => {
+        InstructionKindV2::Call {
+            target: CallTargetV2::Intrinsic(intrinsic),
+            arguments,
+        } => {
+            let binding = intrinsics
+                .get(intrinsic)
+                .ok_or(LoweringErrorV1::Construction(
+                    ConstructionStageV1::DialectGraph,
+                ))?;
+            let arguments = arguments
+                .iter()
+                .map(|argument| value(*argument))
+                .collect::<Result<Vec<_>, _>>()?;
+            let operation = CallOp::new(
+                context,
+                CallOpCallable::Direct(binding.symbol.clone()),
+                binding.function_type,
+                arguments,
+            );
+            match intrinsic.signature().0 {
+                ReturnTypeV2::Value(_) => Some(append_result(context, block, operation)),
+                ReturnTypeV2::Void => {
+                    operation.get_operation().insert_at_back(block, context);
+                    None
+                }
+            }
+        }
+        InstructionKindV2::Call {
+            target: CallTargetV2::Function(_),
+            ..
+        }
+        | InstructionKindV2::Phi { .. } => {
             return Err(LoweringErrorV1::Construction(
                 ConstructionStageV1::DialectGraph,
             ));
@@ -618,12 +693,18 @@ fn build_cast(
         }};
     }
     match operation {
-        CastOperationV2::ZeroExtend => cast!(ZExtOp),
+        CastOperationV2::ZeroExtend => {
+            let operation = ZExtOp::new_with_nneg(context, value, target, false);
+            append_result(context, block, operation)
+        }
         CastOperationV2::SignExtend => cast!(SExtOp),
         CastOperationV2::Truncate => cast!(TruncOp),
         CastOperationV2::FloatExtend => cast!(FPExtOp),
         CastOperationV2::FloatTruncate => cast!(FPTruncOp),
-        CastOperationV2::UnsignedIntToFloat => cast!(UIToFPOp),
+        CastOperationV2::UnsignedIntToFloat => {
+            let operation = UIToFPOp::new_with_nneg(context, value, target, false);
+            append_result(context, block, operation)
+        }
         CastOperationV2::SignedIntToFloat => cast!(SIToFPOp),
         CastOperationV2::FloatToUnsignedInt => cast!(FPToUIOp),
         CastOperationV2::FloatToSignedInt => cast!(FPToSIOp),
@@ -763,6 +844,58 @@ fn type_for(context: &Context, value_type: ValueTypeV2) -> Result<TypeHandle, Lo
     }
 }
 
+fn intrinsic_function_type(
+    context: &Context,
+    intrinsic: IntrinsicV2,
+) -> Result<TypedHandle<FuncType>, LoweringErrorV1> {
+    let (result, parameters) = intrinsic.signature();
+    let result = match result {
+        ReturnTypeV2::Void => VoidType::get(context).into(),
+        ReturnTypeV2::Value(value_type) => type_for(context, value_type)?,
+    };
+    let parameters = parameters
+        .into_iter()
+        .map(|value_type| type_for(context, value_type))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(FuncType::get(context, result, parameters, false))
+}
+
+const fn intrinsic_symbol(intrinsic: IntrinsicV2) -> &'static str {
+    match intrinsic {
+        IntrinsicV2::AmdGpuWorkitemId(axis) => match axis {
+            AxisV2::X => "llvm_amdgcn_workitem_id_x",
+            AxisV2::Y => "llvm_amdgcn_workitem_id_y",
+            AxisV2::Z => "llvm_amdgcn_workitem_id_z",
+        },
+        IntrinsicV2::AmdGpuWorkgroupId(axis) => match axis {
+            AxisV2::X => "llvm_amdgcn_workgroup_id_x",
+            AxisV2::Y => "llvm_amdgcn_workgroup_id_y",
+            AxisV2::Z => "llvm_amdgcn_workgroup_id_z",
+        },
+        IntrinsicV2::AmdGpuBarrier => "llvm_amdgcn_s_barrier",
+        IntrinsicV2::FmaF32 => "llvm_fma_f32",
+        IntrinsicV2::SqrtF32 => "llvm_sqrt_f32",
+        IntrinsicV2::Trap => "llvm_trap",
+        IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k => "llvm_amdgcn_mfma_f32_16x16x16bf16_1k",
+    }
+}
+
+const fn intrinsic_tag(intrinsic: IntrinsicV2) -> u8 {
+    match intrinsic {
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::X) => 1,
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::Y) => 2,
+        IntrinsicV2::AmdGpuWorkitemId(AxisV2::Z) => 3,
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::X) => 4,
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::Y) => 5,
+        IntrinsicV2::AmdGpuWorkgroupId(AxisV2::Z) => 6,
+        IntrinsicV2::AmdGpuBarrier => 7,
+        IntrinsicV2::FmaF32 => 8,
+        IntrinsicV2::SqrtF32 => 9,
+        IntrinsicV2::Trap => 10,
+        IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k => 11,
+    }
+}
+
 fn scalar_type(context: &Context, scalar: ScalarTypeV1) -> Result<TypeHandle, LoweringErrorV1> {
     match scalar {
         ScalarTypeV1::I1
@@ -839,13 +972,18 @@ fn inspect_module(
         .iter(context)
         .collect::<Vec<_>>();
     let global_count = source.module().globals().len();
-    if actual_module_operations.len() != global_count + source.module().functions().len() {
+    let intrinsic_count = source.module().intrinsics().len();
+    if actual_module_operations.len()
+        != global_count + intrinsic_count + source.module().functions().len()
+    {
         return Err(InspectionErrorV1::UnexpectedGraph);
     }
-    let (actual_globals, actual_functions) = actual_module_operations.split_at(global_count);
+    let (actual_globals, remaining) = actual_module_operations.split_at(global_count);
+    let (actual_intrinsics, actual_functions) = remaining.split_at(intrinsic_count);
 
     let mut facts = Vec::new();
     let mut global_count = 0_u32;
+    let mut intrinsic_count = 0_u32;
     let mut function_count = 0_u32;
     let mut block_count = 0_u32;
     let mut block_argument_count = 0_u32;
@@ -861,6 +999,12 @@ fn inspect_module(
             &mut exact_memory_alignment,
         )?;
         global_count = global_count
+            .checked_add(1)
+            .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+    }
+    for (source_intrinsic, actual) in source.module().intrinsics().iter().zip(actual_intrinsics) {
+        inspect_intrinsic(context, *actual, source_intrinsic.intrinsic(), &mut facts)?;
+        intrinsic_count = intrinsic_count
             .checked_add(1)
             .ok_or(InspectionErrorV1::UnexpectedGraph)?;
     }
@@ -956,6 +1100,7 @@ fn inspect_module(
     let graph_sha256: [u8; 32] = Sha256::digest(&facts).into();
     Ok(LiveGraphInspectionV1 {
         global_count,
+        intrinsic_count,
         function_count,
         block_count,
         block_argument_count,
@@ -964,6 +1109,29 @@ fn inspect_module(
         strict_float,
         exact_memory_alignment,
     })
+}
+
+fn inspect_intrinsic(
+    context: &Context,
+    actual: Ptr<Operation>,
+    expected: IntrinsicV2,
+    facts: &mut Vec<u8>,
+) -> Result<(), InspectionErrorV1> {
+    let declaration =
+        Operation::get_op::<FuncOp>(actual, context).ok_or(InspectionErrorV1::UnexpectedGraph)?;
+    let symbol = Identifier::try_from(intrinsic_symbol(expected))
+        .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+    let expected_type = intrinsic_function_type(context, expected)
+        .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+    if declaration.get_symbol_name(context) != symbol
+        || declaration.get_type(context) != expected_type
+        || !declaration.is_declaration(context)
+    {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
+    facts.push(6);
+    facts.push(intrinsic_tag(expected));
+    Ok(())
 }
 
 fn inspect_global(
@@ -1103,12 +1271,26 @@ fn inspect_instruction(
             | ComparePredicateV2::OrderedLessOrEqual => typed!(FCmpOp, 25),
         },
         InstructionKindV2::Cast { operation, .. } => match operation {
-            CastOperationV2::ZeroExtend => typed!(ZExtOp, 26),
+            CastOperationV2::ZeroExtend => {
+                let operation = Operation::get_op::<ZExtOp>(actual, context)
+                    .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                if operation.nneg(context) {
+                    return Err(InspectionErrorV1::UnexpectedGraph);
+                }
+                facts.push(26);
+            }
             CastOperationV2::SignExtend => typed!(SExtOp, 27),
             CastOperationV2::Truncate => typed!(TruncOp, 28),
             CastOperationV2::FloatExtend => typed!(FPExtOp, 29),
             CastOperationV2::FloatTruncate => typed!(FPTruncOp, 30),
-            CastOperationV2::UnsignedIntToFloat => typed!(UIToFPOp, 31),
+            CastOperationV2::UnsignedIntToFloat => {
+                let operation = Operation::get_op::<UIToFPOp>(actual, context)
+                    .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                if operation.nneg(context) {
+                    return Err(InspectionErrorV1::UnexpectedGraph);
+                }
+                facts.push(31);
+            }
             CastOperationV2::SignedIntToFloat => typed!(SIToFPOp, 32),
             CastOperationV2::FloatToUnsignedInt => typed!(FPToUIOp, 33),
             CastOperationV2::FloatToSignedInt => typed!(FPToSIOp, 34),
@@ -1138,7 +1320,29 @@ fn inspect_instruction(
         }
         InstructionKindV2::InsertElement { .. } => typed!(InsertElementOp, 42),
         InstructionKindV2::ExtractElement { .. } => typed!(ExtractElementOp, 43),
-        InstructionKindV2::Phi { .. } | InstructionKindV2::Call { .. } => {
+        InstructionKindV2::Call {
+            target: CallTargetV2::Intrinsic(intrinsic),
+            ..
+        } => {
+            let operation = Operation::get_op::<CallOp>(actual, context)
+                .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+            let symbol = Identifier::try_from(intrinsic_symbol(*intrinsic))
+                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+            if !matches!(operation.callee(context), CallOpCallable::Direct(actual) if actual == symbol)
+            {
+                return Err(InspectionErrorV1::UnexpectedGraph);
+            }
+            *strict_float &= operation
+                .get_attr_llvm_call_fastmath_flags(context)
+                .is_none_or(|flags| *flags == FastmathFlagsAttr::default());
+            facts.push(44);
+            facts.push(intrinsic_tag(*intrinsic));
+        }
+        InstructionKindV2::Call {
+            target: CallTargetV2::Function(_),
+            ..
+        }
+        | InstructionKindV2::Phi { .. } => {
             return Err(InspectionErrorV1::UnexpectedGraph);
         }
     }
@@ -1190,6 +1394,7 @@ fn encode_receipt(
     bytes.extend_from_slice(&source_len.to_le_bytes());
     bytes.extend_from_slice(source_bytes.as_bytes());
     bytes.extend_from_slice(&inspection.global_count.to_le_bytes());
+    bytes.extend_from_slice(&inspection.intrinsic_count.to_le_bytes());
     bytes.extend_from_slice(&inspection.function_count.to_le_bytes());
     bytes.extend_from_slice(&inspection.block_count.to_le_bytes());
     bytes.extend_from_slice(&inspection.block_argument_count.to_le_bytes());
