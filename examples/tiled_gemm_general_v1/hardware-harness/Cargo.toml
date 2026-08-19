@@ -1,0 +1,14 @@
+[package]
+name = "fe2o3-tiled-gemm-general-v1-hardware-harness"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+
+[workspace]
+
+[dependencies]
+fe2o3-amd-target = { path = "../../../crates/fe2o3-amd-target" }
+fe2o3-general-gemm-compiler = { path = "../../../crates/fe2o3-general-gemm-compiler" }
+fe2o3-tiled-gemm-v1 = { path = "../../tiled_gemm_v1" }
+fe2o3-verifier = { path = "../../../crates/fe2o3-verifier" }
