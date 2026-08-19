@@ -157,6 +157,7 @@ pub(crate) enum GeneralGemmFinalJoinErrorV1 {
     MachineCompilationSubstitution,
     MachineScheduleSubstitution,
     MachineArtifactIdentity,
+    MachineWorkerAdmissionIdentity,
     MachineNumericalRefinement,
     MachineRefinement,
 }
@@ -362,6 +363,7 @@ struct MachineObservationFactsV1 {
     compilation_matches: bool,
     schedule_matches: bool,
     artifact_identity_valid: bool,
+    typed_worker_admission_valid: bool,
     numerical_refinement_matches: bool,
     machine_refinement_matches: bool,
 }
@@ -377,6 +379,9 @@ fn validate_machine_observation_facts(
     }
     if !facts.artifact_identity_valid {
         return Err(GeneralGemmFinalJoinErrorV1::MachineArtifactIdentity);
+    }
+    if !facts.typed_worker_admission_valid {
+        return Err(GeneralGemmFinalJoinErrorV1::MachineWorkerAdmissionIdentity);
     }
     if !facts.numerical_refinement_matches {
         return Err(GeneralGemmFinalJoinErrorV1::MachineNumericalRefinement);
@@ -409,6 +414,7 @@ fn validate_machine_observation(
             && machine
                 .finalized_output_identity()
                 .matches(machine.exact_finalized_bytes()),
+        typed_worker_admission_valid: machine.typed_worker_admission_identity() != &[0; 32],
         numerical_refinement_matches: numerical.identity().as_bytes() != &[0; 32]
             && numerical.llvm_assembly_identity() == machine.llvm_assembly_identity()
             && numerical.kernel_symbol_sha256() == machine.kernel_symbol_sha256()
@@ -1047,6 +1053,7 @@ mod tests {
             compilation_matches: true,
             schedule_matches: true,
             artifact_identity_valid: true,
+            typed_worker_admission_valid: true,
             numerical_refinement_matches: true,
             machine_refinement_matches: true,
         };
@@ -1058,7 +1065,7 @@ mod tests {
             })
         );
 
-        let mutations: [MachineFactMutationV1; 5] = [
+        let mutations: [MachineFactMutationV1; 6] = [
             (
                 |facts| facts.compilation_matches = false,
                 GeneralGemmFinalJoinErrorV1::MachineCompilationSubstitution,
@@ -1070,6 +1077,10 @@ mod tests {
             (
                 |facts| facts.artifact_identity_valid = false,
                 GeneralGemmFinalJoinErrorV1::MachineArtifactIdentity,
+            ),
+            (
+                |facts| facts.typed_worker_admission_valid = false,
+                GeneralGemmFinalJoinErrorV1::MachineWorkerAdmissionIdentity,
             ),
             (
                 |facts| facts.numerical_refinement_matches = false,
