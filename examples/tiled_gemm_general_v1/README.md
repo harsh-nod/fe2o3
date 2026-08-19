@@ -21,21 +21,18 @@ Ready -> Staged -> Published -> Consumed -> Ready
 ## Compile-time enforcement boundary
 
 The V1 contract records one enforcement owner for each of issue #138's 15
-semantic mutations. Rust typestate directly rejects the three local lifecycle
-errors: missing publish, missing reuse, and reuse of an expired LDS epoch.
+semantic mutations. Ten companion UI fixtures exercise local Rust typestate and
+sealed-surface restrictions. Those rustc failures remain distinct from a
+distributed safety proof.
 
-The sealed surface also has compile-fail escape tests for unguarded arbitrary C
-stores, duplicate same-capability C/LDS writes, forged workgroup coordinates,
-pre-publication LDS reads, premature staged reads, and accumulator reset. Those
-seven categories still require MIR/Pliron proof for dynamic bounds, lane and
-workgroup injectivity, complete distributed initialization, wait epochs, or
-cross-phase refinement. A rustc error for an API escape attempt is not evidence
-that the corresponding distributed property has been proved.
-
-Unguarded A/B loads, divergent barriers, incorrect K-tail zero fill, and an
-incorrect alpha/beta epilogue are intentionally verifier-only. Safe ordinary
-Rust can express those five mutations, so their semantic-corpus fixtures must
-continue to typecheck and reach proof-required compiler analysis.
+The separate mutation-oracle corpus keeps the same `#![forbid(unsafe_code)]`
+root and derives every negative kernel by one reversible source edit of a full
+dynamic baseline. Authenticated optimized-MIR analysis rejects all 15 exact
+mutations at compiler preflight with their frozen property, stage, and
+`0x464701xx` diagnostic. Each diagnostic retains the kernel root, source and
+terminal spans, and reachable call chain. The managed build leaves no current
+or stale artifact output. This is source-to-diagnostic evidence for the exact
+corpus, not proof authority for the positive kernel or arbitrary Rust source.
 
 ## Current boundary
 
@@ -48,9 +45,15 @@ exact reviewed source and dependency is therefore semantically equivalent;
 package provenance needs a separate signature or transparency-log authority.
 
 This is a compile-tested source contract, not GPU execution authority. The
-safe compiler operations are panic stubs under host rustc. Authenticated MIR
-can reach a non-authoritative semantic Kernel IR witness, but runtime-plan
-binding, frontend promotion, LLVM lowering, protected publication, and GPU
-execution remain unimplemented. A proof-required build must therefore reject
-before emitting an artifact. The existing exact `tiled_gemm_v1` Slice 1 source
-and identities are unchanged.
+safe compiler operations are panic stubs under host rustc. The positive source
+can produce an opaque, non-Clone frontend correspondence whose 11 typed
+property receipts revalidate the exact optimized-MIR, provider, source, ABI,
+and symbolic plan/KIR binding.
+
+The compiler also contains structural Pliron/GPU lowering, two separately
+identified reference and vectorized machine schedules, measured Worker/finalizer
+observations, and a private owner-retaining pair join. That join has no
+production caller. Verus proof execution remains fail-closed until the exact
+root-owned runtime closure is provisioned, so no proof, artifact publication,
+load, launch, or protected general-GEMM hardware authority can be issued. The
+existing exact `tiled_gemm_v1` Slice 1 source and identities are unchanged.
