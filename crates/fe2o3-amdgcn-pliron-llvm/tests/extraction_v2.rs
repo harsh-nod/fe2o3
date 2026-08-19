@@ -166,6 +166,10 @@ fn diagnostics_remain_bounded_and_non_authoritative() {
         assert!(diagnostic.to_string().len() <= MAX_DIAGNOSTIC_BYTES_V1);
         assert!(!diagnostic.to_string().contains("llvm.fadd"));
     }
+    let construction =
+        fe2o3_amdgcn_pliron_llvm::ScalarKernelHandoffDiagnosticV2::UpstreamConstructionPanicked;
+    assert!(construction.to_string().len() <= MAX_DIAGNOSTIC_BYTES_V1);
+    assert!(!construction.to_string().contains("llvm.fadd"));
 }
 
 #[test]

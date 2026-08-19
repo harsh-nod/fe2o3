@@ -789,6 +789,8 @@ pub enum ScalarKernelHandoffDiagnosticV2 {
     Lowering(LoweringDiagnosticV1),
     /// The constructed private live graph failed exact V2 extraction.
     Extraction(HandoffExtractionDiagnosticV2),
+    /// An upstream panic during V1 construction or verification was contained.
+    UpstreamConstructionPanicked,
 }
 
 impl fmt::Display for ScalarKernelHandoffDiagnosticV2 {
@@ -796,6 +798,9 @@ impl fmt::Display for ScalarKernelHandoffDiagnosticV2 {
         match self {
             Self::Lowering(error) => write!(formatter, "V2 boundary lowering failed: {error}"),
             Self::Extraction(error) => write!(formatter, "V2 boundary extraction failed: {error}"),
+            Self::UpstreamConstructionPanicked => {
+                formatter.write_str("V2 boundary contained an upstream construction panic")
+            }
         }
     }
 }
