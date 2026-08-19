@@ -94,7 +94,13 @@ fn symbolic_request_for(
 }
 
 fn symbolic_unit(schedule: GeneralGemmScheduleV1) -> GeneralGemmSymbolicCompilationUnitV1 {
-    let frontend = frontend_binding();
+    symbolic_unit_with_frontend(schedule, frontend_binding())
+}
+
+fn symbolic_unit_with_frontend(
+    schedule: GeneralGemmScheduleV1,
+    frontend: GeneralGemmFrontendSemanticBindingV1,
+) -> GeneralGemmSymbolicCompilationUnitV1 {
     let request = symbolic_request_for(&frontend, schedule);
     GeneralGemmSymbolicCompilationUnitV1::checked(
         &request,
@@ -1039,5 +1045,89 @@ fn machine_sections_and_identities_reject_schedule_and_frontend_abi_substitution
     assert_eq!(
         binding.byte_initializer(),
         Some(reference.binding_section().canonical_bytes())
+    );
+}
+
+#[test]
+fn symbolic_machine_lowers_dynamic_body_without_concrete_witness_plan() {
+    for schedule in [
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+    ] {
+        let unit = symbolic_unit(schedule);
+        let machine = lower_general_gemm_symbolic_structural_machine_v1(&unit).unwrap();
+        assert_eq!(machine.projection().compilation_identity(), unit.identity());
+        assert_eq!(
+            machine.projection().symbolic_plan_identity(),
+            unit.symbolic_plan_identity()
+        );
+        assert_eq!(
+            machine.projection().symbolic_kir_identity(),
+            unit.symbolic_kir_identity()
+        );
+        assert_eq!(
+            machine
+                .handoff()
+                .base()
+                .stage_identities()
+                .schedule()
+                .as_bytes(),
+            unit.schedule_identity().as_bytes()
+        );
+        assert_eq!(
+            machine.assembly().source_identity(),
+            machine.handoff().identity()
+        );
+        assert!(!machine.grants_artifact_authority());
+        assert_ne!(machine.artifact_identity().as_bytes(), &[0; 32]);
+        let text = machine.assembly().as_str();
+        assert_eq!(occurrences(text, "call void @llvm.amdgcn.s.barrier()"), 2);
+        assert_eq!(
+            occurrences(text, "load <4 x i16>"),
+            usize::from(schedule.requires_vectorized_a_isa_confirmation())
+        );
+    }
+}
+
+#[test]
+fn symbolic_machine_identity_rejects_schedule_and_frontend_substitution() {
+    let reference = lower_general_gemm_symbolic_structural_machine_v1(&symbolic_unit(
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+    ))
+    .unwrap();
+    let vector = lower_general_gemm_symbolic_structural_machine_v1(&symbolic_unit(
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+    ))
+    .unwrap();
+    assert_ne!(reference.artifact_identity(), vector.artifact_identity());
+    assert_ne!(
+        reference.binding_section().identity(),
+        vector.binding_section().identity()
+    );
+    assert_ne!(reference.assembly().sha256(), vector.assembly().sha256());
+
+    let substituted_frontend =
+        GeneralGemmFrontendSemanticBindingV1::from_consumed_frontend_receipt_observation(
+            identity(0x12),
+            identity(0x91),
+            identity(0x42),
+            identity(0x43),
+            GeneralGemmSymbolicPlanV1::canonical(),
+            GeneralGemmSymbolicKirV1::canonical(),
+        )
+        .unwrap();
+    let substituted =
+        lower_general_gemm_symbolic_structural_machine_v1(&symbolic_unit_with_frontend(
+            GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+            substituted_frontend,
+        ))
+        .unwrap();
+    assert_ne!(
+        reference.artifact_identity(),
+        substituted.artifact_identity()
+    );
+    assert_ne!(
+        reference.binding_section().identity(),
+        substituted.binding_section().identity()
     );
 }

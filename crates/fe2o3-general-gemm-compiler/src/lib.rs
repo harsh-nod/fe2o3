@@ -1398,6 +1398,54 @@ pub struct GeneralGemmPlironProjectionV1 {
     operation_count: usize,
 }
 
+/// Owner-checked symbolic Pliron projection used by production lowering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralGemmSymbolicPlironProjectionV1 {
+    identity: GeneralGemmPlironProjectionIdentityV1,
+    compilation_identity: GeneralGemmSymbolicCompilationIdentityV1,
+    schedule_identity: GeneralGemmScheduleIdentityV1,
+    symbolic_plan_identity: GeneralGemmSymbolicPlanIdentityV1,
+    symbolic_kir_identity: GeneralGemmSymbolicKirIdentityV1,
+    operation_count: usize,
+}
+
+impl GeneralGemmSymbolicPlironProjectionV1 {
+    /// Returns the exact owner-checked projection identity.
+    pub const fn identity(self) -> GeneralGemmPlironProjectionIdentityV1 {
+        self.identity
+    }
+
+    /// Returns the symbolic compilation consumed by projection.
+    pub const fn compilation_identity(self) -> GeneralGemmSymbolicCompilationIdentityV1 {
+        self.compilation_identity
+    }
+
+    /// Returns the selected closed schedule identity.
+    pub const fn schedule_identity(self) -> GeneralGemmScheduleIdentityV1 {
+        self.schedule_identity
+    }
+
+    /// Returns the symbolic checked-plan schema identity.
+    pub const fn symbolic_plan_identity(self) -> GeneralGemmSymbolicPlanIdentityV1 {
+        self.symbolic_plan_identity
+    }
+
+    /// Returns the symbolic source/KIR schema identity.
+    pub const fn symbolic_kir_identity(self) -> GeneralGemmSymbolicKirIdentityV1 {
+        self.symbolic_kir_identity
+    }
+
+    /// Returns the exact verified operation count.
+    pub const fn operation_count(self) -> usize {
+        self.operation_count
+    }
+
+    /// Structural projection grants no artifact authority.
+    pub const fn grants_artifact_authority(self) -> bool {
+        false
+    }
+}
+
 impl GeneralGemmPlironProjectionV1 {
     /// Returns the exact projection identity.
     pub const fn identity(self) -> GeneralGemmPlironProjectionIdentityV1 {
@@ -2032,6 +2080,220 @@ fn project_to_pliron_inner(
     })
 }
 
+struct GeneralGemmSymbolicPlironEnvelope {
+    context: Context,
+    context_identity: ContextIdentity,
+    module: ModuleOp,
+    receipt: GeneralGemmSymbolicPlironProjectionV1,
+}
+
+impl GeneralGemmSymbolicPlironEnvelope {
+    fn validate_exact(&self, unit: &GeneralGemmSymbolicCompilationUnitV1) -> Result<(), ()> {
+        let current = require_context_identity(&self.context).map_err(|_| ())?;
+        if current != self.context_identity
+            || verify_operation(self.module.get_operation(), &self.context).is_err()
+        {
+            return Err(());
+        }
+        let module_binding = self.module.get_operation();
+        let module = module_binding.deref(&self.context);
+        if module.attributes.0.len() != 5
+            || !metadata_matches(
+                &module.attributes,
+                PLIRON_SCHEMA_ATTR,
+                GENERAL_GEMM_COMPILATION_BINDING_SCHEMA_V1.as_bytes(),
+            )
+            || !metadata_matches(
+                &module.attributes,
+                PLIRON_BINDING_ATTR,
+                unit.identity().as_bytes(),
+            )
+            || !metadata_matches(
+                &module.attributes,
+                PLIRON_KIR_ATTR,
+                &encode_symbolic_kir_template(unit.frontend_semantics()),
+            )
+            || !metadata_matches(
+                &module.attributes,
+                PLIRON_SCHEDULE_ATTR,
+                unit.schedule_identity().as_bytes(),
+            )
+            || module
+                .attributes
+                .0
+                .get(&*ATTR_KEY_SYM_NAME)
+                .and_then(|attribute| attribute.downcast_ref::<IdentifierAttr>())
+                .map(AsRef::as_ref)
+                .is_none_or(|symbol| symbol.as_ref() != PLIRON_MODULE_SYMBOL)
+        {
+            return Err(());
+        }
+        drop(module);
+        validate_symbolic_projection_operations(&self.context, &self.module)
+    }
+}
+
+fn validate_symbolic_projection_operations(context: &Context, module: &ModuleOp) -> Result<(), ()> {
+    let body = module.get_body(context, 0);
+    let body = body.deref(context);
+    let mut operations = body.iter(context);
+    let algorithm = typed_next::<AlgorithmOp>(&mut operations, context)?;
+    if algorithm
+        .iteration_domain(context)
+        .is_none_or(|domain| domain.rank() != 3)
+    {
+        return Err(());
+    }
+    let schedule = typed_next::<PlanOp>(&mut operations, context)?;
+    if schedule.parameters(context).is_none_or(|parameters| {
+        parameters.rank() != 3
+            || parameters.tile_extent() != GENERAL_GEMM_KIR_TILE_EXTENT_V1
+            || parameters.pipeline_stages() != 1
+    }) {
+        return Err(());
+    }
+    let tile = typed_next::<MaterializeOp>(&mut operations, context)?;
+    if tile.distribution(context).is_none_or(|distribution| {
+        distribution.rank() != 2
+            || distribution.lanes() != GENERAL_GEMM_KIR_WAVE_LANES_V1
+            || distribution.elements_per_lane() != GENERAL_GEMM_KIR_COMPONENTS_PER_LANE_V1
+    }) {
+        return Err(());
+    }
+    for expected in [
+        HierarchyAttr::Grid,
+        HierarchyAttr::Workgroup,
+        HierarchyAttr::Subgroup,
+        HierarchyAttr::Lane,
+    ] {
+        let operation = typed_next::<HierarchyIdOp>(&mut operations, context)?;
+        if operation
+            .get_attr_gpu_hierarchy_id_hierarchy(context)
+            .is_none_or(|actual| *actual != expected)
+        {
+            return Err(());
+        }
+    }
+    for expected in [AddressSpaceAttr::Global, AddressSpaceAttr::Workgroup] {
+        let operation = typed_next::<MemorySpaceOp>(&mut operations, context)?;
+        if operation
+            .get_attr_gpu_memory_space_address_space(context)
+            .is_none_or(|actual| *actual != expected)
+        {
+            return Err(());
+        }
+    }
+    for _ in 0..2 {
+        let barrier = typed_next::<BarrierOp>(&mut operations, context)?;
+        if barrier
+            .get_attr_gpu_barrier_execution_scope(context)
+            .is_none_or(|value| *value != HierarchyAttr::Workgroup)
+            || barrier
+                .get_attr_gpu_barrier_memory_scope(context)
+                .is_none_or(|value| *value != MemoryScopeAttr::Workgroup)
+            || barrier
+                .get_attr_gpu_barrier_address_space(context)
+                .is_none_or(|value| *value != AddressSpaceAttr::Workgroup)
+            || barrier
+                .get_attr_gpu_barrier_order(context)
+                .is_none_or(|value| *value != MemoryOrderAttr::AcquireRelease)
+        {
+            return Err(());
+        }
+    }
+    if operations.next().is_some() {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn project_symbolic_to_pliron(
+    unit: &GeneralGemmSymbolicCompilationUnitV1,
+) -> Result<GeneralGemmSymbolicPlironEnvelope, ()> {
+    catch_unwind(AssertUnwindSafe(|| project_symbolic_to_pliron_inner(unit))).unwrap_or(Err(()))
+}
+
+fn project_symbolic_to_pliron_inner(
+    unit: &GeneralGemmSymbolicCompilationUnitV1,
+) -> Result<GeneralGemmSymbolicPlironEnvelope, ()> {
+    let mut context = Context::new();
+    let context_identity = ensure_context_identity(&mut context).map_err(|_| ())?;
+    register_dialects(&mut context)?;
+    let symbol: Identifier = PLIRON_MODULE_SYMBOL.try_into().map_err(|_| ())?;
+    let module = ModuleOp::new(&mut context, symbol);
+    install_symbolic_projection_metadata(&context, &module, unit);
+
+    let algorithm = AlgorithmOp::new(&mut context, 3).map_err(|_| ())?;
+    module.append_operation(&mut context, algorithm.get_operation(), 0);
+    let schedule =
+        PlanOp::new(&mut context, 3, GENERAL_GEMM_KIR_TILE_EXTENT_V1, 1).map_err(|_| ())?;
+    module.append_operation(&mut context, schedule.get_operation(), 0);
+    let tile = MaterializeOp::new(
+        &mut context,
+        2,
+        GENERAL_GEMM_KIR_WAVE_LANES_V1,
+        GENERAL_GEMM_KIR_COMPONENTS_PER_LANE_V1,
+    )
+    .map_err(|_| ())?;
+    module.append_operation(&mut context, tile.get_operation(), 0);
+    for hierarchy in [
+        HierarchyAttr::Grid,
+        HierarchyAttr::Workgroup,
+        HierarchyAttr::Subgroup,
+        HierarchyAttr::Lane,
+    ] {
+        let operation = HierarchyIdOp::new(&mut context, hierarchy);
+        module.append_operation(&mut context, operation.get_operation(), 0);
+    }
+    for address_space in [AddressSpaceAttr::Global, AddressSpaceAttr::Workgroup] {
+        let operation = MemorySpaceOp::new(&mut context, address_space);
+        module.append_operation(&mut context, operation.get_operation(), 0);
+    }
+    for _ in 0..2 {
+        let barrier = BarrierOp::new(
+            &mut context,
+            HierarchyAttr::Workgroup,
+            MemoryScopeAttr::Workgroup,
+            AddressSpaceAttr::Workgroup,
+            MemoryOrderAttr::AcquireRelease,
+        );
+        module.append_operation(&mut context, barrier.get_operation(), 0);
+    }
+    verify_operation(module.get_operation(), &context).map_err(|_| ())?;
+    let operation_count = module
+        .get_body(&context, 0)
+        .deref(&context)
+        .iter(&context)
+        .take(unit.limits().max_pliron_operations + 1)
+        .count();
+    if operation_count != GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1 {
+        return Err(());
+    }
+    let identity = GeneralGemmPlironProjectionIdentityV1(hash_fields(
+        PROJECTION_IDENTITY_DOMAIN_V1,
+        &[
+            unit.identity().as_bytes(),
+            unit.symbolic_plan_identity().as_bytes(),
+            unit.symbolic_kir_identity().as_bytes(),
+            unit.schedule_identity().as_bytes(),
+            &encode_pliron_operation_schema(),
+        ],
+    ));
+    Ok(GeneralGemmSymbolicPlironEnvelope {
+        context,
+        context_identity,
+        module,
+        receipt: GeneralGemmSymbolicPlironProjectionV1 {
+            identity,
+            compilation_identity: unit.identity(),
+            schedule_identity: unit.schedule_identity(),
+            symbolic_plan_identity: unit.symbolic_plan_identity(),
+            symbolic_kir_identity: unit.symbolic_kir_identity(),
+            operation_count,
+        },
+    })
+}
+
 fn register_dialects(context: &mut Context) -> Result<(), ()> {
     let kernel = DialectName::try_new(dialect_kernel::DIALECT_NAME).map_err(|_| ())?;
     dialect_kernel::register_dialect(context, &kernel).map_err(|_| ())?;
@@ -2069,6 +2331,35 @@ fn install_projection_metadata(
     operation.attributes.set(
         metadata_key(PLIRON_SCHEDULE_ATTR),
         BytesAttr::new(unit.schedule.identity().into_bytes().to_vec()),
+    );
+}
+
+fn install_symbolic_projection_metadata(
+    context: &Context,
+    module: &ModuleOp,
+    unit: &GeneralGemmSymbolicCompilationUnitV1,
+) {
+    let binding = module.get_operation();
+    let mut operation = binding.deref_mut(context);
+    operation.attributes.set(
+        metadata_key(PLIRON_SCHEMA_ATTR),
+        BytesAttr::new(
+            GENERAL_GEMM_COMPILATION_BINDING_SCHEMA_V1
+                .as_bytes()
+                .to_vec(),
+        ),
+    );
+    operation.attributes.set(
+        metadata_key(PLIRON_BINDING_ATTR),
+        BytesAttr::new(unit.identity().into_bytes().to_vec()),
+    );
+    operation.attributes.set(
+        metadata_key(PLIRON_KIR_ATTR),
+        BytesAttr::new(encode_symbolic_kir_template(unit.frontend_semantics())),
+    );
+    operation.attributes.set(
+        metadata_key(PLIRON_SCHEDULE_ATTR),
+        BytesAttr::new(unit.schedule_identity().into_bytes().to_vec()),
     );
 }
 
