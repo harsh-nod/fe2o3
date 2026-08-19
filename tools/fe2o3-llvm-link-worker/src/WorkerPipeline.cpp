@@ -142,6 +142,7 @@ enum class PostLinkProfile {
   LegacyGfx942G1,
   ExactRowSoftmaxV1,
   ExactLdsGemmSlice1,
+  ExactGeneralGemmV1,
   ExactWave64CollectivesV1,
   ExactFlashAttentionV1,
   ExactWorkgroupLdsReductionV1,
@@ -153,6 +154,7 @@ enum class MetadataValidationPolicy {
   Generic,
   ExactRowSoftmaxV1,
   ExactLdsGemmSlice1,
+  ExactGeneralGemmV1,
   ExactWave64CollectivesV1,
   ExactFlashAttentionV1,
   ExactWorkgroupLdsReductionV1,
@@ -162,6 +164,19 @@ enum class MetadataValidationPolicy {
 
 constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
 constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
+constexpr StringLiteral ExactGeneralGemmV1Entry = "tiled_gemm_general_v1";
+constexpr StringLiteral ExactGeneralGemmV1Descriptor =
+    "tiled_gemm_general_v1.kd";
+constexpr StringLiteral ExactGeneralGemmV1Check = "general_gemm_v1_profile";
+constexpr StringLiteral ExactGeneralGemmV1DescriptorSection = ".fe2o3.kd.v1";
+constexpr StringLiteral ExactGeneralGemmV1BindingSection =
+    ".fe2o3.general-gemm.binding.v1";
+constexpr StringLiteral ExactGeneralGemmV1DescriptorGlobal =
+    "general_gemm_descriptor_source";
+constexpr StringLiteral ExactGeneralGemmV1BindingGlobal =
+    "general_gemm_compilation_binding";
+constexpr StringLiteral ExactGeneralGemmV1LdsA = "general_gemm_a_lds";
+constexpr StringLiteral ExactGeneralGemmV1LdsB = "general_gemm_b_lds";
 constexpr StringLiteral ExactRowSoftmaxV1Entry = "row_softmax_v1";
 constexpr StringLiteral ExactRowSoftmaxV1Descriptor = "row_softmax_v1.kd";
 constexpr StringLiteral ExactRowSoftmaxV1OcmlExp = "__ocml_exp_f32";
@@ -419,6 +434,12 @@ bool isExactLdsGemmSlice1SymbolSet(ArrayRef<std::string> Symbols) {
                                ExactLdsGemmSlice1Descriptor.str()};
 }
 
+bool isExactGeneralGemmV1SymbolSet(ArrayRef<std::string> Symbols) {
+  return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
+         std::set<std::string>{ExactGeneralGemmV1Entry.str(),
+                               ExactGeneralGemmV1Descriptor.str()};
+}
+
 bool isExactRowSoftmaxV1SymbolSet(ArrayRef<std::string> Symbols) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{ExactRowSoftmaxV1Entry.str(),
@@ -473,6 +494,32 @@ bool isExactLdsGemmSlice1RequestCandidate(const Request &RequestValue) {
 
 bool isClosedExactLdsGemmSlice1Request(const Request &RequestValue) {
   return isExactLdsGemmSlice1RequestCandidate(RequestValue) &&
+         RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
+         RequestValue.LinkOptions.StripDebug &&
+         RequestValue.LinkOptions.VerifyEach;
+}
+
+bool isExactGeneralGemmV1RequestCandidate(const Request &RequestValue) {
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes == RequestValue.CompilerModule.Bytes;
+  return RequestValue.Protocol == ProtocolVersion::V2 &&
+         RequestValue.Target == "gfx942:xnack-" &&
+         RequestValue.CodeObjectVersion == 6 && CompilerInputMatches &&
+         RequestValue.ExternalProviders.empty() &&
+         RequestValue.ImportSymbols.empty() &&
+         RequestValue.ExportSymbols.empty() &&
+         isExactGeneralGemmV1SymbolSet(RequestValue.RequiredSymbols) &&
+         isExactGeneralGemmV1SymbolSet(RequestValue.ExpectedDefinedSymbols) &&
+         isExactGeneralGemmV1SymbolSet(RequestValue.FinalSymbols);
+}
+
+bool isClosedExactGeneralGemmV1Request(const Request &RequestValue) {
+  return isExactGeneralGemmV1RequestCandidate(RequestValue) &&
          RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
          RequestValue.LinkOptions.StripDebug &&
          RequestValue.LinkOptions.VerifyEach;
@@ -624,6 +671,20 @@ exactWorkgroupSyncProfile(const Request &RequestValue) {
   return nullptr;
 }
 
+bool mentionsExactGeneralGemmV1(const Request &RequestValue) {
+  auto Mentions = [](ArrayRef<std::string> Symbols) {
+    return llvm::any_of(Symbols, [](StringRef Symbol) {
+      return Symbol == ExactGeneralGemmV1Entry ||
+             Symbol == ExactGeneralGemmV1Descriptor;
+    });
+  };
+  return Mentions(RequestValue.RequiredSymbols) ||
+         Mentions(RequestValue.ExpectedDefinedSymbols) ||
+         Mentions(RequestValue.ImportSymbols) ||
+         Mentions(RequestValue.ExportSymbols) ||
+         Mentions(RequestValue.FinalSymbols);
+}
+
 bool namesExactWave64CollectivesV1(ArrayRef<std::string> Symbols) {
   return llvm::any_of(Symbols, [](StringRef Symbol) {
     return Symbol == ExactWave64CollectivesV1Entry ||
@@ -727,6 +788,14 @@ selectPostLinkProfile(const Request &RequestValue,
       return pipelineError(
           "exact LDS GEMM Slice1 symbols require the closed Worker V2 profile");
     return PostLinkProfile::ExactLdsGemmSlice1;
+  }
+  const std::set<std::string> ExactGeneralGemmSymbols = {
+      ExactGeneralGemmV1Entry.str(), ExactGeneralGemmV1Descriptor.str()};
+  if (ExpectedSymbols == ExactGeneralGemmSymbols) {
+    if (!isClosedExactGeneralGemmV1Request(RequestValue))
+      return pipelineError("exact general GEMM V1 symbols require the closed "
+                           "Worker V2 profile");
+    return PostLinkProfile::ExactGeneralGemmV1;
   }
   const std::set<std::string> ExactWave64Symbols = {
       ExactWave64CollectivesV1Entry.str(),
@@ -1680,6 +1749,241 @@ Error validateExactWorkgroupSyncModule(const Module &ModuleValue,
   return Error::success();
 }
 
+Expected<std::array<std::vector<uint8_t>, 2>>
+extractExactGeneralGemmV1Sections(const Module &ModuleValue) {
+  static constexpr std::array<StringLiteral, 2> Globals = {
+      ExactGeneralGemmV1DescriptorGlobal, ExactGeneralGemmV1BindingGlobal};
+  static constexpr std::array<StringLiteral, 2> Sections = {
+      ExactGeneralGemmV1DescriptorSection, ExactGeneralGemmV1BindingSection};
+  static constexpr std::array<uint64_t, 2> Alignments = {8, 16};
+  std::array<std::vector<uint8_t>, 2> Result;
+  for (size_t Index = 0; Index != Globals.size(); ++Index) {
+    const GlobalVariable *Global =
+        ModuleValue.getGlobalVariable(Globals[Index], true);
+    const auto *Initializer =
+        Global
+            ? dyn_cast_or_null<ConstantDataSequential>(Global->getInitializer())
+            : nullptr;
+    if (!Global || Global->getAddressSpace() != 4 || !Global->isConstant() ||
+        Global->getLinkage() != GlobalValue::InternalLinkage ||
+        Global->getSection() != Sections[Index] ||
+        Global->getAlign() != Align(Alignments[Index]) || !Initializer ||
+        !Initializer->getElementType()->isIntegerTy(8) ||
+        Initializer->getNumElements() == 0)
+      return pipelineError("exact general GEMM retained section envelope "
+                           "does not match");
+    StringRef Bytes = Initializer->getRawDataValues();
+    Result[Index].assign(Bytes.bytes_begin(), Bytes.bytes_end());
+  }
+  if (Result[0].size() > 64 * 1024 || Result[1].size() > 16 * 1024)
+    return pipelineError(
+        "exact general GEMM retained section exceeds its byte bound");
+  return Result;
+}
+
+Error validateExactGeneralGemmV1Module(const Module &ModuleValue,
+                                       const DataLayout &ExpectedLayout) {
+  if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
+      ModuleValue.getDataLayout() != ExpectedLayout)
+    return pipelineError("exact general GEMM LLVM module envelope does not "
+                         "match");
+  auto Sections = extractExactGeneralGemmV1Sections(ModuleValue);
+  if (!Sections)
+    return Sections.takeError();
+
+  for (StringLiteral Name : {ExactGeneralGemmV1LdsA, ExactGeneralGemmV1LdsB}) {
+    const GlobalVariable *Global = ModuleValue.getGlobalVariable(Name, true);
+    const auto *Array =
+        Global ? dyn_cast<ArrayType>(Global->getValueType()) : nullptr;
+    if (!Global || Global->getAddressSpace() != 3 || Global->isConstant() ||
+        Global->getLinkage() != GlobalValue::InternalLinkage || !Array ||
+        Array->getNumElements() != 256 ||
+        !Array->getElementType()->isIntegerTy(16) ||
+        !isa<UndefValue>(Global->getInitializer()) ||
+        Global->getAlign() != Align(16) || Global->hasSection())
+      return pipelineError(
+          "exact general GEMM workgroup allocation does not match");
+  }
+
+  const GlobalVariable *CompilerUsed =
+      ModuleValue.getGlobalVariable("llvm.compiler.used", true);
+  const auto *UsedArray =
+      CompilerUsed
+          ? dyn_cast_or_null<ConstantArray>(CompilerUsed->getInitializer())
+          : nullptr;
+  if (!CompilerUsed ||
+      CompilerUsed->getLinkage() != GlobalValue::AppendingLinkage ||
+      CompilerUsed->getSection() != "llvm.metadata" || !UsedArray ||
+      UsedArray->getNumOperands() != 2 ||
+      std::distance(ModuleValue.global_begin(), ModuleValue.global_end()) != 5)
+    return pipelineError(
+        "exact general GEMM retained-global closure does not match");
+  std::set<const GlobalVariable *> Retained;
+  for (const Use &Operand : UsedArray->operands()) {
+    const Value *Value = Operand.get();
+    while (const auto *Expression = dyn_cast<ConstantExpr>(Value))
+      Value = Expression->getOperand(0);
+    const auto *Global = dyn_cast<GlobalVariable>(Value);
+    if (!Global)
+      return pipelineError(
+          "exact general GEMM compiler.used entry does not match");
+    Retained.insert(Global);
+  }
+  if (Retained !=
+      std::set<const GlobalVariable *>{
+          ModuleValue.getGlobalVariable(ExactGeneralGemmV1DescriptorGlobal,
+                                        true),
+          ModuleValue.getGlobalVariable(ExactGeneralGemmV1BindingGlobal, true)})
+    return pipelineError(
+        "exact general GEMM compiler.used closure does not match");
+
+  const Function *Kernel = nullptr;
+  std::set<std::string> Declarations;
+  for (const Function &FunctionValue : ModuleValue) {
+    if (FunctionValue.isDeclaration()) {
+      Declarations.insert(FunctionValue.getName().str());
+      continue;
+    }
+    if (Kernel)
+      return pipelineError(
+          "exact general GEMM LLVM module has multiple definitions");
+    Kernel = &FunctionValue;
+  }
+  const std::set<std::string> ExpectedDeclarations = {
+      "llvm.amdgcn.mfma.f32.16x16x16bf16.1k",
+      "llvm.amdgcn.s.barrier",
+      "llvm.amdgcn.workgroup.id.x",
+      "llvm.amdgcn.workgroup.id.y",
+      "llvm.amdgcn.workitem.id.x",
+      "llvm.trap"};
+  if (!Kernel || Kernel->getName() != ExactGeneralGemmV1Entry ||
+      Kernel->getCallingConv() != CallingConv::AMDGPU_KERNEL ||
+      !Kernel->getReturnType()->isVoidTy() || Kernel->isVarArg() ||
+      Kernel->arg_size() != 14 || Declarations != ExpectedDeclarations)
+    return pipelineError(
+        "exact general GEMM LLVM function closure does not match");
+
+  static constexpr std::array<StringLiteral, 14> ArgumentNames = {
+      "a", "a_len", "b",   "b_len", "c",   "c_len", "m",
+      "n", "k",     "lda", "ldb",   "ldc", "alpha", "beta"};
+  size_t ArgumentIndex = 0;
+  for (const Argument &ArgumentValue : Kernel->args()) {
+    Type *TypeValue = ArgumentValue.getType();
+    const bool Pointer =
+        ArgumentIndex == 0 || ArgumentIndex == 2 || ArgumentIndex == 4;
+    const bool Length =
+        ArgumentIndex == 1 || ArgumentIndex == 3 || ArgumentIndex == 5;
+    const bool Float = ArgumentIndex >= 12;
+    if (ArgumentValue.getName() != ArgumentNames[ArgumentIndex] ||
+        (Pointer  ? !TypeValue->isPointerTy() ||
+                        TypeValue->getPointerAddressSpace() != 1
+         : Length ? !TypeValue->isIntegerTy(64)
+         : Float  ? !TypeValue->isFloatTy()
+                  : !TypeValue->isIntegerTy(32)))
+      return pipelineError(
+          "exact general GEMM LLVM argument ABI does not match");
+    ++ArgumentIndex;
+  }
+  if (Kernel->getFnAttribute("target-cpu").getValueAsString() != "gfx942" ||
+      Kernel->getFnAttribute("target-features").getValueAsString() !=
+          "-wavefrontsize32,+wavefrontsize64,-xnack" ||
+      Kernel->getFnAttribute("amdgpu-flat-work-group-size")
+              .getValueAsString() != "64,64" ||
+      Kernel->getFnAttribute("fp-contract").getValueAsString() != "off")
+    return pipelineError(
+        "exact general GEMM LLVM target attributes do not match");
+  MDNode *Workgroup = Kernel->getMetadata("reqd_work_group_size");
+  static constexpr std::array<uint64_t, 3> WorkgroupShape = {64, 1, 1};
+  if (!Workgroup || Workgroup->getNumOperands() != WorkgroupShape.size())
+    return pipelineError(
+        "exact general GEMM LLVM workgroup metadata does not match");
+  for (size_t Index = 0; Index != WorkgroupShape.size(); ++Index) {
+    const auto *Value =
+        mdconst::dyn_extract<ConstantInt>(Workgroup->getOperand(Index));
+    if (!Value || Value->getZExtValue() != WorkgroupShape[Index])
+      return pipelineError(
+          "exact general GEMM LLVM workgroup metadata does not match");
+  }
+
+  size_t Barriers = 0;
+  size_t Mfmas = 0;
+  size_t Traps = 0;
+  size_t WorkitemIds = 0;
+  size_t WorkgroupIds = 0;
+  size_t LdsLoads = 0;
+  size_t LdsStores = 0;
+  size_t GlobalStores = 0;
+  size_t VectorLoads = 0;
+  for (const Instruction &InstructionValue : instructions(*Kernel)) {
+    if (isa<AtomicRMWInst, AtomicCmpXchgInst, FenceInst, AllocaInst>(
+            InstructionValue))
+      return pipelineError(
+          "exact general GEMM LLVM module contains a forbidden memory "
+          "effect");
+    if (const auto *Load = dyn_cast<LoadInst>(&InstructionValue)) {
+      if (Load->isAtomic() || Load->isVolatile())
+        return pipelineError(
+            "exact general GEMM LLVM load effect does not match");
+      LdsLoads += Load->getPointerAddressSpace() == 3;
+      VectorLoads += Load->getType()->isVectorTy();
+    }
+    if (const auto *Store = dyn_cast<StoreInst>(&InstructionValue)) {
+      if (Store->isAtomic() || Store->isVolatile())
+        return pipelineError(
+            "exact general GEMM LLVM store effect does not match");
+      LdsStores += Store->getPointerAddressSpace() == 3;
+      GlobalStores += Store->getPointerAddressSpace() == 1;
+    }
+    const auto *Call = dyn_cast<CallBase>(&InstructionValue);
+    if (!Call)
+      continue;
+    const Function *Callee = Call->getCalledFunction();
+    if (!Callee)
+      return pipelineError(
+          "exact general GEMM LLVM module has an indirect call");
+    StringRef Name = Callee->getName();
+    if (Name == "llvm.amdgcn.s.barrier")
+      ++Barriers;
+    else if (Name == "llvm.amdgcn.mfma.f32.16x16x16bf16.1k")
+      ++Mfmas;
+    else if (Name == "llvm.trap")
+      ++Traps;
+    else if (Name == "llvm.amdgcn.workitem.id.x")
+      ++WorkitemIds;
+    else if (Name == "llvm.amdgcn.workgroup.id.x" ||
+             Name == "llvm.amdgcn.workgroup.id.y")
+      ++WorkgroupIds;
+    else
+      return pipelineError(
+          "exact general GEMM LLVM call closure does not match");
+  }
+  if (Barriers != 2 || Mfmas != 1 || Traps != 1 || WorkitemIds != 1 ||
+      WorkgroupIds != 2 || LdsLoads != 8 || LdsStores != 8 ||
+      GlobalStores != 4 || VectorLoads > 1)
+    return pipelineError(
+        "exact general GEMM LLVM effect closure does not match");
+  return Error::success();
+}
+
+Expected<std::array<std::vector<uint8_t>, 2>>
+parseExactGeneralGemmV1CompilerSections(StringRef Text) {
+  LLVMContext Context;
+  SMDiagnostic Diagnostic;
+  auto Buffer = MemoryBuffer::getMemBufferCopy(
+      Text, "<exact-general-gemm-v1-compiler-module>");
+  std::unique_ptr<Module> ModuleValue =
+      parseAssembly(Buffer->getMemBufferRef(), Diagnostic, Context);
+  if (!ModuleValue) {
+    std::string Message;
+    raw_string_ostream Stream(Message);
+    Diagnostic.print("fe2o3-llvm-link-worker", Stream, false, false);
+    Stream.flush();
+    return pipelineError(Twine("exact general GEMM compiler module: ") +
+                         Message);
+  }
+  return extractExactGeneralGemmV1Sections(*ModuleValue);
+}
+
 Error validateExactWave64CollectivesModule(const Module &ModuleValue) {
   if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
       ModuleValue.getDataLayoutStr() != ExactLdsGemmSlice1ProducerDataLayout ||
@@ -2297,6 +2601,10 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (!MeasuredBuiltinProvider &&
       isClosedExactFlashAttentionV1Request(RequestValue))
     if (Error E = validateExactFlashAttentionModule(**Parsed))
+      return E;
+  if (!MeasuredBuiltinProvider &&
+      isClosedExactGeneralGemmV1Request(RequestValue))
+    if (Error E = validateExactGeneralGemmV1Module(**Parsed, ExpectedLayout))
       return E;
   if (isClosedExactMoeTop2V1Request(RequestValue))
     if (Error E = validateExactMoeTop2V1Module(**Parsed, ExpectedLayout))
@@ -3036,7 +3344,8 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
       return E;
     auto Language = Kernel.find(".language");
     auto LanguageVersion = Kernel.find(".language_version");
-    if (Check == "flash_attention_v1_profile" ||
+    if (Check == ExactGeneralGemmV1Check ||
+        Check == "flash_attention_v1_profile" ||
         Check == ExactRowSoftmaxV1Check) {
       if (Language == Kernel.end() || !Language->second.isString() ||
           Language->second.getString() != "OpenCL C" ||
@@ -3080,6 +3389,8 @@ StringRef exactMetadataCheck(MetadataValidationPolicy Policy) {
     return ExactRowSoftmaxV1Check;
   case MetadataValidationPolicy::ExactLdsGemmSlice1:
     return "lds_gemm_slice1_profile";
+  case MetadataValidationPolicy::ExactGeneralGemmV1:
+    return ExactGeneralGemmV1Check;
   case MetadataValidationPolicy::ExactWave64CollectivesV1:
     return "wave64_collectives_v1_profile";
   case MetadataValidationPolicy::ExactFlashAttentionV1:
@@ -3479,6 +3790,11 @@ Error validateExactLdsGemmSlice1ElfClosure(
   return validateExactElfClosure(ObjectValue, "lds_gemm_slice1_profile");
 }
 
+Error validateExactGeneralGemmV1ElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  return validateExactElfClosure(ObjectValue, ExactGeneralGemmV1Check);
+}
+
 Error validateExactRowSoftmaxV1ElfClosure(
     const ELFObjectFile<ELF64LE> &ObjectValue) {
   return validateExactElfClosure(ObjectValue, ExactRowSoftmaxV1Check);
@@ -3550,6 +3866,152 @@ Expected<Wave64CallScanner> createWave64CallScanner() {
   if (!Result.Disassembler)
     return pipelineError("AMDGPU MC disassembler is unavailable");
   return Result;
+}
+
+Error validateExactGeneralGemmV1Machine(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto SectionsOrError = File.sections();
+  if (!SectionsOrError)
+    return SectionsOrError.takeError();
+  ArrayRef<ELF64LE::Shdr> Sections = *SectionsOrError;
+  ArrayRef<uint8_t> KernelBytes;
+  uint64_t KernelAddress = 0;
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Table : Sections) {
+    if (Table.sh_type != ELF::SHT_SYMTAB)
+      continue;
+    auto Symbols = File.symbols(&Table);
+    if (!Symbols)
+      return Symbols.takeError();
+    auto Strings = File.getStringTableForSymtab(Table, Sections);
+    if (!Strings)
+      return Strings.takeError();
+    for (const ELF64LE::Sym &Symbol : *Symbols) {
+      auto Name = Symbol.getName(*Strings);
+      if (!Name)
+        return Name.takeError();
+      if (*Name != ExactGeneralGemmV1Entry)
+        continue;
+      ++Matches;
+      if (Symbol.getType() != ELF::STT_FUNC || Symbol.st_size == 0 ||
+          Symbol.st_shndx == ELF::SHN_XINDEX ||
+          Symbol.st_shndx >= Sections.size())
+        return postLinkError(ExactGeneralGemmV1Check, "machine_entry_symbol");
+      const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
+      if ((Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) !=
+              (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR) ||
+          Symbol.st_value < Section.sh_addr)
+        return postLinkError(ExactGeneralGemmV1Check, "machine_entry_section");
+      uint64_t Offset = Symbol.st_value - Section.sh_addr;
+      if (Offset > Section.sh_size || Symbol.st_size > Section.sh_size - Offset)
+        return postLinkError(ExactGeneralGemmV1Check, "machine_entry_range");
+      auto Contents = File.getSectionContents(Section);
+      if (!Contents)
+        return Contents.takeError();
+      KernelBytes = Contents->slice(Offset, Symbol.st_size);
+      KernelAddress = Symbol.st_value;
+    }
+  }
+  if (Matches != 1)
+    return postLinkError(ExactGeneralGemmV1Check, "machine_entry_cardinality");
+
+  auto Scanner = createWave64CallScanner();
+  if (!Scanner)
+    return postLinkError(ExactGeneralGemmV1Check,
+                         errorToDiagnostic(Scanner.takeError()));
+  uint64_t Offset = 0;
+  size_t InstructionCount = 0;
+  size_t Barriers = 0;
+  size_t Mfmas = 0;
+  size_t LdsReads = 0;
+  size_t LdsWrites = 0;
+  size_t Waitcnts = 0;
+  std::optional<size_t> FirstLdsWrite;
+  std::optional<size_t> LastLdsWrite;
+  std::optional<size_t> FirstLdsRead;
+  std::optional<size_t> LastLdsRead;
+  std::optional<size_t> MfmaInstruction;
+  std::optional<size_t> ReadCompletionWait;
+  bool PreviousWasVmcntZero = false;
+  bool PublishWaitIsExact = false;
+  while (Offset < KernelBytes.size()) {
+    if (llvm::all_of(KernelBytes.drop_front(Offset),
+                     [](uint8_t Byte) { return Byte == 0; }))
+      break;
+    MCInst Instruction;
+    uint64_t Size = 0;
+    auto Status = Scanner->Disassembler->getInstruction(
+        Instruction, Size, KernelBytes.drop_front(Offset),
+        KernelAddress + Offset, nulls());
+    if (Status != MCDisassembler::Success || Size == 0 ||
+        Size > KernelBytes.size() - Offset)
+      return postLinkError(ExactGeneralGemmV1Check,
+                           "machine_instruction_decode");
+    const MCInstrDesc &Descriptor =
+        Scanner->Instructions->get(Instruction.getOpcode());
+    StringRef Opcode = Scanner->Instructions->getName(Instruction.getOpcode());
+    if (Descriptor.isCall())
+      return postLinkError(ExactGeneralGemmV1Check, "machine_call");
+    if (Opcode.contains("ATOMIC") || Opcode.contains("SCRATCH"))
+      return postLinkError(ExactGeneralGemmV1Check,
+                           "machine_forbidden_memory_effect");
+    const bool IsBarrier = Opcode.contains("BARRIER");
+    const bool IsMfma = Opcode.contains("MFMA_F32_16X16X16BF16_1K");
+    const bool IsLdsRead = Opcode.contains("DS_READ");
+    const bool IsLdsWrite = Opcode.contains("DS_WRITE");
+    const bool IsWaitcnt = Opcode.contains("WAITCNT");
+    const bool IsVmcntZero =
+        IsWaitcnt && Size == 4 && KernelBytes[Offset] == 0x70 &&
+        KernelBytes[Offset + 1] == 0x0f && KernelBytes[Offset + 2] == 0x8c &&
+        KernelBytes[Offset + 3] == 0xbf;
+    const bool IsLgkmcntZero =
+        IsWaitcnt && Size == 4 && KernelBytes[Offset] == 0x7f &&
+        KernelBytes[Offset + 1] == 0xc0 && KernelBytes[Offset + 2] == 0x8c &&
+        KernelBytes[Offset + 3] == 0xbf;
+    Barriers += IsBarrier;
+    Mfmas += IsMfma;
+    LdsReads += IsLdsRead;
+    LdsWrites += IsLdsWrite;
+    Waitcnts += IsWaitcnt;
+    if (IsLdsWrite) {
+      if (!FirstLdsWrite) {
+        FirstLdsWrite = InstructionCount;
+        PublishWaitIsExact = PreviousWasVmcntZero;
+      }
+      LastLdsWrite = InstructionCount;
+    }
+    if (IsLdsRead) {
+      if (!FirstLdsRead)
+        FirstLdsRead = InstructionCount;
+      LastLdsRead = InstructionCount;
+    }
+    if (IsLgkmcntZero && LastLdsRead && InstructionCount == *LastLdsRead + 1)
+      ReadCompletionWait = InstructionCount;
+    if (IsMfma)
+      MfmaInstruction = InstructionCount;
+    Offset += Size;
+    PreviousWasVmcntZero = IsVmcntZero;
+    if (++InstructionCount > 1024 * 1024)
+      return postLinkError(ExactGeneralGemmV1Check,
+                           "machine_instruction_bound");
+  }
+  const bool SingleWaveBarrierRefinement =
+      Barriers == 0 && LdsWrites == 8 && LdsReads == 8 && FirstLdsWrite &&
+      LastLdsWrite && FirstLdsRead && LastLdsRead && MfmaInstruction &&
+      ReadCompletionWait && PublishWaitIsExact &&
+      *FirstLdsRead == *LastLdsWrite + 1 &&
+      *ReadCompletionWait == *LastLdsRead + 1 &&
+      *ReadCompletionWait < *MfmaInstruction;
+  if (InstructionCount == 0 || Mfmas != 1 || !SingleWaveBarrierRefinement)
+    return postLinkError(
+        ExactGeneralGemmV1Check,
+        (Twine("machine_effect_shape instructions=") + Twine(InstructionCount) +
+         " barriers=" + Twine(Barriers) + " mfmas=" + Twine(Mfmas) +
+         " lds_reads=" + Twine(LdsReads) + " lds_writes=" + Twine(LdsWrites) +
+         " waitcnts=" + Twine(Waitcnts))
+            .str());
+  return Error::success();
 }
 
 Error validateExactWave64NoMachineCalls(
@@ -3959,6 +4421,52 @@ Error validateExactWave64DescriptorBinding(
   if (Matches != 1)
     return postLinkError("wave64_collectives_v1_profile",
                          "descriptor_section_cardinality");
+  return Error::success();
+}
+
+Error validateExactGeneralGemmV1SectionBinding(
+    const ELFObjectFile<ELF64LE> &ObjectValue, const Request &RequestValue) {
+  StringRef CompilerBytes(
+      reinterpret_cast<const char *>(RequestValue.CompilerModule.Bytes.data()),
+      RequestValue.CompilerModule.Bytes.size());
+  auto Expected = parseExactGeneralGemmV1CompilerSections(CompilerBytes);
+  if (!Expected)
+    return postLinkError(ExactGeneralGemmV1Check,
+                         errorToDiagnostic(Expected.takeError()));
+
+  static constexpr std::array<StringLiteral, 2> Names = {
+      ExactGeneralGemmV1DescriptorSection, ExactGeneralGemmV1BindingSection};
+  static constexpr std::array<uint64_t, 2> Alignments = {8, 16};
+  std::array<size_t, 2> Matches = {0, 0};
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    auto Found = llvm::find(Names, *Name);
+    if (Found == Names.end())
+      continue;
+    const size_t Index = std::distance(Names.begin(), Found);
+    ++Matches[Index];
+    if (Section.sh_type != ELF::SHT_PROGBITS ||
+        (Section.sh_flags & ELF::SHF_ALLOC) == 0 ||
+        (Section.sh_flags & (ELF::SHF_WRITE | ELF::SHF_EXECINSTR)) != 0 ||
+        Section.sh_addralign != Alignments[Index])
+      return postLinkError(ExactGeneralGemmV1Check,
+                           "retained_section_envelope");
+    auto Contents = File.getSectionContents(Section);
+    if (!Contents)
+      return Contents.takeError();
+    if (*Contents != ArrayRef((*Expected)[Index]))
+      return postLinkError(ExactGeneralGemmV1Check,
+                           "retained_section_identity");
+  }
+  if (Matches != std::array<size_t, 2>{1, 1})
+    return postLinkError(ExactGeneralGemmV1Check,
+                         "retained_section_cardinality");
   return Error::success();
 }
 
@@ -4396,6 +4904,136 @@ Error validateExactLdsGemmSlice1Metadata(const MetadataContract &Metadata) {
 
   const size_t HiddenBaseIndex = 6;
   const uint64_t HiddenBase = 48;
+  auto ValidateHidden = [&](const KernelArgumentContract &Argument,
+                            const HiddenArgumentShape &Expected) {
+    return !Argument.Name && !Argument.TypeName &&
+           Argument.Offset == HiddenBase + Expected.Offset &&
+           Argument.Size == Expected.Size &&
+           Argument.ValueKind == Expected.ValueKind && !Argument.Align &&
+           !Argument.ValueType && !Argument.AddressSpace && !Argument.Access &&
+           !Argument.ActualAccess && !Argument.PointeeAlign &&
+           !Argument.IsConst && !Argument.IsRestrict && !Argument.IsVolatile &&
+           !Argument.IsPipe;
+  };
+  for (size_t Index = 0; Index != RequiredHidden.size(); ++Index)
+    if (!ValidateHidden(Arguments[HiddenBaseIndex + Index],
+                        RequiredHidden[Index]))
+      return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
+  for (size_t Index = HiddenBaseIndex + RequiredHidden.size();
+       Index != Arguments.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto Expected = llvm::find_if(OptionalHidden, [&](const auto &Shape) {
+      return Argument.Offset == HiddenBase + Shape.Offset;
+    });
+    if (Expected == OptionalHidden.end() ||
+        !ValidateHidden(Argument, *Expected))
+      return Mismatch(
+          (Twine("hidden_arg") + Twine(Index - HiddenBaseIndex)).str());
+  }
+  return Error::success();
+}
+
+Error validateExactGeneralGemmV1Metadata(const MetadataContract &Metadata) {
+  static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 13> RequiredHidden = {{
+      {0, 4, "hidden_block_count_x"},
+      {4, 4, "hidden_block_count_y"},
+      {8, 4, "hidden_block_count_z"},
+      {12, 2, "hidden_group_size_x"},
+      {14, 2, "hidden_group_size_y"},
+      {16, 2, "hidden_group_size_z"},
+      {18, 2, "hidden_remainder_x"},
+      {20, 2, "hidden_remainder_y"},
+      {22, 2, "hidden_remainder_z"},
+      {40, 8, "hidden_global_offset_x"},
+      {48, 8, "hidden_global_offset_y"},
+      {56, 8, "hidden_global_offset_z"},
+      {64, 2, "hidden_grid_dims"},
+  }};
+  static constexpr std::array<HiddenArgumentShape, 9> OptionalHidden = {{
+      {72, 8, "hidden_printf_buffer"},
+      {80, 8, "hidden_hostcall_buffer"},
+      {88, 8, "hidden_multigrid_sync_arg"},
+      {96, 8, "hidden_heap_v1"},
+      {104, 8, "hidden_default_queue"},
+      {112, 8, "hidden_completion_action"},
+      {192, 4, "hidden_private_base"},
+      {196, 4, "hidden_shared_base"},
+      {200, 8, "hidden_queue_ptr"},
+  }};
+  auto Mismatch = [](StringRef Field) {
+    return postLinkError(ExactGeneralGemmV1Check,
+                         (Twine("kernel_contract_") + Field).str());
+  };
+  if (Metadata.Kernels.size() != 1)
+    return postLinkError(ExactGeneralGemmV1Check, "kernel_cardinality");
+  const KernelLaunchContract &Kernel = Metadata.Kernels.front();
+  if (Kernel.Name != ExactGeneralGemmV1Entry ||
+      Kernel.Symbol != ExactGeneralGemmV1Descriptor)
+    return Mismatch("symbols");
+  if (!Kernel.RequiredWorkgroupSize ||
+      *Kernel.RequiredWorkgroupSize != Workgroup)
+    return Mismatch("reqd_workgroup_size");
+  if (Kernel.MaxFlatWorkgroupSize != 64)
+    return Mismatch("max_flat_workgroup_size");
+  if (Kernel.WavefrontSize != 64)
+    return Mismatch("wavefront_size");
+  if (Kernel.KernargSegmentSize != 336)
+    return Mismatch("kernarg_segment_size");
+  if (Kernel.KernargSegmentAlign != 8)
+    return Mismatch("kernarg_segment_align");
+  if (Kernel.GroupSegmentFixedSize != 1024)
+    return Mismatch("group_segment_fixed_size");
+  if (Kernel.PrivateSegmentFixedSize != 0)
+    return Mismatch("private_segment_fixed_size");
+  if (!Kernel.SgprSpillCount || *Kernel.SgprSpillCount != 0)
+    return Mismatch("sgpr_spill_count");
+  if (!Kernel.VgprSpillCount || *Kernel.VgprSpillCount != 0)
+    return Mismatch("vgpr_spill_count");
+  if (!Kernel.UsesDynamicStack || *Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack");
+  if (Kernel.WorkgroupProcessorMode ||
+      (Kernel.UniformWorkgroupSize && *Kernel.UniformWorkgroupSize))
+    return Mismatch("optional_execution_mode");
+  if (!Kernel.Arguments)
+    return Mismatch("args_missing");
+  const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
+  if (Arguments.size() < 14 + RequiredHidden.size())
+    return Mismatch("args_cardinality");
+
+  static constexpr std::array<StringLiteral, 14> Names = {
+      "a", "a_len", "b",   "b_len", "c",   "c_len", "m",
+      "n", "k",     "lda", "ldb",   "ldc", "alpha", "beta"};
+  static constexpr std::array<uint64_t, 14> Offsets = {
+      0, 8, 16, 24, 32, 40, 48, 52, 56, 60, 64, 68, 72, 76};
+  static constexpr std::array<uint64_t, 14> Sizes = {8, 8, 8, 8, 8, 8, 4,
+                                                     4, 4, 4, 4, 4, 4, 4};
+  for (size_t Index = 0; Index != Names.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    if (!Argument.Name || *Argument.Name != Names[Index] ||
+        Argument.Offset != Offsets[Index] || Argument.Size != Sizes[Index])
+      return Mismatch((Twine("arg") + Twine(Index) + "_layout").str());
+    const bool Pointer = Index == 0 || Index == 2 || Index == 4;
+    if (Pointer) {
+      if (Argument.ValueKind != "global_buffer" || !Argument.AddressSpace ||
+          *Argument.AddressSpace != "global")
+        return Mismatch((Twine("arg") + Twine(Index) + "_pointer").str());
+    } else if (Argument.ValueKind != "by_value" || Argument.AddressSpace) {
+      return Mismatch((Twine("arg") + Twine(Index) + "_scalar").str());
+    }
+    if ((Argument.Align && *Argument.Align != (Sizes[Index] == 8 ? 8 : 4)) ||
+        (Argument.IsVolatile && *Argument.IsVolatile) ||
+        (Argument.IsPipe && *Argument.IsPipe))
+      return Mismatch((Twine("arg") + Twine(Index) + "_qualifier").str());
+  }
+
+  const size_t HiddenBaseIndex = Names.size();
+  const uint64_t HiddenBase = 80;
   auto ValidateHidden = [&](const KernelArgumentContract &Argument,
                             const HiddenArgumentShape &Expected) {
     return !Argument.Name && !Argument.TypeName &&
@@ -5229,6 +5867,21 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
           diagnosticList(ExpectedSymbols) +
           " actual=" + diagnosticList(StaticPublicDefinitions));
   }
+  if (*Profile == PostLinkProfile::ExactGeneralGemmV1) {
+    if (Error E = validateExactGeneralGemmV1ElfClosure(*ConcreteElf))
+      return E;
+    if (Error E = validateExactGeneralGemmV1Machine(*ConcreteElf))
+      return E;
+    if (Error E = validateExactGeneralGemmV1SectionBinding(*ConcreteElf,
+                                                           RequestValue))
+      return E;
+    if (StaticPublicDefinitions != ExpectedSymbols)
+      return pipelineError(
+          Twine("post_link.check=") + ExactGeneralGemmV1Check +
+          " status=failed reason=static_symbol_closure expected=" +
+          diagnosticList(ExpectedSymbols) +
+          " actual=" + diagnosticList(StaticPublicDefinitions));
+  }
   if (const ExactWorkgroupSyncProfile *WorkgroupProfile =
           postLinkWorkgroupSyncProfile(*Profile)) {
     if (Error E = validateExactWorkgroupSyncElfClosure(*ConcreteElf,
@@ -5282,6 +5935,8 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
     MetadataPolicy = MetadataValidationPolicy::ExactRowSoftmaxV1;
   else if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     MetadataPolicy = MetadataValidationPolicy::ExactLdsGemmSlice1;
+  else if (*Profile == PostLinkProfile::ExactGeneralGemmV1)
+    MetadataPolicy = MetadataValidationPolicy::ExactGeneralGemmV1;
   else if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
     MetadataPolicy = MetadataValidationPolicy::ExactWave64CollectivesV1;
   else if (*Profile == PostLinkProfile::ExactFlashAttentionV1)
@@ -5305,6 +5960,10 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
            " actual=" + (Metadata->Target ? *Metadata->Target : "absent"))
               .str());
   }
+
+  if (*Profile == PostLinkProfile::ExactGeneralGemmV1)
+    if (Error E = validateExactGeneralGemmV1Metadata(*Metadata))
+      return E;
 
   std::set<std::string> ExpectedDescriptors;
   for (const std::string &Name : ExpectedSymbols)
@@ -5394,6 +6053,17 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
         "workgroup=[64,1,1] kernarg_size=304 kernarg_align=8 "
         "group_size=1024 private_size=0 wavefront_size=64 spills=0 "
         "dynamic_stack=false");
+  if (*Profile == PostLinkProfile::ExactGeneralGemmV1)
+    Diagnostics.push_back(
+        "post_link.check=general_gemm_v1_profile status=ok "
+        "workgroup=[64,1,1] explicit_kernarg_size=80 kernarg_size=336 "
+        "kernarg_align=8 group_size=1024 private_size=0 "
+        "wavefront_size=64 calls=0 atomics=0 spills=0 dynamic_stack=false "
+        "mfma=1 lds_writes=8 lds_reads=8 barriers_ir=2 barriers_isa=0 "
+        "barrier_refinement=single_wave_elision "
+        "publish_order=vmcnt0-before-lds-write "
+        "reuse_order=lgkmcnt0-after-lds-read-before-mfma "
+        "descriptor_binding=byte_exact compilation_binding=byte_exact");
   if (*Profile == PostLinkProfile::ExactRowSoftmaxV1)
     Diagnostics.push_back(
         (Twine("post_link.check=row_softmax_v1_profile status=ok ") +
@@ -6011,6 +6681,11 @@ Response executeImpl(const Request &RequestValue,
       !isClosedExactWave64CollectivesV1Request(RequestValue))
     return failure(RequestValue, Stage::InputValidation,
                    {"exact Wave64 collectives symbols require the closed "
+                    "Worker V2 profile"});
+  if (mentionsExactGeneralGemmV1(RequestValue) &&
+      !isClosedExactGeneralGemmV1Request(RequestValue))
+    return failure(RequestValue, Stage::InputValidation,
+                   {"exact general GEMM V1 symbols require the closed "
                     "Worker V2 profile"});
   if (mentionsExactRowSoftmaxV1(RequestValue) &&
       !isClosedExactRowSoftmaxV1Request(RequestValue))

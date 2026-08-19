@@ -29,11 +29,10 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_kernel_ir::{GeneralGemmKirV1, GeneralGemmPlanFieldsV1, GeneralGemmPlanSnapshotV1};
 
-const WORKER_PATH: &str =
-    "/home/harsh/fe2o3-pliron-scalar-add-worker-llvm22/fe2o3-llvm-link-worker";
-const WORKER_SHA256: &str = "836464163fca46f09b83eed501f5002b383488801a703bcfa17d0dd54f83d678";
+const WORKER_PATH: &str = "/home/harsh/fe2o3-general-gemm-worker-llvm22/fe2o3-llvm-link-worker";
+const WORKER_SHA256: &str = "0b4936777b08d7d9d864bf357ab4f14cac33a0bb0a13c479209a26c1da808d35";
 const WORKER_BUILD_ID: &str =
-    "fe2o3-worker-v1-sha256-2c7ca327dd4eacbe3a15b2b3a0f1331115e424ff7b5ea8a3c3c8444af829fca6";
+    "fe2o3-worker-v1-sha256-1769826adfd0cc9832015371d9df79bb9128093a28be89144aa797d8155151a0";
 const LLVM_BUILD_ID: &str = "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
 const OUTPUT_DIRECTORY_ENV: &str = "FE2O3_GENERAL_GEMM_V1_OUTPUT_DIR";
 
