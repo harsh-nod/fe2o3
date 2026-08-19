@@ -452,17 +452,28 @@ output.
 
 `GeneralGemmNumericalCorrespondenceV1` consumes that checked KIR/model record
 and recomputes a versioned BF16/FP32/gfx942 package. Its retained Verus source
-proves exact BF16 encoding widening for the complete 65,536-value domain,
-increasing-K separate multiply/add order, separate alpha/beta epilogue order,
-and the reviewed 16x16x16 wave64 descriptor shape. IEEE binary32 value
-interpretation, round-to-nearest-ties-even multiply/add results, and the
-`llvm.amdgcn.mfma.f32.16x16x16bf16.1k` FP32 accumulation behavior are explicit
-`Contracted` premises. Exceptional/subnormal values and emitted-machine
-numerical refinement are `Unsupported` by this V1 package. Eleven
-boundary-biased fixtures, including cancellation, overflow, minimum/maximum
-normal encodings, signed zero, special-value rejection, and a half-ULP
-reassociation discriminator, are mutation-sensitive observations only and
-cannot promote `Contracted` to `Proved`.
+proves only exact BF16 encoding bit placement for all 65,536 encodings. The
+refinement from Rust/KIR conversion operations to that representation theorem
+is still `Unsupported`. Increasing-K accumulation and separate alpha/beta
+epilogue order have `ModelOnly` exact-real schedule theorems; neither theorem
+projects canonical KIR operations or IEEE binary32 rounding. IEEE binary32
+value interpretation and round-to-nearest-ties-even multiply/add results are
+`Contracted`. The reviewed 16x16x16 wave64 controls and the FP32 accumulation
+behavior of `llvm.amdgcn.mfma.f32.16x16x16bf16.1k` are also `Contracted`, not
+proved. Exceptional/subnormal values and emitted-machine numerical refinement
+are `Unsupported` by this V1 package.
+
+The retained typed property-to-theorem manifest is the source of every property,
+status, basis, theorem name, normalized statement, and exact source identity.
+The host does not carry a second property classification table. Claim checking
+binds all eleven statement/source identities, and retained-root execution
+re-authenticates the exact manifest before and after Verus execution. Weakening
+or status promotion changes its reviewed identity and fails closed.
+
+Eleven boundary-biased fixtures, including cancellation, overflow,
+minimum/maximum normal encodings, signed zero, special-value rejection, and a
+half-ULP reassociation discriminator, are mutation-sensitive observations only.
+They cannot promote `ModelOnly`, `Contracted`, or `Unsupported` to `Proved`.
 
 The numerical claim binds the KIR/model correspondence, proof request,
 schedule, numerical policy, target, compiler toolchain, schedule model/theorem
@@ -473,6 +484,12 @@ for substitution. The checked and executed records are private-field,
 non-`Clone`, and grant no compiler, artifact, publication, load, or execution
 authority.
 
+Emitted-machine refinement is represented as an explicitly incomplete future
+join. It requires an owner-bound Pliron graph identity, a direct LLVM worker
+request/response identity, and a finalizer post-link ISA/result refinement.
+This package supplies none of those identities and does not depend on a
+provisional graph-export path, so the join and property remain `Unsupported`.
+
 Stock `rust_verify` and Z3 do not implement the V2 nonce/control protocol, and
 Verus must create its reviewed Z3 descendant. This runner therefore does not
 produce `AuthenticatedVerusExecutionReceiptV2`, does not claim the V2 frozen
@@ -481,6 +498,10 @@ load, or launch authority. Compiler-owned authentication of the KIR producer,
 discharge of the contracted IEEE/MFMA premises, and post-link correspondence
 from typed LLVM through the emitted gfx942 instruction and observed result bits
 remain separate open obligations.
+
+The retained-root numerical execution test remains ignored until an
+independently provisioned root-owned closure exists beneath `/opt`; an ordinary
+caller-owned directory is not treated as equivalent evidence.
 
 The control-flow binding does not yet prove optimized MIR or machine CFG
 equivalence. It gives those later compiler-refinement checks a canonical exact
