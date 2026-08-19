@@ -211,12 +211,32 @@ pub(crate) fn encode_module_v2(module: &ExecutableModuleV2) -> Vec<u8> {
         put_u8(&mut bytes, address_space_tag(global.address_space));
         put_u8(&mut bytes, u8::from(global.mutable));
         put_u8(&mut bytes, scalar_type_tag(global.value_type));
-        match global.initializer {
-            None => put_u8(&mut bytes, 0),
-            Some(initializer) => {
+        match (
+            global.array_elements,
+            global.initializer,
+            global.byte_initializer.as_deref(),
+        ) {
+            (Some(elements), None, Some(initializer)) => {
+                put_u8(&mut bytes, 3);
+                put_u16(&mut bytes, elements);
+                bytes.extend_from_slice(initializer);
+                put_u16(&mut bytes, global.alignment);
+                put_string(
+                    &mut bytes,
+                    global.section.as_deref().expect("validated byte section"),
+                );
+            }
+            (Some(elements), None, None) => {
+                put_u8(&mut bytes, 2);
+                put_u16(&mut bytes, elements);
+                put_u16(&mut bytes, global.alignment);
+            }
+            (None, None, None) => put_u8(&mut bytes, 0),
+            (None, Some(initializer), None) => {
                 put_u8(&mut bytes, 1);
                 encode_scalar_constant(&mut bytes, initializer);
             }
+            _ => unreachable!("validated globals have one storage form"),
         }
         encode_evidence(&mut bytes, &global.evidence);
     }
@@ -329,8 +349,9 @@ fn decode_module_v2(reader: &mut Reader<'_>) -> Result<ExecutableModuleV2, Decod
         let address_space = decode_address_space(reader.u8()?)?;
         let mutable = decode_bool(reader.u8()?, WireSectionV2::GlobalLinkage)?;
         let value_type = decode_scalar_type(reader.u8()?)?;
-        let initializer = match reader.u8()? {
-            0 => None,
+        let storage_tag = reader.u8()?;
+        let initializer = match storage_tag {
+            0 | 2 | 3 => None,
             1 => Some(decode_scalar_constant(reader)?),
             tag => {
                 return Err(DecodeHandoffErrorV2::UnknownTag {
@@ -339,8 +360,55 @@ fn decode_module_v2(reader: &mut Reader<'_>) -> Result<ExecutableModuleV2, Decod
                 });
             }
         };
+        let array_shape = if storage_tag == 2 {
+            Some((reader.u16()?, reader.u16()?))
+        } else {
+            None
+        };
+        let byte_shape = if storage_tag == 3 {
+            let elements = usize::from(reader.u16()?);
+            check_wire_limit(
+                HandoffLimitV2::CanonicalBytes,
+                elements,
+                crate::MAX_CONSTANT_GLOBAL_BYTES_V2,
+            )?;
+            let bytes = reader.take(elements)?.to_vec();
+            let alignment = reader.u16()?;
+            let section = reader.string(
+                MAX_SYMBOL_BYTES_V2,
+                HandoffLimitV2::SymbolBytes,
+                WireSectionV2::GlobalLinkage,
+            )?;
+            Some((bytes, alignment, section))
+        } else {
+            None
+        };
         let evidence = decode_evidence(reader)?;
-        globals.push(
+        let global = if let Some((bytes, alignment, section)) = byte_shape {
+            if linkage != GlobalLinkageV2::Internal
+                || address_space != AddressSpaceV1::Constant
+                || mutable
+                || value_type != ScalarTypeV1::I8
+            {
+                return Err(DecodeHandoffErrorV2::InvalidModel(
+                    HandoffDiagnosticV2::UnsupportedInstruction,
+                ));
+            }
+            GlobalV2::new_private_constant_bytes(id, &symbol, &section, bytes, alignment, evidence)
+        } else if let Some((elements, alignment)) = array_shape {
+            if linkage != GlobalLinkageV2::Internal
+                || address_space != AddressSpaceV1::Local
+                || !mutable
+                || value_type != ScalarTypeV1::I16
+                || elements != crate::GENERAL_GEMM_LDS_ELEMENTS_V2
+                || alignment != 16
+            {
+                return Err(DecodeHandoffErrorV2::InvalidModel(
+                    HandoffDiagnosticV2::UnsupportedInstruction,
+                ));
+            }
+            GlobalV2::new_lds_bf16_array_256(id, &symbol, evidence)
+        } else {
             GlobalV2::new(
                 id,
                 &symbol,
@@ -351,8 +419,8 @@ fn decode_module_v2(reader: &mut Reader<'_>) -> Result<ExecutableModuleV2, Decod
                 initializer,
                 evidence,
             )
-            .map_err(DecodeHandoffErrorV2::InvalidModel)?,
-        );
+        };
+        globals.push(global.map_err(DecodeHandoffErrorV2::InvalidModel)?);
     }
 
     let intrinsic_count = reader.bounded_u16(HandoffLimitV2::Intrinsics, MAX_INTRINSICS_V2)?;
@@ -525,6 +593,10 @@ fn encode_instruction(bytes: &mut Vec<u8>, instruction: &InstructionV2) {
             put_u8(bytes, 1);
             encode_scalar_constant(bytes, *value);
         }
+        InstructionKindV2::VectorZero { element_type } => {
+            put_u8(bytes, 14);
+            put_u8(bytes, scalar_type_tag(*element_type));
+        }
         InstructionKindV2::GlobalAddress(global) => {
             put_u8(bytes, 2);
             put_u32(bytes, global.get());
@@ -603,6 +675,42 @@ fn encode_instruction(bytes: &mut Vec<u8>, instruction: &InstructionV2) {
                 put_u32(bytes, argument.get());
             }
         }
+        InstructionKindV2::VectorLoad4 {
+            pointer,
+            element_type,
+            alignment,
+        } => {
+            put_u8(bytes, 10);
+            put_u32(bytes, pointer.get());
+            put_u8(bytes, scalar_type_tag(*element_type));
+            put_u16(bytes, *alignment);
+        }
+        InstructionKindV2::Phi { incoming } => {
+            put_u8(bytes, 11);
+            put_u16(
+                bytes,
+                u16::try_from(incoming.len()).expect("bounded phi incoming count fits u16"),
+            );
+            for (value, block) in incoming {
+                put_u32(bytes, value.get());
+                put_u32(bytes, block.get());
+            }
+        }
+        InstructionKindV2::InsertElement {
+            vector,
+            element,
+            index,
+        } => {
+            put_u8(bytes, 12);
+            put_u32(bytes, vector.get());
+            put_u32(bytes, element.get());
+            put_u32(bytes, index.get());
+        }
+        InstructionKindV2::ExtractElement { vector, index } => {
+            put_u8(bytes, 13);
+            put_u32(bytes, vector.get());
+            put_u32(bytes, index.get());
+        }
     }
     encode_evidence(bytes, &instruction.evidence);
 }
@@ -669,6 +777,32 @@ fn decode_instruction(reader: &mut Reader<'_>) -> Result<InstructionV2, DecodeHa
             }
             InstructionKindV2::Call { target, arguments }
         }
+        10 => InstructionKindV2::VectorLoad4 {
+            pointer: ValueIdV2::new(reader.u32()?),
+            element_type: decode_scalar_type(reader.u8()?)?,
+            alignment: reader.u16()?,
+        },
+        11 => {
+            let count =
+                reader.bounded_u16(HandoffLimitV2::FunctionBlocks, MAX_FUNCTION_BLOCKS_V2)?;
+            let mut incoming = Vec::with_capacity(count);
+            for _ in 0..count {
+                incoming.push((ValueIdV2::new(reader.u32()?), BlockIdV2::new(reader.u32()?)));
+            }
+            InstructionKindV2::Phi { incoming }
+        }
+        12 => InstructionKindV2::InsertElement {
+            vector: ValueIdV2::new(reader.u32()?),
+            element: ValueIdV2::new(reader.u32()?),
+            index: ValueIdV2::new(reader.u32()?),
+        },
+        13 => InstructionKindV2::ExtractElement {
+            vector: ValueIdV2::new(reader.u32()?),
+            index: ValueIdV2::new(reader.u32()?),
+        },
+        14 => InstructionKindV2::VectorZero {
+            element_type: decode_scalar_type(reader.u8()?)?,
+        },
         tag => {
             return Err(DecodeHandoffErrorV2::UnknownTag {
                 section: WireSectionV2::Instruction,
@@ -772,6 +906,8 @@ fn encode_intrinsic(bytes: &mut Vec<u8>, intrinsic: IntrinsicV2) {
         IntrinsicV2::AmdGpuBarrier => put_u8(bytes, 3),
         IntrinsicV2::FmaF32 => put_u8(bytes, 4),
         IntrinsicV2::SqrtF32 => put_u8(bytes, 5),
+        IntrinsicV2::Trap => put_u8(bytes, 6),
+        IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k => put_u8(bytes, 7),
     }
 }
 
@@ -782,6 +918,8 @@ fn decode_intrinsic(reader: &mut Reader<'_>) -> Result<IntrinsicV2, DecodeHandof
         3 => Ok(IntrinsicV2::AmdGpuBarrier),
         4 => Ok(IntrinsicV2::FmaF32),
         5 => Ok(IntrinsicV2::SqrtF32),
+        6 => Ok(IntrinsicV2::Trap),
+        7 => Ok(IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k),
         tag => Err(DecodeHandoffErrorV2::UnknownTag {
             section: WireSectionV2::Intrinsic,
             tag,
@@ -815,6 +953,21 @@ fn encode_value_type(bytes: &mut Vec<u8>, value_type: ValueTypeV2) {
             put_u8(bytes, scalar_type_tag(pointee));
             put_u8(bytes, address_space_tag(address_space));
         }
+        ValueTypeV2::Vector { element, lanes } => {
+            put_u8(bytes, 3);
+            put_u8(bytes, scalar_type_tag(element));
+            put_u8(bytes, lanes);
+        }
+        ValueTypeV2::ArrayPointer {
+            element,
+            elements,
+            address_space,
+        } => {
+            put_u8(bytes, 4);
+            put_u8(bytes, scalar_type_tag(element));
+            put_u16(bytes, elements);
+            put_u8(bytes, address_space_tag(address_space));
+        }
     }
 }
 
@@ -825,6 +978,36 @@ fn decode_value_type(reader: &mut Reader<'_>) -> Result<ValueTypeV2, DecodeHando
             pointee: decode_scalar_type(reader.u8()?)?,
             address_space: decode_address_space(reader.u8()?)?,
         }),
+        3 => {
+            let element = decode_scalar_type(reader.u8()?)?;
+            let lanes = reader.u8()?;
+            if lanes != crate::GENERAL_GEMM_VECTOR_LANES_V2
+                || !matches!(element, ScalarTypeV1::I16 | ScalarTypeV1::F32)
+            {
+                return Err(DecodeHandoffErrorV2::InvalidModel(
+                    HandoffDiagnosticV2::UnsupportedInstruction,
+                ));
+            }
+            Ok(ValueTypeV2::Vector { element, lanes })
+        }
+        4 => {
+            let element = decode_scalar_type(reader.u8()?)?;
+            let elements = reader.u16()?;
+            let address_space = decode_address_space(reader.u8()?)?;
+            if element != ScalarTypeV1::I16
+                || elements != crate::GENERAL_GEMM_LDS_ELEMENTS_V2
+                || address_space != AddressSpaceV1::Local
+            {
+                return Err(DecodeHandoffErrorV2::InvalidModel(
+                    HandoffDiagnosticV2::UnsupportedInstruction,
+                ));
+            }
+            Ok(ValueTypeV2::ArrayPointer {
+                element,
+                elements,
+                address_space,
+            })
+        }
         tag => Err(DecodeHandoffErrorV2::UnknownTag {
             section: WireSectionV2::ValueType,
             tag,
@@ -893,6 +1076,11 @@ fn encode_function_attribute(bytes: &mut Vec<u8>, attribute: FunctionAttributeV2
             put_u8(bytes, range.minimum());
             put_u8(bytes, range.maximum());
         }
+        FunctionAttributeV2::RequiredWorkgroupSize(shape) => {
+            for extent in shape {
+                put_u16(bytes, extent);
+            }
+        }
         _ => {}
     }
 }
@@ -921,6 +1109,11 @@ fn decode_function_attribute(
         12 => FunctionAttributeV2::NoSignedZerosFpMathDisabled,
         13 => FunctionAttributeV2::ApproxFuncFpMathDisabled,
         14 => FunctionAttributeV2::FpContractOff,
+        15 => FunctionAttributeV2::RequiredWorkgroupSize([
+            reader.u16()?,
+            reader.u16()?,
+            reader.u16()?,
+        ]),
         tag => {
             return Err(DecodeHandoffErrorV2::UnknownTag {
                 section: WireSectionV2::FunctionAttribute,
@@ -1133,6 +1326,7 @@ fn decode_cast_operation(tag: u8) -> Result<CastOperationV2, DecodeHandoffErrorV
         7 => Ok(CastOperationV2::SignedIntToFloat),
         8 => Ok(CastOperationV2::FloatToUnsignedInt),
         9 => Ok(CastOperationV2::FloatToSignedInt),
+        10 => Ok(CastOperationV2::PointerToInt),
         tag => Err(DecodeHandoffErrorV2::UnknownTag {
             section: WireSectionV2::CastOperation,
             tag,
@@ -1251,6 +1445,7 @@ const fn cast_operation_tag(operation: CastOperationV2) -> u8 {
         CastOperationV2::SignedIntToFloat => 7,
         CastOperationV2::FloatToUnsignedInt => 8,
         CastOperationV2::FloatToSignedInt => 9,
+        CastOperationV2::PointerToInt => 10,
     }
 }
 

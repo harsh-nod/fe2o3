@@ -2,12 +2,219 @@
 
 mod support;
 
+use std::{
+    io::Write as _,
+    process::{Command, Stdio},
+};
+
 use fe2o3_llvm_handoff::{
-    ExecutableModuleV2, Gfx942HandoffV2, HandoffDiagnosticV2, InstructionKindV2, InstructionV2,
-    ModuleFlagV1, ScalarTypeV1,
+    AddressSpaceV1, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallTargetV2, CallingConventionV2,
+    ComparePredicateV2, ExecutableModuleV2, FunctionAttributeV2, FunctionIdV2, FunctionKindV2,
+    FunctionParameterV2, FunctionV2, GENERAL_GEMM_BINDING_SECTION_V2, Gfx942HandoffV2, GlobalIdV2,
+    GlobalV2, HandoffDiagnosticV2, InstructionKindV2, InstructionV2, IntegerBinaryOperationV2,
+    IntrinsicReferenceV2, IntrinsicV2, KERNEL_DESCRIPTOR_SECTION_V2, ModuleFlagV1, ReturnTypeV2,
+    ScalarConstantV2, ScalarTypeV1, TerminatorV2, TypedValueV2, ValueIdV2, ValueTypeV2,
 };
 use fe2o3_llvm_text::{SerializeErrorV2, serialize_gfx942_handoff_v2};
 use support::{Hostile, base_fixture, fixture, module_fixture};
+
+fn general_gemm_machine_helper(base: &fe2o3_llvm_handoff::Gfx942HandoffV1) -> FunctionV2 {
+    let i1 = ValueTypeV2::Scalar(ScalarTypeV1::I1);
+    let i16 = ValueTypeV2::Scalar(ScalarTypeV1::I16);
+    let i32 = ValueTypeV2::Scalar(ScalarTypeV1::I32);
+    let i64 = ValueTypeV2::Scalar(ScalarTypeV1::I64);
+    let f32 = ValueTypeV2::Scalar(ScalarTypeV1::F32);
+    let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16);
+    let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32);
+    let global_i16 = ValueTypeV2::Pointer {
+        pointee: ScalarTypeV1::I16,
+        address_space: AddressSpaceV1::Global,
+    };
+    let local_array = ValueTypeV2::ArrayPointer {
+        element: ScalarTypeV1::I16,
+        elements: 256,
+        address_space: AddressSpaceV1::Local,
+    };
+    let local_i16 = ValueTypeV2::Pointer {
+        pointee: ScalarTypeV1::I16,
+        address_space: AddressSpaceV1::Local,
+    };
+    let op = |result, kind| support::instruction(base, result, kind, false);
+    let entry = BasicBlockV2::new(
+        BlockIdV2::new(0),
+        vec![
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(2), i64)),
+                InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I64, 0).unwrap()),
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(3), i64)),
+                InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I64, 1).unwrap()),
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(4), i64)),
+                InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I64, 2).unwrap()),
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(5), i32)),
+                InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I32, 0).unwrap()),
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(6), local_array)),
+                InstructionKindV2::GlobalAddress(GlobalIdV2::new(20)),
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(7), local_i16)),
+                InstructionKindV2::GetElementPtr {
+                    base: ValueIdV2::new(6),
+                    indices: vec![ValueIdV2::new(2), ValueIdV2::new(2)],
+                },
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(8), i16)),
+                InstructionKindV2::Load {
+                    pointer: ValueIdV2::new(7),
+                    value_type: ScalarTypeV1::I16,
+                    alignment: 2,
+                },
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(9), i16x4)),
+                InstructionKindV2::VectorZero {
+                    element_type: ScalarTypeV1::I16,
+                },
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(10), i16x4)),
+                InstructionKindV2::InsertElement {
+                    vector: ValueIdV2::new(9),
+                    element: ValueIdV2::new(8),
+                    index: ValueIdV2::new(5),
+                },
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(11), i16x4)),
+                InstructionKindV2::VectorLoad4 {
+                    pointer: ValueIdV2::new(1),
+                    element_type: ScalarTypeV1::I16,
+                    alignment: 8,
+                },
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(12), f32x4)),
+                InstructionKindV2::VectorZero {
+                    element_type: ScalarTypeV1::F32,
+                },
+            ),
+        ],
+        TerminatorV2::Branch(BlockIdV2::new(1)),
+    );
+    let loop_header = BasicBlockV2::new(
+        BlockIdV2::new(1),
+        vec![
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(13), i64)),
+                InstructionKindV2::Phi {
+                    incoming: vec![
+                        (ValueIdV2::new(2), BlockIdV2::new(0)),
+                        (ValueIdV2::new(17), BlockIdV2::new(2)),
+                    ],
+                },
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(14), f32x4)),
+                InstructionKindV2::Phi {
+                    incoming: vec![
+                        (ValueIdV2::new(12), BlockIdV2::new(0)),
+                        (ValueIdV2::new(16), BlockIdV2::new(2)),
+                    ],
+                },
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(15), i1)),
+                InstructionKindV2::Compare {
+                    predicate: ComparePredicateV2::UnsignedLessThan,
+                    left: ValueIdV2::new(13),
+                    right: ValueIdV2::new(4),
+                },
+            ),
+        ],
+        TerminatorV2::ConditionalBranch {
+            condition: ValueIdV2::new(15),
+            then_block: BlockIdV2::new(2),
+            else_block: BlockIdV2::new(3),
+        },
+    );
+    let loop_body = BasicBlockV2::new(
+        BlockIdV2::new(2),
+        vec![
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(16), f32x4)),
+                InstructionKindV2::Call {
+                    target: CallTargetV2::Intrinsic(IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k),
+                    arguments: vec![
+                        ValueIdV2::new(11),
+                        ValueIdV2::new(10),
+                        ValueIdV2::new(14),
+                        ValueIdV2::new(5),
+                        ValueIdV2::new(5),
+                        ValueIdV2::new(5),
+                    ],
+                },
+            ),
+            op(
+                Some(TypedValueV2::new(ValueIdV2::new(17), i64)),
+                InstructionKindV2::Binary {
+                    operation: BinaryOperationV2::Integer(IntegerBinaryOperationV2::Add),
+                    left: ValueIdV2::new(13),
+                    right: ValueIdV2::new(3),
+                },
+            ),
+            op(
+                None,
+                InstructionKindV2::Call {
+                    target: CallTargetV2::Intrinsic(IntrinsicV2::AmdGpuBarrier),
+                    arguments: vec![],
+                },
+            ),
+        ],
+        TerminatorV2::Branch(BlockIdV2::new(1)),
+    );
+    let exit = BasicBlockV2::new(
+        BlockIdV2::new(3),
+        vec![op(
+            Some(TypedValueV2::new(ValueIdV2::new(18), f32)),
+            InstructionKindV2::ExtractElement {
+                vector: ValueIdV2::new(14),
+                index: ValueIdV2::new(5),
+            },
+        )],
+        TerminatorV2::Return(Some(ValueIdV2::new(18))),
+    );
+    FunctionV2::new(
+        FunctionIdV2::new(20),
+        "general_gemm_machine_surface",
+        FunctionKindV2::Helper,
+        CallingConventionV2::C,
+        ReturnTypeV2::Value(f32),
+        vec![
+            FunctionParameterV2::new(
+                TypedValueV2::new(ValueIdV2::new(1), global_i16),
+                "a",
+                vec![],
+            )
+            .unwrap(),
+        ],
+        vec![
+            FunctionAttributeV2::NoUnwind,
+            FunctionAttributeV2::AlwaysInline,
+        ],
+        BlockIdV2::new(0),
+        vec![entry, loop_header, loop_body, exit],
+        support::evidence(base, false),
+    )
+    .unwrap()
+}
 
 #[test]
 fn comprehensive_module_matches_the_golden_llvm_assembly() {
@@ -37,6 +244,132 @@ fn canonical_collection_order_produces_identical_bytes_and_identity() {
 
     assert_eq!(ordered, permuted);
     assert_eq!(ordered.sha256(), permuted.sha256());
+}
+
+#[test]
+fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
+    let base = base_fixture();
+    let existing = module_fixture(&base, false, Hostile::None);
+    let mut globals = existing.globals().to_vec();
+    globals.push(
+        GlobalV2::new_lds_bf16_array_256(
+            GlobalIdV2::new(20),
+            "general_gemm_a_lds",
+            support::evidence(&base, false),
+        )
+        .unwrap(),
+    );
+    globals.push(
+        GlobalV2::new_private_constant_bytes(
+            GlobalIdV2::new(22),
+            "general_gemm_descriptor_source",
+            KERNEL_DESCRIPTOR_SECTION_V2,
+            vec![0, 1, 0x7f, 0xff],
+            1,
+            support::evidence(&base, false),
+        )
+        .unwrap(),
+    );
+    globals.push(
+        GlobalV2::new_private_constant_bytes(
+            GlobalIdV2::new(23),
+            "general_gemm_compilation_binding",
+            GENERAL_GEMM_BINDING_SECTION_V2,
+            vec![0x42; 32],
+            16,
+            support::evidence(&base, false),
+        )
+        .unwrap(),
+    );
+    globals.push(
+        GlobalV2::new_lds_bf16_array_256(
+            GlobalIdV2::new(21),
+            "general_gemm_b_lds",
+            support::evidence(&base, false),
+        )
+        .unwrap(),
+    );
+    let mut intrinsics = existing.intrinsics().to_vec();
+    intrinsics.extend([
+        IntrinsicReferenceV2::new(IntrinsicV2::Trap, support::evidence(&base, false)),
+        IntrinsicReferenceV2::new(
+            IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k,
+            support::evidence(&base, false),
+        ),
+    ]);
+    let mut functions = existing.functions().to_vec();
+    let kernel_index = functions
+        .iter()
+        .position(|function| function.kind() == FunctionKindV2::Kernel)
+        .unwrap();
+    let kernel = &functions[kernel_index];
+    let mut kernel_attributes = kernel.attributes().to_vec();
+    kernel_attributes.push(FunctionAttributeV2::RequiredWorkgroupSize([64, 1, 1]));
+    functions[kernel_index] = FunctionV2::new(
+        kernel.id(),
+        kernel.symbol(),
+        kernel.kind(),
+        kernel.calling_convention(),
+        kernel.return_type(),
+        kernel.parameters().to_vec(),
+        kernel_attributes,
+        kernel.entry(),
+        kernel.blocks().to_vec(),
+        kernel.evidence().clone(),
+    )
+    .unwrap();
+    functions.push(general_gemm_machine_helper(&base));
+    let module = ExecutableModuleV2::new(
+        existing.flags().to_vec(),
+        existing.named_metadata().to_vec(),
+        globals,
+        intrinsics,
+        functions,
+    )
+    .unwrap();
+    let handoff = Gfx942HandoffV2::new(base, module).unwrap();
+    let encoded = handoff.encode_canonical();
+    assert_eq!(
+        Gfx942HandoffV2::decode_canonical(encoded.as_bytes()).unwrap(),
+        handoff
+    );
+
+    let assembly = serialize_gfx942_handoff_v2(&handoff).unwrap();
+    let text = assembly.as_str();
+    assert!(text.contains(
+        "@general_gemm_a_lds = internal addrspace(3) global [256 x i16] undef, align 16"
+    ));
+    assert!(
+        text.contains(
+            "getelementptr [256 x i16], ptr addrspace(3) @general_gemm_a_lds, i64 0, i64 0"
+        )
+    );
+    assert!(text.contains("load <4 x i16>, ptr addrspace(1) %a, align 8"));
+    assert!(text.contains("phi <4 x float>"));
+    assert!(text.contains("@llvm.amdgcn.mfma.f32.16x16x16bf16.1k"));
+    assert!(text.contains("declare void @llvm.trap()"));
+    assert!(text.contains("extractelement <4 x float>"));
+    assert!(text.contains("!reqd_work_group_size"));
+    assert!(text.contains("!{i32 64, i32 1, i32 1}"));
+    assert!(text.contains("section \".fe2o3.kd.v1\", align 1"));
+    assert!(text.contains("section \".fe2o3.general-gemm.binding.v1\", align 16"));
+    assert!(text.contains("@llvm.compiler.used = appending global [2 x ptr]"));
+    assert!(text.contains("@general_gemm_descriptor_source to ptr"));
+    assert!(text.contains("@general_gemm_compilation_binding to ptr"));
+    if let Some(llvm_as) = std::env::var_os("FE2O3_LLVM_AS") {
+        let mut child = Command::new(llvm_as)
+            .args(["-o", "/dev/null", "-"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(assembly.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
 }
 
 #[test]

@@ -33,6 +33,7 @@ pub(crate) fn emit(
         for global in module.globals() {
             write_global(&mut output, global)?;
         }
+        write_compiler_used(&mut output, module)?;
     }
     if !module.intrinsics().is_empty() {
         output.push("\n")?;
@@ -40,9 +41,18 @@ pub(crate) fn emit(
             write_intrinsic_declaration(&mut output, reference.intrinsic())?;
         }
     }
+    let workgroup_metadata_base = module.flags().len() + module.named_metadata().len() + 1;
     for (attribute_group, function) in module.functions().iter().enumerate() {
         output.push("\n")?;
-        write_function(&mut output, module, function, attribute_group)?;
+        let workgroup_metadata = required_workgroup_size(function)
+            .map(|shape| (workgroup_metadata_base + attribute_group, shape));
+        write_function(
+            &mut output,
+            module,
+            function,
+            attribute_group,
+            workgroup_metadata,
+        )?;
     }
 
     output.push("\n")?;
@@ -116,12 +126,58 @@ fn write_global(output: &mut BoundedWriter, global: &GlobalV2) -> Result<(), Ser
     } else {
         "constant "
     })?;
-    write_scalar_type(output, global.value_type())?;
-    if let Some(initializer) = global.initializer() {
-        output.push(" ")?;
-        write_scalar_constant(output, initializer)?;
+    if let Some(bytes) = global.byte_initializer() {
+        output.write(format_args!("[{} x i8] c\"", bytes.len()))?;
+        for byte in bytes {
+            output.write(format_args!("\\{byte:02X}"))?;
+        }
+        output.write(format_args!(
+            "\", section \"{}\", align {}",
+            global
+                .section()
+                .ok_or(SerializeErrorV2::InconsistentValidatedModel)?,
+            global.alignment()
+        ))?;
+    } else if let Some(elements) = global.array_elements() {
+        output.write(format_args!("[{elements} x "))?;
+        write_scalar_type(output, global.value_type())?;
+        output.write(format_args!("] undef, align {}", global.alignment()))?;
+    } else {
+        write_scalar_type(output, global.value_type())?;
+        if let Some(initializer) = global.initializer() {
+            output.push(" ")?;
+            write_scalar_constant(output, initializer)?;
+        }
     }
     output.push("\n")
+}
+
+fn write_compiler_used(
+    output: &mut BoundedWriter,
+    module: &ExecutableModuleV2,
+) -> Result<(), SerializeErrorV2> {
+    let retained = module
+        .globals()
+        .iter()
+        .filter(|global| global.byte_initializer().is_some())
+        .collect::<Vec<_>>();
+    if retained.is_empty() {
+        return Ok(());
+    }
+    output.write(format_args!(
+        "@llvm.compiler.used = appending global [{} x ptr] [",
+        retained.len()
+    ))?;
+    for (index, global) in retained.iter().enumerate() {
+        if index != 0 {
+            output.push(", ")?;
+        }
+        output.write(format_args!(
+            "ptr addrspacecast (ptr addrspace(4) @{} to ptr)",
+            global.symbol()
+        ))?;
+    }
+    output.push("], section \"llvm.metadata\"\n")
 }
 
 fn write_global_address_space(
@@ -157,6 +213,7 @@ fn write_function(
     module: &ExecutableModuleV2,
     function: &FunctionV2,
     attribute_group: usize,
+    workgroup_metadata: Option<(usize, [u16; 3])>,
 ) -> Result<(), SerializeErrorV2> {
     let value_types = collect_value_types(function);
     let aliases = collect_aliases(function)?;
@@ -179,7 +236,11 @@ fn write_function(
         }
         output.write(format_args!(" %{}", parameter.name()))?;
     }
-    output.write(format_args!(") #{attribute_group} {{\n"))?;
+    output.write(format_args!(") #{attribute_group}"))?;
+    if let Some((metadata, _)) = workgroup_metadata {
+        output.write(format_args!(" !reqd_work_group_size !{metadata}"))?;
+    }
+    output.push(" {\n")?;
 
     let entry = function
         .blocks()
@@ -225,6 +286,7 @@ fn collect_value_types(function: &FunctionV2) -> Vec<(ValueIdV2, ValueTypeV2)> {
 #[derive(Clone, Copy)]
 enum OperandAlias {
     Constant(ScalarConstantV2),
+    VectorZero,
     Global(GlobalIdV2),
 }
 
@@ -239,6 +301,7 @@ fn collect_aliases(
     {
         let alias = match instruction.kind() {
             InstructionKindV2::Constant(value) => OperandAlias::Constant(*value),
+            InstructionKindV2::VectorZero { .. } => OperandAlias::VectorZero,
             InstructionKindV2::GlobalAddress(global) => OperandAlias::Global(*global),
             _ => continue,
         };
@@ -261,7 +324,9 @@ fn write_block(
     output.write(format_args!("bb{}:\n", block.id().get()))?;
     for instruction in block.instructions() {
         match instruction.kind() {
-            InstructionKindV2::Constant(_) | InstructionKindV2::GlobalAddress(_) => {}
+            InstructionKindV2::Constant(_)
+            | InstructionKindV2::VectorZero { .. }
+            | InstructionKindV2::GlobalAddress(_) => {}
             _ => write_instruction(output, module, function, instruction, value_types, aliases)?,
         }
     }
@@ -284,9 +349,9 @@ fn write_instruction(
     aliases: &[(ValueIdV2, OperandAlias)],
 ) -> Result<(), SerializeErrorV2> {
     match instruction.kind() {
-        InstructionKindV2::Constant(_) | InstructionKindV2::GlobalAddress(_) => {
-            Err(SerializeErrorV2::InconsistentValidatedModel)
-        }
+        InstructionKindV2::Constant(_)
+        | InstructionKindV2::VectorZero { .. }
+        | InstructionKindV2::GlobalAddress(_) => Err(SerializeErrorV2::InconsistentValidatedModel),
         InstructionKindV2::Binary {
             operation,
             left,
@@ -334,10 +399,17 @@ fn write_instruction(
             write_result(output, instruction)?;
             output.push("getelementptr ")?;
             let base_type = value_type(value_types, *base)?;
-            let ValueTypeV2::Pointer { pointee, .. } = base_type else {
-                return Err(SerializeErrorV2::InconsistentValidatedModel);
-            };
-            write_scalar_type(output, pointee)?;
+            match base_type {
+                ValueTypeV2::Pointer { pointee, .. } => write_scalar_type(output, pointee)?,
+                ValueTypeV2::ArrayPointer {
+                    element, elements, ..
+                } => {
+                    output.write(format_args!("[{elements} x "))?;
+                    write_scalar_type(output, element)?;
+                    output.push("]")?;
+                }
+                _ => return Err(SerializeErrorV2::InconsistentValidatedModel),
+            }
             output.push(", ")?;
             write_value_type(output, base_type)?;
             output.push(" ")?;
@@ -358,6 +430,20 @@ fn write_instruction(
             write_result(output, instruction)?;
             output.push("load ")?;
             write_scalar_type(output, *loaded)?;
+            output.push(", ")?;
+            write_value_type(output, value_type(value_types, *pointer)?)?;
+            output.push(" ")?;
+            write_operand(output, module, function, *pointer, aliases)?;
+            output.write(format_args!(", align {alignment}\n"))
+        }
+        InstructionKindV2::VectorLoad4 {
+            pointer,
+            element_type,
+            alignment,
+        } => {
+            write_result(output, instruction)?;
+            output.push("load ")?;
+            write_value_type(output, ValueTypeV2::fixed_vector(*element_type))?;
             output.push(", ")?;
             write_value_type(output, value_type(value_types, *pointer)?)?;
             output.push(" ")?;
@@ -404,6 +490,53 @@ fn write_instruction(
                 write_operand(output, module, function, *argument, aliases)?;
             }
             output.push(")\n")
+        }
+        InstructionKindV2::Phi { incoming } => {
+            write_result(output, instruction)?;
+            output.push("phi ")?;
+            let result_type = instruction
+                .result()
+                .ok_or(SerializeErrorV2::InconsistentValidatedModel)?
+                .value_type();
+            write_value_type(output, result_type)?;
+            output.push(" ")?;
+            for (index, (value, block)) in incoming.iter().enumerate() {
+                if index != 0 {
+                    output.push(", ")?;
+                }
+                output.push("[ ")?;
+                write_operand(output, module, function, *value, aliases)?;
+                output.write(format_args!(", %bb{} ]", block.get()))?;
+            }
+            output.push("\n")
+        }
+        InstructionKindV2::InsertElement {
+            vector,
+            element,
+            index,
+        } => {
+            write_result(output, instruction)?;
+            output.push("insertelement ")?;
+            write_value_type(output, value_type(value_types, *vector)?)?;
+            output.push(" ")?;
+            write_operand(output, module, function, *vector, aliases)?;
+            output.push(", ")?;
+            write_value_type(output, value_type(value_types, *element)?)?;
+            output.push(" ")?;
+            write_operand(output, module, function, *element, aliases)?;
+            output.push(", i32 ")?;
+            write_operand(output, module, function, *index, aliases)?;
+            output.push("\n")
+        }
+        InstructionKindV2::ExtractElement { vector, index } => {
+            write_result(output, instruction)?;
+            output.push("extractelement ")?;
+            write_value_type(output, value_type(value_types, *vector)?)?;
+            output.push(" ")?;
+            write_operand(output, module, function, *vector, aliases)?;
+            output.push(", i32 ")?;
+            write_operand(output, module, function, *index, aliases)?;
+            output.push("\n")
         }
     }
 }
@@ -514,6 +647,7 @@ fn write_operand(
         .find_map(|(id, alias)| (*id == value).then_some(*alias))
     {
         Some(OperandAlias::Constant(constant)) => write_scalar_constant(output, constant),
+        Some(OperandAlias::VectorZero) => output.push("zeroinitializer"),
         Some(OperandAlias::Global(global)) => {
             let global = module
                 .globals()
@@ -553,6 +687,9 @@ fn write_function_attributes(
 ) -> Result<(), SerializeErrorV2> {
     output.write(format_args!("attributes #{attribute_group} = {{"))?;
     for attribute in function.attributes() {
+        if matches!(attribute, FunctionAttributeV2::RequiredWorkgroupSize(_)) {
+            continue;
+        }
         output.push(" ")?;
         match attribute {
             FunctionAttributeV2::NoUnwind => output.push("nounwind")?,
@@ -589,6 +726,7 @@ fn write_function_attributes(
                 output.push("\"approx-func-fp-math\"=\"false\"")?;
             }
             FunctionAttributeV2::FpContractOff => output.push("\"fp-contract\"=\"off\"")?,
+            FunctionAttributeV2::RequiredWorkgroupSize(_) => unreachable!("filtered above"),
         }
     }
     output.write(format_args!(
@@ -676,7 +814,26 @@ fn write_metadata(
     output.write(format_args!(
         "!{identity_node} = !{{!\"sha256:{handoff_identity}\"}}\n"
     ))?;
+    let workgroup_metadata_base = identity_node + 1;
+    for (function_index, function) in module.functions().iter().enumerate() {
+        if let Some([x, y, z]) = required_workgroup_size(function) {
+            output.write(format_args!(
+                "!{} = !{{i32 {x}, i32 {y}, i32 {z}}}\n",
+                workgroup_metadata_base + function_index
+            ))?;
+        }
+    }
     Ok(())
+}
+
+fn required_workgroup_size(function: &FunctionV2) -> Option<[u16; 3]> {
+    function
+        .attributes()
+        .iter()
+        .find_map(|attribute| match attribute {
+            FunctionAttributeV2::RequiredWorkgroupSize(shape) => Some(*shape),
+            _ => None,
+        })
 }
 
 fn write_metadata_references(
@@ -717,7 +874,13 @@ fn write_value_type(
 ) -> Result<(), SerializeErrorV2> {
     match value_type {
         ValueTypeV2::Scalar(scalar) => write_scalar_type(output, scalar),
-        ValueTypeV2::Pointer { address_space, .. } => {
+        ValueTypeV2::Vector { element, lanes } => {
+            output.write(format_args!("<{lanes} x "))?;
+            write_scalar_type(output, element)?;
+            output.push(">")
+        }
+        ValueTypeV2::Pointer { address_space, .. }
+        | ValueTypeV2::ArrayPointer { address_space, .. } => {
             let number = address_space_number(address_space);
             if number == 0 {
                 output.push("ptr")
@@ -796,6 +959,8 @@ const fn intrinsic_name(intrinsic: IntrinsicV2) -> &'static str {
         IntrinsicV2::AmdGpuBarrier => "llvm.amdgcn.s.barrier",
         IntrinsicV2::FmaF32 => "llvm.fma.f32",
         IntrinsicV2::SqrtF32 => "llvm.sqrt.f32",
+        IntrinsicV2::Trap => "llvm.trap",
+        IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k => "llvm.amdgcn.mfma.f32.16x16x16bf16.1k",
     }
 }
 
@@ -847,6 +1012,7 @@ const fn cast_operation(operation: CastOperationV2) -> &'static str {
         CastOperationV2::SignedIntToFloat => "sitofp",
         CastOperationV2::FloatToUnsignedInt => "fptoui",
         CastOperationV2::FloatToSignedInt => "fptosi",
+        CastOperationV2::PointerToInt => "ptrtoint",
     }
 }
 

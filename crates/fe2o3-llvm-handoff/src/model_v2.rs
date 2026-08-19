@@ -28,6 +28,11 @@ pub const MAX_GEP_INDICES_V2: usize = 8;
 pub const MAX_EVIDENCE_OBLIGATIONS_V2: usize = 64;
 pub const MAX_MODULE_FLAGS_V2: usize = 8;
 pub const MAX_NAMED_METADATA_V2: usize = 8;
+pub const GENERAL_GEMM_VECTOR_LANES_V2: u8 = 4;
+pub const GENERAL_GEMM_LDS_ELEMENTS_V2: u16 = 256;
+pub const MAX_CONSTANT_GLOBAL_BYTES_V2: usize = 4 * 1024;
+pub const KERNEL_DESCRIPTOR_SECTION_V2: &str = ".fe2o3.kd.v1";
+pub const GENERAL_GEMM_BINDING_SECTION_V2: &str = ".fe2o3.general-gemm.binding.v1";
 
 const MODULE_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.llvm-handoff.module.identity.v2";
 const HANDOFF_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.llvm-handoff.identity.v2";
@@ -87,15 +92,24 @@ impl ValueIdV2 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ValueTypeV2 {
     Scalar(ScalarTypeV1),
+    Vector {
+        element: ScalarTypeV1,
+        lanes: u8,
+    },
     Pointer {
         pointee: ScalarTypeV1,
+        address_space: AddressSpaceV1,
+    },
+    ArrayPointer {
+        element: ScalarTypeV1,
+        elements: u16,
         address_space: AddressSpaceV1,
     },
 }
 
 impl ValueTypeV2 {
     pub const fn is_pointer(self) -> bool {
-        matches!(self, Self::Pointer { .. })
+        matches!(self, Self::Pointer { .. } | Self::ArrayPointer { .. })
     }
 
     pub const fn is_integer(self) -> bool {
@@ -118,6 +132,13 @@ impl ValueTypeV2 {
                 ScalarTypeV1::F16 | ScalarTypeV1::Bf16 | ScalarTypeV1::F32 | ScalarTypeV1::F64
             )
         )
+    }
+
+    pub const fn fixed_vector(element: ScalarTypeV1) -> Self {
+        Self::Vector {
+            element,
+            lanes: GENERAL_GEMM_VECTOR_LANES_V2,
+        }
     }
 }
 
@@ -228,6 +249,10 @@ pub struct GlobalV2 {
     pub(crate) mutable: bool,
     pub(crate) value_type: ScalarTypeV1,
     pub(crate) initializer: Option<ScalarConstantV2>,
+    pub(crate) array_elements: Option<u16>,
+    pub(crate) alignment: u16,
+    pub(crate) byte_initializer: Option<Vec<u8>>,
+    pub(crate) section: Option<String>,
     pub(crate) evidence: EvidenceV2,
 }
 
@@ -257,6 +282,70 @@ impl GlobalV2 {
             mutable,
             value_type,
             initializer,
+            array_elements: None,
+            alignment: 1,
+            byte_initializer: None,
+            section: None,
+            evidence,
+        })
+    }
+
+    pub fn new_lds_bf16_array_256(
+        id: GlobalIdV2,
+        symbol: &str,
+        evidence: EvidenceV2,
+    ) -> Result<Self, HandoffDiagnosticV2> {
+        validate_symbol(symbol)?;
+        Ok(Self {
+            id,
+            symbol: symbol.to_string(),
+            linkage: GlobalLinkageV2::Internal,
+            address_space: AddressSpaceV1::Local,
+            mutable: true,
+            value_type: ScalarTypeV1::I16,
+            initializer: None,
+            array_elements: Some(GENERAL_GEMM_LDS_ELEMENTS_V2),
+            alignment: 16,
+            byte_initializer: None,
+            section: None,
+            evidence,
+        })
+    }
+
+    pub fn new_private_constant_bytes(
+        id: GlobalIdV2,
+        symbol: &str,
+        section: &str,
+        bytes: Vec<u8>,
+        alignment: u16,
+        evidence: EvidenceV2,
+    ) -> Result<Self, HandoffDiagnosticV2> {
+        validate_symbol(symbol)?;
+        if !matches!(
+            section,
+            KERNEL_DESCRIPTOR_SECTION_V2 | GENERAL_GEMM_BINDING_SECTION_V2
+        ) || bytes.is_empty()
+            || bytes.len() > MAX_CONSTANT_GLOBAL_BYTES_V2
+            || alignment == 0
+            || !alignment.is_power_of_two()
+            || alignment > 256
+        {
+            return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+        }
+        let elements =
+            u16::try_from(bytes.len()).map_err(|_| HandoffDiagnosticV2::UnsupportedInstruction)?;
+        Ok(Self {
+            id,
+            symbol: symbol.to_string(),
+            linkage: GlobalLinkageV2::Internal,
+            address_space: AddressSpaceV1::Constant,
+            mutable: false,
+            value_type: ScalarTypeV1::I8,
+            initializer: None,
+            array_elements: Some(elements),
+            alignment,
+            byte_initializer: Some(bytes),
+            section: Some(section.to_string()),
             evidence,
         })
     }
@@ -289,6 +378,22 @@ impl GlobalV2 {
         self.initializer
     }
 
+    pub const fn array_elements(&self) -> Option<u16> {
+        self.array_elements
+    }
+
+    pub const fn alignment(&self) -> u16 {
+        self.alignment
+    }
+
+    pub fn byte_initializer(&self) -> Option<&[u8]> {
+        self.byte_initializer.as_deref()
+    }
+
+    pub fn section(&self) -> Option<&str> {
+        self.section.as_deref()
+    }
+
     pub const fn evidence(&self) -> &EvidenceV2 {
         &self.evidence
     }
@@ -308,6 +413,8 @@ pub enum IntrinsicV2 {
     AmdGpuBarrier,
     FmaF32,
     SqrtF32,
+    Trap,
+    AmdGpuMfmaF32_16x16x16Bf16_1k,
 }
 
 impl IntrinsicV2 {
@@ -324,6 +431,22 @@ impl IntrinsicV2 {
                 vec![f32_type, f32_type, f32_type],
             ),
             Self::SqrtF32 => (ReturnTypeV2::Value(f32_type), vec![f32_type]),
+            Self::Trap => (ReturnTypeV2::Void, vec![]),
+            Self::AmdGpuMfmaF32_16x16x16Bf16_1k => {
+                let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16);
+                let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32);
+                (
+                    ReturnTypeV2::Value(f32x4),
+                    vec![
+                        i16x4,
+                        i16x4,
+                        f32x4,
+                        ValueTypeV2::Scalar(ScalarTypeV1::I32),
+                        ValueTypeV2::Scalar(ScalarTypeV1::I32),
+                        ValueTypeV2::Scalar(ScalarTypeV1::I32),
+                    ],
+                )
+            }
         }
     }
 }
@@ -468,6 +591,7 @@ pub enum FunctionAttributeV2 {
     NoSignedZerosFpMathDisabled,
     ApproxFuncFpMathDisabled,
     FpContractOff,
+    RequiredWorkgroupSize([u16; 3]),
 }
 
 impl FunctionAttributeV2 {
@@ -487,6 +611,7 @@ impl FunctionAttributeV2 {
             Self::NoSignedZerosFpMathDisabled => 12,
             Self::ApproxFuncFpMathDisabled => 13,
             Self::FpContractOff => 14,
+            Self::RequiredWorkgroupSize(_) => 15,
         }
     }
 }
@@ -560,6 +685,7 @@ pub enum CastOperationV2 {
     SignedIntToFloat,
     FloatToUnsignedInt,
     FloatToSignedInt,
+    PointerToInt,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -571,6 +697,9 @@ pub enum CallTargetV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstructionKindV2 {
     Constant(ScalarConstantV2),
+    VectorZero {
+        element_type: ScalarTypeV1,
+    },
     GlobalAddress(GlobalIdV2),
     Binary {
         operation: BinaryOperationV2,
@@ -596,6 +725,11 @@ pub enum InstructionKindV2 {
         value_type: ScalarTypeV1,
         alignment: u16,
     },
+    VectorLoad4 {
+        pointer: ValueIdV2,
+        element_type: ScalarTypeV1,
+        alignment: u16,
+    },
     Store {
         pointer: ValueIdV2,
         value: ValueIdV2,
@@ -605,6 +739,18 @@ pub enum InstructionKindV2 {
     Call {
         target: CallTargetV2,
         arguments: Vec<ValueIdV2>,
+    },
+    Phi {
+        incoming: Vec<(ValueIdV2, BlockIdV2)>,
+    },
+    InsertElement {
+        vector: ValueIdV2,
+        element: ValueIdV2,
+        index: ValueIdV2,
+    },
+    ExtractElement {
+        vector: ValueIdV2,
+        index: ValueIdV2,
     },
 }
 
@@ -628,7 +774,14 @@ impl InstructionV2 {
                 indices.len(),
                 MAX_GEP_INDICES_V2,
             )?,
+            InstructionKindV2::Phi { incoming } => check_nonempty_count(
+                "phi incoming values",
+                HandoffLimitV2::GetElementPtrIndices,
+                incoming.len(),
+                MAX_FUNCTION_BLOCKS_V2,
+            )?,
             InstructionKindV2::Load { alignment, .. }
+            | InstructionKindV2::VectorLoad4 { alignment, .. }
             | InstructionKindV2::Store { alignment, .. }
                 if *alignment == 0 || !alignment.is_power_of_two() || *alignment > 256 =>
             {
@@ -755,6 +908,20 @@ impl FunctionV2 {
             | (FunctionKindV2::Helper, CallingConventionV2::C, _) => {}
             _ => return Err(HandoffDiagnosticV2::UnsupportedCallingConvention),
         }
+        if matches!(return_type, ReturnTypeV2::Value(value) if !valid_value_type_v2(value))
+            || parameters
+                .iter()
+                .any(|parameter| !valid_value_type_v2(parameter.value.value_type))
+            || blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    instruction
+                        .result
+                        .is_some_and(|result| !valid_value_type_v2(result.value_type))
+                })
+            })
+        {
+            return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+        }
         for (index, parameter) in parameters.iter().enumerate() {
             if parameters[..index]
                 .iter()
@@ -781,6 +948,19 @@ impl FunctionV2 {
         }
         if !attributes.contains(&FunctionAttributeV2::NoUnwind) {
             return Err(HandoffDiagnosticV2::UnsupportedCallingConvention);
+        }
+        if let Some(shape) = attributes.iter().find_map(|attribute| match attribute {
+            FunctionAttributeV2::RequiredWorkgroupSize(shape) => Some(*shape),
+            _ => None,
+        }) {
+            let product = shape.into_iter().try_fold(1_u32, |product, extent| {
+                (extent != 0)
+                    .then(|| product.checked_mul(u32::from(extent)))
+                    .flatten()
+            });
+            if kind != FunctionKindV2::Kernel || product.is_none_or(|product| product > 1_024) {
+                return Err(HandoffDiagnosticV2::InvalidFunctionAttribute);
+            }
         }
         blocks.sort_unstable_by_key(|block| block.id);
         if blocks.windows(2).any(|pair| pair[0].id == pair[1].id) {
@@ -1019,28 +1199,50 @@ impl ExecutableModuleV2 {
             {
                 return Err(HandoffDiagnosticV2::InvalidFunctionAttribute);
             }
-            let parameters = function
+            let mut available = function
                 .parameters
                 .iter()
                 .map(|parameter| (parameter.value.id, parameter.value.value_type))
                 .collect::<Vec<_>>();
-            let mut definitions = parameters.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-            let entry = function
-                .blocks
-                .iter()
-                .find(|block| block.id == function.entry)
-                .expect("checked function entry exists");
-            let mut entry_available = parameters.clone();
-            self.validate_block(function, entry, &mut entry_available, &mut definitions)?;
-            for block in function
-                .blocks
-                .iter()
-                .filter(|block| block.id != function.entry)
-            {
-                // V2 has no phi nodes. Only parameters, entry definitions, and
-                // prior definitions in the same block may be consumed.
-                let mut available = entry_available.clone();
-                self.validate_block(function, block, &mut available, &mut definitions)?;
+            for result in function.blocks.iter().flat_map(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .filter_map(|instruction| instruction.result)
+            }) {
+                if available.iter().any(|(id, _)| *id == result.id) {
+                    return Err(HandoffDiagnosticV2::DuplicateDefinition(
+                        DefinitionKindV2::Value,
+                    ));
+                }
+                available.push((result.id, result.value_type));
+            }
+            check_count(
+                HandoffLimitV2::Values,
+                available.len(),
+                MAX_VALUES_PER_FUNCTION_V2,
+            )?;
+            for block in &function.blocks {
+                let mut saw_non_phi = false;
+                for instruction in &block.instructions {
+                    if matches!(instruction.kind, InstructionKindV2::Phi { .. }) {
+                        if saw_non_phi {
+                            return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+                        }
+                    } else {
+                        saw_non_phi = true;
+                    }
+                    self.validate_instruction(instruction, &available)?;
+                }
+                self.validate_terminator(function, &block.terminator, &available)?;
+            }
+            if function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction.kind, InstructionKindV2::Phi { .. }))
+            }) {
+                validate_function_ssa_v2(function)?;
             }
         }
         Ok(())
@@ -1048,7 +1250,9 @@ impl ExecutableModuleV2 {
 
     fn instruction_may_access_memory(&self, instruction: &InstructionKindV2) -> bool {
         match instruction {
-            InstructionKindV2::Load { .. } | InstructionKindV2::Store { .. } => true,
+            InstructionKindV2::Load { .. }
+            | InstructionKindV2::VectorLoad4 { .. }
+            | InstructionKindV2::Store { .. } => true,
             InstructionKindV2::Call {
                 target: CallTargetV2::Function(id),
                 ..
@@ -1067,33 +1271,6 @@ impl ExecutableModuleV2 {
         }
     }
 
-    fn validate_block(
-        &self,
-        function: &FunctionV2,
-        block: &BasicBlockV2,
-        available: &mut Vec<(ValueIdV2, ValueTypeV2)>,
-        definitions: &mut Vec<ValueIdV2>,
-    ) -> Result<(), HandoffDiagnosticV2> {
-        for instruction in &block.instructions {
-            self.validate_instruction(instruction, available)?;
-            if let Some(result) = instruction.result {
-                if definitions.contains(&result.id) {
-                    return Err(HandoffDiagnosticV2::DuplicateDefinition(
-                        DefinitionKindV2::Value,
-                    ));
-                }
-                definitions.push(result.id);
-                available.push((result.id, result.value_type));
-                check_count(
-                    HandoffLimitV2::Values,
-                    definitions.len(),
-                    MAX_VALUES_PER_FUNCTION_V2,
-                )?;
-            }
-        }
-        self.validate_terminator(function, &block.terminator, available)
-    }
-
     fn validate_instruction(
         &self,
         instruction: &InstructionV2,
@@ -1102,19 +1279,30 @@ impl ExecutableModuleV2 {
         let value_type = |id| lookup_value(available, id);
         match &instruction.kind {
             InstructionKindV2::Constant(value) => require_result(instruction, value.value_type()),
+            InstructionKindV2::VectorZero { element_type } => {
+                if !matches!(element_type, ScalarTypeV1::I16 | ScalarTypeV1::F32) {
+                    return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+                }
+                require_result(instruction, ValueTypeV2::fixed_vector(*element_type))
+            }
             InstructionKindV2::GlobalAddress(id) => {
                 let global = self
                     .globals
                     .iter()
                     .find(|global| global.id == *id)
                     .ok_or(HandoffDiagnosticV2::MissingGlobalReference(*id))?;
-                require_result(
-                    instruction,
-                    ValueTypeV2::Pointer {
+                let result_type = match global.array_elements {
+                    Some(elements) => ValueTypeV2::ArrayPointer {
+                        element: global.value_type,
+                        elements,
+                        address_space: global.address_space,
+                    },
+                    None => ValueTypeV2::Pointer {
                         pointee: global.value_type,
                         address_space: global.address_space,
                     },
-                )
+                };
+                require_result(instruction, result_type)
             }
             InstructionKindV2::Binary {
                 operation,
@@ -1174,7 +1362,22 @@ impl ExecutableModuleV2 {
                         return Err(HandoffDiagnosticV2::UnsupportedInstruction);
                     }
                 }
-                require_result(instruction, base_type)
+                let result_type = match base_type {
+                    ValueTypeV2::Pointer { .. } => base_type,
+                    ValueTypeV2::ArrayPointer {
+                        element,
+                        address_space,
+                        ..
+                    } if indices.len() == 2 => ValueTypeV2::Pointer {
+                        pointee: element,
+                        address_space,
+                    },
+                    ValueTypeV2::ArrayPointer { .. } => {
+                        return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+                    }
+                    _ => return Err(HandoffDiagnosticV2::UnsupportedInstruction),
+                };
+                require_result(instruction, result_type)
             }
             InstructionKindV2::Load {
                 pointer,
@@ -1189,6 +1392,20 @@ impl ExecutableModuleV2 {
                     return Err(HandoffDiagnosticV2::ValueTypeMismatch(*pointer));
                 }
                 require_result(instruction, ValueTypeV2::Scalar(*loaded))
+            }
+            InstructionKindV2::VectorLoad4 {
+                pointer,
+                element_type,
+                ..
+            } => {
+                let pointer_type = value_type(*pointer)?;
+                if !matches!(
+                    pointer_type,
+                    ValueTypeV2::Pointer { pointee, .. } if pointee == *element_type
+                ) {
+                    return Err(HandoffDiagnosticV2::ValueTypeMismatch(*pointer));
+                }
+                require_result(instruction, ValueTypeV2::fixed_vector(*element_type))
             }
             InstructionKindV2::Store {
                 pointer,
@@ -1247,6 +1464,50 @@ impl ExecutableModuleV2 {
                     ReturnTypeV2::Value(value_type) => require_result(instruction, value_type),
                     _ => Err(HandoffDiagnosticV2::InvalidInstructionResult),
                 }
+            }
+            InstructionKindV2::Phi { incoming } => {
+                let result = instruction
+                    .result
+                    .ok_or(HandoffDiagnosticV2::InvalidInstructionResult)?;
+                for (value, _) in incoming {
+                    require_value_type(available, *value, result.value_type)?;
+                }
+                Ok(())
+            }
+            InstructionKindV2::InsertElement {
+                vector,
+                element,
+                index,
+            } => {
+                let vector_type = value_type(*vector)?;
+                let ValueTypeV2::Vector {
+                    element: element_type,
+                    lanes,
+                } = vector_type
+                else {
+                    return Err(HandoffDiagnosticV2::ValueTypeMismatch(*vector));
+                };
+                if lanes != GENERAL_GEMM_VECTOR_LANES_V2 {
+                    return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+                }
+                require_value_type(available, *element, ValueTypeV2::Scalar(element_type))?;
+                require_value_type(available, *index, ValueTypeV2::Scalar(ScalarTypeV1::I32))?;
+                require_result(instruction, vector_type)
+            }
+            InstructionKindV2::ExtractElement { vector, index } => {
+                let vector_type = value_type(*vector)?;
+                let ValueTypeV2::Vector {
+                    element: element_type,
+                    lanes,
+                } = vector_type
+                else {
+                    return Err(HandoffDiagnosticV2::ValueTypeMismatch(*vector));
+                };
+                if lanes != GENERAL_GEMM_VECTOR_LANES_V2 {
+                    return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+                }
+                require_value_type(available, *index, ValueTypeV2::Scalar(ScalarTypeV1::I32))?;
+                require_result(instruction, ValueTypeV2::Scalar(element_type))
             }
         }
     }
@@ -1354,11 +1615,19 @@ impl Gfx942HandoffV2 {
                 .copied()
                 .map(FunctionAttributeV2::from)
                 .collect::<Vec<_>>();
+            let semantic_attributes = kernel
+                .attributes
+                .iter()
+                .copied()
+                .filter(|attribute| {
+                    !matches!(attribute, FunctionAttributeV2::RequiredWorkgroupSize(_))
+                })
+                .collect::<Vec<_>>();
             if kernel.calling_convention != CallingConventionV2::AmdGpuKernel
                 || kernel.return_type != ReturnTypeV2::Void
                 || kernel.evidence.origin != v1.origin()
                 || !parameters_match
-                || kernel.attributes != expected_attributes
+                || semantic_attributes != expected_attributes
             {
                 return Err(HandoffDiagnosticV2::KernelSignatureMismatch);
             }
@@ -1447,6 +1716,229 @@ fn require_result(
     }
 }
 
+#[derive(Clone, Copy)]
+enum SsaDefinitionSiteV2 {
+    Parameter,
+    Instruction { block: usize, instruction: usize },
+}
+
+#[derive(Clone, Copy)]
+struct SsaDefinitionV2 {
+    id: ValueIdV2,
+    site: SsaDefinitionSiteV2,
+}
+
+fn validate_function_ssa_v2(function: &FunctionV2) -> Result<(), HandoffDiagnosticV2> {
+    let block_index = |id: BlockIdV2| {
+        function
+            .blocks
+            .binary_search_by_key(&id, |block| block.id)
+            .map_err(|_| HandoffDiagnosticV2::MissingBlockReference(id))
+    };
+    let entry = block_index(function.entry)?;
+    let mut successors = vec![Vec::new(); function.blocks.len()];
+    for (index, block) in function.blocks.iter().enumerate() {
+        match block.terminator {
+            TerminatorV2::Branch(target) => successors[index].push(block_index(target)?),
+            TerminatorV2::ConditionalBranch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                successors[index].push(block_index(then_block)?);
+                let other = block_index(else_block)?;
+                if !successors[index].contains(&other) {
+                    successors[index].push(other);
+                }
+            }
+            TerminatorV2::Return(_) | TerminatorV2::Unreachable => {}
+        }
+    }
+    let mut predecessors = vec![Vec::new(); function.blocks.len()];
+    for (source, targets) in successors.iter().enumerate() {
+        for target in targets {
+            predecessors[*target].push(source);
+        }
+    }
+    if !predecessors[entry].is_empty() {
+        return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+    }
+    let mut reachable = vec![false; function.blocks.len()];
+    let mut worklist = vec![entry];
+    reachable[entry] = true;
+    let mut cursor = 0;
+    while cursor < worklist.len() {
+        let block = worklist[cursor];
+        cursor += 1;
+        for successor in &successors[block] {
+            if !reachable[*successor] {
+                reachable[*successor] = true;
+                worklist.push(*successor);
+            }
+        }
+    }
+    if reachable.iter().any(|reachable| !reachable) {
+        return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+    }
+
+    let words = function.blocks.len().div_ceil(u64::BITS as usize);
+    let mut dominators = vec![vec![u64::MAX; words]; function.blocks.len()];
+    dominators[entry].fill(0);
+    set_ssa_bit_v2(&mut dominators[entry], entry);
+    loop {
+        let mut changed = false;
+        for block in 0..function.blocks.len() {
+            if block == entry {
+                continue;
+            }
+            let Some((first, rest)) = predecessors[block].split_first() else {
+                return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+            };
+            let mut updated = dominators[*first].clone();
+            for predecessor in rest {
+                for (word, predecessor_word) in updated.iter_mut().zip(&dominators[*predecessor]) {
+                    *word &= predecessor_word;
+                }
+            }
+            set_ssa_bit_v2(&mut updated, block);
+            if updated != dominators[block] {
+                dominators[block] = updated;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let dominates = |definition: usize, use_block: usize| {
+        dominators[use_block][definition / u64::BITS as usize]
+            & (1_u64 << (definition % u64::BITS as usize))
+            != 0
+    };
+
+    let mut definitions = function
+        .parameters
+        .iter()
+        .map(|parameter| SsaDefinitionV2 {
+            id: parameter.value.id,
+            site: SsaDefinitionSiteV2::Parameter,
+        })
+        .collect::<Vec<_>>();
+    for (block, body) in function.blocks.iter().enumerate() {
+        for (instruction, operation) in body.instructions.iter().enumerate() {
+            if let Some(result) = operation.result {
+                definitions.push(SsaDefinitionV2 {
+                    id: result.id,
+                    site: SsaDefinitionSiteV2::Instruction { block, instruction },
+                });
+            }
+        }
+    }
+    definitions.sort_unstable_by_key(|definition| definition.id);
+    let definition = |id: ValueIdV2| {
+        definitions
+            .binary_search_by_key(&id, |definition| definition.id)
+            .ok()
+            .map(|index| definitions[index])
+            .ok_or(HandoffDiagnosticV2::MissingValueReference(id))
+    };
+    let ordinary_use_is_valid =
+        |id: ValueIdV2, block: usize, instruction: usize| match definition(id)?.site {
+            SsaDefinitionSiteV2::Parameter => Ok(()),
+            SsaDefinitionSiteV2::Instruction {
+                block: definition_block,
+                instruction: definition_instruction,
+            } if (definition_block == block && definition_instruction < instruction)
+                || (definition_block != block && dominates(definition_block, block)) =>
+            {
+                Ok(())
+            }
+            SsaDefinitionSiteV2::Instruction { .. } => {
+                Err(HandoffDiagnosticV2::UnsupportedInstruction)
+            }
+        };
+
+    for (block, body) in function.blocks.iter().enumerate() {
+        for (instruction_index, operation) in body.instructions.iter().enumerate() {
+            match &operation.kind {
+                InstructionKindV2::Phi { incoming } => {
+                    let mut actual = incoming
+                        .iter()
+                        .map(|(_, predecessor)| block_index(*predecessor))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    actual.sort_unstable();
+                    if actual != predecessors[block]
+                        || actual.windows(2).any(|pair| pair[0] == pair[1])
+                    {
+                        return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+                    }
+                    for (value, predecessor) in incoming {
+                        let predecessor = block_index(*predecessor)?;
+                        match definition(*value)?.site {
+                            SsaDefinitionSiteV2::Parameter => {}
+                            SsaDefinitionSiteV2::Instruction {
+                                block: definition_block,
+                                ..
+                            } if definition_block == predecessor
+                                || dominates(definition_block, predecessor) => {}
+                            SsaDefinitionSiteV2::Instruction { .. } => {
+                                return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+                            }
+                        }
+                    }
+                }
+                kind => {
+                    for operand in instruction_operands_v2(kind) {
+                        ordinary_use_is_valid(operand, block, instruction_index)?;
+                    }
+                }
+            }
+        }
+        let terminator_position = body.instructions.len();
+        match body.terminator {
+            TerminatorV2::Return(Some(value)) => {
+                ordinary_use_is_valid(value, block, terminator_position)?;
+            }
+            TerminatorV2::ConditionalBranch { condition, .. } => {
+                ordinary_use_is_valid(condition, block, terminator_position)?;
+            }
+            TerminatorV2::Return(None) | TerminatorV2::Branch(_) | TerminatorV2::Unreachable => {}
+        }
+    }
+    Ok(())
+}
+
+fn instruction_operands_v2(kind: &InstructionKindV2) -> Vec<ValueIdV2> {
+    match kind {
+        InstructionKindV2::Constant(_)
+        | InstructionKindV2::VectorZero { .. }
+        | InstructionKindV2::GlobalAddress(_) => Vec::new(),
+        InstructionKindV2::Binary { left, right, .. }
+        | InstructionKindV2::Compare { left, right, .. } => vec![*left, *right],
+        InstructionKindV2::Cast { value, .. } => vec![*value],
+        InstructionKindV2::GetElementPtr { base, indices } => {
+            let mut values = vec![*base];
+            values.extend(indices.iter().copied());
+            values
+        }
+        InstructionKindV2::Load { pointer, .. }
+        | InstructionKindV2::VectorLoad4 { pointer, .. } => vec![*pointer],
+        InstructionKindV2::Store { pointer, value, .. } => vec![*pointer, *value],
+        InstructionKindV2::Call { arguments, .. } => arguments.clone(),
+        InstructionKindV2::Phi { .. } => Vec::new(),
+        InstructionKindV2::InsertElement {
+            vector,
+            element,
+            index,
+        } => vec![*vector, *element, *index],
+        InstructionKindV2::ExtractElement { vector, index } => vec![*vector, *index],
+    }
+}
+
+fn set_ssa_bit_v2(words: &mut [u64], bit: usize) {
+    words[bit / u64::BITS as usize] |= 1_u64 << (bit % u64::BITS as usize);
+}
+
 fn lookup_value(
     available: &[(ValueIdV2, ValueTypeV2)],
     id: ValueIdV2,
@@ -1469,6 +1961,25 @@ fn require_value_type(
     }
 }
 
+const fn valid_value_type_v2(value: ValueTypeV2) -> bool {
+    match value {
+        ValueTypeV2::Scalar(_) | ValueTypeV2::Pointer { .. } => true,
+        ValueTypeV2::Vector { element, lanes } => {
+            lanes == GENERAL_GEMM_VECTOR_LANES_V2
+                && matches!(element, ScalarTypeV1::I16 | ScalarTypeV1::F32)
+        }
+        ValueTypeV2::ArrayPointer {
+            element,
+            elements,
+            address_space,
+        } => {
+            matches!(element, ScalarTypeV1::I16)
+                && elements == GENERAL_GEMM_LDS_ELEMENTS_V2
+                && matches!(address_space, AddressSpaceV1::Local)
+        }
+    }
+}
+
 fn valid_cast(operation: CastOperationV2, from: ValueTypeV2, to: ValueTypeV2) -> bool {
     let scalar_width = |value| match value {
         ValueTypeV2::Scalar(ScalarTypeV1::I1) => Some((true, 1_u8)),
@@ -1479,8 +1990,13 @@ fn valid_cast(operation: CastOperationV2, from: ValueTypeV2, to: ValueTypeV2) ->
         ValueTypeV2::Scalar(ScalarTypeV1::F16 | ScalarTypeV1::Bf16) => Some((false, 16)),
         ValueTypeV2::Scalar(ScalarTypeV1::F32) => Some((false, 32)),
         ValueTypeV2::Scalar(ScalarTypeV1::F64) => Some((false, 64)),
-        ValueTypeV2::Pointer { .. } => None,
+        ValueTypeV2::Vector { .. }
+        | ValueTypeV2::Pointer { .. }
+        | ValueTypeV2::ArrayPointer { .. } => None,
     };
+    if matches!(operation, CastOperationV2::PointerToInt) {
+        return from.is_pointer() && to == ValueTypeV2::Scalar(ScalarTypeV1::I64);
+    }
     let (Some((from_integer, from_width)), Some((to_integer, to_width))) =
         (scalar_width(from), scalar_width(to))
     else {
@@ -1499,6 +2015,7 @@ fn valid_cast(operation: CastOperationV2, from: ValueTypeV2, to: ValueTypeV2) ->
         CastOperationV2::FloatToUnsignedInt | CastOperationV2::FloatToSignedInt => {
             !from_integer && to_integer
         }
+        CastOperationV2::PointerToInt => false,
     }
 }
 

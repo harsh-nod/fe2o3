@@ -98,7 +98,7 @@ pub fn base_fixture() -> Gfx942HandoffV1 {
     .unwrap()
 }
 
-fn evidence(base: &Gfx942HandoffV1, permuted: bool) -> EvidenceV2 {
+pub fn evidence(base: &Gfx942HandoffV1, permuted: bool) -> EvidenceV2 {
     let mut obligations = base
         .obligations()
         .iter()
@@ -110,7 +110,7 @@ fn evidence(base: &Gfx942HandoffV1, permuted: bool) -> EvidenceV2 {
     EvidenceV2::new(base.origins()[0].identity(), obligations).unwrap()
 }
 
-fn instruction(
+pub fn instruction(
     base: &Gfx942HandoffV1,
     result: Option<TypedValueV2>,
     kind: InstructionKindV2,

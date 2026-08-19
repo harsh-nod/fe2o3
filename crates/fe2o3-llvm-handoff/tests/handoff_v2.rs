@@ -699,6 +699,81 @@ fn unknown_v2_semantic_tags_fail_with_typed_sections() {
 }
 
 #[test]
+fn general_gemm_closed_machine_shapes_fail_closed() {
+    let base = base_fixture();
+    assert_eq!(
+        GlobalV2::new_private_constant_bytes(
+            GlobalIdV2::new(90),
+            "descriptor",
+            ".unreviewed",
+            vec![1],
+            1,
+            evidence(&base, false),
+        ),
+        Err(HandoffDiagnosticV2::UnsupportedInstruction)
+    );
+    assert_eq!(
+        GlobalV2::new_private_constant_bytes(
+            GlobalIdV2::new(90),
+            "descriptor",
+            fe2o3_llvm_handoff::KERNEL_DESCRIPTOR_SECTION_V2,
+            vec![],
+            1,
+            evidence(&base, false),
+        ),
+        Err(HandoffDiagnosticV2::UnsupportedInstruction)
+    );
+
+    let invalid_workgroup = FunctionV2::new(
+        FunctionIdV2::new(90),
+        "invalid_workgroup",
+        FunctionKindV2::Kernel,
+        CallingConventionV2::AmdGpuKernel,
+        ReturnTypeV2::Void,
+        vec![],
+        vec![
+            FunctionAttributeV2::NoUnwind,
+            FunctionAttributeV2::RequiredWorkgroupSize([64, 0, 1]),
+        ],
+        BlockIdV2::new(0),
+        vec![BasicBlockV2::new(
+            BlockIdV2::new(0),
+            vec![],
+            TerminatorV2::Return(None),
+        )],
+        evidence(&base, false),
+    );
+    assert_eq!(
+        invalid_workgroup,
+        Err(HandoffDiagnosticV2::InvalidFunctionAttribute)
+    );
+
+    let invalid_vector = FunctionV2::new(
+        FunctionIdV2::new(91),
+        "invalid_vector",
+        FunctionKindV2::Helper,
+        CallingConventionV2::C,
+        ReturnTypeV2::Value(ValueTypeV2::Vector {
+            element: ScalarTypeV1::F32,
+            lanes: 3,
+        }),
+        vec![],
+        vec![FunctionAttributeV2::NoUnwind],
+        BlockIdV2::new(0),
+        vec![BasicBlockV2::new(
+            BlockIdV2::new(0),
+            vec![],
+            TerminatorV2::Unreachable,
+        )],
+        evidence(&base, false),
+    );
+    assert_eq!(
+        invalid_vector,
+        Err(HandoffDiagnosticV2::UnsupportedInstruction)
+    );
+}
+
+#[test]
 fn authenticated_semantic_origin_and_obligation_mutations_fail_closed() {
     let encoded = fixture(false).encode_canonical();
     let offsets = wire_offsets(encoded.as_bytes());
