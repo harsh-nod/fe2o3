@@ -876,9 +876,10 @@ impl PlironSession {
     /// transitional boundary. The preflight limits only the parser input and
     /// the delimiter syntax understood by the pinned, audited parser set; the
     /// postflight limits the graph returned by a parser. Neither limit meters
-    /// CPU time, temporary allocations, interning, or private syntax inside an
-    /// arbitrary `Parsable` implementation. A caller that links or registers
-    /// another parser must audit or contain that implementation independently.
+    /// CPU time, temporary allocations, interning, comments, literals, or
+    /// private syntax inside an arbitrary `Parsable` implementation. A caller
+    /// that links or registers another parser must audit or contain that
+    /// implementation independently.
     pub fn import_operation_text_v1(
         &mut self,
         text: &str,
