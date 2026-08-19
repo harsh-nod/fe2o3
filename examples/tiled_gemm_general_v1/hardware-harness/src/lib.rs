@@ -12,14 +12,17 @@
 use core::{fmt, ops::Range};
 
 use fe2o3_amd_target::AmdTargetId;
+use fe2o3_artifacts::DigestAlgorithm;
+use fe2o3_core::GpuContext;
 use fe2o3_general_gemm_compiler::{
     GENERAL_GEMM_DEVICE_TARGET_V1, GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1,
     GENERAL_GEMM_KERNEL_SYMBOL_V1, GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1,
-    GeneralGemmCheckedLaunchInstantiationIdentityV1, GeneralGemmCheckedLaunchInstantiationV1,
-    GeneralGemmRuntimeAbiIdentityV1, GeneralGemmRuntimeAbiSnapshotV1,
-    GeneralGemmScheduleIdentityV1, GeneralGemmScheduleV1, GeneralGemmSymbolicArtifactIdentityV1,
-    GeneralGemmSymbolicCompilationIdentityV1, GeneralGemmSymbolicCompilationUnitV1,
-    GeneralGemmSymbolicKirIdentityV1, GeneralGemmSymbolicPlanIdentityV1,
+    GeneralGemmCheckedLaunchInstantiationErrorV1, GeneralGemmCheckedLaunchInstantiationIdentityV1,
+    GeneralGemmCheckedLaunchInstantiationV1, GeneralGemmRuntimeAbiIdentityV1,
+    GeneralGemmRuntimeAbiSnapshotV1, GeneralGemmScheduleIdentityV1, GeneralGemmScheduleV1,
+    GeneralGemmSymbolicArtifactIdentityV1, GeneralGemmSymbolicCompilationIdentityV1,
+    GeneralGemmSymbolicCompilationUnitV1, GeneralGemmSymbolicKirIdentityV1,
+    GeneralGemmSymbolicPlanIdentityV1,
 };
 use fe2o3_host::{
     HsaDispatchObservationV1, HsaExecutableObjectIdentityV1,
@@ -30,6 +33,10 @@ use fe2o3_host::{
 use fe2o3_hsa_runtime::{
     HsaRuntimeAdapterError, ReviewedHsaExecutableV1, ReviewedHsaHardwareTestBufferV1,
     ReviewedHsaKernelV1, ReviewedHsaRuntimeAdapterV1,
+};
+use fe2o3_kernel_ir::{
+    GeneralGemmKirV1, GeneralGemmPlanFieldsV1, GeneralGemmPlanSnapshotErrorV1,
+    GeneralGemmPlanSnapshotV1,
 };
 use fe2o3_tiled_gemm_v1::{
     GeneralGemmPlanV1, GeneralGemmRequestV1, GeneralLaunchLimitsV1, GeneralPlanErrorV1,
@@ -53,7 +60,10 @@ pub const GENERAL_GEMM_IMPLICIT_KERNARG_BYTES_V1: usize = 256;
 pub const GENERAL_GEMM_KERNARG_STORAGE_ALIGNMENT_V1: usize = 16;
 /// Exact HSA kernarg-segment alignment in the compiler-generated descriptor.
 pub const GENERAL_GEMM_KERNARG_SEGMENT_ALIGNMENT_V1: u64 = 8;
-/// The protected execution join is intentionally unavailable at this checkpoint.
+/// Whether a safe public construction path exists for protected execution.
+///
+/// The reviewed qualification executor is explicitly unsafe and requires two
+/// live rustc-private final qualifications, so this remains false.
 pub const GENERAL_GEMM_PROTECTED_EXECUTION_AVAILABLE_V1: bool = false;
 
 const A_BODY_POISON: u16 = 0x7fc1;
@@ -583,6 +593,107 @@ pub const GENERAL_GEMM_PHYSICAL_ARGUMENT_LAYOUT_V1: [GeneralGemmPhysicalArgument
     GeneralGemmPhysicalArgumentLayoutV1::new(10, F32_ARGUMENT, 76, 4),
 ];
 
+/// Descriptive inputs borrowed from one retained rustc final qualification.
+///
+/// Constructing this value grants no load, dispatch, publication, or execution
+/// authority. Only the unsafe matrix executor may interpret it while its
+/// caller retains the corresponding private rustc qualification.
+pub struct GeneralGemmQualifiedArtifactExecutionV1<'qualified> {
+    symbolic_unit: &'qualified GeneralGemmSymbolicCompilationUnitV1,
+    symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
+    finalized_bytes: &'qualified [u8],
+    schedule_proof: GeneralGemmEvidenceIdentityV1,
+    proof_and_numerical: GeneralGemmEvidenceIdentityV1,
+    machine_inspection: [u8; 32],
+    rustc_final_join: [u8; 32],
+}
+
+impl<'qualified> GeneralGemmQualifiedArtifactExecutionV1<'qualified> {
+    /// Collects descriptive fields borrowed from one live qualification.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        symbolic_unit: &'qualified GeneralGemmSymbolicCompilationUnitV1,
+        symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
+        finalized_bytes: &'qualified [u8],
+        schedule_proof: GeneralGemmEvidenceIdentityV1,
+        proof_and_numerical: GeneralGemmEvidenceIdentityV1,
+        machine_inspection: [u8; 32],
+        rustc_final_join: [u8; 32],
+    ) -> Self {
+        Self {
+            symbolic_unit,
+            symbolic_artifact,
+            finalized_bytes,
+            schedule_proof,
+            proof_and_numerical,
+            machine_inspection,
+            rustc_final_join,
+        }
+    }
+
+    /// This descriptive record grants no native or publication authority.
+    pub const fn grants_execution_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Bitwise-checked observation for one synchronously completed hardware case.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralGemmQualifiedCaseObservationV1 {
+    case: GeneralGemmHardwareCaseV1,
+    executable: HsaExecutableObjectIdentityV1,
+    kernel: HsaKernelObjectIdentityV1,
+    dispatch: [u8; 16],
+    comparison: GeneralGemmOracleComparisonV1,
+}
+
+impl GeneralGemmQualifiedCaseObservationV1 {
+    /// Returns the exact case that completed and matched the oracle.
+    pub const fn case(self) -> GeneralGemmHardwareCaseV1 {
+        self.case
+    }
+
+    /// Returns the reviewed executable and resolved-kernel observations.
+    pub const fn loaded_objects(
+        self,
+    ) -> (HsaExecutableObjectIdentityV1, HsaKernelObjectIdentityV1) {
+        (self.executable, self.kernel)
+    }
+
+    /// Returns the reviewed synchronous dispatch identity.
+    pub const fn dispatch_identity(self) -> [u8; 16] {
+        self.dispatch
+    }
+
+    /// Returns the complete bitwise allocation comparison.
+    pub const fn comparison(self) -> GeneralGemmOracleComparisonV1 {
+        self.comparison
+    }
+
+    /// One case observation cannot authorize publication or another launch.
+    pub const fn grants_publication_or_runtime_authority(self) -> bool {
+        false
+    }
+}
+
+/// Complete non-authoritative observation for all fourteen qualified cases.
+#[derive(Debug)]
+pub struct GeneralGemmQualifiedMatrixObservationV1 {
+    cases: [GeneralGemmQualifiedCaseObservationV1; 14],
+}
+
+impl GeneralGemmQualifiedMatrixObservationV1 {
+    /// Returns all cases in the canonical matrix order.
+    pub const fn cases(&self) -> &[GeneralGemmQualifiedCaseObservationV1; 14] {
+        &self.cases
+    }
+
+    /// Hardware observations cannot be replayed as publication or launch authority.
+    pub const fn grants_publication_or_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Linear protected authority required by the future real hardware harness.
 ///
 /// Fields are private and there is no constructor. In particular, raw artifact
@@ -994,6 +1105,351 @@ pub fn launch_general_gemm_protected_v1(
         schedule: authority.schedule,
         dispatch: dispatch.dispatch_identity(),
     })
+}
+
+/// Failure while executing the complete qualification-owned hardware matrix.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum GeneralGemmQualificationExecutionErrorV1 {
+    /// Descriptive inputs did not match the two required qualified schedules.
+    QualificationSubstitution(&'static str),
+    /// Independent guarded case preparation or oracle execution failed.
+    Preparation(GeneralGemmHardwarePreparationErrorV1),
+    /// Concrete compiler plan fields differed from the independent host plan.
+    Plan(GeneralGemmPlanSnapshotErrorV1),
+    /// Concrete KIR/runtime instantiation differed from the symbolic artifact.
+    LaunchInstantiation(GeneralGemmCheckedLaunchInstantiationErrorV1),
+    /// The HIP context could not be created for the selected ordinal.
+    Context(fe2o3_core::Error),
+    /// The reviewed HSA lifecycle rejected a native operation.
+    Hsa(HsaRuntimeAdapterError),
+    /// The protected single-case adapter rejected a bound launch.
+    ProtectedLaunch(GeneralGemmProtectedLaunchErrorV1),
+    /// A reviewed HSA readback did not encode the expected element type.
+    Readback(&'static str),
+    /// A complete guarded allocation differed from the independent oracle.
+    Oracle(GeneralGemmOracleComparisonErrorV1),
+    /// The executor did not produce exactly the canonical fourteen cases.
+    ObservationCount,
+}
+
+impl fmt::Display for GeneralGemmQualificationExecutionErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "general GEMM qualification execution failed: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GeneralGemmQualificationExecutionErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Preparation(error) => Some(error),
+            Self::Plan(error) => Some(error),
+            Self::LaunchInstantiation(error) => Some(error),
+            Self::Context(error) => Some(error),
+            Self::Hsa(error) => Some(error),
+            Self::ProtectedLaunch(error) => Some(error),
+            Self::Oracle(error) => Some(error),
+            Self::QualificationSubstitution(_) | Self::Readback(_) | Self::ObservationCount => None,
+        }
+    }
+}
+
+/// Executes both qualified schedule artifacts across all fourteen guarded cases.
+///
+/// The executor creates one reviewed gfx942 HSA runtime, loads the exact bytes
+/// for each schedule, resolves the exact generated symbol, instantiates every
+/// concrete plan and canonical KIR, and unloads each executable after seven
+/// synchronous dispatches. It returns only bitwise-checked observations.
+///
+/// # Safety
+///
+/// The caller must retain, for the entire call, the two private non-Clone
+/// `QualifiedGeneralGemmCompilationV1` values corresponding to `reference` and
+/// `vectorized`. Every field in each descriptive input, including the borrowed
+/// symbolic unit and exact finalized bytes, must come directly from that same
+/// live qualification. The qualifications must name respectively the reference
+/// and A-only-vectorized schedules. Violating this precondition can dispatch
+/// unauthenticated native code; identities and bytes alone do not satisfy it.
+pub unsafe fn execute_qualified_general_gemm_matrix_v1(
+    device_ordinal: i32,
+    reference: GeneralGemmQualifiedArtifactExecutionV1<'_>,
+    vectorized: GeneralGemmQualifiedArtifactExecutionV1<'_>,
+) -> Result<GeneralGemmQualifiedMatrixObservationV1, GeneralGemmQualificationExecutionErrorV1> {
+    validate_qualified_artifact_input(&reference, REFERENCE)?;
+    validate_qualified_artifact_input(&vectorized, VECTOR_A)?;
+
+    let context = GpuContext::new(device_ordinal)
+        .map_err(GeneralGemmQualificationExecutionErrorV1::Context)?;
+    let mut runtime = ReviewedHsaRuntimeAdapterV1::new(context)
+        .map_err(GeneralGemmQualificationExecutionErrorV1::Hsa)?;
+    let expected_target = AmdTargetId::parse(GENERAL_GEMM_DEVICE_TARGET_V1)
+        .expect("fixed general GEMM target is canonical");
+    if runtime.environment().physical_device().target() != expected_target {
+        return Err(
+            GeneralGemmQualificationExecutionErrorV1::QualificationSubstitution(
+                "physical gfx942:xnack- device",
+            ),
+        );
+    }
+
+    let mut observations = Vec::with_capacity(GENERAL_GEMM_HARDWARE_CASES_V1.len());
+    // SAFETY: the function precondition binds both borrowed artifacts to live
+    // rustc qualifications; this helper only narrows each owner to its seven
+    // matching cases and always unloads before returning.
+    observations.extend(unsafe { execute_qualified_artifact_cases(&mut runtime, &reference) }?);
+    // SAFETY: identical reasoning for the independently qualified vector schedule.
+    observations.extend(unsafe { execute_qualified_artifact_cases(&mut runtime, &vectorized) }?);
+    let cases = observations
+        .try_into()
+        .map_err(|_| GeneralGemmQualificationExecutionErrorV1::ObservationCount)?;
+    Ok(GeneralGemmQualifiedMatrixObservationV1 { cases })
+}
+
+fn validate_qualified_artifact_input(
+    input: &GeneralGemmQualifiedArtifactExecutionV1<'_>,
+    expected_schedule: GeneralGemmScheduleV1,
+) -> Result<(), GeneralGemmQualificationExecutionErrorV1> {
+    for (matches, field) in [
+        (
+            input.symbolic_unit.schedule() == expected_schedule,
+            "symbolic schedule",
+        ),
+        (!input.finalized_bytes.is_empty(), "finalized bytes"),
+        (
+            input.symbolic_artifact.as_bytes() != &[0; 32],
+            "symbolic artifact identity",
+        ),
+        (
+            input.schedule_proof.as_bytes() != &[0; 32],
+            "schedule proof identity",
+        ),
+        (
+            input.proof_and_numerical.as_bytes() != &[0; 32],
+            "proof and numerical identity",
+        ),
+        (
+            input.machine_inspection != [0; 32],
+            "machine inspection identity",
+        ),
+        (
+            input.rustc_final_join != [0; 32],
+            "rustc final join identity",
+        ),
+    ] {
+        if !matches {
+            return Err(GeneralGemmQualificationExecutionErrorV1::QualificationSubstitution(field));
+        }
+    }
+    Ok(())
+}
+
+unsafe fn execute_qualified_artifact_cases(
+    runtime: &mut ReviewedHsaRuntimeAdapterV1,
+    input: &GeneralGemmQualifiedArtifactExecutionV1<'_>,
+) -> Result<Vec<GeneralGemmQualifiedCaseObservationV1>, GeneralGemmQualificationExecutionErrorV1> {
+    let finalized_digest = DigestAlgorithm::Sha256.calculate(input.finalized_bytes);
+    // SAFETY: the caller retains the qualification that owns these exact bytes.
+    let (executable, load) =
+        unsafe { runtime.load_executable(input.finalized_bytes, finalized_digest) }
+            .map_err(GeneralGemmQualificationExecutionErrorV1::Hsa)?;
+    let executable_identity = load.executable_object();
+    let execution = (|| {
+        if load.finalized_digest() != finalized_digest
+            || load.byte_len() != input.finalized_bytes.len() as u64
+        {
+            return Err(
+                GeneralGemmQualificationExecutionErrorV1::QualificationSubstitution(
+                    "loaded finalized bytes",
+                ),
+            );
+        }
+        // SAFETY: the live qualification names this exact generated export.
+        let (kernels, resolutions) =
+            unsafe { runtime.resolve_kernel_set(&executable, [GENERAL_GEMM_KERNEL_SYMBOL_V1]) }
+                .map_err(GeneralGemmQualificationExecutionErrorV1::Hsa)?;
+        let kernel = kernels.get(0).ok_or(
+            GeneralGemmQualificationExecutionErrorV1::QualificationSubstitution("resolved kernel"),
+        )?;
+        let resolution = &resolutions[0];
+        if resolution.executable_object() != executable_identity
+            || resolution.export_symbol() != GENERAL_GEMM_KERNEL_SYMBOL_V1
+        {
+            return Err(
+                GeneralGemmQualificationExecutionErrorV1::QualificationSubstitution(
+                    "resolved executable or symbol",
+                ),
+            );
+        }
+        GENERAL_GEMM_HARDWARE_CASES_V1
+            .iter()
+            .copied()
+            .filter(|case| case.schedule() == input.symbolic_unit.schedule())
+            .map(|case| {
+                execute_qualified_case(runtime, &executable, kernel, resolution, input, case)
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })();
+    // The kernel set is dropped when the closure returns, before executable teardown.
+    // SAFETY: all dispatches either failed before publication or completed synchronously.
+    let unload = unsafe { runtime.unload_executable(executable) }
+        .map_err(GeneralGemmQualificationExecutionErrorV1::Hsa)?;
+    if !unload.released() || unload.executable_object() != executable_identity {
+        return Err(
+            GeneralGemmQualificationExecutionErrorV1::QualificationSubstitution(
+                "terminal executable unload",
+            ),
+        );
+    }
+    execution
+}
+
+fn execute_qualified_case(
+    runtime: &mut ReviewedHsaRuntimeAdapterV1,
+    executable: &ReviewedHsaExecutableV1,
+    kernel: &ReviewedHsaKernelV1,
+    resolution: &HsaKernelResolutionObservationV1,
+    input: &GeneralGemmQualifiedArtifactExecutionV1<'_>,
+    case: GeneralGemmHardwareCaseV1,
+) -> Result<GeneralGemmQualifiedCaseObservationV1, GeneralGemmQualificationExecutionErrorV1> {
+    let prepared = prepare_general_gemm_hardware_case_v1(case)
+        .map_err(GeneralGemmQualificationExecutionErrorV1::Preparation)?;
+    let snapshot = runtime_snapshot(&prepared)
+        .map_err(GeneralGemmQualificationExecutionErrorV1::ProtectedLaunch)?;
+    let plan = compiler_plan_fields(&prepared)?;
+    let checked_launch = GeneralGemmCheckedLaunchInstantiationV1::checked(
+        input.symbolic_unit,
+        input.symbolic_artifact,
+        plan,
+        GeneralGemmKirV1::canonical(plan),
+        snapshot,
+    )
+    .map_err(GeneralGemmQualificationExecutionErrorV1::LaunchInstantiation)?;
+
+    let a = runtime
+        .allocate_hardware_test_buffer(&u16_bytes(prepared.a.allocation()))
+        .map_err(GeneralGemmQualificationExecutionErrorV1::Hsa)?;
+    let b = runtime
+        .allocate_hardware_test_buffer(&u16_bytes(prepared.b.allocation()))
+        .map_err(GeneralGemmQualificationExecutionErrorV1::Hsa)?;
+    let mut c = runtime
+        .allocate_hardware_test_buffer(&f32_bytes(prepared.c_initial.allocation()))
+        .map_err(GeneralGemmQualificationExecutionErrorV1::Hsa)?;
+    let authority = GeneralGemmProtectedHardwareAuthorityV1 {
+        symbolic_compilation: input.symbolic_unit.identity(),
+        symbolic_artifact: input.symbolic_artifact,
+        symbolic_plan: input.symbolic_unit.symbolic_plan_identity(),
+        symbolic_kir: input.symbolic_unit.symbolic_kir_identity(),
+        checked_launch: checked_launch.identity(),
+        schedule: input.symbolic_unit.schedule_identity(),
+        schedule_proof: input.schedule_proof,
+        proof_and_numerical: input.proof_and_numerical,
+        machine_inspection: input.machine_inspection,
+        rustc_final_join: input.rustc_final_join,
+        runtime_abi: checked_launch.runtime_abi().identity(),
+        runtime_abi_snapshot: snapshot,
+        // This transient authority is consumed by the same stack frame. The
+        // qualification executor deliberately supplies no publication,
+        // application, or reusable runtime authority.
+        publication: [0; 32],
+        application: [0; 32],
+        observed_device: [0; 32],
+        reviewed_runtime: [0; 32],
+        hsa_executable: resolution.executable_object(),
+        hsa_kernel: resolution.kernel_object(),
+    };
+    let arguments = GeneralGemmProtectedArgumentsV1::checked_hardware_buffers(
+        &authority,
+        input.symbolic_unit,
+        &checked_launch,
+        &prepared,
+        &a,
+        &b,
+        &mut c,
+    )
+    .map_err(GeneralGemmQualificationExecutionErrorV1::ProtectedLaunch)?;
+    let completion = launch_general_gemm_protected_v1(
+        authority, arguments, runtime, executable, kernel, resolution,
+    )
+    .map_err(GeneralGemmQualificationExecutionErrorV1::ProtectedLaunch)?;
+
+    let observed_a = read_u16(&a.read_after_synchronous_dispatch(), "A")?;
+    let observed_b = read_u16(&b.read_after_synchronous_dispatch(), "B")?;
+    let observed_c = read_f32(&c.read_after_synchronous_dispatch(), "C")?;
+    let comparison = compare_general_gemm_hardware_observation_v1(
+        &prepared,
+        &observed_a,
+        &observed_b,
+        &observed_c,
+    )
+    .map_err(GeneralGemmQualificationExecutionErrorV1::Oracle)?;
+    Ok(GeneralGemmQualifiedCaseObservationV1 {
+        case,
+        executable: resolution.executable_object(),
+        kernel: resolution.kernel_object(),
+        dispatch: completion.dispatch_identity(),
+        comparison,
+    })
+}
+
+fn compiler_plan_fields(
+    prepared: &PreparedGeneralGemmHardwareCaseV1,
+) -> Result<GeneralGemmPlanFieldsV1, GeneralGemmQualificationExecutionErrorV1> {
+    let request = prepared.plan.request();
+    let storage = prepared.plan.storage().elements();
+    GeneralGemmPlanFieldsV1::checked(GeneralGemmPlanSnapshotV1 {
+        dimensions: request.dimensions(),
+        strides: request.strides(),
+        storage_elements: storage.map(|elements| elements as u64),
+        block_counts: prepared.plan.block_counts(),
+        aql_grid_work_items: prepared.plan.aql_grid_work_items(),
+        reduction_phases: prepared.plan.reduction_phases(),
+        alpha_bits: request.alpha_bits(),
+        beta_bits: request.beta_bits(),
+    })
+    .map_err(GeneralGemmQualificationExecutionErrorV1::Plan)
+}
+
+fn u16_bytes(values: &[u16]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn f32_bytes(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_bits().to_le_bytes())
+        .collect()
+}
+
+fn read_u16(
+    bytes: &[u8],
+    role: &'static str,
+) -> Result<Vec<u16>, GeneralGemmQualificationExecutionErrorV1> {
+    if !bytes.len().is_multiple_of(2) {
+        return Err(GeneralGemmQualificationExecutionErrorV1::Readback(role));
+    }
+    Ok(bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect())
+}
+
+fn read_f32(
+    bytes: &[u8],
+    role: &'static str,
+) -> Result<Vec<f32>, GeneralGemmQualificationExecutionErrorV1> {
+    if !bytes.len().is_multiple_of(4) {
+        return Err(GeneralGemmQualificationExecutionErrorV1::Readback(role));
+    }
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_bits(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])))
+        .collect())
 }
 
 fn runtime_snapshot(
@@ -1456,6 +1912,70 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn compiler_launch_fields_and_readback_encodings_cover_every_case() {
+        for case in GENERAL_GEMM_HARDWARE_CASES_V1 {
+            let prepared = prepare_general_gemm_hardware_case_v1(case).unwrap();
+            let plan = compiler_plan_fields(&prepared).unwrap();
+            assert_eq!(plan.dimensions(), case.dimensions());
+            assert_eq!(plan.strides(), case.strides());
+            assert_eq!(
+                plan.aql_grid_work_items(),
+                prepared.plan().aql_grid_work_items()
+            );
+            assert_eq!(plan.reduction_phases(), prepared.plan().reduction_phases());
+            assert_eq!(GeneralGemmKirV1::canonical(plan).plan(), plan);
+
+            let a_bytes = u16_bytes(prepared.a().allocation());
+            let c_bytes = f32_bytes(prepared.c_expected().allocation());
+            assert_eq!(read_u16(&a_bytes, "A").unwrap(), prepared.a().allocation());
+            assert!(
+                read_f32(&c_bytes, "C")
+                    .unwrap()
+                    .iter()
+                    .zip(prepared.c_expected().allocation())
+                    .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+            );
+        }
+        assert!(matches!(
+            read_u16(&[0], "A"),
+            Err(GeneralGemmQualificationExecutionErrorV1::Readback("A"))
+        ));
+        assert!(matches!(
+            read_f32(&[0, 1], "C"),
+            Err(GeneralGemmQualificationExecutionErrorV1::Readback("C"))
+        ));
+    }
+
+    #[test]
+    fn qualified_observations_do_not_grant_reusable_authority() {
+        let case = GENERAL_GEMM_HARDWARE_CASES_V1[0];
+        let comparison = GeneralGemmOracleComparisonV1 {
+            case,
+            compared_a_elements: 1,
+            compared_b_elements: 2,
+            compared_c_elements: 3,
+        };
+        let observed = GeneralGemmQualifiedCaseObservationV1 {
+            case,
+            executable: HsaExecutableObjectIdentityV1::new([0x11; 32]).unwrap(),
+            kernel: HsaKernelObjectIdentityV1::new([0x22; 32]).unwrap(),
+            dispatch: [0x33; 16],
+            comparison,
+        };
+        assert!(!observed.grants_publication_or_runtime_authority());
+        let matrix = GeneralGemmQualifiedMatrixObservationV1 {
+            cases: [observed; 14],
+        };
+        assert!(!matrix.grants_publication_or_runtime_authority());
+        assert!(
+            matrix
+                .cases()
+                .iter()
+                .all(|case| !case.grants_publication_or_runtime_authority())
+        );
     }
 
     #[test]

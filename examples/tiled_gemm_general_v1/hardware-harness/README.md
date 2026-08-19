@@ -12,16 +12,14 @@ executable, kernel, geometry, ABI, initialization, and dispatch observations.
 The adapter accepts no raw HSACO, path, native handle, generic launch, packed
 byte, or caller-supplied authority bridge.
 
-There is intentionally no constructible execution entry point at this
-checkpoint. The protected authority has private fields and no constructor. It
-must eventually come from a same-process rustc-codegen join that consumes the
-opaque frontend correspondence, verifier proof/numerical evidence, and
-finalizer machine inspection, then binds the symbolic artifact to a checked
-concrete launch-time plan, canonical KIR, and runtime ABI snapshot. Argument
-construction compares the exact `GeneralGemmSymbolicCompilationUnitV1` and
-`GeneralGemmCheckedLaunchInstantiationV1` accessors against that unavailable
-authority before retaining any HSA allocation. The legacy concrete compiler
-unit is model evidence, not that production artifact authority.
+The only constructible execution entry point is explicitly unsafe. Its safety
+contract requires rustc-codegen to retain the two non-Clone final
+qualifications, one per schedule, throughout the call and to borrow every
+structural input and finalized byte directly from those same owners. The
+executor privately constructs a transient per-case authority, binds each
+symbolic artifact to a checked concrete launch-time plan, canonical KIR, and
+runtime ABI snapshot, and consumes that authority during synchronous dispatch.
+It returns typed observations but no publication, load, or replay authority.
 
 Run the independent preparation and oracle checks with:
 
@@ -29,6 +27,7 @@ Run the independent preparation and oracle checks with:
 cargo test --manifest-path examples/tiled_gemm_general_v1/hardware-harness/Cargo.toml
 ```
 
-Passing these tests is not GPU execution evidence. Protected hardware evidence
-remains blocked on the symbolic lowering/finalization route and the one-shot
-rustc-owned three-party join. The full 14-case matrix has not run on MI300X.
+Passing these tests is not GPU execution evidence. A real run additionally
+requires finalized artifacts and the live rustc-owned three-party
+qualifications. The full 14-case matrix must be invoked through that unsafe
+boundary on MI300X.

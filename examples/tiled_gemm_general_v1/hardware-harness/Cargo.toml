@@ -9,8 +9,11 @@ publish = false
 
 [dependencies]
 fe2o3-amd-target = { path = "../../../crates/fe2o3-amd-target" }
+fe2o3-artifacts = { path = "../../../crates/fe2o3-artifacts" }
+fe2o3-core = { path = "../../../crates/fe2o3-core" }
 fe2o3-general-gemm-compiler = { path = "../../../crates/fe2o3-general-gemm-compiler" }
 fe2o3-host = { path = "../../../crates/fe2o3-host" }
 fe2o3-hsa-runtime = { path = "../../../crates/fe2o3-hsa-runtime", features = ["hardware-test-hooks"] }
+fe2o3-kernel-ir = { path = "../../../crates/fe2o3-kernel-ir" }
 fe2o3-tiled-gemm-v1 = { path = "../../tiled_gemm_v1" }
 fe2o3-verifier = { path = "../../../crates/fe2o3-verifier" }

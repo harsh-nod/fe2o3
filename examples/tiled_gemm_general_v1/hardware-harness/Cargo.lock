@@ -502,9 +502,12 @@ name = "fe2o3-tiled-gemm-general-v1-hardware-harness"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "fe2o3-artifacts",
+ "fe2o3-core",
  "fe2o3-general-gemm-compiler",
  "fe2o3-host",
  "fe2o3-hsa-runtime",
+ "fe2o3-kernel-ir",
  "fe2o3-tiled-gemm-v1",
  "fe2o3-verifier",
 ]
