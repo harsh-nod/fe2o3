@@ -25,12 +25,18 @@ def package(name: str, version: str = CHECKER.PLIRON_VERSION, source: str | None
 
 
 class PlironDependencyPolicyTests(unittest.TestCase):
-    def test_accepts_exact_d0_closure(self) -> None:
+    def test_accepts_exact_dialect_only_closure(self) -> None:
         violations, stats = CHECKER.check_metadata(
-            {"packages": [package("pliron"), package("pliron-derive")]}
+            {
+                "packages": [
+                    package("pliron"),
+                    package("pliron-derive"),
+                    package("pliron-llvm"),
+                ]
+            }
         )
         self.assertEqual([], violations)
-        self.assertEqual({"pliron": 1, "pliron_derive": 1, "pliron_llvm": 0}, stats)
+        self.assertEqual({"pliron": 1, "pliron_derive": 1, "pliron_llvm": 1}, stats)
 
     def test_rejects_missing_and_duplicate_packages(self) -> None:
         violations, _ = CHECKER.check_metadata(
@@ -51,7 +57,7 @@ class PlironDependencyPolicyTests(unittest.TestCase):
         self.assertTrue(any("wrong Pliron version: pliron" in item for item in violations))
         self.assertTrue(any("wrong Pliron source: pliron-derive" in item for item in violations))
 
-    def test_rejects_unreviewed_llvm_or_repository_package(self) -> None:
+    def test_rejects_ffi_authority_or_unexpected_repository_package(self) -> None:
         violations, _ = CHECKER.check_metadata(
             {
                 "packages": [
@@ -59,11 +65,14 @@ class PlironDependencyPolicyTests(unittest.TestCase):
                     package("pliron-derive"),
                     package("pliron-llvm"),
                     package("pliron-extra"),
+                    {"name": "llvm-sys", "version": "221.0.0", "source": "registry"},
+                    {"name": "amd-comgr-sys", "version": "1.0.0", "source": "registry"},
                 ]
             }
         )
-        self.assertTrue(any("pliron-llvm is outside the D0 closure" in item for item in violations))
         self.assertIn("unexpected package from the Pliron repository: pliron-extra", violations)
+        self.assertIn("forbidden LLVM/COMGR authority package: llvm-sys", violations)
+        self.assertIn("forbidden LLVM/COMGR authority package: amd-comgr-sys", violations)
 
 
 if __name__ == "__main__":

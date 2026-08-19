@@ -17,7 +17,9 @@ PLIRON_SOURCE = (
     "git+https://github.com/pliron-org/pliron.git"
     f"?rev={PLIRON_REVISION}#{PLIRON_REVISION}"
 )
-REQUIRED_PACKAGES = ("pliron", "pliron-derive")
+REQUIRED_PACKAGES = ("pliron", "pliron-derive", "pliron-llvm")
+FORBIDDEN_PACKAGES = {"llvm-sys"}
+FORBIDDEN_NAME_FRAGMENTS = ("comgr",)
 
 
 class PolicyInputError(ValueError):
@@ -37,9 +39,10 @@ def _packages(metadata: dict[str, Any]) -> list[dict[str, Any]]:
 def check_metadata(metadata: dict[str, Any]) -> tuple[list[str], dict[str, int]]:
     """Return stable policy violations and closure statistics."""
     selected: dict[str, list[dict[str, Any]]] = {
-        name: [] for name in (*REQUIRED_PACKAGES, "pliron-llvm")
+        name: [] for name in REQUIRED_PACKAGES
     }
     unexpected_source_packages: list[str] = []
+    forbidden_packages: list[str] = []
     for package in _packages(metadata):
         name = package.get("name")
         if not isinstance(name, str) or not name:
@@ -50,6 +53,10 @@ def check_metadata(metadata: dict[str, Any]) -> tuple[list[str], dict[str, int]]
         if isinstance(source, str) and "github.com/pliron-org/pliron.git" in source:
             if name not in selected:
                 unexpected_source_packages.append(name)
+        if name in FORBIDDEN_PACKAGES or any(
+            fragment in name.casefold() for fragment in FORBIDDEN_NAME_FRAGMENTS
+        ):
+            forbidden_packages.append(name)
 
     violations: list[str] = []
     for name in REQUIRED_PACKAGES:
@@ -74,12 +81,10 @@ def check_metadata(metadata: dict[str, Any]) -> tuple[list[str], dict[str, int]]
                     f"expected {PLIRON_SOURCE!r}"
                 )
 
-    if selected["pliron-llvm"]:
-        violations.append(
-            "pliron-llvm is outside the D0 closure; add it only with the reviewed LLVM integration"
-        )
     for name in sorted(set(unexpected_source_packages)):
         violations.append(f"unexpected package from the Pliron repository: {name}")
+    for name in sorted(set(forbidden_packages)):
+        violations.append(f"forbidden LLVM/COMGR authority package: {name}")
 
     return sorted(violations), {
         "pliron": len(selected["pliron"]),
