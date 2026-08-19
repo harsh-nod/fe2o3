@@ -14,7 +14,8 @@ use dialect_mir::{
     MAX_EXECUTABLE_STATEMENTS, MirTypeId,
     pliron::{
         MirBlockOp, MirFunctionOp, MirModuleOp, MirModuleSnapshotError, MirReturnOp,
-        MirSnapshotOperation, register_mir_dialect,
+        MirSemanticOperationKind, MirSemanticSourceSpan, MirSemanticStatementOp,
+        MirSemanticTerminatorOp, MirSnapshotOperation, register_mir_dialect,
     },
 };
 use fe2o3_pliron::{
@@ -359,6 +360,13 @@ pub enum SourceOperationEvidence {
     },
     /// Place-based MIR return terminator.
     Return,
+    /// Exact optimized-rustc return retained through the typed MIR boundary.
+    SemanticReturn {
+        /// Stable identity of the exact rustc terminator.
+        identity: [u64; 4],
+        /// Exact source coordinates reported by rustc.
+        span: MirSemanticSourceSpan,
+    },
 }
 
 /// Pointer-independent source evidence for one MIR CFG block.
@@ -609,6 +617,10 @@ pub enum SourceEntityKind {
     BlockMarker,
     /// MIR return terminator.
     Return,
+    /// Typed rustc statement observation.
+    SemanticStatement,
+    /// Typed rustc terminator observation.
+    SemanticTerminator,
 }
 
 /// Terminal checked-lowering failure. No variant permits fallback execution.
@@ -644,6 +656,20 @@ pub enum LoweringError {
         block: usize,
         /// Zero-based operation index in the block.
         operation: usize,
+    },
+    /// A typed rustc MIR operation is preserved exactly but not yet modeled by
+    /// this target-neutral lowering version.
+    UnsupportedRustSemanticOperation {
+        /// Zero-based source function index.
+        function: usize,
+        /// Zero-based CFG block index.
+        block: usize,
+        /// Exact rustc operation ordinal within the block.
+        ordinal: u32,
+        /// Typed rustc MIR classification.
+        kind: MirSemanticOperationKind,
+        /// Exact rustc source coordinates for the rejected operation.
+        span: MirSemanticSourceSpan,
     },
     /// The source module has no function to transform.
     EmptyModule,
@@ -700,6 +726,17 @@ impl fmt::Display for LoweringError {
             } => write!(
                 formatter,
                 "unsupported MIR operation at function {function}, block {block}, operation {operation}"
+            ),
+            Self::UnsupportedRustSemanticOperation {
+                function,
+                block,
+                ordinal,
+                kind,
+                span,
+            } => write!(
+                formatter,
+                "unsupported typed rustc MIR operation {kind:?} at function {function}, block {block}, ordinal {ordinal}, source coordinates {:?}",
+                span.coordinates()
             ),
             Self::EmptyModule => formatter.write_str("source MIR module has no functions"),
             Self::SourceVerificationFailed => {
@@ -912,6 +949,50 @@ fn preflight_source(
                     )?;
                 } else if Operation::is_op::<MirReturnOp>(block_operation, context) {
                     verify_closed_shape(context, block_operation, SourceEntityKind::Return, 0, 0)?;
+                } else if let Some(statement) =
+                    Operation::get_op::<MirSemanticStatementOp>(block_operation, context)
+                {
+                    verify_closed_shape(
+                        context,
+                        block_operation,
+                        SourceEntityKind::SemanticStatement,
+                        0,
+                        4,
+                    )?;
+                    let semantic = statement
+                        .semantic_snapshot(context)
+                        .ok_or(LoweringError::SourceVerificationFailed)?;
+                    return Err(LoweringError::UnsupportedRustSemanticOperation {
+                        function: function_index,
+                        block: block_index,
+                        ordinal: semantic.ordinal(),
+                        kind: semantic.kind(),
+                        span: semantic.span(),
+                    });
+                } else if let Some(terminator) =
+                    Operation::get_op::<MirSemanticTerminatorOp>(block_operation, context)
+                {
+                    verify_closed_shape(
+                        context,
+                        block_operation,
+                        SourceEntityKind::SemanticTerminator,
+                        0,
+                        5,
+                    )?;
+                    let semantic = terminator
+                        .semantic_snapshot(context)
+                        .ok_or(LoweringError::SourceVerificationFailed)?;
+                    if semantic.kind() != MirSemanticOperationKind::TerminatorReturn
+                        || !semantic.successors().is_empty()
+                    {
+                        return Err(LoweringError::UnsupportedRustSemanticOperation {
+                            function: function_index,
+                            block: block_index,
+                            ordinal: semantic.ordinal(),
+                            kind: semantic.kind(),
+                            span: semantic.span(),
+                        });
+                    }
                 } else {
                     return Err(LoweringError::UnsupportedMirOperation {
                         function: function_index,
@@ -1014,6 +1095,18 @@ fn collect_source_evidence(
                             }
                         }
                         MirSnapshotOperation::Return => SourceOperationEvidence::Return,
+                        MirSnapshotOperation::SemanticStatement(semantic) => {
+                            unreachable!(
+                                "semantic statements fail closed during bounded preflight: {:?}",
+                                semantic.kind()
+                            )
+                        }
+                        MirSnapshotOperation::SemanticTerminator(semantic) => {
+                            SourceOperationEvidence::SemanticReturn {
+                                identity: semantic.identity(),
+                                span: semantic.span(),
+                            }
+                        }
                     })
                     .collect(),
             })
