@@ -15,6 +15,8 @@ use fe2o3_rustc_front::{
     SourceFileIdentityV1, SourceLocationV1, StableTypeIdentityV1, TypedSignatureV1,
     ValidationError, decode_frontend_unit_v1, encode_frontend_unit_v1,
 };
+use rustc_data_structures::fingerprint::Fingerprint;
+use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_middle::mir::Body;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{InstanceKind, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv};
@@ -26,6 +28,17 @@ const MAX_IDENTITY_PREIMAGE_BYTES: usize = 256 * 1024;
 const FUNCTION_IDENTITY_DOMAIN: &[u8] = b"fe2o3-rustc-front/function-identity/v1";
 const TYPE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-rustc-front/type-identity/v1";
 const SOURCE_FILE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-rustc-front/source-file-identity/v1";
+
+macro_rules! stable_fingerprint {
+    ($tcx:expr, $value:expr) => {{
+        let fingerprint: Fingerprint = $tcx.with_stable_hashing_context(|mut context| {
+            let mut hasher = StableHasher::new();
+            ($value).hash_stable(&mut context, &mut hasher);
+            hasher.finish()
+        });
+        fingerprint.to_le_bytes()
+    }};
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FrontendRecordBridgeError {
@@ -508,10 +521,9 @@ fn stable_type_identity<'tcx>(
             rust_type: normalized.to_string(),
         });
     }
-    let canonical_type = normalized.to_string();
     StableTypeIdentityV1::new(hash_identity(
         TYPE_IDENTITY_DOMAIN,
-        &[canonical_type.as_bytes()],
+        &[&stable_fingerprint!(tcx, normalized)],
     )?)
     .map_err(Into::into)
 }
