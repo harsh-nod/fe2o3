@@ -10,8 +10,11 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
-/// Stable name of the reviewed UAPI schema in this crate.
+/// Stable name of the frozen R1 discovery and identity UAPI schema.
 pub const KFD_UAPI_SCHEMA_ID: &str = "linux-kfd-uapi-1.18-generic-ioc-v1";
+
+/// Stable name of the reviewed R2 VM and memory-lifecycle UAPI extension.
+pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.18-generic-ioc-v1";
 
 /// Path of the Linux UAPI header from which this schema was reviewed.
 pub const KFD_UAPI_SOURCE_HEADER: &str = "include/uapi/linux/kfd_ioctl.h";
@@ -36,7 +39,7 @@ pub const KFD_UAPI_CHARDEV_SOURCE_SHA256: &str =
 pub const KFD_UAPI_GPUVM_SOURCE_SHA256: &str =
     "c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d";
 
-/// Canonical content manifest for the admitted schema.
+/// Canonical content manifest for the frozen R1 discovery and identity schema.
 ///
 /// This identifies reviewed userspace definitions. It does not authenticate a
 /// running kernel or claim that the driver implements the schema correctly.
@@ -48,12 +51,44 @@ pub const KFD_UAPI_SCHEMA_MANIFEST: &str = concat!(
     "smi_events_source_sha256=2d786562fe1e97b8257841b755106c8bce47658a2aa3b439ce4e0178323004bd\n",
     "device_source_sha256=ccf20227c5cdd5b258758f50f61bbc1008a09ea776c101f035f83963e7d23037\n",
     "chardev_source_sha256=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
-    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
     "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
     "kfd_uapi=1.18\n",
     "get_version=size:8,align:4,major:0,minor:4,request:80084b01\n",
     "process_device_apertures=size:56,align:8,lds_base:0,lds_limit:8,scratch_base:16,scratch_limit:24,gpuvm_base:32,gpuvm_limit:40,gpu_id:48,pad:52\n",
     "get_process_apertures_new=size:16,align:8,process_apertures_ptr:0,num_of_nodes:8,pad:12,request:c0104b14\n",
+    "acquire_vm=size:8,align:4,drm_fd:0,gpu_id:4,request:40084b15\n",
+    "set_xnack_mode=size:4,align:4,xnack_enabled:0,request:c0044b21\n",
+    "smi_events=size:8,align:4,gpu_id:0,anon_fd:4,request:c0084b1f,pre_reset:3,post_reset:4,mask:000000000000000c\n",
+);
+
+/// SHA-256 of [`KFD_UAPI_SCHEMA_MANIFEST`].
+pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256: &str =
+    "e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4";
+
+/// Typed digest bytes of [`KFD_UAPI_SCHEMA_MANIFEST`].
+pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0xe4, 0xaa, 0xd5, 0xd8, 0xe3, 0x17, 0x7e, 0xa6, 0xd7, 0x02, 0x98, 0xad, 0xab, 0x77, 0x41, 0xc3,
+    0x77, 0xcb, 0x09, 0x13, 0x73, 0x55, 0x3c, 0xe6, 0x89, 0xf3, 0x52, 0x5e, 0x75, 0x14, 0xd9, 0xb4,
+];
+
+/// Canonical manifest for the reviewed R2 VM and memory-lifecycle extension.
+///
+/// This is deliberately separate from KFD_UAPI_SCHEMA_MANIFEST. It binds
+/// the frozen R1 schema digest as a prerequisite, then adds the active header
+/// and GPUVM implementation provenance plus the exact reviewed memory ABI.
+/// A future memory authority must bind both manifest digests; successful R1
+/// version or device admission alone does not admit memory syscalls.
+pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
+    "base_schema_id=linux-kfd-uapi-1.18-generic-ioc-v1\n",
+    "base_schema_manifest_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
+    "target=linux-x86_64-generic-ioc\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "gpuvm_source=amd/amdgpu/amdgpu_amdkfd_gpuvm.c\n",
+    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
+    "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
+    "kfd_uapi=1.18\n",
     "acquire_vm=size:8,align:4,drm_fd:0,gpu_id:4,request:40084b15\n",
     "alloc_flags=gtt:00000002,writable:80000000,executable:40000000,aql_queue:08000000,coherent:04000000,uncached:02000000\n",
     "alloc_profiles=host_visible_coherent:84000002,kernarg:86000002,aql_queue:8e000002,executable:c4000002\n",
@@ -61,18 +96,16 @@ pub const KFD_UAPI_SCHEMA_MANIFEST: &str = concat!(
     "free_memory=size:8,align:8,handle:0,request:40084b17\n",
     "map_memory=size:24,align:8,handle:0,device_ids_array_ptr:8,n_devices:16,n_success:20,request:c0184b18\n",
     "unmap_memory=size:24,align:8,handle:0,device_ids_array_ptr:8,n_devices:16,n_success:20,request:c0184b19\n",
-    "set_xnack_mode=size:4,align:4,xnack_enabled:0,request:c0044b21\n",
-    "smi_events=size:8,align:4,gpu_id:0,anon_fd:4,request:c0084b1f,pre_reset:3,post_reset:4,mask:000000000000000c\n",
 );
 
-/// SHA-256 of [`KFD_UAPI_SCHEMA_MANIFEST`].
-pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256: &str =
-    "c201fe3821c4909e023499307afa6efc4b27bb9ea03be5ff470406f618b3019a";
+/// SHA-256 of KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.
+pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
+    "e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a";
 
-/// Typed digest bytes of [`KFD_UAPI_SCHEMA_MANIFEST`].
-pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0xc2, 0x01, 0xfe, 0x38, 0x21, 0xc4, 0x90, 0x9e, 0x02, 0x34, 0x99, 0x30, 0x7a, 0xfa, 0x6e, 0xfc,
-    0x4b, 0x27, 0xbb, 0x9e, 0xa0, 0x3b, 0xe5, 0xff, 0x47, 0x04, 0x06, 0xf6, 0x18, 0xb3, 0x01, 0x9a,
+/// Typed digest bytes of KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.
+pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0xe2, 0xd6, 0x98, 0x7b, 0x7c, 0x8e, 0x61, 0xa4, 0x05, 0xb2, 0xf7, 0x75, 0xd5, 0xd0, 0x04, 0xf4,
+    0x58, 0xa0, 0x96, 0x24, 0x14, 0x59, 0xe4, 0xcf, 0xdf, 0x90, 0xbd, 0x44, 0x97, 0xf4, 0xd5, 0x8a,
 ];
 
 /// Major version declared by the reviewed AMDGPU 6.16.13 KFD UAPI header.
@@ -637,26 +670,6 @@ impl AdmittedKfdUapi {
     /// require reviewed version evidence before exposing the operation.
     pub const fn acquire_vm_request(self) -> IoctlRequest {
         AMDKFD_IOC_ACQUIRE_VM
-    }
-
-    /// Returns the admitted ALLOC_MEMORY_OF_GPU request number.
-    pub const fn alloc_memory_of_gpu_request(self) -> IoctlRequest {
-        AMDKFD_IOC_ALLOC_MEMORY_OF_GPU
-    }
-
-    /// Returns the admitted FREE_MEMORY_OF_GPU request number.
-    pub const fn free_memory_of_gpu_request(self) -> IoctlRequest {
-        AMDKFD_IOC_FREE_MEMORY_OF_GPU
-    }
-
-    /// Returns the admitted MAP_MEMORY_TO_GPU request number.
-    pub const fn map_memory_to_gpu_request(self) -> IoctlRequest {
-        AMDKFD_IOC_MAP_MEMORY_TO_GPU
-    }
-
-    /// Returns the admitted UNMAP_MEMORY_FROM_GPU request number.
-    pub const fn unmap_memory_from_gpu_request(self) -> IoctlRequest {
-        AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU
     }
 
     /// Returns the admitted GET_PROCESS_APERTURES_NEW request number.

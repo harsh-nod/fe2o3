@@ -4,7 +4,7 @@ Reviewed, `no_std`-compatible raw definitions for the first fe2o3 direct-KFD
 runtime slice. This crate deliberately does not open devices, discover topology,
 issue syscalls, or own resources.
 
-## Admitted schema
+## Reviewed schemas
 
 `linux-kfd-uapi-1.18-generic-ioc-v1` was transcribed from the active AMDGPU DKMS
 driver source installed on the MI300X development host:
@@ -15,6 +15,24 @@ driver source installed on the MI300X development host:
 - `/usr/include/asm-generic/ioctl.h` SHA-256
   `76396e5537d75285c3ca20e3b6a79b101eebfdc14d39c104ff7eab778672160e`
 - header-declared and running `/dev/kfd` UAPI version `1.18`
+
+The frozen R1 discovery and identity manifest is
+KFD_UAPI_SCHEMA_MANIFEST, with SHA-256
+e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4.
+It remains byte-for-byte stable so an R2 data-definition extension cannot
+silently broaden existing R1 admission evidence.
+
+The memory-lifecycle definitions are bound independently by
+KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST under schema ID
+linux-kfd-memory-lifecycle-1.18-generic-ioc-v1, with SHA-256
+e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a.
+That manifest composes with R1 by including its exact schema ID and digest,
+then binds the active KFD header and GPUVM implementation provenance, target,
+package, allocation flags and profiles, layouts, and request numbers.
+
+Future VM or memory authority must bind both manifests along with the runtime
+device and process evidence. R1 version or device admission alone does not
+authorize ACQUIRE_VM or any allocation, mapping, or free request.
 
 The committed slice contains only:
 
@@ -64,10 +82,12 @@ every array element to the allocation's admitted device.
 
 Compile-time assertions and `tests/kfd_uapi_1_18.rs` pin every struct size,
 alignment, field offset, and request number to independent golden values.
-`KFD_UAPI_SCHEMA_MANIFEST` canonically binds those ABI facts, source-header and
-package provenance, and target encoding; its SHA-256 is recomputed in tests.
-This manifest identifies reviewed userspace content. Running kernel, module,
-boot, and device identities remain separate contracted observations.
+`KFD_UAPI_SCHEMA_MANIFEST` canonically binds only the frozen R1 facts.
+`KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST` separately binds the compositional R2
+memory facts and the exact R1 digest it requires. Both SHA-256 values are
+recomputed in tests. These manifests identify reviewed userspace content;
+running kernel, module, boot, device, and process identities remain separate
+contracted observations.
 
 The independent C oracle is preserved at
 `tests/oracles/kfd_uapi_1_18.c`. On the reviewed host it is built directly

@@ -11,18 +11,19 @@ use fe2o3_kfd_uapi::{
     KFD_IOC_ALLOC_MEM_FLAGS_GTT, KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED,
     KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE, KFD_IOCTL_MAJOR_VERSION,
     KFD_IOCTL_MAX_ADMITTED_MINOR_VERSION, KFD_IOCTL_MIN_ADMITTED_MINOR_VERSION,
-    KFD_IOCTL_MINOR_VERSION, KFD_SMI_EVENT_GPU_POST_RESET, KFD_SMI_EVENT_GPU_PRE_RESET,
-    KFD_SMI_EVENT_GPU_RESET_MASK, KFD_SMI_EVENT_MSG_SIZE, KFD_UAPI_CHARDEV_SOURCE_SHA256,
-    KFD_UAPI_DEVICE_SOURCE_SHA256, KFD_UAPI_GPUVM_SOURCE_SHA256, KFD_UAPI_SCHEMA_ID,
-    KFD_UAPI_SCHEMA_MANIFEST, KFD_UAPI_SCHEMA_MANIFEST_SHA256,
-    KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES, KFD_UAPI_SMI_EVENTS_SOURCE_SHA256,
-    KFD_UAPI_SOURCE_HEADER_SHA256, KFD_XNACK_MODE_DISABLED, KFD_XNACK_MODE_ENABLED,
-    KFD_XNACK_MODE_QUERY, KfdAllocMemoryFlags, KfdAllocMemoryFlagsError, KfdIoctlAcquireVmArgs,
-    KfdIoctlAllocMemoryOfGpuArgs, KfdIoctlFreeMemoryOfGpuArgs, KfdIoctlGetProcessAperturesNewArgs,
-    KfdIoctlGetVersionArgs, KfdIoctlMapMemoryToGpuArgs, KfdIoctlSetXnackModeArgs,
-    KfdIoctlSmiEventsArgs, KfdIoctlUnmapMemoryFromGpuArgs, KfdProcessDeviceApertures,
-    KfdUapiVersion, KfdUapiVersionError, admit_kfd_alloc_memory_flags, encode_ioctl,
-    negotiate_kfd_uapi_version,
+    KFD_IOCTL_MINOR_VERSION, KFD_MEMORY_LIFECYCLE_SCHEMA_ID, KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST,
+    KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256, KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES,
+    KFD_SMI_EVENT_GPU_POST_RESET, KFD_SMI_EVENT_GPU_PRE_RESET, KFD_SMI_EVENT_GPU_RESET_MASK,
+    KFD_SMI_EVENT_MSG_SIZE, KFD_UAPI_CHARDEV_SOURCE_SHA256, KFD_UAPI_DEVICE_SOURCE_SHA256,
+    KFD_UAPI_GPUVM_SOURCE_SHA256, KFD_UAPI_SCHEMA_ID, KFD_UAPI_SCHEMA_MANIFEST,
+    KFD_UAPI_SCHEMA_MANIFEST_SHA256, KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES,
+    KFD_UAPI_SMI_EVENTS_SOURCE_SHA256, KFD_UAPI_SOURCE_HEADER_SHA256, KFD_XNACK_MODE_DISABLED,
+    KFD_XNACK_MODE_ENABLED, KFD_XNACK_MODE_QUERY, KfdAllocMemoryFlags, KfdAllocMemoryFlagsError,
+    KfdIoctlAcquireVmArgs, KfdIoctlAllocMemoryOfGpuArgs, KfdIoctlFreeMemoryOfGpuArgs,
+    KfdIoctlGetProcessAperturesNewArgs, KfdIoctlGetVersionArgs, KfdIoctlMapMemoryToGpuArgs,
+    KfdIoctlSetXnackModeArgs, KfdIoctlSmiEventsArgs, KfdIoctlUnmapMemoryFromGpuArgs,
+    KfdProcessDeviceApertures, KfdUapiVersion, KfdUapiVersionError, admit_kfd_alloc_memory_flags,
+    encode_ioctl, negotiate_kfd_uapi_version,
 };
 use sha2::{Digest, Sha256};
 
@@ -49,23 +50,58 @@ fn schema_identity_is_linux_kfd_1_18() {
         KFD_UAPI_CHARDEV_SOURCE_SHA256,
         "f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba"
     );
-    assert_eq!(
-        KFD_UAPI_GPUVM_SOURCE_SHA256,
-        "c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d"
-    );
     let manifest_digest = Sha256::digest(KFD_UAPI_SCHEMA_MANIFEST);
     assert_eq!(&manifest_digest[..], &KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES);
     assert_eq!(
         KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES,
         [
-            0xc2, 0x01, 0xfe, 0x38, 0x21, 0xc4, 0x90, 0x9e, 0x02, 0x34, 0x99, 0x30, 0x7a, 0xfa,
-            0x6e, 0xfc, 0x4b, 0x27, 0xbb, 0x9e, 0xa0, 0x3b, 0xe5, 0xff, 0x47, 0x04, 0x06, 0xf6,
-            0x18, 0xb3, 0x01, 0x9a,
+            0xe4, 0xaa, 0xd5, 0xd8, 0xe3, 0x17, 0x7e, 0xa6, 0xd7, 0x02, 0x98, 0xad, 0xab, 0x77,
+            0x41, 0xc3, 0x77, 0xcb, 0x09, 0x13, 0x73, 0x55, 0x3c, 0xe6, 0x89, 0xf3, 0x52, 0x5e,
+            0x75, 0x14, 0xd9, 0xb4,
         ]
     );
     assert_eq!(
         KFD_UAPI_SCHEMA_MANIFEST_SHA256,
-        "c201fe3821c4909e023499307afa6efc4b27bb9ea03be5ff470406f618b3019a"
+        "e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4"
+    );
+}
+
+#[test]
+fn memory_lifecycle_schema_composes_with_frozen_base_schema() {
+    assert_eq!(
+        KFD_MEMORY_LIFECYCLE_SCHEMA_ID,
+        "linux-kfd-memory-lifecycle-1.18-generic-ioc-v1"
+    );
+    assert_eq!(
+        KFD_UAPI_GPUVM_SOURCE_SHA256,
+        "c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d"
+    );
+    assert!(KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.contains(&format!(
+        "base_schema_manifest_sha256={KFD_UAPI_SCHEMA_MANIFEST_SHA256}\n"
+    )));
+    assert!(KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.contains(&format!(
+        "source_header_sha256={KFD_UAPI_SOURCE_HEADER_SHA256}\n"
+    )));
+    assert!(KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.contains(&format!(
+        "gpuvm_source_sha256={KFD_UAPI_GPUVM_SOURCE_SHA256}\n"
+    )));
+
+    let manifest_digest = Sha256::digest(KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST);
+    assert_eq!(
+        &manifest_digest[..],
+        &KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES
+    );
+    assert_eq!(
+        KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES,
+        [
+            0xe2, 0xd6, 0x98, 0x7b, 0x7c, 0x8e, 0x61, 0xa4, 0x05, 0xb2, 0xf7, 0x75, 0xd5, 0xd0,
+            0x04, 0xf4, 0x58, 0xa0, 0x96, 0x24, 0x14, 0x59, 0xe4, 0xcf, 0xdf, 0x90, 0xbd, 0x44,
+            0x97, 0xf4, 0xd5, 0x8a,
+        ]
+    );
+    assert_eq!(
+        KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256,
+        "e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a"
     );
 }
 
@@ -339,22 +375,6 @@ fn exact_reviewed_version_produces_admission_evidence() {
         KFD_UAPI_SCHEMA_MANIFEST_SHA256
     );
     assert_eq!(admitted.acquire_vm_request(), AMDKFD_IOC_ACQUIRE_VM);
-    assert_eq!(
-        admitted.alloc_memory_of_gpu_request(),
-        AMDKFD_IOC_ALLOC_MEMORY_OF_GPU
-    );
-    assert_eq!(
-        admitted.free_memory_of_gpu_request(),
-        AMDKFD_IOC_FREE_MEMORY_OF_GPU
-    );
-    assert_eq!(
-        admitted.map_memory_to_gpu_request(),
-        AMDKFD_IOC_MAP_MEMORY_TO_GPU
-    );
-    assert_eq!(
-        admitted.unmap_memory_from_gpu_request(),
-        AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU
-    );
     assert_eq!(
         admitted.get_process_apertures_new_request(),
         AMDKFD_IOC_GET_PROCESS_APERTURES_NEW
