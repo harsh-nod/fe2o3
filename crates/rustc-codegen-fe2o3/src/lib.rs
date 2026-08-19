@@ -203,6 +203,7 @@ enum CodegenPipeline {
     KernelIrWorkerV2,
     CollectedExecutableScalarControlFlowV2,
     CollectedFlashAttentionV1,
+    CollectedGeneralGemmV1,
     CollectedMoeTop2V1,
     CollectedRowSoftmaxV1,
     CollectedScalarGemmV1,
@@ -276,6 +277,9 @@ impl PipelineSelection {
             {
                 Self::Valid(CodegenPipeline::CollectedFlashAttentionV1)
             }
+            Some(value) if value == general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1 => {
+                Self::Valid(CodegenPipeline::CollectedGeneralGemmV1)
+            }
             Some(value) if value == collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1 => {
                 Self::Valid(CodegenPipeline::CollectedMoeTop2V1)
             }
@@ -311,9 +315,10 @@ impl PipelineSelection {
                 Self::Valid(CodegenPipeline::CollectedScopedAtomicV1)
             }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
                 collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                 collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
+                general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
                 collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
                 collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                 collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
@@ -477,10 +482,109 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
             let mut generated_host_objects = host_object::GeneratedHostObjects::default();
             let mut temporary_host_objects = TemporaryHostObjects::default();
+            let codegen_pipeline = self.config.codegen_pipeline.clone();
+            if kernel_count == 0
+                && matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(CodegenPipeline::CollectedGeneralGemmV1)
+                )
+            {
+                tcx.dcx().fatal(format!(
+                    "[rustc-codegen-fe2o3] {} found no authenticated general GEMM kernel root; no fallback or artifact reconciliation was entered",
+                    general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
+                ));
+            }
             if kernel_count > 0 {
                 let output_dir = output_dir.expect("kernel output was required above");
-                let codegen_pipeline = self.config.codegen_pipeline.clone();
                 if matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(CodegenPipeline::CollectedGeneralGemmV1)
+                ) {
+                    let qualification = (|| -> Result<_, String> {
+                        let attempt = build_attempt.ok_or_else(|| {
+                            format!(
+                                "{} requires a managed {BUILD_ATTEMPT_ENV}",
+                                general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
+                            )
+                        })?;
+                        let source = local_source.as_deref().ok_or_else(|| {
+                            "general GEMM requires an exact local crate source path".to_owned()
+                        })?;
+                        let working_directory = env::current_dir().map_err(|error| {
+                            format!("cannot identify the rustc working directory: {error}")
+                        })?;
+                        if !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty()
+                        {
+                            return Err(
+                                "general GEMM rejects caller-selected LLVM arguments or passes"
+                                    .to_owned(),
+                            );
+                        }
+                        let collection = collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let frontend_record =
+                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+                                .map_err(|error| {
+                                    format!("frontend record extraction failed: {error}")
+                                })?;
+                        if self.config.verbose {
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] validated general GEMM frontend record: {} function(s), {} canonical byte(s)",
+                                frontend_record.unit().functions().len(),
+                                frontend_record.canonical_bytes().len()
+                            );
+                        }
+                        collector::dump_device_functions(tcx, &collection.functions);
+                        let imported = collected_general_gemm_v1::try_import_general_gemm_v1(
+                            tcx,
+                            &collection,
+                            &self.config.target,
+                        )
+                        .map_err(|error| {
+                            format!("authenticated general GEMM MIR import failed: {error}")
+                        })?;
+                        let correspondence =
+                            general_gemm_pipeline_v1::consume_general_gemm_production_import_v1(
+                                imported,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        let configuration =
+                            general_gemm_pipeline_v1::PreparedGeneralGemmPipelineV1::from_environment(
+                                crate_name.as_str(),
+                                source,
+                                &working_directory,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        general_gemm_pipeline_v1::execute_general_gemm_pipeline_v1(
+                            correspondence,
+                            configuration,
+                            &self.config.target,
+                            output_dir,
+                            &producer,
+                            attempt,
+                        )
+                        .and_then(general_gemm_pipeline_v1::InertSynchronousGeneralGemmPipelineV1::qualify)
+                        .map_err(|error| error.to_string())
+                    })();
+                    match qualification {
+                        Ok(qualification) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} retained the exact authenticated source owner, ordered reference/vectorized symbolic requests, verifier closures, managed handoff bindings, and post-link observations in private pair qualification {} under managed configuration {} ({} transaction bindings); durable artifact publication remains disabled and no legacy fallback was entered",
+                            general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
+                            encode_hex(qualification.pair().identity()),
+                            encode_hex(&qualification.configuration_identity().as_bytes()),
+                            qualification.retained_managed_binding_count(),
+                        )),
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}; no durable artifact publication was entered",
+                            general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
+                        )),
+                    }
+                } else if matches!(
                     codegen_pipeline,
                     PipelineSelection::Valid(
                         CodegenPipeline::CollectedExecutableScalarControlFlowV2
@@ -1558,6 +1662,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             CodegenPipeline::CollectedFlashAttentionV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected FlashAttention V1 entered the legacy artifact transaction"
+                                        .to_owned(),
+                                })
+                            }
+                            CodegenPipeline::CollectedGeneralGemmV1 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: collected general GEMM V1 entered the legacy artifact transaction"
                                         .to_owned(),
                                 })
                             }
@@ -2736,6 +2846,10 @@ mod tests {
             PipelineSelection::Valid(CodegenPipeline::KernelIrWorkerV2)
         );
         assert_eq!(
+            PipelineSelection::from_value(Some(OsStr::new("collected-general-gemm-v1"))),
+            PipelineSelection::Valid(CodegenPipeline::CollectedGeneralGemmV1)
+        );
+        assert_eq!(
             PipelineSelection::from_value(Some(OsStr::new("collected-scalar-gemm-v1"))),
             PipelineSelection::Valid(CodegenPipeline::CollectedScalarGemmV1)
         );
@@ -2759,6 +2873,9 @@ mod tests {
             "collected-row-softmax",
             "collected_row_softmax_v1",
             "COLLECTED-ROW-SOFTMAX-V1",
+            "collected-general-gemm",
+            "collected_general_gemm_v1",
+            "COLLECTED-GENERAL-GEMM-V1",
             "true",
             "1",
         ] {
@@ -2771,6 +2888,7 @@ mod tests {
             assert!(message.contains("kernel-ir-worker-v2"));
             assert!(message.contains("collected-tiled-gemm-v1"));
             assert!(message.contains("collected-row-softmax-v1"));
+            assert!(message.contains("collected-general-gemm-v1"));
         }
     }
 

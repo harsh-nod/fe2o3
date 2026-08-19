@@ -1,11 +1,12 @@
 use super::*;
 
+use std::ffi::OsStr;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_artifact_transaction::{
     BuildInvocation, begin_build_attempt, consume_compiler_module_handoff_v1, fail_build_attempt,
-    publish_compiler_module_handoff_v1,
+    publish_compiler_module_handoff_in_slot_v1, publish_compiler_module_handoff_v1,
 };
 use fe2o3_compiler_api::{
     CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
@@ -27,6 +28,7 @@ const MEASURED_WORKER_BUILD_ID: &str =
     "fe2o3-worker-v1-sha256-1769826adfd0cc9832015371d9df79bb9128093a28be89144aa797d8155151a0";
 const MEASURED_LLVM_BUILD_ID: &str =
     "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
+const TEST_CODEGEN_BACKEND_BUILD_OBSERVATION_V2: [u8; 32] = [0x5a; 32];
 
 struct TestDirectory(PathBuf);
 
@@ -76,8 +78,6 @@ fn manifest_reader_rejects_symlinks_oversized_files_and_lexical_aliases() {
     assert!(require_closed_child_manifest_path(&lexical_alias, "configuration").is_err());
 }
 
-struct OpaqueFrontendToken(u8);
-
 fn identity(value: u8) -> [u8; 32] {
     [value; 32]
 }
@@ -102,6 +102,23 @@ fn request(
     frontend: &GeneralGemmFrontendSemanticBindingV1,
     schedule: GeneralGemmScheduleV1,
 ) -> CompileRequestV1 {
+    request_with_identity(frontend, schedule, 0x11)
+}
+
+fn request_with_identity(
+    frontend: &GeneralGemmFrontendSemanticBindingV1,
+    schedule: GeneralGemmScheduleV1,
+    request_identity: u8,
+) -> CompileRequestV1 {
+    request_with_identity_and_compiler(frontend, schedule, request_identity, 0x13)
+}
+
+fn request_with_identity_and_compiler(
+    frontend: &GeneralGemmFrontendSemanticBindingV1,
+    schedule: GeneralGemmScheduleV1,
+    request_identity: u8,
+    compiler_profile: u8,
+) -> CompileRequestV1 {
     let input = StageSnapshotV1::new(
         CompilerStageV1::FrontendInput,
         SnapshotIdentityV1::from_untrusted_bytes(identity(0x17)),
@@ -111,9 +128,9 @@ fn request(
     .unwrap();
     let obligations = general_gemm_symbolic_obligation_set_identity_v1(&input, frontend);
     CompileRequestV1::new(
-        RequestIdentityV1::from_untrusted_bytes(identity(0x11)),
+        RequestIdentityV1::from_untrusted_bytes(identity(request_identity)),
         KernelInstanceIdentityV1::from_untrusted_bytes(identity(0x12)),
-        CompilerProfileIdentityV1::from_untrusted_bytes(identity(0x13)),
+        CompilerProfileIdentityV1::from_untrusted_bytes(identity(compiler_profile)),
         TargetProfileIdentityV1::from_untrusted_bytes(identity(0x14)),
         general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
         obligations,
@@ -134,6 +151,36 @@ fn unit_with_frontend(
     frontend: GeneralGemmFrontendSemanticBindingV1,
 ) -> GeneralGemmSymbolicCompilationUnitV1 {
     let request = request(&frontend, schedule);
+    GeneralGemmSymbolicCompilationUnitV1::checked(
+        &request,
+        frontend,
+        schedule,
+        GeneralGemmLoweringLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn unit_with_request_identity(
+    schedule: GeneralGemmScheduleV1,
+    request_identity: u8,
+) -> GeneralGemmSymbolicCompilationUnitV1 {
+    let frontend = frontend();
+    let request = request_with_identity(&frontend, schedule, request_identity);
+    GeneralGemmSymbolicCompilationUnitV1::checked(
+        &request,
+        frontend,
+        schedule,
+        GeneralGemmLoweringLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn unit_with_compiler_profile(
+    schedule: GeneralGemmScheduleV1,
+    compiler_profile: u8,
+) -> GeneralGemmSymbolicCompilationUnitV1 {
+    let frontend = frontend();
+    let request = request_with_identity_and_compiler(&frontend, schedule, 0x11, compiler_profile);
     GeneralGemmSymbolicCompilationUnitV1::checked(
         &request,
         frontend,
@@ -214,6 +261,15 @@ fn local_manifest(directory: &TestDirectory) -> (PathBuf, String) {
     )
 }
 
+fn test_compile_unit(directory: &TestDirectory) -> GeneralGemmManifestCompileUnitV1<'_> {
+    GeneralGemmManifestCompileUnitV1 {
+        codegen_backend_build_observation_v2: TEST_CODEGEN_BACKEND_BUILD_OBSERVATION_V2,
+        crate_name: "general_gemm_test",
+        source: Path::new("src/lib.rs"),
+        working_directory: &directory.0,
+    }
+}
+
 fn parse_test_manifest(
     path: &Path,
     expected_identity: &str,
@@ -224,9 +280,7 @@ fn parse_test_manifest(
         expected_identity,
         Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
         &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
-        "general_gemm_test",
-        Path::new("src/lib.rs"),
-        &directory.0,
+        test_compile_unit(directory),
     )
 }
 
@@ -240,9 +294,7 @@ fn prepare_test_manifest(
         expected_identity,
         Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
         &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
-        "general_gemm_test",
-        Path::new("src/lib.rs"),
-        &directory.0,
+        test_compile_unit(directory),
     )
 }
 
@@ -267,6 +319,10 @@ fn parser_accepts_only_the_closed_qualification_pair_and_exact_fields() {
         config.runtime_closure_v2_manifest_sha256,
         GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
     );
+    assert_eq!(
+        config.codegen_backend_build_observation_v2,
+        TEST_CODEGEN_BACKEND_BUILD_OBSERVATION_V2
+    );
     assert_eq!(config.proof_timeout_seconds, 120);
     assert_eq!(hex(&config.identity.as_bytes()), expected);
 
@@ -285,6 +341,27 @@ fn parser_accepts_only_the_closed_qualification_pair_and_exact_fields() {
         Err(GeneralGemmPipelineErrorV1::Configuration(reason))
             if reason.contains("unknown, missing, or reordered")
     ));
+}
+
+#[test]
+fn backend_build_observation_requires_exact_nonzero_lowercase_sha256() {
+    let zero = "0".repeat(64);
+    let uppercase = "AA".repeat(32);
+    let short = "5a".repeat(31);
+    let valid = "5a".repeat(32);
+    for value in [
+        None,
+        Some(OsStr::new("")),
+        Some(OsStr::new(&zero)),
+        Some(OsStr::new(&uppercase)),
+        Some(OsStr::new(&short)),
+    ] {
+        assert!(parse_codegen_backend_build_observation_v2(value).is_err());
+    }
+    assert_eq!(
+        parse_codegen_backend_build_observation_v2(Some(OsStr::new(&valid))).unwrap(),
+        TEST_CODEGEN_BACKEND_BUILD_OBSERVATION_V2
+    );
 }
 
 #[test]
@@ -368,6 +445,96 @@ fn frontend_binding_substitution_is_rejected_before_proof_or_handoff() {
         Err(GeneralGemmPipelineErrorV1::FrontendBindingSubstitution)
     ));
     fail_build_attempt(&directory.0, &producer, attempt).unwrap();
+}
+
+#[test]
+fn pair_request_substitution_is_rejected_before_proof_or_handoff() {
+    let directory = TestDirectory::new("pair-request-substitution");
+    let producer = producer();
+    let attempt = begin_build_attempt(
+        &directory.0,
+        &producer,
+        BuildInvocation::from_bytes([0x88; 32]),
+        BuildSession::from_bytes([0x87; 16]),
+    )
+    .unwrap();
+    assert!(matches!(
+        validate_general_gemm_pair_inputs_v1(&[
+            unit_with_request_identity(GeneralGemmScheduleV1::ReferenceWave64Xor4V1, 0x11),
+            unit_with_request_identity(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                0x12,
+            ),
+        ]),
+        Err(GeneralGemmPipelineErrorV1::PairRequestSubstitution)
+    ));
+    for slot in [
+        CompilerModuleHandoffSlotV1::GeneralGemmReference,
+        CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
+    ] {
+        assert!(
+            consume_compiler_module_handoff_in_slot_v1(&directory.0, &producer, attempt, slot)
+                .is_err()
+        );
+    }
+    fail_build_attempt(&directory.0, &producer, attempt).unwrap();
+}
+
+#[test]
+fn backend_compiler_profile_substitution_is_rejected_before_handoff() {
+    assert!(matches!(
+        validate_general_gemm_pair_inputs_v1(&[
+            unit_with_compiler_profile(GeneralGemmScheduleV1::ReferenceWave64Xor4V1, 0x13),
+            unit_with_compiler_profile(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                0x14,
+            ),
+        ]),
+        Err(GeneralGemmPipelineErrorV1::PairRequestSubstitution)
+    ));
+}
+
+#[test]
+fn mutation_oracle_never_creates_a_handoff_and_failed_attempt_is_unclaimable() {
+    let directory = TestDirectory::new("mutation-oracle-route");
+    let producer = producer();
+    let attempt = begin_build_attempt(
+        &directory.0,
+        &producer,
+        BuildInvocation::from_bytes([0x8a; 32]),
+        BuildSession::from_bytes([0x89; 16]),
+    )
+    .unwrap();
+    let error = consume_general_gemm_production_import_v1(Some(
+        GeneralGemmMirImportV1::VerifiedMutationOracle,
+    ))
+    .expect_err("mutation oracle must remain non-executable");
+    assert!(
+        error
+            .to_string()
+            .contains("mutation oracle is non-executable")
+    );
+    for slot in [
+        CompilerModuleHandoffSlotV1::GeneralGemmReference,
+        CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
+    ] {
+        assert!(
+            consume_compiler_module_handoff_in_slot_v1(&directory.0, &producer, attempt, slot)
+                .is_err()
+        );
+    }
+    fail_build_attempt(&directory.0, &producer, attempt).unwrap();
+    assert!(
+        publish_compiler_module_handoff_in_slot_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            CompilerModuleHandoffSlotV1::GeneralGemmReference,
+            b"stale",
+        )
+        .is_err(),
+        "failed mutation-oracle attempt remained claimable"
+    );
 }
 
 #[test]
@@ -519,9 +686,7 @@ fn runtime_root_path_environment_and_manifest_substitution_are_rejected() {
             &expected,
             expected_root,
             expected_manifest,
-            "general_gemm_test",
-            Path::new("src/lib.rs"),
-            &directory.0,
+            test_compile_unit(&directory),
         ) {
             Err(error) => error,
             Ok(_) => panic!("substituted runtime pin was admitted"),
@@ -570,9 +735,7 @@ fn measured_pair_retains_one_runtime_generation_and_proof_execution_stays_closed
         &expected,
         Path::new("/opt/fe2o3/verus-runtime-v2/0.2026.08.02"),
         &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
-        "general_gemm_test",
-        Path::new("src/lib.rs"),
-        &directory.0,
+        test_compile_unit(&directory),
     )
     .unwrap();
     let producer = producer();
@@ -583,16 +746,9 @@ fn measured_pair_retains_one_runtime_generation_and_proof_execution_stays_closed
         BuildSession::from_bytes([0x82; 16]),
     )
     .unwrap();
-    let result = execute_general_gemm_pipeline_v1(
-        OpaqueFrontendToken(0x91),
-        [
-            unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1),
-            unit(GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1),
-        ],
-        config,
-        &directory.0,
-        &producer,
-        attempt,
+    let result = execute_general_gemm_verifier_closure_v1(
+        &unit(GeneralGemmScheduleV1::ReferenceWave64Xor4V1),
+        &config,
     );
     assert!(matches!(
         result,

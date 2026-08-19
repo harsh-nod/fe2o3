@@ -8,7 +8,7 @@
 
 #![allow(
     dead_code,
-    reason = "the inert orchestration shell is consumed only after the private frontend join lands"
+    reason = "the production route remains fail-closed until authenticated proof execution is available"
 )]
 
 use std::env;
@@ -24,9 +24,17 @@ use fe2o3_artifact_transaction::{
     CompilerModuleHandoffSlotV1, ProducerIdentity, consume_compiler_module_handoff_in_slot_v1,
     publish_compiler_module_handoff_in_slot_v1,
 };
+use fe2o3_compiler_api::{
+    CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
+    KernelInstanceIdentityV1, PipelineSelectorV1, RequestIdentityV1, SnapshotFormatIdentityV1,
+    SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
+};
 use fe2o3_general_gemm_compiler::{
-    GeneralGemmScheduleV1, GeneralGemmSymbolicArtifactIdentityV1,
-    GeneralGemmSymbolicCompilationUnitV1, lower_general_gemm_symbolic_structural_machine_v1,
+    GeneralGemmFrontendSemanticBindingV1, GeneralGemmLoweringLimitsV1, GeneralGemmScheduleV1,
+    GeneralGemmSymbolicArtifactIdentityV1, GeneralGemmSymbolicCompilationUnitV1,
+    general_gemm_symbolic_obligation_set_identity_v1,
+    general_gemm_symbolic_pipeline_configuration_identity_v1,
+    lower_general_gemm_symbolic_structural_machine_v1,
 };
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, OpaqueGeneralGemmPostLinkMachineObservationV1, PinnedWorkerV1,
@@ -44,10 +52,19 @@ use fe2o3_verifier::{
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::AmdGpuTarget;
+use crate::collected_general_gemm_v1::{
+    AuthenticatedGeneralGemmFrontendCorrespondenceV1, GeneralGemmMirImportV1,
+};
+use crate::general_gemm_final_join_v1::{
+    QualifiedGeneralGemmPairCompilationV1, qualify_general_gemm_pair_compilation_v1,
+};
+
 pub(crate) const GENERAL_GEMM_PIPELINE_V1: &str = "collected-general-gemm-v1";
 const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 const WORKER_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 const EXPECTED_CONFIG_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
+const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
 const RUNTIME_CLOSURE_V2_ROOT_ENV: &str = "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT";
 const RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
     "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256";
@@ -99,6 +116,13 @@ const FIXED_OPTIONS: &[(&str, &str)] = &[
     ("strip-debug", "true"),
     ("verify-each", "true"),
 ];
+const REQUEST_SNAPSHOT_FORMAT_DOMAIN_V1: &[u8] =
+    b"FE2O3/GENERAL-GEMM/RUSTC-AUTHENTICATED-SYMBOLIC-INPUT/V1\0";
+const REQUEST_SNAPSHOT_DOMAIN_V1: &[u8] =
+    b"FE2O3/GENERAL-GEMM/RUSTC-AUTHENTICATED-SYMBOLIC-SNAPSHOT/V1\0";
+const REQUEST_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/GENERAL-GEMM/RUSTC-MANAGED-PAIR-REQUEST/V1\0";
+const COMPILER_PROFILE_DOMAIN_V1: &[u8] = b"FE2O3/GENERAL-GEMM/RUSTC-COMPILER-PROFILE/V1\0";
+const TARGET_PROFILE_DOMAIN_V1: &[u8] = b"FE2O3/GENERAL-GEMM/RUSTC-TARGET-PROFILE/V1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneralGemmPipelineConfigIdentityV1([u8; 32]);
@@ -111,11 +135,20 @@ impl GeneralGemmPipelineConfigIdentityV1 {
 
 struct ParsedGeneralGemmPipelineV1 {
     identity: GeneralGemmPipelineConfigIdentityV1,
+    codegen_backend_build_observation_v2: [u8; 32],
     runtime_closure_v2_root: PathBuf,
     runtime_closure_v2_manifest_sha256: [u8; 32],
     proof_timeout_seconds: u32,
     worker: PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
+}
+
+#[derive(Clone, Copy)]
+struct GeneralGemmManifestCompileUnitV1<'a> {
+    codegen_backend_build_observation_v2: [u8; 32],
+    crate_name: &'a str,
+    source: &'a Path,
+    working_directory: &'a Path,
 }
 
 /// Independently pinned configuration and one retained runtime generation.
@@ -158,14 +191,20 @@ impl PreparedGeneralGemmPipelineV1 {
                 "{RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV} is required for in-process general GEMM"
             ))
         })?;
+        let codegen_backend_build_observation_v2 = parse_codegen_backend_build_observation_v2(
+            env::var_os(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2).as_deref(),
+        )?;
         Self::from_manifest(
             &path,
             &expected,
             Path::new(&runtime_root),
             &runtime_manifest,
-            crate_name,
-            source,
-            working_directory,
+            GeneralGemmManifestCompileUnitV1 {
+                codegen_backend_build_observation_v2,
+                crate_name,
+                source,
+                working_directory,
+            },
         )
     }
 
@@ -174,18 +213,14 @@ impl PreparedGeneralGemmPipelineV1 {
         expected_identity: &str,
         expected_runtime_closure_v2_root: &Path,
         expected_runtime_closure_v2_manifest_sha256: &str,
-        crate_name: &str,
-        source: &Path,
-        working_directory: &Path,
+        compile_unit: GeneralGemmManifestCompileUnitV1<'_>,
     ) -> Result<Self, GeneralGemmPipelineErrorV1> {
         let parsed = parse_general_gemm_manifest_v1(
             path,
             expected_identity,
             expected_runtime_closure_v2_root,
             expected_runtime_closure_v2_manifest_sha256,
-            crate_name,
-            source,
-            working_directory,
+            compile_unit,
         )?;
         let runtime_closure_v2 = GeneralGemmVerusRuntimeClosureLeaseV2::open(
             &parsed.runtime_closure_v2_root,
@@ -220,6 +255,10 @@ impl PreparedGeneralGemmPipelineV1 {
         self.parsed.proof_timeout_seconds
     }
 
+    pub(crate) const fn codegen_backend_build_observation_v2(&self) -> [u8; 32] {
+        self.parsed.codegen_backend_build_observation_v2
+    }
+
     fn revalidate_runtime_closure_v2(
         &self,
         boundary: &'static str,
@@ -240,10 +279,13 @@ fn parse_general_gemm_manifest_v1(
     expected_identity: &str,
     expected_runtime_closure_v2_root: &Path,
     expected_runtime_closure_v2_manifest_sha256: &str,
-    crate_name: &str,
-    source: &Path,
-    working_directory: &Path,
+    compile_unit: GeneralGemmManifestCompileUnitV1<'_>,
 ) -> Result<ParsedGeneralGemmPipelineV1, GeneralGemmPipelineErrorV1> {
+    if compile_unit.codegen_backend_build_observation_v2 == [0; 32] {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
+            "{CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2} must not be zero"
+        )));
+    }
     require_absolute_path(path, "configuration")?;
     require_closed_child_manifest_path(path, "configuration")?;
     let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
@@ -284,9 +326,9 @@ fn parse_general_gemm_manifest_v1(
     parse_fixed_options(required_value(root, "link_options", "configuration")?)?;
     require_selected_unit(
         required_value(root, "units", "configuration")?,
-        crate_name,
-        source,
-        working_directory,
+        compile_unit.crate_name,
+        compile_unit.source,
+        compile_unit.working_directory,
     )?;
     let schedule_object = exact_object(
         required_value(root, "general_gemm_v1", "configuration")?,
@@ -368,6 +410,7 @@ fn parse_general_gemm_manifest_v1(
     }
     Ok(ParsedGeneralGemmPipelineV1 {
         identity,
+        codegen_backend_build_observation_v2: compile_unit.codegen_backend_build_observation_v2,
         runtime_closure_v2_root,
         runtime_closure_v2_manifest_sha256,
         proof_timeout_seconds: proof_timeout_seconds as u32,
@@ -496,45 +539,81 @@ impl InertGeneralGemmScheduleQualificationV1 {
     }
 }
 
-/// Inert owning result retained until rustc's private final join is connected.
+/// Inert owning result retained until rustc's private final join consumes it.
 ///
-/// There is deliberately no constructor other than [`execute_general_gemm_pipeline_v1`].
-#[allow(dead_code)]
-pub(crate) struct InertSynchronousGeneralGemmPipelineV1<FrontendCorrespondence> {
-    frontend_correspondence: FrontendCorrespondence,
+/// The frontend field is deliberately the concrete non-Clone correspondence,
+/// not an arbitrary caller-selected token.
+pub(crate) struct InertSynchronousGeneralGemmPipelineV1 {
+    frontend_correspondence: AuthenticatedGeneralGemmFrontendCorrespondenceV1,
     configuration: PreparedGeneralGemmPipelineV1,
     qualifications: [InertGeneralGemmScheduleQualificationV1; 2],
 }
 
-#[allow(dead_code)]
-impl<FrontendCorrespondence> InertSynchronousGeneralGemmPipelineV1<FrontendCorrespondence> {
-    pub(crate) fn into_join_inputs(
+impl InertSynchronousGeneralGemmPipelineV1 {
+    /// Performs the private seven-owner join while retaining the exact managed
+    /// configuration and both handoff transaction bindings beside the result.
+    pub(crate) fn qualify(
         self,
-    ) -> (
-        FrontendCorrespondence,
-        PreparedGeneralGemmPipelineV1,
-        [InertGeneralGemmScheduleQualificationV1; 2],
-    ) {
-        (
-            self.frontend_correspondence,
-            self.configuration,
-            self.qualifications,
+    ) -> Result<QualifiedSynchronousGeneralGemmPipelineV1, GeneralGemmPipelineErrorV1> {
+        let Self {
+            frontend_correspondence,
+            configuration,
+            qualifications: [reference, vectorized],
+        } = self;
+        let (reference_symbolic, reference_verifier, reference_managed, reference_machine) =
+            reference.into_join_inputs();
+        let (vectorized_symbolic, vectorized_verifier, vectorized_managed, vectorized_machine) =
+            vectorized.into_join_inputs();
+        validate_general_gemm_managed_pair_v1(&reference_managed, &vectorized_managed)?;
+        let pair = qualify_general_gemm_pair_compilation_v1(
+            frontend_correspondence,
+            reference_symbolic,
+            reference_verifier.into_closure(),
+            reference_machine,
+            vectorized_symbolic,
+            vectorized_verifier.into_closure(),
+            vectorized_machine,
         )
+        .map_err(|error| GeneralGemmPipelineErrorV1::FinalJoin(error.to_string()))?;
+        Ok(QualifiedSynchronousGeneralGemmPipelineV1 {
+            configuration,
+            managed: [reference_managed, vectorized_managed],
+            pair,
+        })
+    }
+}
+
+/// Complete same-process owner retained by the fatal production checkpoint.
+pub(crate) struct QualifiedSynchronousGeneralGemmPipelineV1 {
+    configuration: PreparedGeneralGemmPipelineV1,
+    managed: [GeneralGemmManagedPipelineBindingsV1; 2],
+    pair: QualifiedGeneralGemmPairCompilationV1,
+}
+
+impl QualifiedSynchronousGeneralGemmPipelineV1 {
+    pub(crate) const fn pair(&self) -> &QualifiedGeneralGemmPairCompilationV1 {
+        &self.pair
+    }
+
+    pub(crate) const fn configuration_identity(&self) -> GeneralGemmPipelineConfigIdentityV1 {
+        self.configuration.identity()
+    }
+
+    pub(crate) fn retained_managed_binding_count(&self) -> usize {
+        self.managed.len()
     }
 }
 
 /// Synchronously proves, lowers, executes, and inspects the exact ordered schedule pair while
-/// retaining the caller's opaque frontend correspondence in this rustc process.
-#[allow(dead_code)]
-pub(crate) fn execute_general_gemm_pipeline_v1<FrontendCorrespondence>(
-    frontend_correspondence: FrontendCorrespondence,
-    units: [GeneralGemmSymbolicCompilationUnitV1; 2],
+/// retaining the authenticated frontend correspondence in this rustc process.
+pub(crate) fn execute_general_gemm_pipeline_v1(
+    frontend_correspondence: AuthenticatedGeneralGemmFrontendCorrespondenceV1,
     configuration: PreparedGeneralGemmPipelineV1,
+    target: &AmdGpuTarget,
     output_directory: &Path,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
-) -> Result<InertSynchronousGeneralGemmPipelineV1<FrontendCorrespondence>, GeneralGemmPipelineErrorV1>
-{
+) -> Result<InertSynchronousGeneralGemmPipelineV1, GeneralGemmPipelineErrorV1> {
     if attempt.session() == BuildSession::DIRECT {
         return Err(GeneralGemmPipelineErrorV1::ManagedBinding(
             "general GEMM requires a non-direct managed build attempt".to_owned(),
@@ -545,6 +624,12 @@ pub(crate) fn execute_general_gemm_pipeline_v1<FrontendCorrespondence>(
             "general GEMM requires the managed artifact output".to_owned(),
         ));
     }
+    let units = derive_general_gemm_symbolic_pair_v1(
+        &frontend_correspondence,
+        &configuration,
+        target,
+        attempt,
+    )?;
     validate_general_gemm_pair_inputs_v1(&units)?;
     configuration.revalidate_runtime_closure_v2(RUNTIME_CLOSURE_V2_PAIR_BOUNDARIES[1])?;
 
@@ -582,6 +667,159 @@ pub(crate) fn execute_general_gemm_pipeline_v1<FrontendCorrespondence>(
     })
 }
 
+/// Consumes only a positive receipt. Mutation oracles and non-GEMM collections
+/// cannot be relabeled as production frontend correspondence.
+pub(crate) fn consume_general_gemm_production_import_v1(
+    imported: Option<GeneralGemmMirImportV1>,
+) -> Result<AuthenticatedGeneralGemmFrontendCorrespondenceV1, GeneralGemmPipelineErrorV1> {
+    match imported {
+        Some(GeneralGemmMirImportV1::VerifiedTemplate(receipt)) => (*receipt)
+            .into_verified_template()
+            .map_err(|error| GeneralGemmPipelineErrorV1::Frontend(error.to_string())),
+        Some(GeneralGemmMirImportV1::VerifiedMutationOracle) => {
+            Err(GeneralGemmPipelineErrorV1::Frontend(
+                "the proof-sensitive mutation oracle is non-executable and cannot issue production frontend correspondence"
+                    .to_owned(),
+            ))
+        }
+        Some(GeneralGemmMirImportV1::Rejected(diagnostic)) => {
+            Err(GeneralGemmPipelineErrorV1::Frontend(format!(
+                "authenticated semantic counterexample: {diagnostic}"
+            )))
+        }
+        None => Err(GeneralGemmPipelineErrorV1::Frontend(
+            "the selected general-GEMM production route found no authenticated general GEMM root"
+                .to_owned(),
+        )),
+    }
+}
+
+fn derive_general_gemm_symbolic_pair_v1(
+    frontend: &AuthenticatedGeneralGemmFrontendCorrespondenceV1,
+    configuration: &PreparedGeneralGemmPipelineV1,
+    target: &AmdGpuTarget,
+    attempt: BuildAttempt,
+) -> Result<[GeneralGemmSymbolicCompilationUnitV1; 2], GeneralGemmPipelineErrorV1> {
+    if !frontend.revalidate() {
+        return Err(GeneralGemmPipelineErrorV1::Frontend(
+            "authenticated frontend correspondence failed owner revalidation".to_owned(),
+        ));
+    }
+    if attempt.session() == BuildSession::DIRECT {
+        return Err(GeneralGemmPipelineErrorV1::ManagedBinding(
+            "symbolic request derivation requires a managed build attempt".to_owned(),
+        ));
+    }
+
+    let binding = frontend.binding();
+    let frontend_identity = frontend.identity();
+    let binding_identity = binding.identity();
+    let configuration_bytes = configuration.identity().as_bytes();
+    let codegen_backend_build_observation_v2 = configuration.codegen_backend_build_observation_v2();
+    let generation_bytes = attempt.generation().to_le_bytes();
+    let session = attempt.session();
+    let invocation = attempt.invocation();
+    let context_fields: [&[u8]; 12] = [
+        frontend_identity.as_bytes(),
+        binding_identity.as_bytes(),
+        binding.kernel_instance_identity(),
+        binding.compiled_source_identity(),
+        binding.provider_semantics_identity(),
+        binding.frontend_abi_identity(),
+        &configuration_bytes,
+        &generation_bytes,
+        session.as_bytes(),
+        invocation.as_bytes(),
+        target.as_str().as_bytes(),
+        &codegen_backend_build_observation_v2,
+    ];
+    let request_identity = identity_from_fields(REQUEST_IDENTITY_DOMAIN_V1, &context_fields);
+    let compiler_profile = identity_from_fields(COMPILER_PROFILE_DOMAIN_V1, &context_fields);
+    let target_profile = identity_from_fields(
+        TARGET_PROFILE_DOMAIN_V1,
+        &[
+            target.as_str().as_bytes(),
+            &configuration_bytes,
+            invocation.as_bytes(),
+        ],
+    );
+    let snapshot_format = identity_from_fields(REQUEST_SNAPSHOT_FORMAT_DOMAIN_V1, &[]);
+    let snapshot_bytes = encode_authenticated_symbolic_input_v1(&context_fields);
+    let snapshot_identity = identity_from_fields(REQUEST_SNAPSHOT_DOMAIN_V1, &[&snapshot_bytes]);
+    let compile_limits = CompileLimitsV1::default();
+    let lowering_limits = GeneralGemmLoweringLimitsV1::default();
+
+    let derive = |schedule| {
+        let projected = project_authenticated_frontend_binding_v1(frontend)?;
+        let input = StageSnapshotV1::new(
+            CompilerStageV1::FrontendInput,
+            SnapshotIdentityV1::from_untrusted_bytes(snapshot_identity),
+            SnapshotFormatIdentityV1::from_untrusted_bytes(snapshot_format),
+            snapshot_bytes.clone(),
+        )
+        .map_err(|error| GeneralGemmPipelineErrorV1::RequestDerivation(error.to_string()))?;
+        let obligations = general_gemm_symbolic_obligation_set_identity_v1(&input, &projected);
+        let request = CompileRequestV1::new(
+            RequestIdentityV1::from_untrusted_bytes(request_identity),
+            KernelInstanceIdentityV1::from_untrusted_bytes(*binding.kernel_instance_identity()),
+            CompilerProfileIdentityV1::from_untrusted_bytes(compiler_profile),
+            TargetProfileIdentityV1::from_untrusted_bytes(target_profile),
+            general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
+            obligations,
+            PipelineSelectorV1::PlironV1,
+            input,
+            compile_limits,
+        )
+        .map_err(|error| GeneralGemmPipelineErrorV1::RequestDerivation(error.to_string()))?;
+        GeneralGemmSymbolicCompilationUnitV1::checked(
+            &request,
+            projected,
+            schedule,
+            lowering_limits,
+        )
+        .map_err(|error| GeneralGemmPipelineErrorV1::RequestDerivation(error.to_string()))
+    };
+
+    Ok([
+        derive(GENERAL_GEMM_QUALIFICATION_SCHEDULES_V1[0])?,
+        derive(GENERAL_GEMM_QUALIFICATION_SCHEDULES_V1[1])?,
+    ])
+}
+
+fn project_authenticated_frontend_binding_v1(
+    frontend: &AuthenticatedGeneralGemmFrontendCorrespondenceV1,
+) -> Result<GeneralGemmFrontendSemanticBindingV1, GeneralGemmPipelineErrorV1> {
+    let binding = frontend.binding();
+    GeneralGemmFrontendSemanticBindingV1::from_consumed_frontend_receipt_observation(
+        *binding.kernel_instance_identity(),
+        *binding.compiled_source_identity(),
+        *binding.provider_semantics_identity(),
+        *binding.frontend_abi_identity(),
+        binding.symbolic_plan(),
+        binding.symbolic_kir(),
+    )
+    .map_err(|error| GeneralGemmPipelineErrorV1::RequestDerivation(format!("{error:?}")))
+}
+
+fn encode_authenticated_symbolic_input_v1(fields: &[&[u8]]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(REQUEST_SNAPSHOT_FORMAT_DOMAIN_V1);
+    for field in fields {
+        bytes.extend_from_slice(&(field.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(field);
+    }
+    bytes
+}
+
+fn identity_from_fields(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    update_identity(&mut hash, domain);
+    for field in fields {
+        update_identity(&mut hash, field);
+    }
+    hash.finalize().into()
+}
+
 fn validate_general_gemm_pair_inputs_v1(
     units: &[GeneralGemmSymbolicCompilationUnitV1; 2],
 ) -> Result<(), GeneralGemmPipelineErrorV1> {
@@ -592,6 +830,44 @@ fn validate_general_gemm_pair_inputs_v1(
     }
     if units[0].frontend_semantics() != units[1].frontend_semantics() {
         return Err(GeneralGemmPipelineErrorV1::FrontendBindingSubstitution);
+    }
+    let reference = units[0].request();
+    let vectorized = units[1].request();
+    if reference.identity() != vectorized.identity()
+        || reference.kernel_instance_identity() != vectorized.kernel_instance_identity()
+        || reference.input() != vectorized.input()
+        || reference.input_obligations_identity() != vectorized.input_obligations_identity()
+        || reference.compiler_profile_identity() != vectorized.compiler_profile_identity()
+        || reference.target_profile_identity() != vectorized.target_profile_identity()
+        || reference.selector() != vectorized.selector()
+        || reference.limits() != vectorized.limits()
+        || units[0].toolchain_route_identity() != units[1].toolchain_route_identity()
+        || units[0].limits() != units[1].limits()
+    {
+        return Err(GeneralGemmPipelineErrorV1::PairRequestSubstitution);
+    }
+    Ok(())
+}
+
+fn validate_general_gemm_managed_pair_v1(
+    reference: &GeneralGemmManagedPipelineBindingsV1,
+    vectorized: &GeneralGemmManagedPipelineBindingsV1,
+) -> Result<(), GeneralGemmPipelineErrorV1> {
+    if reference.output_directory != vectorized.output_directory
+        || reference.producer != vectorized.producer
+        || reference.attempt != vectorized.attempt
+        || reference.slot != CompilerModuleHandoffSlotV1::GeneralGemmReference
+        || vectorized.slot != CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly
+        || reference.handoff_receipt.attempt() != reference.attempt
+        || vectorized.handoff_receipt.attempt() != vectorized.attempt
+        || reference.handoff_receipt.slot() != reference.slot
+        || vectorized.handoff_receipt.slot() != vectorized.slot
+        || reference.handoff_receipt.identity() != reference.consumed_handoff
+        || vectorized.handoff_receipt.identity() != vectorized.consumed_handoff
+    {
+        return Err(GeneralGemmPipelineErrorV1::ManagedBinding(
+            "ordered qualification pair lost its exact managed transaction binding".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -748,15 +1024,19 @@ pub(crate) enum GeneralGemmPipelineErrorV1 {
         error: GeneralGemmRuntimeClosureErrorV2,
     },
     RuntimeClosureBindingSubstitution,
+    Frontend(String),
+    RequestDerivation(String),
     ManagedBinding(String),
     ScheduleSubstitution,
     FrontendBindingSubstitution,
+    PairRequestSubstitution,
     Lowering(String),
     Transaction(String),
     Worker(String),
     Finalizer(String),
     Verifier(String),
     ObservationSubstitution,
+    FinalJoin(String),
 }
 
 impl fmt::Display for GeneralGemmPipelineErrorV1 {
@@ -774,12 +1054,27 @@ impl fmt::Display for GeneralGemmPipelineErrorV1 {
             Self::RuntimeClosureBindingSubstitution => {
                 formatter.write_str("general-GEMM retained runtime closure binding substitution")
             }
+            Self::Frontend(reason) => {
+                write!(
+                    formatter,
+                    "general-GEMM frontend admission failed: {reason}"
+                )
+            }
+            Self::RequestDerivation(reason) => {
+                write!(
+                    formatter,
+                    "general-GEMM managed request derivation failed: {reason}"
+                )
+            }
             Self::ManagedBinding(reason) => {
                 write!(formatter, "invalid general-GEMM managed binding: {reason}")
             }
             Self::ScheduleSubstitution => formatter.write_str("general-GEMM schedule substitution"),
             Self::FrontendBindingSubstitution => {
                 formatter.write_str("general-GEMM frontend binding substitution")
+            }
+            Self::PairRequestSubstitution => {
+                formatter.write_str("general-GEMM qualification pair request substitution")
             }
             Self::Lowering(reason) => write!(formatter, "general-GEMM lowering failed: {reason}"),
             Self::Transaction(reason) => write!(
@@ -791,6 +1086,12 @@ impl fmt::Display for GeneralGemmPipelineErrorV1 {
             Self::Verifier(reason) => write!(formatter, "general-GEMM verifier failed: {reason}"),
             Self::ObservationSubstitution => {
                 formatter.write_str("general-GEMM post-link observation substitution")
+            }
+            Self::FinalJoin(reason) => {
+                write!(
+                    formatter,
+                    "general-GEMM private final join failed: {reason}"
+                )
             }
         }
     }
@@ -984,6 +1285,23 @@ fn required_u64(
                 "{context}.{name} must be an unsigned integer"
             ))
         })
+}
+
+fn parse_codegen_backend_build_observation_v2(
+    value: Option<&std::ffi::OsStr>,
+) -> Result<[u8; 32], GeneralGemmPipelineErrorV1> {
+    let value = value.and_then(std::ffi::OsStr::to_str).ok_or_else(|| {
+        GeneralGemmPipelineErrorV1::Configuration(format!(
+            "{CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2} is required and must be valid UTF-8"
+        ))
+    })?;
+    let observation = decode_sha256(value, CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)?;
+    if observation == [0; 32] {
+        return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
+            "{CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2} must not be zero"
+        )));
+    }
+    Ok(observation)
 }
 
 fn decode_sha256(value: &str, context: &str) -> Result<[u8; 32], GeneralGemmPipelineErrorV1> {
