@@ -10,7 +10,6 @@ use fe2o3_verifier::{
 const MODEL: &str = include_str!("../verus/general_gemm_schedule_model_v1.rs");
 const REFERENCE: &str = include_str!("../verus/general_gemm_reference_schedule_v1.rs");
 const VECTORIZED: &str = include_str!("../verus/general_gemm_vectorized_schedule_v1.rs");
-const RUNTIME_WRAPPER: &str = include_str!("../verus/general_gemm_runtime_wrapper_v2.rs");
 const VECTOR_TAIL_WRONG: &str = include_str!("../verus/negative/general_gemm_vector_tail_wrong.rs");
 const EPILOGUE_WRONG: &str = include_str!("../verus/negative/general_gemm_epilogue_wrong.rs");
 const MACHINE_CLAIM_WRONG: &str =
@@ -107,7 +106,6 @@ fn proof_sources_have_no_trusted_escape_and_name_a_only_vectorization() {
         MODEL,
         REFERENCE,
         VECTORIZED,
-        RUNTIME_WRAPPER,
         VECTOR_TAIL_WRONG,
         EPILOGUE_WRONG,
         MACHINE_CLAIM_WRONG,
@@ -124,8 +122,9 @@ fn proof_sources_have_no_trusted_escape_and_name_a_only_vectorization() {
     assert!(MODEL.contains("VectorizedAOnlyBf16GlobalTransfer"));
     assert!(!MODEL.contains("vector4_b"));
     assert!(MODEL.contains("machine_refinement_complete_v1() -> bool { false }"));
-    assert!(RUNTIME_WRAPPER.contains("/proc/self/fd/188"));
-    assert!(RUNTIME_WRAPPER.contains("/proc/self/fd/189"));
+    assert!(REFERENCE.contains("#[path = \"general_gemm_schedule_model_v1.rs\"]"));
+    assert!(VECTORIZED.contains("#[path = \"general_gemm_schedule_model_v1.rs\"]"));
+    assert!(VECTOR_TAIL_WRONG.contains("#[path = \"../general_gemm_schedule_model_v1.rs\"]"));
 }
 
 #[test]
@@ -167,9 +166,9 @@ fn root_owned_retained_runtime_executes_exact_positive_and_negative_suite() {
         assert_eq!(evidence.positive_output().stderr_bytes(), 0);
         let expected_negative_stderr =
             if schedule == GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1 {
-                &[492, 429][..]
+                &[532, 474][..]
             } else {
-                &[469, 492, 429][..]
+                &[512, 532, 474][..]
             };
         assert_eq!(
             evidence

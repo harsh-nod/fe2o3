@@ -81,6 +81,7 @@ source_for_file() {
     local toolchain=$3
     case "$relative" in
         dist/*) printf '%s/%s\n' "$distribution" "${relative#dist/}" ;;
+        proof/*) printf '%s/%s\n' "$REPOSITORY_ROOT/crates/fe2o3-verifier/verus" "${relative#proof/}" ;;
         toolchain/*) printf '%s/%s\n' "$toolchain" "${relative#toolchain/}" ;;
         system-lib/*) system_source "$relative" ;;
         *) die "manifest file is outside the closed layout: $relative" ;;

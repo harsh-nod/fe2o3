@@ -22,8 +22,8 @@ pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME: &str =
 
 /// SHA-256 of the byte-canonical reviewed runtime manifest.
 pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256: [u8; 32] = [
-    0xbc, 0x5d, 0x19, 0x49, 0x29, 0xee, 0x4a, 0x1b, 0x57, 0xeb, 0x5b, 0xcc, 0x30, 0x36, 0xb4, 0xe9,
-    0x34, 0x14, 0x59, 0x2f, 0x0e, 0xff, 0x5a, 0x75, 0x08, 0x35, 0x58, 0x7e, 0x14, 0xd3, 0x41, 0x98,
+    0x61, 0xa1, 0x5c, 0x5d, 0xa7, 0x75, 0xd9, 0x0f, 0x0b, 0x0c, 0x90, 0x9d, 0x74, 0x38, 0x3d, 0x1c,
+    0x1c, 0xfb, 0xf0, 0xea, 0x9f, 0x0b, 0x20, 0x97, 0xd5, 0x6c, 0x9e, 0xf5, 0xef, 0xf9, 0x54, 0x5f,
 ];
 
 const MANIFEST_BYTES: &[u8] =
@@ -128,11 +128,36 @@ pub struct GeneralGemmVerusRuntimeClosureLeaseV2 {
     retained: linux::RetainedRuntimeClosureV2,
 }
 
-/// One immutable wrapper, model, and proof-body input set.
-pub(crate) struct GeneralGemmSealedProofInputV2 {
-    identity: [u8; 32],
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    sealed: linux::SealedProofInputV2,
+/// One exact proof source selected from the reviewed retained closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GeneralGemmProofSourceV2 {
+    Reference,
+    Vectorized,
+    VectorTailWrong,
+    EpilogueWrong,
+    MachineClaimWrong,
+}
+
+impl GeneralGemmProofSourceV2 {
+    pub(crate) const fn relative_to_proof_directory(self) -> &'static str {
+        match self {
+            Self::Reference => "general_gemm_reference_schedule_v1.rs",
+            Self::Vectorized => "general_gemm_vectorized_schedule_v1.rs",
+            Self::VectorTailWrong => "negative/general_gemm_vector_tail_wrong.rs",
+            Self::EpilogueWrong => "negative/general_gemm_epilogue_wrong.rs",
+            Self::MachineClaimWrong => "negative/general_gemm_machine_claim_wrong.rs",
+        }
+    }
+
+    pub(crate) const fn embedded_bytes(self) -> &'static [u8] {
+        match self {
+            Self::Reference => GENERAL_GEMM_REFERENCE_SOURCE,
+            Self::Vectorized => GENERAL_GEMM_VECTORIZED_SOURCE,
+            Self::VectorTailWrong => GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE,
+            Self::EpilogueWrong => GENERAL_GEMM_EPILOGUE_WRONG_SOURCE,
+            Self::MachineClaimWrong => GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
+        }
+    }
 }
 
 /// Bounded output from one directly executed retained `rust_verify` process.
@@ -214,68 +239,22 @@ impl GeneralGemmVerusRuntimeClosureLeaseV2 {
         }
     }
 
-    pub(crate) fn seal_proof_input(
-        wrapper: &[u8],
-        model: &[u8],
-        proof: &[u8],
-    ) -> Result<GeneralGemmSealedProofInputV2, GeneralGemmRuntimeClosureErrorV2> {
-        let identity = proof_input_identity(wrapper, model, proof);
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        {
-            let sealed = linux::SealedProofInputV2::new(wrapper, model, proof)?;
-            let input = GeneralGemmSealedProofInputV2 { identity, sealed };
-            input.revalidate()?;
-            Ok(input)
-        }
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        {
-            let _ = (wrapper, model, proof, identity);
-            Err(GeneralGemmRuntimeClosureErrorV2::new(
-                GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
-                "sealed general GEMM proof inputs require Linux x86-64",
-            ))
-        }
-    }
-
     pub(crate) fn execute_rust_verify(
         &self,
-        input: &GeneralGemmSealedProofInputV2,
+        source: GeneralGemmProofSourceV2,
         deadline: Instant,
         output_limit: usize,
     ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
         self.revalidate()?;
-        input.revalidate()?;
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let result =
-            linux::execute_rust_verify(&self.retained, &input.sealed, deadline, output_limit);
+        let result = linux::execute_rust_verify(&self.retained, source, deadline, output_limit);
         #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
         let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
             GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
             "direct retained rust_verify execution requires Linux x86-64",
         ));
         self.revalidate()?;
-        input.revalidate()?;
         result
-    }
-}
-
-impl GeneralGemmSealedProofInputV2 {
-    pub(crate) const fn identity(&self) -> [u8; 32] {
-        self.identity
-    }
-
-    fn revalidate(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        {
-            self.sealed.revalidate(self.identity)
-        }
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        {
-            Err(GeneralGemmRuntimeClosureErrorV2::new(
-                GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
-                "sealed general GEMM proof inputs require Linux x86-64",
-            ))
-        }
     }
 }
 
@@ -287,19 +266,50 @@ fn closure_identity() -> GeneralGemmRuntimeClosureIdentityV2 {
     GeneralGemmRuntimeClosureIdentityV2(digest.finalize().into())
 }
 
-fn proof_input_identity(wrapper: &[u8], model: &[u8], proof: &[u8]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"fe2o3-general-gemm-sealed-proof-input-v2\0");
-    put_blob(&mut digest, wrapper);
-    put_blob(&mut digest, model);
-    put_blob(&mut digest, proof);
-    digest.finalize().into()
-}
-
 fn put_blob(digest: &mut Sha256, value: &[u8]) {
     digest.update((value.len() as u64).to_le_bytes());
     digest.update(value);
 }
+
+const GENERAL_GEMM_MODEL_SOURCE: &[u8] =
+    include_bytes!("../verus/general_gemm_schedule_model_v1.rs");
+const GENERAL_GEMM_REFERENCE_SOURCE: &[u8] =
+    include_bytes!("../verus/general_gemm_reference_schedule_v1.rs");
+const GENERAL_GEMM_VECTORIZED_SOURCE: &[u8] =
+    include_bytes!("../verus/general_gemm_vectorized_schedule_v1.rs");
+const GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_vector_tail_wrong.rs");
+const GENERAL_GEMM_EPILOGUE_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_epilogue_wrong.rs");
+const GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE: &[u8] =
+    include_bytes!("../verus/negative/general_gemm_machine_claim_wrong.rs");
+
+const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 6] = [
+    (
+        "proof/general_gemm_reference_schedule_v1.rs",
+        GENERAL_GEMM_REFERENCE_SOURCE,
+    ),
+    (
+        "proof/general_gemm_schedule_model_v1.rs",
+        GENERAL_GEMM_MODEL_SOURCE,
+    ),
+    (
+        "proof/general_gemm_vectorized_schedule_v1.rs",
+        GENERAL_GEMM_VECTORIZED_SOURCE,
+    ),
+    (
+        "proof/negative/general_gemm_epilogue_wrong.rs",
+        GENERAL_GEMM_EPILOGUE_WRONG_SOURCE,
+    ),
+    (
+        "proof/negative/general_gemm_machine_claim_wrong.rs",
+        GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
+    ),
+    (
+        "proof/negative/general_gemm_vector_tail_wrong.rs",
+        GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE,
+    ),
+];
 
 fn validate_absolute_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
     if !path.is_absolute()
@@ -449,7 +459,9 @@ impl ManifestV2 {
             sha256: decode_sha256(interpreter_fields[4])?,
             links: Vec::new(),
         };
-        parse_remaining_manifest(lines, interpreter)
+        let manifest = parse_remaining_manifest(lines, interpreter)?;
+        validate_reviewed_general_gemm_sources(&manifest.files)?;
+        Ok(manifest)
     }
 
     #[cfg(test)]
@@ -469,6 +481,26 @@ impl ManifestV2 {
             interpreter: None,
         }
     }
+}
+
+fn validate_reviewed_general_gemm_sources(
+    files: &[FileSpecV2],
+) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    for (path, bytes) in REVIEWED_GENERAL_GEMM_SOURCES {
+        let specification = files
+            .iter()
+            .find(|specification| specification.path == Path::new(path))
+            .ok_or_else(|| invalid_manifest("reviewed general GEMM source is absent"))?;
+        if specification.mode != 0o444
+            || specification.size != Some(bytes.len() as u64)
+            || specification.sha256 != <[u8; 32]>::from(Sha256::digest(bytes))
+        {
+            return Err(invalid_manifest(
+                "reviewed general GEMM source identity differs",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_remaining_manifest(
@@ -716,14 +748,31 @@ mod tests {
     #[test]
     fn reviewed_manifest_and_target_pins_are_canonical() {
         let manifest = ManifestV2::parse_reviewed().unwrap();
-        assert_eq!(manifest.directories.len(), 8);
-        assert_eq!(manifest.files.len(), 80);
+        assert_eq!(manifest.directories.len(), 10);
+        assert_eq!(manifest.files.len(), 86);
         assert!(manifest.interpreter.is_some());
         assert_eq!(
             Sha256::digest(MANIFEST_BYTES).as_slice(),
             GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
         );
         assert_ne!(closure_identity().as_bytes(), [0; 32]);
+    }
+
+    #[test]
+    fn reviewed_proof_source_substitution_invalidates_the_manifest_contract() {
+        let mut manifest = ManifestV2::parse_reviewed().unwrap();
+        let source = manifest
+            .files
+            .iter_mut()
+            .find(|source| source.path == Path::new("proof/general_gemm_reference_schedule_v1.rs"))
+            .unwrap();
+        source.sha256[0] ^= 1;
+        assert_eq!(
+            validate_reviewed_general_gemm_sources(&manifest.files)
+                .unwrap_err()
+                .kind(),
+            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest
+        );
     }
 
     #[test]

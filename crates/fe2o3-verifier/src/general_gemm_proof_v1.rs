@@ -2,7 +2,7 @@
 //!
 //! The legacy launcher-path API remains fail-closed. A separate V2 entry point
 //! accepts only the exact retained runtime closure admitted beneath the protected
-//! `/opt` installation root, executes sealed proof inputs, and returns model-local
+//! `/opt` installation root, executes exact retained proof sources, and returns model-local
 //! evidence that grants no compiler, artifact, load, or launch authority.
 
 use std::{
@@ -14,8 +14,8 @@ use std::{
 use sha2::{Digest as _, Sha256};
 
 use crate::general_gemm_runtime_closure_v2::{
-    GeneralGemmRuntimeClosureErrorKindV2, GeneralGemmRuntimeClosureErrorV2,
-    GeneralGemmRuntimeProcessOutputV2, GeneralGemmSealedProofInputV2,
+    GeneralGemmProofSourceV2, GeneralGemmRuntimeClosureErrorKindV2,
+    GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeProcessOutputV2,
     GeneralGemmVerusRuntimeClosureLeaseV2,
 };
 
@@ -37,45 +37,44 @@ const SOURCE_CLOSURE_DOMAIN_V2: &[u8] = b"fe2o3-general-gemm-proof-source-closur
 const EXECUTION_OUTPUT_DOMAIN_V2: &[u8] = b"fe2o3-general-gemm-proof-output-v2\0";
 
 const MODEL_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_schedule_model_v1.rs");
+#[cfg(test)]
 const REFERENCE_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_reference_schedule_v1.rs");
+#[cfg(test)]
 const VECTORIZED_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_vectorized_schedule_v1.rs");
+#[cfg(test)]
 const VECTOR_TAIL_WRONG_SOURCE: &[u8] =
     include_bytes!("../verus/negative/general_gemm_vector_tail_wrong.rs");
+#[cfg(test)]
 const EPILOGUE_WRONG_SOURCE: &[u8] =
     include_bytes!("../verus/negative/general_gemm_epilogue_wrong.rs");
+#[cfg(test)]
 const MACHINE_CLAIM_WRONG_SOURCE: &[u8] =
     include_bytes!("../verus/negative/general_gemm_machine_claim_wrong.rs");
-const RUNTIME_WRAPPER_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_runtime_wrapper_v2.rs");
-
-const LOCAL_MODEL_DECLARATION: &[u8] =
-    b"#[path = \"general_gemm_schedule_model_v1.rs\"]\nmod model;\n";
-const PARENT_MODEL_DECLARATION: &[u8] =
-    b"#[path = \"../general_gemm_schedule_model_v1.rs\"]\nmod model;\n";
-const RETAINED_MODEL_IMPORT: &[u8] = b"use crate::model;\n";
 
 const POSITIVE_STDOUT: &[u8] = b"verification results:: 28 verified, 0 errors\n";
-const NEGATIVE_STDOUT: &[u8] = b"verification results:: 22 verified, 1 errors\n";
+const MODEL_NEGATIVE_STDOUT: &[u8] = b"verification results:: 22 verified, 1 errors\n";
+const EPILOGUE_NEGATIVE_STDOUT: &[u8] = b"verification results:: 1 verified, 1 errors\n";
 
 const VECTOR_TAIL_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
-  --> /proc/self/fd/189:23:9
+  --> /proc/self/fd/186/negative/general_gemm_vector_tail_wrong.rs:24:9
    |
- 9 | / pub proof fn mutated_unguarded_vector_tail_is_bounded_v1(
-10 | |     group_y: nat,
-11 | |     phase: nat,
-12 | |     lane: nat,
+10 | / pub proof fn mutated_unguarded_vector_tail_is_bounded_v1(
+11 | |     group_y: nat,
+12 | |     phase: nat,
+13 | |     lane: nat,
 ...  |
-15 | |     lda: nat,
-16 | | )
+16 | |     lda: nat,
+17 | | )
    | |_- at the end of the function body
 ...
-23 |           model::phase_depth_v1(phase, lane, 3) < k,
+24 |           model::phase_depth_v1(phase, lane, 3) < k,
    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
 
 error: aborting due to 1 previous error
 
 "#;
 const EPILOGUE_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
-  --> /proc/self/fd/189:11:13
+  --> /proc/self/fd/186/negative/general_gemm_epilogue_wrong.rs:11:13
    |
  5 | / pub proof fn mutated_epilogue_omits_beta_v1(
  6 | |     alpha: real,
@@ -91,11 +90,11 @@ error: aborting due to 1 previous error
 
 "#;
 const MACHINE_CLAIM_WRONG_STDERR: &[u8] = br#"error: postcondition not satisfied
-  --> /proc/self/fd/189:10:13
+  --> /proc/self/fd/186/negative/general_gemm_machine_claim_wrong.rs:11:13
    |
- 9 | pub proof fn mutated_symbolic_proof_claims_machine_refinement_v1()
+10 | pub proof fn mutated_symbolic_proof_claims_machine_refinement_v1()
    | ------------------------------------------------------------------ at the end of the function body
-10 |     ensures model::machine_refinement_complete_v1(),
+11 |     ensures model::machine_refinement_complete_v1(),
    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
 
 error: aborting due to 1 previous error
@@ -141,10 +140,10 @@ pub enum GeneralGemmProofScheduleV1 {
 }
 
 impl GeneralGemmProofScheduleV1 {
-    const fn positive_source(self) -> &'static [u8] {
+    const fn positive_source(self) -> GeneralGemmProofSourceV2 {
         match self {
-            Self::ReferenceWave64Xor4V1 => REFERENCE_SOURCE,
-            Self::VectorizedAOnlyBf16GlobalTransferV1 => VECTORIZED_SOURCE,
+            Self::ReferenceWave64Xor4V1 => GeneralGemmProofSourceV2::Reference,
+            Self::VectorizedAOnlyBf16GlobalTransferV1 => GeneralGemmProofSourceV2::Vectorized,
         }
     }
 }
@@ -575,11 +574,12 @@ pub fn execute_general_gemm_schedule_proof_v1(
     Err(GeneralGemmProofExecutionErrorV1::AuthenticatedRuntimeClosureUnavailable)
 }
 
-/// Executes the sealed schedule proof suite through one retained V2 runtime closure.
+/// Executes the exact retained schedule proof suite through one retained V2 runtime closure.
 ///
 /// The lease can be opened only from one protected root-owned version directory beneath
-/// `/opt/fe2o3/verus-runtime-v2`. Every proof input is an immutable sealed descriptor and the
-/// returned evidence remains model-local; it grants no compiler, artifact, load, or launch gate.
+/// `/opt/fe2o3/verus-runtime-v2`. Every proof source is selected by a closed typed enum from the
+/// retained root-owned manifest; the returned evidence remains model-local and grants no compiler,
+/// artifact, load, or launch gate.
 pub fn execute_general_gemm_schedule_proof_with_runtime_closure_v2(
     request: GeneralGemmProofRequestV1,
     runtime: &GeneralGemmVerusRuntimeClosureLeaseV2,
@@ -593,14 +593,7 @@ pub fn execute_general_gemm_schedule_proof_with_runtime_closure_v2(
         .checked_add(Duration::from_secs(u64::from(timeout_seconds)))
         .ok_or(GeneralGemmProofExecutionErrorV1::InvalidTimeout)?;
 
-    let positive_body = import_retained_model(request.schedule.positive_source(), false)
-        .ok_or(GeneralGemmProofExecutionErrorV1::PositiveProofFailed)?;
-    let positive = GeneralGemmVerusRuntimeClosureLeaseV2::seal_proof_input(
-        RUNTIME_WRAPPER_SOURCE,
-        MODEL_SOURCE,
-        &positive_body,
-    )
-    .map_err(map_runtime_error)?;
+    let positive = request.schedule.positive_source();
 
     let mut negatives = Vec::with_capacity(
         if request.schedule == GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 {
@@ -610,27 +603,26 @@ pub fn execute_general_gemm_schedule_proof_with_runtime_closure_v2(
         },
     );
     if request.schedule == GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 {
-        negatives.push(seal_negative(
-            VECTOR_TAIL_WRONG_SOURCE,
+        negatives.push(NegativeCaseV2::new(
+            GeneralGemmProofSourceV2::VectorTailWrong,
+            MODEL_NEGATIVE_STDOUT,
             VECTOR_TAIL_WRONG_STDERR,
-            true,
-        )?);
+        ));
     }
-    negatives.push(seal_negative(
-        EPILOGUE_WRONG_SOURCE,
+    negatives.push(NegativeCaseV2::new(
+        GeneralGemmProofSourceV2::EpilogueWrong,
+        EPILOGUE_NEGATIVE_STDOUT,
         EPILOGUE_WRONG_STDERR,
-        false,
-    )?);
-    negatives.push(seal_negative(
-        MACHINE_CLAIM_WRONG_SOURCE,
+    ));
+    negatives.push(NegativeCaseV2::new(
+        GeneralGemmProofSourceV2::MachineClaimWrong,
+        MODEL_NEGATIVE_STDOUT,
         MACHINE_CLAIM_WRONG_STDERR,
-        true,
-    )?);
+    ));
 
-    let source_closure_identity =
-        source_closure_identity(request.schedule.positive_source(), &positive, &negatives);
+    let source_closure_identity = source_closure_identity(positive, &negatives);
     let positive_observation = runtime
-        .execute_rust_verify(&positive, deadline, MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1)
+        .execute_rust_verify(positive, deadline, MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1)
         .map_err(map_runtime_error)?;
     require_positive_output(&positive_observation)?;
 
@@ -638,12 +630,16 @@ pub fn execute_general_gemm_schedule_proof_with_runtime_closure_v2(
     for negative in &negatives {
         let observation = runtime
             .execute_rust_verify(
-                &negative.input,
+                negative.source,
                 deadline,
                 MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1,
             )
             .map_err(map_runtime_error)?;
-        require_negative_output(&observation, negative.expected_stderr)?;
+        require_negative_output(
+            &observation,
+            negative.expected_stdout,
+            negative.expected_stderr,
+        )?;
         negative_observations.push(observation);
     }
     runtime.revalidate().map_err(map_runtime_error)?;
@@ -681,56 +677,24 @@ pub fn execute_general_gemm_schedule_proof_with_runtime_closure_v2(
     })
 }
 
-struct SealedNegativeV2 {
-    embedded_source: &'static [u8],
-    input: GeneralGemmSealedProofInputV2,
+struct NegativeCaseV2 {
+    source: GeneralGemmProofSourceV2,
+    expected_stdout: &'static [u8],
     expected_stderr: &'static [u8],
 }
 
-fn seal_negative(
-    source: &'static [u8],
-    expected_stderr: &'static [u8],
-    imports_model: bool,
-) -> Result<SealedNegativeV2, GeneralGemmProofExecutionErrorV1> {
-    let body = if imports_model {
-        import_retained_model(source, true)
-            .ok_or(GeneralGemmProofExecutionErrorV1::NegativeProofMismatch)?
-    } else {
-        source.to_vec()
-    };
-    let input = GeneralGemmVerusRuntimeClosureLeaseV2::seal_proof_input(
-        RUNTIME_WRAPPER_SOURCE,
-        MODEL_SOURCE,
-        &body,
-    )
-    .map_err(map_runtime_error)?;
-    Ok(SealedNegativeV2 {
-        embedded_source: source,
-        input,
-        expected_stderr,
-    })
-}
-
-fn import_retained_model(source: &[u8], from_parent: bool) -> Option<Vec<u8>> {
-    let declaration = if from_parent {
-        PARENT_MODEL_DECLARATION
-    } else {
-        LOCAL_MODEL_DECLARATION
-    };
-    let mut matches = source
-        .windows(declaration.len())
-        .enumerate()
-        .filter_map(|(index, value)| (value == declaration).then_some(index));
-    let index = matches.next()?;
-    if matches.next().is_some() {
-        return None;
+impl NegativeCaseV2 {
+    const fn new(
+        source: GeneralGemmProofSourceV2,
+        expected_stdout: &'static [u8],
+        expected_stderr: &'static [u8],
+    ) -> Self {
+        Self {
+            source,
+            expected_stdout,
+            expected_stderr,
+        }
     }
-    let mut body =
-        Vec::with_capacity(source.len() - declaration.len() + RETAINED_MODEL_IMPORT.len());
-    body.extend_from_slice(&source[..index]);
-    body.extend_from_slice(RETAINED_MODEL_IMPORT);
-    body.extend_from_slice(&source[index + declaration.len()..]);
-    Some(body)
 }
 
 fn require_positive_output(
@@ -748,11 +712,12 @@ fn require_positive_output(
 
 fn require_negative_output(
     observed: &GeneralGemmRuntimeProcessOutputV2,
+    expected_stdout: &[u8],
     expected_stderr: &[u8],
 ) -> Result<(), GeneralGemmProofExecutionErrorV1> {
     if observed.exit_code != Some(1)
         || observed.signal.is_some()
-        || observed.stdout != NEGATIVE_STDOUT
+        || observed.stdout != expected_stdout
         || observed.stderr != expected_stderr
     {
         return Err(GeneralGemmProofExecutionErrorV1::NegativeProofMismatch);
@@ -773,20 +738,33 @@ fn map_runtime_error(error: GeneralGemmRuntimeClosureErrorV2) -> GeneralGemmProo
 }
 
 fn source_closure_identity(
+    positive: GeneralGemmProofSourceV2,
+    negatives: &[NegativeCaseV2],
+) -> GeneralGemmEvidenceIdentityV1 {
+    source_closure_identity_with_positive_bytes(positive, positive.embedded_bytes(), negatives)
+}
+
+fn source_closure_identity_with_positive_bytes(
+    positive: GeneralGemmProofSourceV2,
     embedded_positive: &[u8],
-    positive: &GeneralGemmSealedProofInputV2,
-    negatives: &[SealedNegativeV2],
+    negatives: &[NegativeCaseV2],
 ) -> GeneralGemmEvidenceIdentityV1 {
     let mut hasher = Sha256::new();
     hasher.update(SOURCE_CLOSURE_DOMAIN_V2);
-    put_blob(&mut hasher, RUNTIME_WRAPPER_SOURCE);
+    put_blob(&mut hasher, b"general_gemm_schedule_model_v1.rs");
     put_blob(&mut hasher, MODEL_SOURCE);
+    put_blob(
+        &mut hasher,
+        positive.relative_to_proof_directory().as_bytes(),
+    );
     put_blob(&mut hasher, embedded_positive);
-    hasher.update(positive.identity());
     hasher.update((negatives.len() as u32).to_le_bytes());
     for negative in negatives {
-        put_blob(&mut hasher, negative.embedded_source);
-        hasher.update(negative.input.identity());
+        put_blob(
+            &mut hasher,
+            negative.source.relative_to_proof_directory().as_bytes(),
+        );
+        put_blob(&mut hasher, negative.source.embedded_bytes());
     }
     GeneralGemmEvidenceIdentityV1(hasher.finalize().into())
 }
@@ -971,44 +949,48 @@ mod tests {
     }
 
     #[test]
-    fn embedded_sources_have_one_exact_retained_model_rewrite() {
-        for source in [REFERENCE_SOURCE, VECTORIZED_SOURCE] {
-            let body = import_retained_model(source, false).unwrap();
-            assert!(
-                !body
-                    .windows(LOCAL_MODEL_DECLARATION.len())
-                    .any(|window| window == LOCAL_MODEL_DECLARATION)
-            );
-            assert_eq!(
-                body.windows(RETAINED_MODEL_IMPORT.len())
-                    .filter(|window| *window == RETAINED_MODEL_IMPORT)
-                    .count(),
-                1
-            );
+    fn typed_sources_are_the_exact_embedded_proof_bodies() {
+        for (source, embedded) in [
+            (GeneralGemmProofSourceV2::Reference, REFERENCE_SOURCE),
+            (GeneralGemmProofSourceV2::Vectorized, VECTORIZED_SOURCE),
+            (
+                GeneralGemmProofSourceV2::VectorTailWrong,
+                VECTOR_TAIL_WRONG_SOURCE,
+            ),
+            (
+                GeneralGemmProofSourceV2::EpilogueWrong,
+                EPILOGUE_WRONG_SOURCE,
+            ),
+            (
+                GeneralGemmProofSourceV2::MachineClaimWrong,
+                MACHINE_CLAIM_WRONG_SOURCE,
+            ),
+        ] {
+            assert_eq!(source.embedded_bytes(), embedded);
         }
-        for source in [VECTOR_TAIL_WRONG_SOURCE, MACHINE_CLAIM_WRONG_SOURCE] {
-            assert!(import_retained_model(source, true).is_some());
-        }
-        assert!(import_retained_model(EPILOGUE_WRONG_SOURCE, true).is_none());
     }
 
     #[test]
     fn source_closure_identity_rejects_embedded_source_substitution() {
-        let body = import_retained_model(REFERENCE_SOURCE, false).unwrap();
-        let positive = GeneralGemmVerusRuntimeClosureLeaseV2::seal_proof_input(
-            RUNTIME_WRAPPER_SOURCE,
-            MODEL_SOURCE,
-            &body,
-        )
-        .unwrap();
-        let negatives =
-            [seal_negative(EPILOGUE_WRONG_SOURCE, EPILOGUE_WRONG_STDERR, false).unwrap()];
-        let exact = source_closure_identity(REFERENCE_SOURCE, &positive, &negatives);
+        let negatives = [NegativeCaseV2::new(
+            GeneralGemmProofSourceV2::EpilogueWrong,
+            EPILOGUE_NEGATIVE_STDOUT,
+            EPILOGUE_WRONG_STDERR,
+        )];
+        let exact = source_closure_identity_with_positive_bytes(
+            GeneralGemmProofSourceV2::Reference,
+            REFERENCE_SOURCE,
+            &negatives,
+        );
         let mut substituted = REFERENCE_SOURCE.to_vec();
         substituted[0] ^= 1;
         assert_ne!(
             exact,
-            source_closure_identity(&substituted, &positive, &negatives)
+            source_closure_identity_with_positive_bytes(
+                GeneralGemmProofSourceV2::Reference,
+                &substituted,
+                &negatives,
+            )
         );
     }
 
@@ -1033,29 +1015,43 @@ mod tests {
     #[test]
     fn negative_output_parser_rejects_every_untyped_substitution() {
         require_negative_output(
-            &output(1, NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR),
+            &output(1, MODEL_NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR),
+            MODEL_NEGATIVE_STDOUT,
             VECTOR_TAIL_WRONG_STDERR,
         )
         .unwrap();
+        require_negative_output(
+            &output(1, EPILOGUE_NEGATIVE_STDOUT, EPILOGUE_WRONG_STDERR),
+            EPILOGUE_NEGATIVE_STDOUT,
+            EPILOGUE_WRONG_STDERR,
+        )
+        .unwrap();
         for altered in [
-            output(0, NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR),
-            output(2, NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR),
+            output(0, MODEL_NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR),
+            output(2, MODEL_NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR),
             output(
                 1,
                 b"verification results:: 21 verified, 1 errors\n",
                 VECTOR_TAIL_WRONG_STDERR,
             ),
-            output(1, NEGATIVE_STDOUT, b""),
-            output(1, NEGATIVE_STDOUT, EPILOGUE_WRONG_STDERR),
-            output(1, NEGATIVE_STDOUT, b"error: postcondition not satisfied\n"),
+            output(1, MODEL_NEGATIVE_STDOUT, b""),
+            output(1, MODEL_NEGATIVE_STDOUT, EPILOGUE_WRONG_STDERR),
+            output(
+                1,
+                MODEL_NEGATIVE_STDOUT,
+                b"error: postcondition not satisfied\n",
+            ),
         ] {
             assert!(matches!(
-                require_negative_output(&altered, VECTOR_TAIL_WRONG_STDERR),
+                require_negative_output(&altered, MODEL_NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR),
                 Err(GeneralGemmProofExecutionErrorV1::NegativeProofMismatch)
             ));
         }
-        let mut signaled = output(1, NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR);
+        let mut signaled = output(1, MODEL_NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR);
         signaled.signal = Some(9);
-        assert!(require_negative_output(&signaled, VECTOR_TAIL_WRONG_STDERR).is_err());
+        assert!(
+            require_negative_output(&signaled, MODEL_NEGATIVE_STDOUT, VECTOR_TAIL_WRONG_STDERR)
+                .is_err()
+        );
     }
 }
