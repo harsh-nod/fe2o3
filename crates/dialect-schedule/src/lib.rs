@@ -21,6 +21,13 @@ use pliron::{
     verify_err, verify_err_noloc, verify_error,
 };
 
+mod general_gemm;
+
+pub use general_gemm::{
+    GeneralGemmPhasePlanAttr, GeneralGemmPlanOp, GeneralGemmScheduleAttr,
+    GeneralGemmTransferPlanAttr,
+};
+
 /// The Pliron namespace owned by this crate.
 pub const DIALECT_NAME: &str = "schedule";
 
@@ -441,7 +448,11 @@ pub fn register_dialect(
     Dialect::register(context, requested);
     PlanType::register(context);
     <ParametersAttr as Attribute>::register::<ParametersAttr>(context);
+    <GeneralGemmScheduleAttr as Attribute>::register::<GeneralGemmScheduleAttr>(context);
+    <GeneralGemmPhasePlanAttr as Attribute>::register::<GeneralGemmPhasePlanAttr>(context);
+    <GeneralGemmTransferPlanAttr as Attribute>::register::<GeneralGemmTransferPlanAttr>(context);
     PlanOp::register(context);
+    GeneralGemmPlanOp::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context.aux_data_map.insert(marker_key, marker);

@@ -21,6 +21,10 @@ use pliron::{
     verify_err, verify_err_noloc, verify_error,
 };
 
+mod general_gemm;
+
+pub use general_gemm::{GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp};
+
 /// The Pliron namespace owned by this crate.
 pub const DIALECT_NAME: &str = "kernel";
 
@@ -336,7 +340,12 @@ pub fn register_dialect(
     Dialect::register(context, requested);
     AlgorithmType::register(context);
     <IterationDomainAttr as Attribute>::register::<IterationDomainAttr>(context);
+    <GeneralGemmAbiSchemaAttr as Attribute>::register::<GeneralGemmAbiSchemaAttr>(context);
+    <GeneralGemmEpilogueSchemaAttr as Attribute>::register::<GeneralGemmEpilogueSchemaAttr>(
+        context,
+    );
     AlgorithmOp::register(context);
+    GeneralGemmOp::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context.aux_data_map.insert(marker_key, marker);

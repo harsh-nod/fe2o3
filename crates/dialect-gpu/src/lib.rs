@@ -25,6 +25,16 @@ use pliron::{
     verify_err,
 };
 
+mod general_gemm;
+
+pub use general_gemm::{
+    GeneralGemmEpilogueAttr, GeneralGemmEpilogueOp, GeneralGemmEpochAttr, GeneralGemmEpochOp,
+    GeneralGemmGlobalTransferAttr, GeneralGemmGlobalTransferOp, GeneralGemmGridMappingAttr,
+    GeneralGemmGridMappingOp, GeneralGemmLdsTransferAttr, GeneralGemmLdsTransferOp,
+    GeneralGemmMfmaAttr, GeneralGemmMfmaOp, GeneralGemmPhaseLoopAttr, GeneralGemmPhaseLoopOp,
+    GeneralGemmRuntimeAbiAttr, GeneralGemmRuntimeAbiOp,
+};
+
 /// Pliron dialect name.
 pub const DIALECT_NAME: &str = "gpu";
 
@@ -585,12 +595,30 @@ pub fn register_dialect(
     <AddressSpaceAttr as Attribute>::register::<AddressSpaceAttr>(context);
     <MemoryScopeAttr as Attribute>::register::<MemoryScopeAttr>(context);
     <MemoryOrderAttr as Attribute>::register::<MemoryOrderAttr>(context);
+    <GeneralGemmRuntimeAbiAttr as Attribute>::register::<GeneralGemmRuntimeAbiAttr>(context);
+    <GeneralGemmGridMappingAttr as Attribute>::register::<GeneralGemmGridMappingAttr>(context);
+    <GeneralGemmPhaseLoopAttr as Attribute>::register::<GeneralGemmPhaseLoopAttr>(context);
+    <GeneralGemmGlobalTransferAttr as Attribute>::register::<GeneralGemmGlobalTransferAttr>(
+        context,
+    );
+    <GeneralGemmLdsTransferAttr as Attribute>::register::<GeneralGemmLdsTransferAttr>(context);
+    <GeneralGemmEpochAttr as Attribute>::register::<GeneralGemmEpochAttr>(context);
+    <GeneralGemmMfmaAttr as Attribute>::register::<GeneralGemmMfmaAttr>(context);
+    <GeneralGemmEpilogueAttr as Attribute>::register::<GeneralGemmEpilogueAttr>(context);
     <HierarchyIndexType as Type>::register(context);
     <MemorySpaceType as Type>::register(context);
     <HierarchyIdOp as Op>::register(context);
     <MemorySpaceOp as Op>::register(context);
     <BarrierOp as Op>::register(context);
     <FenceOp as Op>::register(context);
+    <GeneralGemmRuntimeAbiOp as Op>::register(context);
+    <GeneralGemmGridMappingOp as Op>::register(context);
+    <GeneralGemmPhaseLoopOp as Op>::register(context);
+    <GeneralGemmGlobalTransferOp as Op>::register(context);
+    <GeneralGemmLdsTransferOp as Op>::register(context);
+    <GeneralGemmEpochOp as Op>::register(context);
+    <GeneralGemmMfmaOp as Op>::register(context);
+    <GeneralGemmEpilogueOp as Op>::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context
