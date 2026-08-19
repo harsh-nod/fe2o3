@@ -297,6 +297,7 @@ pub struct GeneralGemmFrontendSemanticBindingV1 {
     kernel_instance: [u8; 32],
     compiled_source: [u8; 32],
     provider_semantics: [u8; 32],
+    frontend_abi: [u8; 32],
     symbolic_plan: GeneralGemmSymbolicPlanV1,
     symbolic_kir: GeneralGemmSymbolicKirV1,
     identity: GeneralGemmFrontendSemanticBindingIdentityV1,
@@ -323,12 +324,18 @@ impl GeneralGemmFrontendSemanticBindingV1 {
         kernel_instance: [u8; 32],
         compiled_source: [u8; 32],
         provider_semantics: [u8; 32],
+        frontend_abi: [u8; 32],
         symbolic_plan: GeneralGemmSymbolicPlanV1,
         symbolic_kir: GeneralGemmSymbolicKirV1,
     ) -> Result<Self, GeneralGemmFrontendSemanticBindingErrorV1> {
-        if [kernel_instance, compiled_source, provider_semantics]
-            .iter()
-            .any(is_zero_identity)
+        if [
+            kernel_instance,
+            compiled_source,
+            provider_semantics,
+            frontend_abi,
+        ]
+        .iter()
+        .any(is_zero_identity)
         {
             return Err(GeneralGemmFrontendSemanticBindingErrorV1::ZeroIdentity);
         }
@@ -344,6 +351,7 @@ impl GeneralGemmFrontendSemanticBindingV1 {
                 &kernel_instance,
                 &compiled_source,
                 &provider_semantics,
+                &frontend_abi,
                 symbolic_plan.identity().as_bytes(),
                 symbolic_kir.identity().as_bytes(),
             ],
@@ -352,6 +360,7 @@ impl GeneralGemmFrontendSemanticBindingV1 {
             kernel_instance,
             compiled_source,
             provider_semantics,
+            frontend_abi,
             symbolic_plan,
             symbolic_kir,
             identity,
@@ -371,6 +380,11 @@ impl GeneralGemmFrontendSemanticBindingV1 {
     /// Returns the provider semantic-source observation.
     pub const fn provider_semantics_identity(&self) -> &[u8; 32] {
         &self.provider_semantics
+    }
+
+    /// Returns the authenticated ordered MIR argument-position and type observation.
+    pub const fn frontend_abi_identity(&self) -> &[u8; 32] {
+        &self.frontend_abi
     }
 
     /// Returns the exact symbolic plan schema.

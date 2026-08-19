@@ -60,6 +60,7 @@ fn frontend_binding() -> GeneralGemmFrontendSemanticBindingV1 {
         identity(0x12),
         identity(0x41),
         identity(0x42),
+        identity(0x43),
         GeneralGemmSymbolicPlanV1::canonical(),
         GeneralGemmSymbolicKirV1::canonical(),
     )
@@ -200,6 +201,7 @@ fn symbolic_frontend_schemas_are_deterministic_and_bound_to_launch() {
             [0; 32],
             identity(0x41),
             identity(0x42),
+            identity(0x43),
             plan_schema,
             kir_schema,
         ),
@@ -214,6 +216,7 @@ fn symbolic_frontend_schemas_are_deterministic_and_bound_to_launch() {
             identity(0x55),
             identity(0x41),
             identity(0x42),
+            identity(0x43),
             plan_schema,
             kir_schema,
         )
@@ -237,8 +240,9 @@ fn compiled_source_and_provider_substitution_change_the_aggregate_identity() {
     let baseline = frontend_binding();
     let source = GeneralGemmFrontendSemanticBindingV1::from_consumed_frontend_receipt_observation(
         identity(0x12),
-        identity(0x43),
+        identity(0x44),
         identity(0x42),
+        identity(0x43),
         GeneralGemmSymbolicPlanV1::canonical(),
         GeneralGemmSymbolicKirV1::canonical(),
     )
@@ -247,7 +251,8 @@ fn compiled_source_and_provider_substitution_change_the_aggregate_identity() {
         GeneralGemmFrontendSemanticBindingV1::from_consumed_frontend_receipt_observation(
             identity(0x12),
             identity(0x41),
-            identity(0x44),
+            identity(0x45),
+            identity(0x43),
             GeneralGemmSymbolicPlanV1::canonical(),
             GeneralGemmSymbolicKirV1::canonical(),
         )
