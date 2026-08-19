@@ -83,10 +83,10 @@ const PTRACE_CHECKPOINT_POLICY_DOMAIN: &[u8] =
     b"FE2O3/AUTHENTICATED-VERUS-PTRACE-CHECKPOINT-POLICY/V2\0";
 const RESULT_MAGIC: &str = "FE2O3-AUTHENTICATED-VERUS-RESULT-V2-PIDFD-NONCE2";
 const CONTROL_MAGIC: &str = "FE2O3-VERUS-EXECUTION-V2-PIDFD-NONCE2";
-const ADDRESS_SPACE_LIMIT_V2: u64 = 8 * 1024 * 1024 * 1024;
-const DATA_LIMIT_V2: u64 = 4 * 1024 * 1024 * 1024;
-const FILE_LIMIT_V2: u64 = 16 * 1024 * 1024;
-const CORE_LIMIT_V2: u64 = 0;
+pub(crate) const ADDRESS_SPACE_LIMIT_V2: u64 = 8 * 1024 * 1024 * 1024;
+pub(crate) const DATA_LIMIT_V2: u64 = 4 * 1024 * 1024 * 1024;
+pub(crate) const FILE_LIMIT_V2: u64 = 16 * 1024 * 1024;
+pub(crate) const CORE_LIMIT_V2: u64 = 0;
 const MAX_LIVE_EXECUTABLE_MAPPING_BYTES_V2: u64 = 512 * 1024 * 1024;
 const MAX_LIVE_EXECUTABLE_TOTAL_BYTES_V2: u64 = 1024 * 1024 * 1024;
 const MAX_RUNTIME_FILE_BYTES_V2: u64 = 1024 * 1024 * 1024;
@@ -1219,6 +1219,431 @@ pub fn execute_authenticated_verus_v2(
         Err(AuthenticatedVerusExecutionErrorV2::plain(
             AuthenticatedVerusExecutionErrorKindV2::UnsupportedPlatform,
         ))
+    }
+}
+
+/// Raw output from a process group supervised under one deadline and per-stream byte bound.
+///
+/// This is a containment observation, not an authenticated Verus receipt and not proof evidence.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Debug)]
+pub(crate) struct BoundedProcessGroupOutputV2 {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) signal: Option<i32>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+}
+
+/// Stable category for bounded process-group supervision failures.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BoundedProcessGroupFailureV2 {
+    TimedOut,
+    OutputTooLarge,
+    Process,
+}
+
+/// Failure to contain, observe, or bound one already-spawned private process group.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Debug)]
+pub(crate) struct BoundedProcessGroupErrorV2 {
+    kind: BoundedProcessGroupFailureV2,
+    detail: String,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl BoundedProcessGroupErrorV2 {
+    pub(crate) const fn kind(&self) -> BoundedProcessGroupFailureV2 {
+        self.kind
+    }
+
+    pub(crate) fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+/// Supervises an already-spawned child whose stdout/stderr are piped and whose process group is
+/// exactly its PID. The deadline covers process execution and final pipe drainage.
+///
+/// The caller remains responsible for authenticating the executable, arguments, environment,
+/// inherited descriptors, and child setup. This helper deliberately grants no Verus authority.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn supervise_bounded_process_group_v2(
+    child: &mut std::process::Child,
+    deadline: std::time::Instant,
+    output_limit: usize,
+) -> Result<BoundedProcessGroupOutputV2, BoundedProcessGroupErrorV2> {
+    bounded_process_group::supervise(child, deadline, output_limit)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod bounded_process_group {
+    use super::{
+        BoundedProcessGroupErrorV2, BoundedProcessGroupFailureV2, BoundedProcessGroupOutputV2,
+    };
+    use std::{
+        io::{self, Read},
+        os::{fd::AsFd, unix::process::ExitStatusExt},
+        process::Child,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use rustix::fs::OFlags;
+
+    const POLL_INTERVAL: Duration = Duration::from_millis(2);
+    const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(100);
+    const SIGKILL: i32 = 9;
+    const SYS_WAITID_X86_64: i64 = 247;
+    const P_PID: i32 = 1;
+    const WNOHANG: i32 = 1;
+    const WEXITED: i32 = 4;
+    const WNOWAIT: i32 = 0x0100_0000;
+
+    unsafe extern "C" {
+        fn getpgid(process: i32) -> i32;
+        fn kill(process: i32, signal: i32) -> i32;
+        #[link_name = "syscall"]
+        fn runtime_syscall(number: i64, ...) -> i64;
+    }
+
+    #[repr(C)]
+    struct SigInfoV2 {
+        signal: i32,
+        error: i32,
+        code: i32,
+        padding: i32,
+        process: i32,
+        user: u32,
+        status: i32,
+        remaining: [u8; 100],
+    }
+
+    struct CaptureV2 {
+        bytes: Vec<u8>,
+        eof: bool,
+        overflow: bool,
+    }
+
+    impl CaptureV2 {
+        const fn new() -> Self {
+            Self {
+                bytes: Vec::new(),
+                eof: false,
+                overflow: false,
+            }
+        }
+    }
+
+    pub(super) fn supervise(
+        child: &mut Child,
+        deadline: Instant,
+        output_limit: usize,
+    ) -> Result<BoundedProcessGroupOutputV2, BoundedProcessGroupErrorV2> {
+        if output_limit == 0 {
+            terminate_process_group(child);
+            let _ = child.wait();
+            return Err(error(
+                BoundedProcessGroupFailureV2::OutputTooLarge,
+                "bounded process output limit is zero",
+            ));
+        }
+        if Instant::now() >= deadline {
+            terminate_process_group(child);
+            let _ = child.wait();
+            return Err(error(
+                BoundedProcessGroupFailureV2::TimedOut,
+                "bounded process deadline elapsed before supervision",
+            ));
+        }
+        let process = i32::try_from(child.id()).map_err(|_| {
+            error(
+                BoundedProcessGroupFailureV2::Process,
+                "child PID does not fit the process-group ABI",
+            )
+        })?;
+        // SAFETY: getpgid observes the live child PID without changing process state.
+        if unsafe { getpgid(process) } != process {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error(
+                BoundedProcessGroupFailureV2::Process,
+                "bounded child does not own a private process group",
+            ));
+        }
+
+        let (Some(mut stdout_pipe), Some(mut stderr_pipe)) =
+            (child.stdout.take(), child.stderr.take())
+        else {
+            terminate_process_group(child);
+            let _ = child.wait();
+            return Err(error(
+                BoundedProcessGroupFailureV2::Process,
+                "bounded child output streams are not both piped",
+            ));
+        };
+        if let Err(source) =
+            make_nonblocking(&stdout_pipe).and_then(|()| make_nonblocking(&stderr_pipe))
+        {
+            terminate_process_group(child);
+            let _ = child.wait();
+            return Err(error(
+                BoundedProcessGroupFailureV2::Process,
+                format!("configure bounded process output: {source}"),
+            ));
+        }
+
+        let mut stdout = CaptureV2::new();
+        let mut stderr = CaptureV2::new();
+        let status = loop {
+            if let Err(failure) = drain_pipe(&mut stdout_pipe, &mut stdout, output_limit)
+                .and_then(|()| drain_pipe(&mut stderr_pipe, &mut stderr, output_limit))
+            {
+                terminate_process_group(child);
+                let _ = child.wait();
+                return Err(failure);
+            }
+            if stdout.overflow || stderr.overflow {
+                terminate_process_group(child);
+                let _ = child.wait();
+                let _ = drain_after_termination(
+                    &mut stdout_pipe,
+                    &mut stderr_pipe,
+                    &mut stdout,
+                    &mut stderr,
+                    output_limit,
+                    deadline,
+                );
+                return Err(error(
+                    BoundedProcessGroupFailureV2::OutputTooLarge,
+                    "bounded process exceeded its per-stream byte bound",
+                ));
+            }
+            match child_exited_unreaped(child) {
+                Ok(true) => {
+                    terminate_process_group(child);
+                    break child.wait().map_err(|source| {
+                        error(
+                            BoundedProcessGroupFailureV2::Process,
+                            format!("reap bounded process: {source}"),
+                        )
+                    })?;
+                }
+                Ok(false) if Instant::now() >= deadline => {
+                    terminate_process_group(child);
+                    let _ = child.wait();
+                    let _ = drain_after_termination(
+                        &mut stdout_pipe,
+                        &mut stderr_pipe,
+                        &mut stdout,
+                        &mut stderr,
+                        output_limit,
+                        deadline,
+                    );
+                    return Err(error(
+                        BoundedProcessGroupFailureV2::TimedOut,
+                        "bounded process group exceeded its global deadline",
+                    ));
+                }
+                Ok(false) => thread::sleep(POLL_INTERVAL),
+                Err(source) => {
+                    terminate_process_group(child);
+                    let _ = child.wait();
+                    return Err(error(
+                        BoundedProcessGroupFailureV2::Process,
+                        format!("observe bounded process: {source}"),
+                    ));
+                }
+            }
+        };
+
+        drain_after_termination(
+            &mut stdout_pipe,
+            &mut stderr_pipe,
+            &mut stdout,
+            &mut stderr,
+            output_limit,
+            deadline,
+        )?;
+        if stdout.overflow || stderr.overflow {
+            return Err(error(
+                BoundedProcessGroupFailureV2::OutputTooLarge,
+                "bounded process exceeded its per-stream byte bound",
+            ));
+        }
+        Ok(BoundedProcessGroupOutputV2 {
+            exit_code: status.code(),
+            signal: status.signal(),
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+        })
+    }
+
+    fn child_exited_unreaped(child: &Child) -> io::Result<bool> {
+        let mut information = SigInfoV2 {
+            signal: 0,
+            error: 0,
+            code: 0,
+            padding: 0,
+            process: 0,
+            user: 0,
+            status: 0,
+            remaining: [0; 100],
+        };
+        // SAFETY: waitid writes one correctly sized siginfo_t-compatible object. WNOWAIT keeps
+        // the child unreaped, preventing PID/process-group reuse before cleanup.
+        if unsafe {
+            runtime_syscall(
+                SYS_WAITID_X86_64,
+                P_PID,
+                child.id(),
+                &mut information,
+                WEXITED | WNOHANG | WNOWAIT,
+                std::ptr::null_mut::<core::ffi::c_void>(),
+            )
+        } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(information.process != 0)
+    }
+
+    fn make_nonblocking(descriptor: &impl AsFd) -> io::Result<()> {
+        let flags = rustix::fs::fcntl_getfl(descriptor)?;
+        rustix::fs::fcntl_setfl(descriptor, flags | OFlags::NONBLOCK)?;
+        Ok(())
+    }
+
+    fn drain_pipe(
+        pipe: &mut impl Read,
+        capture: &mut CaptureV2,
+        limit: usize,
+    ) -> Result<(), BoundedProcessGroupErrorV2> {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) => {
+                    capture.eof = true;
+                    return Ok(());
+                }
+                Ok(read) => {
+                    let remaining = limit.saturating_sub(capture.bytes.len());
+                    capture
+                        .bytes
+                        .extend_from_slice(&buffer[..read.min(remaining)]);
+                    if read > remaining {
+                        capture.overflow = true;
+                        return Ok(());
+                    }
+                }
+                Err(source) if source.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
+                Err(source) => {
+                    return Err(error(
+                        BoundedProcessGroupFailureV2::Process,
+                        format!("read bounded process output: {source}"),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn drain_after_termination(
+        stdout_pipe: &mut impl Read,
+        stderr_pipe: &mut impl Read,
+        stdout: &mut CaptureV2,
+        stderr: &mut CaptureV2,
+        output_limit: usize,
+        global_deadline: Instant,
+    ) -> Result<(), BoundedProcessGroupErrorV2> {
+        let deadline = (Instant::now() + PIPE_DRAIN_GRACE).min(global_deadline);
+        while (!stdout.eof || !stderr.eof) && Instant::now() < deadline {
+            drain_pipe(stdout_pipe, stdout, output_limit)?;
+            drain_pipe(stderr_pipe, stderr, output_limit)?;
+            if !stdout.eof || !stderr.eof {
+                thread::sleep(POLL_INTERVAL);
+            }
+        }
+        if !stdout.eof || !stderr.eof {
+            let kind = if Instant::now() >= global_deadline {
+                BoundedProcessGroupFailureV2::TimedOut
+            } else {
+                BoundedProcessGroupFailureV2::Process
+            };
+            return Err(error(kind, "bounded process output pipes remained open"));
+        }
+        Ok(())
+    }
+
+    fn terminate_process_group(child: &mut Child) {
+        let process = i32::try_from(child.id()).unwrap_or(i32::MAX);
+        // SAFETY: the public helper verifies that the child PID is its private process group.
+        let _ = unsafe { kill(-process, SIGKILL) };
+        let _ = child.kill();
+    }
+
+    fn error(
+        kind: BoundedProcessGroupFailureV2,
+        detail: impl Into<String>,
+    ) -> BoundedProcessGroupErrorV2 {
+        BoundedProcessGroupErrorV2 {
+            kind,
+            detail: detail.into(),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::{
+            os::unix::process::CommandExt,
+            process::{Command, Stdio},
+        };
+
+        fn shell_child(script: &str, private_group: bool) -> Child {
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", script])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if private_group {
+                command.process_group(0);
+            }
+            command.spawn().unwrap()
+        }
+
+        #[test]
+        fn captures_exact_streams_and_status() {
+            let mut child = shell_child("printf stdout; printf stderr >&2; exit 7", true);
+            let output =
+                supervise(&mut child, Instant::now() + Duration::from_secs(2), 64).unwrap();
+            assert_eq!(output.exit_code, Some(7));
+            assert_eq!(output.signal, None);
+            assert_eq!(output.stdout, b"stdout");
+            assert_eq!(output.stderr, b"stderr");
+        }
+
+        #[test]
+        fn kills_process_group_on_timeout_and_output_overflow() {
+            let mut child = shell_child("sleep 60 & wait", true);
+            let error =
+                supervise(&mut child, Instant::now() + Duration::from_millis(20), 64).unwrap_err();
+            assert_eq!(error.kind(), BoundedProcessGroupFailureV2::TimedOut);
+
+            let mut child = shell_child("while :; do printf 1234567890; done", true);
+            let error =
+                supervise(&mut child, Instant::now() + Duration::from_secs(2), 64).unwrap_err();
+            assert_eq!(error.kind(), BoundedProcessGroupFailureV2::OutputTooLarge);
+        }
+
+        #[test]
+        fn rejects_process_group_substitution() {
+            let mut child = shell_child("sleep 60", false);
+            let error =
+                supervise(&mut child, Instant::now() + Duration::from_secs(2), 64).unwrap_err();
+            assert_eq!(error.kind(), BoundedProcessGroupFailureV2::Process);
+        }
     }
 }
 
