@@ -37,7 +37,11 @@ refactor a shared validated envelope) before granting loader authority.
 
 ## Proof and implementation gaps
 
-- These parser checks have hostile unit tests but no Verus refinement proof.
+- The authenticated runtime-model Verus lane proves a narrow abstract relation
+  for segment rounding, span, non-overlap, canonical permission shape, and
+  descriptor equal-delta binding. It does not prove refinement from this
+  executable byte parser to that relation; these parser checks remain covered
+  by hostile unit tests rather than an executable Verus refinement proof.
 - The metadata descriptor is not decoded here, so its `amdhsa.version` and
   `amdhsa.target` fields are not yet bound to the ELF ABI and flags by this
   crate. The exact ELF-side profile and note identity are checked.
