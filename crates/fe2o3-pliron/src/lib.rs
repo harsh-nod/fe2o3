@@ -862,7 +862,7 @@ impl PlironSession {
         })
     }
 
-    /// Imports one bounded textual Pliron root into this owner session.
+    /// Imports one byte- and tree-guarded textual Pliron root into this owner session.
     ///
     /// Text is a noncanonical construction bridge only. It must never be used
     /// as an artifact, proof, cache, publication, or runtime identity. Parsing
@@ -871,6 +871,14 @@ impl PlironSession {
     /// not transactional. A printer/text round trip cannot grant a supported
     /// production compiler capability; typed owner-held construction must
     /// replace this bridge first.
+    ///
+    /// Registered Pliron parser implementations are trusted code at this
+    /// transitional boundary. The preflight limits only the parser input and
+    /// the delimiter syntax understood by the pinned, audited parser set; the
+    /// postflight limits the graph returned by a parser. Neither limit meters
+    /// CPU time, temporary allocations, interning, or private syntax inside an
+    /// arbitrary `Parsable` implementation. A caller that links or registers
+    /// another parser must audit or contain that implementation independently.
     pub fn import_operation_text_v1(
         &mut self,
         text: &str,

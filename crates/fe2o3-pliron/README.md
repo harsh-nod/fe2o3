@@ -8,8 +8,8 @@ workspace. It provides:
   store rather than transferable auxiliary marker data;
 - opaque operation handles whose upstream pointers remain in a private
   session registry;
-- bounded textual operation import that requires exact end-of-input and
-  recursive verification before returning an owner handle;
+- byte- and tree-guarded textual operation import that requires exact
+  end-of-input and recursive verification before returning an owner handle;
 - owner-scoped dialect-registration services with bounded typed actions;
 - deterministic, bounded pass plans over real Pliron `Pass` values.
 
@@ -45,12 +45,21 @@ creation returns an opaque handle containing only a process-local owner
 identity and session-local registry ID.
 Textual operation import is a noncanonical construction bridge for dialect
 integration. Input bytes, parser text, and printer output cannot become
-artifact, cache, proof, publication, or runtime identities. Imports are
-bounded by byte length and structural nesting before parsing, then across the
-complete operation tree. Successful import bytes are charged monotonically to
-the session because interned parser data can outlive an erased operation. A
-parse or verification rejection poisons the session because upstream arena
-allocation is not transactional.
+artifact, cache, proof, publication, or runtime identities. The bridge bounds
+input byte length and the delimiter syntax understood by the pinned, audited
+parser set before parsing, then bounds the complete returned operation tree.
+Successful import bytes are charged monotonically to the session because
+interned parser data can outlive an erased operation. A parse or verification
+rejection poisons the session because upstream arena allocation is not
+transactional.
+
+Every linked or registered Pliron `Parsable` implementation is trusted code at
+this transitional boundary. The source and tree guards do not meter arbitrary
+parser CPU time, temporary allocation, interning, comments, literals, or
+private delimiter syntax. A deployment that adds a parser must audit or
+process-contain it independently; the public registration action limit does
+not make parser execution bounded. Consequently this API makes no resource
+containment claim for an open third-party parser registry.
 This bridge is transitional: a production compiler path that depends on a
 printer/text round trip remains unsupported until it uses an owner-held typed
 dialect construction service.
