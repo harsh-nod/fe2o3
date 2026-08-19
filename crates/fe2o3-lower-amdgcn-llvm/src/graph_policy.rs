@@ -1,6 +1,11 @@
 use fe2o3_llvm_handoff::{
-    FunctionAttributeV2, FunctionV2, Gfx942HandoffV2, GlobalV2, IntrinsicReferenceV2, ModuleFlagV1,
-    NamedMetadataV1, ParameterAttributeV1, TargetFeatureV1,
+    BlockIdV2, CallingConventionV2, FunctionAttributeV2, FunctionIdV2, FunctionKindV2,
+    FunctionParameterV2, FunctionV2, Gfx942HandoffV2, GlobalIdV2, GlobalV2, IdentityV1,
+    IntrinsicReferenceV2, IntrinsicV2, MAX_FUNCTION_ATTRIBUTES_V2, MAX_FUNCTION_BLOCKS_V2,
+    MAX_FUNCTION_PARAMETERS_V2, MAX_MODULE_FLAGS_V2, MAX_NAMED_METADATA_V2,
+    MAX_PARAMETER_ATTRIBUTES_V2, MAX_SYMBOL_BYTES_V2, ModuleFlagV1, NamedMetadataV1,
+    ParameterAttributeV1, TargetFeatureV1, TypedValueV2, ValueIdV2, ValueTypeV2, WavesPerEuV1,
+    WorkgroupSizeRangeV1,
 };
 use pliron::{
     builtin::attributes::BytesAttr, context::Context, identifier::Identifier, operation::Operation,
@@ -20,6 +25,44 @@ pub(crate) const FUNCTION_BLOCKS_ATTR_V1: &str = "fe2o3_function_blocks_v1";
 pub(crate) const INSTRUCTION_BINDING_ATTR_V1: &str = "fe2o3_instruction_binding_v1";
 
 const POLICY_VERSION_V1: u8 = 1;
+const MAX_GRAPH_POLICY_BYTES_V1: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ModuleGraphPolicyV1 {
+    pub(crate) flags: Vec<ModuleFlagV1>,
+    pub(crate) named_metadata: Vec<NamedMetadataV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GlobalGraphPolicyV1 {
+    pub(crate) id: GlobalIdV2,
+    pub(crate) mutable: bool,
+    pub(crate) section: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FunctionGraphPolicyV1 {
+    pub(crate) id: FunctionIdV2,
+    pub(crate) kind: FunctionKindV2,
+    pub(crate) calling_convention: CallingConventionV2,
+    pub(crate) entry: BlockIdV2,
+    pub(crate) attributes: Vec<FunctionAttributeV2>,
+    pub(crate) parameters: Vec<FunctionParameterV2>,
+    pub(crate) blocks: Vec<BlockGraphPolicyV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BlockGraphPolicyV1 {
+    pub(crate) id: BlockIdV2,
+    pub(crate) phis: Vec<TypedValueV2>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InstructionGraphBindingV1 {
+    pub(crate) block: BlockIdV2,
+    pub(crate) ordinal: u32,
+    pub(crate) result: Option<TypedValueV2>,
+}
 
 pub(crate) fn install_module_policy(
     context: &Context,
@@ -105,7 +148,7 @@ pub(crate) fn install_instruction_binding(
     operation: pliron::context::Ptr<Operation>,
     block: u32,
     ordinal: u32,
-    result: Option<u32>,
+    result: Option<TypedValueV2>,
 ) -> Result<(), LoweringErrorV1> {
     let mut bytes = vec![POLICY_VERSION_V1];
     put_u32(&mut bytes, block);
@@ -113,7 +156,8 @@ pub(crate) fn install_instruction_binding(
     match result {
         Some(result) => {
             bytes.push(1);
-            put_u32(&mut bytes, result);
+            put_u32(&mut bytes, result.id().get());
+            encode_value_type(&mut bytes, result.value_type());
         }
         None => bytes.push(0),
     }
@@ -207,7 +251,7 @@ pub(crate) fn inspect_instruction_binding(
     operation: pliron::context::Ptr<Operation>,
     block: u32,
     ordinal: u32,
-    result: Option<u32>,
+    result: Option<TypedValueV2>,
 ) -> Result<(), InspectionErrorV1> {
     let mut expected = vec![POLICY_VERSION_V1];
     put_u32(&mut expected, block);
@@ -215,11 +259,414 @@ pub(crate) fn inspect_instruction_binding(
     match result {
         Some(result) => {
             expected.push(1);
-            put_u32(&mut expected, result);
+            put_u32(&mut expected, result.id().get());
+            encode_value_type(&mut expected, result.value_type());
         }
         None => expected.push(0),
     }
     require_bytes(context, operation, INSTRUCTION_BINDING_ATTR_V1, &expected)
+}
+
+pub(crate) fn decode_module_policy(
+    context: &Context,
+    operation: pliron::context::Ptr<Operation>,
+    source: &Gfx942HandoffV2,
+) -> Result<ModuleGraphPolicyV1, InspectionErrorV1> {
+    require_bytes(
+        context,
+        operation,
+        MODULE_TARGET_POLICY_ATTR_V1,
+        &target_policy(source),
+    )?;
+    let flag_bytes = attribute_bytes(context, operation, MODULE_FLAGS_ATTR_V1)?;
+    let mut flags = ReaderV1::new(&flag_bytes);
+    flags.version()?;
+    let flag_count = flags.length(MAX_MODULE_FLAGS_V2)?;
+    let mut decoded_flags = Vec::new();
+    for _ in 0..flag_count {
+        decoded_flags.push(match flags.byte()? {
+            1 => ModuleFlagV1::CodeObjectVersion6,
+            2 => ModuleFlagV1::PicLevel2,
+            3 => ModuleFlagV1::WcharSize4,
+            _ => return Err(InspectionErrorV1::UnexpectedGraph),
+        });
+    }
+    flags.finish()?;
+
+    let metadata_bytes = attribute_bytes(context, operation, MODULE_METADATA_ATTR_V1)?;
+    let mut metadata = ReaderV1::new(&metadata_bytes);
+    metadata.version()?;
+    let metadata_count = metadata.length(MAX_NAMED_METADATA_V2)?;
+    let mut decoded_metadata = Vec::new();
+    for _ in 0..metadata_count {
+        decoded_metadata.push(match metadata.byte()? {
+            1 => NamedMetadataV1::OpenClVersion2_0,
+            2 => NamedMetadataV1::OpenClSpirVersion2_0,
+            3 => NamedMetadataV1::ProducerIdentity(
+                IdentityV1::new(metadata.array()?)
+                    .map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
+            ),
+            _ => return Err(InspectionErrorV1::UnexpectedGraph),
+        });
+    }
+    metadata.finish()?;
+    Ok(ModuleGraphPolicyV1 {
+        flags: decoded_flags,
+        named_metadata: decoded_metadata,
+    })
+}
+
+pub(crate) fn decode_global_policy(
+    context: &Context,
+    operation: pliron::context::Ptr<Operation>,
+) -> Result<GlobalGraphPolicyV1, InspectionErrorV1> {
+    let bytes = attribute_bytes(context, operation, GLOBAL_POLICY_ATTR_V1)?;
+    let mut reader = ReaderV1::new(&bytes);
+    reader.version()?;
+    let id = GlobalIdV2::new(reader.u32()?);
+    let mutable = reader.boolean()?;
+    let section = match reader.byte()? {
+        0 => None,
+        1 => Some(reader.string(MAX_SYMBOL_BYTES_V2)?),
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    };
+    reader.finish()?;
+    Ok(GlobalGraphPolicyV1 {
+        id,
+        mutable,
+        section,
+    })
+}
+
+pub(crate) fn decode_intrinsic_policy(
+    context: &Context,
+    operation: pliron::context::Ptr<Operation>,
+) -> Result<IntrinsicV2, InspectionErrorV1> {
+    let bytes = attribute_bytes(context, operation, INTRINSIC_POLICY_ATTR_V1)?;
+    let mut reader = ReaderV1::new(&bytes);
+    reader.version()?;
+    let intrinsic = decode_intrinsic(reader.byte()?)?;
+    reader.finish()?;
+    Ok(intrinsic)
+}
+
+pub(crate) fn decode_function_policy(
+    context: &Context,
+    operation: pliron::context::Ptr<Operation>,
+) -> Result<FunctionGraphPolicyV1, InspectionErrorV1> {
+    let abi_bytes = attribute_bytes(context, operation, FUNCTION_ABI_ATTR_V1)?;
+    let mut abi = ReaderV1::new(&abi_bytes);
+    abi.version()?;
+    let id = FunctionIdV2::new(abi.u32()?);
+    let kind = match abi.byte()? {
+        1 => FunctionKindV2::Kernel,
+        2 => FunctionKindV2::Helper,
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    };
+    let calling_convention = match abi.byte()? {
+        1 => CallingConventionV2::C,
+        2 => CallingConventionV2::AmdGpuKernel,
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    };
+    let entry = BlockIdV2::new(abi.u32()?);
+    abi.finish()?;
+
+    let function_attribute_bytes =
+        attribute_bytes(context, operation, FUNCTION_ATTRIBUTES_ATTR_V1)?;
+    let mut attributes = ReaderV1::new(&function_attribute_bytes);
+    attributes.version()?;
+    let attribute_count = attributes.length(MAX_FUNCTION_ATTRIBUTES_V2)?;
+    let mut decoded_attributes = Vec::new();
+    for _ in 0..attribute_count {
+        decoded_attributes.push(decode_function_attribute(&mut attributes)?);
+    }
+    attributes.finish()?;
+
+    let parameter_bytes = attribute_bytes(context, operation, FUNCTION_PARAMETERS_ATTR_V1)?;
+    let mut parameters = ReaderV1::new(&parameter_bytes);
+    parameters.version()?;
+    let parameter_count = parameters.length(MAX_FUNCTION_PARAMETERS_V2)?;
+    let mut decoded_parameters = Vec::new();
+    for _ in 0..parameter_count {
+        let id = ValueIdV2::new(parameters.u32()?);
+        let name = parameters.string(MAX_SYMBOL_BYTES_V2)?;
+        let value = TypedValueV2::new(id, decode_value_type(&mut parameters)?);
+        let count = parameters.length(MAX_PARAMETER_ATTRIBUTES_V2)?;
+        let mut parameter_attributes = Vec::new();
+        for _ in 0..count {
+            parameter_attributes.push(decode_parameter_attribute(&mut parameters)?);
+        }
+        decoded_parameters.push(
+            FunctionParameterV2::new(value, &name, parameter_attributes)
+                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
+        );
+    }
+    parameters.finish()?;
+
+    let block_bytes = attribute_bytes(context, operation, FUNCTION_BLOCKS_ATTR_V1)?;
+    let mut blocks = ReaderV1::new(&block_bytes);
+    blocks.version()?;
+    let block_count = blocks.length(MAX_FUNCTION_BLOCKS_V2)?;
+    let mut decoded_blocks = Vec::new();
+    for _ in 0..block_count {
+        let id = BlockIdV2::new(blocks.u32()?);
+        let phi_count = blocks.length(MAX_FUNCTION_PARAMETERS_V2)?;
+        let mut phis = Vec::new();
+        for _ in 0..phi_count {
+            phis.push(TypedValueV2::new(
+                ValueIdV2::new(blocks.u32()?),
+                decode_value_type(&mut blocks)?,
+            ));
+        }
+        decoded_blocks.push(BlockGraphPolicyV1 { id, phis });
+    }
+    blocks.finish()?;
+    Ok(FunctionGraphPolicyV1 {
+        id,
+        kind,
+        calling_convention,
+        entry,
+        attributes: decoded_attributes,
+        parameters: decoded_parameters,
+        blocks: decoded_blocks,
+    })
+}
+
+pub(crate) fn decode_instruction_binding(
+    context: &Context,
+    operation: pliron::context::Ptr<Operation>,
+) -> Result<InstructionGraphBindingV1, InspectionErrorV1> {
+    let bytes = attribute_bytes(context, operation, INSTRUCTION_BINDING_ATTR_V1)?;
+    let mut reader = ReaderV1::new(&bytes);
+    reader.version()?;
+    let block = BlockIdV2::new(reader.u32()?);
+    let ordinal = reader.u32()?;
+    let result = match reader.byte()? {
+        0 => None,
+        1 => Some(TypedValueV2::new(
+            ValueIdV2::new(reader.u32()?),
+            decode_value_type(&mut reader)?,
+        )),
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    };
+    reader.finish()?;
+    Ok(InstructionGraphBindingV1 {
+        block,
+        ordinal,
+        result,
+    })
+}
+
+fn attribute_bytes(
+    context: &Context,
+    operation: pliron::context::Ptr<Operation>,
+    name: &str,
+) -> Result<Vec<u8>, InspectionErrorV1> {
+    let key = Identifier::try_from(name).map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+    let operation = operation.deref(context);
+    let bytes = operation
+        .attributes
+        .get::<BytesAttr>(&key)
+        .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+    if bytes.as_ref().len() > MAX_GRAPH_POLICY_BYTES_V1 {
+        return Err(InspectionErrorV1::UnexpectedGraph);
+    }
+    Ok(bytes.as_ref().clone())
+}
+
+fn decode_function_attribute(
+    reader: &mut ReaderV1<'_>,
+) -> Result<FunctionAttributeV2, InspectionErrorV1> {
+    Ok(match reader.byte()? {
+        1 => FunctionAttributeV2::NoUnwind,
+        2 => FunctionAttributeV2::AlwaysInline,
+        3 => FunctionAttributeV2::NoInline,
+        4 => FunctionAttributeV2::ReadNone,
+        5 => FunctionAttributeV2::WillReturn,
+        6 => FunctionAttributeV2::FlatWorkgroupSize(
+            WorkgroupSizeRangeV1::new(reader.u16()?, reader.u16()?)
+                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
+        ),
+        7 => FunctionAttributeV2::WavesPerEu(
+            WavesPerEuV1::new(reader.byte()?, reader.byte()?)
+                .map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
+        ),
+        8 => FunctionAttributeV2::DenormalFpMathF32Ieee,
+        9 => FunctionAttributeV2::UnsafeFpMathDisabled,
+        10 => FunctionAttributeV2::NoInfsFpMathDisabled,
+        11 => FunctionAttributeV2::NoNansFpMathDisabled,
+        12 => FunctionAttributeV2::NoSignedZerosFpMathDisabled,
+        13 => FunctionAttributeV2::ApproxFuncFpMathDisabled,
+        14 => FunctionAttributeV2::FpContractOff,
+        15 => FunctionAttributeV2::RequiredWorkgroupSize([
+            reader.u16()?,
+            reader.u16()?,
+            reader.u16()?,
+        ]),
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    })
+}
+
+fn decode_parameter_attribute(
+    reader: &mut ReaderV1<'_>,
+) -> Result<ParameterAttributeV1, InspectionErrorV1> {
+    Ok(match reader.byte()? {
+        1 => ParameterAttributeV1::NoAlias,
+        2 => ParameterAttributeV1::NoCapture,
+        3 => ParameterAttributeV1::NonNull,
+        4 => ParameterAttributeV1::ReadOnly,
+        5 => ParameterAttributeV1::WriteOnly,
+        6 => ParameterAttributeV1::Align(reader.u16()?),
+        7 => ParameterAttributeV1::Dereferenceable(reader.u32()?),
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    })
+}
+
+fn decode_value_type(reader: &mut ReaderV1<'_>) -> Result<ValueTypeV2, InspectionErrorV1> {
+    Ok(match reader.byte()? {
+        1 => ValueTypeV2::Scalar(decode_scalar(reader.byte()?)?),
+        2 => ValueTypeV2::Vector {
+            element: decode_scalar(reader.byte()?)?,
+            lanes: reader.byte()?,
+        },
+        3 => ValueTypeV2::Pointer {
+            pointee: decode_scalar(reader.byte()?)?,
+            address_space: decode_address_space(reader.byte()?)?,
+        },
+        4 => ValueTypeV2::ArrayPointer {
+            element: decode_scalar(reader.byte()?)?,
+            elements: reader.u16()?,
+            address_space: decode_address_space(reader.byte()?)?,
+        },
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    })
+}
+
+fn decode_intrinsic(tag: u8) -> Result<IntrinsicV2, InspectionErrorV1> {
+    use fe2o3_llvm_handoff::AxisV2;
+    Ok(match tag {
+        1 => IntrinsicV2::AmdGpuWorkitemId(AxisV2::X),
+        2 => IntrinsicV2::AmdGpuWorkitemId(AxisV2::Y),
+        3 => IntrinsicV2::AmdGpuWorkitemId(AxisV2::Z),
+        4 => IntrinsicV2::AmdGpuWorkgroupId(AxisV2::X),
+        5 => IntrinsicV2::AmdGpuWorkgroupId(AxisV2::Y),
+        6 => IntrinsicV2::AmdGpuWorkgroupId(AxisV2::Z),
+        7 => IntrinsicV2::AmdGpuBarrier,
+        8 => IntrinsicV2::FmaF32,
+        9 => IntrinsicV2::SqrtF32,
+        10 => IntrinsicV2::Trap,
+        11 => IntrinsicV2::AmdGpuMfmaF32_16x16x16Bf16_1k,
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    })
+}
+
+fn decode_scalar(tag: u8) -> Result<fe2o3_llvm_handoff::ScalarTypeV1, InspectionErrorV1> {
+    use fe2o3_llvm_handoff::ScalarTypeV1;
+    Ok(match tag {
+        1 => ScalarTypeV1::I1,
+        2 => ScalarTypeV1::I8,
+        3 => ScalarTypeV1::I16,
+        4 => ScalarTypeV1::I32,
+        5 => ScalarTypeV1::I64,
+        6 => ScalarTypeV1::F16,
+        7 => ScalarTypeV1::Bf16,
+        8 => ScalarTypeV1::F32,
+        9 => ScalarTypeV1::F64,
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    })
+}
+
+fn decode_address_space(tag: u8) -> Result<fe2o3_llvm_handoff::AddressSpaceV1, InspectionErrorV1> {
+    use fe2o3_llvm_handoff::AddressSpaceV1;
+    Ok(match tag {
+        1 => AddressSpaceV1::Flat,
+        2 => AddressSpaceV1::Global,
+        3 => AddressSpaceV1::Region,
+        4 => AddressSpaceV1::Local,
+        5 => AddressSpaceV1::Constant,
+        6 => AddressSpaceV1::Private,
+        _ => return Err(InspectionErrorV1::UnexpectedGraph),
+    })
+}
+
+struct ReaderV1<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> ReaderV1<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { remaining: bytes }
+    }
+
+    fn version(&mut self) -> Result<(), InspectionErrorV1> {
+        if self.byte()? != POLICY_VERSION_V1 {
+            return Err(InspectionErrorV1::UnexpectedGraph);
+        }
+        Ok(())
+    }
+
+    fn byte(&mut self) -> Result<u8, InspectionErrorV1> {
+        let (&value, remaining) = self
+            .remaining
+            .split_first()
+            .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+        self.remaining = remaining;
+        Ok(value)
+    }
+
+    fn boolean(&mut self) -> Result<bool, InspectionErrorV1> {
+        match self.byte()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(InspectionErrorV1::UnexpectedGraph),
+        }
+    }
+
+    fn u16(&mut self) -> Result<u16, InspectionErrorV1> {
+        Ok(u16::from_le_bytes(self.array()?))
+    }
+
+    fn u32(&mut self) -> Result<u32, InspectionErrorV1> {
+        Ok(u32::from_le_bytes(self.array()?))
+    }
+
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], InspectionErrorV1> {
+        let (value, remaining) = self
+            .remaining
+            .split_at_checked(N)
+            .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+        self.remaining = remaining;
+        value
+            .try_into()
+            .map_err(|_| InspectionErrorV1::UnexpectedGraph)
+    }
+
+    fn length(&mut self, maximum: usize) -> Result<usize, InspectionErrorV1> {
+        let value = usize::try_from(self.u32()?).map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
+        if value > maximum {
+            return Err(InspectionErrorV1::UnexpectedGraph);
+        }
+        Ok(value)
+    }
+
+    fn string(&mut self, maximum: usize) -> Result<String, InspectionErrorV1> {
+        let length = self.length(maximum)?;
+        let (value, remaining) = self
+            .remaining
+            .split_at_checked(length)
+            .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+        self.remaining = remaining;
+        core::str::from_utf8(value)
+            .map(str::to_owned)
+            .map_err(|_| InspectionErrorV1::UnexpectedGraph)
+    }
+
+    fn finish(self) -> Result<(), InspectionErrorV1> {
+        if !self.remaining.is_empty() {
+            return Err(InspectionErrorV1::UnexpectedGraph);
+        }
+        Ok(())
+    }
 }
 
 fn set_bytes(

@@ -53,6 +53,7 @@ use pliron_llvm::{
 };
 use sha2::{Digest as _, Sha256};
 
+use crate::graph_export::derive_graph_handoff;
 use crate::graph_policy::{
     inspect_function_policy, inspect_global_policy, inspect_instruction_binding,
     inspect_intrinsic_policy, inspect_module_policy, install_function_policy,
@@ -98,7 +99,7 @@ fn lower_inner(source: &Gfx942HandoffV2) -> Result<LoweredAmdgcnPlironLlvmV1, Lo
     let inspection = inspect_module(&context, &owned, source)
         .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectInspection))?;
     let receipt = encode_receipt(source, admitted.profile(), inspection)?;
-    Ok(LoweredAmdgcnPlironLlvmV1 {
+    let lowered = LoweredAmdgcnPlironLlvmV1 {
         context,
         module: owned,
         context_identity,
@@ -107,7 +108,16 @@ fn lower_inner(source: &Gfx942HandoffV2) -> Result<LoweredAmdgcnPlironLlvmV1, Lo
         profile: admitted.profile(),
         inspection,
         receipt,
-    })
+    };
+    if derive_graph_handoff(&lowered)
+        .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectInspection))?
+        != *source
+    {
+        return Err(LoweringErrorV1::Construction(
+            ConstructionStageV1::DialectInspection,
+        ));
+    }
+    Ok(lowered)
 }
 
 pub(crate) fn inspect_lowered(
@@ -141,22 +151,37 @@ pub(crate) fn export_graph(
         return Err(GraphExportErrorV1::SourceIdentitySubstitution);
     }
 
-    let inspection = inspect_lowered(lowered).map_err(GraphExportErrorV1::Inspection)?;
-    let receipt = encode_receipt(&lowered.source, lowered.profile, inspection)
-        .map_err(|_| GraphExportErrorV1::ReceiptConstruction)?;
-    if inspection != lowered.inspection || receipt != lowered.receipt {
+    let current = require_context_identity(&lowered.context)
+        .map_err(|_| GraphExportErrorV1::Inspection(InspectionErrorV1::ContextIdentity))?;
+    if current != lowered.context_identity || lowered.module.owner != current {
+        return Err(GraphExportErrorV1::Inspection(
+            InspectionErrorV1::ForeignOwner,
+        ));
+    }
+    let graph_handoff = derive_graph_handoff(lowered).map_err(GraphExportErrorV1::Inspection)?;
+    let admitted = admit_amdgcn_pliron_llvm_v1(&graph_handoff)
+        .map_err(|_| GraphExportErrorV1::LiveGraphSubstitution)?;
+    if admitted.profile() != lowered.profile {
         return Err(GraphExportErrorV1::LiveGraphSubstitution);
     }
+    let inspection = inspect_module(&lowered.context, &lowered.module, &graph_handoff)
+        .map_err(GraphExportErrorV1::Inspection)?;
+    let receipt = encode_receipt(&graph_handoff, lowered.profile, inspection)
+        .map_err(|_| GraphExportErrorV1::ReceiptConstruction)?;
+    let graph_handoff_identity = graph_handoff.identity();
 
     let identity: [u8; 32] = Sha256::new()
         .chain_update(WORKER_EXPORT_IDENTITY_DOMAIN_V1)
         .chain_update(lowered.source_identity.as_bytes())
         .chain_update(receipt.identity.as_bytes())
         .chain_update(inspection.graph_sha256)
+        .chain_update(graph_handoff_identity.as_bytes())
         .finalize()
         .into();
     Ok(CanonicalPlironLlvmGraphExportV1 {
-        source: lowered.source.clone(),
+        graph_handoff,
+        source_identity: lowered.source_identity,
+        construction_receipt_identity: lowered.receipt.identity,
         receipt,
         inspection,
         identity: GraphExportIdentityV1(identity),
@@ -377,7 +402,7 @@ fn build_function(
                 u32::try_from(ordinal).map_err(|_| {
                     LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph)
                 })?,
-                instruction.result().map(|value| value.id().get()),
+                instruction.result(),
             )?;
             match (instruction.result(), result) {
                 (Some(expected), Some(value)) => {
@@ -911,7 +936,7 @@ fn type_for(context: &Context, value_type: ValueTypeV2) -> Result<TypeHandle, Lo
     }
 }
 
-fn intrinsic_function_type(
+pub(crate) fn intrinsic_function_type(
     context: &Context,
     intrinsic: IntrinsicV2,
 ) -> Result<TypedHandle<FuncType>, LoweringErrorV1> {
@@ -927,7 +952,7 @@ fn intrinsic_function_type(
     Ok(FuncType::get(context, result, parameters, false))
 }
 
-const fn intrinsic_symbol(intrinsic: IntrinsicV2) -> &'static str {
+pub(crate) const fn intrinsic_symbol(intrinsic: IntrinsicV2) -> &'static str {
     match intrinsic {
         IntrinsicV2::AmdGpuWorkitemId(axis) => match axis {
             AxisV2::X => "llvm_amdgcn_workitem_id_x",
@@ -1217,7 +1242,7 @@ fn inspect_module(
                     actual,
                     source_block.id().get(),
                     u32::try_from(ordinal).map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
-                    instruction.result().map(|value| value.id().get()),
+                    instruction.result(),
                 )?;
                 let result = inspect_instruction(
                     actual,
@@ -1385,7 +1410,11 @@ fn scalar_type_matches(context: &Context, actual: TypeHandle, expected: ScalarTy
     }
 }
 
-fn value_type_matches(context: &Context, actual: TypeHandle, expected: ValueTypeV2) -> bool {
+pub(crate) fn value_type_matches(
+    context: &Context,
+    actual: TypeHandle,
+    expected: ValueTypeV2,
+) -> bool {
     match expected {
         ValueTypeV2::Scalar(scalar) => scalar_type_matches(context, actual, scalar),
         ValueTypeV2::Pointer { address_space, .. }
@@ -2025,7 +2054,7 @@ mod tests {
     }
 
     #[test]
-    fn live_operand_substitution_fails_closed() {
+    fn admitted_live_operand_transformation_changes_exported_output() {
         let source = scalar_source();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
         let function = first_function(&lowered);
@@ -2038,16 +2067,16 @@ mod tests {
             .unwrap();
         Operation::replace_operand(store, &lowered.context, 1, replacement);
 
-        assert!(matches!(
-            lowered.export_graph_v1(request(&lowered)),
-            Err(GraphExportErrorV1::Inspection(
-                InspectionErrorV1::UnexpectedGraph
-            ))
-        ));
+        let exported = lowered.export_graph_v1(request(&lowered)).unwrap();
+        assert_ne!(exported.graph_handoff(), &source);
+        assert_ne!(
+            exported.graph_receipt().identity(),
+            lowered.receipt().identity()
+        );
     }
 
     #[test]
-    fn live_alignment_substitution_fails_closed() {
+    fn admitted_live_alignment_transformation_changes_exported_output() {
         let source = scalar_source();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
         let function = first_function(&lowered);
@@ -2058,12 +2087,12 @@ mod tests {
             .unwrap();
         load.set_alignment(&lowered.context, 8);
 
-        assert!(matches!(
-            lowered.export_graph_v1(request(&lowered)),
-            Err(GraphExportErrorV1::Inspection(
-                InspectionErrorV1::UnexpectedGraph
-            ))
-        ));
+        let exported = lowered.export_graph_v1(request(&lowered)).unwrap();
+        assert_ne!(exported.graph_handoff(), &source);
+        assert_ne!(
+            exported.graph_receipt().identity(),
+            lowered.receipt().identity()
+        );
     }
 
     #[test]

@@ -16,7 +16,7 @@ fn fresh_export_binds_exact_source_receipt_and_live_graph() {
     let second = lowered.export_graph_v1(request).unwrap();
 
     assert_eq!(first, second);
-    assert_eq!(first.source_handoff(), &source);
+    assert_eq!(first.graph_handoff(), &source);
     assert_eq!(first.source_identity(), source.identity());
     assert_eq!(first.graph_receipt(), lowered.receipt());
     assert_eq!(first.graph_inspection(), lowered.construction_inspection());

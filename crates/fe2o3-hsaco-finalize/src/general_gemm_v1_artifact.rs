@@ -572,7 +572,7 @@ pub fn execute_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
-    if machine.compiler_boundary().graph_export().source_handoff() != machine.handoff()
+    if machine.compiler_boundary().graph_export().graph_handoff() != machine.handoff()
         || machine.compiler_boundary().graph_export().source_identity()
             != machine.handoff().identity()
         || machine.worker_admission().handoff() != machine.handoff()
@@ -618,7 +618,7 @@ pub fn execute_symbolic_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertSymbolicGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
-    if machine.compiler_boundary().graph_export().source_handoff() != machine.handoff()
+    if machine.compiler_boundary().graph_export().graph_handoff() != machine.handoff()
         || machine.compiler_boundary().graph_export().source_identity()
             != machine.handoff().identity()
         || machine.worker_admission().handoff() != machine.handoff()

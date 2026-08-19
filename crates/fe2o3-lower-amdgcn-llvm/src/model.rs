@@ -141,21 +141,33 @@ impl GraphExportRequestV1 {
 /// artifact, link, publication, load, or launch authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalPlironLlvmGraphExportV1 {
-    pub(crate) source: Gfx942HandoffV2,
+    pub(crate) graph_handoff: Gfx942HandoffV2,
+    pub(crate) source_identity: HandoffIdentityV2,
+    pub(crate) construction_receipt_identity: LoweringReceiptIdentityV1,
     pub(crate) receipt: CanonicalLoweringReceiptV1,
     pub(crate) inspection: LiveGraphInspectionV1,
     pub(crate) identity: GraphExportIdentityV1,
 }
 
 impl CanonicalPlironLlvmGraphExportV1 {
-    /// Returns the exact canonical typed source admitted after graph inspection.
-    pub const fn source_handoff(&self) -> &Gfx942HandoffV2 {
-        &self.source
+    /// Returns a fresh typed handoff reconstructed from the live Pliron graph.
+    pub const fn graph_handoff(&self) -> &Gfx942HandoffV2 {
+        &self.graph_handoff
     }
 
-    /// Returns the recomputed canonical source identity.
-    pub fn source_identity(&self) -> HandoffIdentityV2 {
-        self.source.identity()
+    /// Returns the retained construction-source identity bound as provenance.
+    pub const fn source_identity(&self) -> HandoffIdentityV2 {
+        self.source_identity
+    }
+
+    /// Returns the identity of the graph-derived canonical worker handoff.
+    pub fn graph_handoff_identity(&self) -> HandoffIdentityV2 {
+        self.graph_handoff.identity()
+    }
+
+    /// Returns the retained construction receipt identity accepted by the export request.
+    pub const fn construction_receipt_identity(&self) -> LoweringReceiptIdentityV1 {
+        self.construction_receipt_identity
     }
 
     /// Returns the freshly constructed source-and-live-graph receipt.

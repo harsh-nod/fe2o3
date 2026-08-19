@@ -189,7 +189,7 @@ fn complete_general_gemm_handoffs_lower_into_live_pliron_llvm_graphs() {
         assert!(inspection.exact_memory_alignment());
         assert!(!lowered.grants_artifact_authority());
         let boundary = machine.compiler_boundary();
-        assert_eq!(boundary.graph_export().source_handoff(), source);
+        assert_eq!(boundary.graph_export().graph_handoff(), source);
         assert_eq!(boundary.graph_export().graph_inspection(), inspection);
         assert_eq!(
             boundary.worker_admission().handoff_identity(),
@@ -1001,7 +1001,7 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
             &[0; 32]
         );
         assert_eq!(
-            machine.compiler_boundary().graph_export().source_handoff(),
+            machine.compiler_boundary().graph_export().graph_handoff(),
             machine.handoff()
         );
         assert_eq!(

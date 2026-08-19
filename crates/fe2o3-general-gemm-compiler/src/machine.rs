@@ -326,10 +326,11 @@ fn lower_symbolic_structural_inner(
         .map_err(GeneralGemmStructuralMachineErrorV1::Descriptor)?;
     let binding_section = symbolic_machine_binding_section(&lowered, &descriptor_source);
     let handoff = build_symbolic_machine_handoff(&lowered, &descriptor_source, &binding_section)?;
-    let source_identity = handoff.identity();
     let compiler_boundary =
         admit_general_gemm_compiler_boundary_v1(&handoff, MeasuredLlvmLldBuildV1::exact())?;
-    let assembly = serialize_gfx942_handoff_v2(&handoff)
+    let graph_handoff = compiler_boundary.graph_export().graph_handoff();
+    let source_identity = graph_handoff.identity();
+    let assembly = serialize_gfx942_handoff_v2(graph_handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::Serialize)?;
     if assembly.source_identity() != source_identity || !assembly.has_embedded_source_identity() {
         return Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity);
@@ -400,10 +401,11 @@ fn lower_structural_inner(
         .map_err(GeneralGemmStructuralMachineErrorV1::Descriptor)?;
     let binding_section = machine_binding_section(unit, projection, &descriptor_source);
     let handoff = build_machine_handoff(unit, projection, &descriptor_source, &binding_section)?;
-    let source_identity = handoff.identity();
     let compiler_boundary =
         admit_general_gemm_compiler_boundary_v1(&handoff, MeasuredLlvmLldBuildV1::exact())?;
-    let assembly = serialize_gfx942_handoff_v2(&handoff)
+    let graph_handoff = compiler_boundary.graph_export().graph_handoff();
+    let source_identity = graph_handoff.identity();
+    let assembly = serialize_gfx942_handoff_v2(graph_handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::Serialize)?;
     if assembly.source_identity() != source_identity || !assembly.has_embedded_source_identity() {
         return Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity);
@@ -468,17 +470,19 @@ fn admit_compiler_boundary_inner(
             lowered.receipt().identity(),
         ))
         .map_err(GeneralGemmStructuralMachineErrorV1::GraphExport)?;
-    if graph_export.source_handoff() != handoff
+    if graph_export.graph_handoff() != handoff
         || graph_export.source_identity() != handoff.identity()
+        || graph_export.graph_handoff_identity() != handoff.identity()
         || graph_export.graph_inspection() != lowered.construction_inspection()
     {
         return Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity);
     }
 
-    let canonical_handoff = graph_export.source_handoff().encode_canonical();
+    let canonical_handoff = graph_export.graph_handoff().encode_canonical();
+    let graph_handoff_identity = graph_export.graph_handoff_identity();
     let worker_admission = WorkerAdmissionRequestV2::new(
         canonical_handoff.as_bytes(),
-        *graph_export.source_identity().as_bytes(),
+        *graph_handoff_identity.as_bytes(),
         build,
     )
     .admit()
@@ -490,6 +494,7 @@ fn admit_compiler_boundary_inner(
         &[
             &graph_export_identity,
             source_identity.as_bytes(),
+            graph_handoff_identity.as_bytes(),
             worker_admission.admission_identity().as_bytes(),
         ],
     ));

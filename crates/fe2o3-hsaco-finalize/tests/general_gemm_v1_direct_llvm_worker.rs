@@ -187,7 +187,7 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
         let machine = lower_general_gemm_symbolic_structural_machine_v1(&unit(schedule))
             .expect("lower exact symbolic general-GEMM machine");
         assert_eq!(
-            machine.compiler_boundary().graph_export().source_handoff(),
+            machine.compiler_boundary().graph_export().graph_handoff(),
             machine.handoff()
         );
         let canonical_source = machine.handoff().encode_canonical();
