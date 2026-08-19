@@ -53,6 +53,12 @@ use pliron_llvm::{
 };
 use sha2::{Digest as _, Sha256};
 
+use crate::graph_policy::{
+    inspect_function_policy, inspect_global_policy, inspect_instruction_binding,
+    inspect_intrinsic_policy, inspect_module_policy, install_function_policy,
+    install_global_policy, install_instruction_binding, install_intrinsic_policy,
+    install_module_policy,
+};
 use crate::model::{
     CanonicalLoweringReceiptV1, CanonicalPlironLlvmGraphExportV1, ConstructionStageV1,
     GraphExportErrorV1, GraphExportIdentityV1, GraphExportRequestV1, InspectionErrorV1,
@@ -164,6 +170,7 @@ fn build_module(
     let module_name = Identifier::try_from(MODULE_NAME_V1)
         .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph))?;
     let module = ModuleOp::new(context, module_name);
+    install_module_policy(context, module.get_operation(), admitted.handoff())?;
     let globals = admitted
         .handoff()
         .module()
@@ -208,6 +215,7 @@ fn build_intrinsic(
         .map_err(|_| LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph))?;
     let function_type = intrinsic_function_type(context, source.intrinsic())?;
     let declaration = FuncOp::new(context, symbol.clone(), function_type);
+    install_intrinsic_policy(context, declaration.get_operation(), source)?;
     module.append_operation(context, declaration.get_operation(), 0);
     Ok(IntrinsicBinding {
         symbol,
@@ -236,7 +244,11 @@ fn build_global(
     global.set_alignment(context, u32::from(source.alignment()));
     if let Some(bytes) = source.byte_initializer() {
         global.set_initializer_value(context, BytesAttr::new(bytes.to_vec()).into());
+    } else if let Some(initializer) = source.initializer() {
+        let initializer = constant_attribute(context, initializer)?;
+        global.set_initializer_value(context, initializer);
     }
+    install_global_policy(context, global.get_operation(), source)?;
     module.append_operation(context, global.get_operation(), 0);
     Ok(GlobalBinding {
         symbol,
@@ -268,6 +280,7 @@ fn build_function(
         .collect::<Result<Vec<_>, _>>()?;
     let function_type = FuncType::get(context, VoidType::get(context).into(), arguments, false);
     let function = FuncOp::new(context, symbol, function_type);
+    install_function_policy(context, function.get_operation(), source)?;
     module.append_operation(context, function.get_operation(), 0);
 
     let entry = function.get_or_create_entry_block(context);
@@ -338,7 +351,7 @@ fn build_function(
             .ok_or(LoweringErrorV1::Construction(
                 ConstructionStageV1::DialectGraph,
             ))?;
-        for instruction in block.instructions() {
+        for (ordinal, instruction) in block.instructions().iter().enumerate() {
             if matches!(instruction.kind(), InstructionKindV2::Phi { .. }) {
                 continue;
             }
@@ -350,6 +363,21 @@ fn build_function(
                 &value_types,
                 globals,
                 intrinsics,
+            )?;
+            let operation = result
+                .and_then(|value| value.defining_op())
+                .or_else(|| target.deref(context).get_tail())
+                .ok_or(LoweringErrorV1::Construction(
+                    ConstructionStageV1::DialectGraph,
+                ))?;
+            install_instruction_binding(
+                context,
+                operation,
+                block.id().get(),
+                u32::try_from(ordinal).map_err(|_| {
+                    LoweringErrorV1::Construction(ConstructionStageV1::DialectGraph)
+                })?,
+                instruction.result().map(|value| value.id().get()),
             )?;
             match (instruction.result(), result) {
                 (Some(expected), Some(value)) => {
@@ -1004,6 +1032,7 @@ fn inspect_module(
         .map_err(|_| InspectionErrorV1::StaleModule)?;
     verify_operation(module_pointer, context)
         .map_err(|_| InspectionErrorV1::DialectVerification)?;
+    inspect_module_policy(context, module_pointer, source)?;
     let actual_module_operations = owned
         .module
         .get_body(context, 0)
@@ -1042,6 +1071,7 @@ fn inspect_module(
             .ok_or(InspectionErrorV1::UnexpectedGraph)?;
     }
     for (source_intrinsic, actual) in source.module().intrinsics().iter().zip(actual_intrinsics) {
+        inspect_intrinsic_policy(context, *actual, source_intrinsic)?;
         inspect_intrinsic(context, *actual, source_intrinsic.intrinsic(), &mut facts)?;
         intrinsic_count = intrinsic_count
             .checked_add(1)
@@ -1050,6 +1080,7 @@ fn inspect_module(
     for (source_function, actual) in source.module().functions().iter().zip(actual_functions) {
         let function = Operation::get_op::<FuncOp>(*actual, context)
             .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+        inspect_function_policy(context, *actual, source_function)?;
         let source_symbol = Identifier::try_from(source_function.symbol())
             .map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
         if function.get_symbol_name(context) != source_symbol {
@@ -1169,7 +1200,7 @@ fn inspect_module(
                 return Err(InspectionErrorV1::UnexpectedGraph);
             }
             let mut actual_operations = actual_operations.into_iter();
-            for instruction in source_block.instructions() {
+            for (ordinal, instruction) in source_block.instructions().iter().enumerate() {
                 if matches!(instruction.kind(), InstructionKindV2::Phi { .. }) {
                     facts.push(3);
                     let result = instruction
@@ -1181,6 +1212,13 @@ fn inspect_module(
                 let actual = actual_operations
                     .next()
                     .ok_or(InspectionErrorV1::UnexpectedGraph)?;
+                inspect_instruction_binding(
+                    context,
+                    actual,
+                    source_block.id().get(),
+                    u32::try_from(ordinal).map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
+                    instruction.result().map(|value| value.id().get()),
+                )?;
                 let result = inspect_instruction(
                     actual,
                     instruction,
@@ -1274,6 +1312,7 @@ fn inspect_global(
 ) -> Result<(), InspectionErrorV1> {
     let global =
         Operation::get_op::<GlobalOp>(actual, context).ok_or(InspectionErrorV1::UnexpectedGraph)?;
+    inspect_global_policy(context, actual, expected)?;
     let symbol =
         Identifier::try_from(expected.symbol()).map_err(|_| InspectionErrorV1::UnexpectedGraph)?;
     let linkage = match expected.linkage() {
@@ -1918,8 +1957,8 @@ mod tests {
     use fe2o3_amdgcn_pliron_llvm::{ScalarKernelModuleV1, lower_scalar_kernel_v2};
     use fe2o3_llvm_handoff::{IdentityV1, StageIdentitiesV1};
     use pliron::{
-        basic_block::BasicBlock, context::Ptr, linked_list::ContainsLinkedList,
-        operation::Operation,
+        basic_block::BasicBlock, builtin::attributes::BytesAttr, context::Ptr,
+        identifier::Identifier, linked_list::ContainsLinkedList, op::Op, operation::Operation,
     };
     use pliron_llvm::{
         op_interfaces::AlignableOpInterface,
@@ -1927,6 +1966,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::graph_policy::{FUNCTION_ATTRIBUTES_ATTR_V1, MODULE_FLAGS_ATTR_V1};
     use crate::{GraphExportErrorV1, GraphExportRequestV1};
 
     fn scalar_source() -> Gfx942HandoffV2 {
@@ -1962,6 +2002,26 @@ mod tests {
             .iter(&lowered.context)
             .next()
             .unwrap()
+    }
+
+    fn substitute_policy_bytes(
+        lowered: &LoweredAmdgcnPlironLlvmV1,
+        operation: Ptr<Operation>,
+        name: &str,
+    ) {
+        let key = Identifier::try_from(name).unwrap();
+        let mut bytes = operation
+            .deref(&lowered.context)
+            .attributes
+            .get::<BytesAttr>(&key)
+            .unwrap()
+            .as_ref()
+            .clone();
+        *bytes.last_mut().unwrap() ^= 1;
+        operation
+            .deref_mut(&lowered.context)
+            .attributes
+            .set(key, BytesAttr::new(bytes));
     }
 
     #[test]
@@ -2004,5 +2064,29 @@ mod tests {
                 InspectionErrorV1::UnexpectedGraph
             ))
         ));
+    }
+
+    #[test]
+    fn live_module_and_function_policy_substitution_fail_closed() {
+        for (operation_kind, attribute) in [
+            (0_u8, MODULE_FLAGS_ATTR_V1),
+            (1_u8, FUNCTION_ATTRIBUTES_ATTR_V1),
+        ] {
+            let source = scalar_source();
+            let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+            let operation = if operation_kind == 0 {
+                lowered.module.module.get_operation()
+            } else {
+                first_function(&lowered).get_operation()
+            };
+            substitute_policy_bytes(&lowered, operation, attribute);
+
+            assert!(matches!(
+                lowered.export_graph_v1(request(&lowered)),
+                Err(GraphExportErrorV1::Inspection(
+                    InspectionErrorV1::UnexpectedGraph
+                ))
+            ));
+        }
     }
 }

@@ -5,6 +5,7 @@
 //! and obligations remain authoritative through the retained canonical typed
 //! handoff, never through printer text or process-local arena identity.
 
+mod graph_policy;
 mod lower;
 mod model;
 
