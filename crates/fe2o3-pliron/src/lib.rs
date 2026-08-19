@@ -1548,6 +1548,55 @@ mod owner_handle_tests {
         assert!(!session.is_poisoned());
     }
 
+    #[test]
+    fn operation_session_budget_rejects_before_allocation() {
+        let mut session = session();
+        session.operation_tree_work = HARD_MAX_SESSION_OPERATION_TREE_ITEMS;
+        let next = session.next_operation_handle;
+
+        assert!(matches!(
+            session.create_module("module"),
+            Err(OperationHandleError::SessionOperationTreeLimitExceeded)
+        ));
+        assert!(matches!(
+            session.import_operation_text_v1("builtin.module @imported { ^entry(): }"),
+            Err(OperationHandleError::SessionOperationTreeLimitExceeded)
+        ));
+        assert_eq!(session.next_operation_handle, next);
+        assert!(session.operations.is_empty());
+        assert!(!session.is_poisoned());
+    }
+
+    #[test]
+    fn operation_tree_budget_rejects_flat_amplification() {
+        let mut text = String::from("builtin.module @root { ^entry(): ");
+        for index in 0..(HARD_MAX_OPERATION_CHILDREN / 2) {
+            use fmt::Write as _;
+            if index != 0 {
+                text.push_str("; ");
+            }
+            write!(
+                text,
+                "builtin.module @m{index} {{ ^entry(): builtin.module @l{index} {{ ^entry(): }} }}"
+            )
+            .unwrap();
+        }
+        text.push('}');
+        assert!(text.len() <= HARD_MAX_OPERATION_IMPORT_BYTES);
+
+        let mut session = session();
+        let result = session.import_operation_text_v1(&text);
+        assert!(
+            matches!(
+                result,
+                Err(OperationHandleError::OperationTreeLimitExceeded)
+            ),
+            "unexpected import result: {result:?}"
+        );
+        assert!(session.is_poisoned());
+        assert!(session.operations.is_empty());
+    }
+
     #[cfg(feature = "internal-test-context-access")]
     #[test]
     fn test_context_action_panics_are_contained_and_poison_the_session() {
