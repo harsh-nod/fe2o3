@@ -3011,11 +3011,23 @@ mod tests {
             ),
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::WorkgroupX,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::WorkgroupY,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
                 TrustedGeneralGemmOperationV1::LoadA,
             ),
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,
                 TrustedGeneralGemmOperationV1::LoadB,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::LoadC,
             ),
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,
@@ -3027,11 +3039,23 @@ mod tests {
             ),
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::WaitStage,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::ReadStage,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
                 TrustedGeneralGemmOperationV1::Publish,
             ),
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,
                 TrustedGeneralGemmOperationV1::Mfma,
+            ),
+            TrustedDeviceItem::GeneralGemm(
+                TrustedGeneralGemmSurfaceV1::ProofSensitive,
+                TrustedGeneralGemmOperationV1::MfmaValue,
             ),
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::ProofSensitive,

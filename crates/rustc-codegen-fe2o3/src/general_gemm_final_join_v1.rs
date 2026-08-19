@@ -5,6 +5,8 @@
 //! machine observation together. Public identities are compared, but never
 //! accepted in place of any owning input.
 
+#![allow(dead_code)] // The pipeline hook stays fail-closed until proof execution is authoritative.
+
 use core::fmt;
 
 use fe2o3_general_gemm_compiler::{GeneralGemmScheduleV1, GeneralGemmSymbolicCompilationUnitV1};
@@ -21,10 +23,8 @@ use fe2o3_verifier::{
 use sha2::{Digest as _, Sha256};
 
 use crate::collected_general_gemm_v1::{
-    AuthenticatedGeneralGemmFrontendCorrespondenceV1, GeneralGemmSourceMirEvidenceV1,
-    GeneralGemmSourcePropertyKindV1,
+    AuthenticatedGeneralGemmFrontendCorrespondenceV1, GeneralGemmSourcePropertyKindV1,
 };
-use crate::general_gemm_intrinsic_semantics_v1::GeneralGemmIntrinsicSemanticsV1;
 
 const FINAL_JOIN_DOMAIN_V1: &[u8] = b"FE2O3/GENERAL-GEMM/RUSTC-FINAL-JOIN/V1\0";
 const FINAL_PAIR_JOIN_DOMAIN_V1: &[u8] = b"FE2O3/GENERAL-GEMM/RUSTC-FINAL-PAIR-JOIN/V1\0";
@@ -143,7 +143,8 @@ impl QualifiedGeneralGemmPairCompilationV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GeneralGemmFinalJoinErrorV1 {
     FrontendBindingSubstitution,
-    FrontendIdentity,
+    FrontendRevalidation,
+    PairRequestSubstitution,
     ScheduleOrder { index: usize },
     ProofRequestSubstitution,
     PropertyOrder { index: usize },
@@ -152,10 +153,6 @@ pub(crate) enum GeneralGemmFinalJoinErrorV1 {
     PropertyEvidenceIdentity { index: usize },
     SourceRequestSubstitution { index: usize },
     MachineRequestSubstitution { index: usize },
-    SourceReceiptOrder { index: usize },
-    SourceReceiptIdentity { index: usize },
-    SourceIntrinsicFact { index: usize },
-    SourceMirEvidence { index: usize },
     MissingSourceConfirmation { index: usize },
     MachineCompilationSubstitution,
     MachineScheduleSubstitution,
@@ -182,10 +179,10 @@ pub(crate) fn qualify_general_gemm_pair_compilation_v1(
     vectorized_proof: GeneralGemmPropertyClosureEvaluationV1,
     vectorized_machine: OpaqueGeneralGemmPostLinkMachineObservationV1,
 ) -> Result<QualifiedGeneralGemmPairCompilationV1, GeneralGemmFinalJoinErrorV1> {
-    if frontend.identity().as_bytes() == &[0; 32] {
-        return Err(GeneralGemmFinalJoinErrorV1::FrontendIdentity);
+    if !frontend.revalidate() {
+        return Err(GeneralGemmFinalJoinErrorV1::FrontendRevalidation);
     }
-    validate_source_receipts(frontend.source_properties())?;
+    require_pair_request_consistency(&reference_symbolic, &vectorized_symbolic)?;
     let reference = qualify_general_gemm_schedule_v1(
         &frontend,
         GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
@@ -209,6 +206,33 @@ pub(crate) fn qualify_general_gemm_pair_compilation_v1(
         reference,
         vectorized,
     })
+}
+
+fn require_pair_request_consistency(
+    reference: &GeneralGemmSymbolicCompilationUnitV1,
+    vectorized: &GeneralGemmSymbolicCompilationUnitV1,
+) -> Result<(), GeneralGemmFinalJoinErrorV1> {
+    let reference_request = reference.request();
+    let vectorized_request = vectorized.request();
+    if reference.frontend_semantics() != vectorized.frontend_semantics()
+        || reference_request.identity() != vectorized_request.identity()
+        || reference_request.kernel_instance_identity()
+            != vectorized_request.kernel_instance_identity()
+        || reference_request.input() != vectorized_request.input()
+        || reference_request.input_obligations_identity()
+            != vectorized_request.input_obligations_identity()
+        || reference_request.compiler_profile_identity()
+            != vectorized_request.compiler_profile_identity()
+        || reference_request.target_profile_identity()
+            != vectorized_request.target_profile_identity()
+        || reference_request.selector() != vectorized_request.selector()
+        || reference_request.limits() != vectorized_request.limits()
+        || reference.toolchain_route_identity() != vectorized.toolchain_route_identity()
+        || reference.limits() != vectorized.limits()
+    {
+        return Err(GeneralGemmFinalJoinErrorV1::PairRequestSubstitution);
+    }
+    Ok(())
 }
 
 fn qualify_general_gemm_schedule_v1(
@@ -268,13 +292,12 @@ fn qualify_general_gemm_schedule_v1(
         if request.machine_confirmation() != contract.machine {
             return Err(GeneralGemmFinalJoinErrorV1::MachineRequestSubstitution { index });
         }
-        if let Some(required) = contract.source {
-            if !source_receipts
+        if let Some(required) = contract.source
+            && !source_receipts
                 .iter()
                 .any(|receipt| source_kind_to_confirmation(receipt.kind()) == required)
-            {
-                return Err(GeneralGemmFinalJoinErrorV1::MissingSourceConfirmation { index });
-            }
+        {
+            return Err(GeneralGemmFinalJoinErrorV1::MissingSourceConfirmation { index });
         }
         if let Some(required) = contract.machine {
             let present = match required {
@@ -326,102 +349,6 @@ fn require_exact_proof_request(
         return Err(GeneralGemmFinalJoinErrorV1::ProofRequestSubstitution);
     }
     Ok(())
-}
-
-fn validate_source_receipts(
-    receipts: &[crate::collected_general_gemm_v1::GeneralGemmSourcePropertyReceiptV1; 11],
-) -> Result<(), GeneralGemmFinalJoinErrorV1> {
-    let semantics = GeneralGemmIntrinsicSemanticsV1::canonical();
-    if semantics.validate().is_err() {
-        return Err(GeneralGemmFinalJoinErrorV1::SourceIntrinsicFact { index: 0 });
-    }
-    validate_source_receipt_snapshot(&receipts.each_ref().map(|receipt| {
-        let index = receipt.kind() as usize - 1;
-        SourceReceiptSnapshotV1 {
-            kind: receipt.kind(),
-            evidence_identity: *receipt.evidence_identity(),
-            intrinsic_fact_matches: receipt.intrinsic_fact() == semantics.source_facts()[index],
-            mir_evidence_matches: source_mir_evidence_matches_kind(
-                receipt.kind(),
-                receipt.mir_evidence(),
-            ),
-        }
-    }))
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SourceReceiptSnapshotV1 {
-    kind: GeneralGemmSourcePropertyKindV1,
-    evidence_identity: [u8; 32],
-    intrinsic_fact_matches: bool,
-    mir_evidence_matches: bool,
-}
-
-fn validate_source_receipt_snapshot(
-    receipts: &[SourceReceiptSnapshotV1; 11],
-) -> Result<(), GeneralGemmFinalJoinErrorV1> {
-    for (index, (receipt, expected)) in receipts
-        .iter()
-        .zip(canonical_source_property_kinds())
-        .enumerate()
-    {
-        if receipt.kind != expected {
-            return Err(GeneralGemmFinalJoinErrorV1::SourceReceiptOrder { index });
-        }
-        if receipt.evidence_identity == [0; 32] {
-            return Err(GeneralGemmFinalJoinErrorV1::SourceReceiptIdentity { index });
-        }
-        if !receipt.intrinsic_fact_matches {
-            return Err(GeneralGemmFinalJoinErrorV1::SourceIntrinsicFact { index });
-        }
-        if !receipt.mir_evidence_matches {
-            return Err(GeneralGemmFinalJoinErrorV1::SourceMirEvidence { index });
-        }
-    }
-    Ok(())
-}
-
-const fn source_mir_evidence_matches_kind(
-    kind: GeneralGemmSourcePropertyKindV1,
-    evidence: &GeneralGemmSourceMirEvidenceV1,
-) -> bool {
-    matches!(
-        (kind, evidence),
-        (
-            GeneralGemmSourcePropertyKindV1::AllocationAndProvenance,
-            GeneralGemmSourceMirEvidenceV1::AllocationAndProvenance { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::GuardedGlobalAccesses,
-            GeneralGemmSourceMirEvidenceV1::GuardedGlobalAccesses { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::LdsWriteReadInitialization,
-            GeneralGemmSourceMirEvidenceV1::LdsWriteReadInitialization { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::EffectConflictFreedom,
-            GeneralGemmSourceMirEvidenceV1::EffectConflictFreedom { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::ControlFlowBarrierConvergence,
-            GeneralGemmSourceMirEvidenceV1::ControlFlowBarrierConvergence { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::OutputOwnership,
-            GeneralGemmSourceMirEvidenceV1::OutputOwnership { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::LdsLifecycle,
-            GeneralGemmSourceMirEvidenceV1::LdsLifecycle { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::AccumulatorPhase,
-            GeneralGemmSourceMirEvidenceV1::AccumulatorPhase { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::MaskedTail,
-            GeneralGemmSourceMirEvidenceV1::MaskedTail { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::AlphaBetaEpilogue,
-            GeneralGemmSourceMirEvidenceV1::AlphaBetaEpilogue { .. }
-        ) | (
-            GeneralGemmSourcePropertyKindV1::NumericalOperationOrder,
-            GeneralGemmSourceMirEvidenceV1::NumericalOperationOrder { .. }
-        )
-    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -735,6 +662,17 @@ const fn source_kind_to_confirmation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_compiler_api::{
+        CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
+        KernelInstanceIdentityV1, PipelineSelectorV1, RequestIdentityV1, SnapshotFormatIdentityV1,
+        SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
+    };
+    use fe2o3_general_gemm_compiler::{
+        GeneralGemmFrontendSemanticBindingV1, GeneralGemmLoweringLimitsV1,
+        GeneralGemmSymbolicKirV1, GeneralGemmSymbolicPlanV1,
+        general_gemm_symbolic_obligation_set_identity_v1,
+        general_gemm_symbolic_pipeline_configuration_identity_v1,
+    };
     use fe2o3_verifier::GeneralGemmEvidenceIdentityV1;
 
     #[derive(Clone, Copy)]
@@ -745,6 +683,11 @@ mod tests {
         source: Option<GeneralGemmSourcePropertyConfirmationKindV1>,
         machine: Option<GeneralGemmMachinePropertyConfirmationKindV1>,
     }
+
+    type MachineFactMutationV1 = (
+        fn(&mut MachineObservationFactsV1),
+        GeneralGemmFinalJoinErrorV1,
+    );
 
     fn validate_observed_properties(
         schedule: GeneralGemmProofScheduleV1,
@@ -782,6 +725,60 @@ mod tests {
             source: contract.source,
             machine: contract.machine,
         })
+    }
+
+    fn identity(byte: u8) -> [u8; 32] {
+        [byte; 32]
+    }
+
+    fn frontend_binding(kernel_byte: u8, source_byte: u8) -> GeneralGemmFrontendSemanticBindingV1 {
+        GeneralGemmFrontendSemanticBindingV1::from_consumed_frontend_receipt_observation(
+            identity(kernel_byte),
+            identity(source_byte),
+            identity(0x42),
+            identity(0x43),
+            GeneralGemmSymbolicPlanV1::canonical(),
+            GeneralGemmSymbolicKirV1::canonical(),
+        )
+        .unwrap()
+    }
+
+    fn symbolic_unit_for(
+        schedule: GeneralGemmScheduleV1,
+        frontend: GeneralGemmFrontendSemanticBindingV1,
+        request_byte: u8,
+        input_byte: u8,
+        compiler_byte: u8,
+        target_byte: u8,
+        compile_limits: CompileLimitsV1,
+        lowering_limits: GeneralGemmLoweringLimitsV1,
+    ) -> GeneralGemmSymbolicCompilationUnitV1 {
+        let input = StageSnapshotV1::new(
+            CompilerStageV1::FrontendInput,
+            SnapshotIdentityV1::from_untrusted_bytes(identity(input_byte)),
+            SnapshotFormatIdentityV1::from_untrusted_bytes(identity(0x18)),
+            vec![input_byte],
+        )
+        .unwrap();
+        let obligations = general_gemm_symbolic_obligation_set_identity_v1(&input, &frontend);
+        let request = CompileRequestV1::new(
+            RequestIdentityV1::from_untrusted_bytes(identity(request_byte)),
+            KernelInstanceIdentityV1::from_untrusted_bytes(*frontend.kernel_instance_identity()),
+            CompilerProfileIdentityV1::from_untrusted_bytes(identity(compiler_byte)),
+            TargetProfileIdentityV1::from_untrusted_bytes(identity(target_byte)),
+            general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
+            obligations,
+            PipelineSelectorV1::PlironV1,
+            input,
+            compile_limits,
+        )
+        .unwrap();
+        GeneralGemmSymbolicCompilationUnitV1::checked(&request, frontend, schedule, lowering_limits)
+            .unwrap()
+    }
+
+    fn canonical_compile_limits() -> CompileLimitsV1 {
+        CompileLimitsV1::new(16, 16, 16, 4096, 16_384, 4096).unwrap()
     }
 
     fn proof_request(
@@ -832,6 +829,112 @@ mod tests {
             require_schedule_order(reference, vectorized, 1),
             Err(GeneralGemmFinalJoinErrorV1::ScheduleOrder { index: 1 })
         );
+    }
+
+    #[test]
+    fn pair_join_rejects_every_caller_variable_schedule_invariant() {
+        let reference = symbolic_unit_for(
+            GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+            frontend_binding(0x12, 0x41),
+            0x11,
+            0x17,
+            0x13,
+            0x14,
+            canonical_compile_limits(),
+            GeneralGemmLoweringLimitsV1::default(),
+        );
+        let canonical_vectorized = || {
+            symbolic_unit_for(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_binding(0x12, 0x41),
+                0x11,
+                0x17,
+                0x13,
+                0x14,
+                canonical_compile_limits(),
+                GeneralGemmLoweringLimitsV1::default(),
+            )
+        };
+        require_pair_request_consistency(&reference, &canonical_vectorized()).unwrap();
+
+        let substitutions = [
+            symbolic_unit_for(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_binding(0x12, 0x51),
+                0x11,
+                0x17,
+                0x13,
+                0x14,
+                canonical_compile_limits(),
+                GeneralGemmLoweringLimitsV1::default(),
+            ),
+            symbolic_unit_for(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_binding(0x12, 0x41),
+                0x21,
+                0x17,
+                0x13,
+                0x14,
+                canonical_compile_limits(),
+                GeneralGemmLoweringLimitsV1::default(),
+            ),
+            symbolic_unit_for(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_binding(0x12, 0x41),
+                0x11,
+                0x27,
+                0x13,
+                0x14,
+                canonical_compile_limits(),
+                GeneralGemmLoweringLimitsV1::default(),
+            ),
+            symbolic_unit_for(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_binding(0x12, 0x41),
+                0x11,
+                0x17,
+                0x23,
+                0x14,
+                canonical_compile_limits(),
+                GeneralGemmLoweringLimitsV1::default(),
+            ),
+            symbolic_unit_for(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_binding(0x12, 0x41),
+                0x11,
+                0x17,
+                0x13,
+                0x24,
+                canonical_compile_limits(),
+                GeneralGemmLoweringLimitsV1::default(),
+            ),
+            symbolic_unit_for(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_binding(0x12, 0x41),
+                0x11,
+                0x17,
+                0x13,
+                0x14,
+                CompileLimitsV1::new(15, 16, 16, 4096, 16_384, 4096).unwrap(),
+                GeneralGemmLoweringLimitsV1::default(),
+            ),
+            symbolic_unit_for(
+                GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+                frontend_binding(0x12, 0x41),
+                0x11,
+                0x17,
+                0x13,
+                0x14,
+                canonical_compile_limits(),
+                GeneralGemmLoweringLimitsV1::new(4095, 32).unwrap(),
+            ),
+        ];
+        for vectorized in substitutions {
+            assert_eq!(
+                require_pair_request_consistency(&reference, &vectorized),
+                Err(GeneralGemmFinalJoinErrorV1::PairRequestSubstitution)
+            );
+        }
     }
 
     #[test]
@@ -916,46 +1019,6 @@ mod tests {
     }
 
     #[test]
-    fn every_missing_or_reordered_source_receipt_fails_closed() {
-        let canonical = canonical_source_property_kinds().map(|kind| SourceReceiptSnapshotV1 {
-            kind,
-            evidence_identity: [kind as u8; 32],
-            intrinsic_fact_matches: true,
-            mir_evidence_matches: true,
-        });
-        validate_source_receipt_snapshot(&canonical).unwrap();
-        for index in 0..11 {
-            let mut missing = canonical;
-            missing[index].evidence_identity = [0; 32];
-            assert_eq!(
-                validate_source_receipt_snapshot(&missing),
-                Err(GeneralGemmFinalJoinErrorV1::SourceReceiptIdentity { index })
-            );
-
-            let mut reordered = canonical;
-            reordered[index].kind = canonical[(index + 1) % 11].kind;
-            assert_eq!(
-                validate_source_receipt_snapshot(&reordered),
-                Err(GeneralGemmFinalJoinErrorV1::SourceReceiptOrder { index })
-            );
-
-            let mut changed = canonical;
-            changed[index].intrinsic_fact_matches = false;
-            assert_eq!(
-                validate_source_receipt_snapshot(&changed),
-                Err(GeneralGemmFinalJoinErrorV1::SourceIntrinsicFact { index })
-            );
-
-            let mut changed = canonical;
-            changed[index].mir_evidence_matches = false;
-            assert_eq!(
-                validate_source_receipt_snapshot(&changed),
-                Err(GeneralGemmFinalJoinErrorV1::SourceMirEvidence { index })
-            );
-        }
-    }
-
-    #[test]
     fn source_receipt_order_is_a_bijection_with_verifier_confirmation_kinds() {
         let kinds = canonical_source_property_kinds();
         for (index, kind) in kinds.into_iter().enumerate() {
@@ -1005,10 +1068,7 @@ mod tests {
             })
         );
 
-        let mutations: [(
-            fn(&mut MachineObservationFactsV1),
-            GeneralGemmFinalJoinErrorV1,
-        ); 5] = [
+        let mutations: [MachineFactMutationV1; 5] = [
             (
                 |facts| facts.compilation_matches = false,
                 GeneralGemmFinalJoinErrorV1::MachineCompilationSubstitution,

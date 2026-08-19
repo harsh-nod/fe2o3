@@ -34,6 +34,7 @@ mod compiler_ffi_adapter;
 mod device_ffi;
 pub mod executable_scalar_control_flow_v1;
 mod frontend_record_bridge;
+mod general_gemm_final_join_v1;
 mod general_gemm_intrinsic_semantics_v1;
 mod general_gemm_pipeline_v1;
 mod host_object;
@@ -1724,7 +1725,7 @@ fn general_gemm_semantic_preflight_v1<'tcx>(
         },
     )? {
         Some(collected_general_gemm_v1::GeneralGemmMirImportV1::VerifiedTemplate(receipt)) => {
-            let template = receipt.into_verified_template().map_err(|error| {
+            let template = (*receipt).into_verified_template().map_err(|error| {
                 amdgpu_llvm::EmitError::Preflight {
                     reason: format!(
                         "authenticated general GEMM semantic receipt failed structural compiler binding: {error:?}; no artifact authority was issued"

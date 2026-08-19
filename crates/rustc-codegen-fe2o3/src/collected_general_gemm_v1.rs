@@ -38,7 +38,7 @@ const EXACT_GENERAL_GEMM_TARGET_V1: &str = "gfx942:xnack-";
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum GeneralGemmMirImportV1 {
-    VerifiedTemplate(AuthenticatedGeneralGemmSemanticReceiptV1),
+    VerifiedTemplate(Box<AuthenticatedGeneralGemmSemanticReceiptV1>),
     VerifiedMutationOracle,
     Rejected(GeneralGemmSemanticRejectionV1),
 }
@@ -304,6 +304,7 @@ pub(crate) struct GeneralGemmStoreTranscriptV1 {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[allow(clippy::enum_variant_names)] // The prefix marks the production typestate evidence class.
 pub(crate) enum GeneralGemmSourceMirEvidenceV1 {
     TypestateAllocationAndProvenance {
         abi_identity: [u8; 32],
@@ -797,7 +798,9 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
         return Ok(Some(GeneralGemmMirImportV1::VerifiedMutationOracle));
     }
     let receipt = derive_positive_receipt(tcx, root_function.instance.def_id(), body, &root_calls)?;
-    Ok(Some(GeneralGemmMirImportV1::VerifiedTemplate(receipt)))
+    Ok(Some(GeneralGemmMirImportV1::VerifiedTemplate(Box::new(
+        receipt,
+    ))))
 }
 
 fn derived_counterexample(
