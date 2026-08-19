@@ -22,11 +22,13 @@ use pliron::{
 };
 
 mod general_gemm;
+mod registration;
 
 pub use general_gemm::{
     GeneralGemmPhasePlanAttr, GeneralGemmPlanOp, GeneralGemmScheduleAttr,
     GeneralGemmTransferPlanAttr,
 };
+pub use registration::dialect_registration;
 
 /// The Pliron namespace owned by this crate.
 pub const DIALECT_NAME: &str = "schedule";

@@ -21,6 +21,10 @@ use pliron::{
     verify_err, verify_err_noloc, verify_error,
 };
 
+mod registration;
+
+pub use registration::dialect_registration;
+
 mod general_gemm;
 
 pub use general_gemm::{GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp};

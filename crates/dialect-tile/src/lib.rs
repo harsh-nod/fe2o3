@@ -22,8 +22,10 @@ use pliron::{
 };
 
 mod general_gemm;
+mod registration;
 
 pub use general_gemm::{GeneralGemmXor4MappingAttr, GeneralGemmXor4Op};
+pub use registration::dialect_registration;
 
 /// The Pliron namespace owned by this crate.
 pub const DIALECT_NAME: &str = "tile";

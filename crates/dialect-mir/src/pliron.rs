@@ -29,7 +29,6 @@ use ::pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     derive::{op_interface_impl, pliron_attr, pliron_op, pliron_type},
-    dialect::DialectName,
     linked_list::{ContainsLinkedList, LinkedList},
     location::Located,
     op::Op,
@@ -43,8 +42,8 @@ use fe2o3_mir_model::{
     MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_TYPES, MirBlockId, MirTypeId,
 };
 use fe2o3_pliron::{
-    ContextIdentity, ContextIdentityError, DialectRegistration, NameError, RegistrationHookError,
-    ensure_context_identity, require_context_identity,
+    ContextIdentity, ContextIdentityError, DialectRegistration, DialectRegistrationService,
+    NameError, RegistrationHookError, ensure_context_identity, require_context_identity,
 };
 
 use crate::DIALECT;
@@ -1430,15 +1429,17 @@ pub fn register_mir_dialect(context: &mut Context) {
 }
 
 fn registration_hook(
-    context: &mut Context,
-    name: &DialectName,
+    service: &mut DialectRegistrationService<'_>,
 ) -> Result<(), RegistrationHookError> {
-    if name.as_ref() != DIALECT {
-        return Err(RegistrationHookError::new(
-            "MIR registration hook received the wrong dialect name",
-        ));
-    }
-    register_mir_dialect(context);
+    service.require_dialect(DIALECT)?;
+    service.register_type::<MirTypeRef>()?;
+    service.register_attribute::<MirIdentityAttr>()?;
+    service.register_attribute::<MirLimitsAttr>()?;
+    service.register_attribute::<MirBlockIdAttr>()?;
+    service.register_operation::<MirModuleOp>()?;
+    service.register_operation::<MirFunctionOp>()?;
+    service.register_operation::<MirBlockOp>()?;
+    service.register_operation::<MirReturnOp>()?;
     Ok(())
 }
 

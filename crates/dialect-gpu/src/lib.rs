@@ -26,6 +26,7 @@ use pliron::{
 };
 
 mod general_gemm;
+mod registration;
 
 pub use general_gemm::{
     GeneralGemmEpilogueAttr, GeneralGemmEpilogueOp, GeneralGemmEpochAttr, GeneralGemmEpochOp,
@@ -34,6 +35,7 @@ pub use general_gemm::{
     GeneralGemmMfmaAttr, GeneralGemmMfmaOp, GeneralGemmPhaseLoopAttr, GeneralGemmPhaseLoopOp,
     GeneralGemmRuntimeAbiAttr, GeneralGemmRuntimeAbiOp,
 };
+pub use registration::dialect_registration;
 
 /// Pliron dialect name.
 pub const DIALECT_NAME: &str = "gpu";

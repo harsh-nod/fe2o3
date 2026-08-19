@@ -21,6 +21,10 @@ use pliron::{
     verify_err, verify_err_noloc, verify_error,
 };
 
+mod registration;
+
+pub use registration::dialect_registration;
+
 /// The Pliron namespace owned by this crate.
 pub const DIALECT_NAME: &str = "autotune";
 

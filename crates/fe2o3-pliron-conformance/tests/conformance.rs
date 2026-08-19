@@ -28,13 +28,10 @@ use fe2o3_kir_pliron_bridge::{
 };
 use fe2o3_lower_kernel_gpu as lower_kernel_gpu;
 use fe2o3_lower_mir_kernel as lower_mir_kernel;
-use fe2o3_pliron::{
-    ContextBuildError, DialectRegistration, PlironSession, RegistrationHookError, ShellLimits,
-};
+use fe2o3_pliron::{ContextBuildError, DialectRegistration, PlironSession, ShellLimits};
 use pliron::{
     builtin::{attributes::UnitAttr, op_interfaces::SingleBlockRegionInterface},
     context::{Context, Ptr},
-    dialect::DialectName,
     identifier::Identifier,
     linked_list::ContainsLinkedList,
     op::{Op, op_cast},
@@ -63,105 +60,30 @@ const REVERSE_DIALECTS: [&str; 8] = [
     dialect_mir::DIALECT,
 ];
 
-fn registration_error(error: impl std::fmt::Display) -> RegistrationHookError {
-    RegistrationHookError::new(error.to_string())
-}
-
-fn kernel_registration(
-    context: &mut Context,
-    name: &DialectName,
-) -> Result<(), RegistrationHookError> {
-    dialect_kernel::register_dialect(context, name)
-        .map(|_| ())
-        .map_err(registration_error)
-}
-
-fn schedule_registration(
-    context: &mut Context,
-    name: &DialectName,
-) -> Result<(), RegistrationHookError> {
-    dialect_schedule::register_dialect(context, name)
-        .map(|_| ())
-        .map_err(registration_error)
-}
-
-fn tile_registration(
-    context: &mut Context,
-    name: &DialectName,
-) -> Result<(), RegistrationHookError> {
-    dialect_tile::register_dialect(context, name)
-        .map(|_| ())
-        .map_err(registration_error)
-}
-
-fn gpu_registration(
-    context: &mut Context,
-    name: &DialectName,
-) -> Result<(), RegistrationHookError> {
-    require_hook_name(name, dialect_gpu::DIALECT_NAME)?;
-    dialect_gpu::register_dialect(context)
-        .map(|_| ())
-        .map_err(registration_error)
-}
-
-fn proof_registration(
-    context: &mut Context,
-    name: &DialectName,
-) -> Result<(), RegistrationHookError> {
-    require_hook_name(name, dialect_proof::DIALECT_NAME)?;
-    dialect_proof::register_dialect(context)
-        .map(|_| ())
-        .map_err(registration_error)
-}
-
-fn dispatch_registration(
-    context: &mut Context,
-    name: &DialectName,
-) -> Result<(), RegistrationHookError> {
-    require_hook_name(name, dialect_dispatch::DIALECT_NAME)?;
-    dialect_dispatch::register_dialect(context)
-        .map(|_| ())
-        .map_err(registration_error)
-}
-
-fn autotune_registration(
-    context: &mut Context,
-    name: &DialectName,
-) -> Result<(), RegistrationHookError> {
-    dialect_autotune::register_dialect(context, name)
-        .map(|_| ())
-        .map_err(registration_error)
-}
-
-fn require_hook_name(actual: &DialectName, expected: &str) -> Result<(), RegistrationHookError> {
-    if actual.as_ref() == expected {
-        Ok(())
-    } else {
-        Err(RegistrationHookError::new("dialect hook name mismatch"))
-    }
-}
-
 fn registration(name: &str) -> DialectRegistration {
     match name {
         dialect_mir::DIALECT => mir_dialect_registration().expect("valid MIR registration"),
         dialect_kernel::DIALECT_NAME => {
-            DialectRegistration::new(name, kernel_registration).expect("valid kernel registration")
+            dialect_kernel::dialect_registration().expect("valid kernel registration")
         }
-        dialect_schedule::DIALECT_NAME => DialectRegistration::new(name, schedule_registration)
-            .expect("valid schedule registration"),
+        dialect_schedule::DIALECT_NAME => {
+            dialect_schedule::dialect_registration().expect("valid schedule registration")
+        }
         dialect_tile::DIALECT_NAME => {
-            DialectRegistration::new(name, tile_registration).expect("valid tile registration")
+            dialect_tile::dialect_registration().expect("valid tile registration")
         }
         dialect_gpu::DIALECT_NAME => {
-            DialectRegistration::new(name, gpu_registration).expect("valid GPU registration")
+            dialect_gpu::dialect_registration().expect("valid GPU registration")
         }
         dialect_proof::DIALECT_NAME => {
-            DialectRegistration::new(name, proof_registration).expect("valid proof registration")
+            dialect_proof::dialect_registration().expect("valid proof registration")
         }
-        dialect_dispatch::DIALECT_NAME => DialectRegistration::new(name, dispatch_registration)
-            .expect("valid dispatch registration"),
-        dialect_autotune::DIALECT_NAME => DialectRegistration::new(name, autotune_registration)
-            .expect("valid autotune registration"),
+        dialect_dispatch::DIALECT_NAME => {
+            dialect_dispatch::dialect_registration().expect("valid dispatch registration")
+        }
+        dialect_autotune::DIALECT_NAME => {
+            dialect_autotune::dialect_registration().expect("valid autotune registration")
+        }
         _ => panic!("unknown conformance dialect {name}"),
     }
 }
