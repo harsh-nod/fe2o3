@@ -1,20 +1,11 @@
 //! Authenticated schedule-model proof evidence for issue #138 general GEMM.
 //!
-//! This module executes one digest-pinned Verus binary over embedded, exact
-//! proof sources. It returns property-local evidence for the schedule model;
-//! it does not promote that evidence across the source-to-KIR correspondence
-//! or the post-artifact machine-refinement boundary.
+//! The stock Verus release delegates through a launcher, rustup, rust_verify,
+//! solver and dynamic-library closure. That closure is not currently supplied
+//! as reviewed, retainable inputs, so execution fails closed before touching a
+//! caller path or creating any proof-authority evidence.
 
-use std::{
-    fmt, fs,
-    path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
-    thread,
-    time::{Duration, Instant},
-};
-
-use sha2::{Digest as _, Sha256};
+use std::{fmt, path::Path};
 
 /// Pinned Verus release used by the issue #138 schedule-model proofs.
 pub const GENERAL_GEMM_VERUS_VERSION_V1: &str = "0.2026.08.02.b677dd5";
@@ -27,21 +18,6 @@ pub const GENERAL_GEMM_VERUS_SHA256_V1: [u8; 32] = [
 pub const MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1: usize = 1024 * 1024;
 /// Maximum accepted proof deadline.
 pub const MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1: u32 = 300;
-
-const PROOF_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-symbolic-schedule-proof-v1\0";
-const PROPERTY_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-property-evidence-v1\0";
-const SOURCE_CLOSURE_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-proof-source-closure-v1\0";
-const EXECUTION_OUTPUT_DOMAIN_V1: &[u8] = b"fe2o3-general-gemm-proof-output-v1\0";
-
-const MODEL_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_schedule_model_v1.rs");
-const REFERENCE_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_reference_schedule_v1.rs");
-const VECTORIZED_SOURCE: &[u8] = include_bytes!("../verus/general_gemm_vectorized_schedule_v1.rs");
-const VECTOR_TAIL_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_vector_tail_wrong.rs");
-const EPILOGUE_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_epilogue_wrong.rs");
-const MACHINE_CLAIM_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_machine_claim_wrong.rs");
 
 /// A raw SHA-256 domain identity. Construction authenticates no producer.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -79,23 +55,6 @@ pub enum GeneralGemmProofScheduleV1 {
     ReferenceWave64Xor4V1 = 1,
     /// Aligned full-vector A transfers with scalar A-tail fallback and scalar B.
     VectorizedAOnlyBf16GlobalTransferV1 = 2,
-}
-
-impl GeneralGemmProofScheduleV1 {
-    const fn positive_source(self) -> (&'static str, &'static [u8], usize) {
-        match self {
-            Self::ReferenceWave64Xor4V1 => (
-                "general_gemm_reference_schedule_v1.rs",
-                REFERENCE_SOURCE,
-                28,
-            ),
-            Self::VectorizedAOnlyBf16GlobalTransferV1 => (
-                "general_gemm_vectorized_schedule_v1.rs",
-                VECTORIZED_SOURCE,
-                28,
-            ),
-        }
-    }
 }
 
 /// Independent proof-required general GEMM properties.
@@ -285,22 +244,6 @@ impl GeneralGemmProofRequestV1 {
     pub const fn grants_concrete_launch_authority(self) -> bool {
         false
     }
-
-    fn identities(self) -> [GeneralGemmEvidenceIdentityV1; 11] {
-        [
-            self.schedule_identity,
-            self.symbolic_plan_identity,
-            self.symbolic_kir_identity,
-            self.symbolic_compilation_identity,
-            self.compile_request_identity,
-            self.obligation_set_identity,
-            self.compiler_identity,
-            self.target_identity,
-            self.toolchain_identity,
-            self.source_template_identity,
-            self.numerical_policy_identity,
-        ]
-    }
 }
 
 /// Honest authority level of one property result.
@@ -458,6 +401,8 @@ pub enum GeneralGemmProofExecutionErrorV1 {
     InvalidTimeout,
     /// The Verus path was not absolute or did not name a regular file.
     InvalidVerusPath,
+    /// No reviewed, retained closure exists for the stock Verus runtime.
+    AuthenticatedRuntimeClosureUnavailable,
     /// The pinned Verus bytes changed.
     VerusDigestMismatch,
     /// The pinned Verus version output changed.
@@ -488,62 +433,14 @@ impl From<std::io::Error> for GeneralGemmProofExecutionErrorV1 {
     }
 }
 
-struct ProofDirectory(PathBuf);
-
-impl ProofDirectory {
-    fn create() -> Result<Self, GeneralGemmProofExecutionErrorV1> {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let path = std::env::temp_dir().join(format!(
-            "fe2o3-general-gemm-proof-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed),
-        ));
-        fs::create_dir(&path)?;
-        fs::create_dir(path.join("negative"))?;
-        Ok(Self(path))
-    }
-
-    fn write_sources(&self) -> Result<(), GeneralGemmProofExecutionErrorV1> {
-        for (relative, bytes) in [
-            ("general_gemm_schedule_model_v1.rs", MODEL_SOURCE),
-            ("general_gemm_reference_schedule_v1.rs", REFERENCE_SOURCE),
-            ("general_gemm_vectorized_schedule_v1.rs", VECTORIZED_SOURCE),
-            (
-                "negative/general_gemm_vector_tail_wrong.rs",
-                VECTOR_TAIL_WRONG_SOURCE,
-            ),
-            (
-                "negative/general_gemm_epilogue_wrong.rs",
-                EPILOGUE_WRONG_SOURCE,
-            ),
-            (
-                "negative/general_gemm_machine_claim_wrong.rs",
-                MACHINE_CLAIM_WRONG_SOURCE,
-            ),
-        ] {
-            fs::write(self.0.join(relative), bytes)?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for ProofDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-struct ProcessObservation {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-/// Executes the exact embedded schedule proof and its mutation checks.
+/// Refuses to mint schedule-proof evidence without a closed runtime manifest.
 ///
-/// `verus_path` is accepted only when its bytes and version match the pinned
-/// constants above. The returned evidence remains model-local and explicitly
-/// records the open machine boundary.
+/// The current arguments can name only one launcher. They cannot bind the
+/// launcher-selected `rustup`, `rust_verify`, solver, vstd, rlibs, macro DSOs,
+/// Rust toolchain, dynamic loader, shared libraries, environment, or executed
+/// proof-source objects. Until those inputs have an exact reviewed manifest and
+/// are retained immutably through a supervised process tree, this function
+/// deliberately does not inspect `verus_path`, create files, or spawn a child.
 pub fn execute_general_gemm_schedule_proof_v1(
     request: GeneralGemmProofRequestV1,
     verus_path: &Path,
@@ -552,302 +449,6 @@ pub fn execute_general_gemm_schedule_proof_v1(
     if timeout_seconds == 0 || timeout_seconds > MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1 {
         return Err(GeneralGemmProofExecutionErrorV1::InvalidTimeout);
     }
-    if !verus_path.is_absolute() || !verus_path.is_file() {
-        return Err(GeneralGemmProofExecutionErrorV1::InvalidVerusPath);
-    }
-    let verus_bytes = fs::read(verus_path)?;
-    let tool_digest: [u8; 32] = Sha256::digest(&verus_bytes).into();
-    if tool_digest != GENERAL_GEMM_VERUS_SHA256_V1 {
-        return Err(GeneralGemmProofExecutionErrorV1::VerusDigestMismatch);
-    }
-    let version = run_bounded(
-        verus_path,
-        &["--version"],
-        verus_path
-            .parent()
-            .ok_or(GeneralGemmProofExecutionErrorV1::InvalidVerusPath)?,
-        timeout_seconds,
-    )?;
-    let version_text = String::from_utf8_lossy(&version.stdout);
-    if !version.status.success()
-        || !version_text.contains(&format!("Version: {GENERAL_GEMM_VERUS_VERSION_V1}"))
-    {
-        return Err(GeneralGemmProofExecutionErrorV1::VerusVersionMismatch);
-    }
-
-    let directory = ProofDirectory::create()?;
-    directory.write_sources()?;
-    let (positive_path, _, expected_verified) = request.schedule.positive_source();
-    let positive = run_bounded(verus_path, &[positive_path], &directory.0, timeout_seconds)?;
-    let expected_summary = format!("verification results:: {expected_verified} verified, 0 errors");
-    if !positive.status.success()
-        || !String::from_utf8_lossy(&positive.stdout).contains(&expected_summary)
-    {
-        return Err(GeneralGemmProofExecutionErrorV1::PositiveProofFailed);
-    }
-
-    let mut negative_paths = vec![
-        "negative/general_gemm_epilogue_wrong.rs",
-        "negative/general_gemm_machine_claim_wrong.rs",
-    ];
-    if request.schedule == GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 {
-        negative_paths.insert(0, "negative/general_gemm_vector_tail_wrong.rs");
-    }
-    let mut negative_observations = Vec::with_capacity(negative_paths.len());
-    for path in negative_paths {
-        let observed = run_bounded(verus_path, &[path], &directory.0, timeout_seconds)?;
-        let stderr = String::from_utf8_lossy(&observed.stderr);
-        if observed.status.success()
-            || !stderr.contains("postcondition not satisfied")
-            || !stderr.contains(path)
-        {
-            return Err(GeneralGemmProofExecutionErrorV1::NegativeProofMismatch);
-        }
-        negative_observations.push(observed);
-    }
-
-    let source_closure_identity = source_closure_identity(request.schedule);
-    let tool_identity = GeneralGemmEvidenceIdentityV1(tool_digest);
-    let positive_output = output_evidence(&positive);
-    let negative_outputs: Vec<_> = negative_observations.iter().map(output_evidence).collect();
-    let identity = proof_identity(
-        request,
-        source_closure_identity,
-        tool_identity,
-        positive_output,
-        &negative_outputs,
-    );
-    let properties = GENERAL_GEMM_PROOF_PROPERTIES_V1.map(|property| {
-        let (status, basis) = property_evidence_basis(request.schedule, property);
-        GeneralGemmPropertyEvidenceV1 {
-            property,
-            status,
-            basis,
-            identity: property_identity(identity, property, status, basis),
-        }
-    });
-    Ok(AuthenticatedGeneralGemmScheduleProofV1 {
-        request,
-        identity,
-        source_closure_identity,
-        tool_identity,
-        positive_output,
-        negative_outputs,
-        properties,
-    })
-}
-
-fn run_bounded(
-    program: &Path,
-    arguments: &[&str],
-    current_dir: &Path,
-    timeout_seconds: u32,
-) -> Result<ProcessObservation, GeneralGemmProofExecutionErrorV1> {
-    let mut child = Command::new(program)
-        .args(arguments)
-        .current_dir(current_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_seconds));
-    loop {
-        if child.try_wait()?.is_some() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            child.kill()?;
-            let _ = child.wait();
-            return Err(GeneralGemmProofExecutionErrorV1::TimedOut);
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    let output = child.wait_with_output()?;
-    if output.stdout.len() > MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1
-        || output.stderr.len() > MAX_GENERAL_GEMM_PROOF_OUTPUT_BYTES_V1
-    {
-        return Err(GeneralGemmProofExecutionErrorV1::OutputTooLarge);
-    }
-    Ok(ProcessObservation {
-        status: output.status,
-        stdout: output.stdout,
-        stderr: output.stderr,
-    })
-}
-
-fn source_closure_identity(schedule: GeneralGemmProofScheduleV1) -> GeneralGemmEvidenceIdentityV1 {
-    let (_, positive, _) = schedule.positive_source();
-    let mut hasher = Sha256::new();
-    hasher.update(SOURCE_CLOSURE_DOMAIN_V1);
-    put_blob(&mut hasher, MODEL_SOURCE);
-    put_blob(&mut hasher, positive);
-    if schedule == GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 {
-        put_blob(&mut hasher, VECTOR_TAIL_WRONG_SOURCE);
-    }
-    put_blob(&mut hasher, EPILOGUE_WRONG_SOURCE);
-    put_blob(&mut hasher, MACHINE_CLAIM_WRONG_SOURCE);
-    GeneralGemmEvidenceIdentityV1(hasher.finalize().into())
-}
-
-fn output_evidence(observed: &ProcessObservation) -> GeneralGemmProofOutputEvidenceV1 {
-    let mut hasher = Sha256::new();
-    hasher.update(EXECUTION_OUTPUT_DOMAIN_V1);
-    hasher.update(observed.status.code().unwrap_or(-1).to_le_bytes());
-    put_blob(&mut hasher, &observed.stdout);
-    put_blob(&mut hasher, &observed.stderr);
-    GeneralGemmProofOutputEvidenceV1 {
-        identity: GeneralGemmEvidenceIdentityV1(hasher.finalize().into()),
-        stdout_bytes: observed.stdout.len() as u64,
-        stderr_bytes: observed.stderr.len() as u64,
-    }
-}
-
-fn proof_identity(
-    request: GeneralGemmProofRequestV1,
-    source: GeneralGemmEvidenceIdentityV1,
-    tool: GeneralGemmEvidenceIdentityV1,
-    positive: GeneralGemmProofOutputEvidenceV1,
-    negatives: &[GeneralGemmProofOutputEvidenceV1],
-) -> GeneralGemmEvidenceIdentityV1 {
-    let mut hasher = Sha256::new();
-    hasher.update(PROOF_IDENTITY_DOMAIN_V1);
-    hasher.update([request.schedule as u8]);
-    for identity in request.identities() {
-        hasher.update(identity.as_bytes());
-    }
-    hasher.update(source.as_bytes());
-    hasher.update(tool.as_bytes());
-    hasher.update(positive.identity.as_bytes());
-    hasher.update((negatives.len() as u32).to_le_bytes());
-    for negative in negatives {
-        hasher.update(negative.identity.as_bytes());
-    }
-    GeneralGemmEvidenceIdentityV1(hasher.finalize().into())
-}
-
-fn property_identity(
-    proof: GeneralGemmEvidenceIdentityV1,
-    property: GeneralGemmProofPropertyV1,
-    status: GeneralGemmPropertyEvidenceStatusV1,
-    basis: GeneralGemmPropertyEvidenceBasisV1,
-) -> GeneralGemmEvidenceIdentityV1 {
-    let mut hasher = Sha256::new();
-    hasher.update(PROPERTY_IDENTITY_DOMAIN_V1);
-    hasher.update(proof.as_bytes());
-    hasher.update([property as u8]);
-    hasher.update([match status {
-        GeneralGemmPropertyEvidenceStatusV1::ScheduleModelTheoremVerified => 1,
-        GeneralGemmPropertyEvidenceStatusV1::ModelDefinitionOnly => 2,
-        GeneralGemmPropertyEvidenceStatusV1::WeakerExactRealTheoremVerified => 3,
-        GeneralGemmPropertyEvidenceStatusV1::OpenCorrespondenceRequired => 4,
-        GeneralGemmPropertyEvidenceStatusV1::OpenArtifactRequired => 5,
-    }]);
-    match basis {
-        GeneralGemmPropertyEvidenceBasisV1::VerifiedTheorem(name) => {
-            hasher.update([1]);
-            put_blob(&mut hasher, name.as_bytes());
-        }
-        GeneralGemmPropertyEvidenceBasisV1::ModelDefinition(name) => {
-            hasher.update([2]);
-            put_blob(&mut hasher, name.as_bytes());
-        }
-        GeneralGemmPropertyEvidenceBasisV1::OpenObligation(name) => {
-            hasher.update([3]);
-            put_blob(&mut hasher, name.as_bytes());
-        }
-    }
-    GeneralGemmEvidenceIdentityV1(hasher.finalize().into())
-}
-
-fn property_evidence_basis(
-    schedule: GeneralGemmProofScheduleV1,
-    property: GeneralGemmProofPropertyV1,
-) -> (
-    GeneralGemmPropertyEvidenceStatusV1,
-    GeneralGemmPropertyEvidenceBasisV1,
-) {
-    use GeneralGemmProofPropertyV1::*;
-    use GeneralGemmPropertyEvidenceBasisV1::{ModelDefinition, OpenObligation, VerifiedTheorem};
-    use GeneralGemmPropertyEvidenceStatusV1::{
-        ModelDefinitionOnly, OpenArtifactRequired, OpenCorrespondenceRequired,
-        ScheduleModelTheoremVerified, WeakerExactRealTheoremVerified,
-    };
-
-    let schedule_theorem = |reference, vectorized| match schedule {
-        GeneralGemmProofScheduleV1::ReferenceWave64Xor4V1 => reference,
-        GeneralGemmProofScheduleV1::VectorizedAOnlyBf16GlobalTransferV1 => vectorized,
-    };
-    match property {
-        MemorySafe => (
-            OpenCorrespondenceRequired,
-            OpenObligation("allocation_provenance_from_authenticated_kir_v1"),
-        ),
-        BoundsSafe => (
-            ScheduleModelTheoremVerified,
-            VerifiedTheorem(schedule_theorem(
-                "reference_modeled_global_accesses_are_bounded_v1",
-                "vectorized_a_only_modeled_global_accesses_are_bounded_v1",
-            )),
-        ),
-        Initialized => (
-            OpenCorrespondenceRequired,
-            OpenObligation("lds_write_read_initialization_from_authenticated_kir_v1"),
-        ),
-        RaceFree => (
-            OpenCorrespondenceRequired,
-            OpenObligation("global_and_lds_effect_conflict_freedom_from_authenticated_kir_v1"),
-        ),
-        BarrierConvergent => (
-            ModelDefinitionOnly,
-            ModelDefinition("lane_reaches_barrier_v1"),
-        ),
-        OutputRegionInjective => (
-            ScheduleModelTheoremVerified,
-            VerifiedTheorem(schedule_theorem(
-                "reference_output_region_is_injective_v1",
-                "vectorized_a_only_output_region_is_injective_v1",
-            )),
-        ),
-        LdsEpochCorrect => (
-            ModelDefinitionOnly,
-            ModelDefinition("schedule_lds_epoch_correct_v1"),
-        ),
-        AccumulatorPhaseRefinement => (
-            ScheduleModelTheoremVerified,
-            VerifiedTheorem(schedule_theorem(
-                "reference_accumulator_refines_contract_v1",
-                "vectorized_accumulator_refines_contract_v1",
-            )),
-        ),
-        TailRefinement => (
-            ScheduleModelTheoremVerified,
-            VerifiedTheorem(schedule_theorem(
-                "reference_scalar_tail_zero_fills_v1",
-                "vectorized_full_transfer_and_scalar_tail_refine_v1",
-            )),
-        ),
-        EpilogueRefinement => (
-            ScheduleModelTheoremVerified,
-            VerifiedTheorem(schedule_theorem(
-                "reference_epilogue_refines_exact_real_contract_v1",
-                "vectorized_a_only_epilogue_refines_exact_real_contract_v1",
-            )),
-        ),
-        NumericalContract => (
-            WeakerExactRealTheoremVerified,
-            VerifiedTheorem(schedule_theorem(
-                "reference_numerical_contract_v1",
-                "vectorized_numerical_contract_v1",
-            )),
-        ),
-        MachineRefinementBoundary => (
-            OpenArtifactRequired,
-            OpenObligation("emitted_gfx942_machine_refinement_v1"),
-        ),
-    }
-}
-
-fn put_blob(hasher: &mut Sha256, bytes: &[u8]) {
-    hasher.update((bytes.len() as u64).to_le_bytes());
-    hasher.update(bytes);
+    let _ = (request, verus_path);
+    Err(GeneralGemmProofExecutionErrorV1::AuthenticatedRuntimeClosureUnavailable)
 }
