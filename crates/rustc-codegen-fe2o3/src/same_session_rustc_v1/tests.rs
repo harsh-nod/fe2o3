@@ -30,12 +30,36 @@ fn helper(value: u32) -> u32 {
 fn kernel(value: u32) {
     let _ = helper(value);
 }
+
+#[inline(never)]
+fn empty_kernel() {}
 "#;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
+struct SendCustodyCheck<T: ?Sized>(std::marker::PhantomData<T>);
+
+trait AmbiguousIfSend<Marker> {
+    fn marker() {}
+}
+
+impl<T: ?Sized> AmbiguousIfSend<()> for SendCustodyCheck<T> {}
+impl<T: ?Sized + Send> AmbiguousIfSend<u8> for SendCustodyCheck<T> {}
+
 struct DriverResults {
-    positive: OwnerControlledRustKernelImportV1,
+    supported_function_count: usize,
+    supported_mir_matches: bool,
+    supported_abi_is_bound: bool,
+    supported_custody_is_bound: bool,
+    supported_import_is_bound: bool,
+    supported_graph_is_live: bool,
+    supported_join_is_exact: bool,
+    supported_join_rejects_substitution: bool,
+    supported_rewrite_count: usize,
+    supported_grants_no_authority: bool,
+    unsupported_code: UnsupportedRustMirDiagnosticCodeV1,
+    unsupported_is_terminal: bool,
+    unsupported_custody_is_bound: bool,
     item_mismatch: SameSessionRustcErrorV1,
     instance_mismatch: SameSessionRustcErrorV1,
     mir_mismatch: SameSessionRustcErrorV1,
@@ -58,8 +82,30 @@ struct CustodyCallbacks {
 impl Callbacks for CustodyCallbacks {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         let collection = collection(tcx);
+        let supported_collection = supported_collection(tcx);
 
-        let positive = import_ordinary_rust_kernel_same_session_v1(tcx, &collection).unwrap();
+        let mut supported = expect_supported(
+            import_ordinary_rust_kernel_same_session_v1(tcx, &supported_collection).unwrap(),
+        );
+        let unsupported = expect_unsupported(
+            import_ordinary_rust_kernel_same_session_v1(tcx, &collection).unwrap(),
+        );
+        let supported_function_count = supported.function_count();
+        let supported_mir_matches =
+            supported.mir_closure() == supported.imported().mir_closure_identity();
+        let supported_abi_is_bound = supported.abi_closure() != &[0; 32];
+        let supported_custody_is_bound = supported.custody_binding() != &[0; 32];
+        let supported_import_is_bound = supported.mir_import_identity() != &[0; 32];
+        let supported_graph_is_live = supported.retained_graph_is_live();
+        let supported_join_is_exact = supported.source_identity_join_is_exact();
+        let supported_rewrite_count = supported.lowering_record().rewrite_count();
+        let supported_grants_no_authority = !supported.grants_compiler_authority()
+            && !supported.imported().grants_execution_authority();
+        supported.identity_join.mir_import[0] ^= 1;
+        let supported_join_rejects_substitution = !supported.source_identity_join_is_exact();
+        let unsupported_code = unsupported.code();
+        let unsupported_is_terminal = unsupported.is_terminal();
+        let unsupported_custody_is_bound = unsupported.custody_binding() != &[0; 32];
 
         let mut item_owner = RustcSessionCustodianV1::new(tcx);
         let mut item = item_owner.capture(tcx, &collection).unwrap();
@@ -119,15 +165,19 @@ impl Callbacks for CustodyCallbacks {
         let mut semantic_span_owner = RustcSessionCustodianV1::new(tcx);
         let mut semantic_span = semantic_span_owner.capture(tcx, &collection).unwrap();
         let operation = &mut semantic_span.semantic.functions[0].ordered_blocks[0].operations[0];
-        let [start_line, start_column, end_line, end_column] = operation.span.coordinates();
-        operation.span = MirSemanticSourceSpan::new(
-            operation.span.file_identity(),
+        let expansion = operation.provenance.expansion();
+        let [start_line, start_column, end_line, end_column] = expansion.coordinates();
+        let substituted_expansion = MirSemanticSourceSpan::new(
+            expansion.file_identity(),
             start_line,
             start_column,
             end_line,
             end_column.saturating_add(1),
         )
         .unwrap();
+        operation.provenance =
+            MirSemanticSpanProvenance::new(substituted_expansion, operation.provenance.call_site())
+                .unwrap();
         let semantic_span_mismatch = expect_error(semantic_span_owner.release(semantic_span));
 
         let mut semantic_successor_owner = RustcSessionCustodianV1::new(tcx);
@@ -149,7 +199,7 @@ impl Callbacks for CustodyCallbacks {
         let deterministic_right = import_ordinary_rust_kernel_same_session_v1(tcx, &collection)
             .expect("second deterministic import");
         let deterministic_mir_import =
-            deterministic_left.mir_import_identity() == deterministic_right.mir_import_identity();
+            outcome_mir_import(&deterministic_left) == outcome_mir_import(&deterministic_right);
 
         let mut first_owner = RustcSessionCustodianV1::new(tcx);
         let foreign_receipt = first_owner.capture(tcx, &collection).unwrap();
@@ -163,7 +213,19 @@ impl Callbacks for CustodyCallbacks {
         let stale = expect_error(stale_owner.capture(tcx, &collection));
 
         self.results = Some(DriverResults {
-            positive,
+            supported_function_count,
+            supported_mir_matches,
+            supported_abi_is_bound,
+            supported_custody_is_bound,
+            supported_import_is_bound,
+            supported_graph_is_live,
+            supported_join_is_exact,
+            supported_join_rejects_substitution,
+            supported_rewrite_count,
+            supported_grants_no_authority,
+            unsupported_code,
+            unsupported_is_terminal,
+            unsupported_custody_is_bound,
             item_mismatch,
             instance_mismatch,
             mir_mismatch,
@@ -178,6 +240,31 @@ impl Callbacks for CustodyCallbacks {
             deterministic_mir_import,
         });
         Compilation::Stop
+    }
+}
+
+fn expect_supported(outcome: SameSessionRustKernelOutcomeV1) -> OwnerControlledRustKernelImportV1 {
+    match outcome {
+        SameSessionRustKernelOutcomeV1::Supported(supported) => supported,
+        SameSessionRustKernelOutcomeV1::Unsupported(diagnostic) => {
+            panic!("expected supported MIR admission, got {diagnostic}")
+        }
+    }
+}
+
+fn expect_unsupported(outcome: SameSessionRustKernelOutcomeV1) -> UnsupportedRustMirDiagnosticV1 {
+    match outcome {
+        SameSessionRustKernelOutcomeV1::Supported(_) => {
+            panic!("expected terminal unsupported MIR observation")
+        }
+        SameSessionRustKernelOutcomeV1::Unsupported(diagnostic) => diagnostic,
+    }
+}
+
+fn outcome_mir_import(outcome: &SameSessionRustKernelOutcomeV1) -> &[u8; 32] {
+    match outcome {
+        SameSessionRustKernelOutcomeV1::Supported(supported) => supported.mir_import_identity(),
+        SameSessionRustKernelOutcomeV1::Unsupported(diagnostic) => diagnostic.mir_import_identity(),
     }
 }
 
@@ -203,6 +290,13 @@ fn collection(tcx: TyCtxt<'_>) -> CollectionResult<'_> {
             collected(tcx, "kernel", true),
             collected(tcx, "helper", false),
         ],
+        ..CollectionResult::default()
+    }
+}
+
+fn supported_collection(tcx: TyCtxt<'_>) -> CollectionResult<'_> {
+    CollectionResult {
+        functions: vec![collected(tcx, "empty_kernel", true)],
         ..CollectionResult::default()
     }
 }
@@ -306,21 +400,28 @@ fn compiler_results() -> DriverResults {
 #[test]
 fn releases_only_owned_authenticated_data_after_same_session_join() {
     let results = compiler_results();
-    assert_eq!(results.positive.function_count(), 2);
+    assert_eq!(results.supported_function_count, 1);
+    assert!(results.supported_mir_matches);
+    assert!(results.supported_abi_is_bound);
+    assert!(results.supported_custody_is_bound);
+    assert!(results.supported_import_is_bound);
+    assert!(results.supported_graph_is_live);
+    assert!(results.supported_join_is_exact);
+    assert!(results.supported_join_rejects_substitution);
+    assert_eq!(results.supported_rewrite_count, 1);
     assert_eq!(
-        results.positive.mir_closure(),
-        results.positive.imported().mir_closure_identity()
+        results.unsupported_code,
+        UnsupportedRustMirDiagnosticCodeV1::UnsupportedSemanticOperation
     );
-    assert_ne!(results.positive.abi_closure(), &[0; 32]);
-    assert_ne!(results.positive.custody_binding(), &[0; 32]);
-    assert_ne!(results.positive.mir_import_identity(), &[0; 32]);
-    assert!(matches!(
-        results.positive.semantic.lower_outcome,
-        RustMirLowerOutcomeV1::Unsupported { .. }
-    ));
+    assert!(results.unsupported_is_terminal);
+    assert!(results.unsupported_custody_is_bound);
     assert!(results.deterministic_mir_import);
-    assert!(!results.positive.grants_compiler_authority());
-    assert!(!results.positive.imported().grants_execution_authority());
+    assert!(results.supported_grants_no_authority);
+}
+
+#[test]
+fn retained_owner_graph_is_compile_time_thread_affine() {
+    let _ = <SendCustodyCheck<OwnerControlledRustKernelImportV1> as AmbiguousIfSend<_>>::marker;
 }
 
 #[test]

@@ -150,7 +150,7 @@ pub(crate) struct CompilerFrontendRecordV1 {
     unit: FrontendUnitV1,
     canonical_bytes: Vec<u8>,
     kernel_contracts: Vec<CompilerKernelFrontendContractRecordV1>,
-    ordinary_rust_scalar: Option<crate::same_session_rustc_v1::OwnerControlledRustKernelImportV1>,
+    ordinary_rust_scalar: Option<crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1>,
 }
 
 impl fmt::Debug for CompilerFrontendRecordV1 {
@@ -192,7 +192,23 @@ impl CompilerFrontendRecordV1 {
     pub(crate) fn ordinary_rust_scalar(
         &self,
     ) -> Option<&crate::same_session_rustc_v1::OwnerControlledRustKernelImportV1> {
-        self.ordinary_rust_scalar.as_ref()
+        match self.ordinary_rust_scalar.as_ref()? {
+            crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Supported(imported) => {
+                Some(imported)
+            }
+            crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Unsupported(_) => None,
+        }
+    }
+
+    pub(crate) fn ordinary_rust_rejection(
+        &self,
+    ) -> Option<&crate::same_session_rustc_v1::UnsupportedRustMirDiagnosticV1> {
+        match self.ordinary_rust_scalar.as_ref()? {
+            crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Supported(_) => None,
+            crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Unsupported(
+                diagnostic,
+            ) => Some(diagnostic),
+        }
     }
 }
 
@@ -295,22 +311,43 @@ fn extract_frontend_record_untrimmed_v1<'tcx>(
         return Err(FrontendRecordBridgeError::NonCanonicalRoundTrip);
     }
     let ordinary_rust_scalar = if is_ordinary_scalar_candidate(collection) {
-        let imported = crate::same_session_rustc_v1::import_ordinary_rust_kernel_same_session_v1(
+        let outcome = crate::same_session_rustc_v1::import_ordinary_rust_kernel_same_session_v1(
             tcx, collection,
         )
         .map_err(|_| FrontendRecordBridgeError::SameSessionRustcCustody)?;
-        debug_assert_eq!(
-            imported.function_count(),
-            imported.imported().functions().len()
-        );
-        debug_assert_eq!(
-            imported.mir_closure(),
-            imported.imported().mir_closure_identity()
-        );
-        debug_assert_ne!(imported.abi_closure(), &[0; 32]);
-        debug_assert_ne!(imported.custody_binding(), &[0; 32]);
-        debug_assert!(!imported.grants_compiler_authority());
-        Some(imported)
+        match &outcome {
+            crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Supported(imported) => {
+                debug_assert_eq!(
+                    imported.function_count(),
+                    imported.imported().functions().len()
+                );
+                debug_assert_eq!(
+                    imported.mir_closure(),
+                    imported.imported().mir_closure_identity()
+                );
+                debug_assert_ne!(imported.abi_closure(), &[0; 32]);
+                debug_assert_ne!(imported.custody_binding(), &[0; 32]);
+                debug_assert!(imported.retained_graph_is_live());
+                debug_assert!(imported.source_identity_join_is_exact());
+                debug_assert!(!imported.grants_compiler_authority());
+            }
+            crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Unsupported(
+                diagnostic,
+            ) => {
+                debug_assert!(diagnostic.is_terminal());
+                debug_assert_eq!(
+                    diagnostic.code(),
+                    crate::same_session_rustc_v1::UnsupportedRustMirDiagnosticCodeV1::UnsupportedSemanticOperation
+                );
+                debug_assert_ne!(
+                    diagnostic.kind(),
+                    dialect_mir::pliron::MirSemanticOperationKind::TerminatorReturn
+                );
+                debug_assert_ne!(diagnostic.provenance().call_site().file_identity(), [0; 4]);
+                debug_assert_ne!(diagnostic.custody_binding(), &[0; 32]);
+            }
+        }
+        Some(outcome)
     } else {
         None
     };
@@ -639,8 +676,13 @@ fn kernel(value: u32) -> u32 {
 
     #[derive(Debug)]
     struct DriverResults {
-        first: CompilerFrontendRecordV1,
-        reordered: CompilerFrontendRecordV1,
+        canonical_equal: bool,
+        unit_equal: bool,
+        function_count: usize,
+        scalar_outcome_present: bool,
+        scalar_identity_equal: bool,
+        has_kernel: bool,
+        cfg_and_locations_valid: bool,
         helper_only: FrontendRecordBridgeError,
         duplicate: FrontendRecordBridgeError,
     }
@@ -678,9 +720,49 @@ fn kernel(value: u32) -> u32 {
                 },
             )
             .unwrap_err();
+            let first = extract_frontend_record_v1(tcx, &first_collection).unwrap();
+            let reordered = extract_frontend_record_v1(tcx, &reordered_collection).unwrap();
+            let cfg_and_locations_valid = first.unit.functions().iter().all(|function| {
+                function.location().line() > 0
+                    && function.signature().parameters().len() == 1
+                    && !function.blocks().is_empty()
+                    && function
+                        .blocks()
+                        .iter()
+                        .enumerate()
+                        .all(|(expected, block)| {
+                            block.id().get() == u32::try_from(expected).unwrap()
+                                && block.location().line() > 0
+                                && block.successors().iter().all(|successor| {
+                                    successor.get() < function.blocks().len() as u32
+                                })
+                        })
+            });
             self.results = Some(DriverResults {
-                first: extract_frontend_record_v1(tcx, &first_collection).unwrap(),
-                reordered: extract_frontend_record_v1(tcx, &reordered_collection).unwrap(),
+                canonical_equal: first.canonical_bytes == reordered.canonical_bytes,
+                unit_equal: first.unit == reordered.unit,
+                function_count: first.unit.functions().len(),
+                scalar_outcome_present: first.ordinary_rust_scalar.is_some(),
+                scalar_identity_equal: match (
+                    &first.ordinary_rust_scalar,
+                    &reordered.ordinary_rust_scalar,
+                ) {
+                    (
+                        Some(crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Supported(first)),
+                        Some(crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Supported(reordered)),
+                    ) => first.imported().import_identity() == reordered.imported().import_identity(),
+                    (
+                        Some(crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Unsupported(first)),
+                        Some(crate::same_session_rustc_v1::SameSessionRustKernelOutcomeV1::Unsupported(reordered)),
+                    ) => first.mir_import_identity() == reordered.mir_import_identity(),
+                    _ => false,
+                },
+                has_kernel: first
+                    .unit
+                    .functions()
+                    .iter()
+                    .any(|function| function.role() == FunctionRoleV1::Kernel),
+                cfg_and_locations_valid,
                 helper_only,
                 duplicate,
             });
@@ -785,50 +867,13 @@ fn kernel(value: u32) -> u32 {
     #[test]
     fn rustc_records_are_canonical_and_preserve_cfg_and_locations() {
         let results = compiler_results();
-        assert_eq!(
-            results.first.canonical_bytes,
-            results.reordered.canonical_bytes
-        );
-        assert_eq!(results.first.unit, results.reordered.unit);
-        assert_eq!(results.first.unit.functions().len(), 2);
-        assert!(results.first.ordinary_rust_scalar().is_some());
-        assert_eq!(
-            results
-                .first
-                .ordinary_rust_scalar()
-                .unwrap()
-                .imported()
-                .import_identity(),
-            results
-                .reordered
-                .ordinary_rust_scalar()
-                .unwrap()
-                .imported()
-                .import_identity()
-        );
-        assert!(
-            results
-                .first
-                .unit
-                .functions()
-                .iter()
-                .any(|function| function.role() == FunctionRoleV1::Kernel)
-        );
-        for function in results.first.unit.functions() {
-            assert!(function.location().line() > 0);
-            assert_eq!(function.signature().parameters().len(), 1);
-            assert!(!function.blocks().is_empty());
-            for (expected, block) in function.blocks().iter().enumerate() {
-                assert_eq!(block.id().get(), u32::try_from(expected).unwrap());
-                assert!(block.location().line() > 0);
-                assert!(
-                    block
-                        .successors()
-                        .iter()
-                        .all(|successor| successor.get() < function.blocks().len() as u32)
-                );
-            }
-        }
+        assert!(results.canonical_equal);
+        assert!(results.unit_equal);
+        assert_eq!(results.function_count, 2);
+        assert!(results.scalar_outcome_present);
+        assert!(results.scalar_identity_equal);
+        assert!(results.has_kernel);
+        assert!(results.cfg_and_locations_valid);
     }
 
     #[test]

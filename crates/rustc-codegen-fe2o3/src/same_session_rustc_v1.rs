@@ -10,22 +10,24 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dialect_mir::pliron::{
-    MAX_IMPORTED_MIR_SUCCESSORS, MirDialectLimits, MirModuleOp, MirSemanticOperationKind,
-    MirSemanticSourceSpan, MirSnapshotOperation,
+    MAX_IMPORTED_MIR_SUCCESSORS, MirDialectLimits, MirModuleBodyHandle, MirModuleOp,
+    MirSemanticOperationKind, MirSemanticSourceSpan, MirSemanticSpanProvenance,
+    MirSnapshotOperation,
 };
 use fe2o3_lower_mir_kernel::{
-    LoweringConfig, LoweringError, LoweringLimits, MirKernelLoweringPass, register_pass,
+    LoweringConfig, LoweringError, LoweringLimits, LoweringResult, MirKernelLoweringPass,
+    register_pass,
 };
 use fe2o3_rustc_front::{
     AuthenticatedOrdinaryRustScalarKernelImportV1, BasicBlockV1, BlockIdV1,
     CanonicalKernelInstIdV1, CanonicalKernelItemIdV1, ConcreteMonomorphizationIdentityV1,
     DirectCallObservationV1, FrontendSourceSpanV1, FrontendUnitV1, FunctionIdentityV1,
-    FunctionImportRoleV1, FunctionRoleV1, MonomorphizedFunctionV1,
-    OrdinaryRustScalarKernelObservationV1, ReachableFunctionObservationV1,
-    RustItemDefinitionIdentityV1, RustcAbiPassModeV1, RustcAbiValueV1, RustcCallingConventionV1,
-    RustcFnAbiFactsV1, RustcFunctionKindV1, RustcMirIdentityV1, RustcSourceIdentityV1,
-    SourceFileIdentityV1, SourceLocationV1, StableTypeIdentityV1, TypedSignatureV1,
-    authenticate_ordinary_rust_scalar_kernel_v1,
+    FunctionImportRoleV1, FunctionRoleV1, MAX_BLOCKS_PER_FUNCTION_V1,
+    MAX_PARAMETERS_PER_FUNCTION_V1, MonomorphizedFunctionV1, OrdinaryRustScalarKernelObservationV1,
+    ReachableFunctionObservationV1, RustItemDefinitionIdentityV1, RustcAbiPassModeV1,
+    RustcAbiValueV1, RustcCallingConventionV1, RustcFnAbiFactsV1, RustcFunctionKindV1,
+    RustcMirIdentityV1, RustcSourceIdentityV1, SourceFileIdentityV1, SourceLocationV1,
+    StableTypeIdentityV1, TypedSignatureV1, authenticate_ordinary_rust_scalar_kernel_v1,
 };
 use pliron::{context::Context, op::Op};
 use rustc_abi::CanonAbi;
@@ -59,6 +61,7 @@ const TYPE_DOMAIN: &[u8] = b"fe2o3/rustc-session/type/v1";
 const ABI_VALUE_DOMAIN: &[u8] = b"fe2o3/rustc-session/abi-value/v1";
 const ABI_CLOSURE_DOMAIN: &[u8] = b"fe2o3/rustc-session/abi-closure/v1";
 const CUSTODY_DOMAIN: &[u8] = b"fe2o3/rustc-session/custody/v1";
+const PLIRON_GRAPH_DOMAIN: &[u8] = b"fe2o3/rustc-session/owned-pliron-graph/v1";
 const MAX_FUNCTIONS: usize = fe2o3_rustc_front::MAX_SCALAR_IMPORT_FUNCTIONS_V1;
 const MAX_CALLS: usize = fe2o3_rustc_front::MAX_SCALAR_IMPORT_CALLS_V1;
 
@@ -99,7 +102,7 @@ struct RustMirOperationSnapshotV1 {
     ordinal: u32,
     kind: MirSemanticOperationKind,
     identity: [u64; 4],
-    span: MirSemanticSourceSpan,
+    provenance: MirSemanticSpanProvenance,
     successors: Vec<u32>,
 }
 
@@ -109,19 +112,139 @@ struct RustKernelSemanticSnapshotV1 {
     mir_closure: [u8; 32],
     abi_closure: [u8; 32],
     mir_import: [u8; 32],
-    lower_outcome: RustMirLowerOutcomeV1,
+}
+
+struct RetainedRustMirGraphV1 {
+    context: Context,
+    body: MirModuleBodyHandle,
+    lowering: LoweringResult,
+    binding: [u8; 32],
+}
+
+impl fmt::Debug for RetainedRustMirGraphV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RetainedRustMirGraphV1")
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RetainedRustMirGraphV1 {
+    fn validate_live(&self) -> bool {
+        self.body.verify(&self.context).is_ok() && self.lowering.validate(&self.context).is_ok()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RustMirLowerOutcomeV1 {
-    Supported,
+pub(crate) enum UnsupportedRustMirDiagnosticCodeV1 {
+    UnsupportedSemanticOperation,
+}
+
+/// Terminal observation for MIR that was imported exactly but is outside the
+/// current target-neutral model. This type cannot be converted into admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnsupportedRustMirDiagnosticV1 {
+    code: UnsupportedRustMirDiagnosticCodeV1,
+    function: usize,
+    block: usize,
+    ordinal: u32,
+    kind: MirSemanticOperationKind,
+    provenance: MirSemanticSpanProvenance,
+    mir_import: [u8; 32],
+    custody_binding: [u8; 32],
+}
+
+impl UnsupportedRustMirDiagnosticV1 {
+    pub(crate) const fn code(&self) -> UnsupportedRustMirDiagnosticCodeV1 {
+        self.code
+    }
+
+    pub(crate) const fn kind(&self) -> MirSemanticOperationKind {
+        self.kind
+    }
+
+    pub(crate) const fn provenance(&self) -> MirSemanticSpanProvenance {
+        self.provenance
+    }
+
+    pub(crate) const fn mir_import_identity(&self) -> &[u8; 32] {
+        &self.mir_import
+    }
+
+    pub(crate) const fn custody_binding(&self) -> &[u8; 32] {
+        &self.custody_binding
+    }
+
+    pub(crate) const fn is_terminal(&self) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for UnsupportedRustMirDiagnosticV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unsupported typed rustc MIR operation {:?} at function {}, block {}, ordinal {}, expansion coordinates {:?}, call-site coordinates {:?}",
+            self.kind,
+            self.function,
+            self.block,
+            self.ordinal,
+            self.provenance.expansion().coordinates(),
+            self.provenance.call_site().coordinates(),
+        )
+    }
+}
+
+enum PendingRustMirAdmissionV1 {
+    Supported {
+        graph: RetainedRustMirGraphV1,
+    },
     Unsupported {
         function: usize,
         block: usize,
         ordinal: u32,
         kind: MirSemanticOperationKind,
-        span: MirSemanticSourceSpan,
+        provenance: MirSemanticSpanProvenance,
     },
+}
+
+/// Opaque source side of the future authenticated MIR -> KIR -> compiler
+/// graph -> verification join. Current KIR producers must consume this exact
+/// boundary instead of reconstructing Rust identities from bytes or text.
+pub(crate) struct RustMirIdentityJoinBoundaryV1 {
+    item: CanonicalKernelItemIdV1,
+    instance: CanonicalKernelInstIdV1,
+    mir_closure: [u8; 32],
+    abi_closure: [u8; 32],
+    mir_import: [u8; 32],
+    pliron_graph: [u8; 32],
+}
+
+impl RustMirIdentityJoinBoundaryV1 {
+    pub(crate) const fn item(&self) -> CanonicalKernelItemIdV1 {
+        self.item
+    }
+
+    pub(crate) const fn instance(&self) -> CanonicalKernelInstIdV1 {
+        self.instance
+    }
+
+    pub(crate) const fn mir_closure(&self) -> &[u8; 32] {
+        &self.mir_closure
+    }
+
+    pub(crate) const fn abi_closure(&self) -> &[u8; 32] {
+        &self.abi_closure
+    }
+
+    pub(crate) const fn mir_import(&self) -> &[u8; 32] {
+        &self.mir_import
+    }
+
+    pub(crate) const fn pliron_graph(&self) -> &[u8; 32] {
+        &self.pliron_graph
+    }
 }
 
 /// Owned, inert data released by the private same-session custodian.
@@ -132,6 +255,8 @@ pub(crate) struct OwnerControlledRustKernelImportV1 {
     imported: AuthenticatedOrdinaryRustScalarKernelImportV1,
     semantic: RustKernelSemanticSnapshotV1,
     custody_binding: [u8; 32],
+    graph: RetainedRustMirGraphV1,
+    identity_join: RustMirIdentityJoinBoundaryV1,
 }
 
 impl OwnerControlledRustKernelImportV1 {
@@ -162,12 +287,40 @@ impl OwnerControlledRustKernelImportV1 {
     pub(crate) const fn grants_compiler_authority(&self) -> bool {
         false
     }
+
+    pub(crate) fn retained_graph_is_live(&self) -> bool {
+        self.graph.validate_live()
+    }
+
+    pub(crate) const fn lowering_record(&self) -> &fe2o3_lower_mir_kernel::LoweringRecord {
+        self.graph.lowering.record()
+    }
+
+    pub(crate) const fn identity_join_boundary(&self) -> &RustMirIdentityJoinBoundaryV1 {
+        &self.identity_join
+    }
+
+    pub(crate) fn source_identity_join_is_exact(&self) -> bool {
+        let join = self.identity_join_boundary();
+        join.item() == self.imported.kernel_item()
+            && join.instance() == self.imported.kernel_instance()
+            && join.mir_closure() == self.mir_closure()
+            && join.abi_closure() == self.abi_closure()
+            && join.mir_import() == self.mir_import_identity()
+            && join.pliron_graph() == &self.graph.binding
+    }
+}
+
+pub(crate) enum SameSessionRustKernelOutcomeV1 {
+    Supported(OwnerControlledRustKernelImportV1),
+    Unsupported(UnsupportedRustMirDiagnosticV1),
 }
 
 struct SessionBoundRustKernelImportV1<'tcx> {
     owner: u64,
     imported: AuthenticatedOrdinaryRustScalarKernelImportV1,
     semantic: RustKernelSemanticSnapshotV1,
+    admission: PendingRustMirAdmissionV1,
     observed_item: CanonicalKernelItemIdV1,
     observed_instance: CanonicalKernelInstIdV1,
     observed_mir_closure: [u8; 32],
@@ -210,7 +363,7 @@ impl<'tcx> RustcSessionCustodianV1<'tcx> {
     fn release(
         &mut self,
         captured: SessionBoundRustKernelImportV1<'tcx>,
-    ) -> Result<OwnerControlledRustKernelImportV1, SameSessionRustcErrorV1> {
+    ) -> Result<SameSessionRustKernelOutcomeV1, SameSessionRustcErrorV1> {
         if self.consumed || !self.pending {
             return Err(SameSessionRustcErrorV1::StaleCustodian);
         }
@@ -231,17 +384,62 @@ impl<'tcx> RustcSessionCustodianV1<'tcx> {
         if captured.observed_abi_closure != captured.semantic.abi_closure {
             return Err(SameSessionRustcErrorV1::AbiMismatch);
         }
-        let expected = custody_binding(captured.owner, &captured.imported, &captured.semantic);
+        if matches!(
+            &captured.admission,
+            PendingRustMirAdmissionV1::Supported { graph } if !graph.validate_live()
+        ) {
+            return Err(SameSessionRustcErrorV1::UnexpectedMirLoweringFailure);
+        }
+        let expected = custody_binding(
+            captured.owner,
+            &captured.imported,
+            &captured.semantic,
+            &captured.admission,
+        );
         if expected != captured.custody_binding {
             return Err(SameSessionRustcErrorV1::CustodyBindingMismatch);
         }
         self.pending = false;
         self.consumed = true;
-        Ok(OwnerControlledRustKernelImportV1 {
-            imported: captured.imported,
-            semantic: captured.semantic,
-            custody_binding: captured.custody_binding,
-        })
+        match captured.admission {
+            PendingRustMirAdmissionV1::Supported { graph } => {
+                let identity_join = RustMirIdentityJoinBoundaryV1 {
+                    item: captured.imported.kernel_item(),
+                    instance: captured.imported.kernel_instance(),
+                    mir_closure: captured.semantic.mir_closure,
+                    abi_closure: captured.semantic.abi_closure,
+                    mir_import: captured.semantic.mir_import,
+                    pliron_graph: graph.binding,
+                };
+                Ok(SameSessionRustKernelOutcomeV1::Supported(
+                    OwnerControlledRustKernelImportV1 {
+                        imported: captured.imported,
+                        semantic: captured.semantic,
+                        custody_binding: captured.custody_binding,
+                        graph,
+                        identity_join,
+                    },
+                ))
+            }
+            PendingRustMirAdmissionV1::Unsupported {
+                function,
+                block,
+                ordinal,
+                kind,
+                provenance,
+            } => Ok(SameSessionRustKernelOutcomeV1::Unsupported(
+                UnsupportedRustMirDiagnosticV1 {
+                    code: UnsupportedRustMirDiagnosticCodeV1::UnsupportedSemanticOperation,
+                    function,
+                    block,
+                    ordinal,
+                    kind,
+                    provenance,
+                    mir_import: captured.semantic.mir_import,
+                    custody_binding: captured.custody_binding,
+                },
+            )),
+        }
     }
 }
 
@@ -250,7 +448,7 @@ impl<'tcx> RustcSessionCustodianV1<'tcx> {
 pub(crate) fn import_ordinary_rust_kernel_same_session_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
-) -> Result<OwnerControlledRustKernelImportV1, SameSessionRustcErrorV1> {
+) -> Result<SameSessionRustKernelOutcomeV1, SameSessionRustcErrorV1> {
     let mut custodian = RustcSessionCustodianV1::new(tcx);
     let captured = custodian.capture(tcx, collection)?;
     custodian.release(captured)
@@ -267,7 +465,9 @@ pub(crate) enum SameSessionRustcErrorV1 {
     MissingKernelContract,
     MissingTerminator,
     MirOperationBound,
+    MirBlockBound { actual: usize, maximum: usize },
     MirSuccessorBound,
+    AbiArgumentBound { actual: usize, maximum: usize },
     PlironImportFailed,
     PlironSchemaMismatch,
     UnexpectedMirLoweringFailure,
@@ -324,9 +524,17 @@ impl fmt::Display for SameSessionRustcErrorV1 {
             Self::MirOperationBound => {
                 formatter.write_str("same-session optimized MIR operation bound exceeded")
             }
+            Self::MirBlockBound { actual, maximum } => write!(
+                formatter,
+                "same-session optimized MIR block bound exceeded: {actual} > {maximum}"
+            ),
             Self::MirSuccessorBound => {
                 formatter.write_str("same-session optimized MIR successor bound exceeded")
             }
+            Self::AbiArgumentBound { actual, maximum } => write!(
+                formatter,
+                "same-session FnAbi argument bound exceeded: {actual} > {maximum}"
+            ),
             Self::PlironImportFailed => {
                 formatter.write_str("same-session typed Pliron MIR import failed")
             }
@@ -398,6 +606,7 @@ impl From<fe2o3_rustc_front::OrdinaryRustScalarValidationErrorV1> for SameSessio
 
 struct FunctionDraftV1<'tcx> {
     instance: Instance<'tcx>,
+    body: &'tcx Body<'tcx>,
     role: FunctionImportRoleV1,
     frontend: MonomorphizedFunctionV1,
     item: RustItemDefinitionIdentityV1,
@@ -464,6 +673,12 @@ fn capture_in_session<'tcx>(
             return Err(SameSessionRustcErrorV1::MissingMir);
         }
         let body = tcx.instance_mir(function.instance.def);
+        if body.basic_blocks.len() > MAX_BLOCKS_PER_FUNCTION_V1 {
+            return Err(SameSessionRustcErrorV1::MirBlockBound {
+                actual: body.basic_blocks.len(),
+                maximum: MAX_BLOCKS_PER_FUNCTION_V1,
+            });
+        }
         let instance_fingerprint = stable_fingerprint!(tcx, function.instance);
         let function_identity = function_identity(tcx, function.instance)?;
         let monomorphization = if role == FunctionImportRoleV1::Kernel {
@@ -495,6 +710,7 @@ fn capture_in_session<'tcx>(
         let ordered_blocks = ordered_semantic_blocks(tcx, body, instance_fingerprint)?;
         drafts.push(FunctionDraftV1 {
             instance: function.instance,
+            body,
             role,
             frontend,
             item,
@@ -513,8 +729,14 @@ fn capture_in_session<'tcx>(
     let mut total_calls = 0_usize;
     let mut observations = Vec::with_capacity(drafts.len());
     for draft in &drafts {
-        let calls = direct_calls(tcx, draft.instance, &drafts)?;
-        total_calls = total_calls.saturating_add(calls.len());
+        let calls = direct_calls(tcx, draft.instance, draft.body, &drafts)?;
+        total_calls =
+            total_calls
+                .checked_add(calls.len())
+                .ok_or(SameSessionRustcErrorV1::CallBound {
+                    actual: usize::MAX,
+                    maximum: MAX_CALLS,
+                })?;
         if total_calls > MAX_CALLS {
             return Err(SameSessionRustcErrorV1::CallBound {
                 actual: total_calls,
@@ -571,15 +793,14 @@ fn capture_in_session<'tcx>(
     let mir_closure = *imported.mir_closure_identity();
     let abi_closure = abi_closure(&functions);
     let mir_import = mir_import_identity(&functions);
-    let lower_outcome = materialize_and_lower_pliron_mir(&functions, mir_import)?;
+    let admission = materialize_and_lower_pliron_mir(&functions, mir_import)?;
     let semantic = RustKernelSemanticSnapshotV1 {
         functions,
         mir_closure,
         abi_closure,
         mir_import,
-        lower_outcome,
     };
-    let custody_binding = custody_binding(owner, &imported, &semantic);
+    let custody_binding = custody_binding(owner, &imported, &semantic, &admission);
     Ok(SessionBoundRustKernelImportV1 {
         owner,
         observed_item: kernel_item,
@@ -588,6 +809,7 @@ fn capture_in_session<'tcx>(
         observed_abi_closure: abi_closure,
         imported,
         semantic,
+        admission,
         custody_binding,
         invariant_session: PhantomData,
     })
@@ -694,6 +916,12 @@ fn observe_fn_abi<'tcx>(
             "non-Rust calling convention",
         ));
     }
+    if abi.args.len() > MAX_PARAMETERS_PER_FUNCTION_V1 {
+        return Err(SameSessionRustcErrorV1::AbiArgumentBound {
+            actual: abi.args.len(),
+            maximum: MAX_PARAMETERS_PER_FUNCTION_V1,
+        });
+    }
     let arguments = abi
         .args
         .iter()
@@ -755,18 +983,29 @@ fn frontend_function<'tcx>(
     instance_fingerprint: [u8; 16],
 ) -> Result<(MonomorphizedFunctionV1, [u8; 32], u32, u32), SameSessionRustcErrorV1> {
     let mut blocks = Vec::with_capacity(body.basic_blocks.len());
-    let mut cfg_preimage = Vec::with_capacity(body.basic_blocks.len() * 24);
+    let cfg_capacity = body
+        .basic_blocks
+        .len()
+        .checked_mul(24)
+        .ok_or(SameSessionRustcErrorV1::MirOperationBound)?;
+    let mut cfg_preimage = Vec::with_capacity(cfg_capacity);
     let mut edge_count = 0_usize;
     for (block_id, block) in body.basic_blocks.iter_enumerated() {
         let terminator = block
             .terminator
             .as_ref()
             .ok_or(SameSessionRustcErrorV1::MissingTerminator)?;
+        let successor_count = terminator.successors().count();
+        if successor_count > MAX_IMPORTED_MIR_SUCCESSORS {
+            return Err(SameSessionRustcErrorV1::MirSuccessorBound);
+        }
         let successors = terminator
             .successors()
             .map(|successor| successor.as_usize())
             .collect::<BTreeSet<_>>();
-        edge_count = edge_count.saturating_add(successors.len());
+        edge_count = edge_count
+            .checked_add(successors.len())
+            .ok_or(SameSessionRustcErrorV1::MirSuccessorBound)?;
         let block_index = u32::try_from(block_id.as_usize()).map_err(|_| {
             SameSessionRustcErrorV1::InvalidTypedObservation("CFG block index overflow")
         })?;
@@ -845,7 +1084,11 @@ fn ordered_semantic_blocks<'tcx>(
         .basic_blocks
         .iter()
         .try_fold(0_usize, |count, block| {
-            count.checked_add(block.statements.len().saturating_add(1))
+            block
+                .statements
+                .len()
+                .checked_add(1)
+                .and_then(|operations| count.checked_add(operations))
         })
         .ok_or(SameSessionRustcErrorV1::MirOperationBound)?;
     if operation_count > dialect_mir::MAX_EXECUTABLE_STATEMENTS {
@@ -858,7 +1101,12 @@ fn ordered_semantic_blocks<'tcx>(
             let block_index = u32::try_from(block_id.as_usize()).map_err(|_| {
                 SameSessionRustcErrorV1::InvalidTypedObservation("MIR block index overflow")
             })?;
-            let mut operations = Vec::with_capacity(block.statements.len().saturating_add(1));
+            let block_operation_count = block
+                .statements
+                .len()
+                .checked_add(1)
+                .ok_or(SameSessionRustcErrorV1::MirOperationBound)?;
+            let mut operations = Vec::with_capacity(block_operation_count);
             for (statement_index, statement) in block.statements.iter().enumerate() {
                 let ordinal = u32::try_from(statement_index).map_err(|_| {
                     SameSessionRustcErrorV1::InvalidTypedObservation(
@@ -879,7 +1127,7 @@ fn ordered_semantic_blocks<'tcx>(
                             &stable_fingerprint!(tcx, statement),
                         ],
                     )),
-                    span: semantic_source_span(tcx, statement.source_info.span)?,
+                    provenance: semantic_source_provenance(tcx, statement.source_info.span)?,
                     successors: Vec::new(),
                 });
             }
@@ -891,18 +1139,15 @@ fn ordered_semantic_blocks<'tcx>(
                 SameSessionRustcErrorV1::InvalidTypedObservation("MIR terminator ordinal overflow")
             })?;
             let kind = semantic_terminator_kind(&terminator.kind);
-            let successors = terminator
-                .successors()
-                .map(|successor| {
-                    u32::try_from(successor.as_usize()).map_err(|_| {
-                        SameSessionRustcErrorV1::InvalidTypedObservation(
-                            "MIR successor index overflow",
-                        )
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if successors.len() > MAX_IMPORTED_MIR_SUCCESSORS {
+            let successor_count = terminator.successors().count();
+            if successor_count > MAX_IMPORTED_MIR_SUCCESSORS {
                 return Err(SameSessionRustcErrorV1::MirSuccessorBound);
+            }
+            let mut successors = Vec::with_capacity(successor_count);
+            for successor in terminator.successors() {
+                successors.push(u32::try_from(successor.as_usize()).map_err(|_| {
+                    SameSessionRustcErrorV1::InvalidTypedObservation("MIR successor index overflow")
+                })?);
             }
             operations.push(RustMirOperationSnapshotV1 {
                 ordinal,
@@ -917,7 +1162,7 @@ fn ordered_semantic_blocks<'tcx>(
                         &stable_fingerprint!(tcx, terminator),
                     ],
                 )),
-                span: semantic_source_span(tcx, terminator.source_info.span)?,
+                provenance: semantic_source_provenance(tcx, terminator.source_info.span)?,
                 successors,
             });
             Ok(RustMirBlockSnapshotV1 {
@@ -929,6 +1174,9 @@ fn ordered_semantic_blocks<'tcx>(
 }
 
 fn semantic_statement_kind(kind: &StatementKind<'_>) -> MirSemanticOperationKind {
+    // The pinned nightly has no `StatementKind::Deinit`; the dialect keeps its
+    // reserved Deinit tag for snapshots from rustc revisions that expose it.
+    // This exhaustive match makes such rustc enum drift a compile-time gate.
     match kind {
         StatementKind::Assign(_) => MirSemanticOperationKind::StatementAssign,
         StatementKind::FakeRead(..) => MirSemanticOperationKind::StatementFakeRead,
@@ -942,7 +1190,9 @@ fn semantic_statement_kind(kind: &StatementKind<'_>) -> MirSemanticOperationKind
         StatementKind::Intrinsic(_) => MirSemanticOperationKind::StatementIntrinsic,
         StatementKind::ConstEvalCounter => MirSemanticOperationKind::StatementConstEvalCounter,
         StatementKind::Nop => MirSemanticOperationKind::StatementNop,
-        _ => MirSemanticOperationKind::StatementOther,
+        StatementKind::BackwardIncompatibleDropHint { .. } => {
+            MirSemanticOperationKind::StatementBackwardIncompatibleDropHint
+        }
     }
 }
 
@@ -955,15 +1205,33 @@ fn semantic_terminator_kind(kind: &TerminatorKind<'_>) -> MirSemanticOperationKi
         TerminatorKind::Drop { .. } => MirSemanticOperationKind::TerminatorDrop,
         TerminatorKind::Call { .. } => MirSemanticOperationKind::TerminatorCall,
         TerminatorKind::Assert { .. } => MirSemanticOperationKind::TerminatorAssert,
-        _ => MirSemanticOperationKind::TerminatorOther,
+        TerminatorKind::UnwindResume => MirSemanticOperationKind::TerminatorUnwindResume,
+        TerminatorKind::UnwindTerminate(_) => MirSemanticOperationKind::TerminatorUnwindTerminate,
+        TerminatorKind::Yield { .. } => MirSemanticOperationKind::TerminatorYield,
+        TerminatorKind::CoroutineDrop => MirSemanticOperationKind::TerminatorCoroutineDrop,
+        TerminatorKind::FalseEdge { .. } => MirSemanticOperationKind::TerminatorFalseEdge,
+        TerminatorKind::FalseUnwind { .. } => MirSemanticOperationKind::TerminatorFalseUnwind,
+        TerminatorKind::InlineAsm { .. } => MirSemanticOperationKind::TerminatorInlineAsm,
+        TerminatorKind::TailCall { .. } => MirSemanticOperationKind::TerminatorTailCall,
     }
 }
 
-fn semantic_source_span(
+fn semantic_source_provenance(
     tcx: TyCtxt<'_>,
     span: Span,
+) -> Result<MirSemanticSpanProvenance, SameSessionRustcErrorV1> {
+    let expansion = exact_span_observation(tcx, span)?;
+    let call_site = exact_span_observation(tcx, span.source_callsite())?;
+    MirSemanticSpanProvenance::new(
+        semantic_source_span(expansion)?,
+        semantic_source_span(call_site)?,
+    )
+    .map_err(|_| SameSessionRustcErrorV1::InvalidTypedObservation("MIR span provenance"))
+}
+
+fn semantic_source_span(
+    observed: SpanObservationV1,
 ) -> Result<MirSemanticSourceSpan, SameSessionRustcErrorV1> {
-    let observed = span_observation(tcx, span)?;
     MirSemanticSourceSpan::new(
         operation_identity_words(observed.file_identity),
         observed.start_line,
@@ -985,7 +1253,7 @@ fn operation_identity_words(bytes: [u8; 32]) -> [u64; 4] {
 fn materialize_and_lower_pliron_mir(
     functions: &[FunctionSemanticSnapshotV1],
     mir_import: [u8; 32],
-) -> Result<RustMirLowerOutcomeV1, SameSessionRustcErrorV1> {
+) -> Result<PendingRustMirAdmissionV1, SameSessionRustcErrorV1> {
     let block_count = functions
         .iter()
         .try_fold(0_usize, |count, function| {
@@ -995,9 +1263,18 @@ fn materialize_and_lower_pliron_mir(
     let operation_count = functions
         .iter()
         .flat_map(|function| &function.ordered_blocks)
-        .try_fold(1_usize.saturating_add(functions.len()), |count, block| {
-            count.checked_add(block.operations.len().saturating_add(1))
-        })
+        .try_fold(
+            1_usize
+                .checked_add(functions.len())
+                .ok_or(SameSessionRustcErrorV1::MirOperationBound)?,
+            |count, block| {
+                block
+                    .operations
+                    .len()
+                    .checked_add(1)
+                    .and_then(|operations| count.checked_add(operations))
+            },
+        )
         .ok_or(SameSessionRustcErrorV1::MirOperationBound)?;
     let max_blocks_per_function = functions
         .iter()
@@ -1057,14 +1334,23 @@ fn materialize_and_lower_pliron_mir(
                     if operation_index + 1 != block.operations.len() {
                         return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
                     }
+                    let mut successor_handles = Vec::with_capacity(semantic.successors.len());
+                    for successor in &semantic.successors {
+                        successor_handles.push(
+                            blocks
+                                .get(*successor as usize)
+                                .ok_or(SameSessionRustcErrorV1::PlironSchemaMismatch)?
+                                .clone(),
+                        );
+                    }
                     handle
                         .replace_with_semantic_terminator(
                             &mut context,
                             semantic.ordinal,
                             semantic.kind,
                             semantic.identity,
-                            semantic.span,
-                            &semantic.successors,
+                            semantic.provenance,
+                            &successor_handles,
                         )
                         .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
                 } else {
@@ -1074,7 +1360,7 @@ fn materialize_and_lower_pliron_mir(
                             semantic.ordinal,
                             semantic.kind,
                             semantic.identity,
-                            semantic.span,
+                            semantic.provenance,
                         )
                         .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
                 }
@@ -1083,9 +1369,10 @@ fn materialize_and_lower_pliron_mir(
         expected_function_identities.push(identity);
     }
 
-    let imported = module
+    let retained_body = module
         .body(&context)
-        .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?
+        .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
+    let imported = retained_body
         .semantic_functions(&context)
         .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
     if imported.len() != functions.len() {
@@ -1123,7 +1410,7 @@ fn materialize_and_lower_pliron_mir(
                 if imported_semantic.ordinal() != source_operation.ordinal
                     || imported_semantic.kind() != source_operation.kind
                     || imported_semantic.identity() != source_operation.identity
-                    || imported_semantic.span() != source_operation.span
+                    || imported_semantic.provenance() != source_operation.provenance
                     || imported_semantic.successors() != source_operation.successors
                 {
                     return Err(SameSessionRustcErrorV1::PlironSchemaMismatch);
@@ -1131,6 +1418,15 @@ fn materialize_and_lower_pliron_mir(
             }
         }
     }
+
+    let graph_binding = domain_identity(
+        PLIRON_GRAPH_DOMAIN,
+        &[
+            &mir_import,
+            &bounded_usize_identity(block_count),
+            &bounded_usize_identity(operation_count),
+        ],
+    );
 
     let lowering_limits = LoweringLimits::new(
         1,
@@ -1144,19 +1440,29 @@ fn materialize_and_lower_pliron_mir(
         .map_err(|_| SameSessionRustcErrorV1::UnexpectedMirLoweringFailure)?;
     let mut lowering = MirKernelLoweringPass::new(config);
     match lowering.run_checked(module.get_operation(), &mut context) {
-        Ok(_) => Ok(RustMirLowerOutcomeV1::Supported),
+        Ok(result) => {
+            let lowering = result.clone();
+            Ok(PendingRustMirAdmissionV1::Supported {
+                graph: RetainedRustMirGraphV1 {
+                    context,
+                    body: retained_body,
+                    lowering,
+                    binding: graph_binding,
+                },
+            })
+        }
         Err(LoweringError::UnsupportedRustSemanticOperation {
             function,
             block,
             ordinal,
             kind,
-            span,
-        }) => Ok(RustMirLowerOutcomeV1::Unsupported {
+            provenance,
+        }) => Ok(PendingRustMirAdmissionV1::Unsupported {
             function,
             block,
             ordinal,
             kind,
-            span,
+            provenance,
         }),
         Err(_) => Err(SameSessionRustcErrorV1::UnexpectedMirLoweringFailure),
     }
@@ -1165,9 +1471,9 @@ fn materialize_and_lower_pliron_mir(
 fn direct_calls<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: Instance<'tcx>,
+    body: &Body<'tcx>,
     drafts: &[FunctionDraftV1<'tcx>],
 ) -> Result<Vec<DirectCallObservationV1>, SameSessionRustcErrorV1> {
-    let body = tcx.instance_mir(caller.def);
     let mut calls = Vec::new();
     for block in body.basic_blocks.iter() {
         let terminator = block
@@ -1239,19 +1545,28 @@ struct SpanObservationV1 {
     end_column: u32,
 }
 
+/// Existing frontend source coordinates intentionally use rustc's resolved
+/// call-site policy. Exact MIR operation provenance uses
+/// `exact_span_observation` for both the expansion and call-site spans.
 fn span_observation(
     tcx: TyCtxt<'_>,
     span: Span,
 ) -> Result<SpanObservationV1, SameSessionRustcErrorV1> {
-    let canonical = span.source_callsite();
-    if span.is_dummy() || canonical.is_dummy() {
+    exact_span_observation(tcx, span.source_callsite())
+}
+
+fn exact_span_observation(
+    tcx: TyCtxt<'_>,
+    span: Span,
+) -> Result<SpanObservationV1, SameSessionRustcErrorV1> {
+    if span.is_dummy() {
         return Err(SameSessionRustcErrorV1::InvalidTypedObservation(
             "dummy source span",
         ));
     }
     let source_map = tcx.sess.source_map();
-    let start = source_map.lookup_char_pos(canonical.lo());
-    let end = source_map.lookup_char_pos(canonical.hi());
+    let start = source_map.lookup_char_pos(span.lo());
+    let end = source_map.lookup_char_pos(span.hi());
     if start.file.stable_id != end.file.stable_id
         || start.line == 0
         || end.line == 0
@@ -1265,10 +1580,14 @@ fn span_observation(
         .map_err(|_| SameSessionRustcErrorV1::InvalidTypedObservation("source line overflow"))?;
     let end_line = u32::try_from(end.line)
         .map_err(|_| SameSessionRustcErrorV1::InvalidTypedObservation("source line overflow"))?;
-    let start_column = u32::try_from(start.col.0.saturating_add(1))
-        .map_err(|_| SameSessionRustcErrorV1::InvalidTypedObservation("source column overflow"))?;
-    let end_column = u32::try_from(end.col.0.saturating_add(1))
-        .map_err(|_| SameSessionRustcErrorV1::InvalidTypedObservation("source column overflow"))?;
+    let start_column = u32::try_from(start.col.0.checked_add(1).ok_or(
+        SameSessionRustcErrorV1::InvalidTypedObservation("source column overflow"),
+    )?)
+    .map_err(|_| SameSessionRustcErrorV1::InvalidTypedObservation("source column overflow"))?;
+    let end_column = u32::try_from(end.col.0.checked_add(1).ok_or(
+        SameSessionRustcErrorV1::InvalidTypedObservation("source column overflow"),
+    )?)
+    .map_err(|_| SameSessionRustcErrorV1::InvalidTypedObservation("source column overflow"))?;
     Ok(SpanObservationV1 {
         file_identity: domain_identity(
             SOURCE_DOMAIN,
@@ -1309,11 +1628,16 @@ fn mir_import_identity(functions: &[FunctionSemanticSnapshotV1]) -> [u8; 32] {
                 for word in operation.identity {
                     append_digest_field(&mut digest, &word.to_le_bytes());
                 }
-                for word in operation.span.file_identity() {
-                    append_digest_field(&mut digest, &word.to_le_bytes());
-                }
-                for coordinate in operation.span.coordinates() {
-                    append_digest_field(&mut digest, &coordinate.to_le_bytes());
+                for span in [
+                    operation.provenance.expansion(),
+                    operation.provenance.call_site(),
+                ] {
+                    for word in span.file_identity() {
+                        append_digest_field(&mut digest, &word.to_le_bytes());
+                    }
+                    for coordinate in span.coordinates() {
+                        append_digest_field(&mut digest, &coordinate.to_le_bytes());
+                    }
                 }
                 for successor in &operation.successors {
                     append_digest_field(&mut digest, &successor.to_le_bytes());
@@ -1328,6 +1652,7 @@ fn custody_binding(
     owner: u64,
     imported: &AuthenticatedOrdinaryRustScalarKernelImportV1,
     semantic: &RustKernelSemanticSnapshotV1,
+    admission: &PendingRustMirAdmissionV1,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     append_digest_field(&mut digest, CUSTODY_DOMAIN);
@@ -1338,25 +1663,47 @@ fn custody_binding(
     append_digest_field(&mut digest, &semantic.mir_closure);
     append_digest_field(&mut digest, &semantic.abi_closure);
     append_digest_field(&mut digest, &semantic.mir_import);
-    match semantic.lower_outcome {
-        RustMirLowerOutcomeV1::Supported => append_digest_field(&mut digest, &[0]),
-        RustMirLowerOutcomeV1::Unsupported {
+    match admission {
+        PendingRustMirAdmissionV1::Supported { graph } => {
+            append_digest_field(&mut digest, &[0]);
+            append_digest_field(&mut digest, &graph.binding);
+            let lowering = graph.lowering.record();
+            append_digest_field(&mut digest, lowering.source().identity().as_bytes());
+            append_digest_field(
+                &mut digest,
+                &bounded_usize_identity(lowering.source().block_count()),
+            );
+            append_digest_field(
+                &mut digest,
+                &bounded_usize_identity(lowering.source().operation_count()),
+            );
+            for step in lowering.steps() {
+                append_digest_field(
+                    &mut digest,
+                    &bounded_usize_identity(step.source_function_ordinal()),
+                );
+                append_digest_field(&mut digest, &step.iteration_rank().to_le_bytes());
+            }
+        }
+        PendingRustMirAdmissionV1::Unsupported {
             function,
             block,
             ordinal,
             kind,
-            span,
+            provenance,
         } => {
             append_digest_field(&mut digest, &[1]);
-            append_digest_field(&mut digest, &function.to_le_bytes());
-            append_digest_field(&mut digest, &block.to_le_bytes());
+            append_digest_field(&mut digest, &bounded_usize_identity(*function));
+            append_digest_field(&mut digest, &bounded_usize_identity(*block));
             append_digest_field(&mut digest, &ordinal.to_le_bytes());
-            append_digest_field(&mut digest, &(kind as u16).to_le_bytes());
-            for word in span.file_identity() {
-                append_digest_field(&mut digest, &word.to_le_bytes());
-            }
-            for coordinate in span.coordinates() {
-                append_digest_field(&mut digest, &coordinate.to_le_bytes());
+            append_digest_field(&mut digest, &(*kind as u16).to_le_bytes());
+            for span in [provenance.expansion(), provenance.call_site()] {
+                for word in span.file_identity() {
+                    append_digest_field(&mut digest, &word.to_le_bytes());
+                }
+                for coordinate in span.coordinates() {
+                    append_digest_field(&mut digest, &coordinate.to_le_bytes());
+                }
             }
         }
     }
@@ -1376,11 +1723,16 @@ fn custody_binding(
                 for word in operation.identity {
                     append_digest_field(&mut digest, &word.to_le_bytes());
                 }
-                for word in operation.span.file_identity() {
-                    append_digest_field(&mut digest, &word.to_le_bytes());
-                }
-                for coordinate in operation.span.coordinates() {
-                    append_digest_field(&mut digest, &coordinate.to_le_bytes());
+                for span in [
+                    operation.provenance.expansion(),
+                    operation.provenance.call_site(),
+                ] {
+                    for word in span.file_identity() {
+                        append_digest_field(&mut digest, &word.to_le_bytes());
+                    }
+                    for coordinate in span.coordinates() {
+                        append_digest_field(&mut digest, &coordinate.to_le_bytes());
+                    }
                 }
                 for successor in &operation.successors {
                     append_digest_field(&mut digest, &successor.to_le_bytes());
@@ -1403,6 +1755,12 @@ fn domain_identity(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
 fn append_digest_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     digest.update(bytes);
+}
+
+fn bounded_usize_identity(value: usize) -> [u8; 8] {
+    u64::try_from(value)
+        .expect("bounded compiler identity component fits u64")
+        .to_le_bytes()
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
