@@ -23,6 +23,7 @@ mod executor;
 mod flash_attention_memory_v1;
 mod general_gemm_kir_model_correspondence_v1;
 mod general_gemm_numerical_correspondence_v1;
+mod general_gemm_numerical_late_machine_v1;
 mod general_gemm_numerical_property_manifest_v1;
 mod general_gemm_numerical_v1;
 mod general_gemm_proof_numerical_evidence_v1;
@@ -125,6 +126,7 @@ pub use executor::{
 pub use flash_attention_memory_v1::*;
 pub use general_gemm_kir_model_correspondence_v1::*;
 pub use general_gemm_numerical_correspondence_v1::*;
+pub use general_gemm_numerical_late_machine_v1::*;
 pub use general_gemm_numerical_property_manifest_v1::*;
 pub use general_gemm_numerical_v1::*;
 pub use general_gemm_proof_numerical_evidence_v1::*;
