@@ -225,7 +225,12 @@ fn transplanted_identity_and_registration_markers_cannot_transfer_ownership() {
         rejection.1,
         Err(lower_kernel_gpu::PostconditionError::ContextMismatch)
     );
-    assert!(matches!(rejection.2, Err(BridgeError::ContextMismatch)));
+    assert!(matches!(
+        rejection.2,
+        Err(BridgeError::ContextIdentity(
+            fe2o3_pliron::ContextIdentityError::CorruptMarker
+        ))
+    ));
 }
 
 #[test]

@@ -9,5 +9,9 @@ description = "Bounded, non-authoritative Pliron context and pass-planning shell
 readme = "README.md"
 publish = false
 
+[features]
+default = []
+internal-test-context-access = []
+
 [dependencies]
 pliron.workspace = true

@@ -22,7 +22,7 @@ fe2o3-kernel-ir.workspace = true
 fe2o3-kir-pliron-bridge.workspace = true
 fe2o3-lower-kernel-gpu.workspace = true
 fe2o3-lower-mir-kernel.workspace = true
-fe2o3-pliron.workspace = true
+fe2o3-pliron = { workspace = true, features = ["internal-test-context-access"] }
 pliron.workspace = true
 
 [lints.rust]

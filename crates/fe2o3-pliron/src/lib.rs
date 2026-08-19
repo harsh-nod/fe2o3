@@ -543,6 +543,22 @@ impl PlironSession {
         self.poisoned
     }
 
+    /// Grants raw context access only to compiler-internal conformance tests.
+    ///
+    /// Production crates must use owner-aware handles. This test seam remains
+    /// feature-gated until all dialect builders operate through session-owned
+    /// services and is never enabled by the default feature set.
+    #[cfg(feature = "internal-test-context-access")]
+    pub fn with_context_mut<T>(
+        &mut self,
+        action: impl FnOnce(&mut Context) -> T,
+    ) -> Result<T, SessionPoisoned> {
+        if self.poisoned {
+            return Err(SessionPoisoned);
+        }
+        Ok(action(&mut self.context))
+    }
+
     /// Creates an empty builtin module and returns only its owner-aware handle.
     pub fn create_module(&mut self, name: &str) -> Result<OperationHandle, OperationHandleError> {
         validate_name(name, NameKind::Dialect).map_err(OperationHandleError::InvalidName)?;
