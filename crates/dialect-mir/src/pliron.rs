@@ -9,7 +9,7 @@
 use std::{
     collections::BTreeSet,
     error::Error,
-    fmt,
+    fmt::{self, Write as _},
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
@@ -50,6 +50,10 @@ use crate::DIALECT;
 
 /// Maximum ordered CFG targets retained on one imported rustc terminator.
 pub const MAX_IMPORTED_MIR_SUCCESSORS: usize = 256;
+
+/// Maximum canonical decimal bytes for all ordered `u32` CFG targets.
+pub const MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES: usize =
+    MAX_IMPORTED_MIR_SUCCESSORS * 10 + (MAX_IMPORTED_MIR_SUCCESSORS - 1);
 
 /// Hard limit categories for the in-memory MIR shell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -169,6 +173,12 @@ pub enum MirDialectBuildError {
         count: usize,
         limit: usize,
     },
+    SemanticSuccessorTextTooLong {
+        bytes: usize,
+        limit: usize,
+    },
+    InvalidSemanticSuccessorTarget,
+    SemanticSuccessorArityUnsupported,
     InvalidSemanticOperationOrder,
     FunctionLimitExceeded {
         limit: usize,
@@ -214,6 +224,16 @@ impl fmt::Display for MirDialectBuildError {
             Self::TooManySemanticSuccessors { count, limit } => write!(
                 formatter,
                 "MIR semantic terminator has {count} successors, exceeding {limit}"
+            ),
+            Self::SemanticSuccessorTextTooLong { bytes, limit } => write!(
+                formatter,
+                "MIR semantic successor text has {bytes} bytes, exceeding {limit}"
+            ),
+            Self::InvalidSemanticSuccessorTarget => {
+                formatter.write_str("MIR semantic successor target is not in the same function")
+            }
+            Self::SemanticSuccessorArityUnsupported => formatter.write_str(
+                "MIR semantic successor target has block arguments but no edge operands",
             ),
             Self::InvalidSemanticOperationOrder => {
                 formatter.write_str("MIR semantic operation order is invalid")
@@ -326,6 +346,43 @@ pub struct MirSemanticSourceSpan {
     end_column: u32,
 }
 
+/// Exact source provenance for one rustc MIR operation.
+///
+/// `expansion` is rustc's operation span as stored in optimized MIR. `call_site`
+/// is the recursively resolved source call-site span used for user diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MirSemanticSpanProvenance {
+    expansion: MirSemanticSourceSpan,
+    call_site: MirSemanticSourceSpan,
+}
+
+impl MirSemanticSpanProvenance {
+    pub fn new(
+        expansion: MirSemanticSourceSpan,
+        call_site: MirSemanticSourceSpan,
+    ) -> Result<Self, MirDialectBuildError> {
+        expansion.validate()?;
+        call_site.validate()?;
+        Ok(Self {
+            expansion,
+            call_site,
+        })
+    }
+
+    pub const fn expansion(self) -> MirSemanticSourceSpan {
+        self.expansion
+    }
+
+    pub const fn call_site(self) -> MirSemanticSourceSpan {
+        self.call_site
+    }
+
+    fn validate(self) -> Result<(), MirDialectBuildError> {
+        self.expansion.validate()?;
+        self.call_site.validate()
+    }
+}
+
 impl MirSemanticSourceSpan {
     /// Creates one exact, non-empty source span.
     pub fn new(
@@ -392,7 +449,7 @@ pub enum MirSemanticOperationKind {
     StatementIntrinsic = 11,
     StatementConstEvalCounter = 12,
     StatementNop = 13,
-    StatementOther = 255,
+    StatementBackwardIncompatibleDropHint = 14,
     TerminatorGoto = 256,
     TerminatorSwitchInt = 257,
     TerminatorReturn = 258,
@@ -400,13 +457,13 @@ pub enum MirSemanticOperationKind {
     TerminatorDrop = 260,
     TerminatorCall = 261,
     TerminatorAssert = 262,
-    TerminatorUnwind = 263,
+    TerminatorUnwindResume = 263,
     TerminatorYield = 264,
     TerminatorCoroutineDrop = 265,
     TerminatorFalseEdge = 266,
     TerminatorInlineAsm = 267,
     TerminatorTailCall = 268,
-    TerminatorOther = 511,
+    TerminatorUnwindTerminate = 269,
 }
 
 impl MirSemanticOperationKind {
@@ -425,7 +482,7 @@ impl MirSemanticOperationKind {
             11 => Self::StatementIntrinsic,
             12 => Self::StatementConstEvalCounter,
             13 => Self::StatementNop,
-            255 => Self::StatementOther,
+            14 => Self::StatementBackwardIncompatibleDropHint,
             256 => Self::TerminatorGoto,
             257 => Self::TerminatorSwitchInt,
             258 => Self::TerminatorReturn,
@@ -433,13 +490,13 @@ impl MirSemanticOperationKind {
             260 => Self::TerminatorDrop,
             261 => Self::TerminatorCall,
             262 => Self::TerminatorAssert,
-            263 => Self::TerminatorUnwind,
+            263 => Self::TerminatorUnwindResume,
             264 => Self::TerminatorYield,
             265 => Self::TerminatorCoroutineDrop,
             266 => Self::TerminatorFalseEdge,
             267 => Self::TerminatorInlineAsm,
             268 => Self::TerminatorTailCall,
-            511 => Self::TerminatorOther,
+            269 => Self::TerminatorUnwindTerminate,
             _ => return None,
         })
     }
@@ -470,7 +527,7 @@ pub struct MirSemanticOperationSnapshot {
     ordinal: u32,
     kind: MirSemanticOperationKind,
     identity: [u64; 4],
-    span: MirSemanticSourceSpan,
+    provenance: MirSemanticSpanProvenance,
     successors: Vec<u32>,
 }
 
@@ -487,8 +544,16 @@ impl MirSemanticOperationSnapshot {
         self.identity
     }
 
-    pub const fn span(&self) -> MirSemanticSourceSpan {
-        self.span
+    pub const fn provenance(&self) -> MirSemanticSpanProvenance {
+        self.provenance
+    }
+
+    pub const fn expansion_span(&self) -> MirSemanticSourceSpan {
+        self.provenance.expansion()
+    }
+
+    pub const fn call_site_span(&self) -> MirSemanticSourceSpan {
+        self.provenance.call_site()
     }
 
     pub fn successors(&self) -> &[u32] {
@@ -757,7 +822,7 @@ impl MirBlockHandle {
         ordinal: u32,
         kind: MirSemanticOperationKind,
         identity: [u64; 4],
-        span: MirSemanticSourceSpan,
+        provenance: MirSemanticSpanProvenance,
     ) -> Result<(), MirDialectBuildError> {
         self.authenticate(context)
             .map_err(|_| MirDialectBuildError::MalformedOperation("invalid block handle"))?;
@@ -773,7 +838,7 @@ impl MirBlockHandle {
                 ));
             }
             let statement =
-                MirSemanticStatementOp::try_new(context, ordinal, kind, identity, span)?;
+                MirSemanticStatementOp::try_new(context, ordinal, kind, identity, provenance)?;
             statement.get_operation().insert_before(context, tail);
             Ok(())
         }))
@@ -787,12 +852,43 @@ impl MirBlockHandle {
         ordinal: u32,
         kind: MirSemanticOperationKind,
         identity: [u64; 4],
-        span: MirSemanticSourceSpan,
-        successors: &[u32],
+        provenance: MirSemanticSpanProvenance,
+        successors: &[MirBlockHandle],
     ) -> Result<(), MirDialectBuildError> {
         self.authenticate(context)
             .map_err(|_| MirDialectBuildError::MalformedOperation("invalid block handle"))?;
         catch_unwind(AssertUnwindSafe(|| {
+            if successors.len() > MAX_IMPORTED_MIR_SUCCESSORS {
+                return Err(MirDialectBuildError::TooManySemanticSuccessors {
+                    count: successors.len(),
+                    limit: MAX_IMPORTED_MIR_SUCCESSORS,
+                });
+            }
+            let mut target_ids = Vec::with_capacity(successors.len());
+            let mut target_blocks = Vec::with_capacity(successors.len());
+            for target in successors {
+                target
+                    .authenticate(context)
+                    .map_err(|_| MirDialectBuildError::InvalidSemanticSuccessorTarget)?;
+                if target.parent != self.parent
+                    || !matches!(
+                        target.role,
+                        MirBlockRole::FunctionEntry | MirBlockRole::FunctionBlock
+                    )
+                {
+                    return Err(MirDialectBuildError::InvalidSemanticSuccessorTarget);
+                }
+                if target.pointer.deref(context).get_num_arguments() != 0 {
+                    return Err(MirDialectBuildError::SemanticSuccessorArityUnsupported);
+                }
+                target_ids.push(
+                    target
+                        .block_id(context)
+                        .map_err(|_| MirDialectBuildError::InvalidSemanticSuccessorTarget)?
+                        .0,
+                );
+                target_blocks.push(target.pointer);
+            }
             let tail = self.pointer.deref(context).get_tail().ok_or(
                 MirDialectBuildError::MalformedOperation("block terminator is missing"),
             )?;
@@ -802,7 +898,13 @@ impl MirBlockHandle {
                 ));
             }
             let terminator = MirSemanticTerminatorOp::try_new(
-                context, ordinal, kind, identity, span, successors,
+                context,
+                ordinal,
+                kind,
+                identity,
+                provenance,
+                &target_ids,
+                target_blocks,
             )?;
             terminator.get_operation().insert_before(context, tail);
             Operation::erase(tail, context);
@@ -971,6 +1073,9 @@ pub enum MirDialectVerifyError {
     InvalidSemanticKind(u16),
     InvalidSemanticSpan,
     InvalidSemanticSuccessors,
+    SemanticSuccessorTargetMissing(u32),
+    SemanticSuccessorOrderMismatch,
+    SemanticSuccessorArityUnsupported(u32),
     InvalidSemanticOperationOrder,
     SemanticStatementOutsideFunction,
     SemanticTerminatorOutsideFunction,
@@ -1012,6 +1117,19 @@ impl fmt::Display for MirDialectVerifyError {
             Self::InvalidSemanticSuccessors => {
                 formatter.write_str("invalid MIR semantic successor list")
             }
+            Self::SemanticSuccessorTargetMissing(target) => {
+                write!(
+                    formatter,
+                    "MIR semantic successor block {target} does not exist"
+                )
+            }
+            Self::SemanticSuccessorOrderMismatch => formatter.write_str(
+                "MIR semantic successor pointers do not match ordered target identities",
+            ),
+            Self::SemanticSuccessorArityUnsupported(target) => write!(
+                formatter,
+                "MIR semantic successor block {target} has arguments but the edge has none"
+            ),
             Self::InvalidSemanticOperationOrder => {
                 formatter.write_str("invalid MIR semantic operation order")
             }
@@ -1355,41 +1473,97 @@ impl MirSemanticSuccessorsAttr {
                 limit: MAX_IMPORTED_MIR_SUCCESSORS,
             });
         }
-        Ok(Self(StringAttr::new(
-            targets
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(","),
-        )))
+        let bytes = targets.iter().try_fold(0_usize, |bytes, target| {
+            bytes.checked_add(decimal_digits(*target))
+        });
+        let bytes = bytes
+            .and_then(|bytes| bytes.checked_add(targets.len().saturating_sub(1)))
+            .ok_or(MirDialectBuildError::SemanticSuccessorTextTooLong {
+                bytes: usize::MAX,
+                limit: MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES,
+            })?;
+        if bytes > MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES {
+            return Err(MirDialectBuildError::SemanticSuccessorTextTooLong {
+                bytes,
+                limit: MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES,
+            });
+        }
+        let mut text = String::with_capacity(bytes);
+        for (index, target) in targets.iter().enumerate() {
+            if index != 0 {
+                text.push(',');
+            }
+            write!(&mut text, "{target}").expect("writing into a String cannot fail");
+        }
+        Ok(Self(StringAttr::new(text)))
     }
 
     /// Returns targets in exact rustc successor order.
     pub fn targets(&self) -> Result<Vec<u32>, MirDialectBuildError> {
-        if self.0.as_str().is_empty() {
+        let text = self.0.as_str();
+        if text.len() > MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES {
+            return Err(MirDialectBuildError::SemanticSuccessorTextTooLong {
+                bytes: text.len(),
+                limit: MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES,
+            });
+        }
+        if text.is_empty() {
             return Ok(Vec::new());
         }
-        let targets = self
-            .0
-            .as_str()
-            .split(',')
-            .map(|target| {
+        let count = text.bytes().try_fold(1_usize, |count, byte| {
+            if byte == b',' {
+                count.checked_add(1)
+            } else {
+                Some(count)
+            }
+        });
+        let count = count.ok_or(MirDialectBuildError::TooManySemanticSuccessors {
+            count: usize::MAX,
+            limit: MAX_IMPORTED_MIR_SUCCESSORS,
+        })?;
+        if count > MAX_IMPORTED_MIR_SUCCESSORS {
+            return Err(MirDialectBuildError::TooManySemanticSuccessors {
+                count,
+                limit: MAX_IMPORTED_MIR_SUCCESSORS,
+            });
+        }
+        let mut targets = Vec::with_capacity(count);
+        for target in text.split(',') {
+            if target.is_empty()
+                || (target.len() > 1 && target.starts_with('0'))
+                || !target.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(MirDialectBuildError::MalformedOperation(
+                    "non-canonical successor list",
+                ));
+            }
+            targets.push(
                 target
                     .parse::<u32>()
-                    .map_err(|_| MirDialectBuildError::MalformedOperation("invalid successor"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let canonical = targets
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        if targets.len() > MAX_IMPORTED_MIR_SUCCESSORS || canonical != self.0.as_str() {
+                    .map_err(|_| MirDialectBuildError::MalformedOperation("invalid successor"))?,
+            );
+        }
+        if targets.len() != count {
             return Err(MirDialectBuildError::MalformedOperation(
                 "non-canonical successor list",
             ));
         }
         Ok(targets)
+    }
+}
+
+const fn decimal_digits(value: u32) -> usize {
+    match value {
+        0..=9 => 1,
+        10..=99 => 2,
+        100..=999 => 3,
+        1_000..=9_999 => 4,
+        10_000..=99_999 => 5,
+        100_000..=999_999 => 6,
+        1_000_000..=9_999_999 => 7,
+        10_000_000..=99_999_999 => 8,
+        100_000_000..=999_999_999 => 9,
+        _ => 10,
     }
 }
 
@@ -1828,7 +2002,7 @@ impl Verify for MirFunctionOp {
             return verify_err!(location, MirDialectVerifyError::EntryArgumentsMismatch);
         }
 
-        for (index, block) in blocks.into_iter().enumerate() {
+        for (index, block) in blocks.iter().copied().enumerate() {
             if index != 0 && block.deref(context).get_num_arguments() != 0 {
                 return verify_err!(location, MirDialectVerifyError::NonEntryBlockArguments);
             }
@@ -1889,6 +2063,40 @@ impl Verify for MirFunctionOp {
                             location,
                             MirDialectVerifyError::InvalidSemanticOperationOrder
                         );
+                    }
+                    let operation_ref = operation.deref(context);
+                    if operation_ref.get_num_successors() != snapshot.successors().len() {
+                        return verify_err!(
+                            location,
+                            MirDialectVerifyError::SemanticSuccessorOrderMismatch
+                        );
+                    }
+                    for (actual, expected) in operation_ref
+                        .successors()
+                        .zip(snapshot.successors().iter().copied())
+                    {
+                        let Some(expected_block) = usize::try_from(expected)
+                            .ok()
+                            .and_then(|expected| blocks.get(expected))
+                            .copied()
+                        else {
+                            return verify_err!(
+                                location,
+                                MirDialectVerifyError::SemanticSuccessorTargetMissing(expected)
+                            );
+                        };
+                        if actual != expected_block {
+                            return verify_err!(
+                                location,
+                                MirDialectVerifyError::SemanticSuccessorOrderMismatch
+                            );
+                        }
+                        if actual.deref(context).get_num_arguments() != 0 {
+                            return verify_err!(
+                                location,
+                                MirDialectVerifyError::SemanticSuccessorArityUnsupported(expected)
+                            );
+                        }
                     }
                 } else if Operation::is_op::<MirReturnOp>(operation, context)
                     && (operation_index + 1 != operations.len() || expected_ordinal != 0)
@@ -1965,7 +2173,8 @@ impl Verify for MirBlockOp {
         semantic_statement_ordinal: MirSemanticOrdinalAttr,
         semantic_statement_kind: MirSemanticKindAttr,
         semantic_statement_identity: MirSemanticIdentityAttr,
-        semantic_statement_span: MirSemanticSpanAttr
+        semantic_statement_expansion_span: MirSemanticSpanAttr,
+        semantic_statement_call_site_span: MirSemanticSpanAttr
     )
 )]
 /// One exact optimized-rustc statement retained as typed inert Pliron IR.
@@ -1977,13 +2186,13 @@ impl MirSemanticStatementOp {
         ordinal: u32,
         kind: MirSemanticOperationKind,
         identity: [u64; 4],
-        span: MirSemanticSourceSpan,
+        provenance: MirSemanticSpanProvenance,
     ) -> Result<Self, MirDialectBuildError> {
         if kind.is_terminator() {
             return Err(MirDialectBuildError::InvalidSemanticKind(kind as u16));
         }
         let identity = MirSemanticIdentityAttr::new(identity)?;
-        span.validate()?;
+        provenance.validate()?;
         let op = Operation::new(
             context,
             Self::get_concrete_op_info(),
@@ -1997,7 +2206,14 @@ impl MirSemanticStatementOp {
             .set_attr_semantic_statement_ordinal(context, MirSemanticOrdinalAttr::new(ordinal));
         statement.set_attr_semantic_statement_kind(context, MirSemanticKindAttr::new(kind));
         statement.set_attr_semantic_statement_identity(context, identity);
-        statement.set_attr_semantic_statement_span(context, MirSemanticSpanAttr::new(span));
+        statement.set_attr_semantic_statement_expansion_span(
+            context,
+            MirSemanticSpanAttr::new(provenance.expansion()),
+        );
+        statement.set_attr_semantic_statement_call_site_span(
+            context,
+            MirSemanticSpanAttr::new(provenance.call_site()),
+        );
         Ok(statement)
     }
 
@@ -2008,10 +2224,15 @@ impl MirSemanticStatementOp {
             ordinal: self.get_attr_semantic_statement_ordinal(context)?.value(),
             kind: self.get_attr_semantic_statement_kind(context)?.kind()?,
             identity: self.get_attr_semantic_statement_identity(context)?.words(),
-            span: self
-                .get_attr_semantic_statement_span(context)?
-                .span()
-                .ok()?,
+            provenance: MirSemanticSpanProvenance::new(
+                self.get_attr_semantic_statement_expansion_span(context)?
+                    .span()
+                    .ok()?,
+                self.get_attr_semantic_statement_call_site_span(context)?
+                    .span()
+                    .ok()?,
+            )
+            .ok()?,
             successors: Vec::new(),
         })
     }
@@ -2057,7 +2278,8 @@ impl Verify for MirSemanticStatementOp {
         semantic_terminator_ordinal: MirSemanticOrdinalAttr,
         semantic_terminator_kind: MirSemanticKindAttr,
         semantic_terminator_identity: MirSemanticIdentityAttr,
-        semantic_terminator_span: MirSemanticSpanAttr,
+        semantic_terminator_expansion_span: MirSemanticSpanAttr,
+        semantic_terminator_call_site_span: MirSemanticSpanAttr,
         semantic_terminator_successors: MirSemanticSuccessorsAttr
     )
 )]
@@ -2070,21 +2292,22 @@ impl MirSemanticTerminatorOp {
         ordinal: u32,
         kind: MirSemanticOperationKind,
         identity: [u64; 4],
-        span: MirSemanticSourceSpan,
-        successors: &[u32],
+        provenance: MirSemanticSpanProvenance,
+        successor_ids: &[u32],
+        successors: Vec<Ptr<BasicBlock>>,
     ) -> Result<Self, MirDialectBuildError> {
         if !kind.is_terminator() {
             return Err(MirDialectBuildError::InvalidSemanticKind(kind as u16));
         }
         let identity = MirSemanticIdentityAttr::new(identity)?;
-        let successors = MirSemanticSuccessorsAttr::new(successors)?;
-        span.validate()?;
+        let successor_ids = MirSemanticSuccessorsAttr::new(successor_ids)?;
+        provenance.validate()?;
         let op = Operation::new(
             context,
             Self::get_concrete_op_info(),
             vec![],
             vec![],
-            vec![],
+            successors,
             0,
         );
         let terminator = Self { op };
@@ -2092,8 +2315,15 @@ impl MirSemanticTerminatorOp {
             .set_attr_semantic_terminator_ordinal(context, MirSemanticOrdinalAttr::new(ordinal));
         terminator.set_attr_semantic_terminator_kind(context, MirSemanticKindAttr::new(kind));
         terminator.set_attr_semantic_terminator_identity(context, identity);
-        terminator.set_attr_semantic_terminator_span(context, MirSemanticSpanAttr::new(span));
-        terminator.set_attr_semantic_terminator_successors(context, successors);
+        terminator.set_attr_semantic_terminator_expansion_span(
+            context,
+            MirSemanticSpanAttr::new(provenance.expansion()),
+        );
+        terminator.set_attr_semantic_terminator_call_site_span(
+            context,
+            MirSemanticSpanAttr::new(provenance.call_site()),
+        );
+        terminator.set_attr_semantic_terminator_successors(context, successor_ids);
         Ok(terminator)
     }
 
@@ -2104,10 +2334,15 @@ impl MirSemanticTerminatorOp {
             ordinal: self.get_attr_semantic_terminator_ordinal(context)?.value(),
             kind: self.get_attr_semantic_terminator_kind(context)?.kind()?,
             identity: self.get_attr_semantic_terminator_identity(context)?.words(),
-            span: self
-                .get_attr_semantic_terminator_span(context)?
-                .span()
-                .ok()?,
+            provenance: MirSemanticSpanProvenance::new(
+                self.get_attr_semantic_terminator_expansion_span(context)?
+                    .span()
+                    .ok()?,
+                self.get_attr_semantic_terminator_call_site_span(context)?
+                    .span()
+                    .ok()?,
+            )
+            .ok()?,
             successors: self
                 .get_attr_semantic_terminator_successors(context)?
                 .targets()

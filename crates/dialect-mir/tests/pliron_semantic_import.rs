@@ -1,8 +1,11 @@
+#![cfg(feature = "pliron")]
+
 use dialect_mir::{
     MirTypeId,
     pliron::{
         MirDialectBuildError, MirDialectLimits, MirModuleOp, MirSemanticOperationKind,
-        MirSemanticSourceSpan, MirSnapshotOperation, register_mir_dialect,
+        MirSemanticSourceSpan, MirSemanticSpanProvenance, MirSnapshotOperation,
+        register_mir_dialect,
     },
 };
 use pliron::{context::Context, op::Op, operation::verify_operation};
@@ -18,6 +21,10 @@ fn span(seed: u64) -> MirSemanticSourceSpan {
         .expect("valid span")
 }
 
+fn provenance(seed: u64) -> MirSemanticSpanProvenance {
+    MirSemanticSpanProvenance::new(span(seed), span(seed + 100)).expect("valid provenance")
+}
+
 #[test]
 fn exact_semantic_order_and_cfg_survive_owner_bound_snapshot() {
     let mut context = context();
@@ -27,13 +34,15 @@ fn exact_semantic_order_and_cfg_survive_owner_bound_snapshot() {
         .append_function(&mut context, "kernel", &[MirTypeId(0)])
         .expect("function");
     let entry = function.entry_block(&context).expect("entry handle");
+    let block1 = function.append_block(&mut context).expect("block 1");
+    let block2 = function.append_block(&mut context).expect("block 2");
     entry
         .append_semantic_statement(
             &mut context,
             0,
             MirSemanticOperationKind::StatementStorageLive,
             [1, 2, 3, 4],
-            span(10),
+            provenance(10),
         )
         .expect("first statement");
     entry
@@ -42,7 +51,7 @@ fn exact_semantic_order_and_cfg_survive_owner_bound_snapshot() {
             1,
             MirSemanticOperationKind::StatementAssign,
             [5, 6, 7, 8],
-            span(20),
+            provenance(20),
         )
         .expect("second statement");
     entry
@@ -51,8 +60,8 @@ fn exact_semantic_order_and_cfg_survive_owner_bound_snapshot() {
             2,
             MirSemanticOperationKind::TerminatorSwitchInt,
             [9, 10, 11, 12],
-            span(30),
-            &[2, 1, 2],
+            provenance(30),
+            &[block2.clone(), block1.clone(), block2],
         )
         .expect("terminator");
 
@@ -70,7 +79,8 @@ fn exact_semantic_order_and_cfg_survive_owner_bound_snapshot() {
     assert_eq!(first.ordinal(), 0);
     assert_eq!(first.kind(), MirSemanticOperationKind::StatementStorageLive);
     assert_eq!(first.identity(), [1, 2, 3, 4]);
-    assert_eq!(first.span(), span(10));
+    assert_eq!(first.expansion_span(), span(10));
+    assert_eq!(first.call_site_span(), span(110));
     let MirSnapshotOperation::SemanticStatement(second) = &operations[2] else {
         panic!("expected second semantic statement");
     };
@@ -101,7 +111,7 @@ fn semantic_builders_reject_cross_owner_and_field_substitutions() {
             0,
             MirSemanticOperationKind::StatementNop,
             [1, 0, 0, 0],
-            span(1),
+            provenance(1),
         ),
         Err(MirDialectBuildError::MalformedOperation(
             "invalid block handle"
@@ -113,7 +123,7 @@ fn semantic_builders_reject_cross_owner_and_field_substitutions() {
             0,
             MirSemanticOperationKind::StatementNop,
             [0; 4],
-            span(1),
+            provenance(1),
         ),
         Err(MirDialectBuildError::InvalidSemanticIdentity)
     ));
@@ -123,7 +133,7 @@ fn semantic_builders_reject_cross_owner_and_field_substitutions() {
             0,
             MirSemanticOperationKind::TerminatorReturn,
             [1, 0, 0, 0],
-            span(1),
+            provenance(1),
         ),
         Err(MirDialectBuildError::InvalidSemanticKind(_))
     ));
@@ -142,7 +152,7 @@ fn verification_rejects_noncanonical_operation_order() {
             1,
             MirSemanticOperationKind::StatementNop,
             [1, 0, 0, 0],
-            span(1),
+            provenance(1),
         )
         .unwrap();
     assert!(verify_operation(module.get_operation(), &context).is_err());
