@@ -38,7 +38,11 @@ impl FirstBuildWorkerV2IdentityV1 {
 }
 
 /// Inert evidence that a compiler-aware V2 bootstrap and exact V2 replay produced identical bytes.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// This evidence is move-only. Borrow it to inspect the complete bootstrap and replay transcript,
+/// then consume it with [`Self::into_authorized_execution`] when transferring the exact replay to
+/// a typed review boundary.
+#[derive(Debug, Eq, PartialEq)]
 pub struct InertFirstBuildWorkerV2EvidenceV1 {
     identity: FirstBuildWorkerV2IdentityV1,
     attempt: BuildAttempt,
@@ -136,12 +140,27 @@ impl InertFirstBuildWorkerV2EvidenceV1 {
         self.plan.output().identity()
     }
 
+    /// Borrows the exact-replay output for inert inspection only.
+    ///
+    /// These bytes grant no publication, load, or launch authority. A typed production route must
+    /// not retain or copy them; it must consume this evidence through
+    /// [`Self::into_authorized_execution`] and establish its own reviewed runtime capability.
     pub fn output_bytes(&self) -> &[u8] {
         self.authorized
             .response()
             .output()
             .expect("successful first-build evidence retains a V2 output")
             .bytes()
+    }
+
+    /// Consumes the reproducibility evidence and transfers sole exact-replay execution custody.
+    ///
+    /// The bootstrap execution and both retained request transcripts are dropped during this
+    /// transition. The returned execution remains inert and grants no publication, load, or launch
+    /// authority; a typed reviewer must consume it before any such capability can be created.
+    pub fn into_authorized_execution(self) -> InertCompilerHandoffExecutionV2 {
+        let Self { authorized, .. } = self;
+        authorized
     }
 
     pub const fn grants_publication_authority(&self) -> bool {
@@ -158,7 +177,7 @@ impl InertFirstBuildWorkerV2EvidenceV1 {
 }
 
 /// Failure from the two-execution first-build workflow.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum FirstBuildWorkerV2Error {
     CompilerModuleHandoff(CompilerModuleHandoffErrorV2),

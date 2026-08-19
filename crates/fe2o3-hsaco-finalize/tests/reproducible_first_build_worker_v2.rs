@@ -322,6 +322,17 @@ fn derives_exact_plan_and_returns_only_inert_dual_execution_evidence() {
     assert!(!evidence.grants_publication_authority());
     assert!(!evidence.grants_load_authority());
     assert!(!evidence.grants_launch_authority());
+
+    let authorized_request_identity = *evidence.authorized_request_identity();
+    let authorized = evidence.into_authorized_execution();
+    assert_eq!(
+        authorized.response().request_identity(),
+        &authorized_request_identity
+    );
+    assert_eq!(authorized.response().output().unwrap().bytes(), OUTPUT);
+    assert!(!authorized.grants_publication_authority());
+    assert!(!authorized.grants_load_authority());
+    assert!(!authorized.grants_launch_authority());
 }
 
 #[test]
