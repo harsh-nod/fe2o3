@@ -675,6 +675,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-amdgcn-pliron-llvm"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdgcn-model",
+ "fe2o3-llvm-handoff",
+ "fe2o3-pliron",
+ "pliron",
+ "pliron-llvm",
+]
+
+[[package]]
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
@@ -1001,6 +1012,23 @@ dependencies = [
 name = "fe2o3-llvm-handoff"
 version = "0.1.0"
 dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-llvm-route-conformance"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdgcn-pliron-llvm",
+ "fe2o3-llvm-handoff",
+ "fe2o3-llvm-worker-handoff",
+]
+
+[[package]]
+name = "fe2o3-llvm-worker-handoff"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-llvm-handoff",
  "sha2 0.11.0",
 ]
 

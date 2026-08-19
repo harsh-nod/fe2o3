@@ -57,6 +57,7 @@ dialect-proof = { path = "crates/dialect-proof" }
 dialect-schedule = { path = "crates/dialect-schedule" }
 dialect-tile = { path = "crates/dialect-tile" }
 fe2o3-amdgcn-model = { path = "crates/fe2o3-amdgcn-model" }
+fe2o3-amdgcn-pliron-llvm = { path = "crates/fe2o3-amdgcn-pliron-llvm" }
 fe2o3-amd-target = { path = "crates/fe2o3-amd-target" }
 fe2o3-artifact-transaction = { path = "crates/fe2o3-artifact-transaction" }
 fe2o3-build-authority = { path = "crates/fe2o3-build-authority" }
@@ -84,6 +85,9 @@ fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis" }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
 fe2o3-kir-pliron-bridge = { path = "crates/fe2o3-kir-pliron-bridge" }
 fe2o3-legacy-compiler = { path = "crates/fe2o3-legacy-compiler" }
+fe2o3-llvm-handoff = { path = "crates/fe2o3-llvm-handoff" }
+fe2o3-llvm-route-conformance = { path = "crates/fe2o3-llvm-route-conformance" }
+fe2o3-llvm-worker-handoff = { path = "crates/fe2o3-llvm-worker-handoff" }
 fe2o3-lower-kernel-gpu = { path = "crates/fe2o3-lower-kernel-gpu" }
 fe2o3-lower-mir-kernel = { path = "crates/fe2o3-lower-mir-kernel" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }
