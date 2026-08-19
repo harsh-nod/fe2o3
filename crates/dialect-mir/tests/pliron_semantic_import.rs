@@ -1,5 +1,7 @@
 #![cfg(feature = "pliron")]
 
+#![cfg(feature = "pliron")]
+
 use dialect_mir::{
     MirTypeId,
     pliron::{
