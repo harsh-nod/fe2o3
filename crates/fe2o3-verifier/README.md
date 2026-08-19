@@ -448,15 +448,38 @@ model, schedule-specific theorem/source, and complete retained source closure.
 Every field is recomputed from typed APIs; the checked record is private-field,
 non-`Clone`, and can be consumed by the retained-root execution entry point. It
 does not accept caller paths, source bytes, digests, theorem names, or proof
-output. The numerical binding stops at the exact-real model, and machine
-refinement remains explicitly open.
+output.
+
+`GeneralGemmNumericalCorrespondenceV1` consumes that checked KIR/model record
+and recomputes a versioned BF16/FP32/gfx942 package. Its retained Verus source
+proves exact BF16 encoding widening for the complete 65,536-value domain,
+increasing-K separate multiply/add order, separate alpha/beta epilogue order,
+and the reviewed 16x16x16 wave64 descriptor shape. IEEE binary32 value
+interpretation, round-to-nearest-ties-even multiply/add results, and the
+`llvm.amdgcn.mfma.f32.16x16x16bf16.1k` FP32 accumulation behavior are explicit
+`Contracted` premises. Exceptional/subnormal values and emitted-machine
+numerical refinement are `Unsupported` by this V1 package. Eleven
+boundary-biased fixtures, including cancellation, overflow, minimum/maximum
+normal encodings, signed zero, special-value rejection, and a half-ULP
+reassociation discriminator, are mutation-sensitive observations only and
+cannot promote `Contracted` to `Proved`.
+
+The numerical claim binds the KIR/model correspondence, proof request,
+schedule, numerical policy, target, compiler toolchain, schedule model/theorem
+and source closure, numerical model/theorem and source closure, reviewed Verus
+tool closure, exhaustive BF16 result, differential corpus, and exact MFMA
+instruction contract. Every transported field and property subfield is checked
+for substitution. The checked and executed records are private-field,
+non-`Clone`, and grant no compiler, artifact, publication, load, or execution
+authority.
 
 Stock `rust_verify` and Z3 do not implement the V2 nonce/control protocol, and
 Verus must create its reviewed Z3 descendant. This runner therefore does not
 produce `AuthenticatedVerusExecutionReceiptV2`, does not claim the V2 frozen
 mapping/checkpoint properties, and grants no compiler, artifact, publication,
 load, or launch authority. Compiler-owned authentication of the KIR producer,
-BF16/FP32/MFMA machine-rounding correspondence, and emitted LLVM/ISA refinement
+discharge of the contracted IEEE/MFMA premises, and post-link correspondence
+from typed LLVM through the emitted gfx942 instruction and observed result bits
 remain separate open obligations.
 
 The control-flow binding does not yet prove optimized MIR or machine CFG
