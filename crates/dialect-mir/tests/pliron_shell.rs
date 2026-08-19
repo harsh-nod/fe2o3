@@ -1,16 +1,25 @@
 #![cfg(feature = "pliron")]
+#![forbid(unsafe_code)]
+
+use std::{
+    any::Any,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use dialect_mir::{
     MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_TYPES, MirBlockId, MirTypeId,
     pliron::{
-        MirBlockIdAttr, MirBlockOp, MirDialectBuildError, MirDialectLimitKind, MirDialectLimits,
-        MirFunctionOp, MirIdentityAttr, MirLimitsAttr, MirModuleOp, MirReturnOp, MirTypeRef,
-        mir_dialect_registration, register_mir_dialect,
+        MirBlockHandleError, MirBlockIdAttr, MirBlockOp, MirDialectBuildError, MirDialectLimitKind,
+        MirDialectLimits, MirFunctionOp, MirIdentityAttr, MirLimitsAttr, MirModuleOp, MirReturnOp,
+        MirTypeRef, mir_dialect_registration, register_mir_dialect,
     },
 };
-use fe2o3_pliron::{PLIRON_REVISION, PlironSession, ShellLimits};
+use fe2o3_pliron::{
+    CONTEXT_IDENTITY_MARKER_KEY, ContextIdentityError, PLIRON_REVISION, PlironSession, ShellLimits,
+};
 use pliron::{
     context::Context,
+    identifier::Identifier,
     linked_list::ContainsLinkedList,
     op::Op,
     operation::{Operation, verify_operation},
@@ -19,6 +28,29 @@ use pliron::{
     result::ExpectOk,
     r#type::{Type, TypeHandle, verify_type},
 };
+
+fn marker_key(value: &str) -> Identifier {
+    value.try_into().expect("fixed marker key is valid")
+}
+
+fn take_marker(context: &mut Context, key: &str) -> Box<dyn Any> {
+    let index = context
+        .aux_data_map
+        .remove(&marker_key(key))
+        .expect("marker is indexed");
+    context.aux_data.remove(index).expect("marker is present")
+}
+
+fn install_marker(context: &mut Context, key: &str, marker: Box<dyn Any>) {
+    let index = context.aux_data.insert(marker);
+    context.aux_data_map.insert(marker_key(key), index);
+}
+
+fn transplant_marker(owner: &mut Context, foreign: &mut Context, key: &str) {
+    let owner_marker = take_marker(owner, key);
+    drop(take_marker(foreign, key));
+    install_marker(foreign, key, owner_marker);
+}
 
 #[test]
 fn explicit_registration_is_duplicate_safe_and_session_scoped() {
@@ -55,10 +87,13 @@ fn typed_module_function_and_blocks_round_trip_through_pliron() {
             &[MirTypeId(0), MirTypeId(1)],
         )
         .unwrap();
-    function.append_block(&mut context).unwrap();
+    let second_block = function.append_block(&mut context).unwrap();
 
     assert_eq!(module.function_count(&context), 1);
     assert_eq!(function.block_count(&context), 2);
+    assert_eq!(second_block.block_id(&context), Ok(MirBlockId(1)));
+    assert_eq!(second_block.verify(&context), Ok(()));
+    assert!(!second_block.grants_authority());
     assert_eq!(
         MirBlockOp::from_operation(
             function
@@ -243,4 +278,97 @@ fn verifier_rejects_untrusted_type_references() {
     let text = format!("mir.type_ref {}", MAX_EXECUTABLE_TYPES);
     let ty = parse_from_str(TypeHandle::parser(()), &mut context, &text).expect_ok(&context);
     assert!(verify_type(&*ty.deref(&context), &context).is_err());
+}
+
+#[test]
+fn owner_bound_block_rejects_an_equal_slot_foreign_context_without_unwinding() {
+    let limits = MirDialectLimits::new(1, 2, 64).unwrap();
+    let mut owner = Context::new();
+    let owner_module = MirModuleOp::try_new(&mut owner, "owner", limits).unwrap();
+    let owner_function = owner_module
+        .append_function(&mut owner, "owner::entry", &[])
+        .unwrap();
+    let owner_block = owner_function.append_block(&mut owner).unwrap();
+
+    let mut foreign = Context::new();
+    let foreign_module = MirModuleOp::try_new(&mut foreign, "foreign", limits).unwrap();
+    let foreign_function = foreign_module
+        .append_function(&mut foreign, "foreign::entry", &[])
+        .unwrap();
+    foreign_function.append_block(&mut foreign).unwrap();
+
+    let rejection = catch_unwind(AssertUnwindSafe(|| owner_block.verify(&foreign)))
+        .expect("foreign handle verification must not unwind");
+    assert_eq!(rejection, Err(MirBlockHandleError::ForeignContext));
+    assert_eq!(owner_block.verify(&owner), Ok(()));
+}
+
+#[test]
+fn erased_owner_bound_block_returns_a_stale_error_without_unwinding() {
+    let limits = MirDialectLimits::new(1, 2, 64).unwrap();
+    let mut context = Context::new();
+    let module = MirModuleOp::try_new(&mut context, "owner", limits).unwrap();
+    let function = module
+        .append_function(&mut context, "owner::entry", &[])
+        .unwrap();
+    let block = function.append_block(&mut context).unwrap();
+    let stale = block.clone();
+
+    block.erase(&mut context).unwrap();
+    let rejection = catch_unwind(AssertUnwindSafe(|| stale.block_id(&context)))
+        .expect("stale handle observation must not unwind");
+    assert_eq!(rejection, Err(MirBlockHandleError::StaleHandle));
+    assert_eq!(function.block_count(&context), 1);
+    verify_operation(module.get_operation(), &context).unwrap();
+}
+
+#[test]
+fn transplanted_context_marker_cannot_transfer_block_ownership() {
+    let limits = MirDialectLimits::new(1, 2, 64).unwrap();
+    let mut owner = Context::new();
+    let owner_module = MirModuleOp::try_new(&mut owner, "owner", limits).unwrap();
+    let owner_function = owner_module
+        .append_function(&mut owner, "owner::entry", &[])
+        .unwrap();
+    owner_function.append_block(&mut owner).unwrap();
+
+    let mut foreign = Context::new();
+    let foreign_module = MirModuleOp::try_new(&mut foreign, "foreign", limits).unwrap();
+    let foreign_function = foreign_module
+        .append_function(&mut foreign, "foreign::entry", &[])
+        .unwrap();
+    let foreign_block = foreign_function.append_block(&mut foreign).unwrap();
+
+    transplant_marker(&mut owner, &mut foreign, CONTEXT_IDENTITY_MARKER_KEY);
+    let rejection = catch_unwind(AssertUnwindSafe(|| foreign_block.verify(&foreign)))
+        .expect("transplanted-marker verification must not unwind");
+    assert_eq!(
+        rejection,
+        Err(MirBlockHandleError::ContextIdentity(
+            ContextIdentityError::CorruptMarker
+        ))
+    );
+}
+
+#[test]
+fn owner_bound_block_contains_a_pointer_borrow_panic_path() {
+    let limits = MirDialectLimits::new(1, 2, 64).unwrap();
+    let mut context = Context::new();
+    let module = MirModuleOp::try_new(&mut context, "owner", limits).unwrap();
+    let function = module
+        .append_function(&mut context, "owner::entry", &[])
+        .unwrap();
+    let block = function.append_block(&mut context).unwrap();
+    let raw_block = function
+        .get_operation()
+        .deref(&context)
+        .get_region(0)
+        .deref(&context)
+        .get_tail()
+        .unwrap();
+    let _exclusive_borrow = raw_block.deref_mut(&context);
+
+    let rejection = catch_unwind(AssertUnwindSafe(|| block.verify(&context)))
+        .expect("borrow-conflict verification must not unwind");
+    assert_eq!(rejection, Err(MirBlockHandleError::StaleHandle));
 }

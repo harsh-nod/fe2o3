@@ -1,10 +1,17 @@
+#![forbid(unsafe_code)]
+
 //! Feature-gated Pliron ownership shell for the `mir` dialect.
 //!
 //! This module is an in-memory representation only. Canonical MIR records,
 //! wire encodings, and artifact identities remain owned by
 //! [`fe2o3_mir_model`].
 
-use std::{collections::BTreeSet, error::Error, fmt};
+use std::{
+    collections::BTreeSet,
+    error::Error,
+    fmt,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use ::pliron::{
     attribute::Attribute,
@@ -26,7 +33,7 @@ use ::pliron::{
     linked_list::{ContainsLinkedList, LinkedList},
     location::Located,
     op::Op,
-    operation::Operation,
+    operation::{Operation, verify_operation},
     result::Result as PlironResult,
     r#type::{Type, TypeHandle, Typed, TypedHandle},
     verify_err, verify_err_noloc,
@@ -35,7 +42,10 @@ use fe2o3_mir_model::{
     MAX_EXECUTABLE_BLOCK_PARAMETERS, MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_FUNCTIONS,
     MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_TYPES, MirBlockId, MirTypeId,
 };
-use fe2o3_pliron::{DialectRegistration, NameError, RegistrationHookError};
+use fe2o3_pliron::{
+    ContextIdentity, ContextIdentityError, DialectRegistration, NameError, RegistrationHookError,
+    ensure_context_identity, require_context_identity,
+};
 
 use crate::DIALECT;
 
@@ -146,6 +156,8 @@ pub enum MirDialectBuildError {
     BlockLimitExceeded {
         limit: usize,
     },
+    ContextIdentity(ContextIdentityError),
+    UpstreamPanicked,
     MalformedOperation(&'static str),
 }
 
@@ -178,6 +190,12 @@ impl fmt::Display for MirDialectBuildError {
             Self::BlockLimitExceeded { limit } => {
                 write!(formatter, "MIR function block limit {limit} is exhausted")
             }
+            Self::ContextIdentity(_) => {
+                formatter.write_str("MIR context identity validation failed")
+            }
+            Self::UpstreamPanicked => {
+                formatter.write_str("MIR construction was rejected after an upstream panic")
+            }
             Self::MalformedOperation(reason) => {
                 write!(formatter, "malformed MIR operation: {reason}")
             }
@@ -186,6 +204,125 @@ impl fmt::Display for MirDialectBuildError {
 }
 
 impl Error for MirDialectBuildError {}
+
+/// An opaque CFG block capability bound to one Pliron context.
+///
+/// The upstream pointer remains private and can only be used through methods
+/// that authenticate its context owner and liveness first.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MirBlockHandle {
+    owner: ContextIdentity,
+    pointer: Ptr<BasicBlock>,
+}
+
+impl fmt::Debug for MirBlockHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MirBlockHandle")
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Bounded failures from an owner-aware MIR block handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirBlockHandleError {
+    ContextIdentity(ContextIdentityError),
+    ForeignContext,
+    StaleHandle,
+    MalformedBlock,
+    VerificationFailed,
+    UpstreamPanicked,
+}
+
+impl fmt::Display for MirBlockHandleError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ContextIdentity(_) => {
+                formatter.write_str("MIR block context identity validation failed")
+            }
+            Self::ForeignContext => {
+                formatter.write_str("MIR block handle belongs to another context")
+            }
+            Self::StaleHandle => formatter.write_str("MIR block handle is stale"),
+            Self::MalformedBlock => formatter.write_str("MIR block marker is malformed"),
+            Self::VerificationFailed => formatter.write_str("MIR block verification failed"),
+            Self::UpstreamPanicked => {
+                formatter.write_str("MIR block access was rejected after an upstream panic")
+            }
+        }
+    }
+}
+
+impl Error for MirBlockHandleError {}
+
+impl MirBlockHandle {
+    /// Returns the canonical MIR block identity after owner and liveness checks.
+    pub fn block_id(&self, context: &Context) -> Result<MirBlockId, MirBlockHandleError> {
+        self.with_block(context, |block, context| {
+            block
+                .deref(context)
+                .get_head()
+                .and_then(|marker| Operation::get_op::<MirBlockOp>(marker, context))
+                .and_then(|marker| marker.block_id(context))
+        })?
+        .ok_or(MirBlockHandleError::MalformedBlock)
+    }
+
+    /// Verifies the live parent function containing this block.
+    pub fn verify(&self, context: &Context) -> Result<(), MirBlockHandleError> {
+        let verified = self.with_block(context, |block, context| {
+            block
+                .deref(context)
+                .get_parent_op(context)
+                .is_some_and(|parent| verify_operation(parent, context).is_ok())
+        })?;
+        if verified {
+            Ok(())
+        } else {
+            Err(MirBlockHandleError::VerificationFailed)
+        }
+    }
+
+    /// Erases this block after owner and liveness checks.
+    pub fn erase(&self, context: &mut Context) -> Result<(), MirBlockHandleError> {
+        self.authenticate(context)?;
+        catch_unwind(AssertUnwindSafe(|| {
+            BasicBlock::erase(self.pointer, context)
+        }))
+        .map_err(|_| MirBlockHandleError::UpstreamPanicked)
+    }
+
+    /// This in-memory capability grants no publication or runtime authority.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+
+    fn authenticate(&self, context: &Context) -> Result<(), MirBlockHandleError> {
+        let owner =
+            require_context_identity(context).map_err(MirBlockHandleError::ContextIdentity)?;
+        if owner != self.owner {
+            return Err(MirBlockHandleError::ForeignContext);
+        }
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.pointer.try_deref(context).map(drop)
+        })) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(MirBlockHandleError::StaleHandle),
+            Err(_) => Err(MirBlockHandleError::UpstreamPanicked),
+        }
+    }
+
+    fn with_block<T>(
+        &self,
+        context: &Context,
+        action: impl FnOnce(Ptr<BasicBlock>, &Context) -> T,
+    ) -> Result<T, MirBlockHandleError> {
+        self.authenticate(context)?;
+        catch_unwind(AssertUnwindSafe(|| action(self.pointer, context)))
+            .map_err(|_| MirBlockHandleError::UpstreamPanicked)
+    }
+}
 
 /// Verifier failures specific to the MIR dialect shell.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -656,36 +793,48 @@ impl MirFunctionOp {
     pub fn append_block(
         &self,
         context: &mut Context,
-    ) -> Result<Ptr<BasicBlock>, MirDialectBuildError> {
-        let limits = self
-            .get_attr_function_limits(context)
-            .map(|attr| attr.limits())
-            .ok_or(MirDialectBuildError::MalformedOperation(
-                "function limits are missing",
-            ))?;
-        let block_count = self.block_count(context);
-        if block_count >= limits.max_blocks_per_function {
-            return Err(MirDialectBuildError::BlockLimitExceeded {
-                limit: limits.max_blocks_per_function,
-            });
-        }
-        let id =
-            u32::try_from(block_count).map_err(|_| MirDialectBuildError::BlockLimitExceeded {
-                limit: limits.max_blocks_per_function,
+    ) -> Result<MirBlockHandle, MirDialectBuildError> {
+        let owner = match catch_unwind(AssertUnwindSafe(|| ensure_context_identity(context))) {
+            Ok(Ok(owner)) => owner,
+            Ok(Err(error)) => return Err(MirDialectBuildError::ContextIdentity(error)),
+            Err(_) => return Err(MirDialectBuildError::UpstreamPanicked),
+        };
+        catch_unwind(AssertUnwindSafe(|| {
+            let limits = self
+                .get_attr_function_limits(context)
+                .map(|attr| attr.limits())
+                .ok_or(MirDialectBuildError::MalformedOperation(
+                    "function limits are missing",
+                ))?;
+            let block_count = self.block_count(context);
+            if block_count >= limits.max_blocks_per_function {
+                return Err(MirDialectBuildError::BlockLimitExceeded {
+                    limit: limits.max_blocks_per_function,
+                });
+            }
+            let id = u32::try_from(block_count).map_err(|_| {
+                MirDialectBuildError::BlockLimitExceeded {
+                    limit: limits.max_blocks_per_function,
+                }
             })?;
-        let block = BasicBlock::new(
-            context,
-            Some(format!("bb{id}").try_into().expect("valid generated label")),
-            vec![],
-        );
-        block.insert_at_back(self.get_region(context), context);
-        MirBlockOp::new(context, MirBlockId(id))
-            .get_operation()
-            .insert_at_back(block, context);
-        MirReturnOp::new(context)
-            .get_operation()
-            .insert_at_back(block, context);
-        Ok(block)
+            let block = BasicBlock::new(
+                context,
+                Some(format!("bb{id}").try_into().expect("valid generated label")),
+                vec![],
+            );
+            block.insert_at_back(self.get_region(context), context);
+            MirBlockOp::new(context, MirBlockId(id))
+                .get_operation()
+                .insert_at_back(block, context);
+            MirReturnOp::new(context)
+                .get_operation()
+                .insert_at_back(block, context);
+            Ok(MirBlockHandle {
+                owner,
+                pointer: block,
+            })
+        }))
+        .unwrap_or(Err(MirDialectBuildError::UpstreamPanicked))
     }
 
     pub fn signature(&self, context: &Context) -> Option<TypeHandle> {
