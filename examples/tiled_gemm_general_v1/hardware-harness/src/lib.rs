@@ -15,9 +15,11 @@ use fe2o3_amd_target::AmdTargetId;
 use fe2o3_general_gemm_compiler::{
     GENERAL_GEMM_DEVICE_TARGET_V1, GENERAL_GEMM_EXPLICIT_KERNARG_BYTES_V1,
     GENERAL_GEMM_KERNEL_SYMBOL_V1, GENERAL_GEMM_TOTAL_KERNARG_BYTES_V1,
-    GeneralGemmArtifactBindingIdentityV1, GeneralGemmCompilationBindingIdentityV1,
+    GeneralGemmCheckedLaunchInstantiationIdentityV1, GeneralGemmCheckedLaunchInstantiationV1,
     GeneralGemmRuntimeAbiIdentityV1, GeneralGemmRuntimeAbiSnapshotV1,
-    GeneralGemmScheduleIdentityV1, GeneralGemmScheduleV1,
+    GeneralGemmScheduleIdentityV1, GeneralGemmScheduleV1, GeneralGemmSymbolicArtifactIdentityV1,
+    GeneralGemmSymbolicCompilationIdentityV1, GeneralGemmSymbolicCompilationUnitV1,
+    GeneralGemmSymbolicKirIdentityV1, GeneralGemmSymbolicPlanIdentityV1,
 };
 use fe2o3_host::{
     HsaDispatchObservationV1, HsaExecutableObjectIdentityV1,
@@ -587,13 +589,16 @@ pub const GENERAL_GEMM_PHYSICAL_ARGUMENT_LAYOUT_V1: [GeneralGemmPhysicalArgument
 /// bytes, paths, device handles, and generic runtime adapters cannot mint it.
 #[derive(Debug)]
 pub struct GeneralGemmProtectedHardwareAuthorityV1 {
-    compilation_binding: GeneralGemmCompilationBindingIdentityV1,
+    symbolic_compilation: GeneralGemmSymbolicCompilationIdentityV1,
+    symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
+    symbolic_plan: GeneralGemmSymbolicPlanIdentityV1,
+    symbolic_kir: GeneralGemmSymbolicKirIdentityV1,
+    checked_launch: GeneralGemmCheckedLaunchInstantiationIdentityV1,
     schedule: GeneralGemmScheduleIdentityV1,
     schedule_proof: GeneralGemmEvidenceIdentityV1,
-    proof_and_numerical: [u8; 32],
+    proof_and_numerical: GeneralGemmEvidenceIdentityV1,
     machine_inspection: [u8; 32],
     rustc_final_join: [u8; 32],
-    artifact: GeneralGemmArtifactBindingIdentityV1,
     runtime_abi: GeneralGemmRuntimeAbiIdentityV1,
     runtime_abi_snapshot: GeneralGemmRuntimeAbiSnapshotV1,
     publication: [u8; 32],
@@ -605,9 +610,31 @@ pub struct GeneralGemmProtectedHardwareAuthorityV1 {
 }
 
 impl GeneralGemmProtectedHardwareAuthorityV1 {
-    /// Returns the exact proof-to-compiler binding.
-    pub const fn compilation_binding_identity(&self) -> GeneralGemmCompilationBindingIdentityV1 {
-        self.compilation_binding
+    /// Returns the exact runtime-parameterized symbolic compilation identity.
+    pub const fn symbolic_compilation_identity(&self) -> GeneralGemmSymbolicCompilationIdentityV1 {
+        self.symbolic_compilation
+    }
+
+    /// Returns the exact source-bound symbolic artifact identity.
+    pub const fn symbolic_artifact_identity(&self) -> GeneralGemmSymbolicArtifactIdentityV1 {
+        self.symbolic_artifact
+    }
+
+    /// Returns the canonical symbolic checked-plan schema identity.
+    pub const fn symbolic_plan_identity(&self) -> GeneralGemmSymbolicPlanIdentityV1 {
+        self.symbolic_plan
+    }
+
+    /// Returns the canonical symbolic semantic-KIR template identity.
+    pub const fn symbolic_kir_identity(&self) -> GeneralGemmSymbolicKirIdentityV1 {
+        self.symbolic_kir
+    }
+
+    /// Returns the exact concrete checked launch-instantiation identity.
+    pub const fn checked_launch_instantiation_identity(
+        &self,
+    ) -> GeneralGemmCheckedLaunchInstantiationIdentityV1 {
+        self.checked_launch
     }
 
     /// Returns the independently qualified schedule identity.
@@ -621,18 +648,13 @@ impl GeneralGemmProtectedHardwareAuthorityV1 {
     }
 
     /// Returns the verifier-owned schedule/numerical evidence identity.
-    pub const fn proof_and_numerical_identity(&self) -> &[u8; 32] {
-        &self.proof_and_numerical
+    pub const fn proof_and_numerical_identity(&self) -> GeneralGemmEvidenceIdentityV1 {
+        self.proof_and_numerical
     }
 
     /// Returns finalizer machine inspection and rustc three-owner join identities.
     pub const fn final_authority_identities(&self) -> [[u8; 32]; 2] {
         [self.machine_inspection, self.rustc_final_join]
-    }
-
-    /// Returns the exact source-bound artifact identity.
-    pub const fn artifact_identity(&self) -> GeneralGemmArtifactBindingIdentityV1 {
-        self.artifact
     }
 
     /// Returns the exact dynamic runtime ABI identity.
@@ -679,6 +701,9 @@ struct GeneralGemmPhysicalArgumentsV1 {
 /// unique C borrows retain all three HSA allocations through synchronous
 /// completion; no pointer or raw kernarg accessor is exposed.
 pub struct GeneralGemmProtectedArgumentsV1<'buffers> {
+    symbolic_compilation: GeneralGemmSymbolicCompilationIdentityV1,
+    symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
+    checked_launch: GeneralGemmCheckedLaunchInstantiationIdentityV1,
     snapshot: GeneralGemmRuntimeAbiSnapshotV1,
     runtime_abi_identity: GeneralGemmRuntimeAbiIdentityV1,
     schedule_identity: GeneralGemmScheduleIdentityV1,
@@ -693,14 +718,32 @@ impl<'buffers> GeneralGemmProtectedArgumentsV1<'buffers> {
     /// Checks exact guarded buffer extents and derives all 14 physical values.
     pub fn checked_hardware_buffers(
         authority: &GeneralGemmProtectedHardwareAuthorityV1,
+        symbolic_unit: &GeneralGemmSymbolicCompilationUnitV1,
+        checked_launch: &GeneralGemmCheckedLaunchInstantiationV1,
         prepared: &PreparedGeneralGemmHardwareCaseV1,
         a: &'buffers ReviewedHsaHardwareTestBufferV1,
         b: &'buffers ReviewedHsaHardwareTestBufferV1,
         c: &'buffers mut ReviewedHsaHardwareTestBufferV1,
     ) -> Result<Self, GeneralGemmProtectedLaunchErrorV1> {
         let snapshot = runtime_snapshot(prepared)?;
-        if snapshot != authority.runtime_abi_snapshot
+        let checked_abi = checked_launch.runtime_abi();
+        let checked_plan = checked_launch.plan();
+        if symbolic_unit.identity() != authority.symbolic_compilation
+            || symbolic_unit.symbolic_plan_identity() != authority.symbolic_plan
+            || symbolic_unit.symbolic_kir_identity() != authority.symbolic_kir
+            || symbolic_unit.schedule_identity() != authority.schedule
+            || checked_launch.symbolic_compilation_identity() != symbolic_unit.identity()
+            || checked_launch.symbolic_artifact_identity() != authority.symbolic_artifact
+            || checked_launch.symbolic_plan_identity() != symbolic_unit.symbolic_plan_identity()
+            || checked_launch.symbolic_kir_identity() != symbolic_unit.symbolic_kir_identity()
+            || checked_launch.identity() != authority.checked_launch
+            || checked_abi.identity() != authority.runtime_abi
+            || checked_abi.snapshot() != authority.runtime_abi_snapshot
+            || snapshot != checked_abi.snapshot()
             || prepared.case.schedule.identity() != authority.schedule
+            || checked_plan.aql_grid_work_items() != prepared.plan.aql_grid_work_items()
+            || checked_plan.block_counts() != prepared.plan.block_counts()
+            || checked_plan.reduction_phases() != prepared.plan.reduction_phases()
         {
             return Err(GeneralGemmProtectedLaunchErrorV1::AuthoritySubstitution);
         }
@@ -726,9 +769,12 @@ impl<'buffers> GeneralGemmProtectedArgumentsV1<'buffers> {
             )?)?,
         };
         Ok(Self {
+            symbolic_compilation: symbolic_unit.identity(),
+            symbolic_artifact: checked_launch.symbolic_artifact_identity(),
+            checked_launch: checked_launch.identity(),
             snapshot,
-            runtime_abi_identity: authority.runtime_abi,
-            schedule_identity: authority.schedule,
+            runtime_abi_identity: checked_abi.identity(),
+            schedule_identity: symbolic_unit.schedule_identity(),
             launch: GeneralGemmProtectedLaunchContractV1::from_prepared(prepared),
             physical,
             _a: a,
@@ -832,21 +878,29 @@ impl From<HsaRuntimeAdapterError> for GeneralGemmProtectedLaunchErrorV1 {
 /// Typed completion of one authority-bound synchronous HSA dispatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralGemmProtectedDispatchCompletionV1 {
-    compilation_binding: GeneralGemmCompilationBindingIdentityV1,
-    artifact: GeneralGemmArtifactBindingIdentityV1,
+    symbolic_compilation: GeneralGemmSymbolicCompilationIdentityV1,
+    symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
+    checked_launch: GeneralGemmCheckedLaunchInstantiationIdentityV1,
     schedule: GeneralGemmScheduleIdentityV1,
     dispatch: [u8; 16],
 }
 
 impl GeneralGemmProtectedDispatchCompletionV1 {
-    /// Returns the compilation unit bound by the consumed authority.
-    pub const fn compilation_binding_identity(&self) -> GeneralGemmCompilationBindingIdentityV1 {
-        self.compilation_binding
+    /// Returns the symbolic compilation bound by the consumed authority.
+    pub const fn symbolic_compilation_identity(&self) -> GeneralGemmSymbolicCompilationIdentityV1 {
+        self.symbolic_compilation
     }
 
-    /// Returns the finalized artifact binding bound by the consumed authority.
-    pub const fn artifact_identity(&self) -> GeneralGemmArtifactBindingIdentityV1 {
-        self.artifact
+    /// Returns the inspected symbolic artifact bound by the consumed authority.
+    pub const fn symbolic_artifact_identity(&self) -> GeneralGemmSymbolicArtifactIdentityV1 {
+        self.symbolic_artifact
+    }
+
+    /// Returns the concrete checked launch instantiation bound by the dispatch.
+    pub const fn checked_launch_instantiation_identity(
+        &self,
+    ) -> GeneralGemmCheckedLaunchInstantiationIdentityV1 {
+        self.checked_launch
     }
 
     /// Returns the independently qualified schedule identity.
@@ -882,7 +936,10 @@ pub fn launch_general_gemm_protected_v1(
     kernel: &ReviewedHsaKernelV1,
     resolution: &HsaKernelResolutionObservationV1,
 ) -> Result<GeneralGemmProtectedDispatchCompletionV1, GeneralGemmProtectedLaunchErrorV1> {
-    if arguments.runtime_abi_identity != authority.runtime_abi
+    if arguments.symbolic_compilation != authority.symbolic_compilation
+        || arguments.symbolic_artifact != authority.symbolic_artifact
+        || arguments.checked_launch != authority.checked_launch
+        || arguments.runtime_abi_identity != authority.runtime_abi
         || arguments.snapshot != authority.runtime_abi_snapshot
         || arguments.schedule_identity != authority.schedule
         || arguments.launch.workgroup != GENERAL_GEMM_WORKGROUP_V1
@@ -931,8 +988,9 @@ pub fn launch_general_gemm_protected_v1(
     validate_dispatch_observation(&authority, geometry, &dispatch)?;
 
     Ok(GeneralGemmProtectedDispatchCompletionV1 {
-        compilation_binding: authority.compilation_binding,
-        artifact: authority.artifact,
+        symbolic_compilation: authority.symbolic_compilation,
+        symbolic_artifact: authority.symbolic_artifact,
+        checked_launch: authority.checked_launch,
         schedule: authority.schedule,
         dispatch: dispatch.dispatch_identity(),
     })

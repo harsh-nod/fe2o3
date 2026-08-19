@@ -17,8 +17,11 @@ checkpoint. The protected authority has private fields and no constructor. It
 must eventually come from a same-process rustc-codegen join that consumes the
 opaque frontend correspondence, verifier proof/numerical evidence, and
 finalizer machine inspection, then binds the symbolic artifact to a checked
-concrete launch-time plan and runtime ABI snapshot. The current concrete
-compiler unit is model evidence, not that production artifact authority.
+concrete launch-time plan, canonical KIR, and runtime ABI snapshot. Argument
+construction compares the exact `GeneralGemmSymbolicCompilationUnitV1` and
+`GeneralGemmCheckedLaunchInstantiationV1` accessors against that unavailable
+authority before retaining any HSA allocation. The legacy concrete compiler
+unit is model evidence, not that production artifact authority.
 
 Run the independent preparation and oracle checks with:
 
