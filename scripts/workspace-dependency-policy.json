@@ -101,6 +101,7 @@
         "fe2o3-llvm-route-conformance",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
+        "fe2o3-pliron-scalar-add-v1",
         "fe2o3-pliron-worker-v2",
         "rustc-codegen-fe2o3"
       ]
