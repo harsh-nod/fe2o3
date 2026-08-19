@@ -698,6 +698,13 @@ name = "fe2o3-amdhsa-loader"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-aql"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
