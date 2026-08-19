@@ -714,6 +714,30 @@ std::vector<uint8_t> makeExactLdsGemmSlice1TextIr(
   return std::vector<uint8_t>(Text.begin(), Text.end());
 }
 
+std::vector<uint8_t> makeExactPlironScalarAddV1TextIr() {
+  constexpr StringLiteral Ir = R"IR(target triple = "amdgcn-amd-amdhsa"
+target datalayout = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9"
+
+define amdgpu_kernel void @scalar_add(ptr addrspace(1) %input, ptr addrspace(1) %output, float %addend) #0 {
+bb0:
+  %v3 = load float, ptr addrspace(1) %input, align 4
+  %v4 = fadd float %v3, %addend
+  store float %v4, ptr addrspace(1) %output, align 4
+  ret void
+}
+
+attributes #0 = { nounwind "amdgpu-flat-work-group-size"="1,64" "denormal-fp-math-f32"="ieee,ieee" "unsafe-fp-math"="false" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "approx-func-fp-math"="false" "fp-contract"="off" "target-cpu"="gfx942" "target-features"="-wavefrontsize32,+wavefrontsize64,-xnack" }
+
+!llvm.module.flags = !{!0, !1}
+!fe2o3.handoff.identity = !{!2}
+
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 600}
+!1 = !{i32 8, !"PIC Level", i32 2}
+!2 = !{!"sha256:4141414141414141414141414141414141414141414141414141414141414141"}
+)IR";
+  return std::vector<uint8_t>(Ir.bytes_begin(), Ir.bytes_end());
+}
+
 std::vector<uint8_t> makeCov6TwoKernelBitcode() {
   LLVMContext Context;
   Module ModuleValue("cov6-two-kernel", Context);
@@ -1353,6 +1377,54 @@ void overwriteStaticSymbolPrefix(std::vector<uint8_t> &Bytes,
                   Prefix.size() <= Bytes.size() - FileOffset,
               "fixture code symbol is outside file bytes");
       llvm::copy(Prefix, Bytes.begin() + FileOffset);
+      return;
+    }
+  }
+  fail("fixture did not contain the requested static symbol");
+}
+
+void setStaticSymbolValue(std::vector<uint8_t> &Bytes, StringRef SymbolName,
+                          uint64_t Value) {
+  constexpr size_t Elf64SectionTypeOffset = 4;
+  constexpr size_t Elf64SectionOffsetOffset = 24;
+  constexpr size_t Elf64SectionSizeOffset = 32;
+  constexpr size_t Elf64SectionLinkOffset = 40;
+  constexpr size_t Elf64SectionEntrySizeOffset = 56;
+  constexpr size_t Elf64SymbolNameOffset = 0;
+  constexpr size_t Elf64SymbolValueOffset = 8;
+  uint64_t SectionTable = read64(Bytes, 40);
+  uint16_t SectionEntrySize = read16(Bytes, 58);
+  uint16_t SectionCount = read16(Bytes, 60);
+  require(SectionEntrySize >= 64, "fixture has a short section header");
+
+  for (uint16_t I = 0; I < SectionCount; ++I) {
+    size_t Section = SectionTable + static_cast<uint64_t>(I) * SectionEntrySize;
+    if (read32(Bytes, Section + Elf64SectionTypeOffset) != ELF::SHT_SYMTAB)
+      continue;
+    uint64_t Symbols = read64(Bytes, Section + Elf64SectionOffsetOffset);
+    uint64_t SymbolBytes = read64(Bytes, Section + Elf64SectionSizeOffset);
+    uint64_t SymbolSize = read64(Bytes, Section + Elf64SectionEntrySizeOffset);
+    uint32_t StringsIndex = read32(Bytes, Section + Elf64SectionLinkOffset);
+    require(StringsIndex < SectionCount && SymbolSize >= 24,
+            "fixture has an invalid static symbol section");
+    size_t StringsSection =
+        SectionTable + static_cast<uint64_t>(StringsIndex) * SectionEntrySize;
+    uint64_t Strings = read64(Bytes, StringsSection + Elf64SectionOffsetOffset);
+    uint64_t StringBytes =
+        read64(Bytes, StringsSection + Elf64SectionSizeOffset);
+    for (uint64_t Offset = 0; Offset < SymbolBytes; Offset += SymbolSize) {
+      uint32_t NameOffset =
+          read32(Bytes, Symbols + Offset + Elf64SymbolNameOffset);
+      require(NameOffset < StringBytes,
+              "fixture static symbol has an invalid name");
+      const char *Name =
+          reinterpret_cast<const char *>(Bytes.data() + Strings + NameOffset);
+      size_t Remaining = StringBytes - NameOffset;
+      size_t Length = strnlen(Name, Remaining);
+      require(Length < Remaining, "fixture static symbol is unterminated");
+      if (StringRef(Name, Length) != SymbolName)
+        continue;
+      write64(Bytes, Symbols + Offset + Elf64SymbolValueOffset, Value);
       return;
     }
   }
@@ -3414,6 +3486,327 @@ void testExactMoeTop2V1Profile() {
           "exact MoE dependency was accepted or misdiagnosed");
 }
 
+void testExactPlironScalarAddV1Profile() {
+  const std::vector<std::string> SymbolList = {"scalar_add", "scalar_add.kd"};
+  const std::set<std::string> Symbols(SymbolList.begin(), SymbolList.end());
+  auto MakeRequest = [&](StringRef Text) {
+    std::vector<uint8_t> Bytes(Text.bytes_begin(), Text.bytes_end());
+    Request Result =
+        makeV2Request(makeInput(InputKind::LlvmTextIr, std::move(Bytes)), {},
+                      {}, {}, SymbolList, 6);
+    Result.Target = "gfx942:xnack-";
+    Result.LinkOptions = {OptimizationLevel::O2, true, true};
+    return Result;
+  };
+  auto RequireSourceFailure = [&](StringRef Text, StringRef Diagnostic) {
+    Response Failure =
+        requireFailure(MakeRequest(Text), Stage::InputValidation);
+    requireDiagnostic(Failure, Diagnostic);
+  };
+
+  std::vector<uint8_t> Compiler = makeExactPlironScalarAddV1TextIr();
+  StringRef Canonical(reinterpret_cast<const char *>(Compiler.data()),
+                      Compiler.size());
+  Request Exact = MakeRequest(Canonical);
+  Response First = runSuccess(Exact, Symbols);
+  Response Replay = runSuccess(Exact, Symbols);
+  require(First.LinkedOutput->Bytes == Replay.LinkedOutput->Bytes &&
+              First.LinkedOutput->Digest == Replay.LinkedOutput->Digest,
+          "exact Pliron scalar-add LLVM/LLD output is not reproducible");
+  requireDiagnostic(First,
+                    "post_link.check=pliron_scalar_add_v1_profile status=ok");
+  requireDiagnostic(First, "required_workgroup=absent");
+  requireDiagnostic(First, "max_flat_workgroup_size=64 wavefront_size=64");
+  requireDiagnostic(First, "kernarg_size=280 explicit_kernarg_size=24 "
+                           "hidden_kernarg_size=256 kernarg_align=8");
+  requireDiagnostic(First, "sgpr_spills=0 vgpr_spills=0 dynamic_stack=false");
+  requireDiagnostic(First,
+                    "machine_calls=0 machine_branches=0 machine_atomics=0 ");
+  requireDiagnostic(First,
+                    "machine_scratch=0 relocations=0 dynamic_dependencies=0");
+
+  RequireSourceFailure(replaceExactText(Canonical,
+                                        "ptr addrspace(1) %input, align 4",
+                                        "ptr addrspace(1) %output, align 4"),
+                       "load effect does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "fadd float %v3, %addend",
+                                        "fmul float %v3, %addend"),
+                       "strict fadd does not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, "store float %v4", "store float %v3"),
+      "load effect does not match");
+  std::string WrongSsa = replaceExactText(Canonical, "%v3", "%loaded");
+  WrongSsa = replaceExactText(WrongSsa, "%v3", "%loaded");
+  RequireSourceFailure(WrongSsa, "local SSA closure does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "ret void",
+                                        "br label %exit\nexit:\n  ret void"),
+                       "control-flow closure does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "bb0:", "entry:"),
+                       "entry label does not match");
+  std::string WithCall = replaceExactText(
+      Canonical, "define amdgpu_kernel void @scalar_add",
+      "declare float @hidden_import(float)\n\ndefine amdgpu_kernel void "
+      "@scalar_add");
+  RequireSourceFailure(WithCall, "function closure does not match");
+  RequireSourceFailure(
+      (Twine("source_filename = \"hostile.ll\"\n") + Canonical).str(),
+      "source filename does not match");
+  std::string WithComdat =
+      replaceExactText(Canonical, "\n\ndefine amdgpu_kernel",
+                       "\n\n$hostile = comdat any\n\ndefine amdgpu_kernel");
+  WithComdat =
+      replaceExactText(WithComdat, ") #0 {", ") #0 comdat($hostile) {");
+  RequireSourceFailure(WithComdat, "comdat closure does not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, ") #0 {", ") #0 section \".hostile\" {"),
+      "function envelope does not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, ") #0 {", ") #0 partition \"hostile\" {"),
+      "function envelope does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "define amdgpu_kernel",
+                                        "define hidden amdgpu_kernel"),
+                       "function envelope does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "define amdgpu_kernel",
+                                        "define dllexport amdgpu_kernel"),
+                       "function envelope does not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, ") #0 {", ") unnamed_addr #0 {"),
+      "function envelope does not match");
+  RequireSourceFailure(replaceExactText(Canonical, ") #0 {", ") #0 align 16 {"),
+                       "function envelope does not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, ") #0 {", ") addrspace(1) #0 {"),
+      "function envelope does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "define amdgpu_kernel",
+                                        "define dso_local amdgpu_kernel"),
+                       "function envelope does not match");
+  std::string WrongReturn =
+      replaceExactText(Canonical, "define amdgpu_kernel void @scalar_add",
+                       "define amdgpu_kernel i32 @scalar_add");
+  WrongReturn = replaceExactText(WrongReturn, "ret void", "ret i32 0");
+  RequireSourceFailure(WrongReturn, "kernel ABI does not match");
+  RequireSourceFailure(replaceExactText(Canonical,
+                                        "define amdgpu_kernel void @scalar_add",
+                                        "define void @scalar_add"),
+                       "kernel ABI does not match");
+  std::string WrongAddressSpace = replaceExactText(
+      Canonical, "ptr addrspace(1) %input", "ptr addrspace(3) %input");
+  WrongAddressSpace = replaceExactText(
+      WrongAddressSpace, "ptr addrspace(1) %input", "ptr addrspace(3) %input");
+  RequireSourceFailure(WrongAddressSpace, "argument ABI does not match");
+  RequireSourceFailure(replaceExactText(Canonical,
+                                        "ptr addrspace(1) %input, ptr",
+                                        "ptr addrspace(1) align 8 %input, ptr"),
+                       "argument ABI does not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, "%input, align 4", "%input, align 8"),
+      "load effect does not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, "fadd float", "fadd fast float"),
+      "strict fadd does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "nounwind ", ""),
+                       "function attributes do not match");
+  RequireSourceFailure(replaceExactText(Canonical,
+                                        "\"unsafe-fp-math\"=\"false\"",
+                                        "\"unsafe-fp-math\"=\"true\""),
+                       "function attributes do not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, "\"amdgpu-flat-work-group-size\"=\"1,64\"",
+                       "\"amdgpu-flat-work-group-size\"=\"64,64\""),
+      "function attributes do not match");
+  RequireSourceFailure(replaceExactText(Canonical, "\"target-cpu\"=\"gfx942\"",
+                                        "\"target-cpu\"=\"gfx950\""),
+                       "function attributes do not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, "-wavefrontsize32,+wavefrontsize64,-xnack",
+                       "+wavefrontsize32,-wavefrontsize64,-xnack"),
+      "function attributes do not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, "@scalar_add", "@scalar_mul"),
+      "function closure does not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical, "target triple = \"amdgcn-amd-amdhsa\"",
+                       "target triple = \"nvptx64-nvidia-cuda\""),
+      "module envelope does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "p1:64:64", "p1:32:32"),
+                       "LLVM module data layout does not match target machine");
+  RequireSourceFailure(replaceExactText(Canonical, "i32 600", "i32 500"),
+                       "module flags do not match");
+  RequireSourceFailure(
+      replaceExactText(Canonical,
+                       "!0 = !{i32 1, !\"amdhsa_code_object_version\"",
+                       "!0 = !{i32 2, !\"amdhsa_code_object_version\""),
+      "module flags do not match");
+  RequireSourceFailure(replaceExactText(Canonical,
+                                        "!1 = !{i32 8, !\"PIC Level\"",
+                                        "!1 = !{i32 7, !\"PIC Level\""),
+                       "module flags do not match");
+  RequireSourceFailure(replaceExactText(Canonical, "amdhsa_code_object_version",
+                                        "amdhsa_code_object_versioo"),
+                       "module flags do not match");
+  RequireSourceFailure(replaceExactText(Canonical,
+                                        "!llvm.module.flags = !{!0, !1}",
+                                        "!llvm.module.flags = !{!0, !1, !1}"),
+                       "module flags do not match");
+
+  RequireSourceFailure(
+      replaceExactText(
+          Canonical,
+          "4141414141414141414141414141414141414141414141414141414141414141",
+          "414141414141414141414141414141414141414141414141414141414141414A"),
+      "handoff identity does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "sha256:", "sha255:"),
+                       "handoff identity does not match");
+  RequireSourceFailure(replaceExactText(Canonical, "sha256:", ""),
+                       "handoff identity does not match");
+  RequireSourceFailure(replaceExactText(Canonical,
+                                        "!fe2o3.handoff.identity = !{!2}",
+                                        "!fe2o3.handoff.identity = !{!2, !2}"),
+                       "handoff identity does not match");
+  std::string ExtraNamedMetadata = Canonical.str();
+  ExtraNamedMetadata += "!hostile.extra = !{!2}\n";
+  RequireSourceFailure(ExtraNamedMetadata,
+                       "module metadata closure does not match");
+  std::string DuplicateHandoffMetadata = Canonical.str();
+  DuplicateHandoffMetadata += "!fe2o3.handoff.identity = !{!2}\n";
+  RequireSourceFailure(DuplicateHandoffMetadata,
+                       "handoff identity does not match");
+  std::string ExtraMetadataNode = Canonical.str();
+  ExtraMetadataNode += "!3 = !{}\n";
+  RequireSourceFailure(ExtraMetadataNode,
+                       "module metadata closure does not match");
+  std::string InvariantLoad = replaceExactText(
+      Canonical, "%input, align 4", "%input, align 4, !invariant.load !3");
+  InvariantLoad += "!3 = !{}\n";
+  RequireSourceFailure(InvariantLoad,
+                       "instruction metadata closure does not match");
+  std::string RangeLoad = replaceExactText(Canonical, "%input, align 4",
+                                           "%input, align 4, !range !3");
+  RangeLoad += "!3 = !{float 0.000000e+00, float 1.000000e+00}\n";
+  RequireSourceFailure(RangeLoad,
+                       "instruction metadata closure does not match");
+  std::string RequiredWorkgroup =
+      replaceExactText(Canonical, ") #0 {", ") #0 !reqd_work_group_size !3 {");
+  RequiredWorkgroup += "!3 = !{i32 64, i32 1, i32 1}\n";
+  RequireSourceFailure(RequiredWorkgroup, "workgroup metadata must be absent");
+
+  Request WrongTarget = Exact;
+  WrongTarget.Target = "gfx942:xnack+";
+  requireFailure(WrongTarget, Stage::InputValidation);
+  Request WrongCov = Exact;
+  WrongCov.CodeObjectVersion = 5;
+  requireFailure(WrongCov, Stage::InputValidation);
+  Request WrongOptions = Exact;
+  WrongOptions.LinkOptions.Optimization = OptimizationLevel::O1;
+  requireFailure(WrongOptions, Stage::InputValidation);
+  Request WrongImports = Exact;
+  WrongImports.ImportSymbols = {"host_dependency"};
+  requireFailure(WrongImports, Stage::InputValidation);
+  Request WrongProvider = Exact;
+  WrongProvider.ExternalProviders = {Exact.CompilerModule};
+  requireFailure(WrongProvider, Stage::InputValidation);
+  Request WrongExports = Exact;
+  WrongExports.ExportSymbols = {"scalar_add"};
+  requireFailure(WrongExports, Stage::InputValidation);
+  Request WrongRequired = Exact;
+  WrongRequired.RequiredSymbols.pop_back();
+  requireFailure(WrongRequired, Stage::InputValidation);
+  Request WrongFinal = Exact;
+  WrongFinal.FinalSymbols.pop_back();
+  requireFailure(WrongFinal, Stage::InputValidation);
+  Request WrongWorker = Exact;
+  WrongWorker.WorkerBuildIdentity.push_back('x');
+  requireFailure(WrongWorker, Stage::Toolchain);
+  Request WrongLlvm = Exact;
+  WrongLlvm.LlvmBuildIdentity.push_back('x');
+  requireFailure(WrongLlvm, Stage::Toolchain);
+
+  auto MutateMetadata = [&](StringRef Key, uint8_t Expected,
+                            uint8_t Replacement, StringRef Diagnostic) {
+    std::vector<uint8_t> Bytes = First.LinkedOutput->Bytes;
+    replaceMetadataByte(Bytes, Key, Expected, Replacement);
+    requireInspectionFailure(Bytes, Exact, Diagnostic);
+  };
+  MutateMetadata(".wavefront_size", 64, 32, "kernel_contract_wavefront_size");
+  MutateMetadata(".max_flat_workgroup_size", 64, 32,
+                 "kernel_contract_max_flat_workgroup_size");
+  MutateMetadata(".kernarg_segment_size", 0x18, 0x19,
+                 "kernel_contract_kernarg_segment_size");
+  MutateMetadata(".kernarg_segment_align", 8, 16,
+                 "kernel_contract_kernarg_segment_align");
+  MutateMetadata(".group_segment_fixed_size", 0, 1,
+                 "kernel_contract_group_segment_fixed_size");
+  MutateMetadata(".private_segment_fixed_size", 0, 1,
+                 "kernel_contract_private_segment_fixed_size");
+  MutateMetadata(".sgpr_spill_count", 0, 1, "kernel_contract_sgpr_spill_count");
+  MutateMetadata(".vgpr_spill_count", 0, 1, "kernel_contract_vgpr_spill_count");
+  MutateMetadata(".uses_dynamic_stack", 0xc2, 0xc3,
+                 "kernel_contract_uses_dynamic_stack");
+  MutateMetadata(".offset", 0, 1, "arguments%20overlap%20or%20are%20unordered");
+
+  std::vector<uint8_t> WrongMetadataTarget = First.LinkedOutput->Bytes;
+  replaceMetadataText(WrongMetadataTarget, "amdgcn-amd-amdhsa--gfx942:xnack-",
+                      "amdgcn-amd-amdhsa--gfx942:xnack+");
+  requireInspectionFailure(WrongMetadataTarget, Exact,
+                           "pliron_scalar_add_v1_profile%20status%3Dfailed%20"
+                           "reason%3Dkernel_contract_target");
+  std::vector<uint8_t> WrongMetadataSymbol = First.LinkedOutput->Bytes;
+  replaceMetadataFieldText(WrongMetadataSymbol, ".symbol", "scalar_add.kd",
+                           "scalar_add.xx");
+  requireInspectionFailure(
+      WrongMetadataSymbol, Exact,
+      "descriptor%20does%20not%20match%20its%20entry%20name");
+
+  std::vector<uint8_t> WrongCall = First.LinkedOutput->Bytes;
+  static constexpr std::array<uint8_t, 4> SwapPcCall = {0x02, 0x1e, 0x80, 0xbe};
+  overwriteStaticSymbolPrefix(WrongCall, "scalar_add", SwapPcCall);
+  requireInspectionFailure(WrongCall, Exact, "reason=machine_call");
+  std::vector<uint8_t> WrongOpcode = First.LinkedOutput->Bytes;
+  static constexpr std::array<uint8_t, 4> SNopZero = {0x00, 0xbf, 0x80, 0xbf};
+  overwriteStaticSymbolPrefix(WrongOpcode, "scalar_add", SNopZero);
+  requireInspectionFailure(WrongOpcode, Exact,
+                           "reason=machine_instruction_identity");
+
+  std::vector<uint8_t> Relocation = First.LinkedOutput->Bytes;
+  makeStaticSymbolTableRelocationSection(Relocation);
+  requireInspectionFailure(Relocation, Exact,
+                           "reason=residual_relocation_section");
+  std::vector<uint8_t> Dependency = First.LinkedOutput->Bytes;
+  makeDynamicDependency(Dependency);
+  requireInspectionFailure(Dependency, Exact, "reason=dynamic_dependency");
+  std::vector<uint8_t> WrongSection = First.LinkedOutput->Bytes;
+  replaceMetadataText(WrongSection, ".comment", ".commenz");
+  requireInspectionFailure(WrongSection, Exact, "reason=section_closure");
+  std::vector<uint8_t> WrongStaticSymbol = First.LinkedOutput->Bytes;
+  replaceMetadataText(WrongStaticSymbol, "scalar_add.uses_vcc",
+                      "scalar_add.uses_vcd");
+  requireInspectionFailure(WrongStaticSymbol, Exact,
+                           "reason=static_symbol_closure");
+  std::vector<uint8_t> WrongScratchResource = First.LinkedOutput->Bytes;
+  setStaticSymbolValue(WrongScratchResource, "scalar_add.uses_flat_scratch", 1);
+  requireInspectionFailure(WrongScratchResource, Exact,
+                           "reason=resource_symbol_value");
+  std::vector<uint8_t> WrongDynamicStackResource = First.LinkedOutput->Bytes;
+  setStaticSymbolValue(WrongDynamicStackResource,
+                       "scalar_add.has_dyn_sized_stack", 1);
+  requireInspectionFailure(WrongDynamicStackResource, Exact,
+                           "reason=resource_symbol_value");
+  std::vector<uint8_t> WrongUndefined = First.LinkedOutput->Bytes;
+  makeDynamicSymbolUndefined(WrongUndefined, "scalar_add.kd");
+  requireInspectionFailure(WrongUndefined, Exact,
+                           "post_link.check=unresolved status=failed");
+
+  std::vector<uint8_t> WrongIsa = First.LinkedOutput->Bytes;
+  uint32_t Flags = read32(WrongIsa, 48);
+  write32(WrongIsa, 48, Flags & ~ELF::EF_AMDGPU_MACH);
+  requireInspectionFailure(WrongIsa, Exact,
+                           "post_link.check=target status=failed");
+  std::vector<uint8_t> WrongOutputCov = First.LinkedOutput->Bytes;
+  WrongOutputCov[ELF::EI_ABIVERSION] = ELF::ELFABIVERSION_AMDGPU_HSA_V5;
+  requireInspectionFailure(WrongOutputCov, Exact,
+                           "post_link.check=target status=failed");
+}
+
 void testLldExitPolicy(int ExitCode) {
   pid_t Child = fork();
   require(Child >= 0, "could not fork LLD contract test");
@@ -3459,6 +3852,11 @@ int main(int ArgumentCount, char **Arguments) {
     return 0;
   }
   if (ArgumentCount == 2 &&
+      StringRef(Arguments[1]) == "--exact-pliron-scalar-only") {
+    testExactPlironScalarAddV1Profile();
+    return 0;
+  }
+  if (ArgumentCount == 2 &&
       StringRef(Arguments[1]) == "--exact-row-softmax-only") {
     testExactRowSoftmaxV1Profile();
     return 0;
@@ -3469,6 +3867,7 @@ int main(int ArgumentCount, char **Arguments) {
           "[OUTPUT.hsaco [INPUT.bc INPUT.o [OCML_OUTPUT.hsaco]]]");
 
   testExactRowSoftmaxV1Profile();
+  testExactPlironScalarAddV1Profile();
   fe2o3::worker::detail::enforceReusableLldResult({0, true});
   fe2o3::worker::detail::enforceReusableLldResult({1, true});
   testLldExitPolicy(0);
