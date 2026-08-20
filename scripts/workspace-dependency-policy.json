@@ -56,7 +56,8 @@
         "fe2o3-kir-pliron-bridge",
         "fe2o3-lower-kernel-gpu",
         "fe2o3-lower-mir-kernel",
-        "fe2o3-pliron"
+        "fe2o3-pliron",
+        "fe2o3-pliron-owner-core"
       ]
     },
     {
