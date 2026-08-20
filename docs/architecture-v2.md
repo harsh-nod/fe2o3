@@ -15,6 +15,7 @@ Verus trust claim.
 Related documents:
 
 - [cuda-oxide parity matrix](cuda-oxide-parity-matrix.md)
+- [production compiler convergence V1](production-pipeline-convergence-v1.md)
 - [verification model](verification-model.md)
 - [GPU safety contract v1](gpu-safety-contract-v1.md)
 - [implementation roadmap](implementation-roadmap-v2.md)

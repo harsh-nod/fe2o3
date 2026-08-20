@@ -8,6 +8,7 @@ pipeline and adding source-level Verus contracts. The general form remains
 incomplete, while bounded `gfx942` vertical slices exercise the compiler,
 artifact, runtime, and proof boundaries described below. See the
 [living v2 architecture](docs/architecture-v2.md),
+[production compiler convergence design](docs/production-pipeline-convergence-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
 [Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),

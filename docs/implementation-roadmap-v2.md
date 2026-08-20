@@ -15,6 +15,7 @@ The bounded MoE V2 checkpoint remains
 fail-closed host boundary, not the current integration checkpoint.
 
 This roadmap turns [architecture-v2.md](architecture-v2.md),
+[production-pipeline-convergence-v1.md](production-pipeline-convergence-v1.md),
 [verification-model.md](verification-model.md), the
 [GPU safety contract v1](gpu-safety-contract-v1.md), the
 [general typed dispatch V1 contract](general-typed-dispatch-v1.md), and the
