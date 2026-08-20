@@ -38,6 +38,8 @@ The selector table now has one source of names and an explicit
 `PipelinePurposeV1`. An architecture test proves that exactly
 `production-v1` is production-capable. All other values are qualification
 oracles. Invalid configuration is resolved once before collection or lowering.
+Device-function dumps are now verbose-only; differential tests that inspect
+rustc export disambiguators opt into that diagnostic surface explicitly.
 
 The remaining oracle dispatch is still physically large. It must move behind
 test/tool entry points slice by slice; moving it wholesale before replacement

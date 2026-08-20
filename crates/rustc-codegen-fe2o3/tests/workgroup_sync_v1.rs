@@ -469,6 +469,7 @@ fn run_clean_exact_profiles(
         ])
         .env("CARGO_TARGET_DIR", &target.path)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env("FE2O3_VERBOSE", "1")
         .env(REPORT_AUTHORITY_ENV, "1");
     match incremental {
         Some(value) => {
