@@ -26,7 +26,7 @@ use fe2o3_llvm_worker_handoff::{AdmittedWorkerRequestV2, MeasuredLlvmLldBuildV1}
 use fe2o3_lower_amdgcn_llvm::{
     LiveGraphSerializationErrorV1, LiveGraphSerializationReceiptV1,
     LiveGraphSerializationRequestV1, LoweredAmdgcnPlironLlvmV1, LoweringErrorV1,
-    lower_amdgcn_to_pliron_llvm_v1,
+    RetainedLiveGraphExportV1, lower_amdgcn_to_pliron_llvm_v1,
 };
 
 /// Canonical source-binding section schema retained in every general-GEMM object.
@@ -80,6 +80,7 @@ impl GeneralGemmCompilerBoundaryIdentityV1 {
 /// Inert owner-controlled General GEMM graph-to-worker correspondence boundary.
 pub struct GeneralGemmCompilerBoundaryV1 {
     live_owner: LoweredAmdgcnPlironLlvmV1,
+    retained_export: RetainedLiveGraphExportV1,
     serialization_receipt: LiveGraphSerializationReceiptV1,
     worker_admission: AdmittedWorkerRequestV2,
     identity: GeneralGemmCompilerBoundaryIdentityV1,
@@ -89,6 +90,10 @@ impl fmt::Debug for GeneralGemmCompilerBoundaryV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("GeneralGemmCompilerBoundaryV1")
+            .field(
+                "retained_export",
+                &self.retained_export.graph_export_identity(),
+            )
             .field("serialization_receipt", &self.serialization_receipt)
             .field("worker_admission", &self.worker_admission)
             .field("identity", &self.identity)
@@ -98,7 +103,10 @@ impl fmt::Debug for GeneralGemmCompilerBoundaryV1 {
 
 impl PartialEq for GeneralGemmCompilerBoundaryV1 {
     fn eq(&self, other: &Self) -> bool {
-        self.serialization_receipt == other.serialization_receipt
+        self.retained_export.graph_export_identity()
+            == other.retained_export.graph_export_identity()
+            && self.retained_export.canonical_handoff() == other.retained_export.canonical_handoff()
+            && self.serialization_receipt == other.serialization_receipt
             && self.worker_admission == other.worker_admission
             && self.identity == other.identity
     }
@@ -107,6 +115,11 @@ impl PartialEq for GeneralGemmCompilerBoundaryV1 {
 impl Eq for GeneralGemmCompilerBoundaryV1 {}
 
 impl GeneralGemmCompilerBoundaryV1 {
+    /// Returns the concrete canonical handoff retained from live graph traversal.
+    pub const fn retained_graph_export(&self) -> &RetainedLiveGraphExportV1 {
+        &self.retained_export
+    }
+
     /// Returns evidence retained from serialization while the Pliron owner was live.
     pub const fn serialization_receipt(&self) -> LiveGraphSerializationReceiptV1 {
         self.serialization_receipt
@@ -133,9 +146,14 @@ impl GeneralGemmCompilerBoundaryV1 {
         expected_assembly: &Gfx942LlvmAssemblyV2,
         expected_worker_admission: &AdmittedWorkerRequestV2,
     ) -> Result<LiveGraphSerializationReceiptV1, GeneralGemmStructuralMachineErrorV1> {
-        let (fresh_receipt, fresh_assembly, fresh_worker_admission, fresh_identity) =
+        self.retained_export
+            .revalidate_against(&self.live_owner)
+            .map_err(GeneralGemmStructuralMachineErrorV1::LiveGraphSerialization)?;
+        let (fresh_export, fresh_receipt, fresh_assembly, fresh_worker_admission, fresh_identity) =
             serialize_live_owner_inner(&self.live_owner, MeasuredLlvmLldBuildV1::exact())?;
-        if fresh_receipt != expected_receipt
+        if fresh_export.graph_export_identity() != self.retained_export.graph_export_identity()
+            || fresh_export.canonical_handoff() != self.retained_export.canonical_handoff()
+            || fresh_receipt != expected_receipt
             || &fresh_assembly != expected_assembly
             || &fresh_worker_admission != expected_worker_admission
             || fresh_identity != self.identity
@@ -523,11 +541,12 @@ fn admit_compiler_boundary_inner(
 > {
     let lowered = lower_amdgcn_to_pliron_llvm_v1(handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::PlironLlvmLowering)?;
-    let (serialization_receipt, assembly, worker_admission, identity) =
+    let (retained_export, serialization_receipt, assembly, worker_admission, identity) =
         serialize_live_owner_inner(&lowered, build)?;
     Ok((
         GeneralGemmCompilerBoundaryV1 {
             live_owner: lowered,
+            retained_export,
             serialization_receipt,
             worker_admission,
             identity,
@@ -541,6 +560,7 @@ fn serialize_live_owner_inner(
     build: MeasuredLlvmLldBuildV1<'_>,
 ) -> Result<
     (
+        RetainedLiveGraphExportV1,
         LiveGraphSerializationReceiptV1,
         Gfx942LlvmAssemblyV2,
         AdmittedWorkerRequestV2,
@@ -558,7 +578,8 @@ fn serialize_live_owner_inner(
         )
         .serialize_and_admit_v1()
         .map_err(GeneralGemmStructuralMachineErrorV1::LiveGraphSerialization)?;
-    let (serialization_receipt, assembly, worker_admission) = serialized.into_parts();
+    let (retained_export, serialization_receipt, assembly, worker_admission) =
+        serialized.into_retained_parts();
     if assembly.source_identity() != serialization_receipt.graph_handoff_identity()
         || !assembly.has_embedded_source_identity()
         || worker_admission.handoff_identity() != serialization_receipt.graph_handoff_identity()
@@ -577,7 +598,13 @@ fn serialize_live_owner_inner(
             worker_admission.admission_identity().as_bytes(),
         ],
     ));
-    Ok((serialization_receipt, assembly, worker_admission, identity))
+    Ok((
+        retained_export,
+        serialization_receipt,
+        assembly,
+        worker_admission,
+        identity,
+    ))
 }
 
 fn machine_binding_section(
