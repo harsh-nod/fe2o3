@@ -1,9 +1,9 @@
 //! Single production-pipeline transaction shell.
 //!
 //! This module owns the one integration point for issue #175. It deliberately
-//! contains no workload recognition. Until the generic semantic-MIR importer
-//! lands, selecting this path consumes the collected transaction and fails
-//! closed without entering another code-generation route.
+//! contains no workload recognition. The sole semantic-MIR importer now owns
+//! the consuming target-authentication boundary and still fails closed before
+//! semantic-record construction or another code-generation route.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -30,15 +30,11 @@ pub(crate) const fn disposition(device_candidate_count: usize) -> ProductionDisp
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum ProductionPipelineErrorV1 {
     CustomLlvmConfiguration,
     EmptyCollectedDeviceClosure,
-    SemanticImporterUnavailable {
-        collected_functions: usize,
-        registered_kernel_roots: usize,
-        target: String,
-    },
+    SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
 }
 
 impl fmt::Display for ProductionPipelineErrorV1 {
@@ -50,19 +46,19 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::EmptyCollectedDeviceClosure => formatter.write_str(
                 "production-v1 requires a nonempty collector-sealed device closure",
             ),
-            Self::SemanticImporterUnavailable {
-                collected_functions,
-                registered_kernel_roots,
-                target,
-            } => write!(
-                formatter,
-                "production-v1 retained {collected_functions} collected device function(s), {registered_kernel_roots} registered kernel root(s), and configured target {target:?}, but the generic semantic-MIR import transition is not implemented; the transaction was consumed without fallback or artifact emission",
-            ),
+            Self::SemanticImport(error) => write!(formatter, "production-v1 {error}"),
         }
     }
 }
 
-impl std::error::Error for ProductionPipelineErrorV1 {}
+impl std::error::Error for ProductionPipelineErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::SemanticImport(error) => Some(error),
+            Self::CustomLlvmConfiguration | Self::EmptyCollectedDeviceClosure => None,
+        }
+    }
+}
 
 pub(crate) fn reject_custom_llvm_configuration(
     has_custom_llvm_configuration: bool,
@@ -117,7 +113,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         })
     }
 
-    /// Consumes the only production transaction at the first unavailable stage.
+    /// Consumes the only production transaction through the sole importer.
     pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
         let CollectedRustStageV1 {
             tcx,
@@ -126,20 +122,9 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             output_dir,
             build_attempt,
         } = self.stage;
-        let collected_functions = closure.function_count();
-        let registered_kernel_roots = closure.kernel_root_count();
-        let target = closure.target().to_owned();
-        let collection = closure.into_collection();
-
-        // Retain and consume every future transaction input at this boundary.
-        // None may be recovered to enter a different compiler route.
-        drop((tcx, collection, producer, output_dir, build_attempt));
-
-        ProductionPipelineErrorV1::SemanticImporterUnavailable {
-            collected_functions,
-            registered_kernel_roots,
-            target,
-        }
+        let error = crate::collector::require_production_semantic_import_v1(tcx, closure);
+        drop((producer, output_dir, build_attempt));
+        ProductionPipelineErrorV1::SemanticImport(error)
     }
 }
 
@@ -159,23 +144,25 @@ mod tests {
 
     #[test]
     fn custom_llvm_configuration_is_terminal_before_construction() {
-        assert_eq!(reject_custom_llvm_configuration(false), Ok(()));
-        assert_eq!(
+        assert!(reject_custom_llvm_configuration(false).is_ok());
+        assert!(matches!(
             reject_custom_llvm_configuration(true),
             Err(ProductionPipelineErrorV1::CustomLlvmConfiguration)
-        );
+        ));
     }
 
     #[test]
     fn unavailable_import_diagnostic_is_deterministic_and_fail_closed() {
-        let error = ProductionPipelineErrorV1::SemanticImporterUnavailable {
-            collected_functions: 3,
-            registered_kernel_roots: 2,
-            target: "gfx942:xnack-".to_owned(),
-        };
+        let error = ProductionPipelineErrorV1::SemanticImport(
+            crate::collector::ProductionSemanticImportErrorV1::SemanticRecordConstructionPending {
+                collected_functions: 3,
+                registered_roots: 2,
+                llvm_target: "amdgcn-amd-amdhsa".to_owned(),
+            },
+        );
         assert_eq!(
             error.to_string(),
-            "production-v1 retained 3 collected device function(s), 2 registered kernel root(s), and configured target \"gfx942:xnack-\", but the generic semantic-MIR import transition is not implemented; the transaction was consumed without fallback or artifact emission"
+            "production-v1 semantic importer authenticated rustc target \"amdgcn-amd-amdhsa\" and consumed 3 collected device function(s) with 2 external root(s), but canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered"
         );
     }
 

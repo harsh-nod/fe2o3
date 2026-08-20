@@ -90,9 +90,10 @@ fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
         "unimplemented production transaction unexpectedly succeeded"
     );
     assert!(
-        stderr.contains("generic semantic-MIR import transition is not implemented")
-            && stderr.contains("1 registered kernel root(s)")
-            && stderr.contains("transaction was consumed without fallback or artifact emission"),
+        stderr.contains("semantic import target rejection")
+            && stderr.contains("requires authoritative rustc LLVM target")
+            && stderr.contains("amdgcn-amd-amdhsa")
+            && stderr.contains("x86_64-unknown-linux-gnu"),
         "missing fail-closed production diagnostic:\n{stderr}"
     );
     for forbidden in [

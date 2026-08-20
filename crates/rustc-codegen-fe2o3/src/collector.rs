@@ -33,6 +33,12 @@ use rustc_middle::ty::{
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
+mod production_importer_v1;
+
+pub(crate) use production_importer_v1::{
+    ProductionSemanticImportErrorV1, require_production_semantic_import_v1,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TypedKernelProfile {
     VecAddRustcLayoutV2,
@@ -374,34 +380,6 @@ pub(crate) struct AuthenticatedCollectedKernelClosureV1<'tcx> {
 impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
     pub(crate) fn function_count(&self) -> usize {
         self.collection.functions.len()
-    }
-
-    pub(crate) fn kernel_root_count(&self) -> usize {
-        self.roots
-            .iter()
-            .filter(|root| root.role == CollectedFunctionRole::KernelEntry)
-            .count()
-    }
-
-    pub(crate) fn target(&self) -> &'static str {
-        self.target.canonical_name()
-    }
-
-    pub(crate) fn into_collection(self) -> CollectionResult<'tcx> {
-        let Self {
-            target,
-            collection,
-            roots,
-        } = self;
-        let _rustc_layout = target.into_rustc_layout();
-        debug_assert!(roots.iter().all(|root| {
-            collection.functions.iter().any(|function| {
-                function.instance == root.instance
-                    && function.role == root.role
-                    && function.export_name == root.export_name
-            })
-        }));
-        collection
     }
 }
 

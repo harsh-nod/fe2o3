@@ -11,6 +11,11 @@ use crate::semantic_layout_bridge::{
 };
 
 pub(crate) const PRODUCTION_TARGET_V1: &str = "gfx942:xnack-";
+const PRODUCTION_RUSTC_LLVM_TARGET_V1: &str = "amdgcn-amd-amdhsa";
+const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+const PRODUCTION_RUSTC_CPU_V1: &str = "gfx942";
+const PRODUCTION_RUSTC_FEATURES_V1: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
+const PRODUCTION_RUSTC_POINTER_WIDTH_V1: u16 = 64;
 
 /// Move-only retention of the exact source-layout context and the separately
 /// configured production device target. The compatibility backend currently
@@ -18,6 +23,15 @@ pub(crate) const PRODUCTION_TARGET_V1: &str = "gfx942:xnack-";
 /// conflated. The semantic importer must consume and bridge or reject them.
 #[derive(Debug)]
 pub(crate) struct RetainedProductionTargetV1 {
+    rustc_layout: SemanticLayoutTargetV1,
+}
+
+/// Exact target facts authenticated from the live AMDGPU rustc session.
+///
+/// This is move-only and crate-private so configured device labels cannot be
+/// substituted for the target that actually answered layout and FnAbi queries.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductionTargetV1 {
     rustc_layout: SemanticLayoutTargetV1,
 }
 
@@ -40,8 +54,73 @@ impl RetainedProductionTargetV1 {
         PRODUCTION_TARGET_V1
     }
 
-    pub(crate) fn into_rustc_layout(self) -> SemanticLayoutTargetV1 {
-        self.rustc_layout
+    pub(crate) fn authenticate_import_session(
+        self,
+        tcx: TyCtxt<'_>,
+    ) -> Result<AuthenticatedProductionTargetV1, ProductionTargetErrorV1> {
+        let observed = rustc_semantic_layout_target_v1(tcx)
+            .map_err(ProductionTargetErrorV1::RustcObservation)?;
+        if observed != self.rustc_layout {
+            return Err(ProductionTargetErrorV1::RustcSessionChanged);
+        }
+        validate_authoritative_rustc_target_v1(&observed)?;
+        Ok(AuthenticatedProductionTargetV1 {
+            rustc_layout: observed,
+        })
+    }
+}
+
+impl AuthenticatedProductionTargetV1 {
+    pub(crate) fn rustc_layout(&self) -> &SemanticLayoutTargetV1 {
+        &self.rustc_layout
+    }
+}
+
+fn validate_authoritative_rustc_target_v1(
+    target: &SemanticLayoutTargetV1,
+) -> Result<(), ProductionTargetErrorV1> {
+    require_exact_target_text(
+        "LLVM target",
+        PRODUCTION_RUSTC_LLVM_TARGET_V1,
+        target.llvm_target(),
+    )?;
+    require_exact_target_text(
+        "data layout",
+        PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+        target.data_layout(),
+    )?;
+    if target.default_pointer_width_bits() != PRODUCTION_RUSTC_POINTER_WIDTH_V1 {
+        return Err(ProductionTargetErrorV1::RustcTargetMismatch {
+            field: "default pointer width",
+            expected: PRODUCTION_RUSTC_POINTER_WIDTH_V1.to_string(),
+            observed: target.default_pointer_width_bits().to_string(),
+        });
+    }
+    require_exact_target_text(
+        "active CPU",
+        PRODUCTION_RUSTC_CPU_V1,
+        target.active_cpu().unwrap_or("unavailable"),
+    )?;
+    require_exact_target_text(
+        "active target features",
+        PRODUCTION_RUSTC_FEATURES_V1,
+        target.active_features().unwrap_or("unavailable"),
+    )
+}
+
+fn require_exact_target_text(
+    field: &'static str,
+    expected: &'static str,
+    observed: &str,
+) -> Result<(), ProductionTargetErrorV1> {
+    if observed == expected {
+        Ok(())
+    } else {
+        Err(ProductionTargetErrorV1::RustcTargetMismatch {
+            field,
+            expected: expected.to_owned(),
+            observed: observed.to_owned(),
+        })
     }
 }
 
@@ -51,8 +130,16 @@ fn configured_target_is_production_cpu_v1(target: &AmdGpuTarget) -> bool {
 
 #[derive(Debug)]
 pub(crate) enum ProductionTargetErrorV1 {
-    ConfiguredCpu { observed: String },
+    ConfiguredCpu {
+        observed: String,
+    },
     RustcObservation(SemanticLayoutBridgeError),
+    RustcSessionChanged,
+    RustcTargetMismatch {
+        field: &'static str,
+        expected: String,
+        observed: String,
+    },
 }
 
 impl fmt::Display for ProductionTargetErrorV1 {
@@ -68,6 +155,17 @@ impl fmt::Display for ProductionTargetErrorV1 {
                     "production-v1 could not capture the rustc target: {error}"
                 )
             }
+            Self::RustcSessionChanged => formatter.write_str(
+                "production-v1 rustc target facts changed between collection and semantic import",
+            ),
+            Self::RustcTargetMismatch {
+                field,
+                expected,
+                observed,
+            } => write!(
+                formatter,
+                "production-v1 requires authoritative rustc {field} {expected:?}; found {observed:?}",
+            ),
         }
     }
 }
@@ -76,15 +174,21 @@ impl std::error::Error for ProductionTargetErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::RustcObservation(error) => Some(error),
-            Self::ConfiguredCpu { .. } => None,
+            Self::ConfiguredCpu { .. }
+            | Self::RustcSessionChanged
+            | Self::RustcTargetMismatch { .. } => None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::configured_target_is_production_cpu_v1;
+    use super::*;
     use crate::AmdGpuTarget;
+    use rustc_driver::{Callbacks, Compilation};
+    use rustc_interface::interface::Compiler;
+    use std::fs;
+    use std::process::Command;
 
     #[test]
     fn production_device_target_accepts_only_configured_gfx942_cpu() {
@@ -96,5 +200,164 @@ mod tests {
                 rejected
             )));
         }
+    }
+
+    #[test]
+    fn production_rustc_target_requires_every_authoritative_axis() {
+        let exact = SemanticLayoutTargetV1::new_with_codegen_profile(
+            PRODUCTION_RUSTC_LLVM_TARGET_V1,
+            PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+            PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+            PRODUCTION_RUSTC_CPU_V1,
+            "",
+            PRODUCTION_RUSTC_FEATURES_V1,
+        )
+        .unwrap();
+        validate_authoritative_rustc_target_v1(&exact).unwrap();
+
+        let substitutions = [
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "x86_64-unknown-linux-gnu",
+                PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                PRODUCTION_RUSTC_CPU_V1,
+                "",
+                PRODUCTION_RUSTC_FEATURES_V1,
+            )
+            .unwrap(),
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                "e-p:64:64",
+                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                PRODUCTION_RUSTC_CPU_V1,
+                "",
+                PRODUCTION_RUSTC_FEATURES_V1,
+            )
+            .unwrap(),
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+                32,
+                PRODUCTION_RUSTC_CPU_V1,
+                "",
+                PRODUCTION_RUSTC_FEATURES_V1,
+            )
+            .unwrap(),
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                "gfx950",
+                "",
+                PRODUCTION_RUSTC_FEATURES_V1,
+            )
+            .unwrap(),
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                PRODUCTION_RUSTC_CPU_V1,
+                "",
+                "-wavefrontsize32,+wavefrontsize64,+xnack",
+            )
+            .unwrap(),
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                PRODUCTION_RUSTC_CPU_V1,
+                "",
+                "-wavefrontsize32,+wavefrontsize64",
+            )
+            .unwrap(),
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                PRODUCTION_RUSTC_CPU_V1,
+                "",
+                "+wavefrontsize32,-wavefrontsize64,-xnack",
+            )
+            .unwrap(),
+        ];
+        for substitution in substitutions {
+            assert!(matches!(
+                validate_authoritative_rustc_target_v1(&substitution),
+                Err(ProductionTargetErrorV1::RustcTargetMismatch { .. })
+            ));
+        }
+    }
+
+    #[derive(Default)]
+    struct TargetCallbacks {
+        result: Option<Result<(), String>>,
+    }
+
+    impl Callbacks for TargetCallbacks {
+        fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+            self.result = Some(
+                rustc_semantic_layout_target_v1(tcx)
+                    .map_err(|error| error.to_string())
+                    .and_then(|target| {
+                        validate_authoritative_rustc_target_v1(&target)
+                            .map_err(|error| error.to_string())
+                    }),
+            );
+            Compilation::Stop
+        }
+    }
+
+    #[test]
+    fn built_in_amdgcn_session_exposes_exact_gfx942_xnack_minus_target_facts() {
+        // This no-core probe qualifies only rustc's target-session facts. A real
+        // AMD core/dependency graph remains required before MIR import.
+        let directory = crate::test_temp_dir::TestTempDir::create("fe2o3-production-target");
+        let source = directory.path().join("target.rs");
+        fs::write(
+            &source,
+            r#"
+                #![feature(no_core, lang_items)]
+                #![no_core]
+                #![allow(dead_code, internal_features)]
+
+                #[lang = "pointee_sized"]
+                trait PointeeSized {}
+                #[lang = "meta_sized"]
+                trait MetaSized: PointeeSized {}
+                #[lang = "sized"]
+                trait Sized: MetaSized {}
+
+                fn kernel() {}
+            "#,
+        )
+        .unwrap();
+        let sysroot = Command::new("rustc")
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".to_owned(),
+            "--crate-name".to_owned(),
+            "fe2o3_production_target".to_owned(),
+            "--crate-type".to_owned(),
+            "lib".to_owned(),
+            "--edition".to_owned(),
+            "2024".to_owned(),
+            "--target".to_owned(),
+            PRODUCTION_RUSTC_LLVM_TARGET_V1.to_owned(),
+            "-Ctarget-cpu=gfx942".to_owned(),
+            "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32".to_owned(),
+            "-Zno-codegen".to_owned(),
+            "--sysroot".to_owned(),
+            String::from_utf8(sysroot.stdout).unwrap().trim().to_owned(),
+            source.display().to_string(),
+        ];
+        let mut callbacks = TargetCallbacks::default();
+        rustc_driver::run_compiler(&args, &mut callbacks);
+        callbacks
+            .result
+            .expect("target callback did not run")
+            .unwrap();
     }
 }
