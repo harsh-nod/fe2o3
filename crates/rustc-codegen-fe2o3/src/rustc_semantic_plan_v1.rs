@@ -18,7 +18,8 @@ use rustc_middle::mir::{
     Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::{
-    EarlyBinder, GenericArgKind, Instance, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
+    EarlyBinder, GenericArgKind, GenericArgsRef, Instance, Ty, TyCtxt, TyKind, TypeVisitableExt,
+    TypingEnv,
 };
 use rustc_span::Span;
 
@@ -848,20 +849,27 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                         self.queue_type(&mut pending, field)?;
                     }
                 }
-                TyKind::Adt(_, arguments) | TyKind::FnDef(_, arguments) => {
-                    for argument in arguments.iter() {
-                        match argument.kind() {
-                            GenericArgKind::Type(argument) => {
-                                self.queue_type(&mut pending, argument)?;
-                            }
-                            GenericArgKind::Const(argument)
-                                if argument.has_param() || argument.has_escaping_bound_vars() =>
-                            {
-                                return Err(reject("non-monomorphic const generic argument", site));
-                            }
-                            GenericArgKind::Const(_) | GenericArgKind::Lifetime(_) => {}
+                TyKind::Adt(definition, arguments) => {
+                    self.queue_generic_argument_types(&mut pending, arguments, site)?;
+                    let variants = definition.variants();
+                    self.require_type_cardinality(variants.len())?;
+                    for (variant_index, variant) in variants.iter_enumerated() {
+                        self.require_type_cardinality(variant.fields.len())?;
+                        self.work()?;
+                        for field in &variant.fields {
+                            self.work()?;
+                            self.queue_type(&mut pending, field.ty(self.tcx, arguments))?;
+                        }
+                        if definition.is_enum()
+                            && let Some(discriminant) =
+                                ty.discriminant_for_variant(self.tcx, variant_index)
+                        {
+                            self.queue_type(&mut pending, discriminant.ty)?;
                         }
                     }
+                }
+                TyKind::FnDef(_, arguments) => {
+                    self.queue_generic_argument_types(&mut pending, arguments, site)?;
                 }
                 TyKind::Ref(_, pointee, _) | TyKind::RawPtr(pointee, _) => {
                     self.queue_type(&mut pending, *pointee)?;
@@ -876,7 +884,13 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 TyKind::Str => return Err(reject("str type", site)),
                 TyKind::Pat(..) => return Err(reject("pattern type", site)),
                 TyKind::Foreign(..) => return Err(reject("foreign type", site)),
-                TyKind::FnPtr(..) => return Err(reject("function-pointer type", site)),
+                TyKind::FnPtr(signature, _) => {
+                    let signature_types = signature.skip_binder().inputs_and_output;
+                    self.require_type_cardinality(signature_types.len())?;
+                    for signature_type in signature_types {
+                        self.queue_type(&mut pending, signature_type)?;
+                    }
+                }
                 TyKind::UnsafeBinder(..) => return Err(reject("unsafe-binder type", site)),
                 TyKind::Dynamic(..) => return Err(reject("dynamic trait-object type", site)),
                 TyKind::Closure(..) => return Err(reject("closure type", site)),
@@ -915,6 +929,41 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
             ));
         }
         pending.push(ty);
+        Ok(())
+    }
+
+    fn queue_generic_argument_types(
+        &self,
+        pending: &mut Vec<Ty<'tcx>>,
+        arguments: GenericArgsRef<'tcx>,
+        site: RejectionSiteV1,
+    ) -> Result<(), PendingRejectionV1> {
+        for argument in arguments.iter() {
+            match argument.kind() {
+                GenericArgKind::Type(argument) => self.queue_type(pending, argument)?,
+                GenericArgKind::Const(argument)
+                    if argument.has_param() || argument.has_escaping_bound_vars() =>
+                {
+                    return Err(reject("non-monomorphic const generic argument", site));
+                }
+                GenericArgKind::Const(_) | GenericArgKind::Lifetime(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn require_type_cardinality(&self, actual: usize) -> Result<(), PendingRejectionV1> {
+        let actual = u64::try_from(actual).unwrap_or(u64::MAX);
+        let maximum = self.limits.limit(SemanticMirResourceV1::Types);
+        if actual > maximum {
+            return Err(PendingRejectionV1::Fatal(
+                ProductionSemanticPreflightErrorV1::LimitExceeded {
+                    resource: SemanticMirResourceV1::Types,
+                    actual,
+                    maximum,
+                },
+            ));
+        }
         Ok(())
     }
 

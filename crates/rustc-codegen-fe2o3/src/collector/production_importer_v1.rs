@@ -80,7 +80,7 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::Preflight(error) => write!(formatter, "semantic importer {error}"),
             Self::SemanticRecordConstructionPending(pending) => write!(
                 formatter,
-                "semantic importer authenticated rustc target {:?}, consumed {} collected device function(s) with {} external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with {} local(s), {} block(s), {} statement(s), and {} typed terminal expansion recipe(s), retaining {} sorted rustc type producer(s), {} stable source file identity producer(s), {} canonical source provenance producer(s), and {} canonical body ID table(s); canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
+                "semantic importer authenticated rustc target {:?}, consumed {} collected device function(s) with {} external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with {} local(s), {} block(s), {} statement(s), and {} typed terminal expansion recipe(s), retaining {} structurally closed rustc type producer(s), {} stable source file identity producer(s), {} canonical source provenance producer(s), and {} canonical body ID table(s); canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
                 pending.llvm_target,
                 pending.collected_functions,
                 pending.registered_roots,
@@ -351,7 +351,7 @@ mod tests {
         assert!(diagnostic.contains(&"ab".repeat(32)));
         assert!(diagnostic.contains(&"cd".repeat(32)));
         assert!(diagnostic.contains("4 typed terminal expansion recipe(s)"));
-        assert!(diagnostic.contains("6 sorted rustc type producer(s)"));
+        assert!(diagnostic.contains("6 structurally closed rustc type producer(s)"));
         assert!(diagnostic.contains("2 stable source file identity producer(s)"));
         assert!(diagnostic.contains("31 canonical source provenance producer(s)"));
         assert!(diagnostic.contains("3 canonical body ID table(s)"));
