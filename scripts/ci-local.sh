@@ -23,6 +23,7 @@ readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_ident
 readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.sh"
 readonly RUNTIME_PURE_RUST_TARGET_DIR="${REPO_ROOT}/target/runtime-pure-rust-policy"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
+readonly GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS=4200
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 
 readonly CPU_TEST_PACKAGES=(
@@ -107,15 +108,16 @@ Commands:
 EOF
 }
 
-run_step() {
-  local name="$1"
-  shift
+run_step_with_timeout() {
+  local timeout_seconds="$1"
+  local name="$2"
+  shift 2
   local log_file="${LOG_DIR}/${name}.log"
 
-  if [[ ! "${CI_STEP_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
-    ((CI_STEP_TIMEOUT_SECONDS >= 3600)); then
-    printf '%s\n' \
-      'FE2O3_CI_STEP_TIMEOUT_SECONDS must be an integer from 1 through 3599' >&2
+  if [[ ! "${timeout_seconds}" =~ ^[1-9][0-9]*$ ]] ||
+    ((timeout_seconds >= 7200)); then
+    printf 'step timeout must be an integer from 1 through 7199: %s\n' \
+      "${timeout_seconds}" >&2
     return 2
   fi
   if [[ ! "${CI_STEP_KILL_AFTER_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
@@ -132,12 +134,12 @@ run_step() {
   printf '\n==> %s\n' "${name}"
   printf '   command:'
   printf ' %q' "$@"
-  printf '\n   timeout: %ss' "${CI_STEP_TIMEOUT_SECONDS}"
+  printf '\n   timeout: %ss' "${timeout_seconds}"
   printf '\n   log: %s\n' "${log_file}"
 
   set +e
   timeout --signal=TERM --kill-after="${CI_STEP_KILL_AFTER_SECONDS}s" \
-    "${CI_STEP_TIMEOUT_SECONDS}s" "$@" 2>&1 | tee "${log_file}"
+    "${timeout_seconds}s" "$@" 2>&1 | tee "${log_file}"
   local -a pipeline_status=("${PIPESTATUS[@]}")
   local command_status="${pipeline_status[0]}"
   local tee_status="${pipeline_status[1]}"
@@ -156,11 +158,21 @@ run_step() {
   if ((status != 0)); then
     if ((command_status == 124)); then
       printf 'step %s timed out after %s seconds\n' \
-        "${name}" "${CI_STEP_TIMEOUT_SECONDS}" >&2
+        "${name}" "${timeout_seconds}" >&2
     fi
     printf 'step %s failed with status %d\n' "${name}" "${status}" >&2
     return "${status}"
   fi
+}
+
+run_step() {
+  if [[ ! "${CI_STEP_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
+    ((CI_STEP_TIMEOUT_SECONDS >= 3600)); then
+    printf '%s\n' \
+      'FE2O3_CI_STEP_TIMEOUT_SECONDS must be an integer from 1 through 3599' >&2
+    return 2
+  fi
+  run_step_with_timeout "${CI_STEP_TIMEOUT_SECONDS}" "$@"
 }
 
 load_example_packages() {
@@ -358,6 +370,13 @@ run_rustc_codegen_lib_tests() {
 
 run_rustc_codegen_target() {
   local test_target="$1"
+  if [[ "${test_target}" == general_gemm_semantic_frontend ]]; then
+    run_step_with_timeout "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
+      "rustc-codegen-test-${test_target}" \
+      cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
+        --test "${test_target}"
+    return
+  fi
   # Cargo can emit a test rlib and an unversioned backend dylib with different
   # Rust symbol hashes during one --all-targets build. This target-isolated Cargo
   # invocation produces the exact backend dylib before running its linked test.

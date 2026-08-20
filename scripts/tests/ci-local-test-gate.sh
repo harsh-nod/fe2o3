@@ -162,6 +162,7 @@ done
 
 declare -a STEP_NAMES=()
 declare -a STEP_COMMANDS=()
+declare -A STEP_TIMEOUT_OVERRIDES=()
 
 run_step() {
   local name="$1"
@@ -170,6 +171,14 @@ run_step() {
   printf -v command '%q ' "$@"
   STEP_NAMES+=("${name}")
   STEP_COMMANDS+=("${command% }")
+}
+
+run_step_with_timeout() {
+  local timeout_seconds="$1"
+  local name="$2"
+  shift 2
+  STEP_TIMEOUT_OVERRIDES["${name}"]="${timeout_seconds}"
+  run_step "${name}" "$@"
 }
 
 load_example_packages() {
@@ -264,6 +273,14 @@ assert_equals \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'generic backend integration tests are not target-isolated'
 assert_all_codegen_targets_once
+assert_equals 4200 "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
+  'general GEMM semantic frontend timeout policy changed without review'
+assert_equals \
+  "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
+  "${STEP_TIMEOUT_OVERRIDES[rustc-codegen-test-general_gemm_semantic_frontend]:-}" \
+  'general GEMM semantic frontend did not receive its reviewed timeout override'
+assert_equals 1 "${#STEP_TIMEOUT_OVERRIDES[@]}" \
+  'an unexpected codegen target received a timeout override'
 for backend_command in "${STEP_COMMANDS[@]}"; do
   if [[ "${backend_command}" == *"-p ${RUSTC_CODEGEN_TEST_PACKAGE}"* ]] &&
     [[ "${backend_command}" == *"--all-targets"* ]]; then
