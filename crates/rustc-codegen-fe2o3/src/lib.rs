@@ -7,7 +7,6 @@ extern crate rustc_codegen_ssa;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
-#[cfg(test)]
 extern crate rustc_interface;
 extern crate rustc_metadata;
 extern crate rustc_middle;
@@ -44,6 +43,7 @@ mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod pipeline_selection;
 mod production_pipeline_v1;
+mod production_rustc_driver_v1;
 mod production_target_v1;
 mod record_lowering;
 mod rust_type_layout;
@@ -63,6 +63,9 @@ mod test_temp_dir;
 mod trusted_device_items;
 mod typed_artifact;
 mod worker_v2_producer;
+
+#[doc(hidden)]
+pub use production_rustc_driver_v1::run_production_extraction_driver_v1;
 
 use fe2o3_artifact_transaction as artifact_transaction;
 use rustc_codegen_ssa::traits::CodegenBackend;

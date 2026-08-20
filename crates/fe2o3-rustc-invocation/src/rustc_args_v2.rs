@@ -853,6 +853,64 @@ fn is_canonical_cargo_probe_v2(argv: &[OsString]) -> bool {
             index += 2;
             continue;
         }
+        if matches_os(
+            argument,
+            &[
+                "-Awarnings",
+                "-Dwarnings",
+                "-Fwarnings",
+                "-Wwarnings",
+                "-Zalways-encode-mir",
+            ],
+        ) {
+            index += 1;
+            continue;
+        }
+        if matches_os(argument, &["-A", "-D", "-F", "-W"])
+            && argv
+                .get(index + 1)
+                .is_some_and(|value| value == OsStr::new("warnings"))
+        {
+            index += 2;
+            continue;
+        }
+        if [b"-Ctarget-cpu=".as_slice(), b"-Ctarget-feature=".as_slice()]
+            .iter()
+            .any(|prefix| {
+                argument
+                    .as_encoded_bytes()
+                    .strip_prefix(*prefix)
+                    .is_some_and(|value| !value.is_empty())
+            })
+            || argument
+                .as_encoded_bytes()
+                .strip_prefix(b"--target=")
+                .is_some_and(|value| !value.is_empty())
+        {
+            index += 1;
+            continue;
+        }
+        if argument == OsStr::new("-C")
+            && argv.get(index + 1).is_some_and(|value| {
+                [b"target-cpu=".as_slice(), b"target-feature=".as_slice()]
+                    .iter()
+                    .any(|prefix| {
+                        value
+                            .as_encoded_bytes()
+                            .strip_prefix(*prefix)
+                            .is_some_and(|value| !value.is_empty())
+                    })
+            })
+        {
+            index += 2;
+            continue;
+        }
+        if argument == OsStr::new("--target")
+            && argv.get(index + 1).is_some_and(|value| !value.is_empty())
+        {
+            index += 2;
+            continue;
+        }
         return false;
     }
     saw_file_names
@@ -1001,6 +1059,12 @@ mod tests {
             "--crate-name",
             "___",
             "--print=file-names",
+            "-Zalways-encode-mir",
+            "-Ctarget-cpu=gfx942",
+            "-C",
+            "target-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+            "--target",
+            "amdgcn-amd-amdhsa",
             "--crate-type",
             "bin",
             "--crate-type",
@@ -1036,6 +1100,22 @@ mod tests {
                 "--print=file-names",
                 "--extern",
                 "proc_macro=libproc_macro.so",
+            ]),
+            args(&[
+                "rustc",
+                "-",
+                "--crate-name",
+                "___",
+                "--print=file-names",
+                "-Zcodegen-backend=/tmp/untrusted.so",
+            ]),
+            args(&[
+                "rustc",
+                "-",
+                "--crate-name",
+                "___",
+                "--print=file-names",
+                "-Clinker=/tmp/untrusted",
             ]),
         ] {
             assert!(

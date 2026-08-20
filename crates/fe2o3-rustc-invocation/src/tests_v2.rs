@@ -359,22 +359,25 @@ fn classifier_separates_queries_from_compiles_and_rejects_ambiguity() {
         );
     }
 
-    let cargo_probe = [
-        "/opt/fe2o3/rustc",
-        "-",
-        "--crate-name",
-        "___",
-        "--print=file-names",
-        "--crate-type=bin",
-        "--crate-type=rlib",
-    ]
-    .into_iter()
-    .map(std::ffi::OsString::from)
-    .collect::<Vec<_>>();
-    assert!(matches!(
-        classify_rustc_invocation_v2(&cargo_probe),
-        Ok(RustcInvocationV2::Query(_))
-    ));
+    for warning_args in [&[][..], &["-Wwarnings"][..], &["-W", "warnings"][..]] {
+        let cargo_probe = [
+            "/opt/fe2o3/rustc",
+            "-",
+            "--crate-name",
+            "___",
+            "--print=file-names",
+            "--crate-type=bin",
+            "--crate-type=rlib",
+        ]
+        .into_iter()
+        .chain(warning_args.iter().copied())
+        .map(std::ffi::OsString::from)
+        .collect::<Vec<_>>();
+        assert!(matches!(
+            classify_rustc_invocation_v2(&cargo_probe),
+            Ok(RustcInvocationV2::Query(_))
+        ));
+    }
 
     for argument in [
         "@args.rsp",
