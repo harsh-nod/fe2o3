@@ -739,14 +739,10 @@ fn proof_gate_builds_owner_bound_projection_then_stops_without_artifacts() {
         observation.projection().operation_count(),
         GENERAL_GEMM_PLIRON_OPERATION_COUNT_V1
     );
-    assert_eq!(observation.blocker().stage(), CompilerStageV1::Amdgcn);
+    assert_eq!(observation.blocker().stage(), CompilerStageV1::Llvm);
     assert_eq!(
         observation.blocker().gaps(),
-        [
-            GeneralGemmMachineRepresentationGapV1::WorkgroupBf16Array256,
-            GeneralGemmMachineRepresentationGapV1::Wave64Bf16MfmaM16N16K16,
-            GeneralGemmMachineRepresentationGapV1::LoopCarriedF32x4Accumulator,
-        ]
+        [GeneralGemmProductionGapV1::AuthorityJoin]
     );
     assert_eq!(observation.handoff_v2_identity(), None);
     assert_eq!(observation.llvm_assembly_identity(), None);

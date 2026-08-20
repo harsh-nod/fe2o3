@@ -5,13 +5,18 @@ the complete structured KIR, the selected schedule, and the compiler request.
 It consumes the existing compiler-local proof admission before constructing a
 real, owner-bound Pliron projection.
 
-The current LLVM Handoff V2 schema cannot represent the required workgroup
-BF16 arrays, the wave64 BF16 MFMA fragment/intrinsic, or the loop-carried FP32
-fragment accumulator. The route therefore stops with a typed AMDGCN lowering
-blocker and returns a transactional compiler rejection. It cannot construct an
-LLVM handoff, compiler-worker request, executable candidate, artifact,
-publication, load, or launch authority. There is no legacy, COMGR, or shell
-compiler fallback.
+The structural gfx942 route now represents the required workgroup BF16 arrays,
+wave64 BF16 MFMA fragment/intrinsic, loop-carried FP32 accumulators, and both
+closed schedules. It lowers them into a live owner-bound Pliron LLVM graph,
+freshly exports that graph into Handoff V2, serializes it, admits a measured
+upstream-LLVM worker request, and retains exact graph-to-post-link identities.
+
+The production selector remains fail-closed until one rustc-owned authority
+join consumes the authenticated Rust MIR-to-KIR receipt, live graph
+serialization, worker request/response, post-link ISA observation, and verifier
+identity chain. Until that join is installed, it returns a transactional
+compiler rejection and grants no candidate, artifact, publication, load, or
+launch authority. There is no legacy, COMGR, or shell compiler fallback.
 
 The reference and A-v4 schedules share the same semantic algorithm and Pliron
 projection code. Their domain-separated schedule and aggregate compilation

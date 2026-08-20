@@ -133,7 +133,7 @@ const PLIRON_KIR_ATTR: &str = "fe2o3_general_gemm_kir_v1";
 const PLIRON_SCHEDULE_ATTR: &str = "fe2o3_general_gemm_schedule_identity_v1";
 const GENERAL_GEMM_LOWERING_BLOCKED_CODE_V1: u32 = 0x4647_0201;
 const GENERAL_GEMM_LOWERING_BLOCKED_MESSAGE_V1: &str =
-    "general GEMM AMDGPU lowering is unavailable in LLVM Handoff V2; no candidate was produced";
+    "general GEMM production authority join is incomplete; no candidate was produced";
 
 macro_rules! identity_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -1483,24 +1483,21 @@ impl GeneralGemmCompilationUnitV1 {
     }
 }
 
-/// Missing typed machine contracts that prevent honest Handoff V2 emission.
+/// Missing production integration that prevents candidate authority.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum GeneralGemmMachineRepresentationGapV1 {
-    /// Handoff V2 globals cannot represent a 256-element BF16 LDS allocation.
-    WorkgroupBf16Array256,
-    /// Handoff V2 has no wave64 BF16 `m16n16k16` MFMA fragment/intrinsic.
-    Wave64Bf16MfmaM16N16K16,
-    /// Handoff V2 CFG cannot carry the four FP32 accumulators through a loop.
-    LoopCarriedF32x4Accumulator,
+pub enum GeneralGemmProductionGapV1 {
+    /// The production selector does not yet consume the complete Rust, live
+    /// compiler-graph, late-machine verifier, and final-artifact identity join.
+    AuthorityJoin,
 }
 
 /// Known later contracts that remain unavailable after typed LLVM handoff.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum GeneralGemmPostLoweringGapV1 {
-    /// Worker V2 preparation is inert and does not execute a measured worker.
-    MeasuredWorkerV2Execution,
-    /// The finalizer does not consume an exact source-bound general-GEMM handoff.
-    SourceBoundGemmHsacoFinalization,
+    /// The production route has not joined exact graph, request, response, and ISA identities.
+    LateMachineVerifierIdentityJoin,
+    /// The rustc-owned final join does not yet consume the complete identity chain.
+    RustcOwnedFinalArtifactJoin,
     /// Publication and protected runtime admission do not yet consume this chain.
     TransactionalPublicationAndRuntimeAdmission,
 }
@@ -1509,17 +1506,17 @@ pub enum GeneralGemmPostLoweringGapV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralGemmLoweringBlockerV1 {
     stage: CompilerStageV1,
-    gaps: [GeneralGemmMachineRepresentationGapV1; 3],
+    gaps: [GeneralGemmProductionGapV1; 1],
 }
 
 impl GeneralGemmLoweringBlockerV1 {
-    /// Returns the first stage that cannot represent the checked semantics.
+    /// Returns the first stage not connected to the production authority join.
     pub const fn stage(self) -> CompilerStageV1 {
         self.stage
     }
 
-    /// Returns all independently missing Handoff V2 contracts.
-    pub const fn gaps(self) -> [GeneralGemmMachineRepresentationGapV1; 3] {
+    /// Returns the fail-closed production integration gap.
+    pub const fn gaps(self) -> [GeneralGemmProductionGapV1; 1] {
         self.gaps
     }
 }
@@ -1808,7 +1805,7 @@ impl GeneralGemmLoweringObservationV1 {
         self.projection
     }
 
-    /// Returns the exact missing machine-representation contracts.
+    /// Returns the exact missing production integration contract.
     pub const fn blocker(self) -> GeneralGemmLoweringBlockerV1 {
         self.blocker
     }
@@ -1816,8 +1813,8 @@ impl GeneralGemmLoweringObservationV1 {
     /// Returns known later gaps without claiming that the route reached them.
     pub const fn post_lowering_gaps(self) -> [GeneralGemmPostLoweringGapV1; 3] {
         [
-            GeneralGemmPostLoweringGapV1::MeasuredWorkerV2Execution,
-            GeneralGemmPostLoweringGapV1::SourceBoundGemmHsacoFinalization,
+            GeneralGemmPostLoweringGapV1::LateMachineVerifierIdentityJoin,
+            GeneralGemmPostLoweringGapV1::RustcOwnedFinalArtifactJoin,
             GeneralGemmPostLoweringGapV1::TransactionalPublicationAndRuntimeAdmission,
         ]
     }
@@ -1935,7 +1932,7 @@ impl GeneralGemmAdmittedBackendV1 {
     }
 
     /// Consumes proof admission, constructs the real Pliron projection, and
-    /// returns the honest typed Handoff V2 blocker.
+    /// returns the honest production authority-join blocker.
     pub fn lower_admitted(
         &mut self,
         request: &CompileRequestV1,
@@ -1964,12 +1961,8 @@ impl GeneralGemmAdmittedBackendV1 {
         Ok(GeneralGemmLoweringObservationV1 {
             projection,
             blocker: GeneralGemmLoweringBlockerV1 {
-                stage: CompilerStageV1::Amdgcn,
-                gaps: [
-                    GeneralGemmMachineRepresentationGapV1::WorkgroupBf16Array256,
-                    GeneralGemmMachineRepresentationGapV1::Wave64Bf16MfmaM16N16K16,
-                    GeneralGemmMachineRepresentationGapV1::LoopCarriedF32x4Accumulator,
-                ],
+                stage: CompilerStageV1::Llvm,
+                gaps: [GeneralGemmProductionGapV1::AuthorityJoin],
             },
         })
     }
