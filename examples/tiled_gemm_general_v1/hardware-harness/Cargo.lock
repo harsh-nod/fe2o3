@@ -364,6 +364,7 @@ dependencies = [
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-text",
  "fe2o3-llvm-worker-handoff",
+ "fe2o3-lower-amdgcn-llvm",
  "fe2o3-pliron",
  "fe2o3-verifier",
  "pliron",
@@ -471,6 +472,20 @@ name = "fe2o3-llvm-worker-handoff"
 version = "0.1.0"
 dependencies = [
  "fe2o3-llvm-handoff",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-lower-amdgcn-llvm"
+version = "0.1.0"
+dependencies = [
+ "dialect-amdgcn",
+ "fe2o3-llvm-handoff",
+ "fe2o3-llvm-text",
+ "fe2o3-llvm-worker-handoff",
+ "fe2o3-pliron",
+ "pliron",
+ "pliron-llvm",
  "sha2",
 ]
 
@@ -741,6 +756,17 @@ dependencies = [
  "quote",
  "rustc-hash",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "pliron-llvm"
+version = "0.17.0"
+source = "git+https://github.com/pliron-org/pliron.git?rev=2610651306ea3ba670f68d5d8b1e1159bcd521ed#2610651306ea3ba670f68d5d8b1e1159bcd521ed"
+dependencies = [
+ "bitflags",
+ "log",
+ "pliron",
+ "thiserror",
 ]
 
 [[package]]
