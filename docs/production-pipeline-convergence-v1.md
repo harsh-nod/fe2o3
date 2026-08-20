@@ -94,6 +94,45 @@ All mutable transformations execute through the sealed #140 service. A pass
 receives an owner-authenticated operation handle and a bounded configuration;
 it cannot receive or return a raw Pliron pointer.
 
+### Session dependency boundary
+
+The sealed service requires a dependency inversion around the dialect crates.
+It must not be implemented as a public callback that receives `&mut Context`:
+safe callback code could retain a contextless upstream `Ptr<T>` and recreate
+the cross-session confusion that #140 is intended to remove.
+
+The production dependency direction is:
+
+```text
+Pliron owner/registration core
+    <- fe2o3 dialect definitions and typed constructors
+    <- closed production Pliron session and transform adapters
+    <- ProductionCompilationV1 typestate transaction
+```
+
+The lower owner core contains context identity, bounded dialect-registration
+actions, opaque handle mechanics, and fixed diagnostics. Dialect crates depend
+only on that core and pinned Pliron APIs. The closed production-session layer
+depends on the owner core plus the admitted dialect crates, owns the raw
+`Context`, and directly invokes their typed constructors and transformations.
+Its raw-context implementation is compiler-internal TCB code; it exposes no
+callback, trait implementation point, context, pointer, value, block, type, or
+attribute handle to callers.
+
+Construction consumes a bounded canonical MIR or Kernel IR recipe and returns
+an opaque root handle only after recursive verification and canonical
+cross-checking. Transformation selection is a closed fe2o3-owned operation,
+not an arbitrary caller-provided Pliron `Pass`. A transition consumes the
+input-stage capability, reserves its complete work and growth budget, mutates
+only the authenticated tree, recursively verifies the result, and returns a
+new stage capability plus a canonical receipt. Any failure after allocation or
+mutation begins poisons and terminally consumes the production session.
+
+The current textual import and detached lowering services remain test and
+migration bridges. They cannot be called by `ProductionCompilationV1`, and
+removing their final production callers is part of #140/#178 rather than a
+second compiler route.
+
 Each pass performs this transaction:
 
 1. Validate the complete input graph and canonical binding.
