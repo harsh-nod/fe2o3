@@ -16,7 +16,6 @@ extern crate rustc_span;
 extern crate rustc_target;
 
 mod amdgpu_llvm;
-#[allow(dead_code)]
 mod closure_profile_v1;
 mod collected_executable_scalar_control_flow_v2;
 mod collected_flash_attention_v1;
@@ -32,7 +31,6 @@ mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
 mod device_ffi;
-pub mod executable_scalar_control_flow_v1;
 mod frontend_record_bridge;
 mod general_gemm_final_join_v1;
 mod general_gemm_intrinsic_semantics_v1;
@@ -41,16 +39,14 @@ mod host_object;
 mod kernel_ir_codegen;
 mod kernel_ir_lowering;
 mod mir_import;
-#[allow(dead_code)]
 mod mir_import_v2;
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
+mod pipeline_selection;
 mod production_pipeline_v1;
 mod production_target_v1;
 mod record_lowering;
-#[allow(dead_code)]
 mod rust_type_layout;
-#[allow(dead_code)]
 mod rust_type_layout_general;
 mod rust_type_layout_v3;
 pub mod s09_identity_v2;
@@ -80,7 +76,6 @@ use rustc_session::Session;
 use rustc_session::config::OutputFilenames;
 use std::any::Any;
 use std::env;
-use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;
@@ -88,6 +83,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use pipeline_selection::{CodegenPipeline, PipelinePurposeV1, PipelineSelection};
 
 const MAX_FINALIZED_LLVM_IR_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FINALIZED_HSACO_BYTES: usize = 4 * 1024 * 1024;
@@ -199,30 +196,6 @@ impl Drop for TemporaryHostObjects {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CodegenPipeline {
-    ProductionV1,
-    LegacyV1,
-    KernelIrV1,
-    KernelIrWorkerV2,
-    CollectedExecutableScalarControlFlowV2,
-    CollectedFlashAttentionV1,
-    CollectedGeneralGemmV1,
-    CollectedMoeTop2V1,
-    CollectedRowSoftmaxV1,
-    CollectedScalarGemmV1,
-    CollectedTiledGemmV1,
-    CollectedWave64CollectivesV1,
-    CollectedLdsReductionV1,
-    CollectedScopedAtomicV1,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum PipelineSelection {
-    Valid(CodegenPipeline),
-    Invalid(String),
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 enum BuildAttemptSelection {
     #[default]
@@ -253,104 +226,6 @@ impl BuildAttemptSelection {
             Self::Managed(attempt) => Ok(Some(*attempt)),
             Self::Invalid(reason) => Err(reason),
         }
-    }
-}
-
-impl PipelineSelection {
-    fn from_env() -> Self {
-        Self::from_value(env::var_os(CODEGEN_PIPELINE_ENV).as_deref())
-    }
-
-    fn from_value(value: Option<&OsStr>) -> Self {
-        match value {
-            None => Self::Valid(CodegenPipeline::LegacyV1),
-            Some(value) if value == production_pipeline_v1::PRODUCTION_PIPELINE_V1 => {
-                Self::Valid(CodegenPipeline::ProductionV1)
-            }
-            Some(value) if value == "legacy-v1" => Self::Valid(CodegenPipeline::LegacyV1),
-            Some(value) if value == "kernel-ir-v1" => Self::Valid(CodegenPipeline::KernelIrV1),
-            Some(value) if value == "kernel-ir-worker-v2" => {
-                Self::Valid(CodegenPipeline::KernelIrWorkerV2)
-            }
-            Some(value)
-                if value
-                    == collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2 =>
-            {
-                Self::Valid(CodegenPipeline::CollectedExecutableScalarControlFlowV2)
-            }
-            Some(value)
-                if value
-                    == collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1 =>
-            {
-                Self::Valid(CodegenPipeline::CollectedFlashAttentionV1)
-            }
-            Some(value) if value == general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1 => {
-                Self::Valid(CodegenPipeline::CollectedGeneralGemmV1)
-            }
-            Some(value) if value == collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1 => {
-                Self::Valid(CodegenPipeline::CollectedMoeTop2V1)
-            }
-            Some(value)
-                if value == collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1 =>
-            {
-                Self::Valid(CodegenPipeline::CollectedScalarGemmV1)
-            }
-            Some(value)
-                if value == collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1 =>
-            {
-                Self::Valid(CodegenPipeline::CollectedRowSoftmaxV1)
-            }
-            Some(value)
-                if value == collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1 =>
-            {
-                Self::Valid(CodegenPipeline::CollectedTiledGemmV1)
-            }
-            Some(value)
-                if value
-                    == collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1 =>
-            {
-                Self::Valid(CodegenPipeline::CollectedWave64CollectivesV1)
-            }
-            Some(value)
-                if value == collected_workgroup_sync_v1::COLLECTED_LDS_REDUCTION_PIPELINE_V1 =>
-            {
-                Self::Valid(CodegenPipeline::CollectedLdsReductionV1)
-            }
-            Some(value)
-                if value == collected_workgroup_sync_v1::COLLECTED_SCOPED_ATOMIC_PIPELINE_V1 =>
-            {
-                Self::Valid(CodegenPipeline::CollectedScopedAtomicV1)
-            }
-            Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `{}`, `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
-                production_pipeline_v1::PRODUCTION_PIPELINE_V1,
-                collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
-                collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
-                general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
-                collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
-                collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
-                collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
-                collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
-                collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1,
-                collected_workgroup_sync_v1::COLLECTED_LDS_REDUCTION_PIPELINE_V1,
-                collected_workgroup_sync_v1::COLLECTED_SCOPED_ATOMIC_PIPELINE_V1,
-            )),
-        }
-    }
-
-    fn resolve(&self) -> Result<CodegenPipeline, amdgpu_llvm::EmitError> {
-        match self {
-            Self::Valid(pipeline) => Ok(*pipeline),
-            Self::Invalid(reason) => Err(amdgpu_llvm::EmitError::Preflight {
-                reason: reason.clone(),
-            }),
-        }
-    }
-}
-
-impl Default for PipelineSelection {
-    fn default() -> Self {
-        Self::Valid(CodegenPipeline::LegacyV1)
     }
 }
 
@@ -437,6 +312,44 @@ fn dump_authenticated_frontend_contracts(
     );
 }
 
+fn has_custom_llvm_configuration(session: &Session) -> bool {
+    !session.opts.cg.llvm_args.is_empty() || !session.opts.cg.passes.is_empty()
+}
+
+fn collect_qualification_oracle_input<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    cgus: &[rustc_middle::mir::mono::CodegenUnit<'tcx>],
+    verbose: bool,
+    pipeline: CodegenPipeline,
+) -> Result<collector::CollectionResult<'tcx>, String> {
+    debug_assert_eq!(pipeline.purpose(), PipelinePurposeV1::QualificationOracle);
+    let collection = collector::collect_device_functions(tcx, cgus, verbose)
+        .map_err(|error| error.to_string())?;
+    let frontend_record = frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+        .map_err(|error| format!("frontend record extraction failed: {error}"))?;
+    if verbose {
+        eprintln!(
+            "[rustc-codegen-fe2o3] validated `{}` qualification frontend record: {} function(s), {} canonical byte(s)",
+            pipeline.selector_name(),
+            frontend_record.unit().functions().len(),
+            frontend_record.canonical_bytes().len(),
+        );
+        if let Some(envelope) = &collection.compiler_ffi_observation {
+            let inspection = envelope.inspection();
+            eprintln!(
+                "[rustc-codegen-fe2o3] collected compiler FFI envelope {}: {} import(s), {} export(s), {} compiler-module definition requirement(s)",
+                envelope.identity().to_hex(),
+                inspection.import_count(),
+                inspection.export_count(),
+                inspection.requires_compiler_module_definition_count(),
+            );
+        }
+        dump_authenticated_frontend_contracts(&frontend_record);
+        collector::dump_device_functions(tcx, &collection.functions);
+    }
+    Ok(collection)
+}
+
 impl CodegenBackend for Fe2o3CodegenBackend {
     fn name(&self) -> &'static str {
         "fe2o3"
@@ -507,16 +420,16 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
             let mut generated_host_objects = host_object::GeneratedHostObjects::default();
             let mut temporary_host_objects = TemporaryHostObjects::default();
-            let codegen_pipeline = self.config.codegen_pipeline.clone();
-            if matches!(
-                codegen_pipeline,
-                PipelineSelection::Valid(CodegenPipeline::ProductionV1)
-            ) {
+            let codegen_pipeline = self
+                .config
+                .codegen_pipeline
+                .resolve()
+                .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
+            if codegen_pipeline == CodegenPipeline::ProductionV1 {
                 match production_pipeline_v1::disposition(kernel_count) {
                     production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
                     production_pipeline_v1::ProductionDispositionV1::DeviceTransaction => {
-                        let has_custom_llvm_configuration = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                        let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
                         if let Err(error) = production_pipeline_v1::reject_custom_llvm_configuration(
                             has_custom_llvm_configuration,
                         ) {
@@ -552,12 +465,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     }
                 }
             }
-            if kernel_count == 0
-                && matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::CollectedGeneralGemmV1)
-                )
-            {
+            if kernel_count == 0 && codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
                 tcx.dcx().fatal(format!(
                     "[rustc-codegen-fe2o3] {} found no authenticated general GEMM kernel root; no fallback or artifact reconciliation was entered",
                     general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
@@ -565,10 +473,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             }
             if kernel_count > 0 {
                 let output_dir = output_dir.expect("kernel output was required above");
-                if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::CollectedGeneralGemmV1)
-                ) {
+                if codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
                     let qualification = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -582,33 +487,18 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         let working_directory = env::current_dir().map_err(|error| {
                             format!("cannot identify the rustc working directory: {error}")
                         })?;
-                        if !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty()
-                        {
+                        if has_custom_llvm_configuration(tcx.sess) {
                             return Err(
                                 "general GEMM rejects caller-selected LLVM arguments or passes"
                                     .to_owned(),
                             );
                         }
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let frontend_record =
-                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                                .map_err(|error| {
-                                    format!("frontend record extraction failed: {error}")
-                                })?;
-                        if self.config.verbose {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] validated general GEMM frontend record: {} function(s), {} canonical byte(s)",
-                                frontend_record.unit().functions().len(),
-                                frontend_record.canonical_bytes().len()
-                            );
-                        }
-                        collector::dump_device_functions(tcx, &collection.functions);
+                            codegen_pipeline,
+                        )?;
                         let imported = collected_general_gemm_v1::try_import_general_gemm_v1(
                             tcx,
                             &collection,
@@ -653,34 +543,17 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
                         )),
                     }
-                } else if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(
-                        CodegenPipeline::CollectedExecutableScalarControlFlowV2
-                    )
-                ) {
+                } else if codegen_pipeline
+                    == CodegenPipeline::CollectedExecutableScalarControlFlowV2
+                {
                     let lowering = (|| -> Result<_, String> {
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let frontend_record =
-                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                                .map_err(|error| {
-                                    format!("frontend record extraction failed: {error}")
-                                })?;
-                        if self.config.verbose {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] validated frontend record: {} function(s), {} canonical byte(s)",
-                                frontend_record.unit().functions().len(),
-                                frontend_record.canonical_bytes().len()
-                            );
-                        }
-                        collector::dump_device_functions(tcx, &collection.functions);
-                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                            codegen_pipeline,
+                        )?;
+                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         collected_executable_scalar_control_flow_v2::authenticate_collected_executable_scalar_control_flow_v2(
                             tcx,
                             &collection,
@@ -708,10 +581,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                         )),
                     }
-                } else if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::CollectedFlashAttentionV1)
-                ) {
+                } else if codegen_pipeline == CodegenPipeline::CollectedFlashAttentionV1 {
                     let admission = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -719,25 +589,19 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
                             )
                         })?;
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                            .map_err(|error| {
-                                format!("frontend record extraction failed: {error}")
-                            })?;
+                            codegen_pipeline,
+                        )?;
                         let typed_roots =
                             compiler_descriptor::typed_descriptor_roots_from_collection(
                                 tcx,
                                 &collection.functions,
                             )
                             .map_err(|error| error.to_string())?;
-                        collector::dump_device_functions(tcx, &collection.functions);
-                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
                             collected_flash_attention_v1::authenticate_collected_flash_attention_v1(
                                 tcx,
@@ -808,10 +672,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
                         )),
                     }
-                } else if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::CollectedMoeTop2V1)
-                ) {
+                } else if codegen_pipeline == CodegenPipeline::CollectedMoeTop2V1 {
                     let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -819,19 +680,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
                             )
                         })?;
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                            .map_err(|error| {
-                                format!("frontend record extraction failed: {error}")
-                            })?;
-                        collector::dump_device_functions(tcx, &collection.functions);
-                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                            codegen_pipeline,
+                        )?;
+                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
                             collected_moe_top2_v1::authenticate_collected_moe_top2_v1(
                                 tcx,
@@ -900,16 +755,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     }
                 } else if matches!(
                     codegen_pipeline,
-                    PipelineSelection::Valid(
-                        CodegenPipeline::CollectedLdsReductionV1
-                            | CodegenPipeline::CollectedScopedAtomicV1
-                    )
+                    CodegenPipeline::CollectedLdsReductionV1
+                        | CodegenPipeline::CollectedScopedAtomicV1
                 ) {
                     let kind = match codegen_pipeline {
-                        PipelineSelection::Valid(CodegenPipeline::CollectedLdsReductionV1) => {
+                        CodegenPipeline::CollectedLdsReductionV1 => {
                             collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::LdsReduction
                         }
-                        PipelineSelection::Valid(CodegenPipeline::CollectedScopedAtomicV1) => {
+                        CodegenPipeline::CollectedScopedAtomicV1 => {
                             collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::ScopedAtomic
                         }
                         _ => unreachable!(),
@@ -923,19 +776,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         }
                     };
                     let admission = (|| -> Result<_, String> {
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                            .map_err(|error| {
-                                format!("frontend record extraction failed: {error}")
-                            })?;
-                        collector::dump_device_functions(tcx, &collection.functions);
-                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                            codegen_pipeline,
+                        )?;
+                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
                             collected_workgroup_sync_v1::authenticate_collected_workgroup_sync_v1(
                                 tcx,
@@ -968,32 +815,15 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] {pipeline} rejected the collected program without fallback: {error}"
                         )),
                     }
-                } else if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::CollectedWave64CollectivesV1)
-                ) {
+                } else if codegen_pipeline == CodegenPipeline::CollectedWave64CollectivesV1 {
                     let admission = (|| -> Result<_, String> {
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let frontend_record =
-                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                                .map_err(|error| {
-                                    format!("frontend record extraction failed: {error}")
-                                })?;
-                        if self.config.verbose {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] validated Wave64 collectives frontend record: {} function(s), {} canonical byte(s)",
-                                frontend_record.unit().functions().len(),
-                                frontend_record.canonical_bytes().len()
-                            );
-                        }
-                        collector::dump_device_functions(tcx, &collection.functions);
-                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                            codegen_pipeline,
+                        )?;
+                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt = collected_wave64_collectives_v1::authenticate_collected_wave64_collectives_v1(
                             tcx,
                             &collection,
@@ -1034,10 +864,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1,
                         )),
                     }
-                } else if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::CollectedRowSoftmaxV1)
-                ) {
+                } else if codegen_pipeline == CodegenPipeline::CollectedRowSoftmaxV1 {
                     let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -1045,27 +872,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
                             )
                         })?;
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let frontend_record =
-                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                                .map_err(|error| {
-                                    format!("frontend record extraction failed: {error}")
-                                })?;
-                        if self.config.verbose {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] validated row-softmax frontend record: {} function(s), {} canonical byte(s)",
-                                frontend_record.unit().functions().len(),
-                                frontend_record.canonical_bytes().len()
-                            );
-                        }
-                        collector::dump_device_functions(tcx, &collection.functions);
-                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                            codegen_pipeline,
+                        )?;
+                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
                             collected_row_softmax_v1::authenticate_collected_row_softmax_v1(
                                 tcx,
@@ -1147,10 +960,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
                         )),
                     }
-                } else if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::CollectedTiledGemmV1)
-                ) {
+                } else if codegen_pipeline == CodegenPipeline::CollectedTiledGemmV1 {
                     let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -1158,27 +968,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
                             )
                         })?;
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let frontend_record =
-                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                                .map_err(|error| {
-                                    format!("frontend record extraction failed: {error}")
-                                })?;
-                        if self.config.verbose {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] validated tiled GEMM frontend record: {} function(s), {} canonical byte(s)",
-                                frontend_record.unit().functions().len(),
-                                frontend_record.canonical_bytes().len()
-                            );
-                        }
-                        collector::dump_device_functions(tcx, &collection.functions);
-                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                            codegen_pipeline,
+                        )?;
+                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         if collected_tiled_gemm_lds_slice1_v1::is_lds_slice1_collection(&collection)
                         {
                             let mut receipt = collected_tiled_gemm_lds_slice1_v1::authenticate_collected_lds_slice1_v1(
@@ -1323,10 +1119,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
                         )),
                     }
-                } else if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::CollectedScalarGemmV1)
-                ) {
+                } else if codegen_pipeline == CodegenPipeline::CollectedScalarGemmV1 {
                     let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -1334,27 +1127,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                             )
                         })?;
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let frontend_record =
-                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                                .map_err(|error| {
-                                    format!("frontend record extraction failed: {error}")
-                                })?;
-                        if self.config.verbose {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] validated scalar GEMM frontend record: {} function(s), {} canonical byte(s)",
-                                frontend_record.unit().functions().len(),
-                                frontend_record.canonical_bytes().len()
-                            );
-                        }
-                        collector::dump_device_functions(tcx, &collection.functions);
-                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
-                            || !tcx.sess.opts.cg.passes.is_empty();
+                            codegen_pipeline,
+                        )?;
+                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
                             collected_scalar_gemm_v1::authenticate_collected_scalar_gemm_v1(
                                 tcx,
@@ -1431,48 +1210,19 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                         )),
                     }
-                } else if matches!(
-                    codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::KernelIrWorkerV2)
-                ) {
+                } else if codegen_pipeline == CodegenPipeline::KernelIrWorkerV2 {
                     let attempt = build_attempt.unwrap_or_else(|| {
                         tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 requires a managed {BUILD_ATTEMPT_ENV}"
                         ))
                     });
                     let publication = (|| -> Result<_, String> {
-                        let collection = collector::collect_device_functions(
+                        let collection = collect_qualification_oracle_input(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        if self.config.verbose
-                            && let Some(envelope) = &collection.compiler_ffi_observation
-                        {
-                            let inspection = envelope.inspection();
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] collected compiler FFI envelope {}: {} import(s), {} export(s), {} compiler-module definition requirement(s)",
-                                envelope.identity().to_hex(),
-                                inspection.import_count(),
-                                inspection.export_count(),
-                                inspection.requires_compiler_module_definition_count(),
-                            );
-                        }
-                        let frontend_record =
-                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                                .map_err(|error| {
-                                    format!("frontend record extraction failed: {error}")
-                                })?;
-                        if self.config.verbose {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] validated frontend record: {} function(s), {} canonical byte(s)",
-                                frontend_record.unit().functions().len(),
-                                frontend_record.canonical_bytes().len()
-                            );
-                            dump_authenticated_frontend_contracts(&frontend_record);
-                        }
-                        collector::dump_device_functions(tcx, &collection.functions);
+                            codegen_pipeline,
+                        )?;
                         let descriptor_roots =
                             compiler_descriptor::typed_descriptor_roots_from_collection(
                                 tcx,
@@ -1576,20 +1326,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         &self.config.target,
                         build_attempt,
                         || {
-                            let collection = collector::collect_device_functions(
+                            let collection = collect_qualification_oracle_input(
                                 tcx,
                                 mono_partitions.codegen_units,
                                 self.config.verbose,
-                            )
-                            .map_err(|error| {
-                                amdgpu_llvm::EmitError::Preflight {
-                                    reason: error.to_string(),
-                                }
-                            })?;
-                            if matches!(
                                 codegen_pipeline,
-                                PipelineSelection::Valid(CodegenPipeline::KernelIrV1)
-                            ) {
+                            )
+                            .map_err(|reason| amdgpu_llvm::EmitError::Preflight { reason })?;
+                            if codegen_pipeline == CodegenPipeline::KernelIrV1 {
                                 general_gemm_semantic_preflight_v1(
                                     tcx,
                                     &collection,
@@ -1600,44 +1344,11 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 .map_err(|error| amdgpu_llvm::EmitError::Preflight {
                                     reason: error.to_string(),
                                 })?;
-                            if self.config.verbose
-                                && let Some(envelope) = &collection.compiler_ffi_observation
-                            {
-                                let inspection = envelope.inspection();
-                                eprintln!(
-                                    "[rustc-codegen-fe2o3] collected compiler FFI envelope {}: {} import(s), {} export(s), {} compiler-module definition requirement(s)",
-                                    envelope.identity().to_hex(),
-                                    inspection.import_count(),
-                                    inspection.export_count(),
-                                    inspection.requires_compiler_module_definition_count(),
-                                );
-                            }
-                            let frontend_record =
-                                frontend_record_bridge::extract_frontend_record_v1(
-                                    tcx,
-                                    &collection,
-                                )
-                                .map_err(|error| {
-                                    amdgpu_llvm::EmitError::Preflight {
-                                        reason: format!(
-                                            "frontend record extraction failed: {error}"
-                                        ),
-                                    }
-                                })?;
-                            if self.config.verbose {
-                                eprintln!(
-                                    "[rustc-codegen-fe2o3] validated frontend record: {} function(s), {} canonical byte(s)",
-                                    frontend_record.unit().functions().len(),
-                                    frontend_record.canonical_bytes().len()
-                                );
-                                dump_authenticated_frontend_contracts(&frontend_record);
-                            }
-                            collector::dump_device_functions(tcx, &collection.functions);
                             let mir_module = mir_import::import_collection(tcx, &collection)
                                 .map_err(|error| amdgpu_llvm::EmitError::Preflight {
                                     reason: format!("compiler FFI MIR import failed: {error}"),
                                 })?;
-                            match codegen_pipeline.resolve()? {
+                            match codegen_pipeline {
                             CodegenPipeline::LegacyV1 => {
                                 match run_optional_kernel_ir_analysis(
                                     self.config.verify_kernel_ir,

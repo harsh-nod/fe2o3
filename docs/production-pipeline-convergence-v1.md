@@ -237,6 +237,15 @@ The default does not switch until the first scalar slice has complete compile,
 host-interface, artifact, and hardware gates. After the switch, an incomplete
 general route fails closed instead of silently entering legacy codegen.
 
+The 2026-08-20 compiler review made this distinction structural. Selector names
+now come from one table, every route has an explicit production-or-oracle
+purpose, and a test proves that only `production-v1` is production-capable.
+Shared oracle collection and frontend-record validation do not weaken the
+boundary: `ProductionCompilationV1` still receives only the move-only production
+closure and cannot call the oracle helper. See
+`compiler-convergence-review-2026-08-20.md` for the deletion inventory and
+remaining complexity bounds.
+
 ## Migration order
 
 The vertical slices migrate through the same transaction in this order:
