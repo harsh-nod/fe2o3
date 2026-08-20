@@ -566,12 +566,21 @@ fn runtime_closure_open_failure_is_rejected_before_any_handoff() {
         Ok(_) => panic!("missing runtime closure was admitted"),
         Err(error) => error,
     };
-    assert!(matches!(
-        error,
-        GeneralGemmPipelineErrorV1::RuntimeClosure { boundary, error }
-            if boundary.contains("before the qualification pair")
-                && error.kind() == fe2o3_verifier::GeneralGemmRuntimeClosureErrorKindV2::ObjectType
-    ));
+    // A missing child reports ObjectType on one filesystem; NO_XDEV rejects a
+    // separately mounted /opt before child lookup as SymlinkOrTraversal.
+    assert!(
+        matches!(
+            &error,
+            GeneralGemmPipelineErrorV1::RuntimeClosure { boundary, error }
+                if boundary.contains("before the qualification pair")
+                    && matches!(
+                        error.kind(),
+                        fe2o3_verifier::GeneralGemmRuntimeClosureErrorKindV2::ObjectType
+                            | fe2o3_verifier::GeneralGemmRuntimeClosureErrorKindV2::SymlinkOrTraversal
+                    )
+        ),
+        "unexpected runtime-closure admission failure: {error:?}"
+    );
     for slot in [
         CompilerModuleHandoffSlotV1::GeneralGemmReference,
         CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
