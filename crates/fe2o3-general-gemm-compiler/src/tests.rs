@@ -792,7 +792,7 @@ fn transactional_backend_emits_only_the_bounded_blocker_diagnostic() {
         diagnostic.code().get(),
         GENERAL_GEMM_LOWERING_BLOCKED_CODE_V1
     );
-    assert_eq!(diagnostic.stage(), Some(CompilerStageV1::Amdgcn));
+    assert_eq!(diagnostic.stage(), Some(CompilerStageV1::Llvm));
     assert_eq!(
         diagnostic.message().as_str(),
         GENERAL_GEMM_LOWERING_BLOCKED_MESSAGE_V1

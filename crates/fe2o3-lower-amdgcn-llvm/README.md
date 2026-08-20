@@ -10,10 +10,11 @@ retains deterministic canonical graph and non-graph receipts.
 
 - gfx942, wave64, XNACK-disabled, code-object V6 policy
 - AMDGPU kernel calling convention and void kernel return
-- scalar `i1`, `i8`, `i16`, `i32`, `i64`, `f16`, `bf16`, and strict `f32`
+- scalar `i1`, `i8`, `i16`, `i32`, `i64`, and strict `f32`; the closed GEMM
+  profile carries BF16 storage through its admitted integer representation
 - typed pointers in the admitted AMDGPU address spaces, including bounded
   local and constant arrays
-- fixed four-lane vectors used by the closed GEMM MFMA profile
+- fixed four-lane FP32 vectors used by the closed GEMM MFMA profile
 - constants, integer and strict-float binary arithmetic, comparisons, casts
 - bounded GEP, aligned scalar and four-lane vector loads, and aligned stores
 - branches, conditional branches, unreachable, and void return
@@ -22,8 +23,10 @@ retains deterministic canonical graph and non-graph receipts.
   root, trap, and gfx942 BF16 MFMA intrinsic set
 - exact function attributes, module metadata, origins, and obligations retained
   on the live graph or in a separately hashed bounded non-graph envelope
-- fresh owner-borrowing graph export, LLVM serialization, and measured worker
-  admission; detached Handoff values cannot mint this receipt
+- fresh owner-borrowing graph export, LLVM serialization, and exact LLVM/LLD
+  build-policy admission at the worker boundary; detached Handoff values
+  cannot mint this receipt, and this admission does not authenticate a worker
+  measurement
 
 ## Authority boundary
 

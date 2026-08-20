@@ -1991,7 +1991,7 @@ impl AdmittedGemmCompilerBackendV1 for GeneralGemmAdmittedBackendV1 {
             DiagnosticCodeV1::new(GENERAL_GEMM_LOWERING_BLOCKED_CODE_V1)
                 .expect("static diagnostic code is nonzero"),
             DiagnosticSeverityV1::Error,
-            Some(CompilerStageV1::Amdgcn),
+            Some(CompilerStageV1::Llvm),
             Some(DiagnosticSubjectIdentityV1::from_untrusted_bytes(
                 request.kernel_instance_identity().into_bytes(),
             )),
