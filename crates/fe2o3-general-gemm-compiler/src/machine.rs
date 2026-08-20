@@ -25,7 +25,8 @@ use fe2o3_llvm_text::Gfx942LlvmAssemblyV2;
 use fe2o3_llvm_worker_handoff::{AdmittedWorkerRequestV2, MeasuredLlvmLldBuildV1};
 use fe2o3_lower_amdgcn_llvm::{
     LiveGraphSerializationErrorV1, LiveGraphSerializationReceiptV1,
-    LiveGraphSerializationRequestV1, LoweringErrorV1, lower_amdgcn_to_pliron_llvm_v1,
+    LiveGraphSerializationRequestV1, LoweredAmdgcnPlironLlvmV1, LoweringErrorV1,
+    lower_amdgcn_to_pliron_llvm_v1,
 };
 
 /// Canonical source-binding section schema retained in every general-GEMM object.
@@ -77,12 +78,33 @@ impl GeneralGemmCompilerBoundaryIdentityV1 {
 }
 
 /// Inert owner-controlled General GEMM graph-to-worker correspondence boundary.
-#[derive(Debug, Eq, PartialEq)]
 pub struct GeneralGemmCompilerBoundaryV1 {
+    live_owner: LoweredAmdgcnPlironLlvmV1,
     serialization_receipt: LiveGraphSerializationReceiptV1,
     worker_admission: AdmittedWorkerRequestV2,
     identity: GeneralGemmCompilerBoundaryIdentityV1,
 }
+
+impl fmt::Debug for GeneralGemmCompilerBoundaryV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GeneralGemmCompilerBoundaryV1")
+            .field("serialization_receipt", &self.serialization_receipt)
+            .field("worker_admission", &self.worker_admission)
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for GeneralGemmCompilerBoundaryV1 {
+    fn eq(&self, other: &Self) -> bool {
+        self.serialization_receipt == other.serialization_receipt
+            && self.worker_admission == other.worker_admission
+            && self.identity == other.identity
+    }
+}
+
+impl Eq for GeneralGemmCompilerBoundaryV1 {}
 
 impl GeneralGemmCompilerBoundaryV1 {
     /// Returns evidence retained from serialization while the Pliron owner was live.
@@ -103,6 +125,24 @@ impl GeneralGemmCompilerBoundaryV1 {
     /// Reports that this boundary grants no artifact or runtime authority.
     pub const fn grants_artifact_authority(&self) -> bool {
         false
+    }
+
+    fn revalidate_live_owner_against_v1(
+        &self,
+        expected_receipt: LiveGraphSerializationReceiptV1,
+        expected_assembly: &Gfx942LlvmAssemblyV2,
+        expected_worker_admission: &AdmittedWorkerRequestV2,
+    ) -> Result<LiveGraphSerializationReceiptV1, GeneralGemmStructuralMachineErrorV1> {
+        let (fresh_receipt, fresh_assembly, fresh_worker_admission, fresh_identity) =
+            serialize_live_owner_inner(&self.live_owner, MeasuredLlvmLldBuildV1::exact())?;
+        if fresh_receipt != expected_receipt
+            || &fresh_assembly != expected_assembly
+            || &fresh_worker_admission != expected_worker_admission
+            || fresh_identity != self.identity
+        {
+            return Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity);
+        }
+        Ok(fresh_receipt)
     }
 }
 
@@ -190,6 +230,38 @@ impl GeneralGemmSymbolicStructuralMachineV1 {
     /// Returns the descriptive symbolic artifact identity for launch binding.
     pub const fn artifact_identity(&self) -> GeneralGemmSymbolicArtifactIdentityV1 {
         self.artifact_identity
+    }
+
+    /// Freshly revalidates the retained live graph against every structural product.
+    ///
+    /// The returned receipt is inert identity evidence only. Revalidation grants no
+    /// artifact, publication, loading, or launch authority.
+    pub fn revalidate_final_join_owner_v1(
+        &self,
+    ) -> Result<LiveGraphSerializationReceiptV1, GeneralGemmStructuralMachineErrorV1> {
+        let fresh_receipt = self.compiler_boundary.revalidate_live_owner_against_v1(
+            self.compiler_boundary.serialization_receipt,
+            &self.assembly,
+            &self.compiler_boundary.worker_admission,
+        )?;
+        if self.compiler_handoff.module_bytes() != self.assembly.as_bytes() {
+            return Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity);
+        }
+        Ok(fresh_receipt)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn revalidate_final_join_owner_against_for_test_v1(
+        &self,
+        expected_receipt: LiveGraphSerializationReceiptV1,
+        expected_assembly: &Gfx942LlvmAssemblyV2,
+        expected_worker_admission: &AdmittedWorkerRequestV2,
+    ) -> Result<LiveGraphSerializationReceiptV1, GeneralGemmStructuralMachineErrorV1> {
+        self.compiler_boundary.revalidate_live_owner_against_v1(
+            expected_receipt,
+            expected_assembly,
+            expected_worker_admission,
+        )
     }
 
     /// Structural machine data grants no artifact, load, or launch authority.
@@ -451,6 +523,31 @@ fn admit_compiler_boundary_inner(
 > {
     let lowered = lower_amdgcn_to_pliron_llvm_v1(handoff)
         .map_err(GeneralGemmStructuralMachineErrorV1::PlironLlvmLowering)?;
+    let (serialization_receipt, assembly, worker_admission, identity) =
+        serialize_live_owner_inner(&lowered, build)?;
+    Ok((
+        GeneralGemmCompilerBoundaryV1 {
+            live_owner: lowered,
+            serialization_receipt,
+            worker_admission,
+            identity,
+        },
+        assembly,
+    ))
+}
+
+fn serialize_live_owner_inner(
+    lowered: &LoweredAmdgcnPlironLlvmV1,
+    build: MeasuredLlvmLldBuildV1<'_>,
+) -> Result<
+    (
+        LiveGraphSerializationReceiptV1,
+        Gfx942LlvmAssemblyV2,
+        AdmittedWorkerRequestV2,
+        GeneralGemmCompilerBoundaryIdentityV1,
+    ),
+    GeneralGemmStructuralMachineErrorV1,
+> {
     let serialized = lowered
         .acquire_worker_serialization_v1(
             LiveGraphSerializationRequestV1::new(
@@ -480,14 +577,7 @@ fn admit_compiler_boundary_inner(
             worker_admission.admission_identity().as_bytes(),
         ],
     ));
-    Ok((
-        GeneralGemmCompilerBoundaryV1 {
-            serialization_receipt,
-            worker_admission,
-            identity,
-        },
-        assembly,
-    ))
+    Ok((serialization_receipt, assembly, worker_admission, identity))
 }
 
 fn machine_binding_section(

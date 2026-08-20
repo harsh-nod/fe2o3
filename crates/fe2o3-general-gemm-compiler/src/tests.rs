@@ -1027,14 +1027,16 @@ fn structural_machine_lowers_both_schedules_without_artifact_authority() {
 }
 
 #[test]
-fn compiler_boundary_retains_only_post_serialization_graph_evidence() {
-    let machine = lower_general_gemm_structural_machine_v1(&unit(
+fn compiler_boundary_retains_live_owner_and_revalidates_exact_products() {
+    let machine = lower_general_gemm_symbolic_structural_machine_v1(&symbolic_unit(
         GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
     ))
     .unwrap();
     let boundary = machine.compiler_boundary();
     let receipt = boundary.serialization_receipt();
+    let fresh_receipt = machine.revalidate_final_join_owner_v1().unwrap();
 
+    assert_eq!(fresh_receipt, receipt);
     assert_eq!(
         boundary.worker_admission().handoff_identity(),
         receipt.graph_handoff_identity()
@@ -1042,6 +1044,56 @@ fn compiler_boundary_retains_only_post_serialization_graph_evidence() {
     assert_eq!(machine.assembly().sha256(), receipt.assembly_sha256());
     assert!(!boundary.grants_artifact_authority());
     assert!(!boundary.worker_admission().grants_object_authority());
+}
+
+#[test]
+fn compiler_owner_revalidation_rejects_structural_substitutions() {
+    let reference = lower_general_gemm_symbolic_structural_machine_v1(&symbolic_unit(
+        GeneralGemmScheduleV1::ReferenceWave64Xor4V1,
+    ))
+    .unwrap();
+    let vector = lower_general_gemm_symbolic_structural_machine_v1(&symbolic_unit(
+        GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1,
+    ))
+    .unwrap();
+
+    let reference_receipt = reference.compiler_boundary().serialization_receipt();
+    let vector_receipt = vector.compiler_boundary().serialization_receipt();
+    assert_ne!(
+        reference_receipt.graph_export_identity(),
+        vector_receipt.graph_export_identity()
+    );
+    assert_ne!(
+        reference_receipt.non_graph_envelope_identity(),
+        vector_receipt.non_graph_envelope_identity()
+    );
+    assert_ne!(reference.assembly(), vector.assembly());
+    assert_ne!(reference.worker_admission(), vector.worker_admission());
+
+    assert!(matches!(
+        reference.revalidate_final_join_owner_against_for_test_v1(
+            vector_receipt,
+            reference.assembly(),
+            reference.worker_admission(),
+        ),
+        Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity)
+    ));
+    assert!(matches!(
+        reference.revalidate_final_join_owner_against_for_test_v1(
+            reference_receipt,
+            vector.assembly(),
+            reference.worker_admission(),
+        ),
+        Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity)
+    ));
+    assert!(matches!(
+        reference.revalidate_final_join_owner_against_for_test_v1(
+            reference_receipt,
+            reference.assembly(),
+            vector.worker_admission(),
+        ),
+        Err(GeneralGemmStructuralMachineErrorV1::SourceIdentity)
+    ));
 }
 
 #[test]
