@@ -250,15 +250,15 @@ impl MoeTop2FrontendReceiptV1 {
     }
 
     pub(crate) fn portable_mir_hex(&self) -> String {
-        encode_hex(&self.authority().portable_mir_identity)
+        crate::encode_hex(&self.authority().portable_mir_identity)
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(&self.authority().authority_identity)
+        crate::encode_hex(&self.authority().authority_identity)
     }
 
     pub(crate) fn structural_record_hex(&self) -> String {
-        encode_hex(
+        crate::encode_hex(
             &self
                 .structural_record
                 .as_ref()
@@ -449,8 +449,8 @@ impl fmt::Display for CollectedMoeTop2ErrorV1 {
             Self::SourceIdentity { expected, actual } => write!(
                 formatter,
                 "MoeTop2 source bytes mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::Abi(detail) => write!(formatter, "MoeTop2 ABI mismatch: {detail}"),
             Self::Layout(detail) => {
@@ -462,14 +462,14 @@ impl fmt::Display for CollectedMoeTop2ErrorV1 {
             Self::PortableMirIdentity { expected, actual } => write!(
                 formatter,
                 "MoeTop2 complete reachable MIR closure mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::FnAbiIdentity { expected, actual } => write!(
                 formatter,
                 "MoeTop2 rustc FnAbi mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::TrustedDefinitions(detail) => write!(
                 formatter,
@@ -656,7 +656,7 @@ fn require_registration(root: &CollectedFunction<'_>) -> Result<(), CollectedMoe
         let observed_contract = root
             .frontend_contract
             .as_ref()
-            .map(|value| encode_hex(value.canonical_bytes()))
+            .map(|value| crate::encode_hex(value.canonical_bytes()))
             .unwrap_or_else(|| "absent".to_owned());
         return Err(CollectedMoeTop2ErrorV1::Admission(format!(
             "expected the unique ordinary #[kernel(typed)] MoE top-2 root with the reviewed wrapper-derived crate binding and required=max=64x1x1 contract; observed frontend contract {observed_contract}"
@@ -684,7 +684,10 @@ fn rustc_loaded_source_witness(
             "kernel root source was not retained in rustc's loaded SourceFile".into(),
         )
     })?;
-    let namespace_declaration = format!("namespace = \"{}\"", encode_hex(&MOE_TOP2_V1_NAMESPACE));
+    let namespace_declaration = format!(
+        "namespace = \"{}\"",
+        crate::encode_hex(&MOE_TOP2_V1_NAMESPACE)
+    );
     if contents
         .as_bytes()
         .windows(namespace_declaration.len())
@@ -1236,8 +1239,8 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
     if actual != TRUSTED_TERMINAL_IDENTITY_V4 {
         return Err(CollectedMoeTop2ErrorV1::TrustedDefinitions(format!(
             "trusted-definition/semantic-terminal identity drifted: expected {}, found {}",
-            encode_hex(&TRUSTED_TERMINAL_IDENTITY_V4),
-            encode_hex(&actual)
+            crate::encode_hex(&TRUSTED_TERMINAL_IDENTITY_V4),
+            crate::encode_hex(&actual)
         )));
     }
     Ok(actual)
@@ -1373,8 +1376,8 @@ fn require_compiler_semantics(
     if actual != COMPILER_SEMANTICS_IDENTITY_V1 {
         return Err(CollectedMoeTop2ErrorV1::Admission(format!(
             "compiler semantics identity drifted: expected {}, found {}",
-            encode_hex(&COMPILER_SEMANTICS_IDENTITY_V1),
-            encode_hex(&actual)
+            crate::encode_hex(&COMPILER_SEMANTICS_IDENTITY_V1),
+            crate::encode_hex(&actual)
         )));
     }
     Ok(actual)
@@ -1514,15 +1517,6 @@ fn compiler_crate_binding() -> CrateBindingIdV1 {
 fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
 }
 
 #[cfg(test)]

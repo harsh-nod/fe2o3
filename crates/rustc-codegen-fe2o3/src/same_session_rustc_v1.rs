@@ -1318,17 +1318,17 @@ fn materialize_and_lower_pliron_mir(
 
     let mut context = Context::new();
     register_pass(&mut context).map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
-    let module = MirModuleOp::try_new(&mut context, encode_hex(&mir_import), limits)
+    let module = MirModuleOp::try_new(&mut context, crate::encode_hex(&mir_import), limits)
         .map_err(|_| SameSessionRustcErrorV1::PlironImportFailed)?;
 
     let mut expected_function_identities = Vec::with_capacity(functions.len());
     for function in functions {
         let identity = format!(
             "{}:{}:{}:{}",
-            encode_hex(function.function.as_bytes()),
-            encode_hex(function.monomorphization.as_bytes()),
-            encode_hex(function.mir.as_bytes()),
-            encode_hex(&function.fn_abi),
+            crate::encode_hex(function.function.as_bytes()),
+            crate::encode_hex(function.monomorphization.as_bytes()),
+            crate::encode_hex(function.mir.as_bytes()),
+            crate::encode_hex(&function.fn_abi),
         );
         let arguments = (0..function.argument_count)
             .map(dialect_mir::MirTypeId)
@@ -1582,7 +1582,10 @@ fn source_span(
 ) -> Result<FrontendSourceSpanV1, SameSessionRustcErrorV1> {
     let observation = span_observation(tcx, span)?;
     FrontendSourceSpanV1::new(
-        format!("rustc-source:{}", encode_hex(&observation.file_identity)),
+        format!(
+            "rustc-source:{}",
+            crate::encode_hex(&observation.file_identity)
+        ),
         observation.start_line,
         observation.start_column,
         observation.end_line,
@@ -1816,16 +1819,6 @@ fn bounded_usize_identity(value: usize) -> [u8; 16] {
     let mut fixed = [0_u8; 16];
     fixed[..native.len()].copy_from_slice(&native);
     fixed
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    use fmt::Write as _;
-
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(encoded, "{byte:02x}");
-    }
-    encoded
 }
 
 #[cfg(test)]

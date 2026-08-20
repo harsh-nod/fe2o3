@@ -101,7 +101,7 @@ fn request_with_type_and_mode(
     let abi = SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(identity(2)),
         SemanticLayoutIdentityV1::from_sha256(identity(1)),
-        SemanticCallingConventionV1::Rust,
+        SemanticCanonAbiV1::Rust,
         false,
         false,
         vec![SemanticAbiValueV1::new(ty, mode)],

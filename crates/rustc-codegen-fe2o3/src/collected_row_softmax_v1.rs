@@ -276,15 +276,15 @@ impl RowSoftmaxFrontendReceiptV1 {
     }
 
     pub(crate) fn portable_mir_semantic_hex(&self) -> String {
-        encode_hex(&self.authority().portable_mir_semantic_commitment)
+        crate::encode_hex(&self.authority().portable_mir_semantic_commitment)
     }
 
     pub(crate) fn compiler_semantics_hex(&self) -> String {
-        encode_hex(&self.authority().compiler_semantics_commitment)
+        crate::encode_hex(&self.authority().compiler_semantics_commitment)
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(&self.authority().authority_commitment)
+        crate::encode_hex(&self.authority().authority_commitment)
     }
 
     pub(crate) fn authority_commitment(&self) -> &[u8; 32] {
@@ -445,14 +445,14 @@ impl fmt::Display for CollectedRowSoftmaxErrorV1 {
             Self::PortableMirIdentityMismatch { expected, actual } => write!(
                 formatter,
                 "collected row softmax V1 portable MIR identity mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::FnAbiIdentityMismatch { expected, actual } => write!(
                 formatter,
                 "collected row softmax V1 rustc FnAbi identity mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::PortableMir { detail } => write!(
                 formatter,
@@ -1102,8 +1102,8 @@ fn admit_managed_build_authority(
         return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
             detail: format!(
                 "managed wrapper Cargo metadata transcript does not match rustc's ordered -Cmetadata values: expected {}, found {}",
-                encode_hex(&expected_metadata_transcript),
-                encode_hex(&observed_metadata_transcript)
+                crate::encode_hex(&expected_metadata_transcript),
+                crate::encode_hex(&observed_metadata_transcript)
             ),
         });
     }
@@ -1111,8 +1111,8 @@ fn admit_managed_build_authority(
         return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
             detail: format!(
                 "managed wrapper effective rustc argv does not match build attempt invocation: expected {}, found {}",
-                encode_hex(attempt.invocation().as_bytes()),
-                encode_hex(&observed_invocation)
+                crate::encode_hex(attempt.invocation().as_bytes()),
+                crate::encode_hex(&observed_invocation)
             ),
         });
     }
@@ -1508,8 +1508,8 @@ fn consume_brokered_invocation_authority(
         return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
             detail: format!(
                 "invocation-capability peer is not the cargo-fe2o3 executable pinned into this backend: expected {}, found {}",
-                encode_hex(&expected_broker),
-                encode_hex(&observed_broker),
+                crate::encode_hex(&expected_broker),
+                crate::encode_hex(&observed_broker),
             ),
         });
     }
@@ -2054,8 +2054,8 @@ fn require_canonical_module(module: &Module) -> Result<(), CollectedRowSoftmaxEr
         return Err(CollectedRowSoftmaxErrorV1::CanonicalModule {
             detail: format!(
                 "V4 module commitment differs from the independently reviewed digest: expected {}, found {}",
-                encode_hex(&REVIEWED_CANONICAL_MODULE_V4_COMMITMENT),
-                encode_hex(&actual_commitment),
+                crate::encode_hex(&REVIEWED_CANONICAL_MODULE_V4_COMMITMENT),
+                crate::encode_hex(&actual_commitment),
             ),
         });
     }
@@ -2398,8 +2398,8 @@ pub(crate) fn exact_authority_policy_for_test()
     let attempt = fe2o3_artifact_transaction::BuildAttempt::from_env_value(&format!(
         "{}:{}:{}",
         authority.managed_build_authority.generation,
-        encode_hex(&authority.managed_build_authority.session),
-        encode_hex(&authority.managed_build_authority.invocation),
+        crate::encode_hex(&authority.managed_build_authority.session),
+        crate::encode_hex(&authority.managed_build_authority.invocation),
     ))
     .expect("exact row test build attempt");
     RowSoftmaxV1AuthorityPolicyV1::new(
@@ -2436,16 +2436,6 @@ fn layout_mismatch(detail: impl Into<String>) -> CollectedRowSoftmaxErrorV1 {
     CollectedRowSoftmaxErrorV1::LayoutMismatch {
         detail: detail.into(),
     }
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    use fmt::Write as _;
-
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(encoded, "{byte:02x}");
-    }
-    encoded
 }
 
 #[cfg(test)]

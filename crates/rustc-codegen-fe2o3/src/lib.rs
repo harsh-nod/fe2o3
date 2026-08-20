@@ -107,11 +107,12 @@ pub const TILED_GEMM_FRONTEND_TEST_LLVM_DIR_ENV: &str =
     "FE2O3_TEST_RETAIN_TILED_GEMM_FRONTEND_LLVM_DIR";
 
 fn encode_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
 
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        let _ = write!(encoded, "{byte:02x}");
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     encoded
 }

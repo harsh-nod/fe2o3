@@ -216,11 +216,6 @@ identity_type!(
     /// Identity of the exact source-to-GPU lowering transformation.
     GeneralGemmPlironTransformationIdentityV1
 );
-identity_type!(
-    /// Identity of all fields required for an eventual executable candidate.
-    GeneralGemmArtifactBindingIdentityV1
-);
-
 /// Closed schedule choices for the one general-GEMM algorithm body.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -1840,62 +1835,6 @@ impl GeneralGemmLoweringObservationV1 {
     }
 }
 
-/// Eventual all-stage artifact binding. This crate intentionally exposes no
-/// constructor until the missing typed Handoff V2 machine contracts exist.
-#[derive(Debug)]
-pub struct GeneralGemmArtifactBindingV1 {
-    identity: GeneralGemmArtifactBindingIdentityV1,
-    compilation_binding_identity: GeneralGemmCompilationBindingIdentityV1,
-    projection_identity: GeneralGemmPlironProjectionIdentityV1,
-    handoff_identity: HandoffIdentityV2,
-    assembly_identity: LlvmAssemblySha256V2,
-    assembly_len: u64,
-    compiler_handoff_identity: CompilerModuleHandoffIdentityV2,
-    candidate_identity: CandidateIdentityV1,
-}
-
-impl GeneralGemmArtifactBindingV1 {
-    /// Returns the all-stage artifact binding identity.
-    pub const fn identity(&self) -> GeneralGemmArtifactBindingIdentityV1 {
-        self.identity
-    }
-
-    /// Returns the proof-gated compilation binding.
-    pub const fn compilation_binding_identity(&self) -> GeneralGemmCompilationBindingIdentityV1 {
-        self.compilation_binding_identity
-    }
-
-    /// Returns the owner-checked Pliron projection identity.
-    pub const fn projection_identity(&self) -> GeneralGemmPlironProjectionIdentityV1 {
-        self.projection_identity
-    }
-
-    /// Returns the canonical typed LLVM handoff identity.
-    pub const fn handoff_identity(&self) -> HandoffIdentityV2 {
-        self.handoff_identity
-    }
-
-    /// Returns the exact LLVM assembly content digest.
-    pub const fn assembly_identity(&self) -> LlvmAssemblySha256V2 {
-        self.assembly_identity
-    }
-
-    /// Returns the exact LLVM assembly byte length.
-    pub const fn assembly_len(&self) -> u64 {
-        self.assembly_len
-    }
-
-    /// Returns the canonical compiler-worker handoff identity.
-    pub const fn compiler_handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
-        self.compiler_handoff_identity
-    }
-
-    /// Returns the transactional executable-candidate identity.
-    pub const fn candidate_identity(&self) -> CandidateIdentityV1 {
-        self.candidate_identity
-    }
-}
-
 /// Proof-gated backend failures before a transactional rejection is available.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralGemmAdmittedLoweringErrorV1 {
@@ -3105,31 +3044,6 @@ fn hash_fields(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
         hasher.update(field);
     }
     hasher.finalize().into()
-}
-
-#[allow(dead_code)]
-fn artifact_binding_identity(
-    compilation: GeneralGemmCompilationBindingIdentityV1,
-    projection: GeneralGemmPlironProjectionIdentityV1,
-    handoff: HandoffIdentityV2,
-    assembly: LlvmAssemblySha256V2,
-    assembly_len: u64,
-    compiler_handoff: CompilerModuleHandoffIdentityV2,
-    candidate: CandidateIdentityV1,
-) -> GeneralGemmArtifactBindingIdentityV1 {
-    GeneralGemmArtifactBindingIdentityV1(hash_fields(
-        ARTIFACT_IDENTITY_DOMAIN_V1,
-        &[
-            compilation.as_bytes(),
-            projection.as_bytes(),
-            handoff.as_bytes(),
-            assembly.as_bytes(),
-            &assembly_len.to_le_bytes(),
-            compiler_handoff.sha256(),
-            &compiler_handoff.byte_len().to_le_bytes(),
-            candidate.as_bytes(),
-        ],
-    ))
 }
 
 #[cfg(test)]

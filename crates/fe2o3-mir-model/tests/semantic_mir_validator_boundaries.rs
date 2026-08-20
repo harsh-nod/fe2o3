@@ -59,7 +59,7 @@ fn function_abi() -> SemanticFunctionAbiV1 {
     SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(bytes(1)),
         layout_identity(1),
-        SemanticCallingConventionV1::Rust,
+        SemanticCanonAbiV1::Rust,
         false,
         false,
         vec![],
@@ -385,7 +385,7 @@ fn budget_request() -> InertSemanticMirRequestV1 {
 
 #[test]
 fn local_and_block_identity_scans_have_an_exact_validation_work_boundary() {
-    const EXACT_VALIDATION_WORK: u64 = 50;
+    const EXACT_VALIDATION_WORK: u64 = 49;
 
     let exact = SemanticMirLimitsV1::default()
         .with_limit(SemanticMirResourceV1::ValidationWork, EXACT_VALIDATION_WORK)

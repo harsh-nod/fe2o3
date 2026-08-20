@@ -7,8 +7,6 @@
 //! terminals with the required control flow and operands. The frontend owner
 //! must join those live facts separately.
 
-#![allow(dead_code)]
-
 use sha2::{Digest as _, Sha256};
 
 const SCHEMA_DOMAIN_V1: &[u8] = b"fe2o3.general-gemm.intrinsic-semantics.v1\0";
@@ -36,6 +34,7 @@ pub(crate) enum GeneralGemmIntrinsicRoleV1 {
     Store = 6,
 }
 
+#[cfg(test)]
 const TERMINAL_ROLES_V1: [GeneralGemmIntrinsicRoleV1; 6] = [
     GeneralGemmIntrinsicRoleV1::Acquire,
     GeneralGemmIntrinsicRoleV1::Stage,
@@ -670,6 +669,7 @@ pub(crate) enum GeneralGemmIntrinsicSourceFactKindV1 {
     NumericalOperationOrder = 11,
 }
 
+#[cfg(test)]
 const SOURCE_FACT_KINDS_V1: [GeneralGemmIntrinsicSourceFactKindV1; 11] = [
     GeneralGemmIntrinsicSourceFactKindV1::AllocationAndProvenance,
     GeneralGemmIntrinsicSourceFactKindV1::GuardedGlobalAccesses,
@@ -709,18 +709,6 @@ pub(crate) struct GeneralGemmIntrinsicSourceFactV1 {
 }
 
 impl GeneralGemmIntrinsicSourceFactV1 {
-    pub(crate) const fn kind(self) -> GeneralGemmIntrinsicSourceFactKindV1 {
-        self.kind
-    }
-
-    pub(crate) const fn terminal_role_mask(self) -> u8 {
-        self.terminal_role_mask
-    }
-
-    pub(crate) const fn semantic_component_mask(self) -> u16 {
-        self.semantic_component_mask
-    }
-
     pub(crate) fn identity(self, semantics: GeneralGemmIntrinsicSemanticsIdentityV1) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"fe2o3.general-gemm.intrinsic-source-fact.v1\0");
@@ -907,7 +895,8 @@ impl GeneralGemmIntrinsicSemanticsV1 {
         self.identity
     }
 
-    pub(crate) const fn terminals(&self) -> &[GeneralGemmIntrinsicTerminalV1; 6] {
+    #[cfg(test)]
+    const fn terminals(&self) -> &[GeneralGemmIntrinsicTerminalV1; 6] {
         &self.terminals
     }
 
@@ -915,25 +904,21 @@ impl GeneralGemmIntrinsicSemanticsV1 {
         &self.source_facts
     }
 
-    pub(crate) fn terminal(
-        &self,
-        role: GeneralGemmIntrinsicRoleV1,
-    ) -> &GeneralGemmIntrinsicTerminalV1 {
-        &self.terminals[(role as usize) - 1]
-    }
-
-    pub(crate) fn source_fact(
+    #[cfg(test)]
+    fn source_fact(
         &self,
         kind: GeneralGemmIntrinsicSourceFactKindV1,
     ) -> &GeneralGemmIntrinsicSourceFactV1 {
         &self.source_facts[(kind as usize) - 1]
     }
 
-    pub(crate) const fn grants_source_correspondence(&self) -> bool {
+    #[cfg(test)]
+    const fn grants_source_correspondence(&self) -> bool {
         false
     }
 
-    pub(crate) const fn grants_proof_or_execution_authority(&self) -> bool {
+    #[cfg(test)]
+    const fn grants_proof_or_execution_authority(&self) -> bool {
         false
     }
 
@@ -1174,14 +1159,16 @@ impl GeneralGemmIntrinsicSemanticsV1 {
     }
 }
 
-pub(crate) const fn general_gemm_xor4_index_v1(row: u8, column: u8) -> Option<u16> {
+#[cfg(test)]
+const fn general_gemm_xor4_index_v1(row: u8, column: u8) -> Option<u16> {
     if row >= 16 || column >= 16 {
         return None;
     }
     Some((row as u16) * 16 + (column ^ ((row & 3) << 2)) as u16)
 }
 
-pub(crate) const fn general_gemm_lane_component_coordinates_v1(
+#[cfg(test)]
+const fn general_gemm_lane_component_coordinates_v1(
     lane: u8,
     component: u8,
 ) -> Option<GeneralGemmLaneComponentCoordinatesV1> {
@@ -1208,15 +1195,16 @@ pub(crate) const fn general_gemm_lane_component_coordinates_v1(
     })
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GeneralGemmLaneComponentCoordinatesV1 {
-    pub(crate) a_row: u8,
-    pub(crate) b_column: u8,
-    pub(crate) phase_depth: u8,
-    pub(crate) output_row: u8,
-    pub(crate) output_column: u8,
-    pub(crate) a_lds_slot: u16,
-    pub(crate) b_lds_slot: u16,
+struct GeneralGemmLaneComponentCoordinatesV1 {
+    a_row: u8,
+    b_column: u8,
+    phase_depth: u8,
+    output_row: u8,
+    output_column: u8,
+    a_lds_slot: u16,
+    b_lds_slot: u16,
 }
 
 fn push_bool(bytes: &mut Vec<u8>, value: bool) {

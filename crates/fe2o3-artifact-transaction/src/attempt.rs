@@ -35,7 +35,7 @@ impl BuildSession {
 
     /// Encodes the session as exactly 32 lowercase hexadecimal digits.
     pub fn to_hex(self) -> String {
-        encode_hex(&self.0)
+        crate::encode_hex(&self.0)
     }
 
     /// Decodes exactly 32 lowercase hexadecimal digits.
@@ -79,7 +79,7 @@ impl BuildInvocation {
 
     /// Encodes the invocation fingerprint as exactly 64 lowercase hexadecimal digits.
     pub fn to_hex(self) -> String {
-        encode_hex(&self.0)
+        crate::encode_hex(&self.0)
     }
 
     /// Decodes exactly 64 lowercase hexadecimal digits.
@@ -942,16 +942,6 @@ fn record_size(
             backend_receipt,
             Some(BackendReceiptV1::PendingProvenance(_) | BackendReceiptV1::Provenance(_))
         )) * BACKEND_PROVENANCE_RECEIPT_BYTES
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
 }
 
 fn is_lower_hex(encoded: &str) -> bool {

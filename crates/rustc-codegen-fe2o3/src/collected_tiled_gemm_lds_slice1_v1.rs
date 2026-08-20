@@ -132,11 +132,11 @@ impl LdsSlice1FrontendReceiptV1 {
     }
 
     pub(crate) fn portable_mir_semantic_hex(&self) -> String {
-        encode_hex(&self.authority().portable_mir_identity)
+        crate::encode_hex(&self.authority().portable_mir_identity)
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(&self.authority().authority_commitment)
+        crate::encode_hex(&self.authority().authority_commitment)
     }
 
     pub(crate) const fn authority_commitment(&self) -> &[u8; 32] {
@@ -330,14 +330,14 @@ impl fmt::Display for CollectedLdsSlice1ErrorV1 {
             Self::PortableMirIdentity { expected, actual } => write!(
                 formatter,
                 "LDS Slice 1 portable MIR identity mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::FnAbiIdentity { expected, actual } => write!(
                 formatter,
                 "LDS Slice 1 rustc FnAbi identity mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::TrustedDefinitions(detail) => {
                 write!(
@@ -1219,16 +1219,6 @@ fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
-}
-
-fn encode_hex(bytes: &[u8; 32]) -> String {
-    use fmt::Write as _;
-
-    let mut encoded = String::with_capacity(64);
-    for byte in bytes {
-        let _ = write!(encoded, "{byte:02x}");
-    }
-    encoded
 }
 
 #[cfg(test)]

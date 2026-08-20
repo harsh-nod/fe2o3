@@ -223,7 +223,7 @@ pub(crate) fn collect_requested_profile<'tcx>(
     validate_portable_mir_policy_v2(portable_mir_sha256)?;
     eprintln!(
         "[rustc-codegen-fe2o3] S09 portable MIR semantic SHA-256: {}",
-        hex(&portable_mir_sha256)
+        crate::encode_hex(&portable_mir_sha256)
     );
 
     let body = tcx.instance_mir(owner.target().def);
@@ -319,8 +319,8 @@ fn validate_portable_mir_policy_v2(actual: [u8; 32]) -> Result<(), SourceDebugEr
     if actual != S09_PORTABLE_MIR_SHA256_V2 {
         return Err(SourceDebugError::new(format!(
             "S09 portable MIR semantic identity changed: expected {}, found {}",
-            hex(&S09_PORTABLE_MIR_SHA256_V2),
-            hex(&actual)
+            crate::encode_hex(&S09_PORTABLE_MIR_SHA256_V2),
+            crate::encode_hex(&actual)
         )));
     }
     Ok(())
@@ -766,16 +766,6 @@ fn alias_tag(value: AliasClass) -> u8 {
         AliasClass::SharedAtomic => 3,
         AliasClass::Unrestricted => 4,
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(DIGITS[usize::from(byte >> 4)] as char);
-        encoded.push(DIGITS[usize::from(byte & 0x0f)] as char);
-    }
-    encoded
 }
 
 fn exact_place(

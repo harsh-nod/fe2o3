@@ -5,8 +5,6 @@
 //! machine observation together. Public identities are compared, but never
 //! accepted in place of any owning input.
 
-#![allow(dead_code)] // The pipeline hook stays fail-closed until proof execution is authoritative.
-
 use core::fmt;
 
 use fe2o3_general_gemm_compiler::{GeneralGemmScheduleV1, GeneralGemmSymbolicCompilationUnitV1};
@@ -75,36 +73,13 @@ impl QualifiedGeneralGemmScheduleV1 {
     pub(crate) const fn identity(&self) -> &[u8; 32] {
         &self.identity
     }
-
-    pub(crate) const fn symbolic_unit(&self) -> &GeneralGemmSymbolicCompilationUnitV1 {
-        &self.symbolic
-    }
-
-    pub(crate) const fn proof_closure(&self) -> &GeneralGemmPropertyClosureEvaluationV1 {
-        &self.proof
-    }
-
-    pub(crate) fn exact_finalized_bytes(&self) -> &[u8] {
-        self.machine.exact_finalized_bytes()
-    }
-
-    pub(crate) const fn machine_observation(
-        &self,
-    ) -> &OpaqueGeneralGemmPostLinkMachineObservationV1 {
-        &self.machine
-    }
-
-    pub(crate) const fn schedule(&self) -> GeneralGemmScheduleV1 {
-        self.symbolic.schedule()
-    }
 }
 
 /// Private seven-owner qualification for both production schedules.
 ///
 /// This value is deliberately neither `Clone` nor serializable. One frontend
 /// correspondence is consumed once and retained beside both exact symbolic,
-/// verifier, and post-link machine owners. Borrowed schedule views can feed the
-/// hardware executor without reconstructing authority from identities.
+/// verifier, and post-link machine owners.
 #[must_use = "the paired general GEMM qualification must remain in its owning rustc transaction"]
 pub(crate) struct QualifiedGeneralGemmPairCompilationV1 {
     identity: [u8; 32],
@@ -128,14 +103,6 @@ impl fmt::Debug for QualifiedGeneralGemmPairCompilationV1 {
 impl QualifiedGeneralGemmPairCompilationV1 {
     pub(crate) const fn identity(&self) -> &[u8; 32] {
         &self.identity
-    }
-
-    pub(crate) const fn reference(&self) -> &QualifiedGeneralGemmScheduleV1 {
-        &self.reference
-    }
-
-    pub(crate) const fn vectorized(&self) -> &QualifiedGeneralGemmScheduleV1 {
-        &self.vectorized
     }
 }
 
@@ -608,6 +575,7 @@ fn property_join_contracts(
     ]
 }
 
+#[cfg(test)]
 const fn canonical_source_property_kinds() -> [GeneralGemmSourcePropertyKindV1; 11] {
     use GeneralGemmSourcePropertyKindV1::*;
     [
