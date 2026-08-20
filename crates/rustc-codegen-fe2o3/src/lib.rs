@@ -45,6 +45,7 @@ mod mir_import;
 mod mir_import_v2;
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
+mod production_pipeline_v1;
 mod record_lowering;
 #[allow(dead_code)]
 mod rust_type_layout;
@@ -199,6 +200,7 @@ impl Drop for TemporaryHostObjects {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CodegenPipeline {
+    ProductionV1,
     LegacyV1,
     KernelIrV1,
     KernelIrWorkerV2,
@@ -261,6 +263,9 @@ impl PipelineSelection {
     fn from_value(value: Option<&OsStr>) -> Self {
         match value {
             None => Self::Valid(CodegenPipeline::LegacyV1),
+            Some(value) if value == production_pipeline_v1::PRODUCTION_PIPELINE_V1 => {
+                Self::Valid(CodegenPipeline::ProductionV1)
+            }
             Some(value) if value == "legacy-v1" => Self::Valid(CodegenPipeline::LegacyV1),
             Some(value) if value == "kernel-ir-v1" => Self::Valid(CodegenPipeline::KernelIrV1),
             Some(value) if value == "kernel-ir-worker-v2" => {
@@ -316,7 +321,8 @@ impl PipelineSelection {
                 Self::Valid(CodegenPipeline::CollectedScopedAtomicV1)
             }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `{}`, `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
+                production_pipeline_v1::PRODUCTION_PIPELINE_V1,
                 collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                 collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
                 general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
@@ -501,6 +507,50 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             let mut generated_host_objects = host_object::GeneratedHostObjects::default();
             let mut temporary_host_objects = TemporaryHostObjects::default();
             let codegen_pipeline = self.config.codegen_pipeline.clone();
+            if matches!(
+                codegen_pipeline,
+                PipelineSelection::Valid(CodegenPipeline::ProductionV1)
+            ) {
+                match production_pipeline_v1::disposition(kernel_count) {
+                    production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
+                    production_pipeline_v1::ProductionDispositionV1::DeviceTransaction => {
+                        let has_custom_llvm_configuration = !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty();
+                        if let Err(error) = production_pipeline_v1::reject_custom_llvm_configuration(
+                            has_custom_llvm_configuration,
+                        ) {
+                            tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
+                        }
+                        let collection = match collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        ) {
+                            Ok(collection) => collection,
+                            Err(error) => tcx.dcx().fatal(format!(
+                                "[rustc-codegen-fe2o3] production-v1 collection failed without fallback: {error}"
+                            )),
+                        };
+                        let transaction = match production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
+                            tcx,
+                            collection,
+                            producer.clone(),
+                            self.config.target.clone(),
+                            output_dir
+                                .expect("device output was required above")
+                                .to_path_buf(),
+                            build_attempt,
+                        ) {
+                            Ok(transaction) => transaction,
+                            Err(error) => {
+                                tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
+                            }
+                        };
+                        let error = transaction.require_semantic_mir_import();
+                        tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
+                    }
+                }
+            }
             if kernel_count == 0
                 && matches!(
                     codegen_pipeline,
@@ -1622,6 +1672,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     &collection,
                                     Some(&lowering_plan),
                                 )
+                            }
+                            CodegenPipeline::ProductionV1 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: production-v1 escaped its fail-closed transaction branch"
+                                        .to_owned(),
+                                })
                             }
                             CodegenPipeline::KernelIrV1 => {
                                 let module = kernel_ir_lowering::translate_and_verify_for_session(
@@ -2831,6 +2887,10 @@ mod tests {
             PipelineSelection::Valid(CodegenPipeline::LegacyV1)
         );
         assert_eq!(
+            PipelineSelection::from_value(Some(OsStr::new("production-v1"))),
+            PipelineSelection::Valid(CodegenPipeline::ProductionV1)
+        );
+        assert_eq!(
             PipelineSelection::from_value(Some(OsStr::new("legacy-v1"))),
             PipelineSelection::Valid(CodegenPipeline::LegacyV1)
         );
@@ -2880,6 +2940,7 @@ mod tests {
             let error = selection.resolve().expect_err("selector must be exact");
             let message = error.to_string();
             assert!(message.contains("FE2O3_CODEGEN_PIPELINE"));
+            assert!(message.contains("production-v1"));
             assert!(message.contains("legacy-v1"));
             assert!(message.contains("kernel-ir-v1"));
             assert!(message.contains("kernel-ir-worker-v2"));
