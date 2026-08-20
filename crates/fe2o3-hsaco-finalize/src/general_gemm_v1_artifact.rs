@@ -11,14 +11,15 @@ use fe2o3_artifact_transaction::{
 use fe2o3_compiler_ffi::{CompilerDescriptorSourceIdentityV1, CompilerModuleHandoffIdentityV2};
 use fe2o3_general_gemm_compiler::{
     GeneralGemmMachineBindingIdentityV1, GeneralGemmPlironProjectionIdentityV1,
-    GeneralGemmScheduleIdentityV1, GeneralGemmScheduleV1, GeneralGemmStructuralMachineV1,
-    GeneralGemmSymbolicArtifactIdentityV1, GeneralGemmSymbolicCompilationIdentityV1,
-    GeneralGemmSymbolicStructuralMachineV1,
+    GeneralGemmScheduleIdentityV1, GeneralGemmScheduleV1, GeneralGemmStructuralMachineErrorV1,
+    GeneralGemmStructuralMachineV1, GeneralGemmSymbolicArtifactIdentityV1,
+    GeneralGemmSymbolicCompilationIdentityV1, GeneralGemmSymbolicStructuralMachineV1,
 };
 use fe2o3_llvm_handoff::{
     CallTargetV2, FunctionAttributeV2, HandoffIdentityV2, InstructionKindV2, IntrinsicV2,
 };
 use fe2o3_llvm_text::LlvmAssemblySha256V2;
+use fe2o3_verifier::{GeneralGemmEvidenceIdentityV1, GeneralGemmNumericalMachineJoinV1};
 use object::{Object as _, ObjectSection as _, ObjectSymbol as _};
 use sha2::{Digest, Sha256};
 
@@ -39,6 +40,8 @@ const GENERAL_GEMM_POST_LINK_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/GENERAL-GEMM/SYMBOLIC-POST-LINK-MACHINE/V1\0";
 const GENERAL_GEMM_MFMA_NUMERICAL_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/GENERAL-GEMM/GFX942-MFMA-NUMERICAL-REFINEMENT/V1\0";
+const GENERAL_GEMM_NUMERICAL_WORKER_JOIN_DOMAIN_V1: &[u8] =
+    b"FE2O3/GENERAL-GEMM/NUMERICAL-DIRECT-LLVM-WORKER-JOIN/V1\0";
 const GENERAL_GEMM_BINDING_SECTION_V1: &str = ".fe2o3.general-gemm.binding.v1";
 const GENERAL_GEMM_DESCRIPTOR_SECTION_V1: &str = ".fe2o3.kd.v1";
 const GENERAL_GEMM_KERNEL_SYMBOL_V1: &str = "tiled_gemm_general_v1";
@@ -211,6 +214,7 @@ pub struct OpaqueGeneralGemmPostLinkMachineObservationV1 {
     barrier_refinement: GeneralGemmBarrierRefinementV1,
     mfma_numerical: GeneralGemmMfmaNumericalRefinementV1,
     prepared: PreparedFinalizedWorkerV2HsacoV1,
+    structural_machine: GeneralGemmSymbolicStructuralMachineV1,
 }
 
 impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
@@ -356,6 +360,89 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
 
     pub fn exact_finalized_bytes(&self) -> &[u8] {
         self.prepared.exact_finalized_bytes()
+    }
+
+    /// Derives the verifier's identity-only machine join from retained concrete owners.
+    ///
+    /// The caller supplies only the numerical-correspondence identity that the verifier
+    /// will independently check. This observation freshly revalidates its live Pliron
+    /// graph and checks its retained Worker V2 and finalizer lineage before deriving the
+    /// three machine axes. The returned value remains inert and grants no authority.
+    pub fn derive_numerical_machine_join_v1(
+        &self,
+        numerical_correspondence_identity: GeneralGemmEvidenceIdentityV1,
+    ) -> Result<GeneralGemmNumericalMachineJoinV1, GeneralGemmPostLinkMachineErrorV1> {
+        let fresh_serialization = self
+            .structural_machine
+            .revalidate_final_join_owner_v1()
+            .map_err(GeneralGemmPostLinkMachineErrorV1::CompilerOwnerRevalidation)?;
+        if fresh_serialization.identity().as_bytes() != self.live_serialization
+            || fresh_serialization.graph_export_identity().as_bytes() != self.graph_export
+            || fresh_serialization.non_graph_envelope_identity().as_bytes()
+                != self.non_graph_envelope
+            || fresh_serialization.assembly_sha256() != self.llvm_assembly
+            || *fresh_serialization.worker_admission_identity().as_bytes()
+                != self.typed_worker_admission
+        {
+            return Err(
+                GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
+                    "live graph serialization",
+                ),
+            );
+        }
+        if self.structural_machine.projection().identity() != self.projection
+            || self.structural_machine.projection().schedule_identity() != self.schedule_identity
+            || self.structural_machine.projection().compilation_identity()
+                != self.symbolic_compilation
+            || self.structural_machine.artifact_identity() != self.symbolic_artifact
+            || *self
+                .structural_machine
+                .compiler_boundary()
+                .identity()
+                .as_bytes()
+                != self.compiler_boundary
+            || self.structural_machine.graph_handoff().identity() != self.handoff_v2
+            || self.structural_machine.compiler_handoff().identity() != self.compiler_handoff
+            || self.structural_machine.binding_section().identity() != self.machine_binding
+            || self.structural_machine.descriptor_source().identity() != self.descriptor_source
+        {
+            return Err(
+                GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution("structural machine"),
+            );
+        }
+        if self.prepared.source_evidence_identity() != self.worker_execution
+            || self.prepared.raw_inspection_identity() != self.raw_inspection
+            || self.prepared.raw_output_identity() != self.raw_output
+            || self.prepared.policy_identity() != self.raw_policy
+            || self.prepared.identity() != self.finalized
+            || self.prepared.finalized_output_identity() != self.finalized_output
+        {
+            return Err(
+                GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
+                    "Worker V2 or finalizer lineage",
+                ),
+            );
+        }
+
+        let worker_identity = hash_numerical_worker_join_v1(
+            self.prepared.source_evidence_identity(),
+            self.worker_request,
+            self.worker_response,
+        );
+        Ok(GeneralGemmNumericalMachineJoinV1 {
+            numerical_correspondence_identity,
+            owner_bound_pliron_graph_serialization_identity: Some(
+                GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(
+                    fresh_serialization.identity().as_bytes(),
+                ),
+            ),
+            direct_llvm_worker_request_response_identity: Some(
+                GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(worker_identity),
+            ),
+            finalizer_post_link_isa_result_identity: Some(
+                GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(*self.identity.as_bytes()),
+            ),
+        })
     }
 
     pub const fn grants_artifact_authority(&self) -> bool {
@@ -523,6 +610,8 @@ pub enum GeneralGemmPostLinkMachineErrorV1 {
     MachineCodeIdentity,
     MachineProfile(&'static str),
     NumericalRefinement,
+    CompilerOwnerRevalidation(GeneralGemmStructuralMachineErrorV1),
+    RetainedOwnerSubstitution(&'static str),
     RawInspection(WorkerV2RawHsacoInspectionError),
     Finalization(WorkerV2HsacoFinalizationError),
 }
@@ -558,6 +647,13 @@ impl fmt::Display for GeneralGemmPostLinkMachineErrorV1 {
             Self::NumericalRefinement => formatter.write_str(
                 "general-GEMM gfx942 MFMA numerical-refinement observation is incomplete",
             ),
+            Self::CompilerOwnerRevalidation(error) => write!(
+                formatter,
+                "retained general-GEMM compiler owner failed revalidation: {error}"
+            ),
+            Self::RetainedOwnerSubstitution(owner) => {
+                write!(formatter, "retained general-GEMM {owner} was substituted")
+            }
             Self::RawInspection(error) => {
                 write!(
                     formatter,
@@ -574,6 +670,7 @@ impl fmt::Display for GeneralGemmPostLinkMachineErrorV1 {
 impl Error for GeneralGemmPostLinkMachineErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::CompilerOwnerRevalidation(error) => Some(error),
             Self::RawInspection(error) => Some(error),
             Self::Finalization(error) => Some(error),
             _ => None,
@@ -812,7 +909,21 @@ pub fn finalize_symbolic_general_gemm_worker_v2_v1(
         barrier_refinement: GeneralGemmBarrierRefinementV1::SingleWaveElision,
         mfma_numerical,
         prepared,
+        structural_machine: machine,
     })
+}
+
+fn hash_numerical_worker_join_v1(
+    source_evidence: FirstBuildWorkerV2IdentityV1,
+    request: [u8; 32],
+    response: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(GENERAL_GEMM_NUMERICAL_WORKER_JOIN_DOMAIN_V1);
+    hasher.update(source_evidence.as_bytes());
+    hasher.update(request);
+    hasher.update(response);
+    hasher.finalize().into()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

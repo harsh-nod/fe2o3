@@ -29,6 +29,7 @@ use fe2o3_hsaco_finalize::{
     finalize_symbolic_general_gemm_worker_v2_v1,
 };
 use fe2o3_kernel_descriptor::CANONICAL_CODE_OBJECT_DIGEST_OFFSET;
+use fe2o3_verifier::GeneralGemmEvidenceIdentityV1;
 use object::{Object as _, ObjectSection as _};
 
 const WORKER_PATH: &str = "/home/harsh/fe2o3-general-gemm-worker-llvm22/fe2o3-llvm-link-worker";
@@ -250,6 +251,34 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
         assert!(!observation.grants_publication_authority());
         assert!(!observation.grants_load_authority());
         assert!(!observation.grants_launch_authority());
+        let numerical_correspondence =
+            GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(identity(0xa5));
+        let machine_join = observation
+            .derive_numerical_machine_join_v1(numerical_correspondence)
+            .expect("retained graph, Worker V2, and finalizer owners revalidate");
+        assert_eq!(
+            machine_join.numerical_correspondence_identity,
+            numerical_correspondence
+        );
+        assert!(machine_join.has_all_required_identities());
+        assert!(!machine_join.grants_compiler_authority());
+        let graph_axis = machine_join
+            .owner_bound_pliron_graph_serialization_identity
+            .expect("live graph axis");
+        let worker_axis = machine_join
+            .direct_llvm_worker_request_response_identity
+            .expect("direct LLVM worker axis");
+        let finalizer_axis = machine_join
+            .finalizer_post_link_isa_result_identity
+            .expect("post-link finalizer axis");
+        assert_eq!(
+            graph_axis.as_bytes(),
+            observation.live_serialization_identity()
+        );
+        assert_eq!(finalizer_axis.as_bytes(), observation.identity().as_bytes());
+        assert_ne!(graph_axis, worker_axis);
+        assert_ne!(graph_axis, finalizer_axis);
+        assert_ne!(worker_axis, finalizer_axis);
         let raw_object = object::File::parse(raw_bytes.as_slice()).expect("parse raw HSACO");
         let descriptor = raw_object
             .sections()
