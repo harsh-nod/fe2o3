@@ -148,9 +148,7 @@ pub(crate) struct AuthenticatedKernelOwner<T> {
     logical_name: String,
     export_name: String,
     typed_profile: TypedKernelProfile,
-    registration_path: String,
     target_def_path: String,
-    target_def_path_hash: [u8; 16],
     crate_binding: CrateBindingIdV1,
     kernel_binding: KernelBindingIdV1,
     observed_symbol: String,
@@ -177,7 +175,6 @@ impl<T> AuthenticatedKernelOwners<T> {
     }
 }
 
-#[allow(dead_code)]
 impl<T: Copy> AuthenticatedKernelOwner<T> {
     pub(crate) const fn target(&self) -> T {
         self.target
@@ -203,16 +200,8 @@ impl<T: Copy> AuthenticatedKernelOwner<T> {
         self.typed_profile
     }
 
-    pub(crate) fn registration_path(&self) -> &str {
-        &self.registration_path
-    }
-
     pub(crate) fn target_def_path(&self) -> &str {
         &self.target_def_path
-    }
-
-    pub(crate) const fn target_def_path_hash(&self) -> [u8; 16] {
-        self.target_def_path_hash
     }
 
     pub(crate) const fn crate_binding(&self) -> CrateBindingIdV1 {
@@ -306,29 +295,16 @@ pub struct CollectionResult<'tcx> {
     pub functions: Vec<CollectedFunction<'tcx>>,
     pub(crate) authenticated_kernel_owners: AuthenticatedKernelOwners<Instance<'tcx>>,
     // Private source state retained for compiler-envelope construction.
-    #[allow(dead_code)]
     pub(crate) device_ffi: crate::device_ffi::DeviceFfiClosure,
     /// Inert canonical observation produced from the successfully closed graph.
     pub(crate) compiler_ffi_observation: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
 }
 
 impl<'tcx> CollectionResult<'tcx> {
-    #[allow(dead_code)]
     pub(crate) fn authenticated_kernel_owners(
         &self,
     ) -> &[AuthenticatedKernelOwner<Instance<'tcx>>] {
         self.authenticated_kernel_owners.as_slice()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn authenticated_kernel_owner(
-        &self,
-        instance: Instance<'tcx>,
-    ) -> Option<&AuthenticatedKernelOwner<Instance<'tcx>>> {
-        self.authenticated_kernel_owners
-            .as_slice()
-            .iter()
-            .find(|owner| owner.target == instance)
     }
 }
 
@@ -673,7 +649,6 @@ struct RegistrationRecord<T> {
     target_crate_name: String,
     target_symbol: String,
     target_identity: String,
-    target_def_path_hash: [u8; 16],
     target: T,
 }
 
@@ -1662,7 +1637,6 @@ fn decode_registration_static<'tcx>(
     let target_crate_name = tcx.crate_name(target.def_id().krate).to_string();
     let target_symbol = tcx.symbol_name(target).name.to_string();
     let target_identity = tcx.def_path_str(target.def_id());
-    let target_def_path_hash = tcx.def_path_hash(target.def_id()).0.to_le_bytes();
     match functions_by_symbol.get(&target_symbol) {
         None if !target.def_id().is_local() && tcx.is_mir_available(target.def_id()) => {}
         None => {
@@ -1728,7 +1702,6 @@ fn decode_registration_static<'tcx>(
         target_crate_name,
         target_symbol,
         target_identity,
-        target_def_path_hash,
         target,
     })
 }
@@ -2283,9 +2256,7 @@ fn validate_registration_records<T: Copy>(
                 logical_name: record.logical_name.clone(),
                 export_name: record.export_name.clone(),
                 typed_profile,
-                registration_path: record.registration_path.clone(),
                 target_def_path: record.target_identity.clone(),
-                target_def_path_hash: record.target_def_path_hash,
                 crate_binding: record
                     .crate_binding
                     .expect("typed registration crate binding was validated above"),
@@ -2356,7 +2327,10 @@ fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> 
 struct DeviceCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
     seen: BTreeSet<crate::device_ffi::DeviceFfiInstanceIdentity>,
-    call_chains: BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, Vec<String>>,
+    call_chains: BTreeMap<
+        crate::device_ffi::DeviceFfiInstanceIdentity,
+        CallChainLink<crate::device_ffi::DeviceFfiInstanceIdentity>,
+    >,
     call_edges: BTreeMap<
         crate::device_ffi::DeviceFfiInstanceIdentity,
         BTreeSet<crate::device_ffi::DeviceFfiInstanceIdentity>,
@@ -2371,7 +2345,34 @@ struct DeviceCollector<'tcx> {
     reachable_ffi_imports: BTreeSet<reserved_fe2o3_symbols::DeviceFfiContractIdV1>,
     expected_target: String,
     traversal: CollectorTraversalPolicyV1,
+    inspected_blocks: usize,
     verbose: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CallChainLink<T> {
+    predecessor: Option<T>,
+    label: String,
+}
+
+fn reconstruct_call_chain<T: Clone + Ord>(
+    links: &BTreeMap<T, CallChainLink<T>>,
+    start: &T,
+) -> Vec<String> {
+    let mut reverse_chain = Vec::new();
+    let mut cursor = Some(start.clone());
+    for _ in 0..links.len() {
+        let Some(identity) = cursor else {
+            break;
+        };
+        let Some(link) = links.get(&identity) else {
+            break;
+        };
+        reverse_chain.push(link.label.clone());
+        cursor = link.predecessor.clone();
+    }
+    reverse_chain.reverse();
+    reverse_chain
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -2402,8 +2403,60 @@ impl<'tcx> DeviceCollector<'tcx> {
             reachable_ffi_imports: BTreeSet::new(),
             expected_target: configuration.target,
             traversal: configuration.traversal,
+            inspected_blocks: 0,
             verbose,
         }
+    }
+
+    fn mark_seen(
+        &mut self,
+        identity: crate::device_ffi::DeviceFfiInstanceIdentity,
+    ) -> Result<bool, CollectError> {
+        if self.seen.len() >= fe2o3_rustc_front::MAX_FUNCTIONS_V1 && !self.seen.contains(&identity)
+        {
+            return Err(CollectError {
+                message: format!(
+                    "device-reachable function count exceeds hard maximum {}",
+                    fe2o3_rustc_front::MAX_FUNCTIONS_V1,
+                ),
+            });
+        }
+        Ok(self.seen.insert(identity))
+    }
+
+    fn charge_function_blocks(
+        &mut self,
+        function: &Instance<'tcx>,
+        block_count: usize,
+    ) -> Result<(), CollectError> {
+        if block_count > fe2o3_rustc_front::MAX_BLOCKS_PER_FUNCTION_V1 {
+            return Err(self.reachable_error(
+                function,
+                &format!(
+                    "function contains {block_count} MIR blocks; hard maximum is {}",
+                    fe2o3_rustc_front::MAX_BLOCKS_PER_FUNCTION_V1,
+                ),
+                None,
+            ));
+        }
+        let total = self
+            .inspected_blocks
+            .checked_add(block_count)
+            .ok_or_else(|| {
+                self.reachable_error(function, "reachable MIR block accounting overflowed", None)
+            })?;
+        if total > fe2o3_rustc_front::MAX_TOTAL_BLOCKS_V1 {
+            return Err(self.reachable_error(
+                function,
+                &format!(
+                    "device closure contains {total} MIR blocks; hard maximum is {}",
+                    fe2o3_rustc_front::MAX_TOTAL_BLOCKS_V1,
+                ),
+                None,
+            ));
+        }
+        self.inspected_blocks = total;
+        Ok(())
     }
 
     fn add_device_export(
@@ -2419,9 +2472,14 @@ impl<'tcx> DeviceCollector<'tcx> {
             });
         }
         let identity = self.instance_identity(instance);
-        if self.seen.insert(identity.clone()) {
-            self.call_chains
-                .insert(identity, vec![self.instance_label(instance)]);
+        if self.mark_seen(identity.clone())? {
+            self.call_chains.insert(
+                identity,
+                CallChainLink {
+                    predecessor: None,
+                    label: self.instance_label(instance),
+                },
+            );
             self.worklist.push_back(CollectedFunction {
                 instance,
                 role: CollectedFunctionRole::DeviceFfiExport,
@@ -2458,9 +2516,14 @@ impl<'tcx> DeviceCollector<'tcx> {
             });
         }
         let identity = self.instance_identity(instance);
-        if self.seen.insert(identity.clone()) {
-            self.call_chains
-                .insert(identity.clone(), vec![self.instance_label(instance)]);
+        if self.mark_seen(identity.clone())? {
+            self.call_chains.insert(
+                identity.clone(),
+                CallChainLink {
+                    predecessor: None,
+                    label: self.instance_label(instance),
+                },
+            );
             if let Some(owner) = authenticated_owner {
                 debug_assert_eq!(owner.target, instance);
                 self.authenticated_kernel_owners.push(owner);
@@ -2494,6 +2557,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
 
             let mir = self.tcx.instance_mir(function.instance.def);
+            self.charge_function_blocks(&function.instance, mir.basic_blocks.len())?;
             if crate::closure_profile_v1::contains_concrete_closure_v1(self.tcx, function.instance)
                 .map_err(|error| {
                     self.reachable_error(
@@ -3064,8 +3128,9 @@ impl<'tcx> DeviceCollector<'tcx> {
         };
 
         let identity = self.instance_identity(resolved);
+        let caller_identity = self.instance_identity(*caller);
         self.call_edges
-            .entry(self.instance_identity(*caller))
+            .entry(caller_identity.clone())
             .or_default()
             .insert(identity.clone());
         if self.seen.contains(&identity) {
@@ -3201,10 +3266,15 @@ impl<'tcx> DeviceCollector<'tcx> {
             eprintln!("[collector] callee: {name} -> {export_name}");
         }
 
-        let mut call_chain = self.call_chain(caller);
-        call_chain.push(self.instance_label(resolved));
-        self.call_chains.insert(identity.clone(), call_chain);
-        self.seen.insert(identity.clone());
+        let inserted = self.mark_seen(identity.clone())?;
+        debug_assert!(inserted);
+        self.call_chains.insert(
+            identity,
+            CallChainLink {
+                predecessor: Some(caller_identity),
+                label: self.instance_label(resolved),
+            },
+        );
         self.worklist.push_back(CollectedFunction {
             instance: resolved,
             role: CollectedFunctionRole::InternalHelper,
@@ -3237,10 +3307,12 @@ impl<'tcx> DeviceCollector<'tcx> {
 
     fn call_chain(&self, instance: &Instance<'tcx>) -> Vec<String> {
         let identity = self.instance_identity(*instance);
-        self.call_chains
-            .get(&identity)
-            .cloned()
-            .unwrap_or_else(|| vec![self.instance_label(*instance)])
+        let chain = reconstruct_call_chain(&self.call_chains, &identity);
+        if chain.is_empty() {
+            vec![self.instance_label(*instance)]
+        } else {
+            chain
+        }
     }
 
     fn reachable_error(
@@ -3468,10 +3540,11 @@ fn sanitize_symbol_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthenticatedKernelFrontendContractV1, CollectorTraversalPolicyV1, KernelRoot,
-        ObservedInlineAssemblyV1, RegistrationError, RegistrationRecord, TypedArgumentListError,
-        TypedArgumentListV1, TypedKernelProfile, general_typed_launch_v3,
-        reconcile_frontend_contract, reject_production_profile_registrations_v1,
+        AuthenticatedKernelFrontendContractV1, CallChainLink, CollectorTraversalPolicyV1,
+        KernelRoot, ObservedInlineAssemblyV1, RegistrationError, RegistrationRecord,
+        TypedArgumentListError, TypedArgumentListV1, TypedKernelProfile, general_typed_launch_v3,
+        reconcile_frontend_contract, reconstruct_call_chain,
+        reject_production_profile_registrations_v1,
         validate_registration_records as validate_records,
     };
     use fe2o3_artifacts::{
@@ -3494,7 +3567,40 @@ mod tests {
         TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
         derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn predecessor_call_chains_reconstruct_without_per_node_prefix_copies() {
+        let links = BTreeMap::from([
+            (
+                1_u8,
+                CallChainLink {
+                    predecessor: None,
+                    label: "root".to_owned(),
+                },
+            ),
+            (
+                2,
+                CallChainLink {
+                    predecessor: Some(1),
+                    label: "helper_a".to_owned(),
+                },
+            ),
+            (
+                3,
+                CallChainLink {
+                    predecessor: Some(2),
+                    label: "helper_b".to_owned(),
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            reconstruct_call_chain(&links, &3),
+            ["root", "helper_a", "helper_b"],
+        );
+        assert!(reconstruct_call_chain(&links, &9).is_empty());
+    }
 
     fn type_identity(byte: u8) -> TypeIdentity {
         TypeIdentity::new(
@@ -3564,7 +3670,6 @@ mod tests {
             target_crate_name: "fixture".to_owned(),
             target_symbol,
             target_identity,
-            target_def_path_hash: [target; 16],
             target,
         }
     }
@@ -3781,12 +3886,7 @@ mod tests {
                 generated_host_contract_identity,
             } if generated_host_contract_identity.as_bytes() == [0x63; 32]
         ));
-        assert_eq!(
-            owner.registration_path(),
-            "general_genuine::__fe2o3_kernel_registration_alpha"
-        );
         assert_eq!(owner.target_def_path(), expected_def_path);
-        assert_eq!(owner.target_def_path_hash(), [3; 16]);
         assert_eq!(owner.crate_binding(), expected_crate_binding);
         assert_eq!(owner.kernel_binding(), expected_kernel_binding);
         assert_eq!(owner.observed_symbol(), expected_symbol);
