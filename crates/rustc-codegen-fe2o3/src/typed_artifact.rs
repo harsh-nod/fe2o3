@@ -111,7 +111,7 @@ pub(crate) fn build_typed_vecadd_artifact_v1(
     let container = ArtifactContainerV1::new(manifest, algorithm, vec![payload])
         .map_err(TypedArtifactError::Container)?
         .to_bytes();
-    let artifact_id = hex_digest(algorithm.calculate(&container).bytes());
+    let artifact_id = crate::encode_hex(algorithm.calculate(&container).bytes().as_bytes());
 
     Ok(GeneratedTypedArtifactV1 {
         artifact_id,
@@ -317,15 +317,6 @@ fn domain_digest(algorithm: DigestAlgorithm, domain: &[u8], fields: &[&[u8]]) ->
         canonical.extend_from_slice(field);
     }
     algorithm.calculate(&canonical).bytes()
-}
-
-fn hex_digest(digest: DigestBytes) -> String {
-    let mut encoded = String::with_capacity(64);
-    for byte in digest.as_bytes() {
-        use fmt::Write as _;
-        write!(encoded, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    encoded
 }
 
 fn name(value: &str) -> Result<Name, TypedArtifactError> {

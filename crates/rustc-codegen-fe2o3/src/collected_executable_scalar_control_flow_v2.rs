@@ -104,23 +104,23 @@ impl AuthenticatedCollectedScalarControlFlowV2 {
     }
 
     pub(crate) fn root_identity_hex(&self) -> String {
-        encode_hex(&self.root_cfg_identity)
+        crate::encode_hex(&self.root_cfg_identity)
     }
 
     pub(crate) fn helper_identity_hex(&self) -> String {
-        encode_hex(&self.helper_cfg_identity)
+        crate::encode_hex(&self.helper_cfg_identity)
     }
 
     pub(crate) fn compiler_semantics_hex(&self) -> String {
-        encode_hex(&self.compiler_semantics_commitment)
+        crate::encode_hex(&self.compiler_semantics_commitment)
     }
 
     pub(crate) fn portable_mir_semantic_hex(&self) -> String {
-        encode_hex(&self.portable_mir_semantic_commitment)
+        crate::encode_hex(&self.portable_mir_semantic_commitment)
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(&self.authority_commitment)
+        crate::encode_hex(&self.authority_commitment)
     }
 }
 
@@ -176,8 +176,8 @@ impl fmt::Display for CollectedExecutableScalarControlFlowErrorV2 {
             } => write!(
                 formatter,
                 "collected scalar-control-flow V2 {role} MIR identity mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::AbiMismatch { role, detail } => write!(
                 formatter,
@@ -709,16 +709,6 @@ fn abi_mismatch(
         role,
         detail: detail.into(),
     }
-}
-
-fn encode_hex(bytes: &[u8; 32]) -> String {
-    use fmt::Write as _;
-
-    let mut encoded = String::with_capacity(64);
-    for byte in bytes {
-        let _ = write!(encoded, "{byte:02x}");
-    }
-    encoded
 }
 
 #[cfg(test)]

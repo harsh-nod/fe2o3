@@ -42,6 +42,17 @@ mod managed_invocation_capability;
 mod retained_durable_directory;
 mod worker_v2_publication_intent;
 
+fn encode_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
 pub use attempt::{
     AttemptCodecError, BackendPublicationReceiptV1, BuildAttempt, BuildInvocation, BuildSession,
 };

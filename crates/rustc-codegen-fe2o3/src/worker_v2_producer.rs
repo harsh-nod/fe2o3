@@ -160,7 +160,7 @@ impl PreparedFlashAttentionV1WorkerHandoffV1 {
     }
 
     pub(crate) fn ocml_boundary_hex(&self) -> String {
-        hex(&self.ocml_boundary_commitment)
+        crate::encode_hex(&self.ocml_boundary_commitment)
     }
 
     pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
@@ -231,7 +231,7 @@ pub(crate) fn publish_prepared_scalar_gemm_v1_worker_handoff(
         frontend_authority_commitment,
         handoff,
     } = prepared;
-    let authority_hex = hex(&frontend_authority_commitment);
+    let authority_hex = crate::encode_hex(&frontend_authority_commitment);
     let module = std::str::from_utf8(handoff.module_bytes())
         .map_err(|_| WorkerV2ProducerError::MissingScalarFrontendAuthority)?;
     if !module.contains(".fe2o3.scalar-auth.v1")
@@ -264,7 +264,7 @@ pub(crate) fn publish_prepared_tiled_gemm_v1_worker_handoff(
         frontend_authority_commitment,
         handoff,
     } = prepared;
-    let authority_hex = hex(&frontend_authority_commitment);
+    let authority_hex = crate::encode_hex(&frontend_authority_commitment);
     let module = std::str::from_utf8(handoff.module_bytes())
         .map_err(|_| WorkerV2ProducerError::MissingTiledFrontendAuthority)?;
     if !module.contains(".fe2o3.tiled-auth.v1")
@@ -321,9 +321,9 @@ pub(crate) fn publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
     .map_err(WorkerV2ProducerError::Publication)?;
     eprintln!(
         "[rustc-codegen-fe2o3] published attributed LDS Slice 1 Worker V2 handoff bound to source authority {}, canonical Kernel IR {}, and compiler descriptor {}",
-        hex(&prepared.source_authority_commitment),
-        hex(&prepared.canonical_ir_identity),
-        hex(&prepared.descriptor_source_identity),
+        crate::encode_hex(&prepared.source_authority_commitment),
+        crate::encode_hex(&prepared.canonical_ir_identity),
+        crate::encode_hex(&prepared.descriptor_source_identity),
     );
     Ok(receipt)
 }
@@ -445,8 +445,8 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
     .map_err(WorkerV2ProducerError::Publication)?;
     eprintln!(
         "[rustc-codegen-fe2o3] published row-softmax Worker V2 handoff bound to frontend authority {} and exponential boundary {}",
-        hex(&frontend_authority_commitment),
-        hex(&exponential_boundary_commitment),
+        crate::encode_hex(&frontend_authority_commitment),
+        crate::encode_hex(&exponential_boundary_commitment),
     );
     Ok(receipt)
 }
@@ -490,8 +490,8 @@ pub(crate) fn publish_prepared_flash_attention_v1_worker_handoff(
     .map_err(WorkerV2ProducerError::Publication)?;
     eprintln!(
         "[rustc-codegen-fe2o3] published exact FlashAttention Worker V2 handoff bound to frontend authority {} and explicit OCML boundary {}",
-        hex(&prepared.frontend_authority_commitment),
-        hex(&prepared.ocml_boundary_commitment),
+        crate::encode_hex(&prepared.frontend_authority_commitment),
+        crate::encode_hex(&prepared.ocml_boundary_commitment),
     );
     Ok(receipt)
 }
@@ -523,9 +523,9 @@ pub(crate) fn publish_prepared_moe_top2_v1_worker_handoff(
     .map_err(WorkerV2ProducerError::Publication)?;
     eprintln!(
         "[rustc-codegen-fe2o3] published exact MoE Worker V2 handoff bound to source authority {}, canonical Kernel IR {}, and descriptor profile {}",
-        hex(&prepared.source_authority_identity),
-        hex(&prepared.canonical_ir_identity),
-        hex(&prepared.descriptor_profile_identity),
+        crate::encode_hex(&prepared.source_authority_identity),
+        crate::encode_hex(&prepared.canonical_ir_identity),
+        crate::encode_hex(&prepared.descriptor_profile_identity),
     );
     Ok(receipt)
 }
@@ -815,7 +815,7 @@ pub(crate) fn construct_row_softmax_v1_compiler_envelope(
 ) -> Result<CompilerFfiEnvelopeV1, CompilerFfiEnvelopeError> {
     let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
         .expect("fixed row-softmax target is valid");
-    let semantic_text = hex(&exponential_boundary_commitment);
+    let semantic_text = crate::encode_hex(&exponential_boundary_commitment);
     let fields = DeviceFfiContractFieldsV1 {
         direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
         symbol: ROW_SOFTMAX_OCML_EXP_SYMBOL_V1,
@@ -927,7 +927,7 @@ pub(crate) fn construct_flash_attention_v1_compiler_envelope(
 ) -> Result<CompilerFfiEnvelopeV1, CompilerFfiEnvelopeError> {
     let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
         .expect("fixed FlashAttention target is valid");
-    let semantic_text = hex(&ocml_boundary_commitment);
+    let semantic_text = crate::encode_hex(&ocml_boundary_commitment);
     let fields = DeviceFfiContractFieldsV1 {
         direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
         symbol: FLASH_ATTENTION_OCML_EXP_SYMBOL_V1,
@@ -1209,17 +1209,17 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
         let observation = source_debug.build_claim();
         eprintln!(
             "[rustc-codegen-fe2o3] S09 SemanticIdentityClaimV2: schema=fe2o3-s09-semantic-identity-claim-v2; identity_sha256={}; portable_mir_sha256={}",
-            hex(semantic.identity_sha256()),
-            hex(semantic.portable_mir_sha256()),
+            crate::encode_hex(semantic.identity_sha256()),
+            crate::encode_hex(semantic.portable_mir_sha256()),
         );
         eprintln!(
             "[rustc-codegen-fe2o3] S09 BuildIdentityClaimV2: schema=fe2o3-s09-build-identity-claim-v2; identity_sha256={}; cargo_metadata_sha256={}; prepared_rustc_command_sha256={}; cargo_fe2o3_executable_sha256={}; declared_cargo_executable_sha256={}; pinned_cargo_image_sha256={}; observed_parent_pid={}; observed_parent_start_time_ticks={}; observed_def_path={}; observed_symbol={}",
-            hex(observation.identity_sha256()),
-            hex(observation.cargo_metadata_sha256()),
-            hex(observation.prepared_rustc_command_sha256()),
-            hex(observation.cargo_fe2o3_executable_sha256()),
-            hex(observation.declared_cargo_executable_sha256()),
-            hex(observation.pinned_cargo_image_sha256()),
+            crate::encode_hex(observation.identity_sha256()),
+            crate::encode_hex(observation.cargo_metadata_sha256()),
+            crate::encode_hex(observation.prepared_rustc_command_sha256()),
+            crate::encode_hex(observation.cargo_fe2o3_executable_sha256()),
+            crate::encode_hex(observation.declared_cargo_executable_sha256()),
+            crate::encode_hex(observation.pinned_cargo_image_sha256()),
             observation.observed_parent_pid(),
             observation.observed_parent_start_time_ticks(),
             observation.observed_def_path(),
@@ -1229,16 +1229,6 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
 
     publish_compiler_module_handoff_v1(output_dir, producer, attempt, handoff.canonical_bytes())
         .map_err(WorkerV2ProducerError::Publication)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(DIGITS[usize::from(byte >> 4)] as char);
-        encoded.push(DIGITS[usize::from(byte & 0x0f)] as char);
-    }
-    encoded
 }
 
 fn construct_symbol_manifest(

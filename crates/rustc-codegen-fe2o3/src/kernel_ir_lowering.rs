@@ -1033,13 +1033,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         }
 
         match rvalue {
-            MirRvalueKind::Ref => {
-                return Err(diagnostic(
-                    TranslationDiagnosticCode::UnsupportedRvalue,
-                    location,
-                    "legacy payload-free reference MIR is not lowerable because its borrow kind is absent",
-                ));
-            }
+            MirRvalueKind::Ref => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedRvalue,
+                location,
+                "legacy payload-free reference MIR is not lowerable because its borrow kind is absent",
+            )),
             MirRvalueKind::Reference(borrow_kind) => {
                 let semantics = borrow_kind.reference_semantics_v3().ok_or_else(|| {
                     diagnostic(

@@ -98,7 +98,7 @@ fn function_abi(tag: u8) -> SemanticFunctionAbiV1 {
     SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(bytes(tag)),
         layout_identity(tag),
-        SemanticCallingConventionV1::Rust,
+        SemanticCanonAbiV1::Rust,
         false,
         false,
         vec![],
@@ -905,7 +905,7 @@ fn vtable_headers_bind_typed_drop_glue_and_relocation_closure() {
     let drop_abi = SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(bytes(2)),
         layout_identity(2),
-        SemanticCallingConventionV1::Rust,
+        SemanticCanonAbiV1::Rust,
         false,
         false,
         vec![

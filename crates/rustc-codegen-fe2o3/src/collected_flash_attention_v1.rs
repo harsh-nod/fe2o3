@@ -220,11 +220,11 @@ impl FlashAttentionFrontendReceiptV1 {
     }
 
     pub(crate) fn portable_mir_hex(&self) -> String {
-        encode_hex(&self.authority().portable_mir_identity)
+        crate::encode_hex(&self.authority().portable_mir_identity)
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(&self.authority().authority_identity)
+        crate::encode_hex(&self.authority().authority_identity)
     }
 
     pub(crate) fn authority_commitment(&self) -> &[u8; 32] {
@@ -312,7 +312,7 @@ impl AuthenticatedFlashAttentionV1 {
     }
 
     pub(crate) fn descriptor_hex(&self) -> String {
-        encode_hex(&self.descriptor_identity)
+        crate::encode_hex(&self.descriptor_identity)
     }
 
     pub(crate) fn into_finalization_inputs(self) -> FlashAttentionFinalizationInputsV1 {
@@ -392,8 +392,8 @@ impl fmt::Display for CollectedFlashAttentionErrorV1 {
             Self::SourceIdentity { expected, actual } => write!(
                 formatter,
                 "FlashAttention source bytes mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::Abi(detail) => write!(formatter, "FlashAttention ABI mismatch: {detail}"),
             Self::Layout(detail) => {
@@ -405,14 +405,14 @@ impl fmt::Display for CollectedFlashAttentionErrorV1 {
             Self::PortableMirIdentity { expected, actual } => write!(
                 formatter,
                 "FlashAttention complete reachable MIR closure mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::FnAbiIdentity { expected, actual } => write!(
                 formatter,
                 "FlashAttention rustc FnAbi mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::TrustedDefinitions(detail) => write!(
                 formatter,
@@ -607,7 +607,7 @@ fn observe_source_identity(
     })?;
     let namespace_declaration = format!(
         "namespace = \"{}\"",
-        encode_hex(&FLASH_ATTENTION_V1_NAMESPACE)
+        crate::encode_hex(&FLASH_ATTENTION_V1_NAMESPACE)
     );
     if bytes
         .windows(namespace_declaration.len())
@@ -1079,8 +1079,8 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
     if actual != TRUSTED_TERMINAL_IDENTITY_V4 {
         return Err(CollectedFlashAttentionErrorV1::TrustedDefinitions(format!(
             "trusted-definition/semantic-terminal identity drifted: expected {}, found {}",
-            encode_hex(&TRUSTED_TERMINAL_IDENTITY_V4),
-            encode_hex(&actual)
+            crate::encode_hex(&TRUSTED_TERMINAL_IDENTITY_V4),
+            crate::encode_hex(&actual)
         )));
     }
     Ok(actual)
@@ -1216,8 +1216,8 @@ fn require_compiler_semantics(
     if actual != COMPILER_SEMANTICS_IDENTITY_V1 {
         return Err(CollectedFlashAttentionErrorV1::Admission(format!(
             "compiler semantics identity drifted: expected {}, found {}",
-            encode_hex(&COMPILER_SEMANTICS_IDENTITY_V1),
-            encode_hex(&actual)
+            crate::encode_hex(&COMPILER_SEMANTICS_IDENTITY_V1),
+            crate::encode_hex(&actual)
         )));
     }
     Ok(actual)
@@ -1355,15 +1355,6 @@ fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
 fn push_transcript_field(transcript: &mut Vec<u8>, bytes: &[u8]) {
     transcript.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     transcript.extend_from_slice(bytes);
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
 }
 
 #[cfg(test)]

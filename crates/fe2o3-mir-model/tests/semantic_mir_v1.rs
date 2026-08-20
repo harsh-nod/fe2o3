@@ -201,7 +201,7 @@ fn abi(
     SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(bytes(identity)),
         layout_identity(identity),
-        SemanticCallingConventionV1::Rust,
+        SemanticCanonAbiV1::Rust,
         false,
         false,
         arguments
@@ -410,7 +410,7 @@ fn request_with_structured_abi(
     let abi = SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(bytes(1)),
         layout_identity(1),
-        SemanticCallingConventionV1::Rust,
+        SemanticCanonAbiV1::Rust,
         false,
         false,
         arguments,
@@ -1494,7 +1494,7 @@ fn invalid_function_reference_and_tail_abi_fail_closed() {
                 SemanticFunctionAbiV1::new(
                     SemanticAbiIdentityV1::from_sha256(bytes(2)),
                     layout_identity(2),
-                    SemanticCallingConventionV1::Rust,
+                    SemanticCanonAbiV1::Rust,
                     true,
                     false,
                     vec![],
@@ -3529,7 +3529,7 @@ fn ill_typed_projection_and_constant_records_fail_closed() {
         SemanticFunctionAbiV1::new(
             SemanticAbiIdentityV1::from_sha256(bytes(1)),
             layout_identity(1),
-            SemanticCallingConventionV1::Rust,
+            SemanticCanonAbiV1::Rust,
             false,
             false,
             vec![],
@@ -3565,7 +3565,7 @@ fn rvalues_retain_and_validate_operation_specific_types() {
         SemanticFunctionAbiV1::new(
             SemanticAbiIdentityV1::from_sha256(bytes(1)),
             layout_identity(1),
-            SemanticCallingConventionV1::Rust,
+            SemanticCanonAbiV1::Rust,
             false,
             false,
             vec![],
@@ -4134,7 +4134,7 @@ fn fn_abi_argument_cardinality_and_types_are_checked() {
     let function_abi = SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(bytes(1)),
         layout_identity(1),
-        SemanticCallingConventionV1::Rust,
+        SemanticCanonAbiV1::Rust,
         false,
         false,
         vec![direct_value(u32_id)],

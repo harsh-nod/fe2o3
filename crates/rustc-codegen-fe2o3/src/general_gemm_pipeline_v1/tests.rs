@@ -205,7 +205,7 @@ fn manifest(
         "general_gemm_v1": {
             "profile": GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1,
             "proof_timeout_seconds": 120,
-            "runtime_closure_v2_manifest_sha256": hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
+            "runtime_closure_v2_manifest_sha256": crate::encode_hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
             "runtime_closure_v2_root": runtime_closure_v2_root
         },
         "limits": {
@@ -229,7 +229,7 @@ fn manifest(
             "byte_len": worker_length,
             "llvm_build_identity": llvm_build,
             "path": worker_path,
-            "sha256": hex(&worker_sha256),
+            "sha256": crate::encode_hex(&worker_sha256),
             "worker_build_identity": worker_build
         }
     });
@@ -243,7 +243,10 @@ fn manifest(
     )
     .unwrap();
     let worker = PinnedWorkerV1::open(worker_path, measurement).unwrap();
-    (path, hex(&calculate_config_identity(&bytes, &worker).0))
+    (
+        path,
+        crate::encode_hex(&calculate_config_identity(&bytes, &worker).0),
+    )
 }
 
 fn local_manifest(directory: &TestDirectory) -> (PathBuf, String) {
@@ -279,7 +282,7 @@ fn parse_test_manifest(
         path,
         expected_identity,
         Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
-        &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
+        &crate::encode_hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
         test_compile_unit(directory),
     )
 }
@@ -293,13 +296,9 @@ fn prepare_test_manifest(
         path,
         expected_identity,
         Path::new(TEST_RUNTIME_CLOSURE_V2_ROOT),
-        &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
+        &crate::encode_hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
         test_compile_unit(directory),
     )
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|value| format!("{value:02x}")).collect()
 }
 
 fn producer() -> ProducerIdentity {
@@ -324,7 +323,7 @@ fn parser_accepts_only_the_closed_qualification_pair_and_exact_fields() {
         TEST_CODEGEN_BACKEND_BUILD_OBSERVATION_V2
     );
     assert_eq!(config.proof_timeout_seconds, 120);
-    assert_eq!(hex(&config.identity.as_bytes()), expected);
+    assert_eq!(crate::encode_hex(&config.identity.as_bytes()), expected);
 
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     value["general_gemm_v1"]["profile"] = json!("single-schedule-v1");
@@ -686,7 +685,7 @@ fn manifest_profile_mutation_cannot_reuse_the_managed_config_identity() {
 fn runtime_root_path_environment_and_manifest_substitution_are_rejected() {
     let directory = TestDirectory::new("runtime-pin-substitution");
     let (path, expected) = local_manifest(&directory);
-    let manifest_sha256 = hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256);
+    let manifest_sha256 = crate::encode_hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256);
 
     for (expected_root, expected_manifest, reason) in [
         (
@@ -758,7 +757,7 @@ fn measured_pair_retains_one_runtime_generation_and_proof_execution_stays_closed
         &path,
         &expected,
         Path::new("/opt/fe2o3/verus-runtime-v2/0.2026.08.02"),
-        &hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
+        &crate::encode_hex(&GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256),
         test_compile_unit(&directory),
     )
     .unwrap();

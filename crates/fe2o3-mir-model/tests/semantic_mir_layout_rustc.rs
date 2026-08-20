@@ -68,7 +68,7 @@ fn request_for_target(
     let abi = SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(bytes(1)),
         layout_identity(240),
-        SemanticCallingConventionV1::Rust,
+        SemanticCanonAbiV1::Rust,
         false,
         false,
         vec![],

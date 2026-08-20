@@ -581,8 +581,8 @@ impl LinkPublicationRecordV1 {
         let invocation: [u8; 32] = copy_array(decoder.take(32)?);
         let attempt_text = format!(
             "{generation}:{}:{}",
-            encode_hex(&session),
-            encode_hex(&invocation)
+            crate::encode_hex(&session),
+            crate::encode_hex(&invocation)
         );
         let attempt = BuildAttempt::from_env_value(&attempt_text)
             .map_err(|_| LinkPublicationCodecError::InvalidAttempt)?;
@@ -1182,16 +1182,6 @@ fn copy_array<const N: usize>(bytes: &[u8]) -> [u8; N] {
     let mut result = [0; N];
     result.copy_from_slice(bytes);
     result
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-    }
-    encoded
 }
 
 struct Decoder<'a> {

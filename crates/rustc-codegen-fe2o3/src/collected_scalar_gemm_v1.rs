@@ -132,7 +132,7 @@ impl ScalarGemmFrontendReceiptV1 {
     }
 
     pub(crate) fn portable_mir_semantic_hex(&self) -> String {
-        encode_hex(
+        crate::encode_hex(
             &self
                 .authority
                 .as_ref()
@@ -142,7 +142,7 @@ impl ScalarGemmFrontendReceiptV1 {
     }
 
     pub(crate) fn compiler_semantics_hex(&self) -> String {
-        encode_hex(
+        crate::encode_hex(
             &self
                 .authority
                 .as_ref()
@@ -152,7 +152,7 @@ impl ScalarGemmFrontendReceiptV1 {
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(
+        crate::encode_hex(
             &self
                 .authority
                 .as_ref()
@@ -273,8 +273,8 @@ impl fmt::Display for CollectedScalarGemmErrorV1 {
             Self::PortableMirIdentityMismatch { expected, actual } => write!(
                 formatter,
                 "collected scalar GEMM V1 portable MIR identity mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::PortableMir { detail } => write!(
                 formatter,
@@ -945,16 +945,6 @@ fn layout_mismatch(detail: impl Into<String>) -> CollectedScalarGemmErrorV1 {
     CollectedScalarGemmErrorV1::LayoutMismatch {
         detail: detail.into(),
     }
-}
-
-fn encode_hex(bytes: &[u8; 32]) -> String {
-    use fmt::Write as _;
-
-    let mut encoded = String::with_capacity(64);
-    for byte in bytes {
-        let _ = write!(encoded, "{byte:02x}");
-    }
-    encoded
 }
 
 #[cfg(test)]

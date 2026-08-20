@@ -171,11 +171,11 @@ impl Wave64CollectivesFrontendReceiptV1 {
     }
 
     pub(crate) fn portable_mir_hex(&self) -> String {
-        encode_hex(&self.authority().portable_mir_identity)
+        crate::encode_hex(&self.authority().portable_mir_identity)
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(&self.authority().authority_identity)
+        crate::encode_hex(&self.authority().authority_identity)
     }
 
     pub(crate) fn consume(
@@ -223,11 +223,11 @@ impl AuthenticatedWave64CollectivesV1 {
     }
 
     pub(crate) fn source_authority_hex(&self) -> String {
-        encode_hex(&self.source_authority_identity)
+        crate::encode_hex(&self.source_authority_identity)
     }
 
     pub(crate) fn descriptor_hex(&self) -> String {
-        encode_hex(&self.descriptor_identity)
+        crate::encode_hex(&self.descriptor_identity)
     }
 }
 
@@ -264,8 +264,8 @@ impl fmt::Display for CollectedWave64CollectivesErrorV1 {
             Self::SourceIdentity { expected, actual } => write!(
                 formatter,
                 "Wave64 source bytes mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::Abi(detail) => write!(formatter, "Wave64 collectives ABI mismatch: {detail}"),
             Self::Layout(detail) => {
@@ -277,14 +277,14 @@ impl fmt::Display for CollectedWave64CollectivesErrorV1 {
             Self::PortableMirIdentity { expected, actual } => write!(
                 formatter,
                 "Wave64 complete reachable MIR closure mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::FnAbiIdentity { expected, actual } => write!(
                 formatter,
                 "Wave64 rustc FnAbi mismatch: expected {}, found {}",
-                encode_hex(expected),
-                encode_hex(actual)
+                crate::encode_hex(expected),
+                crate::encode_hex(actual)
             ),
             Self::TrustedDefinitions(detail) => write!(
                 formatter,
@@ -476,7 +476,7 @@ fn observe_source_identity(
     })?;
     let namespace_declaration = format!(
         "namespace = \"{}\"",
-        encode_hex(&WAVE64_COLLECTIVES_V1_NAMESPACE)
+        crate::encode_hex(&WAVE64_COLLECTIVES_V1_NAMESPACE)
     );
     if bytes
         .windows(namespace_declaration.len())
@@ -1000,15 +1000,6 @@ fn compiler_crate_binding() -> CrateBindingIdV1 {
 fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
 }
 
 #[cfg(test)]

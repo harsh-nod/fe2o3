@@ -1859,8 +1859,6 @@ pub enum SemanticExternAbiV1 {
     GpuKernel,
 }
 
-pub type SemanticCallingConventionV1 = SemanticCanonAbiV1;
-
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticAbiExtensionV1 {
     None,
@@ -2537,16 +2535,8 @@ impl SemanticFunctionAbiV1 {
         &self.source_signature
     }
 
-    pub const fn calling_convention(&self) -> SemanticCallingConventionV1 {
-        self.canon_abi
-    }
-
     pub const fn can_unwind(&self) -> bool {
         self.can_unwind
-    }
-
-    pub const fn is_variadic(&self) -> bool {
-        self.source_signature.c_variadic
     }
 
     pub const fn c_variadic(&self) -> bool {
@@ -8543,7 +8533,7 @@ fn validate_function(
         };
         validate_terminator(context, id, function, location, &block.terminator.kind)?;
     }
-    charge_reachable_cfg_walk(context, function)
+    Ok(())
 }
 
 fn validate_hidden_abi_argument(
@@ -11441,69 +11431,6 @@ fn enqueue_operand_closure_references(
         | SemanticConstantValueV1::Bytes(_) => {}
     }
     Ok(())
-}
-
-fn charge_reachable_cfg_walk(
-    context: &mut ValidationContextV1<'_>,
-    function: &SemanticFunctionDeclV1,
-) -> Result<(), SemanticMirErrorV1> {
-    let mut reached = BTreeSet::new();
-    let mut pending = VecDeque::from([function.entry]);
-    while let Some(block) = pending.pop_front() {
-        context.one()?;
-        if !reached.insert(block) {
-            continue;
-        }
-        for edge in terminator_edges(&function.blocks[block.0 as usize].terminator.kind) {
-            context.one()?;
-            pending.push_back(edge.target);
-        }
-    }
-    Ok(())
-}
-
-fn terminator_edges(terminator: &SemanticTerminatorKindV1) -> Vec<SemanticControlFlowEdgeV1> {
-    let mut edges = Vec::new();
-    match terminator {
-        SemanticTerminatorKindV1::Goto(edge) => edges.push(*edge),
-        SemanticTerminatorKindV1::SwitchInt { targets, .. } => {
-            edges.extend(targets.values.iter().map(|target| target.edge));
-            edges.push(targets.otherwise);
-        }
-        SemanticTerminatorKindV1::Call(call) => {
-            if let Some(destination) = &call.destination {
-                edges.push(destination.edge);
-            }
-            push_unwind_edge(&mut edges, call.unwind);
-        }
-        SemanticTerminatorKindV1::TailCall(call) => {
-            push_unwind_edge(&mut edges, call.unwind);
-        }
-        SemanticTerminatorKindV1::Drop { target, unwind, .. }
-        | SemanticTerminatorKindV1::Assert { target, unwind, .. } => {
-            edges.push(*target);
-            push_unwind_edge(&mut edges, *unwind);
-        }
-        SemanticTerminatorKindV1::FalseEdge {
-            real_target,
-            imaginary_target,
-        } => {
-            edges.push(*real_target);
-            edges.push(*imaginary_target);
-        }
-        SemanticTerminatorKindV1::Return
-        | SemanticTerminatorKindV1::UnwindResume
-        | SemanticTerminatorKindV1::UnwindTerminate
-        | SemanticTerminatorKindV1::Abort
-        | SemanticTerminatorKindV1::Unreachable => {}
-    }
-    edges
-}
-
-fn push_unwind_edge(edges: &mut Vec<SemanticControlFlowEdgeV1>, unwind: SemanticUnwindActionV1) {
-    if let SemanticUnwindActionV1::Cleanup(edge) = unwind {
-        edges.push(edge);
-    }
 }
 
 fn encode_request(

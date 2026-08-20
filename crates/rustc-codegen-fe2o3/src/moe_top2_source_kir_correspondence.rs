@@ -1047,8 +1047,8 @@ fn snapshot_text(inputs: &StructuralClassifierCandidateV2) -> String {
         .join(",");
     format!(
         "schema=moe-top2-private-structural-v2;source={};fnabi={}:rust={}:variadic={}:fixed={}:unwind={}:ignored={}:result={}:args=[{}];mir={}:functions={}:roots={}:helpers={}:blocks={}:statements={}:terminators={}:edges={}:imports={}:root-args={}:root-locals={}:assignments={}:calls={}:indexed={}:repeats={}:binops=0x{:08x};kir={};profile={};abi={};effects={};routing={};compiler={};trusted={};root={};authority={}",
-        hex(&inputs.source_identity),
-        hex(&abi.identity),
+        crate::encode_hex(&inputs.source_identity),
+        crate::encode_hex(&abi.identity),
         u8::from(abi.rust_calling_convention),
         u8::from(abi.c_variadic),
         abi.fixed_count,
@@ -1056,7 +1056,7 @@ fn snapshot_text(inputs: &StructuralClassifierCandidateV2) -> String {
         u8::from(abi.result_ignored),
         abi.result_size,
         argument_text,
-        hex(&mir.identity),
+        crate::encode_hex(&mir.identity),
         mir.function_count,
         mir.kernel_root_count,
         mir.helper_count,
@@ -1072,23 +1072,31 @@ fn snapshot_text(inputs: &StructuralClassifierCandidateV2) -> String {
         mir.indexed_place_count,
         mir.repeat_count,
         mir.binary_operation_mask,
-        hex(&inputs
-            .canonical
-            .identity(KERNEL_IR_DOMAIN_V2, MEMBER_KERNEL_IR),),
-        hex(&inputs.canonical.identity(PROFILE_DOMAIN_V2, MEMBER_PROFILE),),
-        hex(&inputs
-            .canonical
-            .identity(ABI_PROJECTION_DOMAIN_V2, MEMBER_ABI),),
-        hex(&inputs
-            .canonical
-            .identity(EFFECTS_PROJECTION_DOMAIN_V2, MEMBER_EFFECTS),),
-        hex(&inputs
-            .canonical
-            .identity(ROUTING_PROJECTION_DOMAIN_V2, MEMBER_ROUTING),),
-        hex(&inputs.same_session.compiler_semantics_identity),
-        hex(&inputs.same_session.trusted_definitions_identity),
+        crate::encode_hex(
+            &inputs
+                .canonical
+                .identity(KERNEL_IR_DOMAIN_V2, MEMBER_KERNEL_IR),
+        ),
+        crate::encode_hex(&inputs.canonical.identity(PROFILE_DOMAIN_V2, MEMBER_PROFILE),),
+        crate::encode_hex(
+            &inputs
+                .canonical
+                .identity(ABI_PROJECTION_DOMAIN_V2, MEMBER_ABI),
+        ),
+        crate::encode_hex(
+            &inputs
+                .canonical
+                .identity(EFFECTS_PROJECTION_DOMAIN_V2, MEMBER_EFFECTS),
+        ),
+        crate::encode_hex(
+            &inputs
+                .canonical
+                .identity(ROUTING_PROJECTION_DOMAIN_V2, MEMBER_ROUTING),
+        ),
+        crate::encode_hex(&inputs.same_session.compiler_semantics_identity),
+        crate::encode_hex(&inputs.same_session.trusted_definitions_identity),
         inputs.same_session.root_instance_identity,
-        hex(&inputs.same_session.source_authority_identity),
+        crate::encode_hex(&inputs.same_session.source_authority_identity),
     )
 }
 
@@ -1406,15 +1414,6 @@ fn add_count(
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
 }
 
 #[cfg(test)]
