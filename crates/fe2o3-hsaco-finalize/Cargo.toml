@@ -25,7 +25,7 @@ fe2o3-kernel-ir.workspace = true
 fe2o3-llvm-handoff.workspace = true
 fe2o3-llvm-text.workspace = true
 fe2o3-verifier.workspace = true
-object = { version = "0.39.1", default-features = false, features = ["elf", "read_core"] }
+object = { version = "0.39.1", default-features = false, features = ["elf", "read_core", "std"] }
 reserved-fe2o3-symbols.workspace = true
 rustix = { workspace = true, features = ["process"] }
 sha2.workspace = true
