@@ -37,30 +37,28 @@ but both issues remain open.
   into production compiler selection; the current implementation remains in
   `rustc-codegen-fe2o3`.
 - `fe2o3-pliron` provides the pinned D0 context, private context identity,
-  registration, and bounded pass-plan shell. Generic pass execution is withheld
-  pending owner-aware upstream Pliron handles. Seven
+  registration, bounded pass-plan shell, and owner-held textual bridge. The
+  bridge recursively verifies operations and meters complete owner/session tree
+  accounting, but arbitrary registered parsers remain trusted. Seven
   target-neutral Pliron dialect shells cover `kernel.*`, `schedule.*`,
   `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
   `dialect-mir` adds a bounded `mir.*` shell only with feature `pliron` while
   preserving its default compatibility facade over `fe2o3-mir-model`.
 - `fe2o3-kir-pliron-bridge` round-trips exact canonical KIR V1-V5 bytes through
   an opaque context-bound Pliron envelope. `fe2o3-lower-mir-kernel` and
-  `fe2o3-lower-kernel-gpu` add narrow, bounded, terminally fail-closed
-  detached lowering services with context-bound results. They are not Pliron
-  in-tree passes and are not wired into production selection.
+  `fe2o3-lower-kernel-gpu` add narrow, bounded, terminally fail-closed lowering
+  services with context-bound results. rustc now retains an owner-controlled
+  typed MIR graph for the return-only subset; broader MIR remains unsupported.
 - Existing AMDGPU lowering is owned by `fe2o3-amdgcn-model` and re-exported by
   the historical `dialect-amdgcn` facade. A production `gpu.*` to `amdgcn.*`
   Pliron route has not landed; the implemented scalar dialect slice is not
   that general route.
-- The graph pins dialect-only `pliron-llvm` with
-  `default-features = false`. The bounded scalar slice has live graph-derived
-  V2 extraction (`62e66209e`), deterministic bounded LLVM assembly
-  (`3a3b43e90`), an inert attempt-scoped request bridge (`cb571012f`), and an
-  exact closed execution route: hardened Worker `fd6520d88`, exact ELF and
-  machine inspector `70f9c5ad7`, measured-HSACO gate `e016833d3`, move-only
-  Worker evidence `c9e8ca702`, sealed finalizer/runtime join `62efd243e`, and
-  runtime-alignment correction `228c88ed9`. The bridge grants no
-  artifact/runtime authority by itself.
+- The graph pins dialect-only `pliron-llvm` with `default-features = false`.
+  The closed gfx942 General GEMM profile now has live graph-derived V2 export,
+  deterministic LLVM assembly, exact LLVM/LLD build-policy admission, and
+  retained graph-to-post-link identities for both schedules. The production
+  selector remains fail-closed until authenticated MIR-to-KIR and rustc-owned
+  final authority joins consume this structural route.
 - `fe2o3-service-host` consumes the service and host models through
   authority-free, borrow-retaining typestates. It has no HSA/HIP handles and
   performs no allocation, publication, load, launch, execution, wait,
@@ -84,16 +82,14 @@ transformation, and verification. It may not own LLVM code generation, object
 emission, LLD linking, canonical identity, or evidence, and its printer output
 is not the finalizer contract.
 
-fe2o3 owns canonical handoff V2, the live-graph extractor, deterministic
-bounded LLVM-assembly serialization, and all stable stage receipts and
-evidence around finalization. For the current scalar, a validated V1 sidecar
-still carries the AMD calling convention, target attributes, module metadata,
-and evidence absent from the upstream dialect; graph/sidecar disagreement
-rejects. The embedded backend fixture is structurally parsed before building
-the live graph; it is not Rust user source. The landed attempt-scoped bridge
-binds the fixture identity, exact
-assembly bytes, compiler handoff, manifest, plan, measured worker identity, and
-sealed request, but remains inert.
+fe2o3 owns canonical Handoff V2, the live-graph extractor, deterministic bounded
+LLVM-assembly serialization, and all stable stage receipts and evidence around
+finalization. For the closed General GEMM profile, the live graph carries the
+complete structural LLVM policy and a separately hashed bounded envelope
+carries only non-graph inputs. Fresh owner-borrowing export binds graph,
+assembly, and worker request admission before the graph owner is released. That
+admission checks an exact LLVM/LLD build policy but does not authenticate worker
+measurement, and it remains inert.
 
 The isolated measured upstream LLVM 22.1.8 target machine and in-process LLD
 remain the sole machine-code and HSACO authority. The bounded #159 and #161

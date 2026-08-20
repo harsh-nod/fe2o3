@@ -44,16 +44,18 @@ dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
 The 2026-08-19 [#134](https://github.com/harsh-nod/fe2o3/issues/134)
-checkpoint completes one deliberately bounded Pliron scalar-add vertical
-slice. `pliron-llvm` is used only as a typed dialect dependency with default
-features disabled; its optional `llvm-sys` converter is excluded from both the
-compiler and worker. The route starts from a checked-in backend fixture,
-constructs the exact admitted Pliron graph and canonical V2 handoff, serializes
-deterministic bounded LLVM assembly, and uses the pinned upstream LLVM 22.1.8
-target-machine plus in-process LLD worker. The backend fixture is not Rust user
-source and this checkpoint does not establish a Rust-source frontend or
-source-to-machine refinement proof. No COMGR or subprocess compiler/linker has
-artifact authority on this route.
+checkpoint now includes two additional fail-closed ownership boundaries. The
+rustc frontend retains one non-cloneable, same-session typed MIR/CFG graph with
+exact item, instance, source, MIR, ABI, import, and Pliron-graph identities;
+only the return-only subset is admitted, and it grants no compiler authority.
+The closed gfx942 General GEMM structural route retains a live owner-bound
+Pliron LLVM graph through fresh graph export, deterministic LLVM serialization,
+exact LLVM/LLD build-policy admission, Worker V2 execution, and post-link
+inspection for both schedules. Build-policy admission is not worker-measurement
+authentication. Production positive General GEMM import remains disabled until
+the authenticated MIR-to-KIR and existing rustc-owned final authority joins are
+complete. `pliron-llvm` has default features disabled, and no COMGR,
+`llvm-sys`, or subprocess compiler/linker has artifact authority on this route.
 
 The closure landed in `fd6520d88` (exact Worker machine effects), `70f9c5ad7`
 (structural ELF, descriptor, and decoded-machine inspection), `e016833d3`
@@ -311,11 +313,12 @@ target lowering, and host execution into explicit ownership boundaries:
   yet. The working codegen paths and `FE2O3_CODEGEN_PIPELINE` selection remain
   owned by the existing integration crate.
 - Pliron framework: `fe2o3-pliron` is a bounded D0 context, registration,
-  context-identity, and pass-planning shell over Pliron v0.17.0 at commit
-  `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. Generic pass execution is withheld
-  until [#140](https://github.com/harsh-nod/fe2o3/issues/140) supplies upstream
-  Pliron handles with authenticatable context provenance. Seven target-neutral
-  representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
+  context-identity, pass-planning, and owner-held textual bridge over Pliron
+  v0.17.0 at commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
+  The bridge recursively verifies imported operations and enforces bounded
+  owner/session accounting, but arbitrary registered `Parsable` implementations
+  remain trusted parser code and the bridge grants no compiler authority. Seven
+  target-neutral representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
   `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`. `dialect-mir` remains a
   compatibility facade over `fe2o3-mir-model` and additionally exposes a
   bounded `mir.*` Pliron shell only with its non-default `pliron` feature.
@@ -325,11 +328,13 @@ target lowering, and host execution into explicit ownership boundaries:
   canonical KIR V1-V5 bytes in an opaque context-bound envelope and rejects any
   inconsistent, substituted, or foreign-context Pliron projection.
   `fe2o3-lower-mir-kernel` implements a narrow, terminally fail-closed
-  `mir.*`-to-`kernel.*` detached service, and `fe2o3-lower-kernel-gpu`
+  `mir.*`-to-`kernel.*` service, and `fe2o3-lower-kernel-gpu`
   implements a bounded target-neutral `kernel.*`-to-`gpu.*` detached service.
   Their results are context-bound and stale handles fail with typed errors.
-  They do not implement Pliron's in-tree `Pass` contract and are not a rustc
-  frontend, AMD lowering, artifact producer, or production compiler route.
+  The rustc integration now retains an owner-controlled typed MIR graph for a
+  return-only subset; every other observed MIR operation rejects terminally.
+  These services do not implement Pliron's in-tree `Pass` contract and are not
+  a general Rust frontend, AMD lowering, artifact producer, or production route.
 - Target model and facades: `fe2o3-amd-target` owns canonical AMD target
   contracts. The existing strict AMDGPU lowering implementation moved to
   `fe2o3-amdgcn-model`; `dialect-amdgcn` now preserves the historical crate API

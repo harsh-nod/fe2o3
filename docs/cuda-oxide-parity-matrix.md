@@ -66,6 +66,16 @@ fixture is not Rust user source, so this is not Rust frontend or
 source-to-machine evidence. No COMGR or subprocess compiler/linker has artifact
 authority.
 
+The later #134 Rust/MIR and General GEMM compiler checkpoints also promote no
+row. rustc now retains an exact owner-controlled typed MIR/CFG graph for a
+return-only subset, while the closed gfx942 General GEMM structural route keeps
+its live Pliron LLVM graph authoritative through fresh export, LLVM
+serialization, exact LLVM/LLD build-policy admission, Worker V2 execution, and
+post-link inspection for both schedules. Positive production General GEMM
+import remains disabled until the MIR-to-KIR correspondence and existing final
+authority join consume these owners. The authoritative TSV and generated
+dashboard therefore remain unchanged at `0/97/0/12` combined.
+
 The bounded closure comprises `fd6520d88`, `70f9c5ad7`, `e016833d3`,
 `c9e8ca702`, `62efd243e`, and alignment correction `228c88ed9`. Together they
 close the exact Worker machine-effect profile, structural ELF/descriptor/machine

@@ -44,27 +44,27 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,
   machine-code inspection, and GPU execution remain separate claims.
-- The 2026-08-18 ownership refactor establishes canonical MIR, compiler, proof,
+- The ownership refactor establishes canonical MIR, compiler, proof,
   host-operation, and service-model contracts; an explicit compiler
   API/driver/dormant-legacy-adapter boundary; a pinned Pliron D0 shell; seven
   target-neutral dialect shells; a feature-gated `mir.*` Pliron shell; an
-  opaque context-bound exact-byte KIR/Pliron envelope; bounded detached
-  MIR-to-kernel and kernel-to-GPU lowering services; and an authority-free
-  service-host typestate adapter.
-  These are representation and composition foundations. They are not connected
-  to production compilation or persistent-service execution.
-- The selective scalar Pliron slice has a live graph-derived extractor
-  (`62e66209e`), deterministic bounded LLVM-assembly serializer (`3a3b43e90`),
-  and inert attempt-scoped Worker V2 request bridge (`cb571012f`).
+  opaque context-bound exact-byte KIR/Pliron envelope; bounded MIR-to-kernel
+  and kernel-to-GPU lowering services; an owner-held textual bridge; and an
+  authority-free service-host typestate adapter. The rustc frontend retains an
+  exact typed MIR/CFG graph for a return-only supported subset and rejects all
+  other observed MIR semantics terminally.
+- The Pliron LLVM lane has a live graph-derived extractor, deterministic bounded
+  LLVM-assembly serializer, and inert Worker V2 request bridge.
   `pliron-llvm` v0.17.0 is used with
   `default-features = false` for its typed dialect only. The bridge binds the
   exact request but grants no object, link, publication, load, or launch
   authority.
-- The scalar slice still obtains its AMD calling convention, target
-  attributes, module metadata, and origin/obligation evidence from an exact
-  validated V1 sidecar because upstream `pliron-llvm` does not represent those
-  properties. The live graph supplies scalar operations, operands, results,
-  types, and control flow; any graph/sidecar disagreement rejects.
+- The closed gfx942 General GEMM profile now retains target, module, global,
+  function, CFG, instruction, type, and per-item policy on the live graph, with
+  separately hashed bounded non-graph inputs for stage identities, device
+  libraries, origins, and obligations. Fresh owner-borrowing export is the sole
+  structural route into serialization and worker admission. The resulting
+  identities remain inert and are retained through post-link inspection.
 - The bounded scalar closure comprises hardened Worker profile `fd6520d88`,
   exact ELF and machine inspection `70f9c5ad7`, measured-HSACO gate
   `e016833d3`, move-only Worker execution evidence `c9e8ca702`, the dedicated
@@ -220,7 +220,7 @@ continue to point downward according to the machine-checked
 | `fe2o3-pliron` | Pinned Pliron context, private context identities, registration, and bounded pass-plan validation | Generic pass execution over contextless pointers, fe2o3 dialect semantics, production selection, artifact authority |
 | `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`, `dialect-proof`, `dialect-dispatch`, `dialect-autotune` | Bounded target-neutral Pliron representation shells | Target legalization, compiler selection, proof or runtime authority |
 | `fe2o3-kir-pliron-bridge` | Opaque context-bound exact canonical KIR V1-V5 byte envelope with redundant checked Pliron projection | Accepting raw Pliron modules, reconstructing KIR from Pliron text, target or artifact authority |
-| `fe2o3-lower-mir-kernel`, `fe2o3-lower-kernel-gpu` | Narrow deterministic detached lowering services with context-bound results and terminal unsupported errors | In-tree Pliron pass semantics, rustc extraction, AMD lowering, artifact production, fallback |
+| `fe2o3-lower-mir-kernel`, `fe2o3-lower-kernel-gpu` | Narrow deterministic lowering services with context-bound results and terminal unsupported errors; rustc retains the return-only MIR result | In-tree Pliron pass semantics, general rustc extraction, AMD lowering, artifact production, fallback |
 | `fe2o3-amd-target` | Canonical AMD target identities, features, and capability contracts | Compiler execution and runtime observation |
 | `fe2o3-amdgcn-model` | Existing strict AMDGPU vocabulary, legalization/lowering, OCML/OCKL selection, and LLVM text generation | Pliron object identity, host borrow policy, artifact/launch authority |
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
