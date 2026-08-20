@@ -53,7 +53,52 @@ fn fresh_serialization_binds_exact_envelope_graph_assembly_and_worker() {
         first.receipt().worker_admission_identity(),
         first.worker_admission().admission_identity()
     );
+    assert_eq!(
+        first.retained_graph_export().canonical_handoff_identity(),
+        first.receipt().graph_handoff_identity()
+    );
+    first
+        .retained_graph_export()
+        .revalidate_against(&lowered)
+        .unwrap();
     assert_ne!(first.receipt().identity().as_bytes(), [0; 32]);
+}
+
+#[test]
+fn retained_export_rejects_equivalent_fresh_owner_substitution() {
+    let source = support::scalar_handoff();
+    let owner = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+    let equivalent_but_foreign = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+    let serialized = serialize(&owner);
+    let equivalent_serialized = serialize(&equivalent_but_foreign);
+
+    assert_eq!(
+        serialized
+            .retained_graph_export()
+            .canonical_handoff_identity(),
+        equivalent_serialized
+            .retained_graph_export()
+            .canonical_handoff_identity()
+    );
+    assert!(matches!(
+        serialized
+            .retained_graph_export()
+            .revalidate_against(&equivalent_but_foreign),
+        Err(LiveGraphSerializationErrorV1::RetainedGraphOwnerMismatch)
+    ));
+
+    let (retained, receipt, assembly, worker) = serialized.into_retained_parts();
+    retained.revalidate_against(&owner).unwrap();
+    assert_eq!(
+        retained.canonical_handoff_identity(),
+        receipt.graph_handoff_identity()
+    );
+    assert_eq!(assembly.sha256(), receipt.assembly_sha256());
+    assert_eq!(
+        worker.admission_identity(),
+        receipt.worker_admission_identity()
+    );
+    assert!(!retained.grants_artifact_authority());
 }
 
 #[test]

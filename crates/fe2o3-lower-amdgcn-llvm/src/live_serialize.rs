@@ -11,8 +11,9 @@ use fe2o3_llvm_worker_handoff::{
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    GraphExportErrorV1, GraphExportIdentityV1, GraphExportRequestV1, LiveGraphInspectionV1,
-    LoweredAmdgcnPlironLlvmV1, LoweringReceiptIdentityV1, NonGraphEnvelopeIdentityV1,
+    CanonicalLoweringReceiptV1, CanonicalPlironLlvmGraphExportV1, GraphExportErrorV1,
+    GraphExportIdentityV1, GraphExportRequestV1, LiveGraphInspectionV1, LoweredAmdgcnPlironLlvmV1,
+    LoweringReceiptIdentityV1, NonGraphEnvelopeIdentityV1,
 };
 
 const SERIALIZATION_IDENTITY_DOMAIN_V1: &[u8] =
@@ -47,6 +48,10 @@ pub enum LiveGraphSerializationErrorV1 {
     Assembly(SerializeErrorV2),
     /// Exact canonical graph bytes or measured worker policy failed admission.
     Worker(WorkerAdmissionErrorV2),
+    /// A retained export was paired with a different process-local graph owner.
+    RetainedGraphOwnerMismatch,
+    /// Fresh traversal of the retained owner no longer reproduces the retained export.
+    RetainedGraphExportMismatch,
 }
 
 impl fmt::Display for LiveGraphSerializationErrorV1 {
@@ -61,6 +66,7 @@ impl Error for LiveGraphSerializationErrorV1 {
             Self::Graph(error) => Some(error),
             Self::Assembly(error) => Some(error),
             Self::Worker(error) => Some(error),
+            Self::RetainedGraphOwnerMismatch | Self::RetainedGraphExportMismatch => None,
         }
     }
 }
@@ -134,12 +140,90 @@ impl LiveGraphSerializationReceiptV1 {
     }
 }
 
+/// Move-only concrete export retained from one exact live graph traversal.
+///
+/// Unlike the identity-only serialization receipt, this value owns the
+/// canonical graph-derived handoff. It also remembers process-local owner
+/// provenance so an equivalent graph in another Pliron context cannot be
+/// substituted during fresh revalidation. Neither identity grants artifact or
+/// runtime authority.
+///
+/// The retained export cannot be cloned:
+///
+/// ```compile_fail
+/// use fe2o3_lower_amdgcn_llvm::RetainedLiveGraphExportV1;
+///
+/// fn clone_export(export: RetainedLiveGraphExportV1) {
+///     let _ = export.clone();
+/// }
+/// ```
+#[derive(Debug)]
+pub struct RetainedLiveGraphExportV1 {
+    owner: fe2o3_pliron::ContextIdentity,
+    export: CanonicalPlironLlvmGraphExportV1,
+}
+
+impl RetainedLiveGraphExportV1 {
+    /// Returns the concrete canonical handoff reconstructed from the live graph.
+    pub const fn canonical_handoff(&self) -> &fe2o3_llvm_handoff::Gfx942HandoffV2 {
+        self.export.graph_handoff()
+    }
+
+    /// Returns the identity of the retained concrete canonical handoff.
+    pub fn canonical_handoff_identity(&self) -> HandoffIdentityV2 {
+        self.export.graph_handoff_identity()
+    }
+
+    /// Returns the identity binding the retained graph export and envelope.
+    pub const fn graph_export_identity(&self) -> GraphExportIdentityV1 {
+        self.export.identity()
+    }
+
+    /// Returns the canonical graph-derived lowering receipt.
+    pub const fn graph_receipt(&self) -> &CanonicalLoweringReceiptV1 {
+        self.export.graph_receipt()
+    }
+
+    /// Returns graph facts recovered by the retained traversal.
+    pub const fn graph_inspection(&self) -> LiveGraphInspectionV1 {
+        self.export.graph_inspection()
+    }
+
+    /// Freshly traverses the exact process-local owner and compares the complete export.
+    pub fn revalidate_against(
+        &self,
+        owner: &LoweredAmdgcnPlironLlvmV1,
+    ) -> Result<(), LiveGraphSerializationErrorV1> {
+        if owner.context_identity() != self.owner {
+            return Err(LiveGraphSerializationErrorV1::RetainedGraphOwnerMismatch);
+        }
+        let fresh = crate::lower::export_graph(
+            owner,
+            GraphExportRequestV1::new(
+                owner.receipt().identity(),
+                owner.non_graph_envelope().identity(),
+            ),
+        )
+        .map_err(LiveGraphSerializationErrorV1::Graph)?;
+        if fresh != self.export {
+            return Err(LiveGraphSerializationErrorV1::RetainedGraphExportMismatch);
+        }
+        Ok(())
+    }
+
+    /// This retained compiler export grants no artifact or runtime authority.
+    pub const fn grants_artifact_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Inert output of one owner-borrowing graph serialization and worker admission.
 ///
 /// This value is deliberately not cloneable. Consuming it separates the exact
-/// assembly, worker admission, and retained serialization receipt.
+/// assembly, worker admission, retained concrete graph export, and serialization receipt.
 #[derive(Debug)]
 pub struct AdmittedLiveGraphSerializationV1 {
+    graph_export: RetainedLiveGraphExportV1,
     receipt: LiveGraphSerializationReceiptV1,
     assembly: Gfx942LlvmAssemblyV2,
     worker_admission: AdmittedWorkerRequestV2,
@@ -149,6 +233,11 @@ impl AdmittedLiveGraphSerializationV1 {
     /// Returns evidence binding this output to fresh traversal of the live graph.
     pub const fn receipt(&self) -> LiveGraphSerializationReceiptV1 {
         self.receipt
+    }
+
+    /// Returns the retained concrete graph-derived handoff owner.
+    pub const fn retained_graph_export(&self) -> &RetainedLiveGraphExportV1 {
+        &self.graph_export
     }
 
     /// Returns the exact graph-derived LLVM assembly.
@@ -170,6 +259,23 @@ impl AdmittedLiveGraphSerializationV1 {
         AdmittedWorkerRequestV2,
     ) {
         (self.receipt, self.assembly, self.worker_admission)
+    }
+
+    /// Consumes this result without discarding its concrete graph-derived handoff.
+    pub fn into_retained_parts(
+        self,
+    ) -> (
+        RetainedLiveGraphExportV1,
+        LiveGraphSerializationReceiptV1,
+        Gfx942LlvmAssemblyV2,
+        AdmittedWorkerRequestV2,
+    ) {
+        (
+            self.graph_export,
+            self.receipt,
+            self.assembly,
+            self.worker_admission,
+        )
     }
 }
 
@@ -280,6 +386,10 @@ impl LiveGraphSerializationTokenV1<'_, '_> {
                 .into(),
         );
         Ok(AdmittedLiveGraphSerializationV1 {
+            graph_export: RetainedLiveGraphExportV1 {
+                owner: self.owner.context_identity(),
+                export,
+            },
             receipt: LiveGraphSerializationReceiptV1 {
                 graph_export_identity,
                 graph_handoff_identity,
