@@ -4,6 +4,7 @@ mod executable_wire;
 mod mem2reg;
 mod semantic_constant;
 mod semantic_memory;
+pub mod semantic_mir_v1;
 mod semantic_type;
 pub mod semantic_type_v2;
 
