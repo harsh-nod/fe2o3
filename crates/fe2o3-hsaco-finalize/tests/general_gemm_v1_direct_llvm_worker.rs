@@ -186,27 +186,21 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
     ] {
         let machine = lower_general_gemm_symbolic_structural_machine_v1(&unit(schedule))
             .expect("lower exact symbolic general-GEMM machine");
+        let serialization = machine.compiler_boundary().serialization_receipt();
         assert_eq!(
-            machine.compiler_boundary().graph_export().graph_handoff(),
-            machine.handoff()
+            serialization.graph_handoff_identity(),
+            machine.handoff().identity()
         );
-        let canonical_source = machine.handoff().encode_canonical();
-        assert!(
-            machine
-                .compiler_boundary()
-                .graph_export()
-                .graph_receipt()
-                .as_bytes()
-                .windows(canonical_source.as_bytes().len())
-                .any(|window| window == canonical_source.as_bytes())
+        assert_eq!(serialization.assembly_sha256(), machine.assembly().sha256());
+        assert_eq!(
+            serialization.worker_admission_identity(),
+            machine.worker_admission().admission_identity()
         );
         assert_ne!(machine.compiler_boundary().identity().as_bytes(), &[0; 32]);
         assert!(!machine.compiler_boundary().grants_artifact_authority());
-        let graph_export_identity = machine
-            .compiler_boundary()
-            .graph_export()
-            .identity()
-            .as_bytes();
+        let live_serialization_identity = serialization.identity().as_bytes();
+        let graph_export_identity = serialization.graph_export_identity().as_bytes();
+        let non_graph_envelope_identity = serialization.non_graph_envelope_identity().as_bytes();
         let compiler_boundary_identity = *machine.compiler_boundary().identity().as_bytes();
         let directory = TestDirectory::new();
         let consumed = consumed_handoff(&directory, machine.compiler_handoff(), schedule_byte);
@@ -226,7 +220,15 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
         .expect("write inert raw HSACO for audit");
         let observation = finalize_symbolic_general_gemm_worker_v2_v1(evidence)
             .unwrap_or_else(|error| panic!("{label} post-link inspection failed: {error:?}"));
+        assert_eq!(
+            observation.live_serialization_identity(),
+            &live_serialization_identity
+        );
         assert_eq!(observation.graph_export_identity(), &graph_export_identity);
+        assert_eq!(
+            observation.non_graph_envelope_identity(),
+            &non_graph_envelope_identity
+        );
         assert_eq!(
             observation.compiler_boundary_identity(),
             &compiler_boundary_identity

@@ -181,7 +181,9 @@ pub struct OpaqueGeneralGemmPostLinkMachineObservationV1 {
     symbolic_compilation: GeneralGemmSymbolicCompilationIdentityV1,
     symbolic_artifact: GeneralGemmSymbolicArtifactIdentityV1,
     projection: GeneralGemmPlironProjectionIdentityV1,
+    live_serialization: [u8; 32],
     graph_export: [u8; 32],
+    non_graph_envelope: [u8; 32],
     compiler_boundary: [u8; 32],
     handoff_v2: HandoffIdentityV2,
     typed_worker_admission: [u8; 32],
@@ -236,8 +238,16 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
         self.projection
     }
 
+    pub const fn live_serialization_identity(&self) -> &[u8; 32] {
+        &self.live_serialization
+    }
+
     pub const fn graph_export_identity(&self) -> &[u8; 32] {
         &self.graph_export
+    }
+
+    pub const fn non_graph_envelope_identity(&self) -> &[u8; 32] {
+        &self.non_graph_envelope
     }
 
     pub const fn compiler_boundary_identity(&self) -> &[u8; 32] {
@@ -582,7 +592,11 @@ pub fn execute_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
-    if machine.compiler_boundary().graph_export().source_identity() != machine.handoff().identity()
+    let serialization = machine.compiler_boundary().serialization_receipt();
+    if serialization.graph_handoff_identity() != machine.handoff().identity()
+        || serialization.assembly_sha256() != machine.assembly().sha256()
+        || serialization.worker_admission_identity()
+            != machine.worker_admission().admission_identity()
         || machine.worker_admission().handoff() != machine.graph_handoff()
         || machine.worker_admission().handoff_identity() != machine.graph_handoff().identity()
     {
@@ -626,7 +640,11 @@ pub fn execute_symbolic_general_gemm_worker_v2_v1(
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertSymbolicGeneralGemmWorkerV2EvidenceV1, GeneralGemmWorkerV2ErrorV1> {
-    if machine.compiler_boundary().graph_export().source_identity() != machine.handoff().identity()
+    let serialization = machine.compiler_boundary().serialization_receipt();
+    if serialization.graph_handoff_identity() != machine.handoff().identity()
+        || serialization.assembly_sha256() != machine.assembly().sha256()
+        || serialization.worker_admission_identity()
+            != machine.worker_admission().admission_identity()
         || machine.worker_admission().handoff() != machine.graph_handoff()
         || machine.worker_admission().handoff_identity() != machine.graph_handoff().identity()
     {
@@ -752,10 +770,20 @@ pub fn finalize_symbolic_general_gemm_worker_v2_v1(
         symbolic_compilation: machine.projection().compilation_identity(),
         symbolic_artifact: machine.artifact_identity(),
         projection: machine.projection().identity(),
+        live_serialization: machine
+            .compiler_boundary()
+            .serialization_receipt()
+            .identity()
+            .as_bytes(),
         graph_export: machine
             .compiler_boundary()
-            .graph_export()
-            .identity()
+            .serialization_receipt()
+            .graph_export_identity()
+            .as_bytes(),
+        non_graph_envelope: machine
+            .compiler_boundary()
+            .serialization_receipt()
+            .non_graph_envelope_identity()
             .as_bytes(),
         compiler_boundary: *machine.compiler_boundary().identity().as_bytes(),
         handoff_v2: machine.graph_handoff().identity(),
@@ -1115,13 +1143,10 @@ fn calculate_post_link_identity(
     hasher.update(machine.projection().schedule_identity().as_bytes());
     hasher.update(machine.projection().symbolic_plan_identity().as_bytes());
     hasher.update(machine.projection().symbolic_kir_identity().as_bytes());
-    hasher.update(
-        machine
-            .compiler_boundary()
-            .graph_export()
-            .identity()
-            .as_bytes(),
-    );
+    let serialization = machine.compiler_boundary().serialization_receipt();
+    hasher.update(serialization.identity().as_bytes());
+    hasher.update(serialization.graph_export_identity().as_bytes());
+    hasher.update(serialization.non_graph_envelope_identity().as_bytes());
     hasher.update(machine.compiler_boundary().identity().as_bytes());
     hasher.update(machine.graph_handoff().identity().as_bytes());
     hasher.update(machine.worker_admission().admission_identity().as_bytes());
@@ -1187,6 +1212,10 @@ fn calculate_worker_identity(
     let mut hasher = Sha256::new();
     hasher.update(GENERAL_GEMM_WORKER_IDENTITY_DOMAIN_V1);
     hasher.update(machine.projection().identity().as_bytes());
+    let serialization = machine.compiler_boundary().serialization_receipt();
+    hasher.update(serialization.identity().as_bytes());
+    hasher.update(serialization.graph_export_identity().as_bytes());
+    hasher.update(serialization.non_graph_envelope_identity().as_bytes());
     hasher.update(machine.graph_handoff().identity().as_bytes());
     hasher.update(machine.compiler_boundary().identity().as_bytes());
     hasher.update(machine.worker_admission().admission_identity().as_bytes());
@@ -1214,6 +1243,10 @@ fn calculate_symbolic_worker_identity(
     hasher.update(GENERAL_GEMM_WORKER_IDENTITY_DOMAIN_V1);
     hasher.update(machine.artifact_identity().as_bytes());
     hasher.update(machine.projection().identity().as_bytes());
+    let serialization = machine.compiler_boundary().serialization_receipt();
+    hasher.update(serialization.identity().as_bytes());
+    hasher.update(serialization.graph_export_identity().as_bytes());
+    hasher.update(serialization.non_graph_envelope_identity().as_bytes());
     hasher.update(machine.graph_handoff().identity().as_bytes());
     hasher.update(machine.compiler_boundary().identity().as_bytes());
     hasher.update(machine.worker_admission().admission_identity().as_bytes());
