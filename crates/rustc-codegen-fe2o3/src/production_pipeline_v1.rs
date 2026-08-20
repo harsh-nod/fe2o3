@@ -158,17 +158,25 @@ mod tests {
                 collected_functions: 3,
                 registered_roots: 2,
                 llvm_target: "amdgcn-amd-amdhsa".to_owned(),
+                rustc_identity_inventory_sha256: [0xab; 32],
             },
         );
         assert_eq!(
             error.to_string(),
-            "production-v1 semantic importer authenticated rustc target \"amdgcn-amd-amdhsa\" and consumed 3 collected device function(s) with 2 external root(s), but canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered"
+            format!(
+                "production-v1 semantic importer authenticated rustc target \"amdgcn-amd-amdhsa\", consumed 3 collected device function(s) with 2 external root(s), and derived rustc identity inventory {}; but canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
+                "ab".repeat(32),
+            )
         );
     }
 
     #[test]
     fn production_module_contains_no_profile_selection_vocabulary() {
-        let source = include_str!("production_pipeline_v1.rs");
+        let sources = [
+            include_str!("production_pipeline_v1.rs"),
+            include_str!("collector/production_importer_v1.rs"),
+            include_str!("rustc_semantic_adapter_v1.rs"),
+        ];
         for forbidden in [
             concat!("General", "Gemm"),
             concat!("Flash", "Attention"),
@@ -183,8 +191,44 @@ mod tests {
             concat!("target: AmdGpu", "Target"),
         ] {
             assert!(
-                !source.contains(forbidden),
+                !sources[0].contains(forbidden),
                 "production transaction contains forbidden selector term {forbidden:?}"
+            );
+        }
+
+        for forbidden_importer_term in [
+            concat!("General", "Gemm"),
+            concat!("Flash", "Attention"),
+            concat!("Row", "Softmax"),
+            concat!("Moe", "Top2"),
+            concat!("source", " substring"),
+            concat!("MIR", " transcript"),
+            concat!("legacy", "-v1"),
+            concat!("kernel-ir", "-v1"),
+        ] {
+            assert!(
+                sources
+                    .iter()
+                    .skip(1)
+                    .all(|source| !source.contains(forbidden_importer_term)),
+                "production importer contains forbidden selector term {forbidden_importer_term:?}"
+            );
+        }
+
+        for forbidden_dependency in [
+            concat!("mir_import", "_v2"),
+            concat!("same_session", "_rustc_v1"),
+            concat!("frontend_record", "_bridge"),
+            concat!("semantic_type", "_adapter_v2"),
+            concat!("source_", "debug"),
+            concat!("collected_", "general_gemm_v1"),
+        ] {
+            assert!(
+                sources
+                    .iter()
+                    .skip(1)
+                    .all(|source| !source.contains(forbidden_dependency)),
+                "production importer depends on qualification module {forbidden_dependency:?}"
             );
         }
     }

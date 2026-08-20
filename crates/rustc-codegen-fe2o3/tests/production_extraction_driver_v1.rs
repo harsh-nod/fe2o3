@@ -38,6 +38,18 @@ fn workspace() -> PathBuf {
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
     let target = ScratchTarget::new();
+    let repeated_target = ScratchTarget::new();
+    let first = run_extraction(&target);
+    let repeated = run_extraction(&repeated_target);
+
+    assert_eq!(
+        identity_inventory_sha256(&first),
+        identity_inventory_sha256(&repeated),
+        "separate AMD rustc processes derived different identity inventories",
+    );
+}
+
+fn run_extraction(target: &ScratchTarget) -> String {
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace())
         .env(
@@ -72,7 +84,7 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
         .arg(&target.path)
         .output()
         .expect("run AMD extraction fixture");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
 
     assert!(!output.status.success(), "importer unexpectedly completed");
     assert!(
@@ -93,4 +105,25 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
             "AMD extraction entered forbidden path {forbidden:?}:\n{stderr}"
         );
     }
+    let _ = identity_inventory_sha256(&stderr);
+    stderr
+}
+
+fn identity_inventory_sha256(stderr: &str) -> &str {
+    const PREFIX: &str = "and derived rustc identity inventory ";
+    let suffix = stderr
+        .split_once(PREFIX)
+        .unwrap_or_else(|| panic!("missing identity inventory diagnostic:\n{stderr}"))
+        .1;
+    let identity = suffix
+        .get(..64)
+        .unwrap_or_else(|| panic!("truncated identity inventory diagnostic:\n{stderr}"));
+    assert!(
+        identity
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "identity inventory is not canonical lowercase hexadecimal: {identity:?}",
+    );
+    assert_eq!(suffix.as_bytes().get(64), Some(&b';'));
+    identity
 }

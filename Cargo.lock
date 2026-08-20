@@ -2588,6 +2588,7 @@ dependencies = [
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-lower-mir-kernel",
+ "fe2o3-mir-model",
  "fe2o3-process-identity",
  "fe2o3-rustc-front",
  "fe2o3-rustc-invocation",
