@@ -5,6 +5,7 @@
 
 mod authenticated_machine_effect;
 mod control_flow;
+mod kernel_check_pipeline;
 mod machine_effect;
 mod physical_machine_effect;
 mod scalar_gemm_v1_physical_machine_effect;
@@ -20,6 +21,7 @@ pub use control_flow::{
     MAX_CONTROL_FLOW_NATURAL_LOOPS, MAX_CONTROL_FLOW_STORAGE_ITEMS, MAX_CONTROL_FLOW_WORK_UNITS,
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
+pub use kernel_check_pipeline::*;
 pub use machine_effect::*;
 pub use physical_machine_effect::*;
 pub use scalar_gemm_v1_physical_machine_effect::*;

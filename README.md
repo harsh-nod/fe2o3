@@ -317,6 +317,13 @@ target lowering, and host execution into explicit ownership boundaries:
   `rustc-codegen-fe2o3`; no production selector uses the new driver or adapter
   yet. The working codegen paths and `FE2O3_CODEGEN_PIPELINE` selection remain
   owned by the existing integration crate.
+- General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
+  Kernel IR sequence for structure, control flow, bounds obligations, race
+  freedom, barrier convergence, and workgroup-memory initialization/reuse.
+  The production MIR-to-Kernel-IR boundary runs the sequence for every kernel
+  and rejects concrete failures before transformation. `Incomplete` and
+  `Clean` reports remain non-authoritative; see the
+  [V1 pipeline contract](docs/general-kernel-check-pipeline-v1.md).
 - Pliron framework: `fe2o3-pliron` is a bounded D0 context, registration,
   context-identity, pass-planning, and owner-held textual bridge over Pliron
   v0.17.0 at commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.

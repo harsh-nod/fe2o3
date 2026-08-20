@@ -16,6 +16,9 @@ use fe2o3_general_gemm_compiler::{
     GeneralGemmFrontendSemanticBindingV1, GeneralGemmSymbolicKirV1,
     GeneralGemmSymbolicPlanExpressionV1, GeneralGemmSymbolicPlanV1,
 };
+use fe2o3_kernel_analysis::{
+    KernelBoundAssessmentV1, KernelBoundDimensionV1, KernelBoundStatusV1, KernelMemoryAccessKindV1,
+};
 use fe2o3_kernel_ir::{GeneralGemmKirDiagnosticV1, GeneralGemmPropertyV1};
 use rustc_abi::ExternAbi;
 use rustc_hir::Safety;
@@ -51,7 +54,7 @@ pub(crate) enum GeneralGemmMirImportV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GeneralGemmSemanticRejectionV1 {
     diagnostic: GeneralGemmKirDiagnosticV1,
-    bound_assessment: Option<GeneralGemmBoundAssessmentV1>,
+    bound_assessment: Option<KernelBoundAssessmentV1>,
     root_symbol: String,
     source_span: String,
     terminal_spans: Vec<String>,
@@ -127,91 +130,11 @@ impl GeneralGemmIndexRoleV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct GeneralGemmBoundObligationV1 {
+struct GeneralGemmBoundSpecV1 {
     memory: GeneralGemmAbiRoleV1,
     dimension: u8,
     index: GeneralGemmIndexRoleV1,
     extent: GeneralGemmAbiRoleV1,
-}
-
-impl GeneralGemmBoundObligationV1 {
-    fn write_relation(&self, formatter: &mut fmt::Formatter<'_>, verb: &str) -> fmt::Result {
-        write!(
-            formatter,
-            "{} dimension {} {verb} `{} < {}`",
-            self.memory.as_diagnostic_str(),
-            self.dimension,
-            self.index.as_str(),
-            self.extent.as_diagnostic_str(),
-        )
-    }
-}
-
-impl fmt::Display for GeneralGemmBoundObligationV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.write_relation(formatter, "requires")
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct GeneralGemmBoundProofV1 {
-    obligation: GeneralGemmBoundObligationV1,
-    status: GeneralGemmBoundProofStatusV1,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum GeneralGemmBoundProofStatusV1 {
-    Proven,
-    Unproved,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct GeneralGemmBoundAssessmentV1 {
-    proofs: [GeneralGemmBoundProofV1; 2],
-}
-
-impl GeneralGemmBoundAssessmentV1 {
-    fn has_exact_statuses(&self, statuses: [GeneralGemmBoundProofStatusV1; 2]) -> bool {
-        self.proofs
-            .iter()
-            .zip(statuses)
-            .all(|(proof, expected)| proof.status == expected)
-    }
-}
-
-impl fmt::Display for GeneralGemmBoundAssessmentV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut failed = self
-            .proofs
-            .iter()
-            .filter(|proof| proof.status == GeneralGemmBoundProofStatusV1::Unproved);
-        let first_failed = failed.next().ok_or(fmt::Error)?;
-        write!(
-            formatter,
-            "failed bound: {}, but that relation is not established on every path to the access",
-            first_failed.obligation,
-        )?;
-        for proof in failed {
-            write!(formatter, ", and {}", proof.obligation)?;
-        }
-        for proof in self
-            .proofs
-            .iter()
-            .filter(|proof| proof.status == GeneralGemmBoundProofStatusV1::Proven)
-        {
-            write!(formatter, "; proven bound: ")?;
-            proof.obligation.write_relation(formatter, "satisfies")?;
-        }
-        write!(
-            formatter,
-            "; help: guard every path to the access with the failed relation or use a checked operation that supplies a defined tail value",
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct GeneralGemmBoundSpecV1 {
-    obligation: GeneralGemmBoundObligationV1,
     index_argument: usize,
     extent_argument: usize,
 }
@@ -774,7 +697,7 @@ struct GeneralGemmCallV1 {
 struct GeneralGemmCounterexampleV1<'a> {
     diagnostic: GeneralGemmKirDiagnosticV1,
     call_chain: Vec<&'a GeneralGemmCallV1>,
-    bound_assessment: Option<GeneralGemmBoundAssessmentV1>,
+    bound_assessment: Option<KernelBoundAssessmentV1>,
 }
 
 impl<'a> GeneralGemmCounterexampleV1<'a> {
@@ -788,7 +711,7 @@ impl<'a> GeneralGemmCounterexampleV1<'a> {
 
     fn bounds(
         call_chain: Vec<&'a GeneralGemmCallV1>,
-        bound_assessment: GeneralGemmBoundAssessmentV1,
+        bound_assessment: KernelBoundAssessmentV1,
     ) -> Self {
         Self {
             diagnostic: diagnostic(GeneralGemmPropertyV1::BoundsSafe),
@@ -1126,12 +1049,10 @@ fn bound_obligation_specs(
     Some(std::array::from_fn(|dimension| {
         let (index, extent) = dimensions[dimension];
         GeneralGemmBoundSpecV1 {
-            obligation: GeneralGemmBoundObligationV1 {
-                memory,
-                dimension: dimension as u8,
-                index,
-                extent,
-            },
+            memory,
+            dimension: dimension as u8,
+            index,
+            extent,
             index_argument: dimension + 2,
             extent_argument: dimension + 4,
         }
@@ -1142,7 +1063,7 @@ fn assess_bound_obligations<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     call: &GeneralGemmCallV1,
-) -> Result<GeneralGemmBoundAssessmentV1, GeneralGemmMirImportErrorV1> {
+) -> Result<KernelBoundAssessmentV1, GeneralGemmMirImportErrorV1> {
     let specs = bound_obligation_specs(call.operation).ok_or_else(|| {
         unproved(&format!(
             "{} has a registered two-dimensional bound schema",
@@ -1155,7 +1076,7 @@ fn assess_bound_obligations<'tcx>(
             unproved(&format!(
                 "{} bound dimension {} has index argument {}",
                 operation_name(call.operation),
-                spec.obligation.dimension,
+                spec.dimension,
                 spec.index_argument,
             ))
         })?;
@@ -1163,23 +1084,30 @@ fn assess_bound_obligations<'tcx>(
             unproved(&format!(
                 "{} bound dimension {} has extent argument {}",
                 operation_name(call.operation),
-                spec.obligation.dimension,
+                spec.dimension,
                 spec.extent_argument,
             ))
         })?;
-        Ok(GeneralGemmBoundProofV1 {
-            obligation: spec.obligation,
-            status: if has_true_lt_guard(tcx, body, call.block, &index.node, &extent.node) {
-                GeneralGemmBoundProofStatusV1::Proven
+        KernelBoundDimensionV1::new(
+            spec.memory.as_diagnostic_str(),
+            spec.dimension,
+            spec.index.as_str(),
+            spec.extent.as_diagnostic_str(),
+            if has_true_lt_guard(tcx, body, call.block, &index.node, &extent.node) {
+                KernelBoundStatusV1::Proven
             } else {
-                GeneralGemmBoundProofStatusV1::Unproved
+                KernelBoundStatusV1::Unproved
             },
-        })
+        )
+        .map_err(|_| unproved("derived memory-bound description is valid"))
     };
     let [first, second] = specs;
-    Ok(GeneralGemmBoundAssessmentV1 {
-        proofs: [assess(first)?, assess(second)?],
-    })
+    let access = match call.operation {
+        TrustedGeneralGemmOperationV1::StoreEpilogue => KernelMemoryAccessKindV1::Write,
+        _ => KernelMemoryAccessKindV1::Read,
+    };
+    KernelBoundAssessmentV1::new(access, [assess(first)?, assess(second)?])
+        .map_err(|_| unproved("derived memory-bound dimensions form one exact access"))
 }
 
 fn derived_dynamic_counterexample<'a, 'tcx>(
@@ -1188,17 +1116,17 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
     calls: &'a [GeneralGemmCallV1],
 ) -> Result<Option<GeneralGemmCounterexampleV1<'a>>, GeneralGemmMirImportErrorV1> {
     require_dynamic_mutation_oracle_shape(calls)?;
-    use GeneralGemmBoundProofStatusV1::{Proven, Unproved};
+    use KernelBoundStatusV1::{Proven, Unproved};
 
     let load_a = unique_call(calls, TrustedGeneralGemmOperationV1::LoadA)?;
     let a_bounds = assess_bound_obligations(tcx, body, load_a)?;
-    if a_bounds.has_exact_statuses([Unproved, Proven]) {
+    if a_bounds.has_exact_statuses(&[Unproved, Proven]) {
         return Ok(Some(GeneralGemmCounterexampleV1::bounds(
             vec![load_a],
             a_bounds,
         )));
     }
-    if !a_bounds.has_exact_statuses([Proven, Proven]) {
+    if !a_bounds.has_exact_statuses(&[Proven, Proven]) {
         return Err(unproved(
             "A load has exactly the row<M and depth<K guards or the named single-guard counterexample",
         ));
@@ -1206,13 +1134,13 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
 
     let load_b = unique_call(calls, TrustedGeneralGemmOperationV1::LoadB)?;
     let b_bounds = assess_bound_obligations(tcx, body, load_b)?;
-    if b_bounds.has_exact_statuses([Unproved, Proven]) {
+    if b_bounds.has_exact_statuses(&[Unproved, Proven]) {
         return Ok(Some(GeneralGemmCounterexampleV1::bounds(
             vec![load_b],
             b_bounds,
         )));
     }
-    if !b_bounds.has_exact_statuses([Proven, Proven]) {
+    if !b_bounds.has_exact_statuses(&[Proven, Proven]) {
         return Err(unproved(
             "B load has exactly the depth<K and column<N guards or the named single-guard counterexample",
         ));
@@ -1234,14 +1162,14 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
         if row == ProofSymbolicValueV1::KernelArgument(3)
             && column != ProofSymbolicValueV1::KernelArgument(4)
         {
-            if !bounds.has_exact_statuses([Unproved, Proven]) {
+            if !bounds.has_exact_statuses(&[Unproved, Proven]) {
                 return Err(unproved(
                     "the named out-of-bounds C store has one failed row bound and one proven column bound",
                 ));
             }
             return Ok(Some(GeneralGemmCounterexampleV1::bounds(
                 vec![*store],
-                *bounds,
+                bounds.clone(),
             )));
         }
     }
@@ -1284,7 +1212,7 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
                 "C stores have exact grid-XY16 lane/component ownership or a derived lane/workgroup collision",
             ));
         }
-        if !bounds.has_exact_statuses([Proven, Proven]) {
+        if !bounds.has_exact_statuses(&[Proven, Proven]) {
             return Err(unproved(
                 "C stores are dominated by exact row<M and column<N guards",
             ));
@@ -5278,10 +5206,10 @@ mod tests {
             for (dimension, (proof, (memory, index, extent))) in
                 observed.iter().zip(expected).enumerate()
             {
-                assert_eq!(proof.obligation.memory, memory);
-                assert_eq!(proof.obligation.dimension, dimension as u8);
-                assert_eq!(proof.obligation.index, index);
-                assert_eq!(proof.obligation.extent, extent);
+                assert_eq!(proof.memory, memory);
+                assert_eq!(proof.dimension, dimension as u8);
+                assert_eq!(proof.index, index);
+                assert_eq!(proof.extent, extent);
                 assert_eq!(proof.index_argument, dimension + 2);
                 assert_eq!(proof.extent_argument, dimension + 4);
             }
@@ -5290,28 +5218,16 @@ mod tests {
 
     #[test]
     fn bound_assessment_names_failed_and_proven_dimensions() {
-        let assessment = GeneralGemmBoundAssessmentV1 {
-            proofs: [
-                GeneralGemmBoundProofV1 {
-                    obligation: GeneralGemmBoundObligationV1 {
-                        memory: GeneralGemmAbiRoleV1::A,
-                        dimension: 0,
-                        index: GeneralGemmIndexRoleV1::Row,
-                        extent: GeneralGemmAbiRoleV1::M,
-                    },
-                    status: GeneralGemmBoundProofStatusV1::Unproved,
-                },
-                GeneralGemmBoundProofV1 {
-                    obligation: GeneralGemmBoundObligationV1 {
-                        memory: GeneralGemmAbiRoleV1::A,
-                        dimension: 1,
-                        index: GeneralGemmIndexRoleV1::Depth,
-                        extent: GeneralGemmAbiRoleV1::K,
-                    },
-                    status: GeneralGemmBoundProofStatusV1::Proven,
-                },
+        let assessment = KernelBoundAssessmentV1::new(
+            KernelMemoryAccessKindV1::Read,
+            [
+                KernelBoundDimensionV1::new("A", 0, "row", "m", KernelBoundStatusV1::Unproved)
+                    .unwrap(),
+                KernelBoundDimensionV1::new("A", 1, "depth", "k", KernelBoundStatusV1::Proven)
+                    .unwrap(),
             ],
-        };
+        )
+        .unwrap();
 
         assert_eq!(
             assessment.to_string(),

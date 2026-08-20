@@ -93,6 +93,12 @@ canonical KIR envelope, while `fe2o3-lower-mir-kernel` and
 `fe2o3-lower-kernel-gpu` implement narrow bounded detached lowering services
 with context-bound results. None is a production compiler stage.
 
+The mandatory [general Kernel IR check pipeline](general-kernel-check-pipeline-v1.md)
+runs before Pliron projection or transformation. It is a closed target-neutral
+analysis sequence over immutable `fe2o3-kernel-ir`, not a substitute for the
+withheld generic Pliron execution API. Its reports cannot create compiler,
+artifact, or runtime authority.
+
 This layer may consume canonical contracts and admitted frontend models. It
 MUST NOT depend on target backend, host runtime, Verus execution, compiler
 driver, or fixture crates. `fe2o3-kernel-ir` remains outside this layer and
