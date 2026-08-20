@@ -4,12 +4,13 @@
 //! MIR is inside the first reviewed subset. It does not construct, admit, or
 //! authorize canonical semantic MIR.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticFunctionIdV1, SemanticLocalIdV1,
     SemanticLocalIdentityV1, SemanticMirLimitsV1, SemanticMirResourceV1,
+    SemanticSourceFileIdentityV1, SemanticSourceOriginV1, SemanticSourceProvenanceV1,
     SemanticTargetDataLayoutV1, SemanticTypeIdV1, SemanticTypeIdentityV1,
 };
 use rustc_middle::mir::{
@@ -26,13 +27,14 @@ use crate::production_semantic_terminal_v1::{
     ProductionSemanticTerminalRuleV1, ProductionTerminalExpansionV1,
 };
 use crate::rustc_semantic_adapter_v1::{
-    CanonicalFunctionIdentitiesV1, SemanticIdentityDigestV1, canonical_function_identities_v1,
-    rustc_block_identity_v1, rustc_local_identity_v1, rustc_mir_body_sha256_v1,
-    rustc_type_identity_v1,
+    CanonicalFunctionIdentitiesV1, CanonicalSourceProvenanceV1, SemanticIdentityDigestV1,
+    canonical_function_identities_v1, canonical_source_provenance_v1, rustc_block_identity_v1,
+    rustc_local_identity_v1, rustc_mir_body_sha256_v1, rustc_type_identity_v1,
 };
 
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
 const MAX_DIAGNOSTIC_COMPONENT_CHARS_V1: usize = 512;
+const MAX_MACRO_EXPANSION_DEPTH_V1: usize = 256;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RetainedSemanticFunctionProducerV1<'tcx> {
@@ -52,17 +54,42 @@ struct RetainedSemanticLocalProducerV1 {
     identity: SemanticLocalIdentityV1,
     rustc_local: u32,
     ty: SemanticTypeIdV1,
+    source: RetainedSemanticSourceProducerV1,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct RetainedSemanticBlockProducerV1 {
     identity: SemanticBlockIdentityV1,
     rustc_block: u32,
+    source: RetainedSemanticSourceProducerV1,
+    statements: Box<[RetainedSemanticSourceProducerV1]>,
+    terminator: RetainedSemanticSourceProducerV1,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RetainedSemanticSourceProducerV1 {
+    provenance: SemanticSourceProvenanceV1,
+    expansion_chain_sha256: [u8; 32],
+}
+
+#[derive(Debug)]
+struct RetainedRawBlockSourceProducerV1 {
+    source: RetainedSemanticSourceProducerV1,
+    statements: Box<[RetainedSemanticSourceProducerV1]>,
+    terminator: RetainedSemanticSourceProducerV1,
+}
+
+#[derive(Debug)]
+struct RetainedRawBodySourceProducerV1 {
+    source: RetainedSemanticSourceProducerV1,
+    locals: Box<[RetainedSemanticSourceProducerV1]>,
+    blocks: Box<[RetainedRawBlockSourceProducerV1]>,
 }
 
 #[derive(Debug)]
 struct RetainedSemanticBodyProducerV1 {
     function: SemanticFunctionIdV1,
+    source: RetainedSemanticSourceProducerV1,
     locals: Box<[RetainedSemanticLocalProducerV1]>,
     raw_to_semantic_locals: Box<[SemanticLocalIdV1]>,
     entry: SemanticBlockIdV1,
@@ -72,6 +99,7 @@ struct RetainedSemanticBodyProducerV1 {
 
 struct CanonicalProducerTablesV1<'tcx> {
     types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
+    source_files: Box<[SemanticSourceFileIdentityV1]>,
     bodies: Box<[RetainedSemanticBodyProducerV1]>,
 }
 
@@ -189,6 +217,7 @@ struct TerminalExpansionRecipeV1 {
 #[derive(Debug)]
 pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
+    source_files: Box<[SemanticSourceFileIdentityV1]>,
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
     bodies: Box<[RetainedSemanticBodyProducerV1]>,
     roots: Box<[SemanticFunctionIdV1]>,
@@ -204,6 +233,14 @@ impl ProductionSemanticPreflightPlanV1<'_> {
 
     pub(crate) fn function_count(&self) -> usize {
         self.functions.len()
+    }
+
+    pub(crate) fn source_file_producer_count(&self) -> usize {
+        self.source_files.len()
+    }
+
+    pub(crate) fn source_provenance_producer_count(&self) -> usize {
+        source_provenance_producer_count_v1(&self.bodies)
     }
 
     pub(crate) fn body_producer_count(&self) -> usize {
@@ -476,9 +513,23 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     // Pass two walks every raw MIR node once, classifies the first supported
     // subset, and charges only resources directly observed in rustc MIR.
     let mut types = BTreeMap::new();
+    let mut source_producers = Vec::with_capacity(functions.len());
+    let mut source_cache = HashMap::new();
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
         let body = tcx.instance_mir(function.instance.def);
+        let sources = capture_body_sources_v1(
+            tcx,
+            function_id,
+            body,
+            &mut source_cache,
+            &mut counts,
+            limits,
+        )
+        .map_err(|rejection| {
+            materialize_rejection_v1(tcx, &functions, &roots, &edges, rejection)
+        })?;
+        source_producers.push(sources);
         let mut preflight = BodyPreflightV1 {
             tcx,
             instance: function.instance,
@@ -495,14 +546,18 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         }
     }
 
-    let CanonicalProducerTablesV1 { types, bodies } =
-        build_canonical_producer_tables_v1(tcx, &functions, types)?;
+    let CanonicalProducerTablesV1 {
+        types,
+        source_files,
+        bodies,
+    } = build_canonical_producer_tables_v1(tcx, &functions, source_producers, types)?;
 
     let terminal_expansions = terminal_expansions.into_iter().collect::<Box<[_]>>();
     let sha256 = preflight_plan_sha256_v1(
         target,
         identity_inventory_sha256,
         &types,
+        &source_files,
         &functions,
         &bodies,
         &roots,
@@ -513,6 +568,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     );
     Ok(ProductionSemanticPreflightPlanV1 {
         types,
+        source_files,
         functions,
         bodies,
         roots,
@@ -885,11 +941,149 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
     }
 }
 
+fn capture_body_sources_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    function: SemanticFunctionIdV1,
+    body: &Body<'tcx>,
+    cache: &mut HashMap<Span, RetainedSemanticSourceProducerV1>,
+    counts: &mut RawMirPreflightCountsV1,
+    limits: SemanticMirLimitsV1,
+) -> Result<RetainedRawBodySourceProducerV1, PendingRejectionV1> {
+    let function_site = RejectionSiteV1 {
+        function,
+        block: None,
+        statement: None,
+        local: None,
+        span: body.span,
+    };
+    let source = capture_source_v1(tcx, body.span, function_site, cache, counts, limits)?;
+
+    let mut locals = Vec::with_capacity(body.local_decls.len());
+    for (local, declaration) in body.local_decls.iter_enumerated() {
+        let site = RejectionSiteV1 {
+            function,
+            block: None,
+            statement: None,
+            local: Some(local.index() as u32),
+            span: declaration.source_info.span,
+        };
+        locals.push(capture_source_v1(
+            tcx,
+            declaration.source_info.span,
+            site,
+            cache,
+            counts,
+            limits,
+        )?);
+    }
+
+    let mut blocks = Vec::with_capacity(body.basic_blocks.len());
+    for (block, data) in body.basic_blocks.iter_enumerated() {
+        let Some(terminator) = &data.terminator else {
+            return Err(reject(
+                "basic block without a terminator",
+                RejectionSiteV1 {
+                    function,
+                    block: Some(block.index() as u32),
+                    statement: None,
+                    local: None,
+                    span: body.span,
+                },
+            ));
+        };
+        let mut statements = Vec::with_capacity(data.statements.len());
+        for (statement_index, statement) in data.statements.iter().enumerate() {
+            let site = RejectionSiteV1 {
+                function,
+                block: Some(block.index() as u32),
+                statement: Some(statement_index as u32),
+                local: None,
+                span: statement.source_info.span,
+            };
+            statements.push(capture_source_v1(
+                tcx,
+                statement.source_info.span,
+                site,
+                cache,
+                counts,
+                limits,
+            )?);
+        }
+        let terminator_site = RejectionSiteV1 {
+            function,
+            block: Some(block.index() as u32),
+            statement: None,
+            local: None,
+            span: terminator.source_info.span,
+        };
+        let terminator = capture_source_v1(
+            tcx,
+            terminator.source_info.span,
+            terminator_site,
+            cache,
+            counts,
+            limits,
+        )?;
+        // A basic block has no independent rustc span. Its canonical source is
+        // exactly the first statement's producer, or the terminator's producer
+        // for an empty block.
+        let source = statements.first().copied().unwrap_or(terminator);
+        blocks.push(RetainedRawBlockSourceProducerV1 {
+            source,
+            statements: statements.into_boxed_slice(),
+            terminator,
+        });
+    }
+    Ok(RetainedRawBodySourceProducerV1 {
+        source,
+        locals: locals.into_boxed_slice(),
+        blocks: blocks.into_boxed_slice(),
+    })
+}
+
+fn capture_source_v1(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    site: RejectionSiteV1,
+    cache: &mut HashMap<Span, RetainedSemanticSourceProducerV1>,
+    counts: &mut RawMirPreflightCountsV1,
+    limits: SemanticMirLimitsV1,
+) -> Result<RetainedSemanticSourceProducerV1, PendingRejectionV1> {
+    if let Some(source) = cache.get(&span).copied() {
+        return Ok(source);
+    }
+    let captured = canonical_source_provenance_v1(tcx, span, MAX_MACRO_EXPANSION_DEPTH_V1)
+        .map_err(|error| reject(format!("invalid source provenance: {error}"), site))?;
+    counts
+        .charge(
+            SemanticMirResourceV1::ValidationWork,
+            captured.expansion_depth().saturating_add(2),
+            limits,
+        )
+        .map_err(PendingRejectionV1::Fatal)?;
+    let source = retained_source_v1(captured);
+    cache.insert(span, source);
+    Ok(source)
+}
+
+const fn retained_source_v1(
+    captured: CanonicalSourceProvenanceV1,
+) -> RetainedSemanticSourceProducerV1 {
+    RetainedSemanticSourceProducerV1 {
+        provenance: captured.provenance(),
+        expansion_chain_sha256: captured.expansion_chain_sha256(),
+    }
+}
+
 fn build_canonical_producer_tables_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
+    source_producers: Vec<RetainedRawBodySourceProducerV1>,
     types: BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
 ) -> Result<CanonicalProducerTablesV1<'tcx>, ProductionSemanticPreflightErrorV1> {
+    if source_producers.len() != functions.len() {
+        return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+    }
     let mut type_ids = BTreeMap::new();
     let mut type_producers = Vec::with_capacity(types.len());
     for (index, (identity, ty)) in types.into_iter().enumerate() {
@@ -900,13 +1094,20 @@ fn build_canonical_producer_tables_v1<'tcx>(
     }
 
     let mut bodies = Vec::with_capacity(functions.len());
-    for (function_index, function) in functions.iter().enumerate() {
+    for (function_index, (function, raw_sources)) in
+        functions.iter().zip(source_producers).enumerate()
+    {
         let function_id = SemanticFunctionIdV1::from_index(
             u32::try_from(function_index)
                 .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
         );
         let function_identity = function.identities.function();
         let body = tcx.instance_mir(function.instance.def);
+        if raw_sources.locals.len() != body.local_decls.len()
+            || raw_sources.blocks.len() != body.basic_blocks.len()
+        {
+            return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        }
         let mir_body_sha256 = rustc_mir_body_sha256_v1(tcx, function.instance);
 
         let mut locals = Vec::with_capacity(body.local_decls.len());
@@ -924,6 +1125,10 @@ fn build_canonical_producer_tables_v1<'tcx>(
                 identity: rustc_local_identity_v1(function_identity, mir_body_sha256, raw_local),
                 rustc_local: raw_local,
                 ty,
+                source: *raw_sources
+                    .locals
+                    .get(raw_local as usize)
+                    .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
             });
         }
         locals.sort_unstable_by_key(|local| local.identity);
@@ -953,12 +1158,22 @@ fn build_canonical_producer_tables_v1<'tcx>(
             .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
 
         let mut blocks = Vec::with_capacity(body.basic_blocks.len());
-        for (raw_block, _) in body.basic_blocks.iter_enumerated() {
+        for (raw_block, data) in body.basic_blocks.iter_enumerated() {
             let raw_block = u32::try_from(raw_block.index())
                 .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            let raw_source = raw_sources
+                .blocks
+                .get(raw_block as usize)
+                .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            if raw_source.statements.len() != data.statements.len() {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            }
             blocks.push(RetainedSemanticBlockProducerV1 {
                 identity: rustc_block_identity_v1(function_identity, mir_body_sha256, raw_block),
                 rustc_block: raw_block,
+                source: raw_source.source,
+                statements: raw_source.statements.clone(),
+                terminator: raw_source.terminator,
             });
         }
         blocks.sort_unstable_by_key(|block| block.identity);
@@ -993,6 +1208,7 @@ fn build_canonical_producer_tables_v1<'tcx>(
 
         bodies.push(RetainedSemanticBodyProducerV1 {
             function: function_id,
+            source: raw_sources.source,
             locals: locals.into_boxed_slice(),
             raw_to_semantic_locals: raw_to_semantic_locals.into_boxed_slice(),
             entry,
@@ -1000,10 +1216,37 @@ fn build_canonical_producer_tables_v1<'tcx>(
             raw_to_semantic_blocks: raw_to_semantic_blocks.into_boxed_slice(),
         });
     }
+    let mut source_files = BTreeSet::new();
+    for body in &bodies {
+        remember_source_files_v1(&mut source_files, body.source.provenance);
+        for local in &body.locals {
+            remember_source_files_v1(&mut source_files, local.source.provenance);
+        }
+        for block in &body.blocks {
+            remember_source_files_v1(&mut source_files, block.source.provenance);
+            for statement in &block.statements {
+                remember_source_files_v1(&mut source_files, statement.provenance);
+            }
+            remember_source_files_v1(&mut source_files, block.terminator.provenance);
+        }
+    }
     Ok(CanonicalProducerTablesV1 {
         types: type_producers.into_boxed_slice(),
+        source_files: source_files.into_iter().collect(),
         bodies: bodies.into_boxed_slice(),
     })
+}
+
+fn remember_source_files_v1(
+    files: &mut BTreeSet<SemanticSourceFileIdentityV1>,
+    provenance: SemanticSourceProvenanceV1,
+) {
+    if let Some(origin) = provenance.expansion() {
+        files.insert(origin.file());
+    }
+    if let Some(origin) = provenance.call_site() {
+        files.insert(origin.file());
+    }
 }
 
 fn normalize_type_v1<'tcx>(
@@ -1181,6 +1424,7 @@ fn preflight_plan_sha256_v1<'tcx>(
     target: SemanticTargetDataLayoutV1,
     identity_inventory_sha256: [u8; 32],
     types: &[RetainedSemanticTypeProducerV1<'tcx>],
+    source_files: &[SemanticSourceFileIdentityV1],
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
     bodies: &[RetainedSemanticBodyProducerV1],
     roots: &[SemanticFunctionIdV1],
@@ -1192,12 +1436,27 @@ fn preflight_plan_sha256_v1<'tcx>(
     let mut digest = SemanticIdentityDigestV1::new(PREFLIGHT_PLAN_DOMAIN_V1);
     digest.field(target.identity().as_bytes());
     digest.field(&identity_inventory_sha256);
+    for cardinality in [
+        types.len(),
+        source_files.len(),
+        functions.len(),
+        bodies.len(),
+        source_provenance_producer_count_v1(bodies),
+        roots.len(),
+        edges.len(),
+        terminal_expansions.len(),
+    ] {
+        digest.field(&u64::try_from(cardinality).unwrap_or(u64::MAX).to_le_bytes());
+    }
     for count in counts.digest_fields() {
         digest.field(&count.to_le_bytes());
     }
     for ty in types {
         digest.field(ty.identity.as_bytes());
         digest.field(rustc_type_identity_v1(tcx, ty.ty).as_bytes());
+    }
+    for source_file in source_files {
+        digest.field(source_file.as_bytes());
     }
     for function in functions {
         digest.field(function.identities.function().as_bytes());
@@ -1206,10 +1465,12 @@ fn preflight_plan_sha256_v1<'tcx>(
     }
     for body in bodies {
         digest.field(&body.function.index().to_le_bytes());
+        digest_source_producer_v1(&mut digest, body.source);
         for local in &body.locals {
             digest.field(local.identity.as_bytes());
             digest.field(&local.rustc_local.to_le_bytes());
             digest.field(&local.ty.index().to_le_bytes());
+            digest_source_producer_v1(&mut digest, local.source);
         }
         for local in &body.raw_to_semantic_locals {
             digest.field(&local.index().to_le_bytes());
@@ -1218,6 +1479,11 @@ fn preflight_plan_sha256_v1<'tcx>(
         for block in &body.blocks {
             digest.field(block.identity.as_bytes());
             digest.field(&block.rustc_block.to_le_bytes());
+            digest_source_producer_v1(&mut digest, block.source);
+            for statement in &block.statements {
+                digest_source_producer_v1(&mut digest, *statement);
+            }
+            digest_source_producer_v1(&mut digest, block.terminator);
         }
         for block in &body.raw_to_semantic_blocks {
             digest.field(&block.index().to_le_bytes());
@@ -1237,6 +1503,50 @@ fn preflight_plan_sha256_v1<'tcx>(
         digest.field(&recipe.arguments.to_le_bytes());
     }
     digest.finish()
+}
+
+fn source_provenance_producer_count_v1(bodies: &[RetainedSemanticBodyProducerV1]) -> usize {
+    bodies
+        .iter()
+        .map(|body| {
+            1 + body.locals.len()
+                + body
+                    .blocks
+                    .iter()
+                    .map(|block| 2 + block.statements.len())
+                    .sum::<usize>()
+        })
+        .sum()
+}
+
+fn digest_source_producer_v1(
+    digest: &mut SemanticIdentityDigestV1,
+    source: RetainedSemanticSourceProducerV1,
+) {
+    digest.field(&source.expansion_chain_sha256);
+    digest_source_origin_v1(digest, source.provenance.expansion());
+    digest_source_origin_v1(digest, source.provenance.call_site());
+}
+
+fn digest_source_origin_v1(
+    digest: &mut SemanticIdentityDigestV1,
+    origin: Option<SemanticSourceOriginV1>,
+) {
+    let Some(origin) = origin else {
+        digest.field(&[0]);
+        return;
+    };
+    digest.field(&[1]);
+    digest.field(origin.file().as_bytes());
+    let (byte_start, byte_end) = origin.byte_range();
+    digest.field(&byte_start.to_le_bytes());
+    digest.field(&byte_end.to_le_bytes());
+    let (line_start, column_start) = origin.start_coordinate();
+    digest.field(&line_start.to_le_bytes());
+    digest.field(&column_start.to_le_bytes());
+    let (line_end, column_end) = origin.end_coordinate();
+    digest.field(&line_end.to_le_bytes());
+    digest.field(&column_end.to_le_bytes());
 }
 
 const fn function_role_tag_v1(role: CollectedFunctionRole) -> u8 {

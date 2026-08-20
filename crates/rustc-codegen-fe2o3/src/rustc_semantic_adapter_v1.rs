@@ -4,11 +4,13 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBlockIdentityV1, SemanticConstGenericArgumentsIdentityV1, SemanticFunctionIdentityV1,
     SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
     SemanticLayoutIdentityV1, SemanticLocalIdentityV1, SemanticMonomorphizationIdentityV1,
+    SemanticSourceFileIdentityV1, SemanticSourceOriginV1, SemanticSourceProvenanceV1,
     SemanticTargetDataLayoutV1, SemanticTypeIdentityV1,
 };
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_middle::ty::{GenericArgKind, Instance, Ty, TyCtxt};
+use rustc_span::Span;
 use sha2::{Digest as _, Sha256};
 
 use crate::semantic_layout_bridge::SemanticLayoutTargetV1;
@@ -23,6 +25,8 @@ const MIR_BODY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-mir-body/v1";
 const TYPE_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-type/v1";
 const LOCAL_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-local/v1";
 const BLOCK_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-basic-block/v1";
+const SOURCE_FILE_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-source-file/v1";
+const EXPANSION_CHAIN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-expansion-chain/v1";
 
 macro_rules! stable_fingerprint {
     ($tcx:expr, $value:expr) => {{
@@ -46,6 +50,53 @@ pub(crate) struct CanonicalFunctionIdentitiesV1 {
 
 pub(crate) struct SemanticIdentityDigestV1 {
     digest: Sha256,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CanonicalSourceProvenanceV1 {
+    provenance: SemanticSourceProvenanceV1,
+    expansion_chain_sha256: [u8; 32],
+    expansion_depth: usize,
+}
+
+impl CanonicalSourceProvenanceV1 {
+    pub(crate) const fn provenance(self) -> SemanticSourceProvenanceV1 {
+        self.provenance
+    }
+
+    pub(crate) const fn expansion_chain_sha256(self) -> [u8; 32] {
+        self.expansion_chain_sha256
+    }
+
+    pub(crate) const fn expansion_depth(self) -> usize {
+        self.expansion_depth
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanonicalSourceErrorV1 {
+    DummySpan,
+    CrossFileSpan,
+    InvalidPosition,
+    CoordinateOverflow,
+    ExpansionDepthExceeded { actual: usize, maximum: usize },
+}
+
+impl std::fmt::Display for CanonicalSourceErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DummySpan => formatter.write_str("dummy source span"),
+            Self::CrossFileSpan => formatter.write_str("source span crosses stable source files"),
+            Self::InvalidPosition => formatter.write_str("source span has invalid coordinates"),
+            Self::CoordinateOverflow => {
+                formatter.write_str("source coordinate exceeds canonical width")
+            }
+            Self::ExpansionDepthExceeded { actual, maximum } => write!(
+                formatter,
+                "macro expansion depth {actual} exceeds reviewed maximum {maximum}",
+            ),
+        }
+    }
 }
 
 impl SemanticIdentityDigestV1 {
@@ -186,6 +237,108 @@ pub(crate) fn rustc_block_identity_v1(
             &rustc_block.to_le_bytes(),
         ],
     ))
+}
+
+/// Captures the exact rustc span and its resolved source call site while
+/// binding the complete, bounded macro expansion chain into a stable digest.
+pub(crate) fn canonical_source_provenance_v1(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    maximum_expansion_depth: usize,
+) -> Result<CanonicalSourceProvenanceV1, CanonicalSourceErrorV1> {
+    let expansion = canonical_source_origin_v1(tcx, span)?;
+    let call_site = canonical_source_origin_v1(tcx, span.source_callsite())?;
+
+    let mut expansion_chain = SemanticIdentityDigestV1::new(EXPANSION_CHAIN_DOMAIN_V1);
+    expansion_chain.field(&stable_fingerprint!(tcx, span));
+    expansion_chain.field(&stable_fingerprint!(tcx, span.ctxt()));
+    let mut cursor = span;
+    let mut expansion_depth = 0_usize;
+    while let Some(parent) = cursor.parent_callsite() {
+        expansion_depth = expansion_depth.checked_add(1).ok_or(
+            CanonicalSourceErrorV1::ExpansionDepthExceeded {
+                actual: usize::MAX,
+                maximum: maximum_expansion_depth,
+            },
+        )?;
+        if expansion_depth > maximum_expansion_depth {
+            return Err(CanonicalSourceErrorV1::ExpansionDepthExceeded {
+                actual: expansion_depth,
+                maximum: maximum_expansion_depth,
+            });
+        }
+        let data = cursor.ctxt().outer_expn_data();
+        expansion_chain.field(&stable_fingerprint!(tcx, data));
+        expansion_chain.field(&stable_fingerprint!(tcx, data.call_site));
+        expansion_chain.field(&stable_fingerprint!(tcx, data.def_site));
+        cursor = parent;
+    }
+
+    Ok(CanonicalSourceProvenanceV1 {
+        provenance: SemanticSourceProvenanceV1::new(Some(expansion), Some(call_site)),
+        expansion_chain_sha256: expansion_chain.finish(),
+        expansion_depth,
+    })
+}
+
+fn canonical_source_origin_v1(
+    tcx: TyCtxt<'_>,
+    span: Span,
+) -> Result<SemanticSourceOriginV1, CanonicalSourceErrorV1> {
+    if span.is_dummy() {
+        return Err(CanonicalSourceErrorV1::DummySpan);
+    }
+    let source_map = tcx.sess.source_map();
+    let start = source_map.lookup_char_pos(span.lo());
+    let end = source_map.lookup_char_pos(span.hi());
+    if start.file.stable_id != end.file.stable_id {
+        return Err(CanonicalSourceErrorV1::CrossFileSpan);
+    }
+    if start.line == 0 || end.line == 0 || (start.line, start.col.0) > (end.line, end.col.0) {
+        return Err(CanonicalSourceErrorV1::InvalidPosition);
+    }
+    let byte_start = span
+        .lo()
+        .0
+        .checked_sub(start.file.start_pos.0)
+        .ok_or(CanonicalSourceErrorV1::InvalidPosition)?;
+    let byte_end = span
+        .hi()
+        .0
+        .checked_sub(start.file.start_pos.0)
+        .ok_or(CanonicalSourceErrorV1::InvalidPosition)?;
+    let line_start =
+        u32::try_from(start.line).map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let line_end =
+        u32::try_from(end.line).map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let column_start = start
+        .col
+        .0
+        .checked_add(1)
+        .ok_or(CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let column_end = end
+        .col
+        .0
+        .checked_add(1)
+        .ok_or(CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let column_start =
+        u32::try_from(column_start).map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let column_end =
+        u32::try_from(column_end).map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let file = SemanticSourceFileIdentityV1::from_sha256(domain_digest(
+        SOURCE_FILE_DOMAIN_V1,
+        &[&stable_fingerprint!(tcx, start.file.stable_id)],
+    ));
+    SemanticSourceOriginV1::new(
+        file,
+        u64::from(byte_start),
+        u64::from(byte_end),
+        line_start,
+        column_start,
+        line_end,
+        column_end,
+    )
+    .map_err(|_| CanonicalSourceErrorV1::InvalidPosition)
 }
 
 /// Derives the canonical target-layout identity from exact, already observed

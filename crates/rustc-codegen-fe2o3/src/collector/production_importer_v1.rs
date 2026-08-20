@@ -48,6 +48,8 @@ pub(crate) struct PendingSemanticRecordConstructionV1 {
     pub(crate) raw_blocks: u64,
     pub(crate) raw_statements: u64,
     pub(crate) rustc_type_producers: usize,
+    pub(crate) source_file_producers: usize,
+    pub(crate) source_provenance_producers: usize,
     pub(crate) body_producer_tables: usize,
     pub(crate) llvm_target: String,
     pub(crate) rustc_identity_inventory_sha256: [u8; 32],
@@ -78,7 +80,7 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::Preflight(error) => write!(formatter, "semantic importer {error}"),
             Self::SemanticRecordConstructionPending(pending) => write!(
                 formatter,
-                "semantic importer authenticated rustc target {:?}, consumed {} collected device function(s) with {} external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with {} local(s), {} block(s), {} statement(s), and {} typed terminal expansion recipe(s), retaining {} sorted rustc type producer(s) and {} canonical body ID table(s); canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
+                "semantic importer authenticated rustc target {:?}, consumed {} collected device function(s) with {} external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with {} local(s), {} block(s), {} statement(s), and {} typed terminal expansion recipe(s), retaining {} sorted rustc type producer(s), {} stable source file identity producer(s), {} canonical source provenance producer(s), and {} canonical body ID table(s); canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
                 pending.llvm_target,
                 pending.collected_functions,
                 pending.registered_roots,
@@ -89,6 +91,8 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
                 pending.raw_statements,
                 pending.terminal_expansions,
                 pending.rustc_type_producers,
+                pending.source_file_producers,
+                pending.source_provenance_producers,
                 pending.body_producer_tables,
             ),
         }
@@ -188,6 +192,8 @@ pub(crate) fn require_production_semantic_import_v1<'tcx>(
             raw_blocks: raw_counts.blocks(),
             raw_statements: raw_counts.statements(),
             rustc_type_producers: plan.type_producer_count(),
+            source_file_producers: plan.source_file_producer_count(),
+            source_provenance_producers: plan.source_provenance_producer_count(),
             body_producer_tables: plan.body_producer_count(),
             llvm_target: target.rustc_layout().llvm_target().to_owned(),
             rustc_identity_inventory_sha256,
@@ -331,6 +337,8 @@ mod tests {
                 raw_blocks: 8,
                 raw_statements: 12,
                 rustc_type_producers: 6,
+                source_file_producers: 2,
+                source_provenance_producers: 31,
                 body_producer_tables: 3,
                 llvm_target: "amdgcn-amd-amdhsa".to_owned(),
                 rustc_identity_inventory_sha256: [0xab; 32],
@@ -344,6 +352,8 @@ mod tests {
         assert!(diagnostic.contains(&"cd".repeat(32)));
         assert!(diagnostic.contains("4 typed terminal expansion recipe(s)"));
         assert!(diagnostic.contains("6 sorted rustc type producer(s)"));
+        assert!(diagnostic.contains("2 stable source file identity producer(s)"));
+        assert!(diagnostic.contains("31 canonical source provenance producer(s)"));
         assert!(diagnostic.contains("3 canonical body ID table(s)"));
         for forbidden in [
             "GEMM",
