@@ -3127,11 +3127,12 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
-        // Production recognizes semantic leaves through the request-wide
-        // registry. Their call sites remain in MIR for the sole semantic
-        // importer to authenticate and encode as compiler-intrinsic callables.
+        // Production stops only at the workload-neutral reviewed device
+        // registry. The sole importer must apply that item's explicit
+        // expand-or-reject rule; workload/profile classifiers remain oracles.
         if self.traversal.uses_session_semantic_terminal_registry()
-            && crate::semantic_features::classify(self.tcx, resolved.def_id()).is_some()
+            && crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
+                .is_some()
         {
             if self.verbose {
                 eprintln!(

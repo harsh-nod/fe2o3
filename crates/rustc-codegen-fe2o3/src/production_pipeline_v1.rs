@@ -176,6 +176,7 @@ mod tests {
             include_str!("production_pipeline_v1.rs"),
             include_str!("collector/production_importer_v1.rs"),
             include_str!("rustc_semantic_adapter_v1.rs"),
+            include_str!("production_semantic_terminal_v1.rs"),
         ];
         for forbidden in [
             concat!("General", "Gemm"),
@@ -221,6 +222,8 @@ mod tests {
             concat!("frontend_record", "_bridge"),
             concat!("semantic_type", "_adapter_v2"),
             concat!("source_", "debug"),
+            concat!("semantic_", "features"),
+            concat!("crate::", "collected_"),
             concat!("collected_", "general_gemm_v1"),
         ] {
             assert!(

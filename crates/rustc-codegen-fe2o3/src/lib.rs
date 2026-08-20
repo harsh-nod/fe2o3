@@ -44,6 +44,7 @@ mod monomorphization_dead;
 mod pipeline_selection;
 mod production_pipeline_v1;
 mod production_rustc_driver_v1;
+mod production_semantic_terminal_v1;
 mod production_target_v1;
 mod record_lowering;
 mod rust_type_layout;
