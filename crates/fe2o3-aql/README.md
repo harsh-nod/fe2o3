@@ -13,6 +13,8 @@ It provides:
 - checked monotonic single-producer reservation arithmetic and slot wrapping;
 - one inert, all-or-nothing reservation of 1 through 256 ordered packet IDs
   with distinct wrap-aware slots;
+- a fixed prepared-batch value that drives all INVALID body writes before any
+  ordered release-header callback;
 - the exact 64-byte, 64-aligned busy-wait completion signal initialized to one,
   plus an exact inert pending-signal byte image;
 - pure classification of a completion value already acquired elsewhere;
@@ -42,6 +44,11 @@ the only model instance, acquire the read pointer, retain the memory
 publication, reserve the actual write counter once, copy every INVALID packet
 body, release-publish every paired header, and ring the exact admitted
 doorbell under a separately reviewed batch-publication contract.
+
+The prepared-batch target preserves body-before-header call order but remains
+inert. Its callback trait does not authenticate a target implementation,
+perform a release atomic, or prove that indices name the reservation's native
+slots. Those joins remain private responsibilities of the queue owner.
 
 GPU writes to the signal value and their visibility to a Rust atomic load are
 contracted platform/coherency facts. Rust's language memory model alone does

@@ -8,7 +8,9 @@ use fe2o3_aql::{
     AQL_MAX_BATCH_PACKETS_V1, AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
     AmdBusyCompletionSignalV1, AqlAddressObservationError, AqlCompletionObservationV1,
     AqlDispatchGeometryV1, AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
-    AqlPacketPublicationTargetV1, AqlRingCapacityError, AqlRingCapacityV1, AqlRingReservationError,
+    AqlPacketBatchPublicationTargetV1, AqlPacketPublicationTargetV1,
+    AqlPreparedKernelDispatchBatchErrorV1, AqlPreparedKernelDispatchBatchV1,
+    AqlPreparedKernelDispatchV1, AqlRingCapacityError, AqlRingCapacityV1, AqlRingReservationError,
     AqlSingleProducerRingModelV1, ObservedGpuAddressV1, classify_acquired_completion_value_v1,
     encode_pending_completion_signal_bytes_v1, initialize_pending_completion_signal_bytes_v1,
 };
@@ -104,6 +106,50 @@ fn prepared_publication_keeps_each_setup_dimension_paired() {
         );
         assert_eq!(target.publication_header, Some(0x1402));
     }
+}
+
+#[test]
+fn prepared_batch_writes_every_invalid_body_before_any_release_header() {
+    let batch =
+        AqlPreparedKernelDispatchBatchV1::<4>::try_from_packets(core::array::from_fn(|_| {
+            prepared_packet()
+        }))
+        .unwrap();
+    assert_eq!(batch.packet_count(), 4);
+    let mut target = BatchCaptureTarget::default();
+    batch.publish_with(&mut target).unwrap();
+    assert_eq!(
+        target.events,
+        [
+            BatchEvent::Body(0),
+            BatchEvent::Body(1),
+            BatchEvent::Body(2),
+            BatchEvent::Body(3),
+            BatchEvent::Header(0, 0x1402),
+            BatchEvent::Header(1, 0x1402),
+            BatchEvent::Header(2, 0x1402),
+            BatchEvent::Header(3, 0x1402),
+        ]
+    );
+}
+
+#[test]
+fn prepared_batch_rejects_counts_outside_the_reviewed_bound() {
+    assert_eq!(
+        AqlPreparedKernelDispatchBatchV1::<0>::try_from_packets([]),
+        Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount)
+    );
+    assert_eq!(
+        AqlPreparedKernelDispatchBatchV1::<257>::try_from_packets(core::array::from_fn(|_| {
+            prepared_packet()
+        })),
+        Err(
+            AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
+                requested: 257,
+                maximum: 256,
+            }
+        )
+    );
 }
 
 #[test]
@@ -490,6 +536,36 @@ struct CaptureTarget {
     publication_header: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BatchEvent {
+    Body(u32),
+    Header(u32, u16),
+}
+
+#[derive(Default)]
+struct BatchCaptureTarget {
+    events: Vec<BatchEvent>,
+}
+
+impl AqlPacketBatchPublicationTargetV1 for BatchCaptureTarget {
+    type Error = ();
+
+    fn write_unpublished(
+        &mut self,
+        batch_index: u32,
+        packet: &AqlKernelDispatchPacketV1,
+    ) -> Result<(), Self::Error> {
+        assert!(packet.is_unpublished());
+        self.events.push(BatchEvent::Body(batch_index));
+        Ok(())
+    }
+
+    fn publish_release_header(&mut self, batch_index: u32, header: u16) -> Result<(), Self::Error> {
+        self.events.push(BatchEvent::Header(batch_index, header));
+        Ok(())
+    }
+}
+
 impl AqlPacketPublicationTargetV1 for CaptureTarget {
     type Error = ();
 
@@ -516,6 +592,19 @@ fn assert_batch_failure_unchanged(
         Err(expected)
     );
     assert_eq!((model.write(), model.last_read()), before);
+}
+
+fn prepared_packet() -> AqlPreparedKernelDispatchV1 {
+    AqlKernelDispatchPacketV1::new_unpublished(
+        AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+        0,
+        0,
+        ObservedGpuAddressV1::new(0x1000).unwrap(),
+        ObservedGpuAddressV1::new(0x2000).unwrap(),
+        16,
+        ObservedGpuAddressV1::new(0x3000).unwrap(),
+    )
+    .unwrap()
 }
 
 fn hex(bytes: &[u8]) -> String {

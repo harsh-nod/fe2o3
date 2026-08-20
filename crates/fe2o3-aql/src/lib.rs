@@ -633,6 +633,69 @@ impl AqlPreparedKernelDispatchV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AqlPreparedKernelDispatchBatchErrorV1 {
+    ZeroPacketCount,
+    PacketCountExceedsReviewedMaximum { requested: usize, maximum: u32 },
+}
+
+/// A fixed, inert batch of prepared kernel-dispatch packet values.
+///
+/// Construction only checks the reviewed packet-count bound. Publication
+/// through [`Self::publish_with`] preserves a two-phase ordering: every exact
+/// INVALID body is written before any release header is exposed to the target.
+/// This value owns no queue, slot, counter, address, or completion authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlPreparedKernelDispatchBatchV1<const N: usize> {
+    packets: [AqlPreparedKernelDispatchV1; N],
+}
+
+impl<const N: usize> AqlPreparedKernelDispatchBatchV1<N> {
+    pub fn try_from_packets(
+        packets: [AqlPreparedKernelDispatchV1; N],
+    ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
+        if N == 0 {
+            return Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount);
+        }
+        if N > AQL_MAX_BATCH_PACKETS_V1 as usize {
+            return Err(
+                AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
+                    requested: N,
+                    maximum: AQL_MAX_BATCH_PACKETS_V1,
+                },
+            );
+        }
+        Ok(Self { packets })
+    }
+
+    pub const fn packet_count(&self) -> u32 {
+        N as u32
+    }
+
+    /// Writes all INVALID bodies before release-publishing any header.
+    pub fn publish_with<T: AqlPacketBatchPublicationTargetV1>(
+        self,
+        target: &mut T,
+    ) -> Result<(), T::Error> {
+        for (batch_index, packet) in self.packets.iter().enumerate() {
+            target.write_unpublished(batch_index as u32, &packet.packet)?;
+        }
+        for batch_index in 0..N {
+            target.publish_release_header(
+                batch_index as u32,
+                AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl AqlPreparedKernelDispatchBatchV1<1> {
+    pub const fn one(packet: AqlPreparedKernelDispatchV1) -> Self {
+        Self { packets: [packet] }
+    }
+}
+
 /// Backend boundary used to keep one packet body and final header paired.
 ///
 /// Implementing this trait grants no ring or doorbell authority. A production
@@ -645,6 +708,23 @@ pub trait AqlPacketPublicationTargetV1 {
     fn write_unpublished(&mut self, packet: &AqlKernelDispatchPacketV1) -> Result<(), Self::Error>;
 
     fn publish_release_header(&mut self, header: u16) -> Result<(), Self::Error>;
+}
+
+/// Inert two-phase target boundary for one prepared packet batch.
+///
+/// Implementing this trait grants no native authority. A production target
+/// must remain private to a queue owner that binds each batch index to the
+/// matching exclusive native slot and poisons itself after ambiguous effects.
+pub trait AqlPacketBatchPublicationTargetV1 {
+    type Error;
+
+    fn write_unpublished(
+        &mut self,
+        batch_index: u32,
+        packet: &AqlKernelDispatchPacketV1,
+    ) -> Result<(), Self::Error>;
+
+    fn publish_release_header(&mut self, batch_index: u32, header: u16) -> Result<(), Self::Error>;
 }
 
 /// Encode the exact inert 64-byte image of a pending ROCr user signal.

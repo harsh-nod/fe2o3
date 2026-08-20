@@ -309,13 +309,17 @@ and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
 private submission foundation initializes every ring header to exact INVALID
 type 1 and the two control counters as atomics before GPU mapping. It uses the
 canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
-one acquire-release write-pointer fetch-add, INVALID packet copy, aligned
-release header, and one release-fenced x86-SFENCE volatile `u64` doorbell
-store. Counter divergence/regression and every possible side-effect failure
-poison the non-Clone owner; only an ordinary full ring is retryable. The
-private publication path revalidates the live process-global runtime
-transition, event, all shadow headers, payload, and currentness before
-publication. There is still no public launch API in this slice.
+and an inert batch bound of one through 256 packets. One batch performs one
+acquire-release write-pointer fetch-add by the full count, copies all INVALID
+packet bodies before any aligned release header, publishes headers in packet
+order, and performs one release-fenced x86-SFENCE volatile `u64` doorbell
+store of the last packet ID. Counter divergence/regression and every possible
+side-effect failure poison the non-Clone owner; only full or insufficient
+space before the actual reservation is retryable. The private publication
+path revalidates the live process-global runtime transition, event, all shadow
+headers, payload, and currentness before publication. There is still no public
+launch API, code/kernarg/allocation generation binding, or completion authority
+in this slice.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
