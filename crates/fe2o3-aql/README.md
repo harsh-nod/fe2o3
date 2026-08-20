@@ -11,6 +11,8 @@ It provides:
 - a linear prepared value that exposes only the invariant system-scoped final
   header after the exact INVALID body;
 - checked monotonic single-producer reservation arithmetic and slot wrapping;
+- one inert, all-or-nothing reservation of 1 through 256 ordered packet IDs
+  with distinct wrap-aware slots;
 - the exact 64-byte, 64-aligned busy-wait completion signal initialized to one,
   plus an exact inert pending-signal byte image;
 - pure classification of a completion value already acquired elsewhere;
@@ -32,11 +34,14 @@ allocation, or authorize interpreting arbitrary storage as
 authenticate where its supplied value came from.
 
 The mutable reservation model prevents duplicate slots only within one model
-instance. It is not a native ring lease. A later queue authority layer must own
-the only instance, acquire the read pointer, retain the memory publication,
-copy the INVALID packet body, combine its already-copied setup halfword with
-the invariant final header in one release `u32` publication,
-advance the write pointer, and ring the exact admitted doorbell in that order.
+instance. A batch transition validates the complete packet count, observed
+read counter, available capacity, and checked next write counter before it
+changes either retained counter. Its ordered entries are arithmetic
+observations, not native ring leases. A later queue authority layer must own
+the only model instance, acquire the read pointer, retain the memory
+publication, reserve the actual write counter once, copy every INVALID packet
+body, release-publish every paired header, and ring the exact admitted
+doorbell under a separately reviewed batch-publication contract.
 
 GPU writes to the signal value and their visibility to a Rust atomic load are
 contracted platform/coherency facts. Rust's language memory model alone does
@@ -59,4 +64,6 @@ and five expected-negative mutations. It does not refine
 this crate's executable Rust, establish that a publication target performs a
 CPU release atomic, authenticate a read pointer, or prove device visibility,
 firmware consumption, native slot ownership, completion, liveness, or
-performance.
+performance. The V1 executable batch transition also needs a later dedicated
+Verus relation and concrete-refinement join before it can contribute proof
+authority to a native batch publisher.
