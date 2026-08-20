@@ -95,11 +95,23 @@ impl ReviewedHsaHardwareTestBufferV1 {
 #[cfg(feature = "hardware-test-hooks")]
 impl Drop for ReviewedHsaHardwareTestBufferV1 {
     fn drop(&mut self) {
-        // SAFETY: this token uniquely owns one live HSA pool allocation and
-        // consumes it exactly once while the enclosing adapter is still live.
-        let status =
-            unsafe { crate::sys::fe2o3_hsa_memory_free(self.address as *mut core::ffi::c_void) };
-        if status != crate::api::HSA_SUCCESS {
+        #[cfg(fe2o3_hsa_runtime)]
+        {
+            // SAFETY: this token uniquely owns one live HSA pool allocation and
+            // consumes it exactly once while the enclosing adapter is still live.
+            let status = unsafe {
+                crate::sys::fe2o3_hsa_memory_free(self.address as *mut core::ffi::c_void)
+            };
+            if status != crate::api::HSA_SUCCESS {
+                std::process::abort();
+            }
+        }
+
+        #[cfg(not(fe2o3_hsa_runtime))]
+        {
+            // Construction cannot succeed without the reviewed runtime. If a
+            // future internal path violates that invariant, do not leak a
+            // purported hardware allocation.
             std::process::abort();
         }
     }
