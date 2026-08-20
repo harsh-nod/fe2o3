@@ -628,13 +628,18 @@ fn build_backend(workspace: &Path) -> &'static PinnedBackend {
 
 fn build_collection_backend(workspace: &Path) -> &'static PinnedBackend {
     COLLECTION_BACKEND.get_or_init(|| {
-        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| workspace.join("target"));
+        // Rebuilding the backend in the parent integration-test target can replace
+        // its dylib after later test binaries have linked against it. Keep this
+        // source-correspondence build private, then retain only its sealed memfd.
+        let build_output = TestOutputDir::new(workspace);
+        let target_dir = build_output.0.join("collection-backend-target");
         let mut command = Command::new(env!("CARGO"));
         command
             .current_dir(workspace)
             .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+            .arg("--target-dir")
+            .arg(&target_dir)
+            .env_remove("CARGO_TARGET_DIR")
             .env("CARGO_INCREMENTAL", "0");
         let output = run_bounded(
             &mut command,

@@ -116,6 +116,19 @@ MIR-V2 recapture and decoding helpers used only by hostile tests are now
 compiled only in test builds. The normal backend library builds without dead
 code warnings.
 
+### Medium: an integration helper replaced an already-linked backend dylib
+
+The collected scalar/control-flow integration binary rebuilt
+`rustc-codegen-fe2o3` in the parent `CARGO_TARGET_DIR`. Later integration
+binaries had already linked against the prior dylib and could fail at process
+startup with an undefined Rust symbol. The source-correspondence helper now
+builds in a private target directory, pins that backend into its existing sealed
+memfd, and removes the temporary directory when initialization completes.
+
+The adversarial suites deliberately use clean targets and remain expensive.
+Future CI work may cache an immutable, content-addressed backend input, but it
+must preserve the tests' path-substitution and build-custody properties.
+
 ## Retained compatibility surfaces
 
 | Surface | Why retained | Retirement condition |
