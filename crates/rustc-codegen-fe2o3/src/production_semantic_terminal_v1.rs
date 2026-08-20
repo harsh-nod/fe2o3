@@ -5,7 +5,7 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
     ThreadIndex1d,
     ThreadIndexGet,

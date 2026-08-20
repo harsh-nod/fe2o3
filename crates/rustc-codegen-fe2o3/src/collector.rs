@@ -35,6 +35,8 @@ use std::fmt;
 
 mod production_importer_v1;
 
+#[cfg(test)]
+pub(crate) use production_importer_v1::PendingSemanticRecordConstructionV1;
 pub(crate) use production_importer_v1::{
     ProductionSemanticImportErrorV1, require_production_semantic_import_v1,
 };

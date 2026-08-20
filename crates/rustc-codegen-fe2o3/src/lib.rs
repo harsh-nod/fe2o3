@@ -51,6 +51,7 @@ mod rust_type_layout;
 mod rust_type_layout_general;
 mod rust_type_layout_v3;
 mod rustc_semantic_adapter_v1;
+mod rustc_semantic_plan_v1;
 pub mod s09_identity_v2;
 mod same_session_rustc_v1;
 pub mod scalar_mir_v2;

@@ -47,6 +47,11 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
         identity_inventory_sha256(&repeated),
         "separate AMD rustc processes derived different identity inventories",
     );
+    assert_eq!(
+        preflight_plan_sha256(&first),
+        preflight_plan_sha256(&repeated),
+        "separate AMD rustc processes derived different raw-MIR preflight plans",
+    );
 }
 
 fn run_extraction(target: &ScratchTarget) -> String {
@@ -90,6 +95,10 @@ fn run_extraction(target: &ScratchTarget) -> String {
     assert!(
         stderr.contains("semantic importer authenticated rustc target \"amdgcn-amd-amdhsa\"")
             && stderr.contains("1 external root(s)")
+            && stderr.contains("completed bounded raw-MIR preflight")
+            && stderr.contains(
+                "with 7 local(s), 6 block(s), 4 statement(s), and 2 typed terminal expansion recipe(s)",
+            )
             && stderr.contains("canonical semantic-MIR construction is not implemented"),
         "missing AMD extraction milestone diagnostic:\n{stderr}"
     );
@@ -106,6 +115,7 @@ fn run_extraction(target: &ScratchTarget) -> String {
         );
     }
     let _ = identity_inventory_sha256(&stderr);
+    let _ = preflight_plan_sha256(&stderr);
     stderr
 }
 
@@ -124,6 +134,25 @@ fn identity_inventory_sha256(stderr: &str) -> &str {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
         "identity inventory is not canonical lowercase hexadecimal: {identity:?}",
     );
-    assert_eq!(suffix.as_bytes().get(64), Some(&b';'));
+    assert_eq!(suffix.as_bytes().get(64), Some(&b','));
+    identity
+}
+
+fn preflight_plan_sha256(stderr: &str) -> &str {
+    const PREFIX: &str = "then completed bounded raw-MIR preflight ";
+    let suffix = stderr
+        .split_once(PREFIX)
+        .unwrap_or_else(|| panic!("missing raw-MIR preflight diagnostic:\n{stderr}"))
+        .1;
+    let identity = suffix
+        .get(..64)
+        .unwrap_or_else(|| panic!("truncated raw-MIR preflight diagnostic:\n{stderr}"));
+    assert!(
+        identity
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "raw-MIR preflight identity is not canonical lowercase hexadecimal: {identity:?}",
+    );
+    assert_eq!(suffix.as_bytes().get(64), Some(&b' '));
     identity
 }

@@ -4,10 +4,11 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticConstGenericArgumentsIdentityV1, SemanticFunctionIdentityV1,
     SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
     SemanticLayoutIdentityV1, SemanticMonomorphizationIdentityV1, SemanticTargetDataLayoutV1,
+    SemanticTypeIdentityV1,
 };
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
-use rustc_middle::ty::{GenericArgKind, Instance, TyCtxt};
+use rustc_middle::ty::{GenericArgKind, Instance, Ty, TyCtxt};
 use sha2::{Digest as _, Sha256};
 
 use crate::semantic_layout_bridge::SemanticLayoutTargetV1;
@@ -18,6 +19,8 @@ const ITEM_DEFINITION_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/item-definition/v1
 const MONOMORPHIZATION_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/monomorphization/v1";
 const TYPE_ARGUMENTS_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/type-arguments/v1";
 const CONST_ARGUMENTS_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/const-arguments/v1";
+const MIR_BODY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-mir-body/v1";
+const TYPE_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-type/v1";
 
 macro_rules! stable_fingerprint {
     ($tcx:expr, $value:expr) => {{
@@ -123,6 +126,34 @@ pub(crate) fn canonical_function_identities_v1(
             const_arguments.finish(),
         ),
     }
+}
+
+/// Binds the exact monomorphized MIR observed in the authenticated session.
+/// This is a preflight identity, not a canonical semantic-MIR identity.
+pub(crate) fn rustc_mir_body_sha256_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> [u8; 32] {
+    let body = tcx.instance_mir(instance.def);
+    domain_digest(
+        MIR_BODY_DOMAIN_V1,
+        &[
+            &stable_fingerprint!(tcx, instance),
+            &stable_fingerprint!(tcx, body),
+        ],
+    )
+}
+
+/// Identifies one normalized rustc type encountered during raw-MIR preflight.
+/// Full semantic type/layout construction remains a later importer pass.
+pub(crate) fn rustc_type_identity_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> SemanticTypeIdentityV1 {
+    SemanticTypeIdentityV1::from_sha256(domain_digest(
+        TYPE_DOMAIN_V1,
+        &[&stable_fingerprint!(tcx, ty)],
+    ))
 }
 
 /// Derives the canonical target-layout identity from exact, already observed

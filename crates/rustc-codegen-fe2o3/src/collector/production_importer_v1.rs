@@ -15,8 +15,11 @@ use super::{
 };
 use crate::production_target_v1::ProductionTargetErrorV1;
 use crate::rustc_semantic_adapter_v1::{
-    CanonicalFunctionIdentitiesV1, SemanticIdentityDigestV1, canonical_function_identities_v1,
-    canonical_target_layout_v1,
+    SemanticIdentityDigestV1, canonical_function_identities_v1, canonical_target_layout_v1,
+};
+use crate::rustc_semantic_plan_v1::{
+    ProductionSemanticPreflightErrorV1, RetainedSemanticFunctionProducerV1,
+    build_production_semantic_preflight_plan_v1,
 };
 
 const IDENTITY_INVENTORY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v1";
@@ -32,12 +35,21 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     },
     FunctionIdentityCollision,
     RootIdentityMismatch,
-    SemanticRecordConstructionPending {
-        collected_functions: usize,
-        registered_roots: usize,
-        llvm_target: String,
-        rustc_identity_inventory_sha256: [u8; 32],
-    },
+    Preflight(Box<ProductionSemanticPreflightErrorV1>),
+    SemanticRecordConstructionPending(Box<PendingSemanticRecordConstructionV1>),
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingSemanticRecordConstructionV1 {
+    pub(crate) collected_functions: usize,
+    pub(crate) registered_roots: usize,
+    pub(crate) terminal_expansions: usize,
+    pub(crate) raw_locals: u64,
+    pub(crate) raw_blocks: u64,
+    pub(crate) raw_statements: u64,
+    pub(crate) llvm_target: String,
+    pub(crate) rustc_identity_inventory_sha256: [u8; 32],
+    pub(crate) rustc_preflight_plan_sha256: [u8; 32],
 }
 
 impl fmt::Display for ProductionSemanticImportErrorV1 {
@@ -61,15 +73,19 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::RootIdentityMismatch => formatter.write_str(
                 "semantic importer could not bind independently derived roots to unique collected functions",
             ),
-            Self::SemanticRecordConstructionPending {
-                collected_functions,
-                registered_roots,
-                llvm_target,
-                rustc_identity_inventory_sha256,
-            } => write!(
+            Self::Preflight(error) => write!(formatter, "semantic importer {error}"),
+            Self::SemanticRecordConstructionPending(pending) => write!(
                 formatter,
-                "semantic importer authenticated rustc target {llvm_target:?}, consumed {collected_functions} collected device function(s) with {registered_roots} external root(s), and derived rustc identity inventory {}; but canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
-                crate::encode_hex(rustc_identity_inventory_sha256),
+                "semantic importer authenticated rustc target {:?}, consumed {} collected device function(s) with {} external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with {} local(s), {} block(s), {} statement(s), and {} typed terminal expansion recipe(s); canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
+                pending.llvm_target,
+                pending.collected_functions,
+                pending.registered_roots,
+                crate::encode_hex(&pending.rustc_identity_inventory_sha256),
+                crate::encode_hex(&pending.rustc_preflight_plan_sha256),
+                pending.raw_locals,
+                pending.raw_blocks,
+                pending.raw_statements,
+                pending.terminal_expansions,
             ),
         }
     }
@@ -79,24 +95,19 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Target(error) => Some(error),
+            Self::Preflight(error) => Some(error.as_ref()),
             Self::RootCustodyMismatch
             | Self::LimitExceeded { .. }
             | Self::FunctionIdentityCollision
             | Self::RootIdentityMismatch
-            | Self::SemanticRecordConstructionPending { .. } => None,
+            | Self::SemanticRecordConstructionPending(_) => None,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct SemanticFunctionIdentityInventoryEntryV1 {
-    identities: CanonicalFunctionIdentitiesV1,
-    role: CollectedFunctionRole,
-}
-
 #[derive(Debug)]
-struct ProductionSemanticIdentityInventoryV1 {
-    functions: Box<[SemanticFunctionIdentityInventoryEntryV1]>,
+struct ProductionSemanticIdentityInventoryV1<'tcx> {
+    functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
     roots: Box<[SemanticFunctionIdV1]>,
     sha256: [u8; 32],
 }
@@ -104,7 +115,7 @@ struct ProductionSemanticIdentityInventoryV1 {
 /// Consumes the collector-sealed closure and authenticates the live rustc
 /// session before any type, layout, FnAbi, or MIR fact can enter production.
 ///
-/// This function intentionally stops after the identity-preflight milestone.
+/// This function intentionally stops after the bounded raw-MIR preflight.
 /// Canonical semantic-MIR construction will replace the terminal error without
 /// introducing another consumer or returning the collected rustc values.
 pub(crate) fn require_production_semantic_import_v1<'tcx>(
@@ -148,13 +159,36 @@ pub(crate) fn require_production_semantic_import_v1<'tcx>(
         Err(error) => return error,
     };
 
-    let error = ProductionSemanticImportErrorV1::SemanticRecordConstructionPending {
-        collected_functions: identity_inventory.functions.len(),
-        registered_roots: identity_inventory.roots.len(),
-        llvm_target: target.rustc_layout().llvm_target().to_owned(),
-        rustc_identity_inventory_sha256: identity_inventory.sha256,
+    let ProductionSemanticIdentityInventoryV1 {
+        functions,
+        roots,
+        sha256: rustc_identity_inventory_sha256,
+    } = identity_inventory;
+    let plan = match build_production_semantic_preflight_plan_v1(
+        tcx,
+        canonical_target_layout_v1(target.rustc_layout()),
+        functions,
+        roots,
+        rustc_identity_inventory_sha256,
+    ) {
+        Ok(plan) => plan,
+        Err(error) => return ProductionSemanticImportErrorV1::Preflight(Box::new(error)),
     };
-    drop((identity_inventory, target, collection, roots));
+    let raw_counts = plan.raw_counts();
+    let error = ProductionSemanticImportErrorV1::SemanticRecordConstructionPending(Box::new(
+        PendingSemanticRecordConstructionV1 {
+            collected_functions: plan.function_count(),
+            registered_roots: plan.root_count(),
+            terminal_expansions: plan.terminal_expansion_count(),
+            raw_locals: raw_counts.locals(),
+            raw_blocks: raw_counts.blocks(),
+            raw_statements: raw_counts.statements(),
+            llvm_target: target.rustc_layout().llvm_target().to_owned(),
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256: plan.sha256(),
+        },
+    ));
+    drop((plan, target, collection));
     error
 }
 
@@ -163,7 +197,7 @@ fn build_identity_inventory_v1<'tcx>(
     target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
     collection: &CollectionResult<'tcx>,
     roots: &[AuthenticatedProductionRootV1<'tcx>],
-) -> Result<ProductionSemanticIdentityInventoryV1, ProductionSemanticImportErrorV1> {
+) -> Result<ProductionSemanticIdentityInventoryV1<'tcx>, ProductionSemanticImportErrorV1> {
     require_count_within_limit_v1(
         SemanticMirResourceV1::Functions,
         collection.functions.len(),
@@ -174,8 +208,9 @@ fn build_identity_inventory_v1<'tcx>(
     let target = canonical_target_layout_v1(target.rustc_layout());
     let mut functions = Vec::with_capacity(collection.functions.len());
     for function in &collection.functions {
-        functions.push(SemanticFunctionIdentityInventoryEntryV1 {
+        functions.push(RetainedSemanticFunctionProducerV1 {
             identities: canonical_function_identities_v1(tcx, function.instance),
+            instance: function.instance,
             role: function.role,
         });
     }
@@ -224,7 +259,7 @@ fn build_identity_inventory_v1<'tcx>(
 
 fn identity_inventory_sha256_v1(
     target: SemanticTargetDataLayoutV1,
-    functions: &[SemanticFunctionIdentityInventoryEntryV1],
+    functions: &[RetainedSemanticFunctionProducerV1<'_>],
     roots: &[SemanticFunctionIdV1],
 ) -> [u8; 32] {
     let mut digest = SemanticIdentityDigestV1::new(IDENTITY_INVENTORY_DOMAIN_V1);
@@ -281,16 +316,25 @@ mod tests {
 
     #[test]
     fn terminal_diagnostic_is_bounded_and_workload_neutral() {
-        let error = ProductionSemanticImportErrorV1::SemanticRecordConstructionPending {
-            collected_functions: 3,
-            registered_roots: 2,
-            llvm_target: "amdgcn-amd-amdhsa".to_owned(),
-            rustc_identity_inventory_sha256: [0xab; 32],
-        };
+        let error = ProductionSemanticImportErrorV1::SemanticRecordConstructionPending(Box::new(
+            PendingSemanticRecordConstructionV1 {
+                collected_functions: 3,
+                registered_roots: 2,
+                terminal_expansions: 4,
+                raw_locals: 10,
+                raw_blocks: 8,
+                raw_statements: 12,
+                llvm_target: "amdgcn-amd-amdhsa".to_owned(),
+                rustc_identity_inventory_sha256: [0xab; 32],
+                rustc_preflight_plan_sha256: [0xcd; 32],
+            },
+        ));
         let diagnostic = error.to_string();
         assert!(diagnostic.contains("3 collected device function(s)"));
         assert!(diagnostic.contains("2 external root(s)"));
         assert!(diagnostic.contains(&"ab".repeat(32)));
+        assert!(diagnostic.contains(&"cd".repeat(32)));
+        assert!(diagnostic.contains("4 typed terminal expansion recipe(s)"));
         for forbidden in [
             "GEMM",
             "attention",
