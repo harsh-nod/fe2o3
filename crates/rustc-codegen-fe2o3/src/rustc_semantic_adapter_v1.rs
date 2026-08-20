@@ -9,6 +9,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_middle::ty::layout::TyAndLayout;
 use rustc_middle::ty::{GenericArgKind, Instance, Ty, TyCtxt};
 use rustc_span::Span;
 use sha2::{Digest as _, Sha256};
@@ -27,6 +28,7 @@ const LOCAL_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-local/v1";
 const BLOCK_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-basic-block/v1";
 const SOURCE_FILE_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-source-file/v1";
 const EXPANSION_CHAIN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-expansion-chain/v1";
+const TYPE_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-type-layout/v1";
 
 macro_rules! stable_fingerprint {
     ($tcx:expr, $value:expr) => {{
@@ -207,6 +209,21 @@ pub(crate) fn rustc_type_identity_v1<'tcx>(
         TYPE_DOMAIN_V1,
         &[&stable_fingerprint!(tcx, ty)],
     ))
+}
+
+/// Binds one target-resolved rustc layout producer before schema conversion.
+/// This is a preflight identity, not a canonical semantic layout identity.
+pub(crate) fn rustc_type_layout_sha256_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    layout: TyAndLayout<'tcx>,
+) -> [u8; 32] {
+    domain_digest(
+        TYPE_LAYOUT_DOMAIN_V1,
+        &[
+            &stable_fingerprint!(tcx, layout.ty),
+            &stable_fingerprint!(tcx, layout.layout),
+        ],
+    )
 }
 
 pub(crate) fn rustc_local_identity_v1(

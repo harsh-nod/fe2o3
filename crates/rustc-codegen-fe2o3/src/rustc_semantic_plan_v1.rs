@@ -17,6 +17,7 @@ use rustc_middle::mir::{
     AggregateKind, Body, BorrowKind, Local, MutBorrowKind, Operand, Place, PlaceTy, ProjectionElem,
     Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
 };
+use rustc_middle::ty::layout::{LayoutCx, LayoutOf, TyAndLayout};
 use rustc_middle::ty::{
     EarlyBinder, GenericArgKind, GenericArgsRef, Instance, Ty, TyCtxt, TyKind, TypeVisitableExt,
     TypingEnv,
@@ -31,6 +32,7 @@ use crate::rustc_semantic_adapter_v1::{
     CanonicalFunctionIdentitiesV1, CanonicalSourceProvenanceV1, SemanticIdentityDigestV1,
     canonical_function_identities_v1, canonical_source_provenance_v1, rustc_block_identity_v1,
     rustc_local_identity_v1, rustc_mir_body_sha256_v1, rustc_type_identity_v1,
+    rustc_type_layout_sha256_v1,
 };
 
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
@@ -48,6 +50,8 @@ pub(crate) struct RetainedSemanticFunctionProducerV1<'tcx> {
 struct RetainedSemanticTypeProducerV1<'tcx> {
     identity: SemanticTypeIdentityV1,
     ty: Ty<'tcx>,
+    layout: TyAndLayout<'tcx>,
+    rustc_layout_sha256: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -232,6 +236,10 @@ impl ProductionSemanticPreflightPlanV1<'_> {
         self.types.len()
     }
 
+    pub(crate) fn layout_producer_count(&self) -> usize {
+        self.types.len()
+    }
+
     pub(crate) fn function_count(&self) -> usize {
         self.functions.len()
     }
@@ -277,6 +285,10 @@ pub(crate) enum ProductionSemanticPreflightErrorV1 {
     },
     TypeIdentityCollision,
     IdentityTableMismatch,
+    TypeLayout {
+        identity: SemanticTypeIdentityV1,
+        detail: String,
+    },
     UnsupportedRustcMir {
         construct: String,
         function: String,
@@ -306,6 +318,11 @@ impl fmt::Display for ProductionSemanticPreflightErrorV1 {
             ),
             Self::IdentityTableMismatch => formatter.write_str(
                 "raw rustc MIR preflight could not assign a complete canonical producer table",
+            ),
+            Self::TypeLayout { identity, detail } => write!(
+                formatter,
+                "raw rustc MIR preflight could not obtain target layout for type producer {}: {detail}",
+                crate::encode_hex(identity.as_bytes()),
             ),
             Self::UnsupportedRustcMir {
                 construct,
@@ -1135,11 +1152,24 @@ fn build_canonical_producer_tables_v1<'tcx>(
     }
     let mut type_ids = BTreeMap::new();
     let mut type_producers = Vec::with_capacity(types.len());
+    let layout_cx = LayoutCx::new(tcx, TypingEnv::fully_monomorphized());
     for (index, (identity, ty)) in types.into_iter().enumerate() {
         let index = u32::try_from(index)
             .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        let layout = layout_cx.layout_of(ty).map_err(|error| {
+            ProductionSemanticPreflightErrorV1::TypeLayout {
+                identity,
+                detail: bounded_diagnostic_component_v1(&error.to_string()),
+            }
+        })?;
+        let rustc_layout_sha256 = rustc_type_layout_sha256_v1(tcx, layout);
         type_ids.insert(identity, SemanticTypeIdV1::from_index(index));
-        type_producers.push(RetainedSemanticTypeProducerV1 { identity, ty });
+        type_producers.push(RetainedSemanticTypeProducerV1 {
+            identity,
+            ty,
+            layout,
+            rustc_layout_sha256,
+        });
     }
 
     let mut bodies = Vec::with_capacity(functions.len());
@@ -1503,6 +1533,8 @@ fn preflight_plan_sha256_v1<'tcx>(
     for ty in types {
         digest.field(ty.identity.as_bytes());
         digest.field(rustc_type_identity_v1(tcx, ty.ty).as_bytes());
+        digest.field(&ty.rustc_layout_sha256);
+        digest.field(&rustc_type_layout_sha256_v1(tcx, ty.layout));
     }
     for source_file in source_files {
         digest.field(source_file.as_bytes());
