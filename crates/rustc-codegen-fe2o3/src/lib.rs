@@ -46,6 +46,7 @@ mod mir_import_v2;
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod production_pipeline_v1;
+mod production_target_v1;
 mod record_lowering;
 #[allow(dead_code)]
 mod rust_type_layout;
@@ -521,21 +522,21 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         ) {
                             tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
                         }
-                        let collection = match collector::collect_device_functions(
+                        let closure = match collector::collect_authenticated_kernel_closure_v1(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            self.config.target.clone(),
                         ) {
-                            Ok(collection) => collection,
+                            Ok(closure) => closure,
                             Err(error) => tcx.dcx().fatal(format!(
                                 "[rustc-codegen-fe2o3] production-v1 collection failed without fallback: {error}"
                             )),
                         };
                         let transaction = match production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
                             tcx,
-                            collection,
+                            closure,
                             producer.clone(),
-                            self.config.target.clone(),
                             output_dir
                                 .expect("device output was required above")
                                 .to_path_buf(),

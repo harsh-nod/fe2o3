@@ -11,9 +11,8 @@ use std::path::PathBuf;
 
 use rustc_middle::ty::TyCtxt;
 
-use crate::AmdGpuTarget;
 use crate::artifact_transaction::{BuildAttempt, ProducerIdentity};
-use crate::collector::CollectionResult;
+use crate::collector::AuthenticatedCollectedKernelClosureV1;
 
 pub(crate) const PRODUCTION_PIPELINE_V1: &str = "production-v1";
 
@@ -77,9 +76,8 @@ pub(crate) fn reject_custom_llvm_configuration(
 
 pub(super) struct CollectedRustStageV1<'tcx> {
     tcx: TyCtxt<'tcx>,
-    collection: CollectionResult<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
     producer: ProducerIdentity,
-    target: AmdGpuTarget,
     output_dir: PathBuf,
     build_attempt: Option<BuildAttempt>,
 }
@@ -99,21 +97,19 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     /// The next transition must authenticate every imported MIR fact.
     pub(crate) fn from_collected_device_closure(
         tcx: TyCtxt<'tcx>,
-        collection: CollectionResult<'tcx>,
+        closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
         producer: ProducerIdentity,
-        target: AmdGpuTarget,
         output_dir: PathBuf,
         build_attempt: Option<BuildAttempt>,
     ) -> Result<Self, ProductionPipelineErrorV1> {
-        if collection.functions.is_empty() {
+        if closure.function_count() == 0 {
             return Err(ProductionPipelineErrorV1::EmptyCollectedDeviceClosure);
         }
         Ok(Self {
             stage: CollectedRustStageV1 {
                 tcx,
-                collection,
+                closure,
                 producer,
-                target,
                 output_dir,
                 build_attempt,
             },
@@ -125,18 +121,15 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
         let CollectedRustStageV1 {
             tcx,
-            collection,
+            closure,
             producer,
-            target,
             output_dir,
             build_attempt,
         } = self.stage;
-        let collected_functions = collection.functions.len();
-        let registered_kernel_roots = collection
-            .functions
-            .iter()
-            .filter(|function| function.is_kernel_entry())
-            .count();
+        let collected_functions = closure.function_count();
+        let registered_kernel_roots = closure.kernel_root_count();
+        let target = closure.target().to_owned();
+        let collection = closure.into_collection();
 
         // Retain and consume every future transaction input at this boundary.
         // None may be recovered to enter a different compiler route.
@@ -145,7 +138,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         ProductionPipelineErrorV1::SemanticImporterUnavailable {
             collected_functions,
             registered_kernel_roots,
-            target: target.as_str().to_owned(),
+            target,
         }
     }
 }
@@ -199,6 +192,8 @@ mod tests {
             concat!("MIR", " transcript"),
             concat!("legacy", "-v1"),
             concat!("kernel-ir", "-v1"),
+            concat!("Collection", "Result"),
+            concat!("target: AmdGpu", "Target"),
         ] {
             assert!(
                 !source.contains(forbidden),

@@ -71,6 +71,24 @@ They do not run separate importers. The current #174 work is accepted only when
 generic capture is independent of ordinary-scalar authentication and scalar
 lowering is a separate consuming adapter.
 
+### Rustc and device target custody
+
+The current compatibility backend analyzes the final crate in a host rustc
+session while `cargo-fe2o3` separately configures the device compiler for
+`gfx942`. These are two different target facts. Host-session layout and FnAbi
+must never be relabeled as AMDGPU layout or FnAbi merely because device lowering
+was selected.
+
+Production collection therefore retains both the exact rustc layout context
+and the fixed `gfx942:xnack-` device profile in one move-only token. The
+semantic importer must consume that pair and fail closed on an unsupported
+bridge. The intended convergence is for the explicit extraction driver and the
+compatibility backend to enter the same importer under an AMDGPU rustc target
+session; the compatibility backend may become a thin coordinator for that
+session. Existing host-to-gfx942 conservative layout projections remain
+qualification inputs and cannot mint production semantic identity. Until the
+AMDGPU-session handoff exists, production stops before semantic-MIR admission.
+
 ## Canonical and executable IR
 
 `fe2o3-mir-model` and `fe2o3-kernel-ir::Module` remain the canonical semantic
