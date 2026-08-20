@@ -566,8 +566,9 @@ fn runtime_closure_open_failure_is_rejected_before_any_handoff() {
         Ok(_) => panic!("missing runtime closure was admitted"),
         Err(error) => error,
     };
-    // A missing child reports ObjectType on one filesystem; NO_XDEV rejects a
-    // separately mounted /opt before child lookup as SymlinkOrTraversal.
+    // A missing child reports ObjectType on one filesystem; a separately
+    // mounted or insufficiently protected /opt is rejected before child lookup
+    // as SymlinkOrTraversal or Protection.
     assert!(
         matches!(
             &error,
@@ -576,6 +577,7 @@ fn runtime_closure_open_failure_is_rejected_before_any_handoff() {
                     && matches!(
                         error.kind(),
                         fe2o3_verifier::GeneralGemmRuntimeClosureErrorKindV2::ObjectType
+                            | fe2o3_verifier::GeneralGemmRuntimeClosureErrorKindV2::Protection
                             | fe2o3_verifier::GeneralGemmRuntimeClosureErrorKindV2::SymlinkOrTraversal
                     )
         ),
