@@ -38,6 +38,8 @@ use crate::trusted_device_items::{
 };
 
 const EXACT_GENERAL_GEMM_TARGET_V1: &str = "gfx942:xnack-";
+const MAX_GENERAL_GEMM_REACHABLE_CALLS_V1: usize = 512;
+const MAX_GENERAL_GEMM_TERMINAL_CALLS_V1: usize = 32;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum GeneralGemmMirImportV1 {
@@ -652,6 +654,40 @@ struct GeneralGemmCallV1 {
     evidence: GeneralGemmEvidenceV1,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct GeneralGemmCallBudgetV1 {
+    reachable_calls: usize,
+    general_gemm_terminals: usize,
+}
+
+impl GeneralGemmCallBudgetV1 {
+    fn observe_reachable_call(&mut self) -> Result<(), GeneralGemmMirImportErrorV1> {
+        self.reachable_calls = self
+            .reachable_calls
+            .checked_add(1)
+            .filter(|count| *count <= MAX_GENERAL_GEMM_REACHABLE_CALLS_V1)
+            .ok_or_else(|| {
+                GeneralGemmMirImportErrorV1::new(format!(
+                    "general GEMM MIR closure exceeds the {MAX_GENERAL_GEMM_REACHABLE_CALLS_V1}-call analysis limit"
+                ))
+            })?;
+        Ok(())
+    }
+
+    fn observe_general_gemm_terminal(&mut self) -> Result<(), GeneralGemmMirImportErrorV1> {
+        self.general_gemm_terminals = self
+            .general_gemm_terminals
+            .checked_add(1)
+            .filter(|count| *count <= MAX_GENERAL_GEMM_TERMINAL_CALLS_V1)
+            .ok_or_else(|| {
+                GeneralGemmMirImportErrorV1::new(format!(
+                    "general GEMM MIR closure exceeds the {MAX_GENERAL_GEMM_TERMINAL_CALLS_V1}-terminal analysis limit"
+                ))
+            })?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GeneralGemmEvidenceV1 {
     None,
@@ -708,10 +744,11 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
     let mut root_function = None;
     let mut root_calls = Vec::new();
     let mut saw_general_gemm = false;
+    let mut call_budget = GeneralGemmCallBudgetV1::default();
 
     for function in &collection.functions {
         let body = tcx.instance_mir(function.instance.def);
-        let calls = general_gemm_calls(tcx, body)?;
+        let calls = general_gemm_calls(tcx, body, &mut call_budget)?;
         if calls.is_empty() {
             continue;
         }
@@ -738,9 +775,17 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
             "general GEMM V1 requires exact target `{EXACT_GENERAL_GEMM_TARGET_V1}`, found `{target}`"
         )));
     }
-    let body = root.expect("a recognized terminal must belong to one root");
+    let body = root.ok_or_else(|| {
+        GeneralGemmMirImportErrorV1::new(
+            "general GEMM terminal analysis lost its authenticated kernel root",
+        )
+    })?;
     let surface = unique_surface(&root_calls)?;
-    let root_function = root_function.expect("recognized terminal root has collected metadata");
+    let root_function = root_function.ok_or_else(|| {
+        GeneralGemmMirImportErrorV1::new(
+            "general GEMM terminal analysis lost its collected kernel metadata",
+        )
+    })?;
     require_positive_abi(tcx, root_function.instance.def_id())?;
     let dynamic_mutation_oracle = surface == TrustedGeneralGemmSurfaceV1::ProofSensitive
         && (call_count(&root_calls, TrustedGeneralGemmOperationV1::MfmaValue) != 0
@@ -3564,8 +3609,16 @@ fn hash_fields(fields: &[&[u8]]) -> [u8; 32] {
 fn general_gemm_calls<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
+    budget: &mut GeneralGemmCallBudgetV1,
 ) -> Result<Vec<GeneralGemmCallV1>, GeneralGemmMirImportErrorV1> {
     let mut calls = Vec::new();
+    calls
+        .try_reserve_exact(MAX_GENERAL_GEMM_TERMINAL_CALLS_V1)
+        .map_err(|_| {
+            GeneralGemmMirImportErrorV1::new(
+                "general GEMM terminal analysis could not reserve its fixed call budget",
+            )
+        })?;
     for (block, data) in body.basic_blocks.iter_enumerated() {
         let Some(terminator) = &data.terminator else {
             return Err(GeneralGemmMirImportErrorV1::new(format!(
@@ -3573,6 +3626,10 @@ fn general_gemm_calls<'tcx>(
                 block.as_usize()
             )));
         };
+        if !matches!(&terminator.kind, TerminatorKind::Call { .. }) {
+            continue;
+        }
+        budget.observe_reachable_call()?;
         let TerminatorKind::Call {
             func,
             args,
@@ -3594,6 +3651,7 @@ fn general_gemm_calls<'tcx>(
         else {
             continue;
         };
+        budget.observe_general_gemm_terminal()?;
         calls.push(GeneralGemmCallV1 {
             surface,
             operation,
@@ -4953,5 +5011,22 @@ mod tests {
                 .abi_identity(),
             exact
         );
+    }
+
+    #[test]
+    fn call_budget_accepts_exact_limits_and_rejects_the_next_event() {
+        let mut budget = GeneralGemmCallBudgetV1::default();
+        for _ in 0..MAX_GENERAL_GEMM_REACHABLE_CALLS_V1 {
+            budget.observe_reachable_call().unwrap();
+        }
+        let error = budget.observe_reachable_call().unwrap_err();
+        assert!(error.to_string().contains("512-call analysis limit"));
+
+        let mut budget = GeneralGemmCallBudgetV1::default();
+        for _ in 0..MAX_GENERAL_GEMM_TERMINAL_CALLS_V1 {
+            budget.observe_general_gemm_terminal().unwrap();
+        }
+        let error = budget.observe_general_gemm_terminal().unwrap_err();
+        assert!(error.to_string().contains("32-terminal analysis limit"));
     }
 }
