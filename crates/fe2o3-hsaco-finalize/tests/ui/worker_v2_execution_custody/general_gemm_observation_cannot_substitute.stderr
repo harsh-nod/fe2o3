@@ -1,0 +1,34 @@
+error[E0616]: field `worker_request` of struct `OpaqueGeneralGemmPostLinkMachineObservationV1` is private
+ --> tests/ui/worker_v2_execution_custody/general_gemm_observation_cannot_substitute.rs:7:23
+  |
+7 |     let _ = &original.worker_request;
+  |                       ^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `worker_response` of struct `OpaqueGeneralGemmPostLinkMachineObservationV1` is private
+ --> tests/ui/worker_v2_execution_custody/general_gemm_observation_cannot_substitute.rs:8:23
+  |
+8 |     let _ = &original.worker_response;
+  |                       ^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `kernel_symbol_sha256` of struct `OpaqueGeneralGemmPostLinkMachineObservationV1` is private
+ --> tests/ui/worker_v2_execution_custody/general_gemm_observation_cannot_substitute.rs:9:23
+  |
+9 |     let _ = &original.kernel_symbol_sha256;
+  |                       ^^^^^^^^^^^^^^^^^^^^ private field
+  |
+help: a method `kernel_symbol_sha256` also exists, call it with parentheses
+  |
+9 |     let _ = &original.kernel_symbol_sha256();
+  |                                           ++
+
+error[E0616]: field `prepared` of struct `OpaqueGeneralGemmPostLinkMachineObservationV1` is private
+  --> tests/ui/worker_v2_execution_custody/general_gemm_observation_cannot_substitute.rs:10:20
+   |
+10 |     let _ = &donor.prepared;
+   |                    ^^^^^^^^ private field
+
+error[E0616]: field `structural_machine` of struct `OpaqueGeneralGemmPostLinkMachineObservationV1` is private
+  --> tests/ui/worker_v2_execution_custody/general_gemm_observation_cannot_substitute.rs:11:20
+   |
+11 |     let _ = &donor.structural_machine;
+   |                    ^^^^^^^^^^^^^^^^^^ private field

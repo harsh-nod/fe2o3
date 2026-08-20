@@ -413,16 +413,23 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
             );
         }
         let raw_owner = self.prepared.raw_inspection();
-        let owner_request = *raw_owner.sealed_request_identity();
-        let owner_response = *raw_owner.response_identity().as_bytes();
-        if self.prepared.source_evidence_identity() != self.worker_execution
-            || self.prepared.raw_inspection_identity() != self.raw_inspection
+        let direct_worker_owner = DirectWorkerObservationV1 {
+            source_evidence: *raw_owner.source_evidence_identity().as_bytes(),
+            request: *raw_owner.sealed_request_identity(),
+            response: *raw_owner.response_identity().as_bytes(),
+        };
+        let direct_worker_copy = DirectWorkerObservationV1 {
+            source_evidence: *self.worker_execution.as_bytes(),
+            request: self.worker_request,
+            response: self.worker_response,
+        };
+        let direct_worker =
+            retain_exact_direct_worker_observation_v1(direct_worker_owner, direct_worker_copy)?;
+        if self.prepared.raw_inspection_identity() != self.raw_inspection
             || self.prepared.raw_output_identity() != self.raw_output
             || self.prepared.policy_identity() != self.raw_policy
             || self.prepared.identity() != self.finalized
             || self.prepared.finalized_output_identity() != self.finalized_output
-            || owner_request != self.worker_request
-            || owner_response != self.worker_response
         {
             return Err(
                 GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
@@ -433,26 +440,24 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
 
         let worker_identity = hash_numerical_worker_join_v1(
             raw_owner.source_evidence_identity(),
-            owner_request,
-            owner_response,
+            direct_worker.request,
+            direct_worker.response,
         );
-        let finalized_machine = inspect_exact_machine_object(
+        let finalized_machine_owner = inspect_exact_machine_object(
             self.prepared.exact_finalized_bytes(),
             self.structural_machine.binding_section().canonical_bytes(),
             None,
             self.schedule,
         )?;
-        if finalized_machine.kernel_symbol_sha256 != self.kernel_symbol_sha256
-            || finalized_machine.vector_global_loads != self.vector_global_loads
-            || finalized_machine.barriers_isa != self.barriers_isa
-            || finalized_machine.mfma_count != self.mfma_numerical.count()
-        {
-            return Err(
-                GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
-                    "finalized ISA observation",
-                ),
-            );
-        }
+        let finalized_machine = retain_exact_finalized_machine_observation_v1(
+            finalized_machine_owner,
+            ExactMachineObservationV1 {
+                kernel_symbol_sha256: self.kernel_symbol_sha256,
+                vector_global_loads: self.vector_global_loads,
+                barriers_isa: self.barriers_isa,
+                mfma_count: self.mfma_numerical.count(),
+            },
+        )?;
         let finalizer_identity = hash_numerical_finalizer_join_v1(
             &self.prepared,
             finalized_machine,
@@ -955,6 +960,27 @@ fn hash_numerical_worker_join_v1(
     hasher.finalize().into()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectWorkerObservationV1 {
+    source_evidence: [u8; 32],
+    request: [u8; 32],
+    response: [u8; 32],
+}
+
+fn retain_exact_direct_worker_observation_v1(
+    owner: DirectWorkerObservationV1,
+    copied: DirectWorkerObservationV1,
+) -> Result<DirectWorkerObservationV1, GeneralGemmPostLinkMachineErrorV1> {
+    if owner != copied {
+        return Err(
+            GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
+                "Worker V2 or finalizer lineage",
+            ),
+        );
+    }
+    Ok(owner)
+}
+
 fn hash_numerical_finalizer_join_v1(
     prepared: &PreparedFinalizedWorkerV2HsacoV1,
     machine: ExactMachineObservationV1,
@@ -979,6 +1005,20 @@ struct ExactMachineObservationV1 {
     vector_global_loads: u32,
     barriers_isa: u32,
     mfma_count: u32,
+}
+
+fn retain_exact_finalized_machine_observation_v1(
+    owner: ExactMachineObservationV1,
+    copied: ExactMachineObservationV1,
+) -> Result<ExactMachineObservationV1, GeneralGemmPostLinkMachineErrorV1> {
+    if owner != copied {
+        return Err(
+            GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
+                "finalized ISA observation",
+            ),
+        );
+    }
+    Ok(owner)
 }
 
 fn schedule_from_identity(
@@ -1456,6 +1496,85 @@ mod tests {
             0x0000_0000,
         ]);
         words
+    }
+
+    #[test]
+    fn direct_worker_owner_rejects_each_copied_identity_substitution() {
+        let owner = DirectWorkerObservationV1 {
+            source_evidence: [0x11; 32],
+            request: [0x22; 32],
+            response: [0x33; 32],
+        };
+        assert_eq!(
+            retain_exact_direct_worker_observation_v1(owner, owner).unwrap(),
+            owner
+        );
+
+        for copied in [
+            DirectWorkerObservationV1 {
+                source_evidence: [0x44; 32],
+                ..owner
+            },
+            DirectWorkerObservationV1 {
+                request: [0x44; 32],
+                ..owner
+            },
+            DirectWorkerObservationV1 {
+                response: [0x44; 32],
+                ..owner
+            },
+        ] {
+            assert!(matches!(
+                retain_exact_direct_worker_observation_v1(owner, copied),
+                Err(
+                    GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
+                        "Worker V2 or finalizer lineage"
+                    )
+                )
+            ));
+        }
+    }
+
+    #[test]
+    fn finalized_machine_owner_rejects_each_copied_observation_substitution() {
+        let owner = ExactMachineObservationV1 {
+            kernel_symbol_sha256: [0x51; 32],
+            vector_global_loads: 1,
+            barriers_isa: 0,
+            mfma_count: 1,
+        };
+        assert_eq!(
+            retain_exact_finalized_machine_observation_v1(owner, owner).unwrap(),
+            owner
+        );
+
+        for copied in [
+            ExactMachineObservationV1 {
+                kernel_symbol_sha256: [0x52; 32],
+                ..owner
+            },
+            ExactMachineObservationV1 {
+                vector_global_loads: 0,
+                ..owner
+            },
+            ExactMachineObservationV1 {
+                barriers_isa: 1,
+                ..owner
+            },
+            ExactMachineObservationV1 {
+                mfma_count: 2,
+                ..owner
+            },
+        ] {
+            assert!(matches!(
+                retain_exact_finalized_machine_observation_v1(owner, copied),
+                Err(
+                    GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
+                        "finalized ISA observation"
+                    )
+                )
+            ));
+        }
     }
 
     #[test]

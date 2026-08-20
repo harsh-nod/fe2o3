@@ -175,6 +175,7 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
         env::var(OUTPUT_DIRECTORY_ENV).expect("general-GEMM output directory is required"),
     );
     fs::create_dir_all(&output_directory).expect("create general-GEMM output directory");
+    let mut machine_joins = Vec::new();
 
     for (schedule, label, schedule_byte) in [
         (
@@ -260,6 +261,12 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
             .derive_numerical_machine_join_v1(numerical_correspondence)
             .expect("retained graph, Worker V2, and finalizer owners revalidate");
         assert_eq!(
+            observation
+                .derive_numerical_machine_join_v1(numerical_correspondence)
+                .expect("retained owners survive repeated fresh revalidation"),
+            machine_join
+        );
+        assert_eq!(
             machine_join.numerical_correspondence_identity,
             numerical_correspondence
         );
@@ -292,6 +299,7 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
         assert_ne!(graph_axis, worker_axis);
         assert_ne!(graph_axis, finalizer_axis);
         assert_ne!(worker_axis, finalizer_axis);
+        machine_joins.push((schedule, graph_axis, worker_axis, finalizer_axis));
         let raw_object = object::File::parse(raw_bytes.as_slice()).expect("parse raw HSACO");
         let descriptor = raw_object
             .sections()
@@ -323,4 +331,22 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
             observation.finalized_output_identity().sha256()
         );
     }
+
+    assert_eq!(machine_joins.len(), 2);
+    let reference = machine_joins
+        .iter()
+        .find(|(schedule, ..)| *schedule == GeneralGemmScheduleV1::ReferenceWave64Xor4V1)
+        .expect("reference owner-bound join");
+    let vector_a = machine_joins
+        .iter()
+        .find(|(schedule, ..)| {
+            *schedule == GeneralGemmScheduleV1::VectorizedAOnlyBf16GlobalTransferV1
+        })
+        .expect("vector-A owner-bound join");
+    assert_ne!(reference.1, vector_a.1, "graph owners must not substitute");
+    assert_ne!(reference.2, vector_a.2, "Worker owners must not substitute");
+    assert_ne!(
+        reference.3, vector_a.3,
+        "finalizer owners must not substitute"
+    );
 }
