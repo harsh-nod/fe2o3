@@ -56,9 +56,13 @@ but both issues remain open.
 - The graph pins dialect-only `pliron-llvm` with `default-features = false`.
   The closed gfx942 General GEMM profile now has live graph-derived V2 export,
   deterministic LLVM assembly, exact LLVM/LLD build-policy admission, and
-  retained graph-to-post-link identities for both schedules. The production
-  selector remains fail-closed until authenticated MIR-to-KIR and rustc-owned
-  final authority joins consume this structural route.
+  retained graph-to-post-link owners for both schedules. General GEMM MIR
+  analysis also enforces one aggregate 512-call and 32-terminal budget before
+  the positive boundary. Finalization freshly
+  derives distinct graph, Worker V2, and finalized-machine axes from the
+  retained concrete owners. The production selector remains fail-closed until
+  the #174 authenticated MIR-to-KIR receipt and the rustc-owned final authority
+  join consume this #173 structural and late-machine route.
 - `fe2o3-service-host` consumes the service and host models through
   authority-free, borrow-retaining typestates. It has no HSA/HIP handles and
   performs no allocation, publication, load, launch, execution, wait,

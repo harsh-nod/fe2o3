@@ -67,13 +67,16 @@ source-to-machine evidence. No COMGR or subprocess compiler/linker has artifact
 authority.
 
 The later #134 Rust/MIR and General GEMM compiler checkpoints also promote no
-row. rustc now retains an exact owner-controlled typed MIR/CFG graph for a
-return-only subset, while the closed gfx942 General GEMM structural route keeps
-its live Pliron LLVM graph authoritative through fresh export, LLVM
-serialization, exact LLVM/LLD build-policy admission, Worker V2 execution, and
-post-link inspection for both schedules. Positive production General GEMM
-import remains disabled until the MIR-to-KIR correspondence and existing final
-authority join consume these owners. The authoritative TSV and generated
+row. rustc retains an exact owner-controlled typed MIR/CFG graph for the
+return-only subset. General GEMM MIR analysis now enforces one aggregate
+512-call and 32-trusted-terminal budget, but still produces no positive import.
+The closed gfx942 General GEMM route
+retains its live Pliron LLVM graph, compiler machine, Worker V2 execution owner,
+finalized bytes, and post-link inspection for both schedules. Its three
+late-machine axes are freshly owner-derived but inert. Positive production
+General GEMM import remains disabled until #106 feeds the owner-consuming #174
+MIR-to-KIR receipt and the existing final authority join consumes that receipt
+with the #173 late-machine binding. The authoritative TSV and generated
 dashboard therefore remain unchanged at `0/97/0/12` combined.
 
 The bounded closure comprises `fd6520d88`, `70f9c5ad7`, `e016833d3`,

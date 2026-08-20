@@ -63,8 +63,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   function, CFG, instruction, type, and per-item policy on the live graph, with
   separately hashed bounded non-graph inputs for stage identities, device
   libraries, origins, and obligations. Fresh owner-borrowing export is the sole
-  structural route into serialization and worker admission. The resulting
-  identities remain inert and are retained through post-link inspection.
+  structural route into serialization and worker admission. The compiler
+  machine, prepared Worker V2 owner, finalized bytes, and post-link observation
+  remain move-only through finalization. The late graph, worker, and finalizer
+  axes are freshly derived from those retained owners and remain inert; the
+  existing final authority join does not consume them yet.
 - The bounded scalar closure comprises hardened Worker profile `fd6520d88`,
   exact ELF and machine inspection `70f9c5ad7`, measured-HSACO gate
   `e016833d3`, move-only Worker execution evidence `c9e8ca702`, the dedicated

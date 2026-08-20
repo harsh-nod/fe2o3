@@ -44,17 +44,21 @@ dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
 The 2026-08-19 [#134](https://github.com/harsh-nod/fe2o3/issues/134)
-checkpoint now includes two additional fail-closed ownership boundaries. The
-rustc frontend retains one non-cloneable, same-session typed MIR/CFG graph with
-exact item, instance, source, MIR, ABI, import, and Pliron-graph identities;
-only the return-only subset is admitted, and it grants no compiler authority.
-The closed gfx942 General GEMM structural route retains a live owner-bound
-Pliron LLVM graph through fresh graph export, deterministic LLVM serialization,
-exact LLVM/LLD build-policy admission, Worker V2 execution, and post-link
-inspection for both schedules. Build-policy admission is not worker-measurement
-authentication. Production positive General GEMM import remains disabled until
-the authenticated MIR-to-KIR and existing rustc-owned final authority joins are
-complete. `pliron-llvm` has default features disabled, and no COMGR,
+checkpoint now includes additional fail-closed ownership boundaries. The rustc
+frontend retains one non-cloneable, same-session typed MIR/CFG graph with exact
+item, instance, source, MIR, ABI, import, and Pliron-graph identities; only the
+return-only subset is admitted, and it grants no compiler authority. General
+GEMM collection also enforces one aggregate 512-call and 32-trusted-terminal
+budget. The closed
+gfx942 General GEMM structural route retains its live Pliron LLVM graph,
+compiler machine, Worker V2 execution owner, finalized bytes, and post-link
+inspection for both schedules. Its late graph, worker, and finalizer axes are
+freshly derived from those retained owners. Build-policy admission is not
+worker-measurement authentication, and the axes grant no authority. Production
+positive General GEMM import remains disabled until #106 is consumed by the
+planned owner-carrying #174 receipt and the existing rustc-owned final authority
+join consumes that receipt together with the #173 late-machine binding.
+`pliron-llvm` has default features disabled, and no COMGR,
 `llvm-sys`, or subprocess compiler/linker has artifact authority on this route.
 
 The closure landed in `fd6520d88` (exact Worker machine effects), `70f9c5ad7`
