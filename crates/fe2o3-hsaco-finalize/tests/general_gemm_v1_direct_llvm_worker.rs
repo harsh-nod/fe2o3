@@ -31,6 +31,7 @@ use fe2o3_hsaco_finalize::{
 use fe2o3_kernel_descriptor::CANONICAL_CODE_OBJECT_DIGEST_OFFSET;
 use fe2o3_verifier::GeneralGemmEvidenceIdentityV1;
 use object::{Object as _, ObjectSection as _};
+use sha2::{Digest, Sha256};
 
 const WORKER_PATH: &str = "/home/harsh/fe2o3-general-gemm-worker-llvm22/fe2o3-llvm-link-worker";
 const WORKER_SHA256: &str = "0b4936777b08d7d9d864bf357ab4f14cac33a0bb0a13c479209a26c1da808d35";
@@ -38,6 +39,8 @@ const WORKER_BUILD_ID: &str =
     "fe2o3-worker-v1-sha256-1769826adfd0cc9832015371d9df79bb9128093a28be89144aa797d8155151a0";
 const LLVM_BUILD_ID: &str = "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
 const OUTPUT_DIRECTORY_ENV: &str = "FE2O3_GENERAL_GEMM_V1_OUTPUT_DIR";
+const NUMERICAL_WORKER_JOIN_DOMAIN_V1: &[u8] =
+    b"FE2O3/GENERAL-GEMM/NUMERICAL-DIRECT-LLVM-WORKER-JOIN/V1\0";
 
 struct TestDirectory(PathBuf);
 
@@ -275,7 +278,17 @@ fn measured_worker_emits_both_inert_general_gemm_schedules() {
             graph_axis.as_bytes(),
             observation.live_serialization_identity()
         );
-        assert_eq!(finalizer_axis.as_bytes(), observation.identity().as_bytes());
+        let mut expected_worker = Sha256::new();
+        expected_worker.update(NUMERICAL_WORKER_JOIN_DOMAIN_V1);
+        expected_worker.update(observation.worker_execution_identity().as_bytes());
+        expected_worker.update(observation.worker_request_identity());
+        expected_worker.update(observation.worker_response_identity());
+        assert_eq!(
+            worker_axis,
+            GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(expected_worker.finalize().into())
+        );
+        assert_ne!(finalizer_axis.as_bytes(), observation.identity().as_bytes());
+        assert_ne!(finalizer_axis.as_bytes(), &[0; 32]);
         assert_ne!(graph_axis, worker_axis);
         assert_ne!(graph_axis, finalizer_axis);
         assert_ne!(worker_axis, finalizer_axis);

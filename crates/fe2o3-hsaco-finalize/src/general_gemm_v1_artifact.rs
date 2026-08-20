@@ -42,6 +42,8 @@ const GENERAL_GEMM_MFMA_NUMERICAL_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/GENERAL-GEMM/GFX942-MFMA-NUMERICAL-REFINEMENT/V1\0";
 const GENERAL_GEMM_NUMERICAL_WORKER_JOIN_DOMAIN_V1: &[u8] =
     b"FE2O3/GENERAL-GEMM/NUMERICAL-DIRECT-LLVM-WORKER-JOIN/V1\0";
+const GENERAL_GEMM_NUMERICAL_FINALIZER_JOIN_DOMAIN_V1: &[u8] =
+    b"FE2O3/GENERAL-GEMM/NUMERICAL-FINALIZER-ISA-JOIN/V1\0";
 const GENERAL_GEMM_BINDING_SECTION_V1: &str = ".fe2o3.general-gemm.binding.v1";
 const GENERAL_GEMM_DESCRIPTOR_SECTION_V1: &str = ".fe2o3.kd.v1";
 const GENERAL_GEMM_KERNEL_SYMBOL_V1: &str = "tiled_gemm_general_v1";
@@ -410,12 +412,17 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
                 GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution("structural machine"),
             );
         }
+        let raw_owner = self.prepared.raw_inspection();
+        let owner_request = *raw_owner.sealed_request_identity();
+        let owner_response = *raw_owner.response_identity().as_bytes();
         if self.prepared.source_evidence_identity() != self.worker_execution
             || self.prepared.raw_inspection_identity() != self.raw_inspection
             || self.prepared.raw_output_identity() != self.raw_output
             || self.prepared.policy_identity() != self.raw_policy
             || self.prepared.identity() != self.finalized
             || self.prepared.finalized_output_identity() != self.finalized_output
+            || owner_request != self.worker_request
+            || owner_response != self.worker_response
         {
             return Err(
                 GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
@@ -425,9 +432,31 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
         }
 
         let worker_identity = hash_numerical_worker_join_v1(
-            self.prepared.source_evidence_identity(),
-            self.worker_request,
-            self.worker_response,
+            raw_owner.source_evidence_identity(),
+            owner_request,
+            owner_response,
+        );
+        let finalized_machine = inspect_exact_machine_object(
+            self.prepared.exact_finalized_bytes(),
+            self.structural_machine.binding_section().canonical_bytes(),
+            None,
+            self.schedule,
+        )?;
+        if finalized_machine.kernel_symbol_sha256 != self.kernel_symbol_sha256
+            || finalized_machine.vector_global_loads != self.vector_global_loads
+            || finalized_machine.barriers_isa != self.barriers_isa
+            || finalized_machine.mfma_count != self.mfma_numerical.count()
+        {
+            return Err(
+                GeneralGemmPostLinkMachineErrorV1::RetainedOwnerSubstitution(
+                    "finalized ISA observation",
+                ),
+            );
+        }
+        let finalizer_identity = hash_numerical_finalizer_join_v1(
+            &self.prepared,
+            finalized_machine,
+            self.mfma_numerical,
         );
         Ok(GeneralGemmNumericalMachineJoinV1 {
             numerical_correspondence_identity,
@@ -440,7 +469,7 @@ impl OpaqueGeneralGemmPostLinkMachineObservationV1 {
                 GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(worker_identity),
             ),
             finalizer_post_link_isa_result_identity: Some(
-                GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(*self.identity.as_bytes()),
+                GeneralGemmEvidenceIdentityV1::from_untrusted_bytes(finalizer_identity),
             ),
         })
     }
@@ -923,6 +952,24 @@ fn hash_numerical_worker_join_v1(
     hasher.update(source_evidence.as_bytes());
     hasher.update(request);
     hasher.update(response);
+    hasher.finalize().into()
+}
+
+fn hash_numerical_finalizer_join_v1(
+    prepared: &PreparedFinalizedWorkerV2HsacoV1,
+    machine: ExactMachineObservationV1,
+    mfma_numerical: GeneralGemmMfmaNumericalRefinementV1,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(GENERAL_GEMM_NUMERICAL_FINALIZER_JOIN_DOMAIN_V1);
+    hasher.update(prepared.identity().as_bytes());
+    push_content_identity(&mut hasher, prepared.finalized_output_identity());
+    hasher.update(prepared.canonical_digest().as_bytes());
+    hasher.update(machine.kernel_symbol_sha256);
+    hasher.update(machine.vector_global_loads.to_le_bytes());
+    hasher.update(machine.barriers_isa.to_le_bytes());
+    hasher.update(machine.mfma_count.to_le_bytes());
+    hasher.update(mfma_numerical.identity().as_bytes());
     hasher.finalize().into()
 }
 
