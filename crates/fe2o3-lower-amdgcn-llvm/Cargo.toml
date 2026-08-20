@@ -18,9 +18,6 @@ pliron.workspace = true
 pliron-llvm = { workspace = true, default-features = false }
 sha2.workspace = true
 
-[dev-dependencies]
-fe2o3-amdgcn-pliron-llvm.workspace = true
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

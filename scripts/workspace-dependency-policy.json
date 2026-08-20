@@ -134,13 +134,6 @@
       "kinds": [
         "normal"
       ]
-    },
-    {
-      "from": "fe2o3-lower-amdgcn-llvm",
-      "to": "fe2o3-amdgcn-pliron-llvm",
-      "kinds": [
-        "dev"
-      ]
     }
   ],
   "forbidden_dependency_directions": [

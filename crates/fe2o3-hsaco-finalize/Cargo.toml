@@ -11,11 +11,14 @@ publish = false
 [lib]
 name = "fe2o3_hsaco_finalize"
 
+[features]
+general-gemm-v1 = ["dep:fe2o3-general-gemm-compiler"]
+
 [dependencies]
 dialect-amdgcn.workspace = true
 fe2o3-artifact-transaction.workspace = true
 fe2o3-compiler-ffi.workspace = true
-fe2o3-general-gemm-compiler.workspace = true
+fe2o3-general-gemm-compiler = { workspace = true, optional = true }
 fe2o3-hsaco.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
@@ -38,6 +41,11 @@ name = "fe2o3-worker-v2-hsaco-fixture"
 path = "tests/fixtures/worker_v2_hsaco_fixture.rs"
 test = false
 bench = false
+
+[[test]]
+name = "general_gemm_v1_direct_llvm_worker"
+path = "tests/general_gemm_v1_direct_llvm_worker.rs"
+required-features = ["general-gemm-v1"]
 
 [dev-dependencies]
 fe2o3-compiler-api.workspace = true

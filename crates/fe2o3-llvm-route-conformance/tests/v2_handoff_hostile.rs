@@ -24,11 +24,12 @@ const I32: ValueTypeV2 = ValueTypeV2::Scalar(ScalarTypeV1::I32);
 const I64: ValueTypeV2 = ValueTypeV2::Scalar(ScalarTypeV1::I64);
 const F32: ValueTypeV2 = ValueTypeV2::Scalar(ScalarTypeV1::F32);
 
-const PUBLIC_V2_UNREPRESENTABLE_GAPS: [&str; 4] = [
+const PUBLIC_V2_UNREPRESENTABLE_GAPS: [&str; 5] = [
     "arbitrary intrinsic declarations and calls",
     "atomic instructions and memory orderings",
     "switch terminators and cases",
     "aggregate values and operations",
+    "general vector types and operations outside the fixed GEMM profile",
 ];
 
 #[test]
@@ -1140,6 +1141,7 @@ fn v2_handoff_public_schema_records_supported_families_and_remaining_gaps() {
             "atomic instructions and memory orderings",
             "switch terminators and cases",
             "aggregate values and operations",
+            "general vector types and operations outside the fixed GEMM profile",
         ]
     );
 }

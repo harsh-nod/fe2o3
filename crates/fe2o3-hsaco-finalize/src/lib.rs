@@ -21,6 +21,7 @@ mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
 mod flash_attention_v1_finalizer;
+#[cfg(feature = "general-gemm-v1")]
 mod general_gemm_v1_artifact;
 mod lds_gemm_finalizer;
 mod lds_gemm_profile_registry;
@@ -94,6 +95,7 @@ pub use flash_attention_v1_finalizer::{
     FlashAttentionV1OcmlProviderPinsV1, FlashAttentionV1WorkerPinsV1,
     finalize_flash_attention_v1_worker_v2_hsaco_v1,
 };
+#[cfg(feature = "general-gemm-v1")]
 pub use general_gemm_v1_artifact::{
     GeneralGemmBarrierRefinementV1, GeneralGemmMfmaNumericalRefinementIdentityV1,
     GeneralGemmMfmaNumericalRefinementV1, GeneralGemmPostLinkMachineErrorV1,
