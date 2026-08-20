@@ -1,6 +1,15 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod production;
+
+pub use production::{
+    ConstructedGraphStageV1, ConstructionRegisteredStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS,
+    ProductionConstructionV1, ProductionPlironSessionV1, ProductionRootHandleV1,
+    ProductionSessionErrorV1, ProductionSessionLimitErrorV1, ProductionSessionLimitsV1,
+    ProductionStageHandleV1,
+};
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -16,6 +25,7 @@ pub use fe2o3_pliron_owner_core::{
     ensure_context_identity, require_context_identity, validate_dialect_name,
 };
 use pliron::{
+    builtin::op_interfaces::SymbolOpInterface,
     builtin::ops::ModuleOp,
     combine::{Parser, eof},
     context::Context,
@@ -358,6 +368,7 @@ pub enum OperationHandleError {
     SessionOperationImportLimitExceeded,
     OperationImportRejected,
     OperationVerificationRejected,
+    ConstructionRecipeMismatch,
     OperationTreeLimitExceeded,
     SessionOperationTreeLimitExceeded,
     UpstreamPanicked,
@@ -405,7 +416,10 @@ impl fmt::Display for OperationHandleError {
             }
             Self::OperationImportRejected => formatter.write_str("operation import was rejected"),
             Self::OperationVerificationRejected => {
-                formatter.write_str("imported operation failed recursive verification")
+                formatter.write_str("operation failed recursive verification")
+            }
+            Self::ConstructionRecipeMismatch => {
+                formatter.write_str("constructed operation does not match its production recipe")
             }
             Self::OperationTreeLimitExceeded => {
                 formatter.write_str("operation tree exceeds the hard work limit")
@@ -900,6 +914,41 @@ impl PlironSession {
                 })
             })
             .collect()
+    }
+
+    fn validate_production_module(
+        &mut self,
+        handle: &OperationHandle,
+        expected_name: &str,
+    ) -> Result<OperationShapeV1, OperationHandleError> {
+        let validation = self
+            .with_operation(handle, |pointer, context| {
+                let tree_work = inspect_operation_tree(pointer, context)?;
+                verify_operation(pointer, context)
+                    .map_err(|_| OperationHandleError::OperationVerificationRejected)?;
+                let module = Operation::get_op::<ModuleOp>(pointer, context)
+                    .ok_or(OperationHandleError::ConstructionRecipeMismatch)?;
+                let shape = inspect_operation(pointer, context)?.0;
+                if tree_work != 3
+                    || module.get_symbol_name(context).as_ref() != expected_name
+                    || shape
+                        != (OperationShapeV1 {
+                            operand_count: 0,
+                            result_count: 0,
+                            region_count: 1,
+                            block_count: 1,
+                            child_operation_count: 0,
+                        })
+                {
+                    return Err(OperationHandleError::ConstructionRecipeMismatch);
+                }
+                Ok(shape)
+            })
+            .and_then(|validation| validation);
+        if validation.is_err() {
+            self.poisoned = true;
+        }
+        validation
     }
 }
 
