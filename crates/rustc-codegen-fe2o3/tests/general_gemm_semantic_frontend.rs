@@ -373,6 +373,30 @@ fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic
             )) && stderr.contains(code),
             "safe semantic fixture `{bin}` missed exact {code} diagnostic:\n{stderr}"
         );
+        if let Some((failed, proven)) = match bin {
+            "unguarded-a-tail-load" => Some((
+                "A dimension 0 requires `row < m`",
+                "A dimension 1 satisfies `depth < k`",
+            )),
+            "unguarded-b-tail-load" => Some((
+                "B dimension 0 requires `depth < k`",
+                "B dimension 1 satisfies `column < n`",
+            )),
+            "out-of-bounds-c-store" => Some((
+                "C dimension 0 requires `row < m`",
+                "C dimension 1 satisfies `column < n`",
+            )),
+            _ => None,
+        } {
+            assert!(
+                stderr.contains(&format!("failed bound: {failed}"))
+                    && stderr.contains(&format!("proven bound: {proven}"))
+                    && stderr.contains(
+                        "help: guard every path to the access with the failed relation or use a checked operation that supplies a defined tail value"
+                    ),
+                "safe semantic fixture `{bin}` omitted its dimension-specific bound assessment:\n{stderr}"
+            );
+        }
         assert!(
             !stderr.contains("reached verified symbolic semantic template"),
             "safe semantic fixture `{bin}` acquired a verified witness:\n{stderr}"

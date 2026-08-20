@@ -51,6 +51,7 @@ pub(crate) enum GeneralGemmMirImportV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GeneralGemmSemanticRejectionV1 {
     diagnostic: GeneralGemmKirDiagnosticV1,
+    bound_assessment: Option<GeneralGemmBoundAssessmentV1>,
     root_symbol: String,
     source_span: String,
     terminal_spans: Vec<String>,
@@ -59,10 +60,13 @@ pub(crate) struct GeneralGemmSemanticRejectionV1 {
 
 impl fmt::Display for GeneralGemmSemanticRejectionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.diagnostic)?;
+        if let Some(assessment) = &self.bound_assessment {
+            write!(formatter, "; {assessment}")?;
+        }
         write!(
             formatter,
-            "{}; kind=Counterexample; root symbol={}; source span={}; terminal spans={}; reachable call chain: {}",
-            self.diagnostic,
+            "; kind=Counterexample; root symbol={}; source span={}; terminal spans={}; reachable call chain: {}",
             self.root_symbol,
             self.source_span,
             self.terminal_spans.join(","),
@@ -85,6 +89,131 @@ pub(crate) enum GeneralGemmAbiRoleV1 {
     Ldc,
     Alpha,
     Beta,
+}
+
+impl GeneralGemmAbiRoleV1 {
+    const fn as_diagnostic_str(self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::B => "B",
+            Self::C => "C",
+            Self::M => "m",
+            Self::N => "n",
+            Self::K => "k",
+            Self::Lda => "lda",
+            Self::Ldb => "ldb",
+            Self::Ldc => "ldc",
+            Self::Alpha => "alpha",
+            Self::Beta => "beta",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneralGemmIndexRoleV1 {
+    Row,
+    Column,
+    Depth,
+}
+
+impl GeneralGemmIndexRoleV1 {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Row => "row",
+            Self::Column => "column",
+            Self::Depth => "depth",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneralGemmBoundObligationV1 {
+    memory: GeneralGemmAbiRoleV1,
+    dimension: u8,
+    index: GeneralGemmIndexRoleV1,
+    extent: GeneralGemmAbiRoleV1,
+}
+
+impl GeneralGemmBoundObligationV1 {
+    fn write_relation(&self, formatter: &mut fmt::Formatter<'_>, verb: &str) -> fmt::Result {
+        write!(
+            formatter,
+            "{} dimension {} {verb} `{} < {}`",
+            self.memory.as_diagnostic_str(),
+            self.dimension,
+            self.index.as_str(),
+            self.extent.as_diagnostic_str(),
+        )
+    }
+}
+
+impl fmt::Display for GeneralGemmBoundObligationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.write_relation(formatter, "requires")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneralGemmBoundProofV1 {
+    obligation: GeneralGemmBoundObligationV1,
+    status: GeneralGemmBoundProofStatusV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneralGemmBoundProofStatusV1 {
+    Proven,
+    Unproved,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneralGemmBoundAssessmentV1 {
+    proofs: [GeneralGemmBoundProofV1; 2],
+}
+
+impl GeneralGemmBoundAssessmentV1 {
+    fn has_exact_statuses(&self, statuses: [GeneralGemmBoundProofStatusV1; 2]) -> bool {
+        self.proofs
+            .iter()
+            .zip(statuses)
+            .all(|(proof, expected)| proof.status == expected)
+    }
+}
+
+impl fmt::Display for GeneralGemmBoundAssessmentV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut failed = self
+            .proofs
+            .iter()
+            .filter(|proof| proof.status == GeneralGemmBoundProofStatusV1::Unproved);
+        let first_failed = failed.next().ok_or(fmt::Error)?;
+        write!(
+            formatter,
+            "failed bound: {}, but that relation is not established on every path to the access",
+            first_failed.obligation,
+        )?;
+        for proof in failed {
+            write!(formatter, ", and {}", proof.obligation)?;
+        }
+        for proof in self
+            .proofs
+            .iter()
+            .filter(|proof| proof.status == GeneralGemmBoundProofStatusV1::Proven)
+        {
+            write!(formatter, "; proven bound: ")?;
+            proof.obligation.write_relation(formatter, "satisfies")?;
+        }
+        write!(
+            formatter,
+            "; help: guard every path to the access with the failed relation or use a checked operation that supplies a defined tail value",
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneralGemmBoundSpecV1 {
+    obligation: GeneralGemmBoundObligationV1,
+    index_argument: usize,
+    extent_argument: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -641,6 +770,34 @@ struct GeneralGemmCallV1 {
     evidence: GeneralGemmEvidenceV1,
 }
 
+#[derive(Debug)]
+struct GeneralGemmCounterexampleV1<'a> {
+    diagnostic: GeneralGemmKirDiagnosticV1,
+    call_chain: Vec<&'a GeneralGemmCallV1>,
+    bound_assessment: Option<GeneralGemmBoundAssessmentV1>,
+}
+
+impl<'a> GeneralGemmCounterexampleV1<'a> {
+    fn property(property: GeneralGemmPropertyV1, call_chain: Vec<&'a GeneralGemmCallV1>) -> Self {
+        Self {
+            diagnostic: diagnostic(property),
+            call_chain,
+            bound_assessment: None,
+        }
+    }
+
+    fn bounds(
+        call_chain: Vec<&'a GeneralGemmCallV1>,
+        bound_assessment: GeneralGemmBoundAssessmentV1,
+    ) -> Self {
+        Self {
+            diagnostic: diagnostic(GeneralGemmPropertyV1::BoundsSafe),
+            call_chain,
+            bound_assessment: Some(bound_assessment),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct GeneralGemmCallBudgetV1 {
     reachable_calls: usize,
@@ -799,8 +956,9 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
             .then(|| derived_counterexample(&root_calls, lane_conditional_publish))
             .flatten()
     });
-    if let Some((diagnostic, call_chain)) = counterexample {
-        if !call_chain
+    if let Some(counterexample) = counterexample {
+        if !counterexample
+            .call_chain
             .iter()
             .all(|call| reachable(body, START_BLOCK, call.block))
         {
@@ -824,8 +982,14 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
             end.col.0 + 1
         );
         let mut reachable_call_chain = vec!["kernel-root"];
-        reachable_call_chain.extend(call_chain.iter().map(|call| operation_name(call.operation)));
-        let terminal_spans = call_chain
+        reachable_call_chain.extend(
+            counterexample
+                .call_chain
+                .iter()
+                .map(|call| operation_name(call.operation)),
+        );
+        let terminal_spans = counterexample
+            .call_chain
             .iter()
             .map(|call| {
                 let location = tcx.sess.source_map().lookup_char_pos(call.span.lo());
@@ -843,7 +1007,8 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
             .collect();
         return Ok(Some(GeneralGemmMirImportV1::Rejected(
             GeneralGemmSemanticRejectionV1 {
-                diagnostic,
+                diagnostic: counterexample.diagnostic,
+                bound_assessment: counterexample.bound_assessment,
                 root_symbol: root_function.export_name.clone(),
                 source_span,
                 terminal_spans,
@@ -871,25 +1036,28 @@ pub(crate) fn try_import_general_gemm_v1<'tcx>(
 fn derived_counterexample(
     calls: &[GeneralGemmCallV1],
     lane_conditional_publish: bool,
-) -> Option<(GeneralGemmKirDiagnosticV1, Vec<&GeneralGemmCallV1>)> {
+) -> Option<GeneralGemmCounterexampleV1<'_>> {
     if let Some(call) = calls.iter().find(|call| {
         matches!(
             call.evidence,
             GeneralGemmEvidenceV1::UnguardedA | GeneralGemmEvidenceV1::UnguardedB
         )
     }) {
-        return Some((diagnostic(GeneralGemmPropertyV1::BoundsSafe), vec![call]));
+        return Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::BoundsSafe,
+            vec![call],
+        ));
     }
     let stores = store_calls(calls);
     if stores.len() == 2 {
-        return Some((
-            diagnostic(GeneralGemmPropertyV1::OutputRegionInjective),
+        return Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::OutputRegionInjective,
             stores,
         ));
     }
     if lane_conditional_publish {
-        return Some((
-            diagnostic(GeneralGemmPropertyV1::BarrierConvergent),
+        return Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::BarrierConvergent,
             optional_call(calls, TrustedGeneralGemmOperationV1::Publish)
                 .ok()
                 .flatten()
@@ -898,8 +1066,8 @@ fn derived_counterexample(
         ));
     }
     if call_count(calls, TrustedGeneralGemmOperationV1::Publish) == 0 {
-        return Some((
-            diagnostic(GeneralGemmPropertyV1::Initialized),
+        return Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::Initialized,
             calls
                 .iter()
                 .find(|call| {
@@ -917,8 +1085,8 @@ fn derived_counterexample(
         .iter()
         .find(|call| call.evidence == GeneralGemmEvidenceV1::NonzeroTail)
     {
-        return Some((
-            diagnostic(GeneralGemmPropertyV1::TailRefinement),
+        return Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::TailRefinement,
             vec![call],
         ));
     }
@@ -926,75 +1094,125 @@ fn derived_counterexample(
         .iter()
         .find(|call| call.evidence == GeneralGemmEvidenceV1::WrongEpilogue)
     {
-        return Some((
-            diagnostic(GeneralGemmPropertyV1::EpilogueRefinement),
+        return Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::EpilogueRefinement,
             vec![call],
         ));
     }
     None
 }
 
+fn bound_obligation_specs(
+    operation: TrustedGeneralGemmOperationV1,
+) -> Option<[GeneralGemmBoundSpecV1; 2]> {
+    use GeneralGemmAbiRoleV1 as Memory;
+    use GeneralGemmIndexRoleV1 as Index;
+
+    let (memory, dimensions) = match operation {
+        TrustedGeneralGemmOperationV1::LoadA => (
+            Memory::A,
+            [(Index::Row, Memory::M), (Index::Depth, Memory::K)],
+        ),
+        TrustedGeneralGemmOperationV1::LoadB => (
+            Memory::B,
+            [(Index::Depth, Memory::K), (Index::Column, Memory::N)],
+        ),
+        TrustedGeneralGemmOperationV1::LoadC | TrustedGeneralGemmOperationV1::StoreEpilogue => (
+            Memory::C,
+            [(Index::Row, Memory::M), (Index::Column, Memory::N)],
+        ),
+        _ => return None,
+    };
+    Some(std::array::from_fn(|dimension| {
+        let (index, extent) = dimensions[dimension];
+        GeneralGemmBoundSpecV1 {
+            obligation: GeneralGemmBoundObligationV1 {
+                memory,
+                dimension: dimension as u8,
+                index,
+                extent,
+            },
+            index_argument: dimension + 2,
+            extent_argument: dimension + 4,
+        }
+    }))
+}
+
+fn assess_bound_obligations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    call: &GeneralGemmCallV1,
+) -> Result<GeneralGemmBoundAssessmentV1, GeneralGemmMirImportErrorV1> {
+    let specs = bound_obligation_specs(call.operation).ok_or_else(|| {
+        unproved(&format!(
+            "{} has a registered two-dimensional bound schema",
+            operation_name(call.operation),
+        ))
+    })?;
+    let arguments = call_args(body, call.block)?;
+    let assess = |spec: GeneralGemmBoundSpecV1| {
+        let index = arguments.get(spec.index_argument).ok_or_else(|| {
+            unproved(&format!(
+                "{} bound dimension {} has index argument {}",
+                operation_name(call.operation),
+                spec.obligation.dimension,
+                spec.index_argument,
+            ))
+        })?;
+        let extent = arguments.get(spec.extent_argument).ok_or_else(|| {
+            unproved(&format!(
+                "{} bound dimension {} has extent argument {}",
+                operation_name(call.operation),
+                spec.obligation.dimension,
+                spec.extent_argument,
+            ))
+        })?;
+        Ok(GeneralGemmBoundProofV1 {
+            obligation: spec.obligation,
+            status: if has_true_lt_guard(tcx, body, call.block, &index.node, &extent.node) {
+                GeneralGemmBoundProofStatusV1::Proven
+            } else {
+                GeneralGemmBoundProofStatusV1::Unproved
+            },
+        })
+    };
+    let [first, second] = specs;
+    Ok(GeneralGemmBoundAssessmentV1 {
+        proofs: [assess(first)?, assess(second)?],
+    })
+}
+
 fn derived_dynamic_counterexample<'a, 'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     calls: &'a [GeneralGemmCallV1],
-) -> Result<
-    Option<(GeneralGemmKirDiagnosticV1, Vec<&'a GeneralGemmCallV1>)>,
-    GeneralGemmMirImportErrorV1,
-> {
+) -> Result<Option<GeneralGemmCounterexampleV1<'a>>, GeneralGemmMirImportErrorV1> {
     require_dynamic_mutation_oracle_shape(calls)?;
+    use GeneralGemmBoundProofStatusV1::{Proven, Unproved};
 
     let load_a = unique_call(calls, TrustedGeneralGemmOperationV1::LoadA)?;
-    let load_a_args = call_args(body, load_a.block)?;
-    let a_row_guard = has_true_lt_guard(
-        tcx,
-        body,
-        load_a.block,
-        &load_a_args[2].node,
-        &load_a_args[4].node,
-    );
-    let a_depth_guard = has_true_lt_guard(
-        tcx,
-        body,
-        load_a.block,
-        &load_a_args[3].node,
-        &load_a_args[5].node,
-    );
-    if !a_row_guard && a_depth_guard {
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::BoundsSafe),
+    let a_bounds = assess_bound_obligations(tcx, body, load_a)?;
+    if a_bounds.has_exact_statuses([Unproved, Proven]) {
+        return Ok(Some(GeneralGemmCounterexampleV1::bounds(
             vec![load_a],
+            a_bounds,
         )));
     }
-    if !a_row_guard || !a_depth_guard {
+    if !a_bounds.has_exact_statuses([Proven, Proven]) {
         return Err(unproved(
             "A load has exactly the row<M and depth<K guards or the named single-guard counterexample",
         ));
     }
 
     let load_b = unique_call(calls, TrustedGeneralGemmOperationV1::LoadB)?;
-    let load_b_args = call_args(body, load_b.block)?;
-    let b_depth_guard = has_true_lt_guard(
-        tcx,
-        body,
-        load_b.block,
-        &load_b_args[2].node,
-        &load_b_args[4].node,
-    );
-    let b_column_guard = has_true_lt_guard(
-        tcx,
-        body,
-        load_b.block,
-        &load_b_args[3].node,
-        &load_b_args[5].node,
-    );
-    if !b_depth_guard && b_column_guard {
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::BoundsSafe),
+    let b_bounds = assess_bound_obligations(tcx, body, load_b)?;
+    if b_bounds.has_exact_statuses([Unproved, Proven]) {
+        return Ok(Some(GeneralGemmCounterexampleV1::bounds(
             vec![load_b],
+            b_bounds,
         )));
     }
-    if !b_depth_guard || !b_column_guard {
+    if !b_bounds.has_exact_statuses([Proven, Proven]) {
         return Err(unproved(
             "B load has exactly the depth<K and column<N guards or the named single-guard counterexample",
         ));
@@ -1005,16 +1223,25 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
         .iter()
         .filter(|call| call.operation == TrustedGeneralGemmOperationV1::StoreEpilogue)
         .collect::<Vec<_>>();
-    for store in &stores {
+    let store_bounds = stores
+        .iter()
+        .map(|store| assess_bound_obligations(tcx, body, store))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (store, bounds) in stores.iter().zip(&store_bounds) {
         let args = call_args(body, store.block)?;
         let row = proof_symbolic_operand(tcx, body, calls, phase, &args[2].node)?;
         let column = proof_symbolic_operand(tcx, body, calls, phase, &args[3].node)?;
         if row == ProofSymbolicValueV1::KernelArgument(3)
             && column != ProofSymbolicValueV1::KernelArgument(4)
         {
-            return Ok(Some((
-                diagnostic(GeneralGemmPropertyV1::BoundsSafe),
+            if !bounds.has_exact_statuses([Unproved, Proven]) {
+                return Err(unproved(
+                    "the named out-of-bounds C store has one failed row bound and one proven column bound",
+                ));
+            }
+            return Ok(Some(GeneralGemmCounterexampleV1::bounds(
                 vec![*store],
+                *bounds,
             )));
         }
     }
@@ -1034,7 +1261,7 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
     );
     let lane_collision_column = proof_mul(ProofSymbolicValueV1::WorkgroupX, proof_constant(16));
     let workgroup_collision_column = lane_row.clone();
-    for (component, store) in stores.iter().enumerate() {
+    for ((component, store), bounds) in stores.iter().enumerate().zip(&store_bounds) {
         let args = call_args(body, store.block)?;
         let row = proof_symbolic_operand(tcx, body, calls, phase, &args[2].node)?;
         let column = proof_symbolic_operand(tcx, body, calls, phase, &args[3].node)?;
@@ -1042,8 +1269,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
             && row == expected_row_base
             && (column == lane_collision_column || column == workgroup_collision_column)
         {
-            return Ok(Some((
-                diagnostic(GeneralGemmPropertyV1::OutputRegionInjective),
+            return Ok(Some(GeneralGemmCounterexampleV1::property(
+                GeneralGemmPropertyV1::OutputRegionInjective,
                 vec![*store],
             )));
         }
@@ -1057,9 +1284,7 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
                 "C stores have exact grid-XY16 lane/component ownership or a derived lane/workgroup collision",
             ));
         }
-        if !has_true_lt_guard(tcx, body, store.block, &args[2].node, &args[4].node)
-            || !has_true_lt_guard(tcx, body, store.block, &args[3].node, &args[5].node)
-        {
+        if !bounds.has_exact_statuses([Proven, Proven]) {
             return Err(unproved(
                 "C stores are dominated by exact row<M and column<N guards",
             ));
@@ -1108,8 +1333,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
         .iter()
         .find(|(_, slot, epoch)| *slot == lane_row && *epoch == ProofSymbolicValueV1::Phase)
     {
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::RaceFree),
+        return Ok(Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::RaceFree,
             vec![*stage],
         )));
     }
@@ -1122,8 +1347,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
             .filter(|call| call.operation == TrustedGeneralGemmOperationV1::ReadStage)
             .nth(1)
             .ok_or_else(|| unproved("missing B stage retains a B LDS read witness"))?;
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::Initialized),
+        return Ok(Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::Initialized,
             vec![stage_slots[0].0, first_b_read],
         )));
     }
@@ -1145,16 +1370,16 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
             .iter()
             .find(|call| call.operation == TrustedGeneralGemmOperationV1::MfmaValue)
             .ok_or_else(|| unproved("missing publish retains a consuming MFMA witness"))?;
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::Initialized),
+        return Ok(Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::Initialized,
             vec![first_mfma],
         )));
     }
     let publish = unique_call(calls, TrustedGeneralGemmOperationV1::Publish)?;
     let stage = unique_call(calls, TrustedGeneralGemmOperationV1::Stage)?;
     if publish_is_lane_conditional(body, calls)? {
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::BarrierConvergent),
+        return Ok(Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::BarrierConvergent,
             vec![publish],
         )));
     }
@@ -1167,8 +1392,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
             .iter()
             .rfind(|call| call.operation == TrustedGeneralGemmOperationV1::MfmaValue)
             .ok_or_else(|| unproved("missing reuse retains a completed MFMA witness"))?;
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::LdsEpochCorrect),
+        return Ok(Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::LdsEpochCorrect,
             vec![last_mfma],
         )));
     }
@@ -1186,8 +1411,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
                 Box::new(proof_constant(1)),
             )
         {
-            return Ok(Some((
-                diagnostic(GeneralGemmPropertyV1::LdsEpochCorrect),
+            return Ok(Some(GeneralGemmCounterexampleV1::property(
+                GeneralGemmPropertyV1::LdsEpochCorrect,
                 vec![*read],
             )));
         }
@@ -1207,8 +1432,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
         .iter()
         .find(|read| !dominates(body, wait.block, read.block))
     {
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::Initialized),
+        return Ok(Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::Initialized,
             vec![*read, wait],
         )));
     }
@@ -1228,8 +1453,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
         if symbolic_f32_operand(tcx, body, &args[3].node, 0, &mut BTreeSet::new())
             == Some(SymbolicF32ValueV1::Constant(0.0_f32.to_bits()))
         {
-            return Ok(Some((
-                diagnostic(GeneralGemmPropertyV1::AccumulatorPhaseRefinement),
+            return Ok(Some(GeneralGemmCounterexampleV1::property(
+                GeneralGemmPropertyV1::AccumulatorPhaseRefinement,
                 vec![*mfma],
             )));
         }
@@ -1242,8 +1467,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
         };
         let constants = local_u16_constants(tcx, body, value, 0, &mut BTreeSet::new());
         if constants.iter().any(|value| *value != 0) {
-            return Ok(Some((
-                diagnostic(GeneralGemmPropertyV1::TailRefinement),
+            return Ok(Some(GeneralGemmCounterexampleV1::property(
+                GeneralGemmPropertyV1::TailRefinement,
                 vec![*stage],
             )));
         }
@@ -1258,8 +1483,8 @@ fn derived_dynamic_counterexample<'a, 'tcx>(
         .iter()
         .find(|call| call.evidence == GeneralGemmEvidenceV1::WrongEpilogue)
     {
-        return Ok(Some((
-            diagnostic(GeneralGemmPropertyV1::EpilogueRefinement),
+        return Ok(Some(GeneralGemmCounterexampleV1::property(
+            GeneralGemmPropertyV1::EpilogueRefinement,
             vec![*store],
         )));
     }
@@ -2278,6 +2503,24 @@ fn has_true_lt_guard<'tcx>(
     left: &Operand<'tcx>,
     right: &Operand<'tcx>,
 ) -> bool {
+    let matching_discriminants = body
+        .basic_blocks
+        .iter()
+        .flat_map(|data| &data.statements)
+        .filter_map(|statement| {
+            let (destination, Rvalue::BinaryOp(BinOp::Lt, operands)) =
+                statement.kind.as_assign()?
+            else {
+                return None;
+            };
+            let destination = destination.as_local()?;
+            (same_runtime_value(&operands.0, left) && same_runtime_value(&operands.1, right))
+                .then_some(destination)
+        })
+        .collect::<BTreeSet<_>>();
+    if matching_discriminants.is_empty() {
+        return false;
+    }
     body.basic_blocks.iter_enumerated().any(|(block, data)| {
         let Some(terminator) = &data.terminator else {
             return false;
@@ -2288,21 +2531,7 @@ fn has_true_lt_guard<'tcx>(
         let Some(discr) = operand_local(discr) else {
             return false;
         };
-        let matches = body
-            .basic_blocks
-            .iter()
-            .flat_map(|data| &data.statements)
-            .any(|statement| {
-                let Some((destination, Rvalue::BinaryOp(BinOp::Lt, operands))) =
-                    statement.kind.as_assign()
-                else {
-                    return false;
-                };
-                destination.as_local() == Some(discr)
-                    && same_runtime_value(&operands.0, left)
-                    && same_runtime_value(&operands.1, right)
-            });
-        if !matches {
+        if !matching_discriminants.contains(&discr) {
             return false;
         }
         let true_target = targets
@@ -5015,5 +5244,78 @@ mod tests {
         }
         let error = budget.observe_general_gemm_terminal().unwrap_err();
         assert!(error.to_string().contains("32-terminal analysis limit"));
+    }
+
+    #[test]
+    fn bound_schemas_are_derived_from_memory_operation_signatures() {
+        use GeneralGemmAbiRoleV1 as Memory;
+        use GeneralGemmIndexRoleV1 as Index;
+
+        for (operation, expected) in [
+            (
+                TrustedGeneralGemmOperationV1::LoadA,
+                [
+                    (Memory::A, Index::Row, Memory::M),
+                    (Memory::A, Index::Depth, Memory::K),
+                ],
+            ),
+            (
+                TrustedGeneralGemmOperationV1::LoadB,
+                [
+                    (Memory::B, Index::Depth, Memory::K),
+                    (Memory::B, Index::Column, Memory::N),
+                ],
+            ),
+            (
+                TrustedGeneralGemmOperationV1::StoreEpilogue,
+                [
+                    (Memory::C, Index::Row, Memory::M),
+                    (Memory::C, Index::Column, Memory::N),
+                ],
+            ),
+        ] {
+            let observed = bound_obligation_specs(operation).expect("registered bound schema");
+            for (dimension, (proof, (memory, index, extent))) in
+                observed.iter().zip(expected).enumerate()
+            {
+                assert_eq!(proof.obligation.memory, memory);
+                assert_eq!(proof.obligation.dimension, dimension as u8);
+                assert_eq!(proof.obligation.index, index);
+                assert_eq!(proof.obligation.extent, extent);
+                assert_eq!(proof.index_argument, dimension + 2);
+                assert_eq!(proof.extent_argument, dimension + 4);
+            }
+        }
+    }
+
+    #[test]
+    fn bound_assessment_names_failed_and_proven_dimensions() {
+        let assessment = GeneralGemmBoundAssessmentV1 {
+            proofs: [
+                GeneralGemmBoundProofV1 {
+                    obligation: GeneralGemmBoundObligationV1 {
+                        memory: GeneralGemmAbiRoleV1::A,
+                        dimension: 0,
+                        index: GeneralGemmIndexRoleV1::Row,
+                        extent: GeneralGemmAbiRoleV1::M,
+                    },
+                    status: GeneralGemmBoundProofStatusV1::Unproved,
+                },
+                GeneralGemmBoundProofV1 {
+                    obligation: GeneralGemmBoundObligationV1 {
+                        memory: GeneralGemmAbiRoleV1::A,
+                        dimension: 1,
+                        index: GeneralGemmIndexRoleV1::Depth,
+                        extent: GeneralGemmAbiRoleV1::K,
+                    },
+                    status: GeneralGemmBoundProofStatusV1::Proven,
+                },
+            ],
+        };
+
+        assert_eq!(
+            assessment.to_string(),
+            "failed bound: A dimension 0 requires `row < m`, but that relation is not established on every path to the access; proven bound: A dimension 1 satisfies `depth < k`; help: guard every path to the access with the failed relation or use a checked operation that supplies a defined tail value"
+        );
     }
 }
