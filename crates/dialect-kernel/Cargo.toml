@@ -10,5 +10,5 @@ readme = "README.md"
 publish = false
 
 [dependencies]
-fe2o3-pliron.workspace = true
+fe2o3-pliron-owner-core.workspace = true
 pliron.workspace = true

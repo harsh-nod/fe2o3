@@ -13,6 +13,12 @@ workspace. It provides:
 - owner-scoped dialect-registration services with bounded typed actions;
 - deterministic, bounded pass plans over real Pliron `Pass` values.
 
+The context identity and typed dialect-registration primitives are implemented
+once in the lower-level `fe2o3-pliron-owner-core` crate. Admitted dialect
+adapters depend on that core rather than this full session shell. This crate
+depends on the core and publicly re-exports its existing API for downstream
+compatibility.
+
 The dependency is pinned to Pliron v0.17.0 commit
 `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. The `pliron-derive` dependency
 used by `pliron` is sourced from that same Git workspace revision. This crate
@@ -91,8 +97,9 @@ identity.
 ## Remaining trusted surfaces
 
 `DialectRegistrationHook` no longer receives `&mut Context`; all eight current
-dialect adapters use `DialectRegistrationService`. Direct context access still
-exists at these integration boundaries:
+dialect adapters depend only on `fe2o3-pliron-owner-core` and use its
+`DialectRegistrationService`. Direct context access still exists at these
+integration boundaries:
 
 - `ensure_context_identity` and `require_context_identity` accept a caller-held
   Pliron context so existing owner-aware envelopes and detached services can

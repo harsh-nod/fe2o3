@@ -1,4 +1,6 @@
-use fe2o3_pliron::{
+//! Focused context-identity anchor and locator adversarial tests.
+
+use fe2o3_pliron_owner_core::{
     CONTEXT_IDENTITY_MARKER_KEY, ContextIdentityError, ensure_context_identity,
     require_context_identity,
 };
@@ -97,7 +99,7 @@ fn rebuilding_a_deleted_locator_preserves_the_original_private_identity() {
 }
 
 #[test]
-fn foreign_and_dangling_locator_values_are_rejected() {
+fn colliding_and_dangling_locator_values_are_rejected() {
     let mut collision = Context::new();
     let foreign = collision.aux_data.insert(Box::new(9_u32));
     collision.aux_data_map.insert(marker_key(), foreign);

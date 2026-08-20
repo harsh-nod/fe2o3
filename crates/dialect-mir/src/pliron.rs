@@ -44,7 +44,7 @@ use fe2o3_mir_model::{
     MAX_EXECUTABLE_BLOCK_PARAMETERS, MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_FUNCTIONS,
     MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_TYPES, MirBlockId, MirTypeId,
 };
-use fe2o3_pliron::{
+use fe2o3_pliron_owner_core::{
     ContextIdentity, ContextIdentityError, DialectRegistration, DialectRegistrationService,
     NameError, RegistrationHookError, ensure_context_identity, require_context_identity,
 };
@@ -2493,7 +2493,7 @@ fn registration_hook(
     Ok(())
 }
 
-/// Returns the explicit MIR registration consumed by [`fe2o3_pliron`].
+/// Returns the core-owned adapter consumed by the full `fe2o3-pliron` shell.
 pub fn mir_dialect_registration() -> Result<DialectRegistration, NameError> {
     DialectRegistration::new(DIALECT, registration_hook)
 }

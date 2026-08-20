@@ -1,4 +1,4 @@
-use fe2o3_pliron::{
+use fe2o3_pliron_owner_core::{
     DialectRegistration, DialectRegistrationService, NameError, RegistrationHookError,
 };
 
@@ -20,7 +20,7 @@ fn registration_hook(
     Ok(())
 }
 
-/// Returns the owner-bound kernel registration consumed by `fe2o3-pliron`.
+/// Returns the core-owned adapter consumed by the full `fe2o3-pliron` shell.
 pub fn dialect_registration() -> Result<DialectRegistration, NameError> {
     DialectRegistration::new(DIALECT_NAME, registration_hook)
 }

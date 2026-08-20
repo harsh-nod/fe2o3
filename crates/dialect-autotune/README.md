@@ -9,3 +9,7 @@ The shell does not lower operations, choose a compiler or hardware target,
 produce artifacts, or grant legality, proof, publication, load, tuning, or
 launch authority. Its Pliron values and printed syntax are not durable fe2o3
 identities.
+
+Its production registration adapter depends only on
+`fe2o3-pliron-owner-core`; ownership of the full Pliron session remains in
+`fe2o3-pliron`.

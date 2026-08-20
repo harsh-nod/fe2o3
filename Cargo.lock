@@ -500,7 +500,7 @@ dependencies = [
 name = "dialect-autotune"
 version = "0.1.0"
 dependencies = [
- "fe2o3-pliron",
+ "fe2o3-pliron-owner-core",
  "pliron",
 ]
 
@@ -510,7 +510,7 @@ version = "0.1.0"
 dependencies = [
  "dialect-gpu",
  "dialect-proof",
- "fe2o3-pliron",
+ "fe2o3-pliron-owner-core",
  "pliron",
 ]
 
@@ -518,7 +518,7 @@ dependencies = [
 name = "dialect-gpu"
 version = "0.1.0"
 dependencies = [
- "fe2o3-pliron",
+ "fe2o3-pliron-owner-core",
  "pliron",
 ]
 
@@ -526,7 +526,7 @@ dependencies = [
 name = "dialect-kernel"
 version = "0.1.0"
 dependencies = [
- "fe2o3-pliron",
+ "fe2o3-pliron-owner-core",
  "pliron",
 ]
 
@@ -537,6 +537,7 @@ dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-mir-model",
  "fe2o3-pliron",
+ "fe2o3-pliron-owner-core",
  "pliron",
  "serde_json",
 ]
@@ -545,7 +546,7 @@ dependencies = [
 name = "dialect-proof"
 version = "0.1.0"
 dependencies = [
- "fe2o3-pliron",
+ "fe2o3-pliron-owner-core",
  "pliron",
 ]
 
@@ -553,7 +554,7 @@ dependencies = [
 name = "dialect-schedule"
 version = "0.1.0"
 dependencies = [
- "fe2o3-pliron",
+ "fe2o3-pliron-owner-core",
  "pliron",
 ]
 
@@ -561,7 +562,7 @@ dependencies = [
 name = "dialect-tile"
 version = "0.1.0"
 dependencies = [
- "fe2o3-pliron",
+ "fe2o3-pliron-owner-core",
  "pliron",
 ]
 
@@ -1192,6 +1193,7 @@ dependencies = [
 name = "fe2o3-pliron"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-pliron-owner-core",
  "pliron",
 ]
 
@@ -1222,6 +1224,13 @@ dependencies = [
  "pliron",
  "pliron-llvm",
  "serde_json",
+]
+
+[[package]]
+name = "fe2o3-pliron-owner-core"
+version = "0.1.0"
+dependencies = [
+ "pliron",
 ]
 
 [[package]]

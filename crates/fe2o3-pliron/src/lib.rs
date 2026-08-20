@@ -5,40 +5,35 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
-    hash::{Hash, Hasher},
     num::NonZeroU64,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
+pub use fe2o3_pliron_owner_core::{
+    CONTEXT_IDENTITY_MARKER_KEY, ContextIdentity, ContextIdentityError, DialectRegistration,
+    DialectRegistrationHook, DialectRegistrationService, HARD_MAX_DIALECT_REGISTRATION_ACTIONS,
+    HARD_MAX_NAME_BYTES, NameError, PLIRON_REVISION, RegistrationHookError,
+    ensure_context_identity, require_context_identity, validate_dialect_name,
+};
 use pliron::{
-    attribute::Attribute,
     builtin::ops::ModuleOp,
     combine::{Parser, eof},
     context::Context,
     context::Ptr,
-    dialect::{Dialect, DialectName},
+    dialect::DialectName,
     identifier::Identifier,
     irfmt::parsers::spaced,
     linked_list::ContainsLinkedList,
-    location::Location,
-    op::{Op, OpBox},
+    op::Op,
     operation::{Operation, verify_operation},
-    parsable::{Parsable, parse_from_str},
+    parsable::parse_from_str,
     pass::Pass,
-    r#type::{Type, TypedHandle},
-    uniqued_any::{self, UniquedKey},
 };
-
-/// The only accepted Pliron workspace revision for Wave 0.
-pub const PLIRON_REVISION: &str = "2610651306ea3ba670f68d5d8b1e1159bcd521ed";
 
 /// Hard implementation caps that configuration cannot exceed.
 pub const HARD_MAX_DIALECTS: usize = 64;
 pub const HARD_MAX_PASSES: usize = 256;
-pub const HARD_MAX_NAME_BYTES: usize = 96;
 pub const HARD_MAX_DIAGNOSTIC_BYTES: usize = 4_096;
-pub const HARD_MAX_DIALECT_REGISTRATION_ACTIONS: usize = 64;
 pub const HARD_MAX_OPERATION_HANDLES: usize = 4_096;
 pub const HARD_MAX_OPERATION_REGIONS: usize = 64;
 pub const HARD_MAX_OPERATION_BLOCKS: usize = 4_096;
@@ -48,153 +43,6 @@ pub const HARD_MAX_OPERATION_IMPORT_NESTING: usize = 256;
 pub const HARD_MAX_OPERATION_TREE_ITEMS: usize = 16_384;
 pub const HARD_MAX_SESSION_OPERATION_IMPORT_BYTES: usize = 1_048_576;
 pub const HARD_MAX_SESSION_OPERATION_TREE_ITEMS: usize = 65_536;
-
-/// Auxiliary-data key for the fe2o3 context-identity locator.
-pub const CONTEXT_IDENTITY_MARKER_KEY: &str = "fe2o3_pliron_context_identity_v1";
-
-static NEXT_CONTEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
-
-/// Opaque process-local identity for one Pliron context.
-///
-/// The value is descriptive provenance for in-memory handles. It is not a
-/// durable compiler, artifact, proof, publication, or runtime identity.
-/// Its representation cannot be constructed or recovered by callers:
-///
-/// ```compile_fail
-/// use std::num::NonZeroU64;
-/// use fe2o3_pliron::ContextIdentity;
-///
-/// let forged = ContextIdentity(NonZeroU64::new(1).unwrap());
-/// ```
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-pub struct ContextIdentity(NonZeroU64);
-
-impl fmt::Debug for ContextIdentity {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ContextIdentity(<process-local>)")
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ContextIdentityAnchor(ContextIdentity);
-
-impl PartialEq for ContextIdentityAnchor {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Eq for ContextIdentityAnchor {}
-
-impl Hash for ContextIdentityAnchor {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
-
-#[derive(Debug)]
-struct ContextIdentityMarker {
-    anchor: UniquedKey<ContextIdentityAnchor>,
-    identity: ContextIdentity,
-}
-
-/// Failure to create or validate a context-bound identity anchor.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ContextIdentityError {
-    /// Another typed value claimed the public locator key.
-    MarkerCollision,
-    /// The locator is missing its private, context-owned anchor.
-    CorruptMarker,
-    /// The process exhausted the context-identity counter.
-    IdentitySpaceExhausted,
-}
-
-impl fmt::Display for ContextIdentityError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MarkerCollision => {
-                formatter.write_str("Pliron context identity marker collision")
-            }
-            Self::CorruptMarker => formatter.write_str("Pliron context identity marker is corrupt"),
-            Self::IdentitySpaceExhausted => {
-                formatter.write_str("Pliron context identity space is exhausted")
-            }
-        }
-    }
-}
-
-impl Error for ContextIdentityError {}
-
-/// Returns this context's identity, creating its private anchor when absent.
-///
-/// The authoritative anchor is stored in Pliron's private uniqued store. The
-/// public auxiliary-data marker is only a locator, so moving that marker to a
-/// different context does not transfer the identity.
-pub fn ensure_context_identity(
-    context: &mut Context,
-) -> Result<ContextIdentity, ContextIdentityError> {
-    if let Some(identity) = context_identity_state(context)? {
-        return Ok(identity);
-    }
-
-    let proposed_identity = ContextIdentity(next_context_identity()?);
-    let (anchor, identity) = catch_unwind(AssertUnwindSafe(|| {
-        let anchor = uniqued_any::save(context, ContextIdentityAnchor(proposed_identity));
-        let identity = uniqued_any::get(context, anchor).0;
-        (anchor, identity)
-    }))
-    .map_err(|_| ContextIdentityError::CorruptMarker)?;
-    let marker = context
-        .aux_data
-        .insert(Box::new(ContextIdentityMarker { anchor, identity }));
-    context
-        .aux_data_map
-        .insert(context_identity_marker_key()?, marker);
-    Ok(identity)
-}
-
-/// Returns a previously created context identity without creating one.
-pub fn require_context_identity(
-    context: &Context,
-) -> Result<ContextIdentity, ContextIdentityError> {
-    context_identity_state(context)?.ok_or(ContextIdentityError::CorruptMarker)
-}
-
-fn context_identity_state(
-    context: &Context,
-) -> Result<Option<ContextIdentity>, ContextIdentityError> {
-    let marker_key = context_identity_marker_key()?;
-    let Some(index) = context.aux_data_map.get(&marker_key).copied() else {
-        return Ok(None);
-    };
-    let Some(marker) = context.aux_data.get(index) else {
-        return Err(ContextIdentityError::CorruptMarker);
-    };
-    let marker = marker
-        .downcast_ref::<ContextIdentityMarker>()
-        .ok_or(ContextIdentityError::MarkerCollision)?;
-    let identity = catch_unwind(AssertUnwindSafe(|| {
-        uniqued_any::get(context, marker.anchor).0
-    }))
-    .map_err(|_| ContextIdentityError::CorruptMarker)?;
-    if identity != marker.identity {
-        return Err(ContextIdentityError::CorruptMarker);
-    }
-    Ok(Some(identity))
-}
-
-fn next_context_identity() -> Result<NonZeroU64, ContextIdentityError> {
-    let value = NEXT_CONTEXT_IDENTITY
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-            value.checked_add(1)
-        })
-        .map_err(|_| ContextIdentityError::IdentitySpaceExhausted)?;
-    NonZeroU64::new(value).ok_or(ContextIdentityError::IdentitySpaceExhausted)
-}
-
-fn context_identity_marker_key() -> Result<Identifier, ContextIdentityError> {
-    CONTEXT_IDENTITY_MARKER_KEY
-        .try_into()
-        .map_err(|_| ContextIdentityError::CorruptMarker)
-}
 
 /// Resource limits for one context and pass plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -338,16 +186,10 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> (String, bool) {
     (value[..end].to_owned(), true)
 }
 
-/// Why a bounded dialect or pass name was rejected.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NameError {
-    Empty,
-    TooLong,
-    InvalidFirstByte,
-    InvalidByte,
-}
-
 fn validate_name(value: &str, kind: NameKind) -> Result<(), NameError> {
+    if kind == NameKind::Dialect {
+        return validate_dialect_name(value);
+    }
     if value.is_empty() {
         return Err(NameError::Empty);
     }
@@ -363,8 +205,7 @@ fn validate_name(value: &str, kind: NameKind) -> Result<(), NameError> {
     }
     for byte in bytes {
         let common = byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_';
-        let pass_only = kind == NameKind::Pass && matches!(byte, b'.' | b'-');
-        if !common && !pass_only {
+        if !common && !matches!(byte, b'.' | b'-') {
             return Err(NameError::InvalidByte);
         }
     }
@@ -375,150 +216,6 @@ fn validate_name(value: &str, kind: NameKind) -> Result<(), NameError> {
 enum NameKind {
     Dialect,
     Pass,
-}
-
-/// An error returned by a dialect's explicit registration hook.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RegistrationHookError {
-    detail: String,
-}
-
-impl RegistrationHookError {
-    pub fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-}
-
-impl fmt::Display for RegistrationHookError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
-    }
-}
-
-impl std::error::Error for RegistrationHookError {}
-
-/// A bounded registration capability borrowed from one context construction.
-///
-/// The service cannot be constructed or disassembled outside this crate. It
-/// exposes no context, dialect object, arena pointer, generic callback, or
-/// caller-provided state. Its borrow cannot outlive the registration hook:
-///
-/// ```compile_fail
-/// use fe2o3_pliron::DialectRegistrationService;
-/// use pliron::context::Context;
-///
-/// fn context(service: &mut DialectRegistrationService<'_>) -> &mut Context {
-///     service.context
-/// }
-/// ```
-///
-/// ```compile_fail
-/// use fe2o3_pliron::DialectRegistrationService;
-///
-/// fn retain(
-///     service: &mut DialectRegistrationService<'_>,
-/// ) -> &'static mut DialectRegistrationService<'static> {
-///     service
-/// }
-/// ```
-pub struct DialectRegistrationService<'context> {
-    context: &'context mut Context,
-    dialect_name: &'context DialectName,
-    actions: usize,
-}
-
-impl<'context> DialectRegistrationService<'context> {
-    fn new(context: &'context mut Context, dialect_name: &'context DialectName) -> Self {
-        Self {
-            context,
-            dialect_name,
-            actions: 0,
-        }
-    }
-
-    /// Rejects a hook that was attached to a different dialect name.
-    pub fn require_dialect(&self, expected: &str) -> Result<(), RegistrationHookError> {
-        if self.dialect_name.as_ref() == expected {
-            Ok(())
-        } else {
-            Err(RegistrationHookError::new(
-                "dialect registration hook name mismatch",
-            ))
-        }
-    }
-
-    /// Registers one type owned by this dialect.
-    pub fn register_type<T>(&mut self) -> Result<(), RegistrationHookError>
-    where
-        T: Type + Parsable<Arg = (), Parsed = TypedHandle<T>>,
-    {
-        self.claim_action(&T::get_type_id_static().dialect)?;
-        T::register(self.context);
-        Ok(())
-    }
-
-    /// Registers one attribute owned by this dialect.
-    pub fn register_attribute<A>(&mut self) -> Result<(), RegistrationHookError>
-    where
-        A: Attribute + Parsable<Arg = (), Parsed = A>,
-    {
-        self.claim_action(&A::get_attr_id_static().dialect)?;
-        <A as Attribute>::register::<A>(self.context);
-        Ok(())
-    }
-
-    /// Registers one operation owned by this dialect.
-    pub fn register_operation<O>(&mut self) -> Result<(), RegistrationHookError>
-    where
-        O: Op + Parsable<Arg = Vec<(Identifier, Location)>, Parsed = OpBox>,
-    {
-        self.claim_action(&O::get_opid_static().dialect)?;
-        O::register(self.context);
-        Ok(())
-    }
-
-    fn claim_action(&mut self, entity_dialect: &DialectName) -> Result<(), RegistrationHookError> {
-        if entity_dialect != self.dialect_name {
-            return Err(RegistrationHookError::new(
-                "registered entity belongs to a different dialect",
-            ));
-        }
-        if self.actions == HARD_MAX_DIALECT_REGISTRATION_ACTIONS {
-            return Err(RegistrationHookError::new(
-                "dialect registration action limit exceeded",
-            ));
-        }
-        self.actions += 1;
-        Ok(())
-    }
-}
-
-/// Registers typed entities through a context-custody service.
-pub type DialectRegistrationHook = for<'context> fn(
-    &mut DialectRegistrationService<'context>,
-) -> Result<(), RegistrationHookError>;
-
-/// One explicitly named dialect registration.
-#[derive(Clone)]
-pub struct DialectRegistration {
-    name: String,
-    hook: DialectRegistrationHook,
-}
-
-impl DialectRegistration {
-    pub fn new(name: &str, hook: DialectRegistrationHook) -> Result<Self, NameError> {
-        validate_name(name, NameKind::Dialect)?;
-        Ok(Self {
-            name: name.to_owned(),
-            hook,
-        })
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -746,9 +443,9 @@ impl PlironSession {
 
         let mut seen = BTreeSet::new();
         for registration in &registrations {
-            if !seen.insert(registration.name.clone()) {
+            if !seen.insert(registration.name().to_owned()) {
                 return Err(ContextBuildError::DuplicateDialect(
-                    registration.name.clone(),
+                    registration.name().to_owned(),
                 ));
             }
         }
@@ -758,18 +455,16 @@ impl PlironSession {
             .map_err(|_| ContextBuildError::ContextIdentity(ContextIdentityError::CorruptMarker))?
             .map_err(ContextBuildError::ContextIdentity)?;
         for registration in &registrations {
-            let dialect_name = DialectName::try_new(&registration.name).map_err(|_| {
-                ContextBuildError::UpstreamRejectedDialect(registration.name.clone())
+            let dialect_name = DialectName::try_new(registration.name()).map_err(|_| {
+                ContextBuildError::UpstreamRejectedDialect(registration.name().to_owned())
             })?;
             let hook_result = catch_unwind(AssertUnwindSafe(|| {
-                Dialect::register(&mut context, &dialect_name);
-                let mut service = DialectRegistrationService::new(&mut context, &dialect_name);
-                (registration.hook)(&mut service)
+                registration.register_into(&mut context, &dialect_name)
             }));
             if !matches!(hook_result, Ok(Ok(()))) {
                 return Err(ContextBuildError::RegistrationFailed(Diagnostic::new(
                     DiagnosticCode::DialectHookFailed,
-                    Some(&registration.name),
+                    Some(registration.name()),
                     "the explicit dialect registration hook failed",
                     limits.max_diagnostic_bytes,
                 )));
@@ -788,7 +483,7 @@ impl PlironSession {
                 pliron_revision: PLIRON_REVISION,
                 registration_order: registrations
                     .into_iter()
-                    .map(|registration| registration.name)
+                    .map(|registration| registration.name().to_owned())
                     .collect(),
             },
             operations: BTreeMap::new(),
@@ -1437,6 +1132,12 @@ mod owner_handle_tests {
         PlironSession::new(ShellLimits::default(), []).expect("fresh session")
     }
 
+    fn context_identity_marker_key() -> Identifier {
+        CONTEXT_IDENTITY_MARKER_KEY
+            .try_into()
+            .expect("fixed marker key")
+    }
+
     #[test]
     fn equal_upstream_slots_do_not_transfer_handle_ownership() {
         let mut owner = session();
@@ -1459,7 +1160,7 @@ mod owner_handle_tests {
         let mut owner = session();
         let mut foreign = session();
         let foreign_handle = foreign.create_module("foreign").expect("foreign module");
-        let key = context_identity_marker_key().expect("fixed marker key");
+        let key = context_identity_marker_key();
         let owner_index = owner
             .context
             .aux_data_map
@@ -1491,7 +1192,7 @@ mod owner_handle_tests {
     fn missing_and_colliding_markers_are_rejected_before_pointer_access() {
         let mut missing = session();
         let missing_handle = missing.create_module("owner").expect("owner module");
-        let key = context_identity_marker_key().expect("fixed marker key");
+        let key = context_identity_marker_key();
         missing.context.aux_data_map.remove(&key);
         assert_eq!(
             missing.operation_result_count(&missing_handle),
