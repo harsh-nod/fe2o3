@@ -2021,8 +2021,7 @@ fn encode_receipt(
 
 #[cfg(test)]
 mod tests {
-    use fe2o3_amdgcn_pliron_llvm::{ScalarKernelModuleV1, lower_scalar_kernel_v2};
-    use fe2o3_llvm_handoff::{IdentityV1, StageIdentitiesV1, TypedValueV2};
+    use fe2o3_llvm_handoff::TypedValueV2;
     use fe2o3_llvm_worker_handoff::MeasuredLlvmLldBuildV1;
     use pliron::{
         basic_block::BasicBlock,
@@ -2056,13 +2055,7 @@ mod tests {
     };
 
     fn scalar_source() -> Gfx942HandoffV2 {
-        lower_scalar_kernel_v2(&ScalarKernelModuleV1::canonical(
-            "graph_export_mutation_module",
-            "graph_export_mutation_kernel",
-            IdentityV1::new([0x31; 32]).unwrap(),
-            StageIdentitiesV1::new([0x41; 32], [0x42; 32], [0x43; 32]).unwrap(),
-        ))
-        .unwrap()
+        crate::integration_test_support::scalar_handoff()
     }
 
     fn first_function(lowered: &LoweredAmdgcnPlironLlvmV1) -> FuncOp {
