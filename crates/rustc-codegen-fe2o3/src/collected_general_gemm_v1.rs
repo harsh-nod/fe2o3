@@ -146,7 +146,6 @@ impl AuthenticatedGeneralGemmFrontendCorrespondenceV1 {
         self.identity
     }
 
-    #[allow(dead_code)] // Consumed by the pending same-process final verifier join.
     pub(crate) const fn source_properties(&self) -> &[GeneralGemmSourcePropertyReceiptV1; 11] {
         &self.source_properties
     }
@@ -505,24 +504,12 @@ fn encode_source_mir_evidence(evidence: &GeneralGemmSourceMirEvidenceV1) -> Vec<
 }
 
 impl GeneralGemmSourcePropertyReceiptV1 {
-    #[allow(dead_code)] // Consumed by the pending same-process final verifier join.
     pub(crate) const fn kind(&self) -> GeneralGemmSourcePropertyKindV1 {
         self.kind
     }
 
-    #[allow(dead_code)] // Consumed by the pending same-process final verifier join.
     pub(crate) const fn evidence_identity(&self) -> &[u8; 32] {
         &self.evidence_identity
-    }
-
-    #[allow(dead_code)] // Consumed by the pending same-process final verifier join.
-    pub(crate) const fn intrinsic_fact(&self) -> GeneralGemmIntrinsicSourceFactV1 {
-        self.intrinsic_fact
-    }
-
-    #[allow(dead_code)] // Consumed by the pending same-process final verifier join.
-    pub(crate) const fn mir_evidence(&self) -> &GeneralGemmSourceMirEvidenceV1 {
-        &self.mir_evidence
     }
 
     pub(crate) fn revalidate(&self) -> bool {

@@ -79,7 +79,7 @@ const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
     0xde, 0xaa, 0xb8, 0x1a, 0x74, 0x91, 0x72, 0xcb, 0x6e, 0xa2, 0x41, 0xa5, 0xdd, 0x15, 0x56, 0xec,
 ];
 
-#[allow(dead_code)] // Consumed when the source correspondence join is enabled.
+#[cfg(test)]
 pub(crate) fn reviewed_general_gemm_provider_semantics_identity_v1() -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"FE2O3/GENERAL-GEMM-PROVIDER-SEMANTICS/V1\0");

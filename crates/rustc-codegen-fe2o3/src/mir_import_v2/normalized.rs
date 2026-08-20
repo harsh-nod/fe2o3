@@ -90,6 +90,7 @@ pub(crate) fn canonical_semantic_bytes_v2(
 
 /// Reserved ingestion boundary. V2 remains observation-only until this is
 /// replaced by a reviewed streaming decoder that charges before allocation.
+#[cfg(test)]
 pub(crate) fn decode_captured_body_v2_bounded(
     bytes: &[u8],
     limits: CaptureLimitsV2,
@@ -172,6 +173,7 @@ fn semantic_encoding_error(writer: &BoundedSemanticWriterV2) -> ValidationErrorV
 }
 
 impl CapturedBodyV2 {
+    #[cfg(test)]
     pub(crate) fn is_authorized_for_lowering(&self) -> bool {
         false
     }

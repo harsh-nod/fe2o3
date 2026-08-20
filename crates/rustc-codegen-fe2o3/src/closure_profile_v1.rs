@@ -29,7 +29,9 @@ const MAX_STATIC_CALLS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClosureOriginPolicyV1 {
+    #[cfg(test)]
     HostArgument,
+    #[cfg(test)]
     DeviceInternal,
     Either,
 }
@@ -331,24 +333,21 @@ pub(crate) fn contains_concrete_closure_v1<'tcx>(
 
 fn require_origin(
     policy: ClosureOriginPolicyV1,
-    origin: ClosureOriginV1,
+    _origin: ClosureOriginV1,
 ) -> Result<(), ClosureProfileErrorV1> {
-    let accepted = matches!(policy, ClosureOriginPolicyV1::Either)
-        || matches!(
-            (policy, origin),
-            (
-                ClosureOriginPolicyV1::HostArgument,
-                ClosureOriginV1::HostArgument
-            ) | (
-                ClosureOriginPolicyV1::DeviceInternal,
-                ClosureOriginV1::DeviceInternal
-            )
-        );
-    accepted.then_some(()).ok_or_else(|| {
-        ClosureProfileErrorV1::new(format!(
-            "closure origin {origin:?} does not satisfy policy {policy:?}"
-        ))
-    })
+    match policy {
+        ClosureOriginPolicyV1::Either => Ok(()),
+        #[cfg(test)]
+        ClosureOriginPolicyV1::HostArgument if _origin == ClosureOriginV1::HostArgument => Ok(()),
+        #[cfg(test)]
+        ClosureOriginPolicyV1::DeviceInternal if _origin == ClosureOriginV1::DeviceInternal => {
+            Ok(())
+        }
+        #[cfg(test)]
+        policy => Err(ClosureProfileErrorV1::new(format!(
+            "closure origin {_origin:?} does not satisfy policy {policy:?}"
+        ))),
+    }
 }
 
 fn closure_kind(kind: Option<ClosureKind>) -> Result<ClosureCallKindV1, ClosureProfileErrorV1> {

@@ -22,6 +22,7 @@ use rustc_middle::ty::{
     TyKind, TypingEnv, UintTy,
 };
 use rustc_span::Span;
+#[cfg(test)]
 use std::convert::Infallible;
 use std::error::Error;
 use std::fmt;
@@ -69,23 +70,27 @@ pub(crate) trait RustcAuthenticCaptureV2<'tcx>: sealed::Sealed {
 #[derive(Debug)]
 pub(crate) struct CompilerCapturedBodyV2<'tcx> {
     data: CapturedBodyV2,
+    #[cfg(test)]
     instance: Instance<'tcx>,
     invariant_session: PhantomData<fn(&'tcx ()) -> &'tcx ()>,
 }
 
 impl<'tcx> CompilerCapturedBodyV2<'tcx> {
-    fn new(_tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, data: CapturedBodyV2) -> Self {
+    fn new(_tcx: TyCtxt<'tcx>, _instance: Instance<'tcx>, data: CapturedBodyV2) -> Self {
         Self {
             data,
-            instance,
+            #[cfg(test)]
+            instance: _instance,
             invariant_session: PhantomData,
         }
     }
 
+    #[cfg(test)]
     fn instance(&self) -> Instance<'tcx> {
         self.instance
     }
 
+    #[cfg(test)]
     pub(crate) fn is_authorized_for_lowering(&self) -> bool {
         false
     }
@@ -99,12 +104,14 @@ impl<'tcx> RustcAuthenticCaptureV2<'tcx> for CompilerCapturedBodyV2<'tcx> {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ValidatedRustcCaptureV2<'tcx> {
     recaptured: CompilerCapturedBodyV2<'tcx>,
     invariant_session: PhantomData<fn(&'tcx ()) -> &'tcx ()>,
 }
 
+#[cfg(test)]
 impl<'tcx> ValidatedRustcCaptureV2<'tcx> {
     fn new(
         _tcx: TyCtxt<'tcx>,
@@ -126,8 +133,10 @@ impl<'tcx> ValidatedRustcCaptureV2<'tcx> {
     }
 }
 
+#[cfg(test)]
 impl sealed::Sealed for ValidatedRustcCaptureV2<'_> {}
 
+#[cfg(test)]
 impl<'tcx> RustcAuthenticCaptureV2<'tcx> for ValidatedRustcCaptureV2<'tcx> {
     fn data(&self) -> &CapturedBodyV2 {
         self.recaptured.data()
@@ -184,6 +193,7 @@ fn capture_instance_data_v2<'tcx>(
     capture_body_v2(tcx, instance, body, limits, budget)
 }
 
+#[cfg(test)]
 pub(crate) fn recapture_against_rustc_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -201,6 +211,7 @@ pub(crate) fn recapture_against_rustc_v2<'tcx>(
     Ok(ValidatedRustcCaptureV2::new(tcx, instance, recaptured))
 }
 
+#[cfg(test)]
 pub(crate) fn verify_and_authorize_v2<'tcx>(
     _tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,

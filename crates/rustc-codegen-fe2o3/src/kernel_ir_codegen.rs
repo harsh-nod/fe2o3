@@ -98,15 +98,6 @@ pub(crate) struct InertCompilerModuleTextV1 {
     device_ffi_exports: Vec<String>,
     external_declarations: Vec<String>,
     descriptor_source_identity: Option<CompilerDescriptorSourceIdentityV1>,
-    unbound_target_properties: [UnboundCompilerModuleTargetPropertyV1; 3],
-}
-
-/// Target properties required before textual compiler-module output can become an artifact.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UnboundCompilerModuleTargetPropertyV1 {
-    DataLayout,
-    TargetProcessor,
-    CodeObjectVersion,
 }
 
 /// Private binding of the reviewed LLVM 22.1.8 measurement. This is not a
@@ -126,7 +117,6 @@ fn reviewed_row_softmax_upstream_llvm_layout_v1() -> RowSoftmaxReviewedLlvmLayou
     }
 }
 
-#[allow(dead_code)]
 impl InertCompilerModuleTextV1 {
     pub(crate) fn llvm_ir(&self) -> &str {
         &self.llvm_ir
@@ -156,10 +146,6 @@ impl InertCompilerModuleTextV1 {
         &self,
     ) -> Option<CompilerDescriptorSourceIdentityV1> {
         self.descriptor_source_identity
-    }
-
-    pub(crate) fn unbound_target_properties(&self) -> &[UnboundCompilerModuleTargetPropertyV1; 3] {
-        &self.unbound_target_properties
     }
 }
 
@@ -369,11 +355,6 @@ pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
         device_ffi_exports,
         external_declarations,
         descriptor_source_identity: None,
-        unbound_target_properties: [
-            UnboundCompilerModuleTargetPropertyV1::DataLayout,
-            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
-            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
-        ],
     })
 }
 
@@ -400,11 +381,6 @@ pub(crate) fn construct_inert_scalar_gemm_v1_module_text(
         device_ffi_exports: Vec::new(),
         external_declarations: Vec::new(),
         descriptor_source_identity: None,
-        unbound_target_properties: [
-            UnboundCompilerModuleTargetPropertyV1::DataLayout,
-            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
-            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
-        ],
     })
 }
 
@@ -431,11 +407,6 @@ pub(crate) fn construct_inert_tiled_gemm_v1_module_text(
         device_ffi_exports: Vec::new(),
         external_declarations: Vec::new(),
         descriptor_source_identity: None,
-        unbound_target_properties: [
-            UnboundCompilerModuleTargetPropertyV1::DataLayout,
-            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
-            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
-        ],
     })
 }
 
@@ -464,11 +435,6 @@ pub(crate) fn construct_inert_tiled_gemm_lds_slice1_module_text(
         device_ffi_exports: Vec::new(),
         external_declarations: Vec::new(),
         descriptor_source_identity: None,
-        unbound_target_properties: [
-            UnboundCompilerModuleTargetPropertyV1::DataLayout,
-            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
-            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
-        ],
     })
 }
 
@@ -529,11 +495,6 @@ pub(crate) fn construct_inert_row_softmax_v1_module_text(
         device_ffi_exports: Vec::new(),
         external_declarations: vec!["__ocml_exp_f32".to_owned()],
         descriptor_source_identity: None,
-        unbound_target_properties: [
-            UnboundCompilerModuleTargetPropertyV1::DataLayout,
-            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
-            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
-        ],
     })
 }
 
@@ -658,11 +619,6 @@ pub(crate) fn construct_inert_flash_attention_v1_module_text(
         device_ffi_exports: Vec::new(),
         external_declarations: vec!["__ocml_exp_f32".to_owned()],
         descriptor_source_identity: None,
-        unbound_target_properties: [
-            UnboundCompilerModuleTargetPropertyV1::DataLayout,
-            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
-            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
-        ],
     })
 }
 
@@ -688,11 +644,6 @@ pub(crate) fn construct_inert_moe_top2_v1_module_text(
         device_ffi_exports: Vec::new(),
         external_declarations: Vec::new(),
         descriptor_source_identity: None,
-        unbound_target_properties: [
-            UnboundCompilerModuleTargetPropertyV1::DataLayout,
-            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
-            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
-        ],
     })
 }
 
@@ -3324,14 +3275,6 @@ mod tests {
         assert!(first.internal_helpers().is_empty());
         assert_eq!(first.device_ffi_exports(), &["visible_helper"]);
         assert_eq!(first.external_declarations(), &["external_import"]);
-        assert_eq!(
-            first.unbound_target_properties(),
-            &[
-                UnboundCompilerModuleTargetPropertyV1::DataLayout,
-                UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
-                UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
-            ]
-        );
         assert!(first.llvm_ir().contains("define amdgpu_kernel void @entry"));
         assert!(first.llvm_ir().contains("define void @visible_helper"));
         assert!(first.llvm_ir().contains("declare void @external_import"));

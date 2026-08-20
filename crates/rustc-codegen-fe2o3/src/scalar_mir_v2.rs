@@ -169,15 +169,6 @@ pub fn lower_rustc_scalar_v2(
     })
 }
 
-pub(crate) fn admit_rustc_scalar_operation_v2(
-    request: RustcScalarRequestV2<'_>,
-    arguments: Vec<ValueId>,
-) -> Result<ScalarOperationV2, RustcScalarAdmissionErrorV2> {
-    let operation = normalize_request(request)?;
-    ScalarOperationV2::new(operation, arguments)
-        .map_err(RustcScalarAdmissionErrorV2::InvalidKernelIr)
-}
-
 fn normalize_request(
     request: RustcScalarRequestV2<'_>,
 ) -> Result<Operation, RustcScalarAdmissionErrorV2> {

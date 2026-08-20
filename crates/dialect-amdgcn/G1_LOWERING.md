@@ -126,26 +126,13 @@ carry an exact wave32 or wave64 mode. This remains the backend test boundary
 used by the manually transcribed branching-fill, integer-match, and nested-loop
 gfx942 goldens.
 
-`rustc-codegen-fe2o3::executable_scalar_control_flow_v1` now supplies the first
-structured bridge from those canonical executable-MIR fixtures. It accepts one
-validated place-form function only with a compiler-sealed collected-function
-authority that authenticates the same complete canonical identity and
-preserves either `InternalHelper` or `DeviceFfiExport` role. A separate sealed
-composition contract retains one collected `KernelEntry` identity and export
-symbol while requiring its lowered helper artifact to remain internal; it does
-not infer either role from a name. Before mem2reg the adapter bounds blocks to
-128, natural loops to 16, loop nesting depth to 8, and projected Kernel IR
-operations to 4096.
-It then runs verified mem2reg and admits `u32` add, equality, and less-than
-expressions through Scalar V2 with their real SSA operands. The adapter builds
-and verifies Kernel IR for constants, block-local scalar slots, branches,
-typed switches, loop-carried block arguments, and one `u32` return. Its LLVM
-symbol retains a readable collected stem and a role-bound, domain-separated
-SHA-256 suffix over the complete canonical identity and authenticated export
-name. Raw division, forged identities, role substitution, additional
-functions, unsupported statements/types, and resource expansion fail before
-LLVM is returned. Kernel-root body translation, broader Scalar V2 operations
-and result forms, and code-object construction remain separate work.
+The former `executable_scalar_control_flow_v1` bridge was removed during the
+2026-08-20 compiler convergence review. It had no caller outside its own tests
+and duplicated behavior now covered by the active collected scalar/control-flow
+V2 oracle and the general Kernel IR lowering tests. Production scalar and
+control flow must enter through the sole semantic-MIR importer and
+`ProductionCompilationV1`; this G1 test boundary is not a replacement compiler
+route.
 
 The crate has no in-process LLVM target-machine/code-object API. Consequently
 these control-flow tests stop at exact, target-bound LLVM text. This boundary
