@@ -17,6 +17,13 @@ impl Callbacks for ProductionExtractionCallbacksV1 {
 }
 
 fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
+    let target = crate::production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
+        tcx,
+        &crate::AmdGpuTarget::new(dialect_mir::GFX942_TARGET_CPU),
+    )
+    .map_err(|error| {
+        format!("production extraction target authentication failed before monomorphization: {error}")
+    })?;
     let partitions = tcx.collect_and_partition_mono_items(());
     let kernel_count = crate::collector::count_kernels_in_cgus(tcx, partitions.codegen_units);
     if kernel_count == 0 {
@@ -29,7 +36,7 @@ fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
         tcx,
         partitions.codegen_units,
         false,
-        crate::AmdGpuTarget::new(dialect_mir::GFX942_TARGET_CPU),
+        target,
     )
     .map_err(|error| format!("production extraction collection failed: {error}"))?;
     Err(crate::collector::require_production_semantic_import_v1(tcx, closure).to_string())

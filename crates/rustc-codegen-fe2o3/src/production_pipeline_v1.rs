@@ -232,4 +232,20 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn production_backend_authenticates_target_before_monomorphization() {
+        let backend = include_str!("lib.rs");
+        let codegen = backend
+            .split_once("fn codegen_crate")
+            .expect("codegen entry")
+            .1;
+        let authentication = codegen
+            .find("authenticate_before_collection")
+            .expect("pre-collection target authentication");
+        let monomorphization = codegen
+            .find("collect_and_partition_mono_items")
+            .expect("rustc monomorphization");
+        assert!(authentication < monomorphization);
+    }
 }

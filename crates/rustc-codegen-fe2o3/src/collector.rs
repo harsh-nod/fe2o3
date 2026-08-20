@@ -414,6 +414,14 @@ pub fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]
             .max(crate::device_ffi::count_local_registration_candidates(tcx))
 }
 
+/// Counts every supported production root using HIR/static registration facts
+/// only, before rustc monomorphization or MIR collection is entered.
+pub(crate) fn count_production_roots_before_monomorphization_v1(tcx: TyCtxt<'_>) -> usize {
+    registration_candidates(tcx)
+        .len()
+        .saturating_add(crate::device_ffi::count_local_registration_candidates(tcx))
+}
+
 pub fn collect_device_functions<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
@@ -431,12 +439,8 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
-    target: crate::AmdGpuTarget,
+    target: crate::production_target_v1::RetainedProductionTargetV1,
 ) -> Result<AuthenticatedCollectedKernelClosureV1<'tcx>, CollectError> {
-    let target = crate::production_target_v1::RetainedProductionTargetV1::capture(tcx, &target)
-        .map_err(|error| CollectError {
-            message: error.to_string(),
-        })?;
     let collection = collect_device_functions_with_configuration(
         tcx,
         cgus,
@@ -4440,5 +4444,7 @@ mod tests {
                 "production collection entry contains hidden input {forbidden:?}"
             );
         }
+        assert!(production.contains("RetainedProductionTargetV1"));
+        assert!(!production.contains("authenticate_before_collection"));
     }
 }

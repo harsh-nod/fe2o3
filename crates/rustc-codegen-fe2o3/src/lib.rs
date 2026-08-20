@@ -386,6 +386,27 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>, crate_info: &CrateInfo) -> Box<dyn Any> {
         with_no_trimmed_paths!({
+            let codegen_pipeline = self
+                .config
+                .codegen_pipeline
+                .resolve()
+                .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
+            let mut production_target = None;
+            if codegen_pipeline == CodegenPipeline::ProductionV1
+                && collector::count_production_roots_before_monomorphization_v1(tcx) > 0
+            {
+                production_target = Some(
+                    production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
+                        tcx,
+                        &self.config.target,
+                    )
+                    .unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] production-v1 target authentication failed before monomorphization without fallback: {error}"
+                        ))
+                    }),
+                );
+            }
             let mono_partitions = tcx.collect_and_partition_mono_items(());
             let kernel_count = collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
             let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
@@ -425,11 +446,6 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
             let mut generated_host_objects = host_object::GeneratedHostObjects::default();
             let mut temporary_host_objects = TemporaryHostObjects::default();
-            let codegen_pipeline = self
-                .config
-                .codegen_pipeline
-                .resolve()
-                .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
             if codegen_pipeline == CodegenPipeline::ProductionV1 {
                 match production_pipeline_v1::disposition(kernel_count) {
                     production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
@@ -440,11 +456,16 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         ) {
                             tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
                         }
+                        let target = production_target.take().unwrap_or_else(|| {
+                            tcx.dcx().fatal(
+                                "[rustc-codegen-fe2o3] production-v1 discovered a device root only after monomorphization; pre-collection root authentication failed closed",
+                            )
+                        });
                         let closure = match collector::collect_authenticated_kernel_closure_v1(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            self.config.target.clone(),
+                            target,
                         ) {
                             Ok(closure) => closure,
                             Err(error) => tcx.dcx().fatal(format!(

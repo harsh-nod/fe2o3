@@ -17,10 +17,8 @@ const PRODUCTION_RUSTC_CPU_V1: &str = "gfx942";
 const PRODUCTION_RUSTC_FEATURES_V1: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
 const PRODUCTION_RUSTC_POINTER_WIDTH_V1: u16 = 64;
 
-/// Move-only retention of the exact source-layout context and the separately
-/// configured production device target. The compatibility backend currently
-/// runs rustc analysis under the host target, so these facts must not be
-/// conflated. The semantic importer must consume and bridge or reject them.
+/// Move-only proof that the live rustc session was the exact production target
+/// before monomorphization or production MIR collection began.
 #[derive(Debug)]
 pub(crate) struct RetainedProductionTargetV1 {
     rustc_layout: SemanticLayoutTargetV1,
@@ -36,7 +34,7 @@ pub(crate) struct AuthenticatedProductionTargetV1 {
 }
 
 impl RetainedProductionTargetV1 {
-    pub(crate) fn capture(
+    pub(crate) fn authenticate_before_collection(
         tcx: TyCtxt<'_>,
         configured_cpu: &AmdGpuTarget,
     ) -> Result<Self, ProductionTargetErrorV1> {
@@ -47,6 +45,7 @@ impl RetainedProductionTargetV1 {
         }
         let rustc_layout = rustc_semantic_layout_target_v1(tcx)
             .map_err(ProductionTargetErrorV1::RustcObservation)?;
+        validate_authoritative_rustc_target_v1(&rustc_layout)?;
         Ok(Self { rustc_layout })
     }
 

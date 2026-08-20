@@ -90,7 +90,7 @@ fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
         "unimplemented production transaction unexpectedly succeeded"
     );
     assert!(
-        stderr.contains("semantic import target rejection")
+        stderr.contains("target authentication failed before monomorphization without fallback")
             && stderr.contains("requires authoritative rustc LLVM target")
             && stderr.contains("amdgcn-amd-amdhsa")
             && stderr.contains("x86_64-unknown-linux-gnu"),
@@ -110,6 +110,7 @@ fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
         "collected-wave64-collectives-v1",
         "collected-lds-reduction-v1",
         "collected-scoped-atomic-v1",
+        "semantic importer authenticated rustc target",
         "emitted fill",
         "published inert Worker V2",
     ] {
