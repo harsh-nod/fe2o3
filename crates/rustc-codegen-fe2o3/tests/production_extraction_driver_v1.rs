@@ -99,6 +99,9 @@ fn run_extraction(target: &ScratchTarget) -> String {
             && stderr.contains(
                 "with 7 local(s), 6 block(s), 4 statement(s), and 2 typed terminal expansion recipe(s)",
             )
+            && stderr.contains(
+                "retaining 11 sorted rustc type producer(s) and 1 canonical body ID table(s)",
+            )
             && stderr.contains("canonical semantic-MIR construction is not implemented"),
         "missing AMD extraction milestone diagnostic:\n{stderr}"
     );

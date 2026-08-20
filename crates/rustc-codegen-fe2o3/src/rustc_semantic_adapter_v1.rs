@@ -1,10 +1,10 @@
 //! Neutral rustc-derived identity primitives for canonical semantic MIR.
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticConstGenericArgumentsIdentityV1, SemanticFunctionIdentityV1,
+    SemanticBlockIdentityV1, SemanticConstGenericArgumentsIdentityV1, SemanticFunctionIdentityV1,
     SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
-    SemanticLayoutIdentityV1, SemanticMonomorphizationIdentityV1, SemanticTargetDataLayoutV1,
-    SemanticTypeIdentityV1,
+    SemanticLayoutIdentityV1, SemanticLocalIdentityV1, SemanticMonomorphizationIdentityV1,
+    SemanticTargetDataLayoutV1, SemanticTypeIdentityV1,
 };
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -21,6 +21,8 @@ const TYPE_ARGUMENTS_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/type-arguments/v1";
 const CONST_ARGUMENTS_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/const-arguments/v1";
 const MIR_BODY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-mir-body/v1";
 const TYPE_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-type/v1";
+const LOCAL_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-local/v1";
+const BLOCK_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-basic-block/v1";
 
 macro_rules! stable_fingerprint {
     ($tcx:expr, $value:expr) => {{
@@ -156,6 +158,36 @@ pub(crate) fn rustc_type_identity_v1<'tcx>(
     ))
 }
 
+pub(crate) fn rustc_local_identity_v1(
+    function: SemanticFunctionIdentityV1,
+    mir_body_sha256: [u8; 32],
+    rustc_local: u32,
+) -> SemanticLocalIdentityV1 {
+    SemanticLocalIdentityV1::from_sha256(domain_digest(
+        LOCAL_DOMAIN_V1,
+        &[
+            function.as_bytes(),
+            &mir_body_sha256,
+            &rustc_local.to_le_bytes(),
+        ],
+    ))
+}
+
+pub(crate) fn rustc_block_identity_v1(
+    function: SemanticFunctionIdentityV1,
+    mir_body_sha256: [u8; 32],
+    rustc_block: u32,
+) -> SemanticBlockIdentityV1 {
+    SemanticBlockIdentityV1::from_sha256(domain_digest(
+        BLOCK_DOMAIN_V1,
+        &[
+            function.as_bytes(),
+            &mir_body_sha256,
+            &rustc_block.to_le_bytes(),
+        ],
+    ))
+}
+
 /// Derives the canonical target-layout identity from exact, already observed
 /// rustc target facts. Authentication remains the importer's responsibility.
 pub(crate) fn canonical_target_layout_v1(
@@ -225,5 +257,27 @@ mod tests {
 
         let reordered = canonical_target_layout_v1(&target("+wavefrontsize64,-xnack"));
         assert_eq!(exact.identity(), reordered.identity());
+    }
+
+    #[test]
+    fn local_and_block_domains_bind_function_and_rustc_index() {
+        let function_a = SemanticFunctionIdentityV1::from_sha256([1; 32]);
+        let function_b = SemanticFunctionIdentityV1::from_sha256([2; 32]);
+        assert_ne!(
+            rustc_local_identity_v1(function_a, [3; 32], 0),
+            rustc_local_identity_v1(function_a, [3; 32], 1),
+        );
+        assert_ne!(
+            rustc_local_identity_v1(function_a, [3; 32], 0),
+            rustc_local_identity_v1(function_b, [3; 32], 0),
+        );
+        assert_ne!(
+            rustc_local_identity_v1(function_a, [3; 32], 0),
+            rustc_local_identity_v1(function_a, [4; 32], 0),
+        );
+        assert_ne!(
+            rustc_local_identity_v1(function_a, [3; 32], 0).as_bytes(),
+            rustc_block_identity_v1(function_a, [3; 32], 0).as_bytes(),
+        );
     }
 }

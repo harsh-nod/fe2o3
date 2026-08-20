@@ -8,12 +8,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticFunctionIdV1, SemanticMirLimitsV1, SemanticMirResourceV1, SemanticTargetDataLayoutV1,
-    SemanticTypeIdentityV1,
+    SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticFunctionIdV1, SemanticLocalIdV1,
+    SemanticLocalIdentityV1, SemanticMirLimitsV1, SemanticMirResourceV1,
+    SemanticTargetDataLayoutV1, SemanticTypeIdV1, SemanticTypeIdentityV1,
 };
 use rustc_middle::mir::{
     AggregateKind, Body, BorrowKind, Local, MutBorrowKind, Operand, Place, PlaceTy, ProjectionElem,
-    Rvalue, StatementKind, TerminatorKind, UnwindAction,
+    Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::{
     EarlyBinder, GenericArgKind, Instance, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
@@ -26,7 +27,8 @@ use crate::production_semantic_terminal_v1::{
 };
 use crate::rustc_semantic_adapter_v1::{
     CanonicalFunctionIdentitiesV1, SemanticIdentityDigestV1, canonical_function_identities_v1,
-    rustc_mir_body_sha256_v1, rustc_type_identity_v1,
+    rustc_block_identity_v1, rustc_local_identity_v1, rustc_mir_body_sha256_v1,
+    rustc_type_identity_v1,
 };
 
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
@@ -37,6 +39,40 @@ pub(crate) struct RetainedSemanticFunctionProducerV1<'tcx> {
     pub(crate) identities: CanonicalFunctionIdentitiesV1,
     pub(crate) instance: Instance<'tcx>,
     pub(crate) role: CollectedFunctionRole,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RetainedSemanticTypeProducerV1<'tcx> {
+    identity: SemanticTypeIdentityV1,
+    ty: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RetainedSemanticLocalProducerV1 {
+    identity: SemanticLocalIdentityV1,
+    rustc_local: u32,
+    ty: SemanticTypeIdV1,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RetainedSemanticBlockProducerV1 {
+    identity: SemanticBlockIdentityV1,
+    rustc_block: u32,
+}
+
+#[derive(Debug)]
+struct RetainedSemanticBodyProducerV1 {
+    function: SemanticFunctionIdV1,
+    locals: Box<[RetainedSemanticLocalProducerV1]>,
+    raw_to_semantic_locals: Box<[SemanticLocalIdV1]>,
+    entry: SemanticBlockIdV1,
+    blocks: Box<[RetainedSemanticBlockProducerV1]>,
+    raw_to_semantic_blocks: Box<[SemanticBlockIdV1]>,
+}
+
+struct CanonicalProducerTablesV1<'tcx> {
+    types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
+    bodies: Box<[RetainedSemanticBodyProducerV1]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -152,7 +188,9 @@ struct TerminalExpansionRecipeV1 {
 
 #[derive(Debug)]
 pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
+    types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
+    bodies: Box<[RetainedSemanticBodyProducerV1]>,
     roots: Box<[SemanticFunctionIdV1]>,
     terminal_expansions: Box<[TerminalExpansionRecipeV1]>,
     raw_counts: RawMirPreflightCountsV1,
@@ -160,8 +198,16 @@ pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
 }
 
 impl ProductionSemanticPreflightPlanV1<'_> {
+    pub(crate) fn type_producer_count(&self) -> usize {
+        self.types.len()
+    }
+
     pub(crate) fn function_count(&self) -> usize {
         self.functions.len()
+    }
+
+    pub(crate) fn body_producer_count(&self) -> usize {
+        self.bodies.len()
     }
 
     pub(crate) fn root_count(&self) -> usize {
@@ -191,6 +237,8 @@ pub(crate) enum ProductionSemanticPreflightErrorV1 {
     AccountingDomain {
         resource: SemanticMirResourceV1,
     },
+    TypeIdentityCollision,
+    IdentityTableMismatch,
     UnsupportedRustcMir {
         construct: String,
         function: String,
@@ -214,6 +262,12 @@ impl fmt::Display for ProductionSemanticPreflightErrorV1 {
             Self::AccountingDomain { resource } => write!(
                 formatter,
                 "raw rustc MIR preflight attempted to charge non-raw resource {resource:?}",
+            ),
+            Self::TypeIdentityCollision => formatter.write_str(
+                "raw rustc MIR preflight derived one type identity for distinct normalized rustc types",
+            ),
+            Self::IdentityTableMismatch => formatter.write_str(
+                "raw rustc MIR preflight could not assign a complete canonical producer table",
             ),
             Self::UnsupportedRustcMir {
                 construct,
@@ -256,7 +310,7 @@ struct BodyPreflightV1<'a, 'tcx> {
     function: SemanticFunctionIdV1,
     limits: SemanticMirLimitsV1,
     counts: &'a mut RawMirPreflightCountsV1,
-    types: &'a mut BTreeSet<SemanticTypeIdentityV1>,
+    types: &'a mut BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
 }
 
 pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
@@ -421,7 +475,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
 
     // Pass two walks every raw MIR node once, classifies the first supported
     // subset, and charges only resources directly observed in rustc MIR.
-    let mut types = BTreeSet::new();
+    let mut types = BTreeMap::new();
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
         let body = tcx.instance_mir(function.instance.def);
@@ -441,11 +495,16 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         }
     }
 
+    let CanonicalProducerTablesV1 { types, bodies } =
+        build_canonical_producer_tables_v1(tcx, &functions, types)?;
+
     let terminal_expansions = terminal_expansions.into_iter().collect::<Box<[_]>>();
     let sha256 = preflight_plan_sha256_v1(
         target,
         identity_inventory_sha256,
+        &types,
         &functions,
+        &bodies,
         &roots,
         &edges,
         &terminal_expansions,
@@ -453,7 +512,9 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         tcx,
     );
     Ok(ProductionSemanticPreflightPlanV1 {
+        types,
         functions,
+        bodies,
         roots,
         terminal_expansions,
         raw_counts: counts,
@@ -698,20 +759,24 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
     ) -> Result<(), PendingRejectionV1> {
         let mut pending = vec![raw];
         while let Some(raw) = pending.pop() {
-            let ty = self
-                .instance
-                .try_instantiate_mir_and_normalize_erasing_regions(
-                    self.tcx,
-                    TypingEnv::fully_monomorphized(),
-                    EarlyBinder::bind(raw),
-                )
+            let ty = normalize_type_v1(self.tcx, self.instance, raw)
                 .map_err(|_| reject("type that failed monomorphic normalization", site))?;
             if ty.has_param() || ty.has_escaping_bound_vars() {
                 return Err(reject("non-monomorphic type", site));
             }
             let identity = rustc_type_identity_v1(self.tcx, ty);
-            if !self.types.insert(identity) {
-                continue;
+            match self.types.entry(identity) {
+                std::collections::btree_map::Entry::Occupied(existing) => {
+                    if *existing.get() != ty {
+                        return Err(PendingRejectionV1::Fatal(
+                            ProductionSemanticPreflightErrorV1::TypeIdentityCollision,
+                        ));
+                    }
+                    continue;
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(ty);
+                }
             }
             self.charge(SemanticMirResourceV1::Types, 1)?;
             self.work()?;
@@ -818,6 +883,141 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
     fn work(&mut self) -> Result<(), PendingRejectionV1> {
         self.charge(SemanticMirResourceV1::ValidationWork, 1)
     }
+}
+
+fn build_canonical_producer_tables_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
+    types: BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
+) -> Result<CanonicalProducerTablesV1<'tcx>, ProductionSemanticPreflightErrorV1> {
+    let mut type_ids = BTreeMap::new();
+    let mut type_producers = Vec::with_capacity(types.len());
+    for (index, (identity, ty)) in types.into_iter().enumerate() {
+        let index = u32::try_from(index)
+            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        type_ids.insert(identity, SemanticTypeIdV1::from_index(index));
+        type_producers.push(RetainedSemanticTypeProducerV1 { identity, ty });
+    }
+
+    let mut bodies = Vec::with_capacity(functions.len());
+    for (function_index, function) in functions.iter().enumerate() {
+        let function_id = SemanticFunctionIdV1::from_index(
+            u32::try_from(function_index)
+                .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
+        );
+        let function_identity = function.identities.function();
+        let body = tcx.instance_mir(function.instance.def);
+        let mir_body_sha256 = rustc_mir_body_sha256_v1(tcx, function.instance);
+
+        let mut locals = Vec::with_capacity(body.local_decls.len());
+        for (raw_local, declaration) in body.local_decls.iter_enumerated() {
+            let raw_local = u32::try_from(raw_local.index())
+                .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            let normalized = normalize_type_v1(tcx, function.instance, declaration.ty)
+                .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            let type_identity = rustc_type_identity_v1(tcx, normalized);
+            let ty = type_ids
+                .get(&type_identity)
+                .copied()
+                .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            locals.push(RetainedSemanticLocalProducerV1 {
+                identity: rustc_local_identity_v1(function_identity, mir_body_sha256, raw_local),
+                rustc_local: raw_local,
+                ty,
+            });
+        }
+        locals.sort_unstable_by_key(|local| local.identity);
+        if locals
+            .windows(2)
+            .any(|pair| pair[0].identity == pair[1].identity)
+        {
+            return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        }
+        let mut raw_to_semantic_locals = vec![None; locals.len()];
+        for (semantic_index, local) in locals.iter().enumerate() {
+            let semantic_index = u32::try_from(semantic_index)
+                .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            let Some(slot) = raw_to_semantic_locals.get_mut(local.rustc_local as usize) else {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            };
+            if slot
+                .replace(SemanticLocalIdV1::from_index(semantic_index))
+                .is_some()
+            {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            }
+        }
+        let raw_to_semantic_locals = raw_to_semantic_locals
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+
+        let mut blocks = Vec::with_capacity(body.basic_blocks.len());
+        for (raw_block, _) in body.basic_blocks.iter_enumerated() {
+            let raw_block = u32::try_from(raw_block.index())
+                .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            blocks.push(RetainedSemanticBlockProducerV1 {
+                identity: rustc_block_identity_v1(function_identity, mir_body_sha256, raw_block),
+                rustc_block: raw_block,
+            });
+        }
+        blocks.sort_unstable_by_key(|block| block.identity);
+        if blocks
+            .windows(2)
+            .any(|pair| pair[0].identity == pair[1].identity)
+        {
+            return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        }
+        let mut raw_to_semantic_blocks = vec![None; blocks.len()];
+        for (semantic_index, block) in blocks.iter().enumerate() {
+            let semantic_index = u32::try_from(semantic_index)
+                .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            let Some(slot) = raw_to_semantic_blocks.get_mut(block.rustc_block as usize) else {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            };
+            if slot
+                .replace(SemanticBlockIdV1::from_index(semantic_index))
+                .is_some()
+            {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            }
+        }
+        let raw_to_semantic_blocks = raw_to_semantic_blocks
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        let entry = raw_to_semantic_blocks
+            .get(START_BLOCK.index())
+            .copied()
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+
+        bodies.push(RetainedSemanticBodyProducerV1 {
+            function: function_id,
+            locals: locals.into_boxed_slice(),
+            raw_to_semantic_locals: raw_to_semantic_locals.into_boxed_slice(),
+            entry,
+            blocks: blocks.into_boxed_slice(),
+            raw_to_semantic_blocks: raw_to_semantic_blocks.into_boxed_slice(),
+        });
+    }
+    Ok(CanonicalProducerTablesV1 {
+        types: type_producers.into_boxed_slice(),
+        bodies: bodies.into_boxed_slice(),
+    })
+}
+
+fn normalize_type_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    raw: Ty<'tcx>,
+) -> Result<Ty<'tcx>, &'static str> {
+    instance
+        .try_instantiate_mir_and_normalize_erasing_regions(
+            tcx,
+            TypingEnv::fully_monomorphized(),
+            EarlyBinder::bind(raw),
+        )
+        .map_err(|_| "type failed monomorphic normalization")
 }
 
 fn resolve_direct_call_v1<'tcx>(
@@ -980,7 +1180,9 @@ fn bounded_diagnostic_component_v1(value: &str) -> String {
 fn preflight_plan_sha256_v1<'tcx>(
     target: SemanticTargetDataLayoutV1,
     identity_inventory_sha256: [u8; 32],
+    types: &[RetainedSemanticTypeProducerV1<'tcx>],
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
+    bodies: &[RetainedSemanticBodyProducerV1],
     roots: &[SemanticFunctionIdV1],
     edges: &BTreeSet<CallEdgeV1>,
     terminal_expansions: &[TerminalExpansionRecipeV1],
@@ -993,10 +1195,33 @@ fn preflight_plan_sha256_v1<'tcx>(
     for count in counts.digest_fields() {
         digest.field(&count.to_le_bytes());
     }
+    for ty in types {
+        digest.field(ty.identity.as_bytes());
+        digest.field(rustc_type_identity_v1(tcx, ty.ty).as_bytes());
+    }
     for function in functions {
         digest.field(function.identities.function().as_bytes());
         digest.field(&rustc_mir_body_sha256_v1(tcx, function.instance));
         digest.field(&[function_role_tag_v1(function.role)]);
+    }
+    for body in bodies {
+        digest.field(&body.function.index().to_le_bytes());
+        for local in &body.locals {
+            digest.field(local.identity.as_bytes());
+            digest.field(&local.rustc_local.to_le_bytes());
+            digest.field(&local.ty.index().to_le_bytes());
+        }
+        for local in &body.raw_to_semantic_locals {
+            digest.field(&local.index().to_le_bytes());
+        }
+        digest.field(&body.entry.index().to_le_bytes());
+        for block in &body.blocks {
+            digest.field(block.identity.as_bytes());
+            digest.field(&block.rustc_block.to_le_bytes());
+        }
+        for block in &body.raw_to_semantic_blocks {
+            digest.field(&block.index().to_le_bytes());
+        }
     }
     for root in roots {
         digest.field(&root.index().to_le_bytes());

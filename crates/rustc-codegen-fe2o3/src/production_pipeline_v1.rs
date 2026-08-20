@@ -162,6 +162,8 @@ mod tests {
                     raw_locals: 10,
                     raw_blocks: 8,
                     raw_statements: 12,
+                    rustc_type_producers: 6,
+                    body_producer_tables: 3,
                     llvm_target: "amdgcn-amd-amdhsa".to_owned(),
                     rustc_identity_inventory_sha256: [0xab; 32],
                     rustc_preflight_plan_sha256: [0xcd; 32],
@@ -171,7 +173,7 @@ mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "production-v1 semantic importer authenticated rustc target \"amdgcn-amd-amdhsa\", consumed 3 collected device function(s) with 2 external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with 10 local(s), 8 block(s), 12 statement(s), and 4 typed terminal expansion recipe(s); canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
+                "production-v1 semantic importer authenticated rustc target \"amdgcn-amd-amdhsa\", consumed 3 collected device function(s) with 2 external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with 10 local(s), 8 block(s), 12 statement(s), and 4 typed terminal expansion recipe(s), retaining 6 sorted rustc type producer(s) and 3 canonical body ID table(s); canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
                 "ab".repeat(32),
                 "cd".repeat(32),
             )
