@@ -1605,6 +1605,9 @@ pub enum SemanticTypeShapeV1 {
         element: SemanticTypeIdV1,
         length: u64,
     },
+    Slice {
+        element: SemanticTypeIdV1,
+    },
     Tuple(SemanticAggregateTypeV1),
     Aggregate(SemanticAggregateTypeV1),
     Union(SemanticAggregateTypeV1),
@@ -6233,6 +6236,35 @@ fn validate_type(
                 })
                 || ty.layout.size_bytes != Some(expected)
                 || ty.layout.alignment_bytes != element_layout.alignment_bytes
+            {
+                return Err(SemanticMirErrorV1::InvalidTypeLayout);
+            }
+        }
+        SemanticTypeShapeV1::Slice { element } => {
+            require_plain_layout(&ty.layout)?;
+            require_single_layout(&ty.layout, 0)?;
+            context.type_reference(*element, location)?;
+            let element_layout = &context.request.types[element.0 as usize].layout;
+            let element_size = element_layout
+                .size_bytes
+                .ok_or(SemanticMirErrorV1::InvalidTypeLayout)?;
+            if ty.layout.fields
+                != (SemanticFieldsShapeV1::Array {
+                    stride_bytes: element_size,
+                    count: 0,
+                })
+                || ty.layout.rustc_size_bytes != 0
+                || ty.layout.size_bytes.is_some()
+                || ty.layout.alignment_bytes != element_layout.alignment_bytes
+                || !matches!(
+                    ty.layout.backend_repr,
+                    SemanticBackendReprV1::Memory { sized: false }
+                )
+                || ty.layout.largest_niche.is_some()
+                || ty.layout.uninhabited
+                || ty.layout.max_repr_alignment_bytes.is_some()
+                || ty.layout.unadjusted_abi_alignment_bytes != ty.layout.alignment_bytes
+                || ty.layout.randomization_seed != 0
             {
                 return Err(SemanticMirErrorV1::InvalidTypeLayout);
             }
@@ -11042,7 +11074,9 @@ fn validate_exact_type_closure(
         reached[index] = true;
         match &request.types[index].shape {
             SemanticTypeShapeV1::Pointer(pointer) => pending.push_back(pointer.pointee),
-            SemanticTypeShapeV1::Array { element, .. } => pending.push_back(*element),
+            SemanticTypeShapeV1::Array { element, .. } | SemanticTypeShapeV1::Slice { element } => {
+                pending.push_back(*element)
+            }
             SemanticTypeShapeV1::Tuple(fields)
             | SemanticTypeShapeV1::Aggregate(fields)
             | SemanticTypeShapeV1::Union(fields) => {
@@ -11641,6 +11675,10 @@ fn encode_type(
             writer.u8(4)?;
             writer.u32(element.0)?;
             writer.u64(*length)
+        }
+        SemanticTypeShapeV1::Slice { element } => {
+            writer.u8(12)?;
+            writer.u32(element.0)
         }
         SemanticTypeShapeV1::Tuple(fields) => {
             writer.u8(5)?;

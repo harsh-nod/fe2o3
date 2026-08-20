@@ -1320,6 +1320,49 @@ fn unrooted_type_and_allocation_records_are_rejected() {
 }
 
 #[test]
+fn slice_elements_are_part_of_the_retained_type_closure() {
+    let mut types = model_types();
+    types[FUNCTION_POINTER.index() as usize] = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(2)),
+        layout_identity(2),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            0,
+            8,
+            SemanticFieldsShapeV1::array(8, 0),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(false),
+            None,
+            false,
+            None,
+            8,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Slice {
+            element: DATA_POINTER,
+        },
+    );
+    let admitted = request_with_types(
+        types,
+        vec![],
+        vec![function(
+            1,
+            SemanticFunctionRoleV1::KernelRoot,
+            &[FUNCTION_POINTER],
+            return_block(),
+        )],
+    )
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+
+    assert!(matches!(
+        admitted.types()[FUNCTION_POINTER.index() as usize].shape(),
+        SemanticTypeShapeV1::Slice { element } if *element == DATA_POINTER
+    ));
+}
+
+#[test]
 fn constant_operand_types_are_part_of_the_retained_type_closure() {
     let statement = SemanticStatementV1::new(
         SemanticSourceProvenanceV1::unavailable(),

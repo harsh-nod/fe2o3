@@ -21,7 +21,8 @@ const BOOL: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(17);
 const CHAR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(18);
 const I32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(19);
 const F64: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(20);
-const TYPE_COUNT: usize = 21;
+const SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(21);
+const TYPE_COUNT: usize = 22;
 
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
@@ -357,6 +358,12 @@ struct CatalogOptions {
     niche_expected_offset: u64,
     function_return: SemanticTypeIdV1,
     vtable_uses_noncanonical_address_space: bool,
+    slice_element: SemanticTypeIdV1,
+    slice_layout_stride: u64,
+    slice_layout_count: u64,
+    slice_rustc_size: u64,
+    slice_alignment: u64,
+    slice_backend_sized: bool,
 }
 
 impl Default for CatalogOptions {
@@ -370,6 +377,12 @@ impl Default for CatalogOptions {
             niche_expected_offset: 0,
             function_return: U8,
             vtable_uses_noncanonical_address_space: false,
+            slice_element: U8,
+            slice_layout_stride: 1,
+            slice_layout_count: 0,
+            slice_rustc_size: 0,
+            slice_alignment: 1,
+            slice_backend_sized: false,
         }
     }
 }
@@ -571,6 +584,29 @@ fn catalog_types(options: CatalogOptions) -> Vec<SemanticTypeDeclV1> {
             SemanticScalarTypeV1::Float { bits: 64 },
             full_range(64),
         ),
+        declaration(
+            SLICE,
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                options.slice_rustc_size,
+                options.slice_alignment,
+                SemanticFieldsShapeV1::array(
+                    options.slice_layout_stride,
+                    options.slice_layout_count,
+                ),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(options.slice_backend_sized),
+                None,
+                false,
+                None,
+                options.slice_alignment,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Slice {
+                element: options.slice_element,
+            },
+        ),
     ]
 }
 
@@ -746,6 +782,18 @@ fn canonical_catalog_covers_every_semantic_type_and_exact_layout_form() {
         }
     ));
     assert!(matches!(
+        types[SLICE.index() as usize].shape(),
+        SemanticTypeShapeV1::Slice { element } if *element == U8
+    ));
+    assert_eq!(types[SLICE.index() as usize].layout().size_bytes(), None);
+    assert!(matches!(
+        types[SLICE.index() as usize].layout().fields(),
+        SemanticFieldsShapeV1::Array {
+            stride_bytes: 1,
+            count: 0
+        }
+    ));
+    assert!(matches!(
         types[TUPLE.index() as usize].layout().fields(),
         SemanticFieldsShapeV1::Arbitrary {
             source_order_offsets_bytes,
@@ -826,9 +874,9 @@ fn canonical_encoding_is_pinned_deterministic_and_semantically_complete() {
     assert_eq!(
         left.semantic_sha256().as_bytes(),
         &[
-            0x2e, 0x8c, 0x19, 0x78, 0x7e, 0xa5, 0xb7, 0x3f, 0x85, 0x0c, 0xac, 0xea, 0x34, 0xb1,
-            0xd5, 0x6a, 0x45, 0xbc, 0x61, 0xd0, 0x96, 0xb3, 0xec, 0x0b, 0x4d, 0x62, 0xe3, 0x16,
-            0xf9, 0xbb, 0x42, 0x54,
+            0x75, 0x42, 0x1a, 0x55, 0x19, 0xa9, 0x5e, 0x4e, 0xf2, 0xb2, 0xdb, 0x74, 0x1f, 0x06,
+            0x03, 0xf9, 0xde, 0x7c, 0xfe, 0x35, 0x43, 0xd0, 0x27, 0x8e, 0xc2, 0x6b, 0x6f, 0x66,
+            0x24, 0x40, 0x78, 0x6b,
         ]
     );
 
@@ -841,6 +889,17 @@ fn canonical_encoding_is_pinned_deterministic_and_semantically_complete() {
     assert_ne!(
         left.canonical_encoding(),
         without_explicit_padding.canonical_encoding()
+    );
+
+    let different_slice_element = catalog_request(CatalogOptions {
+        slice_element: NONZERO_U8,
+        ..CatalogOptions::default()
+    })
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    assert_ne!(
+        left.canonical_encoding(),
+        different_slice_element.canonical_encoding()
     );
 
     let mut out_of_order = catalog_types(CatalogOptions::default());
@@ -862,6 +921,10 @@ fn malformed_type_references_fail_closed_at_the_type_boundary() {
         },
         CatalogOptions {
             array_element: SemanticTypeIdV1::from_index(99),
+            ..CatalogOptions::default()
+        },
+        CatalogOptions {
+            slice_element: SemanticTypeIdV1::from_index(99),
             ..CatalogOptions::default()
         },
         CatalogOptions {
@@ -902,6 +965,27 @@ fn malformed_layout_relationships_and_metadata_fail_closed() {
         },
         CatalogOptions {
             vtable_uses_noncanonical_address_space: true,
+            ..CatalogOptions::default()
+        },
+        CatalogOptions {
+            slice_layout_stride: 2,
+            ..CatalogOptions::default()
+        },
+        CatalogOptions {
+            slice_layout_count: 1,
+            slice_rustc_size: 1,
+            ..CatalogOptions::default()
+        },
+        CatalogOptions {
+            slice_alignment: 2,
+            ..CatalogOptions::default()
+        },
+        CatalogOptions {
+            slice_backend_sized: true,
+            ..CatalogOptions::default()
+        },
+        CatalogOptions {
+            slice_element: OPAQUE_DST,
             ..CatalogOptions::default()
         },
     ];
