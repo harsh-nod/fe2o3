@@ -41,6 +41,7 @@
 #endif
 
 #define FE2O3_WRAPPER_FD 191
+#define FE2O3_TRAMPOLINE_FD 192
 #define FE2O3_RUSTC_LIBRARY_PATH "/proc/self/fd/193"
 #define FE2O3_MAX_WRAPPER_BYTES (512U * 1024U * 1024U)
 #define FE2O3_REQUIRED_SEALS                                                   \
@@ -79,13 +80,25 @@ static bool dynamic_loader_name(const char *entry) {
 
 static int validate_loader_environment(void) {
   const char *loader_path = getenv("LD_LIBRARY_PATH");
-  if (loader_path == NULL || loader_path[0] != '/') {
+  if (loader_path == NULL) {
     return -1;
   }
-  const char *last = strrchr(loader_path, ':');
-  last = last == NULL ? loader_path : last + 1;
-  if (strcmp(last, FE2O3_RUSTC_LIBRARY_PATH) != 0) {
-    return -1;
+  const char *component = loader_path;
+  for (;;) {
+    const char *separator = strchr(component, ':');
+    const size_t length = separator == NULL
+                              ? strlen(component)
+                              : (size_t)(separator - component);
+    if (length == 0U || component[0] != '/') {
+      return -1;
+    }
+    if (separator == NULL) {
+      if (strcmp(component, FE2O3_RUSTC_LIBRARY_PATH) != 0) {
+        return -1;
+      }
+      break;
+    }
+    component = separator + 1;
   }
   for (char **entry = environ; *entry != NULL; ++entry) {
     if (dynamic_loader_name(*entry) &&
@@ -95,6 +108,34 @@ static int validate_loader_environment(void) {
     }
   }
   return 0;
+}
+
+static int validate_trampoline_descriptor(void) {
+  struct stat descriptor_status;
+  struct stat executable_status;
+  const int descriptor_flags = fcntl(FE2O3_TRAMPOLINE_FD, F_GETFD);
+  const int status_flags = fcntl(FE2O3_TRAMPOLINE_FD, F_GETFL);
+  const int seals = fcntl(FE2O3_TRAMPOLINE_FD, F_GET_SEALS);
+  const int executable = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+  const bool valid =
+      descriptor_flags == 0 && status_flags >= 0 &&
+      (status_flags & O_PATH) == 0 &&
+      (status_flags & O_ACCMODE) == O_RDONLY &&
+      fstat(FE2O3_TRAMPOLINE_FD, &descriptor_status) == 0 && executable >= 0 &&
+      fstat(executable, &executable_status) == 0 &&
+      S_ISREG(descriptor_status.st_mode) && descriptor_status.st_nlink == 0 &&
+      descriptor_status.st_size > 0 &&
+      (uint64_t)descriptor_status.st_size <= FE2O3_MAX_WRAPPER_BYTES &&
+      (descriptor_status.st_mode & 07777) == 0500 && seals >= 0 &&
+      (seals & FE2O3_REQUIRED_SEALS) == FE2O3_REQUIRED_SEALS &&
+      descriptor_status.st_dev == executable_status.st_dev &&
+      descriptor_status.st_ino == executable_status.st_ino &&
+      descriptor_status.st_mode == executable_status.st_mode &&
+      descriptor_status.st_size == executable_status.st_size;
+  if (executable >= 0) {
+    (void)close(executable);
+  }
+  return valid ? 0 : -1;
 }
 
 static int validate_wrapper_descriptor(void) {
@@ -135,8 +176,12 @@ int main(int argument_count, char *arguments[]) {
   if (validate_wrapper_descriptor() != 0) {
     return fail("invalid sealed cargo-fe2o3 wrapper descriptor");
   }
+  if (validate_trampoline_descriptor() != 0) {
+    return fail("invalid sealed trampoline descriptor");
+  }
   if (unsetenv("LD_LIBRARY_PATH") != 0 ||
       fcntl(FE2O3_WRAPPER_FD, F_SETFD, FD_CLOEXEC) != 0 ||
+      fcntl(FE2O3_TRAMPOLINE_FD, F_SETFD, FD_CLOEXEC) != 0 ||
       normalize_process_state() != 0) {
     return fail("cannot normalize the wrapper process boundary");
   }

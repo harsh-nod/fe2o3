@@ -48,6 +48,9 @@ fn run() -> Result<(), String> {
 }
 
 fn publish_fixture(crate_name: &str, source: &Path) -> Result<(), String> {
+    if Path::new("/proc/self/fd/191").exists() || Path::new("/proc/self/fd/192").exists() {
+        return Err("Cargo binding image descriptors survived the wrapper exec".to_owned());
+    }
     let attempt = env::var(BUILD_ATTEMPT_ENV)
         .ok()
         .and_then(|value| BuildAttempt::from_env_value(&value).ok())

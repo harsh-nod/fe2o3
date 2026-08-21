@@ -217,10 +217,7 @@ mod platform {
     use std::ffi::OsStr;
     use std::fs::{File, Metadata};
     use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::os::fd::AsRawFd;
-    #[cfg(test)]
-    use std::os::fd::RawFd;
-    #[cfg(test)]
+    use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
     use std::os::unix::fs::FileExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::process::CommandExt;
@@ -267,6 +264,17 @@ mod platform {
                 && self.modified_nanoseconds == current.modified_nanoseconds
                 && self.changed_seconds == current.changed_seconds
                 && self.changed_nanoseconds == current.changed_nanoseconds
+        }
+
+        fn matches_stat(self, stat: &rustix::fs::Stat) -> bool {
+            self.device == stat.st_dev
+                && self.inode == stat.st_ino
+                && self.mode == stat.st_mode
+                && u64::try_from(stat.st_size).ok() == Some(self.size)
+                && stat.st_mtime == self.modified_seconds
+                && i64::try_from(stat.st_mtime_nsec).ok() == Some(self.modified_nanoseconds)
+                && stat.st_ctime == self.changed_seconds
+                && i64::try_from(stat.st_ctime_nsec).ok() == Some(self.changed_nanoseconds)
         }
     }
 
@@ -431,6 +439,75 @@ mod platform {
             require_exact_seals(&self.file, REQUIRED_INHERITED_SEALS, &self.display_path)
         }
 
+        pub(crate) fn fixed_child_path(
+            &self,
+            target_fd: RawFd,
+        ) -> Result<PathBuf, PinExecutableError> {
+            self.require_sealed_executable_image()?;
+            require_unused_child_descriptor(target_fd, &self.display_path)?;
+            Ok(PathBuf::from(format!("/proc/self/fd/{target_fd}")))
+        }
+
+        pub(crate) fn inherit_for_child_at(
+            &self,
+            command: &mut Command,
+            target_fd: RawFd,
+        ) -> Result<(), PinExecutableError> {
+            self.require_sealed_executable_image()?;
+            require_unused_child_descriptor(target_fd, &self.display_path)?;
+            let installed =
+                rustix::io::fcntl_dupfd_cloexec(&self.file, target_fd).map_err(|source| {
+                    PinExecutableError::ExecutionStrategy {
+                        path: self.display_path.clone(),
+                        source: source.into(),
+                    }
+                })?;
+            if installed.as_raw_fd() != target_fd {
+                return Err(PinExecutableError::ExecutionStrategy {
+                    path: self.display_path.clone(),
+                    source: io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("fixed executable descriptor {target_fd} raced with another user"),
+                    ),
+                });
+            }
+            let snapshot = self.snapshot;
+            let stat = rustix::fs::fstat(&installed).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: self.display_path.clone(),
+                    source: source.into(),
+                }
+            })?;
+            if !snapshot.matches_stat(&stat) {
+                return Err(PinExecutableError::ExecutionObjectChanged {
+                    path: self.display_path.clone(),
+                });
+            }
+            // SAFETY: `installed` reserves the exact target in the parent through spawn. The
+            // callback only revalidates that descriptor and clears CLOEXEC in the child.
+            unsafe {
+                command.pre_exec(move || {
+                    let stat = rustix::fs::fstat(&installed).map_err(io::Error::from)?;
+                    let seals = rustix::fs::fcntl_get_seals(&installed).map_err(io::Error::from)?;
+                    let status = rustix::fs::fcntl_getfl(&installed).map_err(io::Error::from)?;
+                    if !snapshot.matches_stat(&stat)
+                        || seals != REQUIRED_INHERITED_SEALS
+                        || status & OFlags::ACCMODE != OFlags::RDONLY
+                    {
+                        return Err(io::Error::from_raw_os_error(
+                            rustix::io::Errno::STALE.raw_os_error(),
+                        ));
+                    }
+                    rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty())
+                        .map_err(io::Error::from)?;
+                    // `Command` retains this callback through the immediately following exec.
+                    // The child does not unwind or drop it between this return and that exec.
+                    Ok(())
+                });
+            }
+            Ok(())
+        }
+
         pub(crate) fn seal_executable_image(&self) -> Result<Self, PinExecutableError> {
             let initial = self
                 .file
@@ -534,11 +611,7 @@ mod platform {
             Ok(sealed)
         }
 
-        #[cfg(test)]
-        pub(crate) fn sealed_static_application_identity(
-            &self,
-        ) -> Result<fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1, PinExecutableError>
-        {
+        pub(crate) fn authenticated_bytes(&self) -> Result<Vec<u8>, PinExecutableError> {
             let initial = self
                 .file
                 .metadata()
@@ -589,11 +662,26 @@ mod platform {
                     path: self.display_path.clone(),
                 });
             }
-            fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(&bytes)
-                .map_err(|source| PinExecutableError::UnsealedApplicationRuntime {
+            if <[u8; 32]>::from(Sha256::digest(&bytes)) != self.sha256 {
+                return Err(PinExecutableError::SnapshotDigestMismatch {
                     path: self.display_path.clone(),
-                    source,
-                })
+                });
+            }
+            Ok(bytes)
+        }
+
+        #[cfg(test)]
+        pub(crate) fn sealed_static_application_identity(
+            &self,
+        ) -> Result<fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1, PinExecutableError>
+        {
+            fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(
+                &self.authenticated_bytes()?,
+            )
+            .map_err(|source| PinExecutableError::UnsealedApplicationRuntime {
+                path: self.display_path.clone(),
+                source,
+            })
         }
 
         pub(crate) fn seal_static_application(
@@ -1018,6 +1106,35 @@ mod platform {
         Ok(())
     }
 
+    fn require_unused_child_descriptor(
+        target_fd: RawFd,
+        display_path: &Path,
+    ) -> Result<(), PinExecutableError> {
+        if target_fd < 3 {
+            return Err(PinExecutableError::ExecutionStrategy {
+                path: display_path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "fixed executable descriptor would replace a standard stream",
+                ),
+            });
+        }
+        match rustix::fs::fstat(unsafe { BorrowedFd::borrow_raw(target_fd) }) {
+            Err(rustix::io::Errno::BADF) => Ok(()),
+            Err(source) => Err(PinExecutableError::ExecutionStrategy {
+                path: display_path.to_path_buf(),
+                source: source.into(),
+            }),
+            Ok(_) => Err(PinExecutableError::ExecutionStrategy {
+                path: display_path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("fixed executable descriptor {target_fd} is already in use"),
+                ),
+            }),
+        }
+    }
+
     fn read_retry<R: Read>(reader: &mut R, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
             match reader.read(buffer) {
@@ -1221,6 +1338,30 @@ mod platform {
             sealed
                 .command()
                 .expect("sealed Cargo image remains executable");
+        }
+
+        #[test]
+        fn sealed_executable_is_inherited_at_one_verified_fixed_child_descriptor() {
+            // The unit-test binary shares one descriptor table across hundreds of parallel
+            // tests. Keep this probe above their working set; production 191/192 are exercised
+            // by the process-isolated release integration tests.
+            const CHILD_FD: RawFd = 511;
+            let root = TestDirectory::new();
+            let path = root.path().join("wrapper-image");
+            write_executable(&path, b"#!/bin/sh\nexit 0\n");
+            let source = PinnedExecutable::open(&path).unwrap();
+            let sealed = source.seal_executable_image().unwrap();
+            assert_eq!(
+                sealed.fixed_child_path(CHILD_FD).unwrap(),
+                PathBuf::from("/proc/self/fd/511")
+            );
+
+            let mut command = Command::new("/bin/sh");
+            command
+                .arg("-c")
+                .arg("test -r /proc/self/fd/511 && test \"$(stat -c %a /proc/self/fd/511)\" = 500");
+            sealed.inherit_for_child_at(&mut command, CHILD_FD).unwrap();
+            assert!(command.status().unwrap().success());
         }
 
         #[test]

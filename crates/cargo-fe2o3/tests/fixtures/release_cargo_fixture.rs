@@ -87,6 +87,10 @@ fn build(args: &[OsString]) -> ExitCode {
         "target": env::var_os("FE2O3_TARGET").map(|value| value.to_string_lossy().into_owned()),
         "wrapper": env::var_os("RUSTC_WORKSPACE_WRAPPER")
             .map(|value| value.to_string_lossy().into_owned()),
+        "trampoline_path_input": env::var_os("FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1")
+            .map(|value| value.to_string_lossy().into_owned()),
+        "trampoline_digest_input": env::var_os("FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1")
+            .map(|value| value.to_string_lossy().into_owned()),
         "managed_rustc_args": env::var_os("FE2O3_MANAGED_RUSTC_ARGS_V1")
             .map(|value| value.to_string_lossy().into_owned()),
     });

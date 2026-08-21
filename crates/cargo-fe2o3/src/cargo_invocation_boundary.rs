@@ -53,6 +53,7 @@ mod platform {
     const MAX_PROC_STATUS_BYTES: usize = 64 * 1024;
     const MAX_PENDING_PERMITS: usize = 256;
     const MAX_TRACKED_CARGO_CHILDREN: usize = 256;
+    const PROTECTED_WRAPPER_CHILD_FD: i32 = 191;
 
     #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
     pub(crate) struct ProcessIdentityV1 {
@@ -485,26 +486,47 @@ mod platform {
         // pathname-swap adversary that first entered another image and then execs the wrapper.
         let process_pid = thread_group_id(notification.pid)?;
         authorization.revoke_pid(process_pid);
-        let requested_wrapper = requested_executable_matches(notification, context.wrapper)?;
-        let requested_trampoline = context
-            .trampoline
-            .map(|trampoline| requested_executable_matches(notification, trampoline))
-            .transpose()?
-            .unwrap_or(false);
+        let requested_fixed_wrapper = context.trampoline.is_some()
+            && is_fixed_empty_execveat(notification, PROTECTED_WRAPPER_CHILD_FD);
+        let requested_wrapper = if requested_fixed_wrapper {
+            true
+        } else {
+            requested_executable_matches(notification, context.wrapper)?
+        };
+        let requested_trampoline = if requested_wrapper {
+            false
+        } else {
+            context
+                .trampoline
+                .map(|trampoline| requested_executable_matches(notification, trampoline))
+                .transpose()?
+                .unwrap_or(false)
+        };
 
         let observation = process_observation(process_pid)?;
         let process = ProcessIdentityV1 {
             pid: process_pid,
             start_time_ticks: observation.start_time_ticks,
         };
-        let current = process_executable_object(process_pid)?;
+        let staged_trampoline = tracked_cargo_children
+            .get(&process)
+            .is_some_and(|state| state.entered_trampoline);
+        // The admitted static image makes itself nondumpable before the second exec, so procfs
+        // cannot expose its current image then. That transition is still closed: the first exec
+        // selected the exact sealed trampoline, the same pidfd-backed process is staged, and the
+        // second request must use the reserved sealed-wrapper descriptor with AT_EMPTY_PATH.
+        let current = if requested_fixed_wrapper && staged_trampoline {
+            None
+        } else {
+            Some(process_executable_object(process_pid)?)
+        };
         let cargo_process_is_current = pidfd_is_live(&context.cargo_process_fd)
             && ProcessIdentityV1::observe(context.cargo_pid)? == context.cargo_process;
         let first_direct_cargo_child_exec = is_direct_pinned_cargo_child(
             observation.parent_pid,
             context.cargo_pid,
             cargo_process_is_current,
-            current == context.cargo.object,
+            current == Some(context.cargo.object),
             !tracked_cargo_children.contains_key(&process),
         );
         if first_direct_cargo_child_exec {
@@ -547,13 +569,12 @@ mod platform {
         }
         let admitted = match context.trampoline {
             None => first_direct_cargo_child_exec,
-            Some(trampoline) => is_admitted_trampoline_wrapper_exec(
+            Some(_) => is_admitted_trampoline_wrapper_exec(
                 observation.parent_pid,
                 context.cargo_pid,
                 cargo_process_is_current,
                 entered_trampoline,
-                current == trampoline.object
-                    && process_executable_matches(process_pid, trampoline)?,
+                requested_fixed_wrapper,
             ),
         };
         if !admitted {
@@ -629,12 +650,12 @@ mod platform {
         cargo_pid: u32,
         cargo_process_is_current: bool,
         same_process_entered_trampoline: bool,
-        caller_runs_pinned_trampoline: bool,
+        fixed_wrapper_exec_from_admitted_trampoline: bool,
     ) -> bool {
         parent_pid == cargo_pid
             && cargo_process_is_current
             && same_process_entered_trampoline
-            && caller_runs_pinned_trampoline
+            && fixed_wrapper_exec_from_admitted_trampoline
     }
 
     fn protected_image_digests_are_distinct(
@@ -699,16 +720,10 @@ mod platform {
             .is_ok_and(|executable| expected.matches_pinned(&executable)))
     }
 
-    fn process_executable_matches(
-        pid: u32,
-        expected: ExecutableIdentityV1,
-    ) -> Result<bool, String> {
-        let path = PathBuf::from(format!("/proc/{pid}/exe"));
-        let file = File::open(&path).map_err(|error| {
-            format!("cannot open current executable for Cargo child PID {pid}: {error}")
-        })?;
-        Ok(PinnedExecutable::from_transferred_file(file, path)
-            .is_ok_and(|executable| expected.matches_pinned(&executable)))
+    const fn is_fixed_empty_execveat(notification: libc::seccomp_notif, descriptor: i32) -> bool {
+        notification.data.nr == libc::SYS_execveat as i32
+            && notification.data.args[0] == descriptor as u64
+            && notification.data.args[4] == libc::AT_EMPTY_PATH as u64
     }
 
     fn resolve_exec_path(pid: u32, bytes: &[u8]) -> Result<PathBuf, String> {
@@ -1045,6 +1060,21 @@ mod platform {
                 resolve_execveat_path(71, 9, b"", libc::AT_EMPTY_PATH as u64).unwrap(),
                 PathBuf::from("/proc/71/fd/9")
             );
+
+            // SAFETY: all-zero is a valid inert seccomp notification value for this pure test.
+            let mut notification: libc::seccomp_notif = unsafe { std::mem::zeroed() };
+            notification.data.nr = libc::SYS_execveat as i32;
+            notification.data.args[0] = PROTECTED_WRAPPER_CHILD_FD as u64;
+            notification.data.args[4] = libc::AT_EMPTY_PATH as u64;
+            assert!(is_fixed_empty_execveat(
+                notification,
+                PROTECTED_WRAPPER_CHILD_FD
+            ));
+            notification.data.args[4] |= libc::AT_SYMLINK_NOFOLLOW as u64;
+            assert!(!is_fixed_empty_execveat(
+                notification,
+                PROTECTED_WRAPPER_CHILD_FD
+            ));
         }
     }
 }

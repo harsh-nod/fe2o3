@@ -35,6 +35,7 @@ import sys
 
 TRAMPOLINE = sys.argv[1]
 WRAPPER_FD = 191
+TRAMPOLINE_FD = 192
 REQUIRED_SEALS = (
     fcntl.F_SEAL_SEAL
     | fcntl.F_SEAL_SHRINK
@@ -43,11 +44,11 @@ REQUIRED_SEALS = (
 )
 
 
-def wrapper_image(mode=0o500, sealed=True):
+def sealed_image(path, *, mode=0o500, sealed=True):
     writable = os.memfd_create(
-        "fe2o3-cargo-binding-test-wrapper", os.MFD_ALLOW_SEALING
+        "fe2o3-cargo-binding-test-image", os.MFD_ALLOW_SEALING
     )
-    with open("/usr/bin/env", "rb") as source:
+    with open(path, "rb") as source:
         while chunk := source.read(65536):
             os.write(writable, chunk)
     os.fchmod(writable, mode)
@@ -59,7 +60,10 @@ def wrapper_image(mode=0o500, sealed=True):
 
 
 def run(loader, *, extra=None, mode=0o500, sealed=True, install=True):
-    descriptor = wrapper_image(mode=mode, sealed=sealed) if install else None
+    descriptor = (
+        sealed_image("/usr/bin/env", mode=mode, sealed=sealed) if install else None
+    )
+    trampoline = sealed_image(TRAMPOLINE)
     environment = {
         "FE2O3_CARGO_BINDING_TEST_MARKER": "preserved",
         "LANG": "C",
@@ -72,10 +76,15 @@ def run(loader, *, extra=None, mode=0o500, sealed=True, install=True):
     try:
         if descriptor is not None:
             os.dup2(descriptor, WRAPPER_FD, inheritable=True)
+        os.dup2(trampoline, TRAMPOLINE_FD, inheritable=True)
         return subprocess.run(
-            [TRAMPOLINE, "--"],
+            [f"/proc/self/fd/{TRAMPOLINE_FD}", "--"],
             env=environment,
-            pass_fds=(() if descriptor is None else (WRAPPER_FD,)),
+            pass_fds=(
+                (TRAMPOLINE_FD,)
+                if descriptor is None
+                else (WRAPPER_FD, TRAMPOLINE_FD)
+            ),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -86,6 +95,8 @@ def run(loader, *, extra=None, mode=0o500, sealed=True, install=True):
         if descriptor is not None:
             os.close(WRAPPER_FD)
             os.close(descriptor)
+        os.close(TRAMPOLINE_FD)
+        os.close(trampoline)
 
 
 valid = run("/mutable/cargo/target/debug/deps:/proc/self/fd/193")
@@ -96,6 +107,8 @@ assert "LD_PRELOAD=" not in valid.stdout
 
 for result in [
     run("/proc/self/fd/193:/mutable/cargo/target/debug/deps"),
+    run("/mutable/cargo/target/debug/deps::/proc/self/fd/193"),
+    run("/mutable/cargo/target/debug/deps:relative:/proc/self/fd/193"),
     run("/mutable/cargo/target/debug/deps:/proc/self/fd/193", install=False),
     run("/mutable/cargo/target/debug/deps:/proc/self/fd/193", sealed=False),
     run("/mutable/cargo/target/debug/deps:/proc/self/fd/193", mode=0o555),

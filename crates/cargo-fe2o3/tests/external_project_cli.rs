@@ -277,12 +277,21 @@ impl ProjectFixture {
     fn protected_release_build_command(&self) -> Command {
         let cargo = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-release-cargo-fixture"));
         let rustc = release_rustc_fixture_executable(&self.root);
+        let trampoline = cargo_binding_trampoline(&self.root);
         let mut command = self.isolated_protected_release_command("build");
         command
             .env("CARGO", cargo)
             .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", file_sha256(cargo))
             .env("FE2O3_AUTHORITY_RUSTC_PATH_V1", &rustc)
             .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", file_sha256(&rustc))
+            .env(
+                "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1",
+                &trampoline,
+            )
+            .env(
+                "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1",
+                file_sha256(&trampoline),
+            )
             .env(
                 "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
                 runtime_tree_sha256(
@@ -358,6 +367,28 @@ fn temp_root() -> PathBuf {
             Err(error) => panic!("failed to create temporary project: {error}"),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn cargo_binding_trampoline(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = root.join("cargo-binding-trampoline");
+    fs::create_dir_all(&directory).expect("create Cargo binding trampoline directory");
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        .expect("protect Cargo binding trampoline directory");
+    let trampoline = directory.join("fe2o3-cargo-binding-trampoline");
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("cargo-fe2o3 manifest is inside the repository");
+    let status = Command::new(repository.join("scripts/fe2o3-rustc-trampoline-build.sh"))
+        .arg("--cargo-binding")
+        .arg(&trampoline)
+        .status()
+        .expect("build Cargo binding trampoline fixture");
+    assert!(status.success(), "Cargo binding trampoline build failed");
+    trampoline
 }
 
 fn cargo_fe2o3_command() -> Command {
@@ -1682,12 +1713,9 @@ fn protected_release_build_reaches_authenticated_cargo_publication_fixture() {
     for required in ["build", "--offline", "--frozen"] {
         assert!(args.iter().any(|value| value == required), "{report}");
     }
-    assert!(
-        report["wrapper"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("/proc/") && value.contains("/fd/")),
-        "{report}"
-    );
+    assert_eq!(report["wrapper"], "/proc/self/fd/192", "{report}");
+    assert!(report["trampoline_path_input"].is_null(), "{report}");
+    assert!(report["trampoline_digest_input"].is_null(), "{report}");
     assert!(
         report["managed_rustc_args"]
             .as_str()
@@ -1714,6 +1742,40 @@ fn protected_release_build_reaches_authenticated_cargo_publication_fixture() {
         fs::read(&artifacts[0]).expect("read protected release HSACO fixture"),
         b"fixture hsaco"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_release_rejects_substituted_or_nonstatic_cargo_binding_trampoline() {
+    for (path, digest, expected) in [
+        (None, Some("01".repeat(32)), "does not match"),
+        (
+            Some(PathBuf::from("/usr/bin/env")),
+            Some(file_sha256(Path::new("/usr/bin/env"))),
+            "has a runtime interpreter",
+        ),
+    ] {
+        let fixture = ProjectFixture::standalone();
+        write_authority_lockfile(&fixture.workspace);
+        let mut command = fixture.protected_release_build_command();
+        if let Some(path) = path {
+            command.env("FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1", path);
+        }
+        if let Some(digest) = digest {
+            command.env("FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1", digest);
+        }
+        let output = command.output().expect("run trampoline rejection probe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !fixture.target.join(PROTECTED_RELEASE_CARGO_REPORT).exists(),
+            "substituted trampoline reached Cargo"
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]

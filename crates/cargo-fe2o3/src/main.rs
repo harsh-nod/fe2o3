@@ -6,6 +6,7 @@ mod authority_release;
 mod authorized_kernel_closure;
 mod binding_wrapper;
 mod capability_broker;
+mod cargo_binding_trampoline;
 mod cargo_invocation_boundary;
 mod clean;
 #[cfg(feature = "compiler-handoff-observation-test-only")]
@@ -63,11 +64,17 @@ const AUTHORITY_RUSTC_SHA256_ENV: &str = "FE2O3_AUTHORITY_RUSTC_SHA256_V1";
 const AUTHORITY_RUSTC_PATH_ENV: &str = "FE2O3_AUTHORITY_RUSTC_PATH_V1";
 const AUTHORITY_RUSTC_RUNTIME_SHA256_ENV: &str = "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1";
 const AUTHORITY_BACKEND_SHA256_ENV: &str = "FE2O3_AUTHORITY_BACKEND_SHA256_V1";
+const AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_ENV: &str =
+    "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1";
+const AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV: &str =
+    "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1";
 const NON_PRODUCTION_AUTHORITY_VALIDATION_ENV: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
 const AUTHORITY_BEARING_ROW_PIPELINE: &str = "collected-row-softmax-v1";
 pub(crate) const PROTECTED_RELEASE_ACTION_ENV: &str = "FE2O3_PROTECTED_RELEASE_ACTION_V1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
+const CARGO_BINDING_WRAPPER_CHILD_FD: std::os::fd::RawFd = 191;
+const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
 const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
@@ -491,6 +498,12 @@ fn cargo_with_backend_result(
             )
         })
         .transpose()?;
+    let protected_binding_wrapper = protected_release
+        .map(authority_release::ProtectedReleaseAdmission::pin_binding_wrapper)
+        .transpose()?;
+    let cargo_binding_trampoline = protected_release
+        .map(|_| pin_authority_cargo_binding_trampoline())
+        .transpose()?;
     let mut context = BackendRunContext::prepare(
         BackendRunPreparation {
             project,
@@ -498,14 +511,13 @@ fn cargo_with_backend_result(
             pinned_cargo,
             pinned_rustc,
             authority_backend,
+            protected_binding_wrapper,
+            cargo_binding_trampoline,
             authorized_closure,
             protected_release_action,
         },
         args,
     )?;
-    if let Some(admission) = protected_release {
-        context.binding_wrapper = admission.binding_wrapper_path();
-    }
     run_cargo_with_backend(&mut context, command, args, protected_release)
 }
 
@@ -544,6 +556,34 @@ fn preflight_declared_authority_backend(
     Ok((path, backend))
 }
 
+fn pin_authority_cargo_binding_trampoline() -> Result<pinned_executable::PinnedExecutable, String> {
+    let declaration = env::var_os(AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_ENV).ok_or_else(|| {
+        format!(
+            "cargo fe2o3 authority release requires {AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_ENV}"
+        )
+    })?;
+    let path = require_absolute_authority_tool_path(
+        &declaration,
+        AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_ENV,
+    )?;
+    let expected =
+        authority_sha256_from_environment(AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV)?;
+    let source = pinned_executable::PinnedExecutable::open(&path)
+        .map_err(|error| format!("failed to pin Cargo binding trampoline: {error}"))?;
+    if source.sha256() != &expected {
+        return Err(format!(
+            "Cargo binding trampoline does not match {AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV}"
+        ));
+    }
+    let bytes = source
+        .authenticated_bytes()
+        .map_err(|error| format!("failed to authenticate Cargo binding trampoline: {error}"))?;
+    cargo_binding_trampoline::validate_v1(&bytes)?;
+    source
+        .seal_executable_image()
+        .map_err(|error| format!("failed to seal Cargo binding trampoline: {error}"))
+}
+
 struct BackendRunContext {
     target: String,
     project: project::CargoProject,
@@ -557,7 +597,9 @@ struct BackendRunContext {
     target_dir: project::PinnedDirectory,
     generation: generation::PreparedGeneration,
     managed_rustc_args: OsString,
-    binding_wrapper: PathBuf,
+    binding_wrapper_path: PathBuf,
+    pinned_binding_wrapper: pinned_executable::PinnedExecutable,
+    cargo_binding_trampoline: Option<pinned_executable::PinnedExecutable>,
     build_session: fe2o3_artifact_transaction::BuildSession,
     requires_locked_closure: bool,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
@@ -570,6 +612,8 @@ struct BackendRunPreparation {
     pinned_cargo: pinned_executable::PinnedExecutable,
     pinned_rustc: PinnedRustc,
     authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,
+    protected_binding_wrapper: Option<pinned_executable::PinnedExecutable>,
+    cargo_binding_trampoline: Option<pinned_executable::PinnedExecutable>,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     protected_release_action: Option<ProtectedReleaseAction>,
 }
@@ -582,6 +626,8 @@ impl BackendRunContext {
             pinned_cargo,
             pinned_rustc,
             authority_backend,
+            protected_binding_wrapper,
+            cargo_binding_trampoline,
             authorized_closure,
             protected_release_action,
         } = preparation;
@@ -629,8 +675,13 @@ impl BackendRunContext {
             .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
         let managed_rustc_args =
             generation::managed_rustc_args(&backend_reference, generation.token())?;
-        let binding_wrapper = env::current_exe()
+        let binding_wrapper_path = env::current_exe()
             .map_err(|error| format!("failed to locate cargo-fe2o3 executable: {error}"))?;
+        let pinned_binding_wrapper = match protected_binding_wrapper {
+            Some(wrapper) => wrapper,
+            None => pinned_executable::PinnedExecutable::open(&binding_wrapper_path)
+                .map_err(|error| format!("failed to pin cargo-fe2o3 wrapper: {error}"))?,
+        };
         let build_session = random_build_session()?;
 
         Ok(Self {
@@ -646,7 +697,9 @@ impl BackendRunContext {
             target_dir,
             generation,
             managed_rustc_args,
-            binding_wrapper,
+            binding_wrapper_path,
+            pinned_binding_wrapper,
+            cargo_binding_trampoline,
             build_session,
             requires_locked_closure: authorized_closure.is_some(),
             authorized_closure,
@@ -670,15 +723,28 @@ fn run_cargo_with_backend(
         context.target
     );
 
-    let pinned_wrapper = match protected_release {
-        Some(admission) => admission.pin_binding_wrapper()?,
-        None => pinned_executable::PinnedExecutable::open(&context.binding_wrapper)
-            .map_err(|error| format!("failed to pin cargo-fe2o3 wrapper: {error}"))?,
-    };
     let mut cargo = context
         .pinned_cargo
         .command()
         .map_err(|error| format!("failed to prepare pinned Cargo executable: {error}"))?;
+    let workspace_wrapper = match context.cargo_binding_trampoline.as_ref() {
+        Some(trampoline) => {
+            context
+                .pinned_binding_wrapper
+                .inherit_for_child_at(cargo.as_command_mut(), CARGO_BINDING_WRAPPER_CHILD_FD)
+                .map_err(|error| {
+                    format!("failed to inherit sealed cargo-fe2o3 wrapper: {error}")
+                })?;
+            let path = trampoline
+                .fixed_child_path(CARGO_BINDING_TRAMPOLINE_CHILD_FD)
+                .map_err(|error| format!("failed to retain Cargo binding trampoline: {error}"))?;
+            trampoline
+                .inherit_for_child_at(cargo.as_command_mut(), CARGO_BINDING_TRAMPOLINE_CHILD_FD)
+                .map_err(|error| format!("failed to inherit Cargo binding trampoline: {error}"))?;
+            path
+        }
+        None => context.binding_wrapper_path.clone(),
+    };
     let mut forwarded_args = args.to_vec();
     if context.requires_locked_closure {
         let position = forwarded_args
@@ -747,8 +813,8 @@ fn run_cargo_with_backend(
     let pending_invocation_boundary =
         cargo_invocation_boundary::PendingCargoInvocationBoundary::start(
             &context.pinned_cargo,
-            &pinned_wrapper,
-            None,
+            &context.pinned_binding_wrapper,
+            context.cargo_binding_trampoline.as_ref(),
             invocation_authorization.clone(),
         )?;
     cargo
@@ -765,7 +831,7 @@ fn run_cargo_with_backend(
         .env("FE2O3_HOST_PASSTHROUGH", "0")
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
-        .env("RUSTC_WORKSPACE_WRAPPER", &context.binding_wrapper)
+        .env("RUSTC_WORKSPACE_WRAPPER", workspace_wrapper)
         .env(BINDING_WRAPPER_MODE_ENV, "1")
         .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
         .env(
@@ -796,7 +862,9 @@ fn run_cargo_with_backend(
         .env_remove(AUTHORITY_RUSTC_SHA256_ENV)
         .env_remove(AUTHORITY_RUSTC_PATH_ENV)
         .env_remove(AUTHORITY_RUSTC_RUNTIME_SHA256_ENV)
-        .env_remove(AUTHORITY_BACKEND_SHA256_ENV);
+        .env_remove(AUTHORITY_BACKEND_SHA256_ENV)
+        .env_remove(AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_ENV)
+        .env_remove(AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV);
     remove_dynamic_loader_environment(cargo.as_command_mut());
     context.pinned_rustc.assert_lib_tree_unmutated()?;
     configure_pinned_rustc_child(cargo.as_command_mut(), &context.pinned_rustc)?;
