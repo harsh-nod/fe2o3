@@ -1,8 +1,10 @@
 use fe2o3_artifact_transaction::{
-    BuildInvocation, BuildSession, DurableLinkPublicationPlanV1, DurablePublishedClaimCodecErrorV1,
-    DurablePublishedHsacoClaimV1, PackageIdentityV1, ProducerIdentity,
-    UpstreamCodeObjectEvidenceIdentityV1, begin_build_attempt, finish_build_attempt,
-    publish_exact_hsaco_evidence_for_attempt_v1,
+    BackendPublicationReceiptV2, BuildInvocation, BuildSession, DurableLinkPublicationPlanV1,
+    DurablePublishedClaimCodecErrorV1, DurablePublishedHsacoClaimV1, DurablePublishedHsacoClaimV2,
+    PackageIdentityV1, ProducerIdentity, UpstreamCodeObjectEvidenceIdentityV1,
+    WorkerV2PublicationIntentIdentityV2, begin_build_attempt, finish_build_attempt,
+    persist_worker_v2_publication_intent_v2, publish_exact_hsaco_evidence_for_attempt_v1,
+    publish_exact_hsaco_evidence_for_attempt_v2,
 };
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -23,17 +25,21 @@ use fe2o3_artifacts::{
     ProofTargetIdentity, ScalarType, SourceContractIdentity, TargetIdentity, ToolIdentity,
     TypeIdentity, VerificationModelIdentity,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_kernel_descriptor::{
     BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CodeObjectVersion, CompilerIdentityV1,
     DeviceDescriptorTableV1, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1,
     DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1,
     KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1, ScalarTypeV1,
-    SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
+    SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, decode_device_descriptor_table_v1,
 };
 use fe2o3_worker_v2_bundle::{
     DescriptorLineageV1, EnvelopeDecodeError, EnvelopeInputsDecodeError, EnvelopeValidationError,
-    ExactRawHsacoV1, MAX_WORKER_V2_RAW_HSACO_BYTES, WorkerV2EnvelopeInputsV1,
-    WorkerV2LoadEnvelopeV1,
+    ExactRawHsacoV1, MAX_WORKER_V2_FINAL_ARTIFACT_EVIDENCE_BYTES_V2, MAX_WORKER_V2_RAW_HSACO_BYTES,
+    WORKER_V2_FINAL_ARTIFACT_EVIDENCE_MAGIC_V2, WORKER_V2_LOAD_ENVELOPE_MAGIC_V2,
+    WorkerV2EnvelopeInputsV1, WorkerV2FinalArtifactDecodeErrorV2, WorkerV2FinalArtifactEvidenceV2,
+    WorkerV2FinalArtifactValidationErrorV2, WorkerV2LoadEnvelopeDecodeErrorV2,
+    WorkerV2LoadEnvelopeV1, WorkerV2LoadEnvelopeV2,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -81,6 +87,20 @@ struct Parts {
     claim: DurablePublishedHsacoClaimV1,
 }
 
+struct PartsV2 {
+    container: ArtifactContainerV1,
+    bundle: BundleIndexV1,
+    evidence: DirectLinkBundleEvidenceV1,
+    descriptor: DescriptorLineageV1,
+    proofs: Vec<ProofRecordV1>,
+    raw: ExactRawHsacoV1,
+    final_artifact: WorkerV2FinalArtifactEvidenceV2,
+    closure: CompilerClosureV2,
+    intent: WorkerV2PublicationIntentIdentityV2,
+    receipt: BackendPublicationReceiptV2,
+    claim: DurablePublishedHsacoClaimV2,
+}
+
 impl Parts {
     fn into_envelope(self) -> Result<WorkerV2LoadEnvelopeV1, EnvelopeValidationError> {
         WorkerV2LoadEnvelopeV1::new(
@@ -92,6 +112,20 @@ impl Parts {
             self.raw,
             self.claim,
         )
+    }
+}
+
+impl PartsV2 {
+    fn into_envelope(self) -> Result<WorkerV2LoadEnvelopeV2, Box<dyn std::error::Error>> {
+        Ok(WorkerV2LoadEnvelopeV2::new(
+            self.container,
+            self.bundle,
+            self.evidence,
+            self.descriptor,
+            self.proofs,
+            self.raw,
+            self.final_artifact,
+        )?)
     }
 }
 
@@ -444,6 +478,208 @@ fn build_parts_with_upstream(upstream_override: Option<[u8; 32]>) -> Parts {
     }
 }
 
+fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+    CompilerClosureV2::new(
+        [seed; 32],
+        [seed.wrapping_add(1); 32],
+        [seed.wrapping_add(2); 32],
+        [seed.wrapping_add(3); 32],
+        [seed.wrapping_add(4); 32],
+        [seed.wrapping_add(5); 32],
+    )
+    .unwrap()
+}
+
+fn closure_pins(closure: CompilerClosureV2) -> [[u8; 32]; 6] {
+    [
+        closure.cargo_executable_sha256(),
+        closure.cargo_binding_trampoline_sha256(),
+        closure.cargo_fe2o3_binding_wrapper_sha256(),
+        closure.rustc_executable_sha256(),
+        closure.rustc_runtime_tree_sha256(),
+        closure.codegen_backend_sha256(),
+    ]
+}
+
+fn substitute_closure_role(
+    original: CompilerClosureV2,
+    alternate: CompilerClosureV2,
+    role: usize,
+) -> CompilerClosureV2 {
+    let mut pins = closure_pins(original);
+    pins[role] = closure_pins(alternate)[role];
+    CompilerClosureV2::new(pins[0], pins[1], pins[2], pins[3], pins[4], pins[5]).unwrap()
+}
+
+fn build_parts_v2() -> PartsV2 {
+    build_parts_v2_with_closure(compiler_closure(0x11))
+}
+
+fn build_parts_v2_with_closure(closure: CompilerClosureV2) -> PartsV2 {
+    let Parts {
+        container,
+        bundle,
+        evidence,
+        descriptor,
+        proofs,
+        raw,
+        claim: _,
+    } = build_parts();
+    let expectation = evidence.bindings()[0].expectation().clone();
+    let validated = evidence
+        .validate_against(
+            &bundle,
+            &[&container],
+            &[DirectLinkBindingSourceV1::new(&container, expectation)],
+        )
+        .unwrap();
+    let publication_dir = TestDirectory::new();
+    let output = publication_dir.output();
+    let owner = ProducerIdentity::from_codegen(
+        "fe2o3_worker_v2_bundle_test_v2",
+        Some(Path::new("/src/worker-v2-bundle-test-v2.rs")),
+    )
+    .unwrap();
+    let attempt = begin_build_attempt(
+        &output,
+        &owner,
+        BuildInvocation::from_bytes([0x63; 32]),
+        BuildSession::from_bytes([0x62; 16]),
+    )
+    .unwrap();
+    let publication_scope = ManifestClaimDerivedLinkPublicationScopeV1::derive(
+        CallerClaimedPackageIdentityV1::new(PackageIdentityV1::from_bytes([0x92; 32])),
+        &validated,
+        0,
+        &container,
+    )
+    .unwrap();
+    let bridge = ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+        attempt,
+        publication_scope,
+        &validated,
+        0,
+    )
+    .unwrap();
+    let scope = bridge
+        .non_authoritative_diagnostics()
+        .descriptive_scope_claim();
+    let plan = DurableLinkPublicationPlanV1::new(
+        attempt,
+        scope,
+        bridge.request_identity(),
+        bridge.worker_identity(),
+        bridge.response_identity(),
+        bridge.linked_output_identity(),
+        bridge.finalization_identity(),
+        bridge.finalized_output_identity(),
+        bridge.publication_identity(),
+    );
+    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(
+        Sha256::digest(evidence.to_bytes()).into(),
+    );
+    let final_bytes = container.payloads()[0].bytes();
+    let persisted = persist_worker_v2_publication_intent_v2(
+        &output,
+        &owner,
+        attempt,
+        plan,
+        upstream,
+        closure,
+        final_bytes,
+    )
+    .unwrap();
+    let intent = persisted.record().identity();
+    drop(persisted);
+    let publication = publish_exact_hsaco_evidence_for_attempt_v2(
+        &output,
+        &owner,
+        attempt,
+        plan,
+        upstream,
+        closure,
+        final_bytes,
+    )
+    .unwrap();
+    let receipt = publication.receipt();
+    let claim = publication.published_claim().clone();
+    drop(publication);
+    finish_build_attempt(&output, &owner, attempt).unwrap();
+    let final_artifact = WorkerV2FinalArtifactEvidenceV2::from_proof_records(
+        &container,
+        &descriptor,
+        &proofs,
+        closure,
+        intent,
+        receipt,
+        claim.clone(),
+    )
+    .unwrap();
+    PartsV2 {
+        container,
+        bundle,
+        evidence,
+        descriptor,
+        proofs,
+        raw,
+        final_artifact,
+        closure,
+        intent,
+        receipt,
+        claim,
+    }
+}
+
+const FINAL_ARTIFACT_CLOSURE_OFFSET: usize = 24;
+const FINAL_ARTIFACT_INTENT_OFFSET: usize = FINAL_ARTIFACT_CLOSURE_OFFSET + 226;
+const FINAL_ARTIFACT_FINAL_BYTES_OFFSET: usize = FINAL_ARTIFACT_INTENT_OFFSET + 32;
+const FINAL_ARTIFACT_FACETS_OFFSET: usize = FINAL_ARTIFACT_FINAL_BYTES_OFFSET + 40;
+const FINAL_ARTIFACT_TARGET_TEXT_OFFSET: usize = FINAL_ARTIFACT_FACETS_OFFSET + (6 * 32);
+
+fn checksum(domain: &[u8], body: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update((body.len() as u64).to_le_bytes());
+    digest.update(body);
+    digest.finalize().into()
+}
+
+fn reseal(bytes: &mut [u8], domain: &[u8]) {
+    let body_len = bytes.len() - 32;
+    let value = checksum(domain, &bytes[..body_len]);
+    bytes[body_len..].copy_from_slice(&value);
+}
+
+fn reseal_final_artifact(bytes: &mut [u8]) {
+    reseal(
+        bytes,
+        b"FE2O3/PROTECTED-WORKER-V2/FINAL-ARTIFACT-EVIDENCE-CHECKSUM/V2\0",
+    );
+}
+
+fn reseal_v2_envelope(bytes: &mut [u8]) {
+    reseal(
+        bytes,
+        b"FE2O3/PROTECTED-WORKER-V2/LOAD-ENVELOPE-CHECKSUM/V2\0",
+    );
+}
+
+fn v2_final_artifact_range(bytes: &[u8]) -> std::ops::Range<usize> {
+    let read_u32 =
+        |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+    let start = 77 + read_u32(16) + read_u32(20) + read_u32(24) + read_u32(28);
+    let len = u16::from_le_bytes(bytes[40..42].try_into().unwrap()) as usize;
+    start..start + len
+}
+
+fn mutate_final_artifact_byte(mut bytes: Vec<u8>, relative_offset: usize) -> Vec<u8> {
+    let range = v2_final_artifact_range(&bytes);
+    bytes[range.start + relative_offset] ^= 1;
+    reseal_final_artifact(&mut bytes[range.clone()]);
+    reseal_v2_envelope(&mut bytes);
+    bytes
+}
+
 fn component_offsets(bytes: &[u8]) -> (usize, usize, usize) {
     let read_u32 =
         |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
@@ -661,4 +897,260 @@ fn pre_envelope_inputs_are_canonical_bounded_and_inert() {
         WorkerV2EnvelopeInputsV1::from_bytes(&infeasible),
         Err(EnvelopeInputsDecodeError::AggregateLengthMismatch)
     ));
+}
+
+#[test]
+fn protected_v2_round_trip_retains_exact_typed_evidence_and_is_inert() {
+    let parts = build_parts_v2();
+    let closure = parts.closure;
+    let intent = parts.intent;
+    let receipt = parts.receipt;
+    let claim = parts.claim.clone();
+    assert_eq!(parts.final_artifact.compiler_closure(), closure);
+    assert_eq!(parts.final_artifact.publication_intent_identity(), intent);
+    assert_eq!(parts.final_artifact.backend_receipt(), receipt);
+    assert_eq!(parts.final_artifact.published_claim(), &claim);
+
+    let evidence_bytes = parts.final_artifact.to_bytes();
+    let evidence = WorkerV2FinalArtifactEvidenceV2::from_bytes(&evidence_bytes).unwrap();
+    assert_eq!(evidence.to_bytes(), evidence_bytes);
+    assert_eq!(evidence.compiler_closure(), closure);
+    assert_eq!(evidence.publication_intent_identity(), intent);
+    assert_eq!(evidence.backend_receipt(), receipt);
+    assert_eq!(evidence.published_claim(), &claim);
+    assert!(!evidence.grants_compiler_authority());
+    assert!(!evidence.grants_proof_authority());
+    assert!(!evidence.grants_publication_authority());
+    assert!(!evidence.grants_load_authority());
+    assert!(!evidence.grants_launch_authority());
+
+    let envelope = parts.into_envelope().unwrap();
+    let bytes = envelope.to_bytes();
+    let decoded = WorkerV2LoadEnvelopeV2::from_bytes(&bytes).unwrap();
+    assert_eq!(decoded.to_bytes(), bytes);
+    assert_eq!(decoded.identity(), envelope.identity());
+    assert_eq!(
+        decoded.final_artifact_evidence().compiler_closure(),
+        closure
+    );
+    assert_eq!(
+        decoded
+            .final_artifact_evidence()
+            .publication_intent_identity(),
+        intent
+    );
+    assert_eq!(decoded.final_artifact_evidence().backend_receipt(), receipt);
+    assert_eq!(decoded.final_artifact_evidence().published_claim(), &claim);
+    assert!(
+        decoded
+            .final_artifact_evidence()
+            .final_bytes_identity()
+            .matches(decoded.finalized_payload())
+    );
+    assert!(!decoded.grants_compiler_authority());
+    assert!(!decoded.grants_proof_authority());
+    assert!(!decoded.grants_currentness_authority());
+    assert!(!decoded.grants_load_authority());
+    assert!(!decoded.grants_launch_authority());
+}
+
+#[test]
+fn every_protected_v2_truncation_trailing_oversize_and_header_error_fails_closed() {
+    let envelope = build_parts_v2().into_envelope().unwrap();
+    let bytes = envelope.to_bytes();
+    for end in 0..bytes.len() {
+        assert!(
+            WorkerV2LoadEnvelopeV2::from_bytes(&bytes[..end]).is_err(),
+            "accepted truncation at {end}"
+        );
+    }
+
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(matches!(
+        WorkerV2LoadEnvelopeV2::from_bytes(&trailing),
+        Err(WorkerV2LoadEnvelopeDecodeErrorV2::TrailingBytes)
+    ));
+
+    let mut bad_magic = bytes.clone();
+    bad_magic[0] ^= 1;
+    assert!(matches!(
+        WorkerV2LoadEnvelopeV2::from_bytes(&bad_magic),
+        Err(WorkerV2LoadEnvelopeDecodeErrorV2::InvalidMagic)
+    ));
+
+    let mut bad_version = bytes.clone();
+    bad_version[8..10].copy_from_slice(&3_u16.to_le_bytes());
+    assert!(matches!(
+        WorkerV2LoadEnvelopeV2::from_bytes(&bad_version),
+        Err(WorkerV2LoadEnvelopeDecodeErrorV2::UnknownVersion(3))
+    ));
+
+    let mut bad_checksum = bytes.clone();
+    bad_checksum[100] ^= 1;
+    assert!(matches!(
+        WorkerV2LoadEnvelopeV2::from_bytes(&bad_checksum),
+        Err(WorkerV2LoadEnvelopeDecodeErrorV2::ChecksumMismatch)
+    ));
+
+    let mut oversized_raw = bytes;
+    oversized_raw[32..36]
+        .copy_from_slice(&((MAX_WORKER_V2_RAW_HSACO_BYTES as u32) + 1).to_le_bytes());
+    reseal_v2_envelope(&mut oversized_raw);
+    assert!(matches!(
+        WorkerV2LoadEnvelopeV2::from_bytes(&oversized_raw),
+        Err(WorkerV2LoadEnvelopeDecodeErrorV2::LengthOutOfRange {
+            field: "raw HSACO",
+            ..
+        })
+    ));
+
+    let oversized_evidence = vec![0; MAX_WORKER_V2_FINAL_ARTIFACT_EVIDENCE_BYTES_V2 + 1];
+    assert!(matches!(
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(&oversized_evidence),
+        Err(WorkerV2FinalArtifactDecodeErrorV2::TooLarge { .. })
+    ));
+}
+
+#[test]
+fn every_protected_v2_final_evidence_truncation_trailing_and_header_error_fails_closed() {
+    let bytes = build_parts_v2().final_artifact.to_bytes();
+    for end in 0..bytes.len() {
+        assert!(
+            WorkerV2FinalArtifactEvidenceV2::from_bytes(&bytes[..end]).is_err(),
+            "accepted final-evidence truncation at {end}"
+        );
+    }
+
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(matches!(
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(&trailing),
+        Err(WorkerV2FinalArtifactDecodeErrorV2::TrailingBytes)
+    ));
+
+    let mut bad_magic = bytes.clone();
+    bad_magic[0] ^= 1;
+    assert!(matches!(
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(&bad_magic),
+        Err(WorkerV2FinalArtifactDecodeErrorV2::InvalidMagic)
+    ));
+
+    let mut bad_version = bytes.clone();
+    bad_version[8..10].copy_from_slice(&3_u16.to_le_bytes());
+    assert!(matches!(
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(&bad_version),
+        Err(WorkerV2FinalArtifactDecodeErrorV2::UnknownVersion(3))
+    ));
+
+    let mut bad_checksum = bytes;
+    bad_checksum[24] ^= 1;
+    assert!(matches!(
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(&bad_checksum),
+        Err(WorkerV2FinalArtifactDecodeErrorV2::ChecksumMismatch)
+    ));
+}
+
+#[test]
+fn protected_v2_final_evidence_rejects_every_closure_role_mutation() {
+    let parts = build_parts_v2();
+    let canonical = parts.final_artifact.to_bytes();
+    let alternate = compiler_closure(0x81);
+    for role in 0..6 {
+        let substituted = substitute_closure_role(parts.closure, alternate, role);
+        let mut bytes = canonical.clone();
+        let pin = closure_pins(substituted)[role];
+        let pin_offset = FINAL_ARTIFACT_CLOSURE_OFFSET + role * 32;
+        bytes[pin_offset..pin_offset + 32].copy_from_slice(&pin);
+        let identity_offset = FINAL_ARTIFACT_CLOSURE_OFFSET + (6 * 32) + 2;
+        bytes[identity_offset..identity_offset + 32]
+            .copy_from_slice(&substituted.identity_sha256());
+        reseal_final_artifact(&mut bytes);
+        assert!(matches!(
+            WorkerV2FinalArtifactEvidenceV2::from_bytes(&bytes),
+            Err(WorkerV2FinalArtifactDecodeErrorV2::Validation(
+                WorkerV2FinalArtifactValidationErrorV2::CompilerClosureMismatch
+            ))
+        ));
+    }
+}
+
+#[test]
+fn protected_v2_rejects_target_cov_abi_descriptor_symbol_resource_proof_and_final_substitution() {
+    let bytes = build_parts_v2().into_envelope().unwrap().to_bytes();
+    let substitutions = [
+        21,
+        FINAL_ARTIFACT_FINAL_BYTES_OFFSET,
+        FINAL_ARTIFACT_FACETS_OFFSET,
+        FINAL_ARTIFACT_FACETS_OFFSET + 32,
+        FINAL_ARTIFACT_FACETS_OFFSET + 64,
+        FINAL_ARTIFACT_FACETS_OFFSET + 96,
+        FINAL_ARTIFACT_FACETS_OFFSET + 128,
+        FINAL_ARTIFACT_FACETS_OFFSET + 160,
+        FINAL_ARTIFACT_TARGET_TEXT_OFFSET + 4,
+    ];
+    for relative_offset in substitutions {
+        let substituted = mutate_final_artifact_byte(bytes.clone(), relative_offset);
+        assert!(
+            WorkerV2LoadEnvelopeV2::from_bytes(&substituted).is_err(),
+            "accepted final-artifact substitution at {relative_offset}"
+        );
+    }
+}
+
+#[test]
+fn protected_v2_and_v1_wire_schemas_never_cross_decode() {
+    let v1 = build_parts().into_envelope().unwrap().to_bytes();
+    let v2_parts = build_parts_v2();
+    let v2_claim = v2_parts.claim.encode_canonical().unwrap();
+    let v2_final = v2_parts.final_artifact.to_bytes();
+    let v2 = v2_parts.into_envelope().unwrap().to_bytes();
+
+    assert_ne!(WORKER_V2_LOAD_ENVELOPE_MAGIC_V2, *b"FE2W2B1\0");
+    assert_ne!(WORKER_V2_FINAL_ARTIFACT_EVIDENCE_MAGIC_V2, *b"FE2W2B1\0");
+    assert!(matches!(
+        WorkerV2LoadEnvelopeV2::from_bytes(&v1),
+        Err(WorkerV2LoadEnvelopeDecodeErrorV2::InvalidMagic)
+    ));
+    assert!(matches!(
+        WorkerV2LoadEnvelopeV1::from_bytes(&v2),
+        Err(EnvelopeDecodeError::InvalidMagic)
+    ));
+    assert!(
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(
+            &build_parts().claim.encode_canonical().unwrap()
+        )
+        .is_err()
+    );
+    assert!(DurablePublishedHsacoClaimV1::decode_canonical(&v2_final).is_err());
+    assert!(DurablePublishedHsacoClaimV1::decode_canonical(&v2_claim).is_err());
+}
+
+#[test]
+fn protected_v2_rebuild_is_byte_for_byte_deterministic() {
+    let first = build_parts_v2().into_envelope().unwrap();
+    let second = WorkerV2LoadEnvelopeV2::new(
+        ArtifactContainerV1::from_bytes(&first.container().to_bytes()).unwrap(),
+        BundleIndexV1::from_bytes(&first.bundle_index().to_bytes()).unwrap(),
+        DirectLinkBundleEvidenceV1::from_bytes(&first.direct_link_evidence().to_bytes()).unwrap(),
+        DescriptorLineageV1::new(
+            decode_device_descriptor_table_v1(&first.descriptor_lineage().canonical_bytes())
+                .unwrap(),
+        ),
+        first
+            .proof_records()
+            .iter()
+            .map(|proof| ProofRecordV1::from_bytes(&proof.to_bytes()).unwrap())
+            .collect(),
+        ExactRawHsacoV1::from_bytes(first.raw_hsaco().bytes().to_vec()).unwrap(),
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(&first.final_artifact_evidence().to_bytes())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first.to_bytes(), second.to_bytes());
+    assert_eq!(first.identity(), second.identity());
+    assert_eq!(
+        first.final_artifact_evidence().identity(),
+        second.final_artifact_evidence().identity()
+    );
 }

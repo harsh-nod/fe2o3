@@ -9,6 +9,7 @@ mod error;
 mod inputs;
 mod load_envelope_name;
 mod model;
+mod protected_v2;
 mod static_application;
 
 pub use application_handoff::{
@@ -59,5 +60,17 @@ pub use model::{
     DescriptorLineageV1, ExactRawHsacoV1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
     MAX_WORKER_V2_PROOF_EVIDENCE_BYTES, MAX_WORKER_V2_RAW_HSACO_BYTES,
     WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
+};
+pub use protected_v2::{
+    MAX_WORKER_V2_FINAL_ARTIFACT_EVIDENCE_BYTES_V2, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2,
+    WORKER_V2_FINAL_ARTIFACT_EVIDENCE_MAGIC_V2, WORKER_V2_FINAL_ARTIFACT_EVIDENCE_VERSION_V2,
+    WORKER_V2_LOAD_ENVELOPE_MAGIC_V2, WORKER_V2_LOAD_ENVELOPE_VERSION_V2, WorkerV2AbiIdentityV2,
+    WorkerV2DescriptorIdentityV2, WorkerV2FinalArtifactDecodeErrorV2,
+    WorkerV2FinalArtifactEvidenceIdentityV2, WorkerV2FinalArtifactEvidenceV2,
+    WorkerV2FinalArtifactFieldV2, WorkerV2FinalArtifactValidationErrorV2,
+    WorkerV2FinalBytesIdentityV2, WorkerV2LoadEnvelopeDecodeErrorV2,
+    WorkerV2LoadEnvelopeIdentityV2, WorkerV2LoadEnvelopeV2, WorkerV2LoadEnvelopeValidationErrorV2,
+    WorkerV2ProofOrInspectionIdentityV2, WorkerV2ProofOrInspectionKindV2,
+    WorkerV2ResourceIdentityV2, WorkerV2SymbolIdentityV2, WorkerV2TargetIdentityV2,
 };
 pub use static_application::SealedStaticApplicationErrorV1;

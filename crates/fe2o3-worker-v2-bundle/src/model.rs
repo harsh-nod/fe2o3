@@ -1,5 +1,6 @@
 use fe2o3_artifact_transaction::{
-    DurablePublishedHsacoClaimV1, MAX_DURABLE_FINALIZED_ARTIFACT_BYTES,
+    DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV1,
+    MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, UpstreamCodeObjectEvidenceIdentityV1,
 };
 use fe2o3_artifacts::{
     ArtifactContainerV1, BundleIndexV1, CallerClaimedPackageIdentityV1, CodeObjectFormat,
@@ -105,13 +106,19 @@ impl DescriptorLineageV1 {
 /// establish publication currentness.
 #[derive(Debug, Eq, PartialEq)]
 pub struct WorkerV2LoadEnvelopeV1 {
+    components: WorkerV2EnvelopeComponentsV1,
+    published_claim: DurablePublishedHsacoClaimV1,
+}
+
+/// Schema-neutral validated component closure shared by V1 and protected V2 envelopes.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct WorkerV2EnvelopeComponentsV1 {
     container: ArtifactContainerV1,
     bundle_index: BundleIndexV1,
     direct_link_evidence: DirectLinkBundleEvidenceV1,
     descriptor_lineage: DescriptorLineageV1,
     proof_records: Vec<ProofRecordV1>,
     raw_hsaco: ExactRawHsacoV1,
-    published_claim: DurablePublishedHsacoClaimV1,
 }
 
 impl WorkerV2LoadEnvelopeV1 {
@@ -121,9 +128,96 @@ impl WorkerV2LoadEnvelopeV1 {
         bundle_index: BundleIndexV1,
         direct_link_evidence: DirectLinkBundleEvidenceV1,
         descriptor_lineage: DescriptorLineageV1,
-        mut proof_records: Vec<ProofRecordV1>,
+        proof_records: Vec<ProofRecordV1>,
         raw_hsaco: ExactRawHsacoV1,
         published_claim: DurablePublishedHsacoClaimV1,
+    ) -> Result<Self, EnvelopeValidationError> {
+        let claim = PublicationClaimViewV1::new(
+            published_claim.plan(),
+            published_claim.upstream_evidence(),
+        );
+        let components = WorkerV2EnvelopeComponentsV1::new(
+            container,
+            bundle_index,
+            direct_link_evidence,
+            descriptor_lineage,
+            proof_records,
+            raw_hsaco,
+            claim,
+        )?;
+
+        Ok(Self {
+            components,
+            published_claim,
+        })
+    }
+
+    pub const fn container(&self) -> &ArtifactContainerV1 {
+        self.components.container()
+    }
+
+    pub const fn bundle_index(&self) -> &BundleIndexV1 {
+        self.components.bundle_index()
+    }
+
+    pub const fn direct_link_evidence(&self) -> &DirectLinkBundleEvidenceV1 {
+        self.components.direct_link_evidence()
+    }
+
+    pub const fn descriptor_lineage(&self) -> &DescriptorLineageV1 {
+        self.components.descriptor_lineage()
+    }
+
+    pub fn proof_records(&self) -> &[ProofRecordV1] {
+        self.components.proof_records()
+    }
+
+    pub const fn raw_hsaco(&self) -> &ExactRawHsacoV1 {
+        self.components.raw_hsaco()
+    }
+
+    pub const fn published_claim(&self) -> &DurablePublishedHsacoClaimV1 {
+        &self.published_claim
+    }
+
+    pub fn identity(&self) -> WorkerV2LoadEnvelopeIdentityV1 {
+        let mut digest = Sha256::new();
+        digest.update(LOAD_ENVELOPE_IDENTITY_DOMAIN);
+        digest.update(self.to_bytes());
+        WorkerV2LoadEnvelopeIdentityV1(digest.finalize().into())
+    }
+
+    pub fn finalized_payload(&self) -> &[u8] {
+        self.components.finalized_payload()
+    }
+
+    pub fn finalized_payload_identity(&self) -> PayloadDigest {
+        self.components.finalized_payload_identity()
+    }
+
+    pub const fn grants_currentness_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+impl WorkerV2EnvelopeComponentsV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        container: ArtifactContainerV1,
+        bundle_index: BundleIndexV1,
+        direct_link_evidence: DirectLinkBundleEvidenceV1,
+        descriptor_lineage: DescriptorLineageV1,
+        mut proof_records: Vec<ProofRecordV1>,
+        raw_hsaco: ExactRawHsacoV1,
+        claim: PublicationClaimViewV1,
     ) -> Result<Self, EnvelopeValidationError> {
         validate_raw_hsaco(raw_hsaco.identity, &raw_hsaco.bytes)?;
         let derived = BundleIndexV1::from_containers(std::slice::from_ref(&container))?;
@@ -146,7 +240,7 @@ impl WorkerV2LoadEnvelopeV1 {
         validate_payloads(&container, binding.expectation(), &raw_hsaco)?;
         validate_descriptor(&container, descriptor_lineage.table())?;
         canonicalize_and_validate_proofs(&container, &mut proof_records)?;
-        validate_publication_claim(&container, &validated, &published_claim)?;
+        validate_publication_claim(&container, &validated, claim)?;
 
         Ok(Self {
             container,
@@ -155,46 +249,34 @@ impl WorkerV2LoadEnvelopeV1 {
             descriptor_lineage,
             proof_records,
             raw_hsaco,
-            published_claim,
         })
     }
 
-    pub const fn container(&self) -> &ArtifactContainerV1 {
+    pub(crate) const fn container(&self) -> &ArtifactContainerV1 {
         &self.container
     }
 
-    pub const fn bundle_index(&self) -> &BundleIndexV1 {
+    pub(crate) const fn bundle_index(&self) -> &BundleIndexV1 {
         &self.bundle_index
     }
 
-    pub const fn direct_link_evidence(&self) -> &DirectLinkBundleEvidenceV1 {
+    pub(crate) const fn direct_link_evidence(&self) -> &DirectLinkBundleEvidenceV1 {
         &self.direct_link_evidence
     }
 
-    pub const fn descriptor_lineage(&self) -> &DescriptorLineageV1 {
+    pub(crate) const fn descriptor_lineage(&self) -> &DescriptorLineageV1 {
         &self.descriptor_lineage
     }
 
-    pub fn proof_records(&self) -> &[ProofRecordV1] {
+    pub(crate) fn proof_records(&self) -> &[ProofRecordV1] {
         &self.proof_records
     }
 
-    pub const fn raw_hsaco(&self) -> &ExactRawHsacoV1 {
+    pub(crate) const fn raw_hsaco(&self) -> &ExactRawHsacoV1 {
         &self.raw_hsaco
     }
 
-    pub const fn published_claim(&self) -> &DurablePublishedHsacoClaimV1 {
-        &self.published_claim
-    }
-
-    pub fn identity(&self) -> WorkerV2LoadEnvelopeIdentityV1 {
-        let mut digest = Sha256::new();
-        digest.update(LOAD_ENVELOPE_IDENTITY_DOMAIN);
-        digest.update(self.to_bytes());
-        WorkerV2LoadEnvelopeIdentityV1(digest.finalize().into())
-    }
-
-    pub fn finalized_payload(&self) -> &[u8] {
+    pub(crate) fn finalized_payload(&self) -> &[u8] {
         let identity = self.direct_link_evidence.bindings()[0]
             .expectation()
             .finalized_payload_identity()
@@ -207,23 +289,29 @@ impl WorkerV2LoadEnvelopeV1 {
             .bytes()
     }
 
-    pub fn finalized_payload_identity(&self) -> PayloadDigest {
+    pub(crate) fn finalized_payload_identity(&self) -> PayloadDigest {
         self.direct_link_evidence.bindings()[0]
             .expectation()
             .finalized_payload_identity()
             .digest()
     }
+}
 
-    pub const fn grants_currentness_authority(&self) -> bool {
-        false
-    }
+#[derive(Clone, Copy)]
+pub(crate) struct PublicationClaimViewV1 {
+    plan: DurableLinkPublicationPlanV1,
+    upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+}
 
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
+impl PublicationClaimViewV1 {
+    pub(crate) const fn new(
+        plan: DurableLinkPublicationPlanV1,
+        upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+    ) -> Self {
+        Self {
+            plan,
+            upstream_evidence,
+        }
     }
 }
 
@@ -292,7 +380,7 @@ pub(crate) fn validate_payloads(
     Ok(())
 }
 
-fn validate_descriptor(
+pub(crate) fn validate_descriptor(
     container: &ArtifactContainerV1,
     table: &DeviceDescriptorTableV1,
 ) -> Result<(), EnvelopeValidationError> {
@@ -397,9 +485,9 @@ pub(crate) fn canonicalize_and_validate_proofs(
 fn validate_publication_claim(
     container: &ArtifactContainerV1,
     validated: &fe2o3_artifacts::ValidatedDirectLinkBundleEvidenceV1<'_>,
-    claim: &DurablePublishedHsacoClaimV1,
+    claim: PublicationClaimViewV1,
 ) -> Result<(), EnvelopeValidationError> {
-    let plan = claim.plan();
+    let plan = claim.plan;
     let package = CallerClaimedPackageIdentityV1::new(plan.scope().package());
     let scope =
         ManifestClaimDerivedLinkPublicationScopeV1::derive(package, validated, 0, container)
@@ -461,7 +549,7 @@ fn validate_publication_claim(
             field: "direct-link evidence",
         });
     }
-    if claim.upstream_evidence().as_bytes() != *evidence_digest.bytes().as_bytes() {
+    if claim.upstream_evidence.as_bytes() != *evidence_digest.bytes().as_bytes() {
         return Err(EnvelopeValidationError::PublicationClaimMismatch(
             PublicationClaimFieldV1::UpstreamEvidence,
         ));
