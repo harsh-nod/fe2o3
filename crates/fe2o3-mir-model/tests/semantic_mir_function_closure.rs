@@ -60,6 +60,7 @@ fn model_types() -> Vec<SemanticTypeDeclV1> {
             )
             .unwrap(),
             SemanticTypeShapeV1::FunctionPointer {
+                safety: SemanticFunctionSafetyV1::Safe,
                 extern_abi: SemanticExternAbiV1::Rust,
                 c_variadic: false,
                 arguments: SemanticAggregateTypeV1::new(vec![]).unwrap(),
@@ -1679,6 +1680,7 @@ fn function_constants_require_exact_source_abi_and_variadic_shape() {
             )
             .unwrap(),
             SemanticTypeShapeV1::FunctionPointer {
+                safety: SemanticFunctionSafetyV1::Safe,
                 extern_abi,
                 c_variadic,
                 arguments: SemanticAggregateTypeV1::new(vec![]).unwrap(),

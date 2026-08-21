@@ -625,6 +625,7 @@ fn function_pointer_type(
         )
         .unwrap(),
         SemanticTypeShapeV1::FunctionPointer {
+            safety: SemanticFunctionSafetyV1::Safe,
             extern_abi: SemanticExternAbiV1::Rust,
             c_variadic: false,
             arguments: SemanticAggregateTypeV1::new(vec![]).unwrap(),

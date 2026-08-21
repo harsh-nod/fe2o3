@@ -1594,6 +1594,12 @@ impl SemanticEnumVariantV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticFunctionSafetyV1 {
+    Safe,
+    Unsafe,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SemanticTypeShapeV1 {
     Unit,
@@ -1616,6 +1622,7 @@ pub enum SemanticTypeShapeV1 {
         variants: Box<[SemanticEnumVariantV1]>,
     },
     FunctionPointer {
+        safety: SemanticFunctionSafetyV1,
         extern_abi: SemanticExternAbiV1,
         c_variadic: bool,
         arguments: SemanticAggregateTypeV1,
@@ -6307,6 +6314,7 @@ fn validate_type(
             c_variadic,
             arguments,
             return_type,
+            ..
         } => {
             require_plain_layout(&ty.layout)?;
             require_single_layout(&ty.layout, 0)?;
@@ -10253,6 +10261,7 @@ fn validate_constant(
                 c_variadic,
                 arguments,
                 return_type,
+                ..
             } = &ty.shape
             else {
                 return invalid_type_operation(SemanticTypeOperationV1::Constant, location);
@@ -11707,18 +11716,30 @@ fn encode_type(
             Ok(())
         }
         SemanticTypeShapeV1::FunctionPointer {
+            safety,
             extern_abi,
             c_variadic,
             arguments,
             return_type,
         } => {
             writer.u8(8)?;
+            encode_function_safety(writer, *safety)?;
             encode_extern_abi(writer, *extern_abi)?;
             writer.bool(*c_variadic)?;
             encode_type_list(writer, arguments)?;
             writer.u32(return_type.0)
         }
         SemanticTypeShapeV1::Opaque => writer.u8(9),
+    }
+}
+
+fn encode_function_safety(
+    writer: &mut CanonicalWriterV1,
+    safety: SemanticFunctionSafetyV1,
+) -> Result<(), SemanticMirErrorV1> {
+    match safety {
+        SemanticFunctionSafetyV1::Safe => writer.u8(0),
+        SemanticFunctionSafetyV1::Unsafe => writer.u8(1),
     }
 }
 

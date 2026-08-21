@@ -356,6 +356,7 @@ struct CatalogOptions {
     aggregate_padding_offset: Option<u64>,
     direct_payload_offset: u64,
     niche_expected_offset: u64,
+    function_safety: SemanticFunctionSafetyV1,
     function_return: SemanticTypeIdV1,
     vtable_uses_noncanonical_address_space: bool,
     slice_element: SemanticTypeIdV1,
@@ -375,6 +376,7 @@ impl Default for CatalogOptions {
             aggregate_padding_offset: Some(1),
             direct_payload_offset: 4,
             niche_expected_offset: 0,
+            function_safety: SemanticFunctionSafetyV1::Safe,
             function_return: U8,
             vtable_uses_noncanonical_address_space: false,
             slice_element: U8,
@@ -543,6 +545,7 @@ fn catalog_types(options: CatalogOptions) -> Vec<SemanticTypeDeclV1> {
                 SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
             ),
             SemanticTypeShapeV1::FunctionPointer {
+                safety: options.function_safety,
                 extern_abi: SemanticExternAbiV1::C { unwind: false },
                 c_variadic: true,
                 arguments: SemanticAggregateTypeV1::new(vec![U32]).unwrap(),
@@ -849,6 +852,7 @@ fn canonical_catalog_covers_every_semantic_type_and_exact_layout_form() {
     assert!(matches!(
         types[FUNCTION_POINTER.index() as usize].shape(),
         SemanticTypeShapeV1::FunctionPointer {
+            safety: SemanticFunctionSafetyV1::Safe,
             extern_abi: SemanticExternAbiV1::C { unwind: false },
             c_variadic: true,
             arguments,
@@ -874,9 +878,9 @@ fn canonical_encoding_is_pinned_deterministic_and_semantically_complete() {
     assert_eq!(
         left.semantic_sha256().as_bytes(),
         &[
-            0x75, 0x42, 0x1a, 0x55, 0x19, 0xa9, 0x5e, 0x4e, 0xf2, 0xb2, 0xdb, 0x74, 0x1f, 0x06,
-            0x03, 0xf9, 0xde, 0x7c, 0xfe, 0x35, 0x43, 0xd0, 0x27, 0x8e, 0xc2, 0x6b, 0x6f, 0x66,
-            0x24, 0x40, 0x78, 0x6b,
+            0xa7, 0xbe, 0x9f, 0xa7, 0x23, 0xc5, 0xa7, 0xda, 0x9c, 0xe2, 0x3e, 0xb7, 0x15, 0x3d,
+            0x9e, 0x83, 0x48, 0xf5, 0xc7, 0xa9, 0xda, 0xaa, 0x85, 0x7d, 0xd9, 0xd8, 0x96, 0xa7,
+            0xbf, 0x39, 0x5f, 0x46,
         ]
     );
 
@@ -910,6 +914,52 @@ fn canonical_encoding_is_pinned_deterministic_and_semantically_complete() {
             entity: SemanticMirEntityV1::Type
         })
     ));
+}
+
+#[test]
+fn function_pointer_safety_is_retained_and_canonical() {
+    let safe = catalog_request(CatalogOptions::default())
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+    let unsafe_pointer = catalog_request(CatalogOptions {
+        function_safety: SemanticFunctionSafetyV1::Unsafe,
+        ..CatalogOptions::default()
+    })
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+
+    assert!(matches!(
+        safe.types()[FUNCTION_POINTER.index() as usize].shape(),
+        SemanticTypeShapeV1::FunctionPointer {
+            safety: SemanticFunctionSafetyV1::Safe,
+            ..
+        }
+    ));
+    assert!(matches!(
+        unsafe_pointer.types()[FUNCTION_POINTER.index() as usize].shape(),
+        SemanticTypeShapeV1::FunctionPointer {
+            safety: SemanticFunctionSafetyV1::Unsafe,
+            ..
+        }
+    ));
+
+    let safe_encoding = safe.canonical_encoding();
+    let unsafe_encoding = unsafe_pointer.canonical_encoding();
+    let differing_bytes = safe_encoding
+        .iter()
+        .zip(unsafe_encoding.iter())
+        .filter(|(safe, unsafe_pointer)| safe != unsafe_pointer)
+        .count();
+    assert_eq!(safe_encoding.len(), unsafe_encoding.len());
+    assert_eq!(differing_bytes, 1);
+    assert_ne!(safe.semantic_sha256(), unsafe_pointer.semantic_sha256());
+    assert_eq!(
+        unsafe_pointer.semantic_sha256().as_bytes(),
+        &[
+            130, 169, 22, 16, 232, 79, 99, 4, 116, 31, 182, 159, 84, 35, 59, 188, 254, 124, 242,
+            157, 33, 119, 221, 50, 195, 5, 126, 30, 137, 202, 136, 77,
+        ]
+    );
 }
 
 #[test]
