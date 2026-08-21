@@ -427,6 +427,10 @@ mod platform {
             &self.sha256
         }
 
+        pub(crate) fn require_sealed_executable_image(&self) -> Result<(), PinExecutableError> {
+            require_exact_seals(&self.file, REQUIRED_INHERITED_SEALS, &self.display_path)
+        }
+
         pub(crate) fn seal_executable_image(&self) -> Result<Self, PinExecutableError> {
             let initial = self
                 .file
@@ -1206,8 +1210,10 @@ mod platform {
             let path = root.path().join("cargo-image");
             write_executable(&path, b"#!/bin/sh\nexit 0\n");
             let source = PinnedExecutable::open(&path).unwrap();
+            assert!(source.require_sealed_executable_image().is_err());
             let expected = *source.sha256();
             let sealed = source.seal_executable_image().unwrap();
+            sealed.require_sealed_executable_image().unwrap();
 
             write_executable(&path, b"#!/bin/sh\nexit 41\n");
             assert_eq!(sealed.sha256(), &expected);

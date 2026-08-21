@@ -2,14 +2,15 @@
 //!
 //! On Linux/x86-64, a seccomp user-notification filter is installed before the pinned Cargo
 //! image starts. The parent observes every descendant `execve`/`execveat` while the caller is
-//! stopped in the kernel. A one-use broker permit is issued only when the pinned wrapper is the
-//! requested image, the caller still runs the pinned Cargo image, and the caller is a fresh direct
-//! child of the supervised Cargo process. Every later exec notification for that PID revokes the
-//! permit before it can continue, while the broker separately authenticates the live wrapper image.
+//! stopped in the kernel. A direct build uses one pinned wrapper image. A protected build may use
+//! an exact two-image chain: pinned Cargo enters a pinned static trampoline, then that same PID
+//! generation enters the pinned full wrapper. A one-use broker permit is issued only for the final
+//! wrapper transition. Every later exec notification for that PID revokes the permit before it can
+//! continue, while the broker separately authenticates the live wrapper image.
 //! Seccomp `CONTINUE` is not an atomic pathname pin: a pathname race may execute another image, but
 //! that image cannot consume the permit or retain it across a later exec into the genuine wrapper.
-//! Consequently a build script cannot gain a permit by replacing itself with, or spawning, the
-//! genuine wrapper; the same applies to a procedural macro descendant. Procedural macro code
+//! Consequently a build script cannot gain a permit by replacing itself with, or spawning, either
+//! admitted image; the same applies to a procedural macro descendant. Procedural macro code
 //! remains trusted inside its already-authorized rustc process, where compiler descriptors are
 //! necessarily visible.
 //!
@@ -51,6 +52,7 @@ mod platform {
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const MAX_PROC_STATUS_BYTES: usize = 64 * 1024;
     const MAX_PENDING_PERMITS: usize = 256;
+    const MAX_PENDING_TRAMPOLINES: usize = 256;
 
     #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
     pub(crate) struct ProcessIdentityV1 {
@@ -210,10 +212,34 @@ mod platform {
         pub(crate) fn start(
             cargo: &PinnedExecutable,
             wrapper: &PinnedExecutable,
+            trampoline: Option<&PinnedExecutable>,
             authorization: InvocationAuthorizationRegistryV1,
         ) -> Result<Self, String> {
+            if let Some(trampoline) = trampoline {
+                wrapper.require_sealed_executable_image().map_err(|error| {
+                    format!("Cargo exec boundary wrapper is not immutable: {error}")
+                })?;
+                trampoline
+                    .require_sealed_executable_image()
+                    .map_err(|error| {
+                        format!("Cargo exec boundary trampoline is not immutable: {error}")
+                    })?;
+            }
             let cargo = ExecutableIdentityV1::from_pinned(cargo);
             let wrapper = ExecutableIdentityV1::from_pinned(wrapper);
+            let trampoline = trampoline.map(ExecutableIdentityV1::from_pinned);
+            if let Some(trampoline) = trampoline
+                && !protected_image_digests_are_distinct(
+                    cargo.sha256,
+                    wrapper.sha256,
+                    trampoline.sha256,
+                )
+            {
+                return Err(
+                    "Cargo exec boundary requires distinct Cargo, trampoline, and wrapper images"
+                        .to_owned(),
+                );
+            }
             let (parent_socket, child_socket) = UnixDatagram::pair().map_err(|error| {
                 format!("failed to create Cargo exec-boundary listener channel: {error}")
             })?;
@@ -233,6 +259,7 @@ mod platform {
                         ready_send,
                         cargo,
                         wrapper,
+                        trampoline,
                         worker_authorization,
                     )
                 })
@@ -322,6 +349,7 @@ mod platform {
         ready: mpsc::SyncSender<Result<u32, String>>,
         cargo: ExecutableIdentityV1,
         wrapper: ExecutableIdentityV1,
+        trampoline: Option<ExecutableIdentityV1>,
         authorization: InvocationAuthorizationRegistryV1,
     ) -> Result<(), String> {
         let (listener, cargo_pid) =
@@ -369,31 +397,43 @@ mod platform {
         // Capture the PID generation while its initial exec is still stopped in the kernel. A
         // short-lived Cargo image may otherwise exit between CONTINUE and this observation.
         let cargo_process = ProcessIdentityV1::observe(cargo_pid)?;
+        let cargo_process_fd = open_process_pidfd(cargo_pid)?;
         notification_is_valid(listener.as_raw_fd(), initial.id)?;
+        cargo_process.require_current()?;
         respond_to_notification(listener.as_raw_fd(), initial.id, true)?;
         ready
             .send(Ok(cargo_pid))
             .map_err(|_| "Cargo exec-boundary owner disappeared".to_owned())?;
 
+        let context = CargoInvocationBoundaryContextV1 {
+            cargo_pid,
+            cargo_process,
+            cargo_process_fd,
+            cargo,
+            wrapper,
+            trampoline,
+        };
+        let mut pending_trampolines = BTreeMap::new();
         while let Some(notification) =
             wait_for_notification(listener.as_raw_fd(), shutdown.as_raw_fd())?
         {
             let outcome = authorize_notification(
                 listener.as_raw_fd(),
                 notification,
-                cargo_pid,
-                cargo_process,
-                cargo,
-                wrapper,
+                &context,
                 &authorization,
+                &mut pending_trampolines,
             );
             match outcome {
-                Ok(authorized) => {
+                Ok(admission) => {
                     if let Err(error) =
                         respond_to_notification(listener.as_raw_fd(), notification.id, true)
                     {
-                        if let Some(process) = authorized {
+                        if let Some(process) = admission.authorized {
                             authorization.revoke(process);
+                        }
+                        if let Some(process) = admission.trampoline {
+                            pending_trampolines.remove(&process);
                         }
                         if !notification_is_live(listener.as_raw_fd(), notification.id)? {
                             continue;
@@ -413,24 +453,45 @@ mod platform {
         Ok(())
     }
 
+    struct CargoInvocationBoundaryContextV1 {
+        cargo_pid: u32,
+        cargo_process: ProcessIdentityV1,
+        cargo_process_fd: File,
+        cargo: ExecutableIdentityV1,
+        wrapper: ExecutableIdentityV1,
+        trampoline: Option<ExecutableIdentityV1>,
+    }
+
+    struct PendingTrampolineV1 {
+        expires_at: Instant,
+        process_fd: File,
+    }
+
     fn authorize_notification(
         listener: i32,
         notification: libc::seccomp_notif,
-        cargo_pid: u32,
-        cargo_process: ProcessIdentityV1,
-        cargo: ExecutableIdentityV1,
-        wrapper: ExecutableIdentityV1,
+        context: &CargoInvocationBoundaryContextV1,
         authorization: &InvocationAuthorizationRegistryV1,
-    ) -> Result<Option<ProcessIdentityV1>, String> {
+        pending_trampolines: &mut BTreeMap<ProcessIdentityV1, PendingTrampolineV1>,
+    ) -> Result<NotificationAdmissionV1, String> {
         validate_notification(&notification)?;
+        let now = Instant::now();
+        pending_trampolines.retain(|process, admission| {
+            admission.expires_at > now
+                && pidfd_is_live(&admission.process_fd)
+                && process.require_current().is_ok()
+        });
         // A permit belongs to exactly one successful transition into the wrapper image. Any
         // later exec by the same PID invalidates it before that new image can run, including a
         // pathname-swap adversary that first entered another image and then execs the wrapper.
         let process_pid = thread_group_id(notification.pid)?;
         authorization.revoke_pid(process_pid);
-        if !requested_executable_matches(notification, wrapper)? {
-            return Ok(None);
-        }
+        let requested_wrapper = requested_executable_matches(notification, context.wrapper)?;
+        let requested_trampoline = context
+            .trampoline
+            .map(|trampoline| requested_executable_matches(notification, trampoline))
+            .transpose()?
+            .unwrap_or(false);
 
         let observation = process_observation(process_pid)?;
         let process = ProcessIdentityV1 {
@@ -438,21 +499,82 @@ mod platform {
             start_time_ticks: observation.start_time_ticks,
         };
         let current = process_executable_object(process_pid)?;
-        if !is_direct_pinned_cargo_child(
+        let cargo_process_is_current = pidfd_is_live(&context.cargo_process_fd)
+            && ProcessIdentityV1::observe(context.cargo_pid)? == context.cargo_process;
+        let direct_cargo_child = is_direct_pinned_cargo_child(
             observation.parent_pid,
-            cargo_pid,
-            ProcessIdentityV1::observe(cargo_pid)? == cargo_process,
-            current == cargo.object,
-        ) {
+            context.cargo_pid,
+            cargo_process_is_current,
+            current == context.cargo.object,
+        );
+        if requested_trampoline {
+            pending_trampolines.retain(|candidate, _| candidate.pid != process_pid);
+            if direct_cargo_child {
+                if pending_trampolines.len() >= MAX_PENDING_TRAMPOLINES {
+                    return Err("Cargo trampoline admission set is full".to_owned());
+                }
+                let process_fd = open_process_pidfd(process.pid)?;
+                notification_is_valid(listener, notification.id)?;
+                process.require_current()?;
+                pending_trampolines.insert(
+                    process,
+                    PendingTrampolineV1 {
+                        expires_at: now + INVOCATION_PERMIT_LIFETIME,
+                        process_fd,
+                    },
+                );
+                return Ok(NotificationAdmissionV1 {
+                    authorized: None,
+                    trampoline: Some(process),
+                });
+            }
+            return Ok(NotificationAdmissionV1::NONE);
+        }
+
+        let entered_trampoline = pending_trampolines
+            .remove(&process)
+            .is_some_and(|admission| pidfd_is_live(&admission.process_fd));
+        pending_trampolines.retain(|candidate, _| candidate.pid != process_pid);
+        if !requested_wrapper {
+            return Ok(NotificationAdmissionV1::NONE);
+        }
+        let admitted = match context.trampoline {
+            None => direct_cargo_child,
+            Some(trampoline) => is_admitted_trampoline_wrapper_exec(
+                observation.parent_pid,
+                context.cargo_pid,
+                cargo_process_is_current,
+                entered_trampoline,
+                current == trampoline.object
+                    && process_executable_matches(process_pid, trampoline)?,
+            ),
+        };
+        if !admitted {
             // The exec itself is allowed so the genuine wrapper can report a broker rejection, but
             // no authorization is minted for build-script/proc-macro descendants or replacements.
-            return Ok(None);
+            return Ok(NotificationAdmissionV1::NONE);
         }
         let process_fd = open_process_pidfd(process.pid)?;
         notification_is_valid(listener, notification.id)?;
         process.require_current()?;
         authorization.authorize_with_process_fd(process, Some(process_fd))?;
-        Ok(Some(process))
+        Ok(NotificationAdmissionV1 {
+            authorized: Some(process),
+            trampoline: None,
+        })
+    }
+
+    #[derive(Clone, Copy)]
+    struct NotificationAdmissionV1 {
+        authorized: Option<ProcessIdentityV1>,
+        trampoline: Option<ProcessIdentityV1>,
+    }
+
+    impl NotificationAdmissionV1 {
+        const NONE: Self = Self {
+            authorized: None,
+            trampoline: None,
+        };
     }
 
     fn open_process_pidfd(pid: u32) -> Result<File, String> {
@@ -489,6 +611,27 @@ mod platform {
         caller_runs_pinned_cargo: bool,
     ) -> bool {
         parent_pid == cargo_pid && cargo_process_is_current && caller_runs_pinned_cargo
+    }
+
+    const fn is_admitted_trampoline_wrapper_exec(
+        parent_pid: u32,
+        cargo_pid: u32,
+        cargo_process_is_current: bool,
+        same_process_entered_trampoline: bool,
+        caller_runs_pinned_trampoline: bool,
+    ) -> bool {
+        parent_pid == cargo_pid
+            && cargo_process_is_current
+            && same_process_entered_trampoline
+            && caller_runs_pinned_trampoline
+    }
+
+    fn protected_image_digests_are_distinct(
+        cargo: [u8; 32],
+        wrapper: [u8; 32],
+        trampoline: [u8; 32],
+    ) -> bool {
+        cargo != wrapper && cargo != trampoline && wrapper != trampoline
     }
 
     fn validate_notification(notification: &libc::seccomp_notif) -> Result<(), String> {
@@ -541,6 +684,18 @@ mod platform {
         if object != expected.object {
             return Ok(false);
         }
+        Ok(PinnedExecutable::from_transferred_file(file, path)
+            .is_ok_and(|executable| expected.matches_pinned(&executable)))
+    }
+
+    fn process_executable_matches(
+        pid: u32,
+        expected: ExecutableIdentityV1,
+    ) -> Result<bool, String> {
+        let path = PathBuf::from(format!("/proc/{pid}/exe"));
+        let file = File::open(&path).map_err(|error| {
+            format!("cannot open current executable for Cargo child PID {pid}: {error}")
+        })?;
         Ok(PinnedExecutable::from_transferred_file(file, path)
             .is_ok_and(|executable| expected.matches_pinned(&executable)))
     }
@@ -804,6 +959,42 @@ mod platform {
         }
 
         #[test]
+        fn wrapper_authority_requires_the_same_admitted_trampoline_process() {
+            assert!(is_admitted_trampoline_wrapper_exec(
+                41, 41, true, true, true
+            ));
+            assert!(!is_admitted_trampoline_wrapper_exec(
+                7, 41, true, true, true
+            ));
+            assert!(!is_admitted_trampoline_wrapper_exec(
+                41, 41, false, true, true
+            ));
+            assert!(!is_admitted_trampoline_wrapper_exec(
+                41, 41, true, false, true
+            ));
+            assert!(!is_admitted_trampoline_wrapper_exec(
+                41, 41, true, true, false
+            ));
+        }
+
+        #[test]
+        fn protected_cargo_trampoline_and_wrapper_roles_require_distinct_images() {
+            let cargo = [1; 32];
+            let wrapper = [2; 32];
+            let trampoline = [3; 32];
+            assert!(protected_image_digests_are_distinct(
+                cargo, wrapper, trampoline
+            ));
+            assert!(!protected_image_digests_are_distinct(
+                cargo, cargo, trampoline
+            ));
+            assert!(!protected_image_digests_are_distinct(cargo, wrapper, cargo));
+            assert!(!protected_image_digests_are_distinct(
+                cargo, wrapper, wrapper
+            ));
+        }
+
+        #[test]
         fn proc_self_and_execveat_empty_paths_are_resolved_in_the_tracee() {
             assert_eq!(
                 resolve_process_local_proc_path(71, Path::new("/proc/self/exe")).unwrap(),
@@ -863,6 +1054,7 @@ mod unsupported {
         pub(crate) fn start(
             _cargo: &PinnedExecutable,
             _wrapper: &PinnedExecutable,
+            _trampoline: Option<&PinnedExecutable>,
             _authorization: InvocationAuthorizationRegistryV1,
         ) -> Result<Self, String> {
             Err("Cargo invocation authorization requires Linux/x86-64 seccomp".to_owned())

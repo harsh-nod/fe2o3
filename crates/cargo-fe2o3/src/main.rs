@@ -748,6 +748,7 @@ fn run_cargo_with_backend(
         cargo_invocation_boundary::PendingCargoInvocationBoundary::start(
             &context.pinned_cargo,
             &pinned_wrapper,
+            None,
             invocation_authorization.clone(),
         )?;
     cargo
