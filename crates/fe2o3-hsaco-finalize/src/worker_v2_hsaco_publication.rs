@@ -9,16 +9,22 @@ use std::{error::Error, fmt, path::Path};
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV1,
     AttemptScopedHsacoPublicationResultV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
-    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
-    PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
-    UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
+    CompilerModuleHandoffIdentityV2, CompilerModuleHandoffSlotV2, DurableLinkPublicationPlanV1,
+    FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1,
+    LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1, ProducerIdentity,
+    TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
     producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_kernel_descriptor::CodeObjectVersion;
 use sha2::{Digest, Sha256};
 
-use crate::{InspectedRawWorkerV2HsacoV1, PreparedFinalizedWorkerV2HsacoV1};
+use crate::{
+    ContentIdentityV1, InspectedProtectedRawWorkerV2HsacoIdentityV1,
+    InspectedProtectedRawWorkerV2HsacoV1, InspectedRawWorkerV2HsacoV1,
+    PreparedFinalizedProtectedWorkerV2HsacoV2, PreparedFinalizedWorkerV2HsacoV1,
+    WorkerMeasurementV1, WorkerV2RawHsacoPolicyV1,
+};
 
 const KERNEL_SET_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-KERNEL-SET/V1\0";
 const TARGET_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-TARGET/V1\0";
@@ -43,6 +49,52 @@ const FINALIZED_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V2-FINALIZED-ATOMIC-PUBLICATION/V1\0";
 const FINALIZED_UPSTREAM_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-UPSTREAM/V1\0";
+
+const PROTECTED_RAW_KERNEL_SET_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-PUBLICATION-KERNEL-SET/V2\0";
+const PROTECTED_RAW_TARGET_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-PUBLICATION-TARGET/V2\0";
+const PROTECTED_RAW_REQUEST_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-PUBLICATION-REQUEST/V2\0";
+const PROTECTED_RAW_WORKER_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-PUBLICATION-WORKER/V2\0";
+const PROTECTED_RAW_RESPONSE_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-PUBLICATION-RESPONSE/V2\0";
+const PROTECTED_RAW_FINALIZATION_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-PUBLICATION-RAW-INSPECTION/V2\0";
+const PROTECTED_RAW_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-ATOMIC-PUBLICATION/V2\0";
+const PROTECTED_RAW_UPSTREAM_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-PUBLICATION-UPSTREAM/V2\0";
+const PROTECTED_FINALIZED_KERNEL_SET_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-FINALIZED-PUBLICATION-KERNEL-SET/V2\0";
+const PROTECTED_FINALIZED_TARGET_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-FINALIZED-PUBLICATION-TARGET/V2\0";
+const PROTECTED_FINALIZED_REQUEST_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-FINALIZED-PUBLICATION-REQUEST/V2\0";
+const PROTECTED_FINALIZED_WORKER_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-FINALIZED-PUBLICATION-WORKER/V2\0";
+const PROTECTED_FINALIZED_RESPONSE_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-FINALIZED-PUBLICATION-RESPONSE/V2\0";
+const PROTECTED_FINALIZED_FINALIZATION_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-FINALIZED-PUBLICATION-FINALIZATION/V2\0";
+const PROTECTED_FINALIZED_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-FINALIZED-ATOMIC-PUBLICATION/V2\0";
+const PROTECTED_FINALIZED_UPSTREAM_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-FINALIZED-PUBLICATION-UPSTREAM/V2\0";
+
+const PROTECTED_INSPECTION_BINDING_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-PUBLICATION/RAW-INSPECTION/V2\0";
+const PROTECTED_SOURCE_BINDING_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-PUBLICATION/SOURCE-EVIDENCE/V2\0";
+const PROTECTED_HANDOFF_SLOT_BINDING_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-PUBLICATION/HANDOFF-SLOT/V2\0";
+const PROTECTED_HANDOFF_IDENTITY_BINDING_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-PUBLICATION/HANDOFF-IDENTITY/V2\0";
+const PROTECTED_COMPILER_CLOSURE_BINDING_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-PUBLICATION/COMPILER-CLOSURE/V2\0";
+const PROTECTED_CANONICAL_FINALIZATION_BINDING_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-PUBLICATION/CANONICAL-FINALIZATION/V2\0";
 
 /// Canonical Worker V2 publication route sealed by the finalizer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,6 +182,218 @@ impl SealedWorkerV2HsacoPublicationIntentV1 {
 
     /// Publication intent is not kernel-launch authority.
     pub const fn grants_launch_authority(self) -> bool {
+        false
+    }
+}
+
+/// Protected Worker V2 preparation route bound under V2 identity domains.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtectedWorkerV2HsacoPublicationRouteV2 {
+    InspectedRaw,
+    CanonicallyFinalized,
+}
+
+/// Inert protected restart input derived from one consumed protected inspection.
+///
+/// The complete compiler closure and exact V2 handoff lineage remain inspectable. This value is
+/// not publication authority; `#203` supplies the V2 attempt-scoped publication operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealedProtectedWorkerV2HsacoPublicationIntentV2 {
+    route: ProtectedWorkerV2HsacoPublicationRouteV2,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    raw_inspection: InspectedProtectedRawWorkerV2HsacoIdentityV1,
+    canonical_finalization: Option<crate::FinalizedProtectedWorkerV2HsacoIdentityV2>,
+    raw_snapshot: ContentIdentityV1,
+    retained_snapshot: ContentIdentityV1,
+    handoff_slot: CompilerModuleHandoffSlotV2,
+    handoff_identity: CompilerModuleHandoffIdentityV2,
+    compiler_closure: CompilerClosureV2,
+}
+
+impl SealedProtectedWorkerV2HsacoPublicationIntentV2 {
+    pub const fn route(self) -> ProtectedWorkerV2HsacoPublicationRouteV2 {
+        self.route
+    }
+
+    pub const fn durable_plan(self) -> DurableLinkPublicationPlanV1 {
+        self.plan
+    }
+
+    pub const fn upstream_evidence(self) -> UpstreamCodeObjectEvidenceIdentityV1 {
+        self.upstream
+    }
+
+    pub const fn raw_inspection_identity(self) -> InspectedProtectedRawWorkerV2HsacoIdentityV1 {
+        self.raw_inspection
+    }
+
+    pub const fn canonical_finalization_identity(
+        self,
+    ) -> Option<crate::FinalizedProtectedWorkerV2HsacoIdentityV2> {
+        self.canonical_finalization
+    }
+
+    pub const fn raw_linked_snapshot_identity(self) -> ContentIdentityV1 {
+        self.raw_snapshot
+    }
+
+    pub const fn retained_snapshot_identity(self) -> ContentIdentityV1 {
+        self.retained_snapshot
+    }
+
+    pub const fn handoff_slot(self) -> CompilerModuleHandoffSlotV2 {
+        self.handoff_slot
+    }
+
+    pub const fn handoff_identity(self) -> CompilerModuleHandoffIdentityV2 {
+        self.handoff_identity
+    }
+
+    pub const fn compiler_closure(self) -> CompilerClosureV2 {
+        self.compiler_closure
+    }
+
+    pub fn matches_exact_retained_output(self, bytes: &[u8]) -> bool {
+        self.retained_snapshot.matches(bytes)
+    }
+
+    pub const fn grants_compiler_authority(self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(self) -> bool {
+        false
+    }
+}
+
+/// Complete inert preparation for exact protected raw Worker V2 bytes.
+#[derive(Debug)]
+pub struct PreparedProtectedWorkerV2HsacoPublicationV2 {
+    inspected: InspectedProtectedRawWorkerV2HsacoV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+}
+
+impl PreparedProtectedWorkerV2HsacoPublicationV2 {
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.inspected.attempt()
+    }
+
+    pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV2 {
+        self.inspected.handoff_slot()
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
+        self.inspected.handoff_identity()
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.inspected.compiler_closure()
+    }
+
+    pub fn exact_retained_output(&self) -> &[u8] {
+        self.inspected.exact_bytes()
+    }
+
+    pub const fn publication_intent(&self) -> SealedProtectedWorkerV2HsacoPublicationIntentV2 {
+        let raw_snapshot = self.inspected.linked_output_identity();
+        SealedProtectedWorkerV2HsacoPublicationIntentV2 {
+            route: ProtectedWorkerV2HsacoPublicationRouteV2::InspectedRaw,
+            plan: self.plan,
+            upstream: self.upstream,
+            raw_inspection: self.inspected.identity(),
+            canonical_finalization: None,
+            raw_snapshot,
+            retained_snapshot: raw_snapshot,
+            handoff_slot: self.inspected.handoff_slot(),
+            handoff_identity: self.inspected.handoff_identity(),
+            compiler_closure: self.inspected.compiler_closure(),
+        }
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Complete inert preparation for exact protected canonically finalized Worker V2 bytes.
+#[derive(Debug)]
+pub struct PreparedFinalizedProtectedWorkerV2HsacoPublicationV2 {
+    finalized: PreparedFinalizedProtectedWorkerV2HsacoV2,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+}
+
+impl PreparedFinalizedProtectedWorkerV2HsacoPublicationV2 {
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.finalized.attempt()
+    }
+
+    pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV2 {
+        self.finalized.handoff_slot()
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
+        self.finalized.handoff_identity()
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.finalized.compiler_closure()
+    }
+
+    pub fn exact_retained_output(&self) -> &[u8] {
+        self.finalized.exact_finalized_bytes()
+    }
+
+    pub const fn publication_intent(&self) -> SealedProtectedWorkerV2HsacoPublicationIntentV2 {
+        SealedProtectedWorkerV2HsacoPublicationIntentV2 {
+            route: ProtectedWorkerV2HsacoPublicationRouteV2::CanonicallyFinalized,
+            plan: self.plan,
+            upstream: self.upstream,
+            raw_inspection: self.finalized.raw_inspection_identity(),
+            canonical_finalization: Some(self.finalized.identity()),
+            raw_snapshot: self.finalized.raw_output_identity(),
+            retained_snapshot: self.finalized.finalized_output_identity(),
+            handoff_slot: self.finalized.handoff_slot(),
+            handoff_identity: self.finalized.handoff_identity(),
+            compiler_closure: self.finalized.compiler_closure(),
+        }
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
         false
     }
 }
@@ -316,6 +580,348 @@ impl From<AttemptScopedHsacoPublicationErrorV1> for WorkerV2HsacoPublicationErro
     }
 }
 
+enum PublicationSchemaBindingV2 {
+    OrdinaryV1 {
+        handoff: [u8; 32],
+        source: [u8; 32],
+        inspection: [u8; 32],
+    },
+    ProtectedV2 {
+        handoff_slot: CompilerModuleHandoffSlotV2,
+        handoff: [u8; 32],
+        source: [u8; 32],
+        inspection: [u8; 32],
+        compiler_closure: Box<CompilerClosureV2>,
+    },
+}
+
+struct PublicationInspectionViewV2<'a> {
+    exact_bytes: &'a [u8],
+    linked_output: ContentIdentityV1,
+    attempt: BuildAttempt,
+    target: fe2o3_kernel_descriptor::DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    policy: &'a WorkerV2RawHsacoPolicyV1,
+    compiler_envelope: crate::CompilerFfiEnvelopeIdentityV1,
+    sealed_request_id: &'a [u8; 32],
+    sealed_request_identity: &'a [u8; 32],
+    link_plan_identity: crate::LinkPlanIdentityV1,
+    worker_measurement: &'a WorkerMeasurementV1,
+    response_identity: crate::SealedWorkerV2ResponseIdentityV1,
+    schema: PublicationSchemaBindingV2,
+}
+
+impl<'a> PublicationInspectionViewV2<'a> {
+    fn ordinary(raw: &'a InspectedRawWorkerV2HsacoV1) -> Self {
+        Self {
+            exact_bytes: raw.exact_bytes(),
+            linked_output: raw.linked_output_identity(),
+            attempt: raw.attempt(),
+            target: raw.target(),
+            code_object_version: raw.code_object_version(),
+            policy: raw.policy(),
+            compiler_envelope: raw.compiler_envelope_identity(),
+            sealed_request_id: raw.sealed_request_id(),
+            sealed_request_identity: raw.sealed_request_identity(),
+            link_plan_identity: raw.link_plan_identity(),
+            worker_measurement: raw.worker_measurement(),
+            response_identity: raw.response_identity(),
+            schema: PublicationSchemaBindingV2::OrdinaryV1 {
+                handoff: *raw.handoff_identity().as_bytes(),
+                source: *raw.source_evidence_identity().as_bytes(),
+                inspection: *raw.identity().as_bytes(),
+            },
+        }
+    }
+
+    fn protected(raw: &'a InspectedProtectedRawWorkerV2HsacoV1) -> Self {
+        Self {
+            exact_bytes: raw.exact_bytes(),
+            linked_output: raw.linked_output_identity(),
+            attempt: raw.attempt(),
+            target: raw.target(),
+            code_object_version: raw.code_object_version(),
+            policy: raw.policy(),
+            compiler_envelope: raw.compiler_envelope_identity(),
+            sealed_request_id: raw.sealed_request_id(),
+            sealed_request_identity: raw.sealed_request_identity(),
+            link_plan_identity: raw.link_plan_identity(),
+            worker_measurement: raw.worker_measurement(),
+            response_identity: raw.response_identity(),
+            schema: PublicationSchemaBindingV2::ProtectedV2 {
+                handoff_slot: raw.handoff_slot(),
+                handoff: *raw.handoff_identity().as_bytes(),
+                source: *raw.source_evidence_identity().as_bytes(),
+                inspection: *raw.identity().as_bytes(),
+                compiler_closure: Box::new(raw.compiler_closure()),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PublicationIdentityDomainsV2 {
+    kernel_set: &'static [u8],
+    target: &'static [u8],
+    request: &'static [u8],
+    worker: &'static [u8],
+    response: &'static [u8],
+    publication: &'static [u8],
+}
+
+const RAW_DOMAINS_V1: PublicationIdentityDomainsV2 = PublicationIdentityDomainsV2 {
+    kernel_set: KERNEL_SET_IDENTITY_DOMAIN_V1,
+    target: TARGET_IDENTITY_DOMAIN_V1,
+    request: REQUEST_IDENTITY_DOMAIN_V1,
+    worker: WORKER_IDENTITY_DOMAIN_V1,
+    response: RESPONSE_IDENTITY_DOMAIN_V1,
+    publication: ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1,
+};
+const FINALIZED_DOMAINS_V1: PublicationIdentityDomainsV2 = PublicationIdentityDomainsV2 {
+    kernel_set: FINALIZED_KERNEL_SET_IDENTITY_DOMAIN_V1,
+    target: FINALIZED_TARGET_IDENTITY_DOMAIN_V1,
+    request: FINALIZED_REQUEST_IDENTITY_DOMAIN_V1,
+    worker: FINALIZED_WORKER_IDENTITY_DOMAIN_V1,
+    response: FINALIZED_RESPONSE_IDENTITY_DOMAIN_V1,
+    publication: FINALIZED_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1,
+};
+const PROTECTED_RAW_DOMAINS_V2: PublicationIdentityDomainsV2 = PublicationIdentityDomainsV2 {
+    kernel_set: PROTECTED_RAW_KERNEL_SET_IDENTITY_DOMAIN_V2,
+    target: PROTECTED_RAW_TARGET_IDENTITY_DOMAIN_V2,
+    request: PROTECTED_RAW_REQUEST_IDENTITY_DOMAIN_V2,
+    worker: PROTECTED_RAW_WORKER_IDENTITY_DOMAIN_V2,
+    response: PROTECTED_RAW_RESPONSE_IDENTITY_DOMAIN_V2,
+    publication: PROTECTED_RAW_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V2,
+};
+const PROTECTED_FINALIZED_DOMAINS_V2: PublicationIdentityDomainsV2 = PublicationIdentityDomainsV2 {
+    kernel_set: PROTECTED_FINALIZED_KERNEL_SET_IDENTITY_DOMAIN_V2,
+    target: PROTECTED_FINALIZED_TARGET_IDENTITY_DOMAIN_V2,
+    request: PROTECTED_FINALIZED_REQUEST_IDENTITY_DOMAIN_V2,
+    worker: PROTECTED_FINALIZED_WORKER_IDENTITY_DOMAIN_V2,
+    response: PROTECTED_FINALIZED_RESPONSE_IDENTITY_DOMAIN_V2,
+    publication: PROTECTED_FINALIZED_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V2,
+};
+
+struct PublicationOutputBindingV2<'a> {
+    exact_output: &'a [u8],
+    finalized_output: ContentIdentityV1,
+    finalization: FinalizationIdentityV1,
+    canonical_finalization: Option<[u8; 32]>,
+}
+
+fn derive_publication_plan_shared_v2(
+    producer_package: PackageIdentityV1,
+    raw: &PublicationInspectionViewV2<'_>,
+    output: &PublicationOutputBindingV2<'_>,
+    domains: PublicationIdentityDomainsV2,
+) -> Result<DurableLinkPublicationPlanV1, WorkerV2HsacoPublicationError> {
+    if !raw.linked_output.matches(raw.exact_bytes) {
+        return Err(if output.canonical_finalization.is_some() {
+            WorkerV2HsacoPublicationError::RawOutputIdentityMismatch
+        } else {
+            WorkerV2HsacoPublicationError::OutputIdentityMismatch
+        });
+    }
+    if !output.finalized_output.matches(output.exact_output) {
+        return Err(if output.canonical_finalization.is_some() {
+            WorkerV2HsacoPublicationError::FinalizedOutputIdentityMismatch
+        } else {
+            WorkerV2HsacoPublicationError::OutputIdentityMismatch
+        });
+    }
+
+    let manifest = raw.policy.symbol_manifest().identity();
+    let kernel_set = hash_identity(domains.kernel_set, |digest| {
+        digest.update(manifest.sha256());
+        digest.update(manifest.byte_len().to_le_bytes());
+        digest.update(raw.compiler_envelope.as_bytes());
+    });
+    let kernel_set = KernelSetIdentityV1::from_bytes(kernel_set);
+
+    let launch = raw.policy.launch();
+    let target_text = raw.target.to_string();
+    let target = hash_identity(domains.target, |digest| {
+        update_length_prefixed(digest, target_text.as_bytes());
+        digest.update([code_object_version_tag(raw.code_object_version)]);
+        for axis in launch.required_workgroup_size() {
+            digest.update(axis.to_le_bytes());
+        }
+        digest.update(launch.max_flat_workgroup_size().to_le_bytes());
+        digest.update(launch.wavefront_size().to_le_bytes());
+    });
+    let target = TargetIdentityV1::from_bytes(target);
+    let scope = LinkPublicationScopeV1::new(producer_package, kernel_set, target);
+
+    let request = hash_identity(domains.request, |digest| {
+        digest.update(raw.sealed_request_id);
+        digest.update(raw.sealed_request_identity);
+        update_request_schema_binding(digest, &raw.schema);
+        digest.update(manifest.sha256());
+        digest.update(manifest.byte_len().to_le_bytes());
+        digest.update(raw.link_plan_identity.as_bytes());
+        digest.update(raw.policy.compiler_envelope_identity().as_bytes());
+        digest.update(raw.policy.identity().as_bytes());
+        update_source_schema_binding(digest, &raw.schema);
+        digest.update(raw.worker_measurement.executable().sha256());
+        digest.update(raw.worker_measurement.executable().byte_len().to_le_bytes());
+        if let PublicationSchemaBindingV2::ProtectedV2 { .. } = &raw.schema {
+            update_protected_closure_and_inspection_binding(digest, &raw.schema);
+        }
+    });
+    let request = CanonicalLinkRequestIdentityV1::from_bytes(request);
+
+    let executable = raw.worker_measurement.executable();
+    let worker = hash_identity(domains.worker, |digest| {
+        digest.update(executable.sha256());
+        digest.update(executable.byte_len().to_le_bytes());
+        update_length_prefixed(
+            digest,
+            raw.worker_measurement.worker_build_identity().as_bytes(),
+        );
+        update_length_prefixed(
+            digest,
+            raw.worker_measurement.llvm_build_identity().as_bytes(),
+        );
+    });
+    let worker = PinnedWorkerIdentityV1::from_bytes(worker);
+
+    let response = hash_identity(domains.response, |digest| {
+        digest.update(raw.response_identity.as_bytes());
+    });
+    let response = ValidatedResponseIdentityV1::from_bytes(response);
+    let linked_output = LinkedOutputIdentityV1::from_bytes(*raw.linked_output.sha256());
+    let finalized_output = FinalizedOutputIdentityV1::from_bytes(*output.finalized_output.sha256());
+
+    let publication = hash_identity(domains.publication, |digest| {
+        digest.update(raw.attempt.generation().to_le_bytes());
+        digest.update(raw.attempt.session().as_bytes());
+        digest.update(raw.attempt.invocation().as_bytes());
+        digest.update(producer_package.as_bytes());
+        digest.update(kernel_set.as_bytes());
+        digest.update(target.as_bytes());
+        digest.update(request.as_bytes());
+        digest.update(worker.as_bytes());
+        digest.update(response.as_bytes());
+        digest.update(linked_output.as_bytes());
+        digest.update(output.finalization.as_bytes());
+        digest.update(finalized_output.as_bytes());
+        update_atomic_schema_binding(digest, &raw.schema, output.canonical_finalization);
+    });
+    Ok(DurableLinkPublicationPlanV1::new(
+        raw.attempt,
+        scope,
+        request,
+        worker,
+        response,
+        linked_output,
+        output.finalization,
+        finalized_output,
+        AtomicPublicationIdentityV1::from_bytes(publication),
+    ))
+}
+
+fn update_request_schema_binding(digest: &mut Sha256, schema: &PublicationSchemaBindingV2) {
+    match schema {
+        PublicationSchemaBindingV2::OrdinaryV1 { handoff, .. } => digest.update(handoff),
+        PublicationSchemaBindingV2::ProtectedV2 {
+            handoff_slot,
+            handoff,
+            ..
+        } => {
+            digest.update(hash_identity(
+                PROTECTED_HANDOFF_SLOT_BINDING_DOMAIN_V2,
+                |component| component.update([*handoff_slot as u8]),
+            ));
+            digest.update(hash_identity(
+                PROTECTED_HANDOFF_IDENTITY_BINDING_DOMAIN_V2,
+                |component| component.update(handoff),
+            ));
+        }
+    }
+}
+
+fn update_source_schema_binding(digest: &mut Sha256, schema: &PublicationSchemaBindingV2) {
+    match schema {
+        PublicationSchemaBindingV2::OrdinaryV1 { source, .. } => digest.update(source),
+        PublicationSchemaBindingV2::ProtectedV2 { source, .. } => digest.update(hash_identity(
+            PROTECTED_SOURCE_BINDING_DOMAIN_V2,
+            |component| component.update(source),
+        )),
+    }
+}
+
+fn update_inspection_schema_binding(digest: &mut Sha256, schema: &PublicationSchemaBindingV2) {
+    match schema {
+        PublicationSchemaBindingV2::OrdinaryV1 { inspection, .. } => digest.update(inspection),
+        PublicationSchemaBindingV2::ProtectedV2 { inspection, .. } => digest.update(hash_identity(
+            PROTECTED_INSPECTION_BINDING_DOMAIN_V2,
+            |component| component.update(inspection),
+        )),
+    }
+}
+
+fn update_protected_closure_and_inspection_binding(
+    digest: &mut Sha256,
+    schema: &PublicationSchemaBindingV2,
+) {
+    if let PublicationSchemaBindingV2::ProtectedV2 {
+        inspection,
+        compiler_closure,
+        ..
+    } = schema
+    {
+        digest.update(hash_identity(
+            PROTECTED_COMPILER_CLOSURE_BINDING_DOMAIN_V2,
+            |component| hash_compiler_closure_v2(component, **compiler_closure),
+        ));
+        digest.update(hash_identity(
+            PROTECTED_INSPECTION_BINDING_DOMAIN_V2,
+            |component| component.update(inspection),
+        ));
+    }
+}
+
+fn update_all_protected_schema_bindings(digest: &mut Sha256, schema: &PublicationSchemaBindingV2) {
+    if let PublicationSchemaBindingV2::ProtectedV2 { .. } = schema {
+        update_inspection_schema_binding(digest, schema);
+        update_source_schema_binding(digest, schema);
+        update_request_schema_binding(digest, schema);
+        if let PublicationSchemaBindingV2::ProtectedV2 {
+            compiler_closure, ..
+        } = schema
+        {
+            digest.update(hash_identity(
+                PROTECTED_COMPILER_CLOSURE_BINDING_DOMAIN_V2,
+                |component| hash_compiler_closure_v2(component, **compiler_closure),
+            ));
+        }
+    }
+}
+
+fn update_atomic_schema_binding(
+    digest: &mut Sha256,
+    schema: &PublicationSchemaBindingV2,
+    canonical_finalization: Option<[u8; 32]>,
+) {
+    match schema {
+        PublicationSchemaBindingV2::OrdinaryV1 { inspection, .. } => {
+            digest.update(inspection);
+            if let Some(finalization) = canonical_finalization {
+                digest.update(finalization);
+            }
+        }
+        PublicationSchemaBindingV2::ProtectedV2 { .. } => {
+            update_all_protected_schema_bindings(digest, schema);
+            if let Some(finalization) = canonical_finalization {
+                digest.update(hash_identity(
+                    PROTECTED_CANONICAL_FINALIZATION_BINDING_DOMAIN_V2,
+                    |component| component.update(finalization),
+                ));
+            }
+        }
+    }
+}
+
 /// Consumes independently inspected Worker V2 evidence and derives its complete publication plan.
 ///
 /// The producer contributes only a non-authoritative cooperating-writer package namespace. Every
@@ -330,116 +936,26 @@ pub fn prepare_worker_v2_hsaco_publication_v1(
     if !linked_source.matches(exact_bytes) {
         return Err(WorkerV2HsacoPublicationError::OutputIdentityMismatch);
     }
-
     let producer_package = producer_package_identity_v1(producer);
-    let manifest = inspected.policy().symbol_manifest().identity();
-    let compiler_envelope = inspected.compiler_envelope_identity();
-
-    let kernel_set = hash_identity(KERNEL_SET_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(manifest.sha256());
-        digest.update(manifest.byte_len().to_le_bytes());
-        digest.update(compiler_envelope.as_bytes());
-    });
-    let kernel_set = KernelSetIdentityV1::from_bytes(kernel_set);
-
-    let launch = inspected.policy().launch();
-    let target_text = inspected.target().to_string();
-    let target = hash_identity(TARGET_IDENTITY_DOMAIN_V1, |digest| {
-        update_length_prefixed(digest, target_text.as_bytes());
-        digest.update([code_object_version_tag(inspected.code_object_version())]);
-        for axis in launch.required_workgroup_size() {
-            digest.update(axis.to_le_bytes());
-        }
-        digest.update(launch.max_flat_workgroup_size().to_le_bytes());
-        digest.update(launch.wavefront_size().to_le_bytes());
-    });
-    let target = TargetIdentityV1::from_bytes(target);
-    let scope = LinkPublicationScopeV1::new(producer_package, kernel_set, target);
-
-    let source = inspected.source_evidence_identity();
-    let request = hash_identity(REQUEST_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(inspected.sealed_request_id());
-        digest.update(inspected.sealed_request_identity());
-        digest.update(inspected.handoff_identity().as_bytes());
-        digest.update(manifest.sha256());
-        digest.update(manifest.byte_len().to_le_bytes());
-        digest.update(inspected.link_plan_identity().as_bytes());
-        digest.update(inspected.policy().compiler_envelope_identity().as_bytes());
-        digest.update(inspected.policy().identity().as_bytes());
-        digest.update(source.as_bytes());
-        digest.update(inspected.worker_measurement().executable().sha256());
-        digest.update(
-            inspected
-                .worker_measurement()
-                .executable()
-                .byte_len()
-                .to_le_bytes(),
-        );
-    });
-    let request = CanonicalLinkRequestIdentityV1::from_bytes(request);
-
-    let worker_measurement = inspected.worker_measurement();
-    let executable = worker_measurement.executable();
-    let worker = hash_identity(WORKER_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(executable.sha256());
-        digest.update(executable.byte_len().to_le_bytes());
-        update_length_prefixed(
-            digest,
-            worker_measurement.worker_build_identity().as_bytes(),
-        );
-        update_length_prefixed(digest, worker_measurement.llvm_build_identity().as_bytes());
-    });
-    let worker = PinnedWorkerIdentityV1::from_bytes(worker);
-
-    let response = hash_identity(RESPONSE_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(inspected.response_identity().as_bytes());
-    });
-    let response = ValidatedResponseIdentityV1::from_bytes(response);
-
     let output_digest: [u8; 32] = Sha256::digest(exact_bytes).into();
     if output_digest != *linked_source.sha256() {
         return Err(WorkerV2HsacoPublicationError::OutputIdentityMismatch);
     }
-    let linked_output = LinkedOutputIdentityV1::from_bytes(output_digest);
-
-    // This identity records raw-HSACO inspection. It does not claim canonical descriptor
-    // finalization, which intentionally has not run on this path.
+    let view = PublicationInspectionViewV2::ordinary(&inspected);
     let finalization = hash_identity(RAW_INSPECTION_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(inspected.identity().as_bytes());
+        update_inspection_schema_binding(digest, &view.schema);
     });
-    let finalization = FinalizationIdentityV1::from_bytes(finalization);
-    let finalized_output = FinalizedOutputIdentityV1::from_bytes(output_digest);
-
-    let attempt = inspected.attempt();
-    let publication = hash_identity(ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(attempt.generation().to_le_bytes());
-        digest.update(attempt.session().as_bytes());
-        digest.update(attempt.invocation().as_bytes());
-        digest.update(producer_package.as_bytes());
-        digest.update(kernel_set.as_bytes());
-        digest.update(target.as_bytes());
-        digest.update(request.as_bytes());
-        digest.update(worker.as_bytes());
-        digest.update(response.as_bytes());
-        digest.update(linked_output.as_bytes());
-        digest.update(finalization.as_bytes());
-        digest.update(finalized_output.as_bytes());
-        digest.update(inspected.identity().as_bytes());
+    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(match &view.schema {
+        PublicationSchemaBindingV2::OrdinaryV1 { inspection, .. } => *inspection,
+        PublicationSchemaBindingV2::ProtectedV2 { .. } => unreachable!(),
     });
-    let publication = AtomicPublicationIdentityV1::from_bytes(publication);
-    let plan = DurableLinkPublicationPlanV1::new(
-        attempt,
-        scope,
-        request,
-        worker,
-        response,
-        linked_output,
-        finalization,
-        finalized_output,
-        publication,
-    );
-    let upstream =
-        UpstreamCodeObjectEvidenceIdentityV1::from_bytes(*inspected.identity().as_bytes());
+    let output = PublicationOutputBindingV2 {
+        exact_output: exact_bytes,
+        finalized_output: linked_source,
+        finalization: FinalizationIdentityV1::from_bytes(finalization),
+        canonical_finalization: None,
+    };
+    let plan = derive_publication_plan_shared_v2(producer_package, &view, &output, RAW_DOMAINS_V1)?;
 
     Ok(PreparedWorkerV2HsacoPublicationV1 {
         inspected,
@@ -467,117 +983,144 @@ pub fn prepare_finalized_worker_v2_hsaco_publication_v1(
     }
 
     let producer_package = producer_package_identity_v1(producer);
+    let view = PublicationInspectionViewV2::ordinary(raw);
     let finalization = hash_identity(CANONICAL_FINALIZATION_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(raw.identity().as_bytes());
+        update_inspection_schema_binding(digest, &view.schema);
         digest.update(finalized.identity().as_bytes());
         digest.update(finalized.canonical_digest().as_bytes());
         hash_content_identity(digest, finalized.raw_output_identity());
         hash_content_identity(digest, finalized.finalized_output_identity());
     });
     let finalization = FinalizationIdentityV1::from_bytes(finalization);
-
-    let manifest = raw.policy().symbol_manifest().identity();
-    let compiler_envelope = raw.compiler_envelope_identity();
-    let kernel_set = hash_identity(FINALIZED_KERNEL_SET_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(manifest.sha256());
-        digest.update(manifest.byte_len().to_le_bytes());
-        digest.update(compiler_envelope.as_bytes());
-    });
-    let kernel_set = KernelSetIdentityV1::from_bytes(kernel_set);
-
-    let launch = raw.policy().launch();
-    let target_text = raw.target().to_string();
-    let target = hash_identity(FINALIZED_TARGET_IDENTITY_DOMAIN_V1, |digest| {
-        update_length_prefixed(digest, target_text.as_bytes());
-        digest.update([code_object_version_tag(raw.code_object_version())]);
-        for axis in launch.required_workgroup_size() {
-            digest.update(axis.to_le_bytes());
-        }
-        digest.update(launch.max_flat_workgroup_size().to_le_bytes());
-        digest.update(launch.wavefront_size().to_le_bytes());
-    });
-    let target = TargetIdentityV1::from_bytes(target);
-    let scope = LinkPublicationScopeV1::new(producer_package, kernel_set, target);
-
-    let source = raw.source_evidence_identity();
-    let request = hash_identity(FINALIZED_REQUEST_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(raw.sealed_request_id());
-        digest.update(raw.sealed_request_identity());
-        digest.update(raw.handoff_identity().as_bytes());
-        digest.update(manifest.sha256());
-        digest.update(manifest.byte_len().to_le_bytes());
-        digest.update(raw.link_plan_identity().as_bytes());
-        digest.update(raw.policy().compiler_envelope_identity().as_bytes());
-        digest.update(raw.policy().identity().as_bytes());
-        digest.update(source.as_bytes());
-        digest.update(raw.worker_measurement().executable().sha256());
-        digest.update(
-            raw.worker_measurement()
-                .executable()
-                .byte_len()
-                .to_le_bytes(),
-        );
-    });
-    let request = CanonicalLinkRequestIdentityV1::from_bytes(request);
-
-    let measurement = raw.worker_measurement();
-    let executable = measurement.executable();
-    let worker = hash_identity(FINALIZED_WORKER_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(executable.sha256());
-        digest.update(executable.byte_len().to_le_bytes());
-        update_length_prefixed(digest, measurement.worker_build_identity().as_bytes());
-        update_length_prefixed(digest, measurement.llvm_build_identity().as_bytes());
-    });
-    let worker = PinnedWorkerIdentityV1::from_bytes(worker);
-
-    let response = hash_identity(FINALIZED_RESPONSE_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(raw.response_identity().as_bytes());
-    });
-    let response = ValidatedResponseIdentityV1::from_bytes(response);
-    let linked_output =
-        LinkedOutputIdentityV1::from_bytes(*finalized.raw_output_identity().sha256());
-    let finalized_output =
-        FinalizedOutputIdentityV1::from_bytes(*finalized.finalized_output_identity().sha256());
-    let attempt = finalized.attempt();
-    let publication = hash_identity(FINALIZED_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(attempt.generation().to_le_bytes());
-        digest.update(attempt.session().as_bytes());
-        digest.update(attempt.invocation().as_bytes());
-        digest.update(producer_package.as_bytes());
-        digest.update(kernel_set.as_bytes());
-        digest.update(target.as_bytes());
-        digest.update(request.as_bytes());
-        digest.update(worker.as_bytes());
-        digest.update(response.as_bytes());
-        digest.update(linked_output.as_bytes());
-        digest.update(finalization.as_bytes());
-        digest.update(finalized_output.as_bytes());
-        digest.update(raw.identity().as_bytes());
-        digest.update(finalized.identity().as_bytes());
-    });
-    let publication = AtomicPublicationIdentityV1::from_bytes(publication);
-    let plan = DurableLinkPublicationPlanV1::new(
-        attempt,
-        scope,
-        request,
-        worker,
-        response,
-        linked_output,
-        finalization,
-        finalized_output,
-        publication,
-    );
     let upstream = hash_identity(FINALIZED_UPSTREAM_IDENTITY_DOMAIN_V1, |digest| {
-        digest.update(raw.identity().as_bytes());
+        update_inspection_schema_binding(digest, &view.schema);
         digest.update(finalized.identity().as_bytes());
         digest.update(finalization.as_bytes());
     });
+    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(upstream);
+    let output = PublicationOutputBindingV2 {
+        exact_output: exact_bytes,
+        finalized_output: finalized.finalized_output_identity(),
+        finalization,
+        canonical_finalization: Some(*finalized.identity().as_bytes()),
+    };
+    let plan =
+        derive_publication_plan_shared_v2(producer_package, &view, &output, FINALIZED_DOMAINS_V1)?;
 
     Ok(PreparedFinalizedWorkerV2HsacoPublicationV1 {
         finalized,
         producer_package,
         plan,
-        upstream: UpstreamCodeObjectEvidenceIdentityV1::from_bytes(upstream),
+        upstream,
+    })
+}
+
+/// Consumes protected raw inspection and derives inert V2-domain restart inputs.
+///
+/// No V1 publication API is called. The returned values are intended for V2 intent persistence
+/// and the V2 attempt-scoped publication protocol supplied by `#203`.
+pub fn prepare_protected_worker_v2_hsaco_publication_v2(
+    producer: &ProducerIdentity,
+    inspected: InspectedProtectedRawWorkerV2HsacoV1,
+) -> Result<PreparedProtectedWorkerV2HsacoPublicationV2, WorkerV2HsacoPublicationError> {
+    if !inspected
+        .linked_output_identity()
+        .matches(inspected.exact_bytes())
+    {
+        return Err(WorkerV2HsacoPublicationError::OutputIdentityMismatch);
+    }
+
+    let producer_package = producer_package_identity_v1(producer);
+    let view = PublicationInspectionViewV2::protected(&inspected);
+    let finalization = hash_identity(PROTECTED_RAW_FINALIZATION_IDENTITY_DOMAIN_V2, |digest| {
+        update_all_protected_schema_bindings(digest, &view.schema);
+    });
+    let finalization = FinalizationIdentityV1::from_bytes(finalization);
+    let upstream = hash_identity(PROTECTED_RAW_UPSTREAM_IDENTITY_DOMAIN_V2, |digest| {
+        update_all_protected_schema_bindings(digest, &view.schema);
+        digest.update(finalization.as_bytes());
+    });
+    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(upstream);
+    let output = PublicationOutputBindingV2 {
+        exact_output: inspected.exact_bytes(),
+        finalized_output: inspected.linked_output_identity(),
+        finalization,
+        canonical_finalization: None,
+    };
+    let plan = derive_publication_plan_shared_v2(
+        producer_package,
+        &view,
+        &output,
+        PROTECTED_RAW_DOMAINS_V2,
+    )?;
+    Ok(PreparedProtectedWorkerV2HsacoPublicationV2 {
+        inspected,
+        plan,
+        upstream,
+    })
+}
+
+/// Consumes protected canonical finalization and derives exact finalized restart inputs.
+///
+/// The linked-output field continues to identify the raw worker result while finalized-output and
+/// exact retained bytes identify the canonical snapshot. This function performs no publication.
+pub fn prepare_finalized_protected_worker_v2_hsaco_publication_v2(
+    producer: &ProducerIdentity,
+    finalized: PreparedFinalizedProtectedWorkerV2HsacoV2,
+) -> Result<PreparedFinalizedProtectedWorkerV2HsacoPublicationV2, WorkerV2HsacoPublicationError> {
+    let raw = finalized.raw_inspection();
+    if !finalized.raw_output_identity().matches(raw.exact_bytes()) {
+        return Err(WorkerV2HsacoPublicationError::RawOutputIdentityMismatch);
+    }
+    if !finalized
+        .finalized_output_identity()
+        .matches(finalized.exact_finalized_bytes())
+    {
+        return Err(WorkerV2HsacoPublicationError::FinalizedOutputIdentityMismatch);
+    }
+
+    let producer_package = producer_package_identity_v1(producer);
+    let view = PublicationInspectionViewV2::protected(raw);
+    let protected_finalization = *finalized.identity().as_bytes();
+    let finalization = hash_identity(
+        PROTECTED_FINALIZED_FINALIZATION_IDENTITY_DOMAIN_V2,
+        |digest| {
+            update_all_protected_schema_bindings(digest, &view.schema);
+            digest.update(hash_identity(
+                PROTECTED_CANONICAL_FINALIZATION_BINDING_DOMAIN_V2,
+                |component| component.update(protected_finalization),
+            ));
+            digest.update(finalized.canonical_digest().as_bytes());
+            hash_content_identity(digest, finalized.raw_output_identity());
+            hash_content_identity(digest, finalized.finalized_output_identity());
+        },
+    );
+    let finalization = FinalizationIdentityV1::from_bytes(finalization);
+    let upstream = hash_identity(PROTECTED_FINALIZED_UPSTREAM_IDENTITY_DOMAIN_V2, |digest| {
+        update_all_protected_schema_bindings(digest, &view.schema);
+        digest.update(hash_identity(
+            PROTECTED_CANONICAL_FINALIZATION_BINDING_DOMAIN_V2,
+            |component| component.update(protected_finalization),
+        ));
+        digest.update(finalization.as_bytes());
+    });
+    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(upstream);
+    let output = PublicationOutputBindingV2 {
+        exact_output: finalized.exact_finalized_bytes(),
+        finalized_output: finalized.finalized_output_identity(),
+        finalization,
+        canonical_finalization: Some(protected_finalization),
+    };
+    let plan = derive_publication_plan_shared_v2(
+        producer_package,
+        &view,
+        &output,
+        PROTECTED_FINALIZED_DOMAINS_V2,
+    )?;
+    Ok(PreparedFinalizedProtectedWorkerV2HsacoPublicationV2 {
+        finalized,
+        plan,
+        upstream,
     })
 }
 
@@ -672,6 +1215,21 @@ fn update_length_prefixed(digest: &mut Sha256, bytes: &[u8]) {
 fn hash_content_identity(digest: &mut Sha256, identity: crate::ContentIdentityV1) {
     digest.update(identity.sha256());
     digest.update(identity.byte_len().to_le_bytes());
+}
+
+fn hash_compiler_closure_v2(digest: &mut Sha256, closure: CompilerClosureV2) {
+    digest.update(
+        closure
+            .cargo_binding_transition_protocol_version()
+            .to_le_bytes(),
+    );
+    digest.update(closure.cargo_executable_sha256());
+    digest.update(closure.cargo_binding_trampoline_sha256());
+    digest.update(closure.cargo_fe2o3_binding_wrapper_sha256());
+    digest.update(closure.rustc_executable_sha256());
+    digest.update(closure.rustc_runtime_tree_sha256());
+    digest.update(closure.codegen_backend_sha256());
+    digest.update(closure.identity_sha256());
 }
 
 const fn code_object_version_tag(version: CodeObjectVersion) -> u8 {

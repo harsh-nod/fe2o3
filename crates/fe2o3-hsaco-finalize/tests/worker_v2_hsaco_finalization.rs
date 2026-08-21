@@ -8,9 +8,12 @@ use std::{
 };
 
 use fe2o3_artifact_transaction::{
-    BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
-    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    BuildInvocation, BuildSession, CompilerModuleHandoffSlotV2, ProducerIdentity,
+    begin_build_attempt, consume_compiler_module_handoff_in_slot_v2,
+    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_in_slot_v2,
+    publish_compiler_module_handoff_v1,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
     CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
@@ -23,9 +26,10 @@ use fe2o3_hsaco_finalize::{
     RowSoftmaxV1StructuralArtifactErrorV1, TiledGemmV1StructuralArtifactErrorV1,
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
     WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
-    execute_reproducible_first_build_worker_v2, finalize_inspected_worker_v2_hsaco_v1,
-    finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
-    finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
+    execute_protected_reproducible_first_build_worker_v2,
+    execute_reproducible_first_build_worker_v2, finalize_inspected_protected_worker_v2_hsaco_v2,
+    finalize_inspected_worker_v2_hsaco_v1, finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
+    finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1, inspect_protected_worker_v2_raw_hsaco_v1,
     inspect_row_softmax_v1_structural_worker_v2_hsaco_v1,
     inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1, inspect_unfinalized,
     inspect_worker_v2_raw_hsaco_v1, verify_finalized,
@@ -244,6 +248,146 @@ fn finalization_identity_binds_lineage_separately_from_finalized_content() {
     );
     assert_ne!(first.canonical_digest(), changed.canonical_digest());
     assert_ne!(first.identity(), changed.identity());
+}
+
+#[test]
+fn protected_missing_descriptor_retains_exact_v2_lineage() {
+    let fixture = fixture(FixtureOptions::valid());
+    let closure = compiler_closure(0x31);
+    let slot = CompilerModuleHandoffSlotV2::GeneralGemmReference;
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942",
+        0x71,
+        0x81,
+        closure,
+        slot,
+    ))
+    .unwrap();
+    let attempt = raw.attempt();
+    let handoff = raw.handoff_identity();
+    let inspection = raw.identity();
+
+    let blocker = match finalize_inspected_protected_worker_v2_hsaco_v2(raw) {
+        Err(
+            WorkerV2HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidence(
+                blocker,
+            ),
+        ) => blocker,
+        result => panic!("expected protected descriptor-source blocker, found {result:?}"),
+    };
+    assert_eq!(blocker.attempt(), attempt);
+    assert_eq!(blocker.handoff_slot(), slot);
+    assert_eq!(blocker.handoff_identity(), handoff);
+    assert_eq!(blocker.compiler_closure(), closure);
+    assert_eq!(blocker.raw_inspection_identity(), inspection);
+    assert_eq!(
+        blocker.requirement(),
+        DescriptorSourceEvidenceRequirementV1::AuthenticatedCanonicalDescriptorTableV1
+    );
+    assert_eq!(
+        blocker.canonical_descriptor_section(),
+        CanonicalDescriptorSectionObservationV1::Missing
+    );
+    assert!(!blocker.may_infer_descriptor_claims_from_executable_metadata());
+    assert!(!blocker.grants_publication_authority());
+}
+
+#[test]
+fn protected_finalization_preserves_closure_handoff_and_exact_bytes() {
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let raw_bytes = fixture.bytes.clone();
+    let digest_offset = inspect_unfinalized(&raw_bytes)
+        .unwrap()
+        .location()
+        .digest_offset();
+    let closure = compiler_closure(0x41);
+    let slot = CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly;
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942",
+        0x72,
+        0x82,
+        closure,
+        slot,
+    ))
+    .unwrap();
+    let attempt = raw.attempt();
+    let handoff = raw.handoff_identity();
+    let inspection = raw.identity();
+
+    let finalized = finalize_inspected_protected_worker_v2_hsaco_v2(raw).unwrap();
+    assert_eq!(finalized.attempt(), attempt);
+    assert_eq!(finalized.handoff_slot(), slot);
+    assert_eq!(finalized.handoff_identity(), handoff);
+    assert_eq!(finalized.compiler_closure(), closure);
+    assert_eq!(finalized.raw_inspection_identity(), inspection);
+    assert!(finalized.raw_output_identity().matches(&raw_bytes));
+    assert!(
+        finalized
+            .finalized_output_identity()
+            .matches(finalized.exact_finalized_bytes())
+    );
+    assert_eq!(
+        finalized.canonical_digest(),
+        verify_finalized(finalized.exact_finalized_bytes())
+            .unwrap()
+            .digest()
+    );
+    for (index, (before, after)) in raw_bytes
+        .iter()
+        .zip(finalized.exact_finalized_bytes())
+        .enumerate()
+    {
+        if !(digest_offset..digest_offset + 32).contains(&index) {
+            assert_eq!(before, after, "byte {index} outside digest slot changed");
+        }
+    }
+}
+
+#[test]
+fn every_closure_role_mutation_changes_only_protected_finalization_lineage() {
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let base = finalize_inspected_protected_worker_v2_hsaco_v2(
+        inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+            fixture.bytes.clone(),
+            "gfx942",
+            0x73,
+            0x83,
+            compiler_closure(0x51),
+            CompilerModuleHandoffSlotV2::Default,
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+
+    for role in 0..6 {
+        let changed_closure = compiler_closure_with_mutated_role(0x51, role);
+        let changed = finalize_inspected_protected_worker_v2_hsaco_v2(
+            inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+                fixture.bytes.clone(),
+                "gfx942",
+                0x73,
+                0x83,
+                changed_closure,
+                CompilerModuleHandoffSlotV2::Default,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            base.exact_finalized_bytes(),
+            changed.exact_finalized_bytes()
+        );
+        assert_eq!(
+            base.finalized_output_identity(),
+            changed.finalized_output_identity()
+        );
+        assert_ne!(base.compiler_closure(), changed.compiler_closure());
+        assert_ne!(base.identity(), changed.identity());
+    }
 }
 
 #[test]
@@ -1535,6 +1679,77 @@ fn evidence_for(
         WorkerExecutionLimitsV1::new(Duration::from_secs(2), 16 * 1024, 64 * 1024).unwrap(),
     )
     .unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn protected_evidence(
+    bytes: Vec<u8>,
+    target: &str,
+    invocation_seed: u8,
+    semantic_seed: u8,
+    closure: CompilerClosureV2,
+    slot: CompilerModuleHandoffSlotV2,
+) -> fe2o3_hsaco_finalize::InertProtectedFirstBuildWorkerV2EvidenceV1 {
+    let directory = TestDirectory::new();
+    let producer = ProducerIdentity::from_codegen(
+        "protected_worker_v2_hsaco_finalization_fixture",
+        Some(Path::new("tests/worker_v2_hsaco_finalization.rs")),
+    )
+    .unwrap();
+    let attempt = begin_build_attempt(
+        &directory.0,
+        &producer,
+        BuildInvocation::from_bytes([invocation_seed; 32]),
+        BuildSession::from_bytes([invocation_seed.wrapping_add(1); 16]),
+    )
+    .unwrap();
+    let handoff = compiler_handoff(&bytes, target, semantic_seed, "vecadd", "vecadd.kd");
+    publish_compiler_module_handoff_in_slot_v2(
+        &directory.0,
+        &producer,
+        attempt,
+        slot,
+        closure,
+        handoff.canonical_bytes(),
+    )
+    .unwrap();
+    let consumed =
+        consume_compiler_module_handoff_in_slot_v2(&directory.0, &producer, attempt, slot, closure)
+            .unwrap();
+    execute_protected_reproducible_first_build_worker_v2(
+        consumed,
+        &pinned_worker(),
+        Vec::new(),
+        link_options(),
+        WorkerOutputConstraintsV1::new(64 * 1024).unwrap(),
+        WorkerExecutionLimitsV1::new(Duration::from_secs(2), 16 * 1024, 64 * 1024).unwrap(),
+    )
+    .unwrap()
+}
+
+fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+    CompilerClosureV2::new(
+        [seed; 32],
+        [seed.wrapping_add(1); 32],
+        [seed.wrapping_add(2); 32],
+        [seed.wrapping_add(3); 32],
+        [seed.wrapping_add(4); 32],
+        [seed.wrapping_add(5); 32],
+    )
+    .unwrap()
+}
+
+fn compiler_closure_with_mutated_role(seed: u8, role: usize) -> CompilerClosureV2 {
+    let mut pins = [
+        [seed; 32],
+        [seed.wrapping_add(1); 32],
+        [seed.wrapping_add(2); 32],
+        [seed.wrapping_add(3); 32],
+        [seed.wrapping_add(4); 32],
+        [seed.wrapping_add(5); 32],
+    ];
+    pins[role][0] ^= 0xff;
+    CompilerClosureV2::new(pins[0], pins[1], pins[2], pins[3], pins[4], pins[5]).unwrap()
 }
 
 fn pinned_worker() -> PinnedWorkerV1 {

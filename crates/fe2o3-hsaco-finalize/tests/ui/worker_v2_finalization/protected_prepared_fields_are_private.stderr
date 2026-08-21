@@ -1,0 +1,34 @@
+error[E0616]: field `identity` of struct `PreparedFinalizedProtectedWorkerV2HsacoV2` is private
+ --> tests/ui/worker_v2_finalization/protected_prepared_fields_are_private.rs:7:22
+  |
+7 |     let _ = prepared.identity;
+  |                      ^^^^^^^^ private field
+  |
+help: a method `identity` also exists, call it with parentheses
+  |
+7 |     let _ = prepared.identity();
+  |                              ++
+
+error[E0616]: field `raw` of struct `PreparedFinalizedProtectedWorkerV2HsacoV2` is private
+ --> tests/ui/worker_v2_finalization/protected_prepared_fields_are_private.rs:8:23
+  |
+8 |     let _ = &prepared.raw;
+  |                       ^^^ private field
+
+error[E0616]: field `finalized` of struct `PreparedFinalizedProtectedWorkerV2HsacoV2` is private
+ --> tests/ui/worker_v2_finalization/protected_prepared_fields_are_private.rs:9:23
+  |
+9 |     let _ = &prepared.finalized;
+  |                       ^^^^^^^^^ private field
+
+error[E0616]: field `finalized_output` of struct `PreparedFinalizedProtectedWorkerV2HsacoV2` is private
+  --> tests/ui/worker_v2_finalization/protected_prepared_fields_are_private.rs:10:22
+   |
+10 |     let _ = prepared.finalized_output;
+   |                      ^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `raw` of struct `MissingAuthenticatedProtectedDescriptorSourceEvidenceV2` is private
+  --> tests/ui/worker_v2_finalization/protected_prepared_fields_are_private.rs:14:22
+   |
+14 |     let _ = &blocker.raw;
+   |                      ^^^ private field

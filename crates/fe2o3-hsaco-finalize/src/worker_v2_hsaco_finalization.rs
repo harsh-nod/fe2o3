@@ -7,7 +7,10 @@
 
 use std::{error::Error, fmt};
 
-use fe2o3_artifact_transaction::BuildAttempt;
+use fe2o3_artifact_transaction::{
+    BuildAttempt, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffSlotV2,
+};
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_hsaco::CodeObjectVersion as InspectedCodeObjectVersion;
 use fe2o3_kernel_descriptor::{CanonicalCodeObjectDigest, CodeObjectVersion, DeviceTargetV1};
 use sha2::{Digest, Sha256};
@@ -15,19 +18,43 @@ use sha2::{Digest, Sha256};
 use crate::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME,
     FinalizationError, FinalizedHsaco, FirstBuildWorkerV2IdentityV1,
+    InspectedProtectedRawWorkerV2HsacoIdentityV1, InspectedProtectedRawWorkerV2HsacoV1,
     InspectedRawWorkerV2HsacoIdentityV1, InspectedRawWorkerV2HsacoV1,
-    ObservedWorkerV2KernelSymbolsV1, WorkerV2RawHsacoPolicyIdentityV1,
+    ObservedWorkerV2KernelSymbolsV1, ProtectedFirstBuildWorkerV2IdentityV1,
+    WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
     finalize_allocated_read_only_unfinalized, finalize_unfinalized,
     verify_allocated_read_only_finalized, verify_finalized,
 };
 
 const FINALIZED_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-CANONICAL-FINALIZATION/V1\0";
+const PROTECTED_FINALIZED_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-CANONICAL-FINALIZATION/V2\0";
+const PROTECTED_FINALIZED_INSPECTION_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-FINALIZATION/RAW-INSPECTION/V2\0";
+const PROTECTED_FINALIZED_SOURCE_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-FINALIZATION/SOURCE-EVIDENCE/V2\0";
+const PROTECTED_FINALIZED_HANDOFF_SLOT_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-FINALIZATION/HANDOFF-SLOT/V2\0";
+const PROTECTED_FINALIZED_HANDOFF_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-FINALIZATION/HANDOFF-IDENTITY/V2\0";
+const PROTECTED_FINALIZED_COMPILER_CLOSURE_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-FINALIZATION/COMPILER-CLOSURE/V2\0";
 
 /// Stable identity of one raw-inspection-to-canonical-finalization transition.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FinalizedWorkerV2HsacoIdentityV1([u8; 32]);
 
 impl FinalizedWorkerV2HsacoIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Stable V2-domain identity of one protected raw-to-canonical finalization transition.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FinalizedProtectedWorkerV2HsacoIdentityV2([u8; 32]);
+
+impl FinalizedProtectedWorkerV2HsacoIdentityV2 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -73,6 +100,85 @@ impl MissingAuthenticatedDescriptorSourceEvidenceV1 {
 
     pub const fn attempt(&self) -> BuildAttempt {
         self.raw.attempt()
+    }
+
+    pub const fn target(&self) -> DeviceTargetV1 {
+        self.raw.target()
+    }
+
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.raw.code_object_version()
+    }
+
+    pub fn observed_kernels(&self) -> &[ObservedWorkerV2KernelSymbolsV1] {
+        self.raw.policy().observed_kernels()
+    }
+
+    pub const fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1 {
+        self.raw.canonical_descriptor_section()
+    }
+
+    pub const fn may_infer_descriptor_claims_from_executable_metadata(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Owning fail-closed record for protected raw output with no canonical descriptor table.
+///
+/// The complete V2 handoff and compiler closure stay retained without being represented as V1
+/// lineage. This value is inert and intentionally exposes neither a constructor nor raw bytes.
+#[derive(Debug)]
+pub struct MissingAuthenticatedProtectedDescriptorSourceEvidenceV2 {
+    raw: InspectedProtectedRawWorkerV2HsacoV1,
+}
+
+impl MissingAuthenticatedProtectedDescriptorSourceEvidenceV2 {
+    pub const fn requirement(&self) -> DescriptorSourceEvidenceRequirementV1 {
+        DescriptorSourceEvidenceRequirementV1::AuthenticatedCanonicalDescriptorTableV1
+    }
+
+    pub const fn raw_inspection_identity(&self) -> InspectedProtectedRawWorkerV2HsacoIdentityV1 {
+        self.raw.identity()
+    }
+
+    pub const fn source_evidence_identity(&self) -> ProtectedFirstBuildWorkerV2IdentityV1 {
+        self.raw.source_evidence_identity()
+    }
+
+    pub const fn raw_output_identity(&self) -> ContentIdentityV1 {
+        self.raw.linked_output_identity()
+    }
+
+    pub const fn policy_identity(&self) -> WorkerV2RawHsacoPolicyIdentityV1 {
+        self.raw.policy().identity()
+    }
+
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.raw.attempt()
+    }
+
+    pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV2 {
+        self.raw.handoff_slot()
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
+        self.raw.handoff_identity()
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.raw.compiler_closure()
     }
 
     pub const fn target(&self) -> DeviceTargetV1 {
@@ -207,6 +313,112 @@ impl PreparedFinalizedWorkerV2HsacoV1 {
     }
 }
 
+/// Opaque protected Worker V2 HSACO after structural canonical descriptor finalization.
+///
+/// This side-by-side V2 lineage retains the exact protected inspection, V2 handoff slot and
+/// identity, and complete compiler closure. It remains descriptive evidence and is not cloneable.
+#[derive(Debug)]
+pub struct PreparedFinalizedProtectedWorkerV2HsacoV2 {
+    identity: FinalizedProtectedWorkerV2HsacoIdentityV2,
+    raw: InspectedProtectedRawWorkerV2HsacoV1,
+    finalized: FinalizedHsaco,
+    finalized_output: ContentIdentityV1,
+}
+
+impl PreparedFinalizedProtectedWorkerV2HsacoV2 {
+    pub const fn identity(&self) -> FinalizedProtectedWorkerV2HsacoIdentityV2 {
+        self.identity
+    }
+
+    pub const fn raw_inspection_identity(&self) -> InspectedProtectedRawWorkerV2HsacoIdentityV1 {
+        self.raw.identity()
+    }
+
+    pub const fn source_evidence_identity(&self) -> ProtectedFirstBuildWorkerV2IdentityV1 {
+        self.raw.source_evidence_identity()
+    }
+
+    pub const fn raw_output_identity(&self) -> ContentIdentityV1 {
+        self.raw.linked_output_identity()
+    }
+
+    pub const fn finalized_output_identity(&self) -> ContentIdentityV1 {
+        self.finalized_output
+    }
+
+    pub const fn policy_identity(&self) -> WorkerV2RawHsacoPolicyIdentityV1 {
+        self.raw.policy().identity()
+    }
+
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.raw.attempt()
+    }
+
+    pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV2 {
+        self.raw.handoff_slot()
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
+        self.raw.handoff_identity()
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.raw.compiler_closure()
+    }
+
+    pub const fn target(&self) -> DeviceTargetV1 {
+        self.raw.target()
+    }
+
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.raw.code_object_version()
+    }
+
+    pub const fn canonical_digest(&self) -> CanonicalCodeObjectDigest {
+        self.finalized.inspection().digest()
+    }
+
+    pub fn exact_finalized_bytes(&self) -> &[u8] {
+        self.finalized.as_bytes()
+    }
+
+    pub(crate) const fn raw_inspection(&self) -> &InspectedProtectedRawWorkerV2HsacoV1 {
+        &self.raw
+    }
+
+    pub const fn canonical_descriptor_finalization_ran(&self) -> bool {
+        true
+    }
+
+    pub const fn has_authenticated_descriptor_source_evidence(&self) -> bool {
+        false
+    }
+
+    pub const fn is_structural_only(&self) -> bool {
+        true
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_verus_verification(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Failure while turning admitted raw Worker V2 output into inert canonical-finalization evidence.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -214,6 +426,9 @@ pub enum WorkerV2HsacoFinalizationError {
     RawOutputIdentityMismatch,
     MissingAuthenticatedDescriptorSourceEvidence(
         Box<MissingAuthenticatedDescriptorSourceEvidenceV1>,
+    ),
+    MissingAuthenticatedProtectedDescriptorSourceEvidence(
+        Box<MissingAuthenticatedProtectedDescriptorSourceEvidenceV2>,
     ),
     CanonicalFinalization(FinalizationError),
     FinalizedVerification(FinalizationError),
@@ -237,6 +452,13 @@ impl fmt::Display for WorkerV2HsacoFinalizationError {
                 "raw Worker V2 HSACO has no {DEVICE_DESCRIPTOR_SECTION_NAME}; canonical \
                  finalization requires authenticated descriptor-source evidence and will not \
                  infer Rust ABI, layout, effect, or build-evidence claims from executable metadata"
+            ),
+            Self::MissingAuthenticatedProtectedDescriptorSourceEvidence(_) => write!(
+                formatter,
+                "protected raw Worker V2 HSACO has no {DEVICE_DESCRIPTOR_SECTION_NAME}; \
+                 canonical finalization requires authenticated descriptor-source evidence and \
+                 will not infer Rust ABI, layout, effect, or build-evidence claims from \
+                 executable metadata"
             ),
             Self::CanonicalFinalization(error) => {
                 write!(
@@ -288,6 +510,30 @@ pub fn finalize_inspected_worker_v2_hsaco_v1(
     finalize_inspected_worker_v2_hsaco_with_placement_v1(raw, false)
 }
 
+/// Consumes protected raw inspection exactly once and runs canonical descriptor finalization.
+///
+/// The route preserves the exact V2 handoff slot/identity and complete compiler closure. It does
+/// not convert protected evidence to V1 or grant publication, loading, or launch authority.
+pub fn finalize_inspected_protected_worker_v2_hsaco_v2(
+    raw: InspectedProtectedRawWorkerV2HsacoV1,
+) -> Result<PreparedFinalizedProtectedWorkerV2HsacoV2, WorkerV2HsacoFinalizationError> {
+    let Some(core) = finalize_worker_v2_hsaco_shared(&raw, false)? else {
+        return Err(
+            WorkerV2HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidence(
+                Box::new(MissingAuthenticatedProtectedDescriptorSourceEvidenceV2 { raw }),
+            ),
+        );
+    };
+    let identity =
+        calculate_protected_finalized_identity(&raw, &core.finalized, core.finalized_output);
+    Ok(PreparedFinalizedProtectedWorkerV2HsacoV2 {
+        identity,
+        raw,
+        finalized: core.finalized,
+        finalized_output: core.finalized_output,
+    })
+}
+
 #[cfg(feature = "general-gemm-v1")]
 pub(crate) fn finalize_allocated_general_gemm_worker_v2_hsaco_v1(
     raw: InspectedRawWorkerV2HsacoV1,
@@ -299,17 +545,79 @@ fn finalize_inspected_worker_v2_hsaco_with_placement_v1(
     raw: InspectedRawWorkerV2HsacoV1,
     allocated_read_only: bool,
 ) -> Result<PreparedFinalizedWorkerV2HsacoV1, WorkerV2HsacoFinalizationError> {
-    let raw_bytes = raw.exact_bytes();
-    if !raw.linked_output_identity().matches(raw_bytes) {
-        return Err(WorkerV2HsacoFinalizationError::RawOutputIdentityMismatch);
-    }
-
-    if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
+    let Some(core) = finalize_worker_v2_hsaco_shared(&raw, allocated_read_only)? else {
         return Err(
             WorkerV2HsacoFinalizationError::MissingAuthenticatedDescriptorSourceEvidence(Box::new(
                 MissingAuthenticatedDescriptorSourceEvidenceV1 { raw },
             )),
         );
+    };
+    let identity = calculate_finalized_identity(&raw, &core.finalized, core.finalized_output);
+    Ok(PreparedFinalizedWorkerV2HsacoV1 {
+        identity,
+        raw,
+        finalized: core.finalized,
+        finalized_output: core.finalized_output,
+    })
+}
+
+struct SharedCanonicalFinalizationV1 {
+    finalized: FinalizedHsaco,
+    finalized_output: ContentIdentityV1,
+}
+
+trait WorkerV2HsacoFinalizationSourceV1 {
+    fn exact_bytes(&self) -> &[u8];
+    fn linked_output_identity(&self) -> ContentIdentityV1;
+    fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1;
+    fn target(&self) -> DeviceTargetV1;
+    fn code_object_version(&self) -> CodeObjectVersion;
+    fn policy(&self) -> &WorkerV2RawHsacoPolicyV1;
+}
+
+macro_rules! impl_finalization_source {
+    ($source:ty) => {
+        impl WorkerV2HsacoFinalizationSourceV1 for $source {
+            fn exact_bytes(&self) -> &[u8] {
+                self.exact_bytes()
+            }
+
+            fn linked_output_identity(&self) -> ContentIdentityV1 {
+                self.linked_output_identity()
+            }
+
+            fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1 {
+                self.canonical_descriptor_section()
+            }
+
+            fn target(&self) -> DeviceTargetV1 {
+                self.target()
+            }
+
+            fn code_object_version(&self) -> CodeObjectVersion {
+                self.code_object_version()
+            }
+
+            fn policy(&self) -> &WorkerV2RawHsacoPolicyV1 {
+                self.policy()
+            }
+        }
+    };
+}
+
+impl_finalization_source!(InspectedRawWorkerV2HsacoV1);
+impl_finalization_source!(InspectedProtectedRawWorkerV2HsacoV1);
+
+fn finalize_worker_v2_hsaco_shared(
+    raw: &impl WorkerV2HsacoFinalizationSourceV1,
+    allocated_read_only: bool,
+) -> Result<Option<SharedCanonicalFinalizationV1>, WorkerV2HsacoFinalizationError> {
+    let raw_bytes = raw.exact_bytes();
+    if !raw.linked_output_identity().matches(raw_bytes) {
+        return Err(WorkerV2HsacoFinalizationError::RawOutputIdentityMismatch);
+    }
+    if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
+        return Ok(None);
     }
 
     let finalized = if allocated_read_only {
@@ -328,8 +636,7 @@ fn finalize_inspected_worker_v2_hsaco_with_placement_v1(
         return Err(WorkerV2HsacoFinalizationError::FinalizedInspectionMismatch);
     }
 
-    validate_metadata_lineage(&raw, &finalized)?;
-
+    validate_metadata_lineage(raw, &finalized)?;
     let finalized_output = ContentIdentityV1::calculate(finalized.as_bytes());
     if !finalized_output.matches(finalized.as_bytes())
         || verified.digest().as_bytes() == &[0; 32]
@@ -337,18 +644,14 @@ fn finalize_inspected_worker_v2_hsaco_with_placement_v1(
     {
         return Err(WorkerV2HsacoFinalizationError::FinalizedOutputIdentityMismatch);
     }
-
-    let identity = calculate_finalized_identity(&raw, &finalized, finalized_output);
-    Ok(PreparedFinalizedWorkerV2HsacoV1 {
-        identity,
-        raw,
+    Ok(Some(SharedCanonicalFinalizationV1 {
         finalized,
         finalized_output,
-    })
+    }))
 }
 
 fn validate_metadata_lineage(
-    raw: &InspectedRawWorkerV2HsacoV1,
+    raw: &impl WorkerV2HsacoFinalizationSourceV1,
     finalized: &FinalizedHsaco,
 ) -> Result<(), WorkerV2HsacoFinalizationError> {
     let inspection = finalized.inspection();
@@ -416,6 +719,75 @@ fn calculate_finalized_identity(
         hash_kernel(&mut hasher, kernel);
     }
     FinalizedWorkerV2HsacoIdentityV1(hasher.finalize().into())
+}
+
+fn calculate_protected_finalized_identity(
+    raw: &InspectedProtectedRawWorkerV2HsacoV1,
+    finalized: &FinalizedHsaco,
+    finalized_output: ContentIdentityV1,
+) -> FinalizedProtectedWorkerV2HsacoIdentityV2 {
+    let mut hasher = Sha256::new();
+    hasher.update(PROTECTED_FINALIZED_IDENTITY_DOMAIN_V2);
+    // This structural bridge still records the absence of authenticated source claims.
+    hasher.update([0]);
+    hash_domain_component(
+        &mut hasher,
+        PROTECTED_FINALIZED_INSPECTION_DOMAIN_V2,
+        |component| component.update(raw.identity().as_bytes()),
+    );
+    hash_domain_component(
+        &mut hasher,
+        PROTECTED_FINALIZED_SOURCE_DOMAIN_V2,
+        |component| component.update(raw.source_evidence_identity().as_bytes()),
+    );
+    hash_domain_component(
+        &mut hasher,
+        PROTECTED_FINALIZED_HANDOFF_SLOT_DOMAIN_V2,
+        |component| component.update([raw.handoff_slot() as u8]),
+    );
+    hash_domain_component(
+        &mut hasher,
+        PROTECTED_FINALIZED_HANDOFF_IDENTITY_DOMAIN_V2,
+        |component| component.update(raw.handoff_identity().as_bytes()),
+    );
+    hash_domain_component(
+        &mut hasher,
+        PROTECTED_FINALIZED_COMPILER_CLOSURE_DOMAIN_V2,
+        |component| hash_compiler_closure_v2(component, raw.compiler_closure()),
+    );
+    hasher.update(raw.policy().identity().as_bytes());
+    hash_content(&mut hasher, raw.linked_output_identity());
+    hash_content(&mut hasher, finalized_output);
+    hasher.update(finalized.inspection().digest().as_bytes());
+    hash_text(&mut hasher, &raw.target().to_string());
+    hasher.update([code_object_version_tag(raw.code_object_version())]);
+    hasher.update((raw.policy().observed_kernels().len() as u64).to_le_bytes());
+    for kernel in raw.policy().observed_kernels() {
+        hash_kernel(&mut hasher, kernel);
+    }
+    FinalizedProtectedWorkerV2HsacoIdentityV2(hasher.finalize().into())
+}
+
+fn hash_domain_component(hasher: &mut Sha256, domain: &[u8], update: impl FnOnce(&mut Sha256)) {
+    let mut component = Sha256::new();
+    component.update(domain);
+    update(&mut component);
+    hasher.update(component.finalize());
+}
+
+fn hash_compiler_closure_v2(hasher: &mut Sha256, closure: CompilerClosureV2) {
+    hasher.update(
+        closure
+            .cargo_binding_transition_protocol_version()
+            .to_le_bytes(),
+    );
+    hasher.update(closure.cargo_executable_sha256());
+    hasher.update(closure.cargo_binding_trampoline_sha256());
+    hasher.update(closure.cargo_fe2o3_binding_wrapper_sha256());
+    hasher.update(closure.rustc_executable_sha256());
+    hasher.update(closure.rustc_runtime_tree_sha256());
+    hasher.update(closure.codegen_backend_sha256());
+    hasher.update(closure.identity_sha256());
 }
 
 fn hash_content(hasher: &mut Sha256, identity: ContentIdentityV1) {

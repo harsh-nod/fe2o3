@@ -8,9 +8,12 @@ use std::{
 };
 
 use fe2o3_artifact_transaction::{
-    BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
-    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    BuildInvocation, BuildSession, CompilerModuleHandoffSlotV2, ProducerIdentity,
+    begin_build_attempt, consume_compiler_module_handoff_in_slot_v2,
+    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_in_slot_v2,
+    publish_compiler_module_handoff_v1,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
     CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
@@ -18,9 +21,11 @@ use fe2o3_compiler_ffi::{
     CompilerModuleSymbolRoleV1, DeviceTargetV1 as CompilerDeviceTargetV1,
 };
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, WorkerV2HsacoPublicationRouteV1,
-    execute_reproducible_first_build_worker_v2, finalize_inspected_worker_v2_hsaco_v1,
+    ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, ProtectedWorkerV2HsacoPublicationRouteV2,
+    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    WorkerV2HsacoPublicationRouteV1, execute_protected_reproducible_first_build_worker_v2,
+    execute_reproducible_first_build_worker_v2, finalize_inspected_protected_worker_v2_hsaco_v2,
+    finalize_inspected_worker_v2_hsaco_v1, inspect_protected_worker_v2_raw_hsaco_v1,
     inspect_worker_v2_raw_hsaco_v1,
 };
 use fe2o3_kernel_descriptor::{
@@ -71,6 +76,199 @@ struct PublishedIdentities {
     finalized_output: [u8; 32],
     publication: [u8; 32],
     upstream: [u8; 32],
+}
+
+#[test]
+fn protected_raw_preparation_exposes_exact_v2_restart_inputs() {
+    let directory = TestDirectory::new();
+    let producer = publication_producer("tests/protected-raw-preparation.rs");
+    let fixture = fixture(FixtureOptions::valid());
+    let closure = publication_compiler_closure(0x21);
+    let slot = CompilerModuleHandoffSlotV2::GeneralGemmReference;
+    let inspected = inspect_protected_worker_v2_raw_hsaco_v1(protected_publication_evidence(
+        &directory,
+        &producer,
+        fixture.bytes.clone(),
+        closure,
+        slot,
+        0xb1,
+        0xb2,
+    ))
+    .unwrap();
+    let attempt = inspected.attempt();
+    let handoff = inspected.handoff_identity();
+    let inspection = inspected.identity();
+    let prepared = fe2o3_hsaco_finalize::prepare_protected_worker_v2_hsaco_publication_v2(
+        &producer, inspected,
+    )
+    .unwrap();
+    let intent = prepared.publication_intent();
+
+    assert_eq!(prepared.attempt(), attempt);
+    assert_eq!(prepared.handoff_slot(), slot);
+    assert_eq!(prepared.handoff_identity(), handoff);
+    assert_eq!(prepared.compiler_closure(), closure);
+    assert_eq!(prepared.exact_retained_output(), fixture.bytes);
+    assert_eq!(
+        intent.route(),
+        ProtectedWorkerV2HsacoPublicationRouteV2::InspectedRaw
+    );
+    assert_eq!(intent.raw_inspection_identity(), inspection);
+    assert_eq!(intent.canonical_finalization_identity(), None);
+    assert_eq!(intent.handoff_slot(), slot);
+    assert_eq!(intent.handoff_identity(), handoff);
+    assert_eq!(intent.compiler_closure(), closure);
+    assert_eq!(intent.durable_plan().attempt(), attempt);
+    assert_eq!(
+        intent.durable_plan().linked_output().as_bytes(),
+        intent.raw_linked_snapshot_identity().sha256()
+    );
+    assert_eq!(
+        intent.durable_plan().finalized_output().as_bytes(),
+        intent.retained_snapshot_identity().sha256()
+    );
+    assert!(intent.matches_exact_retained_output(prepared.exact_retained_output()));
+    let mut mutated = prepared.exact_retained_output().to_vec();
+    mutated[0] ^= 1;
+    assert!(!intent.matches_exact_retained_output(&mutated));
+    assert!(!prepared.grants_compiler_authority());
+    assert!(!prepared.grants_publication_authority());
+    assert!(!intent.grants_compiler_authority());
+    assert!(!intent.grants_publication_authority());
+    assert!(!intent.grants_load_authority());
+    assert!(!intent.grants_launch_authority());
+}
+
+#[test]
+fn protected_finalized_preparation_retains_raw_and_exact_canonical_snapshots() {
+    let directory = TestDirectory::new();
+    let producer = publication_producer("tests/protected-finalized-preparation.rs");
+    let table = publication_descriptor_table("gfx942", "vecadd", "vecadd.kd");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let raw_bytes = fixture.bytes.clone();
+    let closure = publication_compiler_closure(0x31);
+    let slot = CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly;
+    let inspected = inspect_protected_worker_v2_raw_hsaco_v1(protected_publication_evidence(
+        &directory,
+        &producer,
+        fixture.bytes,
+        closure,
+        slot,
+        0xc1,
+        0xc2,
+    ))
+    .unwrap();
+    let inspection = inspected.identity();
+    let finalized = finalize_inspected_protected_worker_v2_hsaco_v2(inspected).unwrap();
+    let finalization = finalized.identity();
+    let finalized_bytes = finalized.exact_finalized_bytes().to_vec();
+    let prepared =
+        fe2o3_hsaco_finalize::prepare_finalized_protected_worker_v2_hsaco_publication_v2(
+            &producer, finalized,
+        )
+        .unwrap();
+    let intent = prepared.publication_intent();
+
+    assert_eq!(prepared.handoff_slot(), slot);
+    assert_eq!(prepared.compiler_closure(), closure);
+    assert_eq!(prepared.exact_retained_output(), finalized_bytes);
+    assert_eq!(
+        intent.route(),
+        ProtectedWorkerV2HsacoPublicationRouteV2::CanonicallyFinalized
+    );
+    assert_eq!(intent.raw_inspection_identity(), inspection);
+    assert_eq!(intent.canonical_finalization_identity(), Some(finalization));
+    assert!(intent.raw_linked_snapshot_identity().matches(&raw_bytes));
+    assert!(
+        intent
+            .retained_snapshot_identity()
+            .matches(prepared.exact_retained_output())
+    );
+    assert_ne!(
+        intent.raw_linked_snapshot_identity(),
+        intent.retained_snapshot_identity()
+    );
+    assert_eq!(
+        intent.durable_plan().linked_output().as_bytes(),
+        intent.raw_linked_snapshot_identity().sha256()
+    );
+    assert_eq!(
+        intent.durable_plan().finalized_output().as_bytes(),
+        intent.retained_snapshot_identity().sha256()
+    );
+}
+
+#[test]
+fn protected_domains_reject_v1_aliasing_and_bind_every_closure_role() {
+    let base = protected_raw_plan_identities(publication_compiler_closure(0x41));
+    for role in 0..6 {
+        let changed = protected_raw_plan_identities(publication_mutated_closure(0x41, role));
+        assert_eq!(base.linked_output, changed.linked_output);
+        assert_eq!(base.finalized_output, changed.finalized_output);
+        assert_ne!(base.request, changed.request);
+        assert_ne!(base.finalization, changed.finalization);
+        assert_ne!(base.publication, changed.publication);
+        assert_ne!(base.upstream, changed.upstream);
+    }
+
+    let protected_directory = TestDirectory::new();
+    let ordinary_directory = TestDirectory::new();
+    let producer = publication_producer("tests/protected-v1-domain-separation.rs");
+    let fixture = fixture(FixtureOptions::valid());
+    let protected = inspect_protected_worker_v2_raw_hsaco_v1(protected_publication_evidence(
+        &protected_directory,
+        &producer,
+        fixture.bytes.clone(),
+        publication_compiler_closure(0x41),
+        CompilerModuleHandoffSlotV2::Default,
+        0xb1,
+        0xb2,
+    ))
+    .unwrap();
+    let protected = fe2o3_hsaco_finalize::prepare_protected_worker_v2_hsaco_publication_v2(
+        &producer, protected,
+    )
+    .unwrap()
+    .publication_intent();
+    let ordinary = inspect_worker_v2_raw_hsaco_v1(publication_evidence(
+        &ordinary_directory,
+        &producer,
+        fixture.bytes,
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+    ))
+    .unwrap();
+    let ordinary =
+        fe2o3_hsaco_finalize::prepare_worker_v2_hsaco_publication_v1(&producer, ordinary)
+            .unwrap()
+            .publication_intent();
+    let protected_plan = protected.durable_plan();
+    let ordinary_plan = ordinary.durable_plan();
+    assert_eq!(
+        protected_plan.linked_output(),
+        ordinary_plan.linked_output()
+    );
+    assert_eq!(
+        protected_plan.finalized_output(),
+        ordinary_plan.finalized_output()
+    );
+    assert_ne!(
+        protected_plan.scope().kernel_set(),
+        ordinary_plan.scope().kernel_set()
+    );
+    assert_ne!(
+        protected_plan.scope().target(),
+        ordinary_plan.scope().target()
+    );
+    assert_ne!(protected_plan.request(), ordinary_plan.request());
+    assert_ne!(protected_plan.worker(), ordinary_plan.worker());
+    assert_ne!(protected_plan.response(), ordinary_plan.response());
+    assert_ne!(protected_plan.finalization(), ordinary_plan.finalization());
+    assert_ne!(protected_plan.publication(), ordinary_plan.publication());
+    assert_ne!(protected.upstream_evidence(), ordinary.upstream_evidence());
 }
 
 #[test]
@@ -885,12 +1083,113 @@ fn publish_finalized_identities_inner(
     identities
 }
 
+fn protected_raw_plan_identities(closure: CompilerClosureV2) -> PublishedIdentities {
+    let directory = TestDirectory::new();
+    let producer = publication_producer("tests/protected-closure-mutations.rs");
+    let fixture = fixture(FixtureOptions::valid());
+    let inspected = inspect_protected_worker_v2_raw_hsaco_v1(protected_publication_evidence(
+        &directory,
+        &producer,
+        fixture.bytes,
+        closure,
+        CompilerModuleHandoffSlotV2::Default,
+        0xd1,
+        0xd2,
+    ))
+    .unwrap();
+    let intent = fe2o3_hsaco_finalize::prepare_protected_worker_v2_hsaco_publication_v2(
+        &producer, inspected,
+    )
+    .unwrap()
+    .publication_intent();
+    let plan = intent.durable_plan();
+    PublishedIdentities {
+        package: *plan.scope().package().as_bytes(),
+        kernel_set: *plan.scope().kernel_set().as_bytes(),
+        target: *plan.scope().target().as_bytes(),
+        request: *plan.request().as_bytes(),
+        worker: *plan.worker().as_bytes(),
+        response: *plan.response().as_bytes(),
+        linked_output: *plan.linked_output().as_bytes(),
+        finalization: *plan.finalization().as_bytes(),
+        finalized_output: *plan.finalized_output().as_bytes(),
+        publication: *plan.publication().as_bytes(),
+        upstream: intent.upstream_evidence().as_bytes(),
+    }
+}
+
 fn publication_producer(source: &str) -> ProducerIdentity {
     ProducerIdentity::from_codegen(
         "worker_v2_hsaco_publication_fixture",
         Some(Path::new(source)),
     )
     .unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn protected_publication_evidence(
+    directory: &TestDirectory,
+    producer: &ProducerIdentity,
+    bytes: Vec<u8>,
+    closure: CompilerClosureV2,
+    slot: CompilerModuleHandoffSlotV2,
+    invocation_seed: u8,
+    session_seed: u8,
+) -> fe2o3_hsaco_finalize::InertProtectedFirstBuildWorkerV2EvidenceV1 {
+    let attempt = begin_build_attempt(
+        &directory.0,
+        producer,
+        BuildInvocation::from_bytes([invocation_seed; 32]),
+        BuildSession::from_bytes([session_seed; 16]),
+    )
+    .unwrap();
+    let handoff = publication_compiler_handoff(&bytes, "vecadd", "vecadd.kd", "gfx942", 0x53);
+    publish_compiler_module_handoff_in_slot_v2(
+        &directory.0,
+        producer,
+        attempt,
+        slot,
+        closure,
+        handoff.canonical_bytes(),
+    )
+    .unwrap();
+    let consumed =
+        consume_compiler_module_handoff_in_slot_v2(&directory.0, producer, attempt, slot, closure)
+            .unwrap();
+    execute_protected_reproducible_first_build_worker_v2(
+        consumed,
+        &publication_pinned_worker("fixture-llvm-v1"),
+        Vec::new(),
+        publication_link_options(None),
+        WorkerOutputConstraintsV1::new(64 * 1024).unwrap(),
+        WorkerExecutionLimitsV1::new(Duration::from_secs(2), 16 * 1024, 64 * 1024).unwrap(),
+    )
+    .unwrap()
+}
+
+fn publication_compiler_closure(seed: u8) -> CompilerClosureV2 {
+    CompilerClosureV2::new(
+        [seed; 32],
+        [seed.wrapping_add(1); 32],
+        [seed.wrapping_add(2); 32],
+        [seed.wrapping_add(3); 32],
+        [seed.wrapping_add(4); 32],
+        [seed.wrapping_add(5); 32],
+    )
+    .unwrap()
+}
+
+fn publication_mutated_closure(seed: u8, role: usize) -> CompilerClosureV2 {
+    let mut pins = [
+        [seed; 32],
+        [seed.wrapping_add(1); 32],
+        [seed.wrapping_add(2); 32],
+        [seed.wrapping_add(3); 32],
+        [seed.wrapping_add(4); 32],
+        [seed.wrapping_add(5); 32],
+    ];
+    pins[role][0] ^= 0xff;
+    CompilerClosureV2::new(pins[0], pins[1], pins[2], pins[3], pins[4], pins[5]).unwrap()
 }
 
 #[allow(clippy::too_many_arguments)]

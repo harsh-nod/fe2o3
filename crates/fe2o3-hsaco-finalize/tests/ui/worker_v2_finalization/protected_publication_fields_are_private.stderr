@@ -1,0 +1,115 @@
+error[E0616]: field `inspected` of struct `PreparedProtectedWorkerV2HsacoPublicationV2` is private
+ --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:7:23
+  |
+7 |     let _ = &prepared.inspected;
+  |                       ^^^^^^^^^ private field
+
+error[E0616]: field `plan` of struct `PreparedProtectedWorkerV2HsacoPublicationV2` is private
+ --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:8:22
+  |
+8 |     let _ = prepared.plan;
+  |                      ^^^^ private field
+
+error[E0616]: field `upstream` of struct `PreparedProtectedWorkerV2HsacoPublicationV2` is private
+ --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:9:22
+  |
+9 |     let _ = prepared.upstream;
+  |                      ^^^^^^^^ private field
+
+error[E0616]: field `finalized` of struct `PreparedFinalizedProtectedWorkerV2HsacoPublicationV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:13:23
+   |
+13 |     let _ = &prepared.finalized;
+   |                       ^^^^^^^^^ private field
+
+error[E0616]: field `plan` of struct `PreparedFinalizedProtectedWorkerV2HsacoPublicationV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:14:22
+   |
+14 |     let _ = prepared.plan;
+   |                      ^^^^ private field
+
+error[E0616]: field `upstream` of struct `PreparedFinalizedProtectedWorkerV2HsacoPublicationV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:15:22
+   |
+15 |     let _ = prepared.upstream;
+   |                      ^^^^^^^^ private field
+
+error[E0616]: field `route` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:19:20
+   |
+19 |     let _ = intent.route;
+   |                    ^^^^^ private field
+   |
+help: a method `route` also exists, call it with parentheses
+   |
+19 |     let _ = intent.route();
+   |                         ++
+
+error[E0616]: field `plan` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:20:20
+   |
+20 |     let _ = intent.plan;
+   |                    ^^^^ private field
+
+error[E0616]: field `upstream` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:21:20
+   |
+21 |     let _ = intent.upstream;
+   |                    ^^^^^^^^ private field
+
+error[E0616]: field `raw_inspection` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:22:20
+   |
+22 |     let _ = intent.raw_inspection;
+   |                    ^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `canonical_finalization` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:23:20
+   |
+23 |     let _ = intent.canonical_finalization;
+   |                    ^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `raw_snapshot` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:24:20
+   |
+24 |     let _ = intent.raw_snapshot;
+   |                    ^^^^^^^^^^^^ private field
+
+error[E0616]: field `retained_snapshot` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:25:20
+   |
+25 |     let _ = intent.retained_snapshot;
+   |                    ^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `handoff_slot` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:26:20
+   |
+26 |     let _ = intent.handoff_slot;
+   |                    ^^^^^^^^^^^^ private field
+   |
+help: a method `handoff_slot` also exists, call it with parentheses
+   |
+26 |     let _ = intent.handoff_slot();
+   |                                ++
+
+error[E0616]: field `handoff_identity` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:27:20
+   |
+27 |     let _ = intent.handoff_identity;
+   |                    ^^^^^^^^^^^^^^^^ private field
+   |
+help: a method `handoff_identity` also exists, call it with parentheses
+   |
+27 |     let _ = intent.handoff_identity();
+   |                                    ++
+
+error[E0616]: field `compiler_closure` of struct `SealedProtectedWorkerV2HsacoPublicationIntentV2` is private
+  --> tests/ui/worker_v2_finalization/protected_publication_fields_are_private.rs:28:20
+   |
+28 |     let _ = intent.compiler_closure;
+   |                    ^^^^^^^^^^^^^^^^ private field
+   |
+help: a method `compiler_closure` also exists, call it with parentheses
+   |
+28 |     let _ = intent.compiler_closure();
+   |                                    ++

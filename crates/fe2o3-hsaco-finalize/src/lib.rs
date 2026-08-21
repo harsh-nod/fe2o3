@@ -237,16 +237,23 @@ pub use worker_v2_hsaco_admission::{
     inspect_protected_worker_v2_raw_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
 };
 pub use worker_v2_hsaco_finalization::{
-    DescriptorSourceEvidenceRequirementV1, FinalizedWorkerV2HsacoIdentityV1,
-    MissingAuthenticatedDescriptorSourceEvidenceV1, PreparedFinalizedWorkerV2HsacoV1,
-    WorkerV2HsacoFinalizationError, finalize_inspected_worker_v2_hsaco_v1,
+    DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV2HsacoIdentityV2,
+    FinalizedWorkerV2HsacoIdentityV1, MissingAuthenticatedDescriptorSourceEvidenceV1,
+    MissingAuthenticatedProtectedDescriptorSourceEvidenceV2,
+    PreparedFinalizedProtectedWorkerV2HsacoV2, PreparedFinalizedWorkerV2HsacoV1,
+    WorkerV2HsacoFinalizationError, finalize_inspected_protected_worker_v2_hsaco_v2,
+    finalize_inspected_worker_v2_hsaco_v1,
 };
 pub use worker_v2_hsaco_publication::{
-    PreparedFinalizedWorkerV2HsacoPublicationV1, PreparedWorkerV2HsacoPublicationV1,
-    SealedWorkerV2HsacoPublicationIntentV1, WorkerV2HsacoPublicationError,
-    WorkerV2HsacoPublicationRouteV1, prepare_finalized_worker_v2_hsaco_publication_v1,
-    prepare_worker_v2_hsaco_publication_v1, publish_prepared_finalized_worker_v2_hsaco_v1,
-    publish_prepared_worker_v2_hsaco_v1,
+    PreparedFinalizedProtectedWorkerV2HsacoPublicationV2,
+    PreparedFinalizedWorkerV2HsacoPublicationV1, PreparedProtectedWorkerV2HsacoPublicationV2,
+    PreparedWorkerV2HsacoPublicationV1, ProtectedWorkerV2HsacoPublicationRouteV2,
+    SealedProtectedWorkerV2HsacoPublicationIntentV2, SealedWorkerV2HsacoPublicationIntentV1,
+    WorkerV2HsacoPublicationError, WorkerV2HsacoPublicationRouteV1,
+    prepare_finalized_protected_worker_v2_hsaco_publication_v2,
+    prepare_finalized_worker_v2_hsaco_publication_v1,
+    prepare_protected_worker_v2_hsaco_publication_v2, prepare_worker_v2_hsaco_publication_v1,
+    publish_prepared_finalized_worker_v2_hsaco_v1, publish_prepared_worker_v2_hsaco_v1,
 };
 pub use workgroup_sync_v1_artifact::{
     FinalizedWorkgroupSyncHsacoIdentityV1, PreparedFinalizedWorkgroupSyncHsacoV1,
