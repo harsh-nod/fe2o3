@@ -68,8 +68,8 @@ use crate::worker_v2_restart::{
     restart_admission_commitment_with_inputs_v1,
 };
 use crate::{
-    ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, COMPILER_CLOSURE_CHILD_FD, MANAGED_RUSTC_ARGS_ENV,
-    RUSTC_CHILD_FD, RUSTC_LIBRARY_CHILD_FD,
+    ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV, RUSTC_CHILD_FD,
+    RUSTC_INVOCATION_CHILD_FD, RUSTC_LIBRARY_CHILD_FD,
 };
 
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
@@ -587,6 +587,21 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 "[cargo-fe2o3] inert prepared RustcInvocationDescriptorV{version} observation sha256={digest}; no execution or authority claim"
             );
         }
+        let rustc_invocation_capability = inert_rustc_invocation
+            .as_ref()
+            .and_then(InertPreparedRustcInvocationCapture::descriptor_v3)
+            .map(|descriptor| {
+                let capability =
+                    fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1::create(
+                        descriptor.clone(),
+                    )
+                    .map_err(BindingWrapperError::ChildCapability)?;
+                capability
+                    .inherit_for_child_at(command.as_command_mut(), RUSTC_INVOCATION_CHILD_FD)
+                    .map_err(BindingWrapperError::ChildCapability)?;
+                Ok::<_, BindingWrapperError>(capability)
+            })
+            .transpose()?;
         let protected_source_tree_sha256 = if worker_build_observation.is_some() {
             let source = managed_attempt
                 .as_ref()
@@ -657,9 +672,9 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             capabilities.prepare_invocation_authority(claim)?;
         }
         let status = command.status();
-        Ok((status, inert_rustc_invocation))
+        Ok((status, inert_rustc_invocation, rustc_invocation_capability))
     })();
-    let (status, inert_rustc_invocation) = match pre_spawn_result {
+    let (status, inert_rustc_invocation, rustc_invocation_capability) = match pre_spawn_result {
         Ok(prepared) => {
             if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
                 guard.disarm();
@@ -672,6 +687,8 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     };
     // Keep the in-memory descriptor alive across the exact spawn it describes.
     drop(inert_rustc_invocation);
+    // Keep the immutable transport object alive across the same spawn boundary.
+    drop(rustc_invocation_capability);
     let status = match status {
         Ok(status) => status,
         Err(error) => {
@@ -2442,11 +2459,6 @@ impl CompilerCapabilities {
             crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
             hex(&self.compiler_closure_sha256()),
         );
-        if let Some(compiler_closure) = &self.compiler_closure {
-            compiler_closure
-                .inherit_for_child_at(command, COMPILER_CLOSURE_CHILD_FD)
-                .map_err(BindingWrapperError::ChildCapability)?;
-        }
         if let Some(authority) = &self.invocation_authority {
             authority
                 .inherit_for_child(command)

@@ -2407,11 +2407,14 @@ mod platform {
                  test -e /proc/self/fd/{} && \
                  test \"$(readlink /proc/self/fd/{INVOCATION_AUTHORITY_CHILD_FD_V1})\" != \
                       \"$(readlink /proc/self/fd/{})\"",
-                crate::COMPILER_CLOSURE_CHILD_FD,
-                crate::COMPILER_CLOSURE_CHILD_FD,
+                fe2o3_compiler_closure_capability::COMPILER_CLOSURE_CHILD_FD_V1,
+                fe2o3_compiler_closure_capability::COMPILER_CLOSURE_CHILD_FD_V1,
             ));
             capability
-                .inherit_for_child_at(&mut command, crate::COMPILER_CLOSURE_CHILD_FD)
+                .inherit_for_child_at(
+                    &mut command,
+                    fe2o3_compiler_closure_capability::COMPILER_CLOSURE_CHILD_FD_V1,
+                )
                 .unwrap();
             authority.inherit_for_child(&mut command).unwrap();
             assert!(command.status().unwrap().success());
