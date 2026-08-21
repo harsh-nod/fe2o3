@@ -160,7 +160,7 @@ fn exact_nonzero_entry_lowers_to_verified_kir_with_correspondence() {
         1
     );
     assert_eq!(
-        lowered.correspondence().blocks()[1].erased_effect_free_statements(),
+        lowered.correspondence().blocks()[1].source_statement_count(),
         1
     );
     assert_eq!(

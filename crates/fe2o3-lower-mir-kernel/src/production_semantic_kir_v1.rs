@@ -1,22 +1,30 @@
 //! Owner-consuming production lowering from exact semantic MIR to Kernel IR.
 //!
-//! This boundary is intentionally fail-closed. It currently admits an
-//! effect-free control-flow subset; each additional semantic operation must
-//! arrive with an exact correspondence rule and Kernel IR verification. The
-//! older detached `AlgorithmOp` marker pass is not used by this API.
+//! This boundary is intentionally fail-closed. It admits the exact scalar
+//! `DisjointSlice::get_mut` fill profile, including trusted invocation indices,
+//! structured control flow, and typed global stores. Every additional semantic
+//! operation must arrive with an exact correspondence rule and Kernel IR
+//! verification. The older detached `AlgorithmOp` marker pass is not used by
+//! this API.
 
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BlockId, Function, FunctionId, Kernel, LaunchDomain,
-    LaunchExtent, Module, ScalarType, Signature, Terminator, Type, ValueId, VerificationErrors,
+    AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate,
+    Constant, Function, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
+    LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
+    Signature, SwitchCase, Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
     WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticLocalRoleV1, SemanticMutabilityV1,
-    SemanticPointerMetadataV1, SemanticScalarTypeV1, SemanticStatementKindV1,
-    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticAxisV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
+    SemanticCastKindV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
+    SemanticLocalRoleV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
+    SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
+    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUnwindActionV1, SemanticVolatilityV1,
 };
 use fe2o3_pliron::{ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1};
 
@@ -70,7 +78,7 @@ pub struct SemanticKirBlockCorrespondenceV1 {
     semantic_function: SemanticFunctionIdV1,
     semantic_block: SemanticBlockIdV1,
     kernel_ir_block: BlockId,
-    erased_effect_free_statements: u32,
+    source_statement_count: u32,
 }
 
 impl SemanticKirBlockCorrespondenceV1 {
@@ -89,9 +97,9 @@ impl SemanticKirBlockCorrespondenceV1 {
         self.kernel_ir_block
     }
 
-    /// Returns the number of explicitly classified effect-free statements erased.
-    pub const fn erased_effect_free_statements(self) -> u32 {
-        self.erased_effect_free_statements
+    /// Returns the number of source statements covered by this block rule.
+    pub const fn source_statement_count(self) -> u32 {
+        self.source_statement_count
     }
 }
 
@@ -145,6 +153,17 @@ pub enum ProductionSemanticKirErrorV1 {
         /// Stable rejection reason.
         detail: &'static str,
     },
+    /// A semantic local is used before an SSA value is available on this path.
+    MissingLocalDefinition {
+        /// Source semantic function index.
+        function: u32,
+        /// Source semantic block index.
+        block: u32,
+        /// Source semantic statement ordinal when available.
+        statement: Option<u32>,
+        /// Missing semantic local index.
+        local: u32,
+    },
     /// The constructed Kernel IR failed structural or semantic verification.
     InvalidKernelIr(VerificationErrors),
     /// Retained correspondence no longer matches the exact source owner.
@@ -172,6 +191,15 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 formatter,
                 "semantic-to-Kernel-IR lowering rejected function {function}, block {block:?}, statement {statement:?}: {detail}",
             ),
+            Self::MissingLocalDefinition {
+                function,
+                block,
+                statement,
+                local,
+            } => write!(
+                formatter,
+                "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement {statement:?}: local {local} has no path-available SSA definition",
+            ),
             Self::InvalidKernelIr(error) => error.fmt(formatter),
             Self::CorrespondenceMismatch => formatter.write_str(
                 "semantic-to-Kernel-IR correspondence no longer matches its exact owner",
@@ -187,6 +215,7 @@ impl Error for ProductionSemanticKirErrorV1 {
             Self::InvalidKernelIr(error) => Some(error),
             Self::ResourceLimit { .. }
             | Self::Unsupported { .. }
+            | Self::MissingLocalDefinition { .. }
             | Self::CorrespondenceMismatch => None,
         }
     }
@@ -376,13 +405,16 @@ fn lower_module(
                 .map_err(|_| unsupported(0, None, None, "local identity does not fit Kernel IR"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut lowering = SemanticFunctionLoweringV1::new(
+        semantic.types(),
+        semantic.callables(),
+        function,
+        &parameters,
+        &parameter_values,
+        &parameter_types,
+    )?;
 
-    let mut order = Vec::with_capacity(function.blocks().len());
-    order.push(function.entry());
-    order.extend((0..function.blocks().len()).filter_map(|index| {
-        let block = SemanticBlockIdV1::from_index(index as u32);
-        (block != function.entry()).then_some(block)
-    }));
+    let order = semantic_cfg_preorder(function)?;
     let mut blocks = Vec::with_capacity(order.len());
     let mut correspondence = Vec::with_capacity(order.len());
     for semantic_block in order {
@@ -391,53 +423,33 @@ fn lower_module(
         let source = function.blocks().get(index).ok_or_else(|| {
             unsupported(0, Some(semantic_block.index()), None, "block is missing")
         })?;
-        for (statement, operation) in source.statements().iter().enumerate() {
-            if !matches!(
-                operation.kind(),
-                SemanticStatementKindV1::StorageLive(_)
-                    | SemanticStatementKindV1::StorageDead(_)
-                    | SemanticStatementKindV1::Nop
-            ) {
-                return Err(unsupported(
-                    0,
-                    Some(semantic_block.index()),
-                    u32::try_from(statement).ok(),
-                    "semantic statement has no exact Kernel IR lowering rule",
-                ));
-            }
-        }
         let mut target = BasicBlock::new(BlockId(semantic_block.index()));
-        target.terminator = Some(match source.terminator().kind() {
-            SemanticTerminatorKindV1::Goto(edge) => Terminator::Branch {
-                target: BlockId(edge.target().index()),
-                arguments: vec![],
-            },
-            SemanticTerminatorKindV1::Return => Terminator::Return { values: vec![] },
-            SemanticTerminatorKindV1::Unreachable => Terminator::Unreachable,
-            _ => {
-                return Err(unsupported(
-                    0,
-                    Some(semantic_block.index()),
-                    None,
-                    "semantic terminator has no exact Kernel IR lowering rule",
-                ));
-            }
-        });
+        for (statement, operation) in source.statements().iter().enumerate() {
+            lowering.lower_statement(
+                semantic_block,
+                u32::try_from(statement).ok(),
+                operation.kind(),
+                &mut target.operations,
+            )?;
+        }
+        target.terminator = Some(lowering.lower_terminator(
+            semantic_block,
+            source.terminator().kind(),
+            &mut target.operations,
+        )?);
         blocks.push(target);
         correspondence.push(SemanticKirBlockCorrespondenceV1 {
             semantic_function: SemanticFunctionIdV1::from_index(0),
             semantic_block,
             kernel_ir_block: BlockId(semantic_block.index()),
-            erased_effect_free_statements: u32::try_from(source.statements().len()).map_err(
-                |_| {
-                    unsupported(
-                        0,
-                        Some(semantic_block.index()),
-                        None,
-                        "statement count is too large",
-                    )
-                },
-            )?,
+            source_statement_count: u32::try_from(source.statements().len()).map_err(|_| {
+                unsupported(
+                    0,
+                    Some(semantic_block.index()),
+                    None,
+                    "statement count is too large",
+                )
+            })?,
         });
     }
 
@@ -477,6 +489,953 @@ fn lower_module(
             blocks: correspondence.into_boxed_slice(),
         },
     ))
+}
+
+fn semantic_cfg_preorder(
+    function: &SemanticFunctionDeclV1,
+) -> Result<Vec<SemanticBlockIdV1>, ProductionSemanticKirErrorV1> {
+    let mut order = Vec::with_capacity(function.blocks().len());
+    let mut visited = vec![false; function.blocks().len()];
+    let mut stack = vec![function.entry()];
+    while let Some(block) = stack.pop() {
+        let index = usize::try_from(block.index())
+            .map_err(|_| unsupported(0, None, None, "block identity does not fit this host"))?;
+        let Some(source) = function.blocks().get(index) else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "CFG traversal references a missing block",
+            ));
+        };
+        if visited[index] {
+            continue;
+        }
+        visited[index] = true;
+        order.push(block);
+        let mut successors = Vec::with_capacity(source.terminator().kind().edge_count());
+        source
+            .terminator()
+            .kind()
+            .try_for_each_edge::<ProductionSemanticKirErrorV1>(|edge| {
+                let target = edge.target();
+                let target_index = usize::try_from(target.index()).map_err(|_| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "CFG successor identity does not fit this host",
+                    )
+                })?;
+                if target_index >= function.blocks().len() {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "CFG traversal references a missing successor",
+                    ));
+                }
+                successors.push(target);
+                Ok(())
+            })?;
+        stack.extend(successors.into_iter().rev());
+    }
+    order.extend(
+        visited
+            .iter()
+            .enumerate()
+            .filter(|(_, seen)| !**seen)
+            .map(|(index, _)| SemanticBlockIdV1::from_index(index as u32)),
+    );
+    Ok(order)
+}
+
+#[derive(Clone, Debug)]
+enum SemanticValueBindingV1 {
+    Value {
+        id: ValueId,
+        ty: Type,
+    },
+    OptionPointer {
+        present: ValueId,
+        pointer: ValueId,
+        pointer_ty: Type,
+    },
+}
+
+impl SemanticValueBindingV1 {
+    fn value(&self) -> Result<(ValueId, Type), &'static str> {
+        match self {
+            Self::Value { id, ty } => Ok((*id, ty.clone())),
+            Self::OptionPointer { .. } => Err("aggregate value requires a semantic projection"),
+        }
+    }
+}
+
+struct SemanticFunctionLoweringV1<'a> {
+    types: &'a [SemanticTypeDeclV1],
+    callables: &'a [SemanticCallableDeclV1],
+    function: &'a SemanticFunctionDeclV1,
+    locals: Vec<Option<SemanticValueBindingV1>>,
+    next_value: u32,
+}
+
+impl<'a> SemanticFunctionLoweringV1<'a> {
+    fn new(
+        types: &'a [SemanticTypeDeclV1],
+        callables: &'a [SemanticCallableDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        parameters: &[(u32, usize, SemanticTypeIdV1)],
+        parameter_values: &[ValueId],
+        parameter_types: &[Type],
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let mut locals = vec![None; function.locals().len()];
+        for ((_, local, _), (value, ty)) in parameters
+            .iter()
+            .zip(parameter_values.iter().zip(parameter_types))
+        {
+            locals[*local] = Some(SemanticValueBindingV1::Value {
+                id: *value,
+                ty: ty.clone(),
+            });
+        }
+        let next_value = u32::try_from(function.locals().len())
+            .map_err(|_| unsupported(0, None, None, "local count does not fit Kernel IR"))?;
+        Ok(Self {
+            types,
+            callables,
+            function,
+            locals,
+            next_value,
+        })
+    }
+
+    fn lower_statement(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        kind: &SemanticStatementKindV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        match kind {
+            SemanticStatementKindV1::Assign(assignment) => {
+                let value = self.lower_rvalue(
+                    block,
+                    statement,
+                    assignment.value().result_type(),
+                    assignment.value().kind(),
+                    operations,
+                )?;
+                self.assign_place(
+                    block,
+                    statement,
+                    assignment.destination(),
+                    value,
+                    SemanticVolatilityV1::NonVolatile,
+                    operations,
+                )
+            }
+            SemanticStatementKindV1::Store(store) if store.atomic().is_none() => {
+                let value = self.lower_operand(block, statement, store.value(), operations)?;
+                self.assign_place(
+                    block,
+                    statement,
+                    store.destination(),
+                    value,
+                    store.volatility(),
+                    operations,
+                )
+            }
+            SemanticStatementKindV1::StorageLive(local)
+            | SemanticStatementKindV1::StorageDead(local) => {
+                self.require_local(block, statement, local.index())?;
+                Ok(())
+            }
+            SemanticStatementKindV1::Nop => Ok(()),
+            _ => Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                unsupported_statement_detail(kind)
+                    .unwrap_or("semantic statement has no exact Kernel IR lowering rule"),
+            )),
+        }
+    }
+
+    fn lower_rvalue(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        result_type: SemanticTypeIdV1,
+        value: &SemanticRvalueKindV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        match value {
+            SemanticRvalueKindV1::Use(operand) => {
+                self.lower_operand(block, statement, operand, operations)
+            }
+            SemanticRvalueKindV1::Borrow { place, .. }
+            | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                self.resolve_place(block, statement, place)
+            }
+            SemanticRvalueKindV1::Discriminant(place) => {
+                match self.resolve_place(block, statement, place)? {
+                    SemanticValueBindingV1::OptionPointer { present, .. } => {
+                        let target = lower_scalar_type(self.types, result_type)?;
+                        if target == Type::BOOL {
+                            Ok(SemanticValueBindingV1::Value {
+                                id: present,
+                                ty: Type::BOOL,
+                            })
+                        } else if target.as_scalar().is_some_and(ScalarType::is_integer) {
+                            self.emit(
+                                operations,
+                                target.clone(),
+                                OperationKind::Cast {
+                                    kind: CastKind::ZeroExtend,
+                                    value: present,
+                                    to: target,
+                                },
+                            )
+                        } else {
+                            Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "semantic option discriminant is not integer-valued",
+                            ))
+                        }
+                    }
+                    SemanticValueBindingV1::Value { .. } => Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic discriminant source is not a lowered option",
+                    )),
+                }
+            }
+            SemanticRvalueKindV1::Length(place) => {
+                let (slice, ty) = self
+                    .resolve_place(block, statement, place)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                if !matches!(ty, Type::Slice(_)) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic length source is not a lowered slice",
+                    ));
+                }
+                self.emit(
+                    operations,
+                    Type::INDEX,
+                    OperationKind::SliceLength { slice },
+                )
+            }
+            SemanticRvalueKindV1::Unary { operation, operand } => {
+                let input = self.lower_operand(block, statement, operand, operations)?;
+                let (input, input_ty) = input
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                match operation {
+                    SemanticUnaryOpV1::Not => self.emit(
+                        operations,
+                        input_ty,
+                        OperationKind::Unary {
+                            op: UnaryOp::Not,
+                            operand: input,
+                        },
+                    ),
+                    SemanticUnaryOpV1::Negate => self.emit(
+                        operations,
+                        input_ty,
+                        OperationKind::Unary {
+                            op: UnaryOp::Negate,
+                            operand: input,
+                        },
+                    ),
+                    SemanticUnaryOpV1::PointerMetadata if matches!(input_ty, Type::Slice(_)) => {
+                        self.emit(
+                            operations,
+                            Type::INDEX,
+                            OperationKind::SliceLength { slice: input },
+                        )
+                    }
+                    SemanticUnaryOpV1::PointerMetadata => Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "pointer metadata is available only for lowered slices",
+                    )),
+                }
+            }
+            SemanticRvalueKindV1::Binary {
+                operation,
+                left,
+                right,
+            } => {
+                let (left, left_ty) = self
+                    .lower_operand(block, statement, left, operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                let (right, right_ty) = self
+                    .lower_operand(block, statement, right, operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                if left_ty != right_ty {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic binary operand types differ",
+                    ));
+                }
+                if let Some(predicate) = lower_compare(*operation) {
+                    self.emit(
+                        operations,
+                        Type::BOOL,
+                        OperationKind::Compare {
+                            predicate,
+                            lhs: left,
+                            rhs: right,
+                        },
+                    )
+                } else if let Some(operation) = lower_binary(*operation) {
+                    self.emit(
+                        operations,
+                        left_ty,
+                        OperationKind::Binary {
+                            op: operation,
+                            lhs: left,
+                            rhs: right,
+                        },
+                    )
+                } else {
+                    Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic pointer offset requires an explicit GEP rule",
+                    ))
+                }
+            }
+            SemanticRvalueKindV1::Cast { kind, operand } => {
+                let (input, input_ty) = self
+                    .lower_operand(block, statement, operand, operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                let target = lower_scalar_type(self.types, result_type)?;
+                if input_ty == target {
+                    return Ok(SemanticValueBindingV1::Value {
+                        id: input,
+                        ty: input_ty,
+                    });
+                }
+                let Some(kind) = lower_cast(*kind, &input_ty, &target) else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic cast has no exact Kernel IR cast rule",
+                    ));
+                };
+                self.emit(
+                    operations,
+                    target.clone(),
+                    OperationKind::Cast {
+                        kind,
+                        value: input,
+                        to: target,
+                    },
+                )
+            }
+            SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => {
+                let (pointer, pointer_ty) = self
+                    .resolve_place(block, statement, load.source())?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                let Type::Pointer(pointer_type) = pointer_ty else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic load source is not a lowered pointer",
+                    ));
+                };
+                let mut access = memory_access_for_type(
+                    self.types,
+                    load.source().ty(),
+                    pointer_type.address_space,
+                )?;
+                access.volatile = load.volatility() == SemanticVolatilityV1::Volatile;
+                self.emit(
+                    operations,
+                    (*pointer_type.pointee).clone(),
+                    OperationKind::Load { pointer, access },
+                )
+            }
+            _ => Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                unsupported_rvalue_detail(value),
+            )),
+        }
+    }
+
+    fn lower_operand(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        operand: &SemanticOperandV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        match operand {
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+                self.resolve_place(block, statement, place)
+            }
+            SemanticOperandV1::Constant(constant) => {
+                let ty = lower_scalar_type(self.types, constant.ty())?;
+                let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic constant is not a scalar",
+                    ));
+                };
+                self.emit(
+                    operations,
+                    ty.clone(),
+                    OperationKind::Constant(lower_constant(ty, *value)?),
+                )
+            }
+        }
+    }
+
+    fn lower_terminator(
+        &mut self,
+        block: SemanticBlockIdV1,
+        terminator: &SemanticTerminatorKindV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
+        match terminator {
+            SemanticTerminatorKindV1::Goto(edge) => Ok(Terminator::Branch {
+                target: BlockId(edge.target().index()),
+                arguments: vec![],
+            }),
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } => {
+                let (selector, _) = self
+                    .lower_operand(block, None, discriminant, operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let cases = targets
+                    .values()
+                    .iter()
+                    .map(|target| {
+                        Ok(SwitchCase {
+                            value: u64::try_from(target.value()).map_err(|_| {
+                                unsupported(
+                                    0,
+                                    Some(block.index()),
+                                    None,
+                                    "switch value exceeds Kernel IR V1",
+                                )
+                            })?,
+                            target: BlockId(target.edge().target().index()),
+                            arguments: vec![],
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ProductionSemanticKirErrorV1>>()?;
+                Ok(Terminator::Switch {
+                    selector,
+                    cases,
+                    default_target: BlockId(targets.otherwise().target().index()),
+                    default_arguments: vec![],
+                })
+            }
+            SemanticTerminatorKindV1::Call(call) => self.lower_call(block, call, operations),
+            SemanticTerminatorKindV1::Return => Ok(Terminator::Return { values: vec![] }),
+            SemanticTerminatorKindV1::Unreachable => Ok(Terminator::Unreachable),
+            _ => Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                unsupported_terminator_detail(terminator),
+            )),
+        }
+    }
+
+    fn lower_call(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
+        if matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_)) {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "trusted compiler intrinsic has a cleanup unwind edge",
+            ));
+        }
+        let callable = self
+            .callables
+            .get(call.callee().index() as usize)
+            .ok_or_else(|| unsupported(0, Some(block.index()), None, "callable is missing"))?;
+        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "defined and device-FFI calls require interprocedural lowering",
+            ));
+        };
+        let destination = call.destination().ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "compiler intrinsic call has no destination",
+            )
+        })?;
+        let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
+                if !call.arguments().is_empty() {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "thread index intrinsic has arguments",
+                    ));
+                }
+                self.emit(
+                    operations,
+                    Type::INDEX,
+                    OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+                )?
+            }
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => {
+                self.require_call_argument_count(block, call, 1)?;
+                self.lower_operand(block, None, &call.arguments()[0], operations)?
+            }
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
+                self.emit_index_intrinsic(operations, IndexKind::Local, lower_axis(*axis))?
+            }
+            SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(axis) => {
+                self.emit_index_intrinsic(operations, IndexKind::Workgroup, lower_axis(*axis))?
+            }
+            SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(axis) => {
+                self.emit_index_intrinsic(operations, IndexKind::WorkgroupSize, lower_axis(*axis))?
+            }
+            SemanticCompilerIntrinsicOperationV1::GridDimension(axis) => {
+                self.emit_index_intrinsic(operations, IndexKind::WorkgroupCount, lower_axis(*axis))?
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. } => {
+                self.require_call_argument_count(block, call, 2)?;
+                let (slice, slice_ty) = self
+                    .lower_operand(block, None, &call.arguments()[0], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let (index, index_ty) = self
+                    .lower_operand(block, None, &call.arguments()[1], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let Type::Slice(slice_type) = slice_ty else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "DisjointSlice::get_mut receiver is not a lowered slice",
+                    ));
+                };
+                if index_ty != Type::INDEX {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "DisjointSlice::get_mut index is not the trusted global index",
+                    ));
+                }
+                let (length, _) = self
+                    .emit(
+                        operations,
+                        Type::INDEX,
+                        OperationKind::SliceLength { slice },
+                    )?
+                    .value()
+                    .expect("emitted scalar value");
+                let (present, _) = self
+                    .emit(
+                        operations,
+                        Type::BOOL,
+                        OperationKind::Compare {
+                            predicate: ComparePredicate::LessThan,
+                            lhs: index,
+                            rhs: length,
+                        },
+                    )?
+                    .value()
+                    .expect("emitted scalar value");
+                let pointer_ty = Type::pointer(
+                    (*slice_type.element).clone(),
+                    slice_type.address_space,
+                    slice_type.access,
+                );
+                let (base, _) = self
+                    .emit(
+                        operations,
+                        pointer_ty.clone(),
+                        OperationKind::SliceData { slice },
+                    )?
+                    .value()
+                    .expect("emitted scalar value");
+                let (pointer, _) = self
+                    .emit(
+                        operations,
+                        pointer_ty.clone(),
+                        OperationKind::GetElementPointer {
+                            base,
+                            offset: index,
+                        },
+                    )?
+                    .value()
+                    .expect("emitted scalar value");
+                SemanticValueBindingV1::OptionPointer {
+                    present,
+                    pointer,
+                    pointer_ty,
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
+            | SemanticCompilerIntrinsicOperationV1::WaveBarrier
+            | SemanticCompilerIntrinsicOperationV1::FabsF32 => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "compiler intrinsic has no fill-profile lowering rule",
+                ));
+            }
+        };
+        self.bind_destination(block, None, destination.place(), binding)?;
+        Ok(Terminator::Branch {
+            target: BlockId(destination.edge().target().index()),
+            arguments: vec![],
+        })
+    }
+
+    fn require_call_argument_count(
+        &self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        expected: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if call.arguments().len() == expected {
+            Ok(())
+        } else {
+            Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "compiler intrinsic argument count changed",
+            ))
+        }
+    }
+
+    fn emit_index_intrinsic(
+        &mut self,
+        operations: &mut Vec<Operation>,
+        kind: IndexKind,
+        axis: Axis,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.emit(
+            operations,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex { kind, axis },
+                Type::INDEX,
+            )),
+        )
+    }
+
+    fn assign_place(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        destination: &SemanticPlaceV1,
+        value: SemanticValueBindingV1,
+        volatility: SemanticVolatilityV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if destination.projections().is_empty() {
+            return self.bind_destination(block, statement, destination, value);
+        }
+        if !destination
+            .projections()
+            .iter()
+            .any(|projection| projection.kind() == SemanticProjectionKindV1::Dereference)
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "projected local assignment is not a dereferenced store",
+            ));
+        }
+        let (pointer, pointer_ty) = self
+            .resolve_place(block, statement, destination)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        let (value, value_ty) = value
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        let Type::Pointer(pointer_type) = pointer_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "dereferenced store destination is not a lowered pointer",
+            ));
+        };
+        if *pointer_type.pointee != value_ty {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "dereferenced store value type differs from its pointee",
+            ));
+        }
+        let mut access =
+            memory_access_for_type(self.types, destination.ty(), pointer_type.address_space)?;
+        access.volatile = volatility == SemanticVolatilityV1::Volatile;
+        operations.push(Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer,
+                value,
+                access,
+            },
+        ));
+        Ok(())
+    }
+
+    fn bind_destination(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        destination: &SemanticPlaceV1,
+        value: SemanticValueBindingV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if !destination.projections().is_empty() {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic result destination is projected",
+            ));
+        }
+        let index = self.require_local(block, statement, destination.local().index())?;
+        self.locals[index] = Some(value);
+        Ok(())
+    }
+
+    fn resolve_place(
+        &self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        place: &SemanticPlaceV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let index = self.require_local(block, statement, place.local().index())?;
+        let mut binding = self.locals[index].clone().ok_or(
+            ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                function: 0,
+                block: block.index(),
+                statement,
+                local: place.local().index(),
+            },
+        )?;
+        for projection in place.projections() {
+            binding = match (binding, projection.kind()) {
+                (
+                    SemanticValueBindingV1::OptionPointer {
+                        pointer,
+                        pointer_ty,
+                        ..
+                    },
+                    SemanticProjectionKindV1::Field(_),
+                ) => SemanticValueBindingV1::Value {
+                    id: pointer,
+                    ty: pointer_ty,
+                },
+                (
+                    binding @ SemanticValueBindingV1::OptionPointer { .. },
+                    SemanticProjectionKindV1::Downcast(_),
+                ) => binding,
+                (
+                    binding @ SemanticValueBindingV1::Value { .. },
+                    SemanticProjectionKindV1::Dereference
+                    | SemanticProjectionKindV1::Field(0)
+                    | SemanticProjectionKindV1::Downcast(_)
+                    | SemanticProjectionKindV1::OpaqueCast
+                    | SemanticProjectionKindV1::Subtype,
+                ) => binding,
+                _ => {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic place projection has no exact fill-profile representation",
+                    ));
+                }
+            };
+        }
+        Ok(binding)
+    }
+
+    fn emit(
+        &mut self,
+        operations: &mut Vec<Operation>,
+        ty: Type,
+        kind: OperationKind,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let id = ValueId(self.next_value);
+        self.next_value = self
+            .next_value
+            .checked_add(1)
+            .ok_or_else(|| unsupported(0, None, None, "Kernel IR SSA identity overflow"))?;
+        operations.push(Operation::effect_free(ValueDef::new(id, ty.clone()), kind));
+        Ok(SemanticValueBindingV1::Value { id, ty })
+    }
+
+    fn require_local(
+        &self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        local: u32,
+    ) -> Result<usize, ProductionSemanticKirErrorV1> {
+        let index = usize::try_from(local).map_err(|_| {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "local does not fit this host",
+            )
+        })?;
+        if index >= self.function.locals().len() {
+            Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic local is out of range",
+            ))
+        } else {
+            Ok(index)
+        }
+    }
+}
+
+fn unsupported_terminator_detail(terminator: &SemanticTerminatorKindV1) -> &'static str {
+    match terminator {
+        SemanticTerminatorKindV1::SwitchInt { .. } => {
+            "semantic switch-int terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::Call(_) => {
+            "semantic call terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::TailCall(_) => {
+            "semantic tail-call terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::Drop { .. } => {
+            "semantic drop terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::Assert { .. } => {
+            "semantic assert terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::FalseEdge { .. } => {
+            "semantic false-edge terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::UnwindResume => {
+            "semantic unwind-resume terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::UnwindTerminate => {
+            "semantic unwind-terminate terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::Abort => {
+            "semantic abort terminator has no exact Kernel IR lowering rule"
+        }
+        SemanticTerminatorKindV1::Goto(_)
+        | SemanticTerminatorKindV1::Return
+        | SemanticTerminatorKindV1::Unreachable => {
+            "internally supported semantic terminator reached unsupported diagnostics"
+        }
+    }
+}
+
+fn unsupported_statement_detail(statement: &SemanticStatementKindV1) -> Option<&'static str> {
+    match statement {
+        SemanticStatementKindV1::Assign(assignment) => {
+            Some(unsupported_rvalue_detail(assignment.value().kind()))
+        }
+        SemanticStatementKindV1::Store(_) => {
+            Some("semantic store has no exact Kernel IR lowering rule")
+        }
+        SemanticStatementKindV1::AtomicRmw(_) => {
+            Some("semantic atomic-rmw has no exact Kernel IR lowering rule")
+        }
+        SemanticStatementKindV1::AtomicCompareExchange(_) => {
+            Some("semantic compare-exchange has no exact Kernel IR lowering rule")
+        }
+        SemanticStatementKindV1::SetDiscriminant { .. } => {
+            Some("semantic set-discriminant has no exact Kernel IR lowering rule")
+        }
+        SemanticStatementKindV1::Deinitialize(_) => {
+            Some("semantic deinitialize has no exact Kernel IR lowering rule")
+        }
+        SemanticStatementKindV1::StorageLive(_)
+        | SemanticStatementKindV1::StorageDead(_)
+        | SemanticStatementKindV1::Nop => None,
+    }
+}
+
+fn unsupported_rvalue_detail(value: &SemanticRvalueKindV1) -> &'static str {
+    match value {
+        SemanticRvalueKindV1::Use(_) => {
+            "semantic assignment/use has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::Unary { .. } => {
+            "semantic assignment/unary has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::Binary { .. } => {
+            "semantic assignment/binary has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::Cast { .. } => {
+            "semantic assignment/cast has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::Borrow { .. } => {
+            "semantic assignment/borrow has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::AddressOf { .. } => {
+            "semantic assignment/address-of has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::Length(_) => {
+            "semantic assignment/length has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::Discriminant(_) => {
+            "semantic assignment/discriminant has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::Aggregate(_) => {
+            "semantic assignment/aggregate has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::Load(_) => {
+            "semantic assignment/load has no exact Kernel IR lowering rule"
+        }
+    }
 }
 
 fn lower_parameter_type(
@@ -682,6 +1641,164 @@ fn lower_address_space(address_space: u32) -> Result<AddressSpace, ProductionSem
             "semantic pointer address space is unsupported",
         )),
     }
+}
+
+const fn lower_axis(axis: SemanticAxisV1) -> Axis {
+    match axis {
+        SemanticAxisV1::X => Axis::X,
+        SemanticAxisV1::Y => Axis::Y,
+        SemanticAxisV1::Z => Axis::Z,
+    }
+}
+
+const fn lower_compare(operation: SemanticBinaryOpV1) -> Option<ComparePredicate> {
+    match operation {
+        SemanticBinaryOpV1::Equal => Some(ComparePredicate::Equal),
+        SemanticBinaryOpV1::NotEqual => Some(ComparePredicate::NotEqual),
+        SemanticBinaryOpV1::LessThan => Some(ComparePredicate::LessThan),
+        SemanticBinaryOpV1::LessOrEqual => Some(ComparePredicate::LessThanOrEqual),
+        SemanticBinaryOpV1::GreaterThan => Some(ComparePredicate::GreaterThan),
+        SemanticBinaryOpV1::GreaterOrEqual => Some(ComparePredicate::GreaterThanOrEqual),
+        SemanticBinaryOpV1::Add
+        | SemanticBinaryOpV1::Subtract
+        | SemanticBinaryOpV1::Multiply
+        | SemanticBinaryOpV1::Divide
+        | SemanticBinaryOpV1::Remainder
+        | SemanticBinaryOpV1::BitXor
+        | SemanticBinaryOpV1::BitAnd
+        | SemanticBinaryOpV1::BitOr
+        | SemanticBinaryOpV1::ShiftLeft
+        | SemanticBinaryOpV1::ShiftRight
+        | SemanticBinaryOpV1::Offset => None,
+    }
+}
+
+const fn lower_binary(operation: SemanticBinaryOpV1) -> Option<BinaryOp> {
+    match operation {
+        SemanticBinaryOpV1::Add => Some(BinaryOp::Add),
+        SemanticBinaryOpV1::Subtract => Some(BinaryOp::Subtract),
+        SemanticBinaryOpV1::Multiply => Some(BinaryOp::Multiply),
+        SemanticBinaryOpV1::Divide => Some(BinaryOp::Divide),
+        SemanticBinaryOpV1::Remainder => Some(BinaryOp::Remainder),
+        SemanticBinaryOpV1::BitXor => Some(BinaryOp::BitXor),
+        SemanticBinaryOpV1::BitAnd => Some(BinaryOp::BitAnd),
+        SemanticBinaryOpV1::BitOr => Some(BinaryOp::BitOr),
+        SemanticBinaryOpV1::ShiftLeft => Some(BinaryOp::ShiftLeft),
+        SemanticBinaryOpV1::ShiftRight => Some(BinaryOp::ShiftRight),
+        SemanticBinaryOpV1::Equal
+        | SemanticBinaryOpV1::LessThan
+        | SemanticBinaryOpV1::LessOrEqual
+        | SemanticBinaryOpV1::NotEqual
+        | SemanticBinaryOpV1::GreaterOrEqual
+        | SemanticBinaryOpV1::GreaterThan
+        | SemanticBinaryOpV1::Offset => None,
+    }
+}
+
+fn lower_cast(kind: SemanticCastKindV1, from: &Type, to: &Type) -> Option<CastKind> {
+    let (Some(from), Some(to)) = (from.as_scalar(), to.as_scalar()) else {
+        return None;
+    };
+    let (from_width, to_width) = (from.bit_width()?, to.bit_width()?);
+    match kind {
+        SemanticCastKindV1::Integer if to.is_integer() => {
+            if from.is_float() {
+                Some(CastKind::FloatToInteger)
+            } else if (from.is_integer() || from == ScalarType::Bool) && from_width > to_width {
+                Some(CastKind::Truncate)
+            } else if (from.is_integer() || from == ScalarType::Bool) && from_width < to_width {
+                Some(if from.is_signed_integer() {
+                    CastKind::SignExtend
+                } else {
+                    CastKind::ZeroExtend
+                })
+            } else {
+                Some(CastKind::Bitcast)
+            }
+        }
+        SemanticCastKindV1::Float if to.is_float() => {
+            if from.is_integer() {
+                Some(CastKind::IntegerToFloat)
+            } else if from.is_float() && from_width < to_width {
+                Some(CastKind::FloatExtend)
+            } else if from.is_float() && from_width > to_width {
+                Some(CastKind::FloatTruncate)
+            } else {
+                Some(CastKind::Bitcast)
+            }
+        }
+        SemanticCastKindV1::Transmute if from_width == to_width => Some(CastKind::Bitcast),
+        SemanticCastKindV1::Integer
+        | SemanticCastKindV1::Float
+        | SemanticCastKindV1::Pointer
+        | SemanticCastKindV1::PointerExposeProvenance
+        | SemanticCastKindV1::PointerWithExposedProvenance
+        | SemanticCastKindV1::Transmute => None,
+    }
+}
+
+fn lower_constant(
+    ty: Type,
+    value: SemanticScalarValueV1,
+) -> Result<Constant, ProductionSemanticKirErrorV1> {
+    let bits = value.bits();
+    let constant = match ty.as_scalar() {
+        Some(ScalarType::Bool) if value.size_bytes() == 1 && bits <= 1 => Constant::Bool(bits != 0),
+        Some(ScalarType::I8) if value.size_bytes() == 1 => Constant::I8(bits as u8 as i8),
+        Some(ScalarType::I16) if value.size_bytes() == 2 => Constant::I16(bits as u16 as i16),
+        Some(ScalarType::I32) if value.size_bytes() == 4 => Constant::I32(bits as u32 as i32),
+        Some(ScalarType::I64) if value.size_bytes() == 8 => Constant::I64(bits as u64 as i64),
+        Some(ScalarType::U8) if value.size_bytes() == 1 => Constant::U8(bits as u8),
+        Some(ScalarType::U16) if value.size_bytes() == 2 => Constant::U16(bits as u16),
+        Some(ScalarType::U32) if value.size_bytes() == 4 => Constant::U32(bits as u32),
+        Some(ScalarType::U64) if value.size_bytes() == 8 => Constant::U64(bits as u64),
+        Some(ScalarType::Index) if value.size_bytes() == 8 => Constant::Index(bits as u64),
+        Some(ScalarType::F16) if value.size_bytes() == 2 => Constant::F16Bits(bits as u16),
+        Some(ScalarType::F32) if value.size_bytes() == 4 => Constant::F32Bits(bits as u32),
+        Some(ScalarType::F64) if value.size_bytes() == 8 => Constant::F64Bits(bits as u64),
+        Some(ScalarType::Bf16) if value.size_bytes() == 2 => Constant::Bf16Bits(bits as u16),
+        Some(ScalarType::I128 | ScalarType::U128) => {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "128-bit constants have no Kernel IR V1 representation",
+            ));
+        }
+        Some(_) | None => {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "semantic scalar constant size does not match its lowered type",
+            ));
+        }
+    };
+    Ok(constant)
+}
+
+fn memory_access_for_type(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    address_space: AddressSpace,
+) -> Result<MemoryAccess, ProductionSemanticKirErrorV1> {
+    let alignment = types
+        .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
+        .ok_or_else(|| unsupported(0, None, None, "memory access type is missing"))?
+        .layout()
+        .alignment_bytes();
+    let alignment = u32::try_from(alignment)
+        .ok()
+        .filter(|alignment| *alignment != 0)
+        .ok_or_else(|| {
+            unsupported(
+                0,
+                None,
+                None,
+                "memory access alignment has no Kernel IR V1 representation",
+            )
+        })?;
+    Ok(MemoryAccess::new(address_space, alignment))
 }
 
 fn enforce_limit(
