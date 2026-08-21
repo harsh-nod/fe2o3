@@ -39,8 +39,10 @@ use fe2o3_artifact_transaction::{
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1858,6 +1860,54 @@ fn highest_admissible_create_temp_crash_is_bounded_recovered_and_retryable() {
     commit_worker_v2_publication_intent_cleanup_escrow_v1(&fixture.output, &fixture.owner, capsule)
         .unwrap();
     assert!(escrow_entry_names(&fixture.output).is_empty());
+}
+
+#[test]
+fn cleanup_escrow_prepare_rejects_raw_non_utf8_temp_without_touching_its_alias() {
+    let fixture = CleanupEscrowFixture::new(0x26, "raw-intent-temp-alias");
+    let record_path = schema_entry_with_suffix(&fixture.output, V2_PREFIX, ".record");
+    let output_path = schema_entry_with_suffix(&fixture.output, V2_PREFIX, ".output");
+    let record_before = fs::read(&record_path).unwrap();
+    let output_before = fs::read(&output_path).unwrap();
+    let record_name = record_path.file_name().unwrap().to_str().unwrap();
+    let temp_prefix = format!("{}.tmp-", record_name.strip_suffix(".record").unwrap());
+    let raw_name = OsString::from_vec([temp_prefix.as_bytes(), &[0xff]].concat());
+    let alias_name = format!("{temp_prefix}\u{fffd}");
+    assert_eq!(raw_name.to_string_lossy(), alias_name);
+    let raw_path = fixture.output.join(&raw_name);
+    let alias_path = fixture.output.join(&alias_name);
+    std::os::unix::fs::symlink("missing-target", &raw_path).unwrap();
+    fs::write(&alias_path, b"valid UTF-8 alias").unwrap();
+    fs::set_permissions(&alias_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    for _ in 0..2 {
+        let error = prepare_worker_v2_publication_intent_cleanup_escrow_v1(
+            &fixture.output,
+            &fixture.owner,
+            fixture.attempt,
+            fixture.closure,
+            fixture.intent,
+            fixture.receipt,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkerV2PublicationIntentCleanupEscrowErrorV1::Intent(
+                WorkerV2PublicationIntentErrorV2::InvalidIntent { ref path, ref reason }
+            ) if path == &raw_path && reason == "temporary entry is not private"
+        ));
+        assert!(
+            fs::symlink_metadata(&raw_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&alias_path).unwrap(), b"valid UTF-8 alias");
+        assert_eq!(fs::read(&record_path).unwrap(), record_before);
+        assert_eq!(fs::read(&output_path).unwrap(), output_before);
+        assert!(escrow_entry_names(&fixture.output).is_empty());
+    }
 }
 
 #[test]

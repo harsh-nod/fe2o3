@@ -30,6 +30,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1169,10 +1170,28 @@ fn cleanup_temps<S: PublicationIntentSchema>(
     let directory = rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
     let mut entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
     let mut temps = Vec::new();
+    let mut scanned_entries = 0usize;
     for entry in &mut entries {
         let entry = entry.map_err(std::io::Error::from)?;
-        let name = entry.file_name().to_string_lossy();
-        if !name.starts_with(&names.temp_prefix) {
+        let name_bytes = entry.file_name().to_bytes();
+        if name_bytes == b"." || name_bytes == b".." {
+            continue;
+        }
+        scanned_entries = scanned_entries.checked_add(1).ok_or_else(|| {
+            invalid::<S>(
+                output,
+                &names.temp_prefix,
+                "artifact directory entry count overflowed during temporary cleanup",
+            )
+        })?;
+        if scanned_entries > crate::MAX_OUTPUT_ENTRIES {
+            return Err(invalid::<S>(
+                output,
+                &names.temp_prefix,
+                "artifact directory exceeds the temporary cleanup scan entry bound",
+            ));
+        }
+        if !name_bytes.starts_with(names.temp_prefix.as_bytes()) {
             continue;
         }
         if temps.len() == MAX_TEMP_ATTEMPTS as usize {
@@ -1182,16 +1201,17 @@ fn cleanup_temps<S: PublicationIntentSchema>(
                 "too many temporary entries",
             ));
         }
-        let stat = statat(&output.fd, name.as_ref(), AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(std::io::Error::from)?;
+        let name = PathBuf::from(std::ffi::OsStr::from_bytes(name_bytes));
+        let stat =
+            statat(&output.fd, &name, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
         if !is_private_file(&stat) {
             return Err(invalid::<S>(
                 output,
-                name.as_ref(),
+                &name,
                 "temporary entry is not private",
             ));
         }
-        temps.push(name.into_owned());
+        temps.push(name);
     }
     if !temps.is_empty() {
         for name in temps {
@@ -1413,7 +1433,7 @@ fn hex(bytes: &[u8]) -> String {
 
 fn invalid<S: PublicationIntentSchema>(
     output: &PinnedOutput,
-    entry: &str,
+    entry: impl AsRef<Path>,
     reason: impl Into<String>,
 ) -> S::Error {
     S::Error::invalid_intent(output.display_path.join(entry), reason)
@@ -2675,6 +2695,9 @@ mod publication_intent_v2 {
     mod tests {
         use super::*;
         use crate::BuildInvocation;
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::fs::PermissionsExt;
         use std::thread;
 
         static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -2788,6 +2811,97 @@ mod publication_intent_v2 {
                 .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
                 .filter(|name| name.starts_with(prefix) && name.ends_with(suffix))
                 .count()
+        }
+
+        fn write_private_test_file(path: &Path, bytes: &[u8]) {
+            fs::write(path, bytes).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        fn fill_with_unrelated_entries(output: &Path, target_entries: usize) {
+            let existing = fs::read_dir(output).unwrap().count();
+            assert!(existing <= target_entries);
+            for index in existing..target_entries {
+                fs::File::create(output.join(format!("intent-cleanup-unrelated-{index}"))).unwrap();
+            }
+            assert_eq!(fs::read_dir(output).unwrap().count(), target_entries);
+        }
+
+        #[test]
+        fn temp_cleanup_rejects_the_exact_non_utf8_symlink_without_touching_its_alias() {
+            let temp = TestDirectory::new();
+            let output_dir = temp.output();
+            fs::create_dir(&output_dir).unwrap();
+            let output = PinnedOutput::open_existing(&output_dir).unwrap();
+            let _lock = output.lock().unwrap();
+            let names = IntentNames::new::<PublicationIntentSchemaV2>([0x31; 32], [0x32; 32]);
+            let raw_name = OsString::from_vec([names.temp_prefix.as_bytes(), &[0xff]].concat());
+            let alias_name = format!("{}\u{fffd}", names.temp_prefix);
+            assert_eq!(raw_name.to_string_lossy(), alias_name);
+            let raw_path = output_dir.join(&raw_name);
+            let alias_path = output_dir.join(&alias_name);
+            std::os::unix::fs::symlink("missing-target", &raw_path).unwrap();
+            write_private_test_file(&alias_path, b"valid UTF-8 alias");
+
+            let error = cleanup_temps::<PublicationIntentSchemaV2>(&output, &names).unwrap_err();
+
+            assert!(matches!(
+                error,
+                WorkerV2PublicationIntentErrorV2::InvalidIntent { ref path, ref reason }
+                    if path == &raw_path && reason == "temporary entry is not private"
+            ));
+            assert!(
+                fs::symlink_metadata(&raw_path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read(alias_path).unwrap(), b"valid UTF-8 alias");
+        }
+
+        #[test]
+        fn temp_cleanup_enforces_the_exact_total_directory_entry_bound() {
+            let exact = TestDirectory::new();
+            let exact_output_dir = exact.output();
+            fs::create_dir(&exact_output_dir).unwrap();
+            let exact_output = PinnedOutput::open_existing(&exact_output_dir).unwrap();
+            let _exact_lock = exact_output.lock().unwrap();
+            let exact_names = IntentNames::new::<PublicationIntentSchemaV2>([0x41; 32], [0x42; 32]);
+            let exact_temp = exact_output_dir.join(format!("{}owned", exact_names.temp_prefix));
+            write_private_test_file(&exact_temp, b"exact-bound temp");
+            fill_with_unrelated_entries(&exact_output_dir, crate::MAX_OUTPUT_ENTRIES);
+
+            cleanup_temps::<PublicationIntentSchemaV2>(&exact_output, &exact_names).unwrap();
+
+            assert!(!exact_temp.exists());
+            assert_eq!(
+                fs::read_dir(&exact_output_dir).unwrap().count(),
+                crate::MAX_OUTPUT_ENTRIES - 1
+            );
+
+            let over = TestDirectory::new();
+            let over_output_dir = over.output();
+            fs::create_dir(&over_output_dir).unwrap();
+            let over_output = PinnedOutput::open_existing(&over_output_dir).unwrap();
+            let _over_lock = over_output.lock().unwrap();
+            let over_names = IntentNames::new::<PublicationIntentSchemaV2>([0x51; 32], [0x52; 32]);
+            let over_temp = over_output_dir.join(format!("{}owned", over_names.temp_prefix));
+            write_private_test_file(&over_temp, b"over-bound temp");
+            fill_with_unrelated_entries(&over_output_dir, crate::MAX_OUTPUT_ENTRIES + 1);
+
+            let error =
+                cleanup_temps::<PublicationIntentSchemaV2>(&over_output, &over_names).unwrap_err();
+
+            assert!(matches!(
+                error,
+                WorkerV2PublicationIntentErrorV2::InvalidIntent { ref reason, .. }
+                    if reason == "artifact directory exceeds the temporary cleanup scan entry bound"
+            ));
+            assert_eq!(fs::read(&over_temp).unwrap(), b"over-bound temp");
+            assert_eq!(
+                fs::read_dir(&over_output_dir).unwrap().count(),
+                crate::MAX_OUTPUT_ENTRIES + 1
+            );
         }
 
         #[test]
