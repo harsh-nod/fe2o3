@@ -183,7 +183,31 @@ impl Error for VerificationErrors {}
 /// All diagnostics are collected and sorted, making the result deterministic
 /// regardless of map implementation details in the verifier.
 pub fn verify_module(module: &Module) -> Result<(), VerificationErrors> {
-    verify_module_impl(module, None)
+    verify_module_ref(module).map(|_| ())
+}
+
+/// A borrow of a module whose structural and local semantic invariants were
+/// checked by this crate.
+///
+/// The private field prevents analysis crates from bypassing verification when
+/// several passes need to share one verified module traversal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedKernelIrModuleV1<'module> {
+    module: &'module Module,
+}
+
+impl<'module> VerifiedKernelIrModuleV1<'module> {
+    pub const fn module(self) -> &'module Module {
+        self.module
+    }
+}
+
+/// Verifies a module and returns a non-owning token reusable by later analyses.
+pub fn verify_module_ref(
+    module: &Module,
+) -> Result<VerifiedKernelIrModuleV1<'_>, VerificationErrors> {
+    verify_module_impl(module, None)?;
+    Ok(VerifiedKernelIrModuleV1 { module })
 }
 
 /// Verifies a module and rejects requirements outside a target capability set.

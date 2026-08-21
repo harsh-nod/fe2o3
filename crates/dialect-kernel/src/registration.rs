@@ -3,8 +3,10 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
-    AlgorithmOp, AlgorithmType, DIALECT_NAME, GeneralGemmAbiSchemaAttr,
-    GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IterationDomainAttr,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, BranchOp, DIALECT_NAME, DimensionAttr, DimensionOp,
+    GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexConstantOp,
+    IndexLessThanBranchOp, IndexType, IndexValueAttr, IterationDomainAttr, RankedAccessOp,
+    RankedViewOp, RankedViewType, ReturnOp,
 };
 
 fn registration_hook(
@@ -15,8 +17,20 @@ fn registration_hook(
     service.register_attribute::<IterationDomainAttr>()?;
     service.register_attribute::<GeneralGemmAbiSchemaAttr>()?;
     service.register_attribute::<GeneralGemmEpilogueSchemaAttr>()?;
+    service.register_type::<RankedViewType>()?;
+    service.register_type::<IndexType>()?;
+    service.register_attribute::<IndexValueAttr>()?;
+    service.register_attribute::<DimensionAttr>()?;
+    service.register_attribute::<AccessKindAttr>()?;
     service.register_operation::<AlgorithmOp>()?;
     service.register_operation::<GeneralGemmOp>()?;
+    service.register_operation::<RankedViewOp>()?;
+    service.register_operation::<IndexConstantOp>()?;
+    service.register_operation::<DimensionOp>()?;
+    service.register_operation::<RankedAccessOp>()?;
+    service.register_operation::<IndexLessThanBranchOp>()?;
+    service.register_operation::<BranchOp>()?;
+    service.register_operation::<ReturnOp>()?;
     Ok(())
 }
 

@@ -1,0 +1,391 @@
+use dialect_kernel::AccessKindAttr;
+use fe2o3_pliron::{
+    DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
+    ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
+    ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
+    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+};
+
+const VIEW: ProductionRankedValueIdV1 = ProductionRankedValueIdV1::new(0);
+const INDEX: ProductionRankedValueIdV1 = ProductionRankedValueIdV1::new(1);
+
+fn local(identity: ProductionRankedValueIdV1) -> ProductionRankedValueV1 {
+    ProductionRankedValueV1::Local(identity)
+}
+
+fn static_kernel(index: u64, extent: u64) -> ProductionRankedKernelV1 {
+    ProductionRankedKernelV1::new(
+        "static_copy",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::View {
+                    result: VIEW,
+                    element_width: 32,
+                    writable: false,
+                    shape: vec![extent],
+                    dynamic_extents: vec![],
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: INDEX,
+                    value: index,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Read,
+                    view: local(VIEW),
+                    indices: vec![local(INDEX)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("valid static recipe")
+}
+
+fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {
+    let view = ProductionRankedOperationV1::View {
+        result: VIEW,
+        element_width: 16,
+        writable: false,
+        shape: vec![0],
+        dynamic_extents: vec![ProductionRankedValueV1::Argument(1)],
+    };
+    let access = ProductionRankedOperationV1::Access {
+        kind: AccessKindAttr::Read,
+        view: local(VIEW),
+        indices: vec![ProductionRankedValueV1::Argument(0)],
+    };
+    let blocks = if guarded {
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![view],
+                ProductionRankedTerminatorV1::IndexLessThan {
+                    lhs: ProductionRankedValueV1::Argument(0),
+                    rhs: ProductionRankedValueV1::Argument(1),
+                    true_block: 1,
+                    false_block: 2,
+                },
+            ),
+            ProductionRankedBlockV1::new(vec![access], ProductionRankedTerminatorV1::Return),
+            ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+        ]
+    } else {
+        vec![ProductionRankedBlockV1::new(
+            vec![view, access],
+            ProductionRankedTerminatorV1::Return,
+        )]
+    };
+    ProductionRankedKernelV1::new("dynamic_copy", 2, blocks).expect("valid dynamic recipe")
+}
+
+fn construction(kernel: ProductionRankedKernelV1) -> ProductionConstructionV1 {
+    ProductionConstructionV1::ranked_kernel("kernel_module", kernel).expect("valid construction")
+}
+
+fn session(with_kernel_dialect: bool) -> ProductionPlironSessionV1 {
+    let registrations = if with_kernel_dialect {
+        vec![dialect_kernel::dialect_registration().expect("registration")]
+    } else {
+        Vec::<DialectRegistration>::new()
+    };
+    ProductionPlironSessionV1::new(ProductionSessionLimitsV1::default(), registrations)
+        .expect("production session")
+}
+
+#[test]
+fn static_non_gemm_kernel_reaches_only_bounds_verified_lowering_input() {
+    let input = compile_ranked_kernel_for_lowering_v1(
+        construction(static_kernel(7, 64)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("safe static kernel");
+
+    assert_eq!(input.kernel().function_name(), "static_copy");
+    assert!(input.bounds_report().is_clean());
+    assert!(!input.bounds_report().grants_compiler_refinement_authority());
+    assert!(!input.grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn static_oob_is_a_terminal_compile_time_diagnostic_before_lowering() {
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(static_kernel(64, 64)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedBounds(_))
+    ));
+    assert_eq!(
+        error.to_string(),
+        "error[FE2O3-BOUNDS-001]: statically out-of-bounds Read at block 0 op 2; access: v0 dimension 0; required: 64 < 64",
+    );
+}
+
+#[test]
+fn dynamic_access_requires_a_dominating_exact_bound() {
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(dynamic_kernel(false)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("error[FE2O3-BOUNDS-002]"));
+    assert!(error.to_string().contains("dimension 0"));
+    assert!(error.to_string().contains("unproven bound:"));
+
+    let guarded = compile_ranked_kernel_for_lowering_v1(
+        construction(dynamic_kernel(true)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("dominating guard proves dynamic access");
+    assert!(guarded.bounds_report().is_clean());
+}
+
+#[test]
+fn rank_two_static_shapes_are_checked_without_gemm_semantics() {
+    let row = ProductionRankedValueIdV1::new(1);
+    let column = ProductionRankedValueIdV1::new(2);
+    let kernel = ProductionRankedKernelV1::new(
+        "image_tile",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::View {
+                    result: VIEW,
+                    element_width: 8,
+                    writable: true,
+                    shape: vec![32, 64],
+                    dynamic_extents: vec![],
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: row,
+                    value: 31,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: column,
+                    value: 63,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: local(VIEW),
+                    indices: vec![local(row), local(column)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("rank-two recipe");
+    assert!(
+        compile_ranked_kernel_for_lowering_v1(
+            construction(kernel),
+            ProductionSessionLimitsV1::default(),
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn ranked_construction_requires_the_typed_kernel_registration() {
+    let mut session = session(false);
+    let registered = session
+        .register_construction(construction(static_kernel(0, 1)))
+        .expect("register data recipe");
+    assert!(matches!(
+        session.construct_registered(registered),
+        Err(ProductionSessionErrorV1::RankedRecipe(
+            ProductionRankedKernelErrorV1::MissingKernelDialect
+        ))
+    ));
+    assert!(session.is_poisoned());
+}
+
+#[test]
+fn builtin_module_cannot_be_relabelled_as_bounds_verified() {
+    let mut session = session(false);
+    let registered = session
+        .register_construction(
+            ProductionConstructionV1::builtin_module("empty").expect("module recipe"),
+        )
+        .expect("registration");
+    let (stage, root) = session
+        .construct_registered(registered)
+        .expect("empty module");
+    assert!(matches!(
+        session.verify_ranked_bounds(stage, root),
+        Err(ProductionSessionErrorV1::WrongConstructionKind)
+    ));
+}
+
+#[test]
+fn same_session_stage_root_substitution_is_rejected_before_analysis() {
+    let mut session = session(true);
+    let first = session
+        .register_construction(
+            ProductionConstructionV1::ranked_kernel("first", static_kernel(0, 1)).unwrap(),
+        )
+        .unwrap();
+    let second = session
+        .register_construction(
+            ProductionConstructionV1::ranked_kernel("second", static_kernel(0, 1)).unwrap(),
+        )
+        .unwrap();
+    let (first_stage, _) = session.construct_registered(first).unwrap();
+    let (_, second_root) = session.construct_registered(second).unwrap();
+    assert!(matches!(
+        session.verify_ranked_bounds(first_stage, second_root),
+        Err(ProductionSessionErrorV1::StageRootMismatch)
+    ));
+    assert!(!session.is_poisoned());
+}
+
+#[test]
+fn recipe_rejects_undefined_duplicate_and_non_entry_values() {
+    let undefined = ProductionRankedKernelV1::new(
+        "undefined",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::Access {
+                kind: AccessKindAttr::Read,
+                view: local(VIEW),
+                indices: vec![local(INDEX)],
+            }],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    );
+    assert!(matches!(
+        undefined,
+        Err(ProductionRankedKernelErrorV1::UndefinedValue(_))
+    ));
+
+    let duplicate = ProductionRankedKernelV1::new(
+        "duplicate",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::IndexConstant {
+                    result: VIEW,
+                    value: 0,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: VIEW,
+                    value: 1,
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    );
+    assert_eq!(
+        duplicate,
+        Err(ProductionRankedKernelErrorV1::NonCanonicalValueId {
+            expected: 1,
+            actual: 0,
+        })
+    );
+
+    let non_entry = ProductionRankedKernelV1::new(
+        "non_entry",
+        0,
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![],
+                ProductionRankedTerminatorV1::Branch { target: 1 },
+            ),
+            ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::IndexConstant {
+                    result: INDEX,
+                    value: 0,
+                }],
+                ProductionRankedTerminatorV1::Return,
+            ),
+        ],
+    );
+    assert_eq!(
+        non_entry,
+        Err(ProductionRankedKernelErrorV1::NonEntryDefinition { block: 1 })
+    );
+}
+
+#[test]
+fn recipe_rejects_shape_rank_and_access_type_mismatches() {
+    let bad_dynamic = ProductionRankedKernelV1::new(
+        "bad_dynamic",
+        1,
+        vec![ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::View {
+                result: VIEW,
+                element_width: 32,
+                writable: false,
+                shape: vec![0, 4],
+                dynamic_extents: vec![],
+            }],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    );
+    assert_eq!(
+        bad_dynamic,
+        Err(ProductionRankedKernelErrorV1::DynamicExtentCountMismatch {
+            expected: 1,
+            actual: 0,
+        })
+    );
+
+    let write_read_only = ProductionRankedKernelV1::new(
+        "readonly",
+        1,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::View {
+                    result: VIEW,
+                    element_width: 32,
+                    writable: false,
+                    shape: vec![4],
+                    dynamic_extents: vec![],
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: local(VIEW),
+                    indices: vec![ProductionRankedValueV1::Argument(0)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    );
+    assert_eq!(
+        write_read_only,
+        Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView)
+    );
+}
+
+#[test]
+fn dense_value_and_exact_tree_work_bounds_reject_before_materialization() {
+    let maximum_constants = (HARD_MAX_SESSION_OPERATION_TREE_ITEMS - 9) / 2;
+    let build = |count: usize| {
+        let operations = (0..count)
+            .map(|identity| ProductionRankedOperationV1::IndexConstant {
+                result: ProductionRankedValueIdV1::new(identity as u32),
+                value: identity as u64,
+            })
+            .collect();
+        ProductionRankedKernelV1::new(
+            "resource_boundary",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+    };
+
+    assert!(build(maximum_constants).is_ok());
+    assert_eq!(
+        build(maximum_constants + 1),
+        Err(ProductionRankedKernelErrorV1::ResourceLimit {
+            resource: "operation tree work",
+            limit: HARD_MAX_SESSION_OPERATION_TREE_ITEMS,
+            actual: HARD_MAX_SESSION_OPERATION_TREE_ITEMS + 1,
+        })
+    );
+}

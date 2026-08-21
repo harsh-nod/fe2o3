@@ -1,10 +1,10 @@
 //! Closed, compiler-owned Pliron session for the production pipeline.
 //!
-//! This is the first bounded increment of the issue #140 production boundary.
-//! It deliberately supports only a closed builtin-module construction recipe.
-//! Dialect construction and transformations can be added as closed enum cases;
-//! callers cannot inject callbacks, arbitrary passes, text, raw contexts, or
-//! contextless pointers.
+//! It supports a closed builtin-module recipe and a bounded target-neutral
+//! ranked-kernel recipe. Ranked graphs are constructed inside the owned context
+//! and must pass the whole-function bounds transition before a move-only
+//! lowering input exists. Callers cannot inject callbacks, arbitrary passes,
+//! text, raw contexts, or contextless pointers.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -20,6 +20,10 @@ use super::{
     ContextBuildError, ContextManifest, NameKind, OperationHandle, OperationHandleError,
     OperationShapeV1, PlironSession, ShellLimits, validate_name,
 };
+
+mod ranked;
+
+pub use ranked::*;
 
 /// Hard cap for construction recipes registered during one production session.
 pub const HARD_MAX_PRODUCTION_CONSTRUCTIONS: usize = 4_096;
@@ -91,17 +95,22 @@ impl Error for ProductionSessionLimitErrorV1 {}
 
 /// A closed, bounded construction recipe admitted by the production session.
 ///
-/// The first increment admits only an empty builtin module. The private recipe
-/// representation prevents callers from adding a constructor callback or
-/// smuggling a raw Pliron capability into the session.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// The private recipe representation prevents callers from adding a constructor
+/// callback or smuggling a raw Pliron capability into the session.
+#[derive(Debug, Eq, PartialEq)]
 pub struct ProductionConstructionV1 {
     kind: ProductionConstructionKindV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 enum ProductionConstructionKindV1 {
-    BuiltinModule { root_name: String },
+    BuiltinModule {
+        root_name: String,
+    },
+    RankedKernel {
+        root_name: String,
+        kernel: ProductionRankedKernelV1,
+    },
 }
 
 impl ProductionConstructionV1 {
@@ -117,7 +126,8 @@ impl ProductionConstructionV1 {
 
     fn root_name(&self) -> &str {
         match &self.kind {
-            ProductionConstructionKindV1::BuiltinModule { root_name } => root_name,
+            ProductionConstructionKindV1::BuiltinModule { root_name }
+            | ProductionConstructionKindV1::RankedKernel { root_name, .. } => root_name,
         }
     }
 }
@@ -137,6 +147,12 @@ pub struct ConstructionRegisteredStageV1 {
 /// Typestate for a recursively verified, session-owned Pliron graph.
 #[derive(Debug)]
 pub struct ConstructedGraphStageV1 {
+    _private: (),
+}
+
+/// Typestate for a session-owned ranked function that passed whole-function bounds verification.
+#[derive(Debug)]
+pub struct BoundsVerifiedGraphStageV1 {
     _private: (),
 }
 
@@ -200,6 +216,10 @@ pub enum ProductionSessionErrorV1 {
     ForeignSession,
     StaleStage,
     StageRootMismatch,
+    WrongConstructionKind,
+    RankedGraphChanged,
+    RankedRecipe(ProductionRankedKernelErrorV1),
+    RankedBounds(fe2o3_kernel_analysis::RankedBoundsCheckErrorV1),
     Operation(OperationHandleError),
 }
 
@@ -226,6 +246,16 @@ impl fmt::Display for ProductionSessionErrorV1 {
             Self::StageRootMismatch => {
                 formatter.write_str("production root does not belong to the supplied stage")
             }
+            Self::WrongConstructionKind => {
+                formatter.write_str("production stage is not a ranked-kernel construction")
+            }
+            Self::RankedGraphChanged => {
+                formatter.write_str("production ranked graph changed after bounds verification")
+            }
+            Self::RankedRecipe(error) => {
+                write!(formatter, "production ranked recipe failed: {error}")
+            }
+            Self::RankedBounds(error) => error.fmt(formatter),
             Self::Operation(_) => formatter.write_str("production Pliron operation failed"),
         }
     }
@@ -235,6 +265,8 @@ impl Error for ProductionSessionErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Operation(error) => Some(error),
+            Self::RankedRecipe(error) => Some(error),
+            Self::RankedBounds(error) => Some(error),
             _ => None,
         }
     }
@@ -259,7 +291,7 @@ pub struct ProductionPlironSessionV1 {
     limits: ProductionSessionLimitsV1,
     registered: BTreeMap<StageIdentityV1, ProductionConstructionV1>,
     construction_names: BTreeSet<String>,
-    constructed_roots: BTreeMap<StageIdentityV1, RootIdentityV1>,
+    constructed_roots: BTreeMap<StageIdentityV1, ConstructedRootV1>,
     registration_count: usize,
     next_stage: Option<NonZeroU64>,
     next_root: Option<NonZeroU64>,
@@ -355,8 +387,9 @@ impl ProductionPlironSessionV1 {
         self.authenticate_owner(stage.owner)?;
         let construction = self
             .registered
-            .get(&stage.identity)
+            .remove(&stage.identity)
             .ok_or(ProductionSessionErrorV1::StaleStage)?;
+        self.preflight_construction(&construction)?;
         let root_name = construction.root_name().to_owned();
         let raw_root = self
             .next_root
@@ -364,26 +397,41 @@ impl ProductionPlironSessionV1 {
         let root_identity = RootIdentityV1(raw_root);
         let next_root = raw_root.get().checked_add(1).and_then(NonZeroU64::new);
 
-        let operation = match self.inner.create_module(&root_name) {
-            Ok(operation) => operation,
+        let is_builtin = matches!(
+            &construction.kind,
+            ProductionConstructionKindV1::BuiltinModule { .. }
+        );
+        let materialized = match self.materialize_construction(construction, &root_name) {
+            Ok(materialized) => materialized,
             Err(error) => {
                 self.poisoned = true;
-                return Err(ProductionSessionErrorV1::Operation(error));
+                return Err(error);
             }
         };
-        match self
-            .inner
-            .validate_production_module(&operation, &root_name)
-        {
-            Ok(_) => {}
-            Err(error) => {
-                self.poisoned = true;
-                return Err(ProductionSessionErrorV1::Operation(error));
+        let operation = materialized.operation;
+        if is_builtin {
+            match self
+                .inner
+                .validate_production_module(&operation, &root_name)
+            {
+                Ok(_) => {}
+                Err(error) => {
+                    self.poisoned = true;
+                    return Err(ProductionSessionErrorV1::Operation(error));
+                }
             }
         }
 
-        self.registered.remove(&stage.identity);
-        self.constructed_roots.insert(stage.identity, root_identity);
+        self.constructed_roots.insert(
+            stage.identity,
+            ConstructedRootV1 {
+                identity: root_identity,
+                ranked_function: materialized.ranked_function,
+                ranked_kernel: materialized.ranked_kernel,
+                bounds_verified: false,
+                bounds_report: None,
+            },
+        );
         self.next_root = next_root;
 
         Ok((
@@ -414,7 +462,7 @@ impl ProductionPlironSessionV1 {
         let expected_root = self
             .constructed_roots
             .get(&stage.identity)
-            .copied()
+            .map(|record| record.identity)
             .ok_or(ProductionSessionErrorV1::StaleStage)?;
         if root.stage != stage.identity || root.identity != expected_root {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
@@ -448,10 +496,51 @@ impl ProductionPlironSessionV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dialect_kernel::AccessKindAttr;
 
     fn session() -> ProductionPlironSessionV1 {
         ProductionPlironSessionV1::new(ProductionSessionLimitsV1::default(), [])
             .expect("fresh production session")
+    }
+
+    fn ranked_session() -> ProductionPlironSessionV1 {
+        ProductionPlironSessionV1::new(
+            ProductionSessionLimitsV1::default(),
+            [dialect_kernel::dialect_registration().expect("kernel registration")],
+        )
+        .expect("fresh ranked production session")
+    }
+
+    fn ranked_construction(name: &str) -> ProductionConstructionV1 {
+        let view = ProductionRankedValueIdV1::new(0);
+        let index = ProductionRankedValueIdV1::new(1);
+        let kernel = ProductionRankedKernelV1::new(
+            "checked",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::View {
+                        result: view,
+                        element_width: 32,
+                        writable: false,
+                        shape: vec![1],
+                        dynamic_extents: vec![],
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: index,
+                        value: 0,
+                    },
+                    ProductionRankedOperationV1::Access {
+                        kind: AccessKindAttr::Read,
+                        view: ProductionRankedValueV1::Local(view),
+                        indices: vec![ProductionRankedValueV1::Local(index)],
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .expect("ranked recipe");
+        ProductionConstructionV1::ranked_kernel(name, kernel).expect("ranked construction")
     }
 
     #[test]
@@ -555,6 +644,77 @@ mod tests {
         assert!(matches!(
             session.construct_registered(stale),
             Err(ProductionSessionErrorV1::StaleStage)
+        ));
+        assert!(!session.is_poisoned());
+        assert!(session.inner.operations.is_empty());
+    }
+
+    #[test]
+    fn forged_verified_typestate_cannot_skip_the_bounds_transition() {
+        let mut session = ranked_session();
+        let registered = session
+            .register_construction(ranked_construction("root"))
+            .expect("registration");
+        let (stage, root) = session
+            .construct_registered(registered)
+            .expect("construction");
+        let forged_stage = ProductionStageHandleV1::<BoundsVerifiedGraphStageV1> {
+            owner: stage.owner,
+            identity: stage.identity,
+            _stage: PhantomData,
+        };
+        let forged_root = ProductionRootHandleV1::<BoundsVerifiedGraphStageV1> {
+            owner: root.owner,
+            stage: root.stage,
+            identity: root.identity,
+            operation: root.operation,
+            _stage: PhantomData,
+        };
+
+        assert!(matches!(
+            session.prepare_ranked_lowering(forged_stage, forged_root),
+            Err(ProductionSessionErrorV1::StageRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn private_graph_erasure_is_rechecked_before_lowering_release() {
+        let mut session = ranked_session();
+        let registered = session
+            .register_construction(ranked_construction("root"))
+            .expect("registration");
+        let (stage, root) = session
+            .construct_registered(registered)
+            .expect("construction");
+        let (verified, root) = session
+            .verify_ranked_bounds(stage, root)
+            .expect("bounds verification");
+        session
+            .inner
+            .erase_operation(&root.operation)
+            .expect("simulate private graph corruption");
+
+        assert!(matches!(
+            session.prepare_ranked_lowering(verified, root),
+            Err(ProductionSessionErrorV1::Operation(
+                OperationHandleError::StaleHandle
+            ))
+        ));
+    }
+
+    #[test]
+    fn ranked_tree_capacity_rejects_before_allocation_without_poisoning() {
+        let mut session = ranked_session();
+        let registered = session
+            .register_construction(ranked_construction("root"))
+            .expect("registration");
+        session.inner.operation_tree_work = crate::HARD_MAX_SESSION_OPERATION_TREE_ITEMS - 1;
+
+        assert!(matches!(
+            session.construct_registered(registered),
+            Err(ProductionSessionErrorV1::Operation(
+                OperationHandleError::SessionOperationTreeLimitExceeded
+            ))
         ));
         assert!(!session.is_poisoned());
         assert!(session.inner.operations.is_empty());

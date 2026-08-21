@@ -88,10 +88,29 @@ validates bounded pass plans without executing them. Seven always-Pliron target-
 `fe2o3-mir-model`; its bounded `mir.*` Pliron module/function/block shell is
 available only through the non-default `pliron` feature. These are verified
 in-memory representations, not a connected compiler pipeline.
+The `kernel.*` shell additionally owns ranked-memory and closed-CFG operations
+with local MLIR-style verifiers. `fe2o3-kernel-analysis` owns their bounded,
+non-mutating whole-function bounds stage and terminal pre-lowering check.
+Its target-neutral analyses remain available without the default
+`authenticated-machine-effect` feature, so the production Pliron owner does
+not inherit process-control machinery; rustc enables that feature explicitly
+where finalized-machine evidence is required.
+`fe2o3-pliron` composes those pieces through a closed production recipe and a
+move-only constructed-to-bounds-verified typestate transition; callers never
+receive its retained Pliron function pointer. This does not create a second
+lowering route or relax the owner-handle requirement.
 `fe2o3-kir-pliron-bridge` implements an opaque context-bound exact-byte
 canonical KIR envelope, while `fe2o3-lower-mir-kernel` and
 `fe2o3-lower-kernel-gpu` implement narrow bounded detached lowering services
-with context-bound results. None is a production compiler stage.
+with context-bound results. The ranked construction/bounds transition is a
+production-owned pre-lowering stage; semantic MIR projection and generic
+ranked-memory GPU lowering remain unimplemented.
+
+The mandatory [general Kernel IR check pipeline](general-kernel-check-pipeline-v1.md)
+runs before Pliron projection or transformation. It is a closed target-neutral
+analysis sequence over immutable `fe2o3-kernel-ir`, not a substitute for the
+withheld generic Pliron execution API. Its reports cannot create compiler,
+artifact, or runtime authority.
 
 This layer may consume canonical contracts and admitted frontend models. It
 MUST NOT depend on target backend, host runtime, Verus execution, compiler

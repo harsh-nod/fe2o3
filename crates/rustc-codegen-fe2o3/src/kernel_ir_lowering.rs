@@ -29,13 +29,17 @@ use crate::mir_import::{
 use crate::trusted_device_items::{TrustedDeviceItem, TrustedHalfOperation};
 use dialect_amdgcn::{DeviceMathDiagnosticItem, recognized_device_math_operation};
 use fe2o3_amd_target::AmdTargetId;
+use fe2o3_kernel_analysis::{KernelCheckStatusV1, run_general_kernel_checks_from_verified_v1};
+#[cfg(test)]
+use fe2o3_kernel_ir::verify_module;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BinaryOp, BlockId,
-    ComparePredicate, Constant, FloatConversionKind, FloatOperation, Function, FunctionId, Kernel,
-    LaunchDomain, LaunchExtent, MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1,
-    MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2, MatrixFrontendBindingV2, MemoryAccess, Module,
-    Operation, OperationKind, ScalarType, Signature, SwitchCase, TargetCapability, Terminator,
-    Type, ValueDef, ValueId, WorkgroupSize, gfx942_xnack_minus_target_capability, verify_module,
+    ComparePredicate, Constant, ExplicitLaunchExtent1d, FloatConversionKind, FloatOperation,
+    FormalIndexWidth, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent,
+    MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1, MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2,
+    MatrixFrontendBindingV2, MemoryAccess, Module, Operation, OperationKind, ScalarType, Signature,
+    SwitchCase, TargetCapability, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
+    gfx942_xnack_minus_target_capability, verify_module_ref,
 };
 use reserved_fe2o3_symbols::{
     DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
@@ -57,6 +61,7 @@ pub enum TranslationDiagnosticCode {
     UnsupportedProjection,
     UnsupportedCall,
     VerificationFailed,
+    KernelCheckRejected,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -460,28 +465,73 @@ fn translate_and_verify_with_targets(
         })
         .collect();
 
-    if let Err(verification_errors) = verify_module(&module) {
-        let diagnostics = verification_errors
-            .diagnostics()
-            .iter()
-            .map(|verification| TranslationDiagnostic {
+    verify_and_check_module(module)
+}
+
+fn verify_and_check_module(module: Module) -> Result<Module, TranslationErrors> {
+    let verified = match verify_module_ref(&module) {
+        Ok(verified) => verified,
+        Err(verification_errors) => {
+            let diagnostics = verification_errors
+                .diagnostics()
+                .iter()
+                .map(|verification| TranslationDiagnostic {
+                    location: TranslationLocation {
+                        function: verification
+                            .location
+                            .function
+                            .as_ref()
+                            .map(|function| function.as_str().to_string()),
+                        block: verification.location.block.map(|block| block.0 as usize),
+                        statement: None,
+                        terminator: false,
+                        operation: verification.location.operation,
+                        source: None,
+                    },
+                    code: TranslationDiagnosticCode::VerificationFailed,
+                    message: format!("{:?}: {}", verification.code, verification.message),
+                })
+                .collect();
+            return Err(errors(diagnostics));
+        }
+    };
+
+    let mut check_diagnostics = Vec::new();
+    for kernel in &module.kernels {
+        let launch_extent = match kernel.domain {
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(x),
+            } => ExplicitLaunchExtent1d::Exact(u64::from(x)),
+            _ => ExplicitLaunchExtent1d::Unknown,
+        };
+        let report = run_general_kernel_checks_from_verified_v1(
+            verified,
+            &kernel.id,
+            launch_extent,
+            FormalIndexWidth::Bits64,
+        )
+        .expect("verified module contains the selected kernel");
+        if report.status() != KernelCheckStatusV1::Rejected {
+            continue;
+        }
+        check_diagnostics.extend(report.rejected_findings().map(|finding| {
+            let location = finding.operation_location();
+            TranslationDiagnostic {
                 location: TranslationLocation {
-                    function: verification
-                        .location
-                        .function
-                        .as_ref()
-                        .map(|function| function.as_str().to_string()),
-                    block: verification.location.block.map(|block| block.0 as usize),
+                    function: Some(kernel.entry.as_str().to_owned()),
+                    block: location.map(|location| location.block.0 as usize),
                     statement: None,
                     terminator: false,
-                    operation: verification.location.operation,
+                    operation: location.map(|location| location.operation_index),
                     source: None,
                 },
-                code: TranslationDiagnosticCode::VerificationFailed,
-                message: format!("{:?}: {}", verification.code, verification.message),
-            })
-            .collect();
-        return Err(errors(diagnostics));
+                code: TranslationDiagnosticCode::KernelCheckRejected,
+                message: finding.to_string(),
+            }
+        }));
+    }
+    if !check_diagnostics.is_empty() {
+        return Err(errors(check_diagnostics));
     }
 
     Ok(module)
@@ -3206,9 +3256,29 @@ mod tests {
         MirImportedType, MirLocal, MirLocalRole, MirPlaceRef, MirProjectionElem,
     };
     use dialect_mir::MirType;
+    use fe2o3_kernel_ir::tiled_gemm_lds_v1_module;
     use fe2o3_rustc_front::{
         FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
     };
+
+    #[test]
+    fn production_kernel_ir_boundary_runs_general_checks() {
+        verify_and_check_module(tiled_gemm_lds_v1_module())
+            .expect("canonical tiled GEMM has published LDS reads");
+
+        let mut missing_publish = tiled_gemm_lds_v1_module();
+        missing_publish.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .retain(|operation| !matches!(operation.kind, OperationKind::WorkgroupBarrier(_)));
+        let errors = verify_and_check_module(missing_publish).unwrap_err();
+        assert!(errors.contains(TranslationDiagnosticCode::KernelCheckRejected));
+        assert!(
+            errors
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| { diagnostic.message.contains("may observe unpublished data") })
+        );
+    }
 
     #[test]
     fn empty_kernels_are_sorted_and_verify() {

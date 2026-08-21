@@ -438,6 +438,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-kernel-analysis"
+version = "0.1.0"
+dependencies = [
+ "dialect-kernel",
+ "fe2o3-kernel-ir",
+ "pliron",
+]
+
+[[package]]
 name = "fe2o3-kernel-descriptor"
 version = "0.1.0"
 dependencies = [
@@ -505,6 +514,8 @@ dependencies = [
 name = "fe2o3-pliron"
 version = "0.1.0"
 dependencies = [
+ "dialect-kernel",
+ "fe2o3-kernel-analysis",
  "fe2o3-pliron-owner-core",
  "pliron",
 ]

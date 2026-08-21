@@ -8,7 +8,7 @@ use crate::{
     AccessMode, AddressSpace, Axis, BinaryOp, ByteExpression, Constant, Function, FunctionId,
     FunctionOperationLocation, IndexKind, IntrinsicKind, InvocationRange1d, KernelId, LaunchDomain,
     LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType, Type, ValueId,
-    VerificationErrors, verify_module,
+    VerificationErrors, VerifiedKernelIrModuleV1, verify_module_ref,
 };
 
 /// A caller-supplied one-dimensional launch extent used for formal extraction.
@@ -426,7 +426,23 @@ pub fn derive_kernel_memory_obligations(
     launch_extent: ExplicitLaunchExtent1d,
     index_width: FormalIndexWidth,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
-    verify_module(module).map_err(FormalMemoryObligationError::InvalidModule)?;
+    let verified = verify_module_ref(module).map_err(FormalMemoryObligationError::InvalidModule)?;
+    derive_kernel_memory_obligations_from_verified(verified, kernel_id, launch_extent, index_width)
+}
+
+/// Derives formal memory obligations while reusing a prior Kernel IR
+/// verification traversal.
+///
+/// The token is constructible only by [`verify_module_ref`]. This entry point
+/// lets a fixed analysis pipeline verify once and share the result across
+/// bounds, race, convergence, and initialization passes.
+pub fn derive_kernel_memory_obligations_from_verified(
+    verified: VerifiedKernelIrModuleV1<'_>,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent1d,
+    index_width: FormalIndexWidth,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    let module = verified.module();
     let kernel = module
         .kernels
         .iter()
