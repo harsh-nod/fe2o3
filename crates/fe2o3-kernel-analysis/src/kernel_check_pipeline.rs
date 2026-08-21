@@ -349,7 +349,8 @@ impl WorkgroupMemoryIncompleteReasonV1 {
 }
 
 impl KernelCheckFindingV1 {
-    const fn status(&self) -> KernelCheckStatusV1 {
+    /// Returns whether this finding is a concrete rejection or an unresolved obligation.
+    pub const fn status(&self) -> KernelCheckStatusV1 {
         match self {
             Self::Structural(_)
             | Self::ControlFlow(_)

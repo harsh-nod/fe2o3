@@ -88,6 +88,10 @@ validates bounded pass plans without executing them. Seven always-Pliron target-
 `fe2o3-mir-model`; its bounded `mir.*` Pliron module/function/block shell is
 available only through the non-default `pliron` feature. These are verified
 in-memory representations, not a connected compiler pipeline.
+The `kernel.*` shell additionally owns ranked-memory and closed-CFG operations
+with local MLIR-style verifiers. `fe2o3-kernel-analysis` owns their bounded,
+non-mutating whole-function bounds stage and terminal pre-lowering check; this
+does not create a second lowering route or relax the owner-handle requirement.
 `fe2o3-kir-pliron-bridge` implements an opaque context-bound exact-byte
 canonical KIR envelope, while `fe2o3-lower-mir-kernel` and
 `fe2o3-lower-kernel-gpu` implement narrow bounded detached lowering services

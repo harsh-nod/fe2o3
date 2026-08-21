@@ -8,6 +8,7 @@ mod control_flow;
 mod kernel_check_pipeline;
 mod machine_effect;
 mod physical_machine_effect;
+mod pliron_ranked_bounds;
 mod scalar_gemm_v1_physical_machine_effect;
 mod ssa;
 mod uniformity;
@@ -24,6 +25,7 @@ pub use control_flow::{
 pub use kernel_check_pipeline::*;
 pub use machine_effect::*;
 pub use physical_machine_effect::*;
+pub use pliron_ranked_bounds::*;
 pub use scalar_gemm_v1_physical_machine_effect::*;
 pub use ssa::{
     SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,

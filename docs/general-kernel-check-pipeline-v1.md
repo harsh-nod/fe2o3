@@ -22,10 +22,15 @@ optimized MIR and authenticated frontend facts
 These are compiler analysis passes, but they are not LLVM optimization passes.
 Running them after lowering would lose source-independent memory regions,
 launch structure, address spaces, and synchronization intent. They are also not
-Pliron `Pass` implementations yet: generic Pliron mutation remains withheld
-until owner-aware operation handles land under issue #140. The Kernel IR runner
-is closed, deterministic, and does not accept caller-registered executable
-passes.
+generic mutating Pliron `Pass` implementations yet: generic Pliron mutation
+remains withheld until owner-aware operation handles land under issue #140.
+The target-neutral `kernel.*` dialect now applies MLIR-style local `Verify`
+methods and exposes a closed, non-mutating `kernel-memory-bounds-v1` function
+stage for ranked-memory `FuncOp`s. `require_pliron_ranked_bounds_before_lowering_v1`
+is the fail-closed lowering boundary: static violations, unresolved dynamic
+bounds, malformed CFG, and resource-limit failures are errors and cannot fall
+back to unchecked lowering. The Kernel IR runner and Pliron function stage are
+both closed and do not accept caller-registered executable passes.
 
 ## Fixed Pass Order
 
@@ -38,7 +43,12 @@ order:
 2. `kernel-control-flow-v1` derives reachable blocks, predecessors, dominance,
    and reducibility.
 3. `kernel-memory-bounds-v1` derives formal accesses and the exact runtime
-   extents still needed to close each access.
+   extents still needed to close each access. Its Pliron ranked-memory form
+   constant-folds static dimensions and runs a forward must-analysis: a strict
+   `index < extent` relation is usable only when it holds on every incoming CFG
+   edge. Dynamic extents remain bound to the exact ranked view SSA value (or
+   its exact runtime-shape operand), so a guard for another view cannot prove
+   the access.
 4. `kernel-race-freedom-v1` reuses the same formal-memory extraction to report
    alias requirements and possible inter-invocation write conflicts.
 5. `kernel-barrier-convergence-v1` rejects barriers controlled by values that
@@ -101,6 +111,14 @@ multiple kernels. Bounds and race analysis share one formal-memory extraction.
 Control-flow successors are built once, and workgroup-memory facts use a
 descending worklist that revisits only successors of changed blocks.
 
+The Pliron ranked-memory stage performs one structural traversal, one CFG
+construction, and one descending fixed point. It indexes at most one strict
+relation per block and stores must-facts in dense bitsets; predecessor
+intersection is word-wise rather than cloning hash sets. Its deterministic
+worklist revisits only successors whose input changed. Rank is bounded at 8,
+functions at 1,024 blocks and 65,536 operations, and every rejected access is
+reported once in block/operation/dimension order.
+
 Structural verification and formal-memory extraction each traverse the relevant
 IR once. Control-flow and barrier algorithms have explicit storage/work limits.
 For `V` reachable blocks, `E` edges, and `R` modeled LDS regions, the
@@ -113,10 +131,16 @@ performs an unbounded fixed point.
 
 ## Current Boundary
 
-The production MIR-to-Kernel-IR translator invokes this pipeline for every
-translated kernel and stops on `Rejected`. Dynamic launch sizes and unmodeled
-effects remain `Incomplete`; they are not silently accepted as proven. The
-general GEMM optimized-MIR mutation oracle continues to issue diagnostic-only
-source findings and cannot mint positive correspondence. Re-enabling positive
-source authority requires a complete closed root/helper verifier that produces
-the canonical Kernel IR and retained frontend facts consumed here.
+The production MIR-to-Kernel-IR translator invokes the Kernel IR pipeline for
+every translated kernel and stops on `Rejected`. The new ranked-memory Pliron
+operations, local verifiers, and pre-lowering bounds gate are implemented and
+tested as the target-neutral projection contract; the existing detached
+Pliron-to-GPU lowering does not yet consume ranked-memory functions. Connecting
+that projection to the unified production route remains gated on the same
+owner-aware operation-handle work rather than adding a second unchecked route.
+Dynamic launch sizes and unmodeled effects remain `Incomplete`; they are not
+silently accepted as proven. The general GEMM optimized-MIR mutation oracle
+continues to issue diagnostic-only source findings and cannot mint positive
+correspondence. Re-enabling positive source authority requires a complete
+closed root/helper verifier that produces the canonical Kernel IR and retained
+frontend facts consumed here.

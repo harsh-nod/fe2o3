@@ -29,6 +29,15 @@ mod general_gemm;
 
 pub use general_gemm::{GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp};
 
+mod ranked_memory;
+
+pub use ranked_memory::{
+    AccessKindAttr, BranchOp, DYNAMIC_EXTENT, DimensionAttr, DimensionOp, IndexConstantOp,
+    IndexLessThanBranchOp, IndexType, IndexValueAttr, MAX_RANKED_MEMORY_RANK, RankedAccessOp,
+    RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
+    is_index_type, ranked_view_type,
+};
+
 /// The Pliron namespace owned by this crate.
 pub const DIALECT_NAME: &str = "kernel";
 
@@ -348,8 +357,20 @@ pub fn register_dialect(
     <GeneralGemmEpilogueSchemaAttr as Attribute>::register::<GeneralGemmEpilogueSchemaAttr>(
         context,
     );
+    RankedViewType::register(context);
+    IndexType::register(context);
+    <IndexValueAttr as Attribute>::register::<IndexValueAttr>(context);
+    <DimensionAttr as Attribute>::register::<DimensionAttr>(context);
+    <AccessKindAttr as Attribute>::register::<AccessKindAttr>(context);
     AlgorithmOp::register(context);
     GeneralGemmOp::register(context);
+    RankedViewOp::register(context);
+    IndexConstantOp::register(context);
+    DimensionOp::register(context);
+    RankedAccessOp::register(context);
+    IndexLessThanBranchOp::register(context);
+    BranchOp::register(context);
+    ReturnOp::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context.aux_data_map.insert(marker_key, marker);
