@@ -38,6 +38,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
+    FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
 }
 
 impl fmt::Display for ProductionPipelineErrorV1 {
@@ -59,6 +60,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production-v1 target-neutral lowering failed: {error}")
             }
+            Self::FormalMemoryAdmission(error) => {
+                write!(formatter, "production-v1 formal memory admission failed: {error}")
+            }
         }
     }
 }
@@ -70,6 +74,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
+            Self::FormalMemoryAdmission(error) => Some(error),
             Self::CustomLlvmConfiguration | Self::EmptyCollectedDeviceClosure => None,
         }
     }
@@ -143,17 +148,88 @@ pub(crate) struct TargetNeutralProductionCompilationV1 {
     build_attempt: Option<BuildAttempt>,
 }
 
+/// Move-only production stage retaining exact semantic ownership, verified
+/// Kernel IR, complete formal memory obligations, and transaction bindings.
+pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
+    admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    rustc_identity_inventory_sha256: [u8; 32],
+    rustc_preflight_plan_sha256: [u8; 32],
+    producer: ProducerIdentity,
+    output_dir: PathBuf,
+    build_attempt: Option<BuildAttempt>,
+}
+
 impl TargetNeutralProductionCompilationV1 {
+    fn admit_formal_memory(
+        self,
+    ) -> Result<FormalMemoryAdmittedProductionCompilationV1, ProductionPipelineErrorV1> {
+        let Self {
+            lowered,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        } = self;
+        let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered)
+            .map_err(ProductionPipelineErrorV1::FormalMemoryAdmission)?;
+        Ok(FormalMemoryAdmittedProductionCompilationV1 {
+            admitted,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        })
+    }
+}
+
+impl FormalMemoryAdmittedProductionCompilationV1 {
     pub(crate) fn module(&self) -> &fe2o3_kernel_ir::Module {
-        self.lowered.module()
+        self.admitted.semantic_kir().module()
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
-        self.lowered.semantic().semantic().functions().len()
+        self.admitted
+            .semantic_kir()
+            .semantic()
+            .semantic()
+            .functions()
+            .len()
     }
 
     pub(crate) fn correspondence_block_count(&self) -> usize {
-        self.lowered.correspondence().blocks().len()
+        self.admitted.semantic_kir().correspondence().blocks().len()
+    }
+
+    pub(crate) fn formal_witness_extent(&self) -> u64 {
+        self.admitted.witness_extent()
+    }
+
+    pub(crate) fn formal_allocation_count(&self) -> usize {
+        self.admitted.obligations().allocations().len()
+    }
+
+    pub(crate) fn formal_access_count(&self) -> usize {
+        self.admitted.obligations().accesses().len()
+    }
+
+    pub(crate) fn runtime_bounds_requirement_count(&self) -> usize {
+        self.admitted.obligations().bounds_requirements().len()
+    }
+
+    pub(crate) fn runtime_alias_requirement_count(&self) -> usize {
+        self.admitted
+            .obligations()
+            .runtime_alias_requirements()
+            .len()
+    }
+
+    pub(crate) fn inter_invocation_conflict_count(&self) -> usize {
+        self.admitted
+            .obligations()
+            .inter_invocation_conflicts()
+            .len()
     }
 
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
@@ -167,7 +243,7 @@ impl TargetNeutralProductionCompilationV1 {
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
-        self.lowered.grants_artifact_or_launch_authority()
+        self.admitted.grants_artifact_or_launch_authority()
     }
 }
 
@@ -268,14 +344,15 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             .verify_ranked_memory()
     }
 
-    /// Consumes the sole production transaction through exact semantic MIR and
-    /// verified target-neutral Kernel IR construction.
-    pub(crate) fn lower_target_neutral(
+    /// Consumes the sole production transaction through exact semantic MIR,
+    /// verified target-neutral Kernel IR, and complete formal memory admission.
+    pub(crate) fn admit_formal_memory(
         self,
-    ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
+    ) -> Result<FormalMemoryAdmittedProductionCompilationV1, ProductionPipelineErrorV1> {
         self.import_semantic_mir()?
             .construct_semantic_middle_end()?
-            .lower_target_neutral()
+            .lower_target_neutral()?
+            .admit_formal_memory()
     }
 
     /// Retains the original extraction milestone while consuming the same

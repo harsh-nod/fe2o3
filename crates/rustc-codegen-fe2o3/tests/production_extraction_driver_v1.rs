@@ -123,6 +123,8 @@ fn production_fill_reaches_verified_target_neutral_kir() {
         "production-v1 lowered 1 admitted semantic function(s)",
         "verified target-neutral Kernel IR module",
         "with 6 exact block correspondence record(s)",
+        "admitted complete formal memory obligations for a 2-invocation structural witness",
+        "with 1 allocation(s), 1 access(es), 1 runtime bounds requirement(s), 0 runtime alias requirement(s), and 0 inter-invocation conflict(s)",
         "artifact/launch authority false",
         "gfx942 target mapping remains disabled",
     ] {
@@ -130,6 +132,7 @@ fn production_fill_reaches_verified_target_neutral_kir() {
     }
     for forbidden in [
         "production-v1 target-neutral lowering failed",
+        "production-v1 formal memory admission failed",
         "legacy-v1",
         "kernel-ir-v1",
         "published inert",

@@ -494,12 +494,18 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
                             }
                         };
-                        match transaction.lower_target_neutral() {
+                        match transaction.admit_formal_memory() {
                             Ok(verified) => tcx.dcx().fatal(format!(
-                                "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s) while retaining {} identity/transaction binding(s); artifact/launch authority {}; gfx942 target mapping remains disabled",
+                                "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted complete formal memory obligations for a {}-invocation structural witness with {} allocation(s), {} access(es), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), while retaining {} identity/transaction binding(s); artifact/launch authority {}; gfx942 target mapping remains disabled",
                                 verified.semantic_function_count(),
                                 verified.module().id,
                                 verified.correspondence_block_count(),
+                                verified.formal_witness_extent(),
+                                verified.formal_allocation_count(),
+                                verified.formal_access_count(),
+                                verified.runtime_bounds_requirement_count(),
+                                verified.runtime_alias_requirement_count(),
+                                verified.inter_invocation_conflict_count(),
                                 verified.retained_identity_and_transaction_binding_count(),
                                 verified.grants_artifact_or_launch_authority(),
                             )),
