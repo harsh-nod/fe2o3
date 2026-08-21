@@ -110,7 +110,40 @@ impl DecodedCompilerModuleHandoffV2 {
 pub(crate) fn decode_compiler_module_handoff_v2(
     bytes: &[u8],
 ) -> Result<DecodedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
-    let handoff = CompilerModuleHandoffV2::decode(bytes)?;
+    decoded_compiler_module_handoff_v2(CompilerModuleHandoffV2::decode(bytes)?)
+}
+
+pub(crate) fn reconstruct_compiler_module_handoff_v2(
+    envelope: &CompilerFfiEnvelopeV1,
+    symbol_manifest: &CompilerModuleSymbolManifestV1,
+    compiler_module: &WorkerInputV1,
+) -> Result<DecodedCompilerModuleHandoffV2, WorkerRequestConstructionError> {
+    let kind = match compiler_module.kind() {
+        WorkerInputKindV1::LlvmTextIr => CompilerModuleKindV1::LlvmTextIr,
+        WorkerInputKindV1::LlvmBitcode => CompilerModuleKindV1::LlvmBitcode,
+        kind @ WorkerInputKindV1::AmdGpuRelocatable => {
+            return Err(WorkerRequestConstructionError::UnsupportedCompilerModuleInputKind(kind));
+        }
+    };
+    // This recomputes the distinct canonical compiler-FFI payload identity and reuses the strict
+    // handoff decoder. It cannot recompute the artifact-transaction identity, whose producer and
+    // derived-slot preimages are not present in the V2 finalizer transcript.
+    let handoff = CompilerModuleHandoffV2::new(
+        kind,
+        envelope.target(),
+        envelope.code_object_version(),
+        envelope.clone(),
+        symbol_manifest.clone(),
+        compiler_module.bytes(),
+    )
+    .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
+    decode_compiler_module_handoff_v2(handoff.canonical_bytes())
+        .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)
+}
+
+fn decoded_compiler_module_handoff_v2(
+    handoff: CompilerModuleHandoffV2,
+) -> Result<DecodedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
     let parts = handoff.into_parts();
     let target = parts.target();
     let code_object_version = parts.code_object_version();
@@ -460,6 +493,20 @@ impl ProtectedCompilerHandoffBindingV2 {
             slot: consumed.slot(),
             handoff_identity: consumed.identity(),
             compiler_closure: consumed.compiler_closure(),
+        }
+    }
+
+    pub(crate) const fn from_replay_parts(
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV2,
+        handoff_identity: CompilerModuleHandoffIdentityV2,
+        compiler_closure: CompilerClosureV2,
+    ) -> Self {
+        Self {
+            attempt,
+            slot,
+            handoff_identity,
+            compiler_closure,
         }
     }
 
@@ -928,6 +975,7 @@ pub(crate) fn construct_plan_worker_request_v2_from_decoded(
 #[non_exhaustive]
 pub enum WorkerRequestConstructionError {
     CompilerModuleHandoff(CompilerModuleHandoffErrorV2),
+    UnsupportedCompilerModuleInputKind(WorkerInputKindV1),
     EmptySymbolClosure,
     InvalidRequiredSymbols(WorkerProtocolError),
     InvalidImportSymbols(WorkerProtocolError),
@@ -1000,6 +1048,10 @@ impl fmt::Display for WorkerRequestConstructionError {
                     "invalid consumed compiler-module handoff: {error}"
                 )
             }
+            Self::UnsupportedCompilerModuleInputKind(kind) => write!(
+                formatter,
+                "worker input kind {kind:?} cannot represent a compiler module handoff"
+            ),
             Self::EmptySymbolClosure => formatter.write_str("device link symbol closure is empty"),
             Self::InvalidRequiredSymbols(error) => {
                 write!(formatter, "invalid required-symbol set: {error}")

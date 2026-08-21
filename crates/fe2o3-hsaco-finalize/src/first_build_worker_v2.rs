@@ -18,12 +18,12 @@ use crate::{
     LinkInputKindClosureV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError,
     MultiInputLinkPlanV1, PinnedWorkerV1, ProvenanceNodeV1, WorkerExecutionError,
     WorkerExecutionLimitsV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
-    WorkerProtocolError, WorkerRequestConstructionError, WorkerResponseV2,
+    WorkerProtocolError, WorkerRequestConstructionError, WorkerRequestV2, WorkerResponseV2,
     request_construction::{
         CompilerHandoffRequestBindingV2, DecodedCompilerModuleHandoffV2,
         ProtectedCompilerHandoffBindingV2, construct_first_build_worker_request_v2_from_decoded,
         construct_plan_worker_request_v2_from_decoded, decode_compiler_module_handoff_v2,
-        decode_link_options,
+        decode_link_options, reconstruct_compiler_module_handoff_v2,
     },
     worker_executor::InertWorkerExecutionV2,
 };
@@ -192,6 +192,178 @@ impl ProtectedFirstBuildWorkerV2IdentityV1 {
     }
 }
 
+pub(crate) struct ProtectedFirstBuildReplayValidationV2<'a> {
+    pub(crate) attempt: BuildAttempt,
+    pub(crate) slot: CompilerModuleHandoffSlotV2,
+    pub(crate) handoff_identity: CompilerModuleHandoffIdentityV2,
+    pub(crate) compiler_closure: CompilerClosureV2,
+    pub(crate) compiler_envelope: &'a CompilerFfiEnvelopeV1,
+    pub(crate) symbol_manifest: &'a CompilerModuleSymbolManifestV1,
+    pub(crate) worker: &'a WorkerMeasurementV1,
+    pub(crate) plan: &'a MultiInputLinkPlanV1,
+    pub(crate) bootstrap_request_bytes: &'a [u8],
+    pub(crate) bootstrap_request: &'a WorkerRequestV2,
+    pub(crate) bootstrap_response: &'a WorkerResponseV2,
+    pub(crate) authorized_request_bytes: &'a [u8],
+    pub(crate) authorized_request: &'a WorkerRequestV2,
+    pub(crate) authorized_response: &'a WorkerResponseV2,
+    pub(crate) expected_output_identity: ContentIdentityV1,
+    pub(crate) exact_output_bytes: &'a [u8],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ValidatedProtectedFirstBuildReplayV2 {
+    evidence_identity: ProtectedFirstBuildWorkerV2IdentityV1,
+    output_identity: ContentIdentityV1,
+}
+
+impl ValidatedProtectedFirstBuildReplayV2 {
+    pub(crate) const fn evidence_identity(self) -> ProtectedFirstBuildWorkerV2IdentityV1 {
+        self.evidence_identity
+    }
+
+    pub(crate) const fn output_identity(self) -> ContentIdentityV1 {
+        self.output_identity
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProtectedFirstBuildReplayValidationErrorV2 {
+    field: &'static str,
+}
+
+impl ProtectedFirstBuildReplayValidationErrorV2 {
+    pub(crate) const fn field(self) -> &'static str {
+        self.field
+    }
+}
+
+const fn replay_validation_error(
+    field: &'static str,
+) -> ProtectedFirstBuildReplayValidationErrorV2 {
+    ProtectedFirstBuildReplayValidationErrorV2 { field }
+}
+
+pub(crate) fn validate_protected_first_build_replay_v2(
+    replay: ProtectedFirstBuildReplayValidationV2<'_>,
+) -> Result<ValidatedProtectedFirstBuildReplayV2, ProtectedFirstBuildReplayValidationErrorV2> {
+    let bootstrap_request = replay.bootstrap_request;
+    let bootstrap_response = replay.bootstrap_response;
+    let authorized_request = replay.authorized_request;
+    let authorized_response = replay.authorized_response;
+    let bootstrap_output = bootstrap_response
+        .output()
+        .ok_or_else(|| replay_validation_error("missing bootstrap worker output"))?;
+    let authorized_output = authorized_response
+        .output()
+        .ok_or_else(|| replay_validation_error("missing authorized worker output"))?;
+    if bootstrap_output.bytes() != authorized_output.bytes() {
+        return Err(replay_validation_error("non-reproducible worker outputs"));
+    }
+    for output in [bootstrap_output, authorized_output] {
+        if output.identity() != replay.expected_output_identity
+            || output.bytes() != replay.exact_output_bytes
+        {
+            return Err(replay_validation_error("worker output identity or bytes"));
+        }
+    }
+    if bootstrap_response.worker_build_identity() != replay.worker.worker_build_identity()
+        || authorized_response.worker_build_identity() != replay.worker.worker_build_identity()
+        || !bootstrap_response.binds_request(bootstrap_request)
+        || !authorized_response.binds_request(authorized_request)
+    {
+        return Err(replay_validation_error("worker response request binding"));
+    }
+
+    let binding = ProtectedCompilerHandoffBindingV2::from_replay_parts(
+        replay.attempt,
+        replay.slot,
+        replay.handoff_identity,
+        replay.compiler_closure,
+    );
+    let decoded = reconstruct_compiler_module_handoff_v2(
+        replay.compiler_envelope,
+        replay.symbol_manifest,
+        bootstrap_request.compiler_module(),
+    )
+    .map_err(|error| {
+        let field = match error {
+            WorkerRequestConstructionError::CompilerModuleHandoff(
+                CompilerModuleHandoffErrorV2::FfiImportRoleMismatch
+                | CompilerModuleHandoffErrorV2::FfiExportRoleMismatch,
+            ) => "compiler envelope and symbol manifest roles",
+            _ => "reconstructed compiler module handoff",
+        };
+        replay_validation_error(field)
+    })?;
+    let (_, options) = decode_link_options(replay.plan.options())
+        .map_err(|_| replay_validation_error("link-plan options"))?;
+    let expected_bootstrap = construct_first_build_worker_request_v2_from_decoded(
+        CompilerHandoffRequestBindingV2::Protected(&binding),
+        replay.worker,
+        &decoded,
+        bootstrap_request.external_providers().to_vec(),
+        options,
+        bootstrap_request.output_constraints().clone(),
+    )
+    .map_err(|_| replay_validation_error("protected bootstrap request"))?;
+    if expected_bootstrap.sealed_request().canonical_bytes() != replay.bootstrap_request_bytes {
+        return Err(replay_validation_error(
+            "protected bootstrap request identity",
+        ));
+    }
+
+    let mut all_inputs = bootstrap_request.external_providers().to_vec();
+    all_inputs.push(bootstrap_request.compiler_module().clone());
+    all_inputs.sort_by_key(|input| (input.identity(), input.kind()));
+    reject_duplicate_content_identities(&all_inputs)
+        .map_err(|_| replay_validation_error("link-plan input closure"))?;
+    let reconstructed_plan = derive_plan(
+        decoded.target(),
+        &all_inputs,
+        replay.plan.options().to_vec(),
+        bootstrap_output.identity(),
+    )
+    .map_err(|_| replay_validation_error("reconstructed link plan"))?;
+    if &reconstructed_plan != replay.plan {
+        return Err(replay_validation_error("reconstructed link plan"));
+    }
+    let input_kinds = LinkInputKindClosureV1::new(
+        replay.plan,
+        all_inputs.iter().map(|input| input.kind()).collect(),
+    )
+    .map_err(|_| replay_validation_error("link-plan input-kind closure"))?;
+    let exact_output = WorkerOutputConstraintsV1::new(bootstrap_output.identity().byte_len())
+        .map_err(|_| replay_validation_error("exact output bound"))?;
+    let expected_authorized = construct_plan_worker_request_v2_from_decoded(
+        CompilerHandoffRequestBindingV2::Protected(&binding),
+        replay.plan,
+        replay.worker,
+        &decoded,
+        bootstrap_request.external_providers().to_vec(),
+        &input_kinds,
+        exact_output,
+    )
+    .map_err(|_| replay_validation_error("protected authorized request"))?;
+    if expected_authorized.sealed_request().canonical_bytes() != replay.authorized_request_bytes {
+        return Err(replay_validation_error(
+            "protected authorized request identity",
+        ));
+    }
+
+    Ok(ValidatedProtectedFirstBuildReplayV2 {
+        evidence_identity: calculate_protected_evidence_identity(
+            binding,
+            replay.symbol_manifest.identity(),
+            replay.worker,
+            replay.plan,
+            bootstrap_response,
+            authorized_response,
+        ),
+        output_identity: replay.expected_output_identity,
+    })
+}
+
 /// Inert replay evidence retaining the exact V2 handoff identity and full compiler closure.
 ///
 /// This type is move-only and side-by-side with [`InertFirstBuildWorkerV2EvidenceV1`]. Its
@@ -211,6 +383,7 @@ pub struct InertProtectedFirstBuildWorkerV2EvidenceV1 {
     candidate: InertProtectedCompilerHandoffExecutionV2,
     authorized_request_bytes: Vec<u8>,
     authorized: InertProtectedCompilerHandoffExecutionV2,
+    _replay_validation: ValidatedProtectedFirstBuildReplayV2,
 }
 
 impl InertProtectedFirstBuildWorkerV2EvidenceV1 {
@@ -351,6 +524,9 @@ pub enum FirstBuildWorkerV2Error {
         candidate: Box<InertCompilerHandoffExecutionV2>,
         authorized: Box<InertCompilerHandoffExecutionV2>,
     },
+    ReplayValidation {
+        field: &'static str,
+    },
 }
 
 impl fmt::Display for FirstBuildWorkerV2Error {
@@ -401,6 +577,9 @@ impl fmt::Display for FirstBuildWorkerV2Error {
             }
             Self::OutputMismatch { .. } => formatter
                 .write_str("bootstrap Worker V2 and exact-replay Worker V2 output bytes differ"),
+            Self::ReplayValidation { field } => {
+                write!(formatter, "first-build replay validation failed: {field}")
+            }
         }
     }
 }
@@ -415,7 +594,8 @@ impl Error for FirstBuildWorkerV2Error {
             Self::CandidateExecution(error) | Self::AuthorizedExecution(error) => Some(error),
             Self::CandidateDidNotProduceOutput(_)
             | Self::AuthorizedDidNotProduceOutput { .. }
-            | Self::OutputMismatch { .. } => None,
+            | Self::OutputMismatch { .. }
+            | Self::ReplayValidation { .. } => None,
         }
     }
 }
@@ -438,6 +618,9 @@ pub enum ProtectedFirstBuildWorkerV2Error {
     OutputMismatch {
         candidate: Box<InertProtectedCompilerHandoffExecutionV2>,
         authorized: Box<InertProtectedCompilerHandoffExecutionV2>,
+    },
+    ReplayValidation {
+        field: &'static str,
     },
 }
 
@@ -489,6 +672,10 @@ impl fmt::Display for ProtectedFirstBuildWorkerV2Error {
             Self::OutputMismatch { .. } => formatter.write_str(
                 "protected bootstrap Worker V2 and exact-replay Worker V2 output bytes differ",
             ),
+            Self::ReplayValidation { field } => write!(
+                formatter,
+                "protected first-build replay validation failed: {field}"
+            ),
         }
     }
 }
@@ -503,7 +690,8 @@ impl Error for ProtectedFirstBuildWorkerV2Error {
             Self::CandidateExecution(error) | Self::AuthorizedExecution(error) => Some(error),
             Self::CandidateDidNotProduceOutput(_)
             | Self::AuthorizedDidNotProduceOutput { .. }
-            | Self::OutputMismatch { .. } => None,
+            | Self::OutputMismatch { .. }
+            | Self::ReplayValidation { .. } => None,
         }
     }
 }
@@ -596,16 +784,14 @@ pub fn execute_protected_reproducible_first_build_worker_v2(
         limits,
     )
     .map_err(|error| map_protected_engine_error(binding, error))?;
+    let replay_validation = result.protected_replay_validation.ok_or(
+        ProtectedFirstBuildWorkerV2Error::ReplayValidation {
+            field: "missing typed replay validation",
+        },
+    )?;
     let candidate = protected_execution(binding, result.candidate);
     let authorized = protected_execution(binding, result.authorized);
-    let identity = calculate_protected_evidence_identity(
-        binding,
-        result.decoded.symbol_manifest().identity(),
-        worker.measurement(),
-        &result.plan,
-        &candidate,
-        &authorized,
-    );
+    let identity = replay_validation.evidence_identity();
     Ok(InertProtectedFirstBuildWorkerV2EvidenceV1 {
         identity,
         attempt: binding.attempt(),
@@ -620,6 +806,7 @@ pub fn execute_protected_reproducible_first_build_worker_v2(
         candidate,
         authorized_request_bytes: result.authorized_request_bytes,
         authorized,
+        _replay_validation: replay_validation,
     })
 }
 
@@ -630,6 +817,7 @@ struct FirstBuildWorkerV2EngineResult {
     candidate: InertWorkerExecutionV2,
     authorized_request_bytes: Vec<u8>,
     authorized: InertWorkerExecutionV2,
+    protected_replay_validation: Option<ValidatedProtectedFirstBuildReplayV2>,
 }
 
 enum FirstBuildWorkerV2EngineError {
@@ -647,6 +835,7 @@ enum FirstBuildWorkerV2EngineError {
         candidate: Box<InertWorkerExecutionV2>,
         authorized: Box<InertWorkerExecutionV2>,
     },
+    ReplayValidation(ProtectedFirstBuildReplayValidationErrorV2),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -746,6 +935,30 @@ fn execute_reproducible_first_build_worker_v2_engine(
             authorized: Box::new(authorized),
         });
     }
+    let protected_replay_validation = match binding {
+        CompilerHandoffRequestBindingV2::Protected(binding) => Some(
+            validate_protected_first_build_replay_v2(ProtectedFirstBuildReplayValidationV2 {
+                attempt: binding.attempt(),
+                slot: binding.slot(),
+                handoff_identity: binding.handoff_identity(),
+                compiler_closure: binding.compiler_closure(),
+                compiler_envelope: decoded.envelope(),
+                symbol_manifest: decoded.symbol_manifest(),
+                worker: worker.measurement(),
+                plan: &plan,
+                bootstrap_request_bytes: &candidate_request_bytes,
+                bootstrap_request: candidate_request.sealed_request(),
+                bootstrap_response: candidate.response(),
+                authorized_request_bytes: &authorized_request_bytes,
+                authorized_request: authorized_request.sealed_request(),
+                authorized_response: authorized.response(),
+                expected_output_identity: candidate_output.identity(),
+                exact_output_bytes: candidate_output.bytes(),
+            })
+            .map_err(FirstBuildWorkerV2EngineError::ReplayValidation)?,
+        ),
+        CompilerHandoffRequestBindingV2::Existing { .. } => None,
+    };
 
     Ok(FirstBuildWorkerV2EngineResult {
         decoded,
@@ -754,6 +967,7 @@ fn execute_reproducible_first_build_worker_v2_engine(
         candidate,
         authorized_request_bytes,
         authorized,
+        protected_replay_validation,
     })
 }
 
@@ -800,6 +1014,11 @@ fn map_existing_engine_error(
             candidate: wrap(*candidate),
             authorized: wrap(*authorized),
         },
+        FirstBuildWorkerV2EngineError::ReplayValidation(error) => {
+            FirstBuildWorkerV2Error::ReplayValidation {
+                field: error.field(),
+            }
+        }
     }
 }
 
@@ -854,6 +1073,11 @@ fn map_protected_engine_error(
             candidate: wrap(*candidate),
             authorized: wrap(*authorized),
         },
+        FirstBuildWorkerV2EngineError::ReplayValidation(error) => {
+            ProtectedFirstBuildWorkerV2Error::ReplayValidation {
+                field: error.field(),
+            }
+        }
     }
 }
 
@@ -946,8 +1170,8 @@ fn calculate_protected_evidence_identity(
     manifest_identity: CompilerModuleSymbolManifestIdentityV1,
     worker: &WorkerMeasurementV1,
     plan: &MultiInputLinkPlanV1,
-    candidate: &InertProtectedCompilerHandoffExecutionV2,
-    authorized: &InertProtectedCompilerHandoffExecutionV2,
+    candidate: &WorkerResponseV2,
+    authorized: &WorkerResponseV2,
 ) -> ProtectedFirstBuildWorkerV2IdentityV1 {
     let mut hasher = Sha256::new();
     hasher.update(PROTECTED_FIRST_BUILD_EVIDENCE_DOMAIN_V1);
@@ -960,8 +1184,8 @@ fn calculate_protected_evidence_identity(
         manifest_identity,
         worker,
         plan,
-        candidate.response(),
-        authorized.response(),
+        candidate,
+        authorized,
     );
     ProtectedFirstBuildWorkerV2IdentityV1(hasher.finalize().into())
 }

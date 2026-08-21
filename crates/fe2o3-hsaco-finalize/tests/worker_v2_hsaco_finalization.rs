@@ -22,7 +22,8 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1,
-    DescriptorSourceEvidenceRequirementV1, FinalizationError, LinkOptionV1, PinnedWorkerV1,
+    DescriptorSourceEvidenceRequirementV1, FinalizationError, LinkOptionV1,
+    MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2, PinnedWorkerV1,
     ProtectedWorkerV2FinalizerLineageDecodeErrorV2, ProtectedWorkerV2FinalizerLineageV2,
     RowSoftmaxV1StructuralArtifactErrorV1, TiledGemmV1StructuralArtifactErrorV1,
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
@@ -350,7 +351,7 @@ fn protected_finalization_preserves_closure_handoff_and_exact_bytes() {
 }
 
 #[test]
-fn protected_finalizer_lineage_round_trips_real_raw_and_finalized_envelopes() {
+fn typed_protected_construction_and_wire_replay_share_canonical_validation() {
     let table = descriptor_table("gfx942");
     let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
     let exact_raw = fixture.bytes.clone();
@@ -363,13 +364,14 @@ fn protected_finalizer_lineage_round_trips_real_raw_and_finalized_envelopes() {
         CompilerModuleHandoffSlotV2::GeneralGemmReference,
     ))
     .unwrap();
-    let raw_transcript = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw);
+    let raw_transcript = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw).unwrap();
     let raw_wire = raw_transcript.canonical_bytes();
     let decoded_raw =
         ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&raw_wire, &exact_raw, &exact_raw)
             .unwrap();
     assert_eq!(decoded_raw, raw_transcript);
     assert!(decoded_raw.matches_inspected_source(&raw));
+    assert!(!decoded_raw.independently_rederives_transaction_handoff_identity());
     assert!(!decoded_raw.grants_compiler_authority());
     assert!(!decoded_raw.grants_publication_authority());
     assert!(!decoded_raw.grants_load_authority());
@@ -377,7 +379,7 @@ fn protected_finalizer_lineage_round_trips_real_raw_and_finalized_envelopes() {
 
     let finalized = finalize_inspected_protected_worker_v2_hsaco_v2(raw).unwrap();
     let exact_final = finalized.exact_finalized_bytes();
-    let final_transcript = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&finalized);
+    let final_transcript = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&finalized).unwrap();
     let final_wire = final_transcript.canonical_bytes();
     let decoded_final =
         ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&final_wire, &exact_raw, exact_final)
@@ -387,6 +389,152 @@ fn protected_finalizer_lineage_round_trips_real_raw_and_finalized_envelopes() {
     decoded_final
         .validate_descriptor_table(verify_finalized(exact_final).unwrap().descriptor_table())
         .unwrap();
+}
+
+#[test]
+fn protected_finalizer_lineage_requires_both_exact_worker_outputs() {
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let exact_raw = fixture.bytes.clone();
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942",
+        0x21,
+        0x31,
+        compiler_closure(0x41),
+        CompilerModuleHandoffSlotV2::Default,
+    ))
+    .unwrap();
+    let canonical = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw)
+        .unwrap()
+        .canonical_bytes();
+
+    for (response_segment, expected_field) in [
+        (4, "missing bootstrap worker output"),
+        (6, "missing authorized worker output"),
+    ] {
+        let mut wire = canonical.clone();
+        let response = lineage_segment(&wire, response_segment).to_vec();
+        replace_lineage_segment(
+            &mut wire,
+            response_segment,
+            &worker_response_without_output(&response),
+        );
+        match ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &exact_raw, &exact_raw) {
+            Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::RawLineage(field)) => {
+                assert_eq!(field, expected_field);
+            }
+            result => panic!("expected missing-output rejection, found {result:?}"),
+        }
+    }
+}
+
+#[test]
+fn protected_finalizer_lineage_rejects_canonical_manifest_role_disagreement() {
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let exact_raw = fixture.bytes.clone();
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942",
+        0x22,
+        0x32,
+        compiler_closure(0x42),
+        CompilerModuleHandoffSlotV2::Default,
+    ))
+    .unwrap();
+    let mut wire = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw)
+        .unwrap()
+        .canonical_bytes();
+    let alternate_manifest = CompilerModuleSymbolManifestV1::new([
+        (CompilerModuleSymbolRoleV1::KernelEntry, "vecadd"),
+        (CompilerModuleSymbolRoleV1::KernelDescriptor, "vecadd.kd"),
+        (
+            CompilerModuleSymbolRoleV1::DeviceFfiExport,
+            "self_consistent_forged_export",
+        ),
+    ])
+    .unwrap();
+    replace_lineage_segment(&mut wire, 1, alternate_manifest.canonical_bytes());
+
+    assert!(matches!(
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &exact_raw, &exact_raw,),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::RawLineage(
+            "compiler envelope and symbol manifest roles"
+        ))
+    ));
+}
+
+#[test]
+fn protected_finalizer_lineage_rejects_coordinated_module_and_exchange_substitution() {
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let exact_raw = fixture.bytes.clone();
+    let closure = compiler_closure(0x43);
+    let original = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes.clone(),
+        "gfx942",
+        0x23,
+        0x33,
+        closure,
+        CompilerModuleHandoffSlotV2::Default,
+    ))
+    .unwrap();
+    let alternate =
+        inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence_with_module_prefix(
+            fixture.bytes,
+            "gfx942",
+            0x23,
+            0x33,
+            closure,
+            CompilerModuleHandoffSlotV2::Default,
+            b"different-valid-compiler-module-prefix",
+        ))
+        .unwrap();
+    assert_ne!(original.handoff_identity(), alternate.handoff_identity());
+
+    let mut wire = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&original)
+        .unwrap()
+        .canonical_bytes();
+    let alternate_wire = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&alternate)
+        .unwrap()
+        .canonical_bytes();
+    for segment in 3..=6 {
+        replace_lineage_segment(
+            &mut wire,
+            segment,
+            lineage_segment(&alternate_wire, segment),
+        );
+    }
+    assert!(matches!(
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &exact_raw, &exact_raw),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::RawLineage(
+            "protected bootstrap request identity"
+        ))
+    ));
+
+    let decoded_alternate = ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
+        &alternate_wire,
+        &exact_raw,
+        &exact_raw,
+    )
+    .unwrap();
+    assert!(!decoded_alternate.independently_rederives_transaction_handoff_identity());
+    assert!(!decoded_alternate.grants_compiler_authority());
+}
+
+#[test]
+fn protected_finalizer_lineage_enforces_the_aggregate_wire_maximum() {
+    let mut wire = vec![0; MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2];
+    assert!(matches!(
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &[], &[]),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Checksum)
+    ));
+    wire.push(0);
+    assert!(matches!(
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &[], &[]),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)
+    ));
 }
 
 #[test]
@@ -420,9 +568,12 @@ fn protected_finalizer_lineage_rejects_resealed_substitutions_and_bad_bounds() {
     .unwrap();
     let exact_final = first.exact_finalized_bytes();
     assert_eq!(exact_final, second.exact_finalized_bytes());
-    let mut substituted =
-        ProtectedWorkerV2FinalizerLineageV2::from_finalized(&first).canonical_bytes();
-    let donor = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&second).canonical_bytes();
+    let mut substituted = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&first)
+        .unwrap()
+        .canonical_bytes();
+    let donor = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&second)
+        .unwrap()
+        .canonical_bytes();
     substituted[11..43].copy_from_slice(&donor[11..43]);
     substituted[43..75].copy_from_slice(&donor[43..75]);
     substituted[76..108].copy_from_slice(&donor[76..108]);
@@ -431,16 +582,20 @@ fn protected_finalizer_lineage_rejects_resealed_substitutions_and_bad_bounds() {
     substituted[closure_offset - 32..closure_offset + 226]
         .copy_from_slice(&donor[donor_closure_offset - 32..donor_closure_offset + 226]);
     reseal_lineage_wire(&mut substituted);
-    assert!(
+    assert!(matches!(
         ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
             &substituted,
             &exact_raw,
             exact_final,
-        )
-        .is_err()
-    );
+        ),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::RawLineage(
+            "protected bootstrap request identity"
+        ))
+    ));
 
-    let canonical = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&first).canonical_bytes();
+    let canonical = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&first)
+        .unwrap()
+        .canonical_bytes();
     assert!(matches!(
         ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
             &canonical[..canonical.len() - 1],
@@ -486,7 +641,7 @@ fn protected_finalizer_lineage_joins_total_kernarg_and_max_flat_workgroup_fields
         CompilerModuleHandoffSlotV2::Default,
     ))
     .unwrap();
-    let transcript = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw);
+    let transcript = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw).unwrap();
     let correct = decode_device_descriptor_table_v1(&table).unwrap();
     transcript.validate_descriptor_table(&correct).unwrap();
 
@@ -524,7 +679,7 @@ fn every_closure_role_mutation_changes_only_protected_finalization_lineage() {
         .unwrap(),
     )
     .unwrap();
-    let base_transcript = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&base);
+    let base_transcript = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&base).unwrap();
 
     for role in 0..6 {
         let changed_closure = compiler_closure_with_mutated_role(0x51, role);
@@ -550,7 +705,8 @@ fn every_closure_role_mutation_changes_only_protected_finalization_lineage() {
         );
         assert_ne!(base.compiler_closure(), changed.compiler_closure());
         assert_ne!(base.identity(), changed.identity());
-        let changed_transcript = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&changed);
+        let changed_transcript =
+            ProtectedWorkerV2FinalizerLineageV2::from_finalized(&changed).unwrap();
         assert_ne!(base_transcript.identity(), changed_transcript.identity());
         ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
             &changed_transcript.canonical_bytes(),
@@ -1202,135 +1358,200 @@ fn row_softmax_rejects_lifecycle_cluster_stack_and_hidden_launch_substitutions()
     }
 }
 
-#[test]
-fn row_softmax_rejects_every_metadata_field_absent_from_measured_llvm22_output() {
+fn assert_row_softmax_rejects_unmeasured_metadata(options: FixtureOptions<'static>, case: &str) {
     let table = row_softmax_descriptor_table(row_softmax_capabilities());
-    let kernel_substitutions = [
-        FixtureOptions {
-            kernel_kind: Some("normal"),
-            ..row_softmax_options()
-        },
-        FixtureOptions {
-            uses_dynamic_stack: None,
-            ..row_softmax_options()
-        },
-        FixtureOptions {
-            uniform_work_group_size: Some(0),
-            ..row_softmax_options()
-        },
-        FixtureOptions {
-            workgroup_processor_mode: Some(false),
-            ..row_softmax_options()
-        },
-        FixtureOptions {
-            gfx1250_revision: Some("B0"),
-            ..row_softmax_options()
-        },
-        FixtureOptions {
-            device_enqueue_symbol: Some("queue_entry"),
-            ..row_softmax_options()
-        },
-        FixtureOptions {
-            include_workgroup_size_hint: true,
-            ..row_softmax_options()
-        },
-        FixtureOptions {
-            include_vector_type_hint: true,
-            ..row_softmax_options()
-        },
-        FixtureOptions {
-            include_printf_metadata: true,
-            ..row_softmax_options()
-        },
-    ];
-    for (index, options) in kernel_substitutions.into_iter().enumerate() {
-        let fixture = fixture_with_descriptor_table(options, Some(&table));
-        assert!(
-            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
-                evidence_for(
-                    fixture.bytes,
-                    "gfx942:xnack-",
-                    0xd0_u8.wrapping_add(u8::try_from(index).unwrap()),
-                    0xe0_u8.wrapping_add(u8::try_from(index).unwrap()),
-                    "row_softmax_v1",
-                    "row_softmax_v1.kd",
-                ),
-                row_softmax_expectation(),
-            )
-            .is_err(),
-            "kernel substitution {index} was accepted",
-        );
-    }
+    let fixture = fixture_with_descriptor_table(options, Some(&table));
+    assert!(
+        inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+            evidence_for(
+                fixture.bytes,
+                "gfx942:xnack-",
+                0xd0,
+                0xe0,
+                "row_softmax_v1",
+                "row_softmax_v1.kd",
+            ),
+            row_softmax_expectation(),
+        )
+        .is_err(),
+        "unmeasured metadata case {case} was accepted",
+    );
+}
 
-    let optional_argument_fields = [
-        (".type_name", FixtureMetadataValue::String("float*")),
-        (".align", FixtureMetadataValue::Unsigned(8)),
-        (".value_type", FixtureMetadataValue::String("f32")),
-        (".access", FixtureMetadataValue::String("read_only")),
-        (".actual_access", FixtureMetadataValue::String("read_only")),
-        (".pointee_align", FixtureMetadataValue::Unsigned(4)),
-        (".is_const", FixtureMetadataValue::Boolean(false)),
-        (".is_restrict", FixtureMetadataValue::Boolean(false)),
-        (".is_volatile", FixtureMetadataValue::Boolean(false)),
-        (".is_pipe", FixtureMetadataValue::Boolean(false)),
-    ];
-    // One pointer, one by-value length, and one hidden argument exercise every
-    // parser/finalizer field class without rebuilding 23 equivalent ELF files.
-    for argument_index in [0, 1, 4] {
-        for (field, value) in optional_argument_fields {
-            let fixture = fixture_with_descriptor_table(
+macro_rules! unmeasured_kernel_metadata_case {
+    ($name:ident, $options:expr) => {
+        #[test]
+        fn $name() {
+            assert_row_softmax_rejects_unmeasured_metadata($options, stringify!($name));
+        }
+    };
+}
+
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_kernel_kind,
+    FixtureOptions {
+        kernel_kind: Some("normal"),
+        ..row_softmax_options()
+    }
+);
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_dynamic_stack,
+    FixtureOptions {
+        uses_dynamic_stack: None,
+        ..row_softmax_options()
+    }
+);
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_uniform_workgroup,
+    FixtureOptions {
+        uniform_work_group_size: Some(0),
+        ..row_softmax_options()
+    }
+);
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_workgroup_processor_mode,
+    FixtureOptions {
+        workgroup_processor_mode: Some(false),
+        ..row_softmax_options()
+    }
+);
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_gfx1250_revision,
+    FixtureOptions {
+        gfx1250_revision: Some("B0"),
+        ..row_softmax_options()
+    }
+);
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_device_enqueue_symbol,
+    FixtureOptions {
+        device_enqueue_symbol: Some("queue_entry"),
+        ..row_softmax_options()
+    }
+);
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_workgroup_size_hint,
+    FixtureOptions {
+        include_workgroup_size_hint: true,
+        ..row_softmax_options()
+    }
+);
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_vector_type_hint,
+    FixtureOptions {
+        include_vector_type_hint: true,
+        ..row_softmax_options()
+    }
+);
+unmeasured_kernel_metadata_case!(
+    row_softmax_rejects_unmeasured_printf_metadata,
+    FixtureOptions {
+        include_printf_metadata: true,
+        ..row_softmax_options()
+    }
+);
+
+macro_rules! unmeasured_argument_metadata_case {
+    ($name:ident, $field:expr, $value:expr) => {
+        #[test]
+        fn $name() {
+            for argument_index in [0, 1, 4] {
+                assert_row_softmax_rejects_unmeasured_metadata(
+                    FixtureOptions {
+                        argument_extra: Some((argument_index, $field, $value)),
+                        ..row_softmax_options()
+                    },
+                    stringify!($name),
+                );
+            }
+        }
+    };
+}
+
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_type_name,
+    ".type_name",
+    FixtureMetadataValue::String("float*")
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_align,
+    ".align",
+    FixtureMetadataValue::Unsigned(8)
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_value_type,
+    ".value_type",
+    FixtureMetadataValue::String("f32")
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_access,
+    ".access",
+    FixtureMetadataValue::String("read_only")
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_actual_access,
+    ".actual_access",
+    FixtureMetadataValue::String("read_only")
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_pointee_align,
+    ".pointee_align",
+    FixtureMetadataValue::Unsigned(4)
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_is_const,
+    ".is_const",
+    FixtureMetadataValue::Boolean(false)
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_is_restrict,
+    ".is_restrict",
+    FixtureMetadataValue::Boolean(false)
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_is_volatile,
+    ".is_volatile",
+    FixtureMetadataValue::Boolean(false)
+);
+unmeasured_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_argument_is_pipe,
+    ".is_pipe",
+    FixtureMetadataValue::Boolean(false)
+);
+
+macro_rules! unmeasured_single_argument_metadata_case {
+    ($name:ident, $index:expr, $field:expr, $value:expr) => {
+        #[test]
+        fn $name() {
+            assert_row_softmax_rejects_unmeasured_metadata(
                 FixtureOptions {
-                    argument_extra: Some((argument_index, field, value)),
+                    argument_extra: Some(($index, $field, $value)),
                     ..row_softmax_options()
                 },
-                Some(&table),
-            );
-            assert!(
-                inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
-                    evidence_for(
-                        fixture.bytes,
-                        "gfx942:xnack-",
-                        0xf0,
-                        0xf1,
-                        "row_softmax_v1",
-                        "row_softmax_v1.kd",
-                    ),
-                    row_softmax_expectation(),
-                )
-                .is_err(),
-                "argument {argument_index} accepted optional field {field}",
+                stringify!($name),
             );
         }
-    }
-    for (argument_index, field, value) in [
-        (1, ".address_space", FixtureMetadataValue::String("global")),
-        (4, ".name", FixtureMetadataValue::String("hidden")),
-        (4, ".address_space", FixtureMetadataValue::String("global")),
-    ] {
-        let fixture = fixture_with_descriptor_table(
-            FixtureOptions {
-                argument_extra: Some((argument_index, field, value)),
-                ..row_softmax_options()
-            },
-            Some(&table),
-        );
-        assert!(
-            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
-                evidence_for(
-                    fixture.bytes,
-                    "gfx942:xnack-",
-                    0xf2,
-                    0xf3,
-                    "row_softmax_v1",
-                    "row_softmax_v1.kd",
-                ),
-                row_softmax_expectation(),
-            )
-            .is_err(),
-            "argument {argument_index} accepted optional field {field}",
-        );
-    }
+    };
 }
+
+unmeasured_single_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_value_address_space,
+    1,
+    ".address_space",
+    FixtureMetadataValue::String("global")
+);
+unmeasured_single_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_hidden_name,
+    4,
+    ".name",
+    FixtureMetadataValue::String("hidden")
+);
+unmeasured_single_argument_metadata_case!(
+    row_softmax_rejects_unmeasured_hidden_address_space,
+    4,
+    ".address_space",
+    FixtureMetadataValue::String("global")
+);
 
 #[test]
 fn row_softmax_rejects_source_and_register_metadata_drift() {
@@ -1466,46 +1687,18 @@ fn row_softmax_rejects_source_and_register_metadata_drift() {
     }
 }
 
-#[test]
-fn row_softmax_rejects_each_exact_llvm22_hidden_argument_drift() {
-    const HIDDEN: [(u64, u64, &str); 19] = [
-        (0, 4, "hidden_block_count_x"),
-        (4, 4, "hidden_block_count_y"),
-        (8, 4, "hidden_block_count_z"),
-        (12, 2, "hidden_group_size_x"),
-        (14, 2, "hidden_group_size_y"),
-        (16, 2, "hidden_group_size_z"),
-        (18, 2, "hidden_remainder_x"),
-        (20, 2, "hidden_remainder_y"),
-        (22, 2, "hidden_remainder_z"),
-        (40, 8, "hidden_global_offset_x"),
-        (48, 8, "hidden_global_offset_y"),
-        (56, 8, "hidden_global_offset_z"),
-        (64, 2, "hidden_grid_dims"),
-        (80, 8, "hidden_hostcall_buffer"),
-        (88, 8, "hidden_multigrid_sync_arg"),
-        (96, 8, "hidden_heap_v1"),
-        (104, 8, "hidden_default_queue"),
-        (112, 8, "hidden_completion_action"),
-        (200, 8, "hidden_queue_ptr"),
-    ];
-    let table = row_softmax_descriptor_table(row_softmax_capabilities());
-    for (index, (offset, size, kind)) in HIDDEN.into_iter().enumerate() {
-        for options in [
-            FixtureOptions {
-                omitted_hidden_argument: Some(index),
-                ..row_softmax_options()
-            },
-            FixtureOptions {
-                hidden_argument_override: Some((index, offset, size + 1, kind)),
-                ..row_softmax_options()
-            },
-            FixtureOptions {
-                hidden_argument_override: Some((index, offset, size, "hidden_none")),
-                ..row_softmax_options()
-            },
-        ] {
-            let fixture = fixture_with_descriptor_table(options, Some(&table));
+macro_rules! hidden_argument_omission_case {
+    ($name:ident, $index:expr) => {
+        #[test]
+        fn $name() {
+            let table = row_softmax_descriptor_table(row_softmax_capabilities());
+            let fixture = fixture_with_descriptor_table(
+                FixtureOptions {
+                    omitted_hidden_argument: Some($index),
+                    ..row_softmax_options()
+                },
+                Some(&table),
+            );
             assert!(
                 inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
                     evidence_for(
@@ -1519,9 +1712,62 @@ fn row_softmax_rejects_each_exact_llvm22_hidden_argument_drift() {
                     row_softmax_expectation(),
                 )
                 .is_err(),
-                "hidden argument {index} accepted a hostile mutation",
+                "hidden argument {} accepted an omission",
+                $index,
             );
         }
+    };
+}
+
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_block_count_x, 0);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_block_count_y, 1);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_block_count_z, 2);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_group_size_x, 3);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_group_size_y, 4);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_group_size_z, 5);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_remainder_x, 6);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_remainder_y, 7);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_remainder_z, 8);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_global_offset_x, 9);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_global_offset_y, 10);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_global_offset_z, 11);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_grid_dims, 12);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_hostcall_buffer, 13);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_multigrid_sync_arg, 14);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_heap_v1, 15);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_default_queue, 16);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_completion_action, 17);
+hidden_argument_omission_case!(row_softmax_rejects_omitted_hidden_queue_ptr, 18);
+
+#[test]
+fn row_softmax_rejects_hidden_argument_size_and_kind_drift() {
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    for override_value in [
+        (10, 48, 9, "hidden_global_offset_y"),
+        (10, 48, 8, "hidden_none"),
+    ] {
+        let fixture = fixture_with_descriptor_table(
+            FixtureOptions {
+                hidden_argument_override: Some(override_value),
+                ..row_softmax_options()
+            },
+            Some(&table),
+        );
+        assert!(
+            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+                evidence_for(
+                    fixture.bytes,
+                    "gfx942:xnack-",
+                    0xc1,
+                    0xd1,
+                    "row_softmax_v1",
+                    "row_softmax_v1.kd",
+                ),
+                row_softmax_expectation(),
+            )
+            .is_err(),
+            "hidden argument accepted size or kind drift",
+        );
     }
 }
 
@@ -1796,6 +2042,58 @@ fn lineage_first_segment_offset(bytes: &[u8]) -> usize {
     cursor
 }
 
+fn lineage_segment(bytes: &[u8], index: usize) -> &[u8] {
+    &bytes[lineage_segment_range(bytes, index)]
+}
+
+fn lineage_segment_range(bytes: &[u8], index: usize) -> std::ops::Range<usize> {
+    let mut cursor = lineage_first_segment_offset(bytes);
+    for current in 0..=index {
+        let length = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
+        let start = cursor + 4;
+        let end = start + length;
+        assert!(end <= bytes.len() - 32);
+        if current == index {
+            return start..end;
+        }
+        cursor = end;
+    }
+    unreachable!()
+}
+
+fn replace_lineage_segment(bytes: &mut Vec<u8>, index: usize, replacement: &[u8]) {
+    let range = lineage_segment_range(bytes, index);
+    let length_offset = range.start - 4;
+    bytes.splice(range, replacement.iter().copied());
+    bytes[length_offset..length_offset + 4]
+        .copy_from_slice(&(replacement.len() as u32).to_le_bytes());
+    reseal_lineage_wire(bytes);
+}
+
+fn worker_response_without_output(response: &[u8]) -> Vec<u8> {
+    assert_eq!(&response[..8], b"F3LRSP02");
+    let mut rewritten = response[..8].to_vec();
+    let mut cursor = 8;
+    for expected_tag in 1_u16..=7 {
+        let tag = u16::from_le_bytes(response[cursor..cursor + 2].try_into().unwrap());
+        let length =
+            u32::from_le_bytes(response[cursor + 2..cursor + 6].try_into().unwrap()) as usize;
+        assert_eq!(tag, expected_tag);
+        let field = &response[cursor + 6..cursor + 6 + length];
+        let replacement = match tag {
+            5 => &[8][..],
+            7 => &[0][..],
+            _ => field,
+        };
+        rewritten.extend_from_slice(&tag.to_le_bytes());
+        rewritten.extend_from_slice(&(replacement.len() as u32).to_le_bytes());
+        rewritten.extend_from_slice(replacement);
+        cursor += 6 + length;
+    }
+    assert_eq!(cursor, response.len());
+    rewritten
+}
+
 fn reseal_lineage_wire(bytes: &mut [u8]) {
     const DOMAIN: &[u8] = b"FE2O3/FINALIZER/PROTECTED-WORKER-V2-LINEAGE-CHECKSUM/V2\0";
     let body_len = bytes.len() - 32;
@@ -1902,6 +2200,27 @@ fn protected_evidence(
     closure: CompilerClosureV2,
     slot: CompilerModuleHandoffSlotV2,
 ) -> fe2o3_hsaco_finalize::InertProtectedFirstBuildWorkerV2EvidenceV1 {
+    protected_evidence_with_module_prefix(
+        bytes,
+        target,
+        invocation_seed,
+        semantic_seed,
+        closure,
+        slot,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn protected_evidence_with_module_prefix(
+    bytes: Vec<u8>,
+    target: &str,
+    invocation_seed: u8,
+    semantic_seed: u8,
+    closure: CompilerClosureV2,
+    slot: CompilerModuleHandoffSlotV2,
+    module_prefix: &[u8],
+) -> fe2o3_hsaco_finalize::InertProtectedFirstBuildWorkerV2EvidenceV1 {
     let directory = TestDirectory::new();
     let producer = ProducerIdentity::from_codegen(
         "protected_worker_v2_hsaco_finalization_fixture",
@@ -1915,7 +2234,14 @@ fn protected_evidence(
         BuildSession::from_bytes([invocation_seed.wrapping_add(1); 16]),
     )
     .unwrap();
-    let handoff = compiler_handoff(&bytes, target, semantic_seed, "vecadd", "vecadd.kd");
+    let handoff = compiler_handoff_with_module_prefix(
+        &bytes,
+        target,
+        semantic_seed,
+        "vecadd",
+        "vecadd.kd",
+        module_prefix,
+    );
     publish_compiler_module_handoff_in_slot_v2(
         &directory.0,
         &producer,
@@ -1934,7 +2260,12 @@ fn protected_evidence(
         Vec::new(),
         link_options(),
         WorkerOutputConstraintsV1::new(64 * 1024).unwrap(),
-        WorkerExecutionLimitsV1::new(Duration::from_secs(2), 16 * 1024, 64 * 1024).unwrap(),
+        WorkerExecutionLimitsV1::new(
+            Duration::from_secs(if module_prefix.is_empty() { 2 } else { 10 }),
+            16 * 1024,
+            64 * 1024,
+        )
+        .unwrap(),
     )
     .unwrap()
 }
@@ -1995,6 +2326,17 @@ fn compiler_handoff(
     entry: &str,
     descriptor: &str,
 ) -> CompilerModuleHandoffV2 {
+    compiler_handoff_with_module_prefix(bytes, target, semantic_seed, entry, descriptor, &[])
+}
+
+fn compiler_handoff_with_module_prefix(
+    bytes: &[u8],
+    target: &str,
+    semantic_seed: u8,
+    entry: &str,
+    descriptor: &str,
+    module_prefix: &[u8],
+) -> CompilerModuleHandoffV2 {
     const PAYLOAD_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
     let target = CompilerDeviceTargetV1::parse(target).unwrap();
     let manifest = CompilerModuleSymbolManifestV1::new([
@@ -2008,7 +2350,8 @@ fn compiler_handoff(
     envelope
         .push(compiler_contract(target, semantic_seed))
         .unwrap();
-    let mut module = PAYLOAD_MARKER.to_vec();
+    let mut module = module_prefix.to_vec();
+    module.extend_from_slice(PAYLOAD_MARKER);
     module.extend_from_slice(bytes);
     CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmBitcode,

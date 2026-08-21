@@ -38,6 +38,9 @@ use crate::{
     ObservedWorkerV2KernelSymbolsV1, ProtectedFirstBuildWorkerV2IdentityV1, ProvenanceNodeV1,
     WorkerMeasurementV1, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
     WorkerV2RawLaunchContractV1, finalize_allocated_read_only_unfinalized, finalize_unfinalized,
+    first_build_worker_v2::{
+        ProtectedFirstBuildReplayValidationV2, validate_protected_first_build_replay_v2,
+    },
     verify_allocated_read_only_finalized, verify_finalized,
     worker_v2_hsaco_admission::{
         ProtectedInspectionIdentityPreimageV2, WorkerV2RawLaunchDiagnosticProfileV1,
@@ -65,8 +68,6 @@ const PROTECTED_LINEAGE_CHECKSUM_DOMAIN_V2: &[u8] =
     b"FE2O3/FINALIZER/PROTECTED-WORKER-V2-LINEAGE-CHECKSUM/V2\0";
 const PROTECTED_LINEAGE_IDENTITY_DOMAIN_V2: &[u8] =
     b"FE2O3/FINALIZER/PROTECTED-WORKER-V2-LINEAGE-IDENTITY/V2\0";
-const PROTECTED_FIRST_BUILD_EVIDENCE_DOMAIN_V1: &[u8] =
-    b"FE2O3/CLOSURE-PROTECTED-FIRST-BUILD-V2-REPLAY-EVIDENCE/V1\0";
 const COMPILER_FFI_ENVELOPE_DOMAIN_V1: &[u8] = b"FE2O3/COMPILER-FFI-ENVELOPE/V1\0";
 const LINK_PLAN_DOMAIN_V1: &[u8] = b"FE2O3/AMDGPU-MULTI-INPUT-LINK-PLAN/V1\0";
 const MAX_TARGET_TEXT_BYTES_V2: usize = 256;
@@ -100,18 +101,12 @@ const PROTECTED_LINEAGE_FIXED_BYTES_V2: usize = 8
     + 32
     + 32;
 
-/// Maximum canonical bytes accepted for one finalizer-owned protected lineage transcript.
-pub const MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2: usize =
-    PROTECTED_LINEAGE_FIXED_BYTES_V2
-        + MAX_ATTEMPT_TEXT_BYTES_V2
-        + MAX_TARGET_TEXT_BYTES_V2
-        + MAX_COMPILER_FFI_ENVELOPE_BYTES_V1
-        + MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1
-        + (2 * MAX_WORKER_TOOLCHAIN_ID_BYTES)
-        + MAX_LINK_PLAN_BYTES_V2
-        + (2 * MAX_WORKER_REQUEST_BYTES)
-        + (2 * MAX_WORKER_RESPONSE_BYTES)
-        + (3 * MAX_OBSERVATION_PREIMAGE_BYTES_V2);
+/// Maximum aggregate canonical bytes accepted for one finalizer-owned protected lineage.
+///
+/// Component protocol limits are deliberately not additive here. Requests and responses can each
+/// carry the same HSACO, so adding their independent maxima admitted nearly 500 MiB transcripts
+/// and multi-gigabyte decode peaks. Larger evidence must use a future content-addressed schema.
+pub const MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2: usize = 16 * 1024 * 1024;
 
 /// Stable identity of one raw-inspection-to-canonical-finalization transition.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -550,18 +545,22 @@ pub struct ProtectedWorkerV2FinalizerLineageV2 {
 }
 
 impl ProtectedWorkerV2FinalizerLineageV2 {
-    pub fn from_inspected(source: &InspectedProtectedRawWorkerV2HsacoV1) -> Self {
+    pub fn from_inspected(
+        source: &InspectedProtectedRawWorkerV2HsacoV1,
+    ) -> Result<Self, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
         Self::from_raw(source, None)
     }
 
-    pub fn from_finalized(source: &PreparedFinalizedProtectedWorkerV2HsacoV2) -> Self {
+    pub fn from_finalized(
+        source: &PreparedFinalizedProtectedWorkerV2HsacoV2,
+    ) -> Result<Self, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
         Self::from_raw(source.raw_inspection(), Some(source))
     }
 
     fn from_raw(
         raw: &InspectedProtectedRawWorkerV2HsacoV1,
         finalized: Option<&PreparedFinalizedProtectedWorkerV2HsacoV2>,
-    ) -> Self {
+    ) -> Result<Self, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
         let source = raw.source_evidence();
         let (descriptor_identity, abi_identity, resource_identity) = raw.observation_identities();
         let route = if finalized.is_some() {
@@ -569,7 +568,24 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
         } else {
             ProtectedWorkerV2FinalizerLineageRouteV2::InspectedRaw
         };
-        Self {
+        let link_plan_bytes = source.plan().canonical_bytes();
+        validate_protected_lineage_encoded_length([
+            raw.attempt().to_env_value().len(),
+            raw.target().to_string().len(),
+            source.worker_measurement().worker_build_identity().len(),
+            source.worker_measurement().llvm_build_identity().len(),
+            source.compiler_envelope().canonical_bytes().len(),
+            source.symbol_manifest().canonical_bytes().len(),
+            link_plan_bytes.len(),
+            source.bootstrap_request_bytes().len(),
+            source.bootstrap().response().canonical_bytes().len(),
+            source.authorized_request_bytes().len(),
+            source.authorized().response().canonical_bytes().len(),
+            raw.descriptor_observation_preimage().len(),
+            raw.abi_observation_preimage().len(),
+            raw.resource_observation_preimage().len(),
+        ])?;
+        Ok(Self {
             route,
             source_evidence_identity: *raw.source_evidence_identity().as_bytes(),
             raw_inspection_identity: *raw.identity().as_bytes(),
@@ -584,7 +600,7 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
             compiler_envelope_bytes: source.compiler_envelope().canonical_bytes().to_vec(),
             symbol_manifest_bytes: source.symbol_manifest().canonical_bytes().to_vec(),
             worker: source.worker_measurement().clone(),
-            link_plan_bytes: source.plan().canonical_bytes(),
+            link_plan_bytes,
             bootstrap_request_bytes: source.bootstrap_request_bytes().to_vec(),
             bootstrap_response_bytes: source.bootstrap().response().canonical_bytes().to_vec(),
             authorized_request_bytes: source.authorized_request_bytes().to_vec(),
@@ -604,7 +620,7 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
             resource_observation_preimage: raw.resource_observation_preimage().to_vec(),
             canonical_code_object_digest: finalized
                 .map_or([0; 32], |value| *value.canonical_digest().as_bytes()),
-        }
+        })
     }
 
     pub const fn route(&self) -> ProtectedWorkerV2FinalizerLineageRouteV2 {
@@ -633,6 +649,15 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
 
     pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
         self.handoff_identity
+    }
+
+    /// Whether standalone V2 replay independently recomputes the artifact-transaction identity.
+    ///
+    /// V2 retains that identity and closes both worker request IDs over it, but its wire omits the
+    /// producer and derived-slot preimages needed by the artifact-transaction identity algorithm.
+    /// A later publication join must therefore compare this inert lineage with a trusted root.
+    pub const fn independently_rederives_transaction_handoff_identity(&self) -> bool {
+        false
     }
 
     pub const fn compiler_closure(&self) -> CompilerClosureV2 {
@@ -684,14 +709,14 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
     }
 
     pub fn matches_inspected_source(&self, source: &InspectedProtectedRawWorkerV2HsacoV1) -> bool {
-        self == &Self::from_inspected(source)
+        Self::from_inspected(source).is_ok_and(|expected| self == &expected)
     }
 
     pub fn matches_finalized_source(
         &self,
         source: &PreparedFinalizedProtectedWorkerV2HsacoV2,
     ) -> bool {
-        self == &Self::from_finalized(source)
+        Self::from_finalized(source).is_ok_and(|expected| self == &expected)
     }
 
     pub const fn grants_compiler_authority(&self) -> bool {
@@ -863,7 +888,31 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
         bytes.extend_from_slice(&self.canonical_code_object_digest);
         let checksum = hash_domain_bytes(PROTECTED_LINEAGE_CHECKSUM_DOMAIN_V2, &bytes);
         bytes.extend_from_slice(&checksum);
+        debug_assert_eq!(
+            Some(bytes.len()),
+            protected_lineage_encoded_length(self.variable_encoded_lengths()),
+            "protected lineage fixed-byte accounting drifted from its canonical schema"
+        );
         bytes
+    }
+
+    fn variable_encoded_lengths(&self) -> [usize; 14] {
+        [
+            self.attempt.to_env_value().len(),
+            self.target.to_string().len(),
+            self.worker.worker_build_identity().len(),
+            self.worker.llvm_build_identity().len(),
+            self.compiler_envelope_bytes.len(),
+            self.symbol_manifest_bytes.len(),
+            self.link_plan_bytes.len(),
+            self.bootstrap_request_bytes.len(),
+            self.bootstrap_response_bytes.len(),
+            self.authorized_request_bytes.len(),
+            self.authorized_response_bytes.len(),
+            self.descriptor_observation_preimage.len(),
+            self.abi_observation_preimage.len(),
+            self.resource_observation_preimage.len(),
+        ]
     }
 
     pub fn decode_canonical(
@@ -904,11 +953,18 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
         let attempt_text = reader.text_u16(MAX_ATTEMPT_TEXT_BYTES_V2)?;
         let attempt = BuildAttempt::from_env_value(attempt_text)
             .map_err(|_| ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Attempt)?;
+        if attempt.to_env_value() != attempt_text {
+            return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::NonCanonical);
+        }
         let handoff_slot = decode_handoff_slot(reader.u8()?)?;
         let handoff_identity = CompilerModuleHandoffIdentityV2::from_bytes(reader.array()?);
         let compiler_closure = decode_compiler_closure_v2(&mut reader)?;
-        let target = DeviceTargetV1::parse(reader.text_u16(MAX_TARGET_TEXT_BYTES_V2)?)
+        let target_text = reader.text_u16(MAX_TARGET_TEXT_BYTES_V2)?;
+        let target = DeviceTargetV1::parse(target_text)
             .map_err(|_| ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Target)?;
+        if target.to_string() != target_text {
+            return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::NonCanonical);
+        }
         let code_object_version = decode_code_object_version_v2(reader.u8()?)?;
         let launch = WorkerV2RawLaunchContractV1::from_transcript_parts(
             [reader.u32()?, reader.u32()?, reader.u32()?],
@@ -979,9 +1035,6 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
             return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::TrailingBytes);
         }
         value.validate_recomputed(exact_raw_bytes, exact_final_bytes)?;
-        if value.canonical_bytes() != bytes {
-            return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::NonCanonical);
-        }
         Ok(value)
     }
 
@@ -1020,24 +1073,32 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
             &self.authorized_response_bytes,
         )
         .map_err(|_| ProtectedWorkerV2FinalizerLineageDecodeErrorV2::WorkerExchange)?;
-        for exchange in [&bootstrap, &authorized] {
-            let request = exchange.request();
-            let response = exchange.response();
-            if request.worker_executable() != self.worker.executable()
-                || request.worker_build_identity() != self.worker.worker_build_identity()
-                || request.llvm_build_identity() != self.worker.llvm_build_identity()
-                || response.worker_build_identity() != self.worker.worker_build_identity()
-                || request.target() != self.target
-                || request.code_object_version() != self.code_object_version
-                || request.compiler_envelope_identity().as_bytes()
-                    != compiler_envelope.identity().as_bytes()
-                || response.output().is_none_or(|output| {
-                    output.identity() != self.raw_output_identity
-                        || output.bytes() != exact_raw_bytes
-                })
-            {
-                return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::WorkerExchange);
-            }
+        let replay_validation =
+            validate_protected_first_build_replay_v2(ProtectedFirstBuildReplayValidationV2 {
+                attempt: self.attempt,
+                slot: self.handoff_slot,
+                handoff_identity: self.handoff_identity,
+                compiler_closure: self.compiler_closure,
+                compiler_envelope: &compiler_envelope,
+                symbol_manifest: &symbol_manifest,
+                worker: &self.worker,
+                plan: &link_plan,
+                bootstrap_request_bytes: &self.bootstrap_request_bytes,
+                bootstrap_request: bootstrap.request(),
+                bootstrap_response: bootstrap.response(),
+                authorized_request_bytes: &self.authorized_request_bytes,
+                authorized_request: authorized.request(),
+                authorized_response: authorized.response(),
+                expected_output_identity: self.raw_output_identity,
+                exact_output_bytes: exact_raw_bytes,
+            })
+            .map_err(|error| {
+                ProtectedWorkerV2FinalizerLineageDecodeErrorV2::RawLineage(error.field())
+            })?;
+        if replay_validation.output_identity() != self.raw_output_identity {
+            return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::RawLineage(
+                "validated replay output",
+            ));
         }
         if calculate_response_identity_bytes_v1(&self.authorized_response_bytes)
             != self.response_identity
@@ -1046,17 +1107,7 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
                 "sealed response identity",
             ));
         }
-        let source_identity = calculate_protected_source_identity_v1(
-            self.attempt,
-            self.handoff_slot,
-            self.handoff_identity,
-            self.compiler_closure,
-            &symbol_manifest,
-            &self.worker,
-            &link_plan,
-            bootstrap.response(),
-            authorized.response(),
-        );
+        let source_identity = *replay_validation.evidence_identity().as_bytes();
         if source_identity != self.source_evidence_identity {
             return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::SourceIdentity);
         }
@@ -1211,22 +1262,24 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
                 ),
             );
         }
-        let abi = decode_abi_observation_summaries_v2(&self.abi_observation_preimage)?;
-        let resources =
+        let mut abi = decode_abi_observation_summaries_v2(&self.abi_observation_preimage)?;
+        let mut resources =
             decode_resource_observation_summaries_v2(&self.resource_observation_preimage)?;
         if table.kernels().len() != abi.len() || table.kernels().len() != resources.len() {
             return Err(
                 ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin("kernel count"),
             );
         }
-        for kernel in table.kernels() {
-            let entry = kernel.entry_name().as_str();
-            let abi = abi.iter().find(|value| value.entry == entry).ok_or(
-                ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin("kernel entry"),
-            )?;
-            let resource = resources.iter().find(|value| value.entry == entry).ok_or(
-                ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin("kernel resource"),
-            )?;
+        let mut kernels: Vec<_> = table.kernels().iter().collect();
+        kernels.sort_unstable_by_key(|kernel| kernel.entry_name().as_str());
+        abi.sort_unstable_by(|left, right| left.entry.cmp(&right.entry));
+        resources.sort_unstable_by(|left, right| left.entry.cmp(&right.entry));
+        validate_sorted_descriptor_entries_v2(
+            kernels.iter().map(|kernel| kernel.entry_name().as_str()),
+            abi.iter().map(|value| value.entry.as_str()),
+            resources.iter().map(|value| value.entry.as_str()),
+        )?;
+        for ((kernel, abi), resource) in kernels.into_iter().zip(&abi).zip(&resources) {
             let required_block = resource
                 .required_workgroup_size
                 .map(|required| {
@@ -1263,68 +1316,58 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn calculate_protected_source_identity_v1(
-    attempt: BuildAttempt,
-    slot: CompilerModuleHandoffSlotV2,
-    handoff_identity: CompilerModuleHandoffIdentityV2,
-    compiler_closure: CompilerClosureV2,
-    manifest: &CompilerModuleSymbolManifestV1,
-    worker: &WorkerMeasurementV1,
-    plan: &MultiInputLinkPlanV1,
-    bootstrap: &crate::WorkerResponseV2,
-    authorized: &crate::WorkerResponseV2,
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(PROTECTED_FIRST_BUILD_EVIDENCE_DOMAIN_V1);
-    hasher.update(attempt.generation().to_le_bytes());
-    hasher.update(attempt.session().as_bytes());
-    hasher.update(attempt.invocation().as_bytes());
-    hasher.update([slot as u8]);
-    hasher.update(handoff_identity.as_bytes());
-    hash_source_compiler_closure_v2(&mut hasher, compiler_closure);
-    hasher.update(manifest.identity().sha256());
-    hasher.update(manifest.identity().byte_len().to_le_bytes());
-    hash_content(&mut hasher, worker.executable());
-    hash_text(&mut hasher, worker.worker_build_identity());
-    hash_text(&mut hasher, worker.llvm_build_identity());
-    hasher.update(plan.identity().as_bytes());
-    for response in [bootstrap, authorized] {
-        hasher.update(response.request_id());
-        hasher.update(response.request_identity());
-        match response.response_identity() {
-            Some(identity) => {
-                hasher.update([1]);
-                hasher.update(identity);
-            }
-            None => hasher.update([0]),
-        }
-        match response.device_library_provider() {
-            Some(provider) => {
-                hasher.update([1]);
-                hasher.update(provider.manifest_identity());
-            }
-            None => hasher.update([0]),
-        }
+fn validate_protected_lineage_encoded_length(
+    variable_bytes: impl IntoIterator<Item = usize>,
+) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
+    let encoded_bytes = protected_lineage_encoded_length(variable_bytes)
+        .ok_or(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)?;
+    if encoded_bytes > MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2 {
+        return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length);
     }
-    hasher.update(authorized.compiler_envelope_identity().as_bytes());
-    hash_content(&mut hasher, plan.output().identity());
-    hasher.finalize().into()
+    Ok(())
 }
 
-fn hash_source_compiler_closure_v2(hasher: &mut Sha256, closure: CompilerClosureV2) {
-    hasher.update(closure.cargo_executable_sha256());
-    hasher.update(closure.cargo_binding_trampoline_sha256());
-    hasher.update(closure.cargo_fe2o3_binding_wrapper_sha256());
-    hasher.update(closure.rustc_executable_sha256());
-    hasher.update(closure.rustc_runtime_tree_sha256());
-    hasher.update(closure.codegen_backend_sha256());
-    hasher.update(
-        closure
-            .cargo_binding_transition_protocol_version()
-            .to_le_bytes(),
-    );
-    hasher.update(closure.identity_sha256());
+fn protected_lineage_encoded_length(
+    variable_bytes: impl IntoIterator<Item = usize>,
+) -> Option<usize> {
+    variable_bytes
+        .into_iter()
+        .try_fold(PROTECTED_LINEAGE_FIXED_BYTES_V2, usize::checked_add)
+}
+
+fn validate_sorted_descriptor_entries_v2<'a>(
+    mut kernels: impl Iterator<Item = &'a str>,
+    mut abi: impl Iterator<Item = &'a str>,
+    mut resources: impl Iterator<Item = &'a str>,
+) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
+    let mut previous = None;
+    loop {
+        match (kernels.next(), abi.next(), resources.next()) {
+            (None, None, None) => return Ok(()),
+            (Some(kernel), Some(abi), Some(resource)) => {
+                if previous == Some(kernel) {
+                    return Err(
+                        ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
+                            "duplicate kernel entry",
+                        ),
+                    );
+                }
+                if kernel != abi || kernel != resource {
+                    return Err(
+                        ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
+                            "kernel entry",
+                        ),
+                    );
+                }
+                previous = Some(kernel);
+            }
+            _ => {
+                return Err(
+                    ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin("kernel count"),
+                );
+            }
+        }
+    }
 }
 
 fn hash_domain_bytes(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
@@ -2333,5 +2376,69 @@ const fn code_object_version_tag(version: CodeObjectVersion) -> u8 {
         CodeObjectVersion::V4 => 4,
         CodeObjectVersion::V5 => 5,
         CodeObjectVersion::V6 => 6,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2, PROTECTED_LINEAGE_FIXED_BYTES_V2,
+        ProtectedWorkerV2FinalizerLineageDecodeErrorV2, validate_protected_lineage_encoded_length,
+        validate_sorted_descriptor_entries_v2,
+    };
+
+    #[test]
+    fn aggregate_lineage_bound_is_exact_without_allocating_the_limit() {
+        let maximum_variable_bytes =
+            MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2 - PROTECTED_LINEAGE_FIXED_BYTES_V2;
+        assert!(
+            validate_protected_lineage_encoded_length([maximum_variable_bytes]).is_ok(),
+            "the exact aggregate maximum must remain encodable"
+        );
+        assert!(matches!(
+            validate_protected_lineage_encoded_length([maximum_variable_bytes, 1]),
+            Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)
+        ));
+        assert!(matches!(
+            validate_protected_lineage_encoded_length([usize::MAX]),
+            Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)
+        ));
+    }
+
+    #[test]
+    fn bounded_multi_kernel_entry_join_is_total_and_rejects_aliases() {
+        let kernels = ["attention", "gemm", "moe", "softmax"];
+        assert!(
+            validate_sorted_descriptor_entries_v2(
+                kernels.into_iter(),
+                kernels.into_iter(),
+                kernels.into_iter(),
+            )
+            .is_ok()
+        );
+
+        let wrong_resource = ["attention", "gemm", "moe", "transpose"];
+        assert!(matches!(
+            validate_sorted_descriptor_entries_v2(
+                kernels.into_iter(),
+                kernels.into_iter(),
+                wrong_resource.into_iter(),
+            ),
+            Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin("kernel entry"))
+        ));
+
+        let duplicate = ["attention", "gemm", "gemm", "softmax"];
+        assert!(matches!(
+            validate_sorted_descriptor_entries_v2(
+                duplicate.into_iter(),
+                duplicate.into_iter(),
+                duplicate.into_iter(),
+            ),
+            Err(
+                ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
+                    "duplicate kernel entry"
+                )
+            )
+        ));
     }
 }
