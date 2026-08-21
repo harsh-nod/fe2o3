@@ -2407,20 +2407,26 @@ impl WorkerV2ResumeStoreV1 {
             )
             .map_err(std::io::Error::from)?;
             validate_private_file(&self.directory, &descriptor, name, &self.display_path, None)?;
-            residue.push((name.to_owned(), descriptor));
+            let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+            residue.push((
+                name.to_owned(),
+                PinnedProtectedCleanupFileV1 {
+                    file: File::from(descriptor),
+                    initial,
+                },
+            ));
         }
         if !residue.is_empty() {
-            for (name, descriptor) in residue {
-                validate_private_file(
+            for (name, pinned) in residue {
+                pinned.unlink_and_sync(
                     &self.directory,
-                    &descriptor,
                     &name,
                     &self.display_path,
-                    None,
+                    "resume-marker-temp-before-unlink",
+                    "resume-marker-temp-after-unlink",
+                    "resume-marker-temp-directory-synced",
                 )?;
-                unlinkat(&self.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
             }
-            fsync(&self.directory).map_err(std::io::Error::from)?;
             self.verify_output_path()?;
         }
         Ok(())
@@ -2473,13 +2479,26 @@ impl WorkerV2ResumeStoreV1 {
             )
             .map_err(std::io::Error::from)?;
             validate_private_file(&self.directory, &descriptor, name, &self.display_path, None)?;
-            residue.push(name.to_owned());
+            let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+            residue.push((
+                name.to_owned(),
+                PinnedProtectedCleanupFileV1 {
+                    file: File::from(descriptor),
+                    initial,
+                },
+            ));
         }
         if !residue.is_empty() {
-            for name in residue {
-                unlinkat(&self.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+            for (name, pinned) in residue {
+                pinned.unlink_and_sync(
+                    &self.directory,
+                    &name,
+                    &self.display_path,
+                    "envelope-input-residue-before-unlink",
+                    "envelope-input-residue-after-unlink",
+                    "envelope-input-residue-directory-synced",
+                )?;
             }
-            fsync(&self.directory).map_err(std::io::Error::from)?;
             self.verify_output_path()?;
         }
         Ok(())
@@ -2521,13 +2540,26 @@ impl WorkerV2ResumeStoreV1 {
             )
             .map_err(std::io::Error::from)?;
             validate_private_file(&self.directory, &descriptor, name, &self.display_path, None)?;
-            residue.push(name.to_owned());
+            let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+            residue.push((
+                name.to_owned(),
+                PinnedProtectedCleanupFileV1 {
+                    file: File::from(descriptor),
+                    initial,
+                },
+            ));
         }
         if !residue.is_empty() {
-            for name in residue {
-                unlinkat(&self.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+            for (name, pinned) in residue {
+                pinned.unlink_and_sync(
+                    &self.directory,
+                    &name,
+                    &self.display_path,
+                    "load-envelope-temp-before-unlink",
+                    "load-envelope-temp-after-unlink",
+                    "load-envelope-temp-directory-synced",
+                )?;
             }
-            fsync(&self.directory).map_err(std::io::Error::from)?;
             self.verify_output_path()?;
         }
         Ok(())
@@ -3617,14 +3649,26 @@ impl WorkerV2ResumeStoreV2 {
                 &self.inner.display_path,
                 None,
             )?;
-            residue.push(name.to_owned());
+            let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+            residue.push((
+                name.to_owned(),
+                PinnedProtectedCleanupFileV1 {
+                    file: File::from(descriptor),
+                    initial,
+                },
+            ));
         }
         if !residue.is_empty() {
-            for name in residue {
-                unlinkat(&self.inner.directory, &name, AtFlags::empty())
-                    .map_err(std::io::Error::from)?;
+            for (name, pinned) in residue {
+                pinned.unlink_and_sync(
+                    &self.inner.directory,
+                    &name,
+                    &self.inner.display_path,
+                    "protected-envelope-temp-before-unlink",
+                    "protected-envelope-temp-after-unlink",
+                    "protected-envelope-temp-directory-synced",
+                )?;
             }
-            fsync(&self.inner.directory).map_err(std::io::Error::from)?;
             self.verify_output_path()?;
         }
         Ok(())
@@ -6352,6 +6396,10 @@ impl PinnedProtectedCleanupFileV1 {
         injected_fault_point_v1(_before_unlink);
         #[cfg(test)]
         run_protected_cleanup_before_unlink_test_hook_v1(name);
+        // The fault/test boundary deliberately runs before the final inode check. Cooperating
+        // writers hold the package lock, and an out-of-contract replacement is rejected before
+        // the pathname is unlinked.
+        self.require_named_as(directory, name, display_path)?;
         unlinkat(directory, name, AtFlags::empty()).map_err(std::io::Error::from)?;
         #[cfg(feature = "worker-v2-fault-injection-test-only")]
         injected_fault_point_v1(_after_unlink);
@@ -9449,17 +9497,26 @@ mod tests {
                         .0
                         .join(format!("hostile-protected-cleanup-link-{case}"));
                     let exact_bytes = fs::read(&target_path).unwrap();
+                    let expected_target_bytes = exact_bytes.clone();
+                    let mutate_target_path = target_path.clone();
+                    let mutate_backup_path = backup_path.clone();
+                    let mutate_extra_path = extra_path.clone();
                     let mutate = move || match attack {
                         "replacement" => {
-                            fs::rename(&target_path, &backup_path).unwrap();
-                            fs::write(&target_path, &exact_bytes).unwrap();
-                            fs::set_permissions(&target_path, fs::Permissions::from_mode(0o600))
-                                .unwrap();
+                            fs::rename(&mutate_target_path, &mutate_backup_path).unwrap();
+                            fs::write(&mutate_target_path, &exact_bytes).unwrap();
+                            fs::set_permissions(
+                                &mutate_target_path,
+                                fs::Permissions::from_mode(0o600),
+                            )
+                            .unwrap();
                         }
-                        "hardlink" => fs::hard_link(&target_path, &extra_path).unwrap(),
+                        "hardlink" => {
+                            fs::hard_link(&mutate_target_path, &mutate_extra_path).unwrap()
+                        }
                         "symlink" => {
-                            fs::rename(&target_path, &backup_path).unwrap();
-                            symlink(&backup_path, &target_path).unwrap();
+                            fs::rename(&mutate_target_path, &mutate_backup_path).unwrap();
+                            symlink(&mutate_backup_path, &mutate_target_path).unwrap();
                         }
                         _ => unreachable!(),
                     };
@@ -9481,6 +9538,26 @@ mod tests {
                             "unlink test hook was not consumed"
                         );
                     });
+                    match attack {
+                        "replacement" => {
+                            assert_eq!(fs::read(&target_path).unwrap(), expected_target_bytes);
+                            assert!(backup_path.is_file());
+                        }
+                        "hardlink" => {
+                            assert!(target_path.is_file());
+                            assert!(extra_path.is_file());
+                        }
+                        "symlink" => {
+                            assert!(
+                                fs::symlink_metadata(&target_path)
+                                    .unwrap()
+                                    .file_type()
+                                    .is_symlink()
+                            );
+                            assert!(backup_path.is_file());
+                        }
+                        _ => unreachable!(),
+                    }
                     assert_eq!(
                         store.read_protected_cleanup_evidence().unwrap(),
                         Some(evidence),
@@ -10231,6 +10308,53 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn protected_cleanup_evidence_temp_unlink_reopens_every_boundary() {
+        for (case, fault) in [
+            "protected-cleanup-evidence-temp-before-unlink",
+            "protected-cleanup-evidence-temp-after-unlink",
+            "protected-cleanup-evidence-temp-directory-synced",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let seed = 180 + case as u8;
+            let directory = TestDirectory::new();
+            let producer = producer(seed);
+            let attempt = attempt(&directory.0, &producer, seed);
+            let closure = compiler_closure(seed);
+            let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+            let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            stage_protected_required_ready(&store, &fixture, closure);
+            let package = store.inner.package;
+            let ready = store.load().unwrap().unwrap();
+            drop(store);
+
+            let residue_name = protected_cleanup_evidence_temp_name_v1(
+                package,
+                std::process::id(),
+                case as u64 + 1,
+            );
+            let residue_path = directory.0.join(&residue_name);
+            fs::write(&residue_path, b"bounded residue").unwrap();
+            fs::set_permissions(&residue_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+            let output =
+                run_protected_cleanup_crash_helper(&directory.0, seed, seed, "ready", fault);
+            assert_eq!(output.status.code(), Some(86), "{fault}: {output:?}");
+            assert_eq!(
+                residue_path.exists(),
+                fault == "protected-cleanup-evidence-temp-before-unlink",
+                "unexpected residue state at {fault}"
+            );
+
+            let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            assert_eq!(restarted.load().unwrap(), Some(ready), "{fault}");
+            assert!(!residue_path.exists(), "{fault}");
+        }
     }
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
