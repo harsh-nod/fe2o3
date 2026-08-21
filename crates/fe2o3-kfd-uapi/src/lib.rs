@@ -20,6 +20,10 @@ pub const KFD_UAPI_SCHEMA_ID: &str = "linux-kfd-uapi-1.18-generic-ioc-v1";
 /// Stable name of the reviewed R2 VM and memory-lifecycle UAPI extension.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.18-generic-ioc-v1";
 
+/// Stable name of the reviewed gfx942 device-local memory extension.
+pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID: &str =
+    "linux-kfd-gfx942-device-memory-lifecycle-1.18-v1";
+
 /// Stable name of the reviewed R4 compute-AQL queue-lifecycle UAPI extension.
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID: &str =
     "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1";
@@ -187,6 +191,36 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
     0x58, 0xa0, 0x96, 0x24, 0x14, 0x59, 0xe4, 0xcf, 0xdf, 0x90, 0xbd, 0x44, 0x97, 0xf4, 0xd5, 0x8a,
 ];
 
+/// Canonical manifest for the additive gfx942 device-local allocation profile.
+///
+/// This leaves the R2 host-visible admission set unchanged and binds the new
+/// exact VRAM+writable profile separately. It is ABI evidence only; it grants
+/// no allocation, mapping, address, copy, or dispatch authority.
+pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-gfx942-device-memory-lifecycle-1.18-v1\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
+    "memory_schema_manifest_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
+    "target=gfx942:xnack-,SPX/NPS1,KFD-1.18\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "gpuvm_source=amd/amdgpu/amdgpu_amdkfd_gpuvm.c\n",
+    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
+    "alloc_flags=vram:00000001,writable:80000000\n",
+    "alloc_profile=device_local_writable:80000001\n",
+    "mapping=one-exact-selected-gpu,no-peer\n",
+    "authority=wire-profile-only,no-ioctl-address-copy-or-dispatch\n",
+);
+
+/// SHA-256 of [`KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST`].
+pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
+    "8592027abc19962181c29b42962909e152d4ef4194036a1659dc601992cf709a";
+
+/// Typed digest bytes of [`KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST`].
+pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0x85, 0x92, 0x02, 0x7a, 0xbc, 0x19, 0x96, 0x21, 0x81, 0xc2, 0x9b, 0x42, 0x96, 0x29, 0x09, 0xe1,
+    0x52, 0xd4, 0xef, 0x41, 0x94, 0x03, 0x6a, 0x16, 0x59, 0xdc, 0x60, 0x19, 0x92, 0xcf, 0x70, 0x9a,
+];
+
 /// Canonical manifest for the reviewed R4 compute-AQL queue UAPI extension.
 ///
 /// Queue requests require the frozen R1 discovery schema and R2 memory schema,
@@ -315,6 +349,9 @@ pub const AMDKFD_IOCTL_BASE: u8 = b'K';
 /// GTT/system-memory allocation type admitted by this schema.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_GTT: u32 = 1 << 1;
 
+/// Device-local VRAM allocation type from the reviewed KFD UAPI.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_VRAM: u32 = 1 << 0;
+
 /// Permit GPU writes to the allocation.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE: u32 = 1 << 31;
 
@@ -346,6 +383,10 @@ pub const KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE: u32 =
 /// Exact admitted profile for host-visible executable memory.
 pub const KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE: u32 =
     KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE;
+
+/// Exact gfx942 profile for writable device-local VRAM/HBM.
+pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL: u32 =
+    KFD_IOC_ALLOC_MEM_FLAGS_VRAM | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE;
 
 /// Exact UAPI queue type admitted by the R4 builder.
 pub const KFD_IOC_QUEUE_TYPE_COMPUTE_AQL: u32 = 0x2;
@@ -515,6 +556,7 @@ impl KfdAllocMemoryFlags {
     pub const KERNARG: Self = Self(KFD_ALLOC_MEMORY_FLAGS_KERNARG);
     pub const AQL_QUEUE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE);
     pub const EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE);
+    pub const DEVICE_LOCAL: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL);
 
     /// Returns the exact KFD UAPI bit pattern carried on the wire.
     pub const fn bits(self) -> u32 {
@@ -544,6 +586,19 @@ pub const fn admit_kfd_alloc_memory_flags(
         KFD_ALLOC_MEMORY_FLAGS_KERNARG => Ok(KfdAllocMemoryFlags::KERNARG),
         KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE => Ok(KfdAllocMemoryFlags::AQL_QUEUE),
         KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE => Ok(KfdAllocMemoryFlags::EXECUTABLE),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
+
+/// Admits only the additive gfx942 writable device-local profile.
+///
+/// This function is intentionally separate from
+/// [`admit_kfd_alloc_memory_flags`], whose four R2 GTT profiles remain frozen.
+pub const fn admit_kfd_device_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL => Ok(KfdAllocMemoryFlags::DEVICE_LOCAL),
         flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
     }
 }
@@ -1436,6 +1491,8 @@ const _: () = {
     assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, mmap_offset) == 24);
     assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, gpu_id) == 32);
     assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, flags) == 36);
+    assert!(KFD_IOC_ALLOC_MEM_FLAGS_VRAM == 0x0000_0001);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL == 0x8000_0001);
 
     assert!(size_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);
     assert!(align_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);

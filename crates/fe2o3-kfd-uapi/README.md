@@ -207,12 +207,14 @@ retry, preserving the kernel-written `n_success` prefix for recovery after a
 partial failure. Buffer provenance, lifetime, bounds, mmap, ownership,
 rollback, and syscall execution belong to the later adapter.
 
-Allocation admission is exact-match, not a permissive bit mask. VRAM,
+Allocation admission is exact-match, not a permissive bit mask. The frozen R2
+admission function still accepts only its four GTT profiles and rejects VRAM,
 USERPTR/SVM, doorbells, MMIO remaps, public allocation, extended coherency,
-contiguous allocation, and every unknown bit pattern are rejected by the typed
-admission path. The data-only map records can describe the kernel ABI's device
-array, but they do not authorize peer mapping; the future adapter must correlate
-every array element to the allocation's admitted device.
+contiguous allocation, and every unknown bit pattern. The separate gfx942
+device-memory admission accepts only writable VRAM (`0x80000001`) and is bound
+by `KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST`; it does not widen R2. The
+data-only map records can describe the kernel ABI's device array, but neither
+admission path authorizes peer mapping, allocation, or syscall execution.
 
 Compile-time assertions, `tests/kfd_uapi_1_18.rs`, and
 `tests/kfd_aql_queue_uapi_1_18.rs` pin every admitted struct size, alignment,
@@ -220,8 +222,9 @@ field offset, request number, and typed queue range to independent golden
 values and hostile boundary cases.
 `KFD_UAPI_SCHEMA_MANIFEST` canonically binds only the frozen R1 facts.
 `KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST` separately binds the compositional R2
-memory facts and the exact R1 digest it requires. The R4 queue manifest binds
-both prerequisite digests independently. All three SHA-256 values are
+memory facts and the exact R1 digest it requires. The additive gfx942 device
+memory manifest binds the exact R2 digest without changing it. The R4 queue
+manifest binds its prerequisite digests independently. All SHA-256 values are
 recomputed in tests. These manifests identify reviewed userspace content;
 running kernel, module, boot, device, and process identities remain separate
 contracted observations.
@@ -328,8 +331,9 @@ separate reviewed schema.
 VM ownership, virtual-address reservation, CPU mmap, memory ownership and
 rollback, executable loading, queue or event syscalls, queue/event ownership
 and rollback, doorbell or event-page mmap and stores, AQL packet encoding,
-wait execution and restart policy, SVM/VRAM/peer
-allocation and mapping, and all syscall execution remain outside this crate.
+wait execution and restart policy, SVM/peer allocation and mapping,
+device-memory lifecycle authority beyond the exact writable-VRAM flag profile,
+and all syscall execution remain outside this crate.
 SDMA, PM4 compute, XGMI, target-XCC selection, CU masks, GWS, queue priority
 policy, queue preemption, CWSR allocation, EOP allocation, persistent-queue
 policy, and multi-process queue sharing are not admitted by this initial queue
