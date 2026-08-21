@@ -30,10 +30,11 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_worker_v2_bundle::{
     MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1, MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES,
-    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1 as ENVELOPE_PREFIX,
+    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2,
+    WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1 as ENVELOPE_PREFIX,
     WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1 as ENVELOPE_SUFFIX, WorkerV2EnvelopeInputsIdentityV1,
-    WorkerV2EnvelopeInputsV1, WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
-    worker_v2_load_envelope_name_v1,
+    WorkerV2EnvelopeInputsV1, WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeIdentityV2,
+    WorkerV2LoadEnvelopeV1, WorkerV2LoadEnvelopeV2, worker_v2_load_envelope_name_v1,
 };
 use rustix::fd::{FromRawFd, OwnedFd};
 use rustix::fs::{
@@ -67,6 +68,9 @@ const TEMP_SUFFIX: &str = ".tmp-";
 const ENVELOPE_INPUTS_PREFIX: &str = ".fe2o3-worker-v2-envelope-inputs-v1-";
 const ENVELOPE_INPUTS_SUFFIX: &str = ".capsule";
 const ENVELOPE_INPUTS_NAME_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-ENVELOPE-INPUTS-NAME/V1\0";
+const PROTECTED_ENVELOPE_PREFIX_V2: &str = ".fe2o3-worker-v2-protected-load-envelope-v2-";
+const PROTECTED_ENVELOPE_SUFFIX_V2: &str = ".envelope";
+const PROTECTED_ENVELOPE_TEMP_PREFIX_V2: &str = ".fe2o3-worker-v2-protected-load-envelope-temp-v2-";
 const MAX_ENVELOPE_INPUT_RESIDUE_ENTRIES: usize = 256;
 const MAX_ENVELOPE_TEMP_RESIDUE_ENTRIES: usize = 256;
 const RECEIPT_FIELDS: usize = 7;
@@ -1508,6 +1512,46 @@ pub(super) fn envelope_name(publication_identity: [u8; 32]) -> String {
     worker_v2_load_envelope_name_v1(publication_identity)
 }
 
+fn protected_envelope_name_v2(publication_identity: [u8; 32]) -> String {
+    format!(
+        "{PROTECTED_ENVELOPE_PREFIX_V2}{}{PROTECTED_ENVELOPE_SUFFIX_V2}",
+        hex(&publication_identity)
+    )
+}
+
+fn protected_envelope_temp_package_prefix_v2(package: [u8; 32]) -> String {
+    format!("{PROTECTED_ENVELOPE_TEMP_PREFIX_V2}{}-", hex(&package))
+}
+
+fn protected_envelope_temp_name_v2(
+    package: [u8; 32],
+    publication_identity: [u8; 32],
+    process: u32,
+    counter: u64,
+) -> String {
+    format!(
+        "{}{}{PROTECTED_ENVELOPE_SUFFIX_V2}{TEMP_SUFFIX}{process}-{counter}",
+        protected_envelope_temp_package_prefix_v2(package),
+        hex(&publication_identity)
+    )
+}
+
+fn is_protected_envelope_temp_name_v2(name: &str, package_prefix: &str) -> bool {
+    let bytes = name.as_bytes();
+    let identity_start = package_prefix.len();
+    let identity_end = identity_start + 64;
+    let suffix_end = identity_end + PROTECTED_ENVELOPE_SUFFIX_V2.len();
+    let temp_end = suffix_end + TEMP_SUFFIX.len();
+    bytes.len() > temp_end
+        && bytes.starts_with(package_prefix.as_bytes())
+        && bytes[identity_start..identity_end]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        && &bytes[identity_end..suffix_end] == PROTECTED_ENVELOPE_SUFFIX_V2.as_bytes()
+        && &bytes[suffix_end..temp_end] == TEMP_SUFFIX.as_bytes()
+        && has_decimal_temp_counters(&bytes[temp_end..])
+}
+
 fn envelope_inputs_name(package: [u8; 32], attempt: BuildAttempt) -> String {
     let identity = hash_identity(ENVELOPE_INPUTS_NAME_DOMAIN, |digest| {
         digest.update(package);
@@ -2838,11 +2882,12 @@ impl WorkerV2ResumeStoreV2 {
             .load_protected()?
             .map(|state| (state.publication(), state.attempt()));
         inner.cleanup_envelope_input_residue(retained)?;
-        inner.cleanup_envelope_temp_residue()?;
-        Ok(Self {
+        let store = Self {
             inner,
             producer: producer.clone(),
-        })
+        };
+        store.cleanup_protected_envelope_temp_residue()?;
+        Ok(store)
     }
 
     pub(crate) fn verify_output_path(&self) -> Result<(), ResumeMarkerErrorV1> {
@@ -2868,6 +2913,298 @@ impl WorkerV2ResumeStoreV2 {
         self.inner.recover_envelope_inputs(attempt)
     }
 
+    fn cleanup_protected_envelope_temp_residue(&self) -> Result<(), ResumeMarkerErrorV1> {
+        let package_prefix = protected_envelope_temp_package_prefix_v2(self.inner.package);
+        let scan = rustix::io::fcntl_dupfd_cloexec(&self.inner.directory, 0)
+            .map_err(std::io::Error::from)?;
+        let mut directory = rustix::fs::Dir::read_from(&scan).map_err(std::io::Error::from)?;
+        let mut entries = 0_usize;
+        let mut residue = Vec::new();
+        for entry in &mut directory {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let bytes = entry.file_name().to_bytes();
+            if !count_restart_artifact_entry(&mut entries, bytes).map_err(|()| {
+                self.inner
+                    .invalid("artifact directory exceeds its scan bound")
+            })? {
+                continue;
+            }
+            if !bytes.starts_with(package_prefix.as_bytes()) {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes).map_err(|_| {
+                self.inner
+                    .invalid("protected load-envelope temp residue name is not UTF-8")
+            })?;
+            if !is_protected_envelope_temp_name_v2(name, &package_prefix) {
+                return Err(self.inner.invalid_at_name(
+                    name,
+                    "malformed package-owned protected load-envelope temp name",
+                ));
+            }
+            if residue.len() == MAX_ENVELOPE_TEMP_RESIDUE_ENTRIES {
+                return Err(self
+                    .inner
+                    .invalid("too many package-owned protected load-envelope temp residues"));
+            }
+            let descriptor = openat(
+                &self.inner.directory,
+                name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            validate_private_file(
+                &self.inner.directory,
+                &descriptor,
+                name,
+                &self.inner.display_path,
+                None,
+            )?;
+            residue.push(name.to_owned());
+        }
+        if !residue.is_empty() {
+            for name in residue {
+                unlinkat(&self.inner.directory, &name, AtFlags::empty())
+                    .map_err(std::io::Error::from)?;
+            }
+            fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+            self.verify_output_path()?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn publish_load_envelope(
+        &self,
+        envelope: &WorkerV2LoadEnvelopeV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<WorkerV2EnvelopePublicationOutcomeV1, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        self.validate_protected_envelope_receipt(envelope, receipt, expected_compiler_closure)?;
+        let bytes = envelope.to_bytes();
+        if bytes.is_empty() || bytes.len() > MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2 {
+            return Err(self
+                .inner
+                .invalid("protected load envelope exceeds its canonical V2 bound"));
+        }
+        let decoded = WorkerV2LoadEnvelopeV2::from_bytes(&bytes).map_err(|error| {
+            self.inner.invalid(format!(
+                "protected load envelope is not canonical V2: {error}"
+            ))
+        })?;
+        if decoded != *envelope {
+            return Err(self
+                .inner
+                .invalid("protected load envelope changed during canonical V2 serialization"));
+        }
+        let name = protected_envelope_name_v2(receipt.publication_identity());
+        if let Some(existing) =
+            self.read_load_envelope(&name, receipt, expected_compiler_closure)?
+        {
+            return if existing == *envelope {
+                Ok(WorkerV2EnvelopePublicationOutcomeV1::AlreadyPublished)
+            } else {
+                Err(self
+                    .inner
+                    .invalid("conflicting canonical protected load-envelope publication"))
+            };
+        }
+
+        let temp_name = protected_envelope_temp_name_v2(
+            self.inner.package,
+            receipt.publication_identity(),
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
+        );
+        let result = (|| {
+            let descriptor = openat(
+                &self.inner.directory,
+                &temp_name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)?;
+            let mut file = File::from(descriptor);
+            file.set_len(bytes.len() as u64)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            validate_private_file(
+                &self.inner.directory,
+                &file,
+                &temp_name,
+                &self.inner.display_path,
+                Some(bytes.len()),
+            )?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-envelope-v2-temp-synced");
+            self.verify_output_path()?;
+            match renameat_with(
+                &self.inner.directory,
+                &temp_name,
+                &self.inner.directory,
+                &name,
+                RenameFlags::NOREPLACE,
+            ) {
+                Ok(()) => {}
+                Err(rustix::io::Errno::EXIST) => {
+                    unlinkat(&self.inner.directory, &temp_name, AtFlags::empty())
+                        .map_err(std::io::Error::from)?;
+                    let existing = self
+                        .read_load_envelope(&name, receipt, expected_compiler_closure)?
+                        .ok_or_else(|| {
+                            self.inner.invalid_at_name(
+                                &name,
+                                "protected envelope disappeared after create-new conflict",
+                            )
+                        })?;
+                    return if existing == *envelope {
+                        Ok(WorkerV2EnvelopePublicationOutcomeV1::AlreadyPublished)
+                    } else {
+                        Err(self.inner.invalid_at_name(
+                            &name,
+                            "conflicting canonical protected load envelope",
+                        ))
+                    };
+                }
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+            fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+            self.verify_output_path()?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-envelope-v2-published");
+            let published = self
+                .read_load_envelope(&name, receipt, expected_compiler_closure)?
+                .ok_or_else(|| {
+                    self.inner.invalid_at_name(
+                        &name,
+                        "protected envelope is absent after durable create-new publication",
+                    )
+                })?;
+            if published != *envelope {
+                return Err(self.inner.invalid_at_name(
+                    &name,
+                    "protected envelope changed after durable publication",
+                ));
+            }
+            Ok(WorkerV2EnvelopePublicationOutcomeV1::Published)
+        })();
+        if result.is_err() {
+            let _ = unlinkat(&self.inner.directory, &temp_name, AtFlags::empty());
+        }
+        result
+    }
+
+    pub(crate) fn recover_load_envelope(
+        &self,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<WorkerV2LoadEnvelopeV2, ResumeMarkerErrorV1> {
+        let name = protected_envelope_name_v2(receipt.publication_identity());
+        self.read_load_envelope(&name, receipt, expected_compiler_closure)?
+            .ok_or_else(|| {
+                self.inner.invalid_at_name(
+                    &name,
+                    "canonical protected Worker V2 load envelope is missing",
+                )
+            })
+    }
+
+    fn read_load_envelope(
+        &self,
+        name: &str,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<Option<WorkerV2LoadEnvelopeV2>, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        let descriptor = match openat(
+            &self.inner.directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+        validate_private_file(
+            &self.inner.directory,
+            &descriptor,
+            name,
+            &self.inner.display_path,
+            None,
+        )?;
+        let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+        let initial_size = usize::try_from(initial.st_size).ok();
+        if initial_size.is_none_or(|size| size == 0 || size > MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2)
+        {
+            return Err(self.inner.invalid_at_name(
+                name,
+                "protected envelope size exceeds its canonical V2 bound",
+            ));
+        }
+        let mut file = File::from(descriptor);
+        let mut bytes = Vec::with_capacity(initial_size.unwrap_or(0).saturating_add(1));
+        Read::by_ref(&mut file)
+            .take((MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2 + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        let final_stat = fstat(&file).map_err(std::io::Error::from)?;
+        if final_stat.st_dev != initial.st_dev
+            || final_stat.st_ino != initial.st_ino
+            || final_stat.st_mode != initial.st_mode
+            || final_stat.st_nlink != 1
+            || final_stat.st_mtime != initial.st_mtime
+            || final_stat.st_mtime_nsec != initial.st_mtime_nsec
+            || final_stat.st_ctime != initial.st_ctime
+            || final_stat.st_ctime_nsec != initial.st_ctime_nsec
+            || usize::try_from(final_stat.st_size).ok() != Some(bytes.len())
+            || bytes.len() > MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2
+        {
+            return Err(self
+                .inner
+                .invalid_at_name(name, "protected envelope changed while it was read"));
+        }
+        let envelope = WorkerV2LoadEnvelopeV2::from_bytes(&bytes).map_err(|error| {
+            self.inner
+                .invalid_at_name(name, format!("invalid protected V2 envelope: {error}"))
+        })?;
+        if envelope.to_bytes() != bytes {
+            return Err(self
+                .inner
+                .invalid_at_name(name, "protected V2 envelope encoding is not canonical"));
+        }
+        self.validate_protected_envelope_receipt(&envelope, receipt, expected_compiler_closure)?;
+        Ok(Some(envelope))
+    }
+
+    fn validate_protected_envelope_receipt(
+        &self,
+        envelope: &WorkerV2LoadEnvelopeV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let evidence = envelope.final_artifact_evidence();
+        let claim = evidence.published_claim();
+        if claim.plan().scope().package().as_bytes() != &self.inner.package
+            || evidence.backend_receipt() != receipt
+            || claim.receipt() != receipt
+            || evidence.compiler_closure() != expected_compiler_closure
+            || receipt.compiler_closure() != expected_compiler_closure
+            || claim.compiler_closure() != expected_compiler_closure
+            || envelope.grants_compiler_authority()
+            || envelope.grants_proof_authority()
+            || envelope.grants_currentness_authority()
+            || envelope.grants_load_authority()
+            || envelope.grants_launch_authority()
+        {
+            return Err(self
+                .inner
+                .invalid("protected load envelope disagrees with its exact V2 receipt"));
+        }
+        self.validate_durable_receipt(claim.plan().attempt(), receipt, expected_compiler_closure)?;
+        Ok(())
+    }
+
     pub(crate) fn persist_pending(
         &self,
         publication: WorkerV2PublicationKindV1,
@@ -2884,11 +3221,8 @@ impl WorkerV2ResumeStoreV2 {
         admission: [u8; 32],
         envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
     ) -> Result<(), ResumeMarkerErrorV1> {
-        if publication.requires_envelope() || envelope_inputs.is_some() {
-            return Err(ResumeMarkerErrorV1::InvalidTransition);
-        }
         let envelope_inputs = envelope_inputs.map_or([0; 32], |identity| identity.as_bytes());
-        if admission == [0; 32] {
+        if admission == [0; 32] || publication.requires_envelope() != (envelope_inputs != [0; 32]) {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
         let pending = ResumeMarkerStateV2::Pending {
@@ -2967,29 +3301,68 @@ impl WorkerV2ResumeStoreV2 {
         )
     }
 
-    /// Refuses the V1 envelope placeholder even when the exact V2 receipt is durable.
     pub(crate) fn persist_envelope_and_completed(
         &self,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
-        _intent: WorkerV2PublicationIntentIdentityV2,
+        intent: WorkerV2PublicationIntentIdentityV2,
         receipt: BackendPublicationReceiptV2,
         expected_compiler_closure: CompilerClosureV2,
-        _envelope: &WorkerV2LoadEnvelopeV1,
+        envelope: &WorkerV2LoadEnvelopeV2,
     ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
         if !publication.requires_envelope() {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
         self.validate_durable_receipt(attempt, receipt, expected_compiler_closure)?;
-        Err(ResumeMarkerErrorV1::InvalidTransition)
+        let (admission, marker_inputs) = match self.load()? {
+            Some(ResumeMarkerStateV2::Ready {
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+                envelope_inputs,
+                intent: current_intent,
+            })
+            | Some(ResumeMarkerStateV2::Completed {
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+                envelope_inputs,
+                intent: current_intent,
+                ..
+            }) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent =>
+            {
+                (admission, envelope_inputs)
+            }
+            _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
+        };
+        let envelope_identity = self.validate_and_publish_required_envelope(
+            publication,
+            attempt,
+            intent,
+            receipt,
+            expected_compiler_closure,
+            envelope,
+            admission,
+            marker_inputs,
+        )?;
+        self.persist_completed_inner(
+            publication,
+            attempt,
+            intent,
+            receipt,
+            expected_compiler_closure,
+            Some(envelope_identity),
+        )
     }
 
-    /// Refuses recovery through the V1 envelope placeholder under the protected schema.
+    /// Recovers only the canonical protected V2 envelope named by `receipt` before completion.
     pub(crate) fn recover_envelope_and_completed(
         &self,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
-        _intent: WorkerV2PublicationIntentIdentityV2,
+        intent: WorkerV2PublicationIntentIdentityV2,
         receipt: BackendPublicationReceiptV2,
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
@@ -2997,7 +3370,62 @@ impl WorkerV2ResumeStoreV2 {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
         self.validate_durable_receipt(attempt, receipt, expected_compiler_closure)?;
-        Err(ResumeMarkerErrorV1::InvalidTransition)
+        let envelope = self.recover_load_envelope(receipt, expected_compiler_closure)?;
+        self.persist_envelope_and_completed(
+            publication,
+            attempt,
+            intent,
+            receipt,
+            expected_compiler_closure,
+            &envelope,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_and_publish_required_envelope(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+        envelope: &WorkerV2LoadEnvelopeV2,
+        admission: [u8; 32],
+        marker_inputs: [u8; 32],
+    ) -> Result<WorkerV2LoadEnvelopeIdentityV2, ResumeMarkerErrorV1> {
+        self.validate_protected_envelope_receipt(envelope, receipt, expected_compiler_closure)?;
+        let evidence = envelope.final_artifact_evidence();
+        let claim = evidence.published_claim();
+        let envelope_inputs = self.recover_envelope_inputs(attempt)?;
+        let carried_inputs = WorkerV2EnvelopeInputsV1::new(
+            envelope.direct_link_evidence().clone(),
+            envelope.proof_records().to_vec(),
+            envelope.raw_hsaco().clone(),
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "required protected envelope inputs are invalid: {error}"
+            ))
+        })?;
+        if evidence.publication_intent_identity() != intent
+            || claim.plan().attempt() != attempt
+            || marker_inputs != envelope_inputs.identity().as_bytes()
+            || carried_inputs != envelope_inputs
+            || restart_admission_commitment_with_inputs_v2(
+                publication,
+                claim.plan(),
+                claim.upstream_evidence(),
+                envelope.finalized_payload(),
+                Some(envelope_inputs.identity()),
+                expected_compiler_closure,
+            ) != admission
+        {
+            return Err(self
+                .inner
+                .invalid("required protected envelope disagrees with the ready publication"));
+        }
+        self.publish_load_envelope(envelope, receipt, expected_compiler_closure)?;
+        Ok(envelope.identity())
     }
 
     fn persist_completed_inner(
@@ -3007,7 +3435,7 @@ impl WorkerV2ResumeStoreV2 {
         intent: WorkerV2PublicationIntentIdentityV2,
         receipt: BackendPublicationReceiptV2,
         expected_compiler_closure: CompilerClosureV2,
-        envelope: Option<WorkerV2LoadEnvelopeIdentityV1>,
+        envelope: Option<WorkerV2LoadEnvelopeIdentityV2>,
     ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
         let envelope = envelope.map_or([0; 32], |identity| identity.as_bytes());
         self.validate_durable_receipt(attempt, receipt, expected_compiler_closure)?;
@@ -3135,6 +3563,7 @@ impl WorkerV2ResumeStoreV2 {
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<(), ResumeMarkerErrorV1> {
         self.validate_completed_receipt(expected, receipt, expected_compiler_closure)?;
+        self.validate_completed_envelope(expected, receipt, expected_compiler_closure)?;
         self.clear_exact(expected)
     }
 
@@ -3145,7 +3574,24 @@ impl WorkerV2ResumeStoreV2 {
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<(), ResumeMarkerErrorV1> {
         self.validate_completed_receipt(expected, receipt, expected_compiler_closure)?;
+        self.validate_completed_envelope(expected, receipt, expected_compiler_closure)?;
         self.clear_exact_and_envelope_inputs(expected)
+    }
+
+    fn validate_completed_envelope(
+        &self,
+        state: ResumeMarkerStateV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if !state.publication().requires_envelope() {
+            return Ok(());
+        }
+        let envelope = self.recover_load_envelope(receipt, expected_compiler_closure)?;
+        if envelope.identity().as_bytes() != state.envelope() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        Ok(())
     }
 
     pub(crate) fn clear_abandoned_pending(
@@ -3403,7 +3849,7 @@ impl CanonicalMarkerSchema for ProtectedMarkerSchemaV2 {
     const DISCRIMINATOR: &'static [u8] = &[PROTECTED_INTENT_SCHEMA_V2];
     const ENCODED_BYTES: usize = PROTECTED_MARKER_BYTES;
     const CHECKSUM_DOMAIN: &'static [u8] = PROTECTED_MARKER_CHECKSUM_DOMAIN_V5;
-    const SUPPORTS_ENVELOPE: bool = false;
+    const SUPPORTS_ENVELOPE: bool = true;
 }
 
 #[cfg(test)]
@@ -4095,6 +4541,36 @@ mod tests {
         ValidatedResponseIdentityV1, begin_build_attempt, clear_worker_v2_publication_intent_v1,
         publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
     };
+    use fe2o3_artifacts::{
+        AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
+        ArtifactContainerV1, BlockSize, BundleIndexV1, CallerClaimedPackageIdentityV1,
+        CodeObjectFormat, CodeObjectIdentity, CodeObjectPayload, CompilerIdentity,
+        DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes,
+        Dimensions, DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1,
+        DirectLinkBundleEvidenceV1, DirectLinkFfiClosureIdentityV1,
+        DirectLinkFinalizationIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
+        DirectLinkLinkedOutputIdentityV1, DirectLinkRequestIdentityV1,
+        DirectLinkResponseIdentityV1, DirectLinkToolchainConfigurationIdentityV1,
+        DirectLinkToolchainExecutableIdentityV1, DirectLinkToolchainIdentityV1,
+        DirectLinkTransformationIdentityV1, DirectLinkWorkerConfigurationIdentityV1,
+        DirectLinkWorkerExecutableIdentityV1, DirectLinkWorkerIdentityV1, Endianness, IdentityText,
+        KernelEntry, LaunchContract, ManifestClaimDerivedLinkPublicationScopeV1,
+        ManifestClaimDirectLinkPublicationBridgeV1, ManifestV1, MeasuredToolIdentity, Mutability,
+        Name, PayloadDigest, PointerWidth, ProofArtifactIdentity, ProofExecutionIdentity,
+        ProofOutcome, ProofProperty, ProofRecordV1, ProofTargetIdentity, ScalarType,
+        SourceContractIdentity, TargetIdentity as ArtifactTargetIdentity, ToolIdentity,
+        TypeIdentity, VerificationModelIdentity,
+    };
+    use fe2o3_kernel_descriptor::{
+        BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CompilerIdentityV1,
+        DeviceDescriptorTableV1, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1,
+        DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1,
+        KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1, ScalarTypeV1,
+        SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
+    };
+    use fe2o3_worker_v2_bundle::{
+        DescriptorLineageV1, ExactRawHsacoV1, WorkerV2FinalArtifactEvidenceV2,
+    };
 
     use super::*;
 
@@ -4221,6 +4697,374 @@ mod tests {
         ];
         pins[role][0] ^= 0x80;
         CompilerClosureV2::new(pins[0], pins[1], pins[2], pins[3], pins[4], pins[5]).unwrap()
+    }
+
+    struct ProtectedEnvelopeFixture {
+        envelope: WorkerV2LoadEnvelopeV2,
+        envelope_inputs: WorkerV2EnvelopeInputsV1,
+        intent: WorkerV2PublicationIntentIdentityV2,
+        receipt: BackendPublicationReceiptV2,
+        plan: DurableLinkPublicationPlanV1,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1,
+        output: Vec<u8>,
+    }
+
+    fn fixture_digest(seed: u8) -> DigestBytes {
+        DigestBytes::from_bytes([seed; 32])
+    }
+
+    fn fixture_tagged(seed: u8) -> PayloadDigest {
+        PayloadDigest::new(DigestAlgorithm::Sha256, fixture_digest(seed))
+    }
+
+    fn fixture_text(value: &str) -> IdentityText {
+        IdentityText::new(value).unwrap()
+    }
+
+    fn fixture_name(value: &str) -> Name {
+        Name::new(value).unwrap()
+    }
+
+    fn fixture_manifest_abi() -> AbiLayout {
+        AbiLayout::new(
+            4,
+            4,
+            PointerWidth::Bits64,
+            vec![
+                AbiField::new(
+                    fixture_name("value"),
+                    0,
+                    4,
+                    4,
+                    AbiKind::Scalar(ScalarType::F32),
+                    Mutability::Immutable,
+                    Access::ByValue,
+                    AddressSpace::Value,
+                    TypeIdentity::new(
+                        DeclaredRustTypeIdentity::from_untrusted_bytes(fixture_digest(0xa1)),
+                        DeclaredRustLayoutIdentity::from_untrusted_bytes(fixture_digest(0xa2)),
+                    ),
+                    ArgumentOwnership::ByValue,
+                    AliasClass::Value,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn fixture_manifest_launch() -> LaunchContract {
+        LaunchContract::new(
+            1,
+            BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap()),
+            Dimensions::new(65_535, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap()
+    }
+
+    fn fixture_descriptor_lineage() -> DescriptorLineageV1 {
+        let source_type =
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
+        let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
+        let kernel = KernelDescriptorV1::new(
+            KernelId::from_bytes([0x21; 32]),
+            ValidName::new("alpha").unwrap(),
+            ValidName::new("alpha").unwrap(),
+            ValidName::new("alpha.kd").unwrap(),
+            BuildEvidenceV1::new(
+                EvidenceIdentity::from_opaque_bytes([0x71; 32]),
+                EvidenceDigest::from_sha256_bytes([0x31; 32]),
+            ),
+            BuildEvidenceV1::new(
+                EvidenceIdentity::from_opaque_bytes([0x72; 32]),
+                EvidenceDigest::from_sha256_bytes([0x41; 32]),
+            ),
+            vec![],
+            KernelAbiLayoutV1::new(4, 4, 4).unwrap(),
+            LaunchConstraintsV1::new(
+                1,
+                BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+                DimensionsV1::new(65_535, 1, 1).unwrap(),
+                256,
+                0,
+                0,
+            )
+            .unwrap(),
+            vec![
+                LogicalArgumentV1::scalar(
+                    0,
+                    ValidName::new("value").unwrap(),
+                    &source_type,
+                    &layout,
+                    0,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        DescriptorLineageV1::new(
+            DeviceDescriptorTableV1::new(
+                CanonicalCodeObjectDigest::from_bytes([0xc0; 32]),
+                fe2o3_kernel_descriptor::CodeObjectVersion::V6,
+                CompilerIdentityV1::new(
+                    Text::new("rustc").unwrap(),
+                    Text::new("1.94.0-nightly").unwrap(),
+                    [0x11; 20],
+                ),
+                ProducerIdentityV1::new(
+                    Text::new("cargo-fe2o3").unwrap(),
+                    Text::new("0.1.0").unwrap(),
+                ),
+                DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+                vec![source_type],
+                vec![layout],
+                vec![kernel],
+            )
+            .unwrap(),
+        )
+    }
+
+    fn fixture_proof() -> ProofRecordV1 {
+        let artifact = ProofArtifactIdentity::new(
+            fixture_tagged(0x21),
+            fixture_tagged(0x51),
+            fixture_tagged(0x31),
+            fixture_tagged(0x53),
+            fixture_tagged(0x41),
+            fixture_tagged(0x55),
+            fixture_tagged(0x56),
+            fixture_tagged(0x57),
+        );
+        let contracts = SourceContractIdentity::new(
+            fixture_tagged(0x61),
+            fixture_tagged(0x62),
+            fixture_tagged(0x63),
+            fixture_tagged(0x64),
+            fixture_tagged(0x65),
+        );
+        let tool = |name: &str, seed: u8| {
+            MeasuredToolIdentity::new(
+                fixture_text(name),
+                fixture_text("1.0"),
+                fixture_tagged(seed),
+                fixture_tagged(seed.wrapping_add(1)),
+            )
+        };
+        ProofRecordV1::new(
+            ProofTargetIdentity::new(artifact, contracts),
+            vec![],
+            ProofExecutionIdentity::new(
+                VerificationModelIdentity::new(
+                    fixture_text("verus-model-v1"),
+                    fixture_tagged(0x70),
+                ),
+                tool("verus", 0x71),
+                tool("z3", 0x73),
+                tool("recorder", 0x75),
+                fixture_tagged(0x77),
+            ),
+            ProofOutcome::Proved,
+            vec![ProofProperty::Bounds],
+            vec![],
+        )
+        .unwrap()
+    }
+
+    fn protected_envelope_fixture(
+        path: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        closure: CompilerClosureV2,
+    ) -> ProtectedEnvelopeFixture {
+        let output = vec![0xf1; 64];
+        let raw_bytes = vec![0x71; 64];
+        let payload =
+            CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, output.clone()).unwrap();
+        let finalized_identity = payload.digest();
+        let manifest = ManifestV1::new(
+            CompilerIdentity::new(fixture_text("rustc"), fixture_text("1.94.0-nightly")),
+            ToolIdentity::new(fixture_text("cargo-fe2o3"), fixture_text("0.1.0")),
+            ArtifactTargetIdentity::new(
+                fixture_text("amdgcn-amd-amdhsa"),
+                fixture_text("gfx942:xnack-"),
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![],
+            )
+            .unwrap(),
+            vec![
+                CodeObjectIdentity::new(
+                    finalized_identity.bytes(),
+                    CodeObjectFormat::NativeExecutable,
+                    payload.bytes().len() as u64,
+                )
+                .unwrap(),
+            ],
+            vec![
+                KernelEntry::new(
+                    fixture_digest(0x21),
+                    fixture_name("alpha"),
+                    fixture_name("alpha"),
+                    fixture_digest(0x31),
+                    fixture_digest(0x41),
+                    finalized_identity.bytes(),
+                    vec![],
+                    fixture_manifest_launch(),
+                    fixture_manifest_abi(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let container =
+            ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload]).unwrap();
+        let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
+        let raw = ExactRawHsacoV1::from_bytes(raw_bytes).unwrap();
+        let expectation = DirectLinkBindingExpectationV1::new(
+            DirectLinkRequestIdentityV1::new(fixture_tagged(0x81)),
+            DirectLinkWorkerIdentityV1::new(
+                fixture_text("fe2o3-worker"),
+                fixture_text("v2"),
+                DirectLinkWorkerExecutableIdentityV1::new(fixture_tagged(0x82)),
+                DirectLinkWorkerConfigurationIdentityV1::new(fixture_tagged(0x83)),
+            ),
+            DirectLinkToolchainIdentityV1::new(
+                fixture_text("llvm"),
+                fixture_text("22"),
+                DirectLinkToolchainExecutableIdentityV1::new(fixture_tagged(0x84)),
+                DirectLinkToolchainConfigurationIdentityV1::new(fixture_tagged(0x85)),
+            ),
+            DirectLinkResponseIdentityV1::new(fixture_tagged(0x86)),
+            DirectLinkTransformationIdentityV1::new(
+                DirectLinkLinkedOutputIdentityV1::new(raw.identity()),
+                DirectLinkFinalizationIdentityV1::new(fixture_tagged(0x87)),
+                DirectLinkFinalizedPayloadIdentityV1::new(finalized_identity),
+            ),
+            DirectLinkFfiClosureIdentityV1::new(fixture_tagged(0x88)),
+        );
+        let evidence = DirectLinkBundleEvidenceV1::bind(
+            &bundle,
+            &[&container],
+            &[DirectLinkBindingSourceV1::new(
+                &container,
+                expectation.clone(),
+            )],
+        )
+        .unwrap();
+        let validated = evidence
+            .validate_against(
+                &bundle,
+                &[&container],
+                &[DirectLinkBindingSourceV1::new(&container, expectation)],
+            )
+            .unwrap();
+        let package =
+            PackageIdentityV1::from_bytes(*producer_package_identity_v1(producer).as_bytes());
+        let scope = ManifestClaimDerivedLinkPublicationScopeV1::derive(
+            CallerClaimedPackageIdentityV1::new(package),
+            &validated,
+            0,
+            &container,
+        )
+        .unwrap();
+        let bridge = ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+            attempt, scope, &validated, 0,
+        )
+        .unwrap();
+        let plan = DurableLinkPublicationPlanV1::new(
+            attempt,
+            bridge
+                .non_authoritative_diagnostics()
+                .descriptive_scope_claim(),
+            bridge.request_identity(),
+            bridge.worker_identity(),
+            bridge.response_identity(),
+            bridge.linked_output_identity(),
+            bridge.finalization_identity(),
+            bridge.finalized_output_identity(),
+            bridge.publication_identity(),
+        );
+        let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(
+            Sha256::digest(evidence.to_bytes()).into(),
+        );
+        let durable_intent = persist_worker_v2_publication_intent_v2(
+            path, producer, attempt, plan, upstream, closure, &output,
+        )
+        .unwrap();
+        let intent = durable_intent.record().identity();
+        drop(durable_intent);
+        let publication = publish_exact_hsaco_evidence_for_attempt_v2(
+            path, producer, attempt, plan, upstream, closure, &output,
+        )
+        .unwrap();
+        let receipt = publication.receipt();
+        let claim = publication.published_claim().clone();
+        drop(publication);
+        let descriptor = fixture_descriptor_lineage();
+        let proofs = vec![fixture_proof()];
+        let final_artifact = WorkerV2FinalArtifactEvidenceV2::from_proof_records(
+            &container,
+            &descriptor,
+            &proofs,
+            closure,
+            intent,
+            receipt,
+            claim,
+        )
+        .unwrap();
+        let envelope_inputs =
+            WorkerV2EnvelopeInputsV1::new(evidence.clone(), proofs.clone(), raw.clone()).unwrap();
+        let envelope = WorkerV2LoadEnvelopeV2::new(
+            container,
+            bundle,
+            evidence,
+            descriptor,
+            proofs,
+            raw,
+            final_artifact,
+        )
+        .unwrap();
+        ProtectedEnvelopeFixture {
+            envelope,
+            envelope_inputs,
+            intent,
+            receipt,
+            plan,
+            upstream,
+            output,
+        }
+    }
+
+    fn stage_protected_required_ready(
+        store: &WorkerV2ResumeStoreV2,
+        fixture: &ProtectedEnvelopeFixture,
+        closure: CompilerClosureV2,
+    ) {
+        let publication = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
+        let attempt = fixture.plan.attempt();
+        store
+            .persist_envelope_inputs(attempt, &fixture.envelope_inputs)
+            .unwrap();
+        store
+            .persist_pending_with_envelope_inputs(
+                publication,
+                attempt,
+                restart_admission_commitment_with_inputs_v2(
+                    publication,
+                    fixture.plan,
+                    fixture.upstream,
+                    &fixture.output,
+                    Some(fixture.envelope_inputs.identity()),
+                    closure,
+                ),
+                Some(fixture.envelope_inputs.identity()),
+            )
+            .unwrap();
+        store
+            .persist_ready(publication, attempt, fixture.intent)
+            .unwrap();
     }
 
     fn protected_v4_marker_bytes(
@@ -5015,7 +5859,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_v5_keeps_the_v1_envelope_slot_as_an_inert_placeholder() {
+    fn protected_required_marker_requires_the_exact_envelope_input_identity() {
         let directory = TestDirectory::new();
         let producer = producer(119);
         let attempt = attempt(&directory.0, &producer, 119);
@@ -5025,18 +5869,249 @@ mod tests {
                 WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
                 attempt,
                 [0x33; 32],
-                Some(WorkerV2EnvelopeInputsIdentityV1::from_bytes([0x34; 32])),
+                None,
             ),
             Err(ResumeMarkerErrorV1::InvalidTransition)
         ));
         assert_eq!(store.load().unwrap(), None);
-
+        let inputs = WorkerV2EnvelopeInputsIdentityV1::from_bytes([0x34; 32]);
         store
-            .persist_pending(WorkerV2PublicationKindV1::Finalized, attempt, [0x33; 32])
+            .persist_pending_with_envelope_inputs(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                attempt,
+                [0x33; 32],
+                Some(inputs),
+            )
             .unwrap();
         let state = store.load().unwrap().unwrap();
-        assert_eq!(state.envelope_inputs(), [0; 32]);
+        assert_eq!(state.envelope_inputs(), inputs.as_bytes());
         assert_eq!(state.envelope(), [0; 32]);
+    }
+
+    #[test]
+    fn protected_v2_envelope_persists_recovers_reconciles_and_clears_exactly() {
+        let directory = TestDirectory::new();
+        let producer = producer(120);
+        let attempt = attempt(&directory.0, &producer, 120);
+        let closure = compiler_closure(120);
+        let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &fixture, closure);
+        let publication = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
+
+        let completed = store
+            .persist_envelope_and_completed(
+                publication,
+                attempt,
+                fixture.intent,
+                fixture.receipt,
+                closure,
+                &fixture.envelope,
+            )
+            .unwrap();
+        assert_eq!(completed.envelope(), fixture.envelope.identity().as_bytes());
+        assert_eq!(
+            store
+                .persist_envelope_and_completed(
+                    publication,
+                    attempt,
+                    fixture.intent,
+                    fixture.receipt,
+                    closure,
+                    &fixture.envelope,
+                )
+                .unwrap(),
+            completed
+        );
+        let protected_name = protected_envelope_name_v2(fixture.receipt.publication_identity());
+        assert!(directory.0.join(&protected_name).is_file());
+        assert!(
+            !directory
+                .0
+                .join(envelope_name(fixture.receipt.publication_identity()))
+                .exists()
+        );
+        drop(store);
+
+        let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        assert_eq!(
+            restarted
+                .recover_load_envelope(fixture.receipt, closure)
+                .unwrap()
+                .to_bytes(),
+            fixture.envelope.to_bytes()
+        );
+        assert_eq!(
+            restarted
+                .recover_envelope_and_completed(
+                    publication,
+                    attempt,
+                    fixture.intent,
+                    fixture.receipt,
+                    closure,
+                )
+                .unwrap(),
+            completed
+        );
+        restarted
+            .clear_completed_and_envelope_inputs(completed, fixture.receipt, closure)
+            .unwrap();
+        assert_eq!(restarted.load().unwrap(), None);
+        assert!(restarted.recover_envelope_inputs(attempt).is_err());
+        assert_eq!(
+            restarted
+                .recover_load_envelope(fixture.receipt, closure)
+                .unwrap()
+                .to_bytes(),
+            fixture.envelope.to_bytes()
+        );
+    }
+
+    #[test]
+    fn protected_v2_envelope_crash_window_reconciles_after_envelope_publication() {
+        let directory = TestDirectory::new();
+        let producer = producer(121);
+        let attempt = attempt(&directory.0, &producer, 121);
+        let closure = compiler_closure(121);
+        let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &fixture, closure);
+        let ready = store.load().unwrap().unwrap();
+        assert!(matches!(ready, ResumeMarkerStateV2::Ready { .. }));
+        assert_eq!(
+            store
+                .publish_load_envelope(&fixture.envelope, fixture.receipt, closure)
+                .unwrap(),
+            WorkerV2EnvelopePublicationOutcomeV1::Published
+        );
+        drop(store);
+
+        let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        assert_eq!(restarted.load().unwrap(), Some(ready));
+        let completed = restarted
+            .recover_envelope_and_completed(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                attempt,
+                fixture.intent,
+                fixture.receipt,
+                closure,
+            )
+            .unwrap();
+        assert!(matches!(completed, ResumeMarkerStateV2::Completed { .. }));
+        assert_eq!(
+            restarted
+                .publish_load_envelope(&fixture.envelope, fixture.receipt, closure)
+                .unwrap(),
+            WorkerV2EnvelopePublicationOutcomeV1::AlreadyPublished
+        );
+    }
+
+    #[test]
+    fn protected_v2_envelope_rejects_tamper_v1_magic_and_oversize_without_marker_mutation() {
+        let directory = TestDirectory::new();
+        let producer = producer(122);
+        let attempt = attempt(&directory.0, &producer, 122);
+        let closure = compiler_closure(122);
+        let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &fixture, closure);
+        let ready = store.load().unwrap().unwrap();
+        store
+            .publish_load_envelope(&fixture.envelope, fixture.receipt, closure)
+            .unwrap();
+        let name = protected_envelope_name_v2(fixture.receipt.publication_identity());
+        let path = directory.0.join(&name);
+        let canonical = fs::read(&path).unwrap();
+
+        let mut tampered = canonical.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        fs::write(&path, &tampered).unwrap();
+        assert!(
+            store
+                .recover_load_envelope(fixture.receipt, closure)
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap(), Some(ready));
+
+        let mut v1_tagged = canonical.clone();
+        v1_tagged[..fe2o3_worker_v2_bundle::WORKER_V2_LOAD_ENVELOPE_MAGIC.len()]
+            .copy_from_slice(&fe2o3_worker_v2_bundle::WORKER_V2_LOAD_ENVELOPE_MAGIC);
+        fs::write(&path, &v1_tagged).unwrap();
+        assert!(
+            store
+                .recover_load_envelope(fixture.receipt, closure)
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap(), Some(ready));
+
+        let oversized = File::create(&path).unwrap();
+        oversized
+            .set_len((MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2 + 1) as u64)
+            .unwrap();
+        drop(oversized);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            store
+                .recover_load_envelope(fixture.receipt, closure)
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap(), Some(ready));
+    }
+
+    #[test]
+    fn protected_v2_envelope_recovery_binds_every_compiler_closure_role() {
+        let directory = TestDirectory::new();
+        let producer = producer(123);
+        let attempt = attempt(&directory.0, &producer, 123);
+        let closure = compiler_closure(123);
+        let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &fixture, closure);
+        store
+            .publish_load_envelope(&fixture.envelope, fixture.receipt, closure)
+            .unwrap();
+        let ready = store.load().unwrap().unwrap();
+
+        for role in 0..6 {
+            let substituted = mutated_compiler_closure(123, role);
+            assert!(
+                store
+                    .recover_load_envelope(fixture.receipt, substituted)
+                    .is_err()
+            );
+            assert!(
+                store
+                    .recover_envelope_and_completed(
+                        WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                        attempt,
+                        fixture.intent,
+                        fixture.receipt,
+                        substituted,
+                    )
+                    .is_err()
+            );
+            assert_eq!(store.load().unwrap(), Some(ready));
+        }
+    }
+
+    #[test]
+    fn protected_v2_temp_cleanup_is_schema_separated_from_ordinary_v1() {
+        let directory = TestDirectory::new();
+        let producer = producer(124);
+        let ordinary = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+        let package = ordinary.package;
+        drop(ordinary);
+        let protected_temp = protected_envelope_temp_name_v2(package, [0x91; 32], 1, 1);
+        let ordinary_temp = envelope_temp_name(package, [0x92; 32], 1, 1);
+        for name in [&protected_temp, &ordinary_temp] {
+            fs::write(directory.0.join(name), b"abandoned").unwrap();
+            fs::set_permissions(directory.0.join(name), fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        let protected = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        assert_eq!(protected.load().unwrap(), None);
+        assert!(!directory.0.join(protected_temp).exists());
+        assert!(directory.0.join(ordinary_temp).exists());
     }
 
     #[test]
