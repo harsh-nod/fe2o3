@@ -9,6 +9,7 @@ use fe2o3_artifacts::{
     MeasuredToolIdentity, Mutability, PayloadDigest, PointerWidth, ScalarType,
     derive_generated_host_contract_identity_v1, derive_manifest_claim_target_identity_v1,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_hsaco_finalize::{
     CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolRoleV1,
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
@@ -23,7 +24,10 @@ use fe2o3_kernel_descriptor::{
     DeviceDescriptorTableV1, KernelDescriptorV1, OwnershipSemantics, PhysicalAbiComponentKind,
     ScalarTypeV1, decode_device_descriptor_table_v1, encode_device_descriptor_table_v1,
 };
-use fe2o3_rustc_invocation::{InvocationDigestV2, decode_descriptor_v2, encode_descriptor_v2};
+use fe2o3_rustc_invocation::{
+    InvocationDigestV2, InvocationDigestV3, decode_descriptor_v2, decode_descriptor_v3,
+    encode_descriptor_v2, encode_descriptor_v3,
+};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
@@ -359,36 +363,31 @@ impl ExactCompilerInvocationV1 {
         worker_tool: ExactWorkerToolV1,
         backend_invocation_bytes: &[u8],
     ) -> Result<Self, CompilerTransactionRecorderErrorV1> {
-        require_nonempty("rustc invocation descriptor", rustc_descriptor_bytes)?;
-        require_nonempty("backend invocation", backend_invocation_bytes)?;
+        require_exact_compiler_invocation_inputs(rustc_descriptor_bytes, backend_invocation_bytes)?;
         let descriptor = decode_descriptor_v2(rustc_descriptor_bytes)
             .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRustcDescriptor)?;
         let canonical = encode_descriptor_v2(&descriptor)
             .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRustcDescriptor)?;
-        if canonical != rustc_descriptor_bytes {
-            return Err(CompilerTransactionRecorderErrorV1::NonCanonicalRustcDescriptor);
-        }
-        if descriptor.rustc_executable_sha256() != rustc_tool.executable.as_bytes() {
-            return Err(CompilerTransactionRecorderErrorV1::RustcExecutableMismatch);
-        }
-        if descriptor.codegen_backend_sha256() != backend_tool.executable.as_bytes() {
-            return Err(CompilerTransactionRecorderErrorV1::BackendExecutableMismatch);
-        }
-        if descriptor.amd_target() != GFX942_AMD_TARGET {
-            return Err(CompilerTransactionRecorderErrorV1::UnsupportedTarget);
-        }
+        let measurements = validate_and_measure_exact_compiler_invocation(
+            rustc_descriptor_bytes,
+            &canonical,
+            descriptor.rustc_executable_sha256(),
+            descriptor.codegen_backend_sha256(),
+            descriptor.amd_target(),
+            &rustc_tool,
+            &backend_tool,
+            backend_invocation_bytes,
+        )?;
         let rustc_invocation = InvocationDigestV2::calculate(&descriptor)
             .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRustcDescriptor)?;
         Ok(Self {
             rustc_tool,
             backend_tool,
             worker_tool,
-            rustc_descriptor: CompilerTransactionContentIdentityV1::measure(rustc_descriptor_bytes),
+            rustc_descriptor: measurements.rustc_descriptor,
             rustc_invocation,
-            backend_invocation: CompilerTransactionContentIdentityV1::measure(
-                backend_invocation_bytes,
-            ),
-            amd_target: descriptor.amd_target().to_owned(),
+            backend_invocation: measurements.backend_invocation,
+            amd_target: measurements.amd_target,
         })
     }
 
@@ -411,6 +410,127 @@ impl ExactCompilerInvocationV1 {
     pub fn amd_target(&self) -> &str {
         &self.amd_target
     }
+}
+
+/// Exact protected rustc V3 invocation and compiler-closure measurements.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExactCompilerInvocationV2 {
+    rustc_tool: ExactCompilerToolV1,
+    backend_tool: ExactCompilerToolV1,
+    worker_tool: ExactWorkerToolV1,
+    rustc_descriptor: CompilerTransactionContentIdentityV1,
+    rustc_invocation: InvocationDigestV3,
+    compiler_closure: CompilerClosureV2,
+    backend_invocation: CompilerTransactionContentIdentityV1,
+    amd_target: String,
+}
+
+impl ExactCompilerInvocationV2 {
+    /// Measures one canonical protected rustc invocation and its backend invocation bytes.
+    pub fn measure(
+        rustc_descriptor_bytes: &[u8],
+        rustc_tool: ExactCompilerToolV1,
+        backend_tool: ExactCompilerToolV1,
+        worker_tool: ExactWorkerToolV1,
+        backend_invocation_bytes: &[u8],
+    ) -> Result<Self, CompilerTransactionRecorderErrorV1> {
+        require_exact_compiler_invocation_inputs(rustc_descriptor_bytes, backend_invocation_bytes)?;
+        let descriptor = decode_descriptor_v3(rustc_descriptor_bytes)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRustcDescriptor)?;
+        let canonical = encode_descriptor_v3(&descriptor)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRustcDescriptor)?;
+        let measurements = validate_and_measure_exact_compiler_invocation(
+            rustc_descriptor_bytes,
+            &canonical,
+            descriptor.rustc_executable_sha256(),
+            descriptor.codegen_backend_sha256(),
+            descriptor.amd_target(),
+            &rustc_tool,
+            &backend_tool,
+            backend_invocation_bytes,
+        )?;
+        let rustc_invocation = InvocationDigestV3::calculate(&descriptor)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRustcDescriptor)?;
+
+        Ok(Self {
+            rustc_tool,
+            backend_tool,
+            worker_tool,
+            rustc_descriptor: measurements.rustc_descriptor,
+            rustc_invocation,
+            compiler_closure: *descriptor.compiler_closure(),
+            backend_invocation: measurements.backend_invocation,
+            amd_target: measurements.amd_target,
+        })
+    }
+
+    pub const fn rustc_descriptor_identity(&self) -> CompilerTransactionContentIdentityV1 {
+        self.rustc_descriptor
+    }
+
+    pub const fn rustc_invocation_identity(&self) -> InvocationDigestV3 {
+        self.rustc_invocation
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.compiler_closure
+    }
+
+    pub const fn backend_invocation_identity(&self) -> CompilerTransactionContentIdentityV1 {
+        self.backend_invocation
+    }
+
+    pub const fn worker_tool(&self) -> &ExactWorkerToolV1 {
+        &self.worker_tool
+    }
+
+    pub fn amd_target(&self) -> &str {
+        &self.amd_target
+    }
+}
+
+struct ExactCompilerInvocationMeasurements {
+    rustc_descriptor: CompilerTransactionContentIdentityV1,
+    backend_invocation: CompilerTransactionContentIdentityV1,
+    amd_target: String,
+}
+
+fn require_exact_compiler_invocation_inputs(
+    rustc_descriptor_bytes: &[u8],
+    backend_invocation_bytes: &[u8],
+) -> Result<(), CompilerTransactionRecorderErrorV1> {
+    require_nonempty("rustc invocation descriptor", rustc_descriptor_bytes)?;
+    require_nonempty("backend invocation", backend_invocation_bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_and_measure_exact_compiler_invocation(
+    rustc_descriptor_bytes: &[u8],
+    canonical_descriptor_bytes: &[u8],
+    descriptor_rustc_sha256: &[u8; 32],
+    descriptor_backend_sha256: &[u8; 32],
+    amd_target: &str,
+    rustc_tool: &ExactCompilerToolV1,
+    backend_tool: &ExactCompilerToolV1,
+    backend_invocation_bytes: &[u8],
+) -> Result<ExactCompilerInvocationMeasurements, CompilerTransactionRecorderErrorV1> {
+    if canonical_descriptor_bytes != rustc_descriptor_bytes {
+        return Err(CompilerTransactionRecorderErrorV1::NonCanonicalRustcDescriptor);
+    }
+    if descriptor_rustc_sha256 != rustc_tool.executable.as_bytes() {
+        return Err(CompilerTransactionRecorderErrorV1::RustcExecutableMismatch);
+    }
+    if descriptor_backend_sha256 != backend_tool.executable.as_bytes() {
+        return Err(CompilerTransactionRecorderErrorV1::BackendExecutableMismatch);
+    }
+    if amd_target != GFX942_AMD_TARGET {
+        return Err(CompilerTransactionRecorderErrorV1::UnsupportedTarget);
+    }
+    Ok(ExactCompilerInvocationMeasurements {
+        rustc_descriptor: CompilerTransactionContentIdentityV1::measure(rustc_descriptor_bytes),
+        backend_invocation: CompilerTransactionContentIdentityV1::measure(backend_invocation_bytes),
+        amd_target: amd_target.to_owned(),
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

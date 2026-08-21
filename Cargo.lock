@@ -1597,6 +1597,7 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-build-authority",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-rustc-invocation",
