@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
 use std::time::Duration;
 
+use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
 use crate::pinned_executable::PinnedExecutable;
@@ -29,12 +30,13 @@ pub(crate) const INTERNAL_CHILD_ARG: &str = "__fe2o3-authority-release-child-v1"
 
 const RELEASE_ARG: &str = "release";
 const PROBE_ARG: &str = "probe";
+const PROBE_OK_MARKER: &str = "FE2O3_PROTECTED_AUTHORITY_RELEASE_V1_OK";
 const CONTRACT_FD: RawFd = 187;
 const CONTROL_FD: RawFd = 188;
 const LAUNCHER_IMAGE_FD: RawFd = 189;
 const CWD_FD: RawFd = 190;
-const CONTRACT_MAGIC: &[u8; 8] = b"F2AURL1\0";
-const CONTRACT_VERSION: u16 = 1;
+const CONTRACT_MAGIC: &[u8; 8] = b"F2AURL2\0";
+const CONTRACT_VERSION: u16 = 2;
 const CONTRACT_HEADER_BYTES: usize = 24;
 const CONTRACT_IDENTITY_BYTES: usize = 32;
 const MAX_CONTRACT_BYTES: usize = 2 * 1024 * 1024;
@@ -47,12 +49,12 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 // This window ends before the launcher grants the fresh attempt; the grant/accept exchange keeps
 // the shorter handshake deadline below.
 const CHILD_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const CONTRACT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V1\0";
-const GRANT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V1\0";
-const ACCEPT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V1\0";
-const READY_MAGIC: &[u8; 8] = b"F2AURDY1";
-const GRANT_MAGIC: &[u8; 8] = b"F2AUGRT1";
-const ACCEPT_MAGIC: &[u8; 8] = b"F2AUACC1";
+const CONTRACT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V2\0";
+const GRANT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V2\0";
+const ACCEPT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V2\0";
+const READY_MAGIC: &[u8; 8] = b"F2AURDY2";
+const GRANT_MAGIC: &[u8; 8] = b"F2AUGRT2";
+const ACCEPT_MAGIC: &[u8; 8] = b"F2AUACC2";
 const READY_BYTES: usize = 8 + 32 + 32 + 4 + 8;
 const GRANT_BYTES: usize = 8 + 32 + 32;
 const ACCEPT_BYTES: usize = 8 + 32;
@@ -159,52 +161,53 @@ impl ImageIdentity {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CompilerClosureObservation {
-    cargo: [u8; 32],
-    rustc: [u8; 32],
-    runtime_tree: [u8; 32],
+    closure: CompilerClosureV2,
     runtime_object: ObjectIdentity,
-    backend: [u8; 32],
-    closure: [u8; 32],
 }
 
 impl CompilerClosureObservation {
     fn encode(self, output: &mut Vec<u8>) {
-        output.extend_from_slice(&self.cargo);
-        output.extend_from_slice(&self.rustc);
-        output.extend_from_slice(&self.runtime_tree);
+        output.extend_from_slice(&self.closure.cargo_executable_sha256());
+        output.extend_from_slice(&self.closure.cargo_binding_trampoline_sha256());
+        output.extend_from_slice(&self.closure.cargo_fe2o3_binding_wrapper_sha256());
+        output.extend_from_slice(&self.closure.rustc_executable_sha256());
+        output.extend_from_slice(&self.closure.rustc_runtime_tree_sha256());
+        output.extend_from_slice(&self.closure.codegen_backend_sha256());
+        output.extend_from_slice(
+            &self
+                .closure
+                .cargo_binding_transition_protocol_version()
+                .to_le_bytes(),
+        );
+        output.extend_from_slice(&self.closure.identity_sha256());
         self.runtime_object.encode(output);
-        output.extend_from_slice(&self.backend);
-        output.extend_from_slice(&self.closure);
     }
 
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, String> {
-        let value = Self {
-            cargo: decoder.array()?,
-            rustc: decoder.array()?,
-            runtime_tree: decoder.array()?,
+        let closure = CompilerClosureV2::from_pins_and_identity(
+            decoder.array()?,
+            decoder.array()?,
+            decoder.array()?,
+            decoder.array()?,
+            decoder.array()?,
+            decoder.array()?,
+            decoder.u16()?,
+            decoder.array()?,
+        )
+        .map_err(|error| format!("release contract compiler closure is not canonical: {error}"))?;
+        Ok(Self {
+            closure,
             runtime_object: ObjectIdentity::decode(decoder)?,
-            backend: decoder.array()?,
-            closure: decoder.array()?,
-        };
-        for (label, digest) in [
-            ("Cargo", value.cargo),
-            ("rustc", value.rustc),
-            ("runtime tree", value.runtime_tree),
-            ("backend", value.backend),
-            ("compiler closure", value.closure),
-        ] {
-            require_nonzero(digest, label)?;
+        })
+    }
+
+    fn validate_child_image(self, child: ImageIdentity) -> Result<(), String> {
+        if self.closure.cargo_fe2o3_binding_wrapper_sha256() != child.sha256 {
+            return Err(
+                "release compiler closure wrapper differs from the contract child image".to_owned(),
+            );
         }
-        if crate::compiler_toolchain::compiler_closure_sha256_v1(
-            &value.cargo,
-            &value.rustc,
-            &value.runtime_tree,
-            &value.backend,
-        ) != value.closure
-        {
-            return Err("release contract compiler closure is not canonical".to_owned());
-        }
-        Ok(value)
+        Ok(())
     }
 }
 
@@ -240,6 +243,7 @@ struct ChildObservation {
 impl ReleaseContract {
     fn encode(&self) -> Result<Vec<u8>, String> {
         validate_fields(&self.argv, &self.environment)?;
+        self.compiler.validate_child_image(self.child)?;
         let mut body = Vec::new();
         body.extend_from_slice(&self.attempt);
         body.extend_from_slice(&self.parent_uid.to_le_bytes());
@@ -333,6 +337,7 @@ impl ReleaseContract {
             *descriptor = ObjectIdentity::decode(&mut decoder)?;
         }
         let compiler = CompilerClosureObservation::decode(&mut decoder)?;
+        compiler.validate_child_image(child)?;
         let argv = decoder.fields(MAX_ARGUMENTS)?;
         let environment_count = usize::try_from(decoder.u32()?)
             .map_err(|_| "release environment count is not representable".to_owned())?;
@@ -367,6 +372,7 @@ impl ReleaseContract {
 pub(crate) struct ProtectedReleaseAdmission {
     attempt: [u8; 32],
     contract_identity: [u8; 32],
+    compiler_closure: CompilerClosureV2,
     control: UnixStream,
     child_image: File,
 }
@@ -378,6 +384,10 @@ impl ProtectedReleaseAdmission {
 
     pub(crate) const fn contract_identity(&self) -> &[u8; 32] {
         &self.contract_identity
+    }
+
+    pub(crate) const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.compiler_closure
     }
 
     pub(crate) fn configure_descendant(&self, command: &mut Command) {
@@ -462,9 +472,10 @@ pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
     };
     if args.first().and_then(|value| value.to_str()) == Some(PROBE_ARG) {
         println!(
-            "FE2O3_PROTECTED_AUTHORITY_RELEASE_V1_OK attempt={} contract={} runtime_authority=none gpu_authority=none",
+            "{PROBE_OK_MARKER} attempt={} contract={} compiler={} runtime_authority=none gpu_authority=none",
             hex(admission.attempt()),
-            hex(admission.contract_identity())
+            hex(admission.contract_identity()),
+            hex(&admission.compiler_closure().identity_sha256())
         );
         return ExitCode::SUCCESS;
     }
@@ -657,6 +668,7 @@ fn admit_child(args: &[OsString]) -> Result<ProtectedReleaseAdmission, String> {
     Ok(ProtectedReleaseAdmission {
         attempt: contract.attempt,
         contract_identity,
+        compiler_closure: contract.compiler.closure,
         control,
         child_image,
     })
@@ -777,6 +789,7 @@ fn validate_child_observation(
     if observed.descriptors != contract.descriptors {
         return Err("release child descriptor manifest differs".to_owned());
     }
+    observed.compiler.validate_child_image(observed.child)?;
     if observed.compiler != contract.compiler {
         return Err("release compiler closure/runtime tree drifted across exec".to_owned());
     }
@@ -802,13 +815,19 @@ fn authenticate_parent(contract: &ReleaseContract, control: &UnixStream) -> Resu
 
 fn observe_compiler_closure() -> Result<CompilerClosureObservation, String> {
     let cargo_expected = crate::authority_cargo_sha256_from_environment()?;
+    let trampoline_expected = crate::authority_sha256_from_environment(
+        crate::AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV,
+    )?;
     let rustc_expected = crate::authority_rustc_sha256_from_environment()?;
     let runtime_expected = crate::authority_rustc_runtime_sha256_from_environment()?;
     let backend_expected = crate::authority_backend_sha256_from_environment()?;
     let cargo = canonical_file_from_env("CARGO")?;
+    let trampoline = canonical_file_from_env(crate::AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_ENV)?;
     let rustc = canonical_file_from_env(crate::AUTHORITY_RUSTC_PATH_ENV)?;
     let backend = canonical_file_from_env(crate::BACKEND_ENV)?;
     let cargo_observed = bounded_regular_file_sha256(&cargo, "authority Cargo")?;
+    let trampoline_observed = observe_authority_trampoline(&trampoline, trampoline_expected)?;
+    let (_, wrapper) = pin_process_image(std::process::id())?;
     let rustc_observed = bounded_regular_file_sha256(&rustc, "authority rustc")?;
     let backend_observed = bounded_regular_file_sha256(&backend, "authority backend")?;
     for (label, observed, expected) in [
@@ -834,20 +853,35 @@ fn observe_compiler_closure() -> Result<CompilerClosureObservation, String> {
         return Err("authority rustc runtime tree differs from its declared digest".to_owned());
     }
     runtime.revalidate()?;
-    let closure = crate::compiler_toolchain::compiler_closure_sha256_v1(
-        &cargo_observed,
-        &rustc_observed,
-        &runtime_expected,
-        &backend_observed,
-    );
+    let closure = CompilerClosureV2::new(
+        cargo_observed,
+        trampoline_observed,
+        wrapper.sha256,
+        rustc_observed,
+        runtime_expected,
+        backend_observed,
+    )
+    .map_err(|error| format!("authority compiler closure V2 is invalid: {error}"))?;
     Ok(CompilerClosureObservation {
-        cargo: cargo_observed,
-        rustc: rustc_observed,
-        runtime_tree: runtime_expected,
-        runtime_object,
-        backend: backend_observed,
         closure,
+        runtime_object,
     })
+}
+
+fn observe_authority_trampoline(path: &Path, expected: [u8; 32]) -> Result<[u8; 32], String> {
+    let trampoline = PinnedExecutable::open(path)
+        .map_err(|error| format!("failed to pin Cargo binding trampoline: {error}"))?;
+    if trampoline.sha256() != &expected {
+        return Err(format!(
+            "Cargo binding trampoline does not match {}",
+            crate::AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV
+        ));
+    }
+    let bytes = trampoline
+        .authenticated_bytes()
+        .map_err(|error| format!("failed to authenticate Cargo binding trampoline: {error}"))?;
+    crate::cargo_binding_trampoline::validate_v1(&bytes)?;
+    Ok(*trampoline.sha256())
 }
 
 fn canonical_file_from_env(name: &str) -> Result<PathBuf, String> {
@@ -995,7 +1029,7 @@ fn open_current_directory() -> Result<File, String> {
 
 fn create_contract_file() -> Result<File, String> {
     let file = rustix::fs::memfd_create(
-        "fe2o3-authority-release-contract-v1",
+        "fe2o3-authority-release-contract-v2",
         rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
     )
     .map(File::from)
@@ -1341,7 +1375,7 @@ fn grant_identity(
             &child_start.to_le_bytes(),
             &contract.launcher.sha256,
             &contract.child.sha256,
-            &contract.compiler.closure,
+            &contract.compiler.closure.identity_sha256(),
         ],
     )
 }
@@ -1446,6 +1480,12 @@ impl<'a> Decoder<'a> {
         Ok(value)
     }
 
+    fn u16(&mut self) -> Result<u16, String> {
+        Ok(u16::from_le_bytes(
+            self.take(2)?.try_into().expect("fixed slice"),
+        ))
+    }
+
     fn u32(&mut self) -> Result<u32, String> {
         Ok(u32::from_le_bytes(
             self.take(4)?.try_into().expect("fixed slice"),
@@ -1513,17 +1553,31 @@ mod tests {
         }
     }
 
-    fn contract() -> ReleaseContract {
-        let compiler = CompilerClosureObservation {
-            cargo: [1; 32],
-            rustc: [2; 32],
-            runtime_tree: [3; 32],
+    fn compiler_closure(pins: [[u8; 32]; 6]) -> CompilerClosureV2 {
+        CompilerClosureV2::new(pins[0], pins[1], pins[2], pins[3], pins[4], pins[5]).unwrap()
+    }
+
+    fn compiler_observation() -> CompilerClosureObservation {
+        CompilerClosureObservation {
+            closure: compiler_closure([[1; 32], [2; 32], [6; 32], [3; 32], [4; 32], [5; 32]]),
             runtime_object: object(30, libc::S_IFDIR | 0o500),
-            backend: [4; 32],
-            closure: crate::compiler_toolchain::compiler_closure_sha256_v1(
-                &[1; 32], &[2; 32], &[3; 32], &[4; 32],
-            ),
-        };
+        }
+    }
+
+    fn replace_compiler_pin(closure: CompilerClosureV2, index: usize) -> CompilerClosureV2 {
+        let mut pins = [
+            closure.cargo_executable_sha256(),
+            closure.cargo_binding_trampoline_sha256(),
+            closure.cargo_fe2o3_binding_wrapper_sha256(),
+            closure.rustc_executable_sha256(),
+            closure.rustc_runtime_tree_sha256(),
+            closure.codegen_backend_sha256(),
+        ];
+        pins[index] = [0x55; 32];
+        compiler_closure(pins)
+    }
+
+    fn contract() -> ReleaseContract {
         ReleaseContract {
             attempt: [5; 32],
             parent_uid: 1000,
@@ -1547,7 +1601,7 @@ mod tests {
                 object(1, libc::S_IFREG | 0o500),
                 object(20, libc::S_IFDIR | 0o500),
             ],
-            compiler,
+            compiler: compiler_observation(),
             argv: vec![
                 fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0_V1.to_vec(),
                 INTERNAL_CHILD_ARG.as_bytes().to_vec(),
@@ -1572,10 +1626,40 @@ mod tests {
         }
     }
 
+    fn decode_compiler_observation(encoded: &[u8]) -> Result<CompilerClosureObservation, String> {
+        let mut decoder = Decoder::new(encoded);
+        let observation = CompilerClosureObservation::decode(&mut decoder)?;
+        decoder.finish()?;
+        Ok(observation)
+    }
+
     #[test]
     fn contract_round_trips_canonically() {
         let expected = contract();
         let encoded = expected.encode().unwrap();
+        assert_eq!(INTERNAL_CHILD_ARG, "__fe2o3-authority-release-child-v1");
+        assert_eq!(PROBE_OK_MARKER, "FE2O3_PROTECTED_AUTHORITY_RELEASE_V1_OK");
+        assert_eq!(&encoded[..8], CONTRACT_MAGIC);
+        assert_eq!(
+            u16::from_le_bytes(encoded[8..10].try_into().unwrap()),
+            CONTRACT_VERSION
+        );
+        assert_eq!(
+            u16::from_le_bytes(encoded[10..12].try_into().unwrap()),
+            CONTRACT_HEADER_BYTES as u16
+        );
+        assert_eq!(
+            CONTRACT_DOMAIN,
+            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V2\0"
+        );
+        assert_eq!(
+            GRANT_DOMAIN,
+            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V2\0"
+        );
+        assert_eq!(
+            ACCEPT_DOMAIN,
+            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V2\0"
+        );
         let (decoded, identity) = ReleaseContract::decode(&encoded).unwrap();
         assert_eq!(decoded, expected);
         assert_eq!(identity, contract_identity(&encoded[..encoded.len() - 32]));
@@ -1593,6 +1677,83 @@ mod tests {
     }
 
     #[test]
+    fn v1_contract_headers_fail_closed() {
+        let mut old_magic = contract().encode().unwrap();
+        old_magic[..8].copy_from_slice(b"F2AURL1\0");
+        assert!(
+            ReleaseContract::decode(&old_magic)
+                .unwrap_err()
+                .contains("magic")
+        );
+
+        let mut old_version = contract().encode().unwrap();
+        old_version[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        assert!(
+            ReleaseContract::decode(&old_version)
+                .unwrap_err()
+                .contains("version/header")
+        );
+    }
+
+    #[test]
+    fn compiler_observation_wire_requires_the_exact_v2_preimage() {
+        let expected = compiler_observation();
+        let mut encoded = Vec::new();
+        expected.encode(&mut encoded);
+        assert_eq!(encoded.len(), 258);
+        assert_eq!(&encoded[0..32], &[1; 32]);
+        assert_eq!(&encoded[32..64], &[2; 32]);
+        assert_eq!(&encoded[64..96], &[6; 32]);
+        assert_eq!(&encoded[96..128], &[3; 32]);
+        assert_eq!(&encoded[128..160], &[4; 32]);
+        assert_eq!(&encoded[160..192], &[5; 32]);
+        assert_eq!(
+            u16::from_le_bytes(encoded[192..194].try_into().unwrap()),
+            fe2o3_build_authority::CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1
+        );
+        assert_eq!(&encoded[194..226], &expected.closure.identity_sha256());
+        assert_eq!(decode_compiler_observation(&encoded), Ok(expected));
+
+        for offset in [0, 32, 64, 96, 128, 160, 194] {
+            let mut changed = encoded.clone();
+            changed[offset] ^= 1;
+            assert!(
+                decode_compiler_observation(&changed).is_err(),
+                "compiler field at {offset}"
+            );
+        }
+
+        let mut unknown_protocol = encoded;
+        unknown_protocol[192..194].copy_from_slice(&2_u16.to_le_bytes());
+        assert!(
+            decode_compiler_observation(&unknown_protocol)
+                .unwrap_err()
+                .contains("protocol version 2")
+        );
+    }
+
+    #[test]
+    fn closure_wrapper_must_equal_the_contract_child_image() {
+        let mut mismatch = contract();
+        mismatch.child.sha256[0] ^= 1;
+        assert!(
+            mismatch
+                .encode()
+                .unwrap_err()
+                .contains("closure wrapper differs")
+        );
+
+        let contract = contract();
+        let mut observed = observation(&contract);
+        observed.compiler.closure = replace_compiler_pin(observed.compiler.closure, 2);
+        assert!(
+            validate_child_observation(&contract, &observed)
+                .unwrap_err()
+                .contains("closure wrapper differs")
+        );
+    }
+
+    #[test]
     fn aliases_environment_drift_and_closure_drift_change_identity() {
         let baseline = contract().encode().unwrap();
         let mut changed = contract();
@@ -1600,13 +1761,7 @@ mod tests {
         assert_ne!(baseline, changed.encode().unwrap());
 
         let mut changed = contract();
-        changed.compiler.runtime_tree[0] ^= 1;
-        changed.compiler.closure = crate::compiler_toolchain::compiler_closure_sha256_v1(
-            &changed.compiler.cargo,
-            &changed.compiler.rustc,
-            &changed.compiler.runtime_tree,
-            &changed.compiler.backend,
-        );
+        changed.compiler.closure = replace_compiler_pin(changed.compiler.closure, 4);
         assert_ne!(baseline, changed.encode().unwrap());
 
         let mut changed = contract();
@@ -1720,5 +1875,16 @@ mod tests {
                 .unwrap_err()
                 .contains("closure/runtime tree")
         );
+
+        for index in [0, 1, 3, 4, 5] {
+            let mut closure = observation(&contract);
+            closure.compiler.closure = replace_compiler_pin(closure.compiler.closure, index);
+            assert!(
+                validate_child_observation(&contract, &closure)
+                    .unwrap_err()
+                    .contains("closure/runtime tree"),
+                "compiler pin {index}"
+            );
+        }
     }
 }
