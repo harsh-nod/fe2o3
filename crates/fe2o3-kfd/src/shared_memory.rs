@@ -6,17 +6,18 @@ use std::os::fd::BorrowedFd;
 use std::sync::atomic::Ordering;
 
 use fe2o3_kfd_uapi::{
-    KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE,
-    KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT, KFD_ALLOC_MEMORY_FLAGS_KERNARG,
-    KfdAllocMemoryFlags,
+    KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL,
+    KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE, KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT,
+    KFD_ALLOC_MEMORY_FLAGS_KERNARG, KfdAllocMemoryFlags,
 };
 use fe2o3_runtime_model::{
-    AllocationGenerationV1, AllocationIdV1, DeviceIdentityStateV1, GpuVaRangeV1, MappingIdV1,
-    MemoryAccessV1, MemoryAllocationKeyV1, MemoryAllocationSpecV1, MemoryCoherenceV1, MemoryKindV1,
-    MemoryLifecycleStateV1, MemoryMappingKeyV1, MemoryPublicationIdV1, MemoryPublicationKeyV1,
-    MemoryTransitionErrorV1, MemoryTransitionV1, ModelAdmissionStatusV1, ModelDeviceAdmissionV1,
-    PartialOperationStatusV1, PartialProgressObservationV1, UntrustedAllocationHandleObservationV1,
-    UntrustedVmHandleObservationV1, VaReservationIdV1, VaReservationKeyV1, VmIdV1, VmKeyV1,
+    AllocationGenerationV1, AllocationIdV1, DeviceIdentityStateV1, DeviceKeyV1, GpuVaRangeV1,
+    MappingIdV1, MemoryAccessV1, MemoryAllocationKeyV1, MemoryAllocationSpecV1, MemoryCoherenceV1,
+    MemoryKindV1, MemoryLifecycleStateV1, MemoryMappingKeyV1, MemoryPublicationIdV1,
+    MemoryPublicationKeyV1, MemoryTransitionErrorV1, MemoryTransitionV1, ModelAdmissionStatusV1,
+    ModelDeviceAdmissionV1, PartialOperationStatusV1, PartialProgressObservationV1,
+    UntrustedAllocationHandleObservationV1, UntrustedVmHandleObservationV1, VaReservationIdV1,
+    VaReservationKeyV1, VmIdV1, VmKeyV1,
 };
 
 use super::memory::{
@@ -30,6 +31,34 @@ pub const MAX_SHARED_GTT_SINGLE_CPU_BYTES_V1: u64 = 1 << 31;
 pub const MAX_SHARED_GTT_GPU_VA_BYTES_V1: u64 = 8 << 30;
 pub const MIN_AQL_QUEUE_BYTES_V1: u64 = 4_096;
 pub const MAX_AQL_QUEUE_BYTES_V1: u64 = 1 << 31;
+pub const MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1: usize = 64;
+pub const MAX_GFX942_DEVICE_MEMORY_BYTES_V1: u64 = 192 << 30;
+pub const MAX_GFX942_DEVICE_MEMORY_ALIGNMENT_V1: u64 = HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
+
+/// Canonical contract for bounded device-local allocation leases.
+pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_V1: &str = concat!(
+    "profile=fe2o3-mi300x-gfx942-device-memory-lease-r1-v1\n",
+    "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
+    "kfd_device_memory_schema_sha256=8592027abc19962181c29b42962909e152d4ef4194036a1659dc601992cf709a\n",
+    "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device-and-vm\n",
+    "profile=device-local-vram-hbm-writable:0x80000001\n",
+    "bounds=allocation-records:64,retained-bytes:206158430208,alignment-power-of-two-max:4096,page:4096\n",
+    "lifecycle=linear-non-clone-unmapped-to-mapped-to-unmapped-to-released\n",
+    "mapping=exact-one-selected-gpu,no-peer,no-retry-after-native-attempt\n",
+    "authority=retained-kfd-render-vm-device-and-allocation-generation,no-public-handle-va-pointer-or-fd\n",
+    "currentness=before-and-after-every-native-transition,contracted-composite\n",
+    "failure=retain-reservation-and-possible-handle,global-quarantine-after-ambiguous-native-result,no-drop-cleanup\n",
+    "model=dedicated-bounded-linear-engine,no-runtime-memory-model-projection\n",
+    "excluded=cpu-map,initialization,copy,alias,quiescence,queue-dispatch-binding,kernel-address,launch,completion,peer-map\n",
+);
+
+pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_V1: &str =
+    "e49ec482230bebe98d2943b81dcc3e6db91a9d9dd3fa182fd90c5fdfabb11757";
+
+pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
+    0xe4, 0x9e, 0xc4, 0x82, 0x23, 0x0b, 0xeb, 0xe9, 0x8d, 0x29, 0x43, 0xb8, 0x1d, 0xcc, 0x3e, 0x6d,
+    0xb9, 0x1a, 0x9d, 0x9d, 0xd3, 0xfa, 0x18, 0x2f, 0xd9, 0x0c, 0x5f, 0xdf, 0xab, 0xb1, 0x17, 0x57,
+];
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
@@ -66,6 +95,112 @@ pub enum SharedGttProfileV1 {
     Kernarg,
     AqlQueue,
     Executable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942DeviceMemoryLayoutV1 {
+    requested_bytes: u64,
+    backing_bytes: u64,
+    alignment: u64,
+    uapi_flags: u32,
+}
+
+impl Gfx942DeviceMemoryLayoutV1 {
+    pub const fn requested_bytes(self) -> u64 {
+        self.requested_bytes
+    }
+
+    pub const fn backing_bytes(self) -> u64 {
+        self.backing_bytes
+    }
+
+    pub const fn alignment(self) -> u64 {
+        self.alignment
+    }
+
+    pub const fn uapi_flags(self) -> u32 {
+        self.uapi_flags
+    }
+}
+
+mod device_memory_state {
+    pub trait Sealed {}
+}
+
+pub trait Gfx942DeviceMemoryStateV1: device_memory_state::Sealed + 'static {}
+
+pub enum Gfx942DeviceMemoryUnmappedV1 {}
+pub enum Gfx942DeviceMemoryMappedV1 {}
+
+impl device_memory_state::Sealed for Gfx942DeviceMemoryUnmappedV1 {}
+impl device_memory_state::Sealed for Gfx942DeviceMemoryMappedV1 {}
+impl Gfx942DeviceMemoryStateV1 for Gfx942DeviceMemoryUnmappedV1 {}
+impl Gfx942DeviceMemoryStateV1 for Gfx942DeviceMemoryMappedV1 {}
+
+/// Linear ownership of one bounded gfx942 device-local allocation.
+///
+/// The lease intentionally exposes layout only. A mapped lease still has no
+/// numeric GPU address; a later queue/dispatch binding must consume it before
+/// such an address can exist in a launch authority.
+///
+/// ```compile_fail
+/// use fe2o3_kfd::{Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryUnmappedV1};
+///
+/// fn cannot_copy_or_extract_address(
+///     lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+/// ) {
+///     let _copy = lease.clone();
+///     let _address = lease.gpu_va();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kfd::{
+///     Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
+///     SharedGttMemorySessionV1,
+/// };
+///
+/// fn mapped_memory_cannot_be_freed(
+///     session: &mut SharedGttMemorySessionV1,
+///     lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+/// ) {
+///     session.release_gfx942_device_memory(lease).unwrap();
+/// }
+/// ```
+#[must_use = "device-memory authority must be transitioned or explicitly released"]
+pub struct Gfx942DeviceMemoryLeaseV1<S: Gfx942DeviceMemoryStateV1> {
+    id: u64,
+    generation: u64,
+    device: DeviceKeyV1,
+    vm: VmKeyV1,
+    layout: Gfx942DeviceMemoryLayoutV1,
+    marker: PhantomData<S>,
+}
+
+impl<S: Gfx942DeviceMemoryStateV1> fmt::Debug for Gfx942DeviceMemoryLeaseV1<S> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942DeviceMemoryLeaseV1")
+            .field("layout", &self.layout)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S: Gfx942DeviceMemoryStateV1> Gfx942DeviceMemoryLeaseV1<S> {
+    pub const fn layout(&self) -> Gfx942DeviceMemoryLayoutV1 {
+        self.layout
+    }
+
+    fn retag<T: Gfx942DeviceMemoryStateV1>(self) -> Gfx942DeviceMemoryLeaseV1<T> {
+        Gfx942DeviceMemoryLeaseV1 {
+            id: self.id,
+            generation: self.generation,
+            device: self.device,
+            vm: self.vm,
+            layout: self.layout,
+            marker: PhantomData,
+        }
+    }
 }
 
 mod sealed {
@@ -391,6 +526,14 @@ enum SharedAllocationPhaseV1 {
     Released,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeviceMemoryPhaseV1 {
+    Ambiguous,
+    Unmapped,
+    Mapped,
+    Released,
+}
+
 struct SharedAllocationRecord<B: MemoryBackend> {
     id: u64,
     generation: u64,
@@ -405,12 +548,29 @@ struct SharedAllocationRecord<B: MemoryBackend> {
     phase: SharedAllocationPhaseV1,
 }
 
+struct DeviceMemoryRecord<B: MemoryBackend> {
+    id: u64,
+    generation: u64,
+    device: DeviceKeyV1,
+    vm: VmKeyV1,
+    layout: Gfx942DeviceMemoryLayoutV1,
+    gpu_va: u64,
+    mmap_offset: u64,
+    reservation: Option<B::Reservation>,
+    handle: Option<u64>,
+    free_attempted: bool,
+    phase: DeviceMemoryPhaseV1,
+}
+
 struct SharedMemoryEngine<B: MemoryBackend> {
     backend: B,
     phase: SharedMemorySessionPhaseV1,
     allocations: Vec<SharedAllocationRecord<B>>,
     next_id: u64,
     retained_gpu_va_bytes: u64,
+    device_memory: Vec<DeviceMemoryRecord<B>>,
+    next_device_memory_id: u64,
+    retained_device_memory_bytes: u64,
 }
 
 impl<B: MemoryBackend> SharedMemoryEngine<B> {
@@ -430,6 +590,9 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             allocations: Vec::new(),
             next_id: 1,
             retained_gpu_va_bytes: 0,
+            device_memory: Vec::new(),
+            next_device_memory_id: 1,
+            retained_device_memory_bytes: 0,
         })
     }
 
@@ -503,6 +666,14 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                     record.gpu_va,
                     record.layout.gpu_va_bytes,
                 )
+        }) || self.device_memory.iter().any(|record| {
+            record.phase != DeviceMemoryPhaseV1::Released
+                && ranges_overlap(
+                    gpu_va,
+                    layout.gpu_va_bytes,
+                    record.gpu_va,
+                    record.layout.backing_bytes,
+                )
         }) {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
                 "overlapping GPU VA reservation",
@@ -529,6 +700,9 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         }
         if self.allocations.iter().any(|record| {
             record.phase != SharedAllocationPhaseV1::Released
+                && (record.handle == Some(args.handle) || record.mmap_offset == args.mmap_offset)
+        }) || self.device_memory.iter().any(|record| {
+            record.phase != DeviceMemoryPhaseV1::Released
                 && (record.handle == Some(args.handle) || record.mmap_offset == args.mmap_offset)
         }) {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
@@ -570,6 +744,259 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             layout,
             marker: PhantomData,
         })
+    }
+
+    fn allocate_device_memory(
+        &mut self,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        requested_bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
+        self.require_active()?;
+        if vm.device != device {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        let layout = device_memory_layout(requested_bytes, alignment)?;
+        if self.device_memory.len() >= MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1 {
+            return Err(MemorySessionError::DeviceMemoryAllocationCapacity {
+                maximum: MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1,
+            });
+        }
+        let new_total = self
+            .retained_device_memory_bytes
+            .checked_add(layout.backing_bytes)
+            .ok_or(MemorySessionError::SizeOverflow)?;
+        if new_total > MAX_GFX942_DEVICE_MEMORY_BYTES_V1 {
+            return Err(MemorySessionError::DeviceMemoryByteCapacity {
+                maximum_bytes: MAX_GFX942_DEVICE_MEMORY_BYTES_V1,
+            });
+        }
+        let id = self.next_device_memory_id;
+        let next_id = id.checked_add(1).ok_or(MemorySessionError::SizeOverflow)?;
+        let reservation_bytes =
+            usize::try_from(layout.backing_bytes).map_err(|_| MemorySessionError::SizeOverflow)?;
+
+        self.check_currentness()?;
+        let reservation = match self.backend.reserve_va(reservation_bytes) {
+            Ok(reservation) => reservation,
+            Err(error) => return self.quarantine(error),
+        };
+        let gpu_va = B::reservation_address(&reservation);
+        let index = self.device_memory.len();
+        self.device_memory.push(DeviceMemoryRecord {
+            id,
+            generation: 1,
+            device,
+            vm,
+            layout,
+            gpu_va,
+            mmap_offset: 0,
+            reservation: Some(reservation),
+            handle: None,
+            free_attempted: false,
+            phase: DeviceMemoryPhaseV1::Ambiguous,
+        });
+        self.next_device_memory_id = next_id;
+        self.retained_device_memory_bytes = new_total;
+
+        if let Err(error) =
+            validate_gpu_va_range(gpu_va, layout.backing_bytes, self.backend.gpuvm_aperture())
+        {
+            return self.quarantine(error);
+        }
+        if !gpu_va.is_multiple_of(layout.alignment) {
+            return self.quarantine(MemorySessionError::AddressNotPageAligned);
+        }
+        if self.allocations.iter().any(|record| {
+            record.phase != SharedAllocationPhaseV1::Released
+                && ranges_overlap(
+                    gpu_va,
+                    layout.backing_bytes,
+                    record.gpu_va,
+                    record.layout.gpu_va_bytes,
+                )
+        }) || self.device_memory[..index].iter().any(|record| {
+            record.phase != DeviceMemoryPhaseV1::Released
+                && ranges_overlap(
+                    gpu_va,
+                    layout.backing_bytes,
+                    record.gpu_va,
+                    record.layout.backing_bytes,
+                )
+        }) {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "overlapping device-memory GPU VA reservation",
+            ));
+        }
+
+        let outcome = self.backend.alloc(
+            gpu_va,
+            layout.backing_bytes,
+            KfdAllocMemoryFlags::DEVICE_LOCAL,
+        );
+        let args = outcome.value;
+        self.device_memory[index].handle = (args.handle != 0).then_some(args.handle);
+        self.device_memory[index].mmap_offset = args.mmap_offset;
+        if let Err(error) = outcome.result {
+            return self.quarantine(error);
+        }
+        if args.va_addr != gpu_va
+            || args.size != layout.backing_bytes
+            || args.gpu_id != self.backend.gpu_id()
+            || args.flags != KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL
+            || args.handle == 0
+            || args.mmap_offset == 0
+            || !args
+                .mmap_offset
+                .is_multiple_of(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1)
+        {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "device-local ALLOC_MEMORY_OF_GPU output",
+            ));
+        }
+        if self.allocations.iter().any(|record| {
+            record.phase != SharedAllocationPhaseV1::Released
+                && (record.handle == Some(args.handle) || record.mmap_offset == args.mmap_offset)
+        }) || self.device_memory[..index].iter().any(|record| {
+            record.phase != DeviceMemoryPhaseV1::Released
+                && (record.handle == Some(args.handle) || record.mmap_offset == args.mmap_offset)
+        }) {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "device-memory handle or mmap-offset collision",
+            ));
+        }
+        self.check_currentness()?;
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Unmapped;
+        Ok(Gfx942DeviceMemoryLeaseV1 {
+            id,
+            generation: 1,
+            device,
+            vm,
+            layout,
+            marker: PhantomData,
+        })
+    }
+
+    fn device_memory_index<S: Gfx942DeviceMemoryStateV1>(
+        &self,
+        lease: &Gfx942DeviceMemoryLeaseV1<S>,
+        expected: DeviceMemoryPhaseV1,
+    ) -> Result<usize, MemorySessionError> {
+        self.require_active()?;
+        self.device_memory
+            .iter()
+            .position(|record| {
+                record.id == lease.id
+                    && record.generation == lease.generation
+                    && record.device == lease.device
+                    && record.vm == lease.vm
+                    && record.layout == lease.layout
+                    && record.phase == expected
+            })
+            .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)
+    }
+
+    fn map_device_memory(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, MemorySessionError> {
+        let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
+        self.check_currentness()?;
+        let handle = self.device_memory[index]
+            .handle
+            .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+        let outcome = self.backend.map_gpu(handle, 0);
+        if outcome.value > 1 {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "device-memory MAP_MEMORY_TO_GPU cumulative n_success",
+            ));
+        }
+        if let Err(error) = outcome.result {
+            return self.quarantine(error);
+        }
+        if outcome.value != 1 {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "device-memory MAP_MEMORY_TO_GPU full prefix",
+            ));
+        }
+        self.check_currentness()?;
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Mapped;
+        Ok(lease.retag())
+    }
+
+    fn unmap_device_memory(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
+        let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Mapped)?;
+        self.check_currentness()?;
+        let handle = self.device_memory[index]
+            .handle
+            .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+        let outcome = self.backend.unmap_gpu(handle, 0);
+        if outcome.value > 1 {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "device-memory UNMAP_MEMORY_FROM_GPU cumulative n_success",
+            ));
+        }
+        if let Err(error) = outcome.result {
+            return self.quarantine(error);
+        }
+        if outcome.value != 1 {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "device-memory UNMAP_MEMORY_FROM_GPU full prefix",
+            ));
+        }
+        self.check_currentness()?;
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Unmapped;
+        Ok(lease.retag())
+    }
+
+    fn release_device_memory(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<(), MemorySessionError> {
+        let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
+        self.check_currentness()?;
+        if self.device_memory[index].free_attempted {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "device-memory FREE_MEMORY_OF_GPU exactly-once",
+            ));
+        }
+        let handle = self.device_memory[index]
+            .handle
+            .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+        self.device_memory[index].free_attempted = true;
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+        if let Err(error) = self.backend.free(handle) {
+            return self.quarantine(error);
+        }
+        self.device_memory[index].handle = None;
+        self.check_currentness()?;
+        let release_result = {
+            let (backend, records) = (&mut self.backend, &mut self.device_memory);
+            let reservation = records[index]
+                .reservation
+                .as_mut()
+                .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+            backend.release_va_reservation(reservation)
+        };
+        if let Err(error) = release_result {
+            return self.quarantine(error);
+        }
+        self.device_memory[index].reservation = None;
+        self.check_currentness()?;
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Released;
+        self.retained_device_memory_bytes = self
+            .retained_device_memory_bytes
+            .checked_sub(lease.layout.backing_bytes)
+            .ok_or(MemorySessionError::KernelResultMalformed(
+                "retained device-memory accounting",
+            ))?;
+        Ok(())
     }
 
     fn index<P: GttProfileV1, S: GttAllocationStateV1>(
@@ -926,6 +1353,35 @@ impl<B: MemoryBackend> Drop for SharedMemoryEngine<B> {
     }
 }
 
+fn device_memory_layout(
+    requested_bytes: u64,
+    alignment: u64,
+) -> Result<Gfx942DeviceMemoryLayoutV1, MemorySessionError> {
+    if requested_bytes == 0 || requested_bytes > MAX_GFX942_DEVICE_MEMORY_BYTES_V1 {
+        return Err(MemorySessionError::InvalidDeviceMemorySize);
+    }
+    if alignment == 0
+        || !alignment.is_power_of_two()
+        || alignment > MAX_GFX942_DEVICE_MEMORY_ALIGNMENT_V1
+    {
+        return Err(MemorySessionError::InvalidDeviceMemoryAlignment);
+    }
+    let backing_bytes = requested_bytes
+        .checked_add(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1 - 1)
+        .ok_or(MemorySessionError::SizeOverflow)?
+        / HOST_VISIBLE_MEMORY_PAGE_BYTES_V1
+        * HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
+    if backing_bytes > MAX_GFX942_DEVICE_MEMORY_BYTES_V1 {
+        return Err(MemorySessionError::InvalidDeviceMemorySize);
+    }
+    Ok(Gfx942DeviceMemoryLayoutV1 {
+        requested_bytes,
+        backing_bytes,
+        alignment,
+        uapi_flags: KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL,
+    })
+}
+
 fn profile_layout<P: GttProfileV1>(
     requested_bytes: usize,
 ) -> Result<SharedGttAllocationLayoutV1, MemorySessionError> {
@@ -1072,6 +1528,61 @@ impl SharedGttMemorySessionV1 {
             .count()
     }
 
+    pub fn retained_device_memory_lease_count(&self) -> usize {
+        self.engine
+            .device_memory
+            .iter()
+            .filter(|record| record.phase != DeviceMemoryPhaseV1::Released)
+            .count()
+    }
+
+    pub const fn retained_device_memory_bytes(&self) -> u64 {
+        self.engine.retained_device_memory_bytes
+    }
+
+    /// Allocates uninitialized writable device-local VRAM/HBM.
+    ///
+    /// The resulting lease is not GPU mapped and carries no numeric address.
+    /// This operation grants neither initialization nor copy authority.
+    pub fn allocate_gfx942_device_memory(
+        &mut self,
+        requested_bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
+        self.engine.allocate_device_memory(
+            self.model_device.model_key(),
+            self.vm,
+            requested_bytes,
+            alignment,
+        )
+    }
+
+    /// Maps one exact device-local lease to the selected GPU only.
+    ///
+    /// Mapping does not expose a GPU address or bind this storage to a queue,
+    /// packet, dispatch generation, copy operation, or completion.
+    pub fn map_gfx942_device_memory(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, MemorySessionError> {
+        self.engine.map_device_memory(lease)
+    }
+
+    pub fn unmap_gfx942_device_memory(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
+        self.engine.unmap_device_memory(lease)
+    }
+
+    /// Frees one unmapped lease exactly once, then releases its VA guard.
+    pub fn release_gfx942_device_memory(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<(), MemorySessionError> {
+        self.engine.release_device_memory(lease)
+    }
+
     pub fn model_journal_summary(&self) -> MemoryModelJournalSummary {
         MemoryModelJournalSummary::from_model(&self.model)
     }
@@ -1149,6 +1660,9 @@ impl SharedGttMemorySessionV1 {
         &mut self,
     ) -> Result<(DeviceIdentityStateV1, MemoryLifecycleStateV1), MemorySessionError> {
         self.check_queue_currentness()?;
+        if self.retained_device_memory_lease_count() != 0 {
+            return Err(MemorySessionError::DeviceMemoryQueueBindingRequired);
+        }
         if self.model_transferred {
             return Err(MemorySessionError::Model(
                 "shared queue model ownership already transferred",
@@ -1658,6 +2172,7 @@ const _: () = {
     assert!(KFD_ALLOC_MEMORY_FLAGS_KERNARG == 0x8600_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0x8e00_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE == 0xc400_0002);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL == 0x8000_0001);
 };
 
 #[cfg(test)]
@@ -1683,7 +2198,16 @@ mod tests {
         map_progress: u32,
         unmap_progress: u32,
         map_errno: bool,
+        unmap_errno: bool,
+        alloc_oom: bool,
         corrupt_flags: bool,
+        currentness_calls: usize,
+        fail_currentness_at: Option<usize>,
+        reserve_va_calls: usize,
+        alloc_calls: usize,
+        map_cpu_calls: usize,
+        map_gpu_calls: usize,
+        unmap_gpu_calls: usize,
         free_calls: usize,
         release_va_calls: usize,
     }
@@ -1699,7 +2223,16 @@ mod tests {
                 map_progress: 1,
                 unmap_progress: 1,
                 map_errno: false,
+                unmap_errno: false,
+                alloc_oom: false,
                 corrupt_flags: false,
+                currentness_calls: 0,
+                fail_currentness_at: None,
+                reserve_va_calls: 0,
+                alloc_calls: 0,
+                map_cpu_calls: 0,
+                map_gpu_calls: 0,
+                unmap_gpu_calls: 0,
                 free_calls: 0,
                 release_va_calls: 0,
             }
@@ -1725,18 +2258,27 @@ mod tests {
             7
         }
         fn gpuvm_aperture(&self) -> crate::InclusiveAperture {
-            crate::InclusiveAperture::from_checked_parts_for_memory_tests(0x1_0000, 0x4_0000_0000)
+            crate::InclusiveAperture::from_checked_parts_for_memory_tests(
+                0x1_0000,
+                0x1_0000_0000_0000,
+            )
         }
         fn page_size(&self) -> usize {
             4096
         }
         fn check_currentness(&mut self) -> Result<(), MemorySessionError> {
-            self.check("currentness")
+            self.currentness_calls += 1;
+            if self.fail_currentness_at == Some(self.currentness_calls) {
+                Err(MemorySessionError::Injected("currentness"))
+            } else {
+                self.check("currentness")
+            }
         }
         fn acquire_vm(&mut self) -> Result<(), MemorySessionError> {
             self.check("acquire_vm")
         }
         fn reserve_va(&mut self, bytes: usize) -> Result<Self::Reservation, MemorySessionError> {
+            self.reserve_va_calls += 1;
             self.check("reserve_va")?;
             let address = self.fixed_va.unwrap_or(self.next_va);
             self.next_va = self
@@ -1755,6 +2297,7 @@ mod tests {
             bytes: u64,
             flags: KfdAllocMemoryFlags,
         ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+            self.alloc_calls += 1;
             self.flags.push(flags.bits());
             let handle = self.next_handle;
             self.next_handle += 1;
@@ -1766,7 +2309,14 @@ mod tests {
             }
             KernelOutcome {
                 value: args,
-                result: self.check("alloc"),
+                result: if self.alloc_oom {
+                    Err(MemorySessionError::Syscall {
+                        operation: "AMDKFD_IOC_ALLOC_MEMORY_OF_GPU",
+                        source: rustix::io::Errno::NOMEM,
+                    })
+                } else {
+                    self.check("alloc")
+                },
             }
         }
         fn map_cpu(
@@ -1776,6 +2326,7 @@ mod tests {
             bytes: usize,
             _retain_gpu_va_guard: bool,
         ) -> Result<Self::Mapping, MemorySessionError> {
+            self.map_cpu_calls += 1;
             self.check("map_cpu")?;
             Ok(FakeMapping {
                 bytes: vec![0; bytes],
@@ -1800,6 +2351,7 @@ mod tests {
             Ok(())
         }
         fn map_gpu(&mut self, _handle: u64, _old_success: u32) -> KernelOutcome<u32> {
+            self.map_gpu_calls += 1;
             KernelOutcome {
                 value: self.map_progress,
                 result: if self.map_errno {
@@ -1810,9 +2362,14 @@ mod tests {
             }
         }
         fn unmap_gpu(&mut self, _handle: u64, _old_success: u32) -> KernelOutcome<u32> {
+            self.unmap_gpu_calls += 1;
             KernelOutcome {
                 value: self.unmap_progress,
-                result: self.check("unmap_gpu"),
+                result: if self.unmap_errno {
+                    Err(MemorySessionError::Injected("unmap_gpu"))
+                } else {
+                    self.check("unmap_gpu")
+                },
             }
         }
         fn with_bytes<R>(
@@ -1851,6 +2408,20 @@ mod tests {
 
     fn acquired() -> SharedMemoryEngine<FakeBackend> {
         SharedMemoryEngine::acquire(FakeBackend::good()).unwrap()
+    }
+
+    fn device_vm(generation: u64) -> (DeviceKeyV1, VmKeyV1) {
+        let device = DeviceKeyV1 {
+            physical: fe2o3_runtime_model::PhysicalDeviceIdV1(9),
+            generation: fe2o3_runtime_model::DeviceGenerationV1(generation),
+        };
+        (
+            device,
+            VmKeyV1 {
+                device,
+                id: VmIdV1(11),
+            },
+        )
     }
 
     #[test]
@@ -2013,7 +2584,7 @@ mod tests {
     fn later_allocation_failure_revokes_use_of_prior_tokens() {
         let mut engine = acquired();
         let first = engine.allocate::<HostVisibleCoherentGttV1>(4096).unwrap();
-        engine.backend.fail_operation = Some("alloc");
+        engine.backend.alloc_oom = true;
         assert!(engine.allocate::<KernargGttV1>(4096).is_err());
         assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
         assert!(matches!(
@@ -2057,5 +2628,333 @@ mod tests {
         assert_eq!(va_guard.phase(), SharedMemorySessionPhaseV1::Quarantined);
         assert_eq!(va_guard.backend.free_calls, 1);
         assert_eq!(va_guard.backend.release_va_calls, 1);
+    }
+
+    #[test]
+    fn device_memory_profile_manifest_and_layout_are_frozen() {
+        let digest = Sha256::digest(GFX942_DEVICE_MEMORY_LEASE_MANIFEST_V1);
+        assert_eq!(
+            digest.as_slice(),
+            GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_BYTES_V1
+        );
+        let mut digest_hex = String::with_capacity(64);
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for byte in digest.iter().copied() {
+            digest_hex.push(char::from(HEX[usize::from(byte >> 4)]));
+            digest_hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        assert_eq!(digest_hex, GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_V1);
+        assert!(
+            GFX942_DEVICE_MEMORY_LEASE_MANIFEST_V1
+                .contains(fe2o3_kfd_uapi::KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256)
+        );
+
+        assert!(matches!(
+            device_memory_layout(0, 4096),
+            Err(MemorySessionError::InvalidDeviceMemorySize)
+        ));
+        assert!(matches!(
+            device_memory_layout(MAX_GFX942_DEVICE_MEMORY_BYTES_V1 + 1, 4096),
+            Err(MemorySessionError::InvalidDeviceMemorySize)
+        ));
+        for alignment in [0, 3, 8192] {
+            assert!(matches!(
+                device_memory_layout(1, alignment),
+                Err(MemorySessionError::InvalidDeviceMemoryAlignment)
+            ));
+        }
+        let layout = device_memory_layout(4097, 256).unwrap();
+        assert_eq!(layout.requested_bytes(), 4097);
+        assert_eq!(layout.backing_bytes(), 8192);
+        assert_eq!(layout.alignment(), 256);
+        assert_eq!(layout.uapi_flags(), 0x8000_0001);
+    }
+
+    #[test]
+    fn device_memory_lifecycle_is_linear_redacted_and_single_device() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(7);
+        let lease = engine
+            .allocate_device_memory(device, vm, 4097, 256)
+            .unwrap();
+        assert_eq!(engine.backend.flags, vec![0x8000_0001]);
+        assert_eq!(engine.backend.reserve_va_calls, 1);
+        assert_eq!(engine.backend.alloc_calls, 1);
+        assert_eq!(engine.backend.map_cpu_calls, 0);
+        assert_eq!(engine.retained_device_memory_bytes, 8192);
+        assert_eq!(engine.device_memory.len(), 1);
+        assert_eq!(engine.device_memory[0].device, device);
+        assert_eq!(engine.device_memory[0].vm, vm);
+
+        let lease = engine.map_device_memory(lease).unwrap();
+        assert_eq!(engine.backend.map_gpu_calls, 1);
+        assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Mapped);
+        let lease = engine.unmap_device_memory(lease).unwrap();
+        assert_eq!(engine.backend.unmap_gpu_calls, 1);
+        assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Unmapped);
+        engine.release_device_memory(lease).unwrap();
+        assert_eq!(engine.backend.free_calls, 1);
+        assert_eq!(engine.backend.release_va_calls, 1);
+        assert_eq!(engine.retained_device_memory_bytes, 0);
+        assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Released);
+    }
+
+    #[test]
+    fn device_memory_oom_retains_possible_native_authority_and_poison() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(1);
+        engine.backend.alloc_oom = true;
+        assert!(matches!(
+            engine.allocate_device_memory(device, vm, 4096, 4096),
+            Err(MemorySessionError::Syscall {
+                source: rustix::io::Errno::NOMEM,
+                ..
+            })
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(engine.device_memory.len(), 1);
+        assert!(engine.device_memory[0].reservation.is_some());
+        assert!(engine.device_memory[0].handle.is_some());
+        assert_eq!(
+            engine.device_memory[0].phase,
+            DeviceMemoryPhaseV1::Ambiguous
+        );
+        assert_eq!(engine.retained_device_memory_bytes, 4096);
+        assert_eq!(engine.backend.free_calls, 0);
+        assert_eq!(engine.backend.release_va_calls, 0);
+    }
+
+    #[test]
+    fn device_memory_rejects_wrong_device_generation_and_address_overflow() {
+        let mut mismatch = acquired();
+        let (device, vm) = device_vm(1);
+        let (other_device, _) = device_vm(2);
+        assert!(matches!(
+            mismatch.allocate_device_memory(other_device, vm, 4096, 4096),
+            Err(MemorySessionError::InvalidDeviceMemoryAuthority)
+        ));
+        assert_eq!(mismatch.backend.reserve_va_calls, 0);
+
+        let lease = mismatch
+            .allocate_device_memory(device, vm, 4096, 4096)
+            .unwrap();
+        let substituted = Gfx942DeviceMemoryLeaseV1 {
+            id: lease.id,
+            generation: lease.generation,
+            device: other_device,
+            vm: VmKeyV1 {
+                device: other_device,
+                id: lease.vm.id,
+            },
+            layout: lease.layout,
+            marker: PhantomData::<Gfx942DeviceMemoryUnmappedV1>,
+        };
+        let stale_generation = Gfx942DeviceMemoryLeaseV1 {
+            id: lease.id,
+            generation: lease.generation + 1,
+            device: lease.device,
+            vm: lease.vm,
+            layout: lease.layout,
+            marker: PhantomData::<Gfx942DeviceMemoryUnmappedV1>,
+        };
+        assert!(matches!(
+            mismatch.map_device_memory(substituted),
+            Err(MemorySessionError::InvalidDeviceMemoryAuthority)
+        ));
+        assert!(matches!(
+            mismatch.map_device_memory(stale_generation),
+            Err(MemorySessionError::InvalidDeviceMemoryAuthority)
+        ));
+        assert_eq!(mismatch.phase(), SharedMemorySessionPhaseV1::Active);
+        assert_eq!(mismatch.backend.map_gpu_calls, 0);
+
+        let mut overflow = acquired();
+        overflow.backend.fixed_va = Some(u64::MAX - 2047);
+        assert!(
+            overflow
+                .allocate_device_memory(device, vm, 4096, 4096)
+                .is_err()
+        );
+        assert_eq!(overflow.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(overflow.backend.alloc_calls, 0);
+        assert!(overflow.device_memory[0].reservation.is_some());
+    }
+
+    #[test]
+    fn device_memory_map_and_unmap_ambiguity_retain_and_poison() {
+        let (device, vm) = device_vm(1);
+
+        let mut map_zero = acquired();
+        let lease = map_zero
+            .allocate_device_memory(device, vm, 4096, 4096)
+            .unwrap();
+        map_zero.backend.map_progress = 0;
+        assert!(map_zero.map_device_memory(lease).is_err());
+        assert_eq!(map_zero.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert!(map_zero.device_memory[0].handle.is_some());
+        assert!(map_zero.device_memory[0].reservation.is_some());
+
+        let mut map_errno = acquired();
+        let lease = map_errno
+            .allocate_device_memory(device, vm, 4096, 4096)
+            .unwrap();
+        map_errno.backend.map_errno = true;
+        assert!(map_errno.map_device_memory(lease).is_err());
+        assert_eq!(map_errno.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(map_errno.backend.free_calls, 0);
+
+        let mut unmap_errno = acquired();
+        let lease = unmap_errno
+            .allocate_device_memory(device, vm, 4096, 4096)
+            .unwrap();
+        let lease = unmap_errno.map_device_memory(lease).unwrap();
+        unmap_errno.backend.unmap_errno = true;
+        assert!(unmap_errno.unmap_device_memory(lease).is_err());
+        assert_eq!(unmap_errno.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(
+            unmap_errno.device_memory[0].phase,
+            DeviceMemoryPhaseV1::Ambiguous
+        );
+        assert_eq!(unmap_errno.backend.free_calls, 0);
+    }
+
+    #[test]
+    fn device_memory_free_and_va_release_ambiguity_are_never_retried() {
+        let (device, vm) = device_vm(1);
+
+        let mut free = acquired();
+        let lease = free.allocate_device_memory(device, vm, 4096, 4096).unwrap();
+        free.backend.fail_operation = Some("free");
+        assert!(free.release_device_memory(lease).is_err());
+        assert_eq!(free.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(free.backend.free_calls, 1);
+        assert_eq!(free.backend.release_va_calls, 0);
+        assert!(free.device_memory[0].handle.is_some());
+        assert!(free.device_memory[0].reservation.is_some());
+
+        let mut va = acquired();
+        let lease = va.allocate_device_memory(device, vm, 4096, 4096).unwrap();
+        va.backend.fail_operation = Some("release_va_reservation");
+        assert!(va.release_device_memory(lease).is_err());
+        assert_eq!(va.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(va.backend.free_calls, 1);
+        assert_eq!(va.backend.release_va_calls, 1);
+        assert!(va.device_memory[0].handle.is_none());
+        assert!(va.device_memory[0].reservation.is_some());
+    }
+
+    #[test]
+    fn device_memory_post_side_effect_currentness_failures_retain_and_poison() {
+        let (device, vm) = device_vm(1);
+
+        let mut allocation = acquired();
+        allocation.backend.fail_currentness_at = Some(4);
+        assert!(
+            allocation
+                .allocate_device_memory(device, vm, 4096, 4096)
+                .is_err()
+        );
+        assert_eq!(allocation.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert!(allocation.device_memory[0].handle.is_some());
+        assert!(allocation.device_memory[0].reservation.is_some());
+
+        let mut map = acquired();
+        let lease = map.allocate_device_memory(device, vm, 4096, 4096).unwrap();
+        map.backend.fail_currentness_at = Some(6);
+        assert!(map.map_device_memory(lease).is_err());
+        assert_eq!(map.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(map.device_memory[0].phase, DeviceMemoryPhaseV1::Ambiguous);
+
+        let mut unmap = acquired();
+        let lease = unmap
+            .allocate_device_memory(device, vm, 4096, 4096)
+            .unwrap();
+        let lease = unmap.map_device_memory(lease).unwrap();
+        unmap.backend.fail_currentness_at = Some(8);
+        assert!(unmap.unmap_device_memory(lease).is_err());
+        assert_eq!(unmap.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(unmap.device_memory[0].phase, DeviceMemoryPhaseV1::Ambiguous);
+
+        let mut free = acquired();
+        let lease = free.allocate_device_memory(device, vm, 4096, 4096).unwrap();
+        free.backend.fail_currentness_at = Some(6);
+        assert!(free.release_device_memory(lease).is_err());
+        assert_eq!(free.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert!(free.device_memory[0].handle.is_none());
+        assert!(free.device_memory[0].reservation.is_some());
+
+        let mut va_release = acquired();
+        let lease = va_release
+            .allocate_device_memory(device, vm, 4096, 4096)
+            .unwrap();
+        va_release.backend.fail_currentness_at = Some(7);
+        assert!(va_release.release_device_memory(lease).is_err());
+        assert_eq!(va_release.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert!(va_release.device_memory[0].handle.is_none());
+        assert!(va_release.device_memory[0].reservation.is_none());
+        assert_eq!(va_release.retained_device_memory_bytes, 4096);
+    }
+
+    #[test]
+    fn released_device_memory_rejects_forged_double_release_and_use() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(1);
+        let lease = engine
+            .allocate_device_memory(device, vm, 4096, 4096)
+            .unwrap();
+        let forge = || Gfx942DeviceMemoryLeaseV1 {
+            id: lease.id,
+            generation: lease.generation,
+            device: lease.device,
+            vm: lease.vm,
+            layout: lease.layout,
+            marker: PhantomData::<Gfx942DeviceMemoryUnmappedV1>,
+        };
+        let double_release = forge();
+        let use_after_release = forge();
+        engine.release_device_memory(lease).unwrap();
+        assert!(matches!(
+            engine.release_device_memory(double_release),
+            Err(MemorySessionError::InvalidDeviceMemoryAuthority)
+        ));
+        assert!(matches!(
+            engine.map_device_memory(use_after_release),
+            Err(MemorySessionError::InvalidDeviceMemoryAuthority)
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Active);
+        assert_eq!(engine.backend.free_calls, 1);
+        assert_eq!(engine.backend.release_va_calls, 1);
+    }
+
+    #[test]
+    fn device_memory_capacity_is_preflighted_and_success_reclaims_bytes() {
+        let mut bytes = acquired();
+        let (device, vm) = device_vm(1);
+        let lease = bytes
+            .allocate_device_memory(device, vm, MAX_GFX942_DEVICE_MEMORY_BYTES_V1, 4096)
+            .unwrap();
+        assert!(matches!(
+            bytes.allocate_device_memory(device, vm, 1, 1),
+            Err(MemorySessionError::DeviceMemoryByteCapacity { .. })
+        ));
+        assert_eq!(bytes.backend.alloc_calls, 1);
+        bytes.release_device_memory(lease).unwrap();
+        assert_eq!(bytes.retained_device_memory_bytes, 0);
+        assert!(bytes.allocate_device_memory(device, vm, 1, 1).is_ok());
+
+        let mut records = acquired();
+        let mut leases = Vec::new();
+        for _ in 0..MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1 {
+            leases.push(records.allocate_device_memory(device, vm, 1, 1).unwrap());
+        }
+        assert!(matches!(
+            records.allocate_device_memory(device, vm, 1, 1),
+            Err(MemorySessionError::DeviceMemoryAllocationCapacity { .. })
+        ));
+        assert_eq!(
+            records.backend.alloc_calls,
+            MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1
+        );
+        assert_eq!(leases.len(), MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1);
     }
 }

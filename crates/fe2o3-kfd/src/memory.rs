@@ -150,6 +150,16 @@ pub enum MemorySessionError {
         maximum_bytes: u64,
     },
     InvalidAllocationAuthority,
+    DeviceMemoryAllocationCapacity {
+        maximum: usize,
+    },
+    DeviceMemoryByteCapacity {
+        maximum_bytes: u64,
+    },
+    InvalidDeviceMemorySize,
+    InvalidDeviceMemoryAlignment,
+    InvalidDeviceMemoryAuthority,
+    DeviceMemoryQueueBindingRequired,
     InvalidProfileSize(&'static str),
     UnsupportedPageSize(usize),
     AddressOutsideAperture,
@@ -199,6 +209,23 @@ impl fmt::Display for MemorySessionError {
             Self::InvalidAllocationAuthority => {
                 formatter.write_str("the allocation authority token is stale or substituted")
             }
+            Self::DeviceMemoryAllocationCapacity { maximum } => write!(
+                formatter,
+                "device-memory allocation record capacity {maximum} is exhausted"
+            ),
+            Self::DeviceMemoryByteCapacity { maximum_bytes } => write!(
+                formatter,
+                "device-memory capacity {maximum_bytes} bytes would be exceeded"
+            ),
+            Self::InvalidDeviceMemorySize => {
+                formatter.write_str("device-memory size must be nonzero and within profile bounds")
+            }
+            Self::InvalidDeviceMemoryAlignment => formatter
+                .write_str("device-memory alignment must be a power of two no larger than 4096"),
+            Self::InvalidDeviceMemoryAuthority => formatter
+                .write_str("the device-memory lease is stale, substituted, or in the wrong state"),
+            Self::DeviceMemoryQueueBindingRequired => formatter
+                .write_str("live device memory requires a future explicit queue/dispatch binding"),
             Self::InvalidProfileSize(profile) => {
                 write!(formatter, "the requested size is invalid for {profile}")
             }
