@@ -239,6 +239,35 @@ backing equivalence or queue acceptance. This slice performs no queue ioctl,
 doorbell mapping, packet publication, dispatch, wait, VRAM, USERPTR/SVM, or
 peer mapping.
 
+## C3 gfx942 device-memory leases
+
+The shared KFD VM session can additionally own at most 64 writable
+device-local VRAM/HBM allocation records and at most 192 GiB of retained
+device memory. `Gfx942DeviceMemoryLeaseV1<State>` is non-Clone and exposes only
+checked requested/backing size, alignment, and the exact `0x80000001` UAPI
+profile. It retains the exact admitted device generation and VM identity
+privately. The unmapped and mapped typestates are consumed by explicit
+map/unmap/release methods. Even a mapped lease exposes no handle, descriptor,
+pointer, or numeric GPU address.
+
+Size rounding, capacity totals, power-of-two alignment through 4096 bytes,
+aperture ends, range overlap, handle identity, and mmap-offset identity use
+checked arithmetic and exact comparisons. Mapping targets only the selected
+GPU; peer arrays are absent. Every native transition is surrounded by the
+existing contracted device-currentness fence. Once an allocation ioctl has
+been attempted, any errno, malformed output, partial progress, trailing
+currentness failure, unmap ambiguity, FREE ambiguity, or VA-release ambiguity
+quarantines the entire shared session. The reservation and every possible
+handle remain retained, and Drop performs no cleanup or retry.
+
+Live device-memory leases currently prevent transfer into the queue engine.
+There is no queue/dispatch binding that can reveal a numeric address. The
+dedicated bounded lease journal is not yet projected into the runtime memory
+model and has no Verus-to-Rust or syscall refinement. Contents are
+uninitialized; this slice grants no CPU mapping, initialization, sync or async
+copy, alias, quiescence, kernel launch, or completion authority. GTT profile
+roles, admission, manifests, and lifecycle remain unchanged.
+
 ## R4 queue-resource observations
 
 plan_gfx942_aql_queue_resources turns one selected, correlated topology
@@ -260,10 +289,13 @@ runtime allocator dispatch, KFD driver flag translation, KMT allocation
 translation, the header definitions of page and huge-page alignment, and
 CWSR/EOP expressions needed to derive those values. This is an exact
 expression set, not a transitive ROCr policy implementation closure or
-evidence that an invocation selected a particular branch. These observations
-are not allocations accepted by the current fe2o3 memory authority. USERPTR,
-VRAM, SVM, queue creation, doorbell mmap and doorbell stores remain
-unsupported. The topology does not export CWSR sizes on the admitted host, so
+evidence that an invocation selected a particular branch. These queue-resource
+backing observations are not allocations accepted by the current fe2o3 queue
+authority. USERPTR, SVM, executable coarse-VRAM resource binding, queue
+creation through this planning API, doorbell mmap, and doorbell stores remain
+unsupported. The generic writable device-memory lease has no queue-resource
+binding or numeric-address export. The topology does not export CWSR sizes on
+the admitted host, so
 the plan uses and tests the exact pinned fallback formula. The read-only
 kfd-queue-resources example validates the topology-derived facts on every
 visible MI300X without opening /dev/kfd or creating a queue.
