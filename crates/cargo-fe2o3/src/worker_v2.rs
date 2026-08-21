@@ -43,6 +43,7 @@ pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
 pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
+const PRODUCTION_V1_PIPELINE: &str = "production-v1";
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
 pub(crate) const GENERAL_GEMM_V1_PIPELINE: &str = "collected-general-gemm-v1";
@@ -238,6 +239,7 @@ pub(crate) enum WorkerV2SourceDebugProfileV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorkerV2PipelineV1 {
     General,
+    ProductionV1,
     ScalarGemmV1,
     RowSoftmaxV1,
     GeneralGemmV1,
@@ -247,6 +249,8 @@ impl WorkerV2PipelineV1 {
     fn from_environment_value(value: &OsStr) -> Option<Self> {
         if value == WORKER_V2_PIPELINE {
             Some(Self::General)
+        } else if value == PRODUCTION_V1_PIPELINE {
+            Some(Self::ProductionV1)
         } else if value == SCALAR_GEMM_V1_PIPELINE {
             Some(Self::ScalarGemmV1)
         } else if value == ROW_SOFTMAX_V1_PIPELINE {
@@ -261,6 +265,7 @@ impl WorkerV2PipelineV1 {
     const fn environment_value(self) -> &'static str {
         match self {
             Self::General => WORKER_V2_PIPELINE,
+            Self::ProductionV1 => PRODUCTION_V1_PIPELINE,
             Self::ScalarGemmV1 => SCALAR_GEMM_V1_PIPELINE,
             Self::RowSoftmaxV1 => ROW_SOFTMAX_V1_PIPELINE,
             Self::GeneralGemmV1 => GENERAL_GEMM_V1_PIPELINE,
@@ -959,7 +964,7 @@ impl fmt::Display for WorkerV2ConfigError {
             ),
             Self::UnexpectedConfiguration => write!(
                 formatter,
-                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
+                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={PRODUCTION_V1_PIPELINE}, {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
             ),
             Self::Io { kind, path, error } => {
                 write!(
@@ -1653,6 +1658,10 @@ mod tests {
             Err(WorkerV2ConfigError::MissingConfiguration)
         ));
         assert!(matches!(
+            PreparedWorkerV2Config::from_selection(Some(OsStr::new(PRODUCTION_V1_PIPELINE)), None),
+            Err(WorkerV2ConfigError::MissingConfiguration)
+        ));
+        assert!(matches!(
             PreparedWorkerV2Config::from_selection(Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)), None),
             Err(WorkerV2ConfigError::MissingConfiguration)
         ));
@@ -1936,6 +1945,12 @@ mod tests {
         )
         .unwrap()
         .unwrap();
+        let production = PreparedWorkerV2Config::from_selection(
+            Some(OsStr::new(PRODUCTION_V1_PIPELINE)),
+            Some(path.as_os_str()),
+        )
+        .unwrap()
+        .unwrap();
         let scalar = PreparedWorkerV2Config::from_selection(
             Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
             Some(path.as_os_str()),
@@ -1944,10 +1959,18 @@ mod tests {
         .unwrap();
 
         assert_ne!(general.identity(), scalar.identity());
+        assert_ne!(general.identity(), production.identity());
+        assert_ne!(production.identity(), scalar.identity());
         assert!(!general.requires_expected_identity());
+        assert!(!production.requires_expected_identity());
         assert!(scalar.requires_expected_identity());
         assert_eq!(
             general.compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0),
+            None
+        );
+        assert_eq!(
+            production
+                .compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0,),
             None
         );
         assert_eq!(
