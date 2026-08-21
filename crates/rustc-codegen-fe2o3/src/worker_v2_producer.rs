@@ -9,6 +9,7 @@ use crate::collected_tiled_gemm_v1::AuthenticatedTiledGemmModuleV1;
 use crate::compiler_descriptor::{
     CompilerDescriptorError, TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
     construct_flash_attention_v1_compiler_descriptor_source_v1,
+    construct_production_v1_compiler_descriptor_source_v1,
     validate_tiled_gemm_lds_slice1_compiler_module_evidence_v1,
 };
 use crate::kernel_ir_codegen::{
@@ -667,7 +668,7 @@ fn module_asm_commitment_section(section: &str, bytes: &[u8]) -> String {
 pub(crate) fn prepare_production_v1_worker_handoff(
     authenticated: crate::production_pipeline_v1::AuthenticatedProductionGfx942ModuleV1,
 ) -> Result<PreparedProductionV1WorkerHandoffV1, WorkerV2ProducerError> {
-    let (module, llvm_ir, compiler_ffi_envelope) = authenticated.into_parts();
+    let (formal, module, llvm_ir, typed_roots, compiler_ffi_envelope) = authenticated.into_parts();
     let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
         .expect("fixed production target is valid");
     validate_exact_target_binding(target, &module)?;
@@ -680,6 +681,16 @@ pub(crate) fn prepare_production_v1_worker_handoff(
     };
     validate_exact_target_binding(envelope.target(), &module)?;
     validate_envelope_module_roles(&envelope, &compiler_module)?;
+    let descriptor_source = construct_production_v1_compiler_descriptor_source_v1(
+        &envelope,
+        &module,
+        &compiler_module,
+        &typed_roots,
+        &formal,
+    )
+    .map_err(WorkerV2ProducerError::CompilerDescriptor)?;
+    let compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &descriptor_source)
+        .map_err(WorkerV2ProducerError::CompilerModule)?;
     let symbol_manifest = construct_symbol_manifest(&compiler_module)?;
     let llvm_ir_sha256 = Sha256::digest(compiler_module.llvm_ir().as_bytes()).into();
     let handoff = CompilerModuleHandoffV2::new(

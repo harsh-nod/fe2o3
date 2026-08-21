@@ -387,6 +387,22 @@ impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
     ) -> Option<&fe2o3_compiler_ffi::CompilerFfiEnvelopeV1> {
         self.collection.compiler_ffi_observation.as_ref()
     }
+
+    /// Re-derives typed descriptor roots while the collector-sealed rustc
+    /// instances are still live. No retained identity is accepted without
+    /// independently repeating the rustc layout extraction.
+    pub(crate) fn rederive_typed_descriptor_roots(
+        &self,
+        tcx: TyCtxt<'tcx>,
+    ) -> Result<
+        Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
+        crate::compiler_descriptor::CompilerDescriptorError,
+    > {
+        crate::compiler_descriptor::typed_descriptor_roots_from_production_collection(
+            tcx,
+            &self.collection.functions,
+        )
+    }
 }
 
 impl CollectedFunction<'_> {
@@ -931,6 +947,13 @@ fn general_typed_launch_v3(
         0,
     )
     .map_err(|error| RegistrationError::new(registration_path, error.to_string()))
+}
+
+pub(crate) fn rederive_general_typed_launch_for_descriptor_v1(
+    frontend: Option<&AuthenticatedKernelFrontendContractV1>,
+    kernel: &str,
+) -> Result<LaunchContract, String> {
+    general_typed_launch_v3(frontend, kernel).map_err(|error| error.to_string())
 }
 
 fn encode_lower_hex(bytes: &[u8]) -> String {

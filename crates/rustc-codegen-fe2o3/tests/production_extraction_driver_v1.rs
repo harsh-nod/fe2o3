@@ -7,9 +7,10 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_hsaco::MAX_HSACO_BYTES;
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1,
-    WorkerMeasurementV1, WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
-    inspect_production_v1_worker_v2_raw_hsaco_v1,
+    ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
+    WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
+    finalize_inspected_worker_v2_hsaco_v1, inspect_production_v1_worker_v2_raw_hsaco_v1,
+    verify_finalized,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -23,6 +24,7 @@ const PRODUCTION_WORKER_ENV: &str = "FE2O3_PRODUCTION_V1_WORKER";
 const PRODUCTION_WORKER_BUILD_ID_ENV: &str = "FE2O3_PRODUCTION_V1_WORKER_BUILD_ID";
 const PRODUCTION_LLVM_BUILD_ID_ENV: &str = "FE2O3_PRODUCTION_V1_LLVM_BUILD_ID";
 const PRODUCTION_RAW_HSACO_ENV: &str = "FE2O3_PRODUCTION_V1_RAW_HSACO";
+const PRODUCTION_FINALIZED_HSACO_ENV: &str = "FE2O3_PRODUCTION_V1_FINALIZED_HSACO";
 
 struct ScratchTarget {
     path: PathBuf,
@@ -246,6 +248,7 @@ fn production_fill_publishes_exact_managed_worker_handoff() {
         "\"target-cpu\"=\"gfx942\"",
         "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
         "!{i32 64, i32 1, i32 1}",
+        "module asm \".section .fe2o3.kd.v1,\\22\\22,@progbits\"",
     ] {
         assert!(llvm.contains(required), "missing {required:?}:\n{llvm}");
     }
@@ -314,12 +317,15 @@ fn production_fill_links_to_inspected_raw_hsaco_with_upstream_llvm() {
     )
     .unwrap_or_else(|error| panic!("production upstream-LLVM Worker failed: {error:?}"));
     let diagnostics = evidence.authorized().response().diagnostics().to_vec();
-    let inspected = inspect_production_v1_worker_v2_raw_hsaco_v1(evidence)
-        .unwrap_or_else(|error| {
+    let inspected =
+        inspect_production_v1_worker_v2_raw_hsaco_v1(evidence).unwrap_or_else(|error| {
             panic!("production raw-HSACO inspection failed: {error:?}; {diagnostics:?}")
         });
     assert_eq!(inspected.target().to_string(), "gfx942:xnack-");
-    assert_eq!(inspected.code_object_version(), fe2o3_kernel_descriptor::CodeObjectVersion::V6);
+    assert_eq!(
+        inspected.code_object_version(),
+        fe2o3_kernel_descriptor::CodeObjectVersion::V6
+    );
     assert_eq!(
         inspected.policy().launch().required_workgroup_size(),
         [64, 1, 1]
@@ -334,6 +340,30 @@ fn production_fill_links_to_inspected_raw_hsaco_with_upstream_llvm() {
     assert!(!inspected.grants_load_authority());
     assert!(!inspected.grants_launch_authority());
 
+    let raw_bytes = inspected.exact_bytes().to_vec();
+    let finalized = finalize_inspected_worker_v2_hsaco_v1(inspected)
+        .unwrap_or_else(|error| panic!("production canonical finalization failed: {error:?}"));
+    assert_ne!(finalized.canonical_digest().as_bytes(), &[0; 32]);
+    assert_ne!(finalized.exact_finalized_bytes(), raw_bytes);
+    assert!(finalized.canonical_descriptor_finalization_ran());
+    assert!(!finalized.grants_publication_authority());
+    assert!(!finalized.grants_load_authority());
+    assert!(!finalized.grants_launch_authority());
+    let independently_verified = verify_finalized(finalized.exact_finalized_bytes())
+        .expect("independently verify finalized production HSACO");
+    assert_eq!(
+        independently_verified.digest(),
+        finalized.canonical_digest()
+    );
+    let [descriptor] = independently_verified.descriptor_table().kernels() else {
+        panic!("finalized production HSACO does not contain one descriptor");
+    };
+    assert_eq!(descriptor.entry_name().as_str(), "fill");
+    assert_eq!(descriptor.descriptor_symbol().as_str(), "fill.kd");
+    assert_eq!(descriptor.abi_layout().explicit_argument_size(), 16);
+    assert_eq!(descriptor.abi_layout().kernarg_segment_size(), 272);
+    assert_eq!(descriptor.launch().max_flat_workgroup_size(), 64);
+
     let output_path = PathBuf::from(required_env(PRODUCTION_RAW_HSACO_ENV));
     let mut output_file = OpenOptions::new()
         .write(true)
@@ -341,9 +371,21 @@ fn production_fill_links_to_inspected_raw_hsaco_with_upstream_llvm() {
         .open(&output_path)
         .expect("create fresh production raw HSACO");
     output_file
-        .write_all(inspected.exact_bytes())
+        .write_all(&raw_bytes)
         .expect("write production raw HSACO");
     output_file.sync_all().expect("sync production raw HSACO");
+    let finalized_path = PathBuf::from(required_env(PRODUCTION_FINALIZED_HSACO_ENV));
+    let mut finalized_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&finalized_path)
+        .expect("create fresh production finalized HSACO");
+    finalized_file
+        .write_all(finalized.exact_finalized_bytes())
+        .expect("write production finalized HSACO");
+    finalized_file
+        .sync_all()
+        .expect("sync production finalized HSACO");
     fail_build_attempt(&artifacts, &producer, attempt).expect("close production link attempt");
 }
 

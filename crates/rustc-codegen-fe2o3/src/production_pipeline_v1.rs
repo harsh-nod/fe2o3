@@ -43,6 +43,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
     Gfx942Lowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(String),
+    DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
     WorkerHandoff(crate::worker_v2_producer::WorkerV2ProducerError),
 }
 
@@ -77,6 +78,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::UpstreamLlvmLayoutBinding(error) => {
                 write!(formatter, "production-v1 upstream LLVM layout binding failed: {error}")
             }
+            Self::DescriptorEvidence(error) => {
+                write!(formatter, "production-v1 descriptor evidence failed: {error}")
+            }
             Self::WorkerHandoff(error) => {
                 write!(formatter, "production-v1 Worker V2 handoff failed: {error}")
             }
@@ -94,6 +98,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
             Self::Gfx942Lowering(error) => Some(error),
+            Self::DescriptorEvidence(error) => Some(error),
             Self::WorkerHandoff(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
@@ -115,6 +120,7 @@ pub(crate) fn reject_custom_llvm_configuration(
 pub(super) struct CollectedRustStageV1<'tcx> {
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindingsV1,
 }
 
@@ -128,6 +134,7 @@ struct ProductionTransactionBindingsV1 {
 struct AuthenticatedProductionBindingsV1 {
     rustc_identity_inventory_sha256: [u8; 32],
     rustc_preflight_plan_sha256: [u8; 32],
+    typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindingsV1,
 }
 
@@ -184,8 +191,10 @@ pub(crate) struct Gfx942LoweredProductionCompilationV1 {
 /// Private handoff input that can only be constructed by the exact production
 /// target-lowering stage. It grants no publication or artifact authority.
 pub(crate) struct AuthenticatedProductionGfx942ModuleV1 {
+    admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
+    typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
 }
 
@@ -193,11 +202,19 @@ impl AuthenticatedProductionGfx942ModuleV1 {
     pub(crate) fn into_parts(
         self,
     ) -> (
+        fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
         fe2o3_kernel_ir::Module,
         String,
+        Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
         Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
     ) {
-        (self.target_module, self.llvm_ir, self.compiler_ffi_envelope)
+        (
+            self.admitted,
+            self.target_module,
+            self.llvm_ir,
+            self.typed_descriptor_roots,
+            self.compiler_ffi_envelope,
+        )
     }
 }
 
@@ -346,11 +363,12 @@ impl Gfx942LoweredProductionCompilationV1 {
         let _ = (
             &self.bindings.rustc_identity_inventory_sha256,
             &self.bindings.rustc_preflight_plan_sha256,
+            &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        5 + usize::from(self.bindings.transaction.build_attempt.is_some())
+        6 + usize::from(self.bindings.transaction.build_attempt.is_some())
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -386,6 +404,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         let AuthenticatedProductionBindingsV1 {
             rustc_identity_inventory_sha256,
             rustc_preflight_plan_sha256,
+            typed_descriptor_roots,
             transaction,
         } = bindings;
         let ProductionTransactionBindingsV1 {
@@ -395,8 +414,10 @@ impl Gfx942LoweredProductionCompilationV1 {
             compiler_ffi_envelope,
         } = transaction;
         let compiler_module = AuthenticatedProductionGfx942ModuleV1 {
+            admitted,
             target_module,
             llvm_ir,
+            typed_descriptor_roots,
             compiler_ffi_envelope,
         };
         let prepared =
@@ -414,11 +435,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             prepared,
         )
         .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
-        drop((
-            admitted,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-        ));
+        let _ = (rustc_identity_inventory_sha256, rustc_preflight_plan_sha256);
         Ok(receipt)
     }
 }
@@ -448,11 +465,12 @@ impl RankedVerifiedProductionCompilationV1 {
         let _ = (
             &self.bindings.rustc_identity_inventory_sha256,
             &self.bindings.rustc_preflight_plan_sha256,
+            &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        5 + usize::from(self.bindings.transaction.build_attempt.is_some())
+        6 + usize::from(self.bindings.transaction.build_attempt.is_some())
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -473,11 +491,15 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         if closure.function_count() == 0 {
             return Err(ProductionPipelineErrorV1::EmptyCollectedDeviceClosure);
         }
+        let typed_descriptor_roots = closure
+            .rederive_typed_descriptor_roots(tcx)
+            .map_err(ProductionPipelineErrorV1::DescriptorEvidence)?;
         let compiler_ffi_envelope = closure.compiler_ffi_observation().cloned();
         Ok(Self {
             stage: CollectedRustStageV1 {
                 tcx,
                 closure,
+                typed_descriptor_roots,
                 transaction: ProductionTransactionBindingsV1 {
                     producer,
                     output_dir,
@@ -496,6 +518,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         let CollectedRustStageV1 {
             tcx,
             closure,
+            typed_descriptor_roots,
             transaction,
         } = self.stage;
         let (semantic_mir, rustc_identity_inventory_sha256, rustc_preflight_plan_sha256) =
@@ -507,6 +530,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
                 bindings: AuthenticatedProductionBindingsV1 {
                     rustc_identity_inventory_sha256,
                     rustc_preflight_plan_sha256,
+                    typed_descriptor_roots,
                     transaction,
                 },
             },

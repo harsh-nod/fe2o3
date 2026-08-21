@@ -94,6 +94,24 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
     tcx: TyCtxt<'tcx>,
     functions: &[CollectedFunction<'tcx>],
 ) -> Result<Vec<TypedDescriptorRootV1>, CompilerDescriptorError> {
+    typed_descriptor_roots_from_collection_with_policy(tcx, functions, true)
+}
+
+/// Production collection intentionally does not retain the legacy layout
+/// identity cache. Re-derive the complete evidence directly from rustc and
+/// the independently authenticated frontend launch contract.
+pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    functions: &[CollectedFunction<'tcx>],
+) -> Result<Vec<TypedDescriptorRootV1>, CompilerDescriptorError> {
+    typed_descriptor_roots_from_collection_with_policy(tcx, functions, false)
+}
+
+fn typed_descriptor_roots_from_collection_with_policy<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    functions: &[CollectedFunction<'tcx>],
+    require_retained_evidence: bool,
+) -> Result<Vec<TypedDescriptorRootV1>, CompilerDescriptorError> {
     functions
         .iter()
         .filter_map(|function| {
@@ -115,13 +133,6 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
                         field: "kernel binding",
                     }
                 })?;
-                let retained = function.typed_layout_identities.as_ref().ok_or_else(|| {
-                    CompilerDescriptorError::MissingTypedField {
-                        kernel: function.export_name.clone(),
-                        field: "rustc layout identities",
-                    }
-                })?;
-                validate_profile_argument_count(profile, &function.export_name, retained.len())?;
                 let (arguments, explicit_argument_bytes, kernarg_alignment_bytes) = match profile {
                     TypedKernelProfile::VecAddRustcLayoutV2 => {
                         let [input_a, input_b, output] =
@@ -160,22 +171,40 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
                     TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
                         generated_host_contract_identity,
                     } => {
-                        let retained_contract = function
-                            .general_typed_contract
-                            .as_ref()
-                            .ok_or_else(|| CompilerDescriptorError::MissingTypedField {
-                                kernel: function.export_name.clone(),
-                                field: "general rustc contract",
-                            })?;
+                        let launch = match function.general_typed_contract.as_ref() {
+                            Some(retained) => retained.launch().clone(),
+                            None if require_retained_evidence => {
+                                return Err(CompilerDescriptorError::MissingTypedField {
+                                    kernel: function.export_name.clone(),
+                                    field: "general rustc contract",
+                                });
+                            }
+                            None => {
+                                crate::collector::rederive_general_typed_launch_for_descriptor_v1(
+                                    function.frontend_contract.as_ref(),
+                                    &function.export_name,
+                                )
+                                .map_err(|reason| {
+                                    CompilerDescriptorError::InvalidArgumentCollection {
+                                        kernel: function.export_name.clone(),
+                                        reason,
+                                    }
+                                })?
+                            }
+                        };
                         let contract = extract_general_typed_kernel_v3(
                             tcx,
                             function.instance,
                             &logical_name,
                             &function.export_name,
-                            retained_contract.launch(),
+                            &launch,
                         )
                         .map_err(CompilerDescriptorError::GeneralRustLayout)?;
-                        if retained_contract != &contract {
+                        if function
+                            .general_typed_contract
+                            .as_ref()
+                            .is_some_and(|retained| retained != &contract)
+                        {
                             return Err(CompilerDescriptorError::RetainedGeneralContractMismatch(
                                 function.export_name.clone(),
                             ));
@@ -241,23 +270,34 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
                         reason: error.to_string(),
                     }
                 })?;
-                if retained.len() != arguments.len() {
-                    return Err(
-                        CompilerDescriptorError::RetainedLayoutArgumentCountMismatch {
+                validate_profile_argument_count(profile, &function.export_name, arguments.len())?;
+                match function.typed_layout_identities.as_ref() {
+                    Some(retained) if retained.len() != arguments.len() => {
+                        return Err(
+                            CompilerDescriptorError::RetainedLayoutArgumentCountMismatch {
+                                kernel: function.export_name.clone(),
+                                retained: retained.len(),
+                                rederived: arguments.len(),
+                            },
+                        );
+                    }
+                    Some(retained)
+                        if !retained.as_slice().iter().copied().eq(arguments
+                            .as_slice()
+                            .iter()
+                            .map(|argument| argument.layout.type_identity())) =>
+                    {
+                        return Err(CompilerDescriptorError::RetainedLayoutIdentityMismatch(
+                            function.export_name.clone(),
+                        ));
+                    }
+                    None if require_retained_evidence => {
+                        return Err(CompilerDescriptorError::MissingTypedField {
                             kernel: function.export_name.clone(),
-                            retained: retained.len(),
-                            rederived: arguments.len(),
-                        },
-                    );
-                }
-                if !retained.as_slice().iter().copied().eq(arguments
-                    .as_slice()
-                    .iter()
-                    .map(|argument| argument.layout.type_identity()))
-                {
-                    return Err(CompilerDescriptorError::RetainedLayoutIdentityMismatch(
-                        function.export_name.clone(),
-                    ));
+                            field: "rustc layout identities",
+                        });
+                    }
+                    Some(_) | None => {}
                 }
                 Ok(TypedDescriptorRootV1 {
                     logical_name,
@@ -326,6 +366,244 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
             producer_version: "typed-general-gfx942-cov6-v1",
         },
     )
+}
+
+/// Constructs the descriptor source for the single production pipeline from
+/// evidence retained across every preceding typed stage.
+///
+/// This boundary accepts no caller-authored descriptor fields. The freshly
+/// re-derived rustc root must agree with semantic MIR, target-bound Kernel IR,
+/// and complete formal-memory admission before the existing canonical encoder
+/// is allowed to emit source bytes.
+pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    module: &Module,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    formal: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
+    formal
+        .verify_equivalence()
+        .map_err(CompilerDescriptorError::ProductionFormalMemory)?;
+    validate_production_v1_descriptor_evidence(module, typed_roots, formal)?;
+    construct_compiler_descriptor_source_with_profile_v1(
+        envelope,
+        module,
+        compiler_module,
+        typed_roots,
+        DescriptorConstructionProfileV1 {
+            workgroup_x: 64,
+            max_grid_x: u32::MAX,
+            static_shared_memory_bytes: 0,
+            allow_exact_tiled_matrix: false,
+            allow_workgroup_memory: false,
+            producer_version: "production-v1-gfx942-cov6-v1",
+        },
+    )?
+    .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+        "complete typed descriptor closure",
+    ))
+}
+
+fn validate_production_v1_descriptor_evidence(
+    module: &Module,
+    typed_roots: &[TypedDescriptorRootV1],
+    formal: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+) -> Result<(), CompilerDescriptorError> {
+    use fe2o3_artifacts::RustcAbiClassV1;
+    use fe2o3_kernel_ir::{
+        AccessMode as KirAccessMode, AddressSpace, FormalMemoryAccessKind, FormalParameterKind,
+        Type as KirType,
+    };
+    use fe2o3_mir_model::semantic_mir_v1::SemanticAbiPassModeV1;
+
+    let [root] = typed_roots else {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "one complete typed root",
+        ));
+    };
+    let semantic = formal.semantic_kir().semantic().semantic();
+    let [semantic_root] = semantic.roots() else {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "one semantic root",
+        ));
+    };
+    let semantic_function = semantic
+        .functions()
+        .get(semantic_root.index() as usize)
+        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "semantic root function",
+        ))?;
+    let semantic_entry = semantic_function.kernel_entry().ok_or(
+        CompilerDescriptorError::ProductionDescriptorMismatch("semantic kernel entry"),
+    )?;
+    let semantic_export = std::str::from_utf8(semantic_entry.export_symbol().as_bytes())
+        .map_err(|_| CompilerDescriptorError::ProductionDescriptorMismatch("UTF-8 export"))?;
+    if semantic_export != root.export_name
+        || semantic_entry.kernel_binding_identity().as_bytes() != &root.kernel_binding.as_bytes()
+        || semantic_function.abi().source_input_types().len() != root.arguments.len()
+        || semantic_function.abi().adjusted_arguments().len() != root.arguments.len()
+    {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "semantic source identity/ABI closure",
+        ));
+    }
+
+    let [kernel] = module.kernels.as_slice() else {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "one target-bound kernel",
+        ));
+    };
+    let entry = module
+        .functions
+        .iter()
+        .find(|function| function.id == kernel.entry)
+        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "target-bound kernel entry",
+        ))?;
+    let body = entry
+        .body
+        .as_ref()
+        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "defined target-bound entry",
+        ))?;
+    if kernel.id.as_str() != root.export_name
+        || kernel.workgroup_size != Some(WorkgroupSize::new(64, 1, 1))
+        || entry.signature.parameters.len() != root.arguments.len()
+        || body.parameters.len() != root.arguments.len()
+        || formal.obligations().kernel() != &kernel.id
+        || formal.obligations().entry() != &kernel.entry
+    {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "target/formal kernel closure",
+        ));
+    }
+
+    for (index, (((root_argument, semantic_type), semantic_abi), kernel_type)) in root
+        .arguments
+        .as_slice()
+        .iter()
+        .zip(semantic_function.abi().source_input_types())
+        .zip(semantic_function.abi().adjusted_arguments())
+        .zip(&entry.signature.parameters)
+        .enumerate()
+    {
+        let semantic_type = semantic.types().get(semantic_type.index() as usize).ok_or(
+            CompilerDescriptorError::ProductionDescriptorMismatch("semantic argument type"),
+        )?;
+        if semantic_type.layout().size_bytes() != Some(root_argument.layout.size())
+            || semantic_type.layout().alignment_bytes()
+                != u64::from(root_argument.layout.abi_alignment())
+            || semantic_abi.ty() != semantic_function.abi().source_input_types()[index]
+        {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "rustc semantic argument layout",
+            ));
+        }
+        let exact_abi_mode = matches!(
+            (root_argument.layout.abi_class(), semantic_abi.mode()),
+            (RustcAbiClassV1::Scalar, SemanticAbiPassModeV1::Direct(_))
+                | (
+                    RustcAbiClassV1::ScalarPair,
+                    SemanticAbiPassModeV1::Pair { .. }
+                )
+        );
+        let exact_kernel_type = match (root_argument.kind, kernel_type) {
+            (DescriptorArgumentKindV1::Scalar(scalar), KirType::Scalar(actual)) => {
+                descriptor_scalar_to_kernel_ir(scalar) == Some(*actual)
+            }
+            (DescriptorArgumentKindV1::SharedSlice(scalar), KirType::Slice(actual)) => {
+                actual.address_space == AddressSpace::Global
+                    && actual.access == KirAccessMode::ReadOnly
+                    && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
+            }
+            (DescriptorArgumentKindV1::DisjointSlice(scalar), KirType::Slice(actual)) => {
+                actual.address_space == AddressSpace::Global
+                    && actual.access == KirAccessMode::ReadWrite
+                    && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
+            }
+            _ => false,
+        };
+        if !exact_abi_mode || !exact_kernel_type {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "semantic ABI/Kernel IR argument correspondence",
+            ));
+        }
+    }
+
+    let expected_allocations = root
+        .arguments
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter(|(_, argument)| !matches!(argument.kind, DescriptorArgumentKindV1::Scalar(_)))
+        .collect::<Vec<_>>();
+    if formal.obligations().allocations().len() != expected_allocations.len()
+        || !formal.obligations().runtime_alias_requirements().is_empty()
+        || !formal.obligations().inter_invocation_conflicts().is_empty()
+    {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "closed formal allocation/alias obligations",
+        ));
+    }
+    for (index, argument) in expected_allocations {
+        let allocation = formal
+            .obligations()
+            .allocations()
+            .iter()
+            .find(|allocation| allocation.identity().parameter_index() as usize == index)
+            .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "formal allocation parameter",
+            ))?;
+        let expected_access = match argument.kind {
+            DescriptorArgumentKindV1::SharedSlice(_) => KirAccessMode::ReadOnly,
+            DescriptorArgumentKindV1::DisjointSlice(_) => KirAccessMode::ReadWrite,
+            DescriptorArgumentKindV1::Scalar(_) => unreachable!(),
+        };
+        if allocation.value() != body.parameters[index]
+            || allocation.kind() != FormalParameterKind::Slice
+            || allocation.address_space() != AddressSpace::Global
+            || allocation.access() != expected_access
+        {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "formal allocation ownership",
+            ));
+        }
+    }
+    for access in formal.obligations().accesses() {
+        let index = access.allocation().parameter_index() as usize;
+        let Some(argument) = root.arguments.as_slice().get(index) else {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "formal access parameter",
+            ));
+        };
+        if access.address_space() != AddressSpace::Global
+            || (access.kind() == FormalMemoryAccessKind::Write
+                && matches!(argument.kind, DescriptorArgumentKindV1::SharedSlice(_)))
+        {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "formal access mode",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn descriptor_scalar_to_kernel_ir(scalar: ScalarTypeV1) -> Option<fe2o3_kernel_ir::ScalarType> {
+    use fe2o3_kernel_ir::ScalarType as KirScalar;
+    Some(match scalar {
+        ScalarTypeV1::I8 => KirScalar::I8,
+        ScalarTypeV1::U8 => KirScalar::U8,
+        ScalarTypeV1::I16 => KirScalar::I16,
+        ScalarTypeV1::U16 => KirScalar::U16,
+        ScalarTypeV1::I32 => KirScalar::I32,
+        ScalarTypeV1::U32 => KirScalar::U32,
+        ScalarTypeV1::I64 => KirScalar::I64,
+        ScalarTypeV1::U64 => KirScalar::U64,
+        ScalarTypeV1::F16 => KirScalar::F16,
+        ScalarTypeV1::F32 => KirScalar::F32,
+        ScalarTypeV1::F64 => KirScalar::F64,
+    })
 }
 
 /// Constructs the source-authenticated one-wave tiled GEMM descriptor input.
@@ -1406,6 +1684,8 @@ pub(crate) enum CompilerDescriptorError {
     NonCanonicalFlashAttentionProfile,
     FlashAttentionDescriptorMismatch(&'static str),
     NonCanonicalMoeTop2Module,
+    ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
+    ProductionDescriptorMismatch(&'static str),
     UnsupportedCapability(String),
     Validation(ValidationError),
     Source(CompilerDescriptorSourceErrorV1),
@@ -1536,6 +1816,13 @@ impl fmt::Display for CompilerDescriptorError {
             ),
             Self::NonCanonicalMoeTop2Module => formatter.write_str(
                 "MoE descriptor construction requires the exact authenticated T8/E4/K2/C4 module",
+            ),
+            Self::ProductionFormalMemory(error) => {
+                write!(formatter, "production formal-memory evidence failed: {error}")
+            }
+            Self::ProductionDescriptorMismatch(field) => write!(
+                formatter,
+                "production descriptor evidence has an internal {field} mismatch"
             ),
             Self::UnsupportedCapability(capability) => write!(
                 formatter,
