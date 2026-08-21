@@ -8,21 +8,25 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticFunctionIdV1, SemanticLocalIdV1,
-    SemanticLocalIdentityV1, SemanticMirLimitsV1, SemanticMirResourceV1,
-    SemanticSourceFileIdentityV1, SemanticSourceOriginV1, SemanticSourceProvenanceV1,
-    SemanticTargetDataLayoutV1, SemanticTypeIdV1, SemanticTypeIdentityV1,
+    SemanticAbiIdentityV1, SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticFunctionIdV1,
+    SemanticLayoutIdentityV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticMirLimitsV1,
+    SemanticMirResourceV1, SemanticSourceFileIdentityV1, SemanticSourceOriginV1,
+    SemanticSourceProvenanceV1, SemanticTargetDataLayoutV1, SemanticTypeIdV1,
+    SemanticTypeIdentityV1,
 };
+use rustc_abi::ExternAbi;
 use rustc_middle::mir::{
     AggregateKind, Body, BorrowKind, Local, MutBorrowKind, Operand, Place, PlaceTy, ProjectionElem,
     Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf, TyAndLayout};
+use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::{
-    EarlyBinder, GenericArgKind, GenericArgsRef, Instance, Ty, TyCtxt, TyKind, TypeVisitableExt,
-    TypingEnv,
+    self, EarlyBinder, GenericArgKind, GenericArgsRef, Instance, Ty, TyCtxt, TyKind,
+    TypeVisitableExt, TypingEnv,
 };
 use rustc_span::Span;
+use rustc_target::callconv::FnAbi;
 
 use crate::collector::CollectedFunctionRole;
 use crate::production_semantic_terminal_v1::{
@@ -31,8 +35,10 @@ use crate::production_semantic_terminal_v1::{
 use crate::rustc_semantic_adapter_v1::{
     CanonicalFunctionIdentitiesV1, CanonicalSourceProvenanceV1, SemanticIdentityDigestV1,
     canonical_function_identities_v1, canonical_source_provenance_v1, rustc_block_identity_v1,
-    rustc_local_identity_v1, rustc_mir_body_sha256_v1, rustc_type_identity_v1,
-    rustc_type_layout_sha256_v1,
+    rustc_fn_abi_sha256_v1, rustc_fn_signature_sha256_v1, rustc_local_identity_v1,
+    rustc_mir_body_sha256_v1, rustc_semantic_fn_abi_identity_v1,
+    rustc_semantic_fn_abi_layout_identity_v1, rustc_semantic_layout_identity_v1,
+    rustc_type_identity_v1, rustc_type_layout_sha256_v1,
 };
 
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
@@ -47,11 +53,25 @@ pub(crate) struct RetainedSemanticFunctionProducerV1<'tcx> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct RetainedSemanticTypeProducerV1<'tcx> {
-    identity: SemanticTypeIdentityV1,
-    ty: Ty<'tcx>,
-    layout: TyAndLayout<'tcx>,
-    rustc_layout_sha256: [u8; 32],
+pub(crate) struct RetainedSemanticTypeProducerV1<'tcx> {
+    pub(crate) identity: SemanticTypeIdentityV1,
+    pub(crate) ty: Ty<'tcx>,
+    pub(crate) layout: TyAndLayout<'tcx>,
+    pub(crate) rustc_layout_sha256: [u8; 32],
+    pub(crate) semantic_layout_identity: SemanticLayoutIdentityV1,
+}
+
+#[derive(Debug)]
+pub(crate) struct RetainedSemanticFunctionAbiProducerV1<'tcx> {
+    pub(crate) function: SemanticFunctionIdV1,
+    pub(crate) identity: SemanticAbiIdentityV1,
+    pub(crate) layout_identity: SemanticLayoutIdentityV1,
+    pub(crate) extern_abi: ExternAbi,
+    pub(crate) source_inputs: Box<[Ty<'tcx>]>,
+    pub(crate) source_output: Ty<'tcx>,
+    pub(crate) fn_abi: &'tcx FnAbi<'tcx, Ty<'tcx>>,
+    pub(crate) rustc_source_signature_sha256: [u8; 32],
+    pub(crate) rustc_fn_abi_sha256: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -224,6 +244,7 @@ pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
     source_files: Box<[SemanticSourceFileIdentityV1]>,
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
+    function_abis: Box<[RetainedSemanticFunctionAbiProducerV1<'tcx>]>,
     bodies: Box<[RetainedSemanticBodyProducerV1]>,
     roots: Box<[SemanticFunctionIdV1]>,
     terminal_expansions: Box<[TerminalExpansionRecipeV1]>,
@@ -231,7 +252,11 @@ pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     sha256: [u8; 32],
 }
 
-impl ProductionSemanticPreflightPlanV1<'_> {
+impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
+    pub(crate) fn type_producers(&self) -> &[RetainedSemanticTypeProducerV1<'tcx>] {
+        &self.types
+    }
+
     pub(crate) fn type_producer_count(&self) -> usize {
         self.types.len()
     }
@@ -242,6 +267,10 @@ impl ProductionSemanticPreflightPlanV1<'_> {
 
     pub(crate) fn function_count(&self) -> usize {
         self.functions.len()
+    }
+
+    pub(crate) fn function_abi_producers(&self) -> &[RetainedSemanticFunctionAbiProducerV1<'tcx>] {
+        &self.function_abis
     }
 
     pub(crate) fn source_file_producer_count(&self) -> usize {
@@ -289,6 +318,10 @@ pub(crate) enum ProductionSemanticPreflightErrorV1 {
         identity: SemanticTypeIdentityV1,
         detail: String,
     },
+    FunctionAbi {
+        function: SemanticFunctionIdV1,
+        detail: String,
+    },
     UnsupportedRustcMir {
         construct: String,
         function: String,
@@ -323,6 +356,11 @@ impl fmt::Display for ProductionSemanticPreflightErrorV1 {
                 formatter,
                 "raw rustc MIR preflight could not obtain target layout for type producer {}: {detail}",
                 crate::encode_hex(identity.as_bytes()),
+            ),
+            Self::FunctionAbi { function, detail } => write!(
+                formatter,
+                "raw rustc MIR preflight could not obtain the role-adjusted ABI for function {}: {detail}",
+                function.index(),
             ),
             Self::UnsupportedRustcMir {
                 construct,
@@ -528,6 +566,8 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         ));
     }
 
+    let function_abis = build_function_abi_producers_v1(tcx, target, &functions)?;
+
     // Pass two walks every raw MIR node once, classifies the first supported
     // subset, and charges only resources directly observed in rustc MIR.
     let mut types = BTreeMap::new();
@@ -562,13 +602,37 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                 tcx, &functions, &roots, &edges, rejection,
             ));
         }
+        let abi = function_abis
+            .get(index)
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        let abi_site = RejectionSiteV1 {
+            function: function_id,
+            block: None,
+            statement: None,
+            local: None,
+            span: body.span,
+        };
+        for ty in abi
+            .source_inputs
+            .iter()
+            .copied()
+            .chain(std::iter::once(abi.source_output))
+            .chain(abi.fn_abi.args.iter().map(|argument| argument.layout.ty))
+            .chain(std::iter::once(abi.fn_abi.ret.layout.ty))
+        {
+            if let Err(rejection) = preflight.inspect_type(ty, abi_site) {
+                return Err(materialize_rejection_v1(
+                    tcx, &functions, &roots, &edges, rejection,
+                ));
+            }
+        }
     }
 
     let CanonicalProducerTablesV1 {
         types,
         source_files,
         bodies,
-    } = build_canonical_producer_tables_v1(tcx, &functions, source_producers, types)?;
+    } = build_canonical_producer_tables_v1(tcx, target, &functions, source_producers, types)?;
 
     let terminal_expansions = terminal_expansions.into_iter().collect::<Box<[_]>>();
     let sha256 = preflight_plan_sha256_v1(
@@ -577,6 +641,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         &types,
         &source_files,
         &functions,
+        &function_abis,
         &bodies,
         &roots,
         &edges,
@@ -588,6 +653,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         types,
         source_files,
         functions,
+        function_abis,
         bodies,
         roots,
         terminal_expansions,
@@ -870,18 +936,18 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                     self.queue_generic_argument_types(&mut pending, arguments, site)?;
                     let variants = definition.variants();
                     self.require_type_cardinality(variants.len())?;
-                    for (variant_index, variant) in variants.iter_enumerated() {
+                    if definition.is_enum() {
+                        self.queue_type(
+                            &mut pending,
+                            definition.repr().discr_type().to_ty(self.tcx),
+                        )?;
+                    }
+                    for (_, variant) in variants.iter_enumerated() {
                         self.require_type_cardinality(variant.fields.len())?;
                         self.work()?;
                         for field in &variant.fields {
                             self.work()?;
                             self.queue_type(&mut pending, field.ty(self.tcx, arguments))?;
-                        }
-                        if definition.is_enum()
-                            && let Some(discriminant) =
-                                ty.discriminant_for_variant(self.tcx, variant_index)
-                        {
-                            self.queue_type(&mut pending, discriminant.ty)?;
                         }
                     }
                 }
@@ -1141,8 +1207,78 @@ const fn retained_source_v1(
     }
 }
 
+fn build_function_abi_producers_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target: SemanticTargetDataLayoutV1,
+    functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
+) -> Result<Box<[RetainedSemanticFunctionAbiProducerV1<'tcx>]>, ProductionSemanticPreflightErrorV1>
+{
+    let typing_env = TypingEnv::fully_monomorphized();
+    let mut producers = Vec::new();
+    producers.try_reserve_exact(functions.len()).map_err(|_| {
+        ProductionSemanticPreflightErrorV1::LimitExceeded {
+            resource: SemanticMirResourceV1::Functions,
+            actual: u64::try_from(functions.len()).unwrap_or(u64::MAX),
+            maximum: SemanticMirLimitsV1::default().limit(SemanticMirResourceV1::Functions),
+        }
+    })?;
+    for (index, function) in functions.iter().enumerate() {
+        let function_id = SemanticFunctionIdV1::from_index(
+            u32::try_from(index)
+                .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
+        );
+        let source_signature = tcx.normalize_erasing_regions(
+            typing_env,
+            tcx.instantiate_bound_regions_with_erased(
+                tcx.fn_sig(function.instance.def_id())
+                    .instantiate(tcx, function.instance.args),
+            ),
+        );
+        let extern_abi = match function.role {
+            CollectedFunctionRole::KernelEntry => ExternAbi::GpuKernel,
+            CollectedFunctionRole::DeviceFfiExport => ExternAbi::C { unwind: false },
+            CollectedFunctionRole::InternalHelper => source_signature.abi,
+        };
+        let fn_abi = if function.role == CollectedFunctionRole::InternalHelper {
+            let query = typing_env.as_query_input((function.instance, ty::List::empty()));
+            tcx.fn_abi_of_instance(query)
+        } else {
+            let promoted_signature = ty::Binder::dummy(tcx.mk_fn_sig(
+                source_signature.inputs().iter().copied(),
+                source_signature.output(),
+                source_signature.c_variadic,
+                source_signature.safety,
+                extern_abi,
+            ));
+            let query = typing_env.as_query_input((promoted_signature, ty::List::empty()));
+            tcx.fn_abi_of_fn_ptr(query)
+        }
+        .map_err(|error| ProductionSemanticPreflightErrorV1::FunctionAbi {
+            function: function_id,
+            detail: bounded_diagnostic_component_v1(&format!("{error:?}")),
+        })?;
+        producers.push(RetainedSemanticFunctionAbiProducerV1 {
+            function: function_id,
+            identity: rustc_semantic_fn_abi_identity_v1(
+                tcx,
+                function.identities.function(),
+                fn_abi,
+            ),
+            layout_identity: rustc_semantic_fn_abi_layout_identity_v1(tcx, target, fn_abi),
+            extern_abi,
+            source_inputs: source_signature.inputs().to_vec().into_boxed_slice(),
+            source_output: source_signature.output(),
+            fn_abi,
+            rustc_source_signature_sha256: rustc_fn_signature_sha256_v1(tcx, source_signature),
+            rustc_fn_abi_sha256: rustc_fn_abi_sha256_v1(tcx, fn_abi),
+        });
+    }
+    Ok(producers.into_boxed_slice())
+}
+
 fn build_canonical_producer_tables_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
+    target: SemanticTargetDataLayoutV1,
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
     source_producers: Vec<RetainedRawBodySourceProducerV1>,
     types: BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
@@ -1163,12 +1299,14 @@ fn build_canonical_producer_tables_v1<'tcx>(
             }
         })?;
         let rustc_layout_sha256 = rustc_type_layout_sha256_v1(tcx, layout);
+        let semantic_layout_identity = rustc_semantic_layout_identity_v1(tcx, target, layout);
         type_ids.insert(identity, SemanticTypeIdV1::from_index(index));
         type_producers.push(RetainedSemanticTypeProducerV1 {
             identity,
             ty,
             layout,
             rustc_layout_sha256,
+            semantic_layout_identity,
         });
     }
 
@@ -1505,6 +1643,7 @@ fn preflight_plan_sha256_v1<'tcx>(
     types: &[RetainedSemanticTypeProducerV1<'tcx>],
     source_files: &[SemanticSourceFileIdentityV1],
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
+    function_abis: &[RetainedSemanticFunctionAbiProducerV1<'tcx>],
     bodies: &[RetainedSemanticBodyProducerV1],
     roots: &[SemanticFunctionIdV1],
     edges: &BTreeSet<CallEdgeV1>,
@@ -1519,6 +1658,7 @@ fn preflight_plan_sha256_v1<'tcx>(
         types.len(),
         source_files.len(),
         functions.len(),
+        function_abis.len(),
         bodies.len(),
         source_provenance_producer_count_v1(bodies),
         roots.len(),
@@ -1535,6 +1675,7 @@ fn preflight_plan_sha256_v1<'tcx>(
         digest.field(rustc_type_identity_v1(tcx, ty.ty).as_bytes());
         digest.field(&ty.rustc_layout_sha256);
         digest.field(&rustc_type_layout_sha256_v1(tcx, ty.layout));
+        digest.field(ty.semantic_layout_identity.as_bytes());
     }
     for source_file in source_files {
         digest.field(source_file.as_bytes());
@@ -1543,6 +1684,22 @@ fn preflight_plan_sha256_v1<'tcx>(
         digest.field(function.identities.function().as_bytes());
         digest.field(&rustc_mir_body_sha256_v1(tcx, function.instance));
         digest.field(&[function_role_tag_v1(function.role)]);
+    }
+    for abi in function_abis {
+        digest.field(&abi.function.index().to_le_bytes());
+        digest.field(abi.identity.as_bytes());
+        digest.field(abi.layout_identity.as_bytes());
+        digest.field(&abi.rustc_source_signature_sha256);
+        digest.field(&abi.rustc_fn_abi_sha256);
+        digest.field(
+            &u64::try_from(abi.source_inputs.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        for input in &abi.source_inputs {
+            digest.field(rustc_type_identity_v1(tcx, *input).as_bytes());
+        }
+        digest.field(rustc_type_identity_v1(tcx, abi.source_output).as_bytes());
     }
     for body in bodies {
         digest.field(&body.function.index().to_le_bytes());

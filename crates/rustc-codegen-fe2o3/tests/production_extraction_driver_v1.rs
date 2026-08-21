@@ -100,9 +100,9 @@ fn run_extraction(target: &ScratchTarget) -> String {
                 "with 7 local(s), 6 block(s), 4 statement(s), and 2 typed terminal expansion recipe(s)",
             )
             && stderr.contains(
-                "retaining 17 structurally closed rustc type producer(s), 17 target-resolved rustc layout producer(s), 1 stable source file identity producer(s), 24 canonical source provenance producer(s), and 1 canonical body ID table(s)",
+                "retaining 17 structurally closed rustc type producer(s), 17 target-resolved rustc layout producer(s), and constructing 17 schema-shaped semantic type record(s) and 1 schema-shaped semantic function ABI record(s), plus 1 stable source file identity producer(s), 24 canonical source provenance producer(s), and 1 canonical body ID table(s)",
             )
-            && stderr.contains("canonical semantic-MIR construction is not implemented"),
+            && stderr.contains("body record construction remains pending"),
         "missing AMD extraction milestone diagnostic:\n{stderr}"
     );
     for forbidden in [

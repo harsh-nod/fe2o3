@@ -1,17 +1,18 @@
 //! Neutral rustc-derived identity primitives for canonical semantic MIR.
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticBlockIdentityV1, SemanticConstGenericArgumentsIdentityV1, SemanticFunctionIdentityV1,
-    SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
-    SemanticLayoutIdentityV1, SemanticLocalIdentityV1, SemanticMonomorphizationIdentityV1,
-    SemanticSourceFileIdentityV1, SemanticSourceOriginV1, SemanticSourceProvenanceV1,
-    SemanticTargetDataLayoutV1, SemanticTypeIdentityV1,
+    SemanticAbiIdentityV1, SemanticBlockIdentityV1, SemanticConstGenericArgumentsIdentityV1,
+    SemanticFunctionIdentityV1, SemanticGenericTypeArgumentsIdentityV1,
+    SemanticItemDefinitionIdentityV1, SemanticLayoutIdentityV1, SemanticLocalIdentityV1,
+    SemanticMonomorphizationIdentityV1, SemanticSourceFileIdentityV1, SemanticSourceOriginV1,
+    SemanticSourceProvenanceV1, SemanticTargetDataLayoutV1, SemanticTypeIdentityV1,
 };
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_middle::ty::layout::TyAndLayout;
-use rustc_middle::ty::{GenericArgKind, Instance, Ty, TyCtxt};
+use rustc_middle::ty::{FnSig, GenericArgKind, Instance, Ty, TyCtxt};
 use rustc_span::Span;
+use rustc_target::callconv::FnAbi;
 use sha2::{Digest as _, Sha256};
 
 use crate::semantic_layout_bridge::SemanticLayoutTargetV1;
@@ -29,6 +30,12 @@ const BLOCK_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-basic-block/v1";
 const SOURCE_FILE_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-source-file/v1";
 const EXPANSION_CHAIN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-expansion-chain/v1";
 const TYPE_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-type-layout/v1";
+const SEMANTIC_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/semantic-layout/v1";
+const SEMANTIC_FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-fn-abi/v1";
+const SEMANTIC_FN_ABI_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-fn-abi-layout/v1";
+const RUSTC_FN_ABI_PREFLIGHT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-fn-abi-preflight/v1";
+const RUSTC_FN_SIGNATURE_PREFLIGHT_DOMAIN_V1: &[u8] =
+    b"fe2o3/semantic-mir/rustc-fn-signature-preflight/v1";
 
 macro_rules! stable_fingerprint {
     ($tcx:expr, $value:expr) => {{
@@ -223,6 +230,71 @@ pub(crate) fn rustc_type_layout_sha256_v1<'tcx>(
             &stable_fingerprint!(tcx, layout.ty),
             &stable_fingerprint!(tcx, layout.layout),
         ],
+    )
+}
+
+/// Identifies target-resolved layout facts independently of the source type.
+///
+/// Equal rustc layouts in the same authenticated target session receive the
+/// same semantic layout identity. This is still a record identity, not
+/// compiler or artifact authority.
+pub(crate) fn rustc_semantic_layout_identity_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target: SemanticTargetDataLayoutV1,
+    layout: TyAndLayout<'tcx>,
+) -> SemanticLayoutIdentityV1 {
+    SemanticLayoutIdentityV1::from_sha256(domain_digest(
+        SEMANTIC_LAYOUT_DOMAIN_V1,
+        &[
+            target.identity().as_bytes(),
+            &stable_fingerprint!(tcx, layout.layout),
+        ],
+    ))
+}
+
+/// Identifies one complete, role-adjusted rustc `FnAbi` observation.
+pub(crate) fn rustc_semantic_fn_abi_identity_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    function: SemanticFunctionIdentityV1,
+    abi: &FnAbi<'tcx, Ty<'tcx>>,
+) -> SemanticAbiIdentityV1 {
+    SemanticAbiIdentityV1::from_sha256(domain_digest(
+        SEMANTIC_FN_ABI_DOMAIN_V1,
+        &[function.as_bytes(), &stable_fingerprint!(tcx, abi)],
+    ))
+}
+
+/// Identifies the target-resolved physical ABI independently of function identity.
+pub(crate) fn rustc_semantic_fn_abi_layout_identity_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target: SemanticTargetDataLayoutV1,
+    abi: &FnAbi<'tcx, Ty<'tcx>>,
+) -> SemanticLayoutIdentityV1 {
+    SemanticLayoutIdentityV1::from_sha256(domain_digest(
+        SEMANTIC_FN_ABI_LAYOUT_DOMAIN_V1,
+        &[target.identity().as_bytes(), &stable_fingerprint!(tcx, abi)],
+    ))
+}
+
+/// Preflight commitment used to prove that later construction consumed the
+/// exact rustc ABI retained by the canonical producer plan.
+pub(crate) fn rustc_fn_abi_sha256_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    abi: &FnAbi<'tcx, Ty<'tcx>>,
+) -> [u8; 32] {
+    domain_digest(
+        RUSTC_FN_ABI_PREFLIGHT_DOMAIN_V1,
+        &[&stable_fingerprint!(tcx, abi)],
+    )
+}
+
+pub(crate) fn rustc_fn_signature_sha256_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    signature: FnSig<'tcx>,
+) -> [u8; 32] {
+    domain_digest(
+        RUSTC_FN_SIGNATURE_PREFLIGHT_DOMAIN_V1,
+        &[&stable_fingerprint!(tcx, signature)],
     )
 }
 

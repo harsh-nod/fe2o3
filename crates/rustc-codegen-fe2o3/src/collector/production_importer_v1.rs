@@ -13,6 +13,12 @@ use super::{
     AuthenticatedCollectedKernelClosureV1, AuthenticatedProductionRootV1, CollectedFunctionRole,
     CollectionResult,
 };
+use crate::production_semantic_fn_abi_v1::{
+    ProductionSemanticFnAbiErrorV1, construct_production_semantic_fn_abis_v1,
+};
+use crate::production_semantic_types_v1::{
+    ProductionSemanticTypeErrorV1, construct_production_semantic_types_v1,
+};
 use crate::production_target_v1::ProductionTargetErrorV1;
 use crate::rustc_semantic_adapter_v1::{
     SemanticIdentityDigestV1, canonical_function_identities_v1, canonical_target_layout_v1,
@@ -36,6 +42,8 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     FunctionIdentityCollision,
     RootIdentityMismatch,
     Preflight(Box<ProductionSemanticPreflightErrorV1>),
+    TypeConstruction(Box<ProductionSemanticTypeErrorV1>),
+    FunctionAbiConstruction(Box<ProductionSemanticFnAbiErrorV1>),
     SemanticRecordConstructionPending(Box<PendingSemanticRecordConstructionV1>),
 }
 
@@ -49,6 +57,8 @@ pub(crate) struct PendingSemanticRecordConstructionV1 {
     pub(crate) raw_statements: u64,
     pub(crate) rustc_type_producers: usize,
     pub(crate) rustc_layout_producers: usize,
+    pub(crate) semantic_type_records: usize,
+    pub(crate) semantic_function_abi_records: usize,
     pub(crate) source_file_producers: usize,
     pub(crate) source_provenance_producers: usize,
     pub(crate) body_producer_tables: usize,
@@ -79,9 +89,16 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
                 "semantic importer could not bind independently derived roots to unique collected functions",
             ),
             Self::Preflight(error) => write!(formatter, "semantic importer {error}"),
+            Self::TypeConstruction(error) => {
+                write!(formatter, "semantic importer rejected semantic type construction: {error}")
+            }
+            Self::FunctionAbiConstruction(error) => write!(
+                formatter,
+                "semantic importer rejected semantic function ABI construction: {error}",
+            ),
             Self::SemanticRecordConstructionPending(pending) => write!(
                 formatter,
-                "semantic importer authenticated rustc target {:?}, consumed {} collected device function(s) with {} external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with {} local(s), {} block(s), {} statement(s), and {} typed terminal expansion recipe(s), retaining {} structurally closed rustc type producer(s), {} target-resolved rustc layout producer(s), {} stable source file identity producer(s), {} canonical source provenance producer(s), and {} canonical body ID table(s); canonical semantic-MIR construction is not implemented; no fallback or artifact emission was entered",
+                "semantic importer authenticated rustc target {:?}, consumed {} collected device function(s) with {} external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with {} local(s), {} block(s), {} statement(s), and {} typed terminal expansion recipe(s), retaining {} structurally closed rustc type producer(s), {} target-resolved rustc layout producer(s), and constructing {} schema-shaped semantic type record(s) and {} schema-shaped semantic function ABI record(s), plus {} stable source file identity producer(s), {} canonical source provenance producer(s), and {} canonical body ID table(s); body record construction remains pending; no fallback or artifact emission was entered",
                 pending.llvm_target,
                 pending.collected_functions,
                 pending.registered_roots,
@@ -93,6 +110,8 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
                 pending.terminal_expansions,
                 pending.rustc_type_producers,
                 pending.rustc_layout_producers,
+                pending.semantic_type_records,
+                pending.semantic_function_abi_records,
                 pending.source_file_producers,
                 pending.source_provenance_producers,
                 pending.body_producer_tables,
@@ -106,6 +125,8 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
         match self {
             Self::Target(error) => Some(error),
             Self::Preflight(error) => Some(error.as_ref()),
+            Self::TypeConstruction(error) => Some(error.as_ref()),
+            Self::FunctionAbiConstruction(error) => Some(error.as_ref()),
             Self::RootCustodyMismatch
             | Self::LimitExceeded { .. }
             | Self::FunctionIdentityCollision
@@ -185,6 +206,22 @@ pub(crate) fn require_production_semantic_import_v1<'tcx>(
         Err(error) => return ProductionSemanticImportErrorV1::Preflight(Box::new(error)),
     };
     let raw_counts = plan.raw_counts();
+    let semantic_types = match construct_production_semantic_types_v1(tcx, plan.type_producers()) {
+        Ok(types) => types,
+        Err(error) => {
+            return ProductionSemanticImportErrorV1::TypeConstruction(Box::new(error));
+        }
+    };
+    let semantic_function_abis = match construct_production_semantic_fn_abis_v1(
+        tcx,
+        plan.function_abi_producers(),
+        plan.type_producers(),
+    ) {
+        Ok(abis) => abis,
+        Err(error) => {
+            return ProductionSemanticImportErrorV1::FunctionAbiConstruction(Box::new(error));
+        }
+    };
     let error = ProductionSemanticImportErrorV1::SemanticRecordConstructionPending(Box::new(
         PendingSemanticRecordConstructionV1 {
             collected_functions: plan.function_count(),
@@ -195,6 +232,8 @@ pub(crate) fn require_production_semantic_import_v1<'tcx>(
             raw_statements: raw_counts.statements(),
             rustc_type_producers: plan.type_producer_count(),
             rustc_layout_producers: plan.layout_producer_count(),
+            semantic_type_records: semantic_types.len(),
+            semantic_function_abi_records: semantic_function_abis.len(),
             source_file_producers: plan.source_file_producer_count(),
             source_provenance_producers: plan.source_provenance_producer_count(),
             body_producer_tables: plan.body_producer_count(),
@@ -203,7 +242,13 @@ pub(crate) fn require_production_semantic_import_v1<'tcx>(
             rustc_preflight_plan_sha256: plan.sha256(),
         },
     ));
-    drop((plan, target, collection));
+    drop((
+        semantic_function_abis,
+        semantic_types,
+        plan,
+        target,
+        collection,
+    ));
     error
 }
 
@@ -341,6 +386,8 @@ mod tests {
                 raw_statements: 12,
                 rustc_type_producers: 6,
                 rustc_layout_producers: 6,
+                semantic_type_records: 6,
+                semantic_function_abi_records: 3,
                 source_file_producers: 2,
                 source_provenance_producers: 31,
                 body_producer_tables: 3,
@@ -357,6 +404,8 @@ mod tests {
         assert!(diagnostic.contains("4 typed terminal expansion recipe(s)"));
         assert!(diagnostic.contains("6 structurally closed rustc type producer(s)"));
         assert!(diagnostic.contains("6 target-resolved rustc layout producer(s)"));
+        assert!(diagnostic.contains("constructing 6 schema-shaped semantic type record(s)"));
+        assert!(diagnostic.contains("3 schema-shaped semantic function ABI record(s)"));
         assert!(diagnostic.contains("2 stable source file identity producer(s)"));
         assert!(diagnostic.contains("31 canonical source provenance producer(s)"));
         assert!(diagnostic.contains("3 canonical body ID table(s)"));
