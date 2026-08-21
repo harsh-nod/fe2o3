@@ -1414,6 +1414,582 @@ fn compiler_intrinsics_require_exact_signatures_and_hostile_types_are_total() {
     ));
 }
 
+const FILL_ELEMENT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
+const FILL_RAW_INDEX: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
+const FILL_UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
+const FILL_INDEX_MARKER: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
+const FILL_ELEMENT_POINTER: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
+const FILL_INDEX_WITNESS: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
+const FILL_INDEX_WITNESS_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
+const FILL_DISJOINT_SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
+const FILL_DISJOINT_SLICE_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
+const FILL_ELEMENT_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
+const FILL_ACCESS_RESULT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
+
+fn fill_usize_type() -> SemanticTypeDeclV1 {
+    SemanticTypeDeclV1::new(
+        type_identity(2),
+        layout_identity(2),
+        scalar_layout(
+            8,
+            8,
+            SemanticBackendPrimitiveV1::integer(false, 64, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        ),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 64,
+        }),
+    )
+}
+
+fn fill_index_marker_type() -> SemanticTypeDeclV1 {
+    SemanticTypeDeclV1::new(
+        type_identity(4),
+        layout_identity(4),
+        SemanticTypeLayoutV1::aggregate(
+            Some(0),
+            1,
+            SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+    )
+}
+
+fn fill_raw_element_pointer_type() -> SemanticTypeDeclV1 {
+    let pointer = SemanticBackendPrimitiveV1::pointer(0, 8, 8);
+    SemanticTypeDeclV1::new(
+        type_identity(5),
+        layout_identity(5),
+        scalar_layout(
+            8,
+            8,
+            pointer,
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        ),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                FILL_ELEMENT,
+                SemanticPointerKindV1::Raw,
+                SemanticMutabilityV1::Mutable,
+                0,
+                64,
+                SemanticPointerMetadataV1::None,
+            )
+            .unwrap(),
+        ),
+    )
+}
+
+fn fill_index_witness_type() -> SemanticTypeDeclV1 {
+    let raw_index = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::integer(false, 64, 8),
+        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+    );
+    SemanticTypeDeclV1::new(
+        type_identity(6),
+        layout_identity(6),
+        SemanticTypeLayoutV1::aggregate_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(raw_index),
+            false,
+            SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(
+            SemanticAggregateTypeV1::new(vec![FILL_RAW_INDEX, FILL_INDEX_MARKER]).unwrap(),
+        ),
+    )
+}
+
+fn fill_reference_type(
+    identity: u8,
+    pointee: SemanticTypeIdV1,
+    mutability: SemanticMutabilityV1,
+) -> SemanticTypeDeclV1 {
+    let pointer = SemanticBackendPrimitiveV1::pointer(0, 8, 8);
+    let (kind, pointee_size, pointee_alignment) = match (pointee, mutability) {
+        (FILL_INDEX_WITNESS, SemanticMutabilityV1::Immutable) => (
+            SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+            8,
+            8,
+        ),
+        (FILL_DISJOINT_SLICE, SemanticMutabilityV1::Mutable) => (
+            SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+            16,
+            8,
+        ),
+        (FILL_ELEMENT, SemanticMutabilityV1::Mutable) => (
+            SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+            4,
+            4,
+        ),
+        _ => panic!("unexpected fill reference relationship"),
+    };
+    SemanticTypeDeclV1::new(
+        type_identity(identity),
+        layout_identity(identity),
+        scalar_layout(
+            8,
+            8,
+            pointer,
+            SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+        ),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                pointee,
+                SemanticPointerKindV1::Reference,
+                mutability,
+                0,
+                64,
+                SemanticPointerMetadataV1::None,
+            )
+            .unwrap(),
+        ),
+    )
+    .with_rustc_abi_properties(
+        SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+            Some(SemanticAbiPointeeInfoV1::new(kind, pointee_size, pointee_alignment).unwrap()),
+            None,
+        ),
+    )
+}
+
+fn fill_disjoint_slice_type() -> SemanticTypeDeclV1 {
+    let pointer = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+    );
+    let raw_index = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::integer(false, 64, 8),
+        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+    );
+    SemanticTypeDeclV1::new(
+        type_identity(8),
+        layout_identity(8),
+        SemanticTypeLayoutV1::aggregate_with_backend_repr(
+            Some(16),
+            8,
+            SemanticBackendReprV1::ScalarPair {
+                first: pointer,
+                second: raw_index,
+            },
+            false,
+            SemanticAggregateLayoutV1::new(vec![0, 8, 0], vec![]).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(
+            SemanticAggregateTypeV1::new(vec![
+                FILL_ELEMENT_POINTER,
+                FILL_RAW_INDEX,
+                FILL_INDEX_MARKER,
+            ])
+            .unwrap(),
+        ),
+    )
+}
+
+fn fill_access_result_type() -> SemanticTypeDeclV1 {
+    let pointer = SemanticBackendPrimitiveV1::pointer(0, 8, 8);
+    let source_niche = SemanticLayoutNicheV1::new(
+        0,
+        pointer,
+        SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+    )
+    .unwrap();
+    let empty = SemanticEnumVariantLayoutV1::from_rustc(
+        0,
+        8,
+        8,
+        SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+        SemanticBackendReprV1::memory(true),
+        None,
+        false,
+        None,
+        8,
+        100,
+        SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+    )
+    .unwrap();
+    let occupied = SemanticEnumVariantLayoutV1::from_rustc(
+        1,
+        8,
+        8,
+        SemanticFieldsShapeV1::arbitrary(vec![0], vec![0]).unwrap(),
+        SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+            pointer,
+            SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+        )),
+        Some(source_niche),
+        false,
+        None,
+        8,
+        101,
+        SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+    )
+    .unwrap();
+    let niche = SemanticNicheEnumEncodingV1::new(
+        0,
+        SemanticNicheSourceV1::new(vec![SemanticNichePathComponentV1::Field(0)], 0).unwrap(),
+        source_niche,
+        SemanticBackendScalarV1::initialized(pointer, SemanticScalarValidityRangeV1::new(1, 0)),
+        1,
+        0,
+        0,
+        0,
+    )
+    .unwrap();
+    let enum_layout =
+        SemanticEnumLayoutV1::new(vec![empty, occupied], SemanticEnumEncodingV1::Niche(niche))
+            .unwrap();
+    SemanticTypeDeclV1::new(
+        type_identity(11),
+        layout_identity(11),
+        SemanticTypeLayoutV1::enum_layout_with_backend_repr(
+            8,
+            8,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                pointer,
+                SemanticScalarValidityRangeV1::new(1, 0),
+            )),
+            false,
+            enum_layout,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::enum_type(
+            FILL_ELEMENT,
+            vec![
+                SemanticEnumVariantV1::new(0, SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                SemanticEnumVariantV1::new(
+                    1,
+                    SemanticAggregateTypeV1::new(vec![FILL_ELEMENT_REF]).unwrap(),
+                ),
+            ],
+        )
+        .unwrap(),
+    )
+    .with_rustc_abi_properties(
+        SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+            Some(SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap()),
+            None,
+        ),
+    )
+}
+
+fn fill_intrinsic_argument(ty: SemanticTypeIdV1) -> SemanticAbiValueV1 {
+    let (regular, pointee_size, pointee_alignment) = match ty {
+        FILL_INDEX_WITNESS_REF => (
+            SemanticAbiRegularAttributesV1::new(
+                true,
+                Some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                true,
+                true,
+                false,
+                true,
+            ),
+            8,
+            Some(8),
+        ),
+        FILL_DISJOINT_SLICE_REF => (
+            SemanticAbiRegularAttributesV1::new(true, None, true, false, false, true),
+            16,
+            Some(8),
+        ),
+        _ => return direct_value(ty),
+    };
+    SemanticAbiValueV1::new(
+        ty,
+        SemanticAbiPassModeV1::Direct(
+            SemanticAbiValueAttributesV1::new(
+                regular,
+                SemanticAbiExtensionV1::None,
+                pointee_size,
+                pointee_alignment,
+            )
+            .unwrap(),
+        ),
+    )
+}
+
+fn fill_intrinsic_abi(
+    identity: u8,
+    inputs: Vec<SemanticTypeIdV1>,
+    output: SemanticTypeIdV1,
+) -> SemanticFunctionAbiV1 {
+    SemanticFunctionAbiV1::new(
+        SemanticAbiIdentityV1::from_sha256(bytes(identity)),
+        layout_identity(identity),
+        SemanticCanonAbiV1::Rust,
+        false,
+        false,
+        inputs.into_iter().map(fill_intrinsic_argument).collect(),
+        direct_value(output),
+    )
+    .unwrap()
+}
+
+fn fill_intrinsic_binding(
+    identity: u8,
+    abi: SemanticFunctionAbiV1,
+) -> SemanticNonBodyCallableBindingV1 {
+    SemanticNonBodyCallableBindingV1::new(
+        function_identity(identity),
+        item_identity(identity),
+        monomorphization_identity(identity),
+        generic_types_identity(identity),
+        const_generics_identity(identity),
+        SemanticSourceProvenanceV1::unavailable(),
+        abi,
+    )
+}
+
+fn fill_intrinsic_operations() -> [SemanticCompilerIntrinsicOperationV1; 3] {
+    [
+        SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+            index_witness: FILL_INDEX_WITNESS,
+            raw_index: FILL_RAW_INDEX,
+        },
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+            index_witness: FILL_INDEX_WITNESS,
+            raw_index: FILL_RAW_INDEX,
+        },
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+            disjoint_slice: FILL_DISJOINT_SLICE,
+            index_witness: FILL_INDEX_WITNESS,
+            element: FILL_ELEMENT,
+            raw_index: FILL_RAW_INDEX,
+        },
+    ]
+}
+
+fn fill_intrinsic_request(
+    operations: [SemanticCompilerIntrinsicOperationV1; 3],
+) -> InertSemanticMirRequestV1 {
+    let root_abi = SemanticFunctionAbiV1::new(
+        SemanticAbiIdentityV1::from_sha256(bytes(1)),
+        layout_identity(1),
+        SemanticCanonAbiV1::Rust,
+        false,
+        false,
+        vec![
+            fill_intrinsic_argument(FILL_INDEX_WITNESS_REF),
+            fill_intrinsic_argument(FILL_DISJOINT_SLICE_REF),
+        ],
+        SemanticAbiValueV1::new(FILL_UNIT, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let call_destination = |local_index, ty, target_index| {
+        Some(SemanticCallDestinationV1::new(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local_index), vec![], ty).unwrap(),
+            SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::CallReturn,
+                SemanticBlockIdV1::from_index(target_index),
+            ),
+        ))
+    };
+    let root = function(
+        1,
+        root_abi,
+        vec![
+            local(1, FILL_UNIT, SemanticLocalRoleV1::Return),
+            local(2, FILL_INDEX_WITNESS, SemanticLocalRoleV1::Temporary),
+            local(3, FILL_INDEX_WITNESS_REF, SemanticLocalRoleV1::Argument(0)),
+            local(4, FILL_DISJOINT_SLICE_REF, SemanticLocalRoleV1::Argument(1)),
+            local(5, FILL_RAW_INDEX, SemanticLocalRoleV1::Temporary),
+            local(6, FILL_ACCESS_RESULT, SemanticLocalRoleV1::Temporary),
+        ],
+        vec![
+            block(
+                1,
+                vec![],
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new_callable(
+                        SemanticCallableIdV1::from_index(1),
+                        vec![],
+                        call_destination(1, FILL_INDEX_WITNESS, 1),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            ),
+            block(
+                2,
+                vec![],
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new_callable(
+                        SemanticCallableIdV1::from_index(2),
+                        vec![SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(
+                                SemanticLocalIdV1::from_index(2),
+                                vec![],
+                                FILL_INDEX_WITNESS_REF,
+                            )
+                            .unwrap(),
+                        )],
+                        call_destination(4, FILL_RAW_INDEX, 2),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            ),
+            block(
+                3,
+                vec![],
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new_callable(
+                        SemanticCallableIdV1::from_index(3),
+                        vec![
+                            SemanticOperandV1::Copy(
+                                SemanticPlaceV1::new(
+                                    SemanticLocalIdV1::from_index(3),
+                                    vec![],
+                                    FILL_DISJOINT_SLICE_REF,
+                                )
+                                .unwrap(),
+                            ),
+                            SemanticOperandV1::Move(
+                                SemanticPlaceV1::new(
+                                    SemanticLocalIdV1::from_index(1),
+                                    vec![],
+                                    FILL_INDEX_WITNESS,
+                                )
+                                .unwrap(),
+                            ),
+                        ],
+                        call_destination(5, FILL_ACCESS_RESULT, 3),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            ),
+            block(4, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    )
+    .with_role(SemanticFunctionRoleV1::KernelRoot);
+    let bindings = [
+        fill_intrinsic_binding(20, fill_intrinsic_abi(20, vec![], FILL_INDEX_WITNESS)),
+        fill_intrinsic_binding(
+            21,
+            fill_intrinsic_abi(21, vec![FILL_INDEX_WITNESS_REF], FILL_RAW_INDEX),
+        ),
+        fill_intrinsic_binding(
+            22,
+            fill_intrinsic_abi(
+                22,
+                vec![FILL_DISJOINT_SLICE_REF, FILL_INDEX_WITNESS],
+                FILL_ACCESS_RESULT,
+            ),
+        ),
+    ];
+    InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(layout_identity(250)),
+        vec![
+            u32_type(1),
+            fill_usize_type(),
+            unit_type(3),
+            fill_index_marker_type(),
+            fill_raw_element_pointer_type(),
+            fill_index_witness_type(),
+            fill_reference_type(7, FILL_INDEX_WITNESS, SemanticMutabilityV1::Immutable),
+            fill_disjoint_slice_type(),
+            fill_reference_type(9, FILL_DISJOINT_SLICE, SemanticMutabilityV1::Mutable),
+            fill_reference_type(10, FILL_ELEMENT, SemanticMutabilityV1::Mutable),
+            fill_access_result_type(),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![root],
+        vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                binding: bindings[0].clone(),
+                operation: operations[0],
+                operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(30)),
+            },
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                binding: bindings[1].clone(),
+                operation: operations[1],
+                operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(31)),
+            },
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                binding: bindings[2].clone(),
+                operation: operations[2],
+                operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(32)),
+            },
+        ],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+}
+
+#[test]
+fn production_fill_intrinsics_preserve_typed_safety_relationships_and_pinned_encoding() {
+    let admitted = fill_intrinsic_request(fill_intrinsic_operations())
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+    assert_eq!(admitted.callables().len(), 4);
+    assert_eq!(
+        admitted.semantic_sha256().as_bytes(),
+        &[
+            0x07, 0x9c, 0xc6, 0x1c, 0x2d, 0xf8, 0xfd, 0x41, 0xdf, 0x09, 0xcb, 0x83, 0x7e, 0xdd,
+            0x6d, 0x6d, 0x0b, 0xbf, 0x1c, 0x4a, 0xdc, 0x5a, 0xae, 0x15, 0xd2, 0xd1, 0xd0, 0x42,
+            0xc2, 0x03, 0x11, 0x8a,
+        ]
+    );
+}
+
+#[test]
+fn production_fill_intrinsics_fail_closed_on_forged_type_relationships() {
+    let mut operations = fill_intrinsic_operations();
+    operations[0] = SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+        index_witness: FILL_INDEX_WITNESS,
+        raw_index: FILL_ELEMENT,
+    };
+    assert!(matches!(
+        fill_intrinsic_request(operations).admit(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::InvalidFunctionAbi)
+    ));
+
+    let mut operations = fill_intrinsic_operations();
+    operations[1] = SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+        index_witness: FILL_DISJOINT_SLICE,
+        raw_index: FILL_RAW_INDEX,
+    };
+    assert!(matches!(
+        fill_intrinsic_request(operations).admit(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::InvalidFunctionAbi)
+    ));
+
+    let mut operations = fill_intrinsic_operations();
+    operations[2] = SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+        disjoint_slice: FILL_DISJOINT_SLICE,
+        index_witness: FILL_INDEX_WITNESS,
+        element: FILL_RAW_INDEX,
+        raw_index: FILL_RAW_INDEX,
+    };
+    assert!(matches!(
+        fill_intrinsic_request(operations).admit(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::InvalidFunctionAbi)
+    ));
+
+    let hostile = std::panic::catch_unwind(|| {
+        let mut operations = fill_intrinsic_operations();
+        operations[2] = SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+            disjoint_slice: SemanticTypeIdV1::from_index(99),
+            index_witness: SemanticTypeIdV1::from_index(98),
+            element: SemanticTypeIdV1::from_index(97),
+            raw_index: SemanticTypeIdV1::from_index(96),
+        };
+        fill_intrinsic_request(operations).admit(SemanticMirLimitsV1::default())
+    });
+    assert!(
+        hostile.is_ok_and(|result| matches!(result, Err(SemanticMirErrorV1::InvalidFunctionAbi)))
+    );
+}
+
 #[test]
 fn ordinary_and_tail_calls_are_distinct_typed_records() {
     let ordinary = direct_call_request(false)

@@ -4592,6 +4592,23 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     WorkgroupBarrier,
     WaveBarrier,
     FabsF32,
+    /// Produces the non-duplicable logical-1D index witness backed by `raw_index`.
+    ThreadIndex1d {
+        index_witness: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+    },
+    /// Extracts the backing integer from an immutable borrow of `index_witness`.
+    ThreadIndexGet {
+        index_witness: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+    },
+    /// Bounds-checks one witness-indexed mutable access to `element`.
+    DisjointSliceGetMut {
+        disjoint_slice: SemanticTypeIdV1,
+        index_witness: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -6083,7 +6100,267 @@ fn compiler_intrinsic_signature_matches(
                     Some(SemanticScalarTypeV1::Float { bits: 32 })
                 )
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+            index_witness,
+            raw_index,
+        } => {
+            inputs.is_empty()
+                && output == index_witness
+                && transparent_index_witness_matches(request, index_witness, raw_index)
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+            index_witness,
+            raw_index,
+        } => {
+            inputs.len() == 1
+                && output == raw_index
+                && transparent_index_witness_matches(request, index_witness, raw_index)
+                && shared_reference_to(request, inputs[0], index_witness)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+            disjoint_slice,
+            index_witness,
+            element,
+            raw_index,
+        } => {
+            inputs.len() == 2
+                && inputs[1] == index_witness
+                && transparent_index_witness_matches(request, index_witness, raw_index)
+                && mutable_reference_to(request, inputs[0], disjoint_slice)
+                && disjoint_slice_type_matches(
+                    request,
+                    disjoint_slice,
+                    index_witness,
+                    element,
+                    raw_index,
+                )
+                && checked_mutable_access_result_matches(request, output, element)
+        }
     }
+}
+
+fn transparent_index_witness_matches(
+    request: &InertSemanticMirRequestV1,
+    witness: SemanticTypeIdV1,
+    raw_index: SemanticTypeIdV1,
+) -> bool {
+    let Some(witness_decl) = request.types.get(witness.0 as usize) else {
+        return false;
+    };
+    let Some(raw_decl) = request.types.get(raw_index.0 as usize) else {
+        return false;
+    };
+    if !is_unsigned_integer_with_bits(request, raw_index, 64)
+        || witness_decl.layout.size_bytes != raw_decl.layout.size_bytes
+        || witness_decl.layout.alignment_bytes != raw_decl.layout.alignment_bytes
+        || witness_decl.layout.backend_repr != raw_decl.layout.backend_repr
+    {
+        return false;
+    }
+    let SemanticTypeShapeV1::Aggregate(fields) = &witness_decl.shape else {
+        return false;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = &witness_decl.layout.details else {
+        return false;
+    };
+    let mut raw_fields = 0_usize;
+    let mut marker_fields = 0_usize;
+    for (field, offset) in fields.fields.iter().zip(layout.field_offsets.iter()) {
+        let Some(field_decl) = request.types.get(field.0 as usize) else {
+            return false;
+        };
+        if *field == raw_index {
+            raw_fields += 1;
+            if *offset != 0 {
+                return false;
+            }
+        } else if field_decl.layout.size_bytes == Some(0) {
+            marker_fields += 1;
+        } else {
+            return false;
+        }
+    }
+    raw_fields == 1 && marker_fields != 0
+}
+
+fn shared_reference_to(
+    request: &InertSemanticMirRequestV1,
+    reference: SemanticTypeIdV1,
+    pointee: SemanticTypeIdV1,
+) -> bool {
+    reference_to(request, reference, pointee, SemanticMutabilityV1::Immutable)
+}
+
+fn mutable_reference_to(
+    request: &InertSemanticMirRequestV1,
+    reference: SemanticTypeIdV1,
+    pointee: SemanticTypeIdV1,
+) -> bool {
+    reference_to(request, reference, pointee, SemanticMutabilityV1::Mutable)
+}
+
+fn reference_to(
+    request: &InertSemanticMirRequestV1,
+    reference: SemanticTypeIdV1,
+    pointee: SemanticTypeIdV1,
+    mutability: SemanticMutabilityV1,
+) -> bool {
+    matches!(
+        request.types.get(reference.0 as usize).map(|ty| &ty.shape),
+        Some(SemanticTypeShapeV1::Pointer(pointer))
+            if pointer.pointee == pointee
+                && pointer.kind == SemanticPointerKindV1::Reference
+                && pointer.mutability == mutability
+                && pointer.address_space == 0
+                && pointer.pointer_width_bits == 64
+                && pointer.metadata == SemanticPointerMetadataV1::None
+    )
+}
+
+fn disjoint_slice_type_matches(
+    request: &InertSemanticMirRequestV1,
+    disjoint_slice: SemanticTypeIdV1,
+    index_witness: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+    raw_index: SemanticTypeIdV1,
+) -> bool {
+    let Some(slice_decl) = request.types.get(disjoint_slice.0 as usize) else {
+        return false;
+    };
+    if request.types.get(element.0 as usize).is_none() {
+        return false;
+    }
+    let SemanticTypeShapeV1::Aggregate(slice_fields) = &slice_decl.shape else {
+        return false;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(slice_layout) = &slice_decl.layout.details else {
+        return false;
+    };
+    let Some(witness_decl) = request.types.get(index_witness.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(witness_fields) = &witness_decl.shape else {
+        return false;
+    };
+
+    let mut pointer_field = None;
+    let mut raw_index_field = None;
+    let mut slice_markers = BTreeSet::new();
+    for (field_index, field) in slice_fields.fields.iter().copied().enumerate() {
+        let Some(field_decl) = request.types.get(field.0 as usize) else {
+            return false;
+        };
+        if matches!(
+            &field_decl.shape,
+            SemanticTypeShapeV1::Pointer(pointer)
+                if pointer.pointee == element
+                    && pointer.kind == SemanticPointerKindV1::Raw
+                    && pointer.mutability == SemanticMutabilityV1::Mutable
+                    && pointer.address_space == 0
+                    && pointer.pointer_width_bits == 64
+                    && pointer.metadata == SemanticPointerMetadataV1::None
+        ) {
+            if pointer_field.replace(field_index).is_some() {
+                return false;
+            }
+        } else if field == raw_index {
+            if raw_index_field.replace(field_index).is_some() {
+                return false;
+            }
+        } else if field_decl.layout.size_bytes == Some(0) {
+            slice_markers.insert(field);
+        } else {
+            return false;
+        }
+    }
+    let (Some(pointer_field), Some(raw_index_field)) = (pointer_field, raw_index_field) else {
+        return false;
+    };
+    let pointer_type = slice_fields.fields[pointer_field];
+    let pointer_decl = &request.types[pointer_type.0 as usize];
+    let raw_decl = &request.types[raw_index.0 as usize];
+    let pointer_scalar = match pointer_decl.layout.backend_repr {
+        SemanticBackendReprV1::Scalar(scalar) => scalar,
+        _ => return false,
+    };
+    let raw_scalar = match raw_decl.layout.backend_repr {
+        SemanticBackendReprV1::Scalar(scalar) => scalar,
+        _ => return false,
+    };
+    let expected_raw_offset = match pointer_decl
+        .layout
+        .rustc_size_bytes
+        .checked_add(raw_decl.layout.alignment_bytes.wrapping_sub(1))
+    {
+        Some(value) => value & !(raw_decl.layout.alignment_bytes - 1),
+        None => return false,
+    };
+    let expected_size = match expected_raw_offset.checked_add(raw_decl.layout.rustc_size_bytes) {
+        Some(size) => size,
+        None => return false,
+    };
+    if slice_layout.field_offsets.get(pointer_field) != Some(&0)
+        || slice_layout.field_offsets.get(raw_index_field) != Some(&expected_raw_offset)
+        || slice_decl.layout.size_bytes != Some(expected_size)
+        || slice_decl.layout.alignment_bytes
+            != pointer_decl
+                .layout
+                .alignment_bytes
+                .max(raw_decl.layout.alignment_bytes)
+        || slice_decl.layout.backend_repr
+            != (SemanticBackendReprV1::ScalarPair {
+                first: pointer_scalar,
+                second: raw_scalar,
+            })
+    {
+        return false;
+    }
+
+    witness_fields.fields.iter().any(|field| {
+        *field != raw_index
+            && slice_markers.contains(field)
+            && request
+                .types
+                .get(field.0 as usize)
+                .is_some_and(|ty| ty.layout.size_bytes == Some(0))
+    })
+}
+
+fn checked_mutable_access_result_matches(
+    request: &InertSemanticMirRequestV1,
+    result: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(result_decl) = request.types.get(result.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Enum {
+        variants,
+        discriminant,
+    } = &result_decl.shape
+    else {
+        return false;
+    };
+    if variants.len() != 2
+        || variants[0].discriminant != 0
+        || !variants[0].fields.fields.is_empty()
+        || variants[1].discriminant != 1
+        || variants[1].fields.fields.len() != 1
+        || !is_unsigned_integer_type(request, *discriminant)
+        || !mutable_reference_to(request, variants[1].fields.fields[0], element)
+    {
+        return false;
+    }
+    matches!(
+        &result_decl.layout.variants,
+        SemanticRustcVariantsV1::Multiple(layout)
+            if matches!(
+                &layout.encoding,
+                SemanticEnumEncodingV1::Niche(niche)
+                    if niche.untagged_variant == 1
+                        && niche.niche_variant_range() == (0, 0)
+            )
+    )
 }
 
 const fn function_role_is_external_entry(role: SemanticFunctionRoleV1) -> bool {
@@ -11045,11 +11322,10 @@ fn validate_exact_type_closure(
             enqueue_terminator_type_references(&block.terminator.kind, &mut pending);
         }
     }
-    for binding in request
-        .callables
-        .iter()
-        .filter_map(SemanticCallableDeclV1::binding)
-    {
+    for callable in &request.callables {
+        let Some(binding) = callable.binding() else {
+            continue;
+        };
         context.one()?;
         for argument in &binding.abi.arguments {
             pending.push_back(argument.value.source_ty);
@@ -11063,6 +11339,9 @@ fn validate_exact_type_closure(
         }
         pending.extend(binding.abi.source_input_types().iter().copied());
         pending.push_back(binding.abi.source_output_type());
+        if let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable {
+            enqueue_compiler_intrinsic_type_references(*operation, &mut pending);
+        }
     }
     for static_decl in &request.statics {
         context.one()?;
@@ -11123,6 +11402,43 @@ fn validate_exact_type_closure(
         });
     }
     Ok(())
+}
+
+fn enqueue_compiler_intrinsic_type_references(
+    operation: SemanticCompilerIntrinsicOperationV1,
+    pending: &mut VecDeque<SemanticTypeIdV1>,
+) {
+    match operation {
+        SemanticCompilerIntrinsicOperationV1::ThreadIndex(_)
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
+        | SemanticCompilerIntrinsicOperationV1::WaveBarrier
+        | SemanticCompilerIntrinsicOperationV1::FabsF32 => {}
+        SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+            index_witness,
+            raw_index,
+        }
+        | SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+            index_witness,
+            raw_index,
+        } => {
+            pending.push_back(index_witness);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+            disjoint_slice,
+            index_witness,
+            element,
+            raw_index,
+        } => {
+            pending.push_back(disjoint_slice);
+            pending.push_back(index_witness);
+            pending.push_back(element);
+            pending.push_back(raw_index);
+        }
+    }
 }
 
 fn enqueue_statement_type_references(
@@ -12349,6 +12665,34 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier => writer.u8(4),
         SemanticCompilerIntrinsicOperationV1::WaveBarrier => writer.u8(5),
         SemanticCompilerIntrinsicOperationV1::FabsF32 => writer.u8(6),
+        SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+            index_witness,
+            raw_index,
+        } => {
+            writer.u8(7)?;
+            writer.u32(index_witness.0)?;
+            writer.u32(raw_index.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+            index_witness,
+            raw_index,
+        } => {
+            writer.u8(8)?;
+            writer.u32(index_witness.0)?;
+            writer.u32(raw_index.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+            disjoint_slice,
+            index_witness,
+            element,
+            raw_index,
+        } => {
+            writer.u8(9)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(index_witness.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)
+        }
     }
 }
 
