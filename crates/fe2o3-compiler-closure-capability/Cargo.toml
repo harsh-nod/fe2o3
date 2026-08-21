@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Sealed descriptor transport for canonical fe2o3 compiler closures."
+description = "Sealed descriptor transport for canonical fe2o3 compiler closures and rustc invocations."
 
 [dependencies]
 fe2o3-build-authority.workspace = true
+fe2o3-rustc-invocation.workspace = true
 libc.workspace = true
 rustix.workspace = true
 sha2.workspace = true

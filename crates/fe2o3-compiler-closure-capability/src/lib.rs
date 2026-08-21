@@ -1,19 +1,22 @@
-//! Sealed transport for one canonical protected compiler-closure preimage.
+//! Sealed transport for canonical protected compiler closures and rustc invocation descriptors.
 //!
-//! The descriptor carries coordination evidence only. It does not grant compiler, publication,
+//! These descriptors carry coordination evidence only. They do not grant compiler, publication,
 //! linking, loading, launch, or execution authority.
 
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
-use std::fs::{self, File};
-use std::io::Write;
-use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
-use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
+use std::fs::File;
+use std::os::fd::RawFd;
 use std::process::Command;
 
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
+
+mod rustc_invocation;
+mod sealed_image;
+
+pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1};
+use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};
 
 const MAGIC: &[u8] = b"FE2O3-COMPILER-CLOSURE-CAPABILITY-V1\0";
 const VERSION: u16 = 1;
@@ -23,64 +26,36 @@ const HEADER_BYTES: usize = MAGIC.len() + 2 + 2 + 4;
 const CLOSURE_BYTES: usize = (6 * 32) + 2 + 2 + 32;
 const CHECKSUM_BYTES: usize = 32;
 const WIRE_BYTES: usize = HEADER_BYTES + CLOSURE_BYTES + CHECKSUM_BYTES;
-const REQUIRED_SEALS: rustix::fs::SealFlags = rustix::fs::SealFlags::WRITE
-    .union(rustix::fs::SealFlags::GROW)
-    .union(rustix::fs::SealFlags::SHRINK)
-    .union(rustix::fs::SealFlags::SEAL);
+const ROLE: CapabilityRole = CapabilityRole {
+    name: "compiler-closure capability",
+    memfd_name: "fe2o3-compiler-closure-capability-v1",
+};
+const LENGTH: ImageLength = ImageLength::Exact(WIRE_BYTES);
 
-/// Reserved descriptor used to pass the protected compiler closure into rustc and its backend.
+/// Reserved descriptor used to pass the protected compiler closure from its parent into a wrapper.
 pub const COMPILER_CLOSURE_CHILD_FD_V1: RawFd = 199;
 
 /// An immutable file capability containing one validated compiler closure.
 pub struct CompilerClosureCapabilityV1 {
     closure: CompilerClosureV2,
-    image: File,
-    device: u64,
-    inode: u64,
+    image: SealedCapabilityImage,
 }
 
 impl CompilerClosureCapabilityV1 {
     /// Creates and seals a canonical capability image.
     pub fn create(closure: CompilerClosureV2) -> Result<Self, String> {
         let bytes = encode(closure);
-        let image = rustix::fs::memfd_create(
-            "fe2o3-compiler-closure-capability-v1",
-            rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
-        )
-        .map(File::from)
-        .map_err(|error| format!("cannot allocate compiler-closure capability: {error}"))?;
-        image
-            .set_permissions(fs::Permissions::from_mode(0o400))
-            .map_err(|error| format!("cannot protect compiler-closure capability: {error}"))?;
-        let mut writer = image
-            .try_clone()
-            .map_err(|error| format!("cannot clone compiler-closure capability: {error}"))?;
-        writer
-            .write_all(&bytes)
-            .and_then(|()| writer.flush())
-            .and_then(|()| writer.sync_all())
-            .map_err(|error| format!("cannot write compiler-closure capability: {error}"))?;
-        rustix::fs::fcntl_add_seals(
-            &image,
-            rustix::fs::SealFlags::WRITE
-                | rustix::fs::SealFlags::GROW
-                | rustix::fs::SealFlags::SHRINK,
-        )
-        .and_then(|()| rustix::fs::fcntl_add_seals(&image, rustix::fs::SealFlags::SEAL))
-        .map_err(|error| format!("cannot seal compiler-closure capability: {error}"))?;
-        Self::from_file(image)
+        let image = SealedCapabilityImage::create(&bytes, ROLE, LENGTH)?;
+        let admitted = Self { closure, image };
+        admitted.revalidate()?;
+        Ok(admitted)
     }
 
     /// Admits an already transferred capability file.
     pub fn from_file(image: File) -> Result<Self, String> {
-        let metadata = validate_file(&image)?;
-        let closure = decode(&read_exact_image(&image)?)?;
-        let admitted = Self {
-            closure,
-            image,
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        };
+        let image = SealedCapabilityImage::from_file(image, ROLE, LENGTH)?;
+        let closure = decode(&image.read_exact_bytes()?)?;
+        let admitted = Self { closure, image };
         admitted.revalidate()?;
         Ok(admitted)
     }
@@ -92,24 +67,11 @@ impl CompilerClosureCapabilityV1 {
 
     /// Admits an inherited descriptor after retaining a private close-on-exec duplicate.
     pub fn from_inherited_at(child_fd: RawFd) -> Result<Self, String> {
-        if child_fd < 3 {
-            return Err("compiler-closure child descriptor overlaps stdio".to_owned());
-        }
-        // SAFETY: the descriptor is borrowed only for fcntl duplication and remains owned by the
-        // current process.
-        let inherited = unsafe { BorrowedFd::borrow_raw(child_fd) };
-        let flags = rustix::io::fcntl_getfd(inherited).map_err(|error| {
-            format!("cannot inspect inherited compiler-closure descriptor {child_fd}: {error}")
-        })?;
-        if flags.contains(rustix::io::FdFlags::CLOEXEC) {
-            return Err(
-                "inherited compiler-closure descriptor is unexpectedly close-on-exec".to_owned(),
-            );
-        }
-        let retained = rustix::io::fcntl_dupfd_cloexec(inherited, 3).map_err(|error| {
-            format!("cannot retain inherited compiler-closure descriptor {child_fd}: {error}")
-        })?;
-        Self::from_file(File::from(retained))
+        let image = SealedCapabilityImage::from_inherited_at(child_fd, ROLE, LENGTH)?;
+        let closure = decode(&image.read_exact_bytes()?)?;
+        let admitted = Self { closure, image };
+        admitted.revalidate()?;
+        Ok(admitted)
     }
 
     /// Returns the exact canonical closure carried by this descriptor.
@@ -119,11 +81,7 @@ impl CompilerClosureCapabilityV1 {
 
     /// Revalidates object identity, seals, bytes, and canonical closure equality.
     pub fn revalidate(&self) -> Result<(), String> {
-        let metadata = validate_file(&self.image)?;
-        if metadata.dev() != self.device || metadata.ino() != self.inode {
-            return Err("compiler-closure capability object identity changed".to_owned());
-        }
-        if decode(&read_exact_image(&self.image)?)? != self.closure {
+        if decode(&self.image.read_exact_bytes()?)? != self.closure {
             return Err("compiler-closure capability bytes changed".to_owned());
         }
         Ok(())
@@ -132,13 +90,7 @@ impl CompilerClosureCapabilityV1 {
     /// Clones the exact sealed descriptor for one broker transfer.
     pub fn try_clone_for_transfer(&self) -> Result<File, String> {
         self.revalidate()?;
-        let cloned = self
-            .image
-            .try_clone()
-            .map_err(|error| format!("cannot clone compiler-closure capability: {error}"))?;
-        rustix::io::fcntl_setfd(&cloned, rustix::io::FdFlags::CLOEXEC)
-            .map_err(|error| format!("cannot protect compiler-closure descriptor: {error}"))?;
-        Ok(cloned)
+        self.image.try_clone_for_transfer()
     }
 
     /// Installs this exact immutable image at a reserved descriptor for a child process.
@@ -148,59 +100,7 @@ impl CompilerClosureCapabilityV1 {
         child_fd: RawFd,
     ) -> Result<(), String> {
         self.revalidate()?;
-        if child_fd < 3 {
-            return Err("compiler-closure child descriptor overlaps stdio".to_owned());
-        }
-        // SAFETY: fcntl only probes the process-local descriptor number.
-        let target = unsafe { BorrowedFd::borrow_raw(child_fd) };
-        match rustix::io::fcntl_getfd(target) {
-            Err(rustix::io::Errno::BADF) => {}
-            Err(error) => {
-                return Err(format!(
-                    "cannot inspect reserved compiler-closure descriptor {child_fd}: {error}"
-                ));
-            }
-            Ok(_) => {
-                return Err(format!(
-                    "reserved compiler-closure descriptor {child_fd} is already in use"
-                ));
-            }
-        }
-        let source_fd = self.image.as_raw_fd();
-        let device = self.device;
-        let inode = self.inode;
-        // SAFETY: the image is owned by `self`, which outlives synchronous command spawning. The
-        // callback performs only async-signal-safe descriptor operations.
-        unsafe {
-            command.pre_exec(move || {
-                let source = BorrowedFd::borrow_raw(source_fd);
-                if rustix::fs::fcntl_get_seals(source).map_err(std::io::Error::from)?
-                    != REQUIRED_SEALS
-                {
-                    return Err(std::io::Error::from_raw_os_error(
-                        rustix::io::Errno::PERM.raw_os_error(),
-                    ));
-                }
-                let installed = rustix::io::fcntl_dupfd_cloexec(source, child_fd)
-                    .map_err(std::io::Error::from)?;
-                if installed.as_raw_fd() != child_fd {
-                    return Err(std::io::Error::from_raw_os_error(
-                        rustix::io::Errno::BUSY.raw_os_error(),
-                    ));
-                }
-                let stat = rustix::fs::fstat(&installed).map_err(std::io::Error::from)?;
-                if stat.st_dev != device || stat.st_ino != inode {
-                    return Err(std::io::Error::from_raw_os_error(
-                        rustix::io::Errno::STALE.raw_os_error(),
-                    ));
-                }
-                rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty())
-                    .map_err(std::io::Error::from)?;
-                let _ = installed.into_raw_fd();
-                Ok(())
-            });
-        }
-        Ok(())
+        self.image.inherit_for_child_at(command, child_fd)
     }
 }
 
@@ -285,48 +185,6 @@ fn checksum(bytes: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn validate_file(image: &File) -> Result<fs::Metadata, String> {
-    let metadata = image
-        .metadata()
-        .map_err(|error| format!("cannot inspect compiler-closure capability: {error}"))?;
-    if metadata.mode() & libc::S_IFMT != libc::S_IFREG
-        || metadata.permissions().mode() & 0o777 != 0o400
-        || metadata.len() != WIRE_BYTES as u64
-    {
-        return Err("compiler-closure capability has invalid type, mode, or length".to_owned());
-    }
-    if rustix::fs::fcntl_get_seals(image)
-        .map_err(|error| format!("cannot inspect compiler-closure capability seals: {error}"))?
-        != REQUIRED_SEALS
-    {
-        return Err("compiler-closure capability is not exactly immutable".to_owned());
-    }
-    if !rustix::io::fcntl_getfd(image)
-        .map_err(|error| format!("cannot inspect compiler-closure descriptor flags: {error}"))?
-        .contains(rustix::io::FdFlags::CLOEXEC)
-    {
-        return Err(
-            "compiler-closure capability descriptor is unexpectedly inheritable".to_owned(),
-        );
-    }
-    Ok(metadata)
-}
-
-fn read_exact_image(image: &File) -> Result<Vec<u8>, String> {
-    let mut bytes = vec![0_u8; WIRE_BYTES];
-    let mut offset = 0;
-    while offset < bytes.len() {
-        let read = image
-            .read_at(&mut bytes[offset..], offset as u64)
-            .map_err(|error| format!("cannot read compiler-closure capability: {error}"))?;
-        if read == 0 {
-            return Err("compiler-closure capability ended before its declared length".to_owned());
-        }
-        offset += read;
-    }
-    Ok(bytes)
-}
-
 struct Decoder<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -372,10 +230,85 @@ impl<'a> Decoder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::fd::AsFd;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::io::Write;
+    use std::os::fd::{AsFd, AsRawFd};
+    use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
+    use std::sync::Mutex;
+
+    use fe2o3_rustc_invocation::{
+        CompileEnvironmentV2, MAX_DESCRIPTOR_BYTES_V3, RustcInvocationDescriptorV2,
+        RustcInvocationDescriptorV3, RustcUnitV2, encode_descriptor_v3,
+    };
+
+    use crate::sealed_image::REQUIRED_SEALS;
+
+    static FD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn closure() -> CompilerClosureV2 {
         CompilerClosureV2::new([1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]).unwrap()
+    }
+
+    fn invocation() -> RustcInvocationDescriptorV3 {
+        let rustc = RustcUnitV2::new(
+            "/workspace/fe2o3",
+            vec![
+                "/opt/fe2o3/rustc".into(),
+                "--crate-name".into(),
+                "capability_fixture".into(),
+                "-Zcodegen-backend=/opt/fe2o3/librustc_codegen_fe2o3.so".into(),
+            ],
+        )
+        .unwrap();
+        let environment = CompileEnvironmentV2::from_child_environment([
+            (
+                OsString::from("FE2O3_HSACO_DIR"),
+                OsString::from("/workspace/fe2o3/target/fe2o3"),
+            ),
+            (
+                OsString::from("FE2O3_TARGET"),
+                OsString::from("gfx942:sramecc+:xnack-"),
+            ),
+        ])
+        .unwrap();
+        let v2 = RustcInvocationDescriptorV2::new([4; 32], [6; 32], rustc, environment).unwrap();
+        RustcInvocationDescriptorV3::new(v2, closure()).unwrap()
+    }
+
+    fn sealed_file(bytes: &[u8], mode: u32, seals: rustix::fs::SealFlags, cloexec: bool) -> File {
+        let file = rustix::fs::memfd_create(
+            "fe2o3-capability-hostile-test",
+            rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+        )
+        .map(File::from)
+        .unwrap();
+        file.set_permissions(std::fs::Permissions::from_mode(mode))
+            .unwrap();
+        let mut writer = file.try_clone().unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.flush().unwrap();
+
+        let mut initial_seals = seals;
+        initial_seals.remove(rustix::fs::SealFlags::SEAL);
+        if !initial_seals.is_empty() {
+            rustix::fs::fcntl_add_seals(&file, initial_seals).unwrap();
+        }
+        if seals.contains(rustix::fs::SealFlags::SEAL) {
+            rustix::fs::fcntl_add_seals(&file, rustix::fs::SealFlags::SEAL).unwrap();
+        }
+        if !cloexec {
+            rustix::io::fcntl_setfd(&file, rustix::io::FdFlags::empty()).unwrap();
+        }
+        file
+    }
+
+    fn temporary_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "fe2o3-compiler-capability-{label}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ))
     }
 
     #[test]
@@ -414,11 +347,11 @@ mod tests {
         let capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
         assert_eq!(capability.closure(), closure());
         assert_eq!(
-            rustix::fs::fcntl_get_seals(capability.image.as_fd()).unwrap(),
+            rustix::fs::fcntl_get_seals(capability.image.as_file().as_fd()).unwrap(),
             REQUIRED_SEALS
         );
         assert!(capability.revalidate().is_ok());
-        assert!(capability.image.set_len(0).is_err());
+        assert!(capability.image.as_file().set_len(0).is_err());
         let transferred = capability.try_clone_for_transfer().unwrap();
         let received = CompilerClosureCapabilityV1::from_file(transferred).unwrap();
         assert_eq!(received.closure(), closure());
@@ -443,6 +376,7 @@ mod tests {
 
     #[test]
     fn child_inherits_only_the_requested_exact_descriptor() {
+        let _guard = FD_TEST_LOCK.lock().unwrap();
         let capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
         let child_fd = 511;
         let mut command = Command::new("/bin/sh");
@@ -458,20 +392,207 @@ mod tests {
 
     #[test]
     fn inherited_descriptor_is_retained_and_revalidated_before_use() {
+        let _guard = FD_TEST_LOCK.lock().unwrap();
         let capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
         let child_fd = 511;
-        let installed = rustix::io::fcntl_dupfd_cloexec(&capability.image, child_fd).unwrap();
+        let installed =
+            rustix::io::fcntl_dupfd_cloexec(capability.image.as_file(), child_fd).unwrap();
         assert_eq!(installed.as_raw_fd(), child_fd);
         rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty()).unwrap();
-        let _installed = installed;
 
         let retained = CompilerClosureCapabilityV1::from_inherited_at(child_fd).unwrap();
+        drop(installed);
         assert_eq!(retained.closure(), closure());
         retained.revalidate().unwrap();
         assert!(
-            rustix::io::fcntl_getfd(&retained.image)
+            rustix::io::fcntl_getfd(retained.image.as_file())
                 .unwrap()
                 .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+    }
+
+    #[test]
+    fn invocation_image_is_exact_immutable_and_transfers_the_same_object() {
+        let expected = invocation();
+        let bytes = encode_descriptor_v3(&expected).unwrap();
+        let capability = RustcInvocationCapabilityV1::create(expected.clone()).unwrap();
+        assert_eq!(capability.descriptor(), &expected);
+        assert_eq!(
+            capability.image.as_file().metadata().unwrap().mode(),
+            libc::S_IFREG | 0o400
+        );
+        assert_eq!(
+            rustix::fs::fcntl_get_seals(capability.image.as_file()).unwrap(),
+            REQUIRED_SEALS
+        );
+        assert!(capability.image.as_file().set_len(0).is_err());
+        assert!(capability.image.as_file().write_at(&[0], 0).is_err());
+
+        let transferred = capability.try_clone_for_transfer().unwrap();
+        let first_identity = rustix::fs::fstat(&transferred).unwrap();
+        let received = RustcInvocationCapabilityV1::from_file(transferred).unwrap();
+        let retransferred = received.try_clone_for_transfer().unwrap();
+        let second_identity = rustix::fs::fstat(&retransferred).unwrap();
+        assert_eq!(first_identity.st_dev, second_identity.st_dev);
+        assert_eq!(first_identity.st_ino, second_identity.st_ino);
+        assert_eq!(retransferred.metadata().unwrap().len(), bytes.len() as u64);
+        assert_eq!(received.descriptor(), &expected);
+    }
+
+    #[test]
+    fn invocation_admission_requires_exact_mode_seals_cloexec_and_bound() {
+        let bytes = encode_descriptor_v3(&invocation()).unwrap();
+
+        let path = temporary_path("ordinary-invocation");
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(RustcInvocationCapabilityV1::from_file(File::open(&path).unwrap()).is_err());
+        std::fs::remove_file(path).unwrap();
+
+        for mode in [0o000, 0o600, 0o1400] {
+            let file = sealed_file(&bytes, mode, REQUIRED_SEALS, true);
+            assert!(RustcInvocationCapabilityV1::from_file(file).is_err());
+        }
+        let incomplete_seals = rustix::fs::SealFlags::WRITE
+            | rustix::fs::SealFlags::GROW
+            | rustix::fs::SealFlags::SHRINK;
+        assert!(
+            RustcInvocationCapabilityV1::from_file(sealed_file(
+                &bytes,
+                0o400,
+                incomplete_seals,
+                true,
+            ))
+            .is_err()
+        );
+        assert!(
+            RustcInvocationCapabilityV1::from_file(sealed_file(
+                &bytes,
+                0o400,
+                REQUIRED_SEALS,
+                false,
+            ))
+            .is_err()
+        );
+        assert!(
+            RustcInvocationCapabilityV1::from_file(sealed_file(
+                &vec![0; MAX_DESCRIPTOR_BYTES_V3 + 1],
+                0o400,
+                REQUIRED_SEALS,
+                true,
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn invocation_rejects_every_truncation_and_header_bit_mutation() {
+        let bytes = encode_descriptor_v3(&invocation()).unwrap();
+        for length in 0..bytes.len() {
+            let file = sealed_file(&bytes[..length], 0o400, REQUIRED_SEALS, true);
+            assert!(
+                RustcInvocationCapabilityV1::from_file(file).is_err(),
+                "truncation at {length} bytes was admitted"
+            );
+        }
+
+        for index in 0..20 {
+            for bit in 0..8 {
+                let mut mutated = bytes.clone();
+                mutated[index] ^= 1 << bit;
+                let file = sealed_file(&mutated, 0o400, REQUIRED_SEALS, true);
+                assert!(
+                    RustcInvocationCapabilityV1::from_file(file).is_err(),
+                    "header mutation at byte {index}, bit {bit} was admitted"
+                );
+            }
+        }
+
+        let mut trailing = bytes;
+        trailing.push(0);
+        let declared = u32::try_from(trailing.len()).unwrap();
+        trailing[12..16].copy_from_slice(&declared.to_le_bytes());
+        assert!(
+            RustcInvocationCapabilityV1::from_file(sealed_file(
+                &trailing,
+                0o400,
+                REQUIRED_SEALS,
+                true,
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn invocation_object_identity_substitution_is_rejected() {
+        let descriptor = invocation();
+        let bytes = encode_descriptor_v3(&descriptor).unwrap();
+        let mut capability = RustcInvocationCapabilityV1::create(descriptor).unwrap();
+        capability
+            .image
+            .replace_file_for_test(sealed_file(&bytes, 0o400, REQUIRED_SEALS, true));
+        assert!(capability.revalidate().is_err());
+    }
+
+    #[test]
+    fn canonical_inherited_invocation_is_retained_after_source_close() {
+        let _guard = FD_TEST_LOCK.lock().unwrap();
+        assert_eq!(RUSTC_INVOCATION_CHILD_FD_V1, 199);
+        let expected = invocation();
+        let capability = RustcInvocationCapabilityV1::create(expected.clone()).unwrap();
+        let source = capability.try_clone_for_transfer().unwrap();
+        let installed =
+            rustix::io::fcntl_dupfd_cloexec(&source, RUSTC_INVOCATION_CHILD_FD_V1).unwrap();
+        assert_eq!(installed.as_raw_fd(), RUSTC_INVOCATION_CHILD_FD_V1);
+        rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty()).unwrap();
+        drop(source);
+
+        let retained = RustcInvocationCapabilityV1::from_inherited_child().unwrap();
+        drop(installed);
+        retained.revalidate().unwrap();
+        assert_eq!(retained.descriptor(), &expected);
+        assert!(
+            rustix::io::fcntl_getfd(retained.image.as_file())
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+    }
+
+    #[test]
+    fn invocation_child_installation_uses_fd_199_and_exact_bytes() {
+        let _guard = FD_TEST_LOCK.lock().unwrap();
+        let descriptor = invocation();
+        let bytes = encode_descriptor_v3(&descriptor).unwrap();
+        let path = temporary_path("expected-invocation");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let capability = RustcInvocationCapabilityV1::create(descriptor).unwrap();
+        let mut command = Command::new("/usr/bin/cmp");
+        command
+            .arg("-s")
+            .arg(format!("/proc/self/fd/{RUSTC_INVOCATION_CHILD_FD_V1}"))
+            .arg(&path);
+        capability.inherit_for_child(&mut command).unwrap();
+        drop(capability);
+        assert!(command.status().unwrap().success());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn closure_and_invocation_roles_cannot_be_confused() {
+        let closure_capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
+        assert!(
+            RustcInvocationCapabilityV1::from_file(
+                closure_capability.try_clone_for_transfer().unwrap()
+            )
+            .is_err()
+        );
+
+        let invocation_capability = RustcInvocationCapabilityV1::create(invocation()).unwrap();
+        assert!(
+            CompilerClosureCapabilityV1::from_file(
+                invocation_capability.try_clone_for_transfer().unwrap()
+            )
+            .is_err()
         );
     }
 }
