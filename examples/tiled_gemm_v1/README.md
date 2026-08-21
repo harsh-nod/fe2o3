@@ -151,8 +151,8 @@ no publication, loading, or launch authority. The proof does not establish
 MFMA numerical equivalence, compiler refinement, machine-level memory safety
 or race freedom, emitted code identity, HSACO behavior, hardware behavior, or
 protected authority.
-The dedicated `Tiled GEMM V1 host scaffold` workflow exercises this standalone
-manifest independently of the root workspace. Its proof job downloads one
+The dedicated `Tiled GEMM V1 host scaffold` workflow exercises this package as
+a root workspace member. Its proof job downloads one
 exact Verus release archive, verifies the pinned archive and extracted
 executable digests, and fails closed before proof execution if either artifact
 is unavailable or differs.
@@ -299,14 +299,13 @@ to the Rust source by authenticated compiler evidence. It establishes neither
 a production tiled GEMM nor general shapes, multiple K phases, tails, protected
 launch authority, compiler refinement, memory safety, or race freedom.
 
-Run the host checks independently of the root workspace:
+Run the host checks through the root workspace:
 
 ```text
-cargo fmt --manifest-path examples/tiled_gemm_v1/Cargo.toml \
-  --package fe2o3-tiled-gemm-v1 -- --check
-cargo test --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml
-cargo test --release --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml
-cargo clippy --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml \
+cargo fmt --all -- --check
+cargo test --locked --package fe2o3-tiled-gemm-v1
+cargo test --release --locked --package fe2o3-tiled-gemm-v1
+cargo clippy --locked --package fe2o3-tiled-gemm-v1 \
   --all-targets --all-features -- -D warnings
 cargo clippy --locked \
   --manifest-path examples/tiled_gemm_v1/tests/fixtures/general_tiled_gemm_corpus/Cargo.toml \

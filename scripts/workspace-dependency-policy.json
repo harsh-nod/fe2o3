@@ -112,7 +112,9 @@
     },
     {
       "name": "fixture",
-      "packages": []
+      "packages": [
+        "fe2o3-llm-kernels"
+      ]
     }
   ],
   "path_layers": [
