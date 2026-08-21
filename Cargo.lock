@@ -814,6 +814,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-copy-kernel-v1"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdhsa-loader",
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-ffi",
+ "fe2o3-hsaco",
+ "fe2o3-hsaco-finalize",
+ "fe2o3-llvm-handoff",
+ "fe2o3-llvm-text",
+ "fe2o3-llvm-worker-handoff",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-core"
 version = "0.1.0"
 dependencies = [

@@ -45,6 +45,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-completion
   fe2o3-compiler-api
   fe2o3-compiler-driver
+  fe2o3-copy-kernel-v1
   fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
