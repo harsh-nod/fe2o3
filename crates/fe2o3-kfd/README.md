@@ -403,7 +403,20 @@ recycled in lockstep with C4. Ordinary pre-publication ring occupancy can cancel
 the inert binding. Any generation divergence, currentness loss, publication or
 observation ambiguity, timeout, fault, partial recycle, or teardown ambiguity
 poisons the session and requires process teardown. Explicit release occurs only
-after every signal was recycled and the queue was confirmed destroyed.
+after every signal was recycled and the queue was confirmed destroyed. A
+separate crate-private consuming teardown is available only after one exact
+dispatch generation reached completion and signal recycle. It releases code,
+kernarg, signals, and queue resources, then returns the actual still-mapped C3
+authorities beside their owning shared-memory session. Prepared, canceled,
+in-flight, completed-but-unrecycled, stale-generation, and poisoned states
+cannot enter that path. The returned values still carry no content authority
+or public native identity.
+
+Return is all-or-terminal. Once queue destruction is confirmed, any later
+event, runtime, doorbell, CWSR, queue-resource, code, kernarg, completion-arena,
+or model-restoration failure yields no recoverable returned state. The consumed
+session and its no-effect drops retain any possibly live native resources for
+process teardown; there is no partial in-process cleanup or retry.
 
 This is not a public safe launch API. There is no initialization boolean or
 other caller-supplied read premise, and no generated implicit-kernarg producer
@@ -433,12 +446,13 @@ nor a boolean can mint initialized memory.
 
 This is a prerequisite state machine, not a device-copy implementation. The
 pinned KFD UAPI exposes no admitted memcpy or SDMA submission operation. The
-current compute queue is also fixed to one kernel/resource owner and frees C3
-leases at teardown. The next integration must authenticate an exact copy kernel
-and its semantics, consume its exact C2 publication and C4 completed batch, and
-change the queue owner to return the retained destination lease after exact
-quiescence. Until all three are composed, C6 provides no Linux backend, actual
-copy, initialized lease, read-dispatch premise, or hardware evidence.
+queue can now return its real mapped C3 set only after exact C4 recycle and
+confirmed destruction, but that return path is deliberately not connected to
+the content state machine. The next integration must authenticate an exact
+copy-kernel artifact and semantics and consume its exact C2 publication and C4
+completed batch to construct the opaque tokens above. Until those are
+composed, C6 provides no Linux copy backend, actual copy, initialized lease,
+read-dispatch premise, or hardware evidence.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,

@@ -64,7 +64,7 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r6-v1\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r7-v1\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -75,7 +75,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "composition=shared-gtt-linear-role-authorities,exact-set-device-memory-dispatch-transfer,transferred-model-foundation,whole-slice-doorbell-mmap\n",
     "submission=crate-private-single-producer-bounded-batch-reservation,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
     "completion=separate-linear-256-signal-host-coherent-arena,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,release-reset-after-exact-batch-completion\n",
-    "dispatch-binding=private-authenticated-code-typed-kernarg-c3-device-lease-c2-batch-c4-completion-generation-composition,real-resource-retention-through-recycle\n",
+    "dispatch-binding=private-authenticated-code-typed-kernarg-c3-device-lease-c2-batch-c4-completion-generation-composition,real-resource-retention-through-recycle,actual-mapped-c3-authority-return-only-after-exact-recycle-and-confirmed-destroy\n",
     "missing=public-dispatch,kernel-launch,production-data-initialization-premise-mint,hardware-completion-and-exception-evidence,live-batch-evidence\n",
     "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
     "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
@@ -83,7 +83,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "17489389fbaff72794fc124d1600717f13299e9d0a045ce34ec5d2d0cd7895e5";
+    "eb71a92b046ea5bbd41dee2ec4fdd738fbc61ec9be1540f50ffe786ddb4424ac";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -626,12 +626,23 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
             .find(|resource| resource.key == key && resource.authority.is_some())
             .ok_or(NativeQueueAdapterErrorV1::InvalidPhase)
     }
-}
 
-impl<B: NativeQueueBackendV1> Drop for NativeQueueEngineV1<B> {
-    fn drop(&mut self) {
-        // Deliberately no CREATE/UPDATE/DESTROY retry or resource release.
-        // Ambiguous native state must remain owned until process teardown.
+    /// Returns the private backend after an exact consuming teardown path.
+    ///
+    /// This method performs no native operation. Every contained capability
+    /// type also has a no-effect `Drop`; callers must complete the explicit
+    /// queue and resource transitions before consuming the engine here.
+    fn into_backend(self) -> Result<B, NativeQueueAdapterErrorV1> {
+        if self.authority_poisoned
+            || self.resources.is_empty()
+            || self.resources.iter().any(|resource| {
+                resource.authority.is_some()
+                    || self.phase(resource.key) != Some(ComputeAqlQueuePhaseV1::Destroyed)
+            })
+        {
+            return Err(NativeQueueAdapterErrorV1::InvalidPhase);
+        }
+        Ok(self.backend)
     }
 }
 

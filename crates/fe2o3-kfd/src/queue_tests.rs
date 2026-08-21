@@ -468,6 +468,25 @@ fn complete_lifecycle_projects_exact_history_and_releases_only_explicitly() {
     drop(calls);
     let _authority = engine.release_destroyed_resources(key).unwrap();
     assert_eq!(engine.journal_summary().live_publications, 0);
+    let backend = engine.into_backend().unwrap();
+    assert_eq!(backend.calls.borrow().len(), 4);
+}
+
+#[test]
+fn backend_return_rejects_live_or_unreleased_queue_resources() {
+    let (engine, _) = active_engine(Vec::new());
+    assert_eq!(
+        engine.into_backend().err().unwrap(),
+        NativeQueueAdapterErrorV1::InvalidPhase
+    );
+
+    let fixture = fixture();
+    let engine =
+        NativeQueueEngineV1::new(FakeBackend::new(fixture.foundation, Vec::new())).unwrap();
+    assert_eq!(
+        engine.into_backend().err().unwrap(),
+        NativeQueueAdapterErrorV1::InvalidPhase
+    );
 }
 
 #[test]

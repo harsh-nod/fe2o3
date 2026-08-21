@@ -3063,6 +3063,68 @@ mod tests {
     }
 
     #[test]
+    fn returned_dispatch_session_preserves_and_releases_the_exact_mapped_c3_lease() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(7);
+        let lease = engine
+            .allocate_device_memory(device, vm, 8192, 4096)
+            .and_then(|lease| engine.map_device_memory(lease))
+            .unwrap();
+        let record = engine
+            .device_memory
+            .iter()
+            .find(|record| record.id == lease.id)
+            .unwrap();
+        let expected = (
+            record.id,
+            record.generation,
+            record.device,
+            record.vm,
+            record.layout,
+        );
+        let authority = Gfx942DeviceMemoryDispatchAuthorityV1 {
+            facts: Gfx942DeviceMemoryDispatchFactsV1 {
+                id: record.id,
+                generation: record.generation,
+                device: record.device,
+                vm: record.vm,
+                gpu_va: record.gpu_va,
+                layout: record.layout,
+            },
+            lease,
+        };
+
+        assert_eq!(
+            (
+                authority.facts.id,
+                authority.facts.generation,
+                authority.facts.device,
+                authority.facts.vm,
+                authority.facts.layout,
+            ),
+            expected
+        );
+        let returned_session = (engine, authority.into_lease());
+        let (mut engine, returned) = returned_session;
+        assert_eq!(
+            (
+                returned.id,
+                returned.generation,
+                returned.device,
+                returned.vm,
+                returned.layout,
+            ),
+            expected
+        );
+        let returned = engine.unmap_device_memory(returned).unwrap();
+        engine.release_device_memory(returned).unwrap();
+        assert_eq!(engine.backend.unmap_gpu_calls, 1);
+        assert_eq!(engine.backend.free_calls, 1);
+        assert_eq!(engine.backend.release_va_calls, 1);
+        assert_eq!(engine.retained_device_memory_bytes, 0);
+    }
+
+    #[test]
     fn device_memory_oom_retains_possible_native_authority_and_poison() {
         let mut engine = acquired();
         let (device, vm) = device_vm(1);
