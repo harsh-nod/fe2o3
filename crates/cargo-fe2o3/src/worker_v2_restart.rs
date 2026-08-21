@@ -10,14 +10,15 @@ use std::ffi::OsStr;
 
 use fe2o3_artifact_transaction::{
     BackendPublicationReceiptV1, BackendPublicationReceiptV2, BuildAttempt, BuildSession,
-    DurableLinkPublicationPlanV1, PersistedBackendReceiptV2, ProducerIdentity,
-    RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
+    DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV2, PersistedBackendReceiptV2,
+    ProducerIdentity, RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
     UpstreamCodeObjectEvidenceIdentityV1, WorkerV2PublicationIntentErrorV1,
     WorkerV2PublicationIntentErrorV2, WorkerV2PublicationIntentIdentityV1,
     WorkerV2PublicationIntentIdentityV2, clear_worker_v2_publication_intent_v2,
     persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v2,
     producer_package_identity_v1, read_backend_publication_receipt_v2,
-    recover_worker_v2_publication_intent_v1, recover_worker_v2_publication_intent_v2,
+    recover_published_hsaco_claim_for_attempt_v2, recover_worker_v2_publication_intent_v1,
+    recover_worker_v2_publication_intent_v2,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::CodeObjectVersion;
@@ -73,6 +74,7 @@ const PROTECTED_ENVELOPE_SUFFIX_V2: &str = ".envelope";
 const PROTECTED_ENVELOPE_TEMP_PREFIX_V2: &str = ".fe2o3-worker-v2-protected-load-envelope-temp-v2-";
 const MAX_ENVELOPE_INPUT_RESIDUE_ENTRIES: usize = 256;
 const MAX_ENVELOPE_TEMP_RESIDUE_ENTRIES: usize = 256;
+const MAX_MARKER_TEMP_RESIDUE_ENTRIES: usize = 256;
 const RECEIPT_FIELDS: usize = 7;
 const COMPILER_CLOSURE_DIGEST_FIELDS_V2: usize = 7;
 const COMPILER_CLOSURE_BYTES_V2: usize = COMPILER_CLOSURE_DIGEST_FIELDS_V2 * 32 + 2;
@@ -665,6 +667,9 @@ pub(crate) fn persist_admitted_worker_v2_intent_v2(
     envelope_inputs: Option<&WorkerV2EnvelopeInputsV1>,
     expected_compiler_closure: CompilerClosureV2,
 ) -> Result<PersistedAdmittedWorkerV2IntentV2, RestartIntentErrorV2> {
+    if producer != &store.producer {
+        return Err(RestartIntentErrorV2::IntentIdentityMismatch);
+    }
     let inputs = AdmittedWorkerV2IntentInputs {
         publication,
         plan,
@@ -727,7 +732,8 @@ trait WorkerV2IntentSchema {
         store: &Self::Store,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
-        intent: Self::Identity,
+        recovered: &Self::Recovered,
+        binding: Self::Binding,
     ) -> Result<(), ResumeMarkerErrorV1>;
     fn persist_intent(
         store: &Self::Store,
@@ -765,10 +771,8 @@ trait WorkerV2IntentSchema {
         store: &Self::Store,
         state: Self::State,
         current_admission: [u8; 32],
-        intent: Self::Identity,
-        plan: DurableLinkPublicationPlanV1,
-        upstream: UpstreamCodeObjectEvidenceIdentityV1,
-        output: &[u8],
+        recovered: &Self::Recovered,
+        binding: Self::Binding,
     ) -> Result<(), Self::Error>;
 }
 
@@ -826,7 +830,8 @@ fn persist_admitted_worker_v2_intent<S: WorkerV2IntentSchema>(
         store,
         inputs.publication,
         inputs.plan.attempt(),
-        S::recovered_identity(&persisted),
+        &persisted,
+        binding,
     )
     .map_err(S::marker_error)?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -912,6 +917,9 @@ pub(crate) fn recover_worker_v2_intent_v2(
     state: ResumeMarkerStateV2,
     expected_compiler_closure: CompilerClosureV2,
 ) -> Result<RecoveredWorkerV2PublicationIntentV2, RestartIntentErrorV2> {
+    if producer != &store.producer {
+        return Err(RestartIntentErrorV2::IntentIdentityMismatch);
+    }
     store
         .validate_completed_state(state, expected_compiler_closure)
         .map_err(RestartIntentErrorV2::Marker)?;
@@ -932,6 +940,9 @@ pub(crate) fn clear_worker_v2_intent_v2(
     receipt: BackendPublicationReceiptV2,
     expected_compiler_closure: CompilerClosureV2,
 ) -> Result<(), RestartIntentErrorV2> {
+    if producer != &store.producer {
+        return Err(RestartIntentErrorV2::IntentIdentityMismatch);
+    }
     let ResumeMarkerStateV2::Completed {
         attempt, intent, ..
     } = completed
@@ -943,10 +954,40 @@ pub(crate) fn clear_worker_v2_intent_v2(
     store
         .validate_completed_receipt(completed, receipt, expected_compiler_closure)
         .map_err(RestartIntentErrorV2::Marker)?;
+    store
+        .verify_output_path()
+        .map_err(RestartIntentErrorV2::Marker)?;
+    let recovered = match recover_worker_v2_publication_intent_v2(
+        &store.inner.display_path,
+        producer,
+        attempt,
+        expected_compiler_closure,
+    ) {
+        Ok(recovered) => Some(recovered),
+        Err(WorkerV2PublicationIntentErrorV2::NotFound) => None,
+        Err(error) => return Err(RestartIntentErrorV2::Intent(error)),
+    };
+    store
+        .verify_output_path()
+        .map_err(RestartIntentErrorV2::Marker)?;
+    store
+        .validate_completed_restart_inputs(
+            completed,
+            receipt,
+            expected_compiler_closure,
+            recovered.as_ref(),
+        )
+        .map_err(RestartIntentErrorV2::Marker)?;
     if store.load().map_err(RestartIntentErrorV2::Marker)? != Some(completed) {
         return Err(RestartIntentErrorV2::Marker(
             ResumeMarkerErrorV1::InvalidTransition,
         ));
+    }
+    let Some(recovered) = recovered else {
+        return Ok(());
+    };
+    if recovered.record().identity() != intent {
+        return Err(RestartIntentErrorV2::IntentIdentityMismatch);
     }
     store
         .verify_output_path()
@@ -956,7 +997,7 @@ pub(crate) fn clear_worker_v2_intent_v2(
         producer,
         attempt,
         expected_compiler_closure,
-        intent,
+        recovered.record().identity(),
     )
     .map_err(RestartIntentErrorV2::Intent)?;
     store
@@ -1000,15 +1041,7 @@ fn recover_worker_v2_intent<S: WorkerV2IntentSchema>(
         envelope_inputs_identity,
         binding,
     );
-    S::finish_recovery(
-        store,
-        state,
-        current_admission,
-        identity,
-        S::recovered_plan(&recovered),
-        S::recovered_upstream(&recovered),
-        S::recovered_output(&recovered),
-    )?;
+    S::finish_recovery(store, state, current_admission, &recovered, binding)?;
     Ok(recovered)
 }
 
@@ -1076,9 +1109,10 @@ impl WorkerV2IntentSchema for OrdinaryIntentSchemaV1 {
         store: &Self::Store,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
-        intent: Self::Identity,
+        recovered: &Self::Recovered,
+        (): Self::Binding,
     ) -> Result<(), ResumeMarkerErrorV1> {
-        store.persist_ready(publication, attempt, intent)
+        store.persist_ready(publication, attempt, recovered.record().identity())
     }
 
     fn persist_intent(
@@ -1167,18 +1201,21 @@ impl WorkerV2IntentSchema for OrdinaryIntentSchemaV1 {
         store: &Self::Store,
         state: Self::State,
         current_admission: [u8; 32],
-        intent: Self::Identity,
-        plan: DurableLinkPublicationPlanV1,
-        upstream: UpstreamCodeObjectEvidenceIdentityV1,
-        output: &[u8],
+        recovered: &Self::Recovered,
+        (): Self::Binding,
     ) -> Result<(), Self::Error> {
+        let record = recovered.record();
+        let intent = record.identity();
         if state.is_legacy() {
             if state.publication() != WorkerV2PublicationKindV1::Raw {
                 return Err(Self::identity_mismatch());
             }
             if matches!(state, ResumeMarkerStateV1::Pending { .. })
-                && legacy_restart_admission_commitment_v1(plan, upstream, output)
-                    != state.admission()
+                && legacy_restart_admission_commitment_v1(
+                    record.plan(),
+                    record.upstream_evidence(),
+                    recovered.exact_output(),
+                ) != state.admission()
             {
                 return Err(Self::identity_mismatch());
             }
@@ -1258,9 +1295,10 @@ impl WorkerV2IntentSchema for ProtectedIntentSchemaV2 {
         store: &Self::Store,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
-        intent: Self::Identity,
+        recovered: &Self::Recovered,
+        binding: Self::Binding,
     ) -> Result<(), ResumeMarkerErrorV1> {
-        store.persist_ready(publication, attempt, intent)
+        store.persist_ready(publication, attempt, recovered, binding)
     }
 
     fn persist_intent(
@@ -1356,17 +1394,15 @@ impl WorkerV2IntentSchema for ProtectedIntentSchemaV2 {
         store: &Self::Store,
         state: Self::State,
         current_admission: [u8; 32],
-        intent: Self::Identity,
-        _plan: DurableLinkPublicationPlanV1,
-        _upstream: UpstreamCodeObjectEvidenceIdentityV1,
-        _output: &[u8],
+        recovered: &Self::Recovered,
+        binding: Self::Binding,
     ) -> Result<(), Self::Error> {
         if current_admission != Self::state_admission(state) {
             return Err(Self::identity_mismatch());
         }
         if matches!(state, ResumeMarkerStateV2::Pending { .. }) {
             store
-                .persist_ready(state.publication(), state.attempt(), intent)
+                .persist_ready(state.publication(), state.attempt(), recovered, binding)
                 .map_err(Self::marker_error)?;
         }
         Ok(())
@@ -1550,6 +1586,15 @@ fn is_protected_envelope_temp_name_v2(name: &str, package_prefix: &str) -> bool 
         && &bytes[identity_end..suffix_end] == PROTECTED_ENVELOPE_SUFFIX_V2.as_bytes()
         && &bytes[suffix_end..temp_end] == TEMP_SUFFIX.as_bytes()
         && has_decimal_temp_counters(&bytes[temp_end..])
+}
+
+fn marker_temp_prefix(marker_name: &str) -> String {
+    format!("{marker_name}{TEMP_SUFFIX}")
+}
+
+fn is_marker_temp_name(name: &str, prefix: &str) -> bool {
+    name.as_bytes().starts_with(prefix.as_bytes())
+        && has_decimal_temp_counters(&name.as_bytes()[prefix.len()..])
 }
 
 fn envelope_inputs_name(package: [u8; 32], attempt: BuildAttempt) -> String {
@@ -1880,7 +1925,63 @@ impl WorkerV2ResumeStoreV1 {
             marker_name,
         };
         store.verify_output_path()?;
+        store.cleanup_marker_temp_residue()?;
         Ok(store)
+    }
+
+    fn cleanup_marker_temp_residue(&self) -> Result<(), ResumeMarkerErrorV1> {
+        let prefix = marker_temp_prefix(&self.marker_name);
+        let scan =
+            rustix::io::fcntl_dupfd_cloexec(&self.directory, 0).map_err(std::io::Error::from)?;
+        let mut directory = rustix::fs::Dir::read_from(&scan).map_err(std::io::Error::from)?;
+        let mut entries = 0_usize;
+        let mut residue = Vec::new();
+        for entry in &mut directory {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let bytes = entry.file_name().to_bytes();
+            if !count_restart_artifact_entry(&mut entries, bytes)
+                .map_err(|()| self.invalid("artifact directory exceeds its scan bound"))?
+            {
+                continue;
+            }
+            if !bytes.starts_with(prefix.as_bytes()) {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes)
+                .map_err(|_| self.invalid("resume-marker temp residue name is not UTF-8"))?;
+            if !is_marker_temp_name(name, &prefix) {
+                return Err(
+                    self.invalid_at_name(name, "malformed package-owned resume-marker temp name")
+                );
+            }
+            if residue.len() == MAX_MARKER_TEMP_RESIDUE_ENTRIES {
+                return Err(self.invalid("too many package-owned resume-marker temp residues"));
+            }
+            let descriptor = openat(
+                &self.directory,
+                name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            validate_private_file(&self.directory, &descriptor, name, &self.display_path, None)?;
+            residue.push((name.to_owned(), descriptor));
+        }
+        if !residue.is_empty() {
+            for (name, descriptor) in residue {
+                validate_private_file(
+                    &self.directory,
+                    &descriptor,
+                    &name,
+                    &self.display_path,
+                    None,
+                )?;
+                unlinkat(&self.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+            }
+            fsync(&self.directory).map_err(std::io::Error::from)?;
+            self.verify_output_path()?;
+        }
+        Ok(())
     }
 
     fn cleanup_envelope_input_residue(
@@ -2779,6 +2880,8 @@ impl WorkerV2ResumeStoreV1 {
                 &self.display_path,
                 Some(S::ENCODED_BYTES),
             )?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("resume-marker-temp-synced");
             self.verify_output_path()?;
             if replace {
                 renameat(
@@ -2798,6 +2901,8 @@ impl WorkerV2ResumeStoreV1 {
                 )
                 .map_err(std::io::Error::from)?;
             }
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("resume-marker-renamed");
             fsync(&self.directory).map_err(std::io::Error::from)?;
             self.verify_output_path()?;
             let published = self
@@ -2913,6 +3018,113 @@ impl WorkerV2ResumeStoreV2 {
         self.inner.recover_envelope_inputs(attempt)
     }
 
+    fn recover_complete_intent(
+        &self,
+        attempt: BuildAttempt,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<RecoveredWorkerV2PublicationIntentV2, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        let recovered = recover_worker_v2_publication_intent_v2(
+            &self.inner.display_path,
+            &self.producer,
+            attempt,
+            expected_compiler_closure,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "the complete protected publication intent cannot be recovered: {error}"
+            ))
+        })?;
+        self.verify_output_path()?;
+        self.validate_complete_intent_snapshot(&recovered, attempt, expected_compiler_closure)?;
+        Ok(recovered)
+    }
+
+    fn validate_complete_intent_snapshot(
+        &self,
+        recovered: &RecoveredWorkerV2PublicationIntentV2,
+        attempt: BuildAttempt,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let record = recovered.record();
+        let output_identity: [u8; 32] = Sha256::digest(recovered.exact_output()).into();
+        if record.attempt() != attempt
+            || record.plan().attempt() != attempt
+            || record.compiler_closure() != expected_compiler_closure
+            || recovered.compiler_closure() != expected_compiler_closure
+            || record.output_length() != recovered.exact_output().len()
+            || record.output_identity().as_bytes() != &output_identity
+            || record.plan().finalized_output() != record.output_identity()
+            || record.identity().as_bytes() == [0; 32]
+        {
+            return Err(self
+                .inner
+                .invalid("the complete protected publication intent changed after recovery"));
+        }
+        Ok(())
+    }
+
+    fn recover_complete_claim(
+        &self,
+        claim: &DurablePublishedHsacoClaimV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<DurablePublishedHsacoClaimV2, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        let recovered = recover_published_hsaco_claim_for_attempt_v2(
+            &self.inner.display_path,
+            &self.producer,
+            claim.plan().attempt(),
+            claim.plan(),
+            claim.upstream_evidence(),
+            expected_compiler_closure,
+            receipt,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "the complete protected publication claim cannot be recovered: {error}"
+            ))
+        })?;
+        self.verify_output_path()?;
+        if recovered != *claim {
+            return Err(self
+                .inner
+                .invalid("protected envelope claim differs from durable publication state"));
+        }
+        Ok(recovered)
+    }
+
+    fn recover_claim_for_intent(
+        &self,
+        recovered: &RecoveredWorkerV2PublicationIntentV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<DurablePublishedHsacoClaimV2, ResumeMarkerErrorV1> {
+        let record = recovered.record();
+        self.validate_complete_intent_snapshot(
+            recovered,
+            record.attempt(),
+            expected_compiler_closure,
+        )?;
+        self.verify_output_path()?;
+        let claim = recover_published_hsaco_claim_for_attempt_v2(
+            &self.inner.display_path,
+            &self.producer,
+            record.attempt(),
+            record.plan(),
+            record.upstream_evidence(),
+            expected_compiler_closure,
+            receipt,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "the protected intent's complete publication claim cannot be recovered: {error}"
+            ))
+        })?;
+        self.verify_output_path()?;
+        Ok(claim)
+    }
+
     fn cleanup_protected_envelope_temp_residue(&self) -> Result<(), ResumeMarkerErrorV1> {
         let package_prefix = protected_envelope_temp_package_prefix_v2(self.inner.package);
         let scan = rustix::io::fcntl_dupfd_cloexec(&self.inner.directory, 0)
@@ -2975,6 +3187,34 @@ impl WorkerV2ResumeStoreV2 {
     }
 
     pub(crate) fn publish_load_envelope(
+        &self,
+        envelope: &WorkerV2LoadEnvelopeV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<WorkerV2EnvelopePublicationOutcomeV1, ResumeMarkerErrorV1> {
+        let state = self.load()?.ok_or(ResumeMarkerErrorV1::InvalidTransition)?;
+        if !matches!(state, ResumeMarkerStateV2::Ready { .. }) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let recovered = self.recover_complete_intent(state.attempt(), expected_compiler_closure)?;
+        self.validate_required_envelope_join(
+            state,
+            envelope,
+            receipt,
+            expected_compiler_closure,
+            Some(&recovered),
+        )?;
+        let outcome =
+            self.publish_load_envelope_bytes(envelope, receipt, expected_compiler_closure)?;
+        if self.load()? != Some(state) {
+            return Err(self
+                .inner
+                .invalid("protected Ready marker changed during envelope publication"));
+        }
+        Ok(outcome)
+    }
+
+    fn publish_load_envelope_bytes(
         &self,
         envelope: &WorkerV2LoadEnvelopeV2,
         receipt: BackendPublicationReceiptV2,
@@ -3100,14 +3340,59 @@ impl WorkerV2ResumeStoreV2 {
         receipt: BackendPublicationReceiptV2,
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<WorkerV2LoadEnvelopeV2, ResumeMarkerErrorV1> {
+        let state = self.load()?.ok_or(ResumeMarkerErrorV1::InvalidTransition)?;
+        if !state.publication().requires_envelope()
+            || !matches!(
+                state,
+                ResumeMarkerStateV2::Ready { .. } | ResumeMarkerStateV2::Completed { .. }
+            )
+        {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
         let name = protected_envelope_name_v2(receipt.publication_identity());
-        self.read_load_envelope(&name, receipt, expected_compiler_closure)?
+        let envelope = self
+            .read_load_envelope(&name, receipt, expected_compiler_closure)?
             .ok_or_else(|| {
                 self.inner.invalid_at_name(
                     &name,
                     "canonical protected Worker V2 load envelope is missing",
                 )
-            })
+            })?;
+        self.verify_output_path()?;
+        let recovered = match recover_worker_v2_publication_intent_v2(
+            &self.inner.display_path,
+            &self.producer,
+            state.attempt(),
+            expected_compiler_closure,
+        ) {
+            Ok(recovered) => {
+                self.validate_complete_intent_snapshot(
+                    &recovered,
+                    state.attempt(),
+                    expected_compiler_closure,
+                )?;
+                Some(recovered)
+            }
+            Err(WorkerV2PublicationIntentErrorV2::NotFound)
+                if matches!(state, ResumeMarkerStateV2::Completed { .. }) =>
+            {
+                None
+            }
+            Err(error) => {
+                return Err(self.inner.invalid(format!(
+                    "the protected envelope's complete publication intent cannot be recovered: {error}"
+                )));
+            }
+        };
+        self.verify_output_path()?;
+        self.validate_required_envelope_join(
+            state,
+            &envelope,
+            receipt,
+            expected_compiler_closure,
+            recovered.as_ref(),
+        )?;
+        Ok(envelope)
     }
 
     fn read_load_envelope(
@@ -3185,10 +3470,18 @@ impl WorkerV2ResumeStoreV2 {
     ) -> Result<(), ResumeMarkerErrorV1> {
         let evidence = envelope.final_artifact_evidence();
         let claim = evidence.published_claim();
+        let intent = evidence.publication_intent_transcript();
+        let final_output_identity: [u8; 32] = Sha256::digest(envelope.finalized_payload()).into();
         if claim.plan().scope().package().as_bytes() != &self.inner.package
             || evidence.backend_receipt() != receipt
             || claim.receipt() != receipt
             || evidence.compiler_closure() != expected_compiler_closure
+            || intent.compiler_closure() != expected_compiler_closure
+            || !intent.matches_backend_receipt(receipt)
+            || intent.plan() != claim.plan()
+            || intent.upstream_evidence() != claim.upstream_evidence()
+            || usize::try_from(intent.output_length()) != Ok(envelope.finalized_payload().len())
+            || intent.output_identity().as_bytes() != &final_output_identity
             || receipt.compiler_closure() != expected_compiler_closure
             || claim.compiler_closure() != expected_compiler_closure
             || envelope.grants_compiler_authority()
@@ -3202,6 +3495,144 @@ impl WorkerV2ResumeStoreV2 {
                 .invalid("protected load envelope disagrees with its exact V2 receipt"));
         }
         self.validate_durable_receipt(claim.plan().attempt(), receipt, expected_compiler_closure)?;
+        self.recover_complete_claim(claim, receipt, expected_compiler_closure)?;
+        Ok(())
+    }
+
+    fn validate_required_envelope_join(
+        &self,
+        state: ResumeMarkerStateV2,
+        envelope: &WorkerV2LoadEnvelopeV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+        recovered: Option<&RecoveredWorkerV2PublicationIntentV2>,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if self.load()? != Some(state)
+            || !state.publication().requires_envelope()
+            || !matches!(
+                state,
+                ResumeMarkerStateV2::Ready { .. } | ResumeMarkerStateV2::Completed { .. }
+            )
+        {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.validate_protected_envelope_receipt(envelope, receipt, expected_compiler_closure)?;
+        if let Some(recorded_receipt) = state.completed_receipt()
+            && (!recorded_receipt.matches(receipt)
+                || recorded_receipt.compiler_closure() != Some(expected_compiler_closure)
+                || state.envelope() != envelope.identity().as_bytes())
+        {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+
+        let evidence = envelope.final_artifact_evidence();
+        let intent = evidence.publication_intent_transcript();
+        let envelope_inputs = self.recover_envelope_inputs(state.attempt())?;
+        let carried_inputs = WorkerV2EnvelopeInputsV1::new(
+            envelope.direct_link_evidence().clone(),
+            envelope.proof_records().to_vec(),
+            envelope.raw_hsaco().clone(),
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "required protected envelope inputs are invalid: {error}"
+            ))
+        })?;
+        if state.intent() != Some(intent.source_record_identity())
+            || intent.attempt() != state.attempt()
+            || intent.package_identity().as_bytes() != &self.inner.package
+            || intent.compiler_closure() != expected_compiler_closure
+            || state.envelope_inputs() != envelope_inputs.identity().as_bytes()
+            || carried_inputs != envelope_inputs
+            || restart_admission_commitment_with_inputs_v2(
+                state.publication(),
+                intent.plan(),
+                intent.upstream_evidence(),
+                envelope.finalized_payload(),
+                Some(envelope_inputs.identity()),
+                expected_compiler_closure,
+            ) != state.admission()
+        {
+            return Err(self
+                .inner
+                .invalid("required protected envelope disagrees with its resume marker"));
+        }
+
+        if let Some(recovered) = recovered {
+            self.validate_complete_intent_snapshot(
+                recovered,
+                state.attempt(),
+                expected_compiler_closure,
+            )?;
+            let record = recovered.record();
+            if !intent.matches_source_record(record)
+                || recovered.exact_output() != envelope.finalized_payload()
+                || record.identity() != intent.source_record_identity()
+                || record.plan() != evidence.published_claim().plan()
+                || record.upstream_evidence() != evidence.published_claim().upstream_evidence()
+            {
+                return Err(self.inner.invalid(
+                    "required protected envelope differs from its complete durable intent",
+                ));
+            }
+        } else if !matches!(state, ResumeMarkerStateV2::Completed { .. }) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        Ok(())
+    }
+
+    fn validate_non_envelope_intent_join(
+        &self,
+        state: ResumeMarkerStateV2,
+        recovered: &RecoveredWorkerV2PublicationIntentV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if self.load()? != Some(state)
+            || state.publication().requires_envelope()
+            || !matches!(
+                state,
+                ResumeMarkerStateV2::Ready { .. } | ResumeMarkerStateV2::Completed { .. }
+            )
+        {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.validate_complete_intent_snapshot(
+            recovered,
+            state.attempt(),
+            expected_compiler_closure,
+        )?;
+        let record = recovered.record();
+        if state.intent() != Some(record.identity())
+            || restart_admission_commitment_with_inputs_v2(
+                state.publication(),
+                record.plan(),
+                record.upstream_evidence(),
+                recovered.exact_output(),
+                None,
+                expected_compiler_closure,
+            ) != state.admission()
+        {
+            return Err(self
+                .inner
+                .invalid("protected completion differs from its complete durable intent"));
+        }
+        if let Some(recorded_receipt) = state.completed_receipt()
+            && (!recorded_receipt.matches(receipt)
+                || recorded_receipt.compiler_closure() != Some(expected_compiler_closure))
+        {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let claim = self.recover_claim_for_intent(recovered, receipt, expected_compiler_closure)?;
+        if claim.plan() != record.plan()
+            || claim.upstream_evidence() != record.upstream_evidence()
+            || claim.receipt() != receipt
+            || claim.compiler_closure() != expected_compiler_closure
+        {
+            return Err(self
+                .inner
+                .invalid("protected completion claim differs from its durable intent"));
+        }
         Ok(())
     }
 
@@ -3242,18 +3673,31 @@ impl WorkerV2ResumeStoreV2 {
         &self,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
-        intent: WorkerV2PublicationIntentIdentityV2,
+        recovered: &RecoveredWorkerV2PublicationIntentV2,
+        expected_compiler_closure: CompilerClosureV2,
     ) -> Result<(), ResumeMarkerErrorV1> {
-        if intent.as_bytes() == [0; 32] {
-            return Err(ResumeMarkerErrorV1::InvalidTransition);
-        }
+        self.validate_complete_intent_snapshot(recovered, attempt, expected_compiler_closure)?;
+        let record = recovered.record();
+        let intent = record.identity();
         match self.load()? {
             Some(ResumeMarkerStateV2::Pending {
                 publication: current_publication,
                 attempt: current_attempt,
                 admission,
                 envelope_inputs,
-            }) if current_publication == publication && current_attempt == attempt => {
+            }) if current_publication == publication
+                && current_attempt == attempt
+                && restart_admission_commitment_with_inputs_v2(
+                    publication,
+                    record.plan(),
+                    record.upstream_evidence(),
+                    recovered.exact_output(),
+                    publication
+                        .requires_envelope()
+                        .then(|| WorkerV2EnvelopeInputsIdentityV1::from_bytes(envelope_inputs)),
+                    expected_compiler_closure,
+                ) == admission =>
+            {
                 self.inner.write_protected(
                     ResumeMarkerStateV2::Ready {
                         publication,
@@ -3268,11 +3712,22 @@ impl WorkerV2ResumeStoreV2 {
             Some(ResumeMarkerStateV2::Ready {
                 publication: current_publication,
                 attempt: current_attempt,
+                admission,
+                envelope_inputs,
                 intent: current_intent,
-                ..
             }) if current_publication == publication
                 && current_attempt == attempt
-                && current_intent == intent =>
+                && current_intent == intent
+                && restart_admission_commitment_with_inputs_v2(
+                    publication,
+                    record.plan(),
+                    record.upstream_evidence(),
+                    recovered.exact_output(),
+                    publication
+                        .requires_envelope()
+                        .then(|| WorkerV2EnvelopeInputsIdentityV1::from_bytes(envelope_inputs)),
+                    expected_compiler_closure,
+                ) == admission =>
             {
                 Ok(())
             }
@@ -3291,6 +3746,17 @@ impl WorkerV2ResumeStoreV2 {
         if publication.requires_envelope() {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
+        let state = self.load()?.ok_or(ResumeMarkerErrorV1::InvalidTransition)?;
+        let recovered = self.recover_complete_intent(attempt, expected_compiler_closure)?;
+        if recovered.record().identity() != intent {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.validate_non_envelope_intent_join(
+            state,
+            &recovered,
+            receipt,
+            expected_compiler_closure,
+        )?;
         self.persist_completed_inner(
             publication,
             attempt,
@@ -3313,40 +3779,41 @@ impl WorkerV2ResumeStoreV2 {
         if !publication.requires_envelope() {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
-        self.validate_durable_receipt(attempt, receipt, expected_compiler_closure)?;
-        let (admission, marker_inputs) = match self.load()? {
-            Some(ResumeMarkerStateV2::Ready {
-                publication: current_publication,
-                attempt: current_attempt,
-                admission,
-                envelope_inputs,
-                intent: current_intent,
-            })
-            | Some(ResumeMarkerStateV2::Completed {
-                publication: current_publication,
-                attempt: current_attempt,
-                admission,
-                envelope_inputs,
-                intent: current_intent,
-                ..
-            }) if current_publication == publication
-                && current_attempt == attempt
-                && current_intent == intent =>
-            {
-                (admission, envelope_inputs)
-            }
-            _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
-        };
-        let envelope_identity = self.validate_and_publish_required_envelope(
-            publication,
-            attempt,
-            intent,
+        let state = self.load()?.ok_or(ResumeMarkerErrorV1::InvalidTransition)?;
+        if state.publication() != publication
+            || state.attempt() != attempt
+            || state.intent() != Some(intent)
+        {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let recovered = self.recover_complete_intent(attempt, expected_compiler_closure)?;
+        if recovered.record().identity() != intent {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.validate_required_envelope_join(
+            state,
+            envelope,
             receipt,
             expected_compiler_closure,
-            envelope,
-            admission,
-            marker_inputs,
+            Some(&recovered),
         )?;
+        match state {
+            ResumeMarkerStateV2::Ready { .. } => {
+                self.publish_load_envelope(envelope, receipt, expected_compiler_closure)?;
+            }
+            ResumeMarkerStateV2::Completed { .. } => {
+                let persisted = self.recover_load_envelope(receipt, expected_compiler_closure)?;
+                if persisted != *envelope {
+                    return Err(self
+                        .inner
+                        .invalid("completed protected envelope changed during exact retry"));
+                }
+            }
+            ResumeMarkerStateV2::Pending { .. } => {
+                return Err(ResumeMarkerErrorV1::InvalidTransition);
+            }
+        }
+        let envelope_identity = envelope.identity();
         self.persist_completed_inner(
             publication,
             attempt,
@@ -3379,53 +3846,6 @@ impl WorkerV2ResumeStoreV2 {
             expected_compiler_closure,
             &envelope,
         )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn validate_and_publish_required_envelope(
-        &self,
-        publication: WorkerV2PublicationKindV1,
-        attempt: BuildAttempt,
-        intent: WorkerV2PublicationIntentIdentityV2,
-        receipt: BackendPublicationReceiptV2,
-        expected_compiler_closure: CompilerClosureV2,
-        envelope: &WorkerV2LoadEnvelopeV2,
-        admission: [u8; 32],
-        marker_inputs: [u8; 32],
-    ) -> Result<WorkerV2LoadEnvelopeIdentityV2, ResumeMarkerErrorV1> {
-        self.validate_protected_envelope_receipt(envelope, receipt, expected_compiler_closure)?;
-        let evidence = envelope.final_artifact_evidence();
-        let claim = evidence.published_claim();
-        let envelope_inputs = self.recover_envelope_inputs(attempt)?;
-        let carried_inputs = WorkerV2EnvelopeInputsV1::new(
-            envelope.direct_link_evidence().clone(),
-            envelope.proof_records().to_vec(),
-            envelope.raw_hsaco().clone(),
-        )
-        .map_err(|error| {
-            self.inner.invalid(format!(
-                "required protected envelope inputs are invalid: {error}"
-            ))
-        })?;
-        if evidence.publication_intent_identity() != intent
-            || claim.plan().attempt() != attempt
-            || marker_inputs != envelope_inputs.identity().as_bytes()
-            || carried_inputs != envelope_inputs
-            || restart_admission_commitment_with_inputs_v2(
-                publication,
-                claim.plan(),
-                claim.upstream_evidence(),
-                envelope.finalized_payload(),
-                Some(envelope_inputs.identity()),
-                expected_compiler_closure,
-            ) != admission
-        {
-            return Err(self
-                .inner
-                .invalid("required protected envelope disagrees with the ready publication"));
-        }
-        self.publish_load_envelope(envelope, receipt, expected_compiler_closure)?;
-        Ok(envelope.identity())
     }
 
     fn persist_completed_inner(
@@ -3537,6 +3957,9 @@ impl WorkerV2ResumeStoreV2 {
         if receipt.compiler_closure() != expected_compiler_closure || !record.matches(receipt) {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
+        if state.publication().requires_envelope() {
+            self.recover_load_envelope(receipt, expected_compiler_closure)?;
+        }
         Ok(())
     }
 
@@ -3556,14 +3979,67 @@ impl WorkerV2ResumeStoreV2 {
         self.validate_durable_receipt(state.attempt(), receipt, expected_compiler_closure)
     }
 
+    fn validate_completed_restart_inputs(
+        &self,
+        state: ResumeMarkerStateV2,
+        receipt: BackendPublicationReceiptV2,
+        expected_compiler_closure: CompilerClosureV2,
+        recovered: Option<&RecoveredWorkerV2PublicationIntentV2>,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        self.validate_completed_receipt(state, receipt, expected_compiler_closure)?;
+        if state.publication().requires_envelope() {
+            let envelope = self.recover_load_envelope(receipt, expected_compiler_closure)?;
+            self.validate_required_envelope_join(
+                state,
+                &envelope,
+                receipt,
+                expected_compiler_closure,
+                recovered,
+            )
+        } else if let Some(recovered) = recovered {
+            self.validate_non_envelope_intent_join(
+                state,
+                recovered,
+                receipt,
+                expected_compiler_closure,
+            )
+        } else {
+            self.verify_output_path()?;
+            let recovered = match recover_worker_v2_publication_intent_v2(
+                &self.inner.display_path,
+                &self.producer,
+                state.attempt(),
+                expected_compiler_closure,
+            ) {
+                Ok(recovered) => Some(recovered),
+                Err(WorkerV2PublicationIntentErrorV2::NotFound) => None,
+                Err(error) => {
+                    return Err(self.inner.invalid(format!(
+                        "the completed protected intent cannot be recovered before cleanup: {error}"
+                    )));
+                }
+            };
+            self.verify_output_path()?;
+            if let Some(recovered) = recovered {
+                self.validate_non_envelope_intent_join(
+                    state,
+                    &recovered,
+                    receipt,
+                    expected_compiler_closure,
+                )
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) fn clear_completed(
         &self,
         expected: ResumeMarkerStateV2,
         receipt: BackendPublicationReceiptV2,
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<(), ResumeMarkerErrorV1> {
-        self.validate_completed_receipt(expected, receipt, expected_compiler_closure)?;
-        self.validate_completed_envelope(expected, receipt, expected_compiler_closure)?;
+        self.validate_completed_restart_inputs(expected, receipt, expected_compiler_closure, None)?;
         self.clear_exact(expected)
     }
 
@@ -3573,25 +4049,8 @@ impl WorkerV2ResumeStoreV2 {
         receipt: BackendPublicationReceiptV2,
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<(), ResumeMarkerErrorV1> {
-        self.validate_completed_receipt(expected, receipt, expected_compiler_closure)?;
-        self.validate_completed_envelope(expected, receipt, expected_compiler_closure)?;
+        self.validate_completed_restart_inputs(expected, receipt, expected_compiler_closure, None)?;
         self.clear_exact_and_envelope_inputs(expected)
-    }
-
-    fn validate_completed_envelope(
-        &self,
-        state: ResumeMarkerStateV2,
-        receipt: BackendPublicationReceiptV2,
-        expected_compiler_closure: CompilerClosureV2,
-    ) -> Result<(), ResumeMarkerErrorV1> {
-        if !state.publication().requires_envelope() {
-            return Ok(());
-        }
-        let envelope = self.recover_load_envelope(receipt, expected_compiler_closure)?;
-        if envelope.identity().as_bytes() != state.envelope() {
-            return Err(ResumeMarkerErrorV1::InvalidTransition);
-        }
-        Ok(())
     }
 
     pub(crate) fn clear_abandoned_pending(
@@ -4570,6 +5029,7 @@ mod tests {
     };
     use fe2o3_worker_v2_bundle::{
         DescriptorLineageV1, ExactRawHsacoV1, WorkerV2FinalArtifactEvidenceV2,
+        WorkerV2ProducerBindingV2,
     };
 
     use super::*;
@@ -4671,21 +5131,6 @@ mod tests {
         .receipt()
     }
 
-    fn receipt_v2(
-        path: &Path,
-        producer: &ProducerIdentity,
-        attempt: BuildAttempt,
-        seed: u8,
-        closure: CompilerClosureV2,
-    ) -> BackendPublicationReceiptV2 {
-        let (output, plan, upstream) = publication_inputs(attempt, seed);
-        publish_exact_hsaco_evidence_for_attempt_v2(
-            path, producer, attempt, plan, upstream, closure, &output,
-        )
-        .unwrap()
-        .receipt()
-    }
-
     fn mutated_compiler_closure(seed: u8, role: usize) -> CompilerClosureV2 {
         let mut pins = [
             [seed; 32],
@@ -4726,6 +5171,9 @@ mod tests {
     }
 
     fn fixture_manifest_abi() -> AbiLayout {
+        let source_type =
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
+        let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
         AbiLayout::new(
             4,
             4,
@@ -4741,8 +5189,12 @@ mod tests {
                     Access::ByValue,
                     AddressSpace::Value,
                     TypeIdentity::new(
-                        DeclaredRustTypeIdentity::from_untrusted_bytes(fixture_digest(0xa1)),
-                        DeclaredRustLayoutIdentity::from_untrusted_bytes(fixture_digest(0xa2)),
+                        DeclaredRustTypeIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                            *source_type.identity().as_bytes(),
+                        )),
+                        DeclaredRustLayoutIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                            *layout.identity().as_bytes(),
+                        )),
                     ),
                     ArgumentOwnership::ByValue,
                     AliasClass::Value,
@@ -4764,7 +5216,7 @@ mod tests {
         .unwrap()
     }
 
-    fn fixture_descriptor_lineage() -> DescriptorLineageV1 {
+    fn fixture_descriptor_lineage(finalized_hsaco: &[u8]) -> DescriptorLineageV1 {
         let source_type =
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
         let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
@@ -4806,7 +5258,7 @@ mod tests {
         .unwrap();
         DescriptorLineageV1::new(
             DeviceDescriptorTableV1::new(
-                CanonicalCodeObjectDigest::from_bytes([0xc0; 32]),
+                CanonicalCodeObjectDigest::calculate_from_canonicalized_hsaco(finalized_hsaco),
                 fe2o3_kernel_descriptor::CodeObjectVersion::V6,
                 CompilerIdentityV1::new(
                     Text::new("rustc").unwrap(),
@@ -4993,7 +5445,8 @@ mod tests {
             path, producer, attempt, plan, upstream, closure, &output,
         )
         .unwrap();
-        let intent = durable_intent.record().identity();
+        let intent_record = durable_intent.record();
+        let intent = intent_record.identity();
         drop(durable_intent);
         let publication = publish_exact_hsaco_evidence_for_attempt_v2(
             path, producer, attempt, plan, upstream, closure, &output,
@@ -5002,14 +5455,22 @@ mod tests {
         let receipt = publication.receipt();
         let claim = publication.published_claim().clone();
         drop(publication);
-        let descriptor = fixture_descriptor_lineage();
+        let descriptor = fixture_descriptor_lineage(&output);
         let proofs = vec![fixture_proof()];
+        let seed = attempt.invocation().as_bytes()[0];
+        let source = format!("/src/resume-{seed}.rs");
+        let producer_binding = WorkerV2ProducerBindingV2::from_codegen(
+            &format!("resume_{seed}"),
+            Some(Path::new(&source)),
+        )
+        .unwrap();
         let final_artifact = WorkerV2FinalArtifactEvidenceV2::from_proof_records(
             &container,
             &descriptor,
             &proofs,
             closure,
-            intent,
+            intent_record,
+            producer_binding,
             receipt,
             claim,
         )
@@ -5063,7 +5524,18 @@ mod tests {
             )
             .unwrap();
         store
-            .persist_ready(publication, attempt, fixture.intent)
+            .persist_ready(
+                publication,
+                attempt,
+                &recover_worker_v2_publication_intent_v2(
+                    &store.inner.display_path,
+                    &store.producer,
+                    attempt,
+                    closure,
+                )
+                .unwrap(),
+                closure,
+            )
             .unwrap();
     }
 
@@ -5193,6 +5665,99 @@ mod tests {
         let path = store.display_path.join(&store.marker_name);
         fs::write(&path, bytes).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn replace_unique_bytes(bytes: &mut [u8], original: &[u8], replacement: &[u8]) {
+        assert_eq!(original.len(), replacement.len());
+        let offsets = bytes
+            .windows(original.len())
+            .enumerate()
+            .filter_map(|(offset, candidate)| (candidate == original).then_some(offset))
+            .collect::<Vec<_>>();
+        assert_eq!(offsets.len(), 1, "nested record must occur exactly once");
+        bytes[offsets[0]..offsets[0] + replacement.len()].copy_from_slice(replacement);
+    }
+
+    fn reseal_claim_v2(bytes: &mut [u8]) {
+        const DOMAIN: &[u8] = b"fe2o3.published-hsaco-claim.checksum.v2\0";
+        let body_len = bytes.len() - 32;
+        let mut digest = Sha256::new();
+        digest.update(DOMAIN);
+        digest.update(&bytes[..body_len]);
+        bytes[body_len..].copy_from_slice(&digest.finalize());
+    }
+
+    fn reseal_length_bound_record_v2(bytes: &mut [u8], domain: &[u8]) {
+        let body_len = bytes.len() - 32;
+        let mut digest = Sha256::new();
+        digest.update(domain);
+        digest.update((body_len as u64).to_le_bytes());
+        digest.update(&bytes[..body_len]);
+        bytes[body_len..].copy_from_slice(&digest.finalize());
+    }
+
+    fn envelope_with_resealed_claim_substitution(
+        envelope: &WorkerV2LoadEnvelopeV2,
+        binding_offset: usize,
+    ) -> WorkerV2LoadEnvelopeV2 {
+        const FINAL_DOMAIN: &[u8] =
+            b"FE2O3/PROTECTED-WORKER-V2/FINAL-ARTIFACT-EVIDENCE-CHECKSUM/V2\0";
+        const ENVELOPE_DOMAIN: &[u8] = b"FE2O3/PROTECTED-WORKER-V2/LOAD-ENVELOPE-CHECKSUM/V2\0";
+        const FILE_BINDING_BYTES: usize = 3 * 16 + 8;
+
+        let original_claim = envelope
+            .final_artifact_evidence()
+            .published_claim()
+            .encode_canonical()
+            .unwrap();
+        let mut substituted_claim = original_claim.clone();
+        let claim_body_len = substituted_claim.len() - 32;
+        assert!(binding_offset < FILE_BINDING_BYTES);
+        substituted_claim[claim_body_len - FILE_BINDING_BYTES + binding_offset] ^= 1;
+        reseal_claim_v2(&mut substituted_claim);
+        assert_ne!(substituted_claim, original_claim);
+        DurablePublishedHsacoClaimV2::decode_canonical(&substituted_claim).unwrap();
+
+        let original_final = envelope.final_artifact_evidence().to_bytes();
+        let mut substituted_final = original_final.clone();
+        replace_unique_bytes(&mut substituted_final, &original_claim, &substituted_claim);
+        reseal_length_bound_record_v2(&mut substituted_final, FINAL_DOMAIN);
+
+        let mut substituted_envelope = envelope.to_bytes();
+        replace_unique_bytes(
+            &mut substituted_envelope,
+            &original_final,
+            &substituted_final,
+        );
+        reseal_length_bound_record_v2(&mut substituted_envelope, ENVELOPE_DOMAIN);
+        WorkerV2LoadEnvelopeV2::from_bytes(&substituted_envelope).unwrap()
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const MARKER_CRASH_HELPER_DIRECTORY_ENV: &str =
+        "FE2O3_TEST_RESTART_MARKER_CRASH_HELPER_DIRECTORY";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const MARKER_CRASH_HELPER_ATTEMPT_ENV: &str = "FE2O3_TEST_RESTART_MARKER_CRASH_HELPER_ATTEMPT";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const MARKER_CRASH_HELPER_SEED_ENV: &str = "FE2O3_TEST_RESTART_MARKER_CRASH_HELPER_SEED";
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn run_marker_crash_helper(
+        directory: &Path,
+        attempt: BuildAttempt,
+        seed: u8,
+        fault: &str,
+    ) -> std::process::Output {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("worker_v2_restart::tests::restart_marker_crash_subprocess_helper")
+            .arg("--nocapture")
+            .env(MARKER_CRASH_HELPER_DIRECTORY_ENV, directory)
+            .env(MARKER_CRASH_HELPER_ATTEMPT_ENV, attempt.to_env_value())
+            .env(MARKER_CRASH_HELPER_SEED_ENV, seed.to_string())
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault)
+            .output()
+            .unwrap()
     }
 
     #[test]
@@ -5352,8 +5917,15 @@ mod tests {
         let closure = compiler_closure(101);
         let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
         let publication = WorkerV2PublicationKindV1::Finalized;
-        let admission = [0x31; 32];
-        let intent = WorkerV2PublicationIntentIdentityV2::from_bytes([0x41; 32]);
+        let (output, plan, upstream) = publication_inputs(attempt, 101);
+        let admission = restart_admission_commitment_with_inputs_v2(
+            publication,
+            plan,
+            upstream,
+            &output,
+            None,
+            closure,
+        );
 
         assert_eq!(store.load().unwrap(), None);
         store
@@ -5370,7 +5942,20 @@ mod tests {
             .persist_pending(publication, attempt, admission)
             .unwrap();
 
-        store.persist_ready(publication, attempt, intent).unwrap();
+        let recovered = persist_worker_v2_publication_intent_v2(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            closure,
+            &output,
+        )
+        .unwrap();
+        let intent = recovered.record().identity();
+        store
+            .persist_ready(publication, attempt, &recovered, closure)
+            .unwrap();
         let ready = ResumeMarkerStateV2::Ready {
             publication,
             attempt,
@@ -5379,9 +5964,22 @@ mod tests {
             intent,
         };
         assert_eq!(store.load().unwrap(), Some(ready));
-        store.persist_ready(publication, attempt, intent).unwrap();
+        store
+            .persist_ready(publication, attempt, &recovered, closure)
+            .unwrap();
 
-        let receipt = receipt_v2(&directory.0, &producer, attempt, 102, closure);
+        let published = publish_exact_hsaco_evidence_for_attempt_v2(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            closure,
+            &output,
+        )
+        .unwrap();
+        let receipt = published.receipt();
+        drop(published);
         let completed = store
             .persist_completed(publication, attempt, intent, receipt, closure)
             .unwrap();
@@ -5420,28 +6018,49 @@ mod tests {
         let directory = TestDirectory::new();
         let producer = producer(105);
         let attempt = attempt(&directory.0, &producer, 105);
+        let closure = compiler_closure(105);
         let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
         let publication = WorkerV2PublicationKindV1::Finalized;
-        let intent = WorkerV2PublicationIntentIdentityV2::from_bytes([0x41; 32]);
+        let (output, plan, upstream) = publication_inputs(attempt, 105);
+        let recovered = persist_worker_v2_publication_intent_v2(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            closure,
+            &output,
+        )
+        .unwrap();
+        let admission = restart_admission_commitment_with_inputs_v2(
+            publication,
+            plan,
+            upstream,
+            &output,
+            None,
+            closure,
+        );
 
         assert!(matches!(
-            store.persist_ready(publication, attempt, intent),
+            store.persist_ready(publication, attempt, &recovered, closure),
             Err(ResumeMarkerErrorV1::InvalidTransition)
         ));
         store
-            .persist_pending(publication, attempt, [0x31; 32])
+            .persist_pending(publication, attempt, admission)
             .unwrap();
         let pending = store.load().unwrap().unwrap();
+        assert!(
+            store
+                .persist_ready(
+                    publication,
+                    attempt,
+                    &recovered,
+                    mutated_compiler_closure(105, 0),
+                )
+                .is_err()
+        );
         assert!(matches!(
-            store.persist_ready(
-                publication,
-                attempt,
-                WorkerV2PublicationIntentIdentityV2::from_bytes([0; 32]),
-            ),
-            Err(ResumeMarkerErrorV1::InvalidTransition)
-        ));
-        assert!(matches!(
-            store.persist_ready(WorkerV2PublicationKindV1::Raw, attempt, intent),
+            store.persist_ready(WorkerV2PublicationKindV1::Raw, attempt, &recovered, closure,),
             Err(ResumeMarkerErrorV1::InvalidTransition)
         ));
         assert_eq!(store.load().unwrap(), Some(pending));
@@ -5767,16 +6386,17 @@ mod tests {
         let ready = store.load().unwrap().unwrap();
 
         for role in 0..6 {
-            assert!(matches!(
-                store.persist_completed(
-                    publication,
-                    attempt,
-                    intent,
-                    receipt,
-                    mutated_compiler_closure(117, role),
-                ),
-                Err(ResumeMarkerErrorV1::InvalidTransition)
-            ));
+            assert!(
+                store
+                    .persist_completed(
+                        publication,
+                        attempt,
+                        intent,
+                        receipt,
+                        mutated_compiler_closure(117, role),
+                    )
+                    .is_err()
+            );
             assert_eq!(store.load().unwrap(), Some(ready));
         }
 
@@ -5958,13 +6578,10 @@ mod tests {
             .unwrap();
         assert_eq!(restarted.load().unwrap(), None);
         assert!(restarted.recover_envelope_inputs(attempt).is_err());
-        assert_eq!(
-            restarted
-                .recover_load_envelope(fixture.receipt, closure)
-                .unwrap()
-                .to_bytes(),
-            fixture.envelope.to_bytes()
-        );
+        assert!(matches!(
+            restarted.recover_load_envelope(fixture.receipt, closure),
+            Err(ResumeMarkerErrorV1::InvalidTransition)
+        ));
     }
 
     #[test]
@@ -5998,12 +6615,10 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(completed, ResumeMarkerStateV2::Completed { .. }));
-        assert_eq!(
-            restarted
-                .publish_load_envelope(&fixture.envelope, fixture.receipt, closure)
-                .unwrap(),
-            WorkerV2EnvelopePublicationOutcomeV1::AlreadyPublished
-        );
+        assert!(matches!(
+            restarted.publish_load_envelope(&fixture.envelope, fixture.receipt, closure),
+            Err(ResumeMarkerErrorV1::InvalidTransition)
+        ));
     }
 
     #[test]
@@ -6095,6 +6710,258 @@ mod tests {
     }
 
     #[test]
+    fn protected_v2_envelope_rejects_every_resealed_claim_file_binding_substitution() {
+        for (case, binding_offset) in [0_usize, 16, 32, 48].into_iter().enumerate() {
+            let seed = 127 + case as u8;
+            let directory = TestDirectory::new();
+            let producer = producer(seed);
+            let attempt = attempt(&directory.0, &producer, seed);
+            let closure = compiler_closure(seed);
+            let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+            let substituted =
+                envelope_with_resealed_claim_substitution(&fixture.envelope, binding_offset);
+            let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            stage_protected_required_ready(&store, &fixture, closure);
+            let ready = store.load().unwrap().unwrap();
+
+            assert!(
+                store
+                    .publish_load_envelope(&substituted, fixture.receipt, closure)
+                    .is_err(),
+                "resealed claim substitution {case} was accepted"
+            );
+            assert_eq!(store.load().unwrap(), Some(ready));
+            assert!(
+                recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
+                    .is_ok()
+            );
+            assert!(
+                !directory
+                    .0
+                    .join(protected_envelope_name_v2(
+                        fixture.receipt.publication_identity()
+                    ))
+                    .exists()
+            );
+        }
+    }
+
+    #[test]
+    fn protected_v2_envelope_publication_requires_the_exact_durable_ready_intent() {
+        for pending in [false, true] {
+            let seed = 132 + u8::from(pending);
+            let directory = TestDirectory::new();
+            let producer = producer(seed);
+            let attempt = attempt(&directory.0, &producer, seed);
+            let closure = compiler_closure(seed);
+            let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+            let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            if pending {
+                store
+                    .persist_envelope_inputs(attempt, &fixture.envelope_inputs)
+                    .unwrap();
+                store
+                    .persist_pending_with_envelope_inputs(
+                        WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                        attempt,
+                        restart_admission_commitment_with_inputs_v2(
+                            WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                            fixture.plan,
+                            fixture.upstream,
+                            &fixture.output,
+                            Some(fixture.envelope_inputs.identity()),
+                            closure,
+                        ),
+                        Some(fixture.envelope_inputs.identity()),
+                    )
+                    .unwrap();
+            }
+            let marker = store.load().unwrap();
+
+            assert!(matches!(
+                store.publish_load_envelope(&fixture.envelope, fixture.receipt, closure),
+                Err(ResumeMarkerErrorV1::InvalidTransition)
+            ));
+            assert_eq!(store.load().unwrap(), marker);
+            assert!(
+                recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn protected_v2_envelope_rejects_a_resealed_ready_intent_substitution() {
+        let seed = 134;
+        let directory = TestDirectory::new();
+        let producer = producer(seed);
+        let attempt = attempt(&directory.0, &producer, seed);
+        let closure = compiler_closure(seed);
+        let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &fixture, closure);
+        let ResumeMarkerStateV2::Ready {
+            publication,
+            attempt,
+            admission,
+            envelope_inputs,
+            intent,
+        } = store.load().unwrap().unwrap()
+        else {
+            unreachable!()
+        };
+        let mut substituted_intent = intent.as_bytes();
+        substituted_intent[0] ^= 1;
+        let substituted = ResumeMarkerStateV2::Ready {
+            publication,
+            attempt,
+            admission,
+            envelope_inputs,
+            intent: WorkerV2PublicationIntentIdentityV2::from_bytes(substituted_intent),
+        };
+        install_marker(
+            &store.inner,
+            &encode_protected_marker(store.inner.package, substituted),
+        );
+
+        assert!(
+            store
+                .publish_load_envelope(&fixture.envelope, fixture.receipt, closure)
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap(), Some(substituted));
+        assert!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn protected_v2_intent_cleanup_preserves_both_inputs_when_envelope_is_invalid() {
+        for case in 0..3 {
+            let seed = 135 + case;
+            let directory = TestDirectory::new();
+            let producer = producer(seed);
+            let attempt = attempt(&directory.0, &producer, seed);
+            let closure = compiler_closure(seed);
+            let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+            let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            stage_protected_required_ready(&store, &fixture, closure);
+            let completed = store
+                .persist_envelope_and_completed(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    attempt,
+                    fixture.intent,
+                    fixture.receipt,
+                    closure,
+                    &fixture.envelope,
+                )
+                .unwrap();
+            let envelope_path = directory.0.join(protected_envelope_name_v2(
+                fixture.receipt.publication_identity(),
+            ));
+            match case {
+                0 => fs::remove_file(&envelope_path).unwrap(),
+                1 => {
+                    let mut bytes = fs::read(&envelope_path).unwrap();
+                    *bytes.last_mut().unwrap() ^= 1;
+                    fs::write(&envelope_path, bytes).unwrap();
+                }
+                2 => {
+                    let substituted =
+                        envelope_with_resealed_claim_substitution(&fixture.envelope, 0);
+                    fs::write(&envelope_path, substituted.to_bytes()).unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            assert!(
+                clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure,)
+                    .is_err()
+            );
+            assert_eq!(store.load().unwrap(), Some(completed));
+            assert!(
+                recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn protected_v2_intent_cleanup_retry_after_durable_removal_is_idempotent() {
+        let seed = 138;
+        let directory = TestDirectory::new();
+        let producer = producer(seed);
+        let attempt = attempt(&directory.0, &producer, seed);
+        let closure = compiler_closure(seed);
+        let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &fixture, closure);
+        let completed = store
+            .persist_envelope_and_completed(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                attempt,
+                fixture.intent,
+                fixture.receipt,
+                closure,
+                &fixture.envelope,
+            )
+            .unwrap();
+
+        clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure).unwrap();
+        assert!(matches!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,),
+            Err(WorkerV2PublicationIntentErrorV2::NotFound)
+        ));
+        assert_eq!(store.load().unwrap(), Some(completed));
+        clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure).unwrap();
+        assert_eq!(store.load().unwrap(), Some(completed));
+        store
+            .clear_completed_and_envelope_inputs(completed, fixture.receipt, closure)
+            .unwrap();
+        assert_eq!(store.load().unwrap(), None);
+    }
+
+    #[test]
+    fn protected_v2_restart_apis_reject_a_deputy_for_another_producer() {
+        let seed = 139;
+        let directory = TestDirectory::new();
+        let deputy = producer(seed + 1);
+        let producer = producer(seed);
+        let attempt = attempt(&directory.0, &producer, seed);
+        let closure = compiler_closure(seed);
+        let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &fixture, closure);
+        let ready = store.load().unwrap().unwrap();
+
+        assert!(matches!(
+            recover_worker_v2_intent_v2(&store, &deputy, ready, closure),
+            Err(RestartIntentErrorV2::IntentIdentityMismatch)
+        ));
+        assert_eq!(store.load().unwrap(), Some(ready));
+        let completed = store
+            .persist_envelope_and_completed(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                attempt,
+                fixture.intent,
+                fixture.receipt,
+                closure,
+                &fixture.envelope,
+            )
+            .unwrap();
+        assert!(matches!(
+            clear_worker_v2_intent_v2(&store, &deputy, completed, fixture.receipt, closure,),
+            Err(RestartIntentErrorV2::IntentIdentityMismatch)
+        ));
+        assert_eq!(store.load().unwrap(), Some(completed));
+        assert!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn protected_v2_temp_cleanup_is_schema_separated_from_ordinary_v1() {
         let directory = TestDirectory::new();
         let producer = producer(124);
@@ -6112,6 +6979,95 @@ mod tests {
         assert_eq!(protected.load().unwrap(), None);
         assert!(!directory.0.join(protected_temp).exists());
         assert!(directory.0.join(ordinary_temp).exists());
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn restart_marker_crash_subprocess_helper() {
+        let Some(directory) = std::env::var_os(MARKER_CRASH_HELPER_DIRECTORY_ENV) else {
+            return;
+        };
+        let attempt =
+            BuildAttempt::from_env_value(&std::env::var(MARKER_CRASH_HELPER_ATTEMPT_ENV).unwrap())
+                .unwrap();
+        let seed = std::env::var(MARKER_CRASH_HELPER_SEED_ENV)
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+        let producer = producer(seed);
+        let store = WorkerV2ResumeStoreV2::open(Path::new(&directory), &producer).unwrap();
+        store
+            .persist_pending(WorkerV2PublicationKindV1::Finalized, attempt, [0x33; 32])
+            .unwrap();
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn marker_temp_sync_crash_is_cleaned_before_restart_state_is_read() {
+        let directory = TestDirectory::new();
+        let seed = 125;
+        let producer = producer(seed);
+        let attempt = attempt(&directory.0, &producer, seed);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let marker_name = store.inner.marker_name.clone();
+        let temp_prefix = marker_temp_prefix(&marker_name);
+        drop(store);
+
+        let output =
+            run_marker_crash_helper(&directory.0, attempt, seed, "resume-marker-temp-synced");
+        assert_eq!(output.status.code(), Some(86), "{output:?}");
+        assert!(!directory.0.join(&marker_name).exists());
+        let residue = fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with(&temp_prefix))
+            .collect::<Vec<_>>();
+        assert_eq!(residue.len(), 1);
+
+        let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        assert_eq!(restarted.load().unwrap(), None);
+        assert!(
+            fs::read_dir(&directory.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .all(|name| !name.to_string_lossy().starts_with(&temp_prefix))
+        );
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn marker_rename_crash_recovers_the_exact_published_state_idempotently() {
+        let directory = TestDirectory::new();
+        let seed = 126;
+        let producer = producer(seed);
+        let attempt = attempt(&directory.0, &producer, seed);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let marker_name = store.inner.marker_name.clone();
+        let temp_prefix = marker_temp_prefix(&marker_name);
+        drop(store);
+
+        let output = run_marker_crash_helper(&directory.0, attempt, seed, "resume-marker-renamed");
+        assert_eq!(output.status.code(), Some(86), "{output:?}");
+        assert!(directory.0.join(&marker_name).is_file());
+        assert!(
+            fs::read_dir(&directory.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .all(|name| !name.to_string_lossy().starts_with(&temp_prefix))
+        );
+
+        let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let pending = ResumeMarkerStateV2::Pending {
+            publication: WorkerV2PublicationKindV1::Finalized,
+            attempt,
+            admission: [0x33; 32],
+            envelope_inputs: [0; 32],
+        };
+        assert_eq!(restarted.load().unwrap(), Some(pending));
+        restarted
+            .persist_pending(WorkerV2PublicationKindV1::Finalized, attempt, [0x33; 32])
+            .unwrap();
+        assert_eq!(restarted.load().unwrap(), Some(pending));
     }
 
     #[test]
