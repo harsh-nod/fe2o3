@@ -66,6 +66,8 @@ const ESCROW_CAPSULE_CHECKSUM_DOMAIN: &[u8] =
     b"fe2o3.worker-v2-intent-cleanup-escrow.capsule-checksum.v1\0";
 const ESCROW_RECEIPT_IDENTITY_DOMAIN: &[u8] =
     b"fe2o3.worker-v2-intent-cleanup-escrow.receipt-identity.v1\0";
+// Mirrors the crate-private artifact-store bound for public lifecycle boundary tests.
+const CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES: usize = 4096 * 7;
 const _: () = assert!(MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1 <= 2 * 1024);
 
 static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -287,6 +289,19 @@ fn escrow_entry_names(output: &Path) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+fn output_entry_count(output: &Path) -> usize {
+    fs::read_dir(output).unwrap().count()
+}
+
+fn fill_output_with_unrelated_entries(output: &Path, target_entries: usize) {
+    let existing = output_entry_count(output);
+    assert!(existing <= target_entries);
+    for index in existing..target_entries {
+        fs::File::create(output.join(format!("cleanup-capacity-unrelated-{index}"))).unwrap();
+    }
+    assert_eq!(output_entry_count(output), target_entries);
 }
 
 fn escrow_entry_with_suffix(output: &Path, suffix: &str) -> PathBuf {
@@ -1689,6 +1704,160 @@ fn artifact_owned_cleanup_escrow_roundtrips_rolls_back_and_commits_idempotently(
         Err(WorkerV2PublicationIntentErrorV2::NotFound)
     ));
     assert!(escrow_entry_names(&output).is_empty());
+}
+
+#[test]
+fn fresh_cleanup_escrow_prepare_at_or_one_below_the_entry_cap_is_non_mutating() {
+    let fixture = CleanupEscrowFixture::new(0x23, "fresh-capacity-rejection");
+    fill_output_with_unrelated_entries(
+        &fixture.output,
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES - 1,
+    );
+    for target_entries in [
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES - 1,
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES,
+    ] {
+        if output_entry_count(&fixture.output) < target_entries {
+            fs::File::create(fixture.output.join("cleanup-capacity-exact-cap-extra")).unwrap();
+        }
+        let before_intent = intent_snapshot(&fixture.output);
+        let before_escrow = escrow_entry_names(&fixture.output);
+
+        let error = prepare_worker_v2_publication_intent_cleanup_escrow_v1(
+            &fixture.output,
+            &fixture.owner,
+            fixture.attempt,
+            fixture.closure,
+            fixture.intent,
+            fixture.receipt,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkerV2PublicationIntentCleanupEscrowErrorV1::InvalidEscrow { ref reason, .. }
+                if reason
+                    == "artifact directory lacks capacity for a crash-recoverable cleanup escrow manifest write"
+        ));
+        assert_eq!(intent_snapshot(&fixture.output), before_intent);
+        assert_eq!(escrow_entry_names(&fixture.output), before_escrow);
+        assert_eq!(output_entry_count(&fixture.output), target_entries);
+    }
+}
+
+#[test]
+fn highest_admissible_cleanup_escrow_prepare_and_commit_stay_within_the_entry_cap() {
+    let fixture = CleanupEscrowFixture::new(0x24, "highest-admissible-capacity");
+    fill_output_with_unrelated_entries(
+        &fixture.output,
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES - 2,
+    );
+
+    let capsule = fixture.prepare();
+
+    assert_eq!(
+        output_entry_count(&fixture.output),
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES - 1
+    );
+    assert_eq!(
+        escrow_entry_names(&fixture.output)
+            .iter()
+            .filter(|name| name.contains(".manifest.tmp-"))
+            .count(),
+        0
+    );
+    let replacement_capacity_entry = fixture.output.join("cleanup-capacity-replacement-extra");
+    fs::File::create(&replacement_capacity_entry).unwrap();
+    assert_eq!(
+        output_entry_count(&fixture.output),
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES
+    );
+    let error = commit_worker_v2_publication_intent_cleanup_escrow_v1(
+        &fixture.output,
+        &fixture.owner,
+        capsule,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkerV2PublicationIntentCleanupEscrowErrorV1::InvalidEscrow { ref reason, .. }
+            if reason
+                == "artifact directory lacks capacity for a crash-recoverable cleanup escrow manifest write"
+    ));
+    assert_eq!(
+        output_entry_count(&fixture.output),
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES
+    );
+    assert_eq!(
+        escrow_entry_names(&fixture.output)
+            .iter()
+            .filter(|name| name.contains(".manifest.tmp-"))
+            .count(),
+        0
+    );
+    assert_eq!(
+        recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &fixture.output,
+            &fixture.owner,
+            capsule,
+        )
+        .unwrap(),
+        WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared
+    );
+    fs::remove_file(replacement_capacity_entry).unwrap();
+    commit_worker_v2_publication_intent_cleanup_escrow_v1(&fixture.output, &fixture.owner, capsule)
+        .unwrap();
+    assert!(escrow_entry_names(&fixture.output).is_empty());
+    assert_eq!(
+        output_entry_count(&fixture.output),
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES - 4
+    );
+}
+
+#[test]
+fn highest_admissible_create_temp_crash_is_bounded_recovered_and_retryable() {
+    let fixture = CleanupEscrowFixture::new(0x25, "highest-admissible-create-crash");
+    fill_output_with_unrelated_entries(
+        &fixture.output,
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES - 2,
+    );
+    let point = WorkerV2PublicationIntentCleanupEscrowFaultPointV1 {
+        boundary: WorkerV2PublicationIntentCleanupEscrowBoundaryV1::CreateManifestTemp,
+        timing: WorkerV2PublicationIntentCleanupEscrowFaultTimingV1::After,
+    };
+
+    fixture.run_crash_subprocess("prepare", point, None);
+
+    assert_eq!(
+        output_entry_count(&fixture.output),
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES - 1
+    );
+    let crash_entries = escrow_entry_names(&fixture.output);
+    assert_eq!(
+        crash_entries
+            .iter()
+            .filter(|name| name.contains(".manifest.tmp-"))
+            .count(),
+        1
+    );
+    assert!(!crash_entries.iter().any(|name| name.ends_with(".manifest")));
+
+    let capsule = fixture.prepare();
+
+    assert_eq!(
+        output_entry_count(&fixture.output),
+        CLEANUP_CAPACITY_TEST_MAX_OUTPUT_ENTRIES - 1
+    );
+    assert_eq!(
+        escrow_entry_names(&fixture.output)
+            .iter()
+            .filter(|name| name.contains(".manifest.tmp-"))
+            .count(),
+        0
+    );
+    commit_worker_v2_publication_intent_cleanup_escrow_v1(&fixture.output, &fixture.owner, capsule)
+        .unwrap();
+    assert!(escrow_entry_names(&fixture.output).is_empty());
 }
 
 #[test]

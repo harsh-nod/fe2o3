@@ -23,6 +23,8 @@ const CLEANUP_ESCROW_TEMP_SUFFIX_V1: &str = ".manifest.tmp-";
 const CLEANUP_ESCROW_MAX_TEMPS_V1: usize = 64;
 // Cleanup restart scans share the reviewed bound for artifact-store directory scans.
 const CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1: usize = crate::MAX_OUTPUT_ENTRIES;
+const CLEANUP_ESCROW_NEW_MANIFEST_FREE_ENTRIES_V1: usize = 2;
+const CLEANUP_ESCROW_REPLACEMENT_MANIFEST_FREE_ENTRIES_V1: usize = 1;
 
 // device, inode, byte length, mode, and link count.
 const CLEANUP_ESCROW_FILE_SNAPSHOT_BYTES_V1: usize = 5 * 8;
@@ -953,7 +955,7 @@ fn cleanup_escrow_pin_manifest_v1(
 fn cleanup_escrow_cleanup_temps_v1(
     exclusive: &CleanupEscrowExclusiveDirectoryV1<'_>,
     names: &CleanupEscrowNamesV1,
-) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
+) -> Result<usize, WorkerV2PublicationIntentCleanupEscrowErrorV1> {
     let output = exclusive.output;
     let descriptor =
         rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
@@ -1002,11 +1004,36 @@ fn cleanup_escrow_cleanup_temps_v1(
         }
         temps.push(name);
     }
+    let post_cleanup_entries = scanned_entries - temps.len();
     if !temps.is_empty() {
         for name in temps {
             unlinkat(&output.fd, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
         }
         fsync(&output.fd).map_err(std::io::Error::from)?;
+    }
+    Ok(post_cleanup_entries)
+}
+
+fn cleanup_escrow_require_manifest_capacity_v1(
+    exclusive: &CleanupEscrowExclusiveDirectoryV1<'_>,
+    names: &CleanupEscrowNamesV1,
+    post_cleanup_entries: usize,
+    replace: bool,
+) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
+    let output = exclusive.output;
+    let required_free_entries = if replace {
+        CLEANUP_ESCROW_REPLACEMENT_MANIFEST_FREE_ENTRIES_V1
+    } else {
+        CLEANUP_ESCROW_NEW_MANIFEST_FREE_ENTRIES_V1
+    };
+    if post_cleanup_entries
+        > CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 - required_free_entries
+    {
+        return Err(cleanup_escrow_invalid_v1(
+            output,
+            &names.manifest,
+            "artifact directory lacks capacity for a crash-recoverable cleanup escrow manifest write",
+        ));
     }
     Ok(())
 }
@@ -1015,10 +1042,17 @@ fn cleanup_escrow_write_manifest_v1(
     exclusive: &CleanupEscrowExclusiveDirectoryV1<'_>,
     names: &CleanupEscrowNamesV1,
     manifest: CleanupEscrowManifestV1,
+    post_cleanup_entries: usize,
     replace: bool,
     faults: &mut CleanupEscrowFaultInjectorV1,
 ) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
     let output = exclusive.output;
+    cleanup_escrow_require_manifest_capacity_v1(
+        exclusive,
+        names,
+        post_cleanup_entries,
+        replace,
+    )?;
     let bytes = manifest.to_bytes();
     let start = NEXT_TEMP_ID.fetch_add(MAX_TEMP_ATTEMPTS, Ordering::Relaxed);
     let mut reserved = None;
@@ -1388,6 +1422,13 @@ pub fn prepare_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
 
     let canonical_names = IntentNames::new::<PublicationIntentSchemaV2>(producer_identity, slot);
     cleanup_temps::<PublicationIntentSchemaV2>(&output, &canonical_names)?;
+    let post_cleanup_entries = cleanup_escrow_cleanup_temps_v1(&exclusive, &escrow_names)?;
+    cleanup_escrow_require_manifest_capacity_v1(
+        &exclusive,
+        &escrow_names,
+        post_cleanup_entries,
+        false,
+    )?;
     let quarantined_record = cleanup_escrow_entry_exists_v1(&output, &escrow_names.record)?;
     let canonical_record =
         entry_exists::<PublicationIntentSchemaV2>(&output, &canonical_names.record)?;
@@ -1544,6 +1585,7 @@ pub fn prepare_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
             state: WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared,
             capsule,
         },
+        post_cleanup_entries,
         false,
         &mut faults,
     )?;
@@ -1703,7 +1745,7 @@ fn commit_worker_v2_publication_intent_cleanup_escrow_locked_v1(
         .verify_path_identity()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
     let names = cleanup_escrow_validate_capsule_context_v1(output, producer, capsule)?;
-    cleanup_escrow_cleanup_temps_v1(exclusive, &names)?;
+    let post_cleanup_entries = cleanup_escrow_cleanup_temps_v1(exclusive, &names)?;
     cleanup_escrow_validate_durable_receipt_v1(output, producer, capsule)?;
     let Some(manifest) = cleanup_escrow_read_manifest_v1(output, &names)? else {
         if !cleanup_escrow_all_intent_paths_absent_v1(output, &names, capsule)? {
@@ -1731,6 +1773,7 @@ fn commit_worker_v2_publication_intent_cleanup_escrow_locked_v1(
                 state: WorkerV2PublicationIntentCleanupEscrowStateV1::Committed,
                 capsule,
             },
+            post_cleanup_entries,
             true,
             &mut faults,
         )?;
@@ -2241,6 +2284,48 @@ mod cleanup_escrow_private_tests {
     }
 
     #[test]
+    fn cleanup_manifest_capacity_reserves_exact_create_and_replace_headroom() {
+        let directory = CleanupEscrowPrivateTestDirectory::new("manifest-capacity-boundary");
+        let output = PinnedOutput::open_existing(&directory.0).unwrap();
+        let lock = output.lock().unwrap();
+        let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock).unwrap();
+        let names = cleanup_escrow_test_names(".cleanup-escrow-capacity-temp-");
+
+        cleanup_escrow_require_manifest_capacity_v1(
+            &exclusive,
+            &names,
+            CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 - 2,
+            false,
+        )
+        .unwrap();
+        assert!(matches!(
+            cleanup_escrow_require_manifest_capacity_v1(
+                &exclusive,
+                &names,
+                CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 - 1,
+                false,
+            ),
+            Err(WorkerV2PublicationIntentCleanupEscrowErrorV1::InvalidEscrow { .. })
+        ));
+        cleanup_escrow_require_manifest_capacity_v1(
+            &exclusive,
+            &names,
+            CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 - 1,
+            true,
+        )
+        .unwrap();
+        assert!(matches!(
+            cleanup_escrow_require_manifest_capacity_v1(
+                &exclusive,
+                &names,
+                CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1,
+                true,
+            ),
+            Err(WorkerV2PublicationIntentCleanupEscrowErrorV1::InvalidEscrow { .. })
+        ));
+    }
+
+    #[test]
     fn cleanup_temp_scan_accepts_the_exact_artifact_directory_entry_bound() {
         let directory = CleanupEscrowPrivateTestDirectory::new("scan-exact-bound");
         let temp_prefix = ".cleanup-escrow-exact-bound-temp-";
@@ -2255,12 +2340,16 @@ mod cleanup_escrow_private_tests {
             CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1,
         );
 
-        cleanup_escrow_cleanup_temps_v1(
+        let post_cleanup_entries = cleanup_escrow_cleanup_temps_v1(
             &exclusive,
             &cleanup_escrow_test_names(temp_prefix),
         )
         .unwrap();
 
+        assert_eq!(
+            post_cleanup_entries,
+            CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 - 1
+        );
         assert!(!temp.exists());
         assert!(directory.0.join("unrelated-2").exists());
         assert_eq!(
