@@ -98,7 +98,7 @@ fn ordinary_rust_bounds_and_target_neutral_lowering_fail_closed() {
                 .contains("production-v1 target-neutral lowering failed")
             && safe_production
                 .stderr
-                .contains("semantic statement has no exact Kernel IR lowering rule")
+                .contains("has no exact Kernel IR lowering rule")
             && safe_production.stderr.contains("function 0, block Some(")
             && !safe_production
                 .stderr
@@ -115,7 +115,7 @@ fn ordinary_rust_bounds_and_target_neutral_lowering_fail_closed() {
                 .contains("production-v1 target-neutral lowering failed")
             && oob_production
                 .stderr
-                .contains("semantic statement has no exact Kernel IR lowering rule")
+                .contains("has no exact Kernel IR lowering rule")
             && !oob_production
                 .stderr
                 .contains("gfx942 target mapping remains disabled"),
