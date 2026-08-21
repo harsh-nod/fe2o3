@@ -381,6 +381,12 @@ impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
     pub(crate) fn function_count(&self) -> usize {
         self.collection.functions.len()
     }
+
+    pub(crate) fn compiler_ffi_observation(
+        &self,
+    ) -> Option<&fe2o3_compiler_ffi::CompilerFfiEnvelopeV1> {
+        self.collection.compiler_ffi_observation.as_ref()
+    }
 }
 
 impl CollectedFunction<'_> {

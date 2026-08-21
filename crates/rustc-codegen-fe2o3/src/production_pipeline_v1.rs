@@ -104,27 +104,30 @@ pub(crate) fn reject_custom_llvm_configuration(
 pub(super) struct CollectedRustStageV1<'tcx> {
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    transaction: ProductionTransactionBindingsV1,
+}
+
+struct ProductionTransactionBindingsV1 {
     producer: ProducerIdentity,
     output_dir: PathBuf,
     build_attempt: Option<BuildAttempt>,
+    compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+}
+
+struct AuthenticatedProductionBindingsV1 {
+    rustc_identity_inventory_sha256: [u8; 32],
+    rustc_preflight_plan_sha256: [u8; 32],
+    transaction: ProductionTransactionBindingsV1,
 }
 
 pub(super) struct AdmittedSemanticMirStageV1 {
     semantic_mir: fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
-    rustc_identity_inventory_sha256: [u8; 32],
-    rustc_preflight_plan_sha256: [u8; 32],
-    producer: ProducerIdentity,
-    output_dir: PathBuf,
-    build_attempt: Option<BuildAttempt>,
+    bindings: AuthenticatedProductionBindingsV1,
 }
 
 pub(super) struct EquivalentSemanticMirStageV1 {
     semantic_mir: fe2o3_pliron::ProductionSemanticMirOwnerV1,
-    rustc_identity_inventory_sha256: [u8; 32],
-    rustc_preflight_plan_sha256: [u8; 32],
-    producer: ProducerIdentity,
-    output_dir: PathBuf,
-    build_attempt: Option<BuildAttempt>,
+    bindings: AuthenticatedProductionBindingsV1,
 }
 
 /// Move-only owner of one production compilation stage.
@@ -141,33 +144,21 @@ pub(crate) struct ProductionCompilationV1<'tcx, Stage> {
 /// bindings, admitted semantic MIR, and the owner-held verified PLIRON graph.
 pub(crate) struct RankedVerifiedProductionCompilationV1 {
     ranked: crate::production_ranked_projection_v1::ProductionRankedSemanticProgramV1,
-    rustc_identity_inventory_sha256: [u8; 32],
-    rustc_preflight_plan_sha256: [u8; 32],
-    producer: ProducerIdentity,
-    output_dir: PathBuf,
-    build_attempt: Option<BuildAttempt>,
+    bindings: AuthenticatedProductionBindingsV1,
 }
 
 /// Move-only production stage retaining exact semantic ownership, verified
 /// Kernel IR, correspondence evidence, and the original transaction bindings.
 pub(crate) struct TargetNeutralProductionCompilationV1 {
     lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
-    rustc_identity_inventory_sha256: [u8; 32],
-    rustc_preflight_plan_sha256: [u8; 32],
-    producer: ProducerIdentity,
-    output_dir: PathBuf,
-    build_attempt: Option<BuildAttempt>,
+    bindings: AuthenticatedProductionBindingsV1,
 }
 
 /// Move-only production stage retaining exact semantic ownership, verified
 /// Kernel IR, complete formal memory obligations, and transaction bindings.
 pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
-    rustc_identity_inventory_sha256: [u8; 32],
-    rustc_preflight_plan_sha256: [u8; 32],
-    producer: ProducerIdentity,
-    output_dir: PathBuf,
-    build_attempt: Option<BuildAttempt>,
+    bindings: AuthenticatedProductionBindingsV1,
 }
 
 /// Move-only production stage retaining formal admission, exact target-bound
@@ -176,35 +167,17 @@ pub(crate) struct Gfx942LoweredProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
-    rustc_identity_inventory_sha256: [u8; 32],
-    rustc_preflight_plan_sha256: [u8; 32],
-    producer: ProducerIdentity,
-    output_dir: PathBuf,
-    build_attempt: Option<BuildAttempt>,
+    bindings: AuthenticatedProductionBindingsV1,
 }
 
 impl TargetNeutralProductionCompilationV1 {
     fn admit_formal_memory(
         self,
     ) -> Result<FormalMemoryAdmittedProductionCompilationV1, ProductionPipelineErrorV1> {
-        let Self {
-            lowered,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
-        } = self;
+        let Self { lowered, bindings } = self;
         let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered)
             .map_err(ProductionPipelineErrorV1::FormalMemoryAdmission)?;
-        Ok(FormalMemoryAdmittedProductionCompilationV1 {
-            admitted,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
-        })
+        Ok(FormalMemoryAdmittedProductionCompilationV1 { admitted, bindings })
     }
 }
 
@@ -212,14 +185,7 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
     fn lower_gfx942(
         self,
     ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
-        let Self {
-            admitted,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
-        } = self;
+        let Self { admitted, bindings } = self;
         let mut target_module = admitted.semantic_kir().module().clone();
         let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
         target_module.required_capabilities.insert(target.clone());
@@ -249,11 +215,7 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             admitted,
             target_module,
             llvm_ir,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
+            bindings,
         })
     }
 }
@@ -318,12 +280,13 @@ impl Gfx942LoweredProductionCompilationV1 {
 
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
         let _ = (
-            &self.rustc_identity_inventory_sha256,
-            &self.rustc_preflight_plan_sha256,
-            &self.producer,
-            &self.output_dir,
+            &self.bindings.rustc_identity_inventory_sha256,
+            &self.bindings.rustc_preflight_plan_sha256,
+            &self.bindings.transaction.producer,
+            &self.bindings.transaction.output_dir,
+            &self.bindings.transaction.compiler_ffi_envelope,
         );
-        4 + usize::from(self.build_attempt.is_some())
+        5 + usize::from(self.bindings.transaction.build_attempt.is_some())
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -354,12 +317,13 @@ impl RankedVerifiedProductionCompilationV1 {
 
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
         let _ = (
-            &self.rustc_identity_inventory_sha256,
-            &self.rustc_preflight_plan_sha256,
-            &self.producer,
-            &self.output_dir,
+            &self.bindings.rustc_identity_inventory_sha256,
+            &self.bindings.rustc_preflight_plan_sha256,
+            &self.bindings.transaction.producer,
+            &self.bindings.transaction.output_dir,
+            &self.bindings.transaction.compiler_ffi_envelope,
         );
-        4 + usize::from(self.build_attempt.is_some())
+        5 + usize::from(self.bindings.transaction.build_attempt.is_some())
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -380,13 +344,17 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         if closure.function_count() == 0 {
             return Err(ProductionPipelineErrorV1::EmptyCollectedDeviceClosure);
         }
+        let compiler_ffi_envelope = closure.compiler_ffi_observation().cloned();
         Ok(Self {
             stage: CollectedRustStageV1 {
                 tcx,
                 closure,
-                producer,
-                output_dir,
-                build_attempt,
+                transaction: ProductionTransactionBindingsV1 {
+                    producer,
+                    output_dir,
+                    build_attempt,
+                    compiler_ffi_envelope,
+                },
             },
             invariant_session: PhantomData,
         })
@@ -399,9 +367,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         let CollectedRustStageV1 {
             tcx,
             closure,
-            producer,
-            output_dir,
-            build_attempt,
+            transaction,
         } = self.stage;
         let (semantic_mir, rustc_identity_inventory_sha256, rustc_preflight_plan_sha256) =
             crate::collector::construct_production_semantic_mir_v1(tcx, closure)
@@ -409,11 +375,11 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         Ok(ProductionCompilationV1 {
             stage: AdmittedSemanticMirStageV1 {
                 semantic_mir,
-                rustc_identity_inventory_sha256,
-                rustc_preflight_plan_sha256,
-                producer,
-                output_dir,
-                build_attempt,
+                bindings: AuthenticatedProductionBindingsV1 {
+                    rustc_identity_inventory_sha256,
+                    rustc_preflight_plan_sha256,
+                    transaction,
+                },
             },
             invariant_session: PhantomData,
         })
@@ -462,11 +428,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
     > {
         let AdmittedSemanticMirStageV1 {
             semantic_mir,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
+            bindings,
         } = self.stage;
         let semantic_mir = fe2o3_pliron::ProductionSemanticMirOwnerV1::try_new(
             semantic_mir,
@@ -476,11 +438,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
         Ok(ProductionCompilationV1 {
             stage: EquivalentSemanticMirStageV1 {
                 semantic_mir,
-                rustc_identity_inventory_sha256,
-                rustc_preflight_plan_sha256,
-                producer,
-                output_dir,
-                build_attempt,
+                bindings,
             },
             invariant_session: PhantomData,
         })
@@ -493,45 +451,30 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
     ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
         let EquivalentSemanticMirStageV1 {
             semantic_mir,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
+            bindings,
         } = self.stage;
         let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower(
             semantic_mir,
             fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
         )
         .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
-        Ok(TargetNeutralProductionCompilationV1 {
-            lowered,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
-        })
+        Ok(TargetNeutralProductionCompilationV1 { lowered, bindings })
     }
 
     fn require_target_neutral_lowering(self) -> ProductionPipelineErrorV1 {
         let EquivalentSemanticMirStageV1 {
             semantic_mir,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
+            bindings,
         } = self.stage;
         let error =
             crate::collector::ProductionSemanticImportErrorV1::TargetNeutralLoweringPending {
                 functions: semantic_mir.semantic().functions().len(),
                 callables: semantic_mir.semantic().callables().len(),
-                rustc_identity_inventory_sha256,
-                rustc_preflight_plan_sha256,
+                rustc_identity_inventory_sha256: bindings.rustc_identity_inventory_sha256,
+                rustc_preflight_plan_sha256: bindings.rustc_preflight_plan_sha256,
                 semantic_sha256: *semantic_mir.semantic().semantic_sha256().as_bytes(),
             };
-        drop((semantic_mir, producer, output_dir, build_attempt));
+        drop((semantic_mir, bindings));
         ProductionPipelineErrorV1::SemanticImport(error)
     }
 
@@ -540,25 +483,14 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
     ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
         let EquivalentSemanticMirStageV1 {
             semantic_mir,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
+            bindings,
         } = self.stage;
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,
             )
             .map_err(ProductionPipelineErrorV1::RankedProjection)?;
-        Ok(RankedVerifiedProductionCompilationV1 {
-            ranked,
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
-            producer,
-            output_dir,
-            build_attempt,
-        })
+        Ok(RankedVerifiedProductionCompilationV1 { ranked, bindings })
     }
 }
 
