@@ -14,13 +14,17 @@ use std::time::Duration;
 use crate::production_release::{
     ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1, RowSoftmaxV1ReleaseWorkloadV1,
 };
-use fe2o3_artifact_transaction::ConsumedCompilerModuleHandoffV1;
+use fe2o3_artifact_transaction::{
+    ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2,
+};
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1, LinkOptionV1,
-    LinkPlanError, MAX_LINK_INPUTS, PinnedWorkerV1, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
+    ContentIdentityV1, FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1,
+    InertProtectedFirstBuildWorkerV2EvidenceV1, LinkOptionV1, LinkPlanError, MAX_LINK_INPUTS,
+    PinnedWorkerV1, ProtectedFirstBuildWorkerV2Error, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
     RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
     WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    execute_protected_reproducible_first_build_worker_v2,
     execute_reproducible_first_build_worker_v2,
 };
 use fe2o3_verifier::{
@@ -573,6 +577,27 @@ impl PreparedWorkerV2Config {
         consumed: ConsumedCompilerModuleHandoffV1,
     ) -> Result<InertFirstBuildWorkerV2EvidenceV1, FirstBuildWorkerV2Error> {
         execute_reproducible_first_build_worker_v2(
+            consumed,
+            &self.worker,
+            self.providers.clone(),
+            self.link_options.clone(),
+            self.candidate_output.clone(),
+            self.limits,
+        )
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "protected binding-wrapper integration lands in the next slice"
+        )
+    )]
+    pub(crate) fn execute_protected(
+        &self,
+        consumed: ConsumedCompilerModuleHandoffV2,
+    ) -> Result<InertProtectedFirstBuildWorkerV2EvidenceV1, ProtectedFirstBuildWorkerV2Error> {
+        execute_protected_reproducible_first_build_worker_v2(
             consumed,
             &self.worker,
             self.providers.clone(),
@@ -1598,6 +1623,27 @@ mod tests {
         let path = directory.0.join("config.json");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         path
+    }
+
+    #[test]
+    fn v1_execute_path_preserves_its_handoff_and_evidence_types() {
+        let _execute: fn(
+            &PreparedWorkerV2Config,
+            ConsumedCompilerModuleHandoffV1,
+        )
+            -> Result<InertFirstBuildWorkerV2EvidenceV1, FirstBuildWorkerV2Error> =
+            PreparedWorkerV2Config::execute;
+    }
+
+    #[test]
+    fn protected_execute_path_consumes_v2_and_returns_protected_evidence() {
+        let _execute: fn(
+            &PreparedWorkerV2Config,
+            ConsumedCompilerModuleHandoffV2,
+        ) -> Result<
+            InertProtectedFirstBuildWorkerV2EvidenceV1,
+            ProtectedFirstBuildWorkerV2Error,
+        > = PreparedWorkerV2Config::execute_protected;
     }
 
     fn row_softmax_manifest(directory: &TestDirectory) -> PathBuf {
