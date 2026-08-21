@@ -72,6 +72,11 @@ fn run() -> Result<std::process::ExitStatus, String> {
 }
 
 fn publish_probe(crate_name: &str, source: &Path) -> Result<(), String> {
+    // SAFETY: F_GETFD only queries whether the fixed descriptor is open.
+    let invocation_open = unsafe { libc::fcntl(199, libc::F_GETFD) } >= 0;
+    if invocation_open {
+        return Err("ordinary rustc inherited protected invocation fd199".to_owned());
+    }
     let attempt = env::var(BUILD_ATTEMPT_ENV)
         .ok()
         .and_then(|value| BuildAttempt::from_env_value(&value).ok())
@@ -122,7 +127,7 @@ fn publish_probe(crate_name: &str, source: &Path) -> Result<(), String> {
         .append(true)
         .open(report)
         .map_err(|error| format!("open capability report: {error}"))?;
-    writeln!(report, "{crate_name}:{kernel}")
+    writeln!(report, "{crate_name}:{kernel}:fd199_open={invocation_open}")
         .map_err(|error| format!("write capability report: {error}"))
 }
 

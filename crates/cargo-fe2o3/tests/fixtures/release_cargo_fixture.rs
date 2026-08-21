@@ -1,6 +1,7 @@
 use std::env;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::thread;
@@ -11,6 +12,8 @@ const READY: &str = ".fe2o3-protected-release-cargo-ready-v1";
 const HOLD: &str = ".fe2o3-protected-release-cargo-hold-v1";
 const CONTINUE: &str = ".fe2o3-protected-release-cargo-continue-v1";
 const SURVIVED: &str = ".fe2o3-protected-release-cargo-survived-v1";
+const RUSTC_DESCRIPTOR_ATTACK: &str = ".fe2o3-protected-release-rustc-fd-attack-v1";
+const RUSTC_INVOCATION_FD: i32 = 199;
 
 fn main() -> ExitCode {
     let args = env::args_os().collect::<Vec<_>>();
@@ -116,6 +119,27 @@ fn build(args: &[OsString]) -> ExitCode {
 
     let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
     let rustc = required_path("RUSTC");
+    if fs::read_to_string(state.join(RUSTC_DESCRIPTOR_ATTACK))
+        .is_ok_and(|attack| attack.trim() == "setup-substitute")
+    {
+        let substitute = match File::open(root.join("Cargo.toml")) {
+            Ok(substitute) => substitute,
+            Err(error) => {
+                eprintln!("protected release Cargo fixture cannot open fd199 substitute: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        // SAFETY: this single-threaded hostile fixture intentionally occupies the reserved child
+        // descriptor before the binding wrapper prepares rustc.
+        if unsafe { libc::dup2(substitute.as_raw_fd(), RUSTC_INVOCATION_FD) } != RUSTC_INVOCATION_FD
+        {
+            eprintln!(
+                "protected release Cargo fixture cannot install fd199 substitute: {}",
+                std::io::Error::last_os_error()
+            );
+            return ExitCode::FAILURE;
+        }
+    }
     let status = Command::new(wrapper)
         .arg(rustc)
         .args([
@@ -125,6 +149,7 @@ fn build(args: &[OsString]) -> ExitCode {
         ])
         .arg(root.join("src/main.rs"))
         .env("CARGO_MANIFEST_DIR", &root)
+        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
         .status();
     match status {
         Ok(status) if status.success() => ExitCode::SUCCESS,

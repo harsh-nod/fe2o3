@@ -32,6 +32,9 @@ const PROTECTED_RELEASE_CARGO_REPORT: &str = ".fe2o3-protected-release-cargo-rep
 const PROTECTED_RELEASE_CARGO_READY: &str = ".fe2o3-protected-release-cargo-ready-v1";
 const PROTECTED_RELEASE_CARGO_HOLD: &str = ".fe2o3-protected-release-cargo-hold-v1";
 const PROTECTED_RELEASE_CARGO_SURVIVED: &str = ".fe2o3-protected-release-cargo-survived-v1";
+const PROTECTED_RELEASE_RUSTC_REPORT: &str = ".fe2o3-protected-release-rustc-report-v1";
+const PROTECTED_RELEASE_RUSTC_FD_REPORT: &str = ".fe2o3-protected-release-rustc-fd-report-v1.json";
+const PROTECTED_RELEASE_RUSTC_FD_ATTACK: &str = ".fe2o3-protected-release-rustc-fd-attack-v1";
 
 #[cfg(unix)]
 struct ReapedChild(Option<std::process::Child>);
@@ -515,6 +518,14 @@ fn write_authority_lockfile(workspace: &Path) {
     .expect("write protected release authority lockfile");
 }
 
+fn protected_release_has_published_hsaco(target: &Path) -> bool {
+    fs::read_dir(target.join("fe2o3"))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().extension() == Some(OsStr::new("hsaco")))
+}
+
 #[cfg(target_os = "linux")]
 fn process_observation_for_test(pid: i32) -> Option<(u8, u64)> {
     let bytes = fs::read(format!("/proc/{pid}/stat")).ok()?;
@@ -906,6 +917,12 @@ fn real_cargo_cooperatively_routes_capabilities_to_the_managed_rustc_child() {
         assert!(report.contains(&format!("{name}:probe_")), "{report}");
     }
     assert!(
+        report
+            .lines()
+            .all(|line| line.ends_with(":fd199_open=false")),
+        "ordinary managed rustc inherited the protected V3 descriptor:\n{report}"
+    );
+    assert!(
         fs::read_dir(fixture.target.join("fe2o3"))
             .expect("read committed artifact directory")
             .any(|entry| entry
@@ -940,6 +957,7 @@ fn ordinary_build_script_process_inherits_no_raw_capability_descriptors() {
     let report = fs::read_to_string(report).expect("read ordinary build-script report");
     assert!(report.contains("backend_open=false"), "{report}");
     assert!(report.contains("artifact_open=false"), "{report}");
+    assert!(report.contains("fd199_open=false"), "{report}");
 }
 
 #[cfg(target_os = "linux")]
@@ -1723,13 +1741,9 @@ fn protected_release_build_reaches_authenticated_cargo_publication_fixture() {
         "{report}"
     );
     assert!(
-        fs::read_to_string(
-            fixture
-                .target
-                .join(".fe2o3-protected-release-rustc-report-v1")
-        )
-        .expect("read protected release rustc report")
-        .contains("external_standalone:probe_"),
+        fs::read_to_string(fixture.target.join(PROTECTED_RELEASE_RUSTC_REPORT))
+            .expect("read protected release rustc report")
+            .contains("external_standalone:probe_"),
         "protected release build did not cross the authenticated rustc/backend fixture"
     );
     let artifacts = fs::read_dir(fixture.target.join("fe2o3"))
@@ -1742,6 +1756,90 @@ fn protected_release_build_reaches_authenticated_cargo_publication_fixture() {
         fs::read(&artifacts[0]).expect("read protected release HSACO fixture"),
         b"fixture hsaco"
     );
+
+    let fd_report: serde_json::Value = serde_json::from_slice(
+        &fs::read(fixture.target.join(PROTECTED_RELEASE_RUSTC_FD_REPORT))
+            .expect("read protected release rustc fd199 report"),
+    )
+    .expect("decode protected release rustc fd199 report");
+    assert_eq!(fd_report["fd"], 199, "{fd_report}");
+    assert_eq!(fd_report["invocation_authority_fd"], 195, "{fd_report}");
+    assert_ne!(fd_report["fd"], fd_report["invocation_authority_fd"]);
+    assert_eq!(fd_report["magic_hex"], "4645324f33524900", "{fd_report}");
+    assert_eq!(fd_report["version"], 3, "{fd_report}");
+    assert_eq!(fd_report["canonical_v3"], true, "{fd_report}");
+    assert_eq!(fd_report["raw_compiler_closure"], false, "{fd_report}");
+    assert_eq!(
+        fd_report["mode"],
+        serde_json::json!(libc::S_IFREG | 0o400),
+        "{fd_report}"
+    );
+    let required_seals =
+        libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    assert_eq!(fd_report["seals"], required_seals, "{fd_report}");
+    assert_eq!(fd_report["required_seals"], required_seals, "{fd_report}");
+    assert_eq!(fd_report["close_on_exec"], false, "{fd_report}");
+    assert_eq!(fd_report["fd195_open"], true, "{fd_report}");
+    assert_eq!(fd_report["same_object_as_fd195"], false, "{fd_report}");
+
+    let attack_fixture = ProjectFixture::standalone();
+    write_authority_lockfile(&attack_fixture.workspace);
+    for (attack, expected) in [
+        (
+            "setup-substitute",
+            "reserved rustc-invocation capability descriptor 199 is already in use",
+        ),
+        (
+            "rustc-substitute",
+            "rustc-invocation capability is not an exact regular mode-0400 file",
+        ),
+        (
+            "rustc-close",
+            "cannot inspect inherited rustc-invocation capability descriptor 199",
+        ),
+        ("rustc-truncate", "sealed fd199 truncation was denied"),
+    ] {
+        let _ = fs::remove_dir_all(&attack_fixture.target);
+        fs::create_dir_all(&attack_fixture.target).expect("reset fd199 attack target");
+        fs::write(
+            attack_fixture
+                .target
+                .join(PROTECTED_RELEASE_RUSTC_FD_ATTACK),
+            attack,
+        )
+        .expect("select protected release fd199 attack");
+        let output = attack_fixture
+            .protected_release_build_command()
+            .output()
+            .expect("run protected release fd199 attack");
+        assert!(
+            !output.status.success(),
+            "fd199 attack {attack} unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "attack={attack}\nstderr:\n{stderr}"
+        );
+        assert!(
+            !attack_fixture
+                .target
+                .join(PROTECTED_RELEASE_RUSTC_REPORT)
+                .exists(),
+            "fd199 attack {attack} reached authorized rustc publication"
+        );
+        assert!(
+            !attack_fixture
+                .target
+                .join(PROTECTED_RELEASE_RUSTC_FD_REPORT)
+                .exists(),
+            "fd199 attack {attack} reached successful descriptor admission"
+        );
+        assert!(
+            !protected_release_has_published_hsaco(&attack_fixture.target),
+            "fd199 attack {attack} published authorized output"
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]

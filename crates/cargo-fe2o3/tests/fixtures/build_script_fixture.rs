@@ -33,14 +33,14 @@ fn multithreaded_substitute() -> ExitCode {
     let trace = required_path("FE2O3_TEST_MULTITHREADED_TRACE");
     let forwarded = env::args_os().skip(1).collect::<Vec<_>>();
     let tgid = std::process::id();
-    let (backend_open, artifact_open) = descriptor_state();
+    let (backend_open, artifact_open, invocation_open) = descriptor_state();
     let worker = std::thread::spawn(move || {
         // SAFETY: gettid takes no arguments and has no memory effects.
         let tid = unsafe { libc::syscall(libc::SYS_gettid) } as u32;
         fs::write(
             &trace,
             format!(
-                "tgid={tgid}\ntid={tid}\nnon_leader={}\nbackend_open={backend_open}\nartifact_open={artifact_open}\n",
+                "tgid={tgid}\ntid={tid}\nnon_leader={}\nbackend_open={backend_open}\nartifact_open={artifact_open}\nfd199_open={invocation_open}\n",
                 tid != tgid
             ),
         )
@@ -115,12 +115,12 @@ fn execveat_wrapper() -> ExitCode {
 }
 
 fn ordinary_child() -> ExitCode {
-    let (backend_open, artifact_open) = descriptor_state();
-    if let Err(error) = write_report("ordinary", backend_open, artifact_open) {
+    let (backend_open, artifact_open, invocation_open) = descriptor_state();
+    if let Err(error) = write_report("ordinary", backend_open, artifact_open, invocation_open) {
         eprintln!("ordinary build-script probe failed: {error}");
         return ExitCode::FAILURE;
     }
-    if backend_open || artifact_open {
+    if backend_open || artifact_open || invocation_open {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -158,25 +158,34 @@ fn exec_wrapper() -> ExitCode {
 }
 
 fn forged_compiler() -> ExitCode {
-    let (backend_open, artifact_open) = descriptor_state();
-    if let Err(error) = write_report("exec-wrapper", backend_open, artifact_open) {
+    let (backend_open, artifact_open, invocation_open) = descriptor_state();
+    if let Err(error) = write_report("exec-wrapper", backend_open, artifact_open, invocation_open) {
         eprintln!("replayed compiler probe failed: {error}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }
 
-fn descriptor_state() -> (bool, bool) {
+fn descriptor_state() -> (bool, bool, bool) {
     (
         fs::symlink_metadata("/proc/self/fd/198").is_ok(),
         fs::symlink_metadata("/proc/self/fd/197").is_ok(),
+        // SAFETY: F_GETFD only queries whether the fixed descriptor is open.
+        unsafe { libc::fcntl(199, libc::F_GETFD) } >= 0,
     )
 }
 
-fn write_report(mode: &str, backend_open: bool, artifact_open: bool) -> Result<(), String> {
+fn write_report(
+    mode: &str,
+    backend_open: bool,
+    artifact_open: bool,
+    invocation_open: bool,
+) -> Result<(), String> {
     fs::write(
         required_path(REPORT_ENV),
-        format!("mode={mode}\nbackend_open={backend_open}\nartifact_open={artifact_open}\n"),
+        format!(
+            "mode={mode}\nbackend_open={backend_open}\nartifact_open={artifact_open}\nfd199_open={invocation_open}\n"
+        ),
     )
     .map_err(|error| format!("write descriptor report: {error}"))
 }
