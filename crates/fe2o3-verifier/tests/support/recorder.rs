@@ -71,7 +71,7 @@ fn main() {
             eprint!("bounded failure");
             process::exit(17);
         }
-        "signal" => process::abort(),
+        "signal" => terminate_with_signal(),
         "timeout" => std::thread::sleep(Duration::from_secs(10)),
         "inherited-pipe" => {
             spawn_pipe_holder();
@@ -108,6 +108,17 @@ fn main() {
         "malformed" => write_result(result, b"proved\n"),
         _ => process::exit(92),
     }
+}
+
+fn terminate_with_signal() -> ! {
+    unsafe extern "C" {
+        fn raise(signal: i32) -> i32;
+    }
+
+    const SIGTERM: i32 = 15;
+    let result = unsafe { raise(SIGTERM) };
+    eprintln!("failed to terminate the recorder fixture with SIGTERM: {result}");
+    process::exit(95);
 }
 
 fn synthetic_authenticated_recorder(arguments: &[String]) {

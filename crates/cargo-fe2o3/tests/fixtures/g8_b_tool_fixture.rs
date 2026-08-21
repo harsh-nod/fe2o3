@@ -32,7 +32,7 @@ fn main() {
             target_exit(0);
         }
         "tool-exit" => process::exit(19),
-        "tool-signal" => process::abort(),
+        "tool-signal" => terminate_with_signal(),
         "timeout" => thread::sleep(Duration::from_secs(30)),
         "output-overflow" => {
             let block = [b'x'; 8192];
@@ -88,6 +88,18 @@ fn main() {
 fn target_exit(code: i32) {
     println!("FE2O3_TARGET_EXIT_CODE={code}");
     println!("FE2O3_TARGET_EXIT_SIGNAL=void");
+}
+
+fn terminate_with_signal() -> ! {
+    unsafe extern "C" {
+        fn raise(signal: i32) -> i32;
+    }
+
+    const SIGTERM: i32 = 15;
+    let result = unsafe { raise(SIGTERM) };
+    fail(&format!(
+        "failed to terminate the tool fixture with SIGTERM: {result}"
+    ));
 }
 
 fn replace_argv_zero() {
