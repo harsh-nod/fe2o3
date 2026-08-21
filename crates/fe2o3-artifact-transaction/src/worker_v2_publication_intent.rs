@@ -1234,6 +1234,2057 @@ impl FaultInjector {
     }
 }
 
+#[allow(dead_code)]
+mod publication_intent_v2 {
+    use super::*;
+
+    const RECORD_MAGIC_V2: &[u8] = b"FE2O3-WORKER-V2-PUBLICATION-INTENT-V2\0";
+    const RECORD_VERSION_V2: u16 = 2;
+    const PRODUCER_DOMAIN_V2: &[u8] = b"fe2o3.worker-v2-publication-intent.producer.v2\0";
+    const SLOT_DOMAIN_V2: &[u8] = b"fe2o3.worker-v2-publication-intent.slot.v2\0";
+    const RECORD_CHECKSUM_DOMAIN_V2: &[u8] =
+        b"fe2o3.worker-v2-publication-intent.record-checksum.v2\0";
+    const RECORD_IDENTITY_DOMAIN_V2: &[u8] =
+        b"fe2o3.worker-v2-publication-intent.record-identity.v2\0";
+    const COMPILER_CLOSURE_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3-compiler-closure-identity-v2\0";
+    const COMPILER_TRANSITION_PROTOCOL_VERSION_V2: u16 = 1;
+    const FILE_PREFIX_V2: &str = ".fe2o3-worker-v2-publication-intent-v2-";
+
+    // Six compiler pins, transition protocol, and aggregate identity.
+    const COMPILER_CLOSURE_BYTES_V2: usize = (6 * 32) + 2 + 32;
+
+    // V1 fields under independent V2 domains, followed by the complete compiler-closure preimage.
+    const RECORD_BYTES_V2: usize = RECORD_MAGIC_V2.len()
+        + 2
+        + 32
+        + 8
+        + 16
+        + 32
+        + 32
+        + 32
+        + 32
+        + (3 * 32)
+        + (7 * 32)
+        + 32
+        + 8
+        + COMPILER_CLOSURE_BYTES_V2
+        + 32;
+
+    static NEXT_TEMP_ID_V2: AtomicU64 = AtomicU64::new(1);
+
+    /// Exact canonical size of a V2 publication-intent record.
+    pub const MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES_V2: usize = RECORD_BYTES_V2;
+
+    /// Maximum exact Worker V2 output retained by one V2 publication intent.
+    pub const MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2: usize =
+        MAX_DURABLE_FINALIZED_ARTIFACT_BYTES;
+
+    /// Failure to construct the canonical compiler-closure preimage carried by a V2 intent.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[non_exhaustive]
+    pub enum WorkerV2PublicationIntentCompilerClosureErrorV2 {
+        /// One of the six role-specific content pins or the aggregate identity was all zero.
+        ZeroDigest,
+        /// The Cargo binding transition protocol is not the canonical shared protocol.
+        UnsupportedTransitionProtocolVersion { version: u16 },
+        /// The declared aggregate identity does not match the six role-specific pins.
+        IdentityMismatch,
+    }
+
+    impl fmt::Display for WorkerV2PublicationIntentCompilerClosureErrorV2 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::ZeroDigest => formatter.write_str("compiler closure digests must be nonzero"),
+                Self::UnsupportedTransitionProtocolVersion { version } => write!(
+                    formatter,
+                    "Cargo binding transition protocol version {version} is not canonical"
+                ),
+                Self::IdentityMismatch => formatter
+                    .write_str("declared compiler closure does not match its canonical pins"),
+            }
+        }
+    }
+
+    impl std::error::Error for WorkerV2PublicationIntentCompilerClosureErrorV2 {}
+
+    /// Canonical neutral representation of the complete shared `CompilerClosureV2` preimage.
+    ///
+    /// The transaction crate intentionally does not depend on the authority crate. Primary integration
+    /// can adapt this value mechanically to `fe2o3_build_authority::CompilerClosureV2`; every shared
+    /// field is retained and validated using the shared canonical identity transcript.
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    pub struct WorkerV2PublicationIntentCompilerClosureV2 {
+        cargo_executable_sha256: [u8; 32],
+        cargo_binding_trampoline_sha256: [u8; 32],
+        cargo_fe2o3_binding_wrapper_sha256: [u8; 32],
+        rustc_executable_sha256: [u8; 32],
+        rustc_runtime_tree_sha256: [u8; 32],
+        codegen_backend_sha256: [u8; 32],
+        cargo_binding_transition_protocol_version: u16,
+        identity_sha256: [u8; 32],
+    }
+
+    impl WorkerV2PublicationIntentCompilerClosureV2 {
+        /// Derives the canonical aggregate from six nonzero role-specific content pins.
+        pub fn new(
+            cargo_executable_sha256: [u8; 32],
+            cargo_binding_trampoline_sha256: [u8; 32],
+            cargo_fe2o3_binding_wrapper_sha256: [u8; 32],
+            rustc_executable_sha256: [u8; 32],
+            rustc_runtime_tree_sha256: [u8; 32],
+            codegen_backend_sha256: [u8; 32],
+        ) -> Result<Self, WorkerV2PublicationIntentCompilerClosureErrorV2> {
+            let identity_sha256 = compiler_closure_identity_v2(
+                cargo_executable_sha256,
+                cargo_binding_trampoline_sha256,
+                cargo_fe2o3_binding_wrapper_sha256,
+                rustc_executable_sha256,
+                rustc_runtime_tree_sha256,
+                codegen_backend_sha256,
+                COMPILER_TRANSITION_PROTOCOL_VERSION_V2,
+            );
+            Self::from_pins_and_identity(
+                cargo_executable_sha256,
+                cargo_binding_trampoline_sha256,
+                cargo_fe2o3_binding_wrapper_sha256,
+                rustc_executable_sha256,
+                rustc_runtime_tree_sha256,
+                codegen_backend_sha256,
+                COMPILER_TRANSITION_PROTOCOL_VERSION_V2,
+                identity_sha256,
+            )
+        }
+
+        /// Validates all fields of a declared shared compiler-closure preimage.
+        #[allow(clippy::too_many_arguments)]
+        pub fn from_pins_and_identity(
+            cargo_executable_sha256: [u8; 32],
+            cargo_binding_trampoline_sha256: [u8; 32],
+            cargo_fe2o3_binding_wrapper_sha256: [u8; 32],
+            rustc_executable_sha256: [u8; 32],
+            rustc_runtime_tree_sha256: [u8; 32],
+            codegen_backend_sha256: [u8; 32],
+            cargo_binding_transition_protocol_version: u16,
+            identity_sha256: [u8; 32],
+        ) -> Result<Self, WorkerV2PublicationIntentCompilerClosureErrorV2> {
+            if cargo_binding_transition_protocol_version != COMPILER_TRANSITION_PROTOCOL_VERSION_V2
+            {
+                return Err(
+                WorkerV2PublicationIntentCompilerClosureErrorV2::UnsupportedTransitionProtocolVersion {
+                    version: cargo_binding_transition_protocol_version,
+                },
+            );
+            }
+            if [
+                cargo_executable_sha256,
+                cargo_binding_trampoline_sha256,
+                cargo_fe2o3_binding_wrapper_sha256,
+                rustc_executable_sha256,
+                rustc_runtime_tree_sha256,
+                codegen_backend_sha256,
+                identity_sha256,
+            ]
+            .contains(&[0; 32])
+            {
+                return Err(WorkerV2PublicationIntentCompilerClosureErrorV2::ZeroDigest);
+            }
+            let expected = compiler_closure_identity_v2(
+                cargo_executable_sha256,
+                cargo_binding_trampoline_sha256,
+                cargo_fe2o3_binding_wrapper_sha256,
+                rustc_executable_sha256,
+                rustc_runtime_tree_sha256,
+                codegen_backend_sha256,
+                cargo_binding_transition_protocol_version,
+            );
+            if identity_sha256 != expected {
+                return Err(WorkerV2PublicationIntentCompilerClosureErrorV2::IdentityMismatch);
+            }
+            Ok(Self {
+                cargo_executable_sha256,
+                cargo_binding_trampoline_sha256,
+                cargo_fe2o3_binding_wrapper_sha256,
+                rustc_executable_sha256,
+                rustc_runtime_tree_sha256,
+                codegen_backend_sha256,
+                cargo_binding_transition_protocol_version,
+                identity_sha256,
+            })
+        }
+
+        /// Returns the Cargo executable content digest.
+        pub const fn cargo_executable_sha256(self) -> [u8; 32] {
+            self.cargo_executable_sha256
+        }
+
+        /// Returns the static Cargo binding-trampoline content digest.
+        pub const fn cargo_binding_trampoline_sha256(self) -> [u8; 32] {
+            self.cargo_binding_trampoline_sha256
+        }
+
+        /// Returns the full cargo-fe2o3 binding-wrapper content digest.
+        pub const fn cargo_fe2o3_binding_wrapper_sha256(self) -> [u8; 32] {
+            self.cargo_fe2o3_binding_wrapper_sha256
+        }
+
+        /// Returns the rustc executable content digest.
+        pub const fn rustc_executable_sha256(self) -> [u8; 32] {
+            self.rustc_executable_sha256
+        }
+
+        /// Returns the rustc runtime-tree content digest.
+        pub const fn rustc_runtime_tree_sha256(self) -> [u8; 32] {
+            self.rustc_runtime_tree_sha256
+        }
+
+        /// Returns the codegen-backend content digest.
+        pub const fn codegen_backend_sha256(self) -> [u8; 32] {
+            self.codegen_backend_sha256
+        }
+
+        /// Returns the canonical Cargo binding transition protocol version.
+        pub const fn cargo_binding_transition_protocol_version(self) -> u16 {
+            self.cargo_binding_transition_protocol_version
+        }
+
+        /// Returns the canonical aggregate compiler-closure identity.
+        pub const fn identity_sha256(self) -> [u8; 32] {
+            self.identity_sha256
+        }
+
+        fn encode_into(self, bytes: &mut Vec<u8>) {
+            bytes.extend_from_slice(&self.cargo_executable_sha256);
+            bytes.extend_from_slice(&self.cargo_binding_trampoline_sha256);
+            bytes.extend_from_slice(&self.cargo_fe2o3_binding_wrapper_sha256);
+            bytes.extend_from_slice(&self.rustc_executable_sha256);
+            bytes.extend_from_slice(&self.rustc_runtime_tree_sha256);
+            bytes.extend_from_slice(&self.codegen_backend_sha256);
+            bytes.extend_from_slice(&self.cargo_binding_transition_protocol_version.to_le_bytes());
+            bytes.extend_from_slice(&self.identity_sha256);
+        }
+
+        fn decode(decoder: &mut Decoder<'_>) -> Result<Self, &'static str> {
+            Self::from_pins_and_identity(
+                decoder.array()?,
+                decoder.array()?,
+                decoder.array()?,
+                decoder.array()?,
+                decoder.array()?,
+                decoder.array()?,
+                decoder.u16()?,
+                decoder.array()?,
+            )
+            .map_err(compiler_closure_decode_error_v2)
+        }
+    }
+
+    fn compiler_closure_decode_error_v2(
+        error: WorkerV2PublicationIntentCompilerClosureErrorV2,
+    ) -> &'static str {
+        match error {
+            WorkerV2PublicationIntentCompilerClosureErrorV2::ZeroDigest => {
+                "record compiler closure contains a zero digest"
+            }
+            WorkerV2PublicationIntentCompilerClosureErrorV2::UnsupportedTransitionProtocolVersion {
+                ..
+            } => "record compiler closure uses an unsupported transition protocol version",
+            WorkerV2PublicationIntentCompilerClosureErrorV2::IdentityMismatch => {
+                "record compiler closure identity does not match its role-specific pins"
+            }
+        }
+    }
+
+    /// SHA-256 identity of one complete canonical V2 publication-intent record.
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    pub struct WorkerV2PublicationIntentIdentityV2([u8; 32]);
+
+    impl WorkerV2PublicationIntentIdentityV2 {
+        /// Constructs an identity from its exact 256-bit representation.
+        pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+            Self(bytes)
+        }
+
+        /// Returns the exact 256-bit representation.
+        pub const fn as_bytes(self) -> [u8; 32] {
+            self.0
+        }
+    }
+
+    /// Canonical identities and compiler closure required to retry one exact publication.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct WorkerV2PublicationIntentRecordV2 {
+        slot: [u8; 32],
+        attempt: BuildAttempt,
+        producer_identity: [u8; 32],
+        upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+        plan: DurableLinkPublicationPlanV1,
+        output_identity: FinalizedOutputIdentityV1,
+        output_length: usize,
+        compiler_closure: WorkerV2PublicationIntentCompilerClosureV2,
+        identity: WorkerV2PublicationIntentIdentityV2,
+    }
+
+    impl WorkerV2PublicationIntentRecordV2 {
+        /// Exact build attempt to which this intent is bound.
+        pub const fn attempt(self) -> BuildAttempt {
+            self.attempt
+        }
+
+        /// Domain-separated identity of the exact producer source and crate name.
+        pub const fn producer_identity(self) -> [u8; 32] {
+            self.producer_identity
+        }
+
+        /// Caller-supplied identity of the admitted upstream Worker V2 evidence.
+        pub const fn upstream_evidence(self) -> UpstreamCodeObjectEvidenceIdentityV1 {
+            self.upstream_evidence
+        }
+
+        /// Complete durable publication plan reconstructed from the canonical record.
+        pub const fn plan(self) -> DurableLinkPublicationPlanV1 {
+            self.plan
+        }
+
+        /// SHA-256 identity of the exact retained output bytes.
+        pub const fn output_identity(self) -> FinalizedOutputIdentityV1 {
+            self.output_identity
+        }
+
+        /// Exact retained output length.
+        pub const fn output_length(self) -> usize {
+            self.output_length
+        }
+
+        /// Complete canonical compiler-closure preimage bound into this intent.
+        pub const fn compiler_closure(self) -> WorkerV2PublicationIntentCompilerClosureV2 {
+            self.compiler_closure
+        }
+
+        /// Identity of the complete V2 checksummed canonical record.
+        pub const fn identity(self) -> WorkerV2PublicationIntentIdentityV2 {
+            self.identity
+        }
+
+        /// An intent remains inert until the attempt-scoped publication API authorizes it.
+        pub const fn grants_publication_authority(self) -> bool {
+            false
+        }
+
+        /// A retained compiler closure is evidence only and does not authenticate authorship.
+        pub const fn grants_compiler_authority(self) -> bool {
+            false
+        }
+
+        /// A persisted publication intent does not authorize HSA loading.
+        pub const fn grants_load_authority(self) -> bool {
+            false
+        }
+
+        /// A persisted publication intent does not authorize kernel launch.
+        pub const fn grants_launch_authority(self) -> bool {
+            false
+        }
+
+        fn new(
+            producer: &ProducerIdentity,
+            attempt: BuildAttempt,
+            plan: DurableLinkPublicationPlanV1,
+            upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+            output_length: usize,
+            compiler_closure: WorkerV2PublicationIntentCompilerClosureV2,
+        ) -> Self {
+            let producer_identity = producer_identity_v2(producer);
+            let output_identity = plan.finalized_output();
+            let mut record = Self {
+                slot: slot_identity_v2(producer_identity, attempt),
+                attempt,
+                producer_identity,
+                upstream_evidence,
+                plan,
+                output_identity,
+                output_length,
+                compiler_closure,
+                identity: WorkerV2PublicationIntentIdentityV2([0; 32]),
+            };
+            record.identity = record.encoded_identity();
+            record
+        }
+
+        fn encode(self) -> Vec<u8> {
+            let mut bytes = self.encode_body();
+            let checksum = sha256_parts(&[RECORD_CHECKSUM_DOMAIN_V2, &bytes]);
+            bytes.extend_from_slice(&checksum);
+            debug_assert_eq!(bytes.len(), RECORD_BYTES_V2);
+            bytes
+        }
+
+        fn encode_body(self) -> Vec<u8> {
+            let mut bytes = Vec::with_capacity(RECORD_BYTES_V2 - 32);
+            bytes.extend_from_slice(RECORD_MAGIC_V2);
+            bytes.extend_from_slice(&RECORD_VERSION_V2.to_le_bytes());
+            bytes.extend_from_slice(&self.slot);
+            bytes.extend_from_slice(&self.attempt.generation().to_le_bytes());
+            bytes.extend_from_slice(self.attempt.session().as_bytes());
+            bytes.extend_from_slice(self.attempt.invocation().as_bytes());
+            bytes.extend_from_slice(&self.producer_identity);
+            bytes.extend_from_slice(&self.upstream_evidence.as_bytes());
+            bytes.extend_from_slice(&self.plan.identity());
+            push_scope(&mut bytes, self.plan.scope());
+            bytes.extend_from_slice(self.plan.request().as_bytes());
+            bytes.extend_from_slice(self.plan.worker().as_bytes());
+            bytes.extend_from_slice(self.plan.response().as_bytes());
+            bytes.extend_from_slice(self.plan.linked_output().as_bytes());
+            bytes.extend_from_slice(self.plan.finalization().as_bytes());
+            bytes.extend_from_slice(self.plan.finalized_output().as_bytes());
+            bytes.extend_from_slice(self.plan.publication().as_bytes());
+            bytes.extend_from_slice(self.output_identity.as_bytes());
+            bytes.extend_from_slice(&(self.output_length as u64).to_le_bytes());
+            self.compiler_closure.encode_into(&mut bytes);
+            bytes
+        }
+
+        fn encoded_identity(self) -> WorkerV2PublicationIntentIdentityV2 {
+            WorkerV2PublicationIntentIdentityV2(sha256_parts(&[
+                RECORD_IDENTITY_DOMAIN_V2,
+                &self.encode(),
+            ]))
+        }
+
+        fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
+            if bytes.len() != RECORD_BYTES_V2 {
+                return Err("record has a noncanonical V2 length");
+            }
+            let (body, checksum) = bytes.split_at(bytes.len() - 32);
+            if sha256_parts(&[RECORD_CHECKSUM_DOMAIN_V2, body]).as_slice() != checksum {
+                return Err("record checksum mismatch");
+            }
+            let mut decoder = Decoder::new(body);
+            if decoder.take(RECORD_MAGIC_V2.len())? != RECORD_MAGIC_V2 {
+                return Err("record magic mismatch");
+            }
+            if decoder.u16()? != RECORD_VERSION_V2 {
+                return Err("unsupported V2 record version");
+            }
+            let slot = decoder.array()?;
+            let generation = decoder.u64()?;
+            let session = crate::BuildSession::from_bytes(decoder.array()?);
+            let invocation = crate::BuildInvocation::from_bytes(decoder.array()?);
+            let attempt = BuildAttempt::from_env_value(&format!(
+                "{generation}:{}:{}",
+                session.to_hex(),
+                invocation.to_hex()
+            ))
+            .map_err(|_| "record contains an invalid attempt")?;
+            let producer_identity = decoder.array()?;
+            let upstream_evidence =
+                UpstreamCodeObjectEvidenceIdentityV1::from_bytes(decoder.array()?);
+            let committed_plan_identity: [u8; 32] = decoder.array()?;
+            let scope = LinkPublicationScopeV1::new(
+                PackageIdentityV1::from_bytes(decoder.array()?),
+                KernelSetIdentityV1::from_bytes(decoder.array()?),
+                TargetIdentityV1::from_bytes(decoder.array()?),
+            );
+            let plan = DurableLinkPublicationPlanV1::new(
+                attempt,
+                scope,
+                CanonicalLinkRequestIdentityV1::from_bytes(decoder.array()?),
+                PinnedWorkerIdentityV1::from_bytes(decoder.array()?),
+                ValidatedResponseIdentityV1::from_bytes(decoder.array()?),
+                LinkedOutputIdentityV1::from_bytes(decoder.array()?),
+                FinalizationIdentityV1::from_bytes(decoder.array()?),
+                FinalizedOutputIdentityV1::from_bytes(decoder.array()?),
+                AtomicPublicationIdentityV1::from_bytes(decoder.array()?),
+            );
+            let output_identity = FinalizedOutputIdentityV1::from_bytes(decoder.array()?);
+            let output_length =
+                usize::try_from(decoder.u64()?).map_err(|_| "record output length is invalid")?;
+            let compiler_closure =
+                WorkerV2PublicationIntentCompilerClosureV2::decode(&mut decoder)?;
+            if !decoder.finished() {
+                return Err("record has trailing body bytes");
+            }
+            if output_length == 0
+                || output_length > MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2
+            {
+                return Err("record output length is outside the supported bound");
+            }
+            if committed_plan_identity != plan.identity() {
+                return Err("record plan commitment does not match its plan fields");
+            }
+            if output_identity != plan.finalized_output() {
+                return Err("record output identity does not match its publication plan");
+            }
+            let mut record = Self {
+                slot,
+                attempt,
+                producer_identity,
+                upstream_evidence,
+                plan,
+                output_identity,
+                output_length,
+                compiler_closure,
+                identity: WorkerV2PublicationIntentIdentityV2([0; 32]),
+            };
+            record.identity = WorkerV2PublicationIntentIdentityV2(sha256_parts(&[
+                RECORD_IDENTITY_DOMAIN_V2,
+                bytes,
+            ]));
+            Ok(record)
+        }
+    }
+
+    /// Whether V2 persistence created a new intent or reconciled an existing exact intent.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum WorkerV2PublicationIntentOutcomeV2 {
+        /// This call committed a new canonical V2 intent.
+        Persisted,
+        /// This call recovered an exact V2 intent committed by an earlier process.
+        Recovered,
+    }
+
+    /// Immutable V2 restart input validated under the shared artifact-store lock.
+    #[derive(Clone, Debug)]
+    pub struct RecoveredWorkerV2PublicationIntentV2 {
+        outcome: WorkerV2PublicationIntentOutcomeV2,
+        record: WorkerV2PublicationIntentRecordV2,
+        exact_output: Arc<[u8]>,
+    }
+
+    impl RecoveredWorkerV2PublicationIntentV2 {
+        /// Reports whether this call committed or recovered the intent.
+        pub const fn outcome(&self) -> WorkerV2PublicationIntentOutcomeV2 {
+            self.outcome
+        }
+
+        /// Returns the validated canonical V2 identity record.
+        pub const fn record(&self) -> WorkerV2PublicationIntentRecordV2 {
+            self.record
+        }
+
+        /// Returns the complete compiler closure carried by the validated record.
+        pub const fn compiler_closure(&self) -> WorkerV2PublicationIntentCompilerClosureV2 {
+            self.record.compiler_closure
+        }
+
+        /// Borrows the exact retained Worker V2 output bytes.
+        pub fn exact_output(&self) -> &[u8] {
+            &self.exact_output
+        }
+
+        /// Consumes this result and returns its immutable output snapshot.
+        pub fn into_exact_output(self) -> Arc<[u8]> {
+            self.exact_output
+        }
+
+        /// Recovery still requires the attempt-scoped publication API to authorize these inputs.
+        pub const fn grants_publication_authority(&self) -> bool {
+            false
+        }
+
+        /// Retained compiler evidence does not grant compiler authority.
+        pub const fn grants_compiler_authority(&self) -> bool {
+            false
+        }
+
+        /// Persisted intent bytes do not authorize HSA loading.
+        pub const fn grants_load_authority(&self) -> bool {
+            false
+        }
+
+        /// Persisted intent bytes do not authorize kernel launch.
+        pub const fn grants_launch_authority(&self) -> bool {
+            false
+        }
+    }
+
+    /// Durable V2 operation at which a test may simulate abrupt process termination.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum WorkerV2PublicationIntentBoundaryV2 {
+        CreateOutputTemp,
+        WriteOutputTemp,
+        SyncOutputTemp,
+        RenameOutput,
+        SyncOutputName,
+        CreateRecordTemp,
+        WriteRecordTemp,
+        SyncRecordTemp,
+        RenameRecordToRedo,
+        SyncRedoName,
+        RenameRedoToCanonical,
+        SyncCanonicalName,
+    }
+
+    /// Whether V2 fault injection interrupts before or after one durable operation.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum WorkerV2PublicationIntentFaultTimingV2 {
+        Before,
+        After,
+    }
+
+    /// Exact deterministic V2 crash point used by persistence tests.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct WorkerV2PublicationIntentFaultPointV2 {
+        pub boundary: WorkerV2PublicationIntentBoundaryV2,
+        pub timing: WorkerV2PublicationIntentFaultTimingV2,
+    }
+
+    /// V2 fault-injection options. Production callers use [`Default::default`].
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct WorkerV2PublicationIntentOptionsV2 {
+        injected_crash: Option<WorkerV2PublicationIntentFaultPointV2>,
+    }
+
+    impl WorkerV2PublicationIntentOptionsV2 {
+        /// Simulates abrupt process termination at one exact V2 persistence boundary.
+        pub const fn inject_crash(point: WorkerV2PublicationIntentFaultPointV2) -> Self {
+            Self {
+                injected_crash: Some(point),
+            }
+        }
+    }
+
+    /// Failure to persist, recover, or clear exact V2 restart inputs.
+    #[derive(Debug)]
+    #[non_exhaustive]
+    pub enum WorkerV2PublicationIntentErrorV2 {
+        Store(EmitError),
+        Io(std::io::Error),
+        PlanAttemptMismatch,
+        InvalidOutputSize {
+            actual: usize,
+            maximum: usize,
+        },
+        OutputDigestMismatch,
+        Attempt {
+            reason: String,
+        },
+        NotFound,
+        ConflictingIntent,
+        CompilerClosureMismatch,
+        IntentIdentityMismatch,
+        InvalidIntent {
+            path: PathBuf,
+            reason: String,
+        },
+        InjectedCrash {
+            point: WorkerV2PublicationIntentFaultPointV2,
+        },
+    }
+
+    impl fmt::Display for WorkerV2PublicationIntentErrorV2 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Store(error) => write!(
+                    formatter,
+                    "artifact store rejected V2 publication intent: {error}"
+                ),
+                Self::Io(error) => write!(formatter, "{error}"),
+                Self::PlanAttemptMismatch => formatter.write_str(
+                    "Worker V2 publication plan does not match the supplied build attempt",
+                ),
+                Self::InvalidOutputSize { actual, maximum } => write!(
+                    formatter,
+                    "Worker V2 publication-intent output size {actual} is outside 1..={maximum} bytes"
+                ),
+                Self::OutputDigestMismatch => formatter.write_str(
+                    "Worker V2 publication-intent output digest does not match the durable plan",
+                ),
+                Self::Attempt { reason } => write!(
+                    formatter,
+                    "invalid Worker V2 publication-intent attempt: {reason}"
+                ),
+                Self::NotFound => formatter.write_str("V2 publication intent was not found"),
+                Self::ConflictingIntent => {
+                    formatter.write_str("a different V2 publication intent is already committed")
+                }
+                Self::CompilerClosureMismatch => formatter.write_str(
+                    "compiler closure does not match the canonical V2 publication intent",
+                ),
+                Self::IntentIdentityMismatch => formatter.write_str(
+                    "Worker V2 publication-intent identity does not match the committed V2 record",
+                ),
+                Self::InvalidIntent { path, reason } => write!(
+                    formatter,
+                    "invalid V2 publication intent {}: {reason}",
+                    path.display()
+                ),
+                Self::InjectedCrash { point } => write!(
+                    formatter,
+                    "injected V2 publication-intent crash at {point:?}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for WorkerV2PublicationIntentErrorV2 {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::Store(error) => Some(error),
+                Self::Io(error) => Some(error),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<EmitError> for WorkerV2PublicationIntentErrorV2 {
+        fn from(error: EmitError) -> Self {
+            Self::Store(error)
+        }
+    }
+
+    impl From<std::io::Error> for WorkerV2PublicationIntentErrorV2 {
+        fn from(error: std::io::Error) -> Self {
+            Self::Io(error)
+        }
+    }
+
+    /// Persists exact V2 restart input before the attempt-scoped backend claim is consumed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn persist_worker_v2_publication_intent_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        plan: DurableLinkPublicationPlanV1,
+        upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+        compiler_closure: WorkerV2PublicationIntentCompilerClosureV2,
+        exact_output: &[u8],
+    ) -> Result<RecoveredWorkerV2PublicationIntentV2, WorkerV2PublicationIntentErrorV2> {
+        persist_worker_v2_publication_intent_v2_with_options(
+            output_dir,
+            producer,
+            attempt,
+            plan,
+            upstream_evidence,
+            compiler_closure,
+            exact_output,
+            WorkerV2PublicationIntentOptionsV2::default(),
+        )
+    }
+
+    /// Fault-injectable form of [`persist_worker_v2_publication_intent_v2`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn persist_worker_v2_publication_intent_v2_with_options(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        plan: DurableLinkPublicationPlanV1,
+        upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+        compiler_closure: WorkerV2PublicationIntentCompilerClosureV2,
+        exact_output: &[u8],
+        options: WorkerV2PublicationIntentOptionsV2,
+    ) -> Result<RecoveredWorkerV2PublicationIntentV2, WorkerV2PublicationIntentErrorV2> {
+        validate_inputs_v2(attempt, plan, exact_output)?;
+        let expected = WorkerV2PublicationIntentRecordV2::new(
+            producer,
+            attempt,
+            plan,
+            upstream_evidence,
+            exact_output.len(),
+            compiler_closure,
+        );
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output.lock()?;
+        output.verify_path_identity()?;
+        let authorization = authorize_v2(&output, producer, attempt)?;
+        let names = IntentNamesV2::new(expected.producer_identity, expected.slot);
+        cleanup_temps_v2(&output, &names)?;
+
+        if let Some(recovered) = recover_locked_v2(&output, &names, producer, attempt)? {
+            if recovered.record != expected || recovered.exact_output.as_ref() != exact_output {
+                return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
+            }
+            return Ok(recovered);
+        }
+        if authorization != AttemptPhase::Building {
+            return Err(WorkerV2PublicationIntentErrorV2::Attempt {
+                reason: "a fresh intent may be created only before backend authority is claimed"
+                    .to_string(),
+            });
+        }
+
+        let mut faults = FaultInjectorV2::new(options.injected_crash);
+        persist_output_v2(&output, &names, exact_output, &mut faults)?;
+        persist_record_v2(&output, &names, expected, &mut faults)?;
+        let recovered = recover_locked_v2(&output, &names, producer, attempt)?
+            .ok_or_else(|| invalid_v2(&output, &names.record, "record disappeared after commit"))?;
+        if recovered.record != expected || recovered.exact_output.as_ref() != exact_output {
+            return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
+        }
+        Ok(RecoveredWorkerV2PublicationIntentV2 {
+            outcome: WorkerV2PublicationIntentOutcomeV2::Persisted,
+            ..recovered
+        })
+    }
+
+    /// Recovers exact persisted V2 inputs without consulting or upgrading a V1 record.
+    pub fn recover_worker_v2_publication_intent_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: WorkerV2PublicationIntentCompilerClosureV2,
+    ) -> Result<RecoveredWorkerV2PublicationIntentV2, WorkerV2PublicationIntentErrorV2> {
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output.lock()?;
+        output.verify_path_identity()?;
+        authorize_v2(&output, producer, attempt)?;
+        let producer_identity = producer_identity_v2(producer);
+        let names = IntentNamesV2::new(
+            producer_identity,
+            slot_identity_v2(producer_identity, attempt),
+        );
+        cleanup_temps_v2(&output, &names)?;
+        let recovered = recover_locked_v2(&output, &names, producer, attempt)?
+            .ok_or(WorkerV2PublicationIntentErrorV2::NotFound)?;
+        if recovered.record.compiler_closure != compiler_closure {
+            return Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch);
+        }
+        Ok(recovered)
+    }
+
+    /// Removes one exact committed V2 intent after its publication receipt is durable.
+    pub fn clear_worker_v2_publication_intent_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: WorkerV2PublicationIntentCompilerClosureV2,
+        identity: WorkerV2PublicationIntentIdentityV2,
+    ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output.lock()?;
+        output.verify_path_identity()?;
+        authorize_any_phase_v2(&output, producer, attempt)?;
+        let producer_identity = producer_identity_v2(producer);
+        let names = IntentNamesV2::new(
+            producer_identity,
+            slot_identity_v2(producer_identity, attempt),
+        );
+        cleanup_temps_v2(&output, &names)?;
+        let recovered = recover_locked_v2(&output, &names, producer, attempt)?
+            .ok_or(WorkerV2PublicationIntentErrorV2::NotFound)?;
+        if recovered.record.compiler_closure != compiler_closure {
+            return Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch);
+        }
+        if recovered.record.identity != identity {
+            return Err(WorkerV2PublicationIntentErrorV2::IntentIdentityMismatch);
+        }
+        authorize_clear_v2(&output, producer, attempt, recovered.record)?;
+        unlinkat(&output.fd, &names.record, AtFlags::empty()).map_err(std::io::Error::from)?;
+        fsync(&output.fd).map_err(std::io::Error::from)?;
+        unlinkat(&output.fd, &names.output, AtFlags::empty()).map_err(std::io::Error::from)?;
+        fsync(&output.fd).map_err(std::io::Error::from)?;
+        Ok(())
+    }
+
+    fn validate_inputs_v2(
+        attempt: BuildAttempt,
+        plan: DurableLinkPublicationPlanV1,
+        exact_output: &[u8],
+    ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+        if plan.attempt() != attempt {
+            return Err(WorkerV2PublicationIntentErrorV2::PlanAttemptMismatch);
+        }
+        if attempt.session() == BuildSession::DIRECT {
+            return Err(WorkerV2PublicationIntentErrorV2::Attempt {
+                reason: "the direct compiler token cannot own a restart intent".to_string(),
+            });
+        }
+        if exact_output.is_empty()
+            || exact_output.len() > MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2
+        {
+            return Err(WorkerV2PublicationIntentErrorV2::InvalidOutputSize {
+                actual: exact_output.len(),
+                maximum: MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2,
+            });
+        }
+        if sha256(exact_output) != *plan.finalized_output().as_bytes() {
+            return Err(WorkerV2PublicationIntentErrorV2::OutputDigestMismatch);
+        }
+        Ok(())
+    }
+
+    fn authorize_v2(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<AttemptPhase, WorkerV2PublicationIntentErrorV2> {
+        let phase = authorize_any_phase_v2(output, producer, attempt)?;
+        if !matches!(
+            phase,
+            AttemptPhase::Building | AttemptPhase::BackendClaimed | AttemptPhase::Completed
+        ) {
+            return Err(WorkerV2PublicationIntentErrorV2::Attempt {
+                reason: "build attempt cannot recover a publication intent in its current phase"
+                    .to_string(),
+            });
+        }
+        Ok(phase)
+    }
+
+    fn authorize_any_phase_v2(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<AttemptPhase, WorkerV2PublicationIntentErrorV2> {
+        if attempt.session() == BuildSession::DIRECT {
+            return Err(WorkerV2PublicationIntentErrorV2::Attempt {
+                reason: "the direct compiler token cannot own a restart intent".to_string(),
+            });
+        }
+        let attempts = read_attempt_registry(output)?;
+        let record = attempts
+            .record_exact(&producer.stable_source, attempt)
+            .map_err(|error| WorkerV2PublicationIntentErrorV2::Attempt {
+                reason: error.to_string(),
+            })?;
+        if record.crate_name != producer.crate_name {
+            return Err(WorkerV2PublicationIntentErrorV2::Attempt {
+                reason: "build attempt crate name does not match the producer".to_string(),
+            });
+        }
+        Ok(record.phase)
+    }
+
+    fn authorize_clear_v2(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentRecordV2,
+    ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+        let attempts = read_attempt_registry(output)?;
+        let record = attempts
+            .record_exact(&producer.stable_source, attempt)
+            .map_err(|error| WorkerV2PublicationIntentErrorV2::Attempt {
+                reason: error.to_string(),
+            })?;
+        let expected =
+            publication_receipt(producer, attempt, intent.plan, intent.upstream_evidence);
+        if !matches!(
+            record.phase,
+            AttemptPhase::BackendClaimed | AttemptPhase::Completed
+        ) || record.backend_receipt != Some(BackendReceiptV1::Provenance(expected))
+        {
+            return Err(WorkerV2PublicationIntentErrorV2::Attempt {
+                reason: "the exact backend provenance receipt is not durable".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn recover_locked_v2(
+        output: &PinnedOutput,
+        names: &IntentNamesV2,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<Option<RecoveredWorkerV2PublicationIntentV2>, WorkerV2PublicationIntentErrorV2>
+    {
+        let canonical = entry_exists_v2(output, &names.record)?;
+        let redo = entry_exists_v2(output, &names.redo)?;
+        if canonical && redo {
+            return Err(invalid_v2(
+                output,
+                &names.record,
+                "canonical and redo V2 records coexist",
+            ));
+        }
+        let entry = if canonical {
+            &names.record
+        } else if redo {
+            &names.redo
+        } else {
+            return Ok(None);
+        };
+        let record = read_bound_record_v2(output, names, entry, producer, attempt)?;
+        let exact_output = read_output_v2(output, names, &record)?;
+        if redo {
+            output.verify_path_identity()?;
+            renameat(&output.fd, &names.redo, &output.fd, &names.record)
+                .map_err(std::io::Error::from)?;
+            fsync(&output.fd).map_err(std::io::Error::from)?;
+        }
+        Ok(Some(RecoveredWorkerV2PublicationIntentV2 {
+            outcome: WorkerV2PublicationIntentOutcomeV2::Recovered,
+            record,
+            exact_output: Arc::from(exact_output),
+        }))
+    }
+
+    fn persist_output_v2(
+        output: &PinnedOutput,
+        names: &IntentNamesV2,
+        exact_output: &[u8],
+        faults: &mut FaultInjectorV2,
+    ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+        if entry_exists_v2(output, &names.output)? {
+            let actual =
+                read_output_unbound_v2(output, names, exact_output.len(), sha256(exact_output))?;
+            if actual != exact_output {
+                return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
+            }
+            return Ok(());
+        }
+        let (temp_name, mut temp) = create_temp_v2(
+            output,
+            names,
+            "output",
+            WorkerV2PublicationIntentBoundaryV2::CreateOutputTemp,
+            faults,
+        )?;
+        faults.around(WorkerV2PublicationIntentBoundaryV2::WriteOutputTemp, || {
+            temp.write_all(exact_output).map_err(Into::into)
+        })?;
+        faults.around(WorkerV2PublicationIntentBoundaryV2::SyncOutputTemp, || {
+            temp.sync_all().map_err(Into::into)
+        })?;
+        faults.hit(
+            WorkerV2PublicationIntentBoundaryV2::RenameOutput,
+            WorkerV2PublicationIntentFaultTimingV2::Before,
+        )?;
+        renameat_with(
+            &output.fd,
+            &temp_name,
+            &output.fd,
+            &names.output,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        faults.hit(
+            WorkerV2PublicationIntentBoundaryV2::RenameOutput,
+            WorkerV2PublicationIntentFaultTimingV2::After,
+        )?;
+        validate_renamed_file_v2(output, &names.output, &temp, exact_output.len())?;
+        faults.around(WorkerV2PublicationIntentBoundaryV2::SyncOutputName, || {
+            fsync(&output.fd)
+                .map_err(std::io::Error::from)
+                .map_err(Into::into)
+        })?;
+        Ok(())
+    }
+
+    fn persist_record_v2(
+        output: &PinnedOutput,
+        names: &IntentNamesV2,
+        record: WorkerV2PublicationIntentRecordV2,
+        faults: &mut FaultInjectorV2,
+    ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+        let bytes = record.encode();
+        let (temp_name, mut temp) = create_temp_v2(
+            output,
+            names,
+            "record",
+            WorkerV2PublicationIntentBoundaryV2::CreateRecordTemp,
+            faults,
+        )?;
+        faults.around(WorkerV2PublicationIntentBoundaryV2::WriteRecordTemp, || {
+            temp.write_all(&bytes).map_err(Into::into)
+        })?;
+        faults.around(WorkerV2PublicationIntentBoundaryV2::SyncRecordTemp, || {
+            temp.sync_all().map_err(Into::into)
+        })?;
+        faults.hit(
+            WorkerV2PublicationIntentBoundaryV2::RenameRecordToRedo,
+            WorkerV2PublicationIntentFaultTimingV2::Before,
+        )?;
+        renameat_with(
+            &output.fd,
+            &temp_name,
+            &output.fd,
+            &names.redo,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        faults.hit(
+            WorkerV2PublicationIntentBoundaryV2::RenameRecordToRedo,
+            WorkerV2PublicationIntentFaultTimingV2::After,
+        )?;
+        validate_renamed_file_v2(output, &names.redo, &temp, bytes.len())?;
+        faults.around(WorkerV2PublicationIntentBoundaryV2::SyncRedoName, || {
+            fsync(&output.fd)
+                .map_err(std::io::Error::from)
+                .map_err(Into::into)
+        })?;
+        faults.hit(
+            WorkerV2PublicationIntentBoundaryV2::RenameRedoToCanonical,
+            WorkerV2PublicationIntentFaultTimingV2::Before,
+        )?;
+        renameat(&output.fd, &names.redo, &output.fd, &names.record)
+            .map_err(std::io::Error::from)?;
+        faults.hit(
+            WorkerV2PublicationIntentBoundaryV2::RenameRedoToCanonical,
+            WorkerV2PublicationIntentFaultTimingV2::After,
+        )?;
+        faults.around(
+            WorkerV2PublicationIntentBoundaryV2::SyncCanonicalName,
+            || {
+                fsync(&output.fd)
+                    .map_err(std::io::Error::from)
+                    .map_err(Into::into)
+            },
+        )?;
+        Ok(())
+    }
+
+    fn create_temp_v2(
+        output: &PinnedOutput,
+        names: &IntentNamesV2,
+        purpose: &str,
+        boundary: WorkerV2PublicationIntentBoundaryV2,
+        faults: &mut FaultInjectorV2,
+    ) -> Result<(String, fs::File), WorkerV2PublicationIntentErrorV2> {
+        faults.hit(boundary, WorkerV2PublicationIntentFaultTimingV2::Before)?;
+        let start = NEXT_TEMP_ID_V2.fetch_add(MAX_TEMP_ATTEMPTS, Ordering::Relaxed);
+        for offset in 0..MAX_TEMP_ATTEMPTS {
+            let name = format!(
+                "{}{purpose}-{}-{}",
+                names.temp_prefix,
+                std::process::id(),
+                start.wrapping_add(offset)
+            );
+            match openat(
+                &output.fd,
+                &name,
+                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            ) {
+                Ok(fd) => {
+                    faults.hit(boundary, WorkerV2PublicationIntentFaultTimingV2::After)?;
+                    return Ok((name, fs::File::from(fd)));
+                }
+                Err(error) if error == rustix::io::Errno::EXIST => {}
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+        }
+        Err(invalid_v2(
+            output,
+            &names.temp_prefix,
+            "could not reserve a private V2 temporary entry",
+        ))
+    }
+
+    fn cleanup_temps_v2(
+        output: &PinnedOutput,
+        names: &IntentNamesV2,
+    ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+        let directory =
+            rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
+        let mut entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
+        let mut temps = Vec::new();
+        for entry in &mut entries {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let name = entry.file_name().to_string_lossy();
+            if !name.starts_with(&names.temp_prefix) {
+                continue;
+            }
+            if temps.len() == MAX_TEMP_ATTEMPTS as usize {
+                return Err(invalid_v2(
+                    output,
+                    &names.temp_prefix,
+                    "too many V2 temporary entries",
+                ));
+            }
+            let stat = statat(&output.fd, name.as_ref(), AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(std::io::Error::from)?;
+            if !is_private_file(&stat) {
+                return Err(invalid_v2(
+                    output,
+                    name.as_ref(),
+                    "V2 temporary entry is not private",
+                ));
+            }
+            temps.push(name.into_owned());
+        }
+        if !temps.is_empty() {
+            for name in temps {
+                unlinkat(&output.fd, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+            }
+            fsync(&output.fd).map_err(std::io::Error::from)?;
+        }
+        Ok(())
+    }
+
+    fn read_bound_record_v2(
+        output: &PinnedOutput,
+        names: &IntentNamesV2,
+        entry: &str,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<WorkerV2PublicationIntentRecordV2, WorkerV2PublicationIntentErrorV2> {
+        let bytes = read_private_file_v2(output, entry, RECORD_BYTES_V2)?;
+        let record = WorkerV2PublicationIntentRecordV2::decode(&bytes)
+            .map_err(|reason| invalid_v2(output, entry, reason))?;
+        let expected_producer = producer_identity_v2(producer);
+        if record.producer_identity != expected_producer
+            || record.slot != slot_identity_v2(expected_producer, attempt)
+            || record.attempt != attempt
+            || record.plan.attempt() != attempt
+            || names.base != IntentNamesV2::new(expected_producer, record.slot).base
+        {
+            return Err(invalid_v2(
+                output,
+                entry,
+                "V2 record binding does not match the requested attempt and producer",
+            ));
+        }
+        Ok(record)
+    }
+
+    fn read_output_v2(
+        output: &PinnedOutput,
+        names: &IntentNamesV2,
+        record: &WorkerV2PublicationIntentRecordV2,
+    ) -> Result<Vec<u8>, WorkerV2PublicationIntentErrorV2> {
+        read_output_unbound_v2(
+            output,
+            names,
+            record.output_length,
+            *record.output_identity.as_bytes(),
+        )
+    }
+
+    fn read_output_unbound_v2(
+        output: &PinnedOutput,
+        names: &IntentNamesV2,
+        length: usize,
+        identity: [u8; 32],
+    ) -> Result<Vec<u8>, WorkerV2PublicationIntentErrorV2> {
+        let bytes = read_private_file_v2(output, &names.output, length)?;
+        if sha256(&bytes) != identity {
+            return Err(WorkerV2PublicationIntentErrorV2::OutputDigestMismatch);
+        }
+        Ok(bytes)
+    }
+
+    fn read_private_file_v2(
+        output: &PinnedOutput,
+        entry: &str,
+        exact_length: usize,
+    ) -> Result<Vec<u8>, WorkerV2PublicationIntentErrorV2> {
+        let fd = openat(
+            &output.fd,
+            entry,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| invalid_v2(output, entry, std::io::Error::from(error).to_string()))?;
+        let mut file = fs::File::from(fd);
+        let before = fstat(&file).map_err(std::io::Error::from)?;
+        if !is_private_file(&before) || usize::try_from(before.st_size).ok() != Some(exact_length) {
+            return Err(invalid_v2(
+                output,
+                entry,
+                "expected a private single-link regular file with canonical V2 length",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(exact_length);
+        Read::by_ref(&mut file)
+            .take((exact_length + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        let after = fstat(&file).map_err(std::io::Error::from)?;
+        let named =
+            statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+        if bytes.len() != exact_length
+            || !same_private_file(&before, &after, exact_length)
+            || !same_private_file(&before, &named, exact_length)
+        {
+            return Err(invalid_v2(
+                output,
+                entry,
+                "V2 file changed while its pinned descriptor was read",
+            ));
+        }
+        Ok(bytes)
+    }
+
+    fn validate_renamed_file_v2(
+        output: &PinnedOutput,
+        entry: &str,
+        file: &fs::File,
+        length: usize,
+    ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+        let pinned = fstat(file).map_err(std::io::Error::from)?;
+        let named =
+            statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+        if !same_private_file(&pinned, &named, length) {
+            return Err(invalid_v2(
+                output,
+                entry,
+                "renamed V2 entry does not match its pinned descriptor",
+            ));
+        }
+        Ok(())
+    }
+
+    fn entry_exists_v2(
+        output: &PinnedOutput,
+        entry: &str,
+    ) -> Result<bool, WorkerV2PublicationIntentErrorV2> {
+        match statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => {
+                if !is_private_file(&stat) {
+                    return Err(invalid_v2(
+                        output,
+                        entry,
+                        "V2 entry is not a private single-link regular file",
+                    ));
+                }
+                Ok(true)
+            }
+            Err(error) if error == rustix::io::Errno::NOENT => Ok(false),
+            Err(error) => Err(std::io::Error::from(error).into()),
+        }
+    }
+
+    fn producer_identity_v2(producer: &ProducerIdentity) -> [u8; 32] {
+        sha256_parts(&[
+            PRODUCER_DOMAIN_V2,
+            &(producer.stable_source.len() as u64).to_le_bytes(),
+            producer.stable_source.as_bytes(),
+            &(producer.crate_name.len() as u64).to_le_bytes(),
+            producer.crate_name.as_bytes(),
+        ])
+    }
+
+    fn slot_identity_v2(producer: [u8; 32], attempt: BuildAttempt) -> [u8; 32] {
+        sha256_parts(&[
+            SLOT_DOMAIN_V2,
+            &producer,
+            &attempt.generation().to_le_bytes(),
+            attempt.session().as_bytes(),
+            attempt.invocation().as_bytes(),
+        ])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compiler_closure_identity_v2(
+        cargo_executable_sha256: [u8; 32],
+        cargo_binding_trampoline_sha256: [u8; 32],
+        cargo_fe2o3_binding_wrapper_sha256: [u8; 32],
+        rustc_executable_sha256: [u8; 32],
+        rustc_runtime_tree_sha256: [u8; 32],
+        codegen_backend_sha256: [u8; 32],
+        cargo_binding_transition_protocol_version: u16,
+    ) -> [u8; 32] {
+        sha256_parts(&[
+            COMPILER_CLOSURE_IDENTITY_DOMAIN_V2,
+            &cargo_binding_transition_protocol_version.to_le_bytes(),
+            &cargo_executable_sha256,
+            &cargo_binding_trampoline_sha256,
+            &cargo_fe2o3_binding_wrapper_sha256,
+            &rustc_executable_sha256,
+            &rustc_runtime_tree_sha256,
+            &codegen_backend_sha256,
+        ])
+    }
+
+    fn invalid_v2(
+        output: &PinnedOutput,
+        entry: &str,
+        reason: impl Into<String>,
+    ) -> WorkerV2PublicationIntentErrorV2 {
+        WorkerV2PublicationIntentErrorV2::InvalidIntent {
+            path: output.display_path.join(entry),
+            reason: reason.into(),
+        }
+    }
+
+    struct IntentNamesV2 {
+        base: String,
+        output: String,
+        record: String,
+        redo: String,
+        temp_prefix: String,
+    }
+
+    impl IntentNamesV2 {
+        fn new(producer: [u8; 32], slot: [u8; 32]) -> Self {
+            let base = format!("{FILE_PREFIX_V2}{}-{}", hex(&producer), hex(&slot));
+            Self {
+                output: format!("{base}{OUTPUT_SUFFIX}"),
+                record: format!("{base}{RECORD_SUFFIX}"),
+                redo: format!("{base}{REDO_SUFFIX}"),
+                temp_prefix: format!("{base}{TEMP_SUFFIX}"),
+                base,
+            }
+        }
+    }
+
+    struct FaultInjectorV2 {
+        point: Option<WorkerV2PublicationIntentFaultPointV2>,
+        fired: bool,
+    }
+
+    impl FaultInjectorV2 {
+        const fn new(point: Option<WorkerV2PublicationIntentFaultPointV2>) -> Self {
+            Self {
+                point,
+                fired: false,
+            }
+        }
+
+        fn hit(
+            &mut self,
+            boundary: WorkerV2PublicationIntentBoundaryV2,
+            timing: WorkerV2PublicationIntentFaultTimingV2,
+        ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+            let point = WorkerV2PublicationIntentFaultPointV2 { boundary, timing };
+            if !self.fired && self.point == Some(point) {
+                self.fired = true;
+                Err(WorkerV2PublicationIntentErrorV2::InjectedCrash { point })
+            } else {
+                Ok(())
+            }
+        }
+
+        fn around(
+            &mut self,
+            boundary: WorkerV2PublicationIntentBoundaryV2,
+            operation: impl FnOnce() -> Result<(), WorkerV2PublicationIntentErrorV2>,
+        ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+            self.hit(boundary, WorkerV2PublicationIntentFaultTimingV2::Before)?;
+            operation()?;
+            self.hit(boundary, WorkerV2PublicationIntentFaultTimingV2::After)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::{BuildInvocation, DurableLinkPublicationOptionsV1};
+        use std::thread;
+
+        static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+        struct TestDirectory {
+            path: PathBuf,
+        }
+
+        impl TestDirectory {
+            fn new() -> Self {
+                let id = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "fe2o3-worker-v2-publication-intent-v2-{}-{id}",
+                    std::process::id()
+                ));
+                fs::create_dir(&path).unwrap();
+                Self { path }
+            }
+
+            fn output(&self) -> PathBuf {
+                self.path.join("output")
+            }
+        }
+
+        impl Drop for TestDirectory {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.path);
+            }
+        }
+
+        fn make_producer(source: &str) -> ProducerIdentity {
+            ProducerIdentity::from_codegen("kernel", Some(Path::new(source))).unwrap()
+        }
+
+        fn make_attempt(seed: u8) -> BuildAttempt {
+            BuildAttempt::from_env_value(&format!(
+                "{}:{}:{}",
+                u64::from(seed) + 1,
+                BuildSession::from_bytes([seed; 16]).to_hex(),
+                BuildInvocation::from_bytes([seed.wrapping_add(1); 32]).to_hex()
+            ))
+            .unwrap()
+        }
+
+        fn begin(output: &Path, producer: &ProducerIdentity, seed: u8) -> BuildAttempt {
+            crate::begin_build_attempt(
+                output,
+                producer,
+                BuildInvocation::from_bytes([seed; 32]),
+                BuildSession::from_bytes([seed.wrapping_add(1); 16]),
+            )
+            .unwrap()
+        }
+
+        fn plan(attempt: BuildAttempt, output: &[u8], seed: u8) -> DurableLinkPublicationPlanV1 {
+            DurableLinkPublicationPlanV1::new(
+                attempt,
+                LinkPublicationScopeV1::new(
+                    PackageIdentityV1::from_bytes([seed; 32]),
+                    KernelSetIdentityV1::from_bytes([seed.wrapping_add(1); 32]),
+                    TargetIdentityV1::from_bytes([seed.wrapping_add(2); 32]),
+                ),
+                CanonicalLinkRequestIdentityV1::from_bytes([seed.wrapping_add(3); 32]),
+                PinnedWorkerIdentityV1::from_bytes([seed.wrapping_add(4); 32]),
+                ValidatedResponseIdentityV1::from_bytes([seed.wrapping_add(5); 32]),
+                LinkedOutputIdentityV1::from_bytes([seed.wrapping_add(6); 32]),
+                FinalizationIdentityV1::from_bytes([seed.wrapping_add(7); 32]),
+                FinalizedOutputIdentityV1::from_bytes(sha256(output)),
+                AtomicPublicationIdentityV1::from_bytes([seed.wrapping_add(8); 32]),
+            )
+        }
+
+        fn make_closure(seed: u8) -> WorkerV2PublicationIntentCompilerClosureV2 {
+            WorkerV2PublicationIntentCompilerClosureV2::new(
+                [seed; 32],
+                [seed.wrapping_add(1); 32],
+                [seed.wrapping_add(2); 32],
+                [seed.wrapping_add(3); 32],
+                [seed.wrapping_add(4); 32],
+                [seed.wrapping_add(5); 32],
+            )
+            .unwrap()
+        }
+
+        fn make_record(
+            producer: &ProducerIdentity,
+            attempt: BuildAttempt,
+            output: &[u8],
+            seed: u8,
+            closure: WorkerV2PublicationIntentCompilerClosureV2,
+        ) -> WorkerV2PublicationIntentRecordV2 {
+            WorkerV2PublicationIntentRecordV2::new(
+                producer,
+                attempt,
+                plan(attempt, output, seed),
+                UpstreamCodeObjectEvidenceIdentityV1::from_bytes([seed.wrapping_add(9); 32]),
+                output.len(),
+                closure,
+            )
+        }
+
+        fn reseal(bytes: &mut [u8]) {
+            let body_len = bytes.len() - 32;
+            let checksum = sha256_parts(&[RECORD_CHECKSUM_DOMAIN_V2, &bytes[..body_len]]);
+            bytes[body_len..].copy_from_slice(&checksum);
+        }
+
+        fn intent_entry_count(output: &Path, prefix: &str, suffix: &str) -> usize {
+            fs::read_dir(output)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with(prefix) && name.ends_with(suffix))
+                .count()
+        }
+
+        #[test]
+        fn compiler_closure_matches_the_shared_golden_and_rejects_noncanonical_preimages() {
+            let pins = [
+                [0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], [0x55; 32], [0x66; 32],
+            ];
+            let closure = WorkerV2PublicationIntentCompilerClosureV2::new(
+                pins[0], pins[1], pins[2], pins[3], pins[4], pins[5],
+            )
+            .unwrap();
+            assert_eq!(closure.cargo_executable_sha256(), pins[0]);
+            assert_eq!(closure.cargo_binding_trampoline_sha256(), pins[1]);
+            assert_eq!(closure.cargo_fe2o3_binding_wrapper_sha256(), pins[2]);
+            assert_eq!(closure.rustc_executable_sha256(), pins[3]);
+            assert_eq!(closure.rustc_runtime_tree_sha256(), pins[4]);
+            assert_eq!(closure.codegen_backend_sha256(), pins[5]);
+            assert_eq!(closure.cargo_binding_transition_protocol_version(), 1);
+            assert_eq!(
+                closure.identity_sha256(),
+                [
+                    0x9c, 0x28, 0x98, 0x53, 0x25, 0x45, 0xab, 0xbc, 0x57, 0x7c, 0x9d, 0x6f, 0x20,
+                    0x2e, 0x7e, 0x31, 0x82, 0xee, 0x79, 0x5e, 0xc8, 0x87, 0xfc, 0xb0, 0x54, 0x0e,
+                    0xb4, 0x10, 0x71, 0x96, 0x77, 0xf9,
+                ]
+            );
+            assert_eq!(
+            WorkerV2PublicationIntentCompilerClosureV2::from_pins_and_identity(
+                pins[0],
+                pins[1],
+                pins[2],
+                pins[3],
+                pins[4],
+                pins[5],
+                2,
+                closure.identity_sha256(),
+            ),
+            Err(
+                WorkerV2PublicationIntentCompilerClosureErrorV2::UnsupportedTransitionProtocolVersion {
+                    version: 2,
+                }
+            )
+        );
+            assert_eq!(
+                WorkerV2PublicationIntentCompilerClosureV2::new(
+                    [0; 32], pins[1], pins[2], pins[3], pins[4], pins[5],
+                ),
+                Err(WorkerV2PublicationIntentCompilerClosureErrorV2::ZeroDigest)
+            );
+            let mut wrong_identity = closure.identity_sha256();
+            wrong_identity[0] ^= 1;
+            assert_eq!(
+                WorkerV2PublicationIntentCompilerClosureV2::from_pins_and_identity(
+                    pins[0],
+                    pins[1],
+                    pins[2],
+                    pins[3],
+                    pins[4],
+                    pins[5],
+                    1,
+                    wrong_identity,
+                ),
+                Err(WorkerV2PublicationIntentCompilerClosureErrorV2::IdentityMismatch)
+            );
+        }
+
+        #[test]
+        fn v2_codec_is_canonical_and_binds_every_publication_input() {
+            let producer = make_producer("/src/v2-codec.rs");
+            let output = b"exact V2 output";
+            let attempt = make_attempt(0x11);
+            let closure = make_closure(0x21);
+            let record = make_record(&producer, attempt, output, 0x31, closure);
+            let encoded = record.encode();
+            assert_eq!(MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES, 616);
+            assert_eq!(MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES_V2, 842);
+            assert_eq!(
+                encoded.len(),
+                MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES_V2
+            );
+            assert_eq!(
+                record.identity().as_bytes(),
+                [
+                    0xfe, 0x84, 0x21, 0x81, 0xa3, 0xe4, 0xaf, 0xe2, 0x80, 0xbf, 0xcb, 0x0d, 0x3f,
+                    0x24, 0x56, 0x5c, 0xc9, 0x58, 0xba, 0xc0, 0x87, 0x99, 0x8b, 0x2b, 0x55, 0x09,
+                    0x1d, 0xa0, 0x93, 0x28, 0x93, 0x7c,
+                ]
+            );
+            assert_eq!(
+                WorkerV2PublicationIntentRecordV2::decode(&encoded),
+                Ok(record)
+            );
+            assert_eq!(record.compiler_closure(), closure);
+            assert_ne!(RECORD_MAGIC, RECORD_MAGIC_V2);
+            assert_ne!(RECORD_CHECKSUM_DOMAIN, RECORD_CHECKSUM_DOMAIN_V2);
+            assert_ne!(RECORD_IDENTITY_DOMAIN, RECORD_IDENTITY_DOMAIN_V2);
+            assert_ne!(
+                producer_identity(&producer),
+                producer_identity_v2(&producer)
+            );
+            assert_ne!(
+                slot_identity(producer_identity(&producer), attempt),
+                slot_identity_v2(producer_identity_v2(&producer), attempt)
+            );
+
+            let other_producer = make_producer("/src/v2-codec-other.rs");
+            assert_ne!(
+                make_record(&other_producer, attempt, output, 0x31, closure).identity(),
+                record.identity()
+            );
+            let other_attempt = make_attempt(0x12);
+            assert_ne!(
+                make_record(&producer, other_attempt, output, 0x31, closure).identity(),
+                record.identity()
+            );
+            let mut other_upstream = record;
+            other_upstream.upstream_evidence =
+                UpstreamCodeObjectEvidenceIdentityV1::from_bytes([9; 32]);
+            other_upstream.identity = other_upstream.encoded_identity();
+            assert_ne!(other_upstream.identity(), record.identity());
+            assert_ne!(
+                make_record(&producer, attempt, output, 0x32, closure).identity(),
+                record.identity()
+            );
+            let other_output = b"different exact output";
+            assert_ne!(
+                make_record(&producer, attempt, other_output, 0x31, closure).identity(),
+                record.identity()
+            );
+            assert_ne!(
+                make_record(&producer, attempt, output, 0x31, make_closure(0x22)).identity(),
+                record.identity()
+            );
+        }
+
+        #[test]
+        fn mutation_role_alias_unknown_protocol_version_and_v1_downgrade_fail_closed() {
+            let producer = make_producer("/src/v2-mutation.rs");
+            let output = b"mutation output";
+            let attempt = make_attempt(0x41);
+            let closure = make_closure(0x51);
+            let encoded = make_record(&producer, attempt, output, 0x61, closure).encode();
+
+            for index in 0..encoded.len() {
+                let mut mutated = encoded.clone();
+                mutated[index] ^= 1;
+                assert_eq!(
+                    WorkerV2PublicationIntentRecordV2::decode(&mutated),
+                    Err("record checksum mismatch"),
+                    "unchecked byte {index}"
+                );
+            }
+
+            let closure_offset = RECORD_BYTES - 32;
+            for role in 0..6 {
+                let mut mutated = encoded.clone();
+                mutated[closure_offset + (role * 32)] ^= 1;
+                reseal(&mut mutated);
+                assert_eq!(
+                    WorkerV2PublicationIntentRecordV2::decode(&mutated),
+                    Err("record compiler closure identity does not match its role-specific pins")
+                );
+            }
+
+            let mut aliased_roles = encoded.clone();
+            let first: [u8; 32] = aliased_roles[closure_offset..closure_offset + 32]
+                .try_into()
+                .unwrap();
+            let second: [u8; 32] = aliased_roles[closure_offset + 32..closure_offset + 64]
+                .try_into()
+                .unwrap();
+            aliased_roles[closure_offset..closure_offset + 32].copy_from_slice(&second);
+            aliased_roles[closure_offset + 32..closure_offset + 64].copy_from_slice(&first);
+            reseal(&mut aliased_roles);
+            assert_eq!(
+                WorkerV2PublicationIntentRecordV2::decode(&aliased_roles),
+                Err("record compiler closure identity does not match its role-specific pins")
+            );
+
+            let mut unknown_protocol = encoded.clone();
+            unknown_protocol[closure_offset + (6 * 32)..closure_offset + (6 * 32) + 2]
+                .copy_from_slice(&2u16.to_le_bytes());
+            reseal(&mut unknown_protocol);
+            assert_eq!(
+                WorkerV2PublicationIntentRecordV2::decode(&unknown_protocol),
+                Err("record compiler closure uses an unsupported transition protocol version")
+            );
+
+            let mut unknown_version = encoded.clone();
+            unknown_version[RECORD_MAGIC_V2.len()..RECORD_MAGIC_V2.len() + 2]
+                .copy_from_slice(&3u16.to_le_bytes());
+            reseal(&mut unknown_version);
+            assert_eq!(
+                WorkerV2PublicationIntentRecordV2::decode(&unknown_version),
+                Err("unsupported V2 record version")
+            );
+
+            let v1 = WorkerV2PublicationIntentRecordV1::new(
+                &producer,
+                attempt,
+                plan(attempt, output, 0x61),
+                UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x6a; 32]),
+                output.len(),
+            )
+            .encode();
+            assert_eq!(
+                WorkerV2PublicationIntentRecordV2::decode(&v1),
+                Err("record has a noncanonical V2 length")
+            );
+            let mut downgraded = encoded;
+            downgraded[..RECORD_MAGIC.len()].copy_from_slice(RECORD_MAGIC);
+            downgraded[RECORD_MAGIC.len()..RECORD_MAGIC.len() + 2]
+                .copy_from_slice(&RECORD_VERSION.to_le_bytes());
+            reseal(&mut downgraded);
+            assert_eq!(
+                WorkerV2PublicationIntentRecordV2::decode(&downgraded),
+                Err("record magic mismatch")
+            );
+        }
+
+        #[test]
+        fn persist_recover_and_clear_require_the_exact_full_closure() {
+            let temp = TestDirectory::new();
+            let output_dir = temp.output();
+            let producer = make_producer("/src/v2-wrong-closure.rs");
+            let attempt = begin(&output_dir, &producer, 0x71);
+            let output = b"closure-bound persisted output";
+            let plan = plan(attempt, output, 0x72);
+            let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x73; 32]);
+            let closure = make_closure(0x74);
+            let wrong_closure = make_closure(0x75);
+
+            let persisted = persist_worker_v2_publication_intent_v2(
+                &output_dir,
+                &producer,
+                attempt,
+                plan,
+                upstream,
+                closure,
+                output,
+            )
+            .unwrap();
+            assert_eq!(
+                persisted.outcome(),
+                WorkerV2PublicationIntentOutcomeV2::Persisted
+            );
+            assert_eq!(persisted.compiler_closure(), closure);
+            assert_eq!(persisted.record().compiler_closure(), closure);
+            assert_eq!(persisted.exact_output(), output);
+            assert!(!persisted.grants_publication_authority());
+            assert!(!persisted.grants_compiler_authority());
+            assert!(!persisted.grants_load_authority());
+            assert!(!persisted.grants_launch_authority());
+            assert!(matches!(
+                recover_worker_v2_publication_intent_v2(
+                    &output_dir,
+                    &producer,
+                    attempt,
+                    wrong_closure,
+                ),
+                Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch)
+            ));
+            assert!(matches!(
+                persist_worker_v2_publication_intent_v2(
+                    &output_dir,
+                    &producer,
+                    attempt,
+                    plan,
+                    upstream,
+                    wrong_closure,
+                    output,
+                ),
+                Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent)
+            ));
+            assert!(matches!(
+                clear_worker_v2_publication_intent_v2(
+                    &output_dir,
+                    &producer,
+                    attempt,
+                    wrong_closure,
+                    persisted.record().identity(),
+                ),
+                Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch)
+            ));
+
+            let recovered =
+                recover_worker_v2_publication_intent_v2(&output_dir, &producer, attempt, closure)
+                    .unwrap();
+            assert_eq!(
+                recovered.outcome(),
+                WorkerV2PublicationIntentOutcomeV2::Recovered
+            );
+            assert_eq!(recovered.record(), persisted.record());
+            crate::publish_exact_hsaco_evidence_for_attempt_v1_with_options(
+                &output_dir,
+                &producer,
+                attempt,
+                plan,
+                upstream,
+                output,
+                DurableLinkPublicationOptionsV1::default(),
+            )
+            .unwrap();
+            clear_worker_v2_publication_intent_v2(
+                &output_dir,
+                &producer,
+                attempt,
+                closure,
+                persisted.record().identity(),
+            )
+            .unwrap();
+            assert!(matches!(
+                recover_worker_v2_publication_intent_v2(&output_dir, &producer, attempt, closure,),
+                Err(WorkerV2PublicationIntentErrorV2::NotFound)
+            ));
+        }
+
+        #[test]
+        fn v2_recovery_never_consumes_or_upgrades_v1_records() {
+            let temp = TestDirectory::new();
+            let output_dir = temp.output();
+            let producer = make_producer("/src/v1-compatibility-only.rs");
+            let attempt = begin(&output_dir, &producer, 0x81);
+            let output = b"side-by-side compatibility output";
+            let plan = plan(attempt, output, 0x82);
+            let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x83; 32]);
+            let closure = make_closure(0x84);
+
+            persist_worker_v2_publication_intent_v1(
+                &output_dir,
+                &producer,
+                attempt,
+                plan,
+                upstream,
+                output,
+            )
+            .unwrap();
+            assert!(matches!(
+                recover_worker_v2_publication_intent_v2(&output_dir, &producer, attempt, closure,),
+                Err(WorkerV2PublicationIntentErrorV2::NotFound)
+            ));
+            assert_eq!(
+                intent_entry_count(&output_dir, FILE_PREFIX, RECORD_SUFFIX),
+                1
+            );
+            assert_eq!(
+                intent_entry_count(&output_dir, FILE_PREFIX_V2, RECORD_SUFFIX),
+                0
+            );
+            assert_eq!(
+                recover_worker_v2_publication_intent_v1(&output_dir, &producer, attempt)
+                    .unwrap()
+                    .exact_output(),
+                output
+            );
+
+            persist_worker_v2_publication_intent_v2(
+                &output_dir,
+                &producer,
+                attempt,
+                plan,
+                upstream,
+                closure,
+                output,
+            )
+            .unwrap();
+            assert_eq!(
+                intent_entry_count(&output_dir, FILE_PREFIX, RECORD_SUFFIX),
+                1
+            );
+            assert_eq!(
+                intent_entry_count(&output_dir, FILE_PREFIX_V2, RECORD_SUFFIX),
+                1
+            );
+            assert_eq!(
+                recover_worker_v2_publication_intent_v1(&output_dir, &producer, attempt)
+                    .unwrap()
+                    .exact_output(),
+                output
+            );
+            assert_eq!(
+                recover_worker_v2_publication_intent_v2(&output_dir, &producer, attempt, closure,)
+                    .unwrap()
+                    .exact_output(),
+                output
+            );
+        }
+
+        #[test]
+        fn every_v2_persistence_boundary_reconciles_after_a_crash() {
+            let boundaries = [
+                WorkerV2PublicationIntentBoundaryV2::CreateOutputTemp,
+                WorkerV2PublicationIntentBoundaryV2::WriteOutputTemp,
+                WorkerV2PublicationIntentBoundaryV2::SyncOutputTemp,
+                WorkerV2PublicationIntentBoundaryV2::RenameOutput,
+                WorkerV2PublicationIntentBoundaryV2::SyncOutputName,
+                WorkerV2PublicationIntentBoundaryV2::CreateRecordTemp,
+                WorkerV2PublicationIntentBoundaryV2::WriteRecordTemp,
+                WorkerV2PublicationIntentBoundaryV2::SyncRecordTemp,
+                WorkerV2PublicationIntentBoundaryV2::RenameRecordToRedo,
+                WorkerV2PublicationIntentBoundaryV2::SyncRedoName,
+                WorkerV2PublicationIntentBoundaryV2::RenameRedoToCanonical,
+                WorkerV2PublicationIntentBoundaryV2::SyncCanonicalName,
+            ];
+            let timings = [
+                WorkerV2PublicationIntentFaultTimingV2::Before,
+                WorkerV2PublicationIntentFaultTimingV2::After,
+            ];
+            for (index, (boundary, timing)) in boundaries
+                .into_iter()
+                .flat_map(|boundary| timings.into_iter().map(move |timing| (boundary, timing)))
+                .enumerate()
+            {
+                let temp = TestDirectory::new();
+                let output_dir = temp.output();
+                let producer = make_producer(&format!("/src/v2-crash-{index}.rs"));
+                let attempt = begin(&output_dir, &producer, 0x90 + index as u8);
+                let output = format!("V2 crash {boundary:?} {timing:?}").into_bytes();
+                let plan = plan(attempt, &output, 0xa0 + index as u8);
+                let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0xb0; 32]);
+                let closure = make_closure(0xc0);
+                let point = WorkerV2PublicationIntentFaultPointV2 { boundary, timing };
+                assert!(matches!(
+                    persist_worker_v2_publication_intent_v2_with_options(
+                        &output_dir,
+                        &producer,
+                        attempt,
+                        plan,
+                        upstream,
+                        closure,
+                        &output,
+                        WorkerV2PublicationIntentOptionsV2::inject_crash(point),
+                    ),
+                    Err(WorkerV2PublicationIntentErrorV2::InjectedCrash { point: actual })
+                        if actual == point
+                ));
+                let reconciled = persist_worker_v2_publication_intent_v2(
+                    &output_dir,
+                    &producer,
+                    attempt,
+                    plan,
+                    upstream,
+                    closure,
+                    &output,
+                )
+                .unwrap();
+                assert_eq!(reconciled.compiler_closure(), closure);
+                assert_eq!(reconciled.exact_output(), output);
+                assert_eq!(
+                    recover_worker_v2_publication_intent_v2(
+                        &output_dir,
+                        &producer,
+                        attempt,
+                        closure,
+                    )
+                    .unwrap()
+                    .record(),
+                    reconciled.record()
+                );
+            }
+        }
+
+        #[test]
+        fn concurrent_identical_v2_writers_commit_one_canonical_intent() {
+            let temp = TestDirectory::new();
+            let output_dir = temp.output();
+            let producer = make_producer("/src/v2-concurrent.rs");
+            let attempt = begin(&output_dir, &producer, 0xd1);
+            let output = b"concurrent exact V2 output";
+            let plan = plan(attempt, output, 0xd2);
+            let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0xd3; 32]);
+            let closure = make_closure(0xd4);
+
+            let results = thread::scope(|scope| {
+                let handles = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            persist_worker_v2_publication_intent_v2(
+                                &output_dir,
+                                &producer,
+                                attempt,
+                                plan,
+                                upstream,
+                                closure,
+                                output,
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap().unwrap())
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(
+                results
+                    .iter()
+                    .filter(
+                        |result| result.outcome() == WorkerV2PublicationIntentOutcomeV2::Persisted
+                    )
+                    .count(),
+                1
+            );
+            assert!(
+                results
+                    .windows(2)
+                    .all(|pair| pair[0].record() == pair[1].record())
+            );
+            assert_eq!(
+                intent_entry_count(&output_dir, FILE_PREFIX_V2, RECORD_SUFFIX),
+                1
+            );
+            assert_eq!(
+                intent_entry_count(&output_dir, FILE_PREFIX_V2, OUTPUT_SUFFIX),
+                1
+            );
+        }
+    }
+}
+
+#[allow(unused_imports)]
+pub use publication_intent_v2::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;
