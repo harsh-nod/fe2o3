@@ -629,9 +629,7 @@ fn decode_evidence_for(
         }
         let code_offset = input.u64()?;
         let code_size = input.u64()?;
-        if code_size == 0 {
-            return Err(PhysicalMachineEffectEvidenceErrorV1::InvalidFunctionRange);
-        }
+        checked_code_range_end(code_offset, code_size, payload_identity.byte_len)?;
         entries.push(PhysicalMachineEntryEvidenceV1 {
             symbol,
             descriptor_identity,
@@ -650,9 +648,7 @@ fn decode_evidence_for(
         let symbol = input.text()?;
         let code_offset = input.u64()?;
         let code_size = input.u64()?;
-        if code_size == 0 {
-            return Err(PhysicalMachineEffectEvidenceErrorV1::InvalidFunctionRange);
-        }
+        checked_code_range_end(code_offset, code_size, payload_identity.byte_len)?;
         let count = input.u16()? as usize;
         edge_count = edge_count.saturating_add(count);
         if edge_count > MAX_EDGES {
@@ -795,9 +791,14 @@ fn validate_effects(
             let function = by_name
                 .get(effect.function_symbol.as_str())
                 .ok_or(PhysicalMachineEffectEvidenceErrorV1::UnknownEffectFunction)?;
+            let code_end = checked_code_range_end(
+                function.code_offset,
+                function.code_size,
+                request.payload_identity.byte_len,
+            )?;
             if !closures[&entry.symbol].contains(&effect.function_symbol)
                 || effect.instruction_offset < function.code_offset
-                || effect.instruction_offset >= function.code_offset + function.code_size
+                || effect.instruction_offset >= code_end
             {
                 return Err(PhysicalMachineEffectEvidenceErrorV1::EffectOutsideClosure);
             }
@@ -826,6 +827,23 @@ fn validate_effects(
         return Err(PhysicalMachineEffectEvidenceErrorV1::UnknownEffectEntry);
     }
     Ok(())
+}
+
+fn checked_code_range_end(
+    code_offset: u64,
+    code_size: u64,
+    payload_byte_len: u64,
+) -> Result<u64, PhysicalMachineEffectEvidenceErrorV1> {
+    if code_size == 0 {
+        return Err(PhysicalMachineEffectEvidenceErrorV1::InvalidFunctionRange);
+    }
+    let code_end = code_offset
+        .checked_add(code_size)
+        .ok_or(PhysicalMachineEffectEvidenceErrorV1::InvalidFunctionRange)?;
+    if code_end > payload_byte_len {
+        return Err(PhysicalMachineEffectEvidenceErrorV1::InvalidFunctionRange);
+    }
+    Ok(code_end)
 }
 
 const fn effect_kind_index(kind: PhysicalMachineEffectKindV1) -> usize {

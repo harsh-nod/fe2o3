@@ -13,6 +13,7 @@ use std::{path::Path, time::Duration};
 
 const SCALAR_CODE_OFFSET: u64 = 0x1b00;
 const SCALAR_CODE_SIZE: u64 = 0x0ad0;
+const HSACO_FIXTURE_BYTES: usize = 0x2640;
 
 #[derive(Clone)]
 struct Function<'a> {
@@ -32,7 +33,10 @@ struct Effect<'a> {
 }
 
 fn hsaco() -> Vec<u8> {
-    b"finalized scalar GEMM V1 gfx942 HSACO fixture".to_vec()
+    let label = b"finalized scalar GEMM V1 gfx942 HSACO fixture";
+    let mut payload = vec![0; HSACO_FIXTURE_BYTES];
+    payload[..label.len()].copy_from_slice(label);
+    payload
 }
 
 fn descriptor(byte: u8) -> PhysicalMachineDescriptorIdentityV1 {

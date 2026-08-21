@@ -424,14 +424,14 @@ fn evidence(request: &Request) -> Vec<u8> {
     for (index, entry) in request.entries.iter().enumerate() {
         push_text(&mut output, &entry.symbol);
         output.extend_from_slice(&[0x33 + index as u8; 32]);
-        push_u64(&mut output, 0x100 + index as u64 * 0x100);
-        push_u64(&mut output, 0x40);
+        push_u64(&mut output, 0);
+        push_u64(&mut output, request.payload_bytes);
     }
     push_u32(&mut output, request.entries.len() as u32);
-    for (index, entry) in request.entries.iter().enumerate() {
+    for entry in &request.entries {
         push_text(&mut output, &entry.symbol);
-        push_u64(&mut output, 0x100 + index as u64 * 0x100);
-        push_u64(&mut output, 0x40);
+        push_u64(&mut output, 0);
+        push_u64(&mut output, request.payload_bytes);
         push_u16(&mut output, 0);
     }
     let effect_count = request
@@ -446,8 +446,8 @@ fn evidence(request: &Request) -> Vec<u8> {
         })
         .sum();
     push_u32(&mut output, effect_count);
-    for (index, entry) in request.entries.iter().enumerate() {
-        let base = 0x100 + index as u64 * 0x100;
+    for entry in &request.entries {
+        let base = 0;
         if entry.symbol == "scalar_gemm_v1" {
             for (site, width, kind) in [
                 (0, 8, 2),

@@ -8,6 +8,9 @@ use fe2o3_kernel_analysis::{
     PhysicalMachineToolchainIdentityV1,
 };
 
+const CODE_OFFSET: u64 = 4;
+const CODE_SIZE: u64 = 16;
+
 #[derive(Clone)]
 struct Function<'a> {
     symbol: &'a str,
@@ -62,35 +65,35 @@ fn effects() -> Vec<Effect<'static>> {
         Effect {
             entry: "alpha",
             function: "alpha",
-            offset: 0x100,
+            offset: CODE_OFFSET,
             kind: 1,
             width: 8,
         },
         Effect {
             entry: "alpha",
             function: "alpha",
-            offset: 0x100,
+            offset: CODE_OFFSET,
             kind: 2,
             width: 4,
         },
         Effect {
             entry: "alpha",
             function: "alpha",
-            offset: 0x104,
+            offset: CODE_OFFSET + 4,
             kind: 1,
             width: 8,
         },
         Effect {
             entry: "alpha",
             function: "alpha",
-            offset: 0x104,
+            offset: CODE_OFFSET + 4,
             kind: 3,
             width: 4,
         },
         Effect {
             entry: "alpha",
             function: "alpha",
-            offset: 0x108,
+            offset: CODE_OFFSET + 8,
             kind: 4,
             width: 0,
         },
@@ -99,6 +102,16 @@ fn effects() -> Vec<Effect<'static>> {
 
 fn evidence(
     request: &PhysicalMachineEffectRequestV1,
+    functions: &[Function<'_>],
+    effects: &[Effect<'_>],
+) -> Vec<u8> {
+    evidence_with_entry_range(request, CODE_OFFSET, CODE_SIZE, functions, effects)
+}
+
+fn evidence_with_entry_range(
+    request: &PhysicalMachineEffectRequestV1,
+    entry_offset: u64,
+    entry_size: u64,
     functions: &[Function<'_>],
     effects: &[Effect<'_>],
 ) -> Vec<u8> {
@@ -119,8 +132,8 @@ fn evidence(
     for entry in request.entries() {
         push_text(&mut output, entry.symbol());
         output.extend_from_slice(&[0x33; 32]);
-        push_u64(&mut output, 0x100);
-        push_u64(&mut output, 0x40);
+        push_u64(&mut output, entry_offset);
+        push_u64(&mut output, entry_size);
     }
 
     push_u32(&mut output, functions.len() as u32);
@@ -152,8 +165,8 @@ fn evidence(
 fn alpha_function() -> Function<'static> {
     Function {
         symbol: "alpha",
-        offset: 0x100,
-        size: 0x40,
+        offset: CODE_OFFSET,
+        size: CODE_SIZE,
         callees: Vec::new(),
     }
 }
@@ -198,8 +211,8 @@ fn canonical_record_binds_exact_payload_worker_target_graph_and_effects() {
         decoded.entry_points()[0].descriptor_identity().as_bytes(),
         [0x33; 32]
     );
-    assert_eq!(decoded.entry_points()[0].code_offset(), 0x100);
-    assert_eq!(decoded.entry_points()[0].code_size(), 0x40);
+    assert_eq!(decoded.entry_points()[0].code_offset(), CODE_OFFSET);
+    assert_eq!(decoded.entry_points()[0].code_size(), CODE_SIZE);
     assert_eq!(decoded.functions()[0].symbol(), "alpha");
     assert!(decoded.functions()[0].direct_callees().is_empty());
     assert_eq!(
@@ -236,9 +249,9 @@ fn request_and_evidence_are_deterministic_golden_records() {
     assert_eq!(
         first.identity().sha256(),
         [
-            0xea, 0xf2, 0xb7, 0xa7, 0x4f, 0xfb, 0xe2, 0x77, 0x0e, 0x1d, 0x0a, 0x96, 0xa9, 0xe9,
-            0x39, 0xc1, 0x04, 0x23, 0x8d, 0xf6, 0xbe, 0x72, 0xd0, 0x30, 0x79, 0x90, 0xbf, 0xfb,
-            0x63, 0xa1, 0xdb, 0xd9,
+            0x2e, 0xe9, 0xf4, 0xfe, 0x2f, 0x5f, 0x38, 0x6e, 0x43, 0xab, 0x1b, 0x11, 0x85, 0xc5,
+            0x99, 0x27, 0xa9, 0xb1, 0x03, 0xf5, 0xe8, 0x0a, 0x02, 0x81, 0xcd, 0x1d, 0x4e, 0x7b,
+            0x62, 0x3f, 0x76, 0xf5,
         ]
     );
 }
@@ -295,8 +308,8 @@ fn open_call_edge_and_effect_expansion_fail_closed() {
     let request = request();
     let open = Function {
         symbol: "alpha",
-        offset: 0x100,
-        size: 0x40,
+        offset: CODE_OFFSET,
+        size: CODE_SIZE,
         callees: vec!["missing_helper"],
     };
     assert_eq!(
@@ -321,6 +334,119 @@ fn open_call_edge_and_effect_expansion_fail_closed() {
         ),
         Err(PhysicalMachineEffectEvidenceErrorV1::EffectExpansion)
     );
+}
+
+#[test]
+fn code_ranges_may_end_exactly_at_the_payload_boundary() {
+    let payload = [0u8; 32];
+    let request = request_with(&payload, vec![entry("alpha", budget())]);
+    let function = Function {
+        symbol: "alpha",
+        offset: 16,
+        size: 16,
+        callees: Vec::new(),
+    };
+    let effects = [
+        Effect {
+            entry: "alpha",
+            function: "alpha",
+            offset: 16,
+            kind: 4,
+            width: 0,
+        },
+        Effect {
+            entry: "alpha",
+            function: "alpha",
+            offset: 31,
+            kind: 4,
+            width: 0,
+        },
+    ];
+    let bytes = evidence_with_entry_range(&request, 16, 16, &[function], &effects);
+
+    let decoded = PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes).unwrap();
+    assert_eq!(decoded.entry_points()[0].code_offset(), 16);
+    assert_eq!(decoded.entry_points()[0].code_size(), 16);
+    assert_eq!(decoded.effects()[0].instruction_offset(), 16);
+    assert_eq!(decoded.effects()[1].instruction_offset(), 31);
+}
+
+#[test]
+fn invalid_entry_ranges_fail_closed_without_panicking() {
+    let payload = [0u8; 32];
+    let request = request_with(&payload, vec![entry("alpha", budget())]);
+
+    for (offset, size) in [(32, 1), (31, 2), (u64::MAX, 1), (0, 0)] {
+        let bytes =
+            evidence_with_entry_range(&request, offset, size, &[alpha_function()], &effects());
+        let result = std::panic::catch_unwind(|| {
+            PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes)
+        });
+        assert!(result.is_ok(), "entry range ({offset}, {size}) panicked");
+        assert_eq!(
+            result.unwrap(),
+            Err(PhysicalMachineEffectEvidenceErrorV1::InvalidFunctionRange),
+            "entry range ({offset}, {size}) was not rejected"
+        );
+    }
+}
+
+#[test]
+fn invalid_function_ranges_fail_closed_without_panicking() {
+    let payload = [0u8; 32];
+    let request = request_with(&payload, vec![entry("alpha", budget())]);
+
+    for (offset, size) in [(32, 1), (31, 2), (u64::MAX, 1), (0, 0)] {
+        let function = Function {
+            symbol: "alpha",
+            offset,
+            size,
+            callees: Vec::new(),
+        };
+        let bytes = evidence_with_entry_range(&request, 16, 16, &[function], &[]);
+        let result = std::panic::catch_unwind(|| {
+            PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes)
+        });
+        assert!(result.is_ok(), "function range ({offset}, {size}) panicked");
+        assert_eq!(
+            result.unwrap(),
+            Err(PhysicalMachineEffectEvidenceErrorV1::InvalidFunctionRange),
+            "function range ({offset}, {size}) was not rejected"
+        );
+    }
+}
+
+#[test]
+fn instruction_offsets_outside_the_function_fail_closed() {
+    let payload = [0u8; 32];
+    let request = request_with(&payload, vec![entry("alpha", budget())]);
+    let function = Function {
+        symbol: "alpha",
+        offset: 16,
+        size: 16,
+        callees: Vec::new(),
+    };
+
+    for offset in [15, 32, u64::MAX] {
+        let effects = [Effect {
+            entry: "alpha",
+            function: "alpha",
+            offset,
+            kind: 4,
+            width: 0,
+        }];
+        let bytes =
+            evidence_with_entry_range(&request, 16, 16, std::slice::from_ref(&function), &effects);
+        let result = std::panic::catch_unwind(|| {
+            PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes)
+        });
+        assert!(result.is_ok(), "instruction offset {offset} panicked");
+        assert_eq!(
+            result.unwrap(),
+            Err(PhysicalMachineEffectEvidenceErrorV1::EffectOutsideClosure),
+            "instruction offset {offset} was not rejected"
+        );
+    }
 }
 
 #[test]
