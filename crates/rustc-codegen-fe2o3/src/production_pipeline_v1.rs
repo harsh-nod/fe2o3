@@ -35,6 +35,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     CustomLlvmConfiguration,
     EmptyCollectedDeviceClosure,
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
+    SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
 }
 
@@ -48,6 +49,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
                 "production-v1 requires a nonempty collector-sealed device closure",
             ),
             Self::SemanticImport(error) => write!(formatter, "production-v1 {error}"),
+            Self::SemanticMiddleEnd(error) => {
+                write!(formatter, "production-v1 exact semantic middle end failed: {error}")
+            }
             Self::RankedProjection(error) => {
                 write!(formatter, "production-v1 ranked-memory verification failed: {error}")
             }
@@ -59,6 +63,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::SemanticImport(error) => Some(error),
+            Self::SemanticMiddleEnd(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
             Self::CustomLlvmConfiguration | Self::EmptyCollectedDeviceClosure => None,
         }
@@ -85,6 +90,15 @@ pub(super) struct CollectedRustStageV1<'tcx> {
 
 pub(super) struct AdmittedSemanticMirStageV1 {
     semantic_mir: fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    rustc_identity_inventory_sha256: [u8; 32],
+    rustc_preflight_plan_sha256: [u8; 32],
+    producer: ProducerIdentity,
+    output_dir: PathBuf,
+    build_attempt: Option<BuildAttempt>,
+}
+
+pub(super) struct EquivalentSemanticMirStageV1 {
+    semantic_mir: fe2o3_pliron::ProductionSemanticMirOwnerV1,
     rustc_identity_inventory_sha256: [u8; 32],
     rustc_preflight_plan_sha256: [u8; 32],
     producer: ProducerIdentity,
@@ -205,21 +219,31 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     pub(crate) fn verify_ranked_memory(
         self,
     ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
-        self.import_semantic_mir()?.verify_ranked_memory()
+        self.import_semantic_mir()?
+            .construct_semantic_middle_end()?
+            .verify_ranked_memory()
     }
 
     /// Retains the original extraction milestone while consuming the same
     /// transaction and importer as the production backend.
     pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
         match self.import_semantic_mir() {
-            Ok(transaction) => transaction.require_middle_end(),
+            Ok(transaction) => match transaction.construct_semantic_middle_end() {
+                Ok(transaction) => transaction.require_target_neutral_lowering(),
+                Err(error) => error,
+            },
             Err(error) => error,
         }
     }
 }
 
 impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
-    fn require_middle_end(self) -> ProductionPipelineErrorV1 {
+    fn construct_semantic_middle_end(
+        self,
+    ) -> Result<
+        ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1>,
+        ProductionPipelineErrorV1,
+    > {
         let AdmittedSemanticMirStageV1 {
             semantic_mir,
             rustc_identity_inventory_sha256,
@@ -228,13 +252,43 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
             output_dir,
             build_attempt,
         } = self.stage;
-        let error = crate::collector::ProductionSemanticImportErrorV1::SemanticMiddleEndPending {
-            functions: semantic_mir.functions().len(),
-            callables: semantic_mir.callables().len(),
+        let semantic_mir = fe2o3_pliron::ProductionSemanticMirOwnerV1::try_new(
+            semantic_mir,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .map_err(ProductionPipelineErrorV1::SemanticMiddleEnd)?;
+        Ok(ProductionCompilationV1 {
+            stage: EquivalentSemanticMirStageV1 {
+                semantic_mir,
+                rustc_identity_inventory_sha256,
+                rustc_preflight_plan_sha256,
+                producer,
+                output_dir,
+                build_attempt,
+            },
+            invariant_session: PhantomData,
+        })
+    }
+}
+
+impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
+    fn require_target_neutral_lowering(self) -> ProductionPipelineErrorV1 {
+        let EquivalentSemanticMirStageV1 {
+            semantic_mir,
             rustc_identity_inventory_sha256,
             rustc_preflight_plan_sha256,
-            semantic_sha256: *semantic_mir.semantic_sha256().as_bytes(),
-        };
+            producer,
+            output_dir,
+            build_attempt,
+        } = self.stage;
+        let error =
+            crate::collector::ProductionSemanticImportErrorV1::TargetNeutralLoweringPending {
+                functions: semantic_mir.semantic().functions().len(),
+                callables: semantic_mir.semantic().callables().len(),
+                rustc_identity_inventory_sha256,
+                rustc_preflight_plan_sha256,
+                semantic_sha256: *semantic_mir.semantic().semantic_sha256().as_bytes(),
+            };
         drop((semantic_mir, producer, output_dir, build_attempt));
         ProductionPipelineErrorV1::SemanticImport(error)
     }
@@ -242,7 +296,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
     fn verify_ranked_memory(
         self,
     ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
-        let AdmittedSemanticMirStageV1 {
+        let EquivalentSemanticMirStageV1 {
             semantic_mir,
             rustc_identity_inventory_sha256,
             rustc_preflight_plan_sha256,

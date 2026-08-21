@@ -2,10 +2,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SAFE_EXTRACTION_CRATE_BINDING_V1: &str =
-    "182c5d6df66a18fbd24ac6765acd5c63991775ebdf3636b0a471ab36e9d0a023";
-const OOB_EXTRACTION_CRATE_BINDING_V1: &str =
-    "a62879fdb31f275a163dbe83937def6b19ec80ab640c60e365bab76941082851";
 const SAFE_PRODUCTION_CRATE_BINDING_V1: &str =
     "9cf5c6d630a1cb5aae7973e2850e5875404c726f813e368ff3d6c53d34bf025c";
 const OOB_PRODUCTION_CRATE_BINDING_V1: &str =
@@ -159,14 +155,6 @@ fn run_extraction(target: &ScratchTarget, oob: bool) -> ExtractionOutput {
         .env(
             "FE2O3_EXTRACT_CRATE_V1",
             "fe2o3_production_ranked_bounds_fixture",
-        )
-        .env(
-            "FE2O3_CRATE_BINDING_ID_V1",
-            if oob {
-                OOB_EXTRACTION_CRATE_BINDING_V1
-            } else {
-                SAFE_EXTRACTION_CRATE_BINDING_V1
-            },
         );
     if oob {
         command.args(["--features", "oob"]);

@@ -98,13 +98,13 @@ fn run_extraction(target: &ScratchTarget) -> String {
 
     assert!(
         !output.status.success(),
-        "production pipeline unexpectedly passed the pending semantic middle-end boundary"
+        "production pipeline unexpectedly passed the pending target-neutral lowering boundary"
     );
     let inventory_sha256 = identity_inventory_sha256(&stderr);
     let preflight_sha256 = preflight_plan_sha256(&stderr);
     let semantic_sha256 = semantic_mir_sha256(&stderr);
     let expected_milestone = format!(
-        "production-v1 semantic importer authenticated rustc identity inventory {inventory_sha256} and bounded preflight plan {preflight_sha256}, then admitted one complete semantic MIR request with 1 function(s), 3 callable(s), and canonical identity {semantic_sha256}; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
+        "production-v1 semantic importer authenticated rustc identity inventory {inventory_sha256} and bounded preflight plan {preflight_sha256}, then admitted one complete semantic MIR request with 1 function(s), 3 callable(s), and canonical identity {semantic_sha256}; an owner-held Pliron locator graph was recursively verified for exact semantic equivalence; target-neutral lowering remains pending; no fallback or artifact emission was entered",
     );
     assert!(
         stderr.contains(&expected_milestone),
@@ -151,7 +151,7 @@ fn semantic_mir_sha256(stderr: &str) -> &str {
     canonical_sha256_after(
         stderr,
         "and canonical identity ",
-        "; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
+        "; an owner-held Pliron locator graph was recursively verified for exact semantic equivalence; target-neutral lowering remains pending; no fallback or artifact emission was entered",
         "canonical semantic MIR",
     )
 }

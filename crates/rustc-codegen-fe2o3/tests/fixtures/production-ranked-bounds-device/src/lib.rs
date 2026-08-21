@@ -4,7 +4,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[kernel(
     typed,
-    namespace = "182c5d6df66a18fbd24ac6765acd5c63991775ebdf3636b0a471ab36e9d0a023"
+    namespace = "8d412ec11570c99d56c313012ca2372d2a0e0c1242792aa17f5a9a1b3962385b"
 )]
 #[cfg(not(feature = "oob"))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
@@ -17,7 +17,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "a62879fdb31f275a163dbe83937def6b19ec80ab640c60e365bab76941082851"
+    namespace = "9a9c2e4a658f2594fa575abf0647cc3074b13f3252ad9c0fd19c843f237db547"
 )]
 #[cfg(feature = "oob")]
 #[allow(unconditional_panic)]

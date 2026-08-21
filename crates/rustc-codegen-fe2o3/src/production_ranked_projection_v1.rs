@@ -8,17 +8,17 @@ use std::fmt;
 
 use dialect_kernel::{AccessKindAttr, SUPPORTED_ELEMENT_WIDTHS};
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticConstantValueV1, SemanticFunctionDeclV1,
-    SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticConstantValueV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1,
+    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
+    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
+    SemanticTypeIdV1, SemanticTypeShapeV1,
 };
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
     ProductionRankedKernelErrorV1, ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1,
     ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
-    ProductionRankedValueV1, ProductionSessionErrorV1, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_lowering_v1,
+    ProductionRankedValueV1, ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
+    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
 };
 
 const ROOT_NAME_V1: &str = "semantic_bounds_module";
@@ -33,7 +33,7 @@ pub(crate) struct ProjectedAccessSourceV1 {
 /// Move-only result retaining both the exact admitted Rust semantics and the
 /// owner-held PLIRON graph that passed generic ranked-bounds verification.
 pub(crate) struct ProductionRankedSemanticProgramV1 {
-    semantic: AdmittedInertSemanticMirV1,
+    semantic: ProductionSemanticMirOwnerV1,
     lowering: ProductionRankedKernelLoweringInputV1,
     ranked_ir: String,
 }
@@ -48,11 +48,11 @@ impl ProductionRankedSemanticProgramV1 {
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
-        self.semantic.functions().len()
+        self.semantic.semantic().functions().len()
     }
 
     pub(crate) fn semantic_callable_count(&self) -> usize {
-        self.semantic.callables().len()
+        self.semantic.semantic().callables().len()
     }
 
     pub(crate) fn bounds_are_clean(&self) -> bool {
@@ -66,6 +66,7 @@ impl ProductionRankedSemanticProgramV1 {
 
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
+    SemanticOwner(ProductionSemanticMirErrorV1),
     Unsupported(&'static str),
     Recipe(ProductionRankedKernelErrorV1),
     Construction(fe2o3_pliron::NameError),
@@ -79,6 +80,9 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SemanticOwner(error) => {
+                write!(formatter, "exact semantic middle end failed: {error}")
+            }
             Self::Unsupported(detail) => {
                 write!(formatter, "semantic-to-ranked projection rejected {detail}")
             }
@@ -132,6 +136,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
 impl std::error::Error for ProductionRankedProjectionErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::SemanticOwner(error) => Some(error),
             Self::Recipe(error) => Some(error),
             Self::Compile { error, .. } => Some(error),
             Self::Unsupported(_) | Self::Construction(_) => None,
@@ -140,8 +145,12 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
 }
 
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
-    semantic: AdmittedInertSemanticMirV1,
+    semantic_owner: ProductionSemanticMirOwnerV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+    semantic_owner
+        .verify_equivalence()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
+    let semantic = semantic_owner.semantic();
     if semantic.roots().len() != 1 || semantic.functions().len() != 1 {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "a semantic closure that is not one kernel root without helpers",
@@ -218,7 +227,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             access_sources: sources,
         })?;
     Ok(ProductionRankedSemanticProgramV1 {
-        semantic,
+        semantic: semantic_owner,
         lowering,
         ranked_ir,
     })

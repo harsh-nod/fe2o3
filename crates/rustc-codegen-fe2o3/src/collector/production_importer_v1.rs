@@ -63,7 +63,7 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     FunctionAbiConstruction(Box<ProductionSemanticFnAbiErrorV1>),
     BodyConstruction(Box<ProductionSemanticBodyErrorV1>),
     SemanticSchema(SemanticMirErrorV1),
-    SemanticMiddleEndPending {
+    TargetNeutralLoweringPending {
         functions: usize,
         callables: usize,
         rustc_identity_inventory_sha256: [u8; 32],
@@ -107,7 +107,7 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::SemanticSchema(error) => {
                 write!(formatter, "semantic importer rejected complete semantic MIR: {error}")
             }
-            Self::SemanticMiddleEndPending {
+            Self::TargetNeutralLoweringPending {
                 functions,
                 callables,
                 rustc_identity_inventory_sha256,
@@ -115,7 +115,7 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
                 semantic_sha256,
             } => write!(
                 formatter,
-                "semantic importer authenticated rustc identity inventory {} and bounded preflight plan {}, then admitted one complete semantic MIR request with {functions} function(s), {callables} callable(s), and canonical identity {}; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
+                "semantic importer authenticated rustc identity inventory {} and bounded preflight plan {}, then admitted one complete semantic MIR request with {functions} function(s), {callables} callable(s), and canonical identity {}; an owner-held Pliron locator graph was recursively verified for exact semantic equivalence; target-neutral lowering remains pending; no fallback or artifact emission was entered",
                 crate::encode_hex(rustc_identity_inventory_sha256),
                 crate::encode_hex(rustc_preflight_plan_sha256),
                 crate::encode_hex(semantic_sha256),
@@ -137,7 +137,7 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
             | Self::LimitExceeded { .. }
             | Self::FunctionIdentityCollision
             | Self::RootIdentityMismatch
-            | Self::SemanticMiddleEndPending { .. } => None,
+            | Self::TargetNeutralLoweringPending { .. } => None,
         }
     }
 }
@@ -909,7 +909,7 @@ mod tests {
 
     #[test]
     fn terminal_diagnostic_is_bounded_and_workload_neutral() {
-        let error = ProductionSemanticImportErrorV1::SemanticMiddleEndPending {
+        let error = ProductionSemanticImportErrorV1::TargetNeutralLoweringPending {
             functions: 3,
             callables: 6,
             rustc_identity_inventory_sha256: [0xab; 32],
@@ -923,6 +923,8 @@ mod tests {
         assert!(diagnostic.contains(&"cd".repeat(32)));
         assert!(diagnostic.contains(&"ef".repeat(32)));
         assert!(diagnostic.contains("admitted one complete semantic MIR request"));
+        assert!(diagnostic.contains("recursively verified for exact semantic equivalence"));
+        assert!(diagnostic.contains("target-neutral lowering remains pending"));
         for forbidden in [
             "GEMM",
             "attention",
