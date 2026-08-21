@@ -10,6 +10,7 @@ readonly REPO_ROOT
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
+readonly RUSTC_CODEGEN_BACKEND_ELF_CHECK="${REPO_ROOT}/scripts/check-rustc-codegen-backend-elf.sh"
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
 readonly WORKSPACE_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/workspace_dependency_policy.py"
@@ -430,7 +431,13 @@ run_workspace_tests() {
 }
 
 run_backend_build() {
-  run_step backend-build cargo build --locked -p rustc-codegen-fe2o3
+  run_step backend-build env \
+    CARGO_PROFILE_DEV_DEBUG=1 \
+    CARGO_INCREMENTAL=0 \
+    cargo build --locked -p rustc-codegen-fe2o3
+  run_step backend-elf-check \
+    bash "${RUSTC_CODEGEN_BACKEND_ELF_CHECK}" \
+      "${CARGO_TARGET_DIR:-${REPO_ROOT}/target}" "${RUSTC:-rustc}"
 }
 
 run_verus() {

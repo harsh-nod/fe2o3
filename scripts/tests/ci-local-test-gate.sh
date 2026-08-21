@@ -353,6 +353,7 @@ for core_step in \
   format \
   workspace-check \
   backend-build \
+  backend-elf-check \
   ci-local-test-gate \
   cpu-tests \
   rustc-codegen-lib-tests \
@@ -373,6 +374,14 @@ assert_equals \
   "python3 ${WORKSPACE_DEPENDENCY_POLICY_CHECKER} --policy ${WORKSPACE_DEPENDENCY_POLICY}" \
   "$(step_command workspace-dependency-policy)" \
   'generic core did not enforce the workspace dependency policy'
+assert_equals \
+  "env CARGO_PROFILE_DEV_DEBUG=1 CARGO_INCREMENTAL=0 cargo build --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE}" \
+  "$(step_command backend-build)" \
+  'generic core did not build the backend with the selected limited-debug profile'
+assert_equals \
+  "bash ${RUSTC_CODEGEN_BACKEND_ELF_CHECK} ${CARGO_TARGET_DIR:-${REPO_ROOT}/target} ${RUSTC:-rustc}" \
+  "$(step_command backend-elf-check)" \
+  'generic core did not inspect and load the bounded backend ELF'
 for core_step in "${STEP_NAMES[@]}"; do
   if [[ "${core_step}" == rustc-codegen-test-* ]]; then
     printf 'generic core unexpectedly ran integration target: %s\n' "${core_step}" >&2
