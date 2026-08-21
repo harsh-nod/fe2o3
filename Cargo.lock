@@ -1124,9 +1124,12 @@ dependencies = [
  "fe2o3-compiler-api",
  "fe2o3-compiler-ffi",
  "fe2o3-general-gemm-compiler",
+ "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-ir",
  "fe2o3-llvm-handoff",
+ "fe2o3-llvm-text",
+ "fe2o3-llvm-worker-handoff",
  "sha2 0.11.0",
  "trybuild",
 ]

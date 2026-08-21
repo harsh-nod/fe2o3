@@ -14,9 +14,12 @@ fe2o3-artifact-transaction.workspace = true
 fe2o3-compiler-api.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-general-gemm-compiler.workspace = true
+fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize = { workspace = true, features = ["general-gemm-v1"] }
 fe2o3-kernel-ir.workspace = true
 fe2o3-llvm-handoff.workspace = true
+fe2o3-llvm-text.workspace = true
+fe2o3-llvm-worker-handoff.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]

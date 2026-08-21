@@ -1,0 +1,5 @@
+error[E0451]: field `catalog` of struct `InspectedQwen3RmsNormKernelV1` is private
+ --> tests/ui/rmsnorm_artifact_fields_are_private.rs:4:41
+  |
+4 |     let InspectedQwen3RmsNormKernelV1 { catalog, .. } = value;
+  |                                         ^^^^^^^ private field

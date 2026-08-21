@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `InspectedQwen3RmsNormKernelV1` in the current scope
+ --> tests/ui/rmsnorm_artifact_cannot_clone.rs:4:28
+  |
+4 |     let _duplicate = value.clone();
+  |                            ^^^^^ method not found in `InspectedQwen3RmsNormKernelV1`
