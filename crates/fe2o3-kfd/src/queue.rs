@@ -45,15 +45,15 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "release=explicit-only-after-confirmed-destroy,no-drop-ioctl\n",
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
     "composition=shared-gtt-linear-role-authorities,transferred-model-foundation,whole-slice-doorbell-mmap\n",
-    "submission=crate-private-single-producer-actual-counters-invalid-body-release-header-and-one-doorbell-store\n",
-    "missing=public-dispatch,kernel-launch,code-kernarg-signal-binding,completion-and-exception-observation\n",
+    "submission=crate-private-single-producer-bounded-batch-reservation,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
+    "missing=public-dispatch,kernel-launch,code-kernarg-allocation-generation-signal-binding,completion-and-exception-observation,live-batch-evidence\n",
     "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
     "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
 );
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "680382f9b50e8ee9574e36bd2a6032ea6610967dcf4c882e563b7c0aaf46eb67";
+    "6c5b7d7687934e57dc1b80c44e8f9ac21a345823447b4f4c6ce3f23d30165e3e";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
