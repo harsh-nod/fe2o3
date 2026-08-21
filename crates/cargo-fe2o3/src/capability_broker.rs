@@ -91,7 +91,7 @@ mod platform {
     const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V3\0";
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
-    const RECEIVED_DESCRIPTOR_FLOOR: i32 = 199;
+    const RECEIVED_DESCRIPTOR_FLOOR: i32 = 210;
     pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
         fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
     const BROKER_AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -2388,13 +2388,33 @@ mod platform {
 
             let route = BrokerRouteV3::parse(broker.route()).unwrap();
             assert!(route.binding.requires_compiler_closure_v2());
-            let transferred = receive_from(&route, session, binding).unwrap();
+            let mut transferred = receive_from(&route, session, binding).unwrap();
             assert!(transferred.pinned_cargo_image.is_none());
             let capability = transferred
                 .compiler_closure
+                .take()
                 .expect("protected response carries a compiler closure");
             capability.revalidate().unwrap();
             assert_eq!(capability.closure(), closure);
+
+            let authority = transferred
+                .invocation_authority
+                .take()
+                .expect("protected response carries invocation authority");
+            let mut command = Command::new("/bin/sh");
+            command.arg("-c").arg(format!(
+                "test -e /proc/self/fd/{INVOCATION_AUTHORITY_CHILD_FD_V1} && \
+                 test -e /proc/self/fd/{} && \
+                 test \"$(readlink /proc/self/fd/{INVOCATION_AUTHORITY_CHILD_FD_V1})\" != \
+                      \"$(readlink /proc/self/fd/{})\"",
+                crate::COMPILER_CLOSURE_CHILD_FD,
+                crate::COMPILER_CLOSURE_CHILD_FD,
+            ));
+            capability
+                .inherit_for_child_at(&mut command, crate::COMPILER_CLOSURE_CHILD_FD)
+                .unwrap();
+            authority.inherit_for_child(&mut command).unwrap();
+            assert!(command.status().unwrap().success());
         }
 
         #[test]

@@ -79,11 +79,19 @@ const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
 const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
-const COMPILER_CLOSURE_CHILD_FD: std::os::fd::RawFd = 195;
+const COMPILER_CLOSURE_CHILD_FD: std::os::fd::RawFd = 199;
 const ARTIFACT_CHILD_FD: std::os::fd::RawFd =
     fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
 const BACKEND_CHILD_FD: std::os::fd::RawFd =
     fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_CHILD_FD_V1;
+const _: () = assert!(COMPILER_CLOSURE_CHILD_FD != RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(COMPILER_CLOSURE_CHILD_FD != RUSTC_CHILD_FD);
+const _: () = assert!(
+    COMPILER_CLOSURE_CHILD_FD
+        != fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1
+);
+const _: () = assert!(COMPILER_CLOSURE_CHILD_FD != ARTIFACT_CHILD_FD);
+const _: () = assert!(COMPILER_CLOSURE_CHILD_FD != BACKEND_CHILD_FD);
 
 const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
     "RUSTC",
