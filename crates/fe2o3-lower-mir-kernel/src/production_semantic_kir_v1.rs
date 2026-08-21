@@ -8,14 +8,15 @@
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    BasicBlock, BlockId, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent, Module,
-    ScalarType, Signature, Terminator, Type, ValueId, VerificationErrors, WorkgroupSize,
-    verify_module,
+    AccessMode, AddressSpace, BasicBlock, BlockId, Function, FunctionId, Kernel, LaunchDomain,
+    LaunchExtent, Module, ScalarType, Signature, Terminator, Type, ValueId, VerificationErrors,
+    WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticBlockIdV1, SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticLocalRoleV1,
-    SemanticScalarTypeV1, SemanticStatementKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
-    SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticLocalRoleV1, SemanticMutabilityV1,
+    SemanticPointerMetadataV1, SemanticScalarTypeV1, SemanticStatementKindV1,
+    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1,
 };
 use fe2o3_pliron::{ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1};
 
@@ -365,7 +366,7 @@ fn lower_module(
     }
     let parameter_types = parameters
         .iter()
-        .map(|(_, _, ty)| lower_type(semantic.types(), *ty))
+        .map(|(_, _, ty)| lower_parameter_type(semantic.types(), semantic.callables(), *ty))
         .collect::<Result<Vec<_>, _>>()?;
     let parameter_values = parameters
         .iter()
@@ -478,13 +479,81 @@ fn lower_module(
     ))
 }
 
-fn lower_type(
+fn lower_parameter_type(
     types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
     let shape = types
         .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
         .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?
+        .shape();
+    if let Some(element) = disjoint_slice_element(callables, ty) {
+        return Ok(Type::slice(
+            lower_scalar_type(types, element)?,
+            AddressSpace::Global,
+            AccessMode::ReadWrite,
+        ));
+    }
+    match shape {
+        SemanticTypeShapeV1::Pointer(pointer) => {
+            let access = match pointer.mutability() {
+                SemanticMutabilityV1::Immutable => AccessMode::ReadOnly,
+                SemanticMutabilityV1::Mutable => AccessMode::ReadWrite,
+            };
+            let address_space = lower_address_space(pointer.address_space())?;
+            match pointer.metadata() {
+                SemanticPointerMetadataV1::None => Ok(Type::pointer(
+                    lower_scalar_type(types, pointer.pointee())?,
+                    address_space,
+                    access,
+                )),
+                SemanticPointerMetadataV1::SliceLength => {
+                    let pointee =
+                        types
+                            .get(pointer.pointee().index() as usize)
+                            .ok_or_else(|| {
+                                unsupported(0, None, None, "slice pointee type is missing")
+                            })?;
+                    let SemanticTypeShapeV1::Slice { element } = pointee.shape() else {
+                        return Err(unsupported(
+                            0,
+                            None,
+                            None,
+                            "slice-length pointer metadata has a non-slice pointee",
+                        ));
+                    };
+                    Ok(Type::slice(
+                        lower_scalar_type(types, *element)?,
+                        address_space,
+                        access,
+                    ))
+                }
+                SemanticPointerMetadataV1::VTable => Err(unsupported(
+                    0,
+                    None,
+                    None,
+                    "vtable-bearing kernel arguments are unsupported",
+                )),
+            }
+        }
+        SemanticTypeShapeV1::Scalar(_) => Ok(lower_scalar_type(types, ty)?),
+        _ => Err(unsupported(
+            0,
+            None,
+            None,
+            "kernel argument type has no authenticated Kernel IR representation",
+        )),
+    }
+}
+
+fn lower_scalar_type(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Result<Type, ProductionSemanticKirErrorV1> {
+    let shape = types
+        .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
+        .ok_or_else(|| unsupported(0, None, None, "scalar type is missing"))?
         .shape();
     let scalar = match shape {
         SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool) => ScalarType::Bool,
@@ -524,16 +593,95 @@ fn lower_type(
             }
         },
         SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Char) => ScalarType::U32,
+        SemanticTypeShapeV1::ValidityScalar(validity) => {
+            return lower_scalar_kind(validity.scalar());
+        }
         _ => {
             return Err(unsupported(
                 0,
                 None,
                 None,
-                "kernel argument type is not a scalar",
+                "referenced element type is not a supported scalar",
             ));
         }
     };
     Ok(Type::Scalar(scalar))
+}
+
+fn lower_scalar_kind(scalar: SemanticScalarTypeV1) -> Result<Type, ProductionSemanticKirErrorV1> {
+    let scalar = match scalar {
+        SemanticScalarTypeV1::Bool => ScalarType::Bool,
+        SemanticScalarTypeV1::Integer { signed, bits } => match (signed, bits) {
+            (true, 8) => ScalarType::I8,
+            (true, 16) => ScalarType::I16,
+            (true, 32) => ScalarType::I32,
+            (true, 64) => ScalarType::I64,
+            (true, 128) => ScalarType::I128,
+            (false, 8) => ScalarType::U8,
+            (false, 16) => ScalarType::U16,
+            (false, 32) => ScalarType::U32,
+            (false, 64) => ScalarType::U64,
+            (false, 128) => ScalarType::U128,
+            _ => {
+                return Err(unsupported(
+                    0,
+                    None,
+                    None,
+                    "integer argument width is unsupported",
+                ));
+            }
+        },
+        SemanticScalarTypeV1::Float { bits } => match bits {
+            16 => ScalarType::F16,
+            32 => ScalarType::F32,
+            64 => ScalarType::F64,
+            _ => {
+                return Err(unsupported(
+                    0,
+                    None,
+                    None,
+                    "floating argument width is unsupported",
+                ));
+            }
+        },
+        SemanticScalarTypeV1::Char => ScalarType::U32,
+    };
+    Ok(Type::Scalar(scalar))
+}
+
+fn disjoint_slice_element(
+    callables: &[SemanticCallableDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Option<SemanticTypeIdV1> {
+    callables.iter().find_map(|callable| match callable {
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+                    disjoint_slice,
+                    element,
+                    ..
+                },
+            ..
+        } if *disjoint_slice == ty => Some(*element),
+        SemanticCallableDeclV1::Defined { .. }
+        | SemanticCallableDeclV1::DeviceFfiImport { .. }
+        | SemanticCallableDeclV1::CompilerIntrinsic { .. } => None,
+    })
+}
+
+fn lower_address_space(address_space: u32) -> Result<AddressSpace, ProductionSemanticKirErrorV1> {
+    match address_space {
+        0 | 1 => Ok(AddressSpace::Global),
+        3 => Ok(AddressSpace::Workgroup),
+        4 => Ok(AddressSpace::Constant),
+        5 => Ok(AddressSpace::Private),
+        _ => Err(unsupported(
+            0,
+            None,
+            None,
+            "semantic pointer address space is unsupported",
+        )),
+    }
 }
 
 fn enforce_limit(

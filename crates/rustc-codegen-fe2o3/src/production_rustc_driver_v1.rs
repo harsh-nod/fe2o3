@@ -89,8 +89,13 @@ fn extract_ranked_memory_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), Str
         .verify_ranked_memory()
         .map_err(|error| error.to_string())?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> bounds-verified lowering input for `{}`\n{}",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> bounds-verified lowering input for `{}`; {} semantic function(s), {} callable record(s), {} retained identity/transaction binding(s), artifact/launch authority {}, bounds clean {}\n{}",
         ranked.function_name(),
+        ranked.semantic_function_count(),
+        ranked.semantic_callable_count(),
+        ranked.retained_identity_and_transaction_binding_count(),
+        ranked.grants_artifact_or_launch_authority(),
+        ranked.bounds_are_clean(),
         ranked.ranked_ir(),
     );
     Ok(())

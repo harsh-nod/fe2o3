@@ -45,21 +45,16 @@ fn workspace() -> PathBuf {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn ordinary_rust_static_bounds_lower_or_fail_at_ranked_pliron() {
+fn ordinary_rust_bounds_and_target_neutral_lowering_fail_closed() {
     let safe = run_extraction(&ScratchTarget::new(), false);
     assert!(
-        safe.status.success(),
-        "safe Rust kernel was rejected:\n{}",
+        !safe.status.success()
+            && safe.stderr.contains(
+                "semantic-to-ranked projection incomplete: a dereferenced memory access without a ranked index projection"
+            )
+            && !safe.stderr.contains("error[FE2O3-BOUNDS-001]"),
+        "safe static access did not stop at the unproved dynamic output access:\n{}",
         safe.stderr
-    );
-    assert!(
-        safe.stderr
-            .contains("Rust -> semantic MIR -> ranked PLIRON -> bounds-verified lowering input")
-            && safe.stderr.contains("kernel.ranked_view <32, false, [64]>")
-            && safe.stderr.contains("kernel.index_constant 63")
-            && safe.stderr.contains("kernel.access Read"),
-        "safe kernel did not expose the expected ranked lowering:\n{}",
-        safe.stderr,
     );
 
     let oob = run_extraction(&ScratchTarget::new(), true);
@@ -100,18 +95,15 @@ fn ordinary_rust_static_bounds_lower_or_fail_at_ranked_pliron() {
         !safe_production.status.success()
             && safe_production
                 .stderr
-                .contains("production-v1 lowered 1 admitted semantic function(s)")
+                .contains("production-v1 target-neutral lowering failed")
             && safe_production
                 .stderr
-                .contains("bounds-verified ranked PLIRON")
-            && safe_production
+                .contains("semantic statement has no exact Kernel IR lowering rule")
+            && safe_production.stderr.contains("function 0, block Some(")
+            && !safe_production
                 .stderr
-                .contains("artifact/launch authority false")
-            && safe_production
-                .stderr
-                .contains("target-machine lowering remains disabled")
-            && safe_production.stderr.contains("kernel.index_constant 63"),
-        "safe kernel did not reach the production ranked handoff:\n{}",
+                .contains("gfx942 target mapping remains disabled"),
+        "safe kernel did not enter and fail closed in production KIR lowering:\n{}",
         safe_production.stderr,
     );
 
@@ -120,14 +112,14 @@ fn ordinary_rust_static_bounds_lower_or_fail_at_ranked_pliron() {
         !oob_production.status.success()
             && oob_production
                 .stderr
-                .contains("production-v1 ranked-memory verification failed")
-            && oob_production.stderr.contains("error[FE2O3-BOUNDS-001]")
-            && oob_production.stderr.contains("required: 64 < 64")
-            && oob_production.stderr.contains(":26:20")
+                .contains("production-v1 target-neutral lowering failed")
+            && oob_production
+                .stderr
+                .contains("semantic statement has no exact Kernel IR lowering rule")
             && !oob_production
                 .stderr
-                .contains("target-machine lowering remains disabled"),
-        "out-of-bounds kernel did not fail inside the production verifier:\n{}",
+                .contains("gfx942 target mapping remains disabled"),
+        "out-of-bounds kernel did not fail inside production KIR lowering:\n{}",
         oob_production.stderr,
     );
     assert!(

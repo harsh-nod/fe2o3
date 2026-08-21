@@ -494,16 +494,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
                             }
                         };
-                        match transaction.verify_ranked_memory() {
+                        match transaction.lower_target_neutral() {
                             Ok(verified) => tcx.dcx().fatal(format!(
-                                "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) and {} callable record(s) into bounds-verified ranked PLIRON for `{}` while retaining {} identity/transaction binding(s); artifact/launch authority {}; bounds clean {}; target-machine lowering remains disabled:\n{}",
+                                "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s) while retaining {} identity/transaction binding(s); artifact/launch authority {}; gfx942 target mapping remains disabled",
                                 verified.semantic_function_count(),
-                                verified.semantic_callable_count(),
-                                verified.function_name(),
+                                verified.module().id,
+                                verified.correspondence_block_count(),
                                 verified.retained_identity_and_transaction_binding_count(),
                                 verified.grants_artifact_or_launch_authority(),
-                                verified.bounds_are_clean(),
-                                verified.ranked_ir(),
                             )),
                             Err(error) => {
                                 tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))

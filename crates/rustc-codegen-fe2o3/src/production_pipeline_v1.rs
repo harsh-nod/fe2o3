@@ -37,6 +37,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
+    TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
 }
 
 impl fmt::Display for ProductionPipelineErrorV1 {
@@ -55,6 +56,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::RankedProjection(error) => {
                 write!(formatter, "production-v1 ranked-memory verification failed: {error}")
             }
+            Self::TargetNeutralLowering(error) => {
+                write!(formatter, "production-v1 target-neutral lowering failed: {error}")
+            }
         }
     }
 }
@@ -65,6 +69,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
+            Self::TargetNeutralLowering(error) => Some(error),
             Self::CustomLlvmConfiguration | Self::EmptyCollectedDeviceClosure => None,
         }
     }
@@ -125,6 +130,45 @@ pub(crate) struct RankedVerifiedProductionCompilationV1 {
     producer: ProducerIdentity,
     output_dir: PathBuf,
     build_attempt: Option<BuildAttempt>,
+}
+
+/// Move-only production stage retaining exact semantic ownership, verified
+/// Kernel IR, correspondence evidence, and the original transaction bindings.
+pub(crate) struct TargetNeutralProductionCompilationV1 {
+    lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    rustc_identity_inventory_sha256: [u8; 32],
+    rustc_preflight_plan_sha256: [u8; 32],
+    producer: ProducerIdentity,
+    output_dir: PathBuf,
+    build_attempt: Option<BuildAttempt>,
+}
+
+impl TargetNeutralProductionCompilationV1 {
+    pub(crate) fn module(&self) -> &fe2o3_kernel_ir::Module {
+        self.lowered.module()
+    }
+
+    pub(crate) fn semantic_function_count(&self) -> usize {
+        self.lowered.semantic().semantic().functions().len()
+    }
+
+    pub(crate) fn correspondence_block_count(&self) -> usize {
+        self.lowered.correspondence().blocks().len()
+    }
+
+    pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
+        let _ = (
+            &self.rustc_identity_inventory_sha256,
+            &self.rustc_preflight_plan_sha256,
+            &self.producer,
+            &self.output_dir,
+        );
+        4 + usize::from(self.build_attempt.is_some())
+    }
+
+    pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
+        self.lowered.grants_artifact_or_launch_authority()
+    }
 }
 
 impl RankedVerifiedProductionCompilationV1 {
@@ -224,6 +268,16 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             .verify_ranked_memory()
     }
 
+    /// Consumes the sole production transaction through exact semantic MIR and
+    /// verified target-neutral Kernel IR construction.
+    pub(crate) fn lower_target_neutral(
+        self,
+    ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
+        self.import_semantic_mir()?
+            .construct_semantic_middle_end()?
+            .lower_target_neutral()
+    }
+
     /// Retains the original extraction milestone while consuming the same
     /// transaction and importer as the production backend.
     pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
@@ -272,6 +326,32 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
 }
 
 impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
+    fn lower_target_neutral(
+        self,
+    ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
+        let EquivalentSemanticMirStageV1 {
+            semantic_mir,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        } = self.stage;
+        let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower(
+            semantic_mir,
+            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+        )
+        .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
+        Ok(TargetNeutralProductionCompilationV1 {
+            lowered,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        })
+    }
+
     fn require_target_neutral_lowering(self) -> ProductionPipelineErrorV1 {
         let EquivalentSemanticMirStageV1 {
             semantic_mir,
