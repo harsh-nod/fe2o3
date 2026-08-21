@@ -31,6 +31,17 @@
 //! Successful transactions return immutable IR and code-object snapshots read through the exact
 //! staged file descriptors after publication and before releasing the lock. Returned paths are
 //! diagnostics only, so later publication at the same names cannot change an earlier result.
+//!
+//! # Filesystem concurrency contract
+//!
+//! The output directory is a private protocol namespace for cooperating fe2o3 writers. Every
+//! writer that can create, rename, replace, or remove entries in that directory must use this
+//! crate's lock. POSIX record locks are advisory, and Linux has no unlink-by-file-descriptor
+//! operation. Consequently, these APIs detect substitutions observed before a destructive
+//! operation and verify their results, but they cannot prevent arbitrary same-UID code that
+//! ignores the lock from replacing a pathname in the final check-to-unlink interval. Callers must
+//! not expose the directory to such writers. This is a coordination boundary, not a defense
+//! against a malicious process running as the artifact-store owner.
 
 mod attempt;
 mod attempt_scoped_hsaco_publication;

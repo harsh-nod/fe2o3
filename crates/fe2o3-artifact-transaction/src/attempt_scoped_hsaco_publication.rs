@@ -1677,6 +1677,11 @@ pub(crate) fn publication_receipt_v2(
     )
 }
 
+/// Returns the canonical V2 receipt identity for one exact build attempt.
+pub(crate) fn backend_publication_receipt_attempt_identity_v2(attempt: BuildAttempt) -> [u8; 32] {
+    receipt_attempt_identity(attempt, ATTEMPT_IDENTITY_DOMAIN_V2)
+}
+
 pub(crate) fn publication_receipt_for_producer_identity_v2(
     attempt: BuildAttempt,
     plan: DurableLinkPublicationPlanV1,
@@ -1709,11 +1714,7 @@ fn receipt_context_identities(
     attempt_domain: &[u8],
     scope_domain: &[u8],
 ) -> ([u8; 32], [u8; 32]) {
-    let mut attempt_digest = Sha256::new();
-    attempt_digest.update(attempt_domain);
-    attempt_digest.update(attempt.generation().to_le_bytes());
-    attempt_digest.update(attempt.session().as_bytes());
-    attempt_digest.update(attempt.invocation().as_bytes());
+    let attempt_identity = receipt_attempt_identity(attempt, attempt_domain);
 
     let scope = plan.scope();
     let mut scope_digest = Sha256::new();
@@ -1722,10 +1723,16 @@ fn receipt_context_identities(
     scope_digest.update(scope.kernel_set().as_bytes());
     scope_digest.update(scope.target().as_bytes());
 
-    (
-        attempt_digest.finalize().into(),
-        scope_digest.finalize().into(),
-    )
+    (attempt_identity, scope_digest.finalize().into())
+}
+
+fn receipt_attempt_identity(attempt: BuildAttempt, attempt_domain: &[u8]) -> [u8; 32] {
+    let mut attempt_digest = Sha256::new();
+    attempt_digest.update(attempt_domain);
+    attempt_digest.update(attempt.generation().to_le_bytes());
+    attempt_digest.update(attempt.session().as_bytes());
+    attempt_digest.update(attempt.invocation().as_bytes());
+    attempt_digest.finalize().into()
 }
 
 pub(crate) fn producer_receipt_identity_v1(stable_source: &str, crate_name: &str) -> [u8; 32] {

@@ -10,7 +10,9 @@
 //! worker, Verus, or caller-supplied evidence and grants no publication, loading, or launch authority.
 
 use crate::attempt::{AttemptPhase, BackendReceiptV1};
-use crate::attempt_scoped_hsaco_publication::{publication_receipt, publication_receipt_v2};
+use crate::attempt_scoped_hsaco_publication::{
+    backend_publication_receipt_attempt_identity_v2, publication_receipt, publication_receipt_v2,
+};
 use crate::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildSession, CanonicalLinkRequestIdentityV1,
     DurableLinkPublicationPlanV1, EmitError, FinalizationIdentityV1, FinalizedOutputIdentityV1,
@@ -2386,7 +2388,40 @@ mod publication_intent_v2 {
         )
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct WorkerV2PublicationIntentLeaseFileV2 {
+        device: u64,
+        inode: u64,
+    }
+
+    impl WorkerV2PublicationIntentLeaseFileV2 {
+        fn capture(
+            output: &PinnedOutput,
+            entry: &str,
+            exact_length: usize,
+        ) -> Result<Self, WorkerV2PublicationIntentErrorV2> {
+            let stat = statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(std::io::Error::from)?;
+            if !is_private_file(&stat) || usize::try_from(stat.st_size).ok() != Some(exact_length) {
+                return Err(invalid::<PublicationIntentSchemaV2>(
+                    output,
+                    entry,
+                    "lease entry is not a private file with its canonical length",
+                ));
+            }
+            Ok(Self {
+                device: stat.st_dev,
+                inode: stat.st_ino,
+            })
+        }
+    }
+
     /// Exclusive local intent lease retained across a caller's related durable publication.
+    ///
+    /// The lease serializes cooperating fe2o3 writers. It also detects record, output, and output
+    /// directory replacement when [`Self::revalidate`] is called. It does not constrain same-UID
+    /// code that ignores the artifact-store lock; see the crate-level filesystem concurrency
+    /// contract.
     pub struct WorkerV2PublicationIntentLeaseV2 {
         _lock: OutputLock,
         output: PinnedOutput,
@@ -2394,6 +2429,8 @@ mod publication_intent_v2 {
         attempt: BuildAttempt,
         compiler_closure: CompilerClosureV2,
         recovered: RecoveredWorkerV2PublicationIntentV2,
+        record_file: WorkerV2PublicationIntentLeaseFileV2,
+        output_file: WorkerV2PublicationIntentLeaseFileV2,
     }
 
     impl WorkerV2PublicationIntentLeaseV2 {
@@ -2425,6 +2462,19 @@ mod publication_intent_v2 {
             if recovered.record != self.recovered.record
                 || recovered.exact_output.as_ref() != self.recovered.exact_output.as_ref()
             {
+                return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
+            }
+            let record_file = WorkerV2PublicationIntentLeaseFileV2::capture(
+                &self.output,
+                &names.record,
+                RECORD_BYTES_V2,
+            )?;
+            let output_file = WorkerV2PublicationIntentLeaseFileV2::capture(
+                &self.output,
+                &names.output,
+                recovered.record.output_length(),
+            )?;
+            if record_file != self.record_file || output_file != self.output_file {
                 return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
             }
             self.output.verify_path_identity()?;
@@ -2469,6 +2519,13 @@ mod publication_intent_v2 {
         if recovered.record.identity() != identity {
             return Err(WorkerV2PublicationIntentErrorV2::IntentIdentityMismatch);
         }
+        let record_file =
+            WorkerV2PublicationIntentLeaseFileV2::capture(&output, &names.record, RECORD_BYTES_V2)?;
+        let output_file = WorkerV2PublicationIntentLeaseFileV2::capture(
+            &output,
+            &names.output,
+            recovered.record.output_length(),
+        )?;
         output.verify_path_identity()?;
         Ok(WorkerV2PublicationIntentLeaseV2 {
             _lock: lock,
@@ -2481,6 +2538,8 @@ mod publication_intent_v2 {
                 record: recovered.record,
                 exact_output: recovered.exact_output,
             },
+            record_file,
+            output_file,
         })
     }
 

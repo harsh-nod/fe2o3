@@ -42,6 +42,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 const INTENT_PREFIX: &str = ".fe2o3-worker-v2-publication-intent-";
 const V1_PREFIX: &str = ".fe2o3-worker-v2-publication-intent-v1-";
@@ -55,6 +58,11 @@ const ESCROW_CRASH_HELPER_CLOSURE_SEED: &str = "FE2O3_ESCROW_CRASH_HELPER_CLOSUR
 const ESCROW_CRASH_HELPER_CAPSULE: &str = "FE2O3_ESCROW_CRASH_HELPER_CAPSULE";
 const ESCROW_CRASH_HELPER_BOUNDARY: &str = "FE2O3_ESCROW_CRASH_HELPER_BOUNDARY";
 const ESCROW_CRASH_HELPER_TIMING: &str = "FE2O3_ESCROW_CRASH_HELPER_TIMING";
+const ESCROW_CAPSULE_MAGIC: &[u8] = b"FE2O3-WORKER-V2-INTENT-CLEANUP-ESCROW-CAPSULE-V1\0";
+const ESCROW_CAPSULE_CHECKSUM_DOMAIN: &[u8] =
+    b"fe2o3.worker-v2-intent-cleanup-escrow.capsule-checksum.v1\0";
+const ESCROW_RECEIPT_IDENTITY_DOMAIN: &[u8] =
+    b"fe2o3.worker-v2-intent-cleanup-escrow.receipt-identity.v1\0";
 const _: () = assert!(MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1 <= 2 * 1024);
 
 static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -247,6 +255,11 @@ const PREPARE_ESCROW_BOUNDARIES: &[WorkerV2PublicationIntentCleanupEscrowBoundar
     WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncManifestName,
 ];
 const COMMIT_ESCROW_BOUNDARIES: &[WorkerV2PublicationIntentCleanupEscrowBoundaryV1] = &[
+    WorkerV2PublicationIntentCleanupEscrowBoundaryV1::CreateManifestTemp,
+    WorkerV2PublicationIntentCleanupEscrowBoundaryV1::WriteManifestTemp,
+    WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncManifestTemp,
+    WorkerV2PublicationIntentCleanupEscrowBoundaryV1::RenameManifest,
+    WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncManifestName,
     WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkQuarantinedRecord,
     WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncQuarantinedRecordDeletion,
     WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkQuarantinedOutput,
@@ -281,6 +294,36 @@ fn escrow_entry_with_suffix(output: &Path, suffix: &str) -> PathBuf {
         .collect::<Vec<_>>();
     assert_eq!(matches.len(), 1, "unexpected escrow entries: {names:?}");
     output.join(matches[0])
+}
+
+fn schema_entry_with_suffix(output: &Path, prefix: &str, suffix: &str) -> PathBuf {
+    let matches = fs::read_dir(output)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(prefix) && name.ends_with(suffix)
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "unexpected schema entries: {matches:?}");
+    matches.into_iter().next().unwrap()
+}
+
+fn sha256_domain_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    for part in parts {
+        digest.update(part);
+    }
+    digest.finalize().into()
+}
+
+fn reseal_cleanup_capsule(bytes: &mut [u8]) {
+    let body_len = bytes.len() - 32;
+    let checksum = sha256_domain_parts(ESCROW_CAPSULE_CHECKSUM_DOMAIN, &[&bytes[..body_len]]);
+    bytes[body_len..].copy_from_slice(&checksum);
 }
 
 struct CleanupEscrowFixture {
@@ -495,6 +538,124 @@ fn exact_v2_intent_lease_revalidates_the_pinned_local_snapshot() {
         ),
         Err(WorkerV2PublicationIntentErrorV2::IntentIdentityMismatch)
     ));
+
+    assert!(matches!(
+        acquire_worker_v2_publication_intent_lease_v2(
+            &fixture.output,
+            &fixture.owner,
+            fixture.attempt,
+            compiler_closure(fixture.closure_seed.wrapping_add(1)),
+            fixture.intent,
+        ),
+        Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch)
+    ));
+
+    let wrong_owner = producer("/src/v2-cleanup-escrow-wrong-owner.rs");
+    assert!(matches!(
+        acquire_worker_v2_publication_intent_lease_v2(
+            &fixture.output,
+            &wrong_owner,
+            fixture.attempt,
+            fixture.closure,
+            fixture.intent,
+        ),
+        Err(WorkerV2PublicationIntentErrorV2::Attempt { .. })
+    ));
+
+    let wrong_attempt = BuildAttempt::from_env_value(&format!(
+        "{}:{}:{}",
+        fixture.attempt.generation() + 1,
+        fixture.attempt.session().to_hex(),
+        fixture.attempt.invocation().to_hex()
+    ))
+    .unwrap();
+    assert!(matches!(
+        acquire_worker_v2_publication_intent_lease_v2(
+            &fixture.output,
+            &fixture.owner,
+            wrong_attempt,
+            fixture.closure,
+            fixture.intent,
+        ),
+        Err(WorkerV2PublicationIntentErrorV2::Attempt { .. })
+    ));
+}
+
+#[test]
+fn exact_v2_intent_lease_holds_off_a_cooperating_mutator_until_drop() {
+    let fixture = CleanupEscrowFixture::new(0x1a, "lease-lock-retention");
+    let lease = acquire_worker_v2_publication_intent_lease_v2(
+        &fixture.output,
+        &fixture.owner,
+        fixture.attempt,
+        fixture.closure,
+        fixture.intent,
+    )
+    .unwrap();
+    let output = fixture.output.clone();
+    let owner = fixture.owner.clone();
+    let attempt = fixture.attempt;
+    let closure = fixture.closure;
+    let intent = fixture.intent;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let result =
+            clear_worker_v2_publication_intent_v2(&output, &owner, attempt, closure, intent);
+        done_tx.send(result).unwrap();
+    });
+
+    started_rx.recv().unwrap();
+    assert!(matches!(
+        done_rx.recv_timeout(Duration::from_millis(150)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    lease.revalidate().unwrap();
+    drop(lease);
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn exact_v2_intent_lease_detects_record_output_and_directory_replacement() {
+    for (seed, suffix) in [(0x1b, ".record"), (0x1c, ".output")] {
+        let fixture = CleanupEscrowFixture::new(seed, "lease-file-replacement");
+        let lease = acquire_worker_v2_publication_intent_lease_v2(
+            &fixture.output,
+            &fixture.owner,
+            fixture.attempt,
+            fixture.closure,
+            fixture.intent,
+        )
+        .unwrap();
+        let entry = schema_entry_with_suffix(&fixture.output, V2_PREFIX, suffix);
+        let displaced = fixture.output.join(format!("displaced-lease{suffix}"));
+        fs::rename(&entry, &displaced).unwrap();
+        fs::copy(&displaced, &entry).unwrap();
+        fs::set_permissions(&entry, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            lease.revalidate(),
+            Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent)
+        ));
+    }
+
+    let fixture = CleanupEscrowFixture::new(0x1d, "lease-directory-replacement");
+    let lease = acquire_worker_v2_publication_intent_lease_v2(
+        &fixture.output,
+        &fixture.owner,
+        fixture.attempt,
+        fixture.closure,
+        fixture.intent,
+    )
+    .unwrap();
+    let displaced = fixture._temp.0.join("displaced-output-directory");
+    fs::rename(&fixture.output, &displaced).unwrap();
+    fs::create_dir(&fixture.output).unwrap();
+    assert!(lease.revalidate().is_err());
 }
 
 #[test]
@@ -1123,6 +1284,72 @@ fn artifact_owned_cleanup_escrow_roundtrips_rolls_back_and_commits_idempotently(
         Err(WorkerV2PublicationIntentErrorV2::NotFound)
     ));
     assert!(escrow_entry_names(&output).is_empty());
+}
+
+#[test]
+fn cleanup_escrow_capsule_rejects_resealed_noncanonical_relationships() {
+    let fixture = CleanupEscrowFixture::new(0x2f, "resealed-capsule-relations");
+    let canonical = fixture.prepare().to_bytes();
+    let slot_offset = ESCROW_CAPSULE_MAGIC.len() + 2 + 32 + 32 + 8 + 16 + 32;
+    let intent_offset = slot_offset + 32;
+    let record_identity_offset = intent_offset + 32;
+    let output_identity_offset = record_identity_offset + 32;
+    let receipt_identity_offset = output_identity_offset + 32;
+    let receipt_offset = receipt_identity_offset + 32;
+    let receipt_end = canonical.len() - 32 - (2 * 5 * 8);
+    let record_snapshot_offset = receipt_end;
+    let output_snapshot_offset = record_snapshot_offset + (5 * 8);
+
+    let reject = |mut bytes: Vec<u8>, label: &str| {
+        reseal_cleanup_capsule(&mut bytes);
+        assert!(
+            WorkerV2PublicationIntentCleanupEscrowV1::from_bytes(&bytes).is_err(),
+            "accepted resealed noncanonical {label}"
+        );
+    };
+
+    let mut wrong_slot = canonical.clone();
+    wrong_slot[slot_offset] ^= 1;
+    reject(wrong_slot, "producer/attempt slot");
+
+    let mut wrong_record_identity = canonical.clone();
+    wrong_record_identity[record_identity_offset] ^= 1;
+    reject(wrong_record_identity, "record/intent identity");
+
+    let mut wrong_output_identity = canonical.clone();
+    wrong_output_identity[output_identity_offset] ^= 1;
+    reject(wrong_output_identity, "output/receipt identity");
+
+    let mut wrong_receipt_attempt = canonical.clone();
+    wrong_receipt_attempt[receipt_offset] ^= 1;
+    let receipt_identity = sha256_domain_parts(
+        ESCROW_RECEIPT_IDENTITY_DOMAIN,
+        &[&wrong_receipt_attempt[receipt_offset..receipt_end]],
+    );
+    wrong_receipt_attempt[receipt_identity_offset..receipt_offset]
+        .copy_from_slice(&receipt_identity);
+    reject(wrong_receipt_attempt, "attempt/receipt identity");
+
+    let mut nonprivate_record = canonical.clone();
+    let record_mode_offset = record_snapshot_offset + (3 * 8);
+    let mut mode = u64::from_le_bytes(
+        nonprivate_record[record_mode_offset..record_mode_offset + 8]
+            .try_into()
+            .unwrap(),
+    );
+    mode = (mode & !0o777) | 0o644;
+    nonprivate_record[record_mode_offset..record_mode_offset + 8]
+        .copy_from_slice(&mode.to_le_bytes());
+    reject(nonprivate_record, "record mode");
+
+    let mut aliased_files = canonical;
+    let output_device_and_inode: [u8; 16] = aliased_files
+        [output_snapshot_offset..output_snapshot_offset + 16]
+        .try_into()
+        .unwrap();
+    aliased_files[record_snapshot_offset..record_snapshot_offset + 16]
+        .copy_from_slice(&output_device_and_inode);
+    reject(aliased_files, "record/output inode alias");
 }
 
 #[test]

@@ -112,6 +112,12 @@ impl CleanupEscrowFileSnapshotV1 {
             && stat.st_nlink == self.links
             && is_private_file(stat)
     }
+
+    fn is_canonical_private_file(self) -> bool {
+        FileType::from_raw_mode(self.mode as _) == FileType::RegularFile
+            && self.links == 1
+            && self.mode & 0o777 == 0o600
+    }
 }
 
 /// Small artifact-owned receipt for one quarantined exact V2 publication intent.
@@ -270,8 +276,11 @@ impl WorkerV2PublicationIntentCleanupEscrowV1 {
     }
 
     fn validate(self) -> Result<(), &'static str> {
-        if self.record_identity != self.intent.as_bytes()
+        if self.slot != slot_identity_v2(self.producer_identity, self.attempt)
+            || self.record_identity != self.intent.as_bytes()
             || self.receipt_identity != cleanup_escrow_receipt_identity_v1(self.receipt)
+            || self.receipt.attempt_identity()
+                != backend_publication_receipt_attempt_identity_v2(self.attempt)
             || self.receipt.scope_identity() == [0; 32]
             || self.receipt.finalized_output_identity() != self.output_identity
             || self.record_file.byte_len
@@ -280,8 +289,10 @@ impl WorkerV2PublicationIntentCleanupEscrowV1 {
             || self.output_file.byte_len
                 > u64::try_from(MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2)
                     .expect("output bound fits u64")
-            || self.record_file.links != 1
-            || self.output_file.links != 1
+            || !self.record_file.is_canonical_private_file()
+            || !self.output_file.is_canonical_private_file()
+            || (self.record_file.device == self.output_file.device
+                && self.record_file.inode == self.output_file.inode)
         {
             return Err("cleanup escrow capsule fields are inconsistent");
         }
@@ -646,6 +657,44 @@ struct PinnedCleanupEscrowEntryV1 {
     name: String,
 }
 
+/// Proof that the caller holds the crate's exclusive lock for this pinned directory.
+///
+/// Destructive helpers require this token so cooperating code cannot accidentally bypass the
+/// filesystem concurrency contract. The token cannot constrain same-UID code outside this crate.
+struct CleanupEscrowExclusiveDirectoryV1<'a> {
+    output: &'a PinnedOutput,
+    _lock: &'a OutputLock,
+}
+
+impl<'a> CleanupEscrowExclusiveDirectoryV1<'a> {
+    fn new(
+        output: &'a PinnedOutput,
+        lock: &'a OutputLock,
+    ) -> Result<Self, WorkerV2PublicationIntentCleanupEscrowErrorV1> {
+        let lock_fd = lock.fd.as_ref().ok_or_else(|| {
+            cleanup_escrow_invalid_v1(output, crate::LOCK_FILE, "artifact lock was released")
+        })?;
+        let pinned = fstat(lock_fd).map_err(std::io::Error::from)?;
+        let named = statat(&output.fd, crate::LOCK_FILE, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)?;
+        if !is_private_file(&pinned)
+            || pinned.st_dev != named.st_dev
+            || pinned.st_ino != named.st_ino
+            || !is_private_file(&named)
+        {
+            return Err(cleanup_escrow_invalid_v1(
+                output,
+                crate::LOCK_FILE,
+                "held artifact lock does not belong to the pinned output directory",
+            ));
+        }
+        Ok(Self {
+            output,
+            _lock: lock,
+        })
+    }
+}
+
 impl PinnedCleanupEscrowEntryV1 {
     fn open_and_read(
         output: &PinnedOutput,
@@ -769,11 +818,12 @@ impl PinnedCleanupEscrowEntryV1 {
 
     fn unlink_and_sync(
         self,
-        output: &PinnedOutput,
+        exclusive: &CleanupEscrowExclusiveDirectoryV1<'_>,
         unlink_boundary: WorkerV2PublicationIntentCleanupEscrowBoundaryV1,
         sync_boundary: WorkerV2PublicationIntentCleanupEscrowBoundaryV1,
         faults: &mut CleanupEscrowFaultInjectorV1,
     ) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
+        let output = exclusive.output;
         let named = statat(&output.fd, &self.name, AtFlags::SYMLINK_NOFOLLOW)
             .map_err(std::io::Error::from)?;
         if !same_private_file(
@@ -843,9 +893,10 @@ fn cleanup_escrow_pin_manifest_v1(
 }
 
 fn cleanup_escrow_cleanup_temps_v1(
-    output: &PinnedOutput,
+    exclusive: &CleanupEscrowExclusiveDirectoryV1<'_>,
     names: &CleanupEscrowNamesV1,
 ) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
+    let output = exclusive.output;
     let descriptor =
         rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
     let mut directory = rustix::fs::Dir::read_from(&descriptor).map_err(std::io::Error::from)?;
@@ -884,12 +935,13 @@ fn cleanup_escrow_cleanup_temps_v1(
 }
 
 fn cleanup_escrow_write_manifest_v1(
-    output: &PinnedOutput,
+    exclusive: &CleanupEscrowExclusiveDirectoryV1<'_>,
     names: &CleanupEscrowNamesV1,
     manifest: CleanupEscrowManifestV1,
     replace: bool,
     faults: &mut CleanupEscrowFaultInjectorV1,
 ) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
+    let output = exclusive.output;
     let bytes = manifest.to_bytes();
     let start = NEXT_TEMP_ID.fetch_add(MAX_TEMP_ATTEMPTS, Ordering::Relaxed);
     let mut reserved = None;
@@ -1219,9 +1271,10 @@ pub fn prepare_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
 {
     let output =
         PinnedOutput::open_existing(output_dir).map_err(WorkerV2PublicationIntentErrorV2::from)?;
-    let _lock = output
+    let lock = output
         .lock()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
+    let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock)?;
     output
         .verify_path_identity()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
@@ -1229,7 +1282,7 @@ pub fn prepare_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     let package = *crate::producer_package_identity_v1(producer).as_bytes();
     let slot = slot_identity_v2(producer_identity, attempt);
     let escrow_names = CleanupEscrowNamesV1::new(producer_identity, package, slot, identity);
-    cleanup_escrow_cleanup_temps_v1(&output, &escrow_names)?;
+    cleanup_escrow_cleanup_temps_v1(&exclusive, &escrow_names)?;
     let mut faults = CleanupEscrowFaultInjectorV1::new(options);
 
     if cleanup_escrow_entry_exists_v1(&output, &escrow_names.manifest)? {
@@ -1408,7 +1461,7 @@ pub fn prepare_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     )
     .map_err(|reason| cleanup_escrow_invalid_v1(&output, &escrow_names.manifest, reason))?;
     cleanup_escrow_write_manifest_v1(
-        &output,
+        &exclusive,
         &escrow_names,
         CleanupEscrowManifestV1 {
             state: WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared,
@@ -1432,14 +1485,15 @@ pub fn recover_worker_v2_publication_intent_cleanup_escrow_v1(
 > {
     let output =
         PinnedOutput::open_existing(output_dir).map_err(WorkerV2PublicationIntentErrorV2::from)?;
-    let _lock = output
+    let lock = output
         .lock()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
+    let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock)?;
     output
         .verify_path_identity()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
     let names = cleanup_escrow_validate_capsule_context_v1(&output, producer, capsule)?;
-    cleanup_escrow_cleanup_temps_v1(&output, &names)?;
+    cleanup_escrow_cleanup_temps_v1(&exclusive, &names)?;
     cleanup_escrow_validate_durable_receipt_v1(&output, producer, capsule)?;
     if !cleanup_escrow_entry_exists_v1(&output, &names.manifest)? {
         if !cleanup_escrow_all_intent_paths_absent_v1(&output, &names, capsule)? {
@@ -1552,14 +1606,15 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
 ) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
     let output =
         PinnedOutput::open_existing(output_dir).map_err(WorkerV2PublicationIntentErrorV2::from)?;
-    let _lock = output
+    let lock = output
         .lock()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
+    let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock)?;
     output
         .verify_path_identity()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
     let names = cleanup_escrow_validate_capsule_context_v1(&output, producer, capsule)?;
-    cleanup_escrow_cleanup_temps_v1(&output, &names)?;
+    cleanup_escrow_cleanup_temps_v1(&exclusive, &names)?;
     cleanup_escrow_validate_durable_receipt_v1(&output, producer, capsule)?;
     let Some(manifest) = cleanup_escrow_read_manifest_v1(&output, &names)? else {
         if !cleanup_escrow_all_intent_paths_absent_v1(&output, &names, capsule)? {
@@ -1581,7 +1636,7 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     {
         let payload = cleanup_escrow_pin_prepared_payload_v1(&output, producer, capsule, &names)?;
         cleanup_escrow_write_manifest_v1(
-            &output,
+            &exclusive,
             &names,
             CleanupEscrowManifestV1 {
                 state: WorkerV2PublicationIntentCleanupEscrowStateV1::Committed,
@@ -1663,7 +1718,7 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     };
     if let Some((pinned, _)) = pinned_record {
         pinned.unlink_and_sync(
-            &output,
+            &exclusive,
             WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkQuarantinedRecord,
             WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncQuarantinedRecordDeletion,
             &mut faults,
@@ -1671,14 +1726,14 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     }
     if let Some(pinned) = pinned_output {
         pinned.unlink_and_sync(
-            &output,
+            &exclusive,
             WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkQuarantinedOutput,
             WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncQuarantinedOutputDeletion,
             &mut faults,
         )?;
     }
     pinned_manifest.unlink_and_sync(
-        &output,
+        &exclusive,
         WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkCommittedManifest,
         WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncCommittedManifestDeletion,
         &mut faults,
@@ -1716,14 +1771,15 @@ pub fn rollback_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
 ) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
     let output =
         PinnedOutput::open_existing(output_dir).map_err(WorkerV2PublicationIntentErrorV2::from)?;
-    let _lock = output
+    let lock = output
         .lock()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
+    let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock)?;
     output
         .verify_path_identity()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
     let names = cleanup_escrow_validate_capsule_context_v1(&output, producer, capsule)?;
-    cleanup_escrow_cleanup_temps_v1(&output, &names)?;
+    cleanup_escrow_cleanup_temps_v1(&exclusive, &names)?;
     let Some(manifest) = cleanup_escrow_read_manifest_v1(&output, &names)? else {
         let canonical_names =
             IntentNames::new::<PublicationIntentSchemaV2>(capsule.producer_identity, capsule.slot);
@@ -1886,7 +1942,7 @@ pub fn rollback_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     pinned_record.require_named_as(&output, &canonical_names.record)?;
     pinned_output.require_named_as(&output, &canonical_names.output)?;
     pinned_manifest.unlink_and_sync(
-        &output,
+        &exclusive,
         WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkRolledBackManifest,
         WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncRolledBackManifestDeletion,
         &mut faults,
@@ -1912,7 +1968,7 @@ mod cleanup_escrow_private_tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn pinned_unlink_rejects_a_replacement_without_deleting_it() {
+    fn pinned_unlink_rejects_a_preexisting_replacement_under_the_protocol_lock() {
         let directory = std::env::temp_dir().join(format!(
             "fe2o3-cleanup-escrow-pinned-race-{}-{}",
             std::process::id(),
@@ -1925,6 +1981,8 @@ mod cleanup_escrow_private_tests {
         fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).unwrap();
 
         let output = PinnedOutput::open_existing(&directory).unwrap();
+        let lock = output.lock().unwrap();
+        let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock).unwrap();
         let (pinned, bytes) =
             PinnedCleanupEscrowEntryV1::open_and_read(&output, "victim", 8).unwrap();
         assert_eq!(bytes, b"original");
@@ -1934,7 +1992,7 @@ mod cleanup_escrow_private_tests {
 
         let error = pinned
             .unlink_and_sync(
-                &output,
+                &exclusive,
                 WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkCommittedManifest,
                 WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncCommittedManifestDeletion,
                 &mut CleanupEscrowFaultInjectorV1::new(
