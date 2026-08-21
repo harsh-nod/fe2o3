@@ -586,13 +586,6 @@ impl PreparedWorkerV2Config {
         )
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "protected binding-wrapper integration lands in the next slice"
-        )
-    )]
     pub(crate) fn execute_protected(
         &self,
         consumed: ConsumedCompilerModuleHandoffV2,
