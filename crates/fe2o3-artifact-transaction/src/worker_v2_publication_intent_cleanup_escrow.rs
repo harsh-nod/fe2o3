@@ -1,3 +1,5 @@
+use std::os::unix::ffi::OsStrExt;
+
 const CLEANUP_ESCROW_CAPSULE_MAGIC_V1: &[u8] =
     b"FE2O3-WORKER-V2-INTENT-CLEANUP-ESCROW-CAPSULE-V1\0";
 const CLEANUP_ESCROW_CAPSULE_VERSION_V1: u16 = 1;
@@ -19,6 +21,8 @@ const CLEANUP_ESCROW_RECORD_SUFFIX_V1: &str = ".record.quarantine";
 const CLEANUP_ESCROW_OUTPUT_SUFFIX_V1: &str = ".output.quarantine";
 const CLEANUP_ESCROW_TEMP_SUFFIX_V1: &str = ".manifest.tmp-";
 const CLEANUP_ESCROW_MAX_TEMPS_V1: usize = 64;
+// Cleanup restart scans share the reviewed bound for artifact-store directory scans.
+const CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1: usize = crate::MAX_OUTPUT_ENTRIES;
 
 // device, inode, byte length, mode, and link count.
 const CLEANUP_ESCROW_FILE_SNAPSHOT_BYTES_V1: usize = 5 * 8;
@@ -680,7 +684,7 @@ impl CleanupEscrowNamesV1 {
 
 fn cleanup_escrow_invalid_v1(
     output: &PinnedOutput,
-    entry: &str,
+    entry: impl AsRef<Path>,
     reason: impl Into<String>,
 ) -> WorkerV2PublicationIntentCleanupEscrowErrorV1 {
     WorkerV2PublicationIntentCleanupEscrowErrorV1::InvalidEscrow {
@@ -955,10 +959,28 @@ fn cleanup_escrow_cleanup_temps_v1(
         rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
     let mut directory = rustix::fs::Dir::read_from(&descriptor).map_err(std::io::Error::from)?;
     let mut temps = Vec::new();
+    let mut scanned_entries = 0usize;
     for entry in &mut directory {
         let entry = entry.map_err(std::io::Error::from)?;
-        let name = entry.file_name().to_string_lossy();
-        if !name.starts_with(&names.temp_prefix) {
+        let name_bytes = entry.file_name().to_bytes();
+        if name_bytes == b"." || name_bytes == b".." {
+            continue;
+        }
+        scanned_entries = scanned_entries.checked_add(1).ok_or_else(|| {
+            cleanup_escrow_invalid_v1(
+                output,
+                &names.temp_prefix,
+                "artifact directory entry count overflowed during escrow cleanup",
+            )
+        })?;
+        if scanned_entries > CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 {
+            return Err(cleanup_escrow_invalid_v1(
+                output,
+                &names.temp_prefix,
+                "artifact directory exceeds the cleanup escrow scan entry bound",
+            ));
+        }
+        if !name_bytes.starts_with(names.temp_prefix.as_bytes()) {
             continue;
         }
         if temps.len() == CLEANUP_ESCROW_MAX_TEMPS_V1 {
@@ -968,16 +990,17 @@ fn cleanup_escrow_cleanup_temps_v1(
                 "too many package-owned escrow manifest temporary entries",
             ));
         }
-        let stat = statat(&output.fd, name.as_ref(), AtFlags::SYMLINK_NOFOLLOW)
+        let name = PathBuf::from(std::ffi::OsStr::from_bytes(name_bytes));
+        let stat = statat(&output.fd, &name, AtFlags::SYMLINK_NOFOLLOW)
             .map_err(std::io::Error::from)?;
         if !is_private_file(&stat) {
             return Err(cleanup_escrow_invalid_v1(
                 output,
-                name.as_ref(),
+                &name,
                 "escrow manifest temporary entry is not private",
             ));
         }
-        temps.push(name.into_owned());
+        temps.push(name);
     }
     if !temps.is_empty() {
         for name in temps {
@@ -2128,7 +2151,52 @@ pub fn rollback_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
 #[cfg(test)]
 mod cleanup_escrow_private_tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::PermissionsExt;
+
+    struct CleanupEscrowPrivateTestDirectory(PathBuf);
+
+    impl CleanupEscrowPrivateTestDirectory {
+        fn new(label: &str) -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "fe2o3-cleanup-escrow-{label}-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&directory).unwrap();
+            Self(directory)
+        }
+    }
+
+    impl Drop for CleanupEscrowPrivateTestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn cleanup_escrow_test_names(temp_prefix: &str) -> CleanupEscrowNamesV1 {
+        CleanupEscrowNamesV1 {
+            manifest: "unused.manifest".to_owned(),
+            record: "unused.record".to_owned(),
+            output: "unused.output".to_owned(),
+            temp_prefix: temp_prefix.to_owned(),
+        }
+    }
+
+    fn write_private_test_file(path: &Path, bytes: &[u8]) {
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn fill_with_unrelated_entries(directory: &Path, target_entries: usize) {
+        let existing = fs::read_dir(directory).unwrap().count();
+        assert!(existing <= target_entries);
+        for index in existing..target_entries {
+            fs::File::create(directory.join(format!("unrelated-{index}"))).unwrap();
+        }
+        assert_eq!(fs::read_dir(directory).unwrap().count(), target_entries);
+    }
 
     #[test]
     fn pinned_unlink_rejects_a_preexisting_replacement_under_the_protocol_lock() {
@@ -2170,5 +2238,128 @@ mod cleanup_escrow_private_tests {
         assert_eq!(fs::read(&victim).unwrap(), b"replaced");
         assert_eq!(fs::read(&displaced).unwrap(), b"original");
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cleanup_temp_scan_accepts_the_exact_artifact_directory_entry_bound() {
+        let directory = CleanupEscrowPrivateTestDirectory::new("scan-exact-bound");
+        let temp_prefix = ".cleanup-escrow-exact-bound-temp-";
+        let temp = directory.0.join(format!("{temp_prefix}owned"));
+        write_private_test_file(&temp, b"cleanup residue");
+
+        let output = PinnedOutput::open_existing(&directory.0).unwrap();
+        let lock = output.lock().unwrap();
+        let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock).unwrap();
+        fill_with_unrelated_entries(
+            &directory.0,
+            CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1,
+        );
+
+        cleanup_escrow_cleanup_temps_v1(
+            &exclusive,
+            &cleanup_escrow_test_names(temp_prefix),
+        )
+        .unwrap();
+
+        assert!(!temp.exists());
+        assert!(directory.0.join("unrelated-2").exists());
+        assert_eq!(
+            fs::read_dir(&directory.0).unwrap().count(),
+            CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 - 1
+        );
+    }
+
+    #[test]
+    fn cleanup_temp_scan_rejects_limit_plus_one_without_removing_entries() {
+        let directory = CleanupEscrowPrivateTestDirectory::new("scan-over-bound");
+        let temp_prefix = ".cleanup-escrow-over-bound-temp-";
+        let temp = directory.0.join(format!("{temp_prefix}owned"));
+        write_private_test_file(&temp, b"cleanup residue");
+
+        let output = PinnedOutput::open_existing(&directory.0).unwrap();
+        let lock = output.lock().unwrap();
+        let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock).unwrap();
+        fill_with_unrelated_entries(
+            &directory.0,
+            CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 + 1,
+        );
+
+        let error = cleanup_escrow_cleanup_temps_v1(
+            &exclusive,
+            &cleanup_escrow_test_names(temp_prefix),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkerV2PublicationIntentCleanupEscrowErrorV1::InvalidEscrow { ref reason, .. }
+                if reason == "artifact directory exceeds the cleanup escrow scan entry bound"
+        ));
+        assert_eq!(fs::read(&temp).unwrap(), b"cleanup residue");
+        assert!(directory.0.join("unrelated-2").exists());
+        assert_eq!(
+            fs::read_dir(&directory.0).unwrap().count(),
+            CLEANUP_ESCROW_MAX_SCANNED_ENTRIES_V1 + 1
+        );
+    }
+
+    #[test]
+    fn cleanup_temp_scan_stats_the_exact_non_utf8_name_not_its_lossy_alias() {
+        let directory = CleanupEscrowPrivateTestDirectory::new("non-utf8-stat");
+        let temp_prefix = ".cleanup-escrow-non-utf8-stat-temp-";
+        let raw_name = OsString::from_vec([temp_prefix.as_bytes(), &[0xff]].concat());
+        let alias_name = format!("{temp_prefix}\u{fffd}");
+        assert_eq!(raw_name.to_string_lossy(), alias_name);
+        let raw_path = directory.0.join(&raw_name);
+        let alias_path = directory.0.join(&alias_name);
+        std::os::unix::fs::symlink("missing-target", &raw_path).unwrap();
+        write_private_test_file(&alias_path, b"valid UTF-8 alias");
+
+        let output = PinnedOutput::open_existing(&directory.0).unwrap();
+        let lock = output.lock().unwrap();
+        let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock).unwrap();
+        let error = cleanup_escrow_cleanup_temps_v1(
+            &exclusive,
+            &cleanup_escrow_test_names(temp_prefix),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkerV2PublicationIntentCleanupEscrowErrorV1::InvalidEscrow { .. }
+        ));
+        assert!(fs::symlink_metadata(raw_path).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read(alias_path).unwrap(), b"valid UTF-8 alias");
+    }
+
+    #[test]
+    fn cleanup_temp_scan_unlinks_distinct_non_utf8_and_lossy_alias_names() {
+        let directory = CleanupEscrowPrivateTestDirectory::new("non-utf8-unlink");
+        let temp_prefix = ".cleanup-escrow-non-utf8-unlink-temp-";
+        let raw_name = OsString::from_vec([temp_prefix.as_bytes(), &[0xff]].concat());
+        let alias_name = format!("{temp_prefix}\u{fffd}");
+        assert_eq!(raw_name.to_string_lossy(), alias_name);
+        let raw_path = directory.0.join(&raw_name);
+        let alias_path = directory.0.join(&alias_name);
+        write_private_test_file(&raw_path, b"non-UTF-8 entry");
+        write_private_test_file(&alias_path, b"valid UTF-8 alias");
+
+        let output = PinnedOutput::open_existing(&directory.0).unwrap();
+        let lock = output.lock().unwrap();
+        let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock).unwrap();
+        cleanup_escrow_cleanup_temps_v1(
+            &exclusive,
+            &cleanup_escrow_test_names(temp_prefix),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            fs::symlink_metadata(raw_path).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        ));
+        assert!(matches!(
+            fs::symlink_metadata(alias_path).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        ));
     }
 }
