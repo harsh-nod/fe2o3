@@ -1,4 +1,5 @@
-use dialect_kernel::AccessKindAttr;
+use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
+use dialect_kernel::{AccessKindAttr, MemorySpaceAttr, SemanticBinaryKindAttr};
 use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
     ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
@@ -94,7 +95,7 @@ fn session(with_kernel_dialect: bool) -> ProductionPlironSessionV1 {
 }
 
 #[test]
-fn static_non_gemm_kernel_reaches_only_bounds_verified_lowering_input() {
+fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
     let input = compile_ranked_kernel_for_lowering_v1(
         construction(static_kernel(7, 64)),
         ProductionSessionLimitsV1::default(),
@@ -103,8 +104,251 @@ fn static_non_gemm_kernel_reaches_only_bounds_verified_lowering_input() {
 
     assert_eq!(input.kernel().function_name(), "static_copy");
     assert!(input.bounds_report().is_clean());
+    assert!(input.race_report().is_clean());
+    assert!(!input.race_report().grants_compiler_refinement_authority());
+    assert!(input.barrier_report().is_clean());
+    assert!(input.workgroup_report().is_clean());
+    assert!(input.semantic_report().is_clean());
     assert!(!input.bounds_report().grants_compiler_refinement_authority());
     assert!(!input.grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn declared_expression_mismatch_is_terminal_in_production() {
+    let alpha = ProductionRankedValueIdV1::new(0);
+    let accumulator = ProductionRankedValueIdV1::new(1);
+    let beta = ProductionRankedValueIdV1::new(2);
+    let initial = ProductionRankedValueIdV1::new(3);
+    let alpha_acc = ProductionRankedValueIdV1::new(4);
+    let beta_initial = ProductionRankedValueIdV1::new(5);
+    let actual = ProductionRankedValueIdV1::new(6);
+    let expected = ProductionRankedValueIdV1::new(7);
+    let symbol = |result, symbol| ProductionRankedOperationV1::SemanticSymbol { result, symbol };
+    let binary = |result, kind, lhs, rhs| ProductionRankedOperationV1::SemanticBinary {
+        result,
+        kind,
+        lhs: local(lhs),
+        rhs: local(rhs),
+    };
+    let kernel = ProductionRankedKernelV1::new(
+        "declared_expression_mismatch",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                symbol(alpha, 0),
+                symbol(accumulator, 1),
+                symbol(beta, 2),
+                symbol(initial, 3),
+                binary(
+                    alpha_acc,
+                    SemanticBinaryKindAttr::Multiply,
+                    alpha,
+                    accumulator,
+                ),
+                binary(
+                    beta_initial,
+                    SemanticBinaryKindAttr::Multiply,
+                    beta,
+                    initial,
+                ),
+                binary(actual, SemanticBinaryKindAttr::Add, alpha_acc, initial),
+                binary(
+                    expected,
+                    SemanticBinaryKindAttr::Add,
+                    alpha_acc,
+                    beta_initial,
+                ),
+                ProductionRankedOperationV1::RequireEquivalent {
+                    actual: local(actual),
+                    expected: local(expected),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedSemantic(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-SEMANTIC-001]"));
+}
+
+#[test]
+fn divergent_barrier_is_terminal_in_the_closed_production_pipeline() {
+    let invocation = ProductionRankedValueIdV1::new(0);
+    let two = ProductionRankedValueIdV1::new(1);
+    let kernel = ProductionRankedKernelV1::new(
+        "divergent_barrier",
+        0,
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::InvocationIndex {
+                        result: invocation,
+                        dimension: 0,
+                        launch_extent: 4,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: two,
+                        value: 2,
+                    },
+                ],
+                ProductionRankedTerminatorV1::IndexLessThan {
+                    lhs: local(invocation),
+                    rhs: local(two),
+                    true_block: 1,
+                    false_block: 2,
+                },
+            ),
+            ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::Barrier {
+                    execution_scope: HierarchyAttr::Workgroup,
+                    memory_scope: MemoryScopeAttr::Workgroup,
+                    address_space: AddressSpaceAttr::Workgroup,
+                    order: MemoryOrderAttr::AcquireRelease,
+                }],
+                ProductionRankedTerminatorV1::Branch { target: 2 },
+            ),
+            ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+        ],
+    )
+    .unwrap();
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedBarrier(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-BARRIER-001]"));
+}
+
+#[test]
+fn uninitialized_workgroup_read_is_terminal_before_lowering() {
+    let view = ProductionRankedValueIdV1::new(0);
+    let invocation = ProductionRankedValueIdV1::new(1);
+    let kernel = ProductionRankedKernelV1::new(
+        "uninitialized_workgroup_read",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: view,
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![8],
+                    dynamic_extents: vec![],
+                    memory_space: MemorySpaceAttr::Workgroup,
+                },
+                ProductionRankedOperationV1::InvocationIndex {
+                    result: invocation,
+                    dimension: 0,
+                    launch_extent: 8,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Read,
+                    view: local(view),
+                    indices: vec![local(invocation)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedWorkgroup(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-WORKGROUP-001]"));
+}
+
+fn concurrent_write_kernel(indexed_by_invocation: bool) -> ProductionRankedKernelV1 {
+    let invocation = ProductionRankedOperationV1::InvocationIndex {
+        result: INDEX,
+        dimension: 0,
+        launch_extent: 64,
+    };
+    let address = ProductionRankedValueIdV1::new(2);
+    let constant = (!indexed_by_invocation).then_some(ProductionRankedOperationV1::IndexConstant {
+        result: address,
+        value: 0,
+    });
+    let access_index = if indexed_by_invocation {
+        INDEX
+    } else {
+        address
+    };
+    let mut operations = vec![
+        ProductionRankedOperationV1::ViewInSpace {
+            result: VIEW,
+            element_width: 32,
+            writable: true,
+            shape: vec![64],
+            dynamic_extents: vec![],
+            memory_space: MemorySpaceAttr::Global,
+        },
+        invocation,
+    ];
+    operations.extend(constant);
+    operations.push(ProductionRankedOperationV1::Access {
+        kind: AccessKindAttr::Write,
+        view: local(VIEW),
+        indices: vec![local(access_index)],
+    });
+    ProductionRankedKernelV1::new(
+        "concurrent_write",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            operations,
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("valid concurrent recipe")
+}
+
+#[test]
+fn invocation_owned_output_reaches_lowering_after_race_verification() {
+    let input = compile_ranked_kernel_for_lowering_v1(
+        construction(concurrent_write_kernel(true)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("invocation-owned output is disjoint");
+    assert!(input.bounds_report().is_clean());
+    assert!(input.race_report().is_clean());
+}
+
+#[test]
+fn duplicate_output_ownership_is_a_terminal_compile_time_diagnostic() {
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(concurrent_write_kernel(false)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedRace(_))
+    ));
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains("error[FE2O3-RACE-001]"));
+    assert!(diagnostic.contains("invocation [0]"));
+    assert!(diagnostic.contains("invocation [1]"));
+    assert!(
+        diagnostic
+            .contains("distinct concurrent invocations do not imply disjoint memory coordinates")
+    );
 }
 
 #[test]
@@ -203,7 +447,7 @@ fn ranked_construction_requires_the_typed_kernel_registration() {
 }
 
 #[test]
-fn builtin_module_cannot_be_relabelled_as_bounds_verified() {
+fn builtin_module_cannot_be_relabelled_as_kernel_checks_verified() {
     let mut session = session(false);
     let registered = session
         .register_construction(
@@ -214,7 +458,7 @@ fn builtin_module_cannot_be_relabelled_as_bounds_verified() {
         .construct_registered(registered)
         .expect("empty module");
     assert!(matches!(
-        session.verify_ranked_bounds(stage, root),
+        session.verify_general_ranked_kernel_checks(stage, root),
         Err(ProductionSessionErrorV1::WrongConstructionKind)
     ));
 }
@@ -235,7 +479,7 @@ fn same_session_stage_root_substitution_is_rejected_before_analysis() {
     let (first_stage, _) = session.construct_registered(first).unwrap();
     let (_, second_root) = session.construct_registered(second).unwrap();
     assert!(matches!(
-        session.verify_ranked_bounds(first_stage, second_root),
+        session.verify_general_ranked_kernel_checks(first_stage, second_root),
         Err(ProductionSessionErrorV1::StageRootMismatch)
     ));
     assert!(!session.is_poisoned());

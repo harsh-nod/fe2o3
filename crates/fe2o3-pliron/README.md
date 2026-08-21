@@ -94,24 +94,27 @@ debug value but remains only process-local in-memory provenance; equality or
 hashing must never become an artifact, cache, proof, publication, or runtime
 identity.
 
-## Closed ranked-memory production path
+## Closed generic kernel-check production path
 
 `compile_ranked_kernel_for_lowering_v1` is the single closed owner path for the
 target-neutral ranked-memory schema. It admits only bounded data recipes,
 constructs the module and function inside `ProductionPlironSessionV1`, performs
-recursive Pliron verification, and consumes a `ConstructedGraphStageV1` through
-the whole-function bounds pass. Only that transition can create the move-only
-`ProductionRankedKernelLoweringInputV1`; an empty module, a foreign root, a
-same-session substituted root, or a rejected bounds report cannot be relabeled
-as verified.
+recursive Pliron verification, and consumes a `ConstructedGraphStageV1`
+through the fixed bounds, global race, barrier convergence, workgroup-memory,
+and declared semantic-refinement passes. Each successful pass moves a private
+typestate capability into the next stage. Only the final transition can create
+the move-only `ProductionRankedKernelLoweringInputV1`; an empty module, a
+foreign root, a same-session substituted root, a changed graph, or any rejected
+report cannot be relabeled as verified.
 
 The output transitively owns the exact session graph while exposing no raw
 pointer, and it grants no source correspondence, compiler refinement, artifact,
-or launch authority. The rustc
-production route still stops before canonical semantic-MIR-to-ranked-memory
-projection, and the detached kernel-to-GPU service does not yet lower ranked
-accesses. Those are the two remaining production stages; they must consume this
-owner-bound result rather than reconstructing or bypassing the checked graph.
+or launch authority. The rustc production route projects its admitted semantic
+MIR into this path. Projection remains deliberately fail-closed for semantic
+constructs that do not yet have exact ranked-IR summaries, and the detached
+kernel-to-GPU service does not yet lower every ranked operation. Future lowering
+must consume this owner-bound result rather than reconstructing or bypassing the
+checked graph.
 
 ## Remaining trusted surfaces
 

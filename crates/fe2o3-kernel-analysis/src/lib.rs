@@ -11,7 +11,14 @@ mod kernel_check_pipeline;
 mod machine_effect;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_effect;
+mod pliron_barrier;
+mod pliron_invocation_trace;
+mod pliron_pipeline;
+mod pliron_race;
 mod pliron_ranked_bounds;
+mod pliron_semantic_refinement;
+mod pliron_sparse_index;
+mod pliron_workgroup_memory;
 #[cfg(feature = "authenticated-machine-effect")]
 mod scalar_gemm_v1_physical_machine_effect;
 mod ssa;
@@ -32,7 +39,13 @@ pub use kernel_check_pipeline::*;
 pub use machine_effect::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_effect::*;
+pub use pliron_barrier::*;
+pub use pliron_pipeline::*;
+pub use pliron_race::*;
 pub use pliron_ranked_bounds::*;
+pub use pliron_semantic_refinement::*;
+pub use pliron_sparse_index::*;
+pub use pliron_workgroup_memory::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use scalar_gemm_v1_physical_machine_effect::*;
 pub use ssa::{

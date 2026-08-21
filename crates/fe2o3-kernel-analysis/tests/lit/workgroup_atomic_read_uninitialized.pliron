@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-WORKGROUP-001]
+// CHECK: reads uninitialized workgroup address
+builtin.func @workgroup_atomic_read_uninitialized: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Workgroup]: <() -> (kernel.ranked_view <32,true,[8]>)>;
+    v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 8]: <() -> (kernel.index )>;
+    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind AtomicRead]: <(kernel.ranked_view <32,true,[8]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

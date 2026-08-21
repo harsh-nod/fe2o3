@@ -1006,6 +1006,7 @@ dependencies = [
 name = "fe2o3-kernel-analysis"
 version = "0.1.0"
 dependencies = [
+ "dialect-gpu",
  "dialect-kernel",
  "fe2o3-kernel-ir",
  "pliron",
@@ -1197,6 +1198,7 @@ dependencies = [
 name = "fe2o3-pliron"
 version = "0.1.0"
 dependencies = [
+ "dialect-gpu",
  "dialect-kernel",
  "dialect-mir",
  "fe2o3-kernel-analysis",

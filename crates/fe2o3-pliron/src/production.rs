@@ -152,9 +152,9 @@ pub struct ConstructedGraphStageV1 {
     _private: (),
 }
 
-/// Typestate for a session-owned ranked function that passed whole-function bounds verification.
+/// Typestate for a ranked function that passed the fixed generic verifier pipeline.
 #[derive(Debug)]
-pub struct BoundsVerifiedGraphStageV1 {
+pub struct KernelChecksVerifiedGraphStageV1 {
     _private: (),
 }
 
@@ -222,6 +222,10 @@ pub enum ProductionSessionErrorV1 {
     RankedGraphChanged,
     RankedRecipe(ProductionRankedKernelErrorV1),
     RankedBounds(fe2o3_kernel_analysis::RankedBoundsCheckErrorV1),
+    RankedRace(fe2o3_kernel_analysis::RankedRaceCheckErrorV1),
+    RankedBarrier(fe2o3_kernel_analysis::PlironBarrierCheckErrorV1),
+    RankedWorkgroup(fe2o3_kernel_analysis::PlironWorkgroupMemoryCheckErrorV1),
+    RankedSemantic(fe2o3_kernel_analysis::PlironSemanticRefinementCheckErrorV1),
     Operation(OperationHandleError),
 }
 
@@ -252,12 +256,16 @@ impl fmt::Display for ProductionSessionErrorV1 {
                 formatter.write_str("production stage is not a ranked-kernel construction")
             }
             Self::RankedGraphChanged => {
-                formatter.write_str("production ranked graph changed after bounds verification")
+                formatter.write_str("production ranked graph changed after safety verification")
             }
             Self::RankedRecipe(error) => {
                 write!(formatter, "production ranked recipe failed: {error}")
             }
             Self::RankedBounds(error) => error.fmt(formatter),
+            Self::RankedRace(error) => error.fmt(formatter),
+            Self::RankedBarrier(error) => error.fmt(formatter),
+            Self::RankedWorkgroup(error) => error.fmt(formatter),
+            Self::RankedSemantic(error) => error.fmt(formatter),
             Self::Operation(_) => formatter.write_str("production Pliron operation failed"),
         }
     }
@@ -269,6 +277,10 @@ impl Error for ProductionSessionErrorV1 {
             Self::Operation(error) => Some(error),
             Self::RankedRecipe(error) => Some(error),
             Self::RankedBounds(error) => Some(error),
+            Self::RankedRace(error) => Some(error),
+            Self::RankedBarrier(error) => Some(error),
+            Self::RankedWorkgroup(error) => Some(error),
+            Self::RankedSemantic(error) => Some(error),
             _ => None,
         }
     }
@@ -430,8 +442,7 @@ impl ProductionPlironSessionV1 {
                 identity: root_identity,
                 ranked_function: materialized.ranked_function,
                 ranked_kernel: materialized.ranked_kernel,
-                bounds_verified: false,
-                bounds_report: None,
+                general_check_report: None,
             },
         );
         self.next_root = next_root;
@@ -652,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn forged_verified_typestate_cannot_skip_the_bounds_transition() {
+    fn forged_verified_typestate_cannot_skip_the_safety_transitions() {
         let mut session = ranked_session();
         let registered = session
             .register_construction(ranked_construction("root"))
@@ -660,12 +671,12 @@ mod tests {
         let (stage, root) = session
             .construct_registered(registered)
             .expect("construction");
-        let forged_stage = ProductionStageHandleV1::<BoundsVerifiedGraphStageV1> {
+        let forged_stage = ProductionStageHandleV1::<KernelChecksVerifiedGraphStageV1> {
             owner: stage.owner,
             identity: stage.identity,
             _stage: PhantomData,
         };
-        let forged_root = ProductionRootHandleV1::<BoundsVerifiedGraphStageV1> {
+        let forged_root = ProductionRootHandleV1::<KernelChecksVerifiedGraphStageV1> {
             owner: root.owner,
             stage: root.stage,
             identity: root.identity,
@@ -689,8 +700,8 @@ mod tests {
             .construct_registered(registered)
             .expect("construction");
         let (verified, root) = session
-            .verify_ranked_bounds(stage, root)
-            .expect("bounds verification");
+            .verify_general_ranked_kernel_checks(stage, root)
+            .expect("generic kernel verification");
         session
             .inner
             .erase_operation(&root.operation)

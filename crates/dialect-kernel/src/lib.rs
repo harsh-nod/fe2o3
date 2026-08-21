@@ -30,12 +30,19 @@ mod general_gemm;
 pub use general_gemm::{GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp};
 
 mod ranked_memory;
+mod semantic_contract;
 
 pub use ranked_memory::{
-    AccessKindAttr, BranchOp, DYNAMIC_EXTENT, DimensionAttr, DimensionOp, IndexConstantOp,
-    IndexLessThanBranchOp, IndexType, IndexValueAttr, MAX_RANKED_MEMORY_RANK, RankedAccessOp,
-    RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
-    is_index_type, ranked_view_type,
+    AccessKindAttr, BranchOp, DYNAMIC_EXTENT, DimensionAttr, DimensionOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr,
+    InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr, MAX_RANKED_MEMORY_RANK,
+    MemorySpaceAttr, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
+    SUPPORTED_ELEMENT_WIDTHS, is_index_type, ranked_view_type,
+};
+pub use semantic_contract::{
+    RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
+    SemanticConstantOp, SemanticContractError, SemanticScalarType, SemanticSymbolAttr,
+    SemanticSymbolOp,
 };
 
 /// The Pliron namespace owned by this crate.
@@ -359,18 +366,32 @@ pub fn register_dialect(
     );
     RankedViewType::register(context);
     IndexType::register(context);
+    SemanticScalarType::register(context);
     <IndexValueAttr as Attribute>::register::<IndexValueAttr>(context);
     <DimensionAttr as Attribute>::register::<DimensionAttr>(context);
     <AccessKindAttr as Attribute>::register::<AccessKindAttr>(context);
+    <MemorySpaceAttr as Attribute>::register::<MemorySpaceAttr>(context);
+    <InvocationDimensionAttr as Attribute>::register::<InvocationDimensionAttr>(context);
+    <LaunchExtentAttr as Attribute>::register::<LaunchExtentAttr>(context);
+    <IndexBinaryKindAttr as Attribute>::register::<IndexBinaryKindAttr>(context);
+    <SemanticSymbolAttr as Attribute>::register::<SemanticSymbolAttr>(context);
+    <SemanticConstantAttr as Attribute>::register::<SemanticConstantAttr>(context);
+    <SemanticBinaryKindAttr as Attribute>::register::<SemanticBinaryKindAttr>(context);
     AlgorithmOp::register(context);
     GeneralGemmOp::register(context);
     RankedViewOp::register(context);
     IndexConstantOp::register(context);
+    InvocationIndexOp::register(context);
+    IndexBinaryOp::register(context);
     DimensionOp::register(context);
     RankedAccessOp::register(context);
     IndexLessThanBranchOp::register(context);
     BranchOp::register(context);
     ReturnOp::register(context);
+    SemanticSymbolOp::register(context);
+    SemanticConstantOp::register(context);
+    SemanticBinaryOp::register(context);
+    RequireEquivalentOp::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context.aux_data_map.insert(marker_key, marker);

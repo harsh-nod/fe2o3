@@ -1,0 +1,19 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-BARRIER-001]
+// CHECK: invocation [0]
+// CHECK: invocation [2]
+builtin.func @barrier_divergent: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 4]: <() -> (kernel.index )>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 2]: <() -> (kernel.index )>;
+    kernel.index_lt_br (v0, v1) [^sync_block2v1, ^exit_block3v1] []: <(kernel.index , kernel.index ) -> ()>
+
+  ^sync_block2v1():
+    gpu.barrier Workgroup Workgroup Workgroup AcquireRelease;
+    kernel.br () [^exit_block3v1] []: <() -> ()>
+
+  ^exit_block3v1():
+    kernel.return () [] []: <() -> ()>
+}

@@ -4,8 +4,8 @@
 mod production;
 
 pub use production::{
-    BoundsVerifiedGraphStageV1, ConstructedGraphStageV1, ConstructionRegisteredStageV1,
-    HARD_MAX_PRODUCTION_CONSTRUCTIONS, HARD_MAX_PRODUCTION_RANKED_ARGUMENTS,
+    ConstructedGraphStageV1, ConstructionRegisteredStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS,
+    HARD_MAX_PRODUCTION_RANKED_ARGUMENTS, KernelChecksVerifiedGraphStageV1,
     ProductionConstructionV1, ProductionPlironSessionV1, ProductionRankedBlockV1,
     ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,

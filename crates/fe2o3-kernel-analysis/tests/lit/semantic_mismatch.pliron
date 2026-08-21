@@ -1,0 +1,19 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-SEMANTIC-001]
+// CHECK: actual expression
+// CHECK: required expression
+builtin.func @semantic_mismatch: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.semantic_symbol () [] [kernel_semantic_symbol: kernel.semantic_symbol 0]: <() -> (kernel.semantic_scalar )>;
+    v1 = kernel.semantic_symbol () [] [kernel_semantic_symbol: kernel.semantic_symbol 1]: <() -> (kernel.semantic_scalar )>;
+    v2 = kernel.semantic_symbol () [] [kernel_semantic_symbol: kernel.semantic_symbol 2]: <() -> (kernel.semantic_scalar )>;
+    v3 = kernel.semantic_symbol () [] [kernel_semantic_symbol: kernel.semantic_symbol 3]: <() -> (kernel.semantic_scalar )>;
+    v4 = kernel.semantic_binary (v0, v1) [] [kernel_semantic_binary_kind: kernel.semantic_binary_kind Multiply]: <(kernel.semantic_scalar , kernel.semantic_scalar ) -> (kernel.semantic_scalar )>;
+    v5 = kernel.semantic_binary (v2, v3) [] [kernel_semantic_binary_kind: kernel.semantic_binary_kind Multiply]: <(kernel.semantic_scalar , kernel.semantic_scalar ) -> (kernel.semantic_scalar )>;
+    v6 = kernel.semantic_binary (v4, v3) [] [kernel_semantic_binary_kind: kernel.semantic_binary_kind Add]: <(kernel.semantic_scalar , kernel.semantic_scalar ) -> (kernel.semantic_scalar )>;
+    v7 = kernel.semantic_binary (v4, v5) [] [kernel_semantic_binary_kind: kernel.semantic_binary_kind Add]: <(kernel.semantic_scalar , kernel.semantic_scalar ) -> (kernel.semantic_scalar )>;
+    kernel.require_equivalent (v6, v7) [] []: <(kernel.semantic_scalar , kernel.semantic_scalar ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

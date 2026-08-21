@@ -4,14 +4,19 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
+use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, DYNAMIC_EXTENT, DimensionOp, IndexConstantOp, IndexLessThanBranchOp,
-    IndexType, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
-    SUPPORTED_ELEMENT_WIDTHS,
+    AccessKindAttr, BranchOp, DYNAMIC_EXTENT, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexLessThanBranchOp, IndexType, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
+    SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
+    SemanticSymbolOp,
 };
 use fe2o3_kernel_analysis::{
-    MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS, RankedBoundsReportV1,
-    require_pliron_ranked_bounds_before_lowering_v1,
+    GeneralPlironKernelCheckErrorV1, GeneralPlironKernelCheckReportV1, MAX_RANKED_BOUNDS_BLOCKS,
+    MAX_RANKED_BOUNDS_OPERATIONS, PlironBarrierReportV1, PlironSemanticRefinementReportV1,
+    PlironWorkgroupMemoryReportV1, RankedBoundsReportV1, RankedRaceReportV1,
+    require_general_pliron_kernel_checks_before_lowering_v1,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -29,7 +34,7 @@ use pliron::{
 };
 
 use super::{
-    BoundsVerifiedGraphStageV1, ConstructedGraphStageV1, ProductionConstructionKindV1,
+    ConstructedGraphStageV1, KernelChecksVerifiedGraphStageV1, ProductionConstructionKindV1,
     ProductionConstructionV1, ProductionPlironSessionV1, ProductionRootHandleV1,
     ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
 };
@@ -68,9 +73,28 @@ pub enum ProductionRankedOperationV1 {
         shape: Vec<u64>,
         dynamic_extents: Vec<ProductionRankedValueV1>,
     },
+    ViewInSpace {
+        result: ProductionRankedValueIdV1,
+        element_width: u32,
+        writable: bool,
+        shape: Vec<u64>,
+        dynamic_extents: Vec<ProductionRankedValueV1>,
+        memory_space: MemorySpaceAttr,
+    },
     IndexConstant {
         result: ProductionRankedValueIdV1,
         value: u64,
+    },
+    InvocationIndex {
+        result: ProductionRankedValueIdV1,
+        dimension: u32,
+        launch_extent: u64,
+    },
+    IndexBinary {
+        result: ProductionRankedValueIdV1,
+        kind: IndexBinaryKindAttr,
+        lhs: ProductionRankedValueV1,
+        rhs: ProductionRankedValueV1,
     },
     Dimension {
         result: ProductionRankedValueIdV1,
@@ -81,6 +105,30 @@ pub enum ProductionRankedOperationV1 {
         kind: AccessKindAttr,
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
+    },
+    Barrier {
+        execution_scope: HierarchyAttr,
+        memory_scope: MemoryScopeAttr,
+        address_space: AddressSpaceAttr,
+        order: MemoryOrderAttr,
+    },
+    SemanticSymbol {
+        result: ProductionRankedValueIdV1,
+        symbol: u32,
+    },
+    SemanticConstant {
+        result: ProductionRankedValueIdV1,
+        value: u64,
+    },
+    SemanticBinary {
+        result: ProductionRankedValueIdV1,
+        kind: SemanticBinaryKindAttr,
+        lhs: ProductionRankedValueV1,
+        rhs: ProductionRankedValueV1,
+    },
+    RequireEquivalent {
+        actual: ProductionRankedValueV1,
+        expected: ProductionRankedValueV1,
     },
 }
 
@@ -274,6 +322,7 @@ pub enum ProductionRankedKernelErrorV1 {
         actual: u32,
     },
     ExpectedIndex(ProductionRankedValueV1),
+    ExpectedSemantic(ProductionRankedValueV1),
     ExpectedView(ProductionRankedValueV1),
     DimensionOutOfBounds {
         dimension: u32,
@@ -289,6 +338,7 @@ pub enum ProductionRankedKernelErrorV1 {
         block: usize,
     },
     MissingKernelDialect,
+    MissingGpuDialect,
     Materialization(&'static str),
 }
 
@@ -332,6 +382,10 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
                 formatter,
                 "ranked recipe expected index value, found {value:?}"
             ),
+            Self::ExpectedSemantic(value) => write!(
+                formatter,
+                "ranked recipe expected semantic scalar value, found {value:?}"
+            ),
             Self::ExpectedView(value) => write!(
                 formatter,
                 "ranked recipe expected view value, found {value:?}"
@@ -357,6 +411,9 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             Self::MissingKernelDialect => formatter.write_str(
                 "production ranked construction requires the kernel dialect registration",
             ),
+            Self::MissingGpuDialect => formatter.write_str(
+                "production ranked barrier construction requires the gpu dialect registration",
+            ),
             Self::Materialization(message) => formatter.write_str(message),
         }
     }
@@ -371,6 +428,7 @@ impl Error for ProductionRankedKernelErrorV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecipeValueKindV1 {
     Index,
+    Semantic,
     View { rank: usize, writable: bool },
 }
 
@@ -419,7 +477,24 @@ fn require_view(
 ) -> Result<(usize, bool), ProductionRankedKernelErrorV1> {
     match require_value(value, argument_count, locals)? {
         RecipeValueKindV1::View { rank, writable } => Ok((rank, writable)),
-        RecipeValueKindV1::Index => Err(ProductionRankedKernelErrorV1::ExpectedView(value)),
+        RecipeValueKindV1::Index | RecipeValueKindV1::Semantic => {
+            Err(ProductionRankedKernelErrorV1::ExpectedView(value))
+        }
+    }
+}
+
+fn require_semantic(
+    value: ProductionRankedValueV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    if matches!(
+        require_value(value, argument_count, locals)?,
+        RecipeValueKindV1::Semantic
+    ) {
+        Ok(())
+    } else {
+        Err(ProductionRankedKernelErrorV1::ExpectedSemantic(value))
     }
 }
 
@@ -435,6 +510,14 @@ fn validate_operation(
             writable,
             shape,
             dynamic_extents,
+        }
+        | ProductionRankedOperationV1::ViewInSpace {
+            result,
+            element_width,
+            writable,
+            shape,
+            dynamic_extents,
+            ..
         } => {
             if !(1..=MAX_RANKED_MEMORY_RANK).contains(&shape.len()) {
                 return Err(ProductionRankedKernelErrorV1::InvalidShape);
@@ -468,6 +551,27 @@ fn validate_operation(
         ProductionRankedOperationV1::IndexConstant { result, .. } => {
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
+        ProductionRankedOperationV1::InvocationIndex {
+            result, dimension, ..
+        } => {
+            if usize::try_from(*dimension)
+                .ok()
+                .is_none_or(|dimension| dimension >= MAX_RANKED_MEMORY_RANK)
+            {
+                return Err(ProductionRankedKernelErrorV1::DimensionOutOfBounds {
+                    dimension: *dimension,
+                    rank: MAX_RANKED_MEMORY_RANK,
+                });
+            }
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
+        ProductionRankedOperationV1::IndexBinary {
+            result, lhs, rhs, ..
+        } => {
+            require_index(*lhs, argument_count, locals)?;
+            require_index(*rhs, argument_count, locals)?;
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
         ProductionRankedOperationV1::Dimension {
             result,
             view,
@@ -497,12 +601,29 @@ fn validate_operation(
                     actual: indices.len(),
                 });
             }
-            if *kind == AccessKindAttr::Write && !writable {
+            if kind.writes_memory() && !writable {
                 return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
             }
             for index in indices {
                 require_index(*index, argument_count, locals)?;
             }
+            Ok(None)
+        }
+        ProductionRankedOperationV1::Barrier { .. } => Ok(None),
+        ProductionRankedOperationV1::SemanticSymbol { result, .. }
+        | ProductionRankedOperationV1::SemanticConstant { result, .. } => {
+            Ok(Some((*result, RecipeValueKindV1::Semantic)))
+        }
+        ProductionRankedOperationV1::SemanticBinary {
+            result, lhs, rhs, ..
+        } => {
+            require_semantic(*lhs, argument_count, locals)?;
+            require_semantic(*rhs, argument_count, locals)?;
+            Ok(Some((*result, RecipeValueKindV1::Semantic)))
+        }
+        ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
+            require_semantic(*actual, argument_count, locals)?;
+            require_semantic(*expected, argument_count, locals)?;
             Ok(None)
         }
     }
@@ -544,8 +665,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) identity: RootIdentityV1,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
-    pub(super) bounds_verified: bool,
-    pub(super) bounds_report: Option<RankedBoundsReportV1>,
+    pub(super) general_check_report: Option<GeneralPlironKernelCheckReportV1>,
 }
 
 pub(super) struct MaterializedConstructionV1 {
@@ -570,6 +690,26 @@ impl ProductionConstructionV1 {
 }
 
 impl ProductionPlironSessionV1 {
+    fn run_general_kernel_checks_guarded(
+        &mut self,
+        function: Ptr<Operation>,
+    ) -> Result<GeneralPlironKernelCheckReportV1, ProductionSessionErrorV1> {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let function = FuncOp::from_operation(function);
+            require_general_pliron_kernel_checks_before_lowering_v1(&self.inner.context, &function)
+        }));
+        match result {
+            Ok(Ok(report)) => Ok(report),
+            Ok(Err(error)) => Err(production_general_check_error(error)),
+            Err(_) => {
+                self.poisoned = true;
+                Err(ProductionSessionErrorV1::Operation(
+                    OperationHandleError::UpstreamPanicked,
+                ))
+            }
+        }
+    }
+
     pub(super) fn preflight_construction(
         &self,
         construction: &ProductionConstructionV1,
@@ -581,26 +721,6 @@ impl ProductionPlironSessionV1 {
         self.inner
             .require_internal_tree_capacity(tree_work)
             .map_err(ProductionSessionErrorV1::Operation)
-    }
-
-    fn run_ranked_bounds_guarded(
-        &mut self,
-        function: Ptr<Operation>,
-    ) -> Result<RankedBoundsReportV1, ProductionSessionErrorV1> {
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let function = FuncOp::from_operation(function);
-            require_pliron_ranked_bounds_before_lowering_v1(&self.inner.context, &function)
-        }));
-        match result {
-            Ok(Ok(report)) => Ok(report),
-            Ok(Err(error)) => Err(ProductionSessionErrorV1::RankedBounds(error)),
-            Err(_) => {
-                self.poisoned = true;
-                Err(ProductionSessionErrorV1::Operation(
-                    OperationHandleError::UpstreamPanicked,
-                ))
-            }
-        }
     }
 
     pub(super) fn materialize_construction(
@@ -644,6 +764,24 @@ impl ProductionPlironSessionV1 {
         {
             return Err(ProductionSessionErrorV1::RankedRecipe(
                 ProductionRankedKernelErrorV1::MissingKernelDialect,
+            ));
+        }
+        let has_barrier = kernel.blocks.iter().any(|block| {
+            block
+                .operations
+                .iter()
+                .any(|operation| matches!(operation, ProductionRankedOperationV1::Barrier { .. }))
+        });
+        if has_barrier
+            && !self
+                .inner
+                .manifest()
+                .registration_order()
+                .iter()
+                .any(|name| name == dialect_gpu::DIALECT_NAME)
+        {
+            return Err(ProductionSessionErrorV1::RankedRecipe(
+                ProductionRankedKernelErrorV1::MissingGpuDialect,
             ));
         }
         let operation = self
@@ -731,14 +869,16 @@ impl ProductionPlironSessionV1 {
         })
     }
 
-    pub fn verify_ranked_bounds(
+    /// Runs the fixed generic verifier pipeline in one prerequisite-aware
+    /// sweep and returns only the final safety typestate.
+    pub fn verify_general_ranked_kernel_checks(
         &mut self,
         stage: ProductionStageHandleV1<ConstructedGraphStageV1>,
         root: ProductionRootHandleV1<ConstructedGraphStageV1>,
     ) -> Result<
         (
-            ProductionStageHandleV1<BoundsVerifiedGraphStageV1>,
-            ProductionRootHandleV1<BoundsVerifiedGraphStageV1>,
+            ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
+            ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
         ),
         ProductionSessionErrorV1,
     > {
@@ -752,19 +892,18 @@ impl ProductionPlironSessionV1 {
         if root.stage != stage.identity || root.identity != record.identity {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
         }
-        if record.bounds_verified {
+        if record.general_check_report.is_some() {
             return Err(ProductionSessionErrorV1::StaleStage);
         }
         let function = record
             .ranked_function
             .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
-        let report = self.run_ranked_bounds_guarded(function)?;
+        let report = self.run_general_kernel_checks_guarded(function)?;
         let record = self
             .constructed_roots
             .get_mut(&stage.identity)
             .ok_or(ProductionSessionErrorV1::StaleStage)?;
-        record.bounds_verified = true;
-        record.bounds_report = Some(report);
+        record.general_check_report = Some(report);
         Ok((
             ProductionStageHandleV1 {
                 owner: stage.owner,
@@ -783,8 +922,8 @@ impl ProductionPlironSessionV1 {
 
     pub fn prepare_ranked_lowering(
         mut self,
-        stage: ProductionStageHandleV1<BoundsVerifiedGraphStageV1>,
-        root: ProductionRootHandleV1<BoundsVerifiedGraphStageV1>,
+        stage: ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
+        root: ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
     ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionSessionErrorV1> {
         self.validate_live()?;
         self.authenticate_owner(stage.owner)?;
@@ -793,7 +932,7 @@ impl ProductionPlironSessionV1 {
             self.poisoned = true;
             return Err(ProductionSessionErrorV1::Operation(error));
         }
-        let (expected_root, function, bounds_verified) = {
+        let (expected_root, function, expected_report) = {
             let record = self
                 .constructed_roots
                 .get(&stage.identity)
@@ -801,26 +940,24 @@ impl ProductionPlironSessionV1 {
             (
                 record.identity,
                 record.ranked_function,
-                record.bounds_verified,
+                record.general_check_report.clone(),
             )
         };
-        if root.stage != stage.identity || root.identity != expected_root || !bounds_verified {
+        if root.stage != stage.identity
+            || root.identity != expected_root
+            || expected_report.is_none()
+        {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
         }
         let function = function.ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
-        let revalidated = match self.run_ranked_bounds_guarded(function) {
+        let revalidated = match self.run_general_kernel_checks_guarded(function) {
             Ok(report) => report,
             Err(_) => {
                 self.poisoned = true;
                 return Err(ProductionSessionErrorV1::RankedGraphChanged);
             }
         };
-        if self
-            .constructed_roots
-            .get(&stage.identity)
-            .and_then(|record| record.bounds_report.as_ref())
-            != Some(&revalidated)
-        {
+        if expected_report.as_ref() != Some(&revalidated) {
             self.poisoned = true;
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
         }
@@ -828,32 +965,55 @@ impl ProductionPlironSessionV1 {
             .constructed_roots
             .remove(&stage.identity)
             .ok_or(ProductionSessionErrorV1::StaleStage)?;
-        if root.stage != stage.identity
-            || root.identity != record.identity
-            || !record.bounds_verified
-        {
+        if root.stage != stage.identity || root.identity != record.identity {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
         }
         let kernel = record
             .ranked_kernel
             .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
         let report = record
-            .bounds_report
+            .general_check_report
             .ok_or(ProductionSessionErrorV1::StageRootMismatch)?;
         if !report.is_clean() {
             return Err(ProductionSessionErrorV1::RankedRecipe(
                 ProductionRankedKernelErrorV1::Materialization(
-                    "bounds-verified stage carried a rejected report",
+                    "safety-verified stage carried a rejected report",
                 ),
             ));
         }
+        let (bounds_report, race_report, barrier_report, workgroup_report, semantic_report) =
+            report.into_parts();
         Ok(ProductionRankedKernelLoweringInputV1 {
             kernel,
-            report,
+            bounds_report,
+            race_report,
+            barrier_report,
+            workgroup_report,
+            semantic_report,
             _session: self,
             _stage: stage,
             _root: root,
         })
+    }
+}
+
+fn production_general_check_error(
+    error: GeneralPlironKernelCheckErrorV1,
+) -> ProductionSessionErrorV1 {
+    match error {
+        GeneralPlironKernelCheckErrorV1::Bounds(error) => {
+            ProductionSessionErrorV1::RankedBounds(error)
+        }
+        GeneralPlironKernelCheckErrorV1::Race(error) => ProductionSessionErrorV1::RankedRace(error),
+        GeneralPlironKernelCheckErrorV1::Barrier(error) => {
+            ProductionSessionErrorV1::RankedBarrier(error)
+        }
+        GeneralPlironKernelCheckErrorV1::Workgroup(error) => {
+            ProductionSessionErrorV1::RankedWorkgroup(error)
+        }
+        GeneralPlironKernelCheckErrorV1::Semantic(error) => {
+            ProductionSessionErrorV1::RankedSemantic(error)
+        }
     }
 }
 
@@ -906,8 +1066,56 @@ fn materialize_operation(
             })?;
             (op.get_operation(), Some((*result, op.result(context))))
         }
+        ProductionRankedOperationV1::ViewInSpace {
+            result,
+            element_width,
+            writable,
+            shape,
+            dynamic_extents,
+            memory_space,
+        } => {
+            let view_type = RankedViewType::new(context, *element_width, *writable, shape.clone())
+                .map_err(|_| {
+                    ProductionRankedKernelErrorV1::Materialization(
+                        "validated ranked view failed materialization",
+                    )
+                })?;
+            let dynamic_extents = dynamic_extents
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals))
+                .collect::<Result<Vec<_>, _>>()?;
+            let op = RankedViewOp::new_in_space(context, view_type, dynamic_extents, *memory_space)
+                .map_err(|_| {
+                    ProductionRankedKernelErrorV1::Materialization(
+                        "validated ranked view operation failed materialization",
+                    )
+                })?;
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
         ProductionRankedOperationV1::IndexConstant { result, value } => {
             let op = IndexConstantOp::new(context, *value);
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::InvocationIndex {
+            result,
+            dimension,
+            launch_extent,
+        } => {
+            let op = InvocationIndexOp::new(context, *dimension, *launch_extent);
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::IndexBinary {
+            result,
+            kind,
+            lhs,
+            rhs,
+        } => {
+            let op = IndexBinaryOp::new(
+                context,
+                *kind,
+                resolve_value(*lhs, arguments, locals)?,
+                resolve_value(*rhs, arguments, locals)?,
+            );
             (op.get_operation(), Some((*result, op.result(context))))
         }
         ProductionRankedOperationV1::Dimension {
@@ -947,6 +1155,51 @@ fn materialize_operation(
                     "validated ranked access failed materialization",
                 )
             })?;
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::Barrier {
+            execution_scope,
+            memory_scope,
+            address_space,
+            order,
+        } => {
+            let op = BarrierOp::new(
+                context,
+                *execution_scope,
+                *memory_scope,
+                *address_space,
+                *order,
+            );
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
+            let op = SemanticSymbolOp::new(context, *symbol);
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::SemanticConstant { result, value } => {
+            let op = SemanticConstantOp::new(context, *value);
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::SemanticBinary {
+            result,
+            kind,
+            lhs,
+            rhs,
+        } => {
+            let op = SemanticBinaryOp::new(
+                context,
+                *kind,
+                resolve_value(*lhs, arguments, locals)?,
+                resolve_value(*rhs, arguments, locals)?,
+            );
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
+            let op = RequireEquivalentOp::new(
+                context,
+                resolve_value(*actual, arguments, locals)?,
+                resolve_value(*expected, arguments, locals)?,
+            );
             (op.get_operation(), None)
         }
     };
@@ -993,7 +1246,7 @@ fn materialize_terminator(
     Ok(())
 }
 
-/// Move-only output of the closed construction and bounds stages.
+/// Move-only output of the closed construction, bounds, and race stages.
 ///
 /// The value owns the complete production session and verified stage/root, so
 /// the exact checked graph remains alive while no raw Pliron pointer is exposed.
@@ -1008,13 +1261,17 @@ fn materialize_terminator(
 ///     let _second = input.clone();
 /// }
 /// ```
-#[must_use = "bounds-verified ranked input must be consumed by a checked lowering stage"]
+#[must_use = "safety-verified ranked input must be consumed by a checked lowering stage"]
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
-    report: RankedBoundsReportV1,
+    bounds_report: RankedBoundsReportV1,
+    race_report: RankedRaceReportV1,
+    barrier_report: PlironBarrierReportV1,
+    workgroup_report: PlironWorkgroupMemoryReportV1,
+    semantic_report: PlironSemanticRefinementReportV1,
     _session: ProductionPlironSessionV1,
-    _stage: ProductionStageHandleV1<BoundsVerifiedGraphStageV1>,
-    _root: ProductionRootHandleV1<BoundsVerifiedGraphStageV1>,
+    _stage: ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
+    _root: ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
 }
 
 impl fmt::Debug for ProductionRankedKernelLoweringInputV1 {
@@ -1034,7 +1291,23 @@ impl ProductionRankedKernelLoweringInputV1 {
     }
 
     pub const fn bounds_report(&self) -> &RankedBoundsReportV1 {
-        &self.report
+        &self.bounds_report
+    }
+
+    pub const fn race_report(&self) -> &RankedRaceReportV1 {
+        &self.race_report
+    }
+
+    pub const fn barrier_report(&self) -> &PlironBarrierReportV1 {
+        &self.barrier_report
+    }
+
+    pub const fn workgroup_report(&self) -> &PlironWorkgroupMemoryReportV1 {
+        &self.workgroup_report
+    }
+
+    pub const fn semantic_report(&self) -> &PlironSemanticRefinementReportV1 {
+        &self.semantic_report
     }
 
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -1077,17 +1350,20 @@ impl Error for ProductionRankedCompileErrorV1 {
     }
 }
 
-/// Executes the sole closed ranked-memory production path through construction,
-/// recursive structural verification, whole-function bounds analysis, and the
-/// bounds-verified typestate transition.
+/// Executes the sole closed ranked-kernel production path through construction,
+/// recursive structural verification, the fixed generic verifier pipeline, and
+/// one checked lowering transition.
 pub fn compile_ranked_kernel_for_lowering_v1(
     construction: ProductionConstructionV1,
     limits: ProductionSessionLimitsV1,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
-    let registration = dialect_kernel::dialect_registration()
+    let kernel_registration = dialect_kernel::dialect_registration()
         .map_err(ProductionRankedCompileErrorV1::Registration)?;
-    let mut session = ProductionPlironSessionV1::new(limits, [registration])
-        .map_err(ProductionRankedCompileErrorV1::Context)?;
+    let gpu_registration = dialect_gpu::dialect_registration()
+        .map_err(ProductionRankedCompileErrorV1::Registration)?;
+    let mut session =
+        ProductionPlironSessionV1::new(limits, [kernel_registration, gpu_registration])
+            .map_err(ProductionRankedCompileErrorV1::Context)?;
     let registered = session
         .register_construction(construction)
         .map_err(ProductionRankedCompileErrorV1::Session)?;
@@ -1095,7 +1371,7 @@ pub fn compile_ranked_kernel_for_lowering_v1(
         .construct_registered(registered)
         .map_err(ProductionRankedCompileErrorV1::Session)?;
     let (verified, root) = session
-        .verify_ranked_bounds(constructed, root)
+        .verify_general_ranked_kernel_checks(constructed, root)
         .map_err(ProductionRankedCompileErrorV1::Session)?;
     session
         .prepare_ranked_lowering(verified, root)

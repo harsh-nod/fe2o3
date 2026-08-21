@@ -10,9 +10,11 @@ use std::{
     fmt,
 };
 
+use dialect_gpu::BarrierOp;
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, DimensionOp, IndexConstantOp, IndexLessThanBranchOp,
-    MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
+    AccessKindAttr, BranchOp, DimensionOp, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
     ranked_view_type,
 };
 use pliron::{
@@ -26,7 +28,10 @@ use pliron::{
     value::Value,
 };
 
-use crate::KernelCheckPassKindV1;
+use crate::{
+    KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
+    analyze_pliron_sparse_indices_v1,
+};
 
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
 pub const MAX_RANKED_BOUNDS_OPERATIONS: usize = 65_536;
@@ -63,6 +68,9 @@ pub enum RankedBoundsFindingV1 {
         block: usize,
         operation: usize,
         kind: String,
+    },
+    SparseIndexAnalysisFailed {
+        detail: String,
     },
     StaticOutOfBounds {
         block: usize,
@@ -113,6 +121,10 @@ impl fmt::Display for RankedBoundsFindingV1 {
             } => write!(
                 formatter,
                 "error[FE2O3-BOUNDS-003]: block {block} op {operation} uses unsupported operation {kind}",
+            ),
+            Self::SparseIndexAnalysisFailed { detail } => write!(
+                formatter,
+                "error[FE2O3-BOUNDS-003]: sparse index analysis failed before bounds verification: {detail}",
             ),
             Self::StaticOutOfBounds {
                 block,
@@ -242,11 +254,18 @@ struct PredecessorEdge {
 enum RankedOperationKind {
     RankedView,
     IndexConstant,
+    InvocationIndex,
+    IndexBinary,
     Dimension,
     RankedAccess,
     IndexLessThanBranch,
     Branch,
     Return,
+    Barrier,
+    SemanticSymbol,
+    SemanticConstant,
+    SemanticBinary,
+    RequireEquivalent,
 }
 
 impl RankedOperationKind {
@@ -263,6 +282,10 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::RankedView)
     } else if operation.downcast_ref::<IndexConstantOp>().is_some() {
         Some(RankedOperationKind::IndexConstant)
+    } else if operation.downcast_ref::<InvocationIndexOp>().is_some() {
+        Some(RankedOperationKind::InvocationIndex)
+    } else if operation.downcast_ref::<IndexBinaryOp>().is_some() {
+        Some(RankedOperationKind::IndexBinary)
     } else if operation.downcast_ref::<DimensionOp>().is_some() {
         Some(RankedOperationKind::Dimension)
     } else if operation.downcast_ref::<RankedAccessOp>().is_some() {
@@ -273,6 +296,16 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::Branch)
     } else if operation.downcast_ref::<ReturnOp>().is_some() {
         Some(RankedOperationKind::Return)
+    } else if operation.downcast_ref::<BarrierOp>().is_some() {
+        Some(RankedOperationKind::Barrier)
+    } else if operation.downcast_ref::<SemanticSymbolOp>().is_some() {
+        Some(RankedOperationKind::SemanticSymbol)
+    } else if operation.downcast_ref::<SemanticConstantOp>().is_some() {
+        Some(RankedOperationKind::SemanticConstant)
+    } else if operation.downcast_ref::<SemanticBinaryOp>().is_some() {
+        Some(RankedOperationKind::SemanticBinary)
+    } else if operation.downcast_ref::<RequireEquivalentOp>().is_some() {
+        Some(RankedOperationKind::RequireEquivalent)
     } else {
         None
     }
@@ -510,6 +543,13 @@ pub fn run_pliron_ranked_bounds_check_v1(
         return structural_failure();
     }
 
+    let sparse_indices = match analyze_pliron_sparse_indices_v1(context, function) {
+        Ok(analysis) => analysis,
+        Err(failure) => {
+            return finding_failure(sparse_index_failure(failure));
+        }
+    };
+
     if let Err(finding) = budget.storage(blocks.len().saturating_mul(3)) {
         return finding_failure(finding);
     }
@@ -688,6 +728,7 @@ pub fn run_pliron_ranked_bounds_check_v1(
                         facts: &inputs[block_index],
                         fact_indices: &fact_indices,
                         context,
+                        sparse_indices: &sparse_indices,
                         findings: &mut findings,
                         budget: &mut budget,
                     },
@@ -795,6 +836,7 @@ struct AccessCheck<'a> {
     facts: &'a FactSet,
     fact_indices: &'a HashMap<LessThanFact, usize>,
     context: &'a Context,
+    sparse_indices: &'a SparseIndexAnalysisV1,
     findings: &'a mut Vec<RankedBoundsFindingV1>,
     budget: &'a mut RankedBoundsBudget,
 }
@@ -826,7 +868,9 @@ fn verify_access(
         check.budget.work(1)?;
         let index_expr = canonical_index_expr(index, check.context);
         let extent_expr = extent_expr(view, &view_type, dimension, check.context);
-        if bound_is_proven(index_expr, extent_expr, check.facts, check.fact_indices) {
+        if bound_is_proven(index_expr, extent_expr, check.facts, check.fact_indices)
+            || sparse_bound_is_proven(index, extent_expr, check.sparse_indices)
+        {
             continue;
         }
         match (index_expr, extent_expr) {
@@ -861,6 +905,43 @@ fn verify_access(
         }
     }
     Ok(())
+}
+
+fn sparse_bound_is_proven(
+    index: Value,
+    extent: IndexExpr,
+    sparse_indices: &SparseIndexAnalysisV1,
+) -> bool {
+    let Some(index_maximum) = sparse_indices
+        .fact(index)
+        .maximum(sparse_indices.launch_extents())
+    else {
+        return false;
+    };
+    let extent = match extent {
+        IndexExpr::Constant(extent) => Some(extent),
+        IndexExpr::Value(value) => sparse_indices.fact(value).constant_value(),
+        IndexExpr::Dimension { .. } => None,
+    };
+    extent.is_some_and(|extent| index_maximum < extent)
+}
+
+fn sparse_index_failure(failure: SparseIndexFailureV1) -> RankedBoundsFindingV1 {
+    let detail = match failure {
+        SparseIndexFailureV1::ResourceLimit {
+            resource,
+            limit,
+            actual,
+        } => format!("{resource} count {actual} exceeds {limit}"),
+        SparseIndexFailureV1::InconsistentLaunchExtent {
+            dimension,
+            first,
+            second,
+        } => format!(
+            "invocation dimension {dimension} has inconsistent launch extents {first} and {second}"
+        ),
+    };
+    RankedBoundsFindingV1::SparseIndexAnalysisFailed { detail }
 }
 
 fn bound_is_proven(

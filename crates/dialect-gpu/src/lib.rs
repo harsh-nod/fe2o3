@@ -357,6 +357,25 @@ impl BarrierOp {
         op.set_attr_gpu_barrier_order(context, order);
         op
     }
+
+    pub fn execution_scope(&self, context: &Context) -> Option<HierarchyAttr> {
+        self.get_attr_gpu_barrier_execution_scope(context)
+            .map(|value| *value)
+    }
+
+    pub fn memory_scope(&self, context: &Context) -> Option<MemoryScopeAttr> {
+        self.get_attr_gpu_barrier_memory_scope(context)
+            .map(|value| *value)
+    }
+
+    pub fn address_space(&self, context: &Context) -> Option<AddressSpaceAttr> {
+        self.get_attr_gpu_barrier_address_space(context)
+            .map(|value| *value)
+    }
+
+    pub fn order(&self, context: &Context) -> Option<MemoryOrderAttr> {
+        self.get_attr_gpu_barrier_order(context).map(|value| *value)
+    }
 }
 
 impl Verify for BarrierOp {

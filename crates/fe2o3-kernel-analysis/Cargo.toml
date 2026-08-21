@@ -12,6 +12,7 @@ default = ["authenticated-machine-effect"]
 authenticated-machine-effect = ["dep:rustix", "dep:sha2"]
 
 [dependencies]
+dialect-gpu.workspace = true
 dialect-kernel.workspace = true
 fe2o3-kernel-ir.workspace = true
 pliron.workspace = true

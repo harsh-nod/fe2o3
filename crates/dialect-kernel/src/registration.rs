@@ -4,9 +4,12 @@ use fe2o3_pliron_owner_core::{
 
 use crate::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, BranchOp, DIALECT_NAME, DimensionAttr, DimensionOp,
-    GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexConstantOp,
-    IndexLessThanBranchOp, IndexType, IndexValueAttr, IterationDomainAttr, RankedAccessOp,
-    RankedViewOp, RankedViewType, ReturnOp,
+    GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr,
+    InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
+    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp,
+    SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
 };
 
 fn registration_hook(
@@ -19,18 +22,32 @@ fn registration_hook(
     service.register_attribute::<GeneralGemmEpilogueSchemaAttr>()?;
     service.register_type::<RankedViewType>()?;
     service.register_type::<IndexType>()?;
+    service.register_type::<SemanticScalarType>()?;
     service.register_attribute::<IndexValueAttr>()?;
     service.register_attribute::<DimensionAttr>()?;
     service.register_attribute::<AccessKindAttr>()?;
+    service.register_attribute::<MemorySpaceAttr>()?;
+    service.register_attribute::<InvocationDimensionAttr>()?;
+    service.register_attribute::<LaunchExtentAttr>()?;
+    service.register_attribute::<IndexBinaryKindAttr>()?;
+    service.register_attribute::<SemanticSymbolAttr>()?;
+    service.register_attribute::<SemanticConstantAttr>()?;
+    service.register_attribute::<SemanticBinaryKindAttr>()?;
     service.register_operation::<AlgorithmOp>()?;
     service.register_operation::<GeneralGemmOp>()?;
     service.register_operation::<RankedViewOp>()?;
     service.register_operation::<IndexConstantOp>()?;
+    service.register_operation::<InvocationIndexOp>()?;
+    service.register_operation::<IndexBinaryOp>()?;
     service.register_operation::<DimensionOp>()?;
     service.register_operation::<RankedAccessOp>()?;
     service.register_operation::<IndexLessThanBranchOp>()?;
     service.register_operation::<BranchOp>()?;
     service.register_operation::<ReturnOp>()?;
+    service.register_operation::<SemanticSymbolOp>()?;
+    service.register_operation::<SemanticConstantOp>()?;
+    service.register_operation::<SemanticBinaryOp>()?;
+    service.register_operation::<RequireEquivalentOp>()?;
     Ok(())
 }
 

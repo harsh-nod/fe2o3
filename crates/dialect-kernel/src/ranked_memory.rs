@@ -195,13 +195,81 @@ impl DimensionAttr {
 pub enum AccessKindAttr {
     Read,
     Write,
+    AtomicRead,
+    AtomicWrite,
+    AtomicReadModifyWrite,
+}
+
+impl AccessKindAttr {
+    pub const fn is_atomic(self) -> bool {
+        matches!(
+            self,
+            Self::AtomicRead | Self::AtomicWrite | Self::AtomicReadModifyWrite
+        )
+    }
+
+    pub const fn reads_memory(self) -> bool {
+        matches!(
+            self,
+            Self::Read | Self::AtomicRead | Self::AtomicReadModifyWrite
+        )
+    }
+
+    pub const fn writes_memory(self) -> bool {
+        matches!(
+            self,
+            Self::Write | Self::AtomicWrite | Self::AtomicReadModifyWrite
+        )
+    }
+}
+
+/// Storage domain used by the target-neutral concurrent-effect analyses.
+#[pliron_attr(name = "kernel.memory_space", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum MemorySpaceAttr {
+    Private,
+    Workgroup,
+    Global,
+}
+
+/// One logical launch dimension selected by [`InvocationIndexOp`].
+#[pliron_attr(name = "kernel.invocation_dimension", format = "$0", verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct InvocationDimensionAttr(pub u32);
+
+impl InvocationDimensionAttr {
+    pub const fn dimension(self) -> u32 {
+        self.0
+    }
+}
+
+/// Static launch extent. Zero denotes a runtime extent that analyses must
+/// prove from another retained fact or reject as unresolved.
+#[pliron_attr(name = "kernel.launch_extent", format = "$0", verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct LaunchExtentAttr(pub u64);
+
+impl LaunchExtentAttr {
+    pub const fn extent(self) -> u64 {
+        self.0
+    }
+}
+
+/// Closed arithmetic supported by sparse index analysis.
+#[pliron_attr(name = "kernel.index_binary_kind", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum IndexBinaryKindAttr {
+    Add,
+    Multiply,
+    Remainder,
 }
 
 /// Materializes a ranked view. Its operands are the runtime extents in shape order.
 #[pliron_op(
     name = "kernel.ranked_view",
     format,
-    interfaces = [NResultsInterface<1>, NRegionsInterface<0>]
+    interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
+    attributes = (kernel_memory_space: MemorySpaceAttr)
 )]
 pub struct RankedViewOp;
 
@@ -210,6 +278,15 @@ impl RankedViewOp {
         context: &mut Context,
         view_type: TypedHandle<RankedViewType>,
         dynamic_extents: Vec<Value>,
+    ) -> Result<Self, RankedMemoryError> {
+        Self::new_in_space(context, view_type, dynamic_extents, MemorySpaceAttr::Global)
+    }
+
+    pub fn new_in_space(
+        context: &mut Context,
+        view_type: TypedHandle<RankedViewType>,
+        dynamic_extents: Vec<Value>,
+        memory_space: MemorySpaceAttr,
     ) -> Result<Self, RankedMemoryError> {
         let expected = view_type.deref(context).dynamic_extent_count();
         if dynamic_extents.len() != expected {
@@ -226,7 +303,9 @@ impl RankedViewOp {
             vec![],
             0,
         );
-        Ok(Self::from_operation(operation))
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_memory_space(context, memory_space);
+        Ok(op)
     }
 
     pub fn view_type(&self, context: &Context) -> Option<TypedHandle<RankedViewType>> {
@@ -235,6 +314,11 @@ impl RankedViewOp {
 
     pub fn result(&self, context: &Context) -> Value {
         self.get_operation().deref(context).get_result(0)
+    }
+
+    pub fn memory_space(&self, context: &Context) -> Option<MemorySpaceAttr> {
+        self.get_attr_kernel_memory_space(context)
+            .map(|space| *space)
     }
 
     /// Returns the runtime extent bound to one dynamic shape dimension.
@@ -262,7 +346,10 @@ impl Verify for RankedViewOp {
         let expected = view_type.deref(context).dynamic_extent_count();
         let operation = self.get_operation();
         let operation = operation.deref(context);
-        if operation.get_num_operands() != expected {
+        if operation.get_num_operands() != expected
+            || payload_attribute_count(&operation) != 1
+            || self.memory_space(context).is_none()
+        {
             return verify_err!(
                 self.loc(context),
                 RankedMemoryError::DynamicExtentCountMismatch {
@@ -317,7 +404,7 @@ impl Verify for IndexConstantOp {
         verify_no_regions_results_successors(self, context, 1, 0)?;
         if self.get_operation().deref(context).get_num_operands() != 0
             || self.value(context).is_none()
-            || self.get_operation().deref(context).attributes.0.len() != 1
+            || payload_attribute_count(&self.get_operation().deref(context)) != 1
             || !is_index_type(self.result(context), context)
         {
             return verify_err!(
@@ -326,6 +413,135 @@ impl Verify for IndexConstantOp {
             );
         }
         Ok(())
+    }
+}
+
+/// Produces the logical invocation coordinate in one launch dimension.
+#[pliron_op(
+    name = "kernel.invocation_index",
+    format,
+    interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
+    attributes = (
+        kernel_invocation_dimension: InvocationDimensionAttr,
+        kernel_launch_extent: LaunchExtentAttr
+    )
+)]
+pub struct InvocationIndexOp;
+
+impl InvocationIndexOp {
+    pub fn new(context: &mut Context, dimension: u32, launch_extent: u64) -> Self {
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![IndexType::get(context).into()],
+            vec![],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_invocation_dimension(context, InvocationDimensionAttr(dimension));
+        op.set_attr_kernel_launch_extent(context, LaunchExtentAttr(launch_extent));
+        op
+    }
+
+    pub fn dimension(&self, context: &Context) -> Option<u32> {
+        self.get_attr_kernel_invocation_dimension(context)
+            .map(|dimension| dimension.dimension())
+    }
+
+    pub fn launch_extent(&self, context: &Context) -> Option<u64> {
+        self.get_attr_kernel_launch_extent(context)
+            .map(|extent| extent.extent())
+    }
+
+    pub fn result(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_result(0)
+    }
+}
+
+impl Verify for InvocationIndexOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 1, 0)?;
+        let raw = self.get_operation();
+        let raw = raw.deref(context);
+        if raw.get_num_operands() != 0
+            || payload_attribute_count(&raw) != 2
+            || self
+                .dimension(context)
+                .is_none_or(|dimension| dimension as usize >= MAX_RANKED_MEMORY_RANK)
+            || self.launch_extent(context).is_none()
+            || !is_index_type(self.result(context), context)
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.invocation_index has malformed dimension, extent, or result"
+                )
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Target-neutral unsigned index arithmetic retained for sparse analysis.
+#[pliron_op(
+    name = "kernel.index_binary",
+    format,
+    interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
+    attributes = (kernel_index_binary_kind: IndexBinaryKindAttr)
+)]
+pub struct IndexBinaryOp;
+
+impl IndexBinaryOp {
+    pub fn new(context: &mut Context, kind: IndexBinaryKindAttr, lhs: Value, rhs: Value) -> Self {
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![IndexType::get(context).into()],
+            vec![lhs, rhs],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_index_binary_kind(context, kind);
+        op
+    }
+
+    pub fn kind(&self, context: &Context) -> Option<IndexBinaryKindAttr> {
+        self.get_attr_kernel_index_binary_kind(context)
+            .map(|kind| *kind)
+    }
+
+    pub fn lhs(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn rhs(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(1)
+    }
+
+    pub fn result(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_result(0)
+    }
+}
+
+impl Verify for IndexBinaryOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 1, 0)?;
+        let raw = self.get_operation();
+        let raw = raw.deref(context);
+        if raw.get_num_operands() != 2
+            || payload_attribute_count(&raw) != 1
+            || self.kind(context).is_none()
+            || !is_index_type(self.result(context), context)
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload("kernel.index_binary has malformed payload")
+            );
+        }
+        require_index_operand(self, context, 0)?;
+        require_index_operand(self, context, 1)
     }
 }
 
@@ -386,7 +602,7 @@ impl Verify for DimensionOp {
         let operation = self.get_operation();
         let operation = operation.deref(context);
         if operation.get_num_operands() != 1
-            || operation.attributes.0.len() != 1
+            || payload_attribute_count(&operation) != 1
             || !is_index_type(self.result(context), context)
         {
             return verify_err!(
@@ -445,7 +661,7 @@ impl RankedAccessOp {
                 actual: indices.len(),
             });
         }
-        if kind == AccessKindAttr::Write && !writable {
+        if kind.writes_memory() && !writable {
             return Err(RankedMemoryError::WriteThroughReadOnlyView);
         }
         let mut operands = Vec::with_capacity(indices.len() + 1);
@@ -487,7 +703,7 @@ impl Verify for RankedAccessOp {
         let operation = self.get_operation();
         let operation = operation.deref(context);
         if operation.get_num_operands() == 0
-            || operation.attributes.0.len() != 1
+            || payload_attribute_count(&operation) != 1
             || self.kind(context).is_none()
         {
             return verify_err!(
@@ -509,7 +725,11 @@ impl Verify for RankedAccessOp {
                 }
             );
         }
-        if self.kind(context) == Some(AccessKindAttr::Write) && !view_type.writable() {
+        if self
+            .kind(context)
+            .is_some_and(AccessKindAttr::writes_memory)
+            && !view_type.writable()
+        {
             return verify_err!(
                 self.loc(context),
                 RankedMemoryError::WriteThroughReadOnlyView
@@ -713,7 +933,13 @@ fn verify_no_regions_results_successors(
         key == &*ATTR_KEY_DEBUG_INFO
             || matches!(
                 key.as_ref(),
-                "kernel_index_value" | "kernel_dimension" | "kernel_access_kind"
+                "kernel_index_value"
+                    | "kernel_dimension"
+                    | "kernel_access_kind"
+                    | "kernel_memory_space"
+                    | "kernel_invocation_dimension"
+                    | "kernel_launch_extent"
+                    | "kernel_index_binary_kind"
             )
     });
     if raw.get_num_results() != results
@@ -729,4 +955,13 @@ fn verify_no_regions_results_successors(
         );
     }
     Ok(())
+}
+
+fn payload_attribute_count(operation: &Operation) -> usize {
+    operation
+        .attributes
+        .0
+        .keys()
+        .filter(|key| *key != &*ATTR_KEY_DEBUG_INFO)
+        .count()
 }
