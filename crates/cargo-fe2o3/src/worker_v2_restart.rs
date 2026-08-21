@@ -14,12 +14,14 @@ use fe2o3_artifact_transaction::{
     DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV2,
     MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1, PersistedBackendReceiptV2,
     ProducerIdentity, RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
-    UpstreamCodeObjectEvidenceIdentityV1, WorkerV2PublicationIntentCleanupEscrowStateV1,
-    WorkerV2PublicationIntentCleanupEscrowV1, WorkerV2PublicationIntentErrorV1,
-    WorkerV2PublicationIntentErrorV2, WorkerV2PublicationIntentIdentityV1,
-    WorkerV2PublicationIntentIdentityV2, acquire_worker_v2_publication_intent_lease_v2,
-    clear_worker_v2_publication_intent_v2, commit_worker_v2_publication_intent_cleanup_escrow_v1,
-    persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v2,
+    UpstreamCodeObjectEvidenceIdentityV1, WorkerV2PublicationIntentCleanupEscrowOptionsV1,
+    WorkerV2PublicationIntentCleanupEscrowStateV1, WorkerV2PublicationIntentCleanupEscrowV1,
+    WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentErrorV2,
+    WorkerV2PublicationIntentIdentityV1, WorkerV2PublicationIntentIdentityV2,
+    acquire_worker_v2_publication_intent_lease_v2, clear_worker_v2_publication_intent_v2,
+    commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2,
+    commit_worker_v2_publication_intent_cleanup_escrow_v1, persist_worker_v2_publication_intent_v1,
+    persist_worker_v2_publication_intent_v2,
     prepare_worker_v2_publication_intent_cleanup_escrow_v1, producer_package_identity_v1,
     read_backend_publication_receipt_v2, recover_published_hsaco_claim_for_attempt_v2,
     recover_worker_v2_publication_intent_cleanup_escrow_v1,
@@ -4887,40 +4889,45 @@ impl WorkerV2ResumeStoreV2 {
                 "superseding Ready intent lease revalidation failed: {error}"
             ))
         })?;
-        // The artifact lock is not nestable. Once the predecessor commit starts it is
-        // irreversible, so restart treats its Committed escrow as cleanup-only; authority for
-        // the superseding Ready attempt still requires reacquiring this exact lease below.
-        drop(lease);
-        self.commit_protected_cleanup_escrow(&evidence)?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-newer-ready-after-predecessor-commit");
-        let lease = acquire_worker_v2_publication_intent_lease_v2(
-            &self.inner.display_path,
+        let commit = commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+            lease,
             &self.producer,
+            evidence.escrow,
             ready.attempt(),
             recovered.compiler_closure(),
             intent,
+            recovered,
+            WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
         )
         .map_err(|error| {
             self.inner.invalid(format!(
-                "superseding Ready intent changed after predecessor escrow commit: {error}"
+                "atomic superseding Ready/predecessor escrow commit failed: {error}"
             ))
         })?;
-        if self.load()? != Some(ready)
-            || lease.recovered().record() != recovered.record()
-            || lease.recovered().exact_output() != recovered.exact_output()
+        if commit.predecessor() != evidence.escrow.identity()
+            || commit.successor() != recovered.record()
+            || commit.grants_publication_authority()
+            || commit.grants_load_authority()
+            || commit.grants_launch_authority()
         {
             return Err(self
                 .inner
-                .invalid("superseding Ready state changed after predecessor escrow commit"));
+                .invalid("atomic superseding Ready cleanup returned inconsistent evidence"));
         }
-        lease.revalidate().map_err(|error| {
-            self.inner.invalid(format!(
-                "superseding Ready intent failed final revalidation: {error}"
-            ))
-        })?;
-        drop(lease);
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-newer-ready-after-predecessor-commit");
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-newer-ready-after-successor-lease-release");
+        if self.load()? != Some(ready) {
+            return Err(self
+                .inner
+                .invalid("superseding Ready marker changed after atomic predecessor commit"));
+        }
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-newer-ready-before-local-cleanup");
         self.finish_committed_superseded_cleanup_local_unlink(&evidence)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-newer-ready-after-local-cleanup");
         self.remove_protected_cleanup_evidence(&evidence)
     }
 
@@ -9881,6 +9888,10 @@ mod tests {
     #[test]
     fn protected_cleanup_evidence_retirement_reopens_every_boundary_with_a_new_ready_state() {
         for (case, (fault, remove_envelope)) in [
+            "protected-cleanup-newer-ready-after-predecessor-commit",
+            "protected-cleanup-newer-ready-after-successor-lease-release",
+            "protected-cleanup-newer-ready-before-local-cleanup",
+            "protected-cleanup-newer-ready-after-local-cleanup",
             "protected-cleanup-evidence-before-unlink",
             "protected-cleanup-evidence-after-unlink",
             "protected-cleanup-evidence-directory-synced",
