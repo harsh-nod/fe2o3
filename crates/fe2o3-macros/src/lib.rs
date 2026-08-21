@@ -3889,10 +3889,64 @@ mod tests {
         derive_kernel_binding_id_v1, host_kernel_symbol_v1, semantic_witness_length_symbol_v1,
         semantic_witness_pointer_symbol_v1,
     };
-    use syn::{Expr, FnArg, Item, ItemFn, ItemForeignMod, Type, Visibility, parse_quote};
+    use syn::{
+        Expr, FnArg, Item, ItemFn, ItemForeignMod, ItemMod, Lit, Meta, Type, Visibility,
+        parse_quote,
+    };
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn has_exact_amdgpu_host_exclusion(module: &ItemMod) -> bool {
+        let mut cfg_attributes = module
+            .attrs
+            .iter()
+            .filter(|attribute| attribute.path().is_ident("cfg"));
+        let Some(attribute) = cfg_attributes.next() else {
+            return false;
+        };
+        if cfg_attributes.next().is_some() || !matches!(&attribute.style, syn::AttrStyle::Outer) {
+            return false;
+        }
+        let Meta::List(cfg) = &attribute.meta else {
+            return false;
+        };
+        let Ok(Meta::List(not)) = cfg.parse_args::<Meta>() else {
+            return false;
+        };
+        if !not.path.is_ident("not") {
+            return false;
+        }
+        let Ok(Meta::NameValue(target_arch)) = not.parse_args::<Meta>() else {
+            return false;
+        };
+        if !target_arch.path.is_ident("target_arch") {
+            return false;
+        }
+        let Expr::Lit(value) = &target_arch.value else {
+            return false;
+        };
+        matches!(&value.lit, Lit::Str(value) if value.value() == "amdgpu")
+    }
+
+    fn assert_generated_host_module_has_exact_amdgpu_exclusion(
+        expansion: &proc_macro2::TokenStream,
+        module_name: &str,
+    ) {
+        let file: syn::File = syn::parse2(expansion.clone()).unwrap();
+        let module = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Mod(module) if module.ident == module_name => Some(module),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing generated host module {module_name}"));
+        assert!(
+            has_exact_amdgpu_host_exclusion(module),
+            "generated host module {module_name} must have exact outer #[cfg(not(target_arch = \"amdgpu\"))]"
+        );
     }
 
     fn ffi_options() -> DeviceFfiOptions {
@@ -4459,8 +4513,10 @@ mod tests {
             Some(&host_import),
             Some(crate_binding),
         )
-        .unwrap()
-        .to_string();
+        .unwrap();
+
+        assert_generated_host_module_has_exact_amdgpu_exclusion(&expansion, "vecadd_gpu");
+        let expansion = expansion.to_string();
 
         assert!(expansion.contains("pub mod vecadd_gpu"));
         assert!(expansion.contains("2u16 , 3u16"));
@@ -4501,6 +4557,34 @@ mod tests {
         assert!(!expansion.contains("checked_sub"));
         assert!(!expansion.contains("KernelParams"));
         assert!(!expansion.contains("launch_unchecked"));
+    }
+
+    #[test]
+    fn exact_amdgpu_host_exclusion_rejects_hostile_structural_mutations() {
+        let removed: ItemMod = parse_quote! {
+            pub mod kernel_gpu {}
+        };
+        let flipped: ItemMod = parse_quote! {
+            #[cfg(target_arch = "amdgpu")]
+            pub mod kernel_gpu {}
+        };
+        let relocated: ItemMod = parse_quote! {
+            pub mod kernel_gpu {
+                #[cfg(not(target_arch = "amdgpu"))]
+                const HOST_ONLY: () = ();
+            }
+        };
+
+        for (mutation, module) in [
+            ("removed", removed),
+            ("flipped", flipped),
+            ("relocated", relocated),
+        ] {
+            assert!(
+                !has_exact_amdgpu_host_exclusion(&module),
+                "{mutation} host exclusion unexpectedly passed structural validation"
+            );
+        }
     }
 
     #[test]
@@ -4800,6 +4884,10 @@ mod tests {
             ("alpha", &alpha_expansion, alpha_binding, alpha_contract),
             ("zeta", &zeta_expansion, zeta_binding, zeta_contract),
         ] {
+            assert_generated_host_module_has_exact_amdgpu_exclusion(
+                expansion,
+                &format!("{name}_gpu"),
+            );
             let file: syn::File = syn::parse2(expansion.clone()).unwrap();
             let registration_name = format!("__fe2o3_kernel_registration_{name}");
             let registration = file
