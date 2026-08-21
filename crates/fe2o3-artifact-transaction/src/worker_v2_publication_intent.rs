@@ -10,7 +10,7 @@
 //! worker, Verus, or caller-supplied evidence and grants no publication, loading, or launch authority.
 
 use crate::attempt::{AttemptPhase, BackendReceiptV1};
-use crate::attempt_scoped_hsaco_publication::publication_receipt;
+use crate::attempt_scoped_hsaco_publication::{publication_receipt, publication_receipt_v2};
 use crate::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildSession, CanonicalLinkRequestIdentityV1,
     DurableLinkPublicationPlanV1, EmitError, FinalizationIdentityV1, FinalizedOutputIdentityV1,
@@ -585,7 +585,6 @@ trait PublicationIntentRecord: Copy + Eq {
     fn slot(self) -> [u8; 32];
     fn attempt(self) -> BuildAttempt;
     fn producer_identity(self) -> [u8; 32];
-    fn upstream_evidence(self) -> UpstreamCodeObjectEvidenceIdentityV1;
     fn plan(self) -> DurableLinkPublicationPlanV1;
     fn output_identity(self) -> [u8; 32];
     fn output_length(self) -> usize;
@@ -617,6 +616,12 @@ trait PublicationIntentSchema {
 
     fn encode(record: Self::Record) -> Vec<u8>;
     fn decode(bytes: &[u8]) -> Result<Self::Record, &'static str>;
+    fn has_exact_durable_receipt(
+        receipt: Option<BackendReceiptV1>,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        intent: Self::Record,
+    ) -> bool;
 }
 
 struct PublicationIntentSchemaV1;
@@ -634,10 +639,6 @@ impl PublicationIntentRecord for WorkerV2PublicationIntentRecordV1 {
 
     fn producer_identity(self) -> [u8; 32] {
         self.producer_identity
-    }
-
-    fn upstream_evidence(self) -> UpstreamCodeObjectEvidenceIdentityV1 {
-        self.upstream_evidence
     }
 
     fn plan(self) -> DurableLinkPublicationPlanV1 {
@@ -674,6 +675,17 @@ impl PublicationIntentSchema for PublicationIntentSchemaV1 {
 
     fn decode(bytes: &[u8]) -> Result<Self::Record, &'static str> {
         WorkerV2PublicationIntentRecordV1::decode(bytes)
+    }
+
+    fn has_exact_durable_receipt(
+        receipt: Option<BackendReceiptV1>,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        intent: Self::Record,
+    ) -> bool {
+        let expected =
+            publication_receipt(producer, attempt, intent.plan(), intent.upstream_evidence());
+        receipt == Some(BackendReceiptV1::Provenance(expected))
     }
 }
 
@@ -812,9 +824,9 @@ fn clear_intent<S: PublicationIntentSchema>(
         producer_identity,
         slot_identity_for::<S>(producer_identity, attempt),
     );
-    cleanup_temps::<S>(&output, &names)?;
-    let recovered =
-        recover_locked::<S>(&output, &names, producer, attempt)?.ok_or_else(S::Error::not_found)?;
+    let inspected = inspect_committed_locked::<S>(&output, &names, producer, attempt)?
+        .ok_or_else(S::Error::not_found)?;
+    let recovered = inspected.recovered;
     if recovered.record.binding() != binding {
         return Err(S::Error::binding_mismatch());
     }
@@ -822,7 +834,9 @@ fn clear_intent<S: PublicationIntentSchema>(
         return Err(S::Error::identity_mismatch());
     }
     authorize_clear::<S>(&output, producer, attempt, recovered.record)?;
-    unlinkat(&output.fd, &names.record, AtFlags::empty()).map_err(std::io::Error::from)?;
+    cleanup_temps::<S>(&output, &names)?;
+    unlinkat(&output.fd, inspected.entry.name(&names), AtFlags::empty())
+        .map_err(std::io::Error::from)?;
     fsync(&output.fd).map_err(std::io::Error::from)?;
     unlinkat(&output.fd, &names.output, AtFlags::empty()).map_err(std::io::Error::from)?;
     fsync(&output.fd).map_err(std::io::Error::from)?;
@@ -904,18 +918,70 @@ fn authorize_clear<S: PublicationIntentSchema>(
     let record = attempts
         .record_exact(&producer.stable_source, attempt)
         .map_err(|error| S::Error::attempt(error.to_string()))?;
-    let expected =
-        publication_receipt(producer, attempt, intent.plan(), intent.upstream_evidence());
     if !matches!(
         record.phase,
         AttemptPhase::BackendClaimed | AttemptPhase::Completed
-    ) || record.backend_receipt != Some(BackendReceiptV1::Provenance(expected))
+    ) || !S::has_exact_durable_receipt(record.backend_receipt, producer, attempt, intent)
     {
         return Err(S::Error::attempt(
             "the exact backend provenance receipt is not durable",
         ));
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum CommittedIntentEntry {
+    Canonical,
+    Redo,
+}
+
+impl CommittedIntentEntry {
+    fn name(self, names: &IntentNames) -> &str {
+        match self {
+            Self::Canonical => &names.record,
+            Self::Redo => &names.redo,
+        }
+    }
+}
+
+struct InspectedCommittedIntent<R> {
+    recovered: RecoveredIntent<R>,
+    entry: CommittedIntentEntry,
+}
+
+fn inspect_committed_locked<S: PublicationIntentSchema>(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<Option<InspectedCommittedIntent<S::Record>>, S::Error> {
+    let canonical = entry_exists::<S>(output, &names.record)?;
+    let redo = entry_exists::<S>(output, &names.redo)?;
+    if canonical && redo {
+        return Err(invalid::<S>(
+            output,
+            &names.record,
+            "canonical and redo records coexist",
+        ));
+    }
+    let entry = if canonical {
+        CommittedIntentEntry::Canonical
+    } else if redo {
+        CommittedIntentEntry::Redo
+    } else {
+        return Ok(None);
+    };
+    let record = read_bound_record::<S>(output, names, entry.name(names), producer, attempt)?;
+    let exact_output = read_output::<S>(output, names, record)?;
+    Ok(Some(InspectedCommittedIntent {
+        recovered: RecoveredIntent {
+            persisted: false,
+            record,
+            exact_output: Arc::from(exact_output),
+        },
+        entry,
+    }))
 }
 
 fn recover_locked<S: PublicationIntentSchema>(
@@ -2117,10 +2183,6 @@ mod publication_intent_v2 {
             self.producer_identity
         }
 
-        fn upstream_evidence(self) -> UpstreamCodeObjectEvidenceIdentityV1 {
-            self.upstream_evidence
-        }
-
         fn plan(self) -> DurableLinkPublicationPlanV1 {
             self.plan
         }
@@ -2157,6 +2219,22 @@ mod publication_intent_v2 {
 
         fn decode(bytes: &[u8]) -> Result<Self::Record, &'static str> {
             WorkerV2PublicationIntentRecordV2::decode(bytes)
+        }
+
+        fn has_exact_durable_receipt(
+            receipt: Option<BackendReceiptV1>,
+            producer: &ProducerIdentity,
+            attempt: BuildAttempt,
+            intent: Self::Record,
+        ) -> bool {
+            let expected = publication_receipt_v2(
+                producer,
+                attempt,
+                intent.plan(),
+                intent.upstream_evidence(),
+                intent.compiler_closure(),
+            );
+            receipt == Some(BackendReceiptV1::ProvenanceV2(expected))
         }
     }
 
@@ -2405,7 +2483,7 @@ mod publication_intent_v2 {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::{BuildInvocation, DurableLinkPublicationOptionsV1};
+        use crate::BuildInvocation;
         use std::thread;
 
         static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -2807,14 +2885,14 @@ mod publication_intent_v2 {
                 WorkerV2PublicationIntentOutcomeV2::Recovered
             );
             assert_eq!(recovered.record(), persisted.record());
-            crate::publish_exact_hsaco_evidence_for_attempt_v1_with_options(
+            crate::publish_exact_hsaco_evidence_for_attempt_v2(
                 &output_dir,
                 &producer,
                 attempt,
                 plan,
                 upstream,
+                closure,
                 output,
-                DurableLinkPublicationOptionsV1::default(),
             )
             .unwrap();
             clear_worker_v2_publication_intent_v2(
