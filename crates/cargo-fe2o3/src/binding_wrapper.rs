@@ -28,7 +28,7 @@ use fe2o3_hsaco_finalize::{
     ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, RowSoftmaxV1AuthorityPolicyV1,
     RowSoftmaxV1CompilerClosurePolicyV1, RowSoftmaxV1DirectWorkerExpectationV1,
     RowSoftmaxV1ProviderManifestV1, derive_row_softmax_v1_provider_source_identity_v1,
-    inspect_worker_v2_raw_hsaco_v1,
+    inspect_production_v1_worker_v2_raw_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
 };
 use fe2o3_process_identity::{
     LinuxObjectIdentityV3, ParentPreparedProcessConsistencyV3, PinnedWorkingDirectoryV3,
@@ -3030,7 +3030,12 @@ fn complete_fresh_worker_v2(
     let canonical_response = evidence.authorized().response().canonical_bytes().to_vec();
     let raw_output = evidence.output_bytes().to_vec();
     let worker_v2_request_identity = *evidence.authorized_request_identity();
-    let inspected = inspect_worker_v2_raw_hsaco_v1(evidence).map_err(|error| {
+    let inspected = if worker_v2.is_production_v1() {
+        inspect_production_v1_worker_v2_raw_hsaco_v1(evidence)
+    } else {
+        inspect_worker_v2_raw_hsaco_v1(evidence)
+    }
+    .map_err(|error| {
         CompletionFailure::Uncommitted(format!(
             "independent Worker V2 HSACO inspection failed: {error}"
         ))

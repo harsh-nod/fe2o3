@@ -42,6 +42,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
     Gfx942Lowering(dialect_amdgcn::LoweringErrors),
+    UpstreamLlvmLayoutBinding(String),
     WorkerHandoff(crate::worker_v2_producer::WorkerV2ProducerError),
 }
 
@@ -73,6 +74,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::Gfx942Lowering(error) => {
                 write!(formatter, "production-v1 gfx942 LLVM lowering failed: {error}")
             }
+            Self::UpstreamLlvmLayoutBinding(error) => {
+                write!(formatter, "production-v1 upstream LLVM layout binding failed: {error}")
+            }
             Self::WorkerHandoff(error) => {
                 write!(formatter, "production-v1 Worker V2 handoff failed: {error}")
             }
@@ -91,7 +95,9 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::TargetBinding(error) => Some(error),
             Self::Gfx942Lowering(error) => Some(error),
             Self::WorkerHandoff(error) => Some(error),
-            Self::CustomLlvmConfiguration | Self::EmptyCollectedDeviceClosure => None,
+            Self::CustomLlvmConfiguration
+            | Self::EmptyCollectedDeviceClosure
+            | Self::UpstreamLlvmLayoutBinding(_) => None,
         }
     }
 }
@@ -236,9 +242,11 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
         entry.required_capabilities.insert(wave);
         fe2o3_kernel_ir::verify_module(&target_module)
             .map_err(ProductionPipelineErrorV1::TargetBinding)?;
-        let llvm_ir =
+        let legacy_llvm_ir =
             dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&target_module, &kernel_id)
                 .map_err(ProductionPipelineErrorV1::Gfx942Lowering)?;
+        let llvm_ir = bind_production_upstream_llvm_layout_v1(legacy_llvm_ir)
+            .map_err(ProductionPipelineErrorV1::UpstreamLlvmLayoutBinding)?;
         Ok(Gfx942LoweredProductionCompilationV1 {
             admitted,
             target_module,
@@ -246,6 +254,34 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             bindings,
         })
     }
+}
+
+fn bind_production_upstream_llvm_layout_v1(legacy_llvm_ir: String) -> Result<String, String> {
+    const TRIPLE_HEADER: &str = "target triple = \"amdgcn-amd-amdhsa\"\n";
+    let legacy_layout = format!(
+        "target datalayout = \"{}\"\n",
+        dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
+    );
+    let expected_prefix = format!("{TRIPLE_HEADER}{legacy_layout}\n");
+    if !legacy_llvm_ir.starts_with(&expected_prefix)
+        || legacy_llvm_ir.matches("target triple =").count() != 1
+        || legacy_llvm_ir.matches("target datalayout =").count() != 1
+    {
+        return Err(
+            "verified gfx942 lowering did not retain one canonical target header".to_owned(),
+        );
+    }
+
+    let upstream_layout = crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1;
+    let mut bound = String::with_capacity(
+        legacy_llvm_ir.len() + upstream_layout.len().saturating_sub(legacy_layout.len()),
+    );
+    bound.push_str(TRIPLE_HEADER);
+    bound.push_str("target datalayout = \"");
+    bound.push_str(upstream_layout);
+    bound.push_str("\"\n\n");
+    bound.push_str(&legacy_llvm_ir[expected_prefix.len()..]);
+    Ok(bound)
 }
 
 impl Gfx942LoweredProductionCompilationV1 {
@@ -618,6 +654,37 @@ mod tests {
             reject_custom_llvm_configuration(true),
             Err(ProductionPipelineErrorV1::CustomLlvmConfiguration)
         ));
+    }
+
+    #[test]
+    fn production_layout_binding_uses_the_authenticated_upstream_spelling() {
+        let legacy = format!(
+            "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\ndefine void @body() {{ ret void }}\n",
+            dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
+        );
+        let bound = bind_production_upstream_llvm_layout_v1(legacy).unwrap();
+        assert!(bound.starts_with(&format!(
+            "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\n",
+            crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1
+        )));
+        assert!(bound.ends_with("define void @body() { ret void }\n"));
+        assert_eq!(bound.matches("target triple =").count(), 1);
+        assert_eq!(bound.matches("target datalayout =").count(), 1);
+    }
+
+    #[test]
+    fn production_layout_binding_rejects_noncanonical_headers() {
+        let canonical = format!(
+            "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\ndefine void @body() {{ ret void }}\n",
+            dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
+        );
+        for hostile in [
+            canonical.replacen("target triple", "source_filename", 1),
+            canonical.replacen("\n\n", "\n", 1),
+            format!("{canonical}target datalayout = \"e-p:64:64\"\n"),
+        ] {
+            assert!(bind_production_upstream_llvm_layout_v1(hostile).is_err());
+        }
     }
 
     #[test]

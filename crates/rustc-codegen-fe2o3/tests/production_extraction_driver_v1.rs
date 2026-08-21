@@ -5,12 +5,24 @@ use fe2o3_artifact_transaction::{
 use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolRoleV1,
 };
+use fe2o3_hsaco::MAX_HSACO_BYTES;
+use fe2o3_hsaco_finalize::{
+    ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1,
+    WorkerMeasurementV1, WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
+    inspect_production_v1_worker_v2_raw_hsaco_v1,
+};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PRODUCTION_FILL_CRATE_BINDING_V1: &str =
     "e312f9362d2c716c79f0ce963d229ea0b6dcaf8c7112a675182e764916b2839b";
+const PRODUCTION_WORKER_ENV: &str = "FE2O3_PRODUCTION_V1_WORKER";
+const PRODUCTION_WORKER_BUILD_ID_ENV: &str = "FE2O3_PRODUCTION_V1_WORKER_BUILD_ID";
+const PRODUCTION_LLVM_BUILD_ID_ENV: &str = "FE2O3_PRODUCTION_V1_LLVM_BUILD_ID";
+const PRODUCTION_RAW_HSACO_ENV: &str = "FE2O3_PRODUCTION_V1_RAW_HSACO";
 
 struct ScratchTarget {
     path: PathBuf,
@@ -242,6 +254,101 @@ fn production_fill_publishes_exact_managed_worker_handoff() {
     assert!(!handoff.grants_load_authority());
     assert!(!handoff.grants_launch_authority());
     fail_build_attempt(&artifacts, &producer, attempt).expect("close production fixture attempt");
+}
+
+#[test]
+#[ignore = "requires the measured upstream LLVM 22.1.8 worker and AMD target"]
+fn production_fill_links_to_inspected_raw_hsaco_with_upstream_llvm() {
+    let target = ScratchTarget::new();
+    let artifacts = target.path().join("artifacts");
+    std::fs::create_dir(&artifacts).expect("create production artifact directory");
+    let source = Path::new(
+        "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/lib.rs",
+    );
+    let producer =
+        ProducerIdentity::from_codegen("fe2o3_production_extraction_fixture", Some(source))
+            .expect("production fixture producer");
+    let attempt = begin_build_attempt(
+        &artifacts,
+        &producer,
+        BuildInvocation::from_bytes([0x60; 32]),
+        BuildSession::from_bytes([0x61; 16]),
+    )
+    .expect("begin managed production link attempt");
+    let output = production_fill_command(&target, &artifacts, &production_backend())
+        .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
+        .output()
+        .expect("run managed production fill codegen route");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(output.status.success(), "production fill failed:\n{stderr}");
+
+    let worker_path = PathBuf::from(required_env(PRODUCTION_WORKER_ENV));
+    let worker_bytes = std::fs::read(&worker_path).expect("read measured production worker");
+    let measurement = WorkerMeasurementV1::new(
+        ContentIdentityV1::calculate(&worker_bytes),
+        required_env(PRODUCTION_WORKER_BUILD_ID_ENV),
+        required_env(PRODUCTION_LLVM_BUILD_ID_ENV),
+    )
+    .expect("construct measured production worker identity");
+    let worker = PinnedWorkerV1::open(&worker_path, measurement)
+        .expect("capture measured production worker");
+    let link_options = [
+        ("code-object-version", "6"),
+        ("opt-level", "2"),
+        ("strip-debug", "true"),
+        ("verify-each", "true"),
+    ]
+    .into_iter()
+    .map(|(name, value)| LinkOptionV1::new(name, value).expect("fixed production link option"))
+    .collect();
+    let consumed = consume_compiler_module_handoff_v1(&artifacts, &producer, attempt)
+        .expect("consume production compiler-module handoff");
+    let evidence = execute_reproducible_first_build_worker_v2(
+        consumed,
+        &worker,
+        Vec::new(),
+        link_options,
+        WorkerOutputConstraintsV1::new(MAX_HSACO_BYTES as u64)
+            .expect("bounded production Worker output"),
+        WorkerExecutionLimitsV1::default(),
+    )
+    .unwrap_or_else(|error| panic!("production upstream-LLVM Worker failed: {error:?}"));
+    let diagnostics = evidence.authorized().response().diagnostics().to_vec();
+    let inspected = inspect_production_v1_worker_v2_raw_hsaco_v1(evidence)
+        .unwrap_or_else(|error| {
+            panic!("production raw-HSACO inspection failed: {error:?}; {diagnostics:?}")
+        });
+    assert_eq!(inspected.target().to_string(), "gfx942:xnack-");
+    assert_eq!(inspected.code_object_version(), fe2o3_kernel_descriptor::CodeObjectVersion::V6);
+    assert_eq!(
+        inspected.policy().launch().required_workgroup_size(),
+        [64, 1, 1]
+    );
+    assert_eq!(inspected.policy().launch().max_flat_workgroup_size(), 64);
+    assert_eq!(inspected.policy().launch().wavefront_size(), 64);
+    assert_eq!(
+        inspected.policy().expected_defined_symbols(),
+        ["fill", "fill.kd"]
+    );
+    assert!(!inspected.grants_publication_authority());
+    assert!(!inspected.grants_load_authority());
+    assert!(!inspected.grants_launch_authority());
+
+    let output_path = PathBuf::from(required_env(PRODUCTION_RAW_HSACO_ENV));
+    let mut output_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output_path)
+        .expect("create fresh production raw HSACO");
+    output_file
+        .write_all(inspected.exact_bytes())
+        .expect("write production raw HSACO");
+    output_file.sync_all().expect("sync production raw HSACO");
+    fail_build_attempt(&artifacts, &producer, attempt).expect("close production link attempt");
+}
+
+fn required_env(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("{name} is required"))
 }
 
 fn run_extraction(target: &ScratchTarget) -> String {

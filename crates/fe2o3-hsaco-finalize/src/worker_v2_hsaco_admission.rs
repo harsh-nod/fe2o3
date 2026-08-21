@@ -64,6 +64,7 @@ pub struct WorkerV2RawLaunchContractV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerV2RawLaunchDiagnosticProfileV1 {
     LegacyGfx942G1,
+    ProductionV1,
     TiledGemmV1,
     GeneralGemmV1,
     RowSoftmaxV1,
@@ -87,6 +88,12 @@ impl WorkerV2RawLaunchContractV1 {
     };
 
     const GENERAL_GEMM_V1: Self = Self {
+        required_workgroup_size: [64, 1, 1],
+        max_flat_workgroup_size: 64,
+        wavefront_size: REQUIRED_WAVEFRONT_SIZE,
+    };
+
+    const PRODUCTION_V1: Self = Self {
         required_workgroup_size: [64, 1, 1],
         max_flat_workgroup_size: 64,
         wavefront_size: REQUIRED_WAVEFRONT_SIZE,
@@ -380,6 +387,26 @@ pub enum WorkerV2RawHsacoInspectionError {
         kernel: String,
         actual: u32,
     },
+    ProductionV1RequiredWorkgroupSizeMismatch {
+        kernel: String,
+        actual: Option<[u32; 3]>,
+        expected: [u32; 3],
+    },
+    ProductionV1MaxFlatWorkgroupSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
+    ProductionV1MetadataWavefrontSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
+    ProductionV1DescriptorWavefrontSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
     TiledGemmV1RequiredWorkgroupSizeMismatch {
         kernel: String,
         actual: Option<[u32; 3]>,
@@ -560,6 +587,38 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
             Self::DescriptorWavefrontSizeMismatch { kernel, actual } => write!(
                 formatter,
                 "kernel {kernel} descriptor wavefront is {actual}, expected {REQUIRED_WAVEFRONT_SIZE}"
+            ),
+            Self::ProductionV1RequiredWorkgroupSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "production-v1 kernel {kernel} requires {actual:?}, expected {expected:?}"
+            ),
+            Self::ProductionV1MaxFlatWorkgroupSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "production-v1 kernel {kernel} max flat workgroup is {actual}, expected {expected}"
+            ),
+            Self::ProductionV1MetadataWavefrontSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "production-v1 kernel {kernel} metadata wavefront is {actual}, expected {expected}"
+            ),
+            Self::ProductionV1DescriptorWavefrontSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "production-v1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
             ),
             Self::TiledGemmV1RequiredWorkgroupSizeMismatch {
                 kernel,
@@ -780,6 +839,20 @@ pub fn inspect_worker_v2_raw_hsaco_v1(
     )
 }
 
+/// Consumes sealed production-v1 evidence under its compiler-owned wave64 launch contract.
+///
+/// This route is closed over the current production compiler profile. The caller cannot supply or
+/// weaken its required 64-thread workgroup or wavefront properties.
+pub fn inspect_production_v1_worker_v2_raw_hsaco_v1(
+    source: InertFirstBuildWorkerV2EvidenceV1,
+) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
+    inspect_worker_v2_raw_hsaco_with_launch_v1(
+        source,
+        WorkerV2RawLaunchContractV1::PRODUCTION_V1,
+        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
+    )
+}
+
 /// Consumes sealed Worker V2 evidence under the exact general-GEMM V1 launch contract.
 ///
 /// The caller cannot supply or weaken the required 64-thread wave64 launch profile.
@@ -959,6 +1032,13 @@ fn required_workgroup_size_mismatch(
                 actual,
             }
         }
+        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 => {
+            WorkerV2RawHsacoInspectionError::ProductionV1RequiredWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.required_workgroup_size(),
+            }
+        }
         WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1 => {
             WorkerV2RawHsacoInspectionError::TiledGemmV1RequiredWorkgroupSizeMismatch {
                 kernel: kernel.to_owned(),
@@ -1021,6 +1101,13 @@ fn max_flat_workgroup_size_mismatch(
             WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch {
                 kernel: kernel.to_owned(),
                 actual,
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 => {
+            WorkerV2RawHsacoInspectionError::ProductionV1MaxFlatWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.max_flat_workgroup_size(),
             }
         }
         WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1 => {
@@ -1087,6 +1174,13 @@ fn metadata_wavefront_size_mismatch(
                 actual,
             }
         }
+        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 => {
+            WorkerV2RawHsacoInspectionError::ProductionV1MetadataWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.wavefront_size(),
+            }
+        }
         WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1 => {
             WorkerV2RawHsacoInspectionError::TiledGemmV1MetadataWavefrontSizeMismatch {
                 kernel: kernel.to_owned(),
@@ -1149,6 +1243,13 @@ fn descriptor_wavefront_size_mismatch(
             WorkerV2RawHsacoInspectionError::DescriptorWavefrontSizeMismatch {
                 kernel: kernel.to_owned(),
                 actual,
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 => {
+            WorkerV2RawHsacoInspectionError::ProductionV1DescriptorWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.wavefront_size(),
             }
         }
         WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1 => {

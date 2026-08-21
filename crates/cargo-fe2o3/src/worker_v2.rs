@@ -459,6 +459,10 @@ impl PreparedWorkerV2Config {
         matches!(self.pipeline, WorkerV2PipelineV1::GeneralGemmV1)
     }
 
+    pub(crate) const fn is_production_v1(&self) -> bool {
+        matches!(self.pipeline, WorkerV2PipelineV1::ProductionV1)
+    }
+
     pub(crate) fn row_softmax_v1_worker_pins(
         &self,
     ) -> Result<RowSoftmaxV1DirectWorkerPinsV1, WorkerV2ConfigError> {
