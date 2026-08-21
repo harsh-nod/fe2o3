@@ -37,7 +37,6 @@ mod production_importer_v1;
 
 pub(crate) use production_importer_v1::{
     ProductionSemanticImportErrorV1, construct_production_semantic_mir_v1,
-    require_production_semantic_import_v1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

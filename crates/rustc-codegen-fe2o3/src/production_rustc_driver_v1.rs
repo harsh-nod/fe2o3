@@ -1,6 +1,10 @@
 //! Process-isolated AMD rustc entry for production semantic extraction.
 
+use std::env;
+use std::path::PathBuf;
+
 use rustc_driver::{Callbacks, Compilation};
+use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_interface::interface::Compiler;
 use rustc_middle::ty::TyCtxt;
 
@@ -32,6 +36,10 @@ fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
                 .to_owned(),
         );
     }
+    crate::production_pipeline_v1::reject_custom_llvm_configuration(
+        crate::has_custom_llvm_configuration(tcx.sess),
+    )
+    .map_err(|error| format!("production extraction {error}"))?;
     let closure = crate::collector::collect_authenticated_kernel_closure_v1(
         tcx,
         partitions.codegen_units,
@@ -39,7 +47,26 @@ fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
         target,
     )
     .map_err(|error| format!("production extraction collection failed: {error}"))?;
-    Err(crate::collector::require_production_semantic_import_v1(tcx, closure).to_string())
+    let crate_name = tcx.crate_name(LOCAL_CRATE);
+    let local_source = tcx
+        .sess
+        .local_crate_source_file()
+        .and_then(|source| source.local_path().map(PathBuf::from));
+    let producer = crate::artifact_transaction::ProducerIdentity::from_codegen(
+        crate_name.as_str(),
+        local_source.as_deref(),
+    )
+    .map_err(|error| format!("production extraction producer identity failed: {error}"))?;
+    let output_dir = env::current_dir()
+        .map_err(|error| format!("production extraction working directory failed: {error}"))?;
+    let transaction =
+        crate::production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
+            tcx, closure, producer, output_dir, None,
+        )
+        .map_err(|error| {
+            format!("production extraction transaction construction failed: {error}")
+        })?;
+    Err(transaction.require_semantic_mir_import().to_string())
 }
 
 /// Runs one already-targeted rustc invocation in this process.

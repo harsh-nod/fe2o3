@@ -309,4 +309,28 @@ mod tests {
             .expect("rustc monomorphization");
         assert!(authentication < monomorphization);
     }
+
+    #[test]
+    fn process_isolated_extraction_uses_the_production_transaction() {
+        let driver = include_str!("production_rustc_driver_v1.rs");
+        for required in [
+            "reject_custom_llvm_configuration",
+            "ProductionCompilationV1::from_collected_device_closure",
+            "require_semantic_mir_import",
+        ] {
+            assert!(
+                driver.contains(required),
+                "production extraction driver bypassed required transaction step {required:?}",
+            );
+        }
+        for forbidden in [
+            "construct_production_semantic_mir_v1",
+            "require_production_semantic_import_v1",
+        ] {
+            assert!(
+                !driver.contains(forbidden),
+                "production extraction driver directly called importer entry {forbidden:?}",
+            );
+        }
+    }
 }

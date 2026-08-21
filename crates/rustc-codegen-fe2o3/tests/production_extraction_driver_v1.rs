@@ -104,7 +104,7 @@ fn run_extraction(target: &ScratchTarget) -> String {
     let preflight_sha256 = preflight_plan_sha256(&stderr);
     let semantic_sha256 = semantic_mir_sha256(&stderr);
     let expected_milestone = format!(
-        "semantic importer authenticated rustc identity inventory {inventory_sha256} and bounded preflight plan {preflight_sha256}, then admitted one complete semantic MIR request with 1 function(s), 3 callable(s), and canonical identity {semantic_sha256}; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
+        "production-v1 semantic importer authenticated rustc identity inventory {inventory_sha256} and bounded preflight plan {preflight_sha256}, then admitted one complete semantic MIR request with 1 function(s), 3 callable(s), and canonical identity {semantic_sha256}; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
     );
     assert!(
         stderr.contains(&expected_milestone),

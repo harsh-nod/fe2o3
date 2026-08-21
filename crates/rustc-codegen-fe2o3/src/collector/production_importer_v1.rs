@@ -149,30 +149,6 @@ struct ProductionSemanticIdentityInventoryV1<'tcx> {
     sha256: [u8; 32],
 }
 
-/// Consumes the collector-sealed closure and authenticates the live rustc
-/// session before any type, layout, FnAbi, or MIR fact can enter production.
-///
-/// The diagnostic wrapper preserves the extraction driver's fail-closed API;
-/// the production transaction calls `construct_production_semantic_mir_v1`
-/// directly and retains the admitted move-only owner in its next stage.
-pub(crate) fn require_production_semantic_import_v1<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
-) -> ProductionSemanticImportErrorV1 {
-    match construct_production_semantic_mir_v1(tcx, closure) {
-        Ok((semantic_mir, rustc_identity_inventory_sha256, rustc_preflight_plan_sha256)) => {
-            ProductionSemanticImportErrorV1::SemanticMiddleEndPending {
-                functions: semantic_mir.functions().len(),
-                callables: semantic_mir.callables().len(),
-                rustc_identity_inventory_sha256,
-                rustc_preflight_plan_sha256,
-                semantic_sha256: *semantic_mir.semantic_sha256().as_bytes(),
-            }
-        }
-        Err(error) => error,
-    }
-}
-
 pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
