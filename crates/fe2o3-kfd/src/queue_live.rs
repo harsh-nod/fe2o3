@@ -64,7 +64,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_batch_reservation_schema_sha256=0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83\n",
     "aql_completion_schema_sha256=be1bdd6a05d19f0d269f7e72d6ade2b7918157bfebad2b01466a600f24a22c47\n",
-    "dispatch_binding_schema_sha256=bb8fe615e449e086e84bf04d05b1ba51f692f7143fc140338e62d1a9027fe8a1\n",
+    "dispatch_binding_schema_sha256=ed54cf521e2a19c549a71133d5a7e3cb11d1da8203bc63140ac06ee814497603\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -93,7 +93,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "67567cd75e9232bad18a84bd3ff11d1e45a02337c4877a1abbe69eb9e1d6b888";
+    "1e4d5da95fb6312022e6f0876f217aebd7671ddf1437e55115339f7a40864499";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,

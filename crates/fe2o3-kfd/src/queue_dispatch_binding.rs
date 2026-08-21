@@ -35,20 +35,20 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=validated-amdhsa-kernel-envelope,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=private-typed-complete-image,exact-selected-size-and-power-of-two-alignment,checked-nonoverlapping-8-byte-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,initialized-before-map\n",
-    "data=1-through-16-actual-linear-c3-mapped-device-memory-leases,exact-device-vm-generation-and-whole-allocation-nonalias,checked-valid-byte-extents,read-requires-reviewed-initialization-premise,declared-read-write-effects-retained\n",
+    "data=1-through-16-actual-linear-c3-mapped-device-memory-leases,exact-device-vm-generation-and-whole-allocation-nonalias,checked-valid-byte-extents,write-only-until-authenticated-copy-completion-authority-exists,declared-effects-retained\n",
     "batch=1-through-256,one-code-owner,N-distinct-kernarg-owners,one-generation-bound-private-template-per-packet,C2-one-reservation-one-doorbell-and-C4-one-signal-per-packet-composition\n",
     "retention=queue-owns-code-kernarg-and-device-leases-through-exact-C4-ready-and-recycle,release-only-after-queue-destroy-and-model-restoration\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
     "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
     "authority=crate-private-preparation-bind-submit-poll-wait-recycle,no-public-constructor,no-address-handle-pointer-fd-kernarg-byte-or-generic-launch-export\n",
     "proof=bounded-host-state-machine-and-mock-fault-tests-only,no-concrete-verus-or-machine-refinement\n",
-    "contracted=device-data-copy-initialization-premise,code-segment-permission-refinement,implicit-kernarg-producer,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence\n",
+    "contracted=code-segment-permission-refinement,implicit-kernarg-producer,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence\n",
     "excluded=public-safe-launch,public-packet-template,async-copy,device-address-export,alias-suballocation,peer-map,hardware-execution\n",
 );
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "bb8fe615e449e086e84bf04d05b1ba51f692f7143fc140338e62d1a9027fe8a1";
+    "ed54cf521e2a19c549a71133d5a7e3cb11d1da8203bc63140ac06ee814497603";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -74,16 +74,16 @@ impl DeviceDataEffectV1 {
     }
 }
 
-/// Reviewed premise for one whole C3 allocation.
+/// Write-only premise for one whole uninitialized C3 allocation.
 ///
-/// Construction is crate-private and currently has no production caller. A
-/// future copy/initialization bridge must mint it only after exact completion.
+/// Read effects remain rejected until the device-content foundation can
+/// consume an authenticated copy-kernel completion and the queue can return
+/// its retained destination lease. There is intentionally no caller boolean.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DeviceDataPremiseV1 {
     role_identity: [u8; 32],
     valid_bytes: u64,
     effect: DeviceDataEffectV1,
-    initialized: bool,
 }
 
 impl DeviceDataPremiseV1 {
@@ -91,13 +91,11 @@ impl DeviceDataPremiseV1 {
         role_identity: [u8; 32],
         valid_bytes: u64,
         effect: DeviceDataEffectV1,
-        initialized: bool,
     ) -> Self {
         Self {
             role_identity,
             valid_bytes,
             effect,
-            initialized,
         }
     }
 }
@@ -326,7 +324,6 @@ struct RetainedDataPremiseV1 {
     role_identity: [u8; 32],
     valid_bytes: u64,
     effect: DeviceDataEffectV1,
-    initialized: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -672,7 +669,6 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
             role_identity: premise.role_identity,
             valid_bytes: premise.valid_bytes,
             effect: premise.effect,
-            initialized: premise.initialized,
         });
         data_authorities.push(authority);
     }
@@ -825,10 +821,10 @@ fn validate_data_inputs(
                 detail: "valid byte extent",
             });
         }
-        if premise.effect.reads() && !premise.initialized {
+        if premise.effect.reads() {
             return Err(Gfx942DispatchBindingErrorV1::InvalidData {
                 index,
-                detail: "read without initialization premise",
+                detail: "read requires authenticated initialized-content authority",
             });
         }
         if data[..index]
@@ -960,8 +956,8 @@ fn ranges_overlap_usize(left: usize, left_len: usize, right: usize, right_len: u
 mod tests {
     use super::*;
 
-    fn premise(seed: u8, effect: DeviceDataEffectV1, initialized: bool) -> DeviceDataPremiseV1 {
-        DeviceDataPremiseV1::new([seed; 32], 4096, effect, initialized)
+    fn premise(seed: u8, effect: DeviceDataEffectV1) -> DeviceDataPremiseV1 {
+        DeviceDataPremiseV1::new([seed; 32], 4096, effect)
     }
 
     fn typed(bytes: usize, patches: impl Into<Box<[DevicePointerPatchV1]>>) -> TypedKernargImageV1 {
@@ -1008,21 +1004,11 @@ mod tests {
             Err(Gfx942DispatchBindingErrorV1::DataLeaseCount { .. })
         ));
         let sixteen: Vec<_> = (1..=16)
-            .map(|seed| {
-                fake_input(
-                    seed,
-                    premise(seed as u8, DeviceDataEffectV1::WriteOnly, false),
-                )
-            })
+            .map(|seed| fake_input(seed, premise(seed as u8, DeviceDataEffectV1::WriteOnly)))
             .collect();
         assert!(validate_data_inputs(&sixteen).is_ok());
         let seventeen: Vec<_> = (1..=17)
-            .map(|seed| {
-                fake_input(
-                    seed,
-                    premise(seed as u8, DeviceDataEffectV1::WriteOnly, false),
-                )
-            })
+            .map(|seed| fake_input(seed, premise(seed as u8, DeviceDataEffectV1::WriteOnly)))
             .collect();
         assert!(matches!(
             validate_data_inputs(&seventeen),
@@ -1034,24 +1020,21 @@ mod tests {
     fn data_premises_reject_uninitialized_reads_and_identity_aliases() {
         for effect in [DeviceDataEffectV1::ReadOnly, DeviceDataEffectV1::ReadWrite] {
             assert!(matches!(
-                validate_data_inputs(&[fake_input(1, premise(1, effect, false))]),
+                validate_data_inputs(&[fake_input(1, premise(1, effect))]),
                 Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                    detail: "read without initialization premise",
+                    detail: "read requires authenticated initialized-content authority",
                     ..
                 })
             ));
         }
         assert!(
-            validate_data_inputs(&[fake_input(
-                1,
-                premise(1, DeviceDataEffectV1::WriteOnly, false)
-            )])
-            .is_ok()
+            validate_data_inputs(&[fake_input(1, premise(1, DeviceDataEffectV1::WriteOnly))])
+                .is_ok()
         );
         assert!(matches!(
             validate_data_inputs(&[
-                fake_input(1, premise(7, DeviceDataEffectV1::ReadOnly, true)),
-                fake_input(2, premise(7, DeviceDataEffectV1::WriteOnly, false)),
+                fake_input(1, premise(7, DeviceDataEffectV1::WriteOnly)),
+                fake_input(2, premise(7, DeviceDataEffectV1::WriteOnly)),
             ]),
             Err(Gfx942DispatchBindingErrorV1::InvalidData {
                 detail: "role identity alias",
@@ -1063,8 +1046,8 @@ mod tests {
     #[test]
     fn typed_pointer_layout_is_complete_bounded_and_nonoverlapping() {
         let data = [
-            fake_input(1, premise(1, DeviceDataEffectV1::ReadOnly, true)),
-            fake_input(2, premise(2, DeviceDataEffectV1::WriteOnly, false)),
+            fake_input(1, premise(1, DeviceDataEffectV1::WriteOnly)),
+            fake_input(2, premise(2, DeviceDataEffectV1::WriteOnly)),
         ];
         let valid = typed(
             32,
@@ -1099,8 +1082,8 @@ mod tests {
     #[test]
     fn every_data_lease_must_be_referenced_by_every_batch_shape() {
         let data = [
-            fake_input(1, premise(1, DeviceDataEffectV1::ReadOnly, true)),
-            fake_input(2, premise(2, DeviceDataEffectV1::WriteOnly, false)),
+            fake_input(1, premise(1, DeviceDataEffectV1::WriteOnly)),
+            fake_input(2, premise(2, DeviceDataEffectV1::WriteOnly)),
         ];
         let only_first = typed(16, vec![DevicePointerPatchV1::new(0, 0, 0, 8, 8)]);
         assert!(matches!(

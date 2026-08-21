@@ -35,6 +35,9 @@ pub(crate) mod completion;
 #[path = "queue_dispatch_binding.rs"]
 pub(crate) mod dispatch_binding;
 
+#[path = "queue_device_content.rs"]
+pub(crate) mod device_content;
+
 pub use completion::{
     GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1, GFX942_AQL_COMPLETION_MANIFEST_V1,
     Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
@@ -45,6 +48,12 @@ pub use dispatch_binding::{
     GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1, GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1,
     Gfx942CompletedDispatchBatchV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
     Gfx942DispatchPollV1,
+};
+
+pub use device_content::{
+    GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_SHA256_V1,
+    GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1, Gfx942DeviceContentDescriptorErrorV1,
+    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1,
 };
 
 pub use live::{
