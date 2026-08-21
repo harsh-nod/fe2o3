@@ -1978,6 +1978,10 @@ fn find_or_build_backend(
         .arg(backend_target.fixed_child_path(BACKEND_BUILD_CHILD_FD)?)
         .args(["-p", "rustc-codegen-fe2o3"])
         .current_dir(&source_root)
+        // The backend is an internal compiler plugin, not a debuggable user artifact. Limited
+        // line-table information keeps the pinned image and its bounded hashing work stable as
+        // target-neutral analysis dependencies grow.
+        .env("CARGO_PROFILE_DEV_DEBUG", "1")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("CARGO_TARGET_DIR")

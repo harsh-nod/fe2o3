@@ -96,6 +96,10 @@ fn is_backend_build(args: &[OsString]) -> bool {
 }
 
 fn backend_build(args: &[OsString]) -> ExitCode {
+    if env::var_os("CARGO_PROFILE_DEV_DEBUG").as_deref() != Some(OsStr::new("1")) {
+        eprintln!("fake backend build requires the exact limited-debug profile");
+        return ExitCode::FAILURE;
+    }
     let Some(index) = args.iter().position(|argument| argument == "--target-dir") else {
         eprintln!("fake backend build has no isolated target directory");
         return ExitCode::FAILURE;

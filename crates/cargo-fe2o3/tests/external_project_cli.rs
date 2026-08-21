@@ -824,7 +824,9 @@ fn managed_selector_stays_child_only_after_backend_source_replacement() {
 fn source_backend_build_uses_an_isolated_external_target() {
     let fixture = ProjectFixture::standalone();
     let mut command = fixture.command(&[OsString::from("build")]);
-    command.env_remove("FE2O3_BACKEND");
+    command
+        .env_remove("FE2O3_BACKEND")
+        .env("CARGO_PROFILE_DEV_DEBUG", "0");
 
     let output = command.output().expect("run isolated source backend build");
     assert!(

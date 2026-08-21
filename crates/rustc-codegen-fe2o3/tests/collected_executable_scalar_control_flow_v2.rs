@@ -639,6 +639,7 @@ fn build_collection_backend(workspace: &Path) -> &'static PinnedBackend {
             .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
             .arg("--target-dir")
             .arg(&target_dir)
+            .env("CARGO_PROFILE_DEV_DEBUG", "1")
             .env_remove("CARGO_TARGET_DIR")
             .env("CARGO_INCREMENTAL", "0");
         let output = run_bounded(
@@ -2955,6 +2956,7 @@ fn build_and_pin_broker(
     }
     backend_command
         .env("CARGO_TARGET_DIR", cargo_target)
+        .env("CARGO_PROFILE_DEV_DEBUG", "1")
         .env(
             "FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1",
             encode_lower_hex(
@@ -3504,6 +3506,7 @@ fn isolated_backend_build_helper() {
         .current_dir(&workspace)
         .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
         .env("CARGO_TARGET_DIR", &target_dir)
+        .env("CARGO_PROFILE_DEV_DEBUG", "1")
         .env("CARGO_INCREMENTAL", "0");
     let output = run_bounded(
         &mut command,
