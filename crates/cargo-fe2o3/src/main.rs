@@ -9,6 +9,7 @@ mod capability_broker;
 mod cargo_binding_trampoline;
 mod cargo_invocation_boundary;
 mod clean;
+mod compiler_closure_capability;
 #[cfg(feature = "compiler-handoff-observation-test-only")]
 mod compiler_handoff_observation;
 mod compiler_toolchain;
@@ -78,6 +79,7 @@ const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
 const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
+const COMPILER_CLOSURE_CHILD_FD: std::os::fd::RawFd = 195;
 const ARTIFACT_CHILD_FD: std::os::fd::RawFd =
     fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
 const BACKEND_CHILD_FD: std::os::fd::RawFd =
@@ -597,6 +599,7 @@ struct BackendRunContext {
     _worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
     worker_v2_identity: Option<worker_v2::WorkerV2ConfigIdentity>,
     compiler_closure_sha256: [u8; 32],
+    protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
     target_dir: project::PinnedDirectory,
     generation: generation::PreparedGeneration,
     managed_rustc_args: OsString,
@@ -743,6 +746,7 @@ impl BackendRunContext {
             _worker_v2: worker_v2,
             worker_v2_identity,
             compiler_closure_sha256,
+            protected_compiler_closure: protected_closure,
             target_dir,
             generation,
             managed_rustc_args,
@@ -842,22 +846,40 @@ fn run_cargo_with_backend(
         rustc_lib_tree_stat.st_ino,
         rustc_lib_tree_stat.st_mode,
     );
-    let capability_binding = capability_broker::CapabilityBindingV2::new(
-        capability_profile,
-        context
-            .worker_v2_identity
-            .map(|identity| *identity.as_bytes()),
-        context.compiler_closure_sha256,
-        *context.pinned_rustc.executable.sha256(),
-        retained_object_binding_sha256,
-    )?;
-    let capability_broker = capability_broker::CapabilityBroker::start(
-        context.build_session,
-        capability_binding,
-        &context.pinned_backend,
-        artifact_dir,
-        &context.pinned_cargo,
-    )?;
+    let config_identity = context
+        .worker_v2_identity
+        .map(|identity| *identity.as_bytes());
+    let capability_broker = if let Some(compiler_closure) = context.protected_compiler_closure {
+        let binding = capability_broker::CapabilityBindingV3::new_protected(
+            capability_profile,
+            config_identity,
+            compiler_closure,
+            retained_object_binding_sha256,
+        )?;
+        capability_broker::CapabilityBroker::start_protected(
+            context.build_session,
+            binding,
+            compiler_closure,
+            &context.pinned_backend,
+            artifact_dir,
+            &context.pinned_cargo,
+        )?
+    } else {
+        let binding = capability_broker::CapabilityBindingV3::new(
+            capability_profile,
+            config_identity,
+            context.compiler_closure_sha256,
+            *context.pinned_rustc.executable.sha256(),
+            retained_object_binding_sha256,
+        )?;
+        capability_broker::CapabilityBroker::start(
+            context.build_session,
+            binding,
+            &context.pinned_backend,
+            artifact_dir,
+            &context.pinned_cargo,
+        )?
+    };
     let invocation_authorization = capability_broker.invocation_authorization();
     let pending_invocation_boundary =
         cargo_invocation_boundary::PendingCargoInvocationBoundary::start(

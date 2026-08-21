@@ -66,8 +66,8 @@ use crate::worker_v2_restart::{
     restart_admission_commitment_with_inputs_v1,
 };
 use crate::{
-    ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV, RUSTC_CHILD_FD,
-    RUSTC_LIBRARY_CHILD_FD,
+    ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, COMPILER_CLOSURE_CHILD_FD, MANAGED_RUSTC_ARGS_ENV,
+    RUSTC_CHILD_FD, RUSTC_LIBRARY_CHILD_FD,
 };
 
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
@@ -393,7 +393,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 reject_authority_linker_arguments(compile.argv())?;
             }
             let capability_binding =
-                capability_broker::CapabilityBindingV2::from_environment_for_client(
+                capability_broker::CapabilityBindingV3::from_environment_for_client(
                     capability_profile,
                     worker_v2
                         .as_ref()
@@ -855,7 +855,7 @@ fn authenticate_pinned_rustc(
 }
 
 fn validate_rustc_lib_tree_descriptor(
-    binding: capability_broker::CapabilityBindingV2,
+    binding: capability_broker::CapabilityBindingV3,
 ) -> Result<(), BindingWrapperError> {
     // SAFETY: Cargo must inherit this fixed descriptor from the parent. fstat/fcntl do not take
     // ownership, and the descriptor remains live through the rustc transition.
@@ -2264,9 +2264,10 @@ fn validate_expected_worker_v2_identity(
 }
 
 struct CompilerCapabilities {
-    binding: capability_broker::CapabilityBindingV2,
+    binding: capability_broker::CapabilityBindingV3,
     backend: PinnedCodegenBackend,
     artifact: PinnedDirectory,
+    compiler_closure: Option<crate::compiler_closure_capability::CompilerClosureCapabilityV1>,
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
     output_dir: PathBuf,
     pinned_cargo_image_sha256: Option<[u8; 32]>,
@@ -2274,7 +2275,7 @@ struct CompilerCapabilities {
 
 impl CompilerCapabilities {
     fn from_environment(
-        binding: capability_broker::CapabilityBindingV2,
+        binding: capability_broker::CapabilityBindingV3,
     ) -> Result<Self, BindingWrapperError> {
         let mut transferred = capability_broker::receive(managed_build_session()?, binding)
             .map_err(BindingWrapperError::CapabilityBroker)?;
@@ -2297,11 +2298,36 @@ impl CompilerCapabilities {
             .pinned_cargo_image
             .as_ref()
             .map(|image| *image.sha256());
+        let compiler_closure = transferred.compiler_closure.take();
+        if binding.requires_compiler_closure_v2() != compiler_closure.is_some() {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "brokered compiler-closure descriptor presence differs from the authenticated binding"
+                    .to_owned(),
+            ));
+        }
+        if let Some(capability) = &compiler_closure {
+            capability
+                .revalidate()
+                .map_err(BindingWrapperError::CapabilityBroker)?;
+            let closure = capability.closure();
+            if closure.identity_sha256() != binding.compiler_closure_sha256()
+                || closure.rustc_executable_sha256() != binding.rustc_executable_sha256()
+                || closure.codegen_backend_sha256() != *transferred.backend.sha256()
+                || pinned_cargo_image_sha256
+                    .is_some_and(|cargo| closure.cargo_executable_sha256() != cargo)
+            {
+                return Err(BindingWrapperError::CapabilityBroker(
+                    "brokered compiler closure differs from the retained compiler capabilities"
+                        .to_owned(),
+                ));
+            }
+        }
         let output_dir = transferred.artifact.child_path();
         Ok(Self {
             binding,
             backend: transferred.backend,
             artifact: transferred.artifact,
+            compiler_closure,
             invocation_authority,
             output_dir,
             pinned_cargo_image_sha256,
@@ -2376,6 +2402,11 @@ impl CompilerCapabilities {
             crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
             hex(&self.compiler_closure_sha256()),
         );
+        if let Some(compiler_closure) = &self.compiler_closure {
+            compiler_closure
+                .inherit_for_child_at(command, COMPILER_CLOSURE_CHILD_FD)
+                .map_err(BindingWrapperError::ChildCapability)?;
+        }
         if let Some(authority) = &self.invocation_authority {
             authority
                 .inherit_for_child(command)

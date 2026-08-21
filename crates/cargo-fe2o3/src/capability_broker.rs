@@ -4,9 +4,11 @@
 //! credentials, exact executable identity, the prepared profile/config identity, and a
 //! challenge-response bound to a separate 256-bit broker secret before transferring a
 //! sealed backend image and a read-only artifact-directory descriptor with `SCM_RIGHTS`. The
-//! explicit S09 profile additionally receives an observed pinned Cargo image. Receivers validate
-//! the exact profile-specific descriptor count and positional types before installing capabilities
-//! in the caller-selected compiler process for a compile-shaped wrapper invocation.
+//! explicit S09 profile additionally receives an observed pinned Cargo image. A protected release
+//! also receives one sealed descriptor carrying the complete admitted compiler-closure preimage.
+//! Receivers validate the exact profile-specific descriptor count and positional types before
+//! installing capabilities in the caller-selected compiler process for a compile-shaped wrapper
+//! invocation.
 //!
 //! An independent seccomp exec boundary additionally grants a one-use broker permit only to a
 //! direct Cargo child stopped while requesting the pinned wrapper image. Inherited route material
@@ -55,15 +57,16 @@ mod platform {
     use sha2::{Digest, Sha256};
 
     use crate::cargo_invocation_boundary::{InvocationAuthorizationRegistryV1, ProcessIdentityV1};
+    use crate::compiler_closure_capability::CompilerClosureCapabilityV1;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
-    const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V2\0";
-    const S09_REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-09\0";
+    const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V3\0";
+    const S09_REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-10\0";
     const _: () = assert!(REQUEST_MAGIC.len() == S09_REQUEST_MAGIC.len());
-    const ROUTE_PREFIX: &str = "fe2o3-capability-route-v2";
+    const ROUTE_PREFIX: &str = "fe2o3-capability-route-v3";
     const ENDPOINT_BYTES: usize = 32;
     const ENDPOINT_HEX_BYTES: usize = ENDPOINT_BYTES * 2;
     const SECRET_BYTES: usize = 32;
@@ -77,14 +80,15 @@ mod platform {
         + 16
         + 1
         + CONFIG_ID_BYTES
+        + 1
         + COMPILER_CLOSURE_ID_BYTES
         + RUSTC_EXECUTABLE_ID_BYTES
         + RETAINED_OBJECT_BINDING_BYTES
         + CHALLENGE_BYTES
         + REQUEST_AUTH_BYTES;
     const RESPONSE_BYTES: usize = 1 + REQUEST_AUTH_BYTES;
-    const REQUEST_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/REQUEST-AUTH/V2\0";
-    const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V2\0";
+    const REQUEST_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/REQUEST-AUTH/V3\0";
+    const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V3\0";
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 199;
@@ -163,15 +167,16 @@ mod platform {
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub(crate) struct CapabilityBindingV2 {
+    pub(crate) struct CapabilityBindingV3 {
         profile: CapabilityProfileV1,
         config_identity: Option<[u8; CONFIG_ID_BYTES]>,
+        protected_compiler_closure_v2: bool,
         compiler_closure_sha256: [u8; COMPILER_CLOSURE_ID_BYTES],
         rustc_executable_sha256: [u8; RUSTC_EXECUTABLE_ID_BYTES],
         retained_object_binding_sha256: [u8; RETAINED_OBJECT_BINDING_BYTES],
     }
 
-    impl CapabilityBindingV2 {
+    impl CapabilityBindingV3 {
         pub(crate) fn new(
             profile: CapabilityProfileV1,
             config_identity: Option<[u8; CONFIG_ID_BYTES]>,
@@ -191,10 +196,28 @@ mod platform {
             Ok(Self {
                 profile,
                 config_identity,
+                protected_compiler_closure_v2: false,
                 compiler_closure_sha256,
                 rustc_executable_sha256,
                 retained_object_binding_sha256,
             })
+        }
+
+        pub(crate) fn new_protected(
+            profile: CapabilityProfileV1,
+            config_identity: Option<[u8; CONFIG_ID_BYTES]>,
+            compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            retained_object_binding_sha256: [u8; RETAINED_OBJECT_BINDING_BYTES],
+        ) -> Result<Self, String> {
+            let mut binding = Self::new(
+                profile,
+                config_identity,
+                compiler_closure.identity_sha256(),
+                compiler_closure.rustc_executable_sha256(),
+                retained_object_binding_sha256,
+            )?;
+            binding.protected_compiler_closure_v2 = true;
+            Ok(binding)
         }
 
         pub(crate) fn from_environment_for_client(
@@ -204,7 +227,7 @@ mod platform {
             let encoded_route = std::env::var(CAPABILITY_BROKER_ENV).map_err(|_| {
                 format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}")
             })?;
-            let route = BrokerRouteV2::parse(&encoded_route)?;
+            let route = BrokerRouteV3::parse(&encoded_route)?;
             if route.binding.profile != profile || route.binding.config_identity != config_identity
             {
                 return Err("capability broker route has the wrong profile/config identity".into());
@@ -214,6 +237,14 @@ mod platform {
 
         pub(crate) const fn compiler_closure_sha256(self) -> [u8; 32] {
             self.compiler_closure_sha256
+        }
+
+        pub(crate) const fn requires_compiler_closure_v2(self) -> bool {
+            self.protected_compiler_closure_v2
+        }
+
+        const fn descriptor_count(self) -> usize {
+            self.profile.descriptor_count() + self.protected_compiler_closure_v2 as usize
         }
 
         pub(crate) const fn rustc_executable_sha256(self) -> [u8; 32] {
@@ -384,17 +415,17 @@ mod platform {
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
-    struct BrokerRouteV2 {
+    struct BrokerRouteV3 {
         endpoint: String,
         secret: [u8; SECRET_BYTES],
-        binding: CapabilityBindingV2,
+        binding: CapabilityBindingV3,
         peer: BrokerPeerIdentityV2,
     }
 
-    impl BrokerRouteV2 {
+    impl BrokerRouteV3 {
         fn encode(&self) -> String {
             format!(
-                "{ROUTE_PREFIX}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{:x}:{:x}:{:x}:{}",
+                "{ROUTE_PREFIX}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{:x}:{:x}:{:x}:{}",
                 self.endpoint,
                 hex(&self.secret),
                 self.binding.profile.route_name(),
@@ -402,6 +433,11 @@ mod platform {
                     .config_identity
                     .map(|identity| hex(&identity))
                     .unwrap_or_else(|| "-".to_owned()),
+                if self.binding.protected_compiler_closure_v2 {
+                    "v2"
+                } else {
+                    "-"
+                },
                 hex(&self.binding.compiler_closure_sha256),
                 hex(&self.binding.rustc_executable_sha256),
                 hex(&self.binding.retained_object_binding_sha256),
@@ -417,8 +453,8 @@ mod platform {
 
         fn parse(value: &str) -> Result<Self, String> {
             let fields = value.split(':').collect::<Vec<_>>();
-            if fields.len() != 15 || fields[0] != ROUTE_PREFIX {
-                return Err("capability broker route is not canonical V2".into());
+            if fields.len() != 16 || fields[0] != ROUTE_PREFIX {
+                return Err("capability broker route is not canonical V3".into());
             }
             let endpoint = fields[1].to_owned();
             endpoint_address(&endpoint)?;
@@ -430,28 +466,34 @@ mod platform {
             } else {
                 Some(decode_fixed_hex(fields[4], "config identity")?)
             };
-            let compiler_closure_sha256 = decode_fixed_hex(fields[5], "compiler closure digest")?;
-            let rustc_executable_sha256 = decode_fixed_hex(fields[6], "rustc executable digest")?;
+            let protected_compiler_closure_v2 = match fields[5] {
+                "-" => false,
+                "v2" => true,
+                _ => return Err("capability broker route has an unknown closure schema".into()),
+            };
+            let compiler_closure_sha256 = decode_fixed_hex(fields[6], "compiler closure digest")?;
+            let rustc_executable_sha256 = decode_fixed_hex(fields[7], "rustc executable digest")?;
             let retained_object_binding_sha256 =
-                decode_fixed_hex(fields[7], "retained object binding digest")?;
-            let binding = CapabilityBindingV2::new(
+                decode_fixed_hex(fields[8], "retained object binding digest")?;
+            let mut binding = CapabilityBindingV3::new(
                 profile,
                 config_identity,
                 compiler_closure_sha256,
                 rustc_executable_sha256,
                 retained_object_binding_sha256,
             )?;
+            binding.protected_compiler_closure_v2 = protected_compiler_closure_v2;
             let peer = BrokerPeerIdentityV2 {
-                uid: u32::try_from(parse_canonical_decimal(fields[8], "peer uid", true)?)
+                uid: u32::try_from(parse_canonical_decimal(fields[9], "peer uid", true)?)
                     .map_err(|_| "capability broker peer uid exceeds u32".to_owned())?,
-                pid: u32::try_from(parse_canonical_decimal(fields[9], "peer pid", false)?)
+                pid: u32::try_from(parse_canonical_decimal(fields[10], "peer pid", false)?)
                     .map_err(|_| "capability broker peer pid exceeds u32".to_owned())?,
-                start_time_ticks: parse_canonical_decimal(fields[10], "peer start time", false)?,
-                device: parse_canonical_hex(fields[11], "peer device")?,
-                inode: parse_canonical_hex(fields[12], "peer inode")?,
-                mode: u32::try_from(parse_canonical_hex(fields[13], "peer mode")?)
+                start_time_ticks: parse_canonical_decimal(fields[11], "peer start time", false)?,
+                device: parse_canonical_hex(fields[12], "peer device")?,
+                inode: parse_canonical_hex(fields[13], "peer inode")?,
+                mode: u32::try_from(parse_canonical_hex(fields[14], "peer mode")?)
                     .map_err(|_| "capability broker peer mode exceeds u32".to_owned())?,
-                executable_sha256: decode_fixed_hex(fields[14], "peer executable digest")?,
+                executable_sha256: decode_fixed_hex(fields[15], "peer executable digest")?,
             };
             let route = Self {
                 endpoint,
@@ -966,7 +1008,7 @@ mod platform {
     impl CapabilityBroker {
         pub(crate) fn start(
             session: BuildSession,
-            binding: CapabilityBindingV2,
+            binding: CapabilityBindingV3,
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
@@ -981,9 +1023,48 @@ mod platform {
             )
         }
 
+        pub(crate) fn start_protected(
+            session: BuildSession,
+            binding: CapabilityBindingV3,
+            compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            backend: &PinnedCodegenBackend,
+            artifact: &PinnedDirectory,
+            pinned_cargo_image: &PinnedExecutable,
+        ) -> Result<Self, String> {
+            Self::start_with_compiler_closure(
+                session,
+                binding,
+                Some(compiler_closure),
+                backend,
+                artifact,
+                pinned_cargo_image,
+                PRODUCTION_BROKER_LIMITS,
+            )
+        }
+
         fn start_with_limits(
             session: BuildSession,
-            binding: CapabilityBindingV2,
+            binding: CapabilityBindingV3,
+            backend: &PinnedCodegenBackend,
+            artifact: &PinnedDirectory,
+            pinned_cargo_image: &PinnedExecutable,
+            limits: BrokerLimits,
+        ) -> Result<Self, String> {
+            Self::start_with_compiler_closure(
+                session,
+                binding,
+                None,
+                backend,
+                artifact,
+                pinned_cargo_image,
+                limits,
+            )
+        }
+
+        fn start_with_compiler_closure(
+            session: BuildSession,
+            binding: CapabilityBindingV3,
+            compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
@@ -996,6 +1077,26 @@ mod platform {
             {
                 return Err("capability broker limits must be nonzero".to_owned());
             }
+            if binding.requires_compiler_closure_v2() != compiler_closure.is_some() {
+                return Err(
+                    "capability binding and compiler-closure descriptor presence differ".to_owned(),
+                );
+            }
+            let compiler_closure = compiler_closure
+                .map(|closure| {
+                    if closure.identity_sha256() != binding.compiler_closure_sha256()
+                        || closure.rustc_executable_sha256() != binding.rustc_executable_sha256()
+                        || closure.codegen_backend_sha256() != *backend.sha256()
+                        || closure.cargo_executable_sha256() != *pinned_cargo_image.sha256()
+                    {
+                        return Err(
+                            "compiler-closure descriptor differs from broker-retained images"
+                                .to_owned(),
+                        );
+                    }
+                    CompilerClosureCapabilityV1::create(closure)
+                })
+                .transpose()?;
             #[cfg(test)]
             let test_permit = TestBrokerPermit::acquire();
             let endpoint = random_endpoint().map_err(|error| {
@@ -1024,7 +1125,7 @@ mod platform {
             })?;
             let secret = random_bytes()
                 .map_err(|error| format!("failed to allocate capability broker secret: {error}"))?;
-            let route = BrokerRouteV2 {
+            let route = BrokerRouteV3 {
                 endpoint,
                 secret,
                 binding,
@@ -1047,6 +1148,7 @@ mod platform {
                         backend,
                         artifact,
                         pinned_cargo_image,
+                        compiler_closure,
                         authentication_timeout: limits.authentication_timeout,
                         invocation_frame_timeout: limits.invocation_frame_timeout,
                         invocation_lifetime: limits.invocation_lifetime,
@@ -1090,6 +1192,7 @@ mod platform {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
         pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
+        pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
     }
 
@@ -1188,18 +1291,18 @@ mod platform {
 
     pub(crate) fn receive(
         session: BuildSession,
-        binding: CapabilityBindingV2,
+        binding: CapabilityBindingV3,
     ) -> Result<BrokeredCapabilities, String> {
         let encoded_route = std::env::var(CAPABILITY_BROKER_ENV)
             .map_err(|_| format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}"))?;
-        let route = BrokerRouteV2::parse(&encoded_route)?;
+        let route = BrokerRouteV3::parse(&encoded_route)?;
         receive_from(&route, session, binding)
     }
 
     fn receive_from(
-        route: &BrokerRouteV2,
+        route: &BrokerRouteV3,
         session: BuildSession,
-        binding: CapabilityBindingV2,
+        binding: CapabilityBindingV3,
     ) -> Result<BrokeredCapabilities, String> {
         if route.binding != binding {
             return Err(
@@ -1244,7 +1347,7 @@ mod platform {
                 descriptors.extend(received);
             }
         }
-        let mut capabilities = decode_received_descriptors(descriptors, binding.profile)?;
+        let mut capabilities = decode_received_descriptors(descriptors, binding)?;
         capabilities.invocation_authority = Some(
             BrokeredInvocationAuthorityV1::from_authenticated_stream(stream)?,
         );
@@ -1253,17 +1356,37 @@ mod platform {
 
     fn decode_received_descriptors(
         mut descriptors: Vec<OwnedFd>,
-        profile: CapabilityProfileV1,
+        binding: CapabilityBindingV3,
     ) -> Result<BrokeredCapabilities, String> {
-        if descriptors.len() != profile.descriptor_count() {
+        if descriptors.len() != binding.descriptor_count() {
             return Err(format!(
                 "capability broker returned {} descriptors instead of {} for the {} profile",
                 descriptors.len(),
-                profile.descriptor_count(),
-                profile.name(),
+                binding.descriptor_count(),
+                binding.profile.name(),
             ));
         }
-        let pinned_cargo_image = if profile == CapabilityProfileV1::S09 {
+        let compiler_closure = if binding.requires_compiler_closure_v2() {
+            let image = normalize_received_descriptor(
+                descriptors
+                    .pop()
+                    .expect("compiler-closure descriptor count checked"),
+                "compiler closure",
+            )?;
+            let capability = CompilerClosureCapabilityV1::from_file(image)?;
+            if capability.closure().identity_sha256() != binding.compiler_closure_sha256()
+                || capability.closure().rustc_executable_sha256()
+                    != binding.rustc_executable_sha256()
+            {
+                return Err(
+                    "brokered compiler closure differs from the authenticated binding".to_owned(),
+                );
+            }
+            Some(capability)
+        } else {
+            None
+        };
+        let pinned_cargo_image = if binding.profile == CapabilityProfileV1::S09 {
             let image = normalize_received_descriptor(
                 descriptors.pop().expect("S09 descriptor count checked"),
                 "pinned Cargo image observation",
@@ -1295,6 +1418,7 @@ mod platform {
             backend,
             artifact,
             pinned_cargo_image,
+            compiler_closure,
             invocation_authority: None,
         })
     }
@@ -1314,12 +1438,13 @@ mod platform {
     struct BrokerServer {
         listener: UnixListener,
         session: BuildSession,
-        binding: CapabilityBindingV2,
+        binding: CapabilityBindingV3,
         secret: [u8; SECRET_BYTES],
         executable: BrokerPeerIdentityV2,
         backend: File,
         artifact: File,
         pinned_cargo_image: File,
+        compiler_closure: Option<CompilerClosureCapabilityV1>,
         authentication_timeout: Duration,
         invocation_frame_timeout: Duration,
         invocation_lifetime: Duration,
@@ -1432,6 +1557,7 @@ mod platform {
                 + 16
                 + 1
                 + CONFIG_ID_BYTES
+                + 1
                 + COMPILER_CLOSURE_ID_BYTES
                 + RUSTC_EXECUTABLE_ID_BYTES
                 + RETAINED_OBJECT_BINDING_BYTES;
@@ -1469,6 +1595,15 @@ mod platform {
             let mut descriptors = vec![self.backend.as_fd(), self.artifact.as_fd()];
             if let Some(pinned_cargo_image) = &pinned_cargo_image {
                 descriptors.push(pinned_cargo_image.as_fd());
+            }
+            let compiler_closure = self
+                .compiler_closure
+                .as_ref()
+                .map(CompilerClosureCapabilityV1::try_clone_for_transfer)
+                .transpose()
+                .map_err(io::Error::other)?;
+            if let Some(compiler_closure) = &compiler_closure {
+                descriptors.push(compiler_closure.as_fd());
             }
             let response = response_bytes(&self.secret, challenge, request_auth);
             self.shutdown
@@ -1653,7 +1788,7 @@ mod platform {
 
     fn request_bytes(
         session: BuildSession,
-        binding: CapabilityBindingV2,
+        binding: CapabilityBindingV3,
         challenge: [u8; CHALLENGE_BYTES],
         secret: &[u8; SECRET_BYTES],
     ) -> Vec<u8> {
@@ -1670,6 +1805,7 @@ mod platform {
                 request.extend_from_slice(&[0; CONFIG_ID_BYTES]);
             }
         }
+        request.push(u8::from(binding.protected_compiler_closure_v2));
         request.extend_from_slice(&binding.compiler_closure_sha256);
         request.extend_from_slice(&binding.rustc_executable_sha256);
         request.extend_from_slice(&binding.retained_object_binding_sha256);
@@ -1977,7 +2113,7 @@ mod platform {
         struct ArbitraryRouteProbe {
             endpoint: String,
             listener: UnixListener,
-            route: BrokerRouteV2,
+            route: BrokerRouteV3,
             _mock: SpawnedMockExecutable,
         }
 
@@ -1988,7 +2124,7 @@ mod platform {
                 let listener = UnixListener::bind_addr(&address).unwrap();
                 listener.set_nonblocking(true).unwrap();
                 let mock = SpawnedMockExecutable::ready_shell();
-                let route = BrokerRouteV2 {
+                let route = BrokerRouteV3 {
                     endpoint: endpoint.clone(),
                     secret: random_bytes().unwrap(),
                     binding: ordinary_binding(),
@@ -2045,8 +2181,8 @@ mod platform {
             (temp, backend, artifact, pinned_cargo_image, session)
         }
 
-        fn ordinary_binding() -> CapabilityBindingV2 {
-            CapabilityBindingV2::new(
+        fn ordinary_binding() -> CapabilityBindingV3 {
+            CapabilityBindingV3::new(
                 CapabilityProfileV1::Ordinary,
                 None,
                 [0x70; 32],
@@ -2056,12 +2192,40 @@ mod platform {
             .unwrap()
         }
 
-        fn s09_binding() -> CapabilityBindingV2 {
-            CapabilityBindingV2::new(
+        fn s09_binding() -> CapabilityBindingV3 {
+            CapabilityBindingV3::new(
                 CapabilityProfileV1::S09,
                 Some([0x91; 32]),
                 [0x70; 32],
                 [0x71; 32],
+                [0x72; 32],
+            )
+            .unwrap()
+        }
+
+        fn protected_closure(
+            backend: &PinnedCodegenBackend,
+            pinned_cargo_image: &PinnedExecutable,
+        ) -> fe2o3_build_authority::CompilerClosureV2 {
+            fe2o3_build_authority::CompilerClosureV2::new(
+                *pinned_cargo_image.sha256(),
+                [0x31; 32],
+                [0x32; 32],
+                [0x33; 32],
+                [0x34; 32],
+                *backend.sha256(),
+            )
+            .unwrap()
+        }
+
+        fn protected_binding(
+            profile: CapabilityProfileV1,
+            closure: fe2o3_build_authority::CompilerClosureV2,
+        ) -> CapabilityBindingV3 {
+            CapabilityBindingV3::new_protected(
+                profile,
+                (profile == CapabilityProfileV1::S09).then_some([0x91; 32]),
+                closure,
                 [0x72; 32],
             )
             .unwrap()
@@ -2091,7 +2255,7 @@ mod platform {
 
         fn start_test_broker(
             session: BuildSession,
-            binding: CapabilityBindingV2,
+            binding: CapabilityBindingV3,
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
@@ -2169,7 +2333,7 @@ mod platform {
             fs::rename(&original_artifact, &moved_artifact).unwrap();
             fs::create_dir(&original_artifact).unwrap();
 
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let transferred = receive_from(&route, session, binding).unwrap();
             let transferred_cargo = transferred
                 .pinned_cargo_image
@@ -2200,10 +2364,107 @@ mod platform {
                 CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
                     .unwrap();
 
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let transferred = receive_from(&route, session, binding).unwrap();
             assert_eq!(transferred.backend.sha256(), &backend_sha);
             assert!(transferred.pinned_cargo_image.is_none());
+            assert!(transferred.compiler_closure.is_none());
+        }
+
+        #[test]
+        fn protected_profile_transfers_the_exact_full_compiler_closure() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let closure = protected_closure(&backend, &pinned_cargo_image);
+            let binding = protected_binding(CapabilityProfileV1::Ordinary, closure);
+            let broker = CapabilityBroker::start_protected(
+                session,
+                binding,
+                closure,
+                &backend,
+                &artifact,
+                &pinned_cargo_image,
+            )
+            .unwrap();
+
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
+            assert!(route.binding.requires_compiler_closure_v2());
+            let transferred = receive_from(&route, session, binding).unwrap();
+            assert!(transferred.pinned_cargo_image.is_none());
+            let capability = transferred
+                .compiler_closure
+                .expect("protected response carries a compiler closure");
+            capability.revalidate().unwrap();
+            assert_eq!(capability.closure(), closure);
+        }
+
+        #[test]
+        fn protected_broker_rejects_downgrades_and_retained_image_mismatches() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let closure = protected_closure(&backend, &pinned_cargo_image);
+            let protected = protected_binding(CapabilityProfileV1::Ordinary, closure);
+            assert!(
+                CapabilityBroker::start(
+                    session,
+                    protected,
+                    &backend,
+                    &artifact,
+                    &pinned_cargo_image,
+                )
+                .is_err()
+            );
+            assert!(
+                CapabilityBroker::start_protected(
+                    session,
+                    ordinary_binding(),
+                    closure,
+                    &backend,
+                    &artifact,
+                    &pinned_cargo_image,
+                )
+                .is_err()
+            );
+
+            let wrong_backend = fe2o3_build_authority::CompilerClosureV2::new(
+                closure.cargo_executable_sha256(),
+                closure.cargo_binding_trampoline_sha256(),
+                closure.cargo_fe2o3_binding_wrapper_sha256(),
+                closure.rustc_executable_sha256(),
+                closure.rustc_runtime_tree_sha256(),
+                [0x35; 32],
+            )
+            .unwrap();
+            assert!(
+                CapabilityBroker::start_protected(
+                    session,
+                    protected_binding(CapabilityProfileV1::Ordinary, wrong_backend),
+                    wrong_backend,
+                    &backend,
+                    &artifact,
+                    &pinned_cargo_image,
+                )
+                .is_err()
+            );
+
+            let wrong_cargo = fe2o3_build_authority::CompilerClosureV2::new(
+                [0x36; 32],
+                closure.cargo_binding_trampoline_sha256(),
+                closure.cargo_fe2o3_binding_wrapper_sha256(),
+                closure.rustc_executable_sha256(),
+                closure.rustc_runtime_tree_sha256(),
+                closure.codegen_backend_sha256(),
+            )
+            .unwrap();
+            assert!(
+                CapabilityBroker::start_protected(
+                    session,
+                    protected_binding(CapabilityProfileV1::Ordinary, wrong_cargo),
+                    wrong_cargo,
+                    &backend,
+                    &artifact,
+                    &pinned_cargo_image,
+                )
+                .is_err()
+            );
         }
 
         #[test]
@@ -2222,7 +2483,7 @@ mod platform {
             let broker =
                 CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
                     .unwrap();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let mut transferred = receive_from(&route, session, binding).unwrap();
             let authority = transferred
                 .invocation_authority
@@ -2275,7 +2536,7 @@ mod platform {
                 },
             )
             .unwrap();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let mut transferred = receive_from(&route, session, binding).unwrap();
             let authority = transferred.invocation_authority.take().unwrap();
             let attempt =
@@ -2312,29 +2573,51 @@ mod platform {
 
             let mut ordinary = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
             ordinary.truncate(2);
-            let ordinary =
-                decode_received_descriptors(ordinary, CapabilityProfileV1::Ordinary).unwrap();
+            let ordinary = decode_received_descriptors(ordinary, ordinary_binding()).unwrap();
             assert!(ordinary.pinned_cargo_image.is_none());
 
             let s09 = decode_received_descriptors(
                 raw_descriptor_set(&backend, &artifact, &pinned_cargo_image),
-                CapabilityProfileV1::S09,
+                s09_binding(),
             )
             .unwrap();
             assert!(s09.pinned_cargo_image.is_some());
 
             let mut missing_s09 = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
             missing_s09.truncate(2);
-            assert!(decode_received_descriptors(missing_s09, CapabilityProfileV1::S09).is_err());
+            assert!(decode_received_descriptors(missing_s09, s09_binding()).is_err());
 
             let ordinary_extra = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            assert!(
-                decode_received_descriptors(ordinary_extra, CapabilityProfileV1::Ordinary).is_err()
-            );
+            assert!(decode_received_descriptors(ordinary_extra, ordinary_binding()).is_err());
 
             let mut s09_extra = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
             s09_extra.push(pinned_cargo_image.try_clone_for_transfer().unwrap().into());
-            assert!(decode_received_descriptors(s09_extra, CapabilityProfileV1::S09).is_err());
+            assert!(decode_received_descriptors(s09_extra, s09_binding()).is_err());
+
+            let closure = protected_closure(&backend, &pinned_cargo_image);
+            let protected = protected_binding(CapabilityProfileV1::Ordinary, closure);
+            let closure_capability = CompilerClosureCapabilityV1::create(closure).unwrap();
+            let mut exact = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            exact.truncate(2);
+            exact.push(closure_capability.try_clone_for_transfer().unwrap().into());
+            assert_eq!(
+                decode_received_descriptors(exact, protected)
+                    .unwrap()
+                    .compiler_closure
+                    .unwrap()
+                    .closure(),
+                closure
+            );
+
+            let mut missing = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            missing.truncate(2);
+            assert!(decode_received_descriptors(missing, protected).is_err());
+
+            let mut extra = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            extra.truncate(2);
+            extra.push(closure_capability.try_clone_for_transfer().unwrap().into());
+            extra.push(pinned_cargo_image.try_clone_for_transfer().unwrap().into());
+            assert!(decode_received_descriptors(extra, protected).is_err());
         }
 
         #[test]
@@ -2344,11 +2627,11 @@ mod platform {
             let mut ordinary = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
             ordinary.truncate(2);
             ordinary.swap(0, 1);
-            assert!(decode_received_descriptors(ordinary, CapabilityProfileV1::Ordinary).is_err());
+            assert!(decode_received_descriptors(ordinary, ordinary_binding()).is_err());
 
             let mut s09 = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
             s09.swap(1, 2);
-            assert!(decode_received_descriptors(s09, CapabilityProfileV1::S09).is_err());
+            assert!(decode_received_descriptors(s09, s09_binding()).is_err());
         }
 
         #[test]
@@ -2358,11 +2641,11 @@ mod platform {
             let broker =
                 CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
                     .unwrap();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
 
             let ordinary = ordinary_binding();
             assert!(receive_from(&route, session, ordinary).is_err());
-            let wrong_config = CapabilityBindingV2::new(
+            let wrong_config = CapabilityBindingV3::new(
                 CapabilityProfileV1::S09,
                 Some([0x92; CONFIG_ID_BYTES]),
                 [0x70; COMPILER_CLOSURE_ID_BYTES],
@@ -2371,7 +2654,7 @@ mod platform {
             )
             .unwrap();
             assert!(receive_from(&route, session, wrong_config).is_err());
-            let wrong_rustc = CapabilityBindingV2::new(
+            let wrong_rustc = CapabilityBindingV3::new(
                 CapabilityProfileV1::S09,
                 Some([0x91; CONFIG_ID_BYTES]),
                 [0x71; COMPILER_CLOSURE_ID_BYTES],
@@ -2432,7 +2715,7 @@ mod platform {
                 )
                 .unwrap();
             });
-            let route = BrokerRouteV2 {
+            let route = BrokerRouteV3 {
                 endpoint,
                 secret: random_bytes().unwrap(),
                 binding: ordinary_binding(),
@@ -2485,7 +2768,7 @@ mod platform {
             );
             assert!(
                 receive_from(
-                    &BrokerRouteV2::parse(broker.route()).unwrap(),
+                    &BrokerRouteV3::parse(broker.route()).unwrap(),
                     BuildSession::from_bytes([0x43; 16]),
                     binding,
                 )
@@ -2496,7 +2779,7 @@ mod platform {
                 .map(|_| {
                     let broker = Arc::clone(&broker);
                     std::thread::spawn(move || {
-                        let route = BrokerRouteV2::parse(broker.route()).unwrap();
+                        let route = BrokerRouteV3::parse(broker.route()).unwrap();
                         let transferred = receive_from(&route, session, binding).unwrap();
                         assert_eq!(transferred.backend.sha256(), &backend_sha);
                         let cargo = transferred
@@ -2527,7 +2810,7 @@ mod platform {
                 BROKER_IO_TIMEOUT,
             );
             let pause = broker.shutdown.install_worker_pause();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let stalled = (0..TEST_LIMIT)
                 .map(|_| UnixStream::connect_addr(&address).unwrap())
@@ -2607,7 +2890,7 @@ mod platform {
                 4,
                 Duration::from_millis(500),
             );
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let mut client = UnixStream::connect_addr(&address).unwrap();
             let request = request_bytes(session, binding, [0x19; CHALLENGE_BYTES], &route.secret);
@@ -2643,7 +2926,7 @@ mod platform {
                 2,
                 Duration::from_secs(5),
             );
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             broker.shutdown.inject_worker_panic();
             let failed = UnixStream::connect_addr(&address).unwrap();
@@ -2672,7 +2955,7 @@ mod platform {
                 1,
                 Duration::from_secs(5),
             );
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             broker.shutdown.inject_worker_spawn_failure();
             let failed = UnixStream::connect_addr(&address).unwrap();
@@ -2700,7 +2983,7 @@ mod platform {
                 BROKER_IO_TIMEOUT,
             );
             let pause = broker.shutdown.install_worker_pause();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let clients = (0..CLIENTS)
                 .map(|_| UnixStream::connect_addr(&address).unwrap())
@@ -2746,7 +3029,7 @@ mod platform {
                 2,
                 Duration::from_millis(250),
             );
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let mut client = UnixStream::connect_addr(&address).unwrap();
             client
@@ -2786,7 +3069,7 @@ mod platform {
                 CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
                     .unwrap();
             let pause = broker.shutdown.install_dispatch_pause();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let clients = (0..2)
                 .map(|_| {
                     let route = route.clone();
@@ -2827,7 +3110,7 @@ mod platform {
                 Duration::from_secs(5),
             );
             let shutdown = Arc::clone(&broker.shutdown);
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let clients = (0..TEST_LIMIT)
                 .map(|_| {
@@ -2889,7 +3172,7 @@ mod platform {
                 Duration::from_secs(5),
             );
             let pause = broker.shutdown.install_accept_pause();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let client = UnixStream::connect_addr(&address).unwrap();
             assert!(pause.wait_until_reached().is_some());
@@ -2941,7 +3224,7 @@ mod platform {
                     &pinned_cargo_image,
                 )
                 .unwrap();
-                let route = BrokerRouteV2::parse(broker.route()).unwrap();
+                let route = BrokerRouteV3::parse(broker.route()).unwrap();
                 let address = endpoint_address(&route.endpoint).unwrap();
                 let mut client = UnixStream::connect_addr(&address).unwrap();
                 client
@@ -2973,7 +3256,7 @@ mod platform {
                 CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
                     .unwrap();
             let pause = broker.shutdown.install_dispatch_pause();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let mut client = UnixStream::connect_addr(&address).unwrap();
             client
@@ -3005,7 +3288,7 @@ mod platform {
                 CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
                     .unwrap();
             let pause = broker.shutdown.install_accept_pause();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let client = UnixStream::connect_addr(&address).unwrap();
             client
@@ -3040,7 +3323,7 @@ mod platform {
                 CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
                     .unwrap();
             let pause = broker.shutdown.install_locked_dispatch_pause();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let mut client = UnixStream::connect_addr(&address).unwrap();
             client
@@ -3068,8 +3351,7 @@ mod platform {
             let (bytes, response, descriptors) = receive_raw_response(&client).unwrap();
             assert_eq!(bytes, RESPONSE_BYTES);
             assert_eq!(response, expected_response);
-            let transferred =
-                decode_received_descriptors(descriptors, CapabilityProfileV1::S09).unwrap();
+            let transferred = decode_received_descriptors(descriptors, s09_binding()).unwrap();
             assert_eq!(transferred.backend.sha256(), &backend_sha);
             assert_eq!(
                 transferred
@@ -3106,7 +3388,7 @@ mod platform {
             let broker =
                 CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
                     .unwrap();
-            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let route = BrokerRouteV3::parse(broker.route()).unwrap();
             drop(broker);
 
             assert!(receive_from(&route, session, binding).is_err());
@@ -3131,6 +3413,7 @@ mod unsupported {
     use fe2o3_artifact_transaction::{BrokeredInvocationCapabilityClaimV1, BuildSession};
 
     use crate::cargo_invocation_boundary::InvocationAuthorizationRegistryV1;
+    use crate::compiler_closure_capability::CompilerClosureCapabilityV1;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
@@ -3146,9 +3429,9 @@ mod unsupported {
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub(crate) struct CapabilityBindingV2;
+    pub(crate) struct CapabilityBindingV3;
 
-    impl CapabilityBindingV2 {
+    impl CapabilityBindingV3 {
         pub(crate) fn new(
             _profile: CapabilityProfileV1,
             _config_identity: Option<[u8; 32]>,
@@ -3166,8 +3449,21 @@ mod unsupported {
             Err("Cargo capability transport requires Linux".to_owned())
         }
 
+        pub(crate) fn new_protected(
+            _profile: CapabilityProfileV1,
+            _config_identity: Option<[u8; 32]>,
+            _compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            _retained_object_binding_sha256: [u8; 32],
+        ) -> Result<Self, String> {
+            Ok(Self)
+        }
+
         pub(crate) const fn compiler_closure_sha256(self) -> [u8; 32] {
             [0; 32]
+        }
+
+        pub(crate) const fn requires_compiler_closure_v2(self) -> bool {
+            false
         }
 
         pub(crate) const fn rustc_executable_sha256(self) -> [u8; 32] {
@@ -3184,7 +3480,18 @@ mod unsupported {
     impl CapabilityBroker {
         pub(crate) fn start(
             _session: BuildSession,
-            _binding: CapabilityBindingV2,
+            _binding: CapabilityBindingV3,
+            _backend: &PinnedCodegenBackend,
+            _artifact: &PinnedDirectory,
+            _pinned_cargo_image: &PinnedExecutable,
+        ) -> Result<Self, String> {
+            Err("Cargo capability transport requires Linux".to_string())
+        }
+
+        pub(crate) fn start_protected(
+            _session: BuildSession,
+            _binding: CapabilityBindingV3,
+            _compiler_closure: fe2o3_build_authority::CompilerClosureV2,
             _backend: &PinnedCodegenBackend,
             _artifact: &PinnedDirectory,
             _pinned_cargo_image: &PinnedExecutable,
@@ -3224,12 +3531,13 @@ mod unsupported {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
         pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
+        pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
     }
 
     pub(crate) fn receive(
         _session: BuildSession,
-        _binding: CapabilityBindingV2,
+        _binding: CapabilityBindingV3,
     ) -> Result<BrokeredCapabilities, String> {
         Err("Cargo capability transport requires Linux".to_string())
     }
