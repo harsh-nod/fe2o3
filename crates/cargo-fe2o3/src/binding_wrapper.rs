@@ -6677,28 +6677,24 @@ mod tests {
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     #[test]
-    #[ignore = "blocked: V2 intent cleanup currently authorizes only a V1 backend receipt"]
     fn protected_published_crash_recovers_exactly_once_without_v1_probing() {
         run_protected_crash_restart_case("protected-published", 0x71);
     }
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     #[test]
-    #[ignore = "blocked: V2 intent cleanup currently authorizes only a V1 backend receipt"]
     fn protected_completed_crash_recovers_exactly_once_without_v1_probing() {
         run_protected_crash_restart_case("protected-completed", 0x81);
     }
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     #[test]
-    #[ignore = "blocked: V2 intent cleanup currently authorizes only a V1 backend receipt"]
     fn protected_intent_cleared_crash_recovers_exactly_once_without_v1_probing() {
         run_protected_crash_restart_case("protected-intent-cleared", 0x91);
     }
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     #[test]
-    #[ignore = "blocked: V2 intent cleanup currently authorizes only a V1 backend receipt"]
     fn protected_finished_crash_recovers_exactly_once_without_v1_probing() {
         run_protected_crash_restart_case("protected-finished", 0xa1);
     }
