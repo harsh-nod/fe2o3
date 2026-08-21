@@ -20,6 +20,7 @@ const OWNER_MAGIC: &[u8] = b"fe2o3-owned-v1\0";
 const MARKER_NAME: &str = ".codegen-generation-v1";
 const MARKER_MAGIC: &[u8; 28] = b"fe2o3-codegen-generation-v1\0";
 const MARKER_BYTES: usize = MARKER_MAGIC.len() + 32 + 16 + 32 + 8;
+const GENERATION_SEMANTIC_IDENTITY_DOMAIN_V4: &[u8] = b"fe2o3-cargo-codegen-semantics-v4";
 const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_SNAPSHOT_ENTRIES: u64 = MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 as u64;
 const MAX_SNAPSHOT_DEPTH: usize = 64;
@@ -328,7 +329,7 @@ pub(crate) fn semantic_identity(
     cargo_configuration: &[u8],
 ) -> Result<[u8; 32], String> {
     let mut hash = Sha256::new();
-    update_hash(&mut hash, b"fe2o3-cargo-codegen-semantics-v3");
+    update_hash(&mut hash, GENERATION_SEMANTIC_IDENTITY_DOMAIN_V4);
     update_hash(&mut hash, target.as_bytes());
     update_hash(&mut hash, compiler_closure_sha256);
     match worker_v2 {
@@ -837,6 +838,7 @@ fn os_string(value: Vec<u8>) -> Result<OsString, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler_toolchain::compiler_closure_v2_from_pins;
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::os::unix::net::UnixListener;
@@ -896,10 +898,44 @@ mod tests {
     }
 
     #[test]
-    fn marker_wire_size_and_hex_are_stable() {
+    fn semantic_v4_preserves_the_v1_marker_wire() {
+        assert_eq!(
+            GENERATION_SEMANTIC_IDENTITY_DOMAIN_V4,
+            b"fe2o3-cargo-codegen-semantics-v4"
+        );
         assert_eq!(MARKER_MAGIC, b"fe2o3-codegen-generation-v1\0");
         assert_eq!(MARKER_BYTES, 116);
         assert_eq!(hex(&[0x00, 0x7f, 0xff]), "007fff");
+    }
+
+    #[test]
+    fn generation_semantics_bind_both_v2_wrapper_images() {
+        let baseline = compiler_closure_v2_from_pins(
+            &[1; 32], &[2; 32], &[3; 32], &[4; 32], &[5; 32], &[6; 32],
+        )
+        .unwrap();
+        let changed_trampoline = compiler_closure_v2_from_pins(
+            &[1; 32], &[7; 32], &[3; 32], &[4; 32], &[5; 32], &[6; 32],
+        )
+        .unwrap();
+        let changed_wrapper = compiler_closure_v2_from_pins(
+            &[1; 32], &[2; 32], &[7; 32], &[4; 32], &[5; 32], &[6; 32],
+        )
+        .unwrap();
+
+        let semantic = |closure: fe2o3_build_authority::CompilerClosureV2| {
+            semantic_identity(
+                "gfx942",
+                &closure.identity_sha256(),
+                None,
+                b"release-configuration",
+            )
+            .unwrap()
+        };
+        let baseline = semantic(baseline);
+
+        assert_ne!(baseline, semantic(changed_trampoline));
+        assert_ne!(baseline, semantic(changed_wrapper));
     }
 
     #[test]

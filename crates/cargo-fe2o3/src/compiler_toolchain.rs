@@ -1,7 +1,9 @@
+use fe2o3_build_authority::{
+    CompilerClosureErrorV2, CompilerClosureV2, derive_compiler_closure_identity_v1,
+    derive_rustc_executable_runtime_identity_v1,
+};
 use sha2::{Digest, Sha256};
 
-const RUSTC_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-rustc-executable-runtime-identity-v1\0";
-const COMPILER_CLOSURE_DOMAIN_V1: &[u8] = b"fe2o3-compiler-closure-identity-v1\0";
 const RETAINED_OBJECT_BINDING_DOMAIN_V1: &[u8] = b"fe2o3-compiler-retained-object-binding-v1\0";
 
 /// Binds the admitted tool images and the retained rustc lib-tree directory object.
@@ -15,18 +17,29 @@ pub(crate) fn compiler_closure_sha256_v1(
     rustc_lib_tree_sha256: &[u8; 32],
     backend_sha256: &[u8; 32],
 ) -> [u8; 32] {
-    let mut rustc_identity = Sha256::new();
-    rustc_identity.update(RUSTC_IDENTITY_DOMAIN_V1);
-    rustc_identity.update(rustc_sha256);
-    rustc_identity.update(rustc_lib_tree_sha256);
-    let rustc_identity: [u8; 32] = rustc_identity.finalize().into();
+    let rustc_identity =
+        derive_rustc_executable_runtime_identity_v1(*rustc_sha256, *rustc_lib_tree_sha256);
+    derive_compiler_closure_identity_v1(*cargo_sha256, rustc_identity, *backend_sha256)
+}
 
-    let mut closure = Sha256::new();
-    closure.update(COMPILER_CLOSURE_DOMAIN_V1);
-    closure.update(cargo_sha256);
-    closure.update(rustc_identity);
-    closure.update(backend_sha256);
-    closure.finalize().into()
+/// Constructs the canonical closure for the complete Cargo-to-backend compiler path.
+#[cfg_attr(not(test), allow(dead_code))] // Staged for the protected-release V2 call-site patch.
+pub(crate) fn compiler_closure_v2_from_pins(
+    cargo_sha256: &[u8; 32],
+    cargo_binding_trampoline_sha256: &[u8; 32],
+    cargo_fe2o3_binding_wrapper_sha256: &[u8; 32],
+    rustc_sha256: &[u8; 32],
+    rustc_lib_tree_sha256: &[u8; 32],
+    backend_sha256: &[u8; 32],
+) -> Result<CompilerClosureV2, CompilerClosureErrorV2> {
+    CompilerClosureV2::new(
+        *cargo_sha256,
+        *cargo_binding_trampoline_sha256,
+        *cargo_fe2o3_binding_wrapper_sha256,
+        *rustc_sha256,
+        *rustc_lib_tree_sha256,
+        *backend_sha256,
+    )
 }
 
 pub(crate) fn retained_object_binding_sha256_v1(
@@ -46,7 +59,10 @@ pub(crate) fn retained_object_binding_sha256_v1(
 
 #[cfg(test)]
 mod tests {
-    use super::{compiler_closure_sha256_v1, retained_object_binding_sha256_v1};
+    use super::{
+        compiler_closure_sha256_v1, compiler_closure_v2_from_pins,
+        retained_object_binding_sha256_v1,
+    };
 
     #[test]
     fn compiler_closure_is_content_only_and_binds_every_component() {
@@ -67,6 +83,31 @@ mod tests {
         assert_ne!(
             retained_object_binding_sha256_v1(&closure, 5, 6, 0o40555),
             retained_object_binding_sha256_v1(&closure, 5, 7, 0o40555)
+        );
+    }
+
+    #[test]
+    fn compiler_closure_v2_binds_both_wrapper_images() {
+        let baseline = compiler_closure_v2_from_pins(
+            &[1; 32], &[2; 32], &[3; 32], &[4; 32], &[5; 32], &[6; 32],
+        )
+        .unwrap();
+        let changed_trampoline = compiler_closure_v2_from_pins(
+            &[1; 32], &[7; 32], &[3; 32], &[4; 32], &[5; 32], &[6; 32],
+        )
+        .unwrap();
+        let changed_wrapper = compiler_closure_v2_from_pins(
+            &[1; 32], &[2; 32], &[7; 32], &[4; 32], &[5; 32], &[6; 32],
+        )
+        .unwrap();
+
+        assert_ne!(
+            baseline.identity_sha256(),
+            changed_trampoline.identity_sha256()
+        );
+        assert_ne!(
+            baseline.identity_sha256(),
+            changed_wrapper.identity_sha256()
         );
     }
 
