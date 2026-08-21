@@ -4507,6 +4507,73 @@ pub enum SemanticTerminatorKindV1 {
     Unreachable,
 }
 
+impl SemanticTerminatorKindV1 {
+    /// Visits CFG edges in the canonical successor order used by validation,
+    /// middle-end construction, and lowering.
+    ///
+    /// Edge roles remain part of the retained semantic payload. Consumers must
+    /// not reconstruct them from target positions after this boundary.
+    pub fn try_for_each_edge<E>(
+        &self,
+        mut visitor: impl FnMut(SemanticControlFlowEdgeV1) -> Result<(), E>,
+    ) -> Result<(), E> {
+        fn visit_unwind<E>(
+            unwind: SemanticUnwindActionV1,
+            visitor: &mut impl FnMut(SemanticControlFlowEdgeV1) -> Result<(), E>,
+        ) -> Result<(), E> {
+            match unwind {
+                SemanticUnwindActionV1::Cleanup(edge) => visitor(edge),
+                SemanticUnwindActionV1::Continue
+                | SemanticUnwindActionV1::Unreachable
+                | SemanticUnwindActionV1::Terminate => Ok(()),
+            }
+        }
+        match self {
+            Self::Goto(edge) => visitor(*edge),
+            Self::SwitchInt { targets, .. } => {
+                for target in targets.values() {
+                    visitor(target.edge())?;
+                }
+                visitor(targets.otherwise())
+            }
+            Self::Call(call) => {
+                if let Some(destination) = call.destination() {
+                    visitor(destination.edge())?;
+                }
+                visit_unwind(call.unwind(), &mut visitor)
+            }
+            Self::TailCall(call) => visit_unwind(call.unwind(), &mut visitor),
+            Self::Drop { target, unwind, .. } | Self::Assert { target, unwind, .. } => {
+                visitor(*target)?;
+                visit_unwind(*unwind, &mut visitor)
+            }
+            Self::FalseEdge {
+                real_target,
+                imaginary_target,
+            } => {
+                visitor(*real_target)?;
+                visitor(*imaginary_target)
+            }
+            Self::Return
+            | Self::UnwindResume
+            | Self::UnwindTerminate
+            | Self::Abort
+            | Self::Unreachable => Ok(()),
+        }
+    }
+
+    /// Returns the exact number of canonical CFG successors without allocating.
+    pub fn edge_count(&self) -> usize {
+        let mut count = 0_usize;
+        self.try_for_each_edge::<std::convert::Infallible>(|_| {
+            count += 1;
+            Ok(())
+        })
+        .expect("infallible semantic edge visitor");
+        count
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticTerminatorV1 {
     source: SemanticSourceProvenanceV1,
@@ -13557,5 +13624,47 @@ mod private_tests {
             SemanticAtomicOrderingV1::AcquireRelease,
             SemanticAtomicOrderingV1::Acquire,
         ));
+    }
+
+    #[test]
+    fn canonical_edge_visitor_preserves_roles_order_and_duplicate_targets() {
+        let real = SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::FalseEdgeReal,
+            SemanticBlockIdV1::from_index(7),
+        );
+        let imaginary = SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::FalseEdgeImaginary,
+            SemanticBlockIdV1::from_index(7),
+        );
+        let terminator = SemanticTerminatorKindV1::FalseEdge {
+            real_target: real,
+            imaginary_target: imaginary,
+        };
+        let mut observed = Vec::new();
+        terminator
+            .try_for_each_edge::<std::convert::Infallible>(|edge| {
+                observed.push(edge);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(observed, [real, imaginary]);
+        assert_eq!(terminator.edge_count(), 2);
+        assert_eq!(SemanticTerminatorKindV1::Return.edge_count(), 0);
+    }
+
+    #[test]
+    fn canonical_edge_visitor_short_circuits_without_allocating() {
+        let edge = SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::Goto,
+            SemanticBlockIdV1::from_index(1),
+        );
+        let mut visits = 0;
+        let result = SemanticTerminatorKindV1::Goto(edge).try_for_each_edge(|observed| {
+            visits += 1;
+            assert_eq!(observed, edge);
+            Err("stop")
+        });
+        assert_eq!(result, Err("stop"));
+        assert_eq!(visits, 1);
     }
 }
