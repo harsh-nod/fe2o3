@@ -19,9 +19,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.3"
+version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509591b7bcd67f4ef775afad7662703b4935daaa6ec0e5605cfb1090b32a2b6d"
+checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -102,6 +102,7 @@ dependencies = [
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-build-authority",
  "libc",
  "rustix",
  "sha2",
@@ -112,6 +113,13 @@ name = "fe2o3-artifacts"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-build-authority"
+version = "0.1.0"
+dependencies = [
  "sha2",
 ]
 
@@ -200,6 +208,7 @@ version = "0.1.0"
 dependencies = [
  "dialect-amdgcn",
  "fe2o3-artifact-transaction",
+ "fe2o3-build-authority",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
@@ -267,6 +276,7 @@ name = "fe2o3-rustc-invocation"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "fe2o3-build-authority",
  "sha2",
 ]
 
@@ -293,6 +303,7 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-build-authority",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-rustc-invocation",

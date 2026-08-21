@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
+use sha2::{Digest as _, Sha256};
+
 const ATTEMPT_MAGIC: &[u8] = b"FE2O3-ATTEMPTS-V1\0";
 const MAX_ATTEMPT_RECORDS: usize = 1024;
 pub(crate) const MAX_ATTEMPT_BYTES: usize = 1024 * 1024;
@@ -20,6 +22,8 @@ const BACKEND_PROVENANCE_RECEIPT_BYTES_V1: usize = 7 * 32;
 pub(crate) const COMPILER_CLOSURE_BYTES_V2: usize = (6 * 32) + 2 + 32;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V2: usize =
     BACKEND_PROVENANCE_RECEIPT_BYTES_V1 + COMPILER_CLOSURE_BYTES_V2;
+const COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1: &[u8] =
+    b"FE2O3/COMPILER-CLOSURE-BOUND-BUILD-INVOCATION/V1\0";
 
 /// Process-independent identity shared by the cooperating processes in one build.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -81,6 +85,15 @@ impl BuildInvocation {
     /// Returns the exact 256-bit invocation fingerprint.
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// Binds this invocation identity to the exact authenticated compiler closure.
+    pub fn bind_compiler_closure_v1(self, compiler_closure_sha256: [u8; 32]) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1);
+        digest.update(compiler_closure_sha256);
+        digest.update(self.as_bytes());
+        Self::from_bytes(digest.finalize().into())
     }
 
     /// Encodes the invocation fingerprint as exactly 64 lowercase hexadecimal digits.
@@ -1321,6 +1334,45 @@ mod tests {
     const SESSION_B: BuildSession = BuildSession::from_bytes([0x5a; 16]);
     const INVOCATION_A: BuildInvocation = BuildInvocation::from_bytes([0x11; 32]);
     const INVOCATION_B: BuildInvocation = BuildInvocation::from_bytes([0x22; 32]);
+
+    #[test]
+    fn compiler_closure_binding_has_stable_golden_and_complete_mutation_coverage() {
+        let invocation = BuildInvocation::from_bytes([0x41; 32]);
+        let compiler_closure = [0x52; 32];
+        let identity = invocation.bind_compiler_closure_v1(compiler_closure);
+
+        assert_eq!(
+            COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1,
+            b"FE2O3/COMPILER-CLOSURE-BOUND-BUILD-INVOCATION/V1\0"
+        );
+        assert_eq!(
+            identity.as_bytes(),
+            &[
+                0x11, 0x4b, 0x15, 0x48, 0xa9, 0xf8, 0x3a, 0x21, 0xf1, 0xe1, 0xe5, 0x29, 0x90, 0x98,
+                0x96, 0xb9, 0x1a, 0xe7, 0xda, 0xf2, 0x90, 0xdb, 0x0c, 0x35, 0x40, 0xd9, 0x86, 0xfd,
+                0xb3, 0x9d, 0x0f, 0x36,
+            ]
+        );
+
+        for index in 0..32 {
+            let mut changed_closure = compiler_closure;
+            changed_closure[index] ^= 1;
+            assert_ne!(
+                invocation.bind_compiler_closure_v1(changed_closure),
+                identity,
+                "compiler closure byte {index} was not bound"
+            );
+
+            let mut changed_invocation = *invocation.as_bytes();
+            changed_invocation[index] ^= 1;
+            assert_ne!(
+                BuildInvocation::from_bytes(changed_invocation)
+                    .bind_compiler_closure_v1(compiler_closure),
+                identity,
+                "base invocation byte {index} was not bound"
+            );
+        }
+    }
 
     fn start(registry: &mut AttemptRegistry, source: &str, session: BuildSession) -> BuildAttempt {
         match registry

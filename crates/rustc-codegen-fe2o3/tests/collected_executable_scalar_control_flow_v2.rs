@@ -2408,7 +2408,10 @@ fn compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
     }
-    let invocation = BuildInvocation::from_bytes(digest.finalize().into());
+    let compiler_closure = independently_expected_compiler_closure_for_backend(backend.sha256)
+        .expect("derive the forged command's exact compiler closure");
+    let invocation = BuildInvocation::from_bytes(digest.finalize().into())
+        .bind_compiler_closure_v1(compiler_closure);
     let producer = ProducerIdentity::from_codegen(
         "fe2o3_collected_row_softmax_v1_fixture",
         Some(&source_path),
@@ -2433,10 +2436,7 @@ fn compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env(
             "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1",
-            encode_lower_hex(
-                &independently_expected_compiler_closure_for_backend(backend.sha256)
-                    .expect("derive the forged command's exact compiler closure"),
-            ),
+            encode_lower_hex(&compiler_closure),
         )
         .env(
             "FE2O3_HSACO_DIR",
@@ -4798,9 +4798,10 @@ fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
             let forged_stderr = stderr(&forged);
             assert!(
                 !forged.status.success()
-                    && forged_stderr.contains(
-                        "invocation-capability peer is not the cargo-fe2o3 executable pinned into this backend",
-                    )
+                    && forged_stderr
+                        .contains("protected rustc invocation admission failed without fallback")
+                    && forged_stderr
+                        .contains("cannot admit canonical fd 199 as a sealed V3 capability")
                     && !forged_stderr.contains("selected canonical Kernel IR module"),
                 "exact-argv direct rustc with attacker-populated reserved FDs minted row-softmax authority:\n{forged_stderr}"
             );

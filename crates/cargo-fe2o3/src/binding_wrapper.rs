@@ -109,8 +109,6 @@ const PROCESS_CONSISTENCY_EXPECTATION_FD_V3: std::os::fd::RawFd =
 const BUILD_ATTEMPT_INPUT_DOMAIN: &[u8] = b"FE2O3/BUILD-ATTEMPT-INPUT/V2\0";
 const ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1: &[u8] =
     b"FE2O3/ROW-SOFTMAX/EFFECTIVE-RUSTC-ARGV/V1\0";
-const COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1: &[u8] =
-    b"FE2O3/COMPILER-CLOSURE-BOUND-BUILD-INVOCATION/V1\0";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const WORKER_V2_CONFIG_ID_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-CONFIG-ID/V1\0";
@@ -1373,6 +1371,16 @@ fn materialize_row_softmax_v1_child_environment(
         ),
         (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
     ]);
+    if cfg!(debug_assertions)
+        && inherited
+            .get(OsStr::new(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV))
+            .is_some_and(|value| value == "1")
+    {
+        final_environment.insert(
+            OsString::from(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV),
+            OsString::from("1"),
+        );
+    }
     let explicit = command
         .get_envs()
         .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
@@ -3698,10 +3706,8 @@ fn derive_build_attempt_input_with_config_identity(
         digest.update(WORKER_V2_CONFIG_ID_DOMAIN);
         digest.update(worker_v2_identity.as_bytes());
     }
-    bind_build_invocation_to_compiler_closure(
-        BuildInvocation::from_bytes(digest.finalize().into()),
-        compiler_closure_sha256,
-    )
+    BuildInvocation::from_bytes(digest.finalize().into())
+        .bind_compiler_closure_v1(compiler_closure_sha256)
 }
 
 fn hash_bytes(digest: &mut Sha256, bytes: &[u8]) {
@@ -3719,21 +3725,8 @@ fn row_softmax_effective_rustc_argv_identity(
     for argument in argv {
         hash_bytes(&mut digest, os_bytes(argument));
     }
-    bind_build_invocation_to_compiler_closure(
-        BuildInvocation::from_bytes(digest.finalize().into()),
-        compiler_closure_sha256,
-    )
-}
-
-fn bind_build_invocation_to_compiler_closure(
-    invocation: BuildInvocation,
-    compiler_closure_sha256: [u8; 32],
-) -> BuildInvocation {
-    let mut digest = Sha256::new();
-    digest.update(COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1);
-    digest.update(compiler_closure_sha256);
-    digest.update(invocation.as_bytes());
     BuildInvocation::from_bytes(digest.finalize().into())
+        .bind_compiler_closure_v1(compiler_closure_sha256)
 }
 
 fn is_cargo_stdin_probe(argv: &[OsString]) -> bool {
@@ -3837,8 +3830,7 @@ mod tests {
     use super::{
         BindingWrapperError, BuildExecutableSnapshot,
         CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
-        CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1,
-        COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1, CompileBuildObservationV2,
+        CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, CompileBuildObservationV2,
         CompleteReviewedChildEnvironmentV2, DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
         GeneralGemmChildPinsV1, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
         ManagedAttemptRevocationGuard, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
@@ -3847,8 +3839,7 @@ mod tests {
         ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1, ROW_SOFTMAX_V1_PIPELINE,
         WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
         WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, append_prepared_rustc_arguments,
-        bind_build_invocation_to_compiler_closure, canonicalize_rustc_metadata,
-        configure_build_observation_environment,
+        canonicalize_rustc_metadata, configure_build_observation_environment,
         configure_build_observation_environment_with_test_mutation,
         configure_worker_build_observation_environment, decode_managed_rustc_args,
         derive_build_attempt_input_with_config_identity, hex, is_cargo_stdin_probe,
@@ -4412,47 +4403,6 @@ mod tests {
     }
 
     #[test]
-    fn compiler_closure_bound_invocation_has_stable_golden_and_mutation_binding() {
-        let invocation = BuildInvocation::from_bytes([0x41; 32]);
-        let compiler_closure = [0x52; 32];
-        let identity = bind_build_invocation_to_compiler_closure(invocation, compiler_closure);
-
-        assert_eq!(
-            COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1,
-            b"FE2O3/COMPILER-CLOSURE-BOUND-BUILD-INVOCATION/V1\0"
-        );
-        assert_eq!(
-            identity.as_bytes(),
-            &[
-                0x11, 0x4b, 0x15, 0x48, 0xa9, 0xf8, 0x3a, 0x21, 0xf1, 0xe1, 0xe5, 0x29, 0x90, 0x98,
-                0x96, 0xb9, 0x1a, 0xe7, 0xda, 0xf2, 0x90, 0xdb, 0x0c, 0x35, 0x40, 0xd9, 0x86, 0xfd,
-                0xb3, 0x9d, 0x0f, 0x36,
-            ]
-        );
-
-        for index in 0..32 {
-            let mut changed_closure = compiler_closure;
-            changed_closure[index] ^= 1;
-            assert_ne!(
-                bind_build_invocation_to_compiler_closure(invocation, changed_closure),
-                identity,
-                "compiler closure byte {index} was not bound"
-            );
-
-            let mut changed_invocation = *invocation.as_bytes();
-            changed_invocation[index] ^= 1;
-            assert_ne!(
-                bind_build_invocation_to_compiler_closure(
-                    BuildInvocation::from_bytes(changed_invocation),
-                    compiler_closure,
-                ),
-                identity,
-                "base invocation byte {index} was not bound"
-            );
-        }
-    }
-
-    #[test]
     fn row_softmax_attempt_identity_covers_the_exact_effective_rustc_argv() {
         let argv = args(&[
             "/toolchain/bin/rustc",
@@ -4475,11 +4425,9 @@ mod tests {
             argv_oracle.update((bytes.len() as u64).to_le_bytes());
             argv_oracle.update(bytes);
         }
-        let mut oracle = sha2::Sha256::new();
-        oracle.update(COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1);
-        oracle.update(compiler_closure);
-        oracle.update(<[u8; 32]>::from(argv_oracle.finalize()));
-        assert_eq!(identity.as_bytes(), &<[u8; 32]>::from(oracle.finalize()));
+        let oracle = BuildInvocation::from_bytes(argv_oracle.finalize().into())
+            .bind_compiler_closure_v1(compiler_closure);
+        assert_eq!(identity, oracle);
 
         for index in 0..argv.len() {
             let mut changed = argv.clone();
@@ -5441,6 +5389,10 @@ mod tests {
             .env("FE2O3_BUILD_ATTEMPT_V1", "attempt");
         let mut inherited = fixed().to_vec();
         inherited.push((
+            OsString::from(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV),
+            OsString::from("1"),
+        ));
+        inherited.push((
             OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
             OsString::from("01".repeat(32)),
         ));
@@ -5459,6 +5411,10 @@ mod tests {
         assert!(complete.entries.contains(&(
             OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
             OsString::from("ab".repeat(32)),
+        )));
+        assert!(complete.entries.contains(&(
+            OsString::from(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV),
+            OsString::from("1"),
         )));
 
         for name in [

@@ -221,6 +221,13 @@ impl ManagedCompilerClosureAuthorityV1 {
             Self::ProtectedV2(_) => COLLECTED_AUTHORITY_DOMAIN_V2,
         }
     }
+
+    fn identity_sha256(&self) -> [u8; 32] {
+        match self {
+            Self::UnprotectedQualificationV1(identity) => *identity,
+            Self::ProtectedV2(closure) => closure.identity_sha256(),
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1087,7 +1094,8 @@ fn require_managed_build_authority(
                 .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?,
         ),
     };
-    let observed_invocation = observe_managed_wrapper_effective_rustc_argv()?;
+    let observed_invocation =
+        observe_managed_wrapper_effective_rustc_argv(compiler_closure.identity_sha256())?;
     let broker_executable = consume_brokered_invocation_authority(attempt, observed_invocation)?;
     admit_managed_build_authority(
         attempt,
@@ -1185,7 +1193,9 @@ fn cargo_metadata_build_transcript(metadata: &CargoMetadataBuildObservationV1) -
     digest.finalize().into()
 }
 
-fn observe_managed_wrapper_effective_rustc_argv() -> Result<[u8; 32], CollectedRowSoftmaxErrorV1> {
+fn observe_managed_wrapper_effective_rustc_argv(
+    compiler_closure_sha256: [u8; 32],
+) -> Result<[u8; 32], CollectedRowSoftmaxErrorV1> {
     let argv = std::env::args_os().collect::<Vec<_>>();
     validate_managed_wrapper_effective_rustc_argv(&argv)
         .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
@@ -1220,7 +1230,10 @@ fn observe_managed_wrapper_effective_rustc_argv() -> Result<[u8; 32], CollectedR
         });
     }
 
-    Ok(effective_rustc_argv_identity(&argv))
+    Ok(effective_rustc_argv_identity(
+        &argv,
+        compiler_closure_sha256,
+    ))
 }
 
 fn validate_managed_wrapper_effective_rustc_argv(argv: &[OsString]) -> Result<(), String> {
@@ -1278,14 +1291,16 @@ fn validate_managed_wrapper_effective_rustc_argv(argv: &[OsString]) -> Result<()
     Ok(())
 }
 
-fn effective_rustc_argv_identity(argv: &[OsString]) -> [u8; 32] {
+fn effective_rustc_argv_identity(argv: &[OsString], compiler_closure_sha256: [u8; 32]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1);
     digest.update((argv.len() as u64).to_le_bytes());
     for argument in argv {
         hash_field(&mut digest, os_bytes(argument));
     }
-    digest.finalize().into()
+    *fe2o3_artifact_transaction::BuildInvocation::from_bytes(digest.finalize().into())
+        .bind_compiler_closure_v1(compiler_closure_sha256)
+        .as_bytes()
 }
 
 const MAX_INVOCATION_PEER_PROC_BYTES: usize = 4096;
@@ -2753,6 +2768,7 @@ mod tests {
     #[test]
     fn managed_argv_is_reconstructed_independently_and_rejects_malformed_shapes() {
         let argv = managed_argv();
+        let compiler_closure = [0x73; 32];
         validate_managed_wrapper_effective_rustc_argv(&argv).expect("exact managed argv");
 
         let mut oracle = Sha256::new();
@@ -2763,9 +2779,17 @@ mod tests {
             oracle.update((bytes.len() as u64).to_le_bytes());
             oracle.update(bytes);
         }
+        let oracle = fe2o3_artifact_transaction::BuildInvocation::from_bytes(<[u8; 32]>::from(
+            oracle.finalize(),
+        ))
+        .bind_compiler_closure_v1(compiler_closure);
         assert_eq!(
-            effective_rustc_argv_identity(&argv),
-            <[u8; 32]>::from(oracle.finalize())
+            effective_rustc_argv_identity(&argv, compiler_closure),
+            *oracle.as_bytes()
+        );
+        assert_ne!(
+            effective_rustc_argv_identity(&argv, [0x74; 32]),
+            *oracle.as_bytes()
         );
 
         let missing_tail = argv[..argv.len() - 4].to_vec();
