@@ -381,7 +381,9 @@ releases the completion arena only after confirmed queue destruction.
 The private C5 constructor accepts one authenticated
 `ValidatedKernelEnvelope` for exact gfx942 COV6 code, one through 256 complete
 typed kernarg images, bounded dispatch geometry, and one through 16 device-data
-allocation requests with role, valid-byte, initialization, and effect premises.
+allocation requests with role, valid-byte, and effect premises. Device-data
+reads and read/write effects are rejected; only write-only requests can pass
+until an authenticated initialized-content authority exists.
 It validates all identities, sizes, alignments, geometry, pointer-field ranges,
 and whole-allocation nonalias structure before native preparation. It then uses
 the actual C3 API to allocate and map every device-data lease in the queue's VM.
@@ -403,13 +405,40 @@ observation ambiguity, timeout, fault, partial recycle, or teardown ambiguity
 poisons the session and requires process teardown. Explicit release occurs only
 after every signal was recycled and the queue was confirmed destroyed.
 
-This is not a public safe launch API. No production copy/initialization bridge
-can yet mint the data premises, and no generated implicit-kernarg producer is
-connected. Per-segment GPU permission behavior for the uniformly mapped code
+This is not a public safe launch API. There is no initialization boolean or
+other caller-supplied read premise, and no generated implicit-kernarg producer
+is connected. Per-segment GPU permission behavior for the uniformly mapped code
 allocation, concrete effect/alias semantics, CPU/GPU coherence, firmware packet
 execution, device-write visibility, and quiescence remain Contracted. The host
 state machines and mock fault tests are not a concrete Verus or machine
 refinement, and C5 performed no GPU workload.
+
+### C6 unbacked device-content copy foundation
+
+The private C6 foundation binds one exact mapped GTT source publication to one
+exact mapped C3 destination generation, device and VM, requested byte extent,
+semantic role and ordinal, content SHA-256 and canonical content identity. A
+copy intent additionally binds nonzero operation and publication identities,
+the exact queue generation, and one dispatch generation. All substitutions and
+size failures retain both inputs before any possible side effect.
+
+After publication begins, packet-body, release-header, doorbell, completion
+observation, and signal-recycle failures are terminal and retain both resources
+for process teardown. Only an explicitly no-effect failure is retryable. The
+initialized-content state is reachable only through an opaque authenticated
+copy-completion token that binds the exact copy, queue, dispatch, completion
+batch, signal slot and generation, and last packet. Production deliberately has
+no constructor for that token, so neither public data, an internal descriptor,
+nor a boolean can mint initialized memory.
+
+This is a prerequisite state machine, not a device-copy implementation. The
+pinned KFD UAPI exposes no admitted memcpy or SDMA submission operation. The
+current compute queue is also fixed to one kernel/resource owner and frees C3
+leases at teardown. The next integration must authenticate an exact copy kernel
+and its semantics, consume its exact C2 publication and C4 completed batch, and
+change the queue owner to return the retained destination lease after exact
+quiescence. Until all three are composed, C6 provides no Linux backend, actual
+copy, initialized lease, read-dispatch premise, or hardware evidence.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
