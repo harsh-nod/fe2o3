@@ -12,8 +12,8 @@ use fe2o3_artifact_transaction::{
     BackendPublicationReceiptV1, BuildAttempt, BuildSession, DurableLinkPublicationPlanV1,
     ProducerIdentity, RecoveredWorkerV2PublicationIntentV1, UpstreamCodeObjectEvidenceIdentityV1,
     WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentIdentityV1,
-    persist_worker_v2_publication_intent_v1, producer_package_identity_v1,
-    recover_worker_v2_publication_intent_v1,
+    WorkerV2PublicationIntentIdentityV2, persist_worker_v2_publication_intent_v1,
+    producer_package_identity_v1, recover_worker_v2_publication_intent_v1,
 };
 use fe2o3_compiler_ffi::CodeObjectVersion;
 use fe2o3_hsaco_finalize::{
@@ -45,6 +45,8 @@ const MARKER_MAGIC: &[u8] = b"FE2O3-CARGO-WORKER-V2-RESUME-V1\0";
 const LEGACY_MARKER_VERSION: u16 = 1;
 const PREVIOUS_MARKER_VERSION: u16 = 2;
 const MARKER_VERSION: u16 = 3;
+const PROTECTED_MARKER_VERSION: u16 = 4;
+const PROTECTED_INTENT_SCHEMA_V2: u8 = 2;
 const MARKER_CHECKSUM_DOMAIN: &[u8] = b"FE2O3/CARGO-WORKER-V2-RESUME-CHECKSUM/V1\0";
 const ADMISSION_COMMITMENT_DOMAIN: &[u8] = b"FE2O3/CARGO-WORKER-V2-ADMISSION-COMMITMENT/V1\0";
 const MARKER_PREFIX: &str = ".fe2o3-cargo-worker-v2-resume-v1-";
@@ -60,6 +62,8 @@ const RECEIPT_FIELDS: usize = 7;
 const PREVIOUS_MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 1 + 32 + 8 + 16 + 32 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
 const MARKER_BYTES: usize = PREVIOUS_MARKER_BYTES + 32 + 32;
+const PROTECTED_MARKER_BYTES: usize = MARKER_BYTES + 1;
+const MAX_MARKER_BYTES: usize = PROTECTED_MARKER_BYTES;
 const LEGACY_MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 32 + 8 + 16 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
 
@@ -200,6 +204,34 @@ pub(crate) enum ResumeMarkerStateV1 {
         envelope_inputs: [u8; 32],
         envelope: [u8; 32],
         intent: WorkerV2PublicationIntentIdentityV1,
+        receipt: ReceiptRecordV1,
+    },
+}
+
+/// Canonical protected restart state bound only to a V2 publication-intent identity.
+#[allow(dead_code, clippy::large_enum_variant)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResumeMarkerStateV2 {
+    Pending {
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        admission: [u8; 32],
+        envelope_inputs: [u8; 32],
+    },
+    Ready {
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        admission: [u8; 32],
+        envelope_inputs: [u8; 32],
+        intent: WorkerV2PublicationIntentIdentityV2,
+    },
+    Completed {
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        admission: [u8; 32],
+        envelope_inputs: [u8; 32],
+        envelope: [u8; 32],
+        intent: WorkerV2PublicationIntentIdentityV2,
         receipt: ReceiptRecordV1,
     },
 }
@@ -784,6 +816,61 @@ impl ResumeMarkerStateV1 {
     }
 }
 
+#[allow(dead_code)] // The protected caller is integrated separately from this marker boundary.
+impl ResumeMarkerStateV2 {
+    pub(crate) const fn attempt(self) -> BuildAttempt {
+        match self {
+            Self::Pending { attempt, .. }
+            | Self::Ready { attempt, .. }
+            | Self::Completed { attempt, .. } => attempt,
+        }
+    }
+
+    pub(crate) const fn intent(self) -> Option<WorkerV2PublicationIntentIdentityV2> {
+        match self {
+            Self::Pending { .. } => None,
+            Self::Ready { intent, .. } | Self::Completed { intent, .. } => Some(intent),
+        }
+    }
+
+    pub(crate) const fn publication(self) -> WorkerV2PublicationKindV1 {
+        match self {
+            Self::Pending { publication, .. }
+            | Self::Ready { publication, .. }
+            | Self::Completed { publication, .. } => publication,
+        }
+    }
+
+    pub(crate) const fn admission(self) -> [u8; 32] {
+        match self {
+            Self::Pending { admission, .. }
+            | Self::Ready { admission, .. }
+            | Self::Completed { admission, .. } => admission,
+        }
+    }
+
+    pub(crate) const fn envelope_inputs(self) -> [u8; 32] {
+        match self {
+            Self::Pending {
+                envelope_inputs, ..
+            }
+            | Self::Ready {
+                envelope_inputs, ..
+            }
+            | Self::Completed {
+                envelope_inputs, ..
+            } => envelope_inputs,
+        }
+    }
+
+    pub(crate) const fn envelope(self) -> [u8; 32] {
+        match self {
+            Self::Pending { .. } | Self::Ready { .. } => [0; 32],
+            Self::Completed { envelope, .. } => envelope,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum ResumeMarkerErrorV1 {
     Io(std::io::Error),
@@ -850,6 +937,19 @@ impl WorkerV2ResumeStoreV1 {
         output_dir: &Path,
         producer: &ProducerIdentity,
     ) -> Result<Self, ResumeMarkerErrorV1> {
+        let store = Self::open_locked(output_dir, producer)?;
+        let retained = store
+            .load()?
+            .map(|state| (state.publication(), state.attempt()));
+        store.cleanup_envelope_input_residue(retained)?;
+        store.cleanup_envelope_temp_residue()?;
+        Ok(store)
+    }
+
+    fn open_locked(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+    ) -> Result<Self, ResumeMarkerErrorV1> {
         let directory = open_output_directory(output_dir, true)?;
         let directory_stat = fstat(&directory).map_err(std::io::Error::from)?;
         if FileType::from_raw_mode(directory_stat.st_mode) != FileType::Directory {
@@ -884,17 +984,17 @@ impl WorkerV2ResumeStoreV1 {
             marker_name,
         };
         store.verify_output_path()?;
-        store.cleanup_envelope_input_residue()?;
-        store.cleanup_envelope_temp_residue()?;
         Ok(store)
     }
 
-    fn cleanup_envelope_input_residue(&self) -> Result<(), ResumeMarkerErrorV1> {
-        let retained = self.load()?.and_then(|state| {
-            state
-                .publication()
+    fn cleanup_envelope_input_residue(
+        &self,
+        retained_state: Option<(WorkerV2PublicationKindV1, BuildAttempt)>,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let retained = retained_state.and_then(|(publication, attempt)| {
+            publication
                 .requires_envelope()
-                .then(|| envelope_inputs_name(self.package, state.attempt()))
+                .then(|| envelope_inputs_name(self.package, attempt))
         });
         let package_prefix = envelope_inputs_package_prefix(self.package);
         let scan =
@@ -1319,6 +1419,20 @@ impl WorkerV2ResumeStoreV1 {
     }
 
     pub(crate) fn load(&self) -> Result<Option<ResumeMarkerStateV1>, ResumeMarkerErrorV1> {
+        self.read_marker_bytes()?
+            .map(|bytes| decode_marker(&bytes, self.package))
+            .transpose()
+            .map_err(|reason| self.invalid(reason))
+    }
+
+    fn load_protected(&self) -> Result<Option<ResumeMarkerStateV2>, ResumeMarkerErrorV1> {
+        self.read_marker_bytes()?
+            .map(|bytes| decode_protected_marker(&bytes, self.package))
+            .transpose()
+            .map_err(|reason| self.invalid(reason))
+    }
+
+    fn read_marker_bytes(&self) -> Result<Option<Vec<u8>>, ResumeMarkerErrorV1> {
         self.verify_output_path()?;
         let descriptor = match openat(
             &self.directory,
@@ -1339,13 +1453,16 @@ impl WorkerV2ResumeStoreV1 {
         )?;
         let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
         let mut file = File::from(descriptor);
-        let mut bytes = Vec::with_capacity(MARKER_BYTES + 1);
+        let mut bytes = Vec::with_capacity(MAX_MARKER_BYTES + 1);
         Read::by_ref(&mut file)
-            .take((MARKER_BYTES + 1) as u64)
+            .take((MAX_MARKER_BYTES + 1) as u64)
             .read_to_end(&mut bytes)?;
         let final_stat = fstat(&file).map_err(std::io::Error::from)?;
         let canonical_size = usize::try_from(final_stat.st_size).is_ok_and(|size| {
-            size == MARKER_BYTES || size == PREVIOUS_MARKER_BYTES || size == LEGACY_MARKER_BYTES
+            size == PROTECTED_MARKER_BYTES
+                || size == MARKER_BYTES
+                || size == PREVIOUS_MARKER_BYTES
+                || size == LEGACY_MARKER_BYTES
         });
         if final_stat.st_dev != initial.st_dev
             || final_stat.st_ino != initial.st_ino
@@ -1360,9 +1477,7 @@ impl WorkerV2ResumeStoreV1 {
         {
             return Err(self.invalid("marker changed while it was read"));
         }
-        decode_marker(&bytes, self.package)
-            .map(Some)
-            .map_err(|reason| self.invalid(reason))
+        Ok(Some(bytes))
     }
 
     #[allow(dead_code)] // Ordinary fixture staging uses the no-capsule transition directly.
@@ -1490,6 +1605,48 @@ impl WorkerV2ResumeStoreV1 {
             }
             _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
         };
+        let envelope_identity = self.validate_and_publish_required_envelope(
+            publication,
+            attempt,
+            receipt,
+            envelope,
+            admission,
+            marker_inputs,
+        )?;
+        self.persist_completed_inner(
+            publication,
+            attempt,
+            intent,
+            receipt,
+            Some(envelope_identity),
+        )
+    }
+
+    /// Recovers only the canonical envelope named by `receipt` before advancing to `Completed`.
+    #[allow(dead_code)] // Exercises exact durable-envelope recovery in owner tests.
+    pub(crate) fn recover_envelope_and_completed(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV1,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<ResumeMarkerStateV1, ResumeMarkerErrorV1> {
+        if !publication.requires_envelope() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let envelope = self.recover_load_envelope(receipt)?;
+        self.persist_envelope_and_completed(publication, attempt, intent, receipt, &envelope)
+    }
+
+    fn validate_and_publish_required_envelope(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        receipt: BackendPublicationReceiptV1,
+        envelope: &WorkerV2LoadEnvelopeV1,
+        admission: [u8; 32],
+        marker_inputs: [u8; 32],
+    ) -> Result<WorkerV2LoadEnvelopeIdentityV1, ResumeMarkerErrorV1> {
         let claim = envelope.published_claim();
         let envelope_inputs = self.recover_envelope_inputs(attempt)?;
         let carried_inputs = WorkerV2EnvelopeInputsV1::new(
@@ -1516,29 +1673,7 @@ impl WorkerV2ResumeStoreV1 {
             return Err(self.invalid("required envelope disagrees with the ready publication"));
         }
         self.publish_load_envelope(envelope)?;
-        self.persist_completed_inner(
-            publication,
-            attempt,
-            intent,
-            receipt,
-            Some(envelope.identity()),
-        )
-    }
-
-    /// Recovers only the canonical envelope named by `receipt` before advancing to `Completed`.
-    #[allow(dead_code)] // Exercises exact durable-envelope recovery in owner tests.
-    pub(crate) fn recover_envelope_and_completed(
-        &self,
-        publication: WorkerV2PublicationKindV1,
-        attempt: BuildAttempt,
-        intent: WorkerV2PublicationIntentIdentityV1,
-        receipt: BackendPublicationReceiptV1,
-    ) -> Result<ResumeMarkerStateV1, ResumeMarkerErrorV1> {
-        if !publication.requires_envelope() {
-            return Err(ResumeMarkerErrorV1::InvalidTransition);
-        }
-        let envelope = self.recover_load_envelope(receipt)?;
-        self.persist_envelope_and_completed(publication, attempt, intent, receipt, &envelope)
+        Ok(envelope.identity())
     }
 
     fn persist_completed_inner(
@@ -1686,8 +1821,30 @@ impl WorkerV2ResumeStoreV1 {
         if state.is_legacy() {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
-        self.verify_output_path()?;
+        let canonical = state
+            .into_canonical()
+            .map_err(|()| ResumeMarkerErrorV1::InvalidTransition)?;
         let bytes = encode_marker(self.package, state);
+        self.write_encoded::<OrdinaryMarkerSchemaV1>(canonical, bytes, replace)
+    }
+
+    fn write_protected(
+        &self,
+        state: ResumeMarkerStateV2,
+        replace: bool,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let bytes = encode_protected_marker(self.package, state);
+        self.write_encoded::<ProtectedMarkerSchemaV2>(state.into(), bytes, replace)
+    }
+
+    fn write_encoded<S: CanonicalMarkerSchema>(
+        &self,
+        state: CanonicalMarkerState<S::Intent>,
+        bytes: Vec<u8>,
+        replace: bool,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        debug_assert_eq!(bytes.len(), S::ENCODED_BYTES);
         let temp_name = format!(
             "{}{TEMP_SUFFIX}{}-{}",
             self.marker_name,
@@ -1711,7 +1868,7 @@ impl WorkerV2ResumeStoreV1 {
                 &file,
                 &temp_name,
                 &self.display_path,
-                Some(MARKER_BYTES),
+                Some(S::ENCODED_BYTES),
             )?;
             self.verify_output_path()?;
             if replace {
@@ -1734,7 +1891,12 @@ impl WorkerV2ResumeStoreV1 {
             }
             fsync(&self.directory).map_err(std::io::Error::from)?;
             self.verify_output_path()?;
-            if self.load()? != Some(state) {
+            let published = self
+                .read_marker_bytes()?
+                .ok_or_else(|| self.invalid("marker disappeared after atomic publication"))?;
+            let decoded = decode_canonical_marker::<S>(&published, self.package)
+                .map_err(|reason| self.invalid(reason))?;
+            if decoded != state {
                 return Err(self.invalid("marker changed after atomic publication"));
             }
             Ok(())
@@ -1790,6 +1952,337 @@ impl WorkerV2ResumeStoreV1 {
             path: path.to_path_buf(),
             reason: reason.into(),
         }
+    }
+}
+
+/// Protected marker owner. Its decoder never accepts ordinary V1/V2/V3 marker records.
+#[allow(dead_code)] // The protected caller is integrated separately from this marker boundary.
+pub(crate) struct WorkerV2ResumeStoreV2 {
+    inner: WorkerV2ResumeStoreV1,
+}
+
+#[allow(dead_code)] // The protected caller is integrated separately from this marker boundary.
+impl WorkerV2ResumeStoreV2 {
+    pub(crate) fn open(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+    ) -> Result<Self, ResumeMarkerErrorV1> {
+        let inner = WorkerV2ResumeStoreV1::open_locked(output_dir, producer)?;
+        let retained = inner
+            .load_protected()?
+            .map(|state| (state.publication(), state.attempt()));
+        inner.cleanup_envelope_input_residue(retained)?;
+        inner.cleanup_envelope_temp_residue()?;
+        Ok(Self { inner })
+    }
+
+    pub(crate) fn verify_output_path(&self) -> Result<(), ResumeMarkerErrorV1> {
+        self.inner.verify_output_path()
+    }
+
+    pub(crate) fn load(&self) -> Result<Option<ResumeMarkerStateV2>, ResumeMarkerErrorV1> {
+        self.inner.load_protected()
+    }
+
+    pub(crate) fn persist_envelope_inputs(
+        &self,
+        attempt: BuildAttempt,
+        inputs: &WorkerV2EnvelopeInputsV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        self.inner.persist_envelope_inputs(attempt, inputs)
+    }
+
+    pub(crate) fn recover_envelope_inputs(
+        &self,
+        attempt: BuildAttempt,
+    ) -> Result<WorkerV2EnvelopeInputsV1, ResumeMarkerErrorV1> {
+        self.inner.recover_envelope_inputs(attempt)
+    }
+
+    pub(crate) fn persist_pending(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        admission: [u8; 32],
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        self.persist_pending_with_envelope_inputs(publication, attempt, admission, None)
+    }
+
+    pub(crate) fn persist_pending_with_envelope_inputs(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        admission: [u8; 32],
+        envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let envelope_inputs = envelope_inputs.map_or([0; 32], |identity| identity.as_bytes());
+        if admission == [0; 32] || publication.requires_envelope() != (envelope_inputs != [0; 32]) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let pending = ResumeMarkerStateV2::Pending {
+            publication,
+            attempt,
+            admission,
+            envelope_inputs,
+        };
+        match self.load()? {
+            None => self.inner.write_protected(pending, false),
+            Some(existing) if existing == pending => Ok(()),
+            Some(_) => Err(ResumeMarkerErrorV1::ConflictingMarker),
+        }
+    }
+
+    pub(crate) fn persist_ready(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if intent.as_bytes() == [0; 32] {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        match self.load()? {
+            Some(ResumeMarkerStateV2::Pending {
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+                envelope_inputs,
+            }) if current_publication == publication && current_attempt == attempt => {
+                self.inner.write_protected(
+                    ResumeMarkerStateV2::Ready {
+                        publication,
+                        attempt,
+                        admission,
+                        envelope_inputs,
+                        intent,
+                    },
+                    true,
+                )
+            }
+            Some(ResumeMarkerStateV2::Ready {
+                publication: current_publication,
+                attempt: current_attempt,
+                intent: current_intent,
+                ..
+            }) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent =>
+            {
+                Ok(())
+            }
+            _ => Err(ResumeMarkerErrorV1::InvalidTransition),
+        }
+    }
+
+    pub(crate) fn persist_completed(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV2,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
+        if publication.requires_envelope() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.persist_completed_inner(publication, attempt, intent, receipt, None)
+    }
+
+    /// Durably publishes the required inert envelope before advancing the marker to `Completed`.
+    pub(crate) fn persist_envelope_and_completed(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV2,
+        receipt: BackendPublicationReceiptV1,
+        envelope: &WorkerV2LoadEnvelopeV1,
+    ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
+        if !publication.requires_envelope() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let (admission, marker_inputs) = match self.load()? {
+            Some(ResumeMarkerStateV2::Ready {
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+                envelope_inputs,
+                intent: current_intent,
+            })
+            | Some(ResumeMarkerStateV2::Completed {
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+                envelope_inputs,
+                intent: current_intent,
+                ..
+            }) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent =>
+            {
+                (admission, envelope_inputs)
+            }
+            _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
+        };
+        let envelope_identity = self.inner.validate_and_publish_required_envelope(
+            publication,
+            attempt,
+            receipt,
+            envelope,
+            admission,
+            marker_inputs,
+        )?;
+        self.persist_completed_inner(
+            publication,
+            attempt,
+            intent,
+            receipt,
+            Some(envelope_identity),
+        )
+    }
+
+    /// Recovers only the canonical envelope named by `receipt` before advancing to `Completed`.
+    pub(crate) fn recover_envelope_and_completed(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV2,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
+        if !publication.requires_envelope() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let envelope = self.inner.recover_load_envelope(receipt)?;
+        self.persist_envelope_and_completed(publication, attempt, intent, receipt, &envelope)
+    }
+
+    fn persist_completed_inner(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV2,
+        receipt: BackendPublicationReceiptV1,
+        envelope: Option<WorkerV2LoadEnvelopeIdentityV1>,
+    ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
+        let envelope = envelope.map_or([0; 32], |identity| identity.as_bytes());
+        let receipt = ReceiptRecordV1::from_receipt(receipt);
+        if intent.as_bytes() == [0; 32]
+            || receipt.is_zero()
+            || publication.requires_envelope() != (envelope != [0; 32])
+        {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        match self.load()? {
+            Some(ResumeMarkerStateV2::Ready {
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+                envelope_inputs,
+                intent: current_intent,
+            }) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent =>
+            {
+                let completed = ResumeMarkerStateV2::Completed {
+                    publication,
+                    attempt,
+                    admission,
+                    envelope_inputs,
+                    envelope,
+                    intent,
+                    receipt,
+                };
+                self.inner.write_protected(completed, true)?;
+                Ok(completed)
+            }
+            Some(
+                existing @ ResumeMarkerStateV2::Completed {
+                    publication: current_publication,
+                    attempt: current_attempt,
+                    intent: current_intent,
+                    receipt: current_receipt,
+                    envelope: current_envelope,
+                    ..
+                },
+            ) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent
+                && current_receipt == receipt
+                && current_envelope == envelope =>
+            {
+                Ok(existing)
+            }
+            _ => Err(ResumeMarkerErrorV1::InvalidTransition),
+        }
+    }
+
+    pub(crate) fn clear_completed(
+        &self,
+        expected: ResumeMarkerStateV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if !matches!(expected, ResumeMarkerStateV2::Completed { .. }) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.clear_exact(expected)
+    }
+
+    pub(crate) fn clear_completed_and_envelope_inputs(
+        &self,
+        expected: ResumeMarkerStateV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if !matches!(expected, ResumeMarkerStateV2::Completed { .. }) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.clear_exact_and_envelope_inputs(expected)
+    }
+
+    pub(crate) fn clear_abandoned_pending(
+        &self,
+        expected: ResumeMarkerStateV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if !matches!(expected, ResumeMarkerStateV2::Pending { .. }) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.clear_exact_and_envelope_inputs(expected)
+    }
+
+    fn clear_exact_and_envelope_inputs(
+        &self,
+        expected: ResumeMarkerStateV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let expected_inputs = if expected.publication().requires_envelope() {
+            let inputs = self.recover_envelope_inputs(expected.attempt())?;
+            if inputs.identity().as_bytes() != expected.envelope_inputs() {
+                return Err(self
+                    .inner
+                    .invalid("marker disagrees with its envelope input capsule"));
+            }
+            Some(inputs.identity())
+        } else {
+            None
+        };
+        self.clear_exact(expected)?;
+        if let Some(identity) = expected_inputs {
+            self.inner
+                .remove_envelope_inputs(expected.attempt(), identity)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn clear_exact(
+        &self,
+        expected: ResumeMarkerStateV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if self.load()? != Some(expected) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        unlinkat(
+            &self.inner.directory,
+            &self.inner.marker_name,
+            AtFlags::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        self.verify_output_path()?;
+        Ok(())
     }
 }
 
@@ -1885,25 +2378,369 @@ fn validate_private_file(
     Ok(())
 }
 
+trait MarkerIntentIdentity: Copy + Eq {
+    fn from_marker_bytes(bytes: [u8; 32]) -> Self;
+    fn marker_bytes(self) -> [u8; 32];
+}
+
+impl MarkerIntentIdentity for WorkerV2PublicationIntentIdentityV1 {
+    fn from_marker_bytes(bytes: [u8; 32]) -> Self {
+        Self::from_bytes(bytes)
+    }
+
+    fn marker_bytes(self) -> [u8; 32] {
+        self.as_bytes()
+    }
+}
+
+impl MarkerIntentIdentity for WorkerV2PublicationIntentIdentityV2 {
+    fn from_marker_bytes(bytes: [u8; 32]) -> Self {
+        Self::from_bytes(bytes)
+    }
+
+    fn marker_bytes(self) -> [u8; 32] {
+        self.as_bytes()
+    }
+}
+
+trait CanonicalMarkerSchema {
+    type Intent: MarkerIntentIdentity;
+
+    const VERSION: u16;
+    const DISCRIMINATOR: &'static [u8];
+    const ENCODED_BYTES: usize;
+}
+
+struct OrdinaryMarkerSchemaV1;
+
+impl CanonicalMarkerSchema for OrdinaryMarkerSchemaV1 {
+    type Intent = WorkerV2PublicationIntentIdentityV1;
+
+    const VERSION: u16 = MARKER_VERSION;
+    const DISCRIMINATOR: &'static [u8] = &[];
+    const ENCODED_BYTES: usize = MARKER_BYTES;
+}
+
+struct ProtectedMarkerSchemaV2;
+
+impl CanonicalMarkerSchema for ProtectedMarkerSchemaV2 {
+    type Intent = WorkerV2PublicationIntentIdentityV2;
+
+    const VERSION: u16 = PROTECTED_MARKER_VERSION;
+    const DISCRIMINATOR: &'static [u8] = &[PROTECTED_INTENT_SCHEMA_V2];
+    const ENCODED_BYTES: usize = PROTECTED_MARKER_BYTES;
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CanonicalMarkerState<I> {
+    Pending {
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        admission: [u8; 32],
+        envelope_inputs: [u8; 32],
+    },
+    Ready {
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        admission: [u8; 32],
+        envelope_inputs: [u8; 32],
+        intent: I,
+    },
+    Completed {
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        admission: [u8; 32],
+        envelope_inputs: [u8; 32],
+        envelope: [u8; 32],
+        intent: I,
+        receipt: ReceiptRecordV1,
+    },
+}
+
+impl<I: Copy> CanonicalMarkerState<I> {
+    const fn attempt(self) -> BuildAttempt {
+        match self {
+            Self::Pending { attempt, .. }
+            | Self::Ready { attempt, .. }
+            | Self::Completed { attempt, .. } => attempt,
+        }
+    }
+
+    const fn publication(self) -> WorkerV2PublicationKindV1 {
+        match self {
+            Self::Pending { publication, .. }
+            | Self::Ready { publication, .. }
+            | Self::Completed { publication, .. } => publication,
+        }
+    }
+
+    const fn admission(self) -> [u8; 32] {
+        match self {
+            Self::Pending { admission, .. }
+            | Self::Ready { admission, .. }
+            | Self::Completed { admission, .. } => admission,
+        }
+    }
+
+    const fn envelope_inputs(self) -> [u8; 32] {
+        match self {
+            Self::Pending {
+                envelope_inputs, ..
+            }
+            | Self::Ready {
+                envelope_inputs, ..
+            }
+            | Self::Completed {
+                envelope_inputs, ..
+            } => envelope_inputs,
+        }
+    }
+
+    const fn envelope(self) -> [u8; 32] {
+        match self {
+            Self::Pending { .. } | Self::Ready { .. } => [0; 32],
+            Self::Completed { envelope, .. } => envelope,
+        }
+    }
+}
+
+impl ResumeMarkerStateV1 {
+    fn into_canonical(
+        self,
+    ) -> Result<CanonicalMarkerState<WorkerV2PublicationIntentIdentityV1>, ()> {
+        match self {
+            Self::Pending {
+                legacy: false,
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+            } => Ok(CanonicalMarkerState::Pending {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+            }),
+            Self::Ready {
+                legacy: false,
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                intent,
+            } => Ok(CanonicalMarkerState::Ready {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                intent,
+            }),
+            Self::Completed {
+                legacy: false,
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                envelope,
+                intent,
+                receipt,
+            } => Ok(CanonicalMarkerState::Completed {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                envelope,
+                intent,
+                receipt,
+            }),
+            _ => Err(()),
+        }
+    }
+
+    fn from_canonical(state: CanonicalMarkerState<WorkerV2PublicationIntentIdentityV1>) -> Self {
+        match state {
+            CanonicalMarkerState::Pending {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+            } => Self::Pending {
+                legacy: false,
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+            },
+            CanonicalMarkerState::Ready {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                intent,
+            } => Self::Ready {
+                legacy: false,
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                intent,
+            },
+            CanonicalMarkerState::Completed {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                envelope,
+                intent,
+                receipt,
+            } => Self::Completed {
+                legacy: false,
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                envelope,
+                intent,
+                receipt,
+            },
+        }
+    }
+}
+
+impl From<ResumeMarkerStateV2> for CanonicalMarkerState<WorkerV2PublicationIntentIdentityV2> {
+    fn from(state: ResumeMarkerStateV2) -> Self {
+        match state {
+            ResumeMarkerStateV2::Pending {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+            } => Self::Pending {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+            },
+            ResumeMarkerStateV2::Ready {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                intent,
+            } => Self::Ready {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                intent,
+            },
+            ResumeMarkerStateV2::Completed {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                envelope,
+                intent,
+                receipt,
+            } => Self::Completed {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                envelope,
+                intent,
+                receipt,
+            },
+        }
+    }
+}
+
+impl From<CanonicalMarkerState<WorkerV2PublicationIntentIdentityV2>> for ResumeMarkerStateV2 {
+    fn from(state: CanonicalMarkerState<WorkerV2PublicationIntentIdentityV2>) -> Self {
+        match state {
+            CanonicalMarkerState::Pending {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+            } => Self::Pending {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+            },
+            CanonicalMarkerState::Ready {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                intent,
+            } => Self::Ready {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                intent,
+            },
+            CanonicalMarkerState::Completed {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                envelope,
+                intent,
+                receipt,
+            } => Self::Completed {
+                publication,
+                attempt,
+                admission,
+                envelope_inputs,
+                envelope,
+                intent,
+                receipt,
+            },
+        }
+    }
+}
+
 fn encode_marker(package: [u8; 32], state: ResumeMarkerStateV1) -> Vec<u8> {
-    debug_assert!(!state.is_legacy());
+    let canonical = state
+        .into_canonical()
+        .expect("legacy marker states cannot be encoded canonically");
+    encode_canonical_marker::<OrdinaryMarkerSchemaV1>(package, canonical)
+}
+
+fn encode_protected_marker(package: [u8; 32], state: ResumeMarkerStateV2) -> Vec<u8> {
+    encode_canonical_marker::<ProtectedMarkerSchemaV2>(package, state.into())
+}
+
+fn encode_canonical_marker<S: CanonicalMarkerSchema>(
+    package: [u8; 32],
+    state: CanonicalMarkerState<S::Intent>,
+) -> Vec<u8> {
     let attempt = state.attempt();
     let publication = state.publication();
     let admission = state.admission();
     let envelope_inputs = state.envelope_inputs();
     let envelope = state.envelope();
     let (stage, intent, receipt) = match state {
-        ResumeMarkerStateV1::Pending { .. } => (1, [0; 32], ReceiptRecordV1([[0; 32]; 7])),
-        ResumeMarkerStateV1::Ready { intent, .. } => {
-            (2, intent.as_bytes(), ReceiptRecordV1([[0; 32]; 7]))
+        CanonicalMarkerState::Pending { .. } => {
+            (1, [0; 32], ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]))
         }
-        ResumeMarkerStateV1::Completed {
+        CanonicalMarkerState::Ready { intent, .. } => (
+            2,
+            intent.marker_bytes(),
+            ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]),
+        ),
+        CanonicalMarkerState::Completed {
             intent, receipt, ..
-        } => (3, intent.as_bytes(), receipt),
+        } => (3, intent.marker_bytes(), receipt),
     };
-    let mut bytes = Vec::with_capacity(MARKER_BYTES);
+    let mut bytes = Vec::with_capacity(S::ENCODED_BYTES);
     bytes.extend_from_slice(MARKER_MAGIC);
-    bytes.extend_from_slice(&MARKER_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&S::VERSION.to_le_bytes());
+    bytes.extend_from_slice(S::DISCRIMINATOR);
     bytes.push(stage);
     bytes.push(publication.tag());
     bytes.extend_from_slice(&package);
@@ -1917,7 +2754,7 @@ fn encode_marker(package: [u8; 32], state: ResumeMarkerStateV1) -> Vec<u8> {
     receipt.encode(&mut bytes);
     let checksum = checksum(&bytes);
     bytes.extend_from_slice(&checksum);
-    debug_assert_eq!(bytes.len(), MARKER_BYTES);
+    debug_assert_eq!(bytes.len(), S::ENCODED_BYTES);
     bytes
 }
 
@@ -1941,7 +2778,10 @@ fn decode_marker(
     }
     let version = decoder.u16()?;
     match (version, bytes.len()) {
-        (MARKER_VERSION, MARKER_BYTES) => decode_marker_v3(&mut decoder, expected_package),
+        (MARKER_VERSION, MARKER_BYTES) => {
+            decode_canonical_marker_body::<OrdinaryMarkerSchemaV1>(&mut decoder, expected_package)
+                .map(ResumeMarkerStateV1::from_canonical)
+        }
         (PREVIOUS_MARKER_VERSION, PREVIOUS_MARKER_BYTES) => {
             decode_previous_marker_v2(&mut decoder, expected_package)
         }
@@ -1952,10 +2792,42 @@ fn decode_marker(
     }
 }
 
-fn decode_marker_v3(
+fn decode_protected_marker(
+    bytes: &[u8],
+    expected_package: [u8; 32],
+) -> Result<ResumeMarkerStateV2, &'static str> {
+    decode_canonical_marker::<ProtectedMarkerSchemaV2>(bytes, expected_package)
+        .map(ResumeMarkerStateV2::from)
+}
+
+fn decode_canonical_marker<S: CanonicalMarkerSchema>(
+    bytes: &[u8],
+    expected_package: [u8; 32],
+) -> Result<CanonicalMarkerState<S::Intent>, &'static str> {
+    if bytes.len() != S::ENCODED_BYTES {
+        return Err("marker has a noncanonical schema length");
+    }
+    let (body, encoded_checksum) = bytes.split_at(bytes.len() - 32);
+    if checksum(body).as_slice() != encoded_checksum {
+        return Err("marker checksum mismatch");
+    }
+    let mut decoder = Decoder::new(body);
+    if decoder.take(MARKER_MAGIC.len())? != MARKER_MAGIC {
+        return Err("marker magic mismatch");
+    }
+    if decoder.u16()? != S::VERSION {
+        return Err("unsupported marker schema version");
+    }
+    decode_canonical_marker_body::<S>(&mut decoder, expected_package)
+}
+
+fn decode_canonical_marker_body<S: CanonicalMarkerSchema>(
     decoder: &mut Decoder<'_>,
     expected_package: [u8; 32],
-) -> Result<ResumeMarkerStateV1, &'static str> {
+) -> Result<CanonicalMarkerState<S::Intent>, &'static str> {
+    if decoder.take(S::DISCRIMINATOR.len())? != S::DISCRIMINATOR {
+        return Err("marker intent schema mismatch");
+    }
     let stage = decoder.byte()?;
     let publication = WorkerV2PublicationKindV1::from_tag(decoder.byte()?)
         .ok_or("marker publication kind is noncanonical")?;
@@ -1974,7 +2846,7 @@ fn decode_marker_v3(
     let admission = decoder.array()?;
     let envelope_inputs = decoder.array()?;
     let envelope = decoder.array()?;
-    let intent = WorkerV2PublicationIntentIdentityV1::from_bytes(decoder.array()?);
+    let intent = S::Intent::from_marker_bytes(decoder.array()?);
     let receipt = ReceiptRecordV1::decode(decoder)?;
     if !decoder.finished() {
         return Err("marker has trailing body bytes");
@@ -1985,11 +2857,10 @@ fn decode_marker_v3(
         1 if admission != [0; 32]
             && input_fields_valid
             && envelope == [0; 32]
-            && intent.as_bytes() == [0; 32]
+            && intent.marker_bytes() == [0; 32]
             && receipt.is_zero() =>
         {
-            Ok(ResumeMarkerStateV1::Pending {
-                legacy: false,
+            Ok(CanonicalMarkerState::Pending {
                 publication,
                 attempt,
                 admission,
@@ -1999,11 +2870,10 @@ fn decode_marker_v3(
         2 if admission != [0; 32]
             && input_fields_valid
             && envelope == [0; 32]
-            && intent.as_bytes() != [0; 32]
+            && intent.marker_bytes() != [0; 32]
             && receipt.is_zero() =>
         {
-            Ok(ResumeMarkerStateV1::Ready {
-                legacy: false,
+            Ok(CanonicalMarkerState::Ready {
                 publication,
                 attempt,
                 admission,
@@ -2014,11 +2884,10 @@ fn decode_marker_v3(
         3 if admission != [0; 32]
             && input_fields_valid
             && required == (envelope != [0; 32])
-            && intent.as_bytes() != [0; 32]
+            && intent.marker_bytes() != [0; 32]
             && !receipt.is_zero() =>
         {
-            Ok(ResumeMarkerStateV1::Completed {
-                legacy: false,
+            Ok(CanonicalMarkerState::Completed {
                 publication,
                 attempt,
                 admission,
@@ -2362,6 +3231,65 @@ mod tests {
         bytes
     }
 
+    fn marker_v3_bytes(package: [u8; 32], state: ResumeMarkerStateV1) -> Vec<u8> {
+        assert!(!state.is_legacy());
+        let attempt = state.attempt();
+        let publication = state.publication();
+        let admission = state.admission();
+        let envelope_inputs = state.envelope_inputs();
+        let envelope = state.envelope();
+        let (stage, intent, receipt) = match state {
+            ResumeMarkerStateV1::Pending { .. } => {
+                (1, [0; 32], ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]))
+            }
+            ResumeMarkerStateV1::Ready { intent, .. } => (
+                2,
+                intent.as_bytes(),
+                ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]),
+            ),
+            ResumeMarkerStateV1::Completed {
+                intent, receipt, ..
+            } => (3, intent.as_bytes(), receipt),
+        };
+        let mut bytes = Vec::with_capacity(MARKER_BYTES);
+        bytes.extend_from_slice(MARKER_MAGIC);
+        bytes.extend_from_slice(&MARKER_VERSION.to_le_bytes());
+        bytes.push(stage);
+        bytes.push(publication.tag());
+        bytes.extend_from_slice(&package);
+        bytes.extend_from_slice(&attempt.generation().to_le_bytes());
+        bytes.extend_from_slice(attempt.session().as_bytes());
+        bytes.extend_from_slice(attempt.invocation().as_bytes());
+        bytes.extend_from_slice(&admission);
+        bytes.extend_from_slice(&envelope_inputs);
+        bytes.extend_from_slice(&envelope);
+        bytes.extend_from_slice(&intent);
+        receipt.encode(&mut bytes);
+        let checksum = checksum(&bytes);
+        bytes.extend_from_slice(&checksum);
+        assert_eq!(bytes.len(), MARKER_BYTES);
+        bytes
+    }
+
+    fn fixed_attempt() -> BuildAttempt {
+        BuildAttempt::from_env_value(&format!(
+            "7:{}:{}",
+            BuildSession::from_bytes([0x11; 16]).to_hex(),
+            BuildInvocation::from_bytes([0x22; 32]).to_hex()
+        ))
+        .unwrap()
+    }
+
+    fn marker_sha256(bytes: &[u8]) -> String {
+        hex(&Sha256::digest(bytes))
+    }
+
+    fn reseal_marker(bytes: &mut [u8]) {
+        let body_len = bytes.len() - 32;
+        let digest = checksum(&bytes[..body_len]);
+        bytes[body_len..].copy_from_slice(&digest);
+    }
+
     fn install_marker(store: &WorkerV2ResumeStoreV1, bytes: &[u8]) {
         let path = store.display_path.join(&store.marker_name);
         fs::write(&path, bytes).unwrap();
@@ -2442,6 +3370,403 @@ mod tests {
             .unwrap();
         store.clear_completed(completed).unwrap();
         assert_eq!(store.load().unwrap(), None);
+    }
+
+    #[test]
+    fn ordinary_v1_v2_v3_marker_bytes_match_fixed_goldens() {
+        let package = [0x2a; 32];
+        let attempt = fixed_attempt();
+        let empty_receipt = ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]);
+        let v1 = legacy_marker_bytes(package, attempt, 2, [0x44; 32], empty_receipt);
+        let v2 = previous_marker_bytes(
+            package,
+            WorkerV2PublicationKindV1::Finalized,
+            attempt,
+            2,
+            [0x33; 32],
+            [0x44; 32],
+            empty_receipt,
+        );
+        let state_v3 = ResumeMarkerStateV1::Ready {
+            legacy: false,
+            publication: WorkerV2PublicationKindV1::Finalized,
+            attempt,
+            admission: [0x33; 32],
+            envelope_inputs: [0; 32],
+            intent: WorkerV2PublicationIntentIdentityV1::from_bytes([0x44; 32]),
+        };
+        let v3 = encode_marker(package, state_v3);
+        let independently_encoded_v3 = marker_v3_bytes(package, state_v3);
+
+        assert_eq!(v3, independently_encoded_v3);
+        assert_eq!(
+            marker_sha256(&v1),
+            "a379fdd88a0928a362a0922e51fce83a603ec33c4306bb0648f6b053fe10712f"
+        );
+        assert_eq!(
+            marker_sha256(&v2),
+            "897e7f443aa155e352f66073ebee8bdd8b359c22ece67ab4cd34686fb2f86816"
+        );
+        assert_eq!(
+            marker_sha256(&v3),
+            "7764c36932904b5069adb7e0ba5527d1e6275fe7b5583afdee086f1012af8d51"
+        );
+        assert!(matches!(
+            decode_marker(&v1, package),
+            Ok(ResumeMarkerStateV1::Ready {
+                legacy: true,
+                intent,
+                ..
+            }) if intent.as_bytes() == [0x44; 32]
+        ));
+        assert!(matches!(
+            decode_marker(&v2, package),
+            Ok(ResumeMarkerStateV1::Ready {
+                legacy: false,
+                publication: WorkerV2PublicationKindV1::Finalized,
+                intent,
+                ..
+            }) if intent.as_bytes() == [0x44; 32]
+        ));
+        assert_eq!(decode_marker(&v3, package), Ok(state_v3));
+    }
+
+    #[test]
+    fn protected_v4_state_machine_round_trips_exactly() {
+        let directory = TestDirectory::new();
+        let producer = producer(101);
+        let attempt = attempt(&directory.0, &producer, 101);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let admission = [0x31; 32];
+        let intent = WorkerV2PublicationIntentIdentityV2::from_bytes([0x41; 32]);
+
+        assert_eq!(store.load().unwrap(), None);
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
+        let pending = ResumeMarkerStateV2::Pending {
+            publication,
+            attempt,
+            admission,
+            envelope_inputs: [0; 32],
+        };
+        assert_eq!(store.load().unwrap(), Some(pending));
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
+
+        store.persist_ready(publication, attempt, intent).unwrap();
+        let ready = ResumeMarkerStateV2::Ready {
+            publication,
+            attempt,
+            admission,
+            envelope_inputs: [0; 32],
+            intent,
+        };
+        assert_eq!(store.load().unwrap(), Some(ready));
+        store.persist_ready(publication, attempt, intent).unwrap();
+
+        let receipt = receipt(&directory.0, &producer, attempt, 102);
+        let completed = store
+            .persist_completed(publication, attempt, intent, receipt)
+            .unwrap();
+        assert!(matches!(completed, ResumeMarkerStateV2::Completed { .. }));
+        assert_eq!(store.load().unwrap(), Some(completed));
+        assert_eq!(
+            store
+                .persist_completed(publication, attempt, intent, receipt)
+                .unwrap(),
+            completed
+        );
+
+        let marker = fs::read(
+            store
+                .inner
+                .display_path
+                .join(store.inner.marker_name.as_str()),
+        )
+        .unwrap();
+        assert_eq!(marker.len(), PROTECTED_MARKER_BYTES);
+        assert_eq!(
+            &marker[MARKER_MAGIC.len()..MARKER_MAGIC.len() + 2],
+            &PROTECTED_MARKER_VERSION.to_le_bytes()
+        );
+        assert_eq!(marker[MARKER_MAGIC.len() + 2], PROTECTED_INTENT_SCHEMA_V2);
+
+        store.clear_completed(completed).unwrap();
+        assert_eq!(store.load().unwrap(), None);
+    }
+
+    #[test]
+    fn protected_v4_store_rejects_invalid_transitions_without_changing_state() {
+        let directory = TestDirectory::new();
+        let producer = producer(105);
+        let attempt = attempt(&directory.0, &producer, 105);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let intent = WorkerV2PublicationIntentIdentityV2::from_bytes([0x41; 32]);
+
+        assert!(matches!(
+            store.persist_ready(publication, attempt, intent),
+            Err(ResumeMarkerErrorV1::InvalidTransition)
+        ));
+        store
+            .persist_pending(publication, attempt, [0x31; 32])
+            .unwrap();
+        let pending = store.load().unwrap().unwrap();
+        assert!(matches!(
+            store.persist_ready(
+                publication,
+                attempt,
+                WorkerV2PublicationIntentIdentityV2::from_bytes([0; 32]),
+            ),
+            Err(ResumeMarkerErrorV1::InvalidTransition)
+        ));
+        assert!(matches!(
+            store.persist_ready(WorkerV2PublicationKindV1::Raw, attempt, intent),
+            Err(ResumeMarkerErrorV1::InvalidTransition)
+        ));
+        assert_eq!(store.load().unwrap(), Some(pending));
+        store.clear_abandoned_pending(pending).unwrap();
+        assert_eq!(store.load().unwrap(), None);
+    }
+
+    #[test]
+    fn protected_v4_store_rejects_files_beyond_the_canonical_bound() {
+        let directory = TestDirectory::new();
+        let producer = producer(106);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let marker_path = store
+            .inner
+            .display_path
+            .join(store.inner.marker_name.as_str());
+        drop(store);
+        fs::write(&marker_path, vec![0; PROTECTED_MARKER_BYTES + 1]).unwrap();
+        fs::set_permissions(&marker_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(WorkerV2ResumeStoreV2::open(&directory.0, &producer).is_err());
+    }
+
+    #[test]
+    fn protected_v4_codec_accepts_every_canonical_stage_and_required_shape() {
+        let package = [0x2a; 32];
+        let attempt = fixed_attempt();
+        let publication = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
+        let intent = WorkerV2PublicationIntentIdentityV2::from_bytes([0x44; 32]);
+        let states = [
+            ResumeMarkerStateV2::Pending {
+                publication,
+                attempt,
+                admission: [0x33; 32],
+                envelope_inputs: [0x34; 32],
+            },
+            ResumeMarkerStateV2::Ready {
+                publication,
+                attempt,
+                admission: [0x33; 32],
+                envelope_inputs: [0x34; 32],
+                intent,
+            },
+            ResumeMarkerStateV2::Completed {
+                publication,
+                attempt,
+                admission: [0x33; 32],
+                envelope_inputs: [0x34; 32],
+                envelope: [0x35; 32],
+                intent,
+                receipt: ReceiptRecordV1([[0x55; 32]; RECEIPT_FIELDS]),
+            },
+        ];
+
+        for state in states {
+            let encoded = encode_protected_marker(package, state);
+            assert_eq!(encoded.len(), PROTECTED_MARKER_BYTES);
+            assert_eq!(decode_protected_marker(&encoded, package), Ok(state));
+        }
+    }
+
+    #[test]
+    fn protected_v4_rejects_truncation_trailing_bytes_and_noncanonical_fields() {
+        let package = [0x2a; 32];
+        let attempt = fixed_attempt();
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let canonical = ResumeMarkerStateV2::Ready {
+            publication,
+            attempt,
+            admission: [0x33; 32],
+            envelope_inputs: [0; 32],
+            intent: WorkerV2PublicationIntentIdentityV2::from_bytes([0x44; 32]),
+        };
+        let encoded = encode_protected_marker(package, canonical);
+
+        for length in 0..encoded.len() {
+            assert!(
+                decode_protected_marker(&encoded[..length], package).is_err(),
+                "truncation at {length} bytes was accepted"
+            );
+        }
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(decode_protected_marker(&trailing, package).is_err());
+        assert!(decode_protected_marker(&encoded, [0x2b; 32]).is_err());
+
+        let invalid = [
+            ResumeMarkerStateV2::Pending {
+                publication,
+                attempt,
+                admission: [0; 32],
+                envelope_inputs: [0; 32],
+            },
+            ResumeMarkerStateV2::Pending {
+                publication,
+                attempt,
+                admission: [0x33; 32],
+                envelope_inputs: [0x34; 32],
+            },
+            ResumeMarkerStateV2::Ready {
+                publication,
+                attempt,
+                admission: [0x33; 32],
+                envelope_inputs: [0; 32],
+                intent: WorkerV2PublicationIntentIdentityV2::from_bytes([0; 32]),
+            },
+            ResumeMarkerStateV2::Completed {
+                publication,
+                attempt,
+                admission: [0x33; 32],
+                envelope_inputs: [0; 32],
+                envelope: [0; 32],
+                intent: WorkerV2PublicationIntentIdentityV2::from_bytes([0x44; 32]),
+                receipt: ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]),
+            },
+        ];
+        for state in invalid {
+            assert!(
+                decode_protected_marker(&encode_protected_marker(package, state), package).is_err()
+            );
+        }
+
+        let required_without_envelope = ResumeMarkerStateV2::Completed {
+            publication: WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+            attempt,
+            admission: [0x33; 32],
+            envelope_inputs: [0x34; 32],
+            envelope: [0; 32],
+            intent: WorkerV2PublicationIntentIdentityV2::from_bytes([0x44; 32]),
+            receipt: ReceiptRecordV1([[0x55; 32]; RECEIPT_FIELDS]),
+        };
+        assert!(
+            decode_protected_marker(
+                &encode_protected_marker(package, required_without_envelope),
+                package,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn ordinary_and_protected_marker_schemas_reject_downgrade_and_cross_use() {
+        let package = [0x2a; 32];
+        let attempt = fixed_attempt();
+        let empty_receipt = ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]);
+        let ordinary_v1 = legacy_marker_bytes(package, attempt, 2, [0x44; 32], empty_receipt);
+        let ordinary_v2 = previous_marker_bytes(
+            package,
+            WorkerV2PublicationKindV1::Finalized,
+            attempt,
+            2,
+            [0x33; 32],
+            [0x44; 32],
+            empty_receipt,
+        );
+        let ordinary_v3 = encode_marker(
+            package,
+            ResumeMarkerStateV1::Ready {
+                legacy: false,
+                publication: WorkerV2PublicationKindV1::Finalized,
+                attempt,
+                admission: [0x33; 32],
+                envelope_inputs: [0; 32],
+                intent: WorkerV2PublicationIntentIdentityV1::from_bytes([0x44; 32]),
+            },
+        );
+        let protected_v4 = encode_protected_marker(
+            package,
+            ResumeMarkerStateV2::Ready {
+                publication: WorkerV2PublicationKindV1::Finalized,
+                attempt,
+                admission: [0x33; 32],
+                envelope_inputs: [0; 32],
+                intent: WorkerV2PublicationIntentIdentityV2::from_bytes([0x44; 32]),
+            },
+        );
+
+        for ordinary in [&ordinary_v1, &ordinary_v2, &ordinary_v3] {
+            assert!(decode_protected_marker(ordinary, package).is_err());
+        }
+        assert!(decode_marker(&protected_v4, package).is_err());
+
+        for version in [
+            0,
+            LEGACY_MARKER_VERSION,
+            PREVIOUS_MARKER_VERSION,
+            MARKER_VERSION,
+            PROTECTED_MARKER_VERSION + 1,
+            u16::MAX,
+        ] {
+            let mut wrong_version = protected_v4.clone();
+            wrong_version[MARKER_MAGIC.len()..MARKER_MAGIC.len() + 2]
+                .copy_from_slice(&version.to_le_bytes());
+            reseal_marker(&mut wrong_version);
+            assert!(decode_protected_marker(&wrong_version, package).is_err());
+            assert!(decode_marker(&wrong_version, package).is_err());
+        }
+
+        let mut upgraded = ordinary_v3.clone();
+        upgraded[MARKER_MAGIC.len()..MARKER_MAGIC.len() + 2]
+            .copy_from_slice(&PROTECTED_MARKER_VERSION.to_le_bytes());
+        reseal_marker(&mut upgraded);
+        assert!(decode_marker(&upgraded, package).is_err());
+        assert!(decode_protected_marker(&upgraded, package).is_err());
+
+        let mut cross_schema = protected_v4;
+        cross_schema[MARKER_MAGIC.len() + 2] = 1;
+        reseal_marker(&mut cross_schema);
+        assert!(decode_protected_marker(&cross_schema, package).is_err());
+    }
+
+    #[test]
+    fn ordinary_and_protected_stores_reject_each_others_markers() {
+        let ordinary_directory = TestDirectory::new();
+        let ordinary_producer = producer(103);
+        let ordinary_attempt = attempt(&ordinary_directory.0, &ordinary_producer, 103);
+        let ordinary_store =
+            WorkerV2ResumeStoreV1::open(&ordinary_directory.0, &ordinary_producer).unwrap();
+        ordinary_store
+            .persist_pending(
+                WorkerV2PublicationKindV1::Finalized,
+                ordinary_attempt,
+                [0x33; 32],
+            )
+            .unwrap();
+        drop(ordinary_store);
+        assert!(WorkerV2ResumeStoreV2::open(&ordinary_directory.0, &ordinary_producer).is_err());
+
+        let protected_directory = TestDirectory::new();
+        let protected_producer = producer(104);
+        let protected_attempt = attempt(&protected_directory.0, &protected_producer, 104);
+        let protected_store =
+            WorkerV2ResumeStoreV2::open(&protected_directory.0, &protected_producer).unwrap();
+        protected_store
+            .persist_pending(
+                WorkerV2PublicationKindV1::Finalized,
+                protected_attempt,
+                [0x33; 32],
+            )
+            .unwrap();
+        drop(protected_store);
+        assert!(WorkerV2ResumeStoreV1::open(&protected_directory.0, &protected_producer).is_err());
     }
 
     #[test]
