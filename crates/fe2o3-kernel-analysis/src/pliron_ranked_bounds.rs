@@ -11,8 +11,9 @@ use std::{
 };
 
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, DimensionOp, IndexConstantOp, IndexLessThanBranchOp, RankedAccessOp,
-    RankedViewOp, RankedViewType, ReturnOp, ranked_view_type,
+    AccessKindAttr, BranchOp, DimensionOp, IndexConstantOp, IndexLessThanBranchOp,
+    MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
+    ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -29,6 +30,13 @@ use crate::KernelCheckPassKindV1;
 
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
 pub const MAX_RANKED_BOUNDS_OPERATIONS: usize = 65_536;
+pub const MAX_RANKED_BOUNDS_EDGES: usize = MAX_RANKED_BOUNDS_BLOCKS * 2;
+pub const MAX_RANKED_BOUNDS_FACTS: usize = MAX_RANKED_BOUNDS_BLOCKS;
+pub const MAX_RANKED_BOUNDS_OPERATION_ITEMS: usize =
+    MAX_RANKED_BOUNDS_OPERATIONS * (MAX_RANKED_MEMORY_RANK + 4);
+pub const MAX_RANKED_BOUNDS_FINDINGS: usize = 4_096;
+pub const MAX_RANKED_BOUNDS_STORAGE_ITEMS: usize = 131_072;
+pub const MAX_RANKED_BOUNDS_WORK_UNITS: usize = MAX_RANKED_BOUNDS_OPERATIONS * 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RankedBoundsStatusV1 {
@@ -50,6 +58,11 @@ pub enum RankedBoundsFindingV1 {
     UnsupportedTerminator {
         block: usize,
         operation: String,
+    },
+    UnsupportedOperation {
+        block: usize,
+        operation: usize,
+        kind: String,
     },
     StaticOutOfBounds {
         block: usize,
@@ -92,6 +105,14 @@ impl fmt::Display for RankedBoundsFindingV1 {
             Self::UnsupportedTerminator { block, operation } => write!(
                 formatter,
                 "error[FE2O3-BOUNDS-003]: block {block} uses unsupported terminator {operation}",
+            ),
+            Self::UnsupportedOperation {
+                block,
+                operation,
+                kind,
+            } => write!(
+                formatter,
+                "error[FE2O3-BOUNDS-003]: block {block} op {operation} uses unsupported operation {kind}",
             ),
             Self::StaticOutOfBounds {
                 block,
@@ -217,6 +238,144 @@ struct PredecessorEdge {
     guard_fact: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RankedOperationKind {
+    RankedView,
+    IndexConstant,
+    Dimension,
+    RankedAccess,
+    IndexLessThanBranch,
+    Branch,
+    Return,
+}
+
+impl RankedOperationKind {
+    const fn is_terminator(self) -> bool {
+        matches!(
+            self,
+            Self::IndexLessThanBranch | Self::Branch | Self::Return
+        )
+    }
+}
+
+fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
+    if operation.downcast_ref::<RankedViewOp>().is_some() {
+        Some(RankedOperationKind::RankedView)
+    } else if operation.downcast_ref::<IndexConstantOp>().is_some() {
+        Some(RankedOperationKind::IndexConstant)
+    } else if operation.downcast_ref::<DimensionOp>().is_some() {
+        Some(RankedOperationKind::Dimension)
+    } else if operation.downcast_ref::<RankedAccessOp>().is_some() {
+        Some(RankedOperationKind::RankedAccess)
+    } else if operation.downcast_ref::<IndexLessThanBranchOp>().is_some() {
+        Some(RankedOperationKind::IndexLessThanBranch)
+    } else if operation.downcast_ref::<BranchOp>().is_some() {
+        Some(RankedOperationKind::Branch)
+    } else if operation.downcast_ref::<ReturnOp>().is_some() {
+        Some(RankedOperationKind::Return)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RankedBoundsResource {
+    Blocks,
+    Operations,
+    Edges,
+    Facts,
+    OperationItems,
+    Findings,
+    StorageItems,
+    WorkUnits,
+}
+
+impl RankedBoundsResource {
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Blocks => "basic block",
+            Self::Operations => "operation",
+            Self::Edges => "CFG edge",
+            Self::Facts => "guard fact",
+            Self::OperationItems => "operation component",
+            Self::Findings => "finding",
+            Self::StorageItems => "analysis storage item",
+            Self::WorkUnits => "analysis work unit",
+        }
+    }
+
+    const fn limit(self) -> usize {
+        match self {
+            Self::Blocks => MAX_RANKED_BOUNDS_BLOCKS,
+            Self::Operations => MAX_RANKED_BOUNDS_OPERATIONS,
+            Self::Edges => MAX_RANKED_BOUNDS_EDGES,
+            Self::Facts => MAX_RANKED_BOUNDS_FACTS,
+            Self::OperationItems => MAX_RANKED_BOUNDS_OPERATION_ITEMS,
+            Self::Findings => MAX_RANKED_BOUNDS_FINDINGS,
+            Self::StorageItems => MAX_RANKED_BOUNDS_STORAGE_ITEMS,
+            Self::WorkUnits => MAX_RANKED_BOUNDS_WORK_UNITS,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RankedBoundsBudget {
+    blocks: usize,
+    operations: usize,
+    edges: usize,
+    facts: usize,
+    operation_items: usize,
+    findings: usize,
+    storage_items: usize,
+    work_units: usize,
+}
+
+impl RankedBoundsBudget {
+    fn reserve(
+        &mut self,
+        resource: RankedBoundsResource,
+        amount: usize,
+    ) -> Result<(), RankedBoundsFindingV1> {
+        let current = match resource {
+            RankedBoundsResource::Blocks => self.blocks,
+            RankedBoundsResource::Operations => self.operations,
+            RankedBoundsResource::Edges => self.edges,
+            RankedBoundsResource::Facts => self.facts,
+            RankedBoundsResource::OperationItems => self.operation_items,
+            RankedBoundsResource::Findings => self.findings,
+            RankedBoundsResource::StorageItems => self.storage_items,
+            RankedBoundsResource::WorkUnits => self.work_units,
+        };
+        let actual = current.saturating_add(amount);
+        if actual > resource.limit() {
+            return Err(RankedBoundsFindingV1::ResourceLimitExceeded {
+                resource: resource.description(),
+                limit: resource.limit(),
+                actual,
+            });
+        }
+        match resource {
+            RankedBoundsResource::Blocks => self.blocks = actual,
+            RankedBoundsResource::Operations => self.operations = actual,
+            RankedBoundsResource::Edges => self.edges = actual,
+            RankedBoundsResource::Facts => self.facts = actual,
+            RankedBoundsResource::OperationItems => self.operation_items = actual,
+            RankedBoundsResource::Findings => self.findings = actual,
+            RankedBoundsResource::StorageItems => self.storage_items = actual,
+            RankedBoundsResource::WorkUnits => self.work_units = actual,
+        }
+        Ok(())
+    }
+
+    fn storage(&mut self, amount: usize) -> Result<(), RankedBoundsFindingV1> {
+        self.reserve(RankedBoundsResource::StorageItems, amount)
+    }
+
+    fn work(&mut self, amount: usize) -> Result<(), RankedBoundsFindingV1> {
+        self.reserve(RankedBoundsResource::WorkUnits, amount)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct FactSet {
     words: Vec<u64>,
@@ -270,30 +429,93 @@ pub fn run_pliron_ranked_bounds_check_v1(
     context: &Context,
     function: &FuncOp,
 ) -> RankedBoundsReportV1 {
+    let mut budget = RankedBoundsBudget::default();
     let region = function.get_region(context);
-    let blocks = region.deref(context).iter(context).collect::<Vec<_>>();
-    if blocks.len() > MAX_RANKED_BOUNDS_BLOCKS {
-        return resource_failure("basic block", MAX_RANKED_BOUNDS_BLOCKS, blocks.len());
-    }
-    let Some(operation_count) = blocks.iter().try_fold(0_usize, |total, block| {
-        total.checked_add(block.deref(context).iter(context).count())
-    }) else {
-        return resource_failure("operation", MAX_RANKED_BOUNDS_OPERATIONS, usize::MAX);
-    };
-    if operation_count > MAX_RANKED_BOUNDS_OPERATIONS {
-        return resource_failure("operation", MAX_RANKED_BOUNDS_OPERATIONS, operation_count);
-    }
-    if verify_operation(function.get_operation(), context).is_err() {
-        return RankedBoundsReportV1 {
-            findings: vec![RankedBoundsFindingV1::StructuralVerificationFailed],
-        };
+    let mut blocks = Vec::new();
+    for block in region.deref(context).iter(context) {
+        if let Err(finding) = budget.reserve(RankedBoundsResource::Blocks, 1) {
+            return finding_failure(finding);
+        }
+        if let Err(finding) = budget.storage(1) {
+            return finding_failure(finding);
+        }
+        blocks.push(block);
     }
     if blocks.is_empty() {
-        return RankedBoundsReportV1 {
-            findings: vec![RankedBoundsFindingV1::StructuralVerificationFailed],
-        };
+        return structural_failure();
     }
 
+    // Close the accepted language before recursive Pliron verification. Every
+    // admitted body operation is regionless, so an unknown operation cannot
+    // hide an unmetered nested graph from this analysis.
+    for (block_index, block) in blocks.iter().enumerate() {
+        let terminator = block.deref(context).get_terminator(context);
+        for (operation_index, operation_pointer) in block.deref(context).iter(context).enumerate() {
+            if let Err(finding) = budget.reserve(RankedBoundsResource::Operations, 1) {
+                return finding_failure(finding);
+            }
+            let operation = Operation::get_op_dyn(operation_pointer, context);
+            let Some(kind) = ranked_operation_kind(operation.as_ref()) else {
+                let finding = if terminator == Some(operation_pointer) {
+                    RankedBoundsFindingV1::UnsupportedTerminator {
+                        block: block_index,
+                        operation: operation.get_opid().to_string(),
+                    }
+                } else {
+                    RankedBoundsFindingV1::UnsupportedOperation {
+                        block: block_index,
+                        operation: operation_index,
+                        kind: operation.get_opid().to_string(),
+                    }
+                };
+                return finding_failure(finding);
+            };
+            if kind.is_terminator() != (terminator == Some(operation_pointer)) {
+                return structural_failure();
+            }
+
+            let raw = operation_pointer.deref(context);
+            if raw.num_regions() != 0 {
+                return structural_failure();
+            }
+            let Some(operation_items) = raw
+                .get_num_operands()
+                .checked_add(raw.get_num_results())
+                .and_then(|total| total.checked_add(raw.get_num_successors()))
+                .and_then(|total| total.checked_add(raw.attributes.0.len()))
+            else {
+                return resource_failure(
+                    RankedBoundsResource::OperationItems.description(),
+                    RankedBoundsResource::OperationItems.limit(),
+                    usize::MAX,
+                );
+            };
+            if let Err(finding) =
+                budget.reserve(RankedBoundsResource::OperationItems, operation_items)
+            {
+                return finding_failure(finding);
+            }
+            if let Err(finding) =
+                budget.reserve(RankedBoundsResource::Edges, raw.get_num_successors())
+            {
+                return finding_failure(finding);
+            }
+            if let Err(finding) = budget.work(operation_items.saturating_add(1)) {
+                return finding_failure(finding);
+            }
+        }
+    }
+
+    if verify_operation(function.get_operation(), context).is_err() {
+        return structural_failure();
+    }
+
+    if let Err(finding) = budget.storage(blocks.len().saturating_mul(3)) {
+        return finding_failure(finding);
+    }
+    if let Err(finding) = budget.work(blocks.len()) {
+        return finding_failure(finding);
+    }
     let indices = blocks
         .iter()
         .enumerate()
@@ -306,9 +528,7 @@ pub fn run_pliron_ranked_bounds_check_v1(
 
     for (block_index, block) in blocks.iter().enumerate() {
         let Some(terminator) = block.deref(context).get_terminator(context) else {
-            return RankedBoundsReportV1 {
-                findings: vec![RankedBoundsFindingV1::StructuralVerificationFailed],
-            };
+            return structural_failure();
         };
         let operation = Operation::get_op_dyn(terminator, context);
         let guard_fact = if let Some(branch) = operation.downcast_ref::<IndexLessThanBranchOp>() {
@@ -316,19 +536,39 @@ pub fn run_pliron_ranked_bounds_check_v1(
                 lhs: canonical_index_expr(branch.lhs(context), context),
                 rhs: canonical_index_expr(branch.rhs(context), context),
             };
-            let next = fact_indices.len();
-            Some(*fact_indices.entry(fact).or_insert(next))
+            if let Some(index) = fact_indices.get(&fact).copied() {
+                Some(index)
+            } else {
+                if let Err(finding) = budget.reserve(RankedBoundsResource::Facts, 1) {
+                    return finding_failure(finding);
+                }
+                if let Err(finding) = budget.storage(1) {
+                    return finding_failure(finding);
+                }
+                let next = fact_indices.len();
+                fact_indices.insert(fact, next);
+                Some(next)
+            }
         } else {
             None
         };
 
         let raw = terminator.deref(context);
         for (successor_index, successor) in raw.successors().enumerate() {
+            if let Err(finding) = budget.work(1) {
+                return finding_failure(finding);
+            }
             let Some(target) = indices.get(&successor).copied() else {
-                findings.push(RankedBoundsFindingV1::UnsupportedTerminator {
-                    block: block_index,
-                    operation: "successor outside function region".to_owned(),
-                });
+                if let Err(finding) = push_finding(
+                    &mut findings,
+                    &mut budget,
+                    RankedBoundsFindingV1::UnsupportedTerminator {
+                        block: block_index,
+                        operation: "successor outside function region".to_owned(),
+                    },
+                ) {
+                    return finding_failure(finding);
+                }
                 continue;
             };
             successors[block_index].push(target);
@@ -337,26 +577,53 @@ pub fn run_pliron_ranked_bounds_check_v1(
                 guard_fact: (successor_index == 0).then_some(guard_fact).flatten(),
             });
         }
-
-        if operation.downcast_ref::<IndexLessThanBranchOp>().is_none()
-            && operation.downcast_ref::<BranchOp>().is_none()
-            && operation.downcast_ref::<ReturnOp>().is_none()
-        {
-            findings.push(RankedBoundsFindingV1::UnsupportedTerminator {
-                block: block_index,
-                operation: operation.get_opid().to_string(),
-            });
-        }
     }
 
-    let reachable = reachable_blocks(&successors);
+    if let Err(finding) = budget.storage(budget.edges.saturating_mul(2)) {
+        return finding_failure(finding);
+    }
+    if let Err(finding) = budget.storage(blocks.len().saturating_mul(2)) {
+        return finding_failure(finding);
+    }
+    let reachable = match reachable_blocks(&successors, &mut budget) {
+        Ok(reachable) => reachable,
+        Err(finding) => return finding_failure(finding),
+    };
     for (block, is_reachable) in reachable.iter().copied().enumerate() {
-        if !is_reachable {
-            findings.push(RankedBoundsFindingV1::UnreachableBlock { block });
+        if !is_reachable
+            && let Err(finding) = push_finding(
+                &mut findings,
+                &mut budget,
+                RankedBoundsFindingV1::UnreachableBlock { block },
+            )
+        {
+            return finding_failure(finding);
         }
     }
 
     let fact_count = fact_indices.len();
+    let fact_words = fact_count.div_ceil(u64::BITS as usize);
+    let Some(input_words) = blocks.len().checked_mul(fact_words) else {
+        return resource_failure(
+            RankedBoundsResource::StorageItems.description(),
+            RankedBoundsResource::StorageItems.limit(),
+            usize::MAX,
+        );
+    };
+    let Some(dataflow_storage) = blocks
+        .len()
+        .checked_mul(3)
+        .and_then(|outer| outer.checked_add(input_words))
+    else {
+        return resource_failure(
+            RankedBoundsResource::StorageItems.description(),
+            RankedBoundsResource::StorageItems.limit(),
+            usize::MAX,
+        );
+    };
+    if let Err(finding) = budget.storage(dataflow_storage) {
+        return finding_failure(finding);
+    }
     let mut inputs = (0..blocks.len())
         .map(|block| {
             if block == 0 {
@@ -375,11 +642,26 @@ pub fn run_pliron_ranked_bounds_check_v1(
         let next = if block == 0 {
             FactSet::empty(fact_count)
         } else {
-            intersect_predecessor_facts(block, &predecessors, &inputs, fact_count)
+            match intersect_predecessor_facts(
+                block,
+                &predecessors,
+                &inputs,
+                fact_count,
+                &mut budget,
+            ) {
+                Ok(next) => next,
+                Err(finding) => return finding_failure(finding),
+            }
         };
+        if let Err(finding) = budget.work(1) {
+            return finding_failure(finding);
+        }
         if next != inputs[block] {
             inputs[block] = next;
             for successor in &successors[block] {
+                if let Err(finding) = budget.work(1) {
+                    return finding_failure(finding);
+                }
                 if reachable[*successor] && !queued[*successor] {
                     queued[*successor] = true;
                     pending.push_back(*successor);
@@ -393,19 +675,26 @@ pub fn run_pliron_ranked_bounds_check_v1(
             continue;
         }
         for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
+            if let Err(finding) = budget.work(1) {
+                return finding_failure(finding);
+            }
             let operation = Operation::get_op_dyn(operation, context);
-            let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
-                continue;
-            };
-            verify_access(
-                access,
-                block_index,
-                operation_index,
-                &inputs[block_index],
-                &fact_indices,
-                context,
-                &mut findings,
-            );
+            if let Some(access) = operation.downcast_ref::<RankedAccessOp>()
+                && let Err(finding) = verify_access(
+                    access,
+                    block_index,
+                    operation_index,
+                    &mut AccessCheck {
+                        facts: &inputs[block_index],
+                        fact_indices: &fact_indices,
+                        context,
+                        findings: &mut findings,
+                        budget: &mut budget,
+                    },
+                )
+            {
+                return finding_failure(finding);
+            }
         }
     }
 
@@ -430,25 +719,52 @@ pub fn require_pliron_ranked_bounds_before_lowering_v1(
 }
 
 fn resource_failure(resource: &'static str, limit: usize, actual: usize) -> RankedBoundsReportV1 {
+    finding_failure(RankedBoundsFindingV1::ResourceLimitExceeded {
+        resource,
+        limit,
+        actual,
+    })
+}
+
+fn structural_failure() -> RankedBoundsReportV1 {
+    finding_failure(RankedBoundsFindingV1::StructuralVerificationFailed)
+}
+
+fn finding_failure(finding: RankedBoundsFindingV1) -> RankedBoundsReportV1 {
     RankedBoundsReportV1 {
-        findings: vec![RankedBoundsFindingV1::ResourceLimitExceeded {
-            resource,
-            limit,
-            actual,
-        }],
+        findings: vec![finding],
     }
 }
 
-fn reachable_blocks(successors: &[Vec<usize>]) -> Vec<bool> {
+fn push_finding(
+    findings: &mut Vec<RankedBoundsFindingV1>,
+    budget: &mut RankedBoundsBudget,
+    finding: RankedBoundsFindingV1,
+) -> Result<(), RankedBoundsFindingV1> {
+    budget.reserve(RankedBoundsResource::Findings, 1)?;
+    budget.storage(1)?;
+    findings.push(finding);
+    Ok(())
+}
+
+fn reachable_blocks(
+    successors: &[Vec<usize>],
+    budget: &mut RankedBoundsBudget,
+) -> Result<Vec<bool>, RankedBoundsFindingV1> {
     let mut reachable = vec![false; successors.len()];
     let mut pending = vec![0];
+    reachable[0] = true;
     while let Some(block) = pending.pop() {
-        if !reachable[block] {
-            reachable[block] = true;
-            pending.extend(successors[block].iter().copied());
+        budget.work(1)?;
+        for successor in &successors[block] {
+            budget.work(1)?;
+            if !reachable[*successor] {
+                reachable[*successor] = true;
+                pending.push(*successor);
+            }
         }
     }
-    reachable
+    Ok(reachable)
 }
 
 fn intersect_predecessor_facts(
@@ -456,70 +772,95 @@ fn intersect_predecessor_facts(
     predecessors: &[Vec<PredecessorEdge>],
     inputs: &[FactSet],
     fact_count: usize,
-) -> FactSet {
+    budget: &mut RankedBoundsBudget,
+) -> Result<FactSet, RankedBoundsFindingV1> {
     let mut edges = predecessors[block].iter();
     let Some(first) = edges.next() else {
-        return FactSet::empty(fact_count);
+        budget.work(1)?;
+        return Ok(FactSet::empty(fact_count));
     };
+    budget.work(inputs[first.block].words.len().saturating_add(1))?;
     let mut result = inputs[first.block].clone();
     if let Some(fact) = first.guard_fact {
         result.insert(fact);
     }
     for edge in edges {
+        budget.work(result.words.len().saturating_add(1))?;
         result.intersect_edge(&inputs[edge.block], edge.guard_fact);
     }
-    result
+    Ok(result)
+}
+
+struct AccessCheck<'a> {
+    facts: &'a FactSet,
+    fact_indices: &'a HashMap<LessThanFact, usize>,
+    context: &'a Context,
+    findings: &'a mut Vec<RankedBoundsFindingV1>,
+    budget: &'a mut RankedBoundsBudget,
 }
 
 fn verify_access(
     access: &RankedAccessOp,
     block: usize,
     operation: usize,
-    facts: &FactSet,
-    fact_indices: &HashMap<LessThanFact, usize>,
-    context: &Context,
-    findings: &mut Vec<RankedBoundsFindingV1>,
-) {
-    let view = access.view(context);
-    let Some(view_type) = ranked_view_type(view, context) else {
-        findings.push(RankedBoundsFindingV1::StructuralVerificationFailed);
-        return;
+    check: &mut AccessCheck<'_>,
+) -> Result<(), RankedBoundsFindingV1> {
+    let view = access.view(check.context);
+    let Some(view_type) = ranked_view_type(view, check.context) else {
+        return push_finding(
+            check.findings,
+            check.budget,
+            RankedBoundsFindingV1::StructuralVerificationFailed,
+        );
     };
-    let view_type = view_type.deref(context);
-    let Some(access_kind) = access.kind(context) else {
-        findings.push(RankedBoundsFindingV1::StructuralVerificationFailed);
-        return;
+    let view_type = view_type.deref(check.context);
+    let Some(access_kind) = access.kind(check.context) else {
+        return push_finding(
+            check.findings,
+            check.budget,
+            RankedBoundsFindingV1::StructuralVerificationFailed,
+        );
     };
-    let view_name = view.unique_name(context).to_string();
-    for (dimension, index) in access.indices(context).into_iter().enumerate() {
-        let index_expr = canonical_index_expr(index, context);
-        let extent_expr = extent_expr(view, &view_type, dimension, context);
-        if bound_is_proven(index_expr, extent_expr, facts, fact_indices) {
+    let view_name = view.unique_name(check.context).to_string();
+    for (dimension, index) in access.indices(check.context).into_iter().enumerate() {
+        check.budget.work(1)?;
+        let index_expr = canonical_index_expr(index, check.context);
+        let extent_expr = extent_expr(view, &view_type, dimension, check.context);
+        if bound_is_proven(index_expr, extent_expr, check.facts, check.fact_indices) {
             continue;
         }
         match (index_expr, extent_expr) {
             (IndexExpr::Constant(index), IndexExpr::Constant(extent)) => {
-                findings.push(RankedBoundsFindingV1::StaticOutOfBounds {
+                push_finding(
+                    check.findings,
+                    check.budget,
+                    RankedBoundsFindingV1::StaticOutOfBounds {
+                        block,
+                        operation,
+                        access: access_kind,
+                        view: view_name.clone(),
+                        dimension,
+                        index,
+                        extent,
+                    },
+                )?;
+            }
+            _ => push_finding(
+                check.findings,
+                check.budget,
+                RankedBoundsFindingV1::UnprovedBound {
                     block,
                     operation,
                     access: access_kind,
                     view: view_name.clone(),
                     dimension,
-                    index,
-                    extent,
-                });
-            }
-            _ => findings.push(RankedBoundsFindingV1::UnprovedBound {
-                block,
-                operation,
-                access: access_kind,
-                view: view_name.clone(),
-                dimension,
-                index: index_expr.describe(context),
-                extent: extent_expr.describe(context),
-            }),
+                    index: index_expr.describe(check.context),
+                    extent: extent_expr.describe(check.context),
+                },
+            )?,
         }
     }
+    Ok(())
 }
 
 fn bound_is_proven(

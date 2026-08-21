@@ -1,9 +1,11 @@
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, DIALECT_NAME, DimensionOp, IndexConstantOp, IndexLessThanBranchOp,
-    IndexType, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    AccessKindAttr, AlgorithmOp, BranchOp, DIALECT_NAME, DimensionOp, GeneralGemmOp,
+    IndexConstantOp, IndexLessThanBranchOp, IndexType, RankedAccessOp, RankedViewOp,
+    RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckPassKindV1, MAX_RANKED_BOUNDS_BLOCKS, RankedBoundsFindingV1, RankedBoundsStatusV1,
+    KernelCheckPassKindV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
+    MAX_RANKED_BOUNDS_FINDINGS, RankedBoundsFindingV1, RankedBoundsStatusV1,
     require_pliron_ranked_bounds_before_lowering_v1, run_pliron_ranked_bounds_check_v1,
 };
 use pliron::{
@@ -17,6 +19,7 @@ use pliron::{
     context::{Context, Ptr},
     dialect::DialectName,
     op::Op,
+    operation::Operation,
     r#type::TypeHandle,
     value::Value,
 };
@@ -113,6 +116,108 @@ fn block_resource_limit_fails_closed_before_dataflow() {
             resource: "basic block",
             limit: MAX_RANKED_BOUNDS_BLOCKS,
             actual: MAX_RANKED_BOUNDS_BLOCKS + 1,
+        }]
+    );
+}
+
+#[test]
+fn effecting_general_gemm_operation_is_rejected_by_the_closed_allowlist() {
+    let context = &mut setup();
+    let (function, _) = function(context, "foreign_effect", 0);
+    let entry = function.get_entry_block(context);
+    let gemm = GeneralGemmOp::canonical(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &gemm);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert_eq!(report.status(), RankedBoundsStatusV1::Rejected);
+    assert_eq!(
+        report.findings(),
+        &[RankedBoundsFindingV1::UnsupportedOperation {
+            block: 0,
+            operation: 0,
+            kind: "kernel.general_gemm".to_owned(),
+        }]
+    );
+    assert!(require_pliron_ranked_bounds_before_lowering_v1(context, &function).is_err());
+}
+
+#[test]
+fn unknown_operation_in_an_unreachable_block_is_still_rejected() {
+    let context = &mut setup();
+    let (function, _) = function(context, "dead_unknown", 0);
+    let entry = function.get_entry_block(context);
+    let dead = block(context, &function, "dead");
+    let entry_return = ReturnOp::new(context);
+    let unknown = AlgorithmOp::new(context, 1).unwrap();
+    let dead_return = ReturnOp::new(context);
+    append(context, entry, &entry_return);
+    append(context, dead, &unknown);
+    append(context, dead, &dead_return);
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert_eq!(
+        report.findings(),
+        &[RankedBoundsFindingV1::UnsupportedOperation {
+            block: 1,
+            operation: 0,
+            kind: "kernel.algorithm_root".to_owned(),
+        }]
+    );
+    assert!(!report.is_clean());
+}
+
+#[test]
+fn oversized_successor_vector_fails_before_structural_verification() {
+    let context = &mut setup();
+    let (function, _) = function(context, "successor_amplification", 0);
+    let entry = function.get_entry_block(context);
+    let branch = BranchOp::new(context, entry);
+    for _ in 0..MAX_RANKED_BOUNDS_EDGES {
+        Operation::push_successor(branch.get_operation(), context, entry);
+    }
+    append(context, entry, &branch);
+
+    assert_eq!(
+        run_pliron_ranked_bounds_check_v1(context, &function).findings(),
+        &[RankedBoundsFindingV1::ResourceLimitExceeded {
+            resource: "CFG edge",
+            limit: MAX_RANKED_BOUNDS_EDGES,
+            actual: MAX_RANKED_BOUNDS_EDGES + 1,
+        }]
+    );
+}
+
+#[test]
+fn hostile_finding_amplification_is_bounded() {
+    let context = &mut setup();
+    let (function, _) = function(context, "finding_amplification", 0);
+    let entry = function.get_entry_block(context);
+    let view_type = RankedViewType::new(context, 32, false, vec![1; 8]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let index = IndexConstantOp::new(context, 1);
+    append(context, entry, &view);
+    append(context, entry, &index);
+    for _ in 0..(MAX_RANKED_BOUNDS_FINDINGS / 8 + 1) {
+        let access = RankedAccessOp::new(
+            context,
+            AccessKindAttr::Read,
+            view.result(context),
+            vec![index.result(context); 8],
+        )
+        .unwrap();
+        append(context, entry, &access);
+    }
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    assert_eq!(
+        run_pliron_ranked_bounds_check_v1(context, &function).findings(),
+        &[RankedBoundsFindingV1::ResourceLimitExceeded {
+            resource: "finding",
+            limit: MAX_RANKED_BOUNDS_FINDINGS,
+            actual: MAX_RANKED_BOUNDS_FINDINGS + 1,
         }]
     );
 }
