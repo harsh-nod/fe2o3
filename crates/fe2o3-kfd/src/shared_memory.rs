@@ -62,7 +62,7 @@ pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r2-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r3-v1\n",
     "base_memory_profile_sha256=7bdca672c4921ee56a850d41040045f4a8fbe5a20176628a4ea982dd80fbe8ec\n",
     "kfd_memory_schema_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
     "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0x8e000002,executable:0xc4000002\n",
@@ -70,23 +70,24 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "aql=logical-ring:power-of-two-4096..2147483648,gpu-va:checked-double,cpu-vma:single-physical-copy\n",
     "va_allocator=kernel-selected-prot-none-guards-retained-until-successful-free,checked-nonoverlap\n",
     "authority=one-retained-kfd-render-vm,multiple-linear-redacted-tokens,no-fd-handle-va-or-pointer-export\n",
-    "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,private-va-mapping-publication-facts,no-public-mint\n",
-    "queue-gtt-policy=ring:aql-special,control:host-visible-coherent,eop-and-cwsr:executable,not-rocr-equivalence\n",
-    "cpu_views=closure-scoped,session-exclusive,no-safe-borrow-escape,no-view-while-gpu-mapped\n",
+    "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-and-completion-signal-roles,private-va-mapping-publication-facts,no-public-mint\n",
+    "queue-gtt-policy=ring:aql-special,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable,not-rocr-equivalence\n",
+    "cpu_views=closure-scoped-before-map;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset,no-safe-borrow-escape\n",
+    "completion-bridge=exact-retained-host-coherent-mapping,private-64-byte-slot-index,backend-atomic-i64-acquire-observe-and-release-reset,currentness-sandwiched\n",
     "executable=cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted\n",
     "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
     "fork=current-base-contract,prot-none-dontfork-before-rw,no-raw-fork-clone-during-setup\n",
     "model=completion-only-append-journal,profile-kind-and-gpu-va-span,no-cpu-vma-or-seal-transition\n",
     "proof=no-concrete-verus-refinement,kernel-and-model-coupling-contracted,hostile-tests-only\n",
-    "excluded=queue-ioctl,doorbell,packet-publication,dispatch,completion,userptr,vram,peer-map\n",
+    "excluded=queue-ioctl,doorbell,packet-publication,dispatch,completion-policy-or-aggregation,userptr,peer-map\n",
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "1054b1c31ad143c7218eee24bcc529b17851338a152ed0cf028c46898c6a17a4";
+    "9761da91f900b7186d18aaec01dc8b67597049f8c2c9cf1eeac9a66e0cd7b938";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x10, 0x54, 0xb1, 0xc3, 0x1a, 0xd1, 0x43, 0xc7, 0x21, 0x8e, 0xee, 0x24, 0xbc, 0xc5, 0x29, 0xb1,
-    0x78, 0x51, 0x33, 0x8a, 0x15, 0x2e, 0xd0, 0xcf, 0x02, 0x8c, 0x46, 0x89, 0x8c, 0x6a, 0x17, 0xa4,
+    0x97, 0x61, 0xda, 0x91, 0xf9, 0x00, 0xb7, 0x18, 0x6d, 0x18, 0xaa, 0xec, 0x01, 0xdc, 0x8b, 0x67,
+    0x59, 0x70, 0x49, 0xf8, 0xc2, 0xc9, 0xcf, 0x1e, 0xea, 0xc9, 0xa6, 0x6e, 0x0c, 0xd7, 0xb9, 0x38,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -466,6 +467,7 @@ pub(crate) enum AqlRingResourceRoleV1 {}
 pub(crate) enum AqlControlResourceRoleV1 {}
 pub(crate) enum AqlEndOfPipeResourceRoleV1 {}
 pub(crate) enum AqlContextSaveResourceRoleV1 {}
+pub(crate) enum AqlCompletionSignalResourceRoleV1 {}
 
 macro_rules! define_resource_role {
     ($role:ty) => {
@@ -478,6 +480,7 @@ define_resource_role!(AqlRingResourceRoleV1);
 define_resource_role!(AqlControlResourceRoleV1);
 define_resource_role!(AqlEndOfPipeResourceRoleV1);
 define_resource_role!(AqlContextSaveResourceRoleV1);
+define_resource_role!(AqlCompletionSignalResourceRoleV1);
 
 /// Linear crate-private bridge from shared memory into a later queue owner.
 ///
@@ -1177,6 +1180,39 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         self.check_currentness()
     }
 
+    fn observe_completion_signal(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+    ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        let observation = B::observe_completion_signal_acquire(mapping, requested, slot_index)?;
+        self.check_currentness()?;
+        Ok(observation)
+    }
+
+    fn reset_completion_signal(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        B::reset_completion_signal_release(mapping, requested, slot_index)?;
+        self.check_currentness()
+    }
+
     fn seal_executable(
         &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttCpuWritableV1>,
@@ -1768,6 +1804,21 @@ impl SharedGttMemorySessionV1 {
         self.retain_queue_resource(token)
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn retain_aql_completion_signal_resource(
+        &self,
+        token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Result<
+        SharedGttQueueResourceAuthorityV1<
+            AqlCompletionSignalResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        MemorySessionError,
+    > {
+        self.retain_queue_resource(token)
+    }
+
     #[allow(dead_code, private_bounds)]
     fn retain_queue_resource<R, P, S>(
         &self,
@@ -1934,6 +1985,34 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<(), MemorySessionError> {
         self.engine
             .publish_aql_header(&mut authority.token, slot_index, header)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn observe_aql_completion_signal(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlCompletionSignalResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+    ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
+        self.engine
+            .observe_completion_signal(&mut authority.token, slot_index)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn reset_aql_completion_signal(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlCompletionSignalResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .reset_completion_signal(&mut authority.token, slot_index)
     }
 
     pub fn seal_executable(
@@ -2591,6 +2670,24 @@ mod tests {
             engine.with_bytes(&first, SharedAllocationPhaseV1::CpuWritable, |_| ()),
             Err(MemorySessionError::SharedSessionQuarantined)
         ));
+    }
+
+    #[test]
+    fn completion_arena_allocation_oom_requires_quarantined_teardown() {
+        let mut engine = acquired();
+        engine.backend.alloc_oom = true;
+        assert!(matches!(
+            engine.allocate::<HostVisibleCoherentGttV1>(
+                crate::queue::completion::COMPLETION_SIGNAL_ARENA_BYTES_V1,
+            ),
+            Err(MemorySessionError::Syscall {
+                operation: "AMDKFD_IOC_ALLOC_MEMORY_OF_GPU",
+                ..
+            })
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(engine.backend.alloc_calls, 1);
+        assert_eq!(engine.retained_gpu_va_bytes, 0);
     }
 
     #[test]
