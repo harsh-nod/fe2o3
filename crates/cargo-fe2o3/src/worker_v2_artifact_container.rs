@@ -9,9 +9,11 @@ use std::fmt;
 
 use fe2o3_artifact_transaction::{
     AttemptScopedHsacoPublicationOutcomeV1, AttemptScopedHsacoPublicationResultV1,
-    BackendPublicationReceiptValidationErrorV1, BuildAttempt, DurableLinkPublicationPlanV1,
-    DurablePublishedHsacoClaimV1, ProducerIdentity, UpstreamCodeObjectEvidenceIdentityV1,
-    validate_backend_publication_receipt_v1,
+    BackendPublicationReceiptV2, BackendPublicationReceiptValidationErrorV1,
+    BackendPublicationReceiptValidationErrorV2, BuildAttempt, DurableLinkPublicationPlanV1,
+    DurablePublishedHsacoClaimV1, DurablePublishedHsacoClaimV2, ProducerIdentity,
+    UpstreamCodeObjectEvidenceIdentityV1, WorkerV2PublicationIntentIdentityV2,
+    validate_backend_publication_receipt_v1, validate_backend_publication_receipt_v2,
 };
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -24,6 +26,7 @@ use fe2o3_artifacts::{
     ManifestV1, Mutability, Name, PointerWidth, ProofRecordV1, ScalarType, ToolIdentity,
     TypeIdentity, ValidationError,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind, InspectedKernel,
 };
@@ -31,7 +34,8 @@ use fe2o3_hsaco_finalize::{FinalizationError, inspect_finalized};
 use fe2o3_kernel_descriptor::{AccessMode, AliasSemantics, CapabilityV1, OwnershipSemantics};
 use fe2o3_worker_v2_bundle::{
     DescriptorLineageV1, EnvelopeValidationError, ExactRawHsacoV1, WorkerV2EnvelopeInputsV1,
-    WorkerV2LoadEnvelopeV1,
+    WorkerV2FinalArtifactEvidenceV2, WorkerV2FinalArtifactValidationErrorV2,
+    WorkerV2LoadEnvelopeV1, WorkerV2LoadEnvelopeV2, WorkerV2LoadEnvelopeValidationErrorV2,
 };
 use sha2::{Digest, Sha256};
 
@@ -155,6 +159,121 @@ impl std::error::Error for WorkerV2ArtifactContainerAssemblyErrorV1 {
     }
 }
 
+/// Inert, closure-bound result of reconstructing one protected Worker V2 load envelope.
+///
+/// The duplicated typed identities make the exact publication inputs available to the protected
+/// runtime admission owner without opening the envelope or converting its V2 receipt to V1. This
+/// value grants no compiler, proof, publication, load, or launch authority.
+#[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct PreparedWorkerV2LoadEnvelopeV2 {
+    envelope: WorkerV2LoadEnvelopeV2,
+    compiler_closure: CompilerClosureV2,
+    publication_intent: WorkerV2PublicationIntentIdentityV2,
+    backend_receipt: BackendPublicationReceiptV2,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl PreparedWorkerV2LoadEnvelopeV2 {
+    pub(crate) const fn envelope(&self) -> &WorkerV2LoadEnvelopeV2 {
+        &self.envelope
+    }
+
+    pub(crate) const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.compiler_closure
+    }
+
+    pub(crate) const fn publication_intent_identity(&self) -> WorkerV2PublicationIntentIdentityV2 {
+        self.publication_intent
+    }
+
+    pub(crate) const fn backend_receipt(&self) -> BackendPublicationReceiptV2 {
+        self.backend_receipt
+    }
+
+    pub(crate) fn into_envelope(self) -> WorkerV2LoadEnvelopeV2 {
+        self.envelope
+    }
+
+    pub(crate) const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub(crate) const fn grants_proof_authority(&self) -> bool {
+        false
+    }
+
+    pub(crate) const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub(crate) const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub(crate) const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub(crate) enum WorkerV2ArtifactContainerAssemblyErrorV2 {
+    Receipt(BackendPublicationReceiptValidationErrorV2),
+    ClaimPlanMismatch,
+    ClaimUpstreamEvidenceMismatch,
+    ClaimReceiptMismatch,
+    CompilerClosureMismatch,
+    FinalizedDigestMismatch,
+    CanonicalArtifact(WorkerV2ArtifactContainerAssemblyErrorV1),
+    EnvelopeInputs(EnvelopeValidationError),
+    Bundle(fe2o3_artifacts::BundleValidationError),
+    FinalArtifact(WorkerV2FinalArtifactValidationErrorV2),
+    Envelope(WorkerV2LoadEnvelopeValidationErrorV2),
+}
+
+impl fmt::Display for WorkerV2ArtifactContainerAssemblyErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Receipt(error) => error.fmt(formatter),
+            Self::ClaimPlanMismatch => {
+                formatter.write_str("protected durable claim publication plan does not match")
+            }
+            Self::ClaimUpstreamEvidenceMismatch => {
+                formatter.write_str("protected durable claim upstream evidence does not match")
+            }
+            Self::ClaimReceiptMismatch => {
+                formatter.write_str("protected durable claim backend receipt does not match")
+            }
+            Self::CompilerClosureMismatch => formatter.write_str(
+                "protected compiler closure differs across assembly, receipt, and durable claim",
+            ),
+            Self::FinalizedDigestMismatch => formatter.write_str(
+                "finalized protected Worker V2 payload does not match its V2 receipt digest",
+            ),
+            Self::CanonicalArtifact(error) => error.fmt(formatter),
+            Self::EnvelopeInputs(error) => error.fmt(formatter),
+            Self::Bundle(error) => error.fmt(formatter),
+            Self::FinalArtifact(error) => error.fmt(formatter),
+            Self::Envelope(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for WorkerV2ArtifactContainerAssemblyErrorV2 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Receipt(error) => Some(error),
+            Self::CanonicalArtifact(error) => Some(error),
+            Self::EnvelopeInputs(error) => Some(error),
+            Self::Bundle(error) => Some(error),
+            Self::FinalArtifact(error) => Some(error),
+            Self::Envelope(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct DescriptorTableAssemblyV1 {
     compiler_name: String,
@@ -203,6 +322,7 @@ struct DescriptorFieldAssemblyV1 {
 
 struct CanonicalContainerAssemblyV1 {
     container: ArtifactContainerV1,
+    descriptor_lineage: DescriptorLineageV1,
     canonical_code_object_digest: [u8; 32],
     compiler_commit: [u8; 20],
     descriptors: Vec<WorkerV2DescriptorKernelLineageV1>,
@@ -514,6 +634,7 @@ fn assemble_canonical_container_v1(
     if hsaco.target().to_string() != TARGET {
         return Err(WorkerV2ArtifactContainerAssemblyErrorV1::Target);
     }
+    let descriptor_lineage = DescriptorLineageV1::new(inspection.descriptor_table().clone());
     let table = inspection.descriptor_table();
     if table.code_object_version() != fe2o3_kernel_descriptor::CodeObjectVersion::V6
         || table.device_target().to_string() != TARGET
@@ -657,6 +778,7 @@ fn assemble_canonical_container_v1(
 
     Ok(CanonicalContainerAssemblyV1 {
         container,
+        descriptor_lineage,
         canonical_code_object_digest: *inspection.digest().as_bytes(),
         compiler_commit: table.compiler_commit,
         descriptors,
@@ -827,6 +949,89 @@ pub(crate) fn assemble_recovered_worker_v2_load_envelope_v1(
         claim,
     )
     .map_err(WorkerV2ArtifactContainerAssemblyErrorV1::Envelope)
+}
+
+/// Reconstructs one canonical protected envelope from exact durable V2 publication evidence.
+///
+/// The proof records are copied only from the sealed envelope-input capsule. They are never
+/// derived from descriptor identities or treated as proof authority. The V2 receipt is validated
+/// directly against the complete compiler closure and is never projected into a V1 receipt.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn assemble_recovered_worker_v2_load_envelope_v2(
+    producer: &ProducerIdentity,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    exact_finalized_hsaco: &[u8],
+    claim: DurablePublishedHsacoClaimV2,
+    inputs: &WorkerV2EnvelopeInputsV1,
+    publication_intent: WorkerV2PublicationIntentIdentityV2,
+    backend_receipt: BackendPublicationReceiptV2,
+    compiler_closure: CompilerClosureV2,
+) -> Result<PreparedWorkerV2LoadEnvelopeV2, WorkerV2ArtifactContainerAssemblyErrorV2> {
+    if claim.plan() != plan {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV2::ClaimPlanMismatch);
+    }
+    if claim.upstream_evidence() != upstream {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV2::ClaimUpstreamEvidenceMismatch);
+    }
+    if claim.receipt() != backend_receipt {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV2::ClaimReceiptMismatch);
+    }
+    if claim.compiler_closure() != compiler_closure
+        || backend_receipt.compiler_closure() != compiler_closure
+    {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV2::CompilerClosureMismatch);
+    }
+    validate_backend_publication_receipt_v2(
+        producer,
+        plan.attempt(),
+        plan,
+        upstream,
+        compiler_closure,
+        backend_receipt,
+    )
+    .map_err(WorkerV2ArtifactContainerAssemblyErrorV2::Receipt)?;
+
+    let measured: [u8; 32] = Sha256::digest(exact_finalized_hsaco).into();
+    if measured != backend_receipt.finalized_output_identity() {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV2::FinalizedDigestMismatch);
+    }
+
+    let assembled = assemble_canonical_container_v1(exact_finalized_hsaco)
+        .map_err(WorkerV2ArtifactContainerAssemblyErrorV2::CanonicalArtifact)?;
+    inputs
+        .validate_against_container(&assembled.container)
+        .map_err(WorkerV2ArtifactContainerAssemblyErrorV2::EnvelopeInputs)?;
+    let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&assembled.container))
+        .map_err(WorkerV2ArtifactContainerAssemblyErrorV2::Bundle)?;
+    let final_artifact = WorkerV2FinalArtifactEvidenceV2::from_proof_records(
+        &assembled.container,
+        &assembled.descriptor_lineage,
+        inputs.proof_records(),
+        compiler_closure,
+        publication_intent,
+        backend_receipt,
+        claim,
+    )
+    .map_err(WorkerV2ArtifactContainerAssemblyErrorV2::FinalArtifact)?;
+    let envelope = WorkerV2LoadEnvelopeV2::new(
+        assembled.container,
+        bundle,
+        inputs.direct_link_evidence().clone(),
+        assembled.descriptor_lineage,
+        inputs.proof_records().to_vec(),
+        inputs.raw_hsaco().clone(),
+        final_artifact,
+    )
+    .map_err(WorkerV2ArtifactContainerAssemblyErrorV2::Envelope)?;
+
+    Ok(PreparedWorkerV2LoadEnvelopeV2 {
+        envelope,
+        compiler_closure,
+        publication_intent,
+        backend_receipt,
+    })
 }
 
 fn expected_components(field: FrozenFieldV1) -> Vec<(u32, u16, u16)> {
@@ -1290,7 +1495,8 @@ mod tests {
         LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1,
         TargetIdentityV1, ValidatedResponseIdentityV1, WorkerV2PublicationIntentIdentityV1,
         begin_build_attempt, finish_build_attempt, persist_worker_v2_publication_intent_v1,
-        producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
+        persist_worker_v2_publication_intent_v2, producer_package_identity_v1,
+        publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
     };
     use fe2o3_artifacts::{
         CallerClaimedPackageIdentityV1, ConfigurationEntry, DirectLinkBindingExpectationV1,
@@ -1306,7 +1512,9 @@ mod tests {
         ProofOutcome, ProofTargetIdentity, SourceContractIdentity, TrustedItem,
         VerificationModelIdentity,
     };
-    use fe2o3_worker_v2_bundle::MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES;
+    use fe2o3_worker_v2_bundle::{
+        MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, WorkerV2ProofOrInspectionKindV2,
+    };
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
@@ -1656,6 +1864,121 @@ mod tests {
         .unwrap();
         assert_eq!(envelope.published_claim().receipt(), publication.receipt());
         (publisher, envelope, stale_receipt)
+    }
+
+    struct CanonicalV2Fixture {
+        publisher: ProducerIdentity,
+        prepared: PreparedWorkerV2LoadEnvelopeV2,
+        plan: DurableLinkPublicationPlanV1,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1,
+        exact_finalized: Vec<u8>,
+        claim: DurablePublishedHsacoClaimV2,
+        inputs: WorkerV2EnvelopeInputsV1,
+        intent: WorkerV2PublicationIntentIdentityV2,
+        receipt: BackendPublicationReceiptV2,
+        closure: CompilerClosureV2,
+    }
+
+    fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+        CompilerClosureV2::new(
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            [seed.wrapping_add(2); 32],
+            [seed.wrapping_add(3); 32],
+            [seed.wrapping_add(4); 32],
+            [seed.wrapping_add(5); 32],
+        )
+        .unwrap()
+    }
+
+    fn compiler_closure_with_mutated_role(seed: u8, role: usize) -> CompilerClosureV2 {
+        let mut pins = [
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            [seed.wrapping_add(2); 32],
+            [seed.wrapping_add(3); 32],
+            [seed.wrapping_add(4); 32],
+            [seed.wrapping_add(5); 32],
+        ];
+        pins[role][0] ^= 0xff;
+        CompilerClosureV2::new(pins[0], pins[1], pins[2], pins[3], pins[4], pins[5]).unwrap()
+    }
+
+    fn canonical_v2_fixture(directory: &TestDirectory, seed: u8) -> CanonicalV2Fixture {
+        let name = format!("protected_alpha_zeta_{seed}");
+        let source = format!("/workspace/protected-envelope-{seed}.rs");
+        let (publisher, ordinary, _) = canonical_envelope_fixture_for(directory, &name, &source);
+        let exact_finalized = ordinary.finalized_payload().to_vec();
+        let inputs = WorkerV2EnvelopeInputsV1::new(
+            ordinary.direct_link_evidence().clone(),
+            ordinary.proof_records().to_vec(),
+            ordinary.raw_hsaco().clone(),
+        )
+        .unwrap();
+        let ordinary_attempt = ordinary.published_claim().plan().attempt();
+        drop(ordinary);
+        finish_build_attempt(&directory.0, &publisher, ordinary_attempt).unwrap();
+
+        let attempt = begin(directory, &publisher, seed);
+        let (plan, upstream) = derive_required_worker_v2_publication_plan_v1(
+            &publisher,
+            attempt,
+            &exact_finalized,
+            &inputs,
+        )
+        .unwrap();
+        let closure = compiler_closure(0x91);
+        let persisted = persist_worker_v2_publication_intent_v2(
+            &directory.0,
+            &publisher,
+            attempt,
+            plan,
+            upstream,
+            closure,
+            &exact_finalized,
+        )
+        .unwrap();
+        let intent = persisted.record().identity();
+        drop(persisted);
+        let publication = publish_exact_hsaco_evidence_for_attempt_v2(
+            &directory.0,
+            &publisher,
+            attempt,
+            plan,
+            upstream,
+            closure,
+            &exact_finalized,
+        )
+        .unwrap();
+        let receipt = publication.receipt();
+        let claim = publication.published_claim().clone();
+        let prepared = assemble_recovered_worker_v2_load_envelope_v2(
+            &publisher,
+            plan,
+            upstream,
+            &exact_finalized,
+            claim.clone(),
+            &inputs,
+            intent,
+            receipt,
+            closure,
+        )
+        .unwrap();
+        drop(publication);
+        finish_build_attempt(&directory.0, &publisher, attempt).unwrap();
+
+        CanonicalV2Fixture {
+            publisher,
+            prepared,
+            plan,
+            upstream,
+            exact_finalized,
+            claim,
+            inputs,
+            intent,
+            receipt,
+            closure,
+        }
     }
 
     fn stage_required_ready(
@@ -3022,5 +3345,263 @@ mod tests {
             );
             assert_eq!(store.load().unwrap(), Some(ready));
         }
+    }
+
+    #[test]
+    fn protected_v2_recovered_assembly_binds_every_final_artifact_facet() {
+        let directory = TestDirectory::new();
+        let fixture = canonical_v2_fixture(&directory, 0xb1);
+        let prepared = &fixture.prepared;
+        let envelope = prepared.envelope();
+        let final_artifact = envelope.final_artifact_evidence();
+
+        assert_eq!(prepared.compiler_closure(), fixture.closure);
+        assert_eq!(prepared.publication_intent_identity(), fixture.intent);
+        assert_eq!(prepared.backend_receipt(), fixture.receipt);
+        assert_eq!(final_artifact.compiler_closure(), fixture.closure);
+        assert_eq!(final_artifact.publication_intent_identity(), fixture.intent);
+        assert_eq!(final_artifact.backend_receipt(), fixture.receipt);
+        assert_eq!(final_artifact.published_claim(), &fixture.claim);
+        assert_eq!(final_artifact.target().to_string(), TARGET);
+        assert_eq!(
+            final_artifact.code_object_version(),
+            fe2o3_kernel_descriptor::CodeObjectVersion::V6
+        );
+        assert_eq!(
+            final_artifact.final_bytes_identity().sha256(),
+            fixture.receipt.finalized_output_identity()
+        );
+        assert_eq!(
+            final_artifact.final_bytes_identity().byte_len(),
+            fixture.exact_finalized.len() as u64
+        );
+        assert_eq!(
+            final_artifact.proof_or_inspection_identity().kind(),
+            WorkerV2ProofOrInspectionKindV2::ProofRecords
+        );
+        for identity in [
+            final_artifact.target_identity().as_bytes(),
+            final_artifact.abi_identity().as_bytes(),
+            final_artifact.descriptor_identity().as_bytes(),
+            final_artifact.symbol_identity().as_bytes(),
+            final_artifact.resource_identity().as_bytes(),
+            final_artifact.proof_or_inspection_identity().as_bytes(),
+        ] {
+            assert_ne!(identity, [0; 32]);
+        }
+        assert_eq!(envelope.finalized_payload(), fixture.exact_finalized);
+        assert_eq!(envelope.proof_records(), fixture.inputs.proof_records());
+        assert_eq!(envelope.raw_hsaco(), fixture.inputs.raw_hsaco());
+        assert!(!prepared.grants_compiler_authority());
+        assert!(!prepared.grants_proof_authority());
+        assert!(!prepared.grants_publication_authority());
+        assert!(!prepared.grants_load_authority());
+        assert!(!prepared.grants_launch_authority());
+        assert!(!envelope.grants_compiler_authority());
+        assert!(!envelope.grants_proof_authority());
+        assert!(!envelope.grants_currentness_authority());
+        assert!(!envelope.grants_load_authority());
+        assert!(!envelope.grants_launch_authority());
+    }
+
+    #[test]
+    fn protected_v2_recovered_assembly_is_byte_deterministic() {
+        let directory = TestDirectory::new();
+        let fixture = canonical_v2_fixture(&directory, 0xb2);
+        let rebuilt = assemble_recovered_worker_v2_load_envelope_v2(
+            &fixture.publisher,
+            fixture.plan,
+            fixture.upstream,
+            &fixture.exact_finalized,
+            fixture.claim.clone(),
+            &fixture.inputs,
+            fixture.intent,
+            fixture.receipt,
+            fixture.closure,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fixture.prepared.envelope().to_bytes(),
+            rebuilt.envelope().to_bytes()
+        );
+        assert_eq!(
+            fixture.prepared.envelope().identity(),
+            rebuilt.envelope().identity()
+        );
+        assert_eq!(
+            fixture
+                .prepared
+                .envelope()
+                .final_artifact_evidence()
+                .identity(),
+            rebuilt.envelope().final_artifact_evidence().identity()
+        );
+        assert_eq!(
+            rebuilt.into_envelope().finalized_payload(),
+            fixture.exact_finalized
+        );
+    }
+
+    #[test]
+    fn protected_v2_recovered_assembly_rejects_every_closure_role_substitution() {
+        let directory = TestDirectory::new();
+        let fixture = canonical_v2_fixture(&directory, 0xb3);
+
+        for role in 0..6 {
+            let error = assemble_recovered_worker_v2_load_envelope_v2(
+                &fixture.publisher,
+                fixture.plan,
+                fixture.upstream,
+                &fixture.exact_finalized,
+                fixture.claim.clone(),
+                &fixture.inputs,
+                fixture.intent,
+                fixture.receipt,
+                compiler_closure_with_mutated_role(0x91, role),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    WorkerV2ArtifactContainerAssemblyErrorV2::CompilerClosureMismatch
+                ),
+                "closure role {role} was not rejected exactly: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn protected_v2_recovered_assembly_rejects_claim_receipt_and_producer_substitution() {
+        let first_directory = TestDirectory::new();
+        let second_directory = TestDirectory::new();
+        let first = canonical_v2_fixture(&first_directory, 0xb4);
+        let second = canonical_v2_fixture(&second_directory, 0xb5);
+
+        let wrong_claim = assemble_recovered_worker_v2_load_envelope_v2(
+            &first.publisher,
+            first.plan,
+            first.upstream,
+            &first.exact_finalized,
+            second.claim.clone(),
+            &first.inputs,
+            first.intent,
+            first.receipt,
+            first.closure,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            wrong_claim,
+            WorkerV2ArtifactContainerAssemblyErrorV2::ClaimPlanMismatch
+        ));
+
+        let wrong_receipt = assemble_recovered_worker_v2_load_envelope_v2(
+            &first.publisher,
+            first.plan,
+            first.upstream,
+            &first.exact_finalized,
+            first.claim.clone(),
+            &first.inputs,
+            first.intent,
+            second.receipt,
+            first.closure,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            wrong_receipt,
+            WorkerV2ArtifactContainerAssemblyErrorV2::ClaimReceiptMismatch
+        ));
+
+        let wrong_producer = assemble_recovered_worker_v2_load_envelope_v2(
+            &second.publisher,
+            first.plan,
+            first.upstream,
+            &first.exact_finalized,
+            first.claim.clone(),
+            &first.inputs,
+            first.intent,
+            first.receipt,
+            first.closure,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            wrong_producer,
+            WorkerV2ArtifactContainerAssemblyErrorV2::Receipt(
+                BackendPublicationReceiptValidationErrorV2::ProducerIdentityMismatch
+            )
+        ));
+    }
+
+    #[test]
+    fn protected_v2_recovered_assembly_rejects_output_upstream_and_intent_substitution() {
+        let first_directory = TestDirectory::new();
+        let first = canonical_v2_fixture(&first_directory, 0xb6);
+
+        let mut changed_output = first.exact_finalized.clone();
+        changed_output[0] ^= 1;
+        let wrong_output = assemble_recovered_worker_v2_load_envelope_v2(
+            &first.publisher,
+            first.plan,
+            first.upstream,
+            &changed_output,
+            first.claim.clone(),
+            &first.inputs,
+            first.intent,
+            first.receipt,
+            first.closure,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            wrong_output,
+            WorkerV2ArtifactContainerAssemblyErrorV2::FinalizedDigestMismatch
+        ));
+
+        let wrong_upstream = assemble_recovered_worker_v2_load_envelope_v2(
+            &first.publisher,
+            first.plan,
+            UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0xe3; 32]),
+            &first.exact_finalized,
+            first.claim.clone(),
+            &first.inputs,
+            first.intent,
+            first.receipt,
+            first.closure,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            wrong_upstream,
+            WorkerV2ArtifactContainerAssemblyErrorV2::ClaimUpstreamEvidenceMismatch
+        ));
+
+        let zero_intent = assemble_recovered_worker_v2_load_envelope_v2(
+            &first.publisher,
+            first.plan,
+            first.upstream,
+            &first.exact_finalized,
+            first.claim,
+            &first.inputs,
+            WorkerV2PublicationIntentIdentityV2::from_bytes([0; 32]),
+            first.receipt,
+            first.closure,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            zero_intent,
+            WorkerV2ArtifactContainerAssemblyErrorV2::FinalArtifact(
+                WorkerV2FinalArtifactValidationErrorV2::ZeroPublicationIntent
+            )
+        ));
+    }
+
+    #[test]
+    fn protected_v2_envelope_does_not_cross_decode_with_ordinary_v1() {
+        let protected_directory = TestDirectory::new();
+        let protected = canonical_v2_fixture(&protected_directory, 0xb8);
+        let protected_bytes = protected.prepared.envelope().to_bytes();
+        assert!(WorkerV2LoadEnvelopeV1::from_bytes(&protected_bytes).is_err());
+
+        let ordinary_directory = TestDirectory::new();
+        let (_, ordinary, _) = canonical_envelope_fixture(&ordinary_directory);
+        assert!(WorkerV2LoadEnvelopeV2::from_bytes(&ordinary.to_bytes()).is_err());
     }
 }
