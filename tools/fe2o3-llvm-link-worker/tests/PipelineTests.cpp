@@ -553,13 +553,15 @@ std::vector<uint8_t>
 makeKernelBitcode(StringRef Name,
                   std::optional<std::array<uint32_t, 3>> RequiredWorkgroup =
                       std::array<uint32_t, 3>{256, 1, 1},
-                  uint32_t MaxWorkgroup = 256) {
+                  uint32_t MaxWorkgroup = 256,
+                  uint8_t CodeObjectVersion = 5) {
   LLVMContext Context;
   auto ModuleValue = std::make_unique<Module>("publication-kernel", Context);
   std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
   ModuleValue->setTargetTriple(Triple(AmdGpuTriple));
   ModuleValue->setDataLayout(Machine->createDataLayout());
-  ModuleValue->addModuleFlag(Module::Error, "amdhsa_code_object_version", 500);
+  ModuleValue->addModuleFlag(Module::Error, "amdhsa_code_object_version",
+                             CodeObjectVersion * 100);
 
   FunctionType *Signature = FunctionType::get(Type::getVoidTy(Context), false);
   Function *Kernel = Function::Create(Signature, GlobalValue::ExternalLinkage,
@@ -4003,6 +4005,20 @@ int main(int ArgumentCount, char **Arguments) {
   requireDiagnostic(PublicationResponse, "max_workgroup_size=256");
   requireDiagnostic(PublicationResponse, "reqd_workgroup_size=[256,1,1]");
 
+  Request ProductionFill = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeKernelBitcode("fill", std::array<uint32_t, 3>{64, 1, 1},
+                                  64, 6)),
+      {}, {}, {"fill"}, {"fill", "fill.kd"}, 6);
+  ProductionFill.Target = "gfx942:xnack-";
+  Response ProductionFillResponse =
+      runSuccess(ProductionFill, {"fill", "fill.kd"});
+  requireDiagnostic(ProductionFillResponse,
+                    "post_link.kernel name=fill symbol=fill.kd");
+  requireDiagnostic(ProductionFillResponse, "max_workgroup_size=64");
+  requireDiagnostic(ProductionFillResponse,
+                    "reqd_workgroup_size=[64,1,1]");
+
   auto MakeExactLdsGemmSlice1Request =
       [](uint32_t Workgroup = 64, uint32_t MaxWorkgroup = 64,
          uint32_t StaticLdsTiles = 2,
@@ -4805,18 +4821,19 @@ int main(int ArgumentCount, char **Arguments) {
                            "reason=linked%20output%20has%20invalid%20AMDGPU%20"
                            "metadata%20schema");
 
-  Request WrongRequiredWorkgroup = makeV2Request(
+  Request CompilerDeclared128Workgroup = makeV2Request(
       makeInput(InputKind::LlvmBitcode,
-                makeKernelBitcode("wrong_required_workgroup",
-                                  std::array<uint32_t, 3>{128, 1, 1})),
-      {}, {}, {"wrong_required_workgroup"},
-      {"wrong_required_workgroup", "wrong_required_workgroup.kd"});
-  Response WrongRequiredFailure =
-      requireFailure(WrongRequiredWorkgroup, Stage::OutputInspection);
-  requireDiagnostic(WrongRequiredFailure,
-                    "post_link.check=g1_profile status=failed "
-                    "kernel=wrong_required_workgroup "
-                    "field=reqd_workgroup_size expected=[256,1,1]");
+                makeKernelBitcode("compiler_declared_128_workgroup",
+                                  std::array<uint32_t, 3>{128, 1, 1}, 128)),
+      {}, {}, {"compiler_declared_128_workgroup"},
+      {"compiler_declared_128_workgroup",
+       "compiler_declared_128_workgroup.kd"});
+  Response CompilerDeclared128Response = runSuccess(
+      CompilerDeclared128Workgroup,
+      {"compiler_declared_128_workgroup",
+       "compiler_declared_128_workgroup.kd"});
+  requireDiagnostic(CompilerDeclared128Response,
+                    "reqd_workgroup_size=[128,1,1]");
 
   Request MissingRequiredWorkgroup = makeV2Request(
       makeInput(InputKind::LlvmBitcode,
@@ -4824,32 +4841,30 @@ int main(int ArgumentCount, char **Arguments) {
       {}, {}, {"missing_required_workgroup"},
       {"missing_required_workgroup", "missing_required_workgroup.kd"});
   Response MissingRequiredFailure =
-      requireFailure(MissingRequiredWorkgroup, Stage::OutputInspection);
+      requireFailure(MissingRequiredWorkgroup, Stage::InputValidation);
   requireDiagnostic(MissingRequiredFailure,
-                    "post_link.check=g1_profile status=failed "
-                    "kernel=missing_required_workgroup "
-                    "field=reqd_workgroup_size expected=[256,1,1]");
+                    "has no exact required-workgroup metadata");
 
-  Request WrongMaxWorkgroup = makeV2Request(
+  Request CompilerDeclared512Maximum = makeV2Request(
       makeInput(InputKind::LlvmBitcode,
-                makeKernelBitcode("wrong_max_workgroup",
-                                  std::array<uint32_t, 3>{256, 1, 1}, 512)),
-      {}, {}, {"wrong_max_workgroup"},
-      {"wrong_max_workgroup", "wrong_max_workgroup.kd"});
-  Response WrongMaxFailure =
-      requireFailure(WrongMaxWorkgroup, Stage::OutputInspection);
-  requireDiagnostic(WrongMaxFailure,
-                    "post_link.check=g1_profile status=failed "
-                    "kernel=wrong_max_workgroup "
-                    "field=max_flat_workgroup_size expected=256 actual=512");
+                makeKernelBitcode("compiler_declared_512_maximum",
+                                  std::array<uint32_t, 3>{512, 1, 1}, 512)),
+      {}, {}, {"compiler_declared_512_maximum"},
+      {"compiler_declared_512_maximum",
+       "compiler_declared_512_maximum.kd"});
+  Response CompilerDeclared512Response = runSuccess(
+      CompilerDeclared512Maximum,
+      {"compiler_declared_512_maximum",
+       "compiler_declared_512_maximum.kd"});
+  requireDiagnostic(CompilerDeclared512Response,
+                    "max_workgroup_size=512");
 
   std::vector<uint8_t> WrongOutputWavefront =
       PublicationResponse.LinkedOutput->Bytes;
   replaceMetadataByte(WrongOutputWavefront, ".wavefront_size", 64, 32);
   requireInspectionFailure(WrongOutputWavefront, PublicationKernel,
-                           "post_link.check=g1_profile status=failed "
-                           "kernel=publication_kernel field=wavefront_size "
-                           "expected=64 actual=32");
+                           "post_link.check=compiler_launch_contract status=failed "
+                           "kernel=publication_kernel field=wavefront_size");
 
   Request WrongV2Worker = MixedV2;
   WrongV2Worker.WorkerBuildIdentity = "wrong-worker";

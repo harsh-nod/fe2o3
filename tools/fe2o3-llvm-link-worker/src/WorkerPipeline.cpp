@@ -3138,10 +3138,17 @@ struct ElfContract {
   std::set<std::string> RequiredImports;
 };
 
+struct CompilerKernelLaunchContract {
+  std::array<uint64_t, 3> RequiredWorkgroupSize;
+  uint64_t MaxFlatWorkgroupSize;
+  uint64_t WavefrontSize;
+};
+
 struct SymbolContract {
   std::set<std::string> Definitions;
   std::set<std::string> PublicDefinitions;
   std::set<std::string> RequiredImports;
+  std::map<std::string, CompilerKernelLaunchContract> KernelLaunchContracts;
 };
 
 std::string diagnosticAtom(StringRef Value) {
@@ -3247,6 +3254,67 @@ Expected<ElfContract> inspectRelocatable(ArrayRef<uint8_t> Bytes) {
     }
   }
   return Result;
+}
+
+Expected<CompilerKernelLaunchContract>
+inspectCompilerKernelLaunchContract(const Function &Kernel) {
+  MDNode *Workgroup = Kernel.getMetadata("reqd_work_group_size");
+  if (!Workgroup || Workgroup->getNumOperands() != 3)
+    return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
+                         "' has no exact required-workgroup metadata");
+  std::array<uint64_t, 3> Required;
+  uint64_t FlatSize = 1;
+  for (size_t Index = 0; Index != Required.size(); ++Index) {
+    const auto *Value =
+        mdconst::dyn_extract<ConstantInt>(Workgroup->getOperand(Index));
+    if (!Value || Value->isNegative() ||
+        Value->getValue().getActiveBits() > 32 ||
+        Value->isZero())
+      return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
+                           "' has invalid required-workgroup metadata");
+    Required[Index] = Value->getZExtValue();
+    if (FlatSize > std::numeric_limits<uint32_t>::max() / Required[Index])
+      return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
+                           "' required-workgroup size overflows");
+    FlatSize *= Required[Index];
+  }
+
+  Attribute Flat = Kernel.getFnAttribute("amdgpu-flat-work-group-size");
+  if (!Flat.isStringAttribute())
+    return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
+                         "' has no flat-workgroup contract");
+  SmallVector<StringRef, 2> FlatParts;
+  Flat.getValueAsString().split(FlatParts, ',', -1, false);
+  uint64_t Minimum = 0;
+  uint64_t Maximum = 0;
+  if (FlatParts.size() != 2 || FlatParts[0].getAsInteger(10, Minimum) ||
+      FlatParts[1].getAsInteger(10, Maximum) || Minimum == 0 ||
+      Maximum == 0 || Minimum > Maximum || FlatSize < Minimum ||
+      FlatSize > Maximum || Maximum > std::numeric_limits<uint32_t>::max())
+    return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
+                         "' has an invalid flat-workgroup contract");
+
+  Attribute Features = Kernel.getFnAttribute("target-features");
+  if (!Features.isStringAttribute())
+    return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
+                         "' has no wavefront contract");
+  bool Wave32Disabled = false;
+  bool Wave64Enabled = false;
+  SmallVector<StringRef, 32> FeatureParts;
+  Features.getValueAsString().split(FeatureParts, ',', -1, false);
+  for (StringRef Feature : FeatureParts) {
+    if (Feature == "-wavefrontsize32")
+      Wave32Disabled = true;
+    else if (Feature == "+wavefrontsize64")
+      Wave64Enabled = true;
+    else if (Feature == "+wavefrontsize32" || Feature == "-wavefrontsize64")
+      return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
+                           "' does not select the production wave64 contract");
+  }
+  if (!Wave32Disabled || !Wave64Enabled)
+    return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
+                         "' does not select the production wave64 contract");
+  return CompilerKernelLaunchContract{Required, Maximum, 64};
 }
 
 SymbolContract inspectModuleSymbols(const Module &ModuleValue) {
@@ -3359,6 +3427,33 @@ inspectNormalizedCompilerModule(const Request &RequestValue,
   }
 
   SymbolContract IrSymbols = inspectModuleSymbols(**Parsed);
+  std::set<std::string> ExpectedSymbols(
+      RequestValue.ExpectedDefinedSymbols.begin(),
+      RequestValue.ExpectedDefinedSymbols.end());
+  auto Profile = selectPostLinkProfile(RequestValue, ExpectedSymbols);
+  bool GenericCompilerProfile = false;
+  if (Profile)
+    GenericCompilerProfile = *Profile == PostLinkProfile::LegacyGfx942G1;
+  else
+    consumeError(Profile.takeError());
+  bool HasDescriptors = llvm::any_of(ExpectedSymbols, [](const std::string &Name) {
+    return StringRef(Name).ends_with(".kd");
+  });
+  if (GenericCompilerProfile && HasDescriptors) {
+    for (const Function &FunctionValue : **Parsed) {
+      if (FunctionValue.isDeclaration() ||
+          FunctionValue.getCallingConv() != CallingConv::AMDGPU_KERNEL)
+        continue;
+      auto Launch = inspectCompilerKernelLaunchContract(FunctionValue);
+      if (!Launch)
+        return Launch.takeError();
+      if (!IrSymbols.KernelLaunchContracts
+               .emplace(FunctionValue.getName().str(), *Launch)
+               .second)
+        return pipelineError(
+            "compiler module has a duplicate kernel launch contract");
+    }
+  }
   auto ObjectBytes = emitObject(**Parsed, Machine);
   if (!ObjectBytes)
     return ObjectBytes.takeError();
@@ -3367,7 +3462,7 @@ inspectNormalizedCompilerModule(const Request &RequestValue,
     return ObjectSymbols.takeError();
   SymbolContract EmittedSymbols{std::move(ObjectSymbols->Definitions),
                                 std::move(ObjectSymbols->PublicDefinitions),
-                                std::move(ObjectSymbols->RequiredImports)};
+                                std::move(ObjectSymbols->RequiredImports), {}};
 
   if (Error E = validateExactDynamicLdsPseudoImport(
           RequestValue, IrSymbols.RequiredImports, "LLVM module", true))
@@ -3398,7 +3493,7 @@ Expected<SymbolContract> inspectInputSymbols(const Input &InputValue,
     return Elf.takeError();
   return SymbolContract{std::move(Elf->Definitions),
                         std::move(Elf->PublicDefinitions),
-                        std::move(Elf->RequiredImports)};
+                        std::move(Elf->RequiredImports), {}};
 }
 
 Error validateV2SymbolRoles(const Request &RequestValue,
@@ -6377,7 +6472,12 @@ Error validateExactMoeTop2V1Metadata(const MetadataContract &Metadata) {
 
 Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
                                                  const ElfContract &Expected,
-                                                 const Request &RequestValue) {
+                                                 const Request &RequestValue,
+                                                 const std::map<
+                                                     std::string,
+                                                     CompilerKernelLaunchContract>
+                                                     *CompilerLaunchContracts =
+                                                         nullptr) {
   StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
   auto ObjectOrError =
       ObjectFile::createObjectFile(MemoryBufferRef(Data, "<output>"));
@@ -6634,27 +6734,49 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
         " actual=" + diagnosticList(MetadataDescriptors));
 
   if (RequestedTarget.Cpu == "gfx942" && !ExpectedDescriptors.empty() &&
-      *Profile == PostLinkProfile::LegacyGfx942G1) {
+      *Profile == PostLinkProfile::LegacyGfx942G1 &&
+      RequestValue.Protocol == ProtocolVersion::V2) {
+    if (!CompilerLaunchContracts || CompilerLaunchContracts->size() !=
+                                        Metadata->Kernels.size())
+      return pipelineError(
+          "post_link.check=compiler_launch_contract status=failed "
+          "reason=kernel_cardinality");
+    for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
+      auto ExpectedLaunch = CompilerLaunchContracts->find(Kernel.Name);
+      if (ExpectedLaunch == CompilerLaunchContracts->end())
+        return pipelineError(
+            Twine("post_link.check=compiler_launch_contract status=failed kernel=") +
+            diagnosticAtom(Kernel.Name) +
+            " field=compiler_kernel_presence");
+      if (!Kernel.RequiredWorkgroupSize ||
+          *Kernel.RequiredWorkgroupSize !=
+              ExpectedLaunch->second.RequiredWorkgroupSize)
+        return pipelineError(
+            Twine("post_link.check=compiler_launch_contract status=failed kernel=") +
+            diagnosticAtom(Kernel.Name) +
+            " field=reqd_workgroup_size");
+      if (Kernel.MaxFlatWorkgroupSize !=
+          ExpectedLaunch->second.MaxFlatWorkgroupSize)
+        return pipelineError(
+            Twine("post_link.check=compiler_launch_contract status=failed kernel=") +
+            diagnosticAtom(Kernel.Name) +
+            " field=max_flat_workgroup_size");
+      if (Kernel.WavefrontSize != ExpectedLaunch->second.WavefrontSize)
+        return pipelineError(
+            Twine("post_link.check=compiler_launch_contract status=failed kernel=") +
+            diagnosticAtom(Kernel.Name) + " field=wavefront_size");
+    }
+  } else if (RequestedTarget.Cpu == "gfx942" &&
+             !ExpectedDescriptors.empty() &&
+             *Profile == PostLinkProfile::LegacyGfx942G1) {
     static constexpr std::array<uint64_t, 3> G1Workgroup = {256, 1, 1};
     for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
       if (!Kernel.RequiredWorkgroupSize ||
-          *Kernel.RequiredWorkgroupSize != G1Workgroup)
+          *Kernel.RequiredWorkgroupSize != G1Workgroup ||
+          Kernel.MaxFlatWorkgroupSize != 256 || Kernel.WavefrontSize != 64)
         return pipelineError(
             Twine("post_link.check=g1_profile status=failed kernel=") +
-            diagnosticAtom(Kernel.Name) +
-            " field=reqd_workgroup_size expected=[256,1,1]");
-      if (Kernel.MaxFlatWorkgroupSize != 256)
-        return pipelineError(
-            Twine("post_link.check=g1_profile status=failed kernel=") +
-            diagnosticAtom(Kernel.Name) +
-            " field=max_flat_workgroup_size expected=256 actual=" +
-            Twine(Kernel.MaxFlatWorkgroupSize));
-      if (Kernel.WavefrontSize != 64)
-        return pipelineError(
-            Twine("post_link.check=g1_profile status=failed kernel=") +
-            diagnosticAtom(Kernel.Name) +
-            " field=wavefront_size expected=64 actual=" +
-            Twine(Kernel.WavefrontSize));
+            diagnosticAtom(Kernel.Name) + " field=launch_contract");
     }
   }
   if (*Profile == PostLinkProfile::ExactPlironScalarAddV1)
@@ -7331,7 +7453,16 @@ inspectLinkedOutputForPublication(ArrayRef<uint8_t> Bytes,
       expectedAbiVersion(RequestValue.CodeObjectVersion))
     return pipelineError(
         "target machine emitted the wrong code-object version");
-  return inspectOutput(Bytes, *ExpectedElf, RequestValue);
+  std::optional<SymbolContract> CompilerModule;
+  if (RequestValue.Protocol == ProtocolVersion::V2) {
+    auto Inspected = inspectNormalizedCompilerModule(RequestValue, *Machine);
+    if (!Inspected)
+      return Inspected.takeError();
+    CompilerModule = std::move(*Inspected);
+  }
+  return inspectOutput(
+      Bytes, *ExpectedElf, RequestValue,
+      CompilerModule ? &CompilerModule->KernelLaunchContracts : nullptr);
 }
 
 Response executeImpl(const Request &RequestValue,
@@ -7557,8 +7688,9 @@ Response executeImpl(const Request &RequestValue,
                    canonicalDiagnostics(LinkDiagnostics, Temporary.Path));
   }
 
-  auto PublicationDiagnostics =
-      inspectOutput(*LinkedBytes, *ExpectedElf, RequestValue);
+  auto PublicationDiagnostics = inspectOutput(
+      *LinkedBytes, *ExpectedElf, RequestValue,
+      CompilerModule ? &CompilerModule->KernelLaunchContracts : nullptr);
   if (!PublicationDiagnostics)
     return failure(RequestValue, Stage::OutputInspection,
                    PublicationDiagnostics.takeError());
