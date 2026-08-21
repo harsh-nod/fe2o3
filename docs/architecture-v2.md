@@ -37,6 +37,18 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   upstream LLVM build for module linking, optimization, target-machine object
   emission, and in-process LLD linking. It neither uses COMGR nor shells out to
   `clang`, `llc`, or `ld.lld`.
+- Compiler provenance now has a canonical six-pin `CompilerClosureV2`, with
+  an explicit Cargo-to-trampoline-to-wrapper transition protocol, and a
+  `RustcInvocationDescriptorV3` that preserves the exact V2 process and
+  environment while adding the complete closure. Protected release and the
+  broker-to-wrapper raw sealed closure transfer are implemented. The wrapper
+  constructs and seals V3 and installs it at fd 199 for rustc; backend
+  admission and live-process equality are not wired yet.
+- Closure-bound compiler-handoff V2 and Worker publication-intent V2 schemas
+  and APIs are implemented on shared V1/V2 engines. Protected production
+  producer/consumer call sites and restart-marker integration still use V1;
+  the V2 records do not yet establish end-to-end production provenance. V1
+  wire formats and APIs remain available for compatibility.
 - Versioned artifact, descriptor, durable-publication, generated launch, HIP,
   and HSA layers exist. Safe generated dispatch is still profile-specific; an
   arbitrary manifest cannot manufacture a safe Rust signature or launch
@@ -230,6 +242,7 @@ continue to point downward according to the machine-checked
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
 | `fe2o3-compiler-api` | Target-neutral request, selector, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
 | `fe2o3-compiler-driver`, `fe2o3-legacy-compiler` | Single-route fail-closed API dispatch and dormant adaptation of the existing legacy owner | Production selection, codegen ownership, artifact/runtime authority |
+| `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, or load/launch authority |
 | `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture lineage, repository policy, scalar finalizer join, and sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
 | `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |

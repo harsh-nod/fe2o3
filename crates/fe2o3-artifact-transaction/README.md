@@ -3,6 +3,25 @@
 This crate coordinates local compiler artifact publication through bounded canonical records,
 descriptor-relative filesystem operations, and one cooperative output-directory lock.
 
+## Compiler provenance records
+
+The compiler-module handoff and Worker V2 publication-intent protocols expose
+both V1 compatibility records and closure-bound V2 records. Their V1 and V2
+implementations use shared internal engines for slot ownership, bounded
+filesystem operations, recovery, and fault boundaries; version-specific
+schemas retain distinct names, domains, encodings, and error surfaces.
+
+| Protocol | V2 binding | Current production selection |
+|---|---|---|
+| Compiler module handoff | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Protected backend and wrapper/finalizer call sites still publish and consume V1. |
+| Worker V2 publication intent | The complete closure is committed with the attempt, producer, durable plan, upstream evidence, output identity, length, and exact retained bytes; V2 persist/recover/clear APIs reject closure mismatch. | Protected publication and restart-marker paths still persist, recover, and clear V1 intents. |
+
+The V2 engines and crash-recovery tests are implemented, but the
+protected production call sites and restart flow are not wired to them. V1
+APIs and wire formats remain available and are not silently upgraded. Neither
+version authenticates compiler authorship or grants publication, linking,
+loading, launch, or execution authority.
+
 ## Retained service directory
 
 `RetainedDurableDirectoryV1` is the lower-level descriptor-only mechanism used by the W1 durable

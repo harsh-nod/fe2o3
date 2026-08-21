@@ -17,8 +17,11 @@ inherited descriptors; exactly one additional descriptor may be the live
 `/proc/<pid>/fd` enumeration directory opened by that check. It pins its
 running executable object and bytes, copies the same bytes into a fully sealed
 memfd, pins the exact cwd object, measures
-the declared Cargo, rustc, rustc runtime tree, backend, and compiler-closure
-identities, and snapshots the complete raw argument vector and environment. It
+the declared Cargo, static binding trampoline, running binding wrapper, rustc,
+rustc runtime tree, and backend pins, constructs the canonical
+`CompilerClosureV2`, and snapshots the complete raw argument vector and
+environment. The closure also binds transition protocol version 1 and derives
+its aggregate identity from that protocol and the six ordered pins. It
 then executes the sealed image with fixed contract, control, launcher-image,
 and cwd descriptors. The child independently checks its own image, its live
 parent's PID/start time/uid/image, the retained backing objects, exact argv,
@@ -30,9 +33,10 @@ PID/start identity. The protected child applies the same race-free boundary to
 its pinned Cargo subprocess. Therefore the admitted child and that Cargo
 process cannot continue when their respective admitted parent dies.
 
-Release starts from a cleared environment. The complete V1 allowlist is
-`CARGO`, the five `FE2O3_AUTHORITY_*_V1` tool/path pins,
-`FE2O3_BACKEND`, `FE2O3_CODEGEN_PIPELINE`, `FE2O3_TARGET`, optional
+Release starts from a cleared environment. The complete allowlist is `CARGO`;
+the backend, Cargo, binding-trampoline, rustc-path, rustc, and rustc-runtime
+`FE2O3_AUTHORITY_*_V1` inputs; `FE2O3_BACKEND`,
+`FE2O3_CODEGEN_PIPELINE`, `FE2O3_TARGET`, optional
 `FE2O3_WORKER_V2_CONFIG_V2`, `LANG=C`, `LC_ALL=C`, and `TZ=UTC`.
 Aliases, extra variables or descriptors, loader variables, rustup/tool
 selectors, noncanonical paths, changed backing objects, replayed attempts, and
@@ -56,6 +60,23 @@ authority path, and no debug normalization is used. An exact static binding
 wrapper must be integrated and admitted before row-softmax can enter Cargo and
 the backend. Consequently the staged 25-pin finalizer/runtime path has no
 production compiler, artifact, launch, or GPU authority.
+
+### Compiler provenance wiring
+
+For protected builds, the capability broker sends a sealed raw
+`CompilerClosureV2` capability to the binding wrapper. The wrapper revalidates
+the complete closure, captures the exact prepared V2 rustc process and child
+environment, and upgrades that in-memory observation to
+`RustcInvocationDescriptorV3`. The rustc and backend pins duplicated by V2 and
+the closure must match.
+
+The wrapper seals the canonical V3 bytes and installs that exact immutable
+image at fd 199 for the prepared rustc child. The raw brokered closure stops at
+the wrapper and is only an input to V3 construction. Backend admission of the
+inherited V3 descriptor is the next boundary and is not wired yet, so this
+transport remains coordination evidence rather than an execution receipt or
+compiler-authorship proof. Unprotected compatibility captures remain V2 and
+receive no fd 199 invocation capability.
 
 ## External Cargo projects
 
@@ -199,6 +220,13 @@ device kernels to proceed. If such a compilation unexpectedly contains a
 device kernel, the backend rejects it because the required managed attempt is
 absent. A selected compilation must publish exactly one attempt-scoped handoff;
 a missing handoff is an error and invalidates the attempt.
+
+The closure-bound compiler handoff V2 and publication-intent V2 protocols are
+available in `fe2o3-artifact-transaction`, each through a shared V1/V2 engine.
+This flow's protected producer/consumer and restart call sites have not been
+migrated: they still call compiler handoff V1 and publication-intent V1 APIs.
+V1 remains supported for compatibility; the presence of V2 schemas does not
+make this path end-to-end provenance-bound.
 
 For a selected unit, the wrapper pins and validates all configured inputs,
 binds a domain-separated identity of the exact manifest, sealed worker image,
@@ -378,10 +406,14 @@ record from the actual process and consumes a sealed parent expectation. The
 aggregate canonical encoding is limited to 8 MiB. The separate
 `fe2o3-rustc-wrapper` compile path remains disabled.
 
-The inert `RustcInvocationDescriptorV2` capture has a narrower cwd statement:
-it binds the canonical cwd pathname supplied to rustc. The process-consistency
-record above separately binds the pinned cwd object. No object-identity join
-between that object and the descriptor pathname is claimed.
+The inert prepared invocation capture binds the canonical cwd pathname supplied
+to rustc. Protected captures use `RustcInvocationDescriptorV3`, which contains
+the exact V2 process/environment and the canonical compiler closure;
+compatibility captures may remain V2. The process-consistency record above
+separately binds the pinned cwd object. No object-identity join between that
+object and the descriptor pathname is claimed. V3 is sealed and inherited by
+rustc at fd 199, but the backend does not yet consume and compare it with the
+live process.
 
 ## Pinned codegen-backend object
 
@@ -408,8 +440,11 @@ integration test invokes the built `cargo-fe2o3` binary against the real
 `fe2o3-typed-alias-spoof` S09 fixture. It therefore traverses project
 discovery, pinned Cargo execution, the S09 capability broker, brokered backend
 and artifact descriptors, `binding_wrapper::run`, closed-environment
-materialization, inert descriptor capture, pinned rustc spawn, Worker V2
-selection, and durable HSACO publication. It is not a `--print` query.
+materialization, inert V2-or-V3 descriptor capture, pinned rustc spawn, Worker
+V2 selection, and durable HSACO publication. It is not a `--print` query. The
+regression still exercises V1 compiler-handoff and publication-intent
+production call sites. It exercises sealed V3 delivery to the rustc process,
+but not the pending backend admission or protected V2 restart path.
 
 The test clears its outer environment and requires these explicit inputs:
 

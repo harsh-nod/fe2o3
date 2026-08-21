@@ -57,6 +57,21 @@ construction, encoding, and decoding. The V3 size bound is the V2 bound plus
 the fixed 194-byte closure preimage, so every valid V2 descriptor remains
 eligible for an upgrade.
 
+### Integration status
+
+The protected `cargo-fe2o3` binding wrapper currently receives a sealed raw
+`CompilerClosureV2` capability from the broker, revalidates it, and uses it to
+construct an in-memory V3 descriptor for the fully prepared rustc child. The
+wrapper seals the canonical V3 bytes and installs the immutable image at fd
+199 for that exact spawn.
+
+The raw brokered closure ends at the wrapper. Backend admission of the inherited
+V3 capability and equality with the live rustc process is not wired yet, so
+sealed delivery must not be described as authenticated compiler authorship or
+an execution receipt. Unprotected and compatibility callers may continue to
+construct V2, receive no fd 199 capability, and use the frozen V1 and V2 APIs
+and wire formats.
+
 ## V2 model
 
 `RustcInvocationDescriptorV2` records:

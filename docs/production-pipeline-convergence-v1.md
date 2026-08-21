@@ -9,7 +9,8 @@ additional production architectures.
 
 ## One transaction
 
-Every kernel-containing final crate enters one rustc-owned transaction:
+The completed convergence target sends every kernel-containing final crate
+through one rustc-owned transaction:
 
 ```text
 authenticated rustc kernel closure
@@ -23,6 +24,45 @@ authenticated rustc kernel closure
     -> independently inspected AMDHSA artifact
     -> generated typed host interface
 ```
+
+Compiler provenance is one cross-cutting input to this transaction, not a
+second compiler route. The canonical `CompilerClosureV2` commits to six
+role-specific SHA-256 pins:
+
+1. Cargo executable;
+2. static Cargo binding trampoline;
+3. full `cargo-fe2o3` binding wrapper;
+4. rustc executable;
+5. complete rustc runtime tree; and
+6. selected rustc codegen backend.
+
+The closure also commits to the canonical Cargo-to-trampoline-to-wrapper
+transition protocol, currently
+`CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1`, and derives one aggregate
+identity from the domain, protocol version, and ordered pins. The aggregate is
+validated, not an independently trusted seventh pin.
+
+`RustcInvocationDescriptorV3` is exactly one complete
+`RustcInvocationDescriptorV2` process description, including cwd, final argv,
+and complete sorted child environment, plus the complete canonical
+`CompilerClosureV2` preimage. Construction cross-checks the duplicated rustc
+and backend digests.
+
+### Compiler provenance wiring
+
+| Boundary | Current state through `f001409c70` | Remaining production wiring |
+|---|---|---|
+| Protected release and Cargo broker | The release contract validates `CompilerClosureV2`; the broker transfers a sealed raw closure capability to the binding wrapper. | Preserve that admitted closure through every later protected boundary. |
+| Exact rustc invocation | The wrapper constructs and seals V3 for protected captures and installs its exact immutable image at fd 199 for rustc. V2 capture remains for compatibility and receives no fd 199 capability. | Admit V3 inside the backend and compare its argv, cwd, complete environment, role-specific pins, target, and full closure with the live process. |
+| Compiler module handoff | Closure-bound V2 publish/consume records and APIs exist on the shared V1/V2 handoff engine. | Switch the protected producer and consumer call sites from V1 to V2. |
+| Worker publication restart | Closure-bound V2 persist/recover/clear records and APIs exist on the shared V1/V2 publication-intent engine. | Wire V2 into the protected publication and restart call sites and their restart-marker state. |
+| Compatibility | Frozen V1 closure, invocation, handoff, and publication-intent surfaces remain available; current production call sites still use V1 where noted above. | Migrate callers explicitly without changing V1 wire formats or silently upgrading V1 records. |
+
+The broker-to-wrapper raw closure capability is not the rustc invocation
+capability and stops at the wrapper. Until backend V3 admission and the
+protected V2 handoff and restart call sites are connected, the sealed transport
+is coordination evidence, not end-to-end compiler provenance or production
+readiness.
 
 The implementation uses one move-only typestate owner, conceptually
 `ProductionCompilationV1<'tcx, Stage>`. A transition consumes the previous
