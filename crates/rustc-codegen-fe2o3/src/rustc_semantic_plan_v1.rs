@@ -16,8 +16,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use rustc_abi::ExternAbi;
 use rustc_middle::mir::{
-    AggregateKind, Body, BorrowKind, Local, MutBorrowKind, Operand, Place, PlaceTy, ProjectionElem,
-    Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
+    AggregateKind, AssertKind, BinOp, Body, BorrowKind, Local, MutBorrowKind, Operand, Place,
+    PlaceTy, ProjectionElem, Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf, TyAndLayout};
 use rustc_middle::ty::util::IntTypeExt;
@@ -861,10 +861,43 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 }
                 Ok(())
             }
-            Rvalue::Repeat(..) => Err(reject("Repeat rvalue", site)),
+            Rvalue::Repeat(operand, count) => {
+                let count = count
+                    .try_to_target_usize(self.tcx)
+                    .and_then(|count| usize::try_from(count).ok())
+                    .ok_or_else(|| reject("Repeat count outside host bounds", site))?;
+                if count == 0 {
+                    return Ok(());
+                }
+                self.inspect_operand(operand, site)?;
+                self.charge(SemanticMirResourceV1::Operands, count - 1)
+            }
             Rvalue::RawPtr(..) => Err(reject("RawPtr rvalue", site)),
             Rvalue::Cast(..) => Err(reject("Cast rvalue", site)),
-            Rvalue::BinaryOp(..) => Err(reject("BinaryOp rvalue", site)),
+            Rvalue::BinaryOp(
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Rem
+                | BinOp::BitXor
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::Shl
+                | BinOp::Shr
+                | BinOp::Eq
+                | BinOp::Lt
+                | BinOp::Le
+                | BinOp::Ne
+                | BinOp::Ge
+                | BinOp::Gt
+                | BinOp::Offset,
+                operands,
+            ) => {
+                self.inspect_operand(&operands.0, site)?;
+                self.inspect_operand(&operands.1, site)
+            }
+            Rvalue::BinaryOp(..) => Err(reject("unsupported BinaryOp rvalue", site)),
             Rvalue::UnaryOp(..) => Err(reject("UnaryOp rvalue", site)),
             Rvalue::ThreadLocalRef(..) => Err(reject("ThreadLocalRef rvalue", site)),
             Rvalue::WrapUnsafeBinder(..) => Err(reject("WrapUnsafeBinder rvalue", site)),
@@ -905,7 +938,21 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
             }
             TerminatorKind::TailCall { .. } => Err(reject("TailCall terminator", site)),
             TerminatorKind::Drop { .. } => Err(reject("Drop terminator", site)),
-            TerminatorKind::Assert { .. } => Err(reject("Assert terminator", site)),
+            TerminatorKind::Assert {
+                cond, msg, unwind, ..
+            } => {
+                if !matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) {
+                    return Err(reject("assert with executable unwind edge", site));
+                }
+                self.inspect_operand(cond, site)?;
+                match msg.as_ref() {
+                    AssertKind::BoundsCheck { len, index } => {
+                        self.inspect_operand(len, site)?;
+                        self.inspect_operand(index, site)
+                    }
+                    _ => Err(reject("non-bounds Assert terminator", site)),
+                }
+            }
             TerminatorKind::UnwindResume => Err(reject("UnwindResume terminator", site)),
             TerminatorKind::UnwindTerminate(..) => Err(reject("UnwindTerminate terminator", site)),
             TerminatorKind::Yield { .. } => Err(reject("Yield terminator", site)),

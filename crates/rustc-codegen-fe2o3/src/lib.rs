@@ -43,6 +43,7 @@ mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod pipeline_selection;
 mod production_pipeline_v1;
+mod production_ranked_projection_v1;
 mod production_rustc_driver_v1;
 mod production_semantic_body_v1;
 mod production_semantic_fn_abi_v1;
@@ -71,7 +72,9 @@ mod typed_artifact;
 mod worker_v2_producer;
 
 #[doc(hidden)]
-pub use production_rustc_driver_v1::run_production_extraction_driver_v1;
+pub use production_rustc_driver_v1::{
+    run_production_extraction_driver_v1, run_production_ranked_extraction_driver_v1,
+};
 
 use fe2o3_artifact_transaction as artifact_transaction;
 use rustc_codegen_ssa::traits::CodegenBackend;
@@ -491,8 +494,21 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
                             }
                         };
-                        let error = transaction.require_semantic_mir_import();
-                        tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
+                        match transaction.verify_ranked_memory() {
+                            Ok(verified) => tcx.dcx().fatal(format!(
+                                "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) and {} callable record(s) into bounds-verified ranked PLIRON for `{}` while retaining {} identity/transaction binding(s); artifact/launch authority {}; bounds clean {}; target-machine lowering remains disabled:\n{}",
+                                verified.semantic_function_count(),
+                                verified.semantic_callable_count(),
+                                verified.function_name(),
+                                verified.retained_identity_and_transaction_binding_count(),
+                                verified.grants_artifact_or_launch_authority(),
+                                verified.bounds_are_clean(),
+                                verified.ranked_ir(),
+                            )),
+                            Err(error) => {
+                                tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
+                            }
+                        }
                     }
                 }
             }

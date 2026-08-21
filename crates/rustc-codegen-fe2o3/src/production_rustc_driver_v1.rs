@@ -10,17 +10,30 @@ use rustc_middle::ty::TyCtxt;
 
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
+    ranked_memory: bool,
     result: Option<Result<(), String>>,
 }
 
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
-        self.result = Some(extract_in_active_session_v1(tcx));
+        self.result = Some(if self.ranked_memory {
+            extract_ranked_memory_in_active_session_v1(tcx)
+        } else {
+            extract_in_active_session_v1(tcx)
+        });
         Compilation::Stop
     }
 }
 
-fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
+fn transaction_in_active_session_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Result<
+    crate::production_pipeline_v1::ProductionCompilationV1<
+        'tcx,
+        crate::production_pipeline_v1::CollectedRustStageV1<'tcx>,
+    >,
+    String,
+> {
     let target = crate::production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
         tcx,
         &crate::AmdGpuTarget::new(dialect_mir::GFX942_TARGET_CPU),
@@ -59,14 +72,28 @@ fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
     .map_err(|error| format!("production extraction producer identity failed: {error}"))?;
     let output_dir = env::current_dir()
         .map_err(|error| format!("production extraction working directory failed: {error}"))?;
-    let transaction =
-        crate::production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
-            tcx, closure, producer, output_dir, None,
-        )
-        .map_err(|error| {
-            format!("production extraction transaction construction failed: {error}")
-        })?;
-    Err(transaction.require_semantic_mir_import().to_string())
+    crate::production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
+        tcx, closure, producer, output_dir, None,
+    )
+    .map_err(|error| format!("production extraction transaction construction failed: {error}"))
+}
+
+fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
+    Err(transaction_in_active_session_v1(tcx)?
+        .require_semantic_mir_import()
+        .to_string())
+}
+
+fn extract_ranked_memory_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
+    let ranked = transaction_in_active_session_v1(tcx)?
+        .verify_ranked_memory()
+        .map_err(|error| error.to_string())?;
+    eprintln!(
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> bounds-verified lowering input for `{}`\n{}",
+        ranked.function_name(),
+        ranked.ranked_ir(),
+    );
+    Ok(())
 }
 
 /// Runs one already-targeted rustc invocation in this process.
@@ -79,5 +106,18 @@ pub fn run_production_extraction_driver_v1(args: &[String]) -> Result<(), String
     rustc_driver::run_compiler(args, &mut callbacks);
     callbacks.result.unwrap_or_else(|| {
         Err("production extraction callback did not reach rustc analysis".to_owned())
+    })
+}
+
+/// Runs the same production importer followed by generic ranked-memory
+/// construction and verification, without granting artifact authority.
+pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(), String> {
+    let mut callbacks = ProductionExtractionCallbacksV1 {
+        ranked_memory: true,
+        result: None,
+    };
+    rustc_driver::run_compiler(args, &mut callbacks);
+    callbacks.result.unwrap_or_else(|| {
+        Err("production ranked extraction callback did not reach rustc analysis".to_owned())
     })
 }

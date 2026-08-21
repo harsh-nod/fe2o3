@@ -3,7 +3,7 @@
 //! This module owns the one integration point for issue #175. It deliberately
 //! contains no workload recognition. The sole semantic-MIR importer owns the
 //! consuming target-authentication boundary and moves an admitted request into
-//! a typed stage before the still-pending middle-end transition fails closed.
+//! a typed stage before generic ranked-memory verification.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -35,6 +35,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     CustomLlvmConfiguration,
     EmptyCollectedDeviceClosure,
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
+    RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
 }
 
 impl fmt::Display for ProductionPipelineErrorV1 {
@@ -47,6 +48,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
                 "production-v1 requires a nonempty collector-sealed device closure",
             ),
             Self::SemanticImport(error) => write!(formatter, "production-v1 {error}"),
+            Self::RankedProjection(error) => {
+                write!(formatter, "production-v1 ranked-memory verification failed: {error}")
+            }
         }
     }
 }
@@ -55,6 +59,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::SemanticImport(error) => Some(error),
+            Self::RankedProjection(error) => Some(error),
             Self::CustomLlvmConfiguration | Self::EmptyCollectedDeviceClosure => None,
         }
     }
@@ -95,6 +100,53 @@ pub(super) struct AdmittedSemanticMirStageV1 {
 pub(crate) struct ProductionCompilationV1<'tcx, Stage> {
     stage: Stage,
     invariant_session: PhantomData<fn(TyCtxt<'tcx>) -> TyCtxt<'tcx>>,
+}
+
+/// Move-only production stage retaining rustc identities, transaction
+/// bindings, admitted semantic MIR, and the owner-held verified PLIRON graph.
+pub(crate) struct RankedVerifiedProductionCompilationV1 {
+    ranked: crate::production_ranked_projection_v1::ProductionRankedSemanticProgramV1,
+    rustc_identity_inventory_sha256: [u8; 32],
+    rustc_preflight_plan_sha256: [u8; 32],
+    producer: ProducerIdentity,
+    output_dir: PathBuf,
+    build_attempt: Option<BuildAttempt>,
+}
+
+impl RankedVerifiedProductionCompilationV1 {
+    pub(crate) fn ranked_ir(&self) -> &str {
+        self.ranked.ranked_ir()
+    }
+
+    pub(crate) fn function_name(&self) -> &str {
+        self.ranked.function_name()
+    }
+
+    pub(crate) fn semantic_function_count(&self) -> usize {
+        self.ranked.semantic_function_count()
+    }
+
+    pub(crate) fn semantic_callable_count(&self) -> usize {
+        self.ranked.semantic_callable_count()
+    }
+
+    pub(crate) fn bounds_are_clean(&self) -> bool {
+        self.ranked.bounds_are_clean()
+    }
+
+    pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
+        let _ = (
+            &self.rustc_identity_inventory_sha256,
+            &self.rustc_preflight_plan_sha256,
+            &self.producer,
+            &self.output_dir,
+        );
+        4 + usize::from(self.build_attempt.is_some())
+    }
+
+    pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
+        self.ranked.grants_artifact_or_launch_authority()
+    }
 }
 
 impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
@@ -149,7 +201,15 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         })
     }
 
-    /// Consumes the only production transaction through the sole importer.
+    /// Consumes the only production transaction through import and verification.
+    pub(crate) fn verify_ranked_memory(
+        self,
+    ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
+        self.import_semantic_mir()?.verify_ranked_memory()
+    }
+
+    /// Retains the original extraction milestone while consuming the same
+    /// transaction and importer as the production backend.
     pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
         match self.import_semantic_mir() {
             Ok(transaction) => transaction.require_middle_end(),
@@ -178,6 +238,32 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
         drop((semantic_mir, producer, output_dir, build_attempt));
         ProductionPipelineErrorV1::SemanticImport(error)
     }
+
+    fn verify_ranked_memory(
+        self,
+    ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
+        let AdmittedSemanticMirStageV1 {
+            semantic_mir,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        } = self.stage;
+        let ranked =
+            crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
+                semantic_mir,
+            )
+            .map_err(ProductionPipelineErrorV1::RankedProjection)?;
+        Ok(RankedVerifiedProductionCompilationV1 {
+            ranked,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -201,28 +287,6 @@ mod tests {
             reject_custom_llvm_configuration(true),
             Err(ProductionPipelineErrorV1::CustomLlvmConfiguration)
         ));
-    }
-
-    #[test]
-    fn unavailable_import_diagnostic_is_deterministic_and_fail_closed() {
-        let error = ProductionPipelineErrorV1::SemanticImport(
-            crate::collector::ProductionSemanticImportErrorV1::SemanticMiddleEndPending {
-                functions: 3,
-                callables: 6,
-                rustc_identity_inventory_sha256: [0xab; 32],
-                rustc_preflight_plan_sha256: [0xcd; 32],
-                semantic_sha256: [0xef; 32],
-            },
-        );
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "production-v1 semantic importer authenticated rustc identity inventory {} and bounded preflight plan {}, then admitted one complete semantic MIR request with 3 function(s), 6 callable(s), and canonical identity {}; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
-                "ab".repeat(32),
-                "cd".repeat(32),
-                "ef".repeat(32),
-            )
-        );
     }
 
     #[test]

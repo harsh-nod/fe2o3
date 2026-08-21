@@ -4,7 +4,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[kernel(
     typed,
-    namespace = "b635d5f638735efbfdcf4a85cf23cf7299092bbb37c8aa02fed2cb0994baed92"
+    namespace = "7e11768a389c455f81cb967164c9dd109e736bc4c2bd882fd5ee96727bac20c8"
 )]
 pub fn fill(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();

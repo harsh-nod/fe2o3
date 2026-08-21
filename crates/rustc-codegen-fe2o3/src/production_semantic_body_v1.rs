@@ -9,12 +9,13 @@ use std::collections::HashMap;
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAggregateKindV1, SemanticAssignmentV1, SemanticBasicBlockV1, SemanticBlockIdV1,
-    SemanticBlockIdentityV1, SemanticBorrowKindV1, SemanticCallDestinationV1, SemanticCallableIdV1,
-    SemanticConstGenericArgumentsIdentityV1, SemanticConstantBytesV1, SemanticConstantV1,
-    SemanticConstantValueV1, SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1,
-    SemanticFunctionAbiV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAssignmentV1, SemanticBasicBlockV1,
+    SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticBorrowKindV1,
+    SemanticCallDestinationV1, SemanticCallableIdV1, SemanticConstGenericArgumentsIdentityV1,
+    SemanticConstantBytesV1, SemanticConstantV1, SemanticConstantValueV1,
+    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1, SemanticFunctionAbiV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
     SemanticItemDefinitionIdentityV1, SemanticKernelEntryV1, SemanticLinkSymbolV1,
     SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticLocalRoleV1,
     SemanticMemoryLoadV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
@@ -26,8 +27,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::{
-    AggregateKind, Body, BorrowKind, ConstValue, MutBorrowKind, Operand, Place, PlaceTy,
-    ProjectionElem, RETURN_PLACE, Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
+    AggregateKind, AssertKind, BinOp, Body, BorrowKind, ConstValue, MutBorrowKind, Operand, Place,
+    PlaceTy, ProjectionElem, RETURN_PLACE, Rvalue, START_BLOCK, StatementKind, TerminatorKind,
+    UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
@@ -848,15 +850,34 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 }
                 SemanticRvalueKindV1::aggregate(aggregate_kind, semantic_operands)?
             }
-            Rvalue::Repeat(..) => {
-                return Err(unsupported("Repeat rvalue", block, statement));
+            Rvalue::Repeat(operand, count) => {
+                let count = count
+                    .try_to_target_usize(self.tcx)
+                    .and_then(|count| usize::try_from(count).ok())
+                    .ok_or_else(|| {
+                        unsupported("Repeat count outside host bounds", block, statement)
+                    })?;
+                let mut semantic_operands = try_vec_v1(count, SemanticMirResourceV1::Operands)?;
+                if count != 0 {
+                    let operand = self.construct_operand(operand, block, statement)?;
+                    self.owner
+                        .charge(SemanticMirResourceV1::Operands, count - 1)?;
+                    semantic_operands.resize(count, operand);
+                }
+                SemanticRvalueKindV1::aggregate(SemanticAggregateKindV1::Array, semantic_operands)?
             }
             Rvalue::RawPtr(..) => {
                 return Err(unsupported("RawPtr rvalue", block, statement));
             }
             Rvalue::Cast(..) => return Err(unsupported("Cast rvalue", block, statement)),
-            Rvalue::BinaryOp(..) => {
-                return Err(unsupported("BinaryOp rvalue", block, statement));
+            Rvalue::BinaryOp(operation, operands) => {
+                let operation = semantic_binary_operation(*operation)
+                    .ok_or_else(|| unsupported("unsupported BinaryOp rvalue", block, statement))?;
+                SemanticRvalueKindV1::Binary {
+                    operation,
+                    left: self.construct_operand(&operands.0, block, statement)?,
+                    right: self.construct_operand(&operands.1, block, statement)?,
+                }
             }
             Rvalue::UnaryOp(..) => {
                 return Err(unsupported("UnaryOp rvalue", block, statement));
@@ -948,7 +969,41 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             }
             TerminatorKind::TailCall { .. } => Err(unsupported("TailCall terminator", block, None)),
             TerminatorKind::Drop { .. } => Err(unsupported("Drop terminator", block, None)),
-            TerminatorKind::Assert { .. } => Err(unsupported("Assert terminator", block, None)),
+            TerminatorKind::Assert {
+                cond,
+                expected,
+                msg,
+                target,
+                unwind,
+            } => {
+                let message = match msg.as_ref() {
+                    AssertKind::BoundsCheck { len, index } => {
+                        SemanticAssertMessageV1::BoundsCheck {
+                            length: self.construct_operand(len, block, None)?,
+                            index: self.construct_operand(index, block, None)?,
+                        }
+                    }
+                    _ => return Err(unsupported("non-bounds Assert terminator", block, None)),
+                };
+                let unwind = match unwind {
+                    UnwindAction::Continue => SemanticUnwindActionV1::Continue,
+                    UnwindAction::Unreachable => SemanticUnwindActionV1::Unreachable,
+                    UnwindAction::Terminate(_) | UnwindAction::Cleanup(_) => {
+                        return Err(unsupported(
+                            "assert with executable unwind edge",
+                            block,
+                            None,
+                        ));
+                    }
+                };
+                Ok(SemanticTerminatorKindV1::Assert {
+                    condition: self.construct_operand(cond, block, None)?,
+                    expected: *expected,
+                    message,
+                    target: self.edge(SemanticEdgeRoleV1::AssertSuccess, target.index())?,
+                    unwind,
+                })
+            }
             TerminatorKind::UnwindResume => {
                 Err(unsupported("UnwindResume terminator", block, None))
             }
@@ -1605,6 +1660,37 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         ProductionTerminalExpansionV1::ThreadIndex1d => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet => Some(1),
         ProductionTerminalExpansionV1::DisjointSliceGetMut => Some(2),
+    }
+}
+
+fn semantic_binary_operation(operation: BinOp) -> Option<SemanticBinaryOpV1> {
+    match operation {
+        BinOp::Add => Some(SemanticBinaryOpV1::Add),
+        BinOp::Sub => Some(SemanticBinaryOpV1::Subtract),
+        BinOp::Mul => Some(SemanticBinaryOpV1::Multiply),
+        BinOp::Div => Some(SemanticBinaryOpV1::Divide),
+        BinOp::Rem => Some(SemanticBinaryOpV1::Remainder),
+        BinOp::BitXor => Some(SemanticBinaryOpV1::BitXor),
+        BinOp::BitAnd => Some(SemanticBinaryOpV1::BitAnd),
+        BinOp::BitOr => Some(SemanticBinaryOpV1::BitOr),
+        BinOp::Shl => Some(SemanticBinaryOpV1::ShiftLeft),
+        BinOp::Shr => Some(SemanticBinaryOpV1::ShiftRight),
+        BinOp::Eq => Some(SemanticBinaryOpV1::Equal),
+        BinOp::Lt => Some(SemanticBinaryOpV1::LessThan),
+        BinOp::Le => Some(SemanticBinaryOpV1::LessOrEqual),
+        BinOp::Ne => Some(SemanticBinaryOpV1::NotEqual),
+        BinOp::Ge => Some(SemanticBinaryOpV1::GreaterOrEqual),
+        BinOp::Gt => Some(SemanticBinaryOpV1::GreaterThan),
+        BinOp::Offset => Some(SemanticBinaryOpV1::Offset),
+        BinOp::Cmp
+        | BinOp::AddWithOverflow
+        | BinOp::SubWithOverflow
+        | BinOp::MulWithOverflow
+        | BinOp::AddUnchecked
+        | BinOp::SubUnchecked
+        | BinOp::MulUnchecked
+        | BinOp::ShlUnchecked
+        | BinOp::ShrUnchecked => None,
     }
 }
 
