@@ -1,13 +1,13 @@
 //! Linear identity and failure foundation for device-content initialization.
 //!
-//! The pinned KFD UAPI has no admitted memcpy or SDMA submission primitive,
-//! and the current compute queue cannot yet return a device lease after an
-//! authenticated copy-kernel dispatch. Consequently this module deliberately
-//! has no production completion constructor and cannot mint initialized
-//! content. It does close the host-side composition needed by that future
-//! bridge: exact source, destination, content, operation, publication, and
-//! completion identities; fail-before-side-effect retry; and terminal
-//! retention after any ambiguous side effect.
+//! The pinned KFD UAPI has no admitted memcpy or SDMA submission primitive.
+//! The compute queue can return an exact recycled C3 lease, but no authenticated
+//! copy-kernel path connects that return to this state machine. Consequently
+//! this module deliberately has no production completion constructor and
+//! cannot mint initialized content. It does close the host-side composition
+//! needed by that future bridge: exact source, destination, content, operation,
+//! publication, and completion identities; fail-before-side-effect retry; and
+//! terminal retention after any ambiguous side effect.
 
 #![allow(dead_code)]
 
@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 /// Frozen claim boundary for the unbacked KFD copy-composition foundation.
 pub const GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-device-content-copy-foundation-r1-v1\n",
+    "profile=fe2o3-mi300x-gfx942-device-content-copy-foundation-r2-v1\n",
     "target=gfx942:xnack-,one-selected-current-device-vm-and-queue-generation\n",
     "content=nonzero-semantic-role-identity,u32-ordinal,nonzero-byte-extent,sha256,canonical-content-identity\n",
     "source=actual-private-mapped-gtt-allocation-and-publication-generations,exact-logical-byte-extent,no-address-export\n",
@@ -31,13 +31,14 @@ pub const GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1: &str = concat!(
     "quiescence=initialized-authority-form-exists-only-after-exact-completed-identity,source-and-destination-retained-through-completion\n",
     "authority=crate-private-linear-states,no-public-mint,no-handle-gpu-address-pointer-fd-packet-or-signal-export\n",
     "proof=bounded-host-state-machine-and-hostile-tests-only,no-concrete-verus-or-machine-refinement\n",
-    "hard-boundary=no-admitted-kfd-memcpy-or-sdma-packet,no-authenticated-copy-kernel,no-queue-resource-return-after-copy,no-linux-backend-or-hardware-evidence\n",
+    "queue-prerequisite=actual-mapped-c3-authority-return-with-owning-memory-session-only-after-exact-C4-recycle-and-confirmed-queue-destroy,not-yet-connected-to-content-state-machine\n",
+    "hard-boundary=no-admitted-kfd-memcpy-or-sdma-packet,no-authenticated-copy-kernel,no-production-copy-token-constructor,no-linux-copy-backend-or-hardware-evidence\n",
     "excluded=actual-copy,initialized-content-mint,dispatch-read-premise,alias-or-effect-proof,cpu-gpu-coherence,firmware-effects,public-launch\n",
 );
 
 /// SHA-256 of [`GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1`].
 pub const GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "c6226713ddcdaf11845f018b167cede4eee219de6084ff73c1c8a1d3cf4b4a71";
+    "2e52b3b210f36729fd309b4973fbcbbb1fe9e325e95ae62f4e567f544f79eceb";
 
 /// Semantic role and ordinal for one exact byte image.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -267,8 +268,7 @@ impl AuthenticatedDeviceCopyPublicationV1 {
 ///
 /// Production has deliberately no constructor. The required follow-up bridge
 /// must consume the exact C4 completed batch for the authenticated copy
-/// publication to construct this token. It must also retain and return the
-/// destination C3 lease instead of freeing it during queue teardown. Raw
+/// publication and the exact recycled C3 return to construct this token. Raw
 /// caller fields or a boolean are insufficient.
 pub(crate) struct AuthenticatedDeviceCopyCompletionV1 {
     identity: DeviceCopyCompletionIdentityV1,

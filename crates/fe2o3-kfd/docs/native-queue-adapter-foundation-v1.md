@@ -1,6 +1,6 @@
 # Native queue adapter foundation V1
 
-This R6 slice executes the compute-AQL queue lifecycle against a private
+This R7 slice executes the compute-AQL queue lifecycle against a private
 backend and projects every attempted lifecycle operation into the existing
 bounded `QueueLifecycleStateV1`. The production composition consumes the
 checked device and exact shared-GTT capabilities; callers cannot construct a
@@ -183,6 +183,22 @@ The queue owns those resources through C2 publication, C4 completion, and
 signal recycle; generation keys are substitution checks rather than ownership.
 A doorbell failure after publication is not rollback evidence and remains
 process-teardown-only poison.
+
+Ordinary confirmed teardown releases every C3 allocation as before. A second
+crate-private consuming path is admitted only after one exact dispatch
+generation has reached C4 completion and signal recycle. It confirms queue
+destroy, releases event/runtime/doorbell/CWSR/queue/code/kernarg/completion
+resources, restores the memory model, and returns the actual mapped C3
+authorities with the owning shared-memory session. Initial preparation,
+pre-publication cancellation, in-flight work, completion without recycle,
+stale generations, and poison all reject before queue teardown starts. This is
+a concrete lease-return prerequisite, not initialized-content evidence.
+
+After DESTROY is confirmed, return is all-or-terminal. Any later
+event/runtime/doorbell/CWSR/queue/code/kernarg/completion release or model
+restoration error produces no partial returned value. The consumed session's
+no-effect drops retain all possibly live native resources until process
+teardown; cleanup and retry are not admitted.
 
 ## Private completion-signal boundary
 

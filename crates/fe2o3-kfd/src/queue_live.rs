@@ -24,8 +24,8 @@ use super::completion::{
 use super::dispatch_binding::{
     DeviceDataAllocationInputV1, DispatchGeometryV1, DispatchResourceOwnerV1,
     Gfx942CompletedDispatchBatchV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
-    Gfx942DispatchPollV1, TypedKernargImageV1, prepare_dispatch_resources, unwrap_completed,
-    unwrap_published, wrap_completed, wrap_poll, wrap_published,
+    Gfx942DispatchPollV1, ReturnedDispatchDataV1, TypedKernargImageV1, prepare_dispatch_resources,
+    unwrap_completed, unwrap_published, wrap_completed, wrap_poll, wrap_published,
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
@@ -57,14 +57,14 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and private batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r9-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r10-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=032e68de9b493deb70326fe8e65bb90248ff3a0d02d6a77f3e939df15262b33e\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_batch_reservation_schema_sha256=0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83\n",
     "aql_completion_schema_sha256=be1bdd6a05d19f0d269f7e72d6ade2b7918157bfebad2b01466a600f24a22c47\n",
-    "dispatch_binding_schema_sha256=ed54cf521e2a19c549a71133d5a7e3cb11d1da8203bc63140ac06ee814497603\n",
+    "dispatch_binding_schema_sha256=5f94ed69091dac7d1f405b4be9fa313878c6e9d1d0ee4783559ad4625db84d66\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -79,7 +79,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-256-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,batch-count-1-through-256-and-ring-capacity-bounded,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll,pending-ready-fault-timeout-distinct,release-reset-only-after-all-signals-zero\n",
-    "dispatch=private-only,validated-code-materialization-and-descriptor-resolution,typed-kernarg-device-pointer-injection,exact-c3-lease-set-and-data-premises,C2-publication,C4-completion,resource-release-after-destroy\n",
+    "dispatch=private-only,validated-code-materialization-and-descriptor-resolution,typed-kernarg-device-pointer-injection,exact-c3-lease-set-and-data-premises,C2-publication,C4-completion,ordinary-release-or-exact-recycle-gated-c3-return-after-destroy\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
@@ -93,7 +93,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "1e4d5da95fb6312022e6f0876f217aebd7671ddf1437e55115339f7a40864499";
+    "981f972b9bb30a28322bbc6efe60d9a08f4d936759d651189ddcea2108a42147";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -401,6 +401,43 @@ impl ComputeAqlQueueDestroyedV1 {
             released_resources,
         }
     }
+}
+
+/// Private ownership returned by the exact recycled-dispatch teardown path.
+///
+/// The value retains the active shared-memory session beside the actual mapped
+/// C3 authorities. It exposes neither native identities nor device addresses
+/// and does not claim that any returned extent contains initialized content.
+#[allow(dead_code)]
+#[must_use = "returned mapped C3 leases require explicit unmap and release"]
+pub(crate) struct Gfx942RecycledDispatchResourcesV1 {
+    destroyed: ComputeAqlQueueDestroyedV1,
+    memory: SharedGttMemorySessionV1,
+    dispatch: ReturnedDispatchDataV1,
+}
+
+#[allow(dead_code)]
+impl Gfx942RecycledDispatchResourcesV1 {
+    pub(crate) const fn destroyed(&self) -> ComputeAqlQueueDestroyedV1 {
+        self.destroyed
+    }
+
+    pub(crate) const fn dispatch_generation(&self) -> u64 {
+        self.dispatch.generation()
+    }
+
+    pub(crate) fn data_lease_count(&self) -> usize {
+        self.dispatch.data().len()
+    }
+
+    pub(super) fn into_parts(self) -> (SharedGttMemorySessionV1, ReturnedDispatchDataV1) {
+        (self.memory, self.dispatch)
+    }
+}
+
+enum QueueDestroyOutcomeV1 {
+    Released(ComputeAqlQueueDestroyedV1),
+    Returned(Box<Gfx942RecycledDispatchResourcesV1>),
 }
 
 #[derive(Debug)]
@@ -1195,7 +1232,36 @@ impl ComputeAqlQueueSessionV1 {
         Ok(observation)
     }
 
-    pub fn destroy(mut self) -> Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1> {
+    pub fn destroy(self) -> Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1> {
+        match self.destroy_inner(false)? {
+            QueueDestroyOutcomeV1::Released(destroyed) => Ok(destroyed),
+            QueueDestroyOutcomeV1::Returned(_) => Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "ordinary destroy returned dispatch resources",
+            )),
+        }
+    }
+
+    /// Destroys a queue and returns its actual mapped C3 authorities only when
+    /// the bound dispatch reached exact C4 completion and signal recycle.
+    ///
+    /// This is crate-private prerequisite plumbing for a future authenticated
+    /// copy-kernel bridge. It grants no initialized-content or read authority.
+    #[allow(dead_code)]
+    pub(crate) fn destroy_returning_recycled_dispatch_resources(
+        self,
+    ) -> Result<Gfx942RecycledDispatchResourcesV1, ComputeAqlQueueSessionErrorV1> {
+        match self.destroy_inner(true)? {
+            QueueDestroyOutcomeV1::Returned(resources) => Ok(*resources),
+            QueueDestroyOutcomeV1::Released(_) => Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "returning destroy released dispatch resources",
+            )),
+        }
+    }
+
+    fn destroy_inner(
+        mut self,
+        return_dispatch_data: bool,
+    ) -> Result<QueueDestroyOutcomeV1, ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal queue session requires process teardown",
@@ -1203,7 +1269,13 @@ impl ComputeAqlQueueSessionV1 {
         }
         self.completion_owner.ensure_releasable()?;
         if let Some(dispatch) = self.dispatch.as_ref() {
-            dispatch.ensure_releasable()?;
+            if return_dispatch_data {
+                dispatch.ensure_returnable()?;
+            } else {
+                dispatch.ensure_releasable()?;
+            }
+        } else if return_dispatch_data {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
         let engine = self
             .engine
@@ -1253,16 +1325,30 @@ impl ComputeAqlQueueSessionV1 {
             authority,
             shadow_release,
         )?;
-        if let Some(dispatch) = self.dispatch.take() {
-            dispatch.release(
-                &mut self
-                    .engine
-                    .as_mut()
-                    .expect("session engine")
-                    .backend
-                    .session,
-            )?;
-        }
+        let returned_dispatch = match self.dispatch.take() {
+            Some(dispatch) if return_dispatch_data => Some(
+                dispatch.release_non_data_after_recycle(
+                    &mut self
+                        .engine
+                        .as_mut()
+                        .expect("session engine")
+                        .backend
+                        .session,
+                )?,
+            ),
+            Some(dispatch) => {
+                dispatch.release(
+                    &mut self
+                        .engine
+                        .as_mut()
+                        .expect("session engine")
+                        .backend
+                        .session,
+                )?;
+                None
+            }
+            None => None,
+        };
         let completion_signals =
             self.completion_signals
                 .take()
@@ -1277,10 +1363,26 @@ impl ComputeAqlQueueSessionV1 {
             .session;
         let completion_signals = memory.unmap_from_gpu(completion_signals.into_token())?;
         memory.release(completion_signals)?;
-        Ok(ComputeAqlQueueDestroyedV1 {
+        let destroyed = ComputeAqlQueueDestroyedV1 {
             queue_id: self.observation.queue_id,
             released_resources: 5,
-        })
+        };
+        let Some(dispatch) = returned_dispatch else {
+            return Ok(QueueDestroyOutcomeV1::Released(destroyed));
+        };
+        let backend = self
+            .engine
+            .take()
+            .expect("session engine")
+            .into_backend()
+            .map_err(map_native)?;
+        Ok(QueueDestroyOutcomeV1::Returned(Box::new(
+            Gfx942RecycledDispatchResourcesV1 {
+                destroyed,
+                memory: backend.session,
+                dispatch,
+            },
+        )))
     }
 
     fn check_currentness(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {

@@ -21,8 +21,9 @@ use super::completion::{
 use crate::MemorySessionError;
 use crate::shared_memory::{
     AqlDispatchCodeResourceRoleV1, AqlDispatchKernargResourceRoleV1, ExecutableGttV1,
-    Gfx942DeviceMemoryDispatchAuthorityV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
-    KernargGttV1, SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1,
+    Gfx942DeviceMemoryDispatchAuthorityV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
+    GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1, KernargGttV1,
+    SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1,
 };
 
 pub(crate) const MAX_DISPATCH_DATA_LEASES_V1: usize = 16;
@@ -31,24 +32,24 @@ const KERNEL_DESCRIPTOR_BYTES_V1: u64 = 64;
 
 /// Frozen claim boundary for the private dispatch-binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r1-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r2-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=validated-amdhsa-kernel-envelope,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=private-typed-complete-image,exact-selected-size-and-power-of-two-alignment,checked-nonoverlapping-8-byte-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,initialized-before-map\n",
     "data=1-through-16-actual-linear-c3-mapped-device-memory-leases,exact-device-vm-generation-and-whole-allocation-nonalias,checked-valid-byte-extents,write-only-until-authenticated-copy-completion-authority-exists,declared-effects-retained\n",
     "batch=1-through-256,one-code-owner,N-distinct-kernarg-owners,one-generation-bound-private-template-per-packet,C2-one-reservation-one-doorbell-and-C4-one-signal-per-packet-composition\n",
-    "retention=queue-owns-code-kernarg-and-device-leases-through-exact-C4-ready-and-recycle,release-only-after-queue-destroy-and-model-restoration\n",
+    "retention=queue-owns-code-kernarg-and-device-leases-through-exact-C4-ready-and-recycle,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-c3-authorities-with-owning-memory-session\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
     "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
     "authority=crate-private-preparation-bind-submit-poll-wait-recycle,no-public-constructor,no-address-handle-pointer-fd-kernarg-byte-or-generic-launch-export\n",
     "proof=bounded-host-state-machine-and-mock-fault-tests-only,no-concrete-verus-or-machine-refinement\n",
     "contracted=code-segment-permission-refinement,implicit-kernarg-producer,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence\n",
-    "excluded=public-safe-launch,public-packet-template,async-copy,device-address-export,alias-suballocation,peer-map,hardware-execution\n",
+    "excluded=public-safe-launch,public-packet-template,async-copy,initialized-content-mint,read-premise,device-address-export,alias-suballocation,peer-map,hardware-execution\n",
 );
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "ed54cf521e2a19c549a71133d5a7e3cb11d1da8203bc63140ac06ee814497603";
+    "5f94ed69091dac7d1f405b4be9fa313878c6e9d1d0ee4783559ad4625db84d66";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -238,6 +239,7 @@ enum DispatchOwnerPhaseV1 {
 struct DispatchGenerationOwnerV1 {
     next_generation: u64,
     phase: DispatchOwnerPhaseV1,
+    recycled_generation: Option<u64>,
 }
 
 impl DispatchGenerationOwnerV1 {
@@ -245,6 +247,7 @@ impl DispatchGenerationOwnerV1 {
         Self {
             next_generation: 1,
             phase: DispatchOwnerPhaseV1::Prepared,
+            recycled_generation: None,
         }
     }
 
@@ -261,6 +264,7 @@ impl DispatchGenerationOwnerV1 {
         debug_assert_eq!(self.next_generation, generation);
         self.next_generation = generation + 1;
         self.phase = DispatchOwnerPhaseV1::InFlight { generation };
+        self.recycled_generation = None;
     }
 
     fn active(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
@@ -287,7 +291,14 @@ impl DispatchGenerationOwnerV1 {
     fn recycle(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
         self.require(DispatchOwnerPhaseV1::Completed { generation })?;
         self.phase = DispatchOwnerPhaseV1::Prepared;
+        self.recycled_generation = Some(generation);
         Ok(())
+    }
+
+    fn returned_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.ensure_prepared()?;
+        self.recycled_generation
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
     }
 
     fn poison(&mut self) {
@@ -324,6 +335,50 @@ struct RetainedDataPremiseV1 {
     role_identity: [u8; 32],
     valid_bytes: u64,
     effect: DeviceDataEffectV1,
+}
+
+/// One actual mapped C3 authority returned only after exact C4 recycle.
+pub(super) struct ReturnedDispatchDataLeaseV1 {
+    lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    premise: RetainedDataPremiseV1,
+}
+
+impl ReturnedDispatchDataLeaseV1 {
+    pub(super) const fn role_identity(&self) -> [u8; 32] {
+        self.premise.role_identity
+    }
+
+    pub(super) const fn valid_bytes(&self) -> u64 {
+        self.premise.valid_bytes
+    }
+
+    pub(super) const fn effect(&self) -> DeviceDataEffectV1 {
+        self.premise.effect
+    }
+
+    pub(super) fn into_lease(self) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
+        self.lease
+    }
+}
+
+/// Exact returned C3 set from one completed and recycled dispatch generation.
+pub(super) struct ReturnedDispatchDataV1 {
+    generation: u64,
+    data: Vec<ReturnedDispatchDataLeaseV1>,
+}
+
+impl ReturnedDispatchDataV1 {
+    pub(super) const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn data(&self) -> &[ReturnedDispatchDataLeaseV1] {
+        &self.data
+    }
+
+    pub(super) fn into_data(self) -> Vec<ReturnedDispatchDataLeaseV1> {
+        self.data
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -434,6 +489,10 @@ impl DispatchResourceOwnerV1 {
         self.require_prepared()
     }
 
+    pub(super) fn ensure_returnable(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.generation.returned_generation()
+    }
+
     pub(super) fn release(
         self,
         memory: &mut SharedGttMemorySessionV1,
@@ -448,6 +507,38 @@ impl DispatchResourceOwnerV1 {
             memory.release_gfx942_device_memory(lease)?;
         }
         Ok(())
+    }
+
+    /// Releases code and kernarg while returning the exact mapped C3 set.
+    ///
+    /// The generation owner admits this transition only after a matching C4
+    /// completion was observed and its signal was recycled. The returned
+    /// authorities retain no public address, handle, pointer, or descriptor.
+    pub(super) fn release_non_data_after_recycle(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
+        let generation = self.generation.returned_generation()?;
+        if self.data.len() != self.data_premises.len() {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: self.data.len().min(self.data_premises.len()),
+                detail: "retained data/premise cardinality",
+            });
+        }
+        let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
+        memory.release(kernarg)?;
+        let code = memory.unmap_executable_from_gpu(self.code.into_token())?;
+        memory.release_executable(code)?;
+        let data = self
+            .data
+            .into_iter()
+            .zip(self.data_premises)
+            .map(|(authority, premise)| ReturnedDispatchDataLeaseV1 {
+                lease: authority.into_lease(),
+                premise,
+            })
+            .collect();
+        Ok(ReturnedDispatchDataV1 { generation, data })
     }
 
     fn require_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
@@ -1108,6 +1199,7 @@ mod tests {
         assert!(owner.recycle(generation + 1).is_err());
         owner.recycle(generation).unwrap();
         assert!(owner.ensure_prepared().is_ok());
+        assert_eq!(owner.returned_generation().unwrap(), generation);
         owner.poison();
         assert!(matches!(
             owner.next(),
@@ -1146,6 +1238,29 @@ mod tests {
         let recycled = owner;
         assert!(owner.recycle(generation).is_err());
         assert_eq!(owner, recycled);
+        assert_eq!(owner.returned_generation().unwrap(), generation);
+
+        let next = owner.next().unwrap();
+        owner.commit_begin(next);
+        assert!(owner.returned_generation().is_err());
+        owner.cancel(next).unwrap();
+        assert!(owner.returned_generation().is_err());
+    }
+
+    #[test]
+    fn data_return_requires_exact_completion_and_recycle() {
+        let mut owner = DispatchGenerationOwnerV1::new();
+        assert!(owner.returned_generation().is_err());
+
+        let generation = owner.next().unwrap();
+        owner.commit_begin(generation);
+        assert!(owner.returned_generation().is_err());
+        owner.complete(generation).unwrap();
+        assert!(owner.returned_generation().is_err());
+        assert!(owner.recycle(generation + 1).is_err());
+        assert!(owner.returned_generation().is_err());
+        owner.recycle(generation).unwrap();
+        assert_eq!(owner.returned_generation().unwrap(), generation);
     }
 
     #[test]
@@ -1153,6 +1268,7 @@ mod tests {
         let exhausted = DispatchGenerationOwnerV1 {
             next_generation: u64::MAX,
             phase: DispatchOwnerPhaseV1::Prepared,
+            recycled_generation: None,
         };
         let before = exhausted;
         assert!(matches!(
@@ -1169,6 +1285,7 @@ mod tests {
             let mut owner = DispatchGenerationOwnerV1 {
                 next_generation: 8,
                 phase,
+                recycled_generation: None,
             };
             owner.poison();
             assert_eq!(owner.phase, DispatchOwnerPhaseV1::Poisoned);
