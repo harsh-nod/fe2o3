@@ -1,4 +1,4 @@
-//! Generic projection from admitted semantic MIR into bounds-verifiable ranked PLIRON.
+//! Generic projection from admitted semantic MIR into safety-verifiable ranked PLIRON.
 //!
 //! Static proof facts come from the indexed place and its semantic array type.
 //! Rust bounds-assert terminators are retained in semantic MIR but do not
@@ -6,14 +6,16 @@
 
 use std::fmt;
 
-use dialect_kernel::{AccessKindAttr, MAX_RANKED_MEMORY_RANK, SUPPORTED_ELEMENT_WIDTHS};
+use dialect_kernel::{
+    AccessKindAttr, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, SUPPORTED_ELEMENT_WIDTHS,
+};
 use fe2o3_kernel_analysis::MAX_RANKED_BOUNDS_OPERATIONS;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCallableDeclV1, SemanticCallableIdV1, SemanticConstantValueV1, SemanticDirectCallV1,
     SemanticDirectTailCallV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1,
-    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
-    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
-    SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticLocalRoleV1, SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1,
+    SemanticRvalueKindV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
+    SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1,
 };
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
@@ -23,7 +25,7 @@ use fe2o3_pliron::{
     ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
 };
 
-const ROOT_NAME_V1: &str = "semantic_bounds_module";
+const ROOT_NAME_V1: &str = "semantic_safety_module";
 // Leave one operation for the ranked function terminator.
 const MAX_PROJECTED_OPERATIONS_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS - 1;
 // Diagnostics are retained only until this bounded projection is consumed.
@@ -33,11 +35,12 @@ const MAX_PROJECTED_RANKED_IR_BYTES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 2
 pub(crate) struct ProjectedAccessSourceV1 {
     operation: usize,
     access: AccessKindAttr,
+    memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
 }
 
 /// Move-only result retaining both the exact admitted Rust semantics and the
-/// owner-held PLIRON graph that passed generic ranked-bounds verification.
+/// owner-held PLIRON graph that passed every mandatory generic kernel check.
 pub(crate) struct ProductionRankedSemanticProgramV1 {
     semantic: ProductionSemanticMirOwnerV1,
     lowering: ProductionRankedKernelLoweringInputV1,
@@ -65,8 +68,26 @@ impl ProductionRankedSemanticProgramV1 {
         self.lowering.bounds_report().is_clean()
     }
 
+    pub(crate) fn all_kernel_checks_are_clean(&self) -> bool {
+        self.lowering.bounds_report().is_clean()
+            && self.lowering.race_report().is_clean()
+            && self.lowering.barrier_report().is_clean()
+            && self.lowering.workgroup_report().is_clean()
+            && self.lowering.semantic_report().is_clean()
+    }
+
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
+    }
+
+    pub(crate) fn into_verified_semantic_owner(self) -> ProductionSemanticMirOwnerV1 {
+        let Self {
+            semantic,
+            lowering,
+            ranked_ir,
+        } = self;
+        drop((lowering, ranked_ir));
+        semantic
     }
 }
 
@@ -229,6 +250,20 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             "a kernel without a statically ranked indexed memory access",
         ));
     }
+    if sources
+        .iter()
+        .any(|source| source.memory_space != MemorySpaceAttr::Private)
+        && !operations.iter().any(|operation| {
+            matches!(
+                operation,
+                ProductionRankedOperationV1::InvocationIndex { .. }
+            )
+        })
+    {
+        incomplete.get_or_insert(
+            "a concurrent memory effect before exact invocation-index projection is available",
+        );
+    }
     push_ranked_ir(&mut ranked_ir, "  kernel.return\n}\n")?;
 
     let kernel = ProductionRankedKernelV1::new(
@@ -316,7 +351,11 @@ fn project_statement_accesses(
                 types,
                 function,
                 store.destination(),
-                AccessKindAttr::Write,
+                if store.atomic().is_some() {
+                    AccessKindAttr::AtomicWrite
+                } else {
+                    AccessKindAttr::Write
+                },
                 PlaceAccessRequirementV1::ExplicitMemory,
                 source,
                 constants,
@@ -462,22 +501,19 @@ fn project_atomic_address(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    for access in [AccessKindAttr::Read, AccessKindAttr::Write] {
-        project_place_access(
-            types,
-            function,
-            address,
-            access,
-            PlaceAccessRequirementV1::ExplicitMemory,
-            source,
-            constants,
-            operations,
-            sources,
-            next_value,
-            ranked_ir,
-        )?;
-    }
-    Ok(())
+    project_place_access(
+        types,
+        function,
+        address,
+        AccessKindAttr::AtomicReadModifyWrite,
+        PlaceAccessRequirementV1::ExplicitMemory,
+        source,
+        constants,
+        operations,
+        sources,
+        next_value,
+        ranked_ir,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -798,7 +834,11 @@ fn project_rvalue_reads(
             types,
             function,
             load.source(),
-            AccessKindAttr::Read,
+            if load.atomic().is_some() {
+                AccessKindAttr::AtomicRead
+            } else {
+                AccessKindAttr::Read
+            },
             PlaceAccessRequirementV1::ExplicitMemory,
             source,
             constants,
@@ -885,10 +925,12 @@ fn project_place_access(
     let mut shape = Vec::new();
     let mut indices = Vec::new();
     let mut crosses_memory_boundary = false;
+    let mut dereferenced = false;
     for projection in place.projections() {
         match projection.kind() {
             SemanticProjectionKindV1::Dereference => {
                 crosses_memory_boundary = true;
+                dereferenced = true;
                 let Some(ty) = types.get(current.index() as usize) else {
                     return Err(ProductionRankedProjectionErrorV1::Unsupported(
                         "an indexed place with an out-of-range type",
@@ -970,21 +1012,28 @@ fn project_place_access(
     reserve_projected_access(operations, sources, indices.len() + 2)?;
     let element_width = type_width(types, place.ty())?;
     let view_id = next_value_id(next_value)?;
-    operations.push(ProductionRankedOperationV1::View {
+    let memory_space = if dereferenced || matches!(local.role(), SemanticLocalRoleV1::Argument(_)) {
+        MemorySpaceAttr::Global
+    } else {
+        MemorySpaceAttr::Private
+    };
+    operations.push(ProductionRankedOperationV1::ViewInSpace {
         result: view_id,
         element_width,
-        writable: access == AccessKindAttr::Write,
+        writable: access.writes_memory(),
         shape: shape.clone(),
         dynamic_extents: vec![],
+        memory_space,
     });
     push_ranked_ir(
         ranked_ir,
         &format!(
-            "  %{} = kernel.ranked_view <{}, {}, {:?}>\n",
+            "  %{} = kernel.ranked_view <{}, {}, {:?}, {:?}>\n",
             view_id.get(),
             element_width,
-            access == AccessKindAttr::Write,
+            access.writes_memory(),
             shape,
+            memory_space,
         ),
     )?;
     let mut ranked_indices = Vec::with_capacity(indices.len());
@@ -1025,6 +1074,7 @@ fn project_place_access(
     sources.push(ProjectedAccessSourceV1 {
         operation,
         access,
+        memory_space,
         source,
     });
     Ok(())
@@ -1388,8 +1438,16 @@ mod tests {
             .filter_map(|operation| match operation {
                 ProductionRankedOperationV1::Access { kind, .. } => Some(*kind),
                 ProductionRankedOperationV1::View { .. }
+                | ProductionRankedOperationV1::ViewInSpace { .. }
                 | ProductionRankedOperationV1::IndexConstant { .. }
-                | ProductionRankedOperationV1::Dimension { .. } => None,
+                | ProductionRankedOperationV1::InvocationIndex { .. }
+                | ProductionRankedOperationV1::IndexBinary { .. }
+                | ProductionRankedOperationV1::Dimension { .. }
+                | ProductionRankedOperationV1::Barrier { .. }
+                | ProductionRankedOperationV1::SemanticSymbol { .. }
+                | ProductionRankedOperationV1::SemanticConstant { .. }
+                | ProductionRankedOperationV1::SemanticBinary { .. }
+                | ProductionRankedOperationV1::RequireEquivalent { .. } => None,
             })
             .collect()
     }
@@ -1424,14 +1482,21 @@ mod tests {
             .unwrap();
             assert_eq!(
                 access_kinds(&operations),
-                vec![AccessKindAttr::Write, AccessKindAttr::Read]
+                vec![
+                    if atomic.is_some() {
+                        AccessKindAttr::AtomicWrite
+                    } else {
+                        AccessKindAttr::Write
+                    },
+                    AccessKindAttr::Read,
+                ]
             );
             assert_eq!(sources.len(), 2);
         }
     }
 
     #[test]
-    fn atomic_rmw_projects_result_address_read_write_and_value() {
+    fn atomic_rmw_projects_result_one_atomic_address_effect_and_value() {
         let (operations, sources, _) = audit_statements(vec![statement(
             SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
                 scalar_place(),
@@ -1444,13 +1509,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             access_kinds(&operations),
-            vec![
-                AccessKindAttr::Read,
-                AccessKindAttr::Write,
-                AccessKindAttr::Read,
-            ]
+            vec![AccessKindAttr::AtomicReadModifyWrite, AccessKindAttr::Read,]
         );
-        assert_eq!(sources.len(), 3);
+        assert_eq!(sources.len(), 2);
     }
 
     #[test]
@@ -1470,13 +1531,12 @@ mod tests {
         assert_eq!(
             access_kinds(&operations),
             vec![
-                AccessKindAttr::Read,
-                AccessKindAttr::Write,
+                AccessKindAttr::AtomicReadModifyWrite,
                 AccessKindAttr::Read,
                 AccessKindAttr::Read,
             ]
         );
-        assert_eq!(sources.len(), 4);
+        assert_eq!(sources.len(), 3);
     }
 
     #[test]

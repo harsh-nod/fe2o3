@@ -3,7 +3,7 @@
 //! This module owns the one integration point for issue #175. It deliberately
 //! contains no workload recognition. The sole semantic-MIR importer owns the
 //! consuming target-authentication boundary and moves an admitted request into
-//! a typed stage before generic ranked-memory verification.
+//! a typed stage before the mandatory generic kernel-verification pipeline.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -61,7 +61,7 @@ impl fmt::Display for ProductionPipelineErrorV1 {
                 write!(formatter, "production-v1 exact semantic middle end failed: {error}")
             }
             Self::RankedProjection(error) => {
-                write!(formatter, "production-v1 ranked-memory verification failed: {error}")
+                write!(formatter, "production-v1 general kernel verification failed: {error}")
             }
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production-v1 target-neutral lowering failed: {error}")
@@ -461,6 +461,10 @@ impl RankedVerifiedProductionCompilationV1 {
         self.ranked.bounds_are_clean()
     }
 
+    pub(crate) fn all_kernel_checks_are_clean(&self) -> bool {
+        self.ranked.all_kernel_checks_are_clean()
+    }
+
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
         let _ = (
             &self.bindings.rustc_identity_inventory_sha256,
@@ -539,12 +543,12 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     }
 
     /// Consumes the only production transaction through import and verification.
-    pub(crate) fn verify_ranked_memory(
+    pub(crate) fn verify_general_kernel_checks(
         self,
     ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
         self.import_semantic_mir()?
             .construct_semantic_middle_end()?
-            .verify_ranked_memory()
+            .verify_general_kernel_checks()
     }
 
     /// Consumes the sole production transaction through exact semantic MIR,
@@ -554,6 +558,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
         self.import_semantic_mir()?
             .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .admit_formal_memory()?
             .lower_gfx942()
@@ -609,21 +614,6 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
 }
 
 impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
-    fn lower_target_neutral(
-        self,
-    ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
-        let EquivalentSemanticMirStageV1 {
-            semantic_mir,
-            bindings,
-        } = self.stage;
-        let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower(
-            semantic_mir,
-            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-        )
-        .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
-        Ok(TargetNeutralProductionCompilationV1 { lowered, bindings })
-    }
-
     fn require_target_neutral_lowering(self) -> ProductionPipelineErrorV1 {
         let EquivalentSemanticMirStageV1 {
             semantic_mir,
@@ -641,7 +631,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
         ProductionPipelineErrorV1::SemanticImport(error)
     }
 
-    fn verify_ranked_memory(
+    fn verify_general_kernel_checks(
         self,
     ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
         let EquivalentSemanticMirStageV1 {
@@ -654,6 +644,20 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
             )
             .map_err(ProductionPipelineErrorV1::RankedProjection)?;
         Ok(RankedVerifiedProductionCompilationV1 { ranked, bindings })
+    }
+}
+
+impl RankedVerifiedProductionCompilationV1 {
+    fn lower_target_neutral(
+        self,
+    ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
+        let Self { ranked, bindings } = self;
+        let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower(
+            ranked.into_verified_semantic_owner(),
+            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+        )
+        .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
+        Ok(TargetNeutralProductionCompilationV1 { lowered, bindings })
     }
 }
 
@@ -709,6 +713,25 @@ mod tests {
         ] {
             assert!(bind_production_upstream_llvm_layout_v1(hostile).is_err());
         }
+    }
+
+    #[test]
+    fn worker_route_cannot_bypass_general_pliron_checks() {
+        let source = include_str!("production_pipeline_v1.rs");
+        let route = source
+            .split("pub(crate) fn lower_gfx942(")
+            .nth(1)
+            .expect("gfx942 production route")
+            .split("pub(crate) fn publish_worker_handoff(")
+            .next()
+            .expect("bounded route body");
+        let verify = route
+            .find(".verify_general_kernel_checks()?")
+            .expect("mandatory general PLIRON checks");
+        let lower = route
+            .find(".lower_target_neutral()?")
+            .expect("target-neutral lowering");
+        assert!(verify < lower, "lowering ran before general PLIRON checks");
     }
 
     #[test]

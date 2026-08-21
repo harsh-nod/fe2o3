@@ -45,7 +45,7 @@ fn workspace() -> PathBuf {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn ordinary_rust_bounds_and_target_neutral_lowering_fail_closed() {
+fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
     let safe = run_extraction(&ScratchTarget::new(), false);
     assert!(
         !safe.status.success()
@@ -95,15 +95,14 @@ fn ordinary_rust_bounds_and_target_neutral_lowering_fail_closed() {
         !safe_production.status.success()
             && safe_production
                 .stderr
-                .contains("production-v1 target-neutral lowering failed")
-            && safe_production
-                .stderr
-                .contains("has no exact Kernel IR lowering rule")
-            && safe_production.stderr.contains("function 0, block Some(")
+                .contains("production-v1 general kernel verification failed")
+            && safe_production.stderr.contains(
+                "semantic-to-ranked projection incomplete: a dereferenced memory access without a ranked index projection"
+            )
             && !safe_production
                 .stderr
-                .contains("gfx942 target mapping remains disabled"),
-        "safe kernel did not enter and fail closed in production KIR lowering:\n{}",
+                .contains("production-v1 target-neutral lowering failed"),
+        "safe kernel bypassed the mandatory production PLIRON checks:\n{}",
         safe_production.stderr,
     );
 
@@ -112,14 +111,20 @@ fn ordinary_rust_bounds_and_target_neutral_lowering_fail_closed() {
         !oob_production.status.success()
             && oob_production
                 .stderr
-                .contains("production-v1 target-neutral lowering failed")
+                .contains("production-v1 general kernel verification failed")
+            && oob_production.stderr.contains("error[FE2O3-BOUNDS-001]")
+            && oob_production.stderr.contains("required: 64 < 64")
+            && oob_production.stderr.contains("Rust source")
             && oob_production
                 .stderr
-                .contains("has no exact Kernel IR lowering rule")
+                .contains("ranked PLIRON before rejected lowering")
+            && oob_production
+                .stderr
+                .contains("lowering stopped before target IR or artifact emission")
             && !oob_production
                 .stderr
-                .contains("gfx942 target mapping remains disabled"),
-        "out-of-bounds kernel did not fail inside production KIR lowering:\n{}",
+                .contains("production-v1 target-neutral lowering failed"),
+        "out-of-bounds kernel bypassed the production PLIRON bounds pass:\n{}",
         oob_production.stderr,
     );
     assert!(
