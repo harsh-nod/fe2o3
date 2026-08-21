@@ -59,6 +59,30 @@ pub const AQL_INVALID_PACKET_HEADER_V1: u16 = 1;
 pub const AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1402;
 pub const AQL_MIN_RING_BYTES_V1: u32 = 4096;
 pub const AQL_MAX_RING_BYTES_V1: u32 = 1 << 31;
+/// Maximum packets admitted by one V1 arithmetic batch reservation.
+///
+/// At 64 bytes per packet this bounds one reservation to 16 KiB of logical
+/// ring slots. It does not size a native queue or claim that one batch is a
+/// complete inference schedule.
+pub const AQL_MAX_BATCH_PACKETS_V1: u32 = 256;
+
+/// Stable name of the inert V1 batch-reservation model.
+pub const AQL_BATCH_RESERVATION_MODEL_SCHEMA_ID_V1: &str =
+    "fe2o3-aql-single-producer-batch-reservation-v1";
+
+/// Canonical arithmetic and authority boundary of the V1 batch model.
+pub const AQL_BATCH_RESERVATION_MODEL_MANIFEST_V1: &str = r#"schema=fe2o3-aql-single-producer-batch-reservation-v1
+packet-count=1..256
+state=single-producer-write,last-observed-read,power-of-two-ring-capacity
+admission=nondecreasing-read,read<=write,distance<=capacity,count<=capacity,count<=available,checked-u64-next-write
+slots=packet-id&(capacity-1),ordered,distinct-within-admitted-batch,wrap-aware
+transition=all-checks-before-write-or-last-read-mutation
+authority=inert-arithmetic-only,no-native-reservation,no-counter-access,no-packet-write,no-publication,no-doorbell,no-completion
+"#;
+
+/// SHA-256 of [`AQL_BATCH_RESERVATION_MODEL_MANIFEST_V1`].
+pub const AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1: &str =
+    "0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqlAddressObservationError {
@@ -138,10 +162,14 @@ impl AqlRingCapacityV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqlRingReservationError {
+    ZeroPacketCount,
+    PacketCountExceedsReviewedMaximum { requested: u32, maximum: u32 },
+    PacketCountExceedsRingCapacity { requested: u32, capacity: u32 },
     ReadAfterWrite,
     ReadRegressed,
     CounterDistanceExceedsCapacity,
     Full,
+    InsufficientSpace { requested: u32, available: u32 },
     WriteCounterExhausted,
 }
 
@@ -188,6 +216,44 @@ impl AqlSingleProducerRingModelV1 {
         &mut self,
         observed_read: u64,
     ) -> Result<AqlRingReservationV1, AqlRingReservationError> {
+        let batch = match self.reserve_batch(observed_read, 1) {
+            Ok(batch) => batch,
+            Err(error) => return Err(error),
+        };
+        Ok(AqlRingReservationV1 {
+            packet_id: batch.first_packet_id,
+            slot_index: (batch.first_packet_id & batch.slot_mask) as u32,
+            observed_read: batch.observed_read,
+            next_write: batch.next_write,
+        })
+    }
+
+    /// Reserves one bounded ordered batch in this arithmetic model.
+    ///
+    /// All validation and checked arithmetic complete before either retained
+    /// counter changes. Success advances both counters once as one model
+    /// transition. The result remains inert and cannot reserve native storage
+    /// or publish packets.
+    pub const fn reserve_batch(
+        &mut self,
+        observed_read: u64,
+        packet_count: u32,
+    ) -> Result<AqlRingBatchReservationV1, AqlRingReservationError> {
+        if packet_count == 0 {
+            return Err(AqlRingReservationError::ZeroPacketCount);
+        }
+        if packet_count > AQL_MAX_BATCH_PACKETS_V1 {
+            return Err(AqlRingReservationError::PacketCountExceedsReviewedMaximum {
+                requested: packet_count,
+                maximum: AQL_MAX_BATCH_PACKETS_V1,
+            });
+        }
+        if packet_count > self.capacity.packets {
+            return Err(AqlRingReservationError::PacketCountExceedsRingCapacity {
+                requested: packet_count,
+                capacity: self.capacity.packets,
+            });
+        }
         if observed_read < self.last_read {
             return Err(AqlRingReservationError::ReadRegressed);
         }
@@ -201,12 +267,20 @@ impl AqlSingleProducerRingModelV1 {
         if distance == capacity_u64 {
             return Err(AqlRingReservationError::Full);
         }
-        let Some(next_write) = self.write.checked_add(1) else {
+        let available = capacity_u64 - distance;
+        if packet_count as u64 > available {
+            return Err(AqlRingReservationError::InsufficientSpace {
+                requested: packet_count,
+                available: available as u32,
+            });
+        }
+        let Some(next_write) = self.write.checked_add(packet_count as u64) else {
             return Err(AqlRingReservationError::WriteCounterExhausted);
         };
-        let reservation = AqlRingReservationV1 {
-            packet_id: self.write,
-            slot_index: (self.write & self.capacity.mask()) as u32,
+        let reservation = AqlRingBatchReservationV1 {
+            first_packet_id: self.write,
+            packet_count,
+            slot_mask: self.capacity.mask(),
             observed_read,
             next_write,
         };
@@ -215,6 +289,116 @@ impl AqlSingleProducerRingModelV1 {
         Ok(reservation)
     }
 }
+
+/// One ordered, bounded arithmetic reservation over distinct logical slots.
+///
+/// This value owns no native counter or memory. Its entries only describe the
+/// packet IDs and wrapped slot indices selected by the successful model
+/// transition.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlRingBatchReservationV1 {
+    first_packet_id: u64,
+    packet_count: u32,
+    slot_mask: u64,
+    observed_read: u64,
+    next_write: u64,
+}
+
+impl AqlRingBatchReservationV1 {
+    pub const fn first_packet_id(&self) -> u64 {
+        self.first_packet_id
+    }
+
+    pub const fn packet_count(&self) -> u32 {
+        self.packet_count
+    }
+
+    pub const fn observed_read(&self) -> u64 {
+        self.observed_read
+    }
+
+    pub const fn next_write(&self) -> u64 {
+        self.next_write
+    }
+
+    pub const fn last_packet_id(&self) -> u64 {
+        self.next_write - 1
+    }
+
+    pub const fn entry(&self, batch_index: u32) -> Option<AqlRingBatchReservationEntryV1> {
+        if batch_index >= self.packet_count {
+            return None;
+        }
+        let Some(packet_id) = self.first_packet_id.checked_add(batch_index as u64) else {
+            return None;
+        };
+        Some(AqlRingBatchReservationEntryV1 {
+            packet_id,
+            slot_index: (packet_id & self.slot_mask) as u32,
+        })
+    }
+
+    pub const fn entries(&self) -> AqlRingBatchReservationEntriesV1 {
+        AqlRingBatchReservationEntriesV1 {
+            first_packet_id: self.first_packet_id,
+            packet_count: self.packet_count,
+            slot_mask: self.slot_mask,
+            next_index: 0,
+        }
+    }
+}
+
+/// One inert packet-ID/slot pair within a batch reservation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AqlRingBatchReservationEntryV1 {
+    packet_id: u64,
+    slot_index: u32,
+}
+
+impl AqlRingBatchReservationEntryV1 {
+    pub const fn packet_id(self) -> u64 {
+        self.packet_id
+    }
+
+    pub const fn slot_index(self) -> u32 {
+        self.slot_index
+    }
+}
+
+/// Exact-size iterator over one inert batch reservation.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlRingBatchReservationEntriesV1 {
+    first_packet_id: u64,
+    packet_count: u32,
+    slot_mask: u64,
+    next_index: u32,
+}
+
+impl Iterator for AqlRingBatchReservationEntriesV1 {
+    type Item = AqlRingBatchReservationEntryV1;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_index >= self.packet_count {
+            return None;
+        }
+        let packet_id = self
+            .first_packet_id
+            .checked_add(u64::from(self.next_index))?;
+        self.next_index += 1;
+        Some(AqlRingBatchReservationEntryV1 {
+            packet_id,
+            slot_index: (packet_id & self.slot_mask) as u32,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = (self.packet_count - self.next_index) as usize;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for AqlRingBatchReservationEntriesV1 {}
+impl core::iter::FusedIterator for AqlRingBatchReservationEntriesV1 {}
 
 /// One slot selected by one mutable arithmetic-model transition.
 ///
@@ -449,6 +633,69 @@ impl AqlPreparedKernelDispatchV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AqlPreparedKernelDispatchBatchErrorV1 {
+    ZeroPacketCount,
+    PacketCountExceedsReviewedMaximum { requested: usize, maximum: u32 },
+}
+
+/// A fixed, inert batch of prepared kernel-dispatch packet values.
+///
+/// Construction only checks the reviewed packet-count bound. Publication
+/// through [`Self::publish_with`] preserves a two-phase ordering: every exact
+/// INVALID body is written before any release header is exposed to the target.
+/// This value owns no queue, slot, counter, address, or completion authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlPreparedKernelDispatchBatchV1<const N: usize> {
+    packets: [AqlPreparedKernelDispatchV1; N],
+}
+
+impl<const N: usize> AqlPreparedKernelDispatchBatchV1<N> {
+    pub fn try_from_packets(
+        packets: [AqlPreparedKernelDispatchV1; N],
+    ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
+        if N == 0 {
+            return Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount);
+        }
+        if N > AQL_MAX_BATCH_PACKETS_V1 as usize {
+            return Err(
+                AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
+                    requested: N,
+                    maximum: AQL_MAX_BATCH_PACKETS_V1,
+                },
+            );
+        }
+        Ok(Self { packets })
+    }
+
+    pub const fn packet_count(&self) -> u32 {
+        N as u32
+    }
+
+    /// Writes all INVALID bodies before release-publishing any header.
+    pub fn publish_with<T: AqlPacketBatchPublicationTargetV1>(
+        self,
+        target: &mut T,
+    ) -> Result<(), T::Error> {
+        for (batch_index, packet) in self.packets.iter().enumerate() {
+            target.write_unpublished(batch_index as u32, &packet.packet)?;
+        }
+        for batch_index in 0..N {
+            target.publish_release_header(
+                batch_index as u32,
+                AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl AqlPreparedKernelDispatchBatchV1<1> {
+    pub const fn one(packet: AqlPreparedKernelDispatchV1) -> Self {
+        Self { packets: [packet] }
+    }
+}
+
 /// Backend boundary used to keep one packet body and final header paired.
 ///
 /// Implementing this trait grants no ring or doorbell authority. A production
@@ -461,6 +708,23 @@ pub trait AqlPacketPublicationTargetV1 {
     fn write_unpublished(&mut self, packet: &AqlKernelDispatchPacketV1) -> Result<(), Self::Error>;
 
     fn publish_release_header(&mut self, header: u16) -> Result<(), Self::Error>;
+}
+
+/// Inert two-phase target boundary for one prepared packet batch.
+///
+/// Implementing this trait grants no native authority. A production target
+/// must remain private to a queue owner that binds each batch index to the
+/// matching exclusive native slot and poisons itself after ambiguous effects.
+pub trait AqlPacketBatchPublicationTargetV1 {
+    type Error;
+
+    fn write_unpublished(
+        &mut self,
+        batch_index: u32,
+        packet: &AqlKernelDispatchPacketV1,
+    ) -> Result<(), Self::Error>;
+
+    fn publish_release_header(&mut self, batch_index: u32, header: u16) -> Result<(), Self::Error>;
 }
 
 /// Encode the exact inert 64-byte image of a pending ROCr user signal.

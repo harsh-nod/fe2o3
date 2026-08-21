@@ -111,25 +111,29 @@ an `AtomicU32`, and both control counters are explicitly initialized as
 
 Submission acquire-loads the actual shared write and read counters, requires
 the write observation to equal the retained model, and applies
-`AqlSingleProducerRingModelV1` to reject full, replayed, regressed, impossible,
+`AqlSingleProducerRingModelV1` to reserve one through 256 packets while
+rejecting over-capacity, full, insufficient, replayed, regressed, impossible,
 or exhausted observations. After a second PID/device-currentness check it
-performs one acquire-release fetch-add on the actual write pointer. It selects
-the exact masked slot, copies the complete still-INVALID packet body, and uses
-`AqlPreparedKernelDispatchV1` to release-store one aligned little-endian `u32`
-full header. A one-dimensional packet publishes exactly `0x00011402`. A final
-currentness check precedes one release fence, x86 SFENCE, and one volatile
-little-endian `u64` doorbell store of the packet ID.
+performs exactly one acquire-release fetch-add by the complete batch count on
+the actual write pointer. It selects every exact masked slot, copies all
+complete still-INVALID packet bodies before publishing any packet, and then
+release-stores the aligned little-endian `u32` full headers in packet order. A
+one-dimensional packet publishes exactly `0x00011402`. A final currentness
+check precedes one release fence, x86 SFENCE, and one volatile little-endian
+`u64` doorbell store of the batch's last packet ID.
 
 Any error after the pure reservation or any possible shared-memory side effect
 permanently poisons the submission owner. Counter mismatch, read regression,
 impossible distance, exhaustion, or currentness loss also poison it; only an
-ordinary full-ring observation remains retryable. The mapped production path
-never creates an encompassing Rust slice or exposes a raw mapping pointer. Its
-private Linux backend performs only checked exact atomic/copy operations on the
-retained `NonNull` mapping. `Drop` performs no
-counter, packet, doorbell, ioctl, unmap, or free operation. The callable method
-is crate-private and exposes no counter reference, address, pointer, ring
-slice, or general MMIO primitive.
+ordinary full or insufficient-space observation before the actual write
+reservation remains retryable. The mapped production path never creates an
+encompassing Rust slice or exposes a raw mapping pointer. Its private Linux
+backend performs only checked exact atomic/copy operations on the retained
+`NonNull` mapping. `Drop` performs no counter, packet, doorbell, ioctl, unmap,
+or free operation. The callable methods are crate-private and expose no
+counter reference, address, pointer, ring slice, or general MMIO primitive.
+They accept inert packet values, not code, kernarg, allocation, dispatch, or
+completion authority.
 
 Rust atomic ordering does not specify concurrent GPU accesses, system-scope
 AQL publication, GTT cache coherence, write-combining MMIO ordering, or

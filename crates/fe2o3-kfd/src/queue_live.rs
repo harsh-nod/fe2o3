@@ -36,18 +36,21 @@ use crate::{
     Gfx942AqlQueueResourcePlanV1, Gfx942QueueResourcePlanningError, MemorySessionError,
     SHARED_GTT_MEMORY_PROFILE_SHA256_V1, plan_gfx942_aql_queue_resources,
 };
-use fe2o3_aql::{AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchV1};
+use fe2o3_aql::{
+    AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV1, AqlPreparedKernelDispatchV1,
+};
 
 const CONTROL_BYTES: usize = 4_096;
 static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
-/// Canonical claim boundary for the first live, non-dispatching queue session.
+/// Canonical claim boundary for the live queue and private batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r6-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r7-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=1054b1c31ad143c7218eee24bcc529b17851338a152ed0cf028c46898c6a17a4\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
+    "aql_batch_reservation_schema_sha256=0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -60,7 +63,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "gtt_policy=ring:aql-queue,control:host-visible-coherent,eop-and-cwsr:executable;fe2o3-policy-not-rocr-equivalence\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
-    "submission=crate-private-non-clone-single-producer,no-mapped-slice-or-raw-pointer-escape,actual-wptr-acq-rel-fetch-add,rptr-wptr-acquire,invalid-body-copy,u32-release-header,release-fence-x86-sfence,one-volatile-u64-doorbell-store\n",
+    "submission=crate-private-non-clone-single-producer,batch-count-1-through-256-and-ring-capacity-bounded,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-and-resource-release;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
@@ -68,13 +71,13 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "event-lifecycle=linear-private-kfd-event,no-event-page-mmap,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;exact-8-owned-fixed-private-anonymous-pages,prot-none-then-dontfork-then-rw;headers-mirrored-and-read-back-in-bo-and-shadows;cpu-visible-debug-suspend-checkpoint-wave-state-copy-unsupported;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms,wait-and-volatile-payload-must-agree,unknown-reason-rejected,timeout-is-terminal-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
-    "failure=counter-divergence-regression-currentness-and-any-post-reservation-runtime-event-shadow-wait-publication-or-teardown-error-terminally-poisons;no-in-process-recovery-or-cleanup-after-terminal-observation;only-ordinary-ring-full-retryable\n",
-    "excluded=public-submission,kernel-launch,actual-fault-or-exception-delivery-evidence,code-kernarg-completion-authority,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
+    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-or-teardown-error-terminally-poisons;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-pre-side-effect-full-or-insufficient-space-retryable\n",
+    "excluded=public-submission,kernel-launch,live-batch-execution-evidence,actual-fault-or-exception-delivery-evidence,code-kernarg-allocation-dispatch-generation-completion-authority,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "dd043a5c9ed9506e46aa68646f98ff76b250bb9f8ae4c1b6a77a6200147c62f6";
+    "ab7327bd54f0af7940550d0610b1c75d1fd097f9780653a34e24fa559205ac5b";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -543,6 +546,17 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         packet: AqlPreparedKernelDispatchV1,
     ) -> Result<u64, NativeAqlSubmissionErrorV1> {
+        self.submit_prepared_batch(AqlPreparedKernelDispatchBatchV1::one(packet))
+    }
+
+    /// Private arithmetic/publication bridge only. The prepared values carry
+    /// no code, kernarg, allocation, dispatch-generation, or completion
+    /// authority, so this is deliberately not a launch API.
+    #[allow(dead_code)]
+    pub(crate) fn submit_prepared_batch<const N: usize>(
+        &mut self,
+        batch: AqlPreparedKernelDispatchBatchV1<N>,
+    ) -> Result<u64, NativeAqlSubmissionErrorV1> {
         if self.terminal_poisoned {
             return Err(NativeAqlSubmissionErrorV1::Poisoned);
         }
@@ -594,13 +608,16 @@ impl ComputeAqlQueueSessionV1 {
             doorbell,
             exception,
         };
-        let result = owner.submit(packet, &mut native);
+        let result = owner.submit_batch(batch, &mut native);
         if let Err(error) = &result {
-            let ordinary_full = matches!(
+            let ordinary_occupancy = matches!(
                 error,
-                NativeAqlSubmissionErrorV1::Ring(fe2o3_aql::AqlRingReservationError::Full)
+                NativeAqlSubmissionErrorV1::Ring(
+                    fe2o3_aql::AqlRingReservationError::Full
+                        | fe2o3_aql::AqlRingReservationError::InsufficientSpace { .. }
+                )
             );
-            if !ordinary_full {
+            if !ordinary_occupancy {
                 self.terminal_poisoned = true;
             }
         }
@@ -1010,6 +1027,10 @@ mod tests {
         assert_eq!(
             fe2o3_aql::AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
             "b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf"
+        );
+        assert_eq!(
+            fe2o3_aql::AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1,
+            "0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_RUNTIME_ENABLE_SCHEMA_SHA256,
