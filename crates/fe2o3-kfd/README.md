@@ -211,7 +211,8 @@ the one permitted `FREE_MEMORY_OF_GPU` attempt; Drop performs no ioctl, munmap,
 FREE, or retry.
 
 The crate-private queue bridge can consume mapped tokens into distinct,
-non-Clone ring, control, EOP, context-save, and completion-signal role
+non-Clone ring, control, EOP, context-save, completion-signal, dispatch-code,
+and dispatch-kernarg role
 capabilities. Each retains
 the exact private GPU VA span, model mapping key, and proposed publication key;
 validated subranges are computed with checked bounds and alignment. Numeric
@@ -261,13 +262,15 @@ currentness failure, unmap ambiguity, FREE ambiguity, or VA-release ambiguity
 quarantines the entire shared session. The reservation and every possible
 handle remain retained, and Drop performs no cleanup or retry.
 
-Live device-memory leases currently prevent transfer into the queue engine.
-There is no queue/dispatch binding that can reveal a numeric address. The
-dedicated bounded lease journal is not yet projected into the runtime memory
-model and has no Verus-to-Rust or syscall refinement. Contents are
-uninitialized; this slice grants no CPU mapping, initialization, sync or async
-copy, alias, quiescence, kernel launch, or completion authority. GTT profile
-roles, admission, manifests, and lifecycle remain unchanged.
+The ordinary queue path still rejects live device-memory leases. The private C5
+dispatch path can transfer model ownership only when it consumes an exact,
+complete, distinct set representing every live mapped C3 lease. That bridge
+retains the real lease and keeps its address facts private. It does not turn an
+initialization declaration into copy evidence or expose a numeric address.
+The dedicated bounded lease journal is not projected into the runtime memory
+model and has no Verus-to-Rust or syscall refinement. C3 itself still grants no
+CPU mapping, initialization, sync or async copy, alias, quiescence, public
+kernel launch, or hardware-completion authority.
 
 ## R4 queue-resource observations
 
@@ -351,16 +354,17 @@ side-effect failure poison the non-Clone owner; only full or insufficient
 space before the actual reservation is retryable. The private publication
 path revalidates the live process-global runtime transition, event, all shadow
 headers, payload, and currentness before publication. There is still no public
-launch API or code/kernarg/data-allocation liveness authority.
+launch API. The C5 path below is the only private producer that can compose
+code, kernarg, and data-allocation liveness.
 
 The private completion slice owns one separate 16 KiB host-coherent GTT arena
 containing exactly 256 distinct aligned `AmdBusyCompletionSignalV1` objects.
 All are constructed as exact pending user signals before GPU mapping. A batch
 of one through 256 packets receives one unique slot per packet; the private
-binding retains the exact queue, signal allocation, kernarg mapping, and data
-mapping generations without exposing a numeric signal address. The generation
-keys detect substitution but do not themselves mint code, kernarg, data
-allocation, initialization, alias, or copy authority.
+binding retains the exact queue, signal allocation, code/kernarg mapping, and
+dispatch generations without exposing a numeric signal address. The generation
+keys detect substitution but do not themselves mint resource ownership,
+initialization, alias, or copy authority.
 
 Completion observation performs bounded atomic `i64` acquire loads. A batch is
 ready only after every exact signal is zero; pending, unexpected-value fault,
@@ -371,6 +375,41 @@ Completed slots can be recycled only by a checked
 release reset to pending, after which their slot generations advance. Queue
 destroy refuses any bound, published, or completed-but-unrecycled batch and
 releases the completion arena only after confirmed queue destruction.
+
+### C5 private dispatch binding
+
+The private C5 constructor accepts one authenticated
+`ValidatedKernelEnvelope` for exact gfx942 COV6 code, one through 256 complete
+typed kernarg images, bounded dispatch geometry, and one through 16 device-data
+allocation requests with role, valid-byte, initialization, and effect premises.
+It validates all identities, sizes, alignments, geometry, pointer-field ranges,
+and whole-allocation nonalias structure before native preparation. It then uses
+the actual C3 API to allocate and map every device-data lease in the queue's VM.
+
+The authenticated object is materialized exactly into one owned executable GTT
+allocation, hashed after materialization, CPU-sealed, and GPU-mapped. The
+selected kernel descriptor is resolved by checked subtraction from the loader's
+image base and checked addition to the private mapped base. Kernargs occupy one
+owned mapped arena with distinct aligned slices per packet. Device pointers are
+inserted only inside a closure-scoped CPU initialization borrow; no numeric code,
+kernarg, or device address is returned by safe public API.
+
+The queue retains the real code allocation, kernarg arena, and every C3 lease
+while C2 publishes the batch and C4 observes its unique per-packet signals. One
+nonzero dispatch generation advances from prepared to in-flight to completed to
+recycled in lockstep with C4. Ordinary pre-publication ring occupancy can cancel
+the inert binding. Any generation divergence, currentness loss, publication or
+observation ambiguity, timeout, fault, partial recycle, or teardown ambiguity
+poisons the session and requires process teardown. Explicit release occurs only
+after every signal was recycled and the queue was confirmed destroyed.
+
+This is not a public safe launch API. No production copy/initialization bridge
+can yet mint the data premises, and no generated implicit-kernarg producer is
+connected. Per-segment GPU permission behavior for the uniformly mapped code
+allocation, concrete effect/alias semantics, CPU/GPU coherence, firmware packet
+execution, device-write visibility, and quiescence remain Contracted. The host
+state machines and mock fault tests are not a concrete Verus or machine
+refinement, and C5 performed no GPU workload.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
@@ -404,9 +443,9 @@ This is queue-exception preparation, not actual fault-delivery evidence.
 CPU-visible debug suspend and checkpoint/wave-state control-stack copies remain
 unsupported because only the eight header pages are CPU shadows. Ordinary
 hardware CWSR preemption and restore use the GPUVM BO and remain Contracted,
-not excluded. Live kernel dispatch, hardware completion evidence,
-code/kernarg/data liveness authority, and an injected-fault observation remain
-separate gates.
+not excluded. Live kernel dispatch, hardware completion evidence, a production
+data-copy and implicit-kernarg premise producer, and an injected-fault
+observation remain separate gates.
 
 The abstract Verus relation proves Active and Disabled are the only direct
 destroy sources and that failed-no-effect restores the exact retained source.

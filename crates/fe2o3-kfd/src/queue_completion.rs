@@ -25,23 +25,23 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r1-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r2-v1\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "arena=one-host-visible-coherent-gtt-allocation,16384-bytes,256-distinct-64-byte-aligned-user-signals\n",
     "batch=1-through-256,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
-    "binding=crate-private-packet-construction,no-public-signal-address,exact-queue-vm-signal-kernarg-and-data-allocation-generations-retained\n",
+    "binding=crate-private-packet-construction,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
     "observation=bounded-busy-poll,atomic-i64-acquire,all-signals-zero-before-ready,unexpected-value-is-fault\n",
     "recycle=only-after-exact-all-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
     "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;teardown-required\n",
     "release=queue-destroy-first,only-when-every-batch-was-completed-and-recycled,explicit-unmap-and-free,no-drop-native-effects\n",
     "proof=host-state-machine-and-mock-fault-tests-only,cpu-gpu-atomic-coherence-device-write-visibility-firmware-signal-and-quiescence-refinement-contracted\n",
-    "excluded=public-safe-launch,code-object-authority,kernarg-or-device-allocation-liveness-mint,copy,alias-proof,hardware-execution,ioctl-validation\n",
+    "excluded=public-safe-launch,resource-lifetime-mint,copy,alias-proof,hardware-execution,ioctl-validation\n",
 );
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "639120a81cd1bba9a94ca1a3550c7e3664de1e23e0d6c812f10a9283444b69dd";
+    "be1bdd6a05d19f0d269f7e72d6ade2b7918157bfebad2b01466a600f24a22c47";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -66,21 +66,24 @@ struct CompletionSlotRecordV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CompletionDispatchGenerationBindingV1 {
     queue: QueueKeyV1,
+    code: MemoryMappingKeyV1,
     kernarg: MemoryMappingKeyV1,
-    data: MemoryMappingKeyV1,
+    dispatch_generation: u64,
 }
 
 impl CompletionDispatchGenerationBindingV1 {
     #[allow(dead_code)]
     pub(crate) const fn new(
         queue: QueueKeyV1,
+        code: MemoryMappingKeyV1,
         kernarg: MemoryMappingKeyV1,
-        data: MemoryMappingKeyV1,
+        dispatch_generation: u64,
     ) -> Self {
         Self {
             queue,
+            code,
             kernarg,
-            data,
+            dispatch_generation,
         }
     }
 }
@@ -551,8 +554,9 @@ impl CompletionSignalArenaOwnerV1 {
         if binding.queue != self.queue {
             return Err(Gfx942CompletionErrorV1::WrongQueueGeneration);
         }
-        if binding.kernarg.allocation.vm != self.queue.vm
-            || binding.data.allocation.vm != self.queue.vm
+        if binding.dispatch_generation == 0
+            || binding.code.allocation.vm != self.queue.vm
+            || binding.kernarg.allocation.vm != self.queue.vm
         {
             return Err(Gfx942CompletionErrorV1::WrongVmGeneration);
         }
@@ -599,8 +603,9 @@ impl CompletionSignalArenaOwnerV1 {
             if record.generation != slot.generation
                 || record.phase != expected(retention.batch_id)
                 || retention.dispatches[batch_index].queue != retention.queue
+                || retention.dispatches[batch_index].dispatch_generation == 0
+                || retention.dispatches[batch_index].code.allocation.vm != retention.queue.vm
                 || retention.dispatches[batch_index].kernarg.allocation.vm != retention.queue.vm
-                || retention.dispatches[batch_index].data.allocation.vm != retention.queue.vm
                 || retention.slots[..batch_index]
                     .iter()
                     .any(|prior| prior.index == slot.index)
@@ -825,8 +830,9 @@ mod tests {
             16,
             CompletionDispatchGenerationBindingV1::new(
                 queue(),
+                mapping(queue().vm, 30, 1),
                 mapping(queue().vm, 31 + index * 2, 2),
-                mapping(queue().vm, 32 + index * 2, 4),
+                4,
             ),
         )
     }
@@ -927,7 +933,7 @@ mod tests {
             Err(Gfx942CompletionErrorV1::WrongQueueGeneration)
         ));
         let mut wrong_vm = template(0);
-        wrong_vm.generations.data.allocation.vm = vm(3, 12);
+        wrong_vm.generations.code.allocation.vm = vm(3, 12);
         assert!(matches!(
             owner.bind_batch([wrong_vm]),
             Err(Gfx942CompletionErrorV1::WrongVmGeneration)

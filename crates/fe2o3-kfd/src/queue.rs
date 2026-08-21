@@ -32,10 +32,19 @@ pub(crate) mod submit;
 #[path = "queue_completion.rs"]
 pub(crate) mod completion;
 
+#[path = "queue_dispatch_binding.rs"]
+pub(crate) mod dispatch_binding;
+
 pub use completion::{
     GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1, GFX942_AQL_COMPLETION_MANIFEST_V1,
     Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
     Gfx942CompletionPollV1, Gfx942CompletionRecycleObservationV1,
+};
+
+pub use dispatch_binding::{
+    GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1, GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1,
+    Gfx942CompletedDispatchBatchV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
+    Gfx942DispatchPollV1,
 };
 
 pub use live::{
@@ -46,7 +55,7 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r5-v1\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r6-v1\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -54,17 +63,18 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "failure=linux-errno-must-map-indeterminate,malformed-output-global-poison,post-call-projection-failure-global-poison\n",
     "release=explicit-only-after-confirmed-destroy,no-drop-ioctl\n",
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
-    "composition=shared-gtt-linear-role-authorities,transferred-model-foundation,whole-slice-doorbell-mmap\n",
+    "composition=shared-gtt-linear-role-authorities,exact-set-device-memory-dispatch-transfer,transferred-model-foundation,whole-slice-doorbell-mmap\n",
     "submission=crate-private-single-producer-bounded-batch-reservation,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
     "completion=separate-linear-256-signal-host-coherent-arena,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,release-reset-after-exact-batch-completion\n",
-    "missing=public-dispatch,kernel-launch,code-kernarg-data-allocation-liveness-authority,hardware-completion-and-exception-evidence,live-batch-evidence\n",
+    "dispatch-binding=private-authenticated-code-typed-kernarg-c3-device-lease-c2-batch-c4-completion-generation-composition,real-resource-retention-through-recycle\n",
+    "missing=public-dispatch,kernel-launch,production-data-initialization-premise-mint,hardware-completion-and-exception-evidence,live-batch-evidence\n",
     "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
     "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
 );
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "c0cf3a4f9de742b7633cc0400a65a5cd6d8d3d9833e3578c193448923cf1c783";
+    "17489389fbaff72794fc124d1600717f13299e9d0a045ce34ec5d2d0cd7895e5";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
