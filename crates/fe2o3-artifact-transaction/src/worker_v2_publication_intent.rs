@@ -2416,6 +2416,86 @@ mod publication_intent_v2 {
         }
     }
 
+    struct WorkerV2PublicationIntentLeaseSnapshotV2 {
+        recovered: RecoveredWorkerV2PublicationIntentV2,
+        record_file: WorkerV2PublicationIntentLeaseFileV2,
+        output_file: WorkerV2PublicationIntentLeaseFileV2,
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_worker_v2_publication_intent_locked_v2(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: CompilerClosureV2,
+        identity: WorkerV2PublicationIntentIdentityV2,
+        expected: Option<&RecoveredWorkerV2PublicationIntentV2>,
+    ) -> Result<WorkerV2PublicationIntentLeaseSnapshotV2, WorkerV2PublicationIntentErrorV2> {
+        output.verify_path_identity()?;
+        authorize::<PublicationIntentSchemaV2>(output, producer, attempt)?;
+        let producer_identity = producer_identity_v2(producer);
+        let names = IntentNames::new::<PublicationIntentSchemaV2>(
+            producer_identity,
+            slot_identity_v2(producer_identity, attempt),
+        );
+        cleanup_temps::<PublicationIntentSchemaV2>(output, &names)?;
+        let recovered =
+            recover_locked::<PublicationIntentSchemaV2>(output, &names, producer, attempt)?
+                .ok_or(WorkerV2PublicationIntentErrorV2::NotFound)?;
+        if recovered.record.compiler_closure() != compiler_closure {
+            return Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch);
+        }
+        if recovered.record.identity() != identity {
+            return Err(WorkerV2PublicationIntentErrorV2::IntentIdentityMismatch);
+        }
+        if expected.is_some_and(|expected| {
+            expected.record() != recovered.record
+                || expected.exact_output() != recovered.exact_output.as_ref()
+        }) {
+            return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
+        }
+        let record_file =
+            WorkerV2PublicationIntentLeaseFileV2::capture(output, &names.record, RECORD_BYTES_V2)?;
+        let output_file = WorkerV2PublicationIntentLeaseFileV2::capture(
+            output,
+            &names.output,
+            recovered.record.output_length(),
+        )?;
+        output.verify_path_identity()?;
+        Ok(WorkerV2PublicationIntentLeaseSnapshotV2 {
+            recovered: RecoveredWorkerV2PublicationIntentV2 {
+                outcome: WorkerV2PublicationIntentOutcomeV2::Recovered,
+                record: recovered.record,
+                exact_output: recovered.exact_output,
+            },
+            record_file,
+            output_file,
+        })
+    }
+
+    fn revalidate_worker_v2_publication_intent_locked_v2(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: CompilerClosureV2,
+        snapshot: &WorkerV2PublicationIntentLeaseSnapshotV2,
+    ) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+        let current = validate_worker_v2_publication_intent_locked_v2(
+            output,
+            producer,
+            attempt,
+            compiler_closure,
+            snapshot.recovered.record().identity(),
+            Some(&snapshot.recovered),
+        )?;
+        if current.record_file != snapshot.record_file
+            || current.output_file != snapshot.output_file
+        {
+            return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
+        }
+        Ok(())
+    }
+
     /// Exclusive local intent lease retained across a caller's related durable publication.
     ///
     /// The lease serializes cooperating fe2o3 writers. It also detects record, output, and output
@@ -2441,44 +2521,17 @@ mod publication_intent_v2 {
 
         /// Revalidates the exact intent and output while retaining the same artifact lock.
         pub fn revalidate(&self) -> Result<(), WorkerV2PublicationIntentErrorV2> {
-            self.output.verify_path_identity()?;
-            authorize::<PublicationIntentSchemaV2>(&self.output, &self.producer, self.attempt)?;
-            let producer_identity = producer_identity_v2(&self.producer);
-            let names = IntentNames::new::<PublicationIntentSchemaV2>(
-                producer_identity,
-                slot_identity_v2(producer_identity, self.attempt),
-            );
-            cleanup_temps::<PublicationIntentSchemaV2>(&self.output, &names)?;
-            let recovered = recover_locked::<PublicationIntentSchemaV2>(
+            revalidate_worker_v2_publication_intent_locked_v2(
                 &self.output,
-                &names,
                 &self.producer,
                 self.attempt,
-            )?
-            .ok_or(WorkerV2PublicationIntentErrorV2::NotFound)?;
-            if recovered.record.compiler_closure() != self.compiler_closure {
-                return Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch);
-            }
-            if recovered.record != self.recovered.record
-                || recovered.exact_output.as_ref() != self.recovered.exact_output.as_ref()
-            {
-                return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
-            }
-            let record_file = WorkerV2PublicationIntentLeaseFileV2::capture(
-                &self.output,
-                &names.record,
-                RECORD_BYTES_V2,
-            )?;
-            let output_file = WorkerV2PublicationIntentLeaseFileV2::capture(
-                &self.output,
-                &names.output,
-                recovered.record.output_length(),
-            )?;
-            if record_file != self.record_file || output_file != self.output_file {
-                return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
-            }
-            self.output.verify_path_identity()?;
-            Ok(())
+                self.compiler_closure,
+                &WorkerV2PublicationIntentLeaseSnapshotV2 {
+                    recovered: self.recovered.clone(),
+                    record_file: self.record_file,
+                    output_file: self.output_file,
+                },
+            )
         }
 
         /// A local lease coordinates mutation but grants no publication authority.
@@ -2502,44 +2555,23 @@ mod publication_intent_v2 {
     ) -> Result<WorkerV2PublicationIntentLeaseV2, WorkerV2PublicationIntentErrorV2> {
         let output = PinnedOutput::open_existing(output_dir)?;
         let lock = output.lock()?;
-        output.verify_path_identity()?;
-        authorize::<PublicationIntentSchemaV2>(&output, producer, attempt)?;
-        let producer_identity = producer_identity_v2(producer);
-        let names = IntentNames::new::<PublicationIntentSchemaV2>(
-            producer_identity,
-            slot_identity_v2(producer_identity, attempt),
-        );
-        cleanup_temps::<PublicationIntentSchemaV2>(&output, &names)?;
-        let recovered =
-            recover_locked::<PublicationIntentSchemaV2>(&output, &names, producer, attempt)?
-                .ok_or(WorkerV2PublicationIntentErrorV2::NotFound)?;
-        if recovered.record.compiler_closure() != compiler_closure {
-            return Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch);
-        }
-        if recovered.record.identity() != identity {
-            return Err(WorkerV2PublicationIntentErrorV2::IntentIdentityMismatch);
-        }
-        let record_file =
-            WorkerV2PublicationIntentLeaseFileV2::capture(&output, &names.record, RECORD_BYTES_V2)?;
-        let output_file = WorkerV2PublicationIntentLeaseFileV2::capture(
+        let snapshot = validate_worker_v2_publication_intent_locked_v2(
             &output,
-            &names.output,
-            recovered.record.output_length(),
+            producer,
+            attempt,
+            compiler_closure,
+            identity,
+            None,
         )?;
-        output.verify_path_identity()?;
         Ok(WorkerV2PublicationIntentLeaseV2 {
             _lock: lock,
             output,
             producer: producer.clone(),
             attempt,
             compiler_closure,
-            recovered: RecoveredWorkerV2PublicationIntentV2 {
-                outcome: WorkerV2PublicationIntentOutcomeV2::Recovered,
-                record: recovered.record,
-                exact_output: recovered.exact_output,
-            },
-            record_file,
-            output_file,
+            recovered: snapshot.recovered,
+            record_file: snapshot.record_file,
+            output_file: snapshot.output_file,
         })
     }
 

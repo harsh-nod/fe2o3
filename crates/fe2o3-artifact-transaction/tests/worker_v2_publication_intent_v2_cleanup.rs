@@ -6,9 +6,10 @@ use fe2o3_artifact_transaction::{
     DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
     KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
     MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1, PackageIdentityV1,
-    PersistedBackendReceiptV2, PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
-    UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
-    WorkerV2PublicationIntentBoundaryV2, WorkerV2PublicationIntentCleanupEscrowBoundaryV1,
+    PersistedBackendReceiptV2, PinnedWorkerIdentityV1, ProducerIdentity,
+    RecoveredWorkerV2PublicationIntentV2, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+    ValidatedResponseIdentityV1, WorkerV2PublicationIntentBoundaryV2,
+    WorkerV2PublicationIntentCleanupEscrowBoundaryV1,
     WorkerV2PublicationIntentCleanupEscrowErrorV1,
     WorkerV2PublicationIntentCleanupEscrowFaultPointV1,
     WorkerV2PublicationIntentCleanupEscrowFaultTimingV1,
@@ -18,7 +19,9 @@ use fe2o3_artifact_transaction::{
     WorkerV2PublicationIntentFaultTimingV2, WorkerV2PublicationIntentIdentityV2,
     WorkerV2PublicationIntentOptionsV2, acquire_worker_v2_publication_intent_lease_v2,
     begin_build_attempt, clear_worker_v2_publication_intent_v1,
-    clear_worker_v2_publication_intent_v2, commit_worker_v2_publication_intent_cleanup_escrow_v1,
+    clear_worker_v2_publication_intent_v2,
+    commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2,
+    commit_worker_v2_publication_intent_cleanup_escrow_v1,
     commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options,
     emit_artifact_transaction_for_attempt, finish_build_attempt,
     persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v2,
@@ -344,7 +347,8 @@ impl CleanupEscrowFixture {
         let output = temp.output();
         let source = format!("/src/v2-cleanup-escrow-{label}-{seed:02x}.rs");
         let owner = producer(&source);
-        let attempt = begin(&output, &owner, seed);
+        let _superseded = begin(&output, &owner, seed);
+        let attempt = begin(&output, &owner, seed.wrapping_add(0x20));
         let bytes = format!("artifact-owned escrow fixture {label} {seed:02x}").into_bytes();
         let publication_plan = escrow_plan(&owner, attempt, seed.wrapping_add(1), &bytes);
         let evidence = upstream(seed.wrapping_add(2));
@@ -395,6 +399,44 @@ impl CleanupEscrowFixture {
         .unwrap()
     }
 
+    fn successor(&self, seed: u8) -> ExactSuccessor {
+        let attempt = begin(&self.output, &self.owner, seed);
+        let bytes = format!("exact successor output {seed:02x}").into_bytes();
+        let publication_plan = escrow_plan(&self.owner, attempt, seed.wrapping_add(1), &bytes);
+        let evidence = upstream(seed.wrapping_add(2));
+        let closure = compiler_closure(seed.wrapping_add(3));
+        let persisted = persist_worker_v2_publication_intent_v2(
+            &self.output,
+            &self.owner,
+            attempt,
+            publication_plan,
+            evidence,
+            closure,
+            &bytes,
+        )
+        .unwrap();
+        publish_v2(
+            &self.output,
+            &self.owner,
+            attempt,
+            publication_plan,
+            evidence,
+            closure,
+            &bytes,
+        );
+        let recovered =
+            recover_worker_v2_publication_intent_v2(&self.output, &self.owner, attempt, closure)
+                .unwrap();
+        assert_eq!(recovered.record(), persisted.record());
+        assert_eq!(recovered.exact_output(), bytes);
+        ExactSuccessor {
+            attempt,
+            closure,
+            intent: recovered.record().identity(),
+            recovered,
+        }
+    }
+
     fn run_crash_subprocess(
         &self,
         operation: &str,
@@ -434,6 +476,51 @@ impl CleanupEscrowFixture {
             String::from_utf8_lossy(&child.stderr)
         );
     }
+}
+
+struct ExactSuccessor {
+    attempt: BuildAttempt,
+    closure: CompilerClosureV2,
+    intent: WorkerV2PublicationIntentIdentityV2,
+    recovered: RecoveredWorkerV2PublicationIntentV2,
+}
+
+fn attempt_with_generation(attempt: BuildAttempt, generation: u64) -> BuildAttempt {
+    BuildAttempt::from_env_value(&format!(
+        "{generation}:{}:{}",
+        attempt.session().to_hex(),
+        attempt.invocation().to_hex()
+    ))
+    .unwrap()
+}
+
+fn exact_successor_lease(
+    fixture: &CleanupEscrowFixture,
+    successor: &ExactSuccessor,
+) -> fe2o3_artifact_transaction::WorkerV2PublicationIntentLeaseV2 {
+    acquire_worker_v2_publication_intent_lease_v2(
+        &fixture.output,
+        &fixture.owner,
+        successor.attempt,
+        successor.closure,
+        successor.intent,
+    )
+    .unwrap()
+}
+
+fn assert_predecessor_prepared(
+    fixture: &CleanupEscrowFixture,
+    capsule: WorkerV2PublicationIntentCleanupEscrowV1,
+) {
+    assert_eq!(
+        recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &fixture.output,
+            &fixture.owner,
+            capsule,
+        )
+        .unwrap(),
+        WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared
+    );
 }
 
 #[test]
@@ -656,6 +743,324 @@ fn exact_v2_intent_lease_detects_record_output_and_directory_replacement() {
     fs::rename(&fixture.output, &displaced).unwrap();
     fs::create_dir(&fixture.output).unwrap();
     assert!(lease.revalidate().is_err());
+}
+
+#[test]
+fn atomic_successor_commit_returns_bounded_inert_evidence_and_is_idempotent() {
+    let fixture = CleanupEscrowFixture::new(0xd1, "atomic-successor-idempotent");
+    let capsule = fixture.prepare();
+    let successor = fixture.successor(0xd2);
+
+    let evidence = commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+        exact_successor_lease(&fixture, &successor),
+        &fixture.owner,
+        capsule,
+        successor.attempt,
+        successor.closure,
+        successor.intent,
+        &successor.recovered,
+        WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(evidence.predecessor(), capsule.identity());
+    assert_eq!(evidence.successor(), successor.recovered.record());
+    assert!(!evidence.grants_publication_authority());
+    assert!(!evidence.grants_load_authority());
+    assert!(!evidence.grants_launch_authority());
+    assert!(std::mem::size_of_val(&evidence) < 2048);
+    assert_eq!(
+        recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &fixture.output,
+            &fixture.owner,
+            capsule,
+        )
+        .unwrap(),
+        WorkerV2PublicationIntentCleanupEscrowStateV1::Committed
+    );
+    assert_eq!(
+        recover_worker_v2_publication_intent_v2(
+            &fixture.output,
+            &fixture.owner,
+            successor.attempt,
+            successor.closure,
+        )
+        .unwrap()
+        .record(),
+        successor.recovered.record()
+    );
+
+    let replay = commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+        exact_successor_lease(&fixture, &successor),
+        &fixture.owner,
+        capsule,
+        successor.attempt,
+        successor.closure,
+        successor.intent,
+        &successor.recovered,
+        WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(replay, evidence);
+}
+
+#[test]
+fn atomic_successor_commit_rejects_older_equal_and_mismatched_expectations() {
+    let fixture = CleanupEscrowFixture::new(0xd3, "atomic-successor-expectations");
+    let capsule = fixture.prepare();
+    let successor = fixture.successor(0xd4);
+    assert_eq!(fixture.attempt.generation(), 2);
+    assert_eq!(successor.attempt.generation(), 3);
+
+    for generation in [1, fixture.attempt.generation()] {
+        let candidate = attempt_with_generation(successor.attempt, generation);
+        assert!(matches!(
+            commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+                exact_successor_lease(&fixture, &successor),
+                &fixture.owner,
+                capsule,
+                candidate,
+                successor.closure,
+                successor.intent,
+                &successor.recovered,
+                WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+            ),
+            Err(WorkerV2PublicationIntentCleanupEscrowErrorV1::SuccessorGenerationNotNewer {
+                predecessor: 2,
+                successor
+            }) if successor == generation
+        ));
+        assert_predecessor_prepared(&fixture, capsule);
+    }
+
+    let wrong_owner = producer("/src/atomic-successor-wrong-owner.rs");
+    let wrong_attempt = attempt_with_generation(successor.attempt, 4);
+    let wrong_closure = compiler_closure(0xe1);
+    let wrong_intent = WorkerV2PublicationIntentIdentityV2::from_bytes([0xe2; 32]);
+    for (owner, attempt, closure, intent) in [
+        (
+            &wrong_owner,
+            successor.attempt,
+            successor.closure,
+            successor.intent,
+        ),
+        (
+            &fixture.owner,
+            wrong_attempt,
+            successor.closure,
+            successor.intent,
+        ),
+        (
+            &fixture.owner,
+            successor.attempt,
+            wrong_closure,
+            successor.intent,
+        ),
+        (
+            &fixture.owner,
+            successor.attempt,
+            successor.closure,
+            wrong_intent,
+        ),
+    ] {
+        assert!(matches!(
+            commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+                exact_successor_lease(&fixture, &successor),
+                owner,
+                capsule,
+                attempt,
+                closure,
+                intent,
+                &successor.recovered,
+                WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+            ),
+            Err(WorkerV2PublicationIntentCleanupEscrowErrorV1::SuccessorExpectationMismatch)
+        ));
+        assert_predecessor_prepared(&fixture, capsule);
+    }
+
+    commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+        exact_successor_lease(&fixture, &successor),
+        &fixture.owner,
+        capsule,
+        successor.attempt,
+        successor.closure,
+        successor.intent,
+        &successor.recovered,
+        WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn atomic_successor_commit_rejects_pinned_file_and_directory_replacement() {
+    for (seed, suffix) in [(0xd5, ".record"), (0xd6, ".output")] {
+        let fixture = CleanupEscrowFixture::new(seed, "atomic-successor-file-replacement");
+        let capsule = fixture.prepare();
+        let successor = fixture.successor(seed.wrapping_add(1));
+        let lease = exact_successor_lease(&fixture, &successor);
+        let entry = schema_entry_with_suffix(&fixture.output, V2_PREFIX, suffix);
+        let displaced = fixture.output.join(format!("displaced-atomic{suffix}"));
+        fs::rename(&entry, &displaced).unwrap();
+        fs::copy(&displaced, &entry).unwrap();
+        fs::set_permissions(&entry, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(matches!(
+            commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+                lease,
+                &fixture.owner,
+                capsule,
+                successor.attempt,
+                successor.closure,
+                successor.intent,
+                &successor.recovered,
+                WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+            ),
+            Err(WorkerV2PublicationIntentCleanupEscrowErrorV1::Intent(
+                WorkerV2PublicationIntentErrorV2::ConflictingIntent
+            ))
+        ));
+        assert!(entry.exists(), "replacement was destructively removed");
+        assert_predecessor_prepared(&fixture, capsule);
+    }
+
+    let fixture = CleanupEscrowFixture::new(0xd8, "atomic-successor-directory-replacement");
+    let capsule = fixture.prepare();
+    let successor = fixture.successor(0xd9);
+    let lease = exact_successor_lease(&fixture, &successor);
+    let displaced = fixture._temp.0.join("displaced-atomic-output");
+    fs::rename(&fixture.output, &displaced).unwrap();
+    fs::create_dir(&fixture.output).unwrap();
+    assert!(
+        commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+            lease,
+            &fixture.owner,
+            capsule,
+            successor.attempt,
+            successor.closure,
+            successor.intent,
+            &successor.recovered,
+            WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+        )
+        .is_err()
+    );
+    fs::remove_dir(&fixture.output).unwrap();
+    fs::rename(&displaced, &fixture.output).unwrap();
+    assert_predecessor_prepared(&fixture, capsule);
+}
+
+#[test]
+fn atomic_successor_commit_retains_lock_through_predecessor_commit() {
+    let fixture = CleanupEscrowFixture::new(0xda, "atomic-successor-lock-retention");
+    let capsule = fixture.prepare();
+    let successor = fixture.successor(0xdb);
+    let lease = exact_successor_lease(&fixture, &successor);
+    let output = fixture.output.clone();
+    let owner = fixture.owner.clone();
+    let attempt = successor.attempt;
+    let closure = successor.closure;
+    let intent = successor.intent;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        done_tx
+            .send(clear_worker_v2_publication_intent_v2(
+                &output, &owner, attempt, closure, intent,
+            ))
+            .unwrap();
+    });
+    started_rx.recv().unwrap();
+    assert!(matches!(
+        done_rx.recv_timeout(Duration::from_millis(150)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+
+    commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+        lease,
+        &fixture.owner,
+        capsule,
+        successor.attempt,
+        successor.closure,
+        successor.intent,
+        &successor.recovered,
+        WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+    )
+    .unwrap();
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &fixture.output,
+            &fixture.owner,
+            capsule,
+        )
+        .unwrap(),
+        WorkerV2PublicationIntentCleanupEscrowStateV1::Committed
+    );
+}
+
+#[test]
+fn atomic_successor_commit_recovers_every_predecessor_commit_boundary() {
+    for (boundary_index, boundary) in COMMIT_ESCROW_BOUNDARIES.iter().copied().enumerate() {
+        for timing in [
+            WorkerV2PublicationIntentCleanupEscrowFaultTimingV1::Before,
+            WorkerV2PublicationIntentCleanupEscrowFaultTimingV1::After,
+        ] {
+            let seed = 0x20_u8.wrapping_add(boundary_index as u8);
+            let fixture = CleanupEscrowFixture::new(seed, "atomic-successor-crash-boundary");
+            let capsule = fixture.prepare();
+            let successor = fixture.successor(seed.wrapping_add(0x40));
+            let point = WorkerV2PublicationIntentCleanupEscrowFaultPointV1 { boundary, timing };
+            assert!(matches!(
+                commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+                    exact_successor_lease(&fixture, &successor),
+                    &fixture.owner,
+                    capsule,
+                    successor.attempt,
+                    successor.closure,
+                    successor.intent,
+                    &successor.recovered,
+                    WorkerV2PublicationIntentCleanupEscrowOptionsV1::inject_crash(point),
+                ),
+                Err(WorkerV2PublicationIntentCleanupEscrowErrorV1::InjectedCrash {
+                    point: actual
+                }) if actual == point
+            ));
+            if point
+                == (WorkerV2PublicationIntentCleanupEscrowFaultPointV1 {
+                    boundary: WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncManifestName,
+                    timing: WorkerV2PublicationIntentCleanupEscrowFaultTimingV1::After,
+                })
+            {
+                assert_eq!(
+                    recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                        &fixture.output,
+                        &fixture.owner,
+                        capsule,
+                    )
+                    .unwrap(),
+                    WorkerV2PublicationIntentCleanupEscrowStateV1::Committed
+                );
+            }
+
+            let evidence =
+                commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+                    exact_successor_lease(&fixture, &successor),
+                    &fixture.owner,
+                    capsule,
+                    successor.attempt,
+                    successor.closure,
+                    successor.intent,
+                    &successor.recovered,
+                    WorkerV2PublicationIntentCleanupEscrowOptionsV1::default(),
+                )
+                .unwrap();
+            assert_eq!(evidence.successor(), successor.recovered.record());
+        }
+    }
 }
 
 #[test]

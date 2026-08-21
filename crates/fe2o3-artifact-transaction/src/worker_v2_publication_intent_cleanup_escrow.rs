@@ -384,6 +384,41 @@ impl WorkerV2PublicationIntentCleanupEscrowStateV1 {
     }
 }
 
+/// Bounded evidence that one predecessor escrow was committed while an exact newer V2 intent
+/// remained pinned under the same artifact-directory lock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkerV2PublicationIntentCleanupEscrowCommitEvidenceV2 {
+    predecessor: WorkerV2PublicationIntentCleanupEscrowIdentityV1,
+    successor: WorkerV2PublicationIntentRecordV2,
+}
+
+impl WorkerV2PublicationIntentCleanupEscrowCommitEvidenceV2 {
+    /// Identity of the exact predecessor escrow consumed by the atomic operation.
+    pub const fn predecessor(self) -> WorkerV2PublicationIntentCleanupEscrowIdentityV1 {
+        self.predecessor
+    }
+
+    /// Complete bounded successor record revalidated after predecessor commit.
+    pub const fn successor(self) -> WorkerV2PublicationIntentRecordV2 {
+        self.successor
+    }
+
+    /// This cleanup evidence does not grant publication authority.
+    pub const fn grants_publication_authority(self) -> bool {
+        false
+    }
+
+    /// This cleanup evidence does not grant load authority.
+    pub const fn grants_load_authority(self) -> bool {
+        false
+    }
+
+    /// This cleanup evidence does not grant launch authority.
+    pub const fn grants_launch_authority(self) -> bool {
+        false
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CleanupEscrowManifestV1 {
     state: WorkerV2PublicationIntentCleanupEscrowStateV1,
@@ -494,6 +529,15 @@ pub enum WorkerV2PublicationIntentCleanupEscrowErrorV1 {
     ConflictingEscrow,
     CapsuleMismatch,
     InvalidTransition,
+    /// Explicit successor fields disagree with the supplied exact recovered snapshot.
+    SuccessorExpectationMismatch,
+    /// The proposed successor generation is not strictly newer than the predecessor.
+    SuccessorGenerationNotNewer {
+        /// Durable predecessor generation.
+        predecessor: u64,
+        /// Proposed successor generation.
+        successor: u64,
+    },
     InjectedCrash {
         point: WorkerV2PublicationIntentCleanupEscrowFaultPointV1,
     },
@@ -520,6 +564,16 @@ impl fmt::Display for WorkerV2PublicationIntentCleanupEscrowErrorV1 {
             Self::InvalidTransition => {
                 formatter.write_str("invalid protected cleanup escrow state transition")
             }
+            Self::SuccessorExpectationMismatch => formatter.write_str(
+                "exact successor inputs do not describe one canonical V2 publication intent",
+            ),
+            Self::SuccessorGenerationNotNewer {
+                predecessor,
+                successor,
+            } => write!(
+                formatter,
+                "successor generation {successor} is not newer than predecessor generation {predecessor}",
+            ),
             Self::InjectedCrash { point } => {
                 write!(formatter, "injected cleanup escrow crash at {point:?}")
             }
@@ -1610,16 +1664,28 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
         .lock()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
     let exclusive = CleanupEscrowExclusiveDirectoryV1::new(&output, &lock)?;
+    commit_worker_v2_publication_intent_cleanup_escrow_locked_v1(
+        &exclusive, producer, capsule, options,
+    )
+}
+
+fn commit_worker_v2_publication_intent_cleanup_escrow_locked_v1(
+    exclusive: &CleanupEscrowExclusiveDirectoryV1<'_>,
+    producer: &ProducerIdentity,
+    capsule: WorkerV2PublicationIntentCleanupEscrowV1,
+    options: WorkerV2PublicationIntentCleanupEscrowOptionsV1,
+) -> Result<(), WorkerV2PublicationIntentCleanupEscrowErrorV1> {
+    let output = exclusive.output;
     output
         .verify_path_identity()
         .map_err(WorkerV2PublicationIntentErrorV2::from)?;
-    let names = cleanup_escrow_validate_capsule_context_v1(&output, producer, capsule)?;
-    cleanup_escrow_cleanup_temps_v1(&exclusive, &names)?;
-    cleanup_escrow_validate_durable_receipt_v1(&output, producer, capsule)?;
-    let Some(manifest) = cleanup_escrow_read_manifest_v1(&output, &names)? else {
-        if !cleanup_escrow_all_intent_paths_absent_v1(&output, &names, capsule)? {
+    let names = cleanup_escrow_validate_capsule_context_v1(output, producer, capsule)?;
+    cleanup_escrow_cleanup_temps_v1(exclusive, &names)?;
+    cleanup_escrow_validate_durable_receipt_v1(output, producer, capsule)?;
+    let Some(manifest) = cleanup_escrow_read_manifest_v1(output, &names)? else {
+        if !cleanup_escrow_all_intent_paths_absent_v1(output, &names, capsule)? {
             return Err(cleanup_escrow_invalid_v1(
-                &output,
+                output,
                 &names.manifest,
                 "manifest is absent while canonical or quarantined intent state remains",
             ));
@@ -1634,9 +1700,9 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     let prepared_payload = if manifest.state
         == WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared
     {
-        let payload = cleanup_escrow_pin_prepared_payload_v1(&output, producer, capsule, &names)?;
+        let payload = cleanup_escrow_pin_prepared_payload_v1(output, producer, capsule, &names)?;
         cleanup_escrow_write_manifest_v1(
-            &exclusive,
+            exclusive,
             &names,
             CleanupEscrowManifestV1 {
                 state: WorkerV2PublicationIntentCleanupEscrowStateV1::Committed,
@@ -1650,7 +1716,7 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
         None
     };
 
-    let (pinned_manifest, committed_manifest) = cleanup_escrow_pin_manifest_v1(&output, &names)?;
+    let (pinned_manifest, committed_manifest) = cleanup_escrow_pin_manifest_v1(output, &names)?;
     if committed_manifest
         != (CleanupEscrowManifestV1 {
             state: WorkerV2PublicationIntentCleanupEscrowStateV1::Committed,
@@ -1662,29 +1728,29 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
 
     let canonical_names =
         IntentNames::new::<PublicationIntentSchemaV2>(capsule.producer_identity, capsule.slot);
-    if entry_exists::<PublicationIntentSchemaV2>(&output, &canonical_names.record)?
-        || entry_exists::<PublicationIntentSchemaV2>(&output, &canonical_names.redo)?
-        || entry_exists::<PublicationIntentSchemaV2>(&output, &canonical_names.output)?
+    if entry_exists::<PublicationIntentSchemaV2>(output, &canonical_names.record)?
+        || entry_exists::<PublicationIntentSchemaV2>(output, &canonical_names.redo)?
+        || entry_exists::<PublicationIntentSchemaV2>(output, &canonical_names.output)?
     {
         return Err(cleanup_escrow_invalid_v1(
-            &output,
+            output,
             &names.manifest,
             "commit refuses canonical intent state beside its escrow",
         ));
     }
     let (prepared_record, prepared_output) =
         if let Some((record, value, output_entry)) = prepared_payload {
-            record.require_named_as(&output, &names.record)?;
-            output_entry.require_named_as(&output, &names.output)?;
+            record.require_named_as(output, &names.record)?;
+            output_entry.require_named_as(output, &names.output)?;
             (Some((record, value)), Some(output_entry))
         } else {
             (None, None)
         };
     let pinned_record = if let Some(record) = prepared_record {
         Some(record)
-    } else if cleanup_escrow_entry_exists_v1(&output, &names.record)? {
+    } else if cleanup_escrow_entry_exists_v1(output, &names.record)? {
         let (pinned, record) = cleanup_escrow_pin_record_v1(
-            &output,
+            output,
             &canonical_names,
             &names.record,
             producer,
@@ -1692,20 +1758,20 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
             capsule.receipt.compiler_closure(),
             capsule.intent,
         )?;
-        pinned.require_snapshot(&output, capsule.record_file)?;
+        pinned.require_snapshot(output, capsule.record_file)?;
         Some((pinned, record))
     } else {
         None
     };
     let pinned_output = if let Some(output_entry) = prepared_output {
         Some(output_entry)
-    } else if cleanup_escrow_entry_exists_v1(&output, &names.output)? {
+    } else if cleanup_escrow_entry_exists_v1(output, &names.output)? {
         let length = usize::try_from(capsule.output_file.byte_len).map_err(|_| {
-            cleanup_escrow_invalid_v1(&output, &names.output, "capsule output length is invalid")
+            cleanup_escrow_invalid_v1(output, &names.output, "capsule output length is invalid")
         })?;
         let pinned =
-            cleanup_escrow_pin_output_v1(&output, &names.output, length, capsule.output_identity)?;
-        pinned.require_snapshot(&output, capsule.output_file)?;
+            cleanup_escrow_pin_output_v1(output, &names.output, length, capsule.output_identity)?;
+        pinned.require_snapshot(output, capsule.output_file)?;
         if let Some((_, record)) = &pinned_record
             && (record.output_length() != length
                 || *record.output_identity().as_bytes() != capsule.output_identity)
@@ -1718,7 +1784,7 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     };
     if let Some((pinned, _)) = pinned_record {
         pinned.unlink_and_sync(
-            &exclusive,
+            exclusive,
             WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkQuarantinedRecord,
             WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncQuarantinedRecordDeletion,
             &mut faults,
@@ -1726,28 +1792,125 @@ pub fn commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options(
     }
     if let Some(pinned) = pinned_output {
         pinned.unlink_and_sync(
-            &exclusive,
+            exclusive,
             WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkQuarantinedOutput,
             WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncQuarantinedOutputDeletion,
             &mut faults,
         )?;
     }
     pinned_manifest.unlink_and_sync(
-        &exclusive,
+        exclusive,
         WorkerV2PublicationIntentCleanupEscrowBoundaryV1::UnlinkCommittedManifest,
         WorkerV2PublicationIntentCleanupEscrowBoundaryV1::SyncCommittedManifestDeletion,
         &mut faults,
     )?;
-    if !cleanup_escrow_all_intent_paths_absent_v1(&output, &names, capsule)?
-        || cleanup_escrow_entry_exists_v1(&output, &names.manifest)?
+    if !cleanup_escrow_all_intent_paths_absent_v1(output, &names, capsule)?
+        || cleanup_escrow_entry_exists_v1(output, &names.manifest)?
     {
         return Err(cleanup_escrow_invalid_v1(
-            &output,
+            output,
             &names.manifest,
             "committed escrow deletion left durable state behind",
         ));
     }
     Ok(())
+}
+
+/// Commits one exact predecessor escrow only while an exact newer V2 intent remains current.
+///
+/// This operation consumes an already acquired exact successor lease and performs no second lock
+/// acquisition. Under that lease's retained lock it joins the explicit successor attempt,
+/// compiler closure, and intent identity to `expected_successor`, compares the complete canonical
+/// record and exact output bytes, revalidates their pinned inodes, commits the predecessor escrow,
+/// and revalidates the same directory and file bindings again. The returned evidence is bounded
+/// and inert; it contains no file payload or authority.
+///
+/// Production callers pass [`WorkerV2PublicationIntentCleanupEscrowOptionsV1::default`]. Fault
+/// injection exists only to qualify every predecessor commit durability boundary.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_worker_v2_publication_intent_cleanup_escrow_after_exact_successor_v2(
+    successor_lease: WorkerV2PublicationIntentLeaseV2,
+    producer: &ProducerIdentity,
+    predecessor: WorkerV2PublicationIntentCleanupEscrowV1,
+    successor_attempt: BuildAttempt,
+    successor_compiler_closure: CompilerClosureV2,
+    successor_intent: WorkerV2PublicationIntentIdentityV2,
+    expected_successor: &RecoveredWorkerV2PublicationIntentV2,
+    options: WorkerV2PublicationIntentCleanupEscrowOptionsV1,
+) -> Result<
+    WorkerV2PublicationIntentCleanupEscrowCommitEvidenceV2,
+    WorkerV2PublicationIntentCleanupEscrowErrorV1,
+> {
+    if successor_attempt.generation() <= predecessor.attempt().generation() {
+        return Err(
+            WorkerV2PublicationIntentCleanupEscrowErrorV1::SuccessorGenerationNotNewer {
+                predecessor: predecessor.attempt().generation(),
+                successor: successor_attempt.generation(),
+            },
+        );
+    }
+    let expected_record = expected_successor.record();
+    if successor_lease.producer != *producer
+        || successor_lease.attempt != successor_attempt
+        || successor_lease.compiler_closure != successor_compiler_closure
+        || successor_lease.recovered.record().identity() != successor_intent
+        || successor_lease.recovered.record() != expected_record
+        || successor_lease.recovered.exact_output() != expected_successor.exact_output()
+        || expected_record.attempt() != successor_attempt
+        || expected_record.compiler_closure() != successor_compiler_closure
+        || expected_record.identity() != successor_intent
+    {
+        return Err(
+            WorkerV2PublicationIntentCleanupEscrowErrorV1::SuccessorExpectationMismatch,
+        );
+    }
+    let successor = WorkerV2PublicationIntentLeaseSnapshotV2 {
+        recovered: successor_lease.recovered.clone(),
+        record_file: successor_lease.record_file,
+        output_file: successor_lease.output_file,
+    };
+    let exclusive = CleanupEscrowExclusiveDirectoryV1::new(
+        &successor_lease.output,
+        &successor_lease._lock,
+    )?;
+    successor_lease
+        .output
+        .verify_path_identity()
+        .map_err(WorkerV2PublicationIntentErrorV2::from)?;
+    cleanup_escrow_validate_capsule_context_v1(
+        &successor_lease.output,
+        producer,
+        predecessor,
+    )?;
+    revalidate_worker_v2_publication_intent_locked_v2(
+        &successor_lease.output,
+        producer,
+        successor_attempt,
+        successor_compiler_closure,
+        &successor,
+    )?;
+    commit_worker_v2_publication_intent_cleanup_escrow_locked_v1(
+        &exclusive,
+        producer,
+        predecessor,
+        options,
+    )?;
+    revalidate_worker_v2_publication_intent_locked_v2(
+        &successor_lease.output,
+        producer,
+        successor_attempt,
+        successor_compiler_closure,
+        &successor,
+    )?;
+    CleanupEscrowExclusiveDirectoryV1::new(
+        &successor_lease.output,
+        &successor_lease._lock,
+    )?;
+
+    Ok(WorkerV2PublicationIntentCleanupEscrowCommitEvidenceV2 {
+        predecessor: predecessor.identity(),
+        successor: successor.recovered.record(),
+    })
 }
 
 pub fn rollback_worker_v2_publication_intent_cleanup_escrow_v1(
