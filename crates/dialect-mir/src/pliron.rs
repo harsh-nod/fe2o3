@@ -10,6 +10,7 @@ use std::{
     collections::BTreeSet,
     error::Error,
     fmt,
+    hash::{Hash, Hasher},
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
@@ -43,6 +44,10 @@ use ::pliron::{
 use fe2o3_mir_model::{
     MAX_EXECUTABLE_BLOCK_PARAMETERS, MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_FUNCTIONS,
     MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_TYPES, MirBlockId, MirTypeId,
+    semantic_mir_v1::{
+        HARD_MAX_BLOCKS_V1, HARD_MAX_FUNCTIONS_V1, HARD_MAX_STATEMENTS_V1,
+        HARD_MAX_SWITCH_TARGETS_V1, SemanticBlockIdV1, SemanticEdgeRoleV1, SemanticFunctionIdV1,
+    },
 };
 use fe2o3_pliron_owner_core::{
     ContextIdentity, ContextIdentityError, DialectRegistration, DialectRegistrationService,
@@ -57,6 +62,528 @@ pub const MAX_IMPORTED_MIR_SUCCESSORS: usize = 256;
 /// Maximum canonical decimal bytes for all ordered `u32` CFG targets.
 pub const MAX_IMPORTED_MIR_SUCCESSOR_TEXT_BYTES: usize =
     MAX_IMPORTED_MIR_SUCCESSORS * 10 + (MAX_IMPORTED_MIR_SUCCESSORS - 1);
+
+/// Maximum canonical text bytes for ordered `role:block` production arcs.
+pub const MAX_PRODUCTION_LOCATOR_ARC_TEXT_BYTES_V1: usize =
+    MAX_PRODUCTION_LOCATOR_SUCCESSOR_ARCS_V1 * 14 - 1;
+
+/// Semantic-v1 schema cap for the largest possible switch successor list.
+pub const MAX_PRODUCTION_LOCATOR_SUCCESSOR_ARCS_V1: usize = HARD_MAX_SWITCH_TARGETS_V1 as usize + 1;
+
+/// Independent implementation cap for constructing and verifying a Pliron tree.
+pub const MAX_PRODUCTION_PLIRON_TREE_WORK_V1: u64 = 16_000_000;
+
+/// Named middle-end resource charged before any production Pliron allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirProductionPlironResourceV1 {
+    TreeWork,
+}
+
+/// Explicit resource limits for the production locator Pliron representation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MirProductionPlironLimitsV1 {
+    max_tree_work: u64,
+}
+
+impl MirProductionPlironLimitsV1 {
+    /// Creates a nonzero implementation budget bounded by the production cap.
+    pub fn new(max_tree_work: u64) -> Result<Self, MirProductionLocatorErrorV1> {
+        if max_tree_work == 0 || max_tree_work > MAX_PRODUCTION_PLIRON_TREE_WORK_V1 {
+            return Err(MirProductionLocatorErrorV1::InvalidMiddleEndResourceLimit {
+                resource: MirProductionPlironResourceV1::TreeWork,
+                value: max_tree_work,
+                hard_limit: MAX_PRODUCTION_PLIRON_TREE_WORK_V1,
+            });
+        }
+        Ok(Self { max_tree_work })
+    }
+
+    /// Returns the maximum charged construction and verification work.
+    pub const fn max_tree_work(self) -> u64 {
+        self.max_tree_work
+    }
+}
+
+impl Default for MirProductionPlironLimitsV1 {
+    fn default() -> Self {
+        Self {
+            max_tree_work: MAX_PRODUCTION_PLIRON_TREE_WORK_V1,
+        }
+    }
+}
+
+/// A caller-asserted SHA-256 locator for one admitted semantic MIR module.
+///
+/// This value is inert. It identifies source evidence but does not authenticate,
+/// admit, or grant authority over that evidence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MirProductionSemanticSha256V1([u8; 32]);
+
+impl MirProductionSemanticSha256V1 {
+    /// Wraps caller-asserted SHA-256 bytes without authenticating them.
+    pub const fn from_sha256(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the exact digest bytes.
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// One typed successor arc in exact semantic-MIR order.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MirProductionSuccessorArcV1 {
+    role: SemanticEdgeRoleV1,
+    target: SemanticBlockIdV1,
+}
+
+impl MirProductionSuccessorArcV1 {
+    /// Creates one typed locator arc.
+    pub const fn new(role: SemanticEdgeRoleV1, target: SemanticBlockIdV1) -> Self {
+        Self { role, target }
+    }
+
+    /// Returns the semantic role of this arc.
+    pub const fn role(self) -> SemanticEdgeRoleV1 {
+        self.role
+    }
+
+    /// Returns the target block locator.
+    pub const fn target(self) -> SemanticBlockIdV1 {
+        self.target
+    }
+}
+
+impl Hash for MirProductionSuccessorArcV1 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        production_edge_role_code(self.role).hash(state);
+        self.target.index().hash(state);
+    }
+}
+
+/// One statement position within a semantic MIR block.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MirProductionStatementLocatorV1 {
+    ordinal: u32,
+}
+
+impl MirProductionStatementLocatorV1 {
+    /// Creates a statement locator. Its enclosing block validates density.
+    pub const fn new(ordinal: u32) -> Self {
+        Self { ordinal }
+    }
+
+    /// Returns the zero-based statement ordinal.
+    pub const fn ordinal(self) -> u32 {
+        self.ordinal
+    }
+}
+
+/// The unique terminator position and its exact ordered successor arcs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirProductionTerminatorLocatorV1 {
+    successors: Vec<MirProductionSuccessorArcV1>,
+}
+
+impl MirProductionTerminatorLocatorV1 {
+    /// Creates a bounded, order-preserving terminator locator.
+    pub fn try_new(
+        successors: Vec<MirProductionSuccessorArcV1>,
+    ) -> Result<Self, MirProductionLocatorErrorV1> {
+        if successors.len() > MAX_PRODUCTION_LOCATOR_SUCCESSOR_ARCS_V1 {
+            return Err(MirProductionLocatorErrorV1::TooManySuccessors {
+                count: successors.len(),
+                limit: MAX_PRODUCTION_LOCATOR_SUCCESSOR_ARCS_V1,
+            });
+        }
+        Ok(Self { successors })
+    }
+
+    /// Returns successor arcs in exact semantic-MIR order.
+    pub fn successors(&self) -> &[MirProductionSuccessorArcV1] {
+        &self.successors
+    }
+}
+
+/// Closed locator-only representation of one semantic MIR block.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirProductionBlockLocatorV1 {
+    block_id: SemanticBlockIdV1,
+    statements: Vec<MirProductionStatementLocatorV1>,
+    terminator: MirProductionTerminatorLocatorV1,
+}
+
+impl MirProductionBlockLocatorV1 {
+    /// Creates a block with dense statement ordinals and exactly one terminator.
+    pub fn try_new(
+        block_id: SemanticBlockIdV1,
+        statements: Vec<MirProductionStatementLocatorV1>,
+        terminator: MirProductionTerminatorLocatorV1,
+    ) -> Result<Self, MirProductionLocatorErrorV1> {
+        if u64::from(block_id.index()) >= HARD_MAX_BLOCKS_V1 {
+            return Err(MirProductionLocatorErrorV1::BlockIdOutOfRange(
+                block_id.index(),
+            ));
+        }
+        if statements.len() as u64 > HARD_MAX_STATEMENTS_V1 {
+            return Err(MirProductionLocatorErrorV1::TooManyStatementsInBlock {
+                count: statements.len(),
+                limit: HARD_MAX_STATEMENTS_V1 as usize,
+            });
+        }
+        for (expected, statement) in statements.iter().enumerate() {
+            let expected = expected as u32;
+            if statement.ordinal != expected {
+                return Err(MirProductionLocatorErrorV1::NonCanonicalStatementOrdinal {
+                    expected,
+                    found: statement.ordinal,
+                });
+            }
+        }
+        Ok(Self {
+            block_id,
+            statements,
+            terminator,
+        })
+    }
+
+    /// Returns this block's typed semantic locator.
+    pub const fn block_id(&self) -> SemanticBlockIdV1 {
+        self.block_id
+    }
+
+    /// Returns statements in canonical ordinal order.
+    pub fn statements(&self) -> &[MirProductionStatementLocatorV1] {
+        &self.statements
+    }
+
+    /// Returns the unique block terminator locator.
+    pub const fn terminator(&self) -> &MirProductionTerminatorLocatorV1 {
+        &self.terminator
+    }
+}
+
+/// Closed locator-only representation of one semantic MIR function.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirProductionFunctionLocatorV1 {
+    function_id: SemanticFunctionIdV1,
+    entry_block_id: SemanticBlockIdV1,
+    blocks: Vec<MirProductionBlockLocatorV1>,
+}
+
+impl MirProductionFunctionLocatorV1 {
+    /// Creates a function in exact source block order with dense block locators.
+    ///
+    /// Pliron materialization may move the nonzero entry block to the physical
+    /// head, but the block IDs retain and reconstruct this source order.
+    pub fn try_new(
+        function_id: SemanticFunctionIdV1,
+        entry_block_id: SemanticBlockIdV1,
+        blocks: Vec<MirProductionBlockLocatorV1>,
+    ) -> Result<Self, MirProductionLocatorErrorV1> {
+        if u64::from(function_id.index()) >= HARD_MAX_FUNCTIONS_V1 {
+            return Err(MirProductionLocatorErrorV1::FunctionIdOutOfRange(
+                function_id.index(),
+            ));
+        }
+        if blocks.is_empty() {
+            return Err(MirProductionLocatorErrorV1::EmptyFunction);
+        }
+        if blocks.len() as u64 > HARD_MAX_BLOCKS_V1 {
+            return Err(MirProductionLocatorErrorV1::TooManyBlocks {
+                count: blocks.len(),
+                limit: HARD_MAX_BLOCKS_V1 as usize,
+            });
+        }
+        if entry_block_id.index() as usize >= blocks.len() {
+            return Err(MirProductionLocatorErrorV1::EntryBlockMissing(
+                entry_block_id.index(),
+            ));
+        }
+        for (position, block) in blocks.iter().enumerate() {
+            let expected = position as u32;
+            if block.block_id.index() != expected {
+                return Err(MirProductionLocatorErrorV1::NonCanonicalBlockId {
+                    expected,
+                    found: block.block_id.index(),
+                });
+            }
+            for arc in block.terminator.successors() {
+                if arc.target.index() as usize >= blocks.len() {
+                    return Err(MirProductionLocatorErrorV1::DanglingSuccessor {
+                        block: block.block_id.index(),
+                        target: arc.target.index(),
+                    });
+                }
+            }
+        }
+        Ok(Self {
+            function_id,
+            entry_block_id,
+            blocks,
+        })
+    }
+
+    /// Returns this function's typed semantic locator.
+    pub const fn function_id(&self) -> SemanticFunctionIdV1 {
+        self.function_id
+    }
+
+    /// Returns the exact entry block locator.
+    pub const fn entry_block_id(&self) -> SemanticBlockIdV1 {
+        self.entry_block_id
+    }
+
+    /// Returns blocks in exact source order (ascending semantic block ID).
+    pub fn blocks(&self) -> &[MirProductionBlockLocatorV1] {
+        &self.blocks
+    }
+}
+
+/// Closed, pointer-independent production locator graph for one semantic module.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirProductionModuleLocatorV1 {
+    semantic_sha256: MirProductionSemanticSha256V1,
+    functions: Vec<MirProductionFunctionLocatorV1>,
+}
+
+impl MirProductionModuleLocatorV1 {
+    /// Creates a module with dense function IDs and bounded global statements.
+    pub fn try_new(
+        semantic_sha256: MirProductionSemanticSha256V1,
+        functions: Vec<MirProductionFunctionLocatorV1>,
+    ) -> Result<Self, MirProductionLocatorErrorV1> {
+        if functions.is_empty() {
+            return Err(MirProductionLocatorErrorV1::EmptyModule);
+        }
+        if functions.len() as u64 > HARD_MAX_FUNCTIONS_V1 {
+            return Err(MirProductionLocatorErrorV1::TooManyFunctions {
+                count: functions.len(),
+                limit: HARD_MAX_FUNCTIONS_V1 as usize,
+            });
+        }
+        let mut statement_count = 0_usize;
+        let mut block_count = 0_usize;
+        for (expected, function) in functions.iter().enumerate() {
+            let expected = expected as u32;
+            if function.function_id.index() != expected {
+                return Err(MirProductionLocatorErrorV1::NonCanonicalFunctionId {
+                    expected,
+                    found: function.function_id.index(),
+                });
+            }
+            block_count = block_count.checked_add(function.blocks.len()).ok_or(
+                MirProductionLocatorErrorV1::TooManyBlocks {
+                    count: usize::MAX,
+                    limit: HARD_MAX_BLOCKS_V1 as usize,
+                },
+            )?;
+            for block in &function.blocks {
+                statement_count = statement_count.checked_add(block.statements.len()).ok_or(
+                    MirProductionLocatorErrorV1::TooManyStatements {
+                        count: usize::MAX,
+                        limit: HARD_MAX_STATEMENTS_V1 as usize,
+                    },
+                )?;
+            }
+        }
+        if block_count as u64 > HARD_MAX_BLOCKS_V1 {
+            return Err(MirProductionLocatorErrorV1::TooManyBlocks {
+                count: block_count,
+                limit: HARD_MAX_BLOCKS_V1 as usize,
+            });
+        }
+        if statement_count as u64 > HARD_MAX_STATEMENTS_V1 {
+            return Err(MirProductionLocatorErrorV1::TooManyStatements {
+                count: statement_count,
+                limit: HARD_MAX_STATEMENTS_V1 as usize,
+            });
+        }
+        Ok(Self {
+            semantic_sha256,
+            functions,
+        })
+    }
+
+    /// Returns the exact caller-asserted semantic module digest.
+    pub const fn semantic_sha256(&self) -> MirProductionSemanticSha256V1 {
+        self.semantic_sha256
+    }
+
+    /// Returns functions in canonical function-ID order.
+    pub fn functions(&self) -> &[MirProductionFunctionLocatorV1] {
+        &self.functions
+    }
+}
+
+const fn canonical_production_block_id(position: usize, entry: u32) -> u32 {
+    if position == 0 {
+        entry
+    } else {
+        let ascending = (position - 1) as u32;
+        if ascending < entry {
+            ascending
+        } else {
+            ascending + 1
+        }
+    }
+}
+
+/// Rejections from the closed production locator API and its owner-bound handle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MirProductionLocatorErrorV1 {
+    EmptyModule,
+    EmptyFunction,
+    TooManyFunctions {
+        count: usize,
+        limit: usize,
+    },
+    TooManyBlocks {
+        count: usize,
+        limit: usize,
+    },
+    TooManyStatements {
+        count: usize,
+        limit: usize,
+    },
+    TooManyStatementsInBlock {
+        count: usize,
+        limit: usize,
+    },
+    TooManySuccessors {
+        count: usize,
+        limit: usize,
+    },
+    FunctionIdOutOfRange(u32),
+    BlockIdOutOfRange(u32),
+    NonCanonicalFunctionId {
+        expected: u32,
+        found: u32,
+    },
+    NonCanonicalBlockId {
+        expected: u32,
+        found: u32,
+    },
+    NonCanonicalStatementOrdinal {
+        expected: u32,
+        found: u32,
+    },
+    EntryBlockMissing(u32),
+    DanglingSuccessor {
+        block: u32,
+        target: u32,
+    },
+    InvalidMiddleEndResourceLimit {
+        resource: MirProductionPlironResourceV1,
+        value: u64,
+        hard_limit: u64,
+    },
+    MiddleEndResourceLimitExceeded {
+        resource: MirProductionPlironResourceV1,
+        actual: u64,
+        limit: u64,
+    },
+    ContextIdentity(ContextIdentityError),
+    ForeignContext,
+    StaleHandle,
+    WrongKind,
+    VerificationFailed,
+    MalformedSnapshot,
+    UpstreamPanicked,
+}
+
+impl fmt::Display for MirProductionLocatorErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyModule => formatter.write_str("production locator module is empty"),
+            Self::EmptyFunction => formatter.write_str("production locator function is empty"),
+            Self::TooManyFunctions { count, limit } => write!(
+                formatter,
+                "production locator has {count} functions, exceeding {limit}"
+            ),
+            Self::TooManyBlocks { count, limit } => write!(
+                formatter,
+                "production locator has {count} blocks, exceeding {limit}"
+            ),
+            Self::TooManyStatements { count, limit } => write!(
+                formatter,
+                "production locator has {count} statements, exceeding {limit}"
+            ),
+            Self::TooManyStatementsInBlock { count, limit } => write!(
+                formatter,
+                "production locator block has {count} statements, exceeding {limit}"
+            ),
+            Self::TooManySuccessors { count, limit } => write!(
+                formatter,
+                "production locator terminator has {count} successors, exceeding {limit}"
+            ),
+            Self::FunctionIdOutOfRange(id) => {
+                write!(
+                    formatter,
+                    "production function locator {id} is out of range"
+                )
+            }
+            Self::BlockIdOutOfRange(id) => {
+                write!(formatter, "production block locator {id} is out of range")
+            }
+            Self::NonCanonicalFunctionId { expected, found } => write!(
+                formatter,
+                "production function locator {found} is non-canonical; expected {expected}"
+            ),
+            Self::NonCanonicalBlockId { expected, found } => write!(
+                formatter,
+                "production block locator {found} is non-canonical; expected {expected}"
+            ),
+            Self::NonCanonicalStatementOrdinal { expected, found } => write!(
+                formatter,
+                "production statement ordinal {found} is non-canonical; expected {expected}"
+            ),
+            Self::EntryBlockMissing(id) => {
+                write!(formatter, "production entry block locator {id} is missing")
+            }
+            Self::DanglingSuccessor { block, target } => write!(
+                formatter,
+                "production block {block} has dangling successor locator {target}"
+            ),
+            Self::InvalidMiddleEndResourceLimit {
+                resource,
+                value,
+                hard_limit,
+            } => write!(
+                formatter,
+                "invalid production Pliron {resource:?} limit {value}; expected 1..={hard_limit}"
+            ),
+            Self::MiddleEndResourceLimitExceeded {
+                resource,
+                actual,
+                limit,
+            } => write!(
+                formatter,
+                "production Pliron {resource:?} work {actual} exceeds middle-end limit {limit}"
+            ),
+            Self::ContextIdentity(_) => {
+                formatter.write_str("production locator context identity validation failed")
+            }
+            Self::ForeignContext => {
+                formatter.write_str("production locator handle belongs to another context")
+            }
+            Self::StaleHandle => formatter.write_str("production locator handle is stale"),
+            Self::WrongKind => formatter.write_str("production locator handle has the wrong kind"),
+            Self::VerificationFailed => {
+                formatter.write_str("production locator verification failed")
+            }
+            Self::MalformedSnapshot => {
+                formatter.write_str("verified production locator structure changed")
+            }
+            Self::UpstreamPanicked => {
+                formatter.write_str("production locator operation was rejected after a panic")
+            }
+        }
+    }
+}
+
+impl Error for MirProductionLocatorErrorV1 {}
 
 /// Hard limit categories for the in-memory MIR shell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1104,6 +1631,7 @@ pub enum MirDialectVerifyError {
     BlockMarkerOutsideFunction,
     BlockMarkerNotFirst,
     ReturnOutsideFunction,
+    InvalidProductionLocator(&'static str),
 }
 
 impl fmt::Display for MirDialectVerifyError {
@@ -1199,6 +1727,9 @@ impl fmt::Display for MirDialectVerifyError {
             }
             Self::ReturnOutsideFunction => {
                 formatter.write_str("mir.return must be nested in mir.func")
+            }
+            Self::InvalidProductionLocator(reason) => {
+                write!(formatter, "invalid production locator IR: {reason}")
             }
         }
     }
@@ -1605,6 +2136,324 @@ impl Verify for MirSemanticSuccessorsAttr {
     fn verify(&self, _context: &Context) -> PlironResult<()> {
         if self.targets().is_err() {
             return verify_err_noloc!(MirDialectVerifyError::InvalidSemanticSuccessors);
+        }
+        Ok(())
+    }
+}
+
+const fn production_edge_role_code(role: SemanticEdgeRoleV1) -> u8 {
+    match role {
+        SemanticEdgeRoleV1::Goto => 0,
+        SemanticEdgeRoleV1::SwitchValue => 1,
+        SemanticEdgeRoleV1::SwitchOtherwise => 2,
+        SemanticEdgeRoleV1::CallReturn => 3,
+        SemanticEdgeRoleV1::CallUnwind => 4,
+        SemanticEdgeRoleV1::TailCallUnwind => 5,
+        SemanticEdgeRoleV1::DropReturn => 6,
+        SemanticEdgeRoleV1::DropUnwind => 7,
+        SemanticEdgeRoleV1::AssertSuccess => 8,
+        SemanticEdgeRoleV1::AssertUnwind => 9,
+        SemanticEdgeRoleV1::FalseEdgeReal => 10,
+        SemanticEdgeRoleV1::FalseEdgeImaginary => 11,
+    }
+}
+
+const fn production_edge_role_from_code(code: u8) -> Option<SemanticEdgeRoleV1> {
+    Some(match code {
+        0 => SemanticEdgeRoleV1::Goto,
+        1 => SemanticEdgeRoleV1::SwitchValue,
+        2 => SemanticEdgeRoleV1::SwitchOtherwise,
+        3 => SemanticEdgeRoleV1::CallReturn,
+        4 => SemanticEdgeRoleV1::CallUnwind,
+        5 => SemanticEdgeRoleV1::TailCallUnwind,
+        6 => SemanticEdgeRoleV1::DropReturn,
+        7 => SemanticEdgeRoleV1::DropUnwind,
+        8 => SemanticEdgeRoleV1::AssertSuccess,
+        9 => SemanticEdgeRoleV1::AssertUnwind,
+        10 => SemanticEdgeRoleV1::FalseEdgeReal,
+        11 => SemanticEdgeRoleV1::FalseEdgeImaginary,
+        _ => return None,
+    })
+}
+
+/// Fixed-width locator for the retained semantic MIR module.
+#[pliron_attr(
+    name = "mir.production_semantic_sha256_v1",
+    format = "`<` $word0 `,` $word1 `,` $word2 `,` $word3 `>`"
+)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct MirProductionSemanticSha256AttrV1 {
+    word0: u64,
+    word1: u64,
+    word2: u64,
+    word3: u64,
+}
+
+impl MirProductionSemanticSha256AttrV1 {
+    fn new(value: MirProductionSemanticSha256V1) -> Self {
+        let bytes = value.0;
+        Self {
+            word0: u64::from_le_bytes(bytes[0..8].try_into().expect("fixed SHA-256 word")),
+            word1: u64::from_le_bytes(bytes[8..16].try_into().expect("fixed SHA-256 word")),
+            word2: u64::from_le_bytes(bytes[16..24].try_into().expect("fixed SHA-256 word")),
+            word3: u64::from_le_bytes(bytes[24..32].try_into().expect("fixed SHA-256 word")),
+        }
+    }
+
+    fn value(&self) -> MirProductionSemanticSha256V1 {
+        let mut bytes = [0_u8; 32];
+        bytes[0..8].copy_from_slice(&self.word0.to_le_bytes());
+        bytes[8..16].copy_from_slice(&self.word1.to_le_bytes());
+        bytes[16..24].copy_from_slice(&self.word2.to_le_bytes());
+        bytes[24..32].copy_from_slice(&self.word3.to_le_bytes());
+        MirProductionSemanticSha256V1(bytes)
+    }
+}
+
+impl Verify for MirProductionSemanticSha256AttrV1 {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        Ok(())
+    }
+}
+
+#[pliron_attr(name = "mir.production_function_id_v1", format = "$0")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct MirProductionFunctionIdAttrV1(u32);
+
+impl MirProductionFunctionIdAttrV1 {
+    const fn new(id: SemanticFunctionIdV1) -> Self {
+        Self(id.index())
+    }
+
+    const fn value(self) -> SemanticFunctionIdV1 {
+        SemanticFunctionIdV1::from_index(self.0)
+    }
+}
+
+impl Verify for MirProductionFunctionIdAttrV1 {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if u64::from(self.0) >= HARD_MAX_FUNCTIONS_V1 {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidProductionLocator(
+                "function ID is out of range"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[pliron_attr(name = "mir.production_block_id_v1", format = "$0")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct MirProductionBlockIdAttrV1(u32);
+
+impl MirProductionBlockIdAttrV1 {
+    const fn new(id: SemanticBlockIdV1) -> Self {
+        Self(id.index())
+    }
+
+    const fn value(self) -> SemanticBlockIdV1 {
+        SemanticBlockIdV1::from_index(self.0)
+    }
+}
+
+impl Verify for MirProductionBlockIdAttrV1 {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if u64::from(self.0) >= HARD_MAX_BLOCKS_V1 {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidProductionLocator(
+                "block ID is out of range"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[pliron_attr(name = "mir.production_source_block_ordinal_v1", format = "$0")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct MirProductionSourceBlockOrdinalAttrV1(u32);
+
+impl MirProductionSourceBlockOrdinalAttrV1 {
+    const fn new(ordinal: u32) -> Self {
+        Self(ordinal)
+    }
+
+    const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+impl Verify for MirProductionSourceBlockOrdinalAttrV1 {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if u64::from(self.0) >= HARD_MAX_BLOCKS_V1 {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidProductionLocator(
+                "source block ordinal is out of range"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[pliron_attr(name = "mir.production_statement_ordinal_v1", format = "$0")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct MirProductionStatementOrdinalAttrV1(u32);
+
+impl MirProductionStatementOrdinalAttrV1 {
+    const fn new(ordinal: u32) -> Self {
+        Self(ordinal)
+    }
+
+    const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+impl Verify for MirProductionStatementOrdinalAttrV1 {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if u64::from(self.0) >= HARD_MAX_STATEMENTS_V1 {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidProductionLocator(
+                "statement ordinal is out of range"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Ordered semantic roles and block locators for one production terminator.
+#[pliron_attr(name = "mir.production_successor_arcs_v1")]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct MirProductionSuccessorArcsAttrV1(Option<Vec<MirProductionSuccessorArcV1>>);
+
+impl MirProductionSuccessorArcsAttrV1 {
+    fn new(arcs: &[MirProductionSuccessorArcV1]) -> Self {
+        Self(Some(arcs.to_vec()))
+    }
+
+    fn arcs(&self) -> Option<&[MirProductionSuccessorArcV1]> {
+        self.0.as_deref().filter(|arcs| {
+            arcs.len() <= MAX_PRODUCTION_LOCATOR_SUCCESSOR_ARCS_V1
+                && arcs
+                    .iter()
+                    .all(|arc| u64::from(arc.target.index()) < HARD_MAX_BLOCKS_V1)
+        })
+    }
+
+    fn from_text(text: &str) -> Self {
+        Self(parse_production_arc_text_v1(text))
+    }
+}
+
+fn parse_canonical_decimal_u32(text: &str) -> Option<u32> {
+    if text.is_empty()
+        || (text.len() > 1 && text.starts_with('0'))
+        || !text.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    text.parse().ok()
+}
+
+fn parse_production_arc_text_v1(text: &str) -> Option<Vec<MirProductionSuccessorArcV1>> {
+    if text.len() > MAX_PRODUCTION_LOCATOR_ARC_TEXT_BYTES_V1 {
+        return None;
+    }
+    if text.is_empty() {
+        return Some(Vec::new());
+    }
+    let count = text.bytes().filter(|byte| *byte == b',').count() + 1;
+    if count > MAX_PRODUCTION_LOCATOR_SUCCESSOR_ARCS_V1 {
+        return None;
+    }
+    let mut arcs = Vec::with_capacity(count);
+    for encoded in text.split(',') {
+        let (role, target) = encoded.split_once(':')?;
+        if target.contains(':') {
+            return None;
+        }
+        let role = parse_canonical_decimal_u32(role)?;
+        let role = u8::try_from(role)
+            .ok()
+            .and_then(production_edge_role_from_code)?;
+        let target = parse_canonical_decimal_u32(target)?;
+        arcs.push(MirProductionSuccessorArcV1::new(
+            role,
+            SemanticBlockIdV1::from_index(target),
+        ));
+    }
+    (arcs.len() == count).then_some(arcs)
+}
+
+impl Printable for MirProductionSuccessorArcsAttrV1 {
+    fn fmt(
+        &self,
+        _context: &Context,
+        _state: &printable::State,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        formatter.write_str("\"")?;
+        let Some(arcs) = &self.0 else {
+            return formatter.write_str("<invalid>\"");
+        };
+        for (index, arc) in arcs.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str(",")?;
+            }
+            write!(
+                formatter,
+                "{}:{}",
+                production_edge_role_code(arc.role),
+                arc.target.index()
+            )?;
+        }
+        formatter.write_str("\"")
+    }
+}
+
+impl Parsable for MirProductionSuccessorArcsAttrV1 {
+    type Arg = ();
+    type Parsed = Self;
+
+    fn parse<'a>(
+        state_stream: &mut StateStream<'a>,
+        _arg: Self::Arg,
+    ) -> ParseResult<'a, Self::Parsed> {
+        StringAttr::parser(())
+            .map(|text| Self::from_text(text.as_str()))
+            .parse_stream(state_stream)
+            .into()
+    }
+}
+
+impl Verify for MirProductionSuccessorArcsAttrV1 {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if self.arcs().is_none() {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidProductionLocator(
+                "successor arcs are unknown, oversized, or non-canonical"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[pliron_attr(name = "mir.production_tree_work_limit_v1", format = "$0")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct MirProductionTreeWorkLimitAttrV1(u64);
+
+impl MirProductionTreeWorkLimitAttrV1 {
+    const fn new(limits: MirProductionPlironLimitsV1) -> Self {
+        Self(limits.max_tree_work)
+    }
+
+    const fn limits(self) -> MirProductionPlironLimitsV1 {
+        MirProductionPlironLimitsV1 {
+            max_tree_work: self.0,
+        }
+    }
+}
+
+impl Verify for MirProductionTreeWorkLimitAttrV1 {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if MirProductionPlironLimitsV1::new(self.0).is_err() {
+            return verify_err_noloc!(MirDialectVerifyError::InvalidProductionLocator(
+                "middle-end tree-work limit is invalid"
+            ));
         }
         Ok(())
     }
@@ -2451,6 +3300,1063 @@ impl Verify for MirReturnOp {
     }
 }
 
+#[pliron_op(
+    name = "mir.production_module_v1",
+    format,
+    interfaces = [
+        OneRegionInterface,
+        SingleBlockRegionInterface,
+        NoTerminatorInterface,
+        IsolatedFromAboveInterface,
+        NOpdsInterface<0>,
+        NResultsInterface<0>
+    ],
+    attributes = (
+        production_module_sha256: MirProductionSemanticSha256AttrV1,
+        production_module_tree_work_limit: MirProductionTreeWorkLimitAttrV1
+    )
+)]
+struct MirProductionModuleOpV1;
+
+#[op_interface_impl]
+impl RegionKindInterface for MirProductionModuleOpV1 {
+    fn get_region_kind(&self, _index: usize) -> RegionKind {
+        RegionKind::Graph
+    }
+}
+
+impl MirProductionModuleOpV1 {
+    fn new(
+        context: &mut Context,
+        semantic_sha256: MirProductionSemanticSha256V1,
+        limits: MirProductionPlironLimitsV1,
+    ) -> Self {
+        let op = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let module = Self { op };
+        module.set_attr_production_module_sha256(
+            context,
+            MirProductionSemanticSha256AttrV1::new(semantic_sha256),
+        );
+        module.set_attr_production_module_tree_work_limit(
+            context,
+            MirProductionTreeWorkLimitAttrV1::new(limits),
+        );
+        let body = BasicBlock::new(
+            context,
+            Some("production_module_v1".try_into().expect("valid label")),
+            vec![],
+        );
+        body.insert_at_front(op.deref(context).get_region(0), context);
+        module
+    }
+
+    fn body_raw(&self, context: &Context) -> Option<Ptr<BasicBlock>> {
+        let operation = self.get_operation().deref(context);
+        if operation.num_regions() != 1 {
+            return None;
+        }
+        let region = operation.get_region(0);
+        drop(operation);
+        let region = region.deref(context);
+        let body = region.get_head()?;
+        (region.get_tail() == Some(body)).then_some(body)
+    }
+}
+
+impl Verify for MirProductionModuleOpV1 {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        if let Err(error) = verify_production_module_v1(self, context) {
+            return verify_err!(self.get_operation().deref(context).loc(), error);
+        }
+        Ok(())
+    }
+}
+
+#[pliron_op(
+    name = "mir.production_function_v1",
+    format,
+    interfaces = [
+        OneRegionInterface,
+        IsolatedFromAboveInterface,
+        NOpdsInterface<0>,
+        NResultsInterface<0>
+    ],
+    attributes = (
+        production_function_id: MirProductionFunctionIdAttrV1,
+        production_entry_block_id: MirProductionBlockIdAttrV1
+    )
+)]
+struct MirProductionFunctionOpV1;
+
+#[op_interface_impl]
+impl RegionKindInterface for MirProductionFunctionOpV1 {
+    fn get_region_kind(&self, _index: usize) -> RegionKind {
+        RegionKind::SSACFG
+    }
+}
+
+impl MirProductionFunctionOpV1 {
+    fn new(
+        context: &mut Context,
+        function_id: SemanticFunctionIdV1,
+        entry_block_id: SemanticBlockIdV1,
+    ) -> Self {
+        let op = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let function = Self { op };
+        function.set_attr_production_function_id(
+            context,
+            MirProductionFunctionIdAttrV1::new(function_id),
+        );
+        function.set_attr_production_entry_block_id(
+            context,
+            MirProductionBlockIdAttrV1::new(entry_block_id),
+        );
+        function
+    }
+}
+
+impl Verify for MirProductionFunctionOpV1 {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        let operation = self.get_operation();
+        let location = operation.deref(context).loc();
+        let Some(parent) = operation
+            .deref(context)
+            .get_parent_op(context)
+            .and_then(|parent| Operation::get_op::<MirProductionModuleOpV1>(parent, context))
+        else {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::InvalidProductionLocator(
+                    "function is outside its production module"
+                )
+            );
+        };
+        let Some(limits) = parent.get_attr_production_module_tree_work_limit(context) else {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::InvalidProductionLocator(
+                    "module tree-work limit is missing"
+                )
+            );
+        };
+        if let Err(error) = verify_production_function_v1(self, limits.limits(), context) {
+            return verify_err!(location, error);
+        }
+        Ok(())
+    }
+}
+
+#[pliron_op(
+    name = "mir.production_block_v1",
+    format,
+    interfaces = [NRegionsInterface<0>, NOpdsInterface<0>, NResultsInterface<0>],
+    attributes = (
+        production_block_function_id: MirProductionFunctionIdAttrV1,
+        production_block_id: MirProductionBlockIdAttrV1,
+        production_source_block_ordinal: MirProductionSourceBlockOrdinalAttrV1
+    )
+)]
+struct MirProductionBlockOpV1;
+
+impl MirProductionBlockOpV1 {
+    fn new(
+        context: &mut Context,
+        function_id: SemanticFunctionIdV1,
+        block_id: SemanticBlockIdV1,
+        source_ordinal: u32,
+    ) -> Self {
+        let op = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            0,
+        );
+        let block = Self { op };
+        block.set_attr_production_block_function_id(
+            context,
+            MirProductionFunctionIdAttrV1::new(function_id),
+        );
+        block.set_attr_production_block_id(context, MirProductionBlockIdAttrV1::new(block_id));
+        block.set_attr_production_source_block_ordinal(
+            context,
+            MirProductionSourceBlockOrdinalAttrV1::new(source_ordinal),
+        );
+        block
+    }
+}
+
+impl Verify for MirProductionBlockOpV1 {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        let operation = self.get_operation();
+        let location = operation.deref(context).loc();
+        if !production_has_exact_attribute_count(operation, context, 3)
+            || self
+                .get_attr_production_block_function_id(context)
+                .is_none()
+            || self.get_attr_production_block_id(context).is_none()
+            || self
+                .get_attr_production_source_block_ordinal(context)
+                .is_none()
+        {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::InvalidProductionLocator(
+                    "block locator attributes are missing"
+                )
+            );
+        }
+        let Some(parent_block) = operation.deref(context).get_parent_block() else {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::InvalidProductionLocator("block marker is detached")
+            );
+        };
+        if !parent_block
+            .deref(context)
+            .get_parent_op(context)
+            .is_some_and(|parent| Operation::is_op::<MirProductionFunctionOpV1>(parent, context))
+            || operation.deref(context).get_prev().is_some()
+        {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::InvalidProductionLocator(
+                    "block marker has non-canonical placement"
+                )
+            );
+        }
+        Ok(())
+    }
+}
+
+#[pliron_op(
+    name = "mir.production_statement_v1",
+    format,
+    interfaces = [NRegionsInterface<0>, NOpdsInterface<0>, NResultsInterface<0>],
+    attributes = (
+        production_statement_function_id: MirProductionFunctionIdAttrV1,
+        production_statement_block_id: MirProductionBlockIdAttrV1,
+        production_statement_ordinal: MirProductionStatementOrdinalAttrV1
+    )
+)]
+struct MirProductionStatementOpV1;
+
+impl MirProductionStatementOpV1 {
+    fn new(
+        context: &mut Context,
+        function_id: SemanticFunctionIdV1,
+        block_id: SemanticBlockIdV1,
+        ordinal: u32,
+    ) -> Self {
+        let op = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            0,
+        );
+        let statement = Self { op };
+        statement.set_attr_production_statement_function_id(
+            context,
+            MirProductionFunctionIdAttrV1::new(function_id),
+        );
+        statement.set_attr_production_statement_block_id(
+            context,
+            MirProductionBlockIdAttrV1::new(block_id),
+        );
+        statement.set_attr_production_statement_ordinal(
+            context,
+            MirProductionStatementOrdinalAttrV1::new(ordinal),
+        );
+        statement
+    }
+}
+
+impl Verify for MirProductionStatementOpV1 {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        let operation = self.get_operation();
+        let location = operation.deref(context).loc();
+        if !production_has_exact_attribute_count(operation, context, 3)
+            || self
+                .get_attr_production_statement_function_id(context)
+                .is_none()
+            || self
+                .get_attr_production_statement_block_id(context)
+                .is_none()
+            || self
+                .get_attr_production_statement_ordinal(context)
+                .is_none()
+            || !production_leaf_is_in_function(operation, context)
+        {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::InvalidProductionLocator(
+                    "statement locator is missing attributes or nesting"
+                )
+            );
+        }
+        Ok(())
+    }
+}
+
+#[pliron_op(
+    name = "mir.production_terminator_v1",
+    format,
+    interfaces = [
+        IsTerminatorInterface,
+        NRegionsInterface<0>,
+        NOpdsInterface<0>,
+        NResultsInterface<0>
+    ],
+    attributes = (
+        production_terminator_function_id: MirProductionFunctionIdAttrV1,
+        production_terminator_block_id: MirProductionBlockIdAttrV1,
+        production_terminator_successor_arcs: MirProductionSuccessorArcsAttrV1
+    )
+)]
+struct MirProductionTerminatorOpV1;
+
+impl MirProductionTerminatorOpV1 {
+    fn new(
+        context: &mut Context,
+        function_id: SemanticFunctionIdV1,
+        block_id: SemanticBlockIdV1,
+        arcs: &[MirProductionSuccessorArcV1],
+        successors: Vec<Ptr<BasicBlock>>,
+    ) -> Self {
+        let op = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            successors,
+            0,
+        );
+        let terminator = Self { op };
+        terminator.set_attr_production_terminator_function_id(
+            context,
+            MirProductionFunctionIdAttrV1::new(function_id),
+        );
+        terminator.set_attr_production_terminator_block_id(
+            context,
+            MirProductionBlockIdAttrV1::new(block_id),
+        );
+        terminator.set_attr_production_terminator_successor_arcs(
+            context,
+            MirProductionSuccessorArcsAttrV1::new(arcs),
+        );
+        terminator
+    }
+}
+
+impl Verify for MirProductionTerminatorOpV1 {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        let operation = self.get_operation();
+        let location = operation.deref(context).loc();
+        if !production_has_exact_attribute_count(operation, context, 3)
+            || self
+                .get_attr_production_terminator_function_id(context)
+                .is_none()
+            || self
+                .get_attr_production_terminator_block_id(context)
+                .is_none()
+            || self
+                .get_attr_production_terminator_successor_arcs(context)
+                .and_then(|arcs| arcs.arcs().map(|_| ()))
+                .is_none()
+            || !production_leaf_is_in_function(operation, context)
+            || operation.deref(context).get_next().is_some()
+        {
+            return verify_err!(
+                location,
+                MirDialectVerifyError::InvalidProductionLocator(
+                    "terminator locator is malformed or non-final"
+                )
+            );
+        }
+        Ok(())
+    }
+}
+
+fn production_leaf_is_in_function(operation: Ptr<Operation>, context: &Context) -> bool {
+    operation
+        .deref(context)
+        .get_parent_block()
+        .and_then(|block| block.deref(context).get_parent_op(context))
+        .is_some_and(|parent| Operation::is_op::<MirProductionFunctionOpV1>(parent, context))
+}
+
+fn production_has_exact_attribute_count(
+    operation: Ptr<Operation>,
+    context: &Context,
+    expected: usize,
+) -> bool {
+    operation.deref(context).attributes.0.len() == expected
+}
+
+fn verify_production_module_v1(
+    module: &MirProductionModuleOpV1,
+    context: &Context,
+) -> Result<(), MirDialectVerifyError> {
+    if !production_has_exact_attribute_count(module.get_operation(), context, 2) {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "module has unknown or extra attributes",
+        ));
+    }
+    if module
+        .get_operation()
+        .deref(context)
+        .get_parent_block()
+        .is_some()
+    {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "production module must be a detached root",
+        ));
+    }
+    let limits = module
+        .get_attr_production_module_tree_work_limit(context)
+        .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+            "module tree-work limit is missing",
+        ))?
+        .limits();
+    MirProductionPlironLimitsV1::new(limits.max_tree_work).map_err(|_| {
+        MirDialectVerifyError::InvalidProductionLocator("module tree-work limit is invalid")
+    })?;
+    module.get_attr_production_module_sha256(context).ok_or(
+        MirDialectVerifyError::InvalidProductionLocator("module SHA-256 locator is missing"),
+    )?;
+    let body = module
+        .body_raw(context)
+        .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+            "module must have exactly one body block",
+        ))?;
+    if body.deref(context).get_num_arguments() != 0 {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "module body has block arguments",
+        ));
+    }
+    let children = body.deref(context).iter(context).collect::<Vec<_>>();
+    if children.is_empty() {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "module has no functions",
+        ));
+    }
+    if children.len() as u64 > HARD_MAX_FUNCTIONS_V1 {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "module exceeds the semantic function schema cap",
+        ));
+    }
+    let mut statement_count = 0_usize;
+    let mut block_count = 0_usize;
+    let mut tree_work = 2_u64;
+    for (expected, child) in children.into_iter().enumerate() {
+        let function = Operation::get_op::<MirProductionFunctionOpV1>(child, context).ok_or(
+            MirDialectVerifyError::InvalidProductionLocator("module has an unknown child"),
+        )?;
+        let found = function
+            .get_attr_production_function_id(context)
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "function ID is missing",
+            ))?
+            .value()
+            .index();
+        if found != expected as u32 {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "function IDs are duplicate, missing, or non-canonical",
+            ));
+        }
+        let (function_blocks, function_statements, function_work) =
+            verify_production_function_v1(&function, limits, context)?;
+        block_count = block_count.checked_add(function_blocks).ok_or(
+            MirDialectVerifyError::InvalidProductionLocator("module block count overflowed"),
+        )?;
+        if block_count as u64 > HARD_MAX_BLOCKS_V1 {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "module exceeds the semantic block schema cap",
+            ));
+        }
+        statement_count = statement_count.checked_add(function_statements).ok_or(
+            MirDialectVerifyError::InvalidProductionLocator("module statement count overflowed"),
+        )?;
+        if statement_count as u64 > HARD_MAX_STATEMENTS_V1 {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "module exceeds the semantic statement schema cap",
+            ));
+        }
+        tree_work = tree_work.checked_add(function_work).ok_or(
+            MirDialectVerifyError::InvalidProductionLocator("module tree work overflowed"),
+        )?;
+        if tree_work > limits.max_tree_work {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "module exceeds the production Pliron tree-work limit",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verify_production_function_v1(
+    function: &MirProductionFunctionOpV1,
+    module_limits: MirProductionPlironLimitsV1,
+    context: &Context,
+) -> Result<(usize, usize, u64), MirDialectVerifyError> {
+    if !production_has_exact_attribute_count(function.get_operation(), context, 2) {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "function has unknown or extra attributes",
+        ));
+    }
+    let function_id = function
+        .get_attr_production_function_id(context)
+        .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+            "function ID is missing",
+        ))?
+        .value();
+    if u64::from(function_id.index()) >= HARD_MAX_FUNCTIONS_V1 {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "function ID is out of range",
+        ));
+    }
+    let entry = function
+        .get_attr_production_entry_block_id(context)
+        .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+            "entry block ID is missing",
+        ))?
+        .value();
+    let operation = function.get_operation().deref(context);
+    if operation.num_regions() != 1 {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "function must have exactly one region",
+        ));
+    }
+    let region = operation.get_region(0);
+    drop(operation);
+    let blocks = region.deref(context).iter(context).collect::<Vec<_>>();
+    if blocks.is_empty() {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "function has no blocks",
+        ));
+    }
+    if blocks.len() as u64 > HARD_MAX_BLOCKS_V1 {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "function exceeds the semantic block schema cap",
+        ));
+    }
+    if entry.index() as usize >= blocks.len() {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "entry block locator is dangling",
+        ));
+    }
+
+    let mut by_id = vec![None; blocks.len()];
+    let mut statement_count = 0_usize;
+    let mut tree_work = 1_u64;
+    for (position, block) in blocks.iter().copied().enumerate() {
+        if block.deref(context).get_num_arguments() != 0 {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "production blocks may not have arguments",
+            ));
+        }
+        let operations = block.deref(context).iter(context).collect::<Vec<_>>();
+        if operations.len() < 2 {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "block requires a marker and one terminator",
+            ));
+        }
+        let marker = Operation::get_op::<MirProductionBlockOpV1>(operations[0], context).ok_or(
+            MirDialectVerifyError::InvalidProductionLocator("block marker is missing or unknown"),
+        )?;
+        if !production_has_exact_attribute_count(marker.get_operation(), context, 3) {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "block marker has unknown or extra attributes",
+            ));
+        }
+        let marker_function = marker
+            .get_attr_production_block_function_id(context)
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "block function locator is missing",
+            ))?
+            .value();
+        let block_id = marker
+            .get_attr_production_block_id(context)
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "block ID is missing",
+            ))?
+            .value();
+        let source_ordinal = marker
+            .get_attr_production_source_block_ordinal(context)
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "source block ordinal is missing",
+            ))?
+            .value();
+        let expected = canonical_production_block_id(position, entry.index());
+        if marker_function != function_id
+            || block_id.index() != expected
+            || source_ordinal != block_id.index()
+        {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "block IDs or source order are duplicate, missing, foreign, or non-canonical",
+            ));
+        }
+        by_id[block_id.index() as usize] = Some(block);
+
+        let statement_operations = &operations[1..operations.len() - 1];
+        if statement_operations.len() as u64 > HARD_MAX_STATEMENTS_V1 {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "block exceeds the semantic statement schema cap",
+            ));
+        }
+        for (expected_ordinal, operation) in statement_operations.iter().copied().enumerate() {
+            let statement = Operation::get_op::<MirProductionStatementOpV1>(operation, context)
+                .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                    "block contains an unknown or misplaced operation",
+                ))?;
+            if !production_has_exact_attribute_count(statement.get_operation(), context, 3) {
+                return Err(MirDialectVerifyError::InvalidProductionLocator(
+                    "statement has unknown or extra attributes",
+                ));
+            }
+            let statement_function = statement
+                .get_attr_production_statement_function_id(context)
+                .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                    "statement function locator is missing",
+                ))?
+                .value();
+            let statement_block = statement
+                .get_attr_production_statement_block_id(context)
+                .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                    "statement block locator is missing",
+                ))?
+                .value();
+            let ordinal = statement
+                .get_attr_production_statement_ordinal(context)
+                .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                    "statement ordinal is missing",
+                ))?
+                .value();
+            if statement_function != function_id
+                || statement_block != block_id
+                || ordinal != expected_ordinal as u32
+            {
+                return Err(MirDialectVerifyError::InvalidProductionLocator(
+                    "statement locator is foreign, duplicate, missing, or non-canonical",
+                ));
+            }
+        }
+        statement_count = statement_count
+            .checked_add(statement_operations.len())
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "function statement count overflowed",
+            ))?;
+        tree_work = tree_work
+            .checked_add(3)
+            .and_then(|work| work.checked_add(statement_operations.len() as u64))
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "function tree work overflowed",
+            ))?;
+
+        let terminator = Operation::get_op::<MirProductionTerminatorOpV1>(
+            *operations.last().expect("length checked"),
+            context,
+        )
+        .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+            "block terminator is missing or unknown",
+        ))?;
+        if !production_has_exact_attribute_count(terminator.get_operation(), context, 3) {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "terminator has unknown or extra attributes",
+            ));
+        }
+        let terminator_function = terminator
+            .get_attr_production_terminator_function_id(context)
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "terminator function locator is missing",
+            ))?
+            .value();
+        let terminator_block = terminator
+            .get_attr_production_terminator_block_id(context)
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "terminator block locator is missing",
+            ))?
+            .value();
+        if terminator_function != function_id || terminator_block != block_id {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "terminator locator is foreign or non-canonical",
+            ));
+        }
+    }
+
+    for block in blocks {
+        let operations = block.deref(context).iter(context).collect::<Vec<_>>();
+        let terminator = Operation::get_op::<MirProductionTerminatorOpV1>(
+            *operations.last().expect("structure checked"),
+            context,
+        )
+        .expect("structure checked");
+        let arcs = terminator
+            .get_attr_production_terminator_successor_arcs(context)
+            .and_then(|arcs| arcs.arcs().map(<[_]>::to_vec))
+            .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                "terminator arcs are missing, unknown, or oversized",
+            ))?;
+        let terminator_ref = terminator.get_operation().deref(context);
+        if terminator_ref.get_num_successors() != arcs.len() {
+            return Err(MirDialectVerifyError::InvalidProductionLocator(
+                "terminator arc and successor counts differ",
+            ));
+        }
+        for (actual, arc) in terminator_ref.successors().zip(arcs) {
+            let expected = by_id
+                .get(arc.target.index() as usize)
+                .and_then(|target| *target)
+                .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                    "terminator successor locator is dangling",
+                ))?;
+            if actual != expected {
+                return Err(MirDialectVerifyError::InvalidProductionLocator(
+                    "terminator successor pointers do not match ordered arcs",
+                ));
+            }
+            tree_work =
+                tree_work
+                    .checked_add(1)
+                    .ok_or(MirDialectVerifyError::InvalidProductionLocator(
+                        "function tree work overflowed",
+                    ))?;
+        }
+    }
+    if tree_work > module_limits.max_tree_work {
+        return Err(MirDialectVerifyError::InvalidProductionLocator(
+            "function exceeds the production Pliron tree-work limit",
+        ));
+    }
+    Ok((by_id.len(), statement_count, tree_work))
+}
+
+/// An opaque production-locator module capability bound to one Pliron context.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MirProductionModuleHandleV1 {
+    owner: ContextIdentity,
+    pointer: Ptr<Operation>,
+}
+
+impl fmt::Debug for MirProductionModuleHandleV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MirProductionModuleHandleV1")
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MirProductionModuleHandleV1 {
+    /// Materializes a closed locator graph after complete allocation-free preflight.
+    pub fn try_new(
+        context: &mut Context,
+        locator: MirProductionModuleLocatorV1,
+        limits: MirProductionPlironLimitsV1,
+    ) -> Result<Self, MirProductionLocatorErrorV1> {
+        preflight_production_locator_v1(&locator, limits)?;
+        let owner = match catch_unwind(AssertUnwindSafe(|| ensure_context_identity(context))) {
+            Ok(Ok(owner)) => owner,
+            Ok(Err(error)) => return Err(MirProductionLocatorErrorV1::ContextIdentity(error)),
+            Err(_) => return Err(MirProductionLocatorErrorV1::UpstreamPanicked),
+        };
+        catch_unwind(AssertUnwindSafe(|| {
+            materialize_production_locator_v1(context, owner, &locator, limits)
+        }))
+        .unwrap_or(Err(MirProductionLocatorErrorV1::UpstreamPanicked))
+    }
+
+    /// Verifies owner, liveness, closed structure, and exact ordered arcs.
+    pub fn verify(&self, context: &Context) -> Result<(), MirProductionLocatorErrorV1> {
+        self.authenticate(context)?;
+        let verified = catch_unwind(AssertUnwindSafe(|| {
+            verify_operation(self.pointer, context).is_ok()
+        }))
+        .map_err(|_| MirProductionLocatorErrorV1::UpstreamPanicked)?;
+        if verified {
+            Ok(())
+        } else {
+            Err(MirProductionLocatorErrorV1::VerificationFailed)
+        }
+    }
+
+    /// Returns an exact pointer-independent snapshot after full verification.
+    pub fn snapshot(
+        &self,
+        context: &Context,
+    ) -> Result<MirProductionModuleLocatorV1, MirProductionLocatorErrorV1> {
+        self.verify(context)?;
+        catch_unwind(AssertUnwindSafe(|| {
+            snapshot_production_locator_v1(self.pointer, context)
+        }))
+        .unwrap_or(Err(MirProductionLocatorErrorV1::UpstreamPanicked))
+    }
+
+    /// This inert locator graph grants no proof, publication, load, or launch authority.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+
+    fn authenticate(&self, context: &Context) -> Result<(), MirProductionLocatorErrorV1> {
+        let owner = require_context_identity(context)
+            .map_err(MirProductionLocatorErrorV1::ContextIdentity)?;
+        if owner != self.owner {
+            return Err(MirProductionLocatorErrorV1::ForeignContext);
+        }
+        catch_unwind(AssertUnwindSafe(|| {
+            let operation = self
+                .pointer
+                .try_deref(context)
+                .map_err(|_| MirProductionLocatorErrorV1::StaleHandle)?;
+            if !Operation::is_op::<MirProductionModuleOpV1>(self.pointer, context)
+                || operation.get_parent_block().is_some()
+            {
+                return Err(MirProductionLocatorErrorV1::WrongKind);
+            }
+            Ok(())
+        }))
+        .unwrap_or(Err(MirProductionLocatorErrorV1::UpstreamPanicked))
+    }
+}
+
+fn preflight_production_locator_v1(
+    locator: &MirProductionModuleLocatorV1,
+    limits: MirProductionPlironLimitsV1,
+) -> Result<(), MirProductionLocatorErrorV1> {
+    let mut tree_work = 2_u64;
+    for function in &locator.functions {
+        tree_work = tree_work.checked_add(1).ok_or(
+            MirProductionLocatorErrorV1::MiddleEndResourceLimitExceeded {
+                resource: MirProductionPlironResourceV1::TreeWork,
+                actual: u64::MAX,
+                limit: limits.max_tree_work,
+            },
+        )?;
+        for block in &function.blocks {
+            tree_work = tree_work
+                .checked_add(3)
+                .and_then(|work| work.checked_add(block.statements.len() as u64))
+                .and_then(|work| work.checked_add(block.terminator.successors.len() as u64))
+                .ok_or(
+                    MirProductionLocatorErrorV1::MiddleEndResourceLimitExceeded {
+                        resource: MirProductionPlironResourceV1::TreeWork,
+                        actual: u64::MAX,
+                        limit: limits.max_tree_work,
+                    },
+                )?;
+            if tree_work > limits.max_tree_work {
+                return Err(
+                    MirProductionLocatorErrorV1::MiddleEndResourceLimitExceeded {
+                        resource: MirProductionPlironResourceV1::TreeWork,
+                        actual: tree_work,
+                        limit: limits.max_tree_work,
+                    },
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn materialize_production_locator_v1(
+    context: &mut Context,
+    owner: ContextIdentity,
+    locator: &MirProductionModuleLocatorV1,
+    limits: MirProductionPlironLimitsV1,
+) -> Result<MirProductionModuleHandleV1, MirProductionLocatorErrorV1> {
+    let module = MirProductionModuleOpV1::new(context, locator.semantic_sha256, limits);
+    let module_pointer = module.get_operation();
+    let body = module
+        .body_raw(context)
+        .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+    for function_locator in &locator.functions {
+        let function = MirProductionFunctionOpV1::new(
+            context,
+            function_locator.function_id,
+            function_locator.entry_block_id,
+        );
+        let function_pointer = function.get_operation();
+        function_pointer.insert_at_back(body, context);
+        let region = function_pointer.deref(context).get_region(0);
+        let mut by_id = vec![None; function_locator.blocks.len()];
+        for physical_position in 0..function_locator.blocks.len() {
+            let source_ordinal = canonical_production_block_id(
+                physical_position,
+                function_locator.entry_block_id.index(),
+            );
+            let block_locator = &function_locator.blocks[source_ordinal as usize];
+            let block = BasicBlock::new(
+                context,
+                Some(
+                    format!("production_bb{}", block_locator.block_id.index())
+                        .try_into()
+                        .expect("valid generated label"),
+                ),
+                vec![],
+            );
+            block.insert_at_back(region, context);
+            by_id[block_locator.block_id.index() as usize] = Some(block);
+            MirProductionBlockOpV1::new(
+                context,
+                function_locator.function_id,
+                block_locator.block_id,
+                source_ordinal,
+            )
+            .get_operation()
+            .insert_at_back(block, context);
+            for statement in &block_locator.statements {
+                MirProductionStatementOpV1::new(
+                    context,
+                    function_locator.function_id,
+                    block_locator.block_id,
+                    statement.ordinal,
+                )
+                .get_operation()
+                .insert_at_back(block, context);
+            }
+        }
+        for block_locator in &function_locator.blocks {
+            let block = by_id[block_locator.block_id.index() as usize]
+                .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+            let successors = block_locator
+                .terminator
+                .successors
+                .iter()
+                .map(|arc| {
+                    by_id[arc.target.index() as usize]
+                        .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            MirProductionTerminatorOpV1::new(
+                context,
+                function_locator.function_id,
+                block_locator.block_id,
+                &block_locator.terminator.successors,
+                successors,
+            )
+            .get_operation()
+            .insert_at_back(block, context);
+        }
+    }
+    if verify_operation(module_pointer, context).is_err() {
+        Operation::erase(module_pointer, context);
+        return Err(MirProductionLocatorErrorV1::VerificationFailed);
+    }
+    Ok(MirProductionModuleHandleV1 {
+        owner,
+        pointer: module_pointer,
+    })
+}
+
+fn snapshot_production_locator_v1(
+    pointer: Ptr<Operation>,
+    context: &Context,
+) -> Result<MirProductionModuleLocatorV1, MirProductionLocatorErrorV1> {
+    let module = Operation::get_op::<MirProductionModuleOpV1>(pointer, context)
+        .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+    let semantic_sha256 = module
+        .get_attr_production_module_sha256(context)
+        .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?
+        .value();
+    let body = module
+        .body_raw(context)
+        .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+    let function_operations = body.deref(context).iter(context).collect::<Vec<_>>();
+    let mut functions = Vec::with_capacity(function_operations.len());
+    for function_operation in function_operations {
+        let function = Operation::get_op::<MirProductionFunctionOpV1>(function_operation, context)
+            .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+        let function_id = function
+            .get_attr_production_function_id(context)
+            .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?
+            .value();
+        let entry = function
+            .get_attr_production_entry_block_id(context)
+            .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?
+            .value();
+        let region = function_operation.deref(context).get_region(0);
+        let block_pointers = region.deref(context).iter(context).collect::<Vec<_>>();
+        let mut blocks_by_source = vec![None; block_pointers.len()];
+        for block in block_pointers {
+            let operations = block.deref(context).iter(context).collect::<Vec<_>>();
+            let marker = operations
+                .first()
+                .and_then(|operation| {
+                    Operation::get_op::<MirProductionBlockOpV1>(*operation, context)
+                })
+                .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+            let block_id = marker
+                .get_attr_production_block_id(context)
+                .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?
+                .value();
+            let source_ordinal = marker
+                .get_attr_production_source_block_ordinal(context)
+                .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?
+                .value();
+            if source_ordinal as usize >= blocks_by_source.len()
+                || source_ordinal != block_id.index()
+                || blocks_by_source[source_ordinal as usize].is_some()
+            {
+                return Err(MirProductionLocatorErrorV1::MalformedSnapshot);
+            }
+            let mut statements = Vec::with_capacity(operations.len().saturating_sub(2));
+            for operation in &operations[1..operations.len() - 1] {
+                let statement =
+                    Operation::get_op::<MirProductionStatementOpV1>(*operation, context)
+                        .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+                statements.push(MirProductionStatementLocatorV1::new(
+                    statement
+                        .get_attr_production_statement_ordinal(context)
+                        .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?
+                        .value(),
+                ));
+            }
+            let terminator = operations
+                .last()
+                .and_then(|operation| {
+                    Operation::get_op::<MirProductionTerminatorOpV1>(*operation, context)
+                })
+                .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+            let arcs = terminator
+                .get_attr_production_terminator_successor_arcs(context)
+                .and_then(|arcs| arcs.arcs().map(<[_]>::to_vec))
+                .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+            blocks_by_source[source_ordinal as usize] = Some(MirProductionBlockLocatorV1::try_new(
+                block_id,
+                statements,
+                MirProductionTerminatorLocatorV1::try_new(arcs)?,
+            )?);
+        }
+        let blocks = blocks_by_source
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or(MirProductionLocatorErrorV1::MalformedSnapshot)?;
+        functions.push(MirProductionFunctionLocatorV1::try_new(
+            function_id,
+            entry,
+            blocks,
+        )?);
+    }
+    MirProductionModuleLocatorV1::try_new(semantic_sha256, functions)
+}
+
 /// Explicitly registers every D1 MIR entity. Repeated calls are idempotent.
 pub fn register_mir_dialect(context: &mut Context) {
     let _ = catch_unwind(AssertUnwindSafe(|| ensure_context_identity(context)));
@@ -2463,12 +4369,24 @@ pub fn register_mir_dialect(context: &mut Context) {
     MirSemanticSpanAttr::register(context);
     MirSemanticOrdinalAttr::register(context);
     MirSemanticSuccessorsAttr::register(context);
+    MirProductionSemanticSha256AttrV1::register(context);
+    MirProductionFunctionIdAttrV1::register(context);
+    MirProductionBlockIdAttrV1::register(context);
+    MirProductionSourceBlockOrdinalAttrV1::register(context);
+    MirProductionStatementOrdinalAttrV1::register(context);
+    MirProductionSuccessorArcsAttrV1::register(context);
+    MirProductionTreeWorkLimitAttrV1::register(context);
     MirModuleOp::register(context);
     MirFunctionOp::register(context);
     MirBlockOp::register(context);
     MirSemanticStatementOp::register(context);
     MirSemanticTerminatorOp::register(context);
     MirReturnOp::register(context);
+    MirProductionModuleOpV1::register(context);
+    MirProductionFunctionOpV1::register(context);
+    MirProductionBlockOpV1::register(context);
+    MirProductionStatementOpV1::register(context);
+    MirProductionTerminatorOpV1::register(context);
 }
 
 fn registration_hook(
@@ -2484,12 +4402,24 @@ fn registration_hook(
     service.register_attribute::<MirSemanticSpanAttr>()?;
     service.register_attribute::<MirSemanticOrdinalAttr>()?;
     service.register_attribute::<MirSemanticSuccessorsAttr>()?;
+    service.register_attribute::<MirProductionSemanticSha256AttrV1>()?;
+    service.register_attribute::<MirProductionFunctionIdAttrV1>()?;
+    service.register_attribute::<MirProductionBlockIdAttrV1>()?;
+    service.register_attribute::<MirProductionSourceBlockOrdinalAttrV1>()?;
+    service.register_attribute::<MirProductionStatementOrdinalAttrV1>()?;
+    service.register_attribute::<MirProductionSuccessorArcsAttrV1>()?;
+    service.register_attribute::<MirProductionTreeWorkLimitAttrV1>()?;
     service.register_operation::<MirModuleOp>()?;
     service.register_operation::<MirFunctionOp>()?;
     service.register_operation::<MirBlockOp>()?;
     service.register_operation::<MirSemanticStatementOp>()?;
     service.register_operation::<MirSemanticTerminatorOp>()?;
     service.register_operation::<MirReturnOp>()?;
+    service.register_operation::<MirProductionModuleOpV1>()?;
+    service.register_operation::<MirProductionFunctionOpV1>()?;
+    service.register_operation::<MirProductionBlockOpV1>()?;
+    service.register_operation::<MirProductionStatementOpV1>()?;
+    service.register_operation::<MirProductionTerminatorOpV1>()?;
     Ok(())
 }
 
@@ -2505,6 +4435,85 @@ mod direct_semantic_tests {
 
     fn span(seed: u64) -> MirSemanticSourceSpan {
         MirSemanticSourceSpan::new([seed, seed + 1, seed + 2, seed + 3], 1, 1, 1, 2).unwrap()
+    }
+
+    fn production_block_for_direct_test(
+        id: u32,
+        statements: u32,
+        arcs: Vec<MirProductionSuccessorArcV1>,
+    ) -> MirProductionBlockLocatorV1 {
+        MirProductionBlockLocatorV1::try_new(
+            SemanticBlockIdV1::from_index(id),
+            (0..statements)
+                .map(MirProductionStatementLocatorV1::new)
+                .collect(),
+            MirProductionTerminatorLocatorV1::try_new(arcs).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn production_handle_for_direct_test(context: &mut Context) -> MirProductionModuleHandleV1 {
+        register_mir_dialect(context);
+        let function = MirProductionFunctionLocatorV1::try_new(
+            SemanticFunctionIdV1::from_index(0),
+            SemanticBlockIdV1::from_index(0),
+            vec![
+                production_block_for_direct_test(
+                    0,
+                    1,
+                    vec![
+                        MirProductionSuccessorArcV1::new(
+                            SemanticEdgeRoleV1::SwitchValue,
+                            SemanticBlockIdV1::from_index(1),
+                        ),
+                        MirProductionSuccessorArcV1::new(
+                            SemanticEdgeRoleV1::SwitchOtherwise,
+                            SemanticBlockIdV1::from_index(0),
+                        ),
+                    ],
+                ),
+                production_block_for_direct_test(1, 0, vec![]),
+            ],
+        )
+        .unwrap();
+        let locator = MirProductionModuleLocatorV1::try_new(
+            MirProductionSemanticSha256V1::from_sha256([0x5a; 32]),
+            vec![function],
+        )
+        .unwrap();
+        MirProductionModuleHandleV1::try_new(
+            context,
+            locator,
+            MirProductionPlironLimitsV1::default(),
+        )
+        .unwrap()
+    }
+
+    fn direct_production_function(
+        handle: &MirProductionModuleHandleV1,
+        context: &Context,
+    ) -> MirProductionFunctionOpV1 {
+        let module = Operation::get_op::<MirProductionModuleOpV1>(handle.pointer, context).unwrap();
+        let function = module
+            .body_raw(context)
+            .unwrap()
+            .deref(context)
+            .get_head()
+            .unwrap();
+        Operation::get_op::<MirProductionFunctionOpV1>(function, context).unwrap()
+    }
+
+    fn direct_production_block(
+        function: &MirProductionFunctionOpV1,
+        context: &Context,
+        physical_position: usize,
+    ) -> Ptr<BasicBlock> {
+        function
+            .get_region(context)
+            .deref(context)
+            .iter(context)
+            .nth(physical_position)
+            .unwrap()
     }
 
     #[test]
@@ -2549,6 +4558,195 @@ mod direct_semantic_tests {
         assert_eq!(
             SEMANTIC_SUCCESSOR_TEXT_PRINT_COUNT.load(Ordering::Relaxed),
             0
+        );
+    }
+
+    #[test]
+    fn production_arc_parser_rejects_unknown_and_noncanonical_locators() {
+        let context = Context::new();
+        for text in [
+            "12:0", "01:0", "0:01", "0:0:1", "0:", ":0", "0:0,", "0:262144",
+        ] {
+            let attribute = MirProductionSuccessorArcsAttrV1::from_text(text);
+            assert!(attribute.arcs().is_none(), "unexpectedly accepted {text}");
+            assert!(attribute.verify(&context).is_err());
+        }
+        let duplicate = MirProductionSuccessorArcsAttrV1::from_text("1:7,1:7,2:0");
+        assert_eq!(
+            duplicate.arcs().unwrap(),
+            &[
+                MirProductionSuccessorArcV1::new(
+                    SemanticEdgeRoleV1::SwitchValue,
+                    SemanticBlockIdV1::from_index(7),
+                ),
+                MirProductionSuccessorArcV1::new(
+                    SemanticEdgeRoleV1::SwitchValue,
+                    SemanticBlockIdV1::from_index(7),
+                ),
+                MirProductionSuccessorArcV1::new(
+                    SemanticEdgeRoleV1::SwitchOtherwise,
+                    SemanticBlockIdV1::from_index(0),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_production_op_rejects_an_extra_attribute() {
+        for target_kind in 0..5 {
+            let mut context = Context::new();
+            let handle = production_handle_for_direct_test(&mut context);
+            let module =
+                Operation::get_op::<MirProductionModuleOpV1>(handle.pointer, &context).unwrap();
+            let function = direct_production_function(&handle, &context);
+            let block = direct_production_block(&function, &context, 0);
+            let operations = block.deref(&context).iter(&context).collect::<Vec<_>>();
+            let marker =
+                Operation::get_op::<MirProductionBlockOpV1>(operations[0], &context).unwrap();
+            let statement =
+                Operation::get_op::<MirProductionStatementOpV1>(operations[1], &context).unwrap();
+            let terminator = Operation::get_op::<MirProductionTerminatorOpV1>(
+                *operations.last().unwrap(),
+                &context,
+            )
+            .unwrap();
+            let target = match target_kind {
+                0 => module.get_operation(),
+                1 => function.get_operation(),
+                2 => marker.get_operation(),
+                3 => statement.get_operation(),
+                4 => terminator.get_operation(),
+                _ => unreachable!(),
+            };
+            target.deref_mut(&context).attributes.set(
+                "hostile_extra".try_into().unwrap(),
+                StringAttr::new("unknown".to_owned()),
+            );
+            let rejected = match target_kind {
+                0 => module.verify(&context).is_err(),
+                1 => function.verify(&context).is_err(),
+                2 => marker.verify(&context).is_err(),
+                3 => statement.verify(&context).is_err(),
+                4 => terminator.verify(&context).is_err(),
+                _ => unreachable!(),
+            };
+            assert!(
+                rejected,
+                "production op kind {target_kind} accepted an extra attribute"
+            );
+        }
+    }
+
+    #[test]
+    fn production_verifier_rejects_mutated_ids_ordinals_and_source_order() {
+        let mut context = Context::new();
+        let handle = production_handle_for_direct_test(&mut context);
+        let function = direct_production_function(&handle, &context);
+        function.set_attr_production_function_id(
+            &context,
+            MirProductionFunctionIdAttrV1::new(SemanticFunctionIdV1::from_index(1)),
+        );
+        assert_eq!(
+            handle.verify(&context),
+            Err(MirProductionLocatorErrorV1::VerificationFailed)
+        );
+
+        let mut context = Context::new();
+        let handle = production_handle_for_direct_test(&mut context);
+        let function = direct_production_function(&handle, &context);
+        let block = direct_production_block(&function, &context, 0);
+        let statement = block.deref(&context).iter(&context).nth(1).unwrap();
+        Operation::get_op::<MirProductionStatementOpV1>(statement, &context)
+            .unwrap()
+            .set_attr_production_statement_ordinal(
+                &context,
+                MirProductionStatementOrdinalAttrV1::new(7),
+            );
+        assert_eq!(
+            handle.verify(&context),
+            Err(MirProductionLocatorErrorV1::VerificationFailed)
+        );
+
+        let mut context = Context::new();
+        let handle = production_handle_for_direct_test(&mut context);
+        let function = direct_production_function(&handle, &context);
+        let block = direct_production_block(&function, &context, 0);
+        let marker = block.deref(&context).get_head().unwrap();
+        Operation::get_op::<MirProductionBlockOpV1>(marker, &context)
+            .unwrap()
+            .set_attr_production_source_block_ordinal(
+                &context,
+                MirProductionSourceBlockOrdinalAttrV1::new(1),
+            );
+        assert_eq!(
+            handle.verify(&context),
+            Err(MirProductionLocatorErrorV1::VerificationFailed)
+        );
+    }
+
+    #[test]
+    fn production_verifier_rejects_dangling_reordered_and_unknown_structure() {
+        let mut context = Context::new();
+        let handle = production_handle_for_direct_test(&mut context);
+        let function = direct_production_function(&handle, &context);
+        let block = direct_production_block(&function, &context, 0);
+        let terminator = block.deref(&context).get_tail().unwrap();
+        Operation::get_op::<MirProductionTerminatorOpV1>(terminator, &context)
+            .unwrap()
+            .set_attr_production_terminator_successor_arcs(
+                &context,
+                MirProductionSuccessorArcsAttrV1::new(&[
+                    MirProductionSuccessorArcV1::new(
+                        SemanticEdgeRoleV1::SwitchValue,
+                        SemanticBlockIdV1::from_index(99),
+                    ),
+                    MirProductionSuccessorArcV1::new(
+                        SemanticEdgeRoleV1::SwitchOtherwise,
+                        SemanticBlockIdV1::from_index(0),
+                    ),
+                ]),
+            );
+        assert_eq!(
+            handle.verify(&context),
+            Err(MirProductionLocatorErrorV1::VerificationFailed)
+        );
+
+        let mut context = Context::new();
+        let handle = production_handle_for_direct_test(&mut context);
+        let function = direct_production_function(&handle, &context);
+        let block = direct_production_block(&function, &context, 0);
+        let terminator = block.deref(&context).get_tail().unwrap();
+        Operation::get_op::<MirProductionTerminatorOpV1>(terminator, &context)
+            .unwrap()
+            .set_attr_production_terminator_successor_arcs(
+                &context,
+                MirProductionSuccessorArcsAttrV1::new(&[
+                    MirProductionSuccessorArcV1::new(
+                        SemanticEdgeRoleV1::SwitchValue,
+                        SemanticBlockIdV1::from_index(0),
+                    ),
+                    MirProductionSuccessorArcV1::new(
+                        SemanticEdgeRoleV1::SwitchOtherwise,
+                        SemanticBlockIdV1::from_index(1),
+                    ),
+                ]),
+            );
+        assert_eq!(
+            handle.verify(&context),
+            Err(MirProductionLocatorErrorV1::VerificationFailed)
+        );
+
+        let mut context = Context::new();
+        let handle = production_handle_for_direct_test(&mut context);
+        let function = direct_production_function(&handle, &context);
+        let block = direct_production_block(&function, &context, 0);
+        let terminator = block.deref(&context).get_tail().unwrap();
+        MirReturnOp::new(&mut context)
+            .get_operation()
+            .insert_before(&context, terminator);
+        assert_eq!(
+            handle.verify(&context),
+            Err(MirProductionLocatorErrorV1::VerificationFailed)
         );
     }
 }
