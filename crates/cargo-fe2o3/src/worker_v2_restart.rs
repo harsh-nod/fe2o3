@@ -10,11 +10,15 @@ use std::ffi::OsStr;
 
 use fe2o3_artifact_transaction::{
     BackendPublicationReceiptV1, BuildAttempt, BuildSession, DurableLinkPublicationPlanV1,
-    ProducerIdentity, RecoveredWorkerV2PublicationIntentV1, UpstreamCodeObjectEvidenceIdentityV1,
-    WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentIdentityV1,
-    WorkerV2PublicationIntentIdentityV2, persist_worker_v2_publication_intent_v1,
+    ProducerIdentity, RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
+    UpstreamCodeObjectEvidenceIdentityV1, WorkerV2PublicationIntentErrorV1,
+    WorkerV2PublicationIntentErrorV2, WorkerV2PublicationIntentIdentityV1,
+    WorkerV2PublicationIntentIdentityV2, clear_worker_v2_publication_intent_v2,
+    persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v2,
     producer_package_identity_v1, recover_worker_v2_publication_intent_v1,
+    recover_worker_v2_publication_intent_v2,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::CodeObjectVersion;
 use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, InspectedRawWorkerV2HsacoV1,
@@ -49,6 +53,8 @@ const PROTECTED_MARKER_VERSION: u16 = 4;
 const PROTECTED_INTENT_SCHEMA_V2: u8 = 2;
 const MARKER_CHECKSUM_DOMAIN: &[u8] = b"FE2O3/CARGO-WORKER-V2-RESUME-CHECKSUM/V1\0";
 const ADMISSION_COMMITMENT_DOMAIN: &[u8] = b"FE2O3/CARGO-WORKER-V2-ADMISSION-COMMITMENT/V1\0";
+const PROTECTED_ADMISSION_COMMITMENT_DOMAIN_V2: &[u8] =
+    b"FE2O3/CARGO-WORKER-V2-PROTECTED-ADMISSION-COMMITMENT/V2\0";
 const MARKER_PREFIX: &str = ".fe2o3-cargo-worker-v2-resume-v1-";
 const LOCK_SUFFIX: &str = ".lock";
 const RECORD_SUFFIX: &str = ".record";
@@ -319,6 +325,56 @@ pub(crate) struct PersistedAdmittedWorkerV2IntentV1 {
     pub(crate) publication: WorkerV2PublicationKindV1,
 }
 
+/// Closure-bound protected counterpart retained until the V2 binding owner is integrated.
+#[allow(dead_code)] // Its fields are consumed by that pending binding integration.
+pub(crate) struct PersistedAdmittedWorkerV2IntentV2 {
+    pub(crate) intent: RecoveredWorkerV2PublicationIntentV2,
+    pub(crate) publication: WorkerV2PublicationKindV1,
+}
+
+#[derive(Debug)]
+pub(crate) enum RestartIntentErrorV2 {
+    Marker(ResumeMarkerErrorV1),
+    Intent(WorkerV2PublicationIntentErrorV2),
+    IntentIdentityMismatch,
+    MissingEnvelopeInputs,
+}
+
+impl fmt::Display for RestartIntentErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Marker(error) => {
+                write!(
+                    formatter,
+                    "protected Worker V2 resume marker failed: {error}"
+                )
+            }
+            Self::Intent(error) => {
+                write!(
+                    formatter,
+                    "protected Worker V2 publication intent failed: {error}"
+                )
+            }
+            Self::IntentIdentityMismatch => formatter.write_str(
+                "recovered protected Worker V2 publication intent does not match its resume marker",
+            ),
+            Self::MissingEnvelopeInputs => formatter.write_str(
+                "canonical protected Worker V2 envelope inputs are missing or unexpected",
+            ),
+        }
+    }
+}
+
+impl Error for RestartIntentErrorV2 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Marker(error) => Some(error),
+            Self::Intent(error) => Some(error),
+            Self::IntentIdentityMismatch | Self::MissingEnvelopeInputs => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum PreparedWorkerV2PublicationV1 {
     Raw(Box<PreparedWorkerV2HsacoPublicationV1>),
@@ -368,12 +424,54 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
     envelope_mode: WorkerV2EnvelopeModeV1,
     envelope_inputs: Option<&WorkerV2EnvelopeInputsV1>,
 ) -> Result<PersistedAdmittedWorkerV2IntentV1, RestartIntentErrorV1> {
+    let prepared =
+        prepare_admitted_worker_v2_intent_v1(producer, inspected, envelope_mode, envelope_inputs)?;
+    let (intent, publication) = persist_admitted_worker_v2_intent::<OrdinaryIntentSchemaV1>(
+        store,
+        producer,
+        prepared.inputs(envelope_inputs),
+        (),
+    )?;
+    Ok(PersistedAdmittedWorkerV2IntentV1 {
+        intent,
+        publication,
+    })
+}
+
+struct PreparedAdmittedWorkerV2IntentV1 {
+    publication: WorkerV2PublicationKindV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    exact_output: Vec<u8>,
+}
+
+impl PreparedAdmittedWorkerV2IntentV1 {
+    fn inputs<'a>(
+        &'a self,
+        envelope_inputs: Option<&'a WorkerV2EnvelopeInputsV1>,
+    ) -> AdmittedWorkerV2IntentInputs<'a> {
+        AdmittedWorkerV2IntentInputs {
+            publication: self.publication,
+            plan: self.plan,
+            upstream: self.upstream,
+            exact_output: &self.exact_output,
+            envelope_inputs,
+        }
+    }
+}
+
+fn prepare_admitted_worker_v2_intent_v1(
+    producer: &ProducerIdentity,
+    inspected: InspectedRawWorkerV2HsacoV1,
+    envelope_mode: WorkerV2EnvelopeModeV1,
+    envelope_inputs: Option<&WorkerV2EnvelopeInputsV1>,
+) -> Result<PreparedAdmittedWorkerV2IntentV1, RestartIntentErrorV1> {
     let publication = select_publication_kind_v1(
         inspected.code_object_version(),
         inspected.canonical_descriptor_section(),
         envelope_mode,
     )?;
-    let (attempt, plan, upstream, exact_bytes) = match publication {
+    let (_attempt, plan, upstream, exact_bytes) = match publication {
         WorkerV2PublicationKindV1::Raw => {
             if envelope_inputs.is_some() {
                 return Err(RestartIntentErrorV1::MissingEnvelopeInputs);
@@ -430,51 +528,218 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
             (attempt, plan, upstream, exact_bytes)
         }
     };
-    let envelope_inputs_identity = match (publication.requires_envelope(), envelope_inputs) {
-        (true, Some(inputs)) => Some(inputs.identity()),
-        (true, None) | (false, Some(_)) => return Err(RestartIntentErrorV1::MissingEnvelopeInputs),
-        (false, None) => None,
-    };
-    let admission = restart_admission_commitment_with_inputs_v1(
+    Ok(PreparedAdmittedWorkerV2IntentV1 {
         publication,
         plan,
         upstream,
-        &exact_bytes,
+        exact_output: exact_bytes,
+    })
+}
+
+/// Persists an already-admitted protected publication without depending on its future wrapper.
+#[allow(dead_code)] // The protected binding caller lands with its inspected wrapper.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn persist_admitted_worker_v2_intent_v2(
+    store: &WorkerV2ResumeStoreV2,
+    producer: &ProducerIdentity,
+    publication: WorkerV2PublicationKindV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    exact_output: &[u8],
+    envelope_inputs: Option<&WorkerV2EnvelopeInputsV1>,
+    expected_compiler_closure: CompilerClosureV2,
+) -> Result<PersistedAdmittedWorkerV2IntentV2, RestartIntentErrorV2> {
+    let inputs = AdmittedWorkerV2IntentInputs {
+        publication,
+        plan,
+        upstream,
+        exact_output,
+        envelope_inputs,
+    };
+    let (intent, publication) = persist_admitted_worker_v2_intent::<ProtectedIntentSchemaV2>(
+        store,
+        producer,
+        inputs,
+        expected_compiler_closure,
+    )?;
+    Ok(PersistedAdmittedWorkerV2IntentV2 {
+        intent,
+        publication,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct AdmittedWorkerV2IntentInputs<'a> {
+    publication: WorkerV2PublicationKindV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    exact_output: &'a [u8],
+    envelope_inputs: Option<&'a WorkerV2EnvelopeInputsV1>,
+}
+
+trait WorkerV2IntentSchema {
+    type Store;
+    type State: Copy;
+    type Binding: Copy;
+    type Recovered;
+    type Identity: Copy + Eq;
+    type IntentError;
+    type Error;
+
+    fn marker_error(error: ResumeMarkerErrorV1) -> Self::Error;
+    fn intent_error(error: Self::IntentError) -> Self::Error;
+    fn identity_mismatch() -> Self::Error;
+    fn missing_envelope_inputs() -> Self::Error;
+
+    fn verify_output_path(store: &Self::Store) -> Result<(), ResumeMarkerErrorV1>;
+    fn persist_envelope_inputs(
+        store: &Self::Store,
+        attempt: BuildAttempt,
+        inputs: &WorkerV2EnvelopeInputsV1,
+    ) -> Result<(), ResumeMarkerErrorV1>;
+    fn recover_envelope_inputs_identity(
+        store: &Self::Store,
+        attempt: BuildAttempt,
+    ) -> Result<WorkerV2EnvelopeInputsIdentityV1, ResumeMarkerErrorV1>;
+    fn persist_pending(
+        store: &Self::Store,
+        inputs: AdmittedWorkerV2IntentInputs<'_>,
+        admission: [u8; 32],
+        envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+    ) -> Result<(), ResumeMarkerErrorV1>;
+    fn persist_ready(
+        store: &Self::Store,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: Self::Identity,
+    ) -> Result<(), ResumeMarkerErrorV1>;
+    fn persist_intent(
+        store: &Self::Store,
+        producer: &ProducerIdentity,
+        inputs: AdmittedWorkerV2IntentInputs<'_>,
+        binding: Self::Binding,
+    ) -> Result<Self::Recovered, Self::IntentError>;
+    fn recover_intent(
+        store: &Self::Store,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        binding: Self::Binding,
+    ) -> Result<Self::Recovered, Self::IntentError>;
+
+    fn recovered_identity(recovered: &Self::Recovered) -> Self::Identity;
+    fn recovered_plan(recovered: &Self::Recovered) -> DurableLinkPublicationPlanV1;
+    fn recovered_upstream(recovered: &Self::Recovered) -> UpstreamCodeObjectEvidenceIdentityV1;
+    fn recovered_output(recovered: &Self::Recovered) -> &[u8];
+    fn recovered_binding_matches(recovered: &Self::Recovered, expected: Self::Binding) -> bool;
+    fn admission(
+        publication: WorkerV2PublicationKindV1,
+        plan: DurableLinkPublicationPlanV1,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1,
+        output: &[u8],
+        envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+        binding: Self::Binding,
+    ) -> [u8; 32];
+
+    fn state_attempt(state: Self::State) -> BuildAttempt;
+    fn state_publication(state: Self::State) -> WorkerV2PublicationKindV1;
+    fn state_admission(state: Self::State) -> [u8; 32];
+    fn state_envelope_inputs(state: Self::State) -> [u8; 32];
+    fn state_intent(state: Self::State) -> Option<Self::Identity>;
+    fn finish_recovery(
+        store: &Self::Store,
+        state: Self::State,
+        current_admission: [u8; 32],
+        intent: Self::Identity,
+        plan: DurableLinkPublicationPlanV1,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1,
+        output: &[u8],
+    ) -> Result<(), Self::Error>;
+}
+
+struct OrdinaryIntentSchemaV1;
+struct ProtectedIntentSchemaV2;
+
+fn persist_admitted_worker_v2_intent<S: WorkerV2IntentSchema>(
+    store: &S::Store,
+    producer: &ProducerIdentity,
+    inputs: AdmittedWorkerV2IntentInputs<'_>,
+    binding: S::Binding,
+) -> Result<(S::Recovered, WorkerV2PublicationKindV1), S::Error> {
+    let envelope_inputs_identity = match (
+        inputs.publication.requires_envelope(),
+        inputs.envelope_inputs,
+    ) {
+        (true, Some(inputs)) => Some(inputs.identity()),
+        (false, None) => None,
+        (true, None) | (false, Some(_)) => return Err(S::missing_envelope_inputs()),
+    };
+    let admission = S::admission(
+        inputs.publication,
+        inputs.plan,
+        inputs.upstream,
+        inputs.exact_output,
         envelope_inputs_identity,
+        binding,
     );
     // A required marker is recoverable only after its exact capsule name and bytes are durable.
-    if let Some(inputs) = envelope_inputs {
-        store.persist_envelope_inputs(attempt, inputs)?;
+    if let Some(envelope_inputs) = inputs.envelope_inputs {
+        S::persist_envelope_inputs(store, inputs.plan.attempt(), envelope_inputs)
+            .map_err(S::marker_error)?;
         #[cfg(feature = "worker-v2-fault-injection-test-only")]
         injected_fault_point_v1("envelope-inputs-persisted");
     }
-    store.persist_pending_with_envelope_inputs(
-        publication,
-        attempt,
-        admission,
-        envelope_inputs_identity,
-    )?;
+    S::persist_pending(store, inputs, admission, envelope_inputs_identity)
+        .map_err(S::marker_error)?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     injected_fault_point_v1("pending-marker");
-    store.verify_output_path()?;
-    let persisted = persist_worker_v2_publication_intent_v1(
-        &store.display_path,
-        producer,
-        attempt,
-        plan,
-        upstream,
-        &exact_bytes,
-    )?;
+    S::verify_output_path(store).map_err(S::marker_error)?;
+    let persisted = S::persist_intent(store, producer, inputs, binding).map_err(S::intent_error)?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     injected_fault_point_v1("pending-intent");
-    store.verify_output_path()?;
-    store.persist_ready(publication, attempt, persisted.record().identity())?;
+    S::verify_output_path(store).map_err(S::marker_error)?;
+    if !recovered_matches_admitted_inputs::<S>(
+        &persisted,
+        inputs,
+        envelope_inputs_identity,
+        admission,
+        binding,
+    ) {
+        return Err(S::identity_mismatch());
+    }
+    S::persist_ready(
+        store,
+        inputs.publication,
+        inputs.plan.attempt(),
+        S::recovered_identity(&persisted),
+    )
+    .map_err(S::marker_error)?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     injected_fault_point_v1("ready");
-    Ok(PersistedAdmittedWorkerV2IntentV1 {
-        intent: persisted,
-        publication,
-    })
+    Ok((persisted, inputs.publication))
+}
+
+fn recovered_matches_admitted_inputs<S: WorkerV2IntentSchema>(
+    recovered: &S::Recovered,
+    inputs: AdmittedWorkerV2IntentInputs<'_>,
+    envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+    admission: [u8; 32],
+    binding: S::Binding,
+) -> bool {
+    let plan = S::recovered_plan(recovered);
+    let upstream = S::recovered_upstream(recovered);
+    let output = S::recovered_output(recovered);
+    S::recovered_binding_matches(recovered, binding)
+        && plan == inputs.plan
+        && upstream == inputs.upstream
+        && output == inputs.exact_output
+        && S::admission(
+            inputs.publication,
+            plan,
+            upstream,
+            output,
+            envelope_inputs,
+            binding,
+        ) == admission
 }
 
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -520,58 +785,469 @@ pub(crate) fn recover_worker_v2_intent_v1(
     producer: &ProducerIdentity,
     state: ResumeMarkerStateV1,
 ) -> Result<RecoveredWorkerV2PublicationIntentV1, RestartIntentErrorV1> {
-    let attempt = state.attempt();
-    let envelope_inputs_identity = if state.publication().requires_envelope() {
-        let identity = store.recover_envelope_inputs(attempt)?.identity();
-        if state.envelope_inputs() != identity.as_bytes() {
-            return Err(RestartIntentErrorV1::IntentIdentityMismatch);
+    recover_worker_v2_intent::<OrdinaryIntentSchemaV1>(store, producer, state, ())
+}
+
+/// Recovers only a closure-equal V2 record and promotes only its protected pending marker.
+#[allow(dead_code)] // The protected binding caller lands with its inspected wrapper.
+pub(crate) fn recover_worker_v2_intent_v2(
+    store: &WorkerV2ResumeStoreV2,
+    producer: &ProducerIdentity,
+    state: ResumeMarkerStateV2,
+    expected_compiler_closure: CompilerClosureV2,
+) -> Result<RecoveredWorkerV2PublicationIntentV2, RestartIntentErrorV2> {
+    recover_worker_v2_intent::<ProtectedIntentSchemaV2>(
+        store,
+        producer,
+        state,
+        expected_compiler_closure,
+    )
+}
+
+/// Clears only the exact closure-bound V2 intent named by a durable protected completion marker.
+#[allow(dead_code)] // The protected binding caller lands with its inspected wrapper.
+pub(crate) fn clear_worker_v2_intent_v2(
+    store: &WorkerV2ResumeStoreV2,
+    producer: &ProducerIdentity,
+    completed: ResumeMarkerStateV2,
+    expected_compiler_closure: CompilerClosureV2,
+) -> Result<(), RestartIntentErrorV2> {
+    let ResumeMarkerStateV2::Completed {
+        attempt, intent, ..
+    } = completed
+    else {
+        return Err(RestartIntentErrorV2::Marker(
+            ResumeMarkerErrorV1::InvalidTransition,
+        ));
+    };
+    if store.load().map_err(RestartIntentErrorV2::Marker)? != Some(completed) {
+        return Err(RestartIntentErrorV2::Marker(
+            ResumeMarkerErrorV1::InvalidTransition,
+        ));
+    }
+    store
+        .verify_output_path()
+        .map_err(RestartIntentErrorV2::Marker)?;
+    clear_worker_v2_publication_intent_v2(
+        &store.inner.display_path,
+        producer,
+        attempt,
+        expected_compiler_closure,
+        intent,
+    )
+    .map_err(RestartIntentErrorV2::Intent)?;
+    store
+        .verify_output_path()
+        .map_err(RestartIntentErrorV2::Marker)
+}
+
+fn recover_worker_v2_intent<S: WorkerV2IntentSchema>(
+    store: &S::Store,
+    producer: &ProducerIdentity,
+    state: S::State,
+    binding: S::Binding,
+) -> Result<S::Recovered, S::Error> {
+    let attempt = S::state_attempt(state);
+    let publication = S::state_publication(state);
+    let envelope_inputs_identity = if publication.requires_envelope() {
+        let identity =
+            S::recover_envelope_inputs_identity(store, attempt).map_err(S::marker_error)?;
+        if S::state_envelope_inputs(state) != identity.as_bytes() {
+            return Err(S::identity_mismatch());
         }
         Some(identity)
     } else {
         None
     };
-    store.verify_output_path()?;
+    S::verify_output_path(store).map_err(S::marker_error)?;
     let recovered =
-        recover_worker_v2_publication_intent_v1(&store.display_path, producer, attempt)?;
-    store.verify_output_path()?;
-    if let Some(expected) = state.intent()
-        && recovered.record().identity() != expected
+        S::recover_intent(store, producer, attempt, binding).map_err(S::intent_error)?;
+    S::verify_output_path(store).map_err(S::marker_error)?;
+    let identity = S::recovered_identity(&recovered);
+    if S::state_intent(state).is_some_and(|expected| expected != identity)
+        || !S::recovered_binding_matches(&recovered, binding)
     {
-        return Err(RestartIntentErrorV1::IntentIdentityMismatch);
+        return Err(S::identity_mismatch());
     }
-    let current_admission = restart_admission_commitment_with_inputs_v1(
-        state.publication(),
-        recovered.record().plan(),
-        recovered.record().upstream_evidence(),
-        recovered.exact_output(),
+    let current_admission = S::admission(
+        publication,
+        S::recovered_plan(&recovered),
+        S::recovered_upstream(&recovered),
+        S::recovered_output(&recovered),
         envelope_inputs_identity,
+        binding,
     );
-    if state.is_legacy() {
-        if state.publication() != WorkerV2PublicationKindV1::Raw {
-            return Err(RestartIntentErrorV1::IntentIdentityMismatch);
-        }
-        if matches!(state, ResumeMarkerStateV1::Pending { .. })
-            && legacy_restart_admission_commitment_v1(
-                recovered.record().plan(),
-                recovered.record().upstream_evidence(),
-                recovered.exact_output(),
-            ) != state.admission()
-        {
-            return Err(RestartIntentErrorV1::IntentIdentityMismatch);
-        }
-        if !matches!(state, ResumeMarkerStateV1::Completed { .. }) {
-            store.migrate_legacy_to_ready(
-                state,
-                current_admission,
-                recovered.record().identity(),
-            )?;
-        }
-    } else if current_admission != state.admission() {
-        return Err(RestartIntentErrorV1::IntentIdentityMismatch);
-    } else if matches!(state, ResumeMarkerStateV1::Pending { .. }) {
-        store.persist_ready(state.publication(), attempt, recovered.record().identity())?;
-    }
+    S::finish_recovery(
+        store,
+        state,
+        current_admission,
+        identity,
+        S::recovered_plan(&recovered),
+        S::recovered_upstream(&recovered),
+        S::recovered_output(&recovered),
+    )?;
     Ok(recovered)
+}
+
+impl WorkerV2IntentSchema for OrdinaryIntentSchemaV1 {
+    type Store = WorkerV2ResumeStoreV1;
+    type State = ResumeMarkerStateV1;
+    type Binding = ();
+    type Recovered = RecoveredWorkerV2PublicationIntentV1;
+    type Identity = WorkerV2PublicationIntentIdentityV1;
+    type IntentError = WorkerV2PublicationIntentErrorV1;
+    type Error = RestartIntentErrorV1;
+
+    fn marker_error(error: ResumeMarkerErrorV1) -> Self::Error {
+        RestartIntentErrorV1::Marker(error)
+    }
+
+    fn intent_error(error: Self::IntentError) -> Self::Error {
+        RestartIntentErrorV1::Intent(error)
+    }
+
+    fn identity_mismatch() -> Self::Error {
+        RestartIntentErrorV1::IntentIdentityMismatch
+    }
+
+    fn missing_envelope_inputs() -> Self::Error {
+        RestartIntentErrorV1::MissingEnvelopeInputs
+    }
+
+    fn verify_output_path(store: &Self::Store) -> Result<(), ResumeMarkerErrorV1> {
+        store.verify_output_path()
+    }
+
+    fn persist_envelope_inputs(
+        store: &Self::Store,
+        attempt: BuildAttempt,
+        inputs: &WorkerV2EnvelopeInputsV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        store.persist_envelope_inputs(attempt, inputs)
+    }
+
+    fn recover_envelope_inputs_identity(
+        store: &Self::Store,
+        attempt: BuildAttempt,
+    ) -> Result<WorkerV2EnvelopeInputsIdentityV1, ResumeMarkerErrorV1> {
+        store
+            .recover_envelope_inputs(attempt)
+            .map(|inputs| inputs.identity())
+    }
+
+    fn persist_pending(
+        store: &Self::Store,
+        inputs: AdmittedWorkerV2IntentInputs<'_>,
+        admission: [u8; 32],
+        envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        store.persist_pending_with_envelope_inputs(
+            inputs.publication,
+            inputs.plan.attempt(),
+            admission,
+            envelope_inputs,
+        )
+    }
+
+    fn persist_ready(
+        store: &Self::Store,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: Self::Identity,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        store.persist_ready(publication, attempt, intent)
+    }
+
+    fn persist_intent(
+        store: &Self::Store,
+        producer: &ProducerIdentity,
+        inputs: AdmittedWorkerV2IntentInputs<'_>,
+        (): Self::Binding,
+    ) -> Result<Self::Recovered, Self::IntentError> {
+        persist_worker_v2_publication_intent_v1(
+            &store.display_path,
+            producer,
+            inputs.plan.attempt(),
+            inputs.plan,
+            inputs.upstream,
+            inputs.exact_output,
+        )
+    }
+
+    fn recover_intent(
+        store: &Self::Store,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        (): Self::Binding,
+    ) -> Result<Self::Recovered, Self::IntentError> {
+        recover_worker_v2_publication_intent_v1(&store.display_path, producer, attempt)
+    }
+
+    fn recovered_identity(recovered: &Self::Recovered) -> Self::Identity {
+        recovered.record().identity()
+    }
+
+    fn recovered_plan(recovered: &Self::Recovered) -> DurableLinkPublicationPlanV1 {
+        recovered.record().plan()
+    }
+
+    fn recovered_upstream(recovered: &Self::Recovered) -> UpstreamCodeObjectEvidenceIdentityV1 {
+        recovered.record().upstream_evidence()
+    }
+
+    fn recovered_output(recovered: &Self::Recovered) -> &[u8] {
+        recovered.exact_output()
+    }
+
+    fn recovered_binding_matches(_recovered: &Self::Recovered, (): Self::Binding) -> bool {
+        true
+    }
+
+    fn admission(
+        publication: WorkerV2PublicationKindV1,
+        plan: DurableLinkPublicationPlanV1,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1,
+        output: &[u8],
+        envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+        (): Self::Binding,
+    ) -> [u8; 32] {
+        restart_admission_commitment_with_inputs_v1(
+            publication,
+            plan,
+            upstream,
+            output,
+            envelope_inputs,
+        )
+    }
+
+    fn state_attempt(state: Self::State) -> BuildAttempt {
+        state.attempt()
+    }
+
+    fn state_publication(state: Self::State) -> WorkerV2PublicationKindV1 {
+        state.publication()
+    }
+
+    fn state_admission(state: Self::State) -> [u8; 32] {
+        state.admission()
+    }
+
+    fn state_envelope_inputs(state: Self::State) -> [u8; 32] {
+        state.envelope_inputs()
+    }
+
+    fn state_intent(state: Self::State) -> Option<Self::Identity> {
+        state.intent()
+    }
+
+    fn finish_recovery(
+        store: &Self::Store,
+        state: Self::State,
+        current_admission: [u8; 32],
+        intent: Self::Identity,
+        plan: DurableLinkPublicationPlanV1,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1,
+        output: &[u8],
+    ) -> Result<(), Self::Error> {
+        if state.is_legacy() {
+            if state.publication() != WorkerV2PublicationKindV1::Raw {
+                return Err(Self::identity_mismatch());
+            }
+            if matches!(state, ResumeMarkerStateV1::Pending { .. })
+                && legacy_restart_admission_commitment_v1(plan, upstream, output)
+                    != state.admission()
+            {
+                return Err(Self::identity_mismatch());
+            }
+            if !matches!(state, ResumeMarkerStateV1::Completed { .. }) {
+                store.migrate_legacy_to_ready(state, current_admission, intent)?;
+            }
+        } else if current_admission != Self::state_admission(state) {
+            return Err(Self::identity_mismatch());
+        } else if matches!(state, ResumeMarkerStateV1::Pending { .. }) {
+            store.persist_ready(state.publication(), state.attempt(), intent)?;
+        }
+        Ok(())
+    }
+}
+
+impl WorkerV2IntentSchema for ProtectedIntentSchemaV2 {
+    type Store = WorkerV2ResumeStoreV2;
+    type State = ResumeMarkerStateV2;
+    type Binding = CompilerClosureV2;
+    type Recovered = RecoveredWorkerV2PublicationIntentV2;
+    type Identity = WorkerV2PublicationIntentIdentityV2;
+    type IntentError = WorkerV2PublicationIntentErrorV2;
+    type Error = RestartIntentErrorV2;
+
+    fn marker_error(error: ResumeMarkerErrorV1) -> Self::Error {
+        RestartIntentErrorV2::Marker(error)
+    }
+
+    fn intent_error(error: Self::IntentError) -> Self::Error {
+        RestartIntentErrorV2::Intent(error)
+    }
+
+    fn identity_mismatch() -> Self::Error {
+        RestartIntentErrorV2::IntentIdentityMismatch
+    }
+
+    fn missing_envelope_inputs() -> Self::Error {
+        RestartIntentErrorV2::MissingEnvelopeInputs
+    }
+
+    fn verify_output_path(store: &Self::Store) -> Result<(), ResumeMarkerErrorV1> {
+        store.verify_output_path()
+    }
+
+    fn persist_envelope_inputs(
+        store: &Self::Store,
+        attempt: BuildAttempt,
+        inputs: &WorkerV2EnvelopeInputsV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        store.persist_envelope_inputs(attempt, inputs)
+    }
+
+    fn recover_envelope_inputs_identity(
+        store: &Self::Store,
+        attempt: BuildAttempt,
+    ) -> Result<WorkerV2EnvelopeInputsIdentityV1, ResumeMarkerErrorV1> {
+        store
+            .recover_envelope_inputs(attempt)
+            .map(|inputs| inputs.identity())
+    }
+
+    fn persist_pending(
+        store: &Self::Store,
+        inputs: AdmittedWorkerV2IntentInputs<'_>,
+        admission: [u8; 32],
+        envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        store.persist_pending_with_envelope_inputs(
+            inputs.publication,
+            inputs.plan.attempt(),
+            admission,
+            envelope_inputs,
+        )
+    }
+
+    fn persist_ready(
+        store: &Self::Store,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: Self::Identity,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        store.persist_ready(publication, attempt, intent)
+    }
+
+    fn persist_intent(
+        store: &Self::Store,
+        producer: &ProducerIdentity,
+        inputs: AdmittedWorkerV2IntentInputs<'_>,
+        binding: Self::Binding,
+    ) -> Result<Self::Recovered, Self::IntentError> {
+        persist_worker_v2_publication_intent_v2(
+            &store.inner.display_path,
+            producer,
+            inputs.plan.attempt(),
+            inputs.plan,
+            inputs.upstream,
+            binding,
+            inputs.exact_output,
+        )
+    }
+
+    fn recover_intent(
+        store: &Self::Store,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        binding: Self::Binding,
+    ) -> Result<Self::Recovered, Self::IntentError> {
+        recover_worker_v2_publication_intent_v2(
+            &store.inner.display_path,
+            producer,
+            attempt,
+            binding,
+        )
+    }
+
+    fn recovered_identity(recovered: &Self::Recovered) -> Self::Identity {
+        recovered.record().identity()
+    }
+
+    fn recovered_plan(recovered: &Self::Recovered) -> DurableLinkPublicationPlanV1 {
+        recovered.record().plan()
+    }
+
+    fn recovered_upstream(recovered: &Self::Recovered) -> UpstreamCodeObjectEvidenceIdentityV1 {
+        recovered.record().upstream_evidence()
+    }
+
+    fn recovered_output(recovered: &Self::Recovered) -> &[u8] {
+        recovered.exact_output()
+    }
+
+    fn recovered_binding_matches(recovered: &Self::Recovered, expected: Self::Binding) -> bool {
+        recovered.compiler_closure() == expected
+    }
+
+    fn admission(
+        publication: WorkerV2PublicationKindV1,
+        plan: DurableLinkPublicationPlanV1,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1,
+        output: &[u8],
+        envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+        binding: Self::Binding,
+    ) -> [u8; 32] {
+        restart_admission_commitment_with_inputs_v2(
+            publication,
+            plan,
+            upstream,
+            output,
+            envelope_inputs,
+            binding,
+        )
+    }
+
+    fn state_attempt(state: Self::State) -> BuildAttempt {
+        state.attempt()
+    }
+
+    fn state_publication(state: Self::State) -> WorkerV2PublicationKindV1 {
+        state.publication()
+    }
+
+    fn state_admission(state: Self::State) -> [u8; 32] {
+        state.admission()
+    }
+
+    fn state_envelope_inputs(state: Self::State) -> [u8; 32] {
+        state.envelope_inputs()
+    }
+
+    fn state_intent(state: Self::State) -> Option<Self::Identity> {
+        state.intent()
+    }
+
+    fn finish_recovery(
+        store: &Self::Store,
+        state: Self::State,
+        current_admission: [u8; 32],
+        intent: Self::Identity,
+        _plan: DurableLinkPublicationPlanV1,
+        _upstream: UpstreamCodeObjectEvidenceIdentityV1,
+        _output: &[u8],
+    ) -> Result<(), Self::Error> {
+        if current_admission != Self::state_admission(state) {
+            return Err(Self::identity_mismatch());
+        }
+        if matches!(state, ResumeMarkerStateV2::Pending { .. }) {
+            store
+                .persist_ready(state.publication(), state.attempt(), intent)
+                .map_err(Self::marker_error)?;
+        }
+        Ok(())
+    }
 }
 
 #[allow(dead_code)] // Ordinary fixture staging uses the no-capsule contract directly.
@@ -592,29 +1268,79 @@ pub(crate) fn restart_admission_commitment_with_inputs_v1(
     envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
 ) -> [u8; 32] {
     hash_identity(ADMISSION_COMMITMENT_DOMAIN, |digest| {
-        digest.update([publication.tag()]);
-        let attempt = plan.attempt();
-        digest.update(attempt.generation().to_le_bytes());
-        digest.update(attempt.session().as_bytes());
-        digest.update(attempt.invocation().as_bytes());
-        digest.update(plan.scope().package().as_bytes());
-        digest.update(plan.scope().kernel_set().as_bytes());
-        digest.update(plan.scope().target().as_bytes());
-        digest.update(plan.request().as_bytes());
-        digest.update(plan.worker().as_bytes());
-        digest.update(plan.response().as_bytes());
-        digest.update(plan.linked_output().as_bytes());
-        digest.update(plan.finalization().as_bytes());
-        digest.update(plan.finalized_output().as_bytes());
-        digest.update(plan.publication().as_bytes());
-        digest.update(upstream.as_bytes());
-        digest.update(Sha256::digest(output));
-        digest.update((output.len() as u64).to_le_bytes());
-        if let Some(identity) = envelope_inputs {
-            digest.update([1]);
-            digest.update(identity.as_bytes());
-        }
+        update_restart_admission_commitment(
+            digest,
+            publication,
+            plan,
+            upstream,
+            output,
+            envelope_inputs,
+        );
     })
+}
+
+fn restart_admission_commitment_with_inputs_v2(
+    publication: WorkerV2PublicationKindV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    output: &[u8],
+    envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+    compiler_closure: CompilerClosureV2,
+) -> [u8; 32] {
+    hash_identity(PROTECTED_ADMISSION_COMMITMENT_DOMAIN_V2, |digest| {
+        update_restart_admission_commitment(
+            digest,
+            publication,
+            plan,
+            upstream,
+            output,
+            envelope_inputs,
+        );
+        digest.update(compiler_closure.cargo_executable_sha256());
+        digest.update(compiler_closure.cargo_binding_trampoline_sha256());
+        digest.update(compiler_closure.cargo_fe2o3_binding_wrapper_sha256());
+        digest.update(compiler_closure.rustc_executable_sha256());
+        digest.update(compiler_closure.rustc_runtime_tree_sha256());
+        digest.update(compiler_closure.codegen_backend_sha256());
+        digest.update(
+            compiler_closure
+                .cargo_binding_transition_protocol_version()
+                .to_le_bytes(),
+        );
+        digest.update(compiler_closure.identity_sha256());
+    })
+}
+
+fn update_restart_admission_commitment(
+    digest: &mut Sha256,
+    publication: WorkerV2PublicationKindV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    output: &[u8],
+    envelope_inputs: Option<WorkerV2EnvelopeInputsIdentityV1>,
+) {
+    digest.update([publication.tag()]);
+    let attempt = plan.attempt();
+    digest.update(attempt.generation().to_le_bytes());
+    digest.update(attempt.session().as_bytes());
+    digest.update(attempt.invocation().as_bytes());
+    digest.update(plan.scope().package().as_bytes());
+    digest.update(plan.scope().kernel_set().as_bytes());
+    digest.update(plan.scope().target().as_bytes());
+    digest.update(plan.request().as_bytes());
+    digest.update(plan.worker().as_bytes());
+    digest.update(plan.response().as_bytes());
+    digest.update(plan.linked_output().as_bytes());
+    digest.update(plan.finalization().as_bytes());
+    digest.update(plan.finalized_output().as_bytes());
+    digest.update(plan.publication().as_bytes());
+    digest.update(upstream.as_bytes());
+    digest.update(Sha256::digest(output));
+    digest.update((output.len() as u64).to_le_bytes());
+    if let Some(identity) = envelope_inputs {
+        digest.update([1]);
+        digest.update(identity.as_bytes());
+    }
 }
 
 fn legacy_restart_admission_commitment_v1(
@@ -1606,12 +2332,20 @@ impl WorkerV2ResumeStoreV1 {
             _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
         };
         let envelope_identity = self.validate_and_publish_required_envelope(
-            publication,
             attempt,
             receipt,
             envelope,
             admission,
             marker_inputs,
+            |plan, upstream, output, inputs| {
+                restart_admission_commitment_with_inputs_v1(
+                    publication,
+                    plan,
+                    upstream,
+                    output,
+                    Some(inputs),
+                )
+            },
         )?;
         self.persist_completed_inner(
             publication,
@@ -1640,12 +2374,17 @@ impl WorkerV2ResumeStoreV1 {
 
     fn validate_and_publish_required_envelope(
         &self,
-        publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
         receipt: BackendPublicationReceiptV1,
         envelope: &WorkerV2LoadEnvelopeV1,
         admission: [u8; 32],
         marker_inputs: [u8; 32],
+        admission_commitment: impl FnOnce(
+            DurableLinkPublicationPlanV1,
+            UpstreamCodeObjectEvidenceIdentityV1,
+            &[u8],
+            WorkerV2EnvelopeInputsIdentityV1,
+        ) -> [u8; 32],
     ) -> Result<WorkerV2LoadEnvelopeIdentityV1, ResumeMarkerErrorV1> {
         let claim = envelope.published_claim();
         let envelope_inputs = self.recover_envelope_inputs(attempt)?;
@@ -1659,12 +2398,11 @@ impl WorkerV2ResumeStoreV1 {
             || claim.plan().attempt() != attempt
             || marker_inputs != envelope_inputs.identity().as_bytes()
             || carried_inputs != envelope_inputs
-            || restart_admission_commitment_with_inputs_v1(
-                publication,
+            || admission_commitment(
                 claim.plan(),
                 claim.upstream_evidence(),
                 envelope.finalized_payload(),
-                Some(envelope_inputs.identity()),
+                envelope_inputs.identity(),
             ) != admission
             || envelope.grants_currentness_authority()
             || envelope.grants_load_authority()
@@ -2094,6 +2832,7 @@ impl WorkerV2ResumeStoreV2 {
         attempt: BuildAttempt,
         intent: WorkerV2PublicationIntentIdentityV2,
         receipt: BackendPublicationReceiptV1,
+        expected_compiler_closure: CompilerClosureV2,
         envelope: &WorkerV2LoadEnvelopeV1,
     ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
         if !publication.requires_envelope() {
@@ -2123,12 +2862,21 @@ impl WorkerV2ResumeStoreV2 {
             _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
         };
         let envelope_identity = self.inner.validate_and_publish_required_envelope(
-            publication,
             attempt,
             receipt,
             envelope,
             admission,
             marker_inputs,
+            |plan, upstream, output, inputs| {
+                restart_admission_commitment_with_inputs_v2(
+                    publication,
+                    plan,
+                    upstream,
+                    output,
+                    Some(inputs),
+                    expected_compiler_closure,
+                )
+            },
         )?;
         self.persist_completed_inner(
             publication,
@@ -2146,12 +2894,20 @@ impl WorkerV2ResumeStoreV2 {
         attempt: BuildAttempt,
         intent: WorkerV2PublicationIntentIdentityV2,
         receipt: BackendPublicationReceiptV1,
+        expected_compiler_closure: CompilerClosureV2,
     ) -> Result<ResumeMarkerStateV2, ResumeMarkerErrorV1> {
         if !publication.requires_envelope() {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
         let envelope = self.inner.recover_load_envelope(receipt)?;
-        self.persist_envelope_and_completed(publication, attempt, intent, receipt, &envelope)
+        self.persist_envelope_and_completed(
+            publication,
+            attempt,
+            intent,
+            receipt,
+            expected_compiler_closure,
+            &envelope,
+        )
     }
 
     fn persist_completed_inner(
@@ -3167,6 +3923,18 @@ mod tests {
         )
     }
 
+    fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+        CompilerClosureV2::new(
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            [seed.wrapping_add(2); 32],
+            [seed.wrapping_add(3); 32],
+            [seed.wrapping_add(4); 32],
+            [seed.wrapping_add(5); 32],
+        )
+        .unwrap()
+    }
+
     fn receipt(
         path: &Path,
         producer: &ProducerIdentity,
@@ -3767,6 +4535,325 @@ mod tests {
             .unwrap();
         drop(protected_store);
         assert!(WorkerV2ResumeStoreV1::open(&protected_directory.0, &protected_producer).is_err());
+    }
+
+    #[test]
+    fn protected_intent_crash_retry_promotes_only_after_exact_v2_intent() {
+        let before_intent = TestDirectory::new();
+        let before_producer = producer(107);
+        let before_attempt = attempt(&before_intent.0, &before_producer, 107);
+        let (before_output, before_plan, before_upstream) = publication_inputs(before_attempt, 107);
+        let closure = compiler_closure(107);
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let before_store = WorkerV2ResumeStoreV2::open(&before_intent.0, &before_producer).unwrap();
+        let before_admission = restart_admission_commitment_with_inputs_v2(
+            publication,
+            before_plan,
+            before_upstream,
+            &before_output,
+            None,
+            closure,
+        );
+        before_store
+            .persist_pending(publication, before_attempt, before_admission)
+            .unwrap();
+        let before_state = before_store.load().unwrap().unwrap();
+        assert!(matches!(before_state, ResumeMarkerStateV2::Pending { .. }));
+        assert!(matches!(
+            recover_worker_v2_intent_v2(&before_store, &before_producer, before_state, closure,),
+            Err(RestartIntentErrorV2::Intent(
+                WorkerV2PublicationIntentErrorV2::NotFound
+            ))
+        ));
+        assert_eq!(before_store.load().unwrap(), Some(before_state));
+        before_store.clear_abandoned_pending(before_state).unwrap();
+
+        let after_intent = TestDirectory::new();
+        let after_producer = producer(108);
+        let after_attempt = attempt(&after_intent.0, &after_producer, 108);
+        let (after_output, after_plan, after_upstream) = publication_inputs(after_attempt, 108);
+        let after_store = WorkerV2ResumeStoreV2::open(&after_intent.0, &after_producer).unwrap();
+        let after_admission = restart_admission_commitment_with_inputs_v2(
+            publication,
+            after_plan,
+            after_upstream,
+            &after_output,
+            None,
+            closure,
+        );
+        after_store
+            .persist_pending(publication, after_attempt, after_admission)
+            .unwrap();
+        let durable = persist_worker_v2_publication_intent_v2(
+            &after_intent.0,
+            &after_producer,
+            after_attempt,
+            after_plan,
+            after_upstream,
+            closure,
+            &after_output,
+        )
+        .unwrap();
+        let intent = durable.record().identity();
+        drop(durable);
+
+        let retried = persist_admitted_worker_v2_intent_v2(
+            &after_store,
+            &after_producer,
+            publication,
+            after_plan,
+            after_upstream,
+            &after_output,
+            None,
+            closure,
+        )
+        .unwrap();
+        assert_eq!(retried.publication, publication);
+        assert_eq!(retried.intent.record().identity(), intent);
+        assert_eq!(retried.intent.compiler_closure(), closure);
+        assert_eq!(retried.intent.exact_output(), after_output);
+        assert_eq!(
+            retried.intent.outcome(),
+            fe2o3_artifact_transaction::WorkerV2PublicationIntentOutcomeV2::Recovered
+        );
+        assert_eq!(
+            after_store.load().unwrap(),
+            Some(ResumeMarkerStateV2::Ready {
+                publication,
+                attempt: after_attempt,
+                admission: after_admission,
+                envelope_inputs: [0; 32],
+                intent,
+            })
+        );
+    }
+
+    #[test]
+    fn protected_ready_replay_and_clear_require_the_exact_closure() {
+        let directory = TestDirectory::new();
+        let producer = producer(109);
+        let attempt = attempt(&directory.0, &producer, 109);
+        let (output, plan, upstream) = publication_inputs(attempt, 109);
+        let closure = compiler_closure(109);
+        let wrong_closure = compiler_closure(110);
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let persisted = persist_admitted_worker_v2_intent_v2(
+            &store,
+            &producer,
+            publication,
+            plan,
+            upstream,
+            &output,
+            None,
+            closure,
+        )
+        .unwrap();
+        let intent = persisted.intent.record().identity();
+        let ready = store.load().unwrap().unwrap();
+        assert!(matches!(
+            recover_worker_v2_intent_v2(&store, &producer, ready, wrong_closure),
+            Err(RestartIntentErrorV2::Intent(
+                WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch
+            ))
+        ));
+        assert_eq!(store.load().unwrap(), Some(ready));
+
+        let recovered = recover_worker_v2_intent_v2(&store, &producer, ready, closure).unwrap();
+        assert_eq!(recovered.record().identity(), intent);
+        assert_eq!(recovered.compiler_closure(), closure);
+        assert_eq!(recovered.exact_output(), output);
+        let receipt = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            &output,
+        )
+        .unwrap()
+        .receipt();
+        let completed = store
+            .persist_completed(publication, attempt, intent, receipt)
+            .unwrap();
+        assert!(matches!(
+            clear_worker_v2_intent_v2(&store, &producer, completed, wrong_closure),
+            Err(RestartIntentErrorV2::Intent(
+                WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch
+            ))
+        ));
+        assert!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
+                .is_ok()
+        );
+        clear_worker_v2_intent_v2(&store, &producer, completed, closure).unwrap();
+        assert!(matches!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,),
+            Err(WorkerV2PublicationIntentErrorV2::NotFound)
+        ));
+        store.clear_completed(completed).unwrap();
+    }
+
+    #[test]
+    fn protected_recovery_rejects_stale_attempt_without_changing_marker() {
+        let directory = TestDirectory::new();
+        let producer = producer(111);
+        let current = attempt(&directory.0, &producer, 111);
+        let stale = BuildAttempt::from_env_value(&format!(
+            "{}:{}:{}",
+            current.generation() + 1,
+            current.session().to_hex(),
+            current.invocation().to_hex()
+        ))
+        .unwrap();
+        let (output, plan, upstream) = publication_inputs(current, 111);
+        let closure = compiler_closure(111);
+        persist_worker_v2_publication_intent_v2(
+            &directory.0,
+            &producer,
+            current,
+            plan,
+            upstream,
+            closure,
+            &output,
+        )
+        .unwrap();
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        store
+            .persist_pending(
+                publication,
+                stale,
+                restart_admission_commitment_with_inputs_v2(
+                    publication,
+                    plan,
+                    upstream,
+                    &output,
+                    None,
+                    closure,
+                ),
+            )
+            .unwrap();
+        let state = store.load().unwrap().unwrap();
+        assert!(matches!(
+            recover_worker_v2_intent_v2(&store, &producer, state, closure),
+            Err(RestartIntentErrorV2::Intent(_))
+        ));
+        assert_eq!(store.load().unwrap(), Some(state));
+        assert!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, current, closure,)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn ordinary_and_protected_intent_recovery_never_crosses_or_downgrades_schema() {
+        let v1_directory = TestDirectory::new();
+        let v1_producer = producer(112);
+        let v1_attempt = attempt(&v1_directory.0, &v1_producer, 112);
+        let (v1_output, v1_plan, v1_upstream) = publication_inputs(v1_attempt, 112);
+        persist_worker_v2_publication_intent_v1(
+            &v1_directory.0,
+            &v1_producer,
+            v1_attempt,
+            v1_plan,
+            v1_upstream,
+            &v1_output,
+        )
+        .unwrap();
+        let closure = compiler_closure(112);
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let protected_store = WorkerV2ResumeStoreV2::open(&v1_directory.0, &v1_producer).unwrap();
+        protected_store
+            .persist_pending(
+                publication,
+                v1_attempt,
+                restart_admission_commitment_with_inputs_v2(
+                    publication,
+                    v1_plan,
+                    v1_upstream,
+                    &v1_output,
+                    None,
+                    closure,
+                ),
+            )
+            .unwrap();
+        let protected_state = protected_store.load().unwrap().unwrap();
+        assert!(matches!(
+            recover_worker_v2_intent_v2(&protected_store, &v1_producer, protected_state, closure,),
+            Err(RestartIntentErrorV2::Intent(
+                WorkerV2PublicationIntentErrorV2::NotFound
+            ))
+        ));
+        assert_eq!(protected_store.load().unwrap(), Some(protected_state));
+
+        let v2_directory = TestDirectory::new();
+        let v2_producer = producer(113);
+        let v2_attempt = attempt(&v2_directory.0, &v2_producer, 113);
+        let (v2_output, v2_plan, v2_upstream) = publication_inputs(v2_attempt, 113);
+        persist_worker_v2_publication_intent_v2(
+            &v2_directory.0,
+            &v2_producer,
+            v2_attempt,
+            v2_plan,
+            v2_upstream,
+            closure,
+            &v2_output,
+        )
+        .unwrap();
+        let ordinary_store = WorkerV2ResumeStoreV1::open(&v2_directory.0, &v2_producer).unwrap();
+        ordinary_store
+            .persist_pending(
+                publication,
+                v2_attempt,
+                restart_admission_commitment_v1(publication, v2_plan, v2_upstream, &v2_output),
+            )
+            .unwrap();
+        let ordinary_state = ordinary_store.load().unwrap().unwrap();
+        assert!(matches!(
+            recover_worker_v2_intent_v1(&ordinary_store, &v2_producer, ordinary_state),
+            Err(RestartIntentErrorV1::Intent(
+                WorkerV2PublicationIntentErrorV1::NotFound
+            ))
+        ));
+        assert_eq!(ordinary_store.load().unwrap(), Some(ordinary_state));
+        assert!(
+            recover_worker_v2_publication_intent_v2(
+                &v2_directory.0,
+                &v2_producer,
+                v2_attempt,
+                closure,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn protected_admission_binds_the_complete_compiler_closure_under_a_new_domain() {
+        let attempt = fixed_attempt();
+        let (output, plan, upstream) = publication_inputs(attempt, 114);
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let first = restart_admission_commitment_with_inputs_v2(
+            publication,
+            plan,
+            upstream,
+            &output,
+            None,
+            compiler_closure(114),
+        );
+        let second = restart_admission_commitment_with_inputs_v2(
+            publication,
+            plan,
+            upstream,
+            &output,
+            None,
+            compiler_closure(115),
+        );
+        assert_ne!(first, second);
+        assert_ne!(
+            first,
+            restart_admission_commitment_with_inputs_v1(publication, plan, upstream, &output, None,)
+        );
     }
 
     #[test]
