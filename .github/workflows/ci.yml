@@ -160,6 +160,7 @@ jobs:
           - 06-device-ffi
           - 07-frontend-types
           - 08-abi-collectives
+          - 09-general-gemm-semantic
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/rustc-codegen-${{ matrix.shard }}
       CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/rustc-codegen-${{ matrix.shard }}

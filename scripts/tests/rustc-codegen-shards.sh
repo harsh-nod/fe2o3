@@ -62,6 +62,12 @@ EOF
 
 # Exercise the production defaults against the real locked workspace first.
 python3 "${POLICY}" check >/dev/null
+if [[ "$(python3 "${POLICY}" tests 09-general-gemm-semantic)" != \
+  general_gemm_semantic_frontend ]]; then
+  printf '%s\n' \
+    'general GEMM semantic frontend must remain in its exact isolated shard' >&2
+  exit 1
+fi
 
 FIXTURE_PACKAGE="${TEST_ROOT}/package"
 readonly FIXTURE_PACKAGE
