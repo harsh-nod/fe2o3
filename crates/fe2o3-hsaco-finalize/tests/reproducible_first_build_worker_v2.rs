@@ -8,21 +8,29 @@ use std::{
 };
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, BuildInvocation, BuildSession, CompilerModuleHandoffIdentityV1,
-    ConsumedCompilerModuleHandoffV1, ProducerIdentity, begin_build_attempt,
-    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    BuildAttempt, BuildInvocation, BuildSession,
+    CompilerModuleHandoffErrorV1 as TransactionHandoffErrorV1,
+    CompilerModuleHandoffErrorV2 as TransactionHandoffErrorV2, CompilerModuleHandoffIdentityV1,
+    CompilerModuleHandoffIdentityV2 as TransactionHandoffIdentityV2,
+    ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2, ProducerIdentity,
+    begin_build_attempt, consume_compiler_module_handoff_v1, consume_compiler_module_handoff_v2,
+    publish_compiler_module_handoff_v1, publish_compiler_module_handoff_v2,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
     CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
-    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestV1,
-    CompilerModuleSymbolRoleV1, DeviceTargetV1 as CompilerDeviceTargetV1,
+    CompilerModuleHandoffErrorV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2,
+    CompilerModuleKindV1, CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    DeviceTargetV1 as CompilerDeviceTargetV1,
 };
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FirstBuildWorkerV2Error, InertDecodedWorkerExchangeV2, LinkOptionV1,
-    LinkPlanError, PinnedWorkerV1, WorkerEvidenceClassV2, WorkerExecutionErrorKind,
-    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError, WorkerStageV1,
+    LinkPlanError, PinnedWorkerV1, ProtectedFirstBuildWorkerV2Error, WorkerEvidenceClassV2,
+    WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
+    WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    WorkerRequestConstructionError, WorkerStageV1,
+    execute_protected_reproducible_first_build_worker_v2,
     execute_reproducible_first_build_worker_v2,
 };
 use reserved_fe2o3_symbols::{
@@ -219,6 +227,300 @@ fn consumed_bytes(
         publish_compiler_module_handoff_v1(&directory.0, &producer, attempt, bytes).unwrap();
     let consumed = consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
     (attempt, receipt.identity(), consumed)
+}
+
+fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+    CompilerClosureV2::new(
+        [seed; 32],
+        [seed.wrapping_add(1); 32],
+        [seed.wrapping_add(2); 32],
+        [seed.wrapping_add(3); 32],
+        [seed.wrapping_add(4); 32],
+        [seed.wrapping_add(5); 32],
+    )
+    .unwrap()
+}
+
+fn protected_consumed_bytes(
+    directory: &TestDirectory,
+    closure: CompilerClosureV2,
+    bytes: &[u8],
+) -> (
+    BuildAttempt,
+    TransactionHandoffIdentityV2,
+    ConsumedCompilerModuleHandoffV2,
+) {
+    let producer = ProducerIdentity::from_codegen(
+        "workflow_fixture",
+        Some(Path::new("src/workflow_fixture.rs")),
+    )
+    .unwrap();
+    let attempt = begin_build_attempt(
+        &directory.0,
+        &producer,
+        BuildInvocation::from_bytes([0x61; 32]),
+        BuildSession::from_bytes([0x62; 16]),
+    )
+    .unwrap();
+    let receipt =
+        publish_compiler_module_handoff_v2(&directory.0, &producer, attempt, closure, bytes)
+            .unwrap();
+    let consumed =
+        consume_compiler_module_handoff_v2(&directory.0, &producer, attempt, closure).unwrap();
+    (attempt, receipt.identity(), consumed)
+}
+
+#[test]
+fn protected_publish_consume_executes_with_exact_inert_closure_binding() {
+    let directory = TestDirectory::new();
+    let closure = compiler_closure(0x20);
+    let (attempt, handoff_identity, consumed) = protected_consumed_bytes(
+        &directory,
+        closure,
+        canonical_handoff(&[]).canonical_bytes(),
+    );
+    let evidence = execute_protected_reproducible_first_build_worker_v2(
+        consumed,
+        &pinned(),
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    )
+    .unwrap();
+
+    assert_eq!(evidence.attempt(), attempt);
+    assert_eq!(evidence.handoff_identity(), handoff_identity);
+    assert_eq!(evidence.compiler_closure(), closure);
+    assert_eq!(evidence.bootstrap().handoff_identity(), handoff_identity);
+    assert_eq!(evidence.exact_replay().handoff_identity(), handoff_identity);
+    assert_eq!(evidence.bootstrap().compiler_closure(), closure);
+    assert_eq!(evidence.exact_replay().compiler_closure(), closure);
+    assert_eq!(evidence.output_bytes(), OUTPUT);
+    assert!(!evidence.grants_compiler_authority());
+    assert!(!evidence.grants_link_authority());
+    assert!(!evidence.grants_publication_authority());
+    assert!(!evidence.grants_load_authority());
+    assert!(!evidence.grants_launch_authority());
+}
+
+#[test]
+fn closure_substitution_is_rejected_and_different_closures_change_all_protected_identities() {
+    let rejected_directory = TestDirectory::new();
+    let producer = ProducerIdentity::from_codegen(
+        "workflow_fixture",
+        Some(Path::new("src/workflow_fixture.rs")),
+    )
+    .unwrap();
+    let attempt = begin_build_attempt(
+        &rejected_directory.0,
+        &producer,
+        BuildInvocation::from_bytes([0x61; 32]),
+        BuildSession::from_bytes([0x62; 16]),
+    )
+    .unwrap();
+    let expected = compiler_closure(0x30);
+    let substituted = compiler_closure(0x40);
+    publish_compiler_module_handoff_v2(
+        &rejected_directory.0,
+        &producer,
+        attempt,
+        expected,
+        canonical_handoff(&[]).canonical_bytes(),
+    )
+    .unwrap();
+    assert!(matches!(
+        consume_compiler_module_handoff_v2(&rejected_directory.0, &producer, attempt, substituted,),
+        Err(TransactionHandoffErrorV2::WrongCompilerClosure)
+    ));
+
+    let first_directory = TestDirectory::new();
+    let second_directory = TestDirectory::new();
+    let (_, first_handoff, first_consumed) = protected_consumed_bytes(
+        &first_directory,
+        expected,
+        canonical_handoff(&[]).canonical_bytes(),
+    );
+    let (_, second_handoff, second_consumed) = protected_consumed_bytes(
+        &second_directory,
+        substituted,
+        canonical_handoff(&[]).canonical_bytes(),
+    );
+    let worker = pinned();
+    let first = execute_protected_reproducible_first_build_worker_v2(
+        first_consumed,
+        &worker,
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    )
+    .unwrap();
+    let second = execute_protected_reproducible_first_build_worker_v2(
+        second_consumed,
+        &worker,
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    )
+    .unwrap();
+
+    assert_ne!(first_handoff, second_handoff);
+    assert_ne!(first.identity(), second.identity());
+    assert_ne!(
+        first.bootstrap().response().request_id(),
+        second.bootstrap().response().request_id()
+    );
+    assert_ne!(
+        first.exact_replay().response().request_id(),
+        second.exact_replay().response().request_id()
+    );
+    assert_eq!(first.plan().identity(), second.plan().identity());
+    assert_eq!(first.output_bytes(), second.output_bytes());
+}
+
+#[test]
+fn transaction_schema_cross_use_and_compiler_handoff_downgrade_are_rejected() {
+    let closure = compiler_closure(0x50);
+    let producer = ProducerIdentity::from_codegen(
+        "workflow_fixture",
+        Some(Path::new("src/workflow_fixture.rs")),
+    )
+    .unwrap();
+
+    let v1_directory = TestDirectory::new();
+    let v1_attempt = begin_build_attempt(
+        &v1_directory.0,
+        &producer,
+        BuildInvocation::from_bytes([0x71; 32]),
+        BuildSession::from_bytes([0x72; 16]),
+    )
+    .unwrap();
+    publish_compiler_module_handoff_v1(
+        &v1_directory.0,
+        &producer,
+        v1_attempt,
+        canonical_handoff(&[]).canonical_bytes(),
+    )
+    .unwrap();
+    assert!(matches!(
+        consume_compiler_module_handoff_v2(&v1_directory.0, &producer, v1_attempt, closure,),
+        Err(TransactionHandoffErrorV2::NotPublished)
+    ));
+
+    let v2_directory = TestDirectory::new();
+    let v2_attempt = begin_build_attempt(
+        &v2_directory.0,
+        &producer,
+        BuildInvocation::from_bytes([0x73; 32]),
+        BuildSession::from_bytes([0x74; 16]),
+    )
+    .unwrap();
+    publish_compiler_module_handoff_v2(
+        &v2_directory.0,
+        &producer,
+        v2_attempt,
+        closure,
+        canonical_handoff(&[]).canonical_bytes(),
+    )
+    .unwrap();
+    assert!(matches!(
+        consume_compiler_module_handoff_v1(&v2_directory.0, &producer, v2_attempt),
+        Err(TransactionHandoffErrorV1::NotPublished)
+    ));
+
+    let downgrade_directory = TestDirectory::new();
+    let mut downgraded = canonical_handoff(&[]).canonical_bytes().to_vec();
+    let version = downgraded
+        .windows(3)
+        .position(|window| window == b"/V2")
+        .unwrap();
+    downgraded[version + 2] = b'1';
+    let (_, _, consumed) = protected_consumed_bytes(&downgrade_directory, closure, &downgraded);
+    assert!(matches!(
+        execute_protected_reproducible_first_build_worker_v2(
+            consumed,
+            &pinned(),
+            vec![provider()],
+            options(),
+            WorkerOutputConstraintsV1::new(4096).unwrap(),
+            limits(),
+        ),
+        Err(ProtectedFirstBuildWorkerV2Error::CompilerModuleHandoff(
+            CompilerModuleHandoffErrorV2::InvalidMagic
+        ))
+    ));
+}
+
+#[test]
+fn protected_decode_rejects_target_cov_manifest_and_module_substitution() {
+    const DOMAIN: &[u8] = b"FE2O3/COMPILER-MODULE-HANDOFF/V2\0";
+    const TARGET_TEXT: &[u8] = b"gfx942:xnack-";
+
+    let canonical = canonical_handoff(&[]).canonical_bytes().to_vec();
+    let target_offset = DOMAIN.len() + 4;
+    let cov_offset = target_offset + TARGET_TEXT.len();
+    let manifest_digest_offset = cov_offset + 1 + 1 + 32 + 8 + 4;
+    let mut cases = Vec::new();
+
+    let mut target = canonical.clone();
+    target[target_offset..target_offset + 6].copy_from_slice(b"gfx90a");
+    cases.push(("target", target));
+
+    let mut cov = canonical.clone();
+    cov[cov_offset] = 5;
+    cases.push(("code object version", cov));
+
+    let mut manifest = canonical.clone();
+    manifest[manifest_digest_offset] ^= 1;
+    cases.push(("manifest", manifest));
+
+    let mut module = canonical;
+    *module.last_mut().unwrap() ^= 1;
+    cases.push(("module", module));
+
+    for (index, (field, bytes)) in cases.into_iter().enumerate() {
+        let directory = TestDirectory::new();
+        let closure = compiler_closure(0x60 + index as u8);
+        let (_, _, consumed) = protected_consumed_bytes(&directory, closure, &bytes);
+        let error = execute_protected_reproducible_first_build_worker_v2(
+            consumed,
+            &pinned(),
+            vec![provider()],
+            options(),
+            WorkerOutputConstraintsV1::new(4096).unwrap(),
+            limits(),
+        )
+        .unwrap_err();
+        let ProtectedFirstBuildWorkerV2Error::CompilerModuleHandoff(error) = error else {
+            panic!("unexpected {field} substitution result: {error:?}");
+        };
+        let expected = match field {
+            "target" => matches!(
+                error,
+                CompilerModuleHandoffErrorV2::Handoff(CompilerModuleHandoffErrorV1::TargetMismatch)
+            ),
+            "code object version" => matches!(
+                error,
+                CompilerModuleHandoffErrorV2::Handoff(
+                    CompilerModuleHandoffErrorV1::CodeObjectVersionMismatch
+                )
+            ),
+            "manifest" => matches!(
+                error,
+                CompilerModuleHandoffErrorV2::ManifestIdentityMismatch
+            ),
+            "module" => matches!(
+                error,
+                CompilerModuleHandoffErrorV2::Handoff(
+                    CompilerModuleHandoffErrorV1::ModuleIdentityMismatch
+                )
+            ),
+            _ => false,
+        };
+        assert!(expected, "unexpected {field} substitution error: {error:?}");
+    }
 }
 
 #[test]

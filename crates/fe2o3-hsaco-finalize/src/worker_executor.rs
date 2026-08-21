@@ -21,10 +21,15 @@ use std::{io, path::PathBuf, process::ExitStatus};
 
 use crate::{
     CompilerHandoffWorkerRequestV2, ContentIdentityV1, MAX_WORKER_RESPONSE_BYTES,
-    MAX_WORKER_TOOLCHAIN_ID_BYTES, WorkerEvidenceClassV1, WorkerEvidenceClassV2,
-    WorkerProtocolError, WorkerRequestV1, WorkerRequestV2, WorkerResponseV1, WorkerResponseV2,
+    MAX_WORKER_TOOLCHAIN_ID_BYTES, ProtectedCompilerHandoffWorkerRequestV2, WorkerEvidenceClassV1,
+    WorkerEvidenceClassV2, WorkerProtocolError, WorkerRequestV1, WorkerRequestV2, WorkerResponseV1,
+    WorkerResponseV2,
 };
-use fe2o3_artifact_transaction::{BuildAttempt, CompilerModuleHandoffIdentityV1};
+use fe2o3_artifact_transaction::{
+    BuildAttempt, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffIdentityV2,
+    CompilerModuleHandoffSlotV2,
+};
+use fe2o3_build_authority::CompilerClosureV2;
 
 /// Maximum bytes accepted for a selected native worker executable.
 pub const MAX_WORKER_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
@@ -342,6 +347,18 @@ pub struct InertCompilerHandoffExecutionV2 {
 }
 
 impl InertCompilerHandoffExecutionV2 {
+    pub(crate) fn from_execution(
+        attempt: BuildAttempt,
+        handoff_identity: CompilerModuleHandoffIdentityV1,
+        execution: InertWorkerExecutionV2,
+    ) -> Self {
+        Self {
+            attempt,
+            handoff_identity,
+            execution,
+        }
+    }
+
     pub const fn attempt(&self) -> BuildAttempt {
         self.attempt
     }
@@ -360,6 +377,86 @@ impl InertCompilerHandoffExecutionV2 {
 
     pub const fn evidence_class(&self) -> WorkerEvidenceClassV2 {
         WorkerEvidenceClassV2::CompilerFfiLink
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Verified Worker V2 execution retaining one closure-protected V2 handoff binding.
+///
+/// This move-only value exposes the exact V2 transaction identity and complete compiler closure.
+/// They remain inert cooperative-protocol evidence and grant no compiler, link, publication,
+/// loading, or launch authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct InertProtectedCompilerHandoffExecutionV2 {
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV2,
+    handoff_identity: CompilerModuleHandoffIdentityV2,
+    compiler_closure: CompilerClosureV2,
+    execution: InertWorkerExecutionV2,
+}
+
+impl InertProtectedCompilerHandoffExecutionV2 {
+    pub(crate) fn from_execution(
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV2,
+        handoff_identity: CompilerModuleHandoffIdentityV2,
+        compiler_closure: CompilerClosureV2,
+        execution: InertWorkerExecutionV2,
+    ) -> Self {
+        Self {
+            attempt,
+            slot,
+            handoff_identity,
+            compiler_closure,
+            execution,
+        }
+    }
+
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.attempt
+    }
+
+    pub const fn slot(&self) -> CompilerModuleHandoffSlotV2 {
+        self.slot
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
+        self.handoff_identity
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.compiler_closure
+    }
+
+    pub const fn worker_executable(&self) -> ContentIdentityV1 {
+        self.execution.worker_executable()
+    }
+
+    pub const fn response(&self) -> &WorkerResponseV2 {
+        self.execution.response()
+    }
+
+    pub const fn evidence_class(&self) -> WorkerEvidenceClassV2 {
+        WorkerEvidenceClassV2::CompilerFfiLink
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
     }
 
     pub const fn grants_publication_authority(&self) -> bool {
@@ -765,11 +862,27 @@ mod platform {
             limits: WorkerExecutionLimitsV1,
         ) -> Result<InertCompilerHandoffExecutionV2, WorkerExecutionError> {
             let execution = self.execute_v2(request.sealed_request(), limits)?;
-            Ok(InertCompilerHandoffExecutionV2 {
-                attempt: request.attempt(),
-                handoff_identity: request.handoff_identity(),
+            Ok(InertCompilerHandoffExecutionV2::from_execution(
+                request.attempt(),
+                request.handoff_identity(),
                 execution,
-            })
+            ))
+        }
+
+        /// Executes a Worker V2 request retaining its closure-protected V2 handoff binding.
+        pub fn execute_protected_compiler_handoff_v2(
+            &self,
+            request: &ProtectedCompilerHandoffWorkerRequestV2,
+            limits: WorkerExecutionLimitsV1,
+        ) -> Result<InertProtectedCompilerHandoffExecutionV2, WorkerExecutionError> {
+            let execution = self.execute_v2(request.sealed_request(), limits)?;
+            Ok(InertProtectedCompilerHandoffExecutionV2::from_execution(
+                request.attempt(),
+                request.slot(),
+                request.handoff_identity(),
+                request.compiler_closure(),
+                execution,
+            ))
         }
     }
 
@@ -1169,6 +1282,16 @@ impl PinnedWorkerV1 {
         _request: &CompilerHandoffWorkerRequestV2,
         _limits: WorkerExecutionLimitsV1,
     ) -> Result<InertCompilerHandoffExecutionV2, WorkerExecutionError> {
+        Err(WorkerExecutionError::plain(
+            WorkerExecutionErrorKind::UnsupportedPlatform,
+        ))
+    }
+
+    pub fn execute_protected_compiler_handoff_v2(
+        &self,
+        _request: &ProtectedCompilerHandoffWorkerRequestV2,
+        _limits: WorkerExecutionLimitsV1,
+    ) -> Result<InertProtectedCompilerHandoffExecutionV2, WorkerExecutionError> {
         Err(WorkerExecutionError::plain(
             WorkerExecutionErrorKind::UnsupportedPlatform,
         ))

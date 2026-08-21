@@ -6,11 +6,13 @@ use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use sha2::{Digest, Sha256};
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, CompilerModuleHandoffIdentityV1, ConsumedCompilerModuleHandoffV1,
+    BuildAttempt, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffIdentityV2,
+    CompilerModuleHandoffSlotV2, ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
-    CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
-    CompilerModuleSymbolManifestIdentityV1, CompilerModuleSymbolManifestV1,
+    CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2,
+    CompilerModuleKindV1, CompilerModuleSymbolManifestIdentityV1, CompilerModuleSymbolManifestV1,
     CompilerModuleSymbolRoleV1,
 };
 
@@ -30,6 +32,10 @@ const PLAN_REQUEST_DOMAIN_V1: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V1\0";
 const PLAN_REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V2\0";
 const FIRST_BUILD_REQUEST_DOMAIN_V2: &[u8] =
     b"FE2O3/FIRST-BUILD-COMPILER-HANDOFF-WORKER-REQUEST/V2\0";
+const PROTECTED_PLAN_REQUEST_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V2\0";
+const PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V2: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-FIRST-BUILD-WORKER-REQUEST/V2\0";
 
 /// Exact compiler-module bytes retained without accepting a caller-supplied digest.
 ///
@@ -61,6 +67,65 @@ pub(crate) fn stage_exact_compiler_module_artifact_v1(
 ) -> Result<ExactCompilerModuleArtifactV1, WorkerProtocolError> {
     Ok(ExactCompilerModuleArtifactV1 {
         input: WorkerInputV1::new(kind, bytes)?,
+    })
+}
+
+/// One validated compiler-FFI handoff decoded by both transaction schemas.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DecodedCompilerModuleHandoffV2 {
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    envelope: CompilerFfiEnvelopeV1,
+    symbol_manifest: CompilerModuleSymbolManifestV1,
+    compiler_module_kind: WorkerInputKindV1,
+    compiler_module_bytes: Vec<u8>,
+}
+
+impl DecodedCompilerModuleHandoffV2 {
+    pub(crate) const fn target(&self) -> DeviceTargetV1 {
+        self.target
+    }
+
+    pub(crate) const fn code_object_version(&self) -> CodeObjectVersion {
+        self.code_object_version
+    }
+
+    pub(crate) const fn envelope(&self) -> &CompilerFfiEnvelopeV1 {
+        &self.envelope
+    }
+
+    pub(crate) const fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
+        &self.symbol_manifest
+    }
+
+    pub(crate) const fn compiler_module_kind(&self) -> WorkerInputKindV1 {
+        self.compiler_module_kind
+    }
+
+    pub(crate) fn compiler_module_bytes(&self) -> &[u8] {
+        &self.compiler_module_bytes
+    }
+}
+
+pub(crate) fn decode_compiler_module_handoff_v2(
+    bytes: &[u8],
+) -> Result<DecodedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
+    let handoff = CompilerModuleHandoffV2::decode(bytes)?;
+    let parts = handoff.into_parts();
+    let target = parts.target();
+    let code_object_version = parts.code_object_version();
+    let (envelope, symbol_manifest, module) = parts.into_envelope_manifest_and_module();
+    let compiler_module_kind = match module.kind() {
+        CompilerModuleKindV1::LlvmTextIr => WorkerInputKindV1::LlvmTextIr,
+        CompilerModuleKindV1::LlvmBitcode => WorkerInputKindV1::LlvmBitcode,
+    };
+    Ok(DecodedCompilerModuleHandoffV2 {
+        target,
+        code_object_version,
+        envelope,
+        symbol_manifest,
+        compiler_module_kind,
+        compiler_module_bytes: module.into_bytes(),
     })
 }
 
@@ -364,6 +429,78 @@ pub(crate) fn construct_worker_request_v2(
     input_kinds: &LinkInputKindClosureV1,
     output: WorkerOutputConstraintsV1,
 ) -> Result<WorkerRequestV2, WorkerRequestConstructionError> {
+    construct_worker_request_v2_engine(
+        plan,
+        measurement,
+        target,
+        code_object_version,
+        options,
+        staged_envelope,
+        symbol_manifest,
+        compiler_module,
+        external_providers,
+        input_kinds,
+        output,
+        PlanRequestIdentityBindingV2::Existing,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProtectedCompilerHandoffBindingV2 {
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV2,
+    handoff_identity: CompilerModuleHandoffIdentityV2,
+    compiler_closure: CompilerClosureV2,
+}
+
+impl ProtectedCompilerHandoffBindingV2 {
+    pub(crate) fn from_consumed(consumed: &ConsumedCompilerModuleHandoffV2) -> Self {
+        Self {
+            attempt: consumed.attempt(),
+            slot: consumed.slot(),
+            handoff_identity: consumed.identity(),
+            compiler_closure: consumed.compiler_closure(),
+        }
+    }
+
+    pub(crate) const fn attempt(self) -> BuildAttempt {
+        self.attempt
+    }
+
+    pub(crate) const fn slot(self) -> CompilerModuleHandoffSlotV2 {
+        self.slot
+    }
+
+    pub(crate) const fn handoff_identity(self) -> CompilerModuleHandoffIdentityV2 {
+        self.handoff_identity
+    }
+
+    pub(crate) const fn compiler_closure(self) -> CompilerClosureV2 {
+        self.compiler_closure
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PlanRequestIdentityBindingV2<'a> {
+    Existing,
+    Protected(&'a ProtectedCompilerHandoffBindingV2),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn construct_worker_request_v2_engine(
+    plan: &MultiInputLinkPlanV1,
+    measurement: &WorkerMeasurementV1,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    options: WorkerOptionsV1,
+    staged_envelope: StagedCompilerFfiEnvelopeV1,
+    symbol_manifest: CompilerModuleSymbolManifestV1,
+    compiler_module: ExactCompilerModuleArtifactV1,
+    external_providers: Vec<WorkerInputV1>,
+    input_kinds: &LinkInputKindClosureV1,
+    output: WorkerOutputConstraintsV1,
+    identity_binding: PlanRequestIdentityBindingV2<'_>,
+) -> Result<WorkerRequestV2, WorkerRequestConstructionError> {
     if target != plan.target() {
         return Err(WorkerRequestConstructionError::TargetMismatch);
     }
@@ -404,23 +541,43 @@ pub(crate) fn construct_worker_request_v2(
     all_inputs.sort_by_key(|input| (input.identity(), input.kind()));
     validate_inputs(plan, input_kinds, &all_inputs)?;
 
-    let request_id = calculate_request_id_v2(
-        plan,
-        measurement,
-        staged_envelope.identity().as_bytes(),
-        envelope.envelope_identity().as_bytes(),
-        manifest_identity,
-        target,
-        code_object_version,
-        options,
-        &compiler_module,
-        &external_providers,
-        input_kinds,
-        symbols.import_symbols(),
-        symbols.export_symbols(),
-        symbols.required_symbols(),
-        &output,
-    );
+    let request_id = match identity_binding {
+        PlanRequestIdentityBindingV2::Existing => calculate_request_id_v2(
+            plan,
+            measurement,
+            staged_envelope.identity().as_bytes(),
+            envelope.envelope_identity().as_bytes(),
+            manifest_identity,
+            target,
+            code_object_version,
+            options,
+            &compiler_module,
+            &external_providers,
+            input_kinds,
+            symbols.import_symbols(),
+            symbols.export_symbols(),
+            symbols.required_symbols(),
+            &output,
+        ),
+        PlanRequestIdentityBindingV2::Protected(binding) => calculate_protected_plan_request_id_v2(
+            binding,
+            plan,
+            measurement,
+            staged_envelope.identity().as_bytes(),
+            envelope.envelope_identity().as_bytes(),
+            manifest_identity,
+            target,
+            code_object_version,
+            options,
+            &compiler_module,
+            &external_providers,
+            input_kinds,
+            symbols.import_symbols(),
+            symbols.export_symbols(),
+            symbols.required_symbols(),
+            &output,
+        ),
+    };
     if request_id == [0; 32] {
         return Err(WorkerRequestConstructionError::ReservedRequestId);
     }
@@ -489,56 +646,143 @@ impl CompilerHandoffWorkerRequestV2 {
     }
 }
 
-/// Constructs a sealed Worker V2 request before the exact output identity is known.
+/// A closure-protected Worker V2 request retaining its exact V2 transaction binding.
 ///
-/// This path is crate-private because its output ceiling is not backed by a link plan. It exists
-/// only to obtain inert first-build bytes from the same compiler-aware worker path that will
-/// immediately replay those bytes under an exact-output plan.
-pub(crate) fn construct_first_build_worker_request_v2_from_consumed_handoff(
+/// The handoff identity is never represented as a V1 identity. The complete compiler closure and
+/// exact V2 slot are retained alongside the sealed request, whose request ID binds all of them
+/// under a protected domain. This value remains inert.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ProtectedCompilerHandoffWorkerRequestV2 {
+    binding: ProtectedCompilerHandoffBindingV2,
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
+    request: WorkerRequestV2,
+}
+
+impl ProtectedCompilerHandoffWorkerRequestV2 {
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.binding.attempt
+    }
+
+    pub const fn slot(&self) -> CompilerModuleHandoffSlotV2 {
+        self.binding.slot
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
+        self.binding.handoff_identity
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.binding.compiler_closure
+    }
+
+    pub const fn manifest_identity(&self) -> CompilerModuleSymbolManifestIdentityV1 {
+        self.manifest_identity
+    }
+
+    pub const fn sealed_request(&self) -> &WorkerRequestV2 {
+        &self.request
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CompilerHandoffRequestBindingV2<'a> {
+    Existing {
+        attempt: BuildAttempt,
+        handoff_identity: CompilerModuleHandoffIdentityV1,
+    },
+    Protected(&'a ProtectedCompilerHandoffBindingV2),
+}
+
+pub(crate) struct ConstructedCompilerHandoffWorkerRequestV2 {
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
+    request: WorkerRequestV2,
+}
+
+impl ConstructedCompilerHandoffWorkerRequestV2 {
+    pub(crate) const fn sealed_request(&self) -> &WorkerRequestV2 {
+        &self.request
+    }
+}
+
+pub(crate) fn construct_first_build_worker_request_v2_from_decoded(
+    binding: CompilerHandoffRequestBindingV2<'_>,
     measurement: &WorkerMeasurementV1,
-    consumed: ConsumedCompilerModuleHandoffV1,
+    decoded: &DecodedCompilerModuleHandoffV2,
     mut external_providers: Vec<WorkerInputV1>,
     options: WorkerOptionsV1,
     output: WorkerOutputConstraintsV1,
-) -> Result<CompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
-    let attempt = consumed.attempt();
-    let handoff_identity = consumed.identity();
-    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
-        .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
-    let parts = handoff.into_parts();
-    let target = parts.target();
-    let code_object_version = parts.code_object_version();
-    let (envelope, symbol_manifest, module) = parts.into_envelope_manifest_and_module();
-    let manifest_identity = symbol_manifest.identity();
-    let directional_symbols = envelope.directional_symbols();
+) -> Result<ConstructedCompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
+    let manifest_identity = decoded.symbol_manifest.identity();
+    let directional_symbols = decoded.envelope.directional_symbols();
     let symbols = derive_manifest_symbol_closure(
-        &symbol_manifest,
+        &decoded.symbol_manifest,
         directional_symbols.imports().map(str::to_owned).collect(),
         directional_symbols.exports().map(str::to_owned).collect(),
     )?;
-    let kind = match module.kind() {
-        CompilerModuleKindV1::LlvmTextIr => WorkerInputKindV1::LlvmTextIr,
-        CompilerModuleKindV1::LlvmBitcode => WorkerInputKindV1::LlvmBitcode,
-    };
-    let compiler_module = WorkerInputV1::new(kind, module.into_bytes())
-        .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
+    let compiler_module = WorkerInputV1::new(
+        decoded.compiler_module_kind,
+        decoded.compiler_module_bytes.clone(),
+    )
+    .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
     external_providers.sort_by_key(|input| (input.identity(), input.kind()));
-    let request_id = calculate_first_build_request_id_v2(
-        attempt,
-        handoff_identity,
-        measurement,
-        envelope.identity().as_bytes(),
-        manifest_identity,
-        target,
-        code_object_version,
-        options,
-        &compiler_module,
-        &external_providers,
-        symbols.import_symbols(),
-        symbols.export_symbols(),
-        symbols.required_symbols(),
-        &output,
-    );
+    let request_id = match binding {
+        CompilerHandoffRequestBindingV2::Existing {
+            attempt,
+            handoff_identity,
+        } => calculate_first_build_request_id_v2(
+            attempt,
+            handoff_identity,
+            measurement,
+            decoded.envelope.identity().as_bytes(),
+            manifest_identity,
+            decoded.target,
+            decoded.code_object_version,
+            options,
+            &compiler_module,
+            &external_providers,
+            symbols.import_symbols(),
+            symbols.export_symbols(),
+            symbols.required_symbols(),
+            &output,
+        ),
+        CompilerHandoffRequestBindingV2::Protected(binding) => {
+            calculate_protected_first_build_request_id_v2(
+                binding,
+                measurement,
+                decoded.envelope.identity().as_bytes(),
+                manifest_identity,
+                decoded.target,
+                decoded.code_object_version,
+                options,
+                &compiler_module,
+                &external_providers,
+                symbols.import_symbols(),
+                symbols.export_symbols(),
+                symbols.required_symbols(),
+                &output,
+            )
+        }
+    };
     if request_id == [0; 32] {
         return Err(WorkerRequestConstructionError::ReservedRequestId);
     }
@@ -547,11 +791,11 @@ pub(crate) fn construct_first_build_worker_request_v2_from_consumed_handoff(
         llvm_build_identity: measurement.llvm_build_identity().to_owned(),
         worker_build_identity: measurement.worker_build_identity().to_owned(),
         worker_executable: measurement.executable(),
-        target,
-        code_object_version,
+        target: decoded.target,
+        code_object_version: decoded.code_object_version,
         options,
         compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2::from_compiler_identity(
-            envelope.identity(),
+            decoded.envelope.identity(),
         ),
         compiler_module,
         external_providers,
@@ -561,9 +805,7 @@ pub(crate) fn construct_first_build_worker_request_v2_from_consumed_handoff(
         output,
     })
     .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
-    Ok(CompilerHandoffWorkerRequestV2 {
-        attempt,
-        handoff_identity,
+    Ok(ConstructedCompilerHandoffWorkerRequestV2 {
         manifest_identity,
         request,
     })
@@ -586,30 +828,16 @@ pub fn construct_worker_request_v2_from_consumed_handoff(
 ) -> Result<CompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
     let attempt = consumed.attempt();
     let handoff_identity = consumed.identity();
-    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
+    let decoded = decode_compiler_module_handoff_v2(consumed.bytes())
         .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
-    let parts = handoff.into_parts();
-    let target = parts.target();
-    let code_object_version = parts.code_object_version();
-    let (envelope, symbol_manifest, module) = parts.into_envelope_manifest_and_module();
-    let manifest_identity = symbol_manifest.identity();
-    let kind = match module.kind() {
-        CompilerModuleKindV1::LlvmTextIr => WorkerInputKindV1::LlvmTextIr,
-        CompilerModuleKindV1::LlvmBitcode => WorkerInputKindV1::LlvmBitcode,
-    };
-    let compiler_module = stage_exact_compiler_module_artifact_v1(kind, module.into_bytes())
-        .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
-    let staged_envelope = crate::stage_compiler_ffi_envelope_v1(envelope);
-    let (_, options) = decode_plan_options(plan)?;
-    let request = construct_worker_request_v2(
+    let constructed = construct_plan_worker_request_v2_from_decoded(
+        CompilerHandoffRequestBindingV2::Existing {
+            attempt,
+            handoff_identity,
+        },
         plan,
         measurement,
-        target,
-        code_object_version,
-        options,
-        staged_envelope,
-        symbol_manifest,
-        compiler_module,
+        &decoded,
         external_providers,
         input_kinds,
         output,
@@ -617,7 +845,81 @@ pub fn construct_worker_request_v2_from_consumed_handoff(
     Ok(CompilerHandoffWorkerRequestV2 {
         attempt,
         handoff_identity,
-        manifest_identity,
+        manifest_identity: constructed.manifest_identity,
+        request: constructed.request,
+    })
+}
+
+/// Constructs a closure-protected Worker V2 request from a consumed V2 transaction handoff.
+///
+/// This path does not inspect a V1 transaction slot and never converts the V2 handoff identity.
+/// Target, code-object version, manifest roles, module bytes, plan inputs, worker measurement, and
+/// output length must all match before the protected request can be returned.
+pub fn construct_protected_worker_request_v2_from_consumed_handoff(
+    plan: &MultiInputLinkPlanV1,
+    measurement: &WorkerMeasurementV1,
+    consumed: ConsumedCompilerModuleHandoffV2,
+    external_providers: Vec<WorkerInputV1>,
+    input_kinds: &LinkInputKindClosureV1,
+    output: WorkerOutputConstraintsV1,
+) -> Result<ProtectedCompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
+    let binding = ProtectedCompilerHandoffBindingV2::from_consumed(&consumed);
+    let decoded = decode_compiler_module_handoff_v2(consumed.bytes())
+        .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
+    let constructed = construct_plan_worker_request_v2_from_decoded(
+        CompilerHandoffRequestBindingV2::Protected(&binding),
+        plan,
+        measurement,
+        &decoded,
+        external_providers,
+        input_kinds,
+        output,
+    )?;
+    Ok(ProtectedCompilerHandoffWorkerRequestV2 {
+        binding,
+        manifest_identity: constructed.manifest_identity,
+        request: constructed.request,
+    })
+}
+
+pub(crate) fn construct_plan_worker_request_v2_from_decoded(
+    binding: CompilerHandoffRequestBindingV2<'_>,
+    plan: &MultiInputLinkPlanV1,
+    measurement: &WorkerMeasurementV1,
+    decoded: &DecodedCompilerModuleHandoffV2,
+    external_providers: Vec<WorkerInputV1>,
+    input_kinds: &LinkInputKindClosureV1,
+    output: WorkerOutputConstraintsV1,
+) -> Result<ConstructedCompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
+    let compiler_module = stage_exact_compiler_module_artifact_v1(
+        decoded.compiler_module_kind,
+        decoded.compiler_module_bytes.clone(),
+    )
+    .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
+    let staged_envelope = crate::stage_compiler_ffi_envelope_v1(decoded.envelope.clone());
+    let (_, options) = decode_plan_options(plan)?;
+    let identity_binding = match binding {
+        CompilerHandoffRequestBindingV2::Existing { .. } => PlanRequestIdentityBindingV2::Existing,
+        CompilerHandoffRequestBindingV2::Protected(binding) => {
+            PlanRequestIdentityBindingV2::Protected(binding)
+        }
+    };
+    let request = construct_worker_request_v2_engine(
+        plan,
+        measurement,
+        decoded.target,
+        decoded.code_object_version,
+        options,
+        staged_envelope,
+        decoded.symbol_manifest.clone(),
+        compiler_module,
+        external_providers,
+        input_kinds,
+        output,
+        identity_binding,
+    )?;
+    Ok(ConstructedCompilerHandoffWorkerRequestV2 {
+        manifest_identity: decoded.symbol_manifest.identity(),
         request,
     })
 }
@@ -1032,6 +1334,89 @@ fn calculate_request_id_v2(
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(PLAN_REQUEST_DOMAIN_V2);
+    hash_plan_request_v2(
+        &mut hasher,
+        plan,
+        measurement,
+        staged_envelope_identity,
+        compiler_envelope_identity,
+        manifest_identity,
+        target,
+        code_object_version,
+        options,
+        compiler_module,
+        external_providers,
+        input_kinds,
+        import_symbols,
+        export_symbols,
+        final_symbols,
+        output,
+    );
+    hasher.finalize().into()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calculate_protected_plan_request_id_v2(
+    binding: &ProtectedCompilerHandoffBindingV2,
+    plan: &MultiInputLinkPlanV1,
+    measurement: &WorkerMeasurementV1,
+    staged_envelope_identity: [u8; 32],
+    compiler_envelope_identity: [u8; 32],
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    options: WorkerOptionsV1,
+    compiler_module: &WorkerInputV1,
+    external_providers: &[WorkerInputV1],
+    input_kinds: &LinkInputKindClosureV1,
+    import_symbols: &[String],
+    export_symbols: &[String],
+    final_symbols: &[String],
+    output: &WorkerOutputConstraintsV1,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PROTECTED_PLAN_REQUEST_DOMAIN_V2);
+    hash_protected_handoff_binding(&mut hasher, binding);
+    hash_plan_request_v2(
+        &mut hasher,
+        plan,
+        measurement,
+        staged_envelope_identity,
+        compiler_envelope_identity,
+        manifest_identity,
+        target,
+        code_object_version,
+        options,
+        compiler_module,
+        external_providers,
+        input_kinds,
+        import_symbols,
+        export_symbols,
+        final_symbols,
+        output,
+    );
+    hasher.finalize().into()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn hash_plan_request_v2(
+    hasher: &mut Sha256,
+    plan: &MultiInputLinkPlanV1,
+    measurement: &WorkerMeasurementV1,
+    staged_envelope_identity: [u8; 32],
+    compiler_envelope_identity: [u8; 32],
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    options: WorkerOptionsV1,
+    compiler_module: &WorkerInputV1,
+    external_providers: &[WorkerInputV1],
+    input_kinds: &LinkInputKindClosureV1,
+    import_symbols: &[String],
+    export_symbols: &[String],
+    final_symbols: &[String],
+    output: &WorkerOutputConstraintsV1,
+) {
     hasher.update(plan.identity().as_bytes());
     hasher.update(input_kinds.identity.as_bytes());
     hasher.update(staged_envelope_identity);
@@ -1040,25 +1425,24 @@ fn calculate_request_id_v2(
     hasher.update(manifest_identity.byte_len().to_le_bytes());
     hasher.update(measurement.executable().sha256());
     hasher.update(measurement.executable().byte_len().to_le_bytes());
-    hash_text(&mut hasher, measurement.worker_build_identity());
-    hash_text(&mut hasher, measurement.llvm_build_identity());
-    hash_text(&mut hasher, &target.to_string());
+    hash_text(hasher, measurement.worker_build_identity());
+    hash_text(hasher, measurement.llvm_build_identity());
+    hash_text(hasher, &target.to_string());
     hasher.update([code_object_version_byte(code_object_version)]);
     hasher.update([
         options.optimization() as u8,
         u8::from(options.strip_debug()),
         u8::from(options.verify_each()),
     ]);
-    hash_input(&mut hasher, compiler_module);
+    hash_input(hasher, compiler_module);
     hasher.update((external_providers.len() as u64).to_le_bytes());
     for input in external_providers {
-        hash_input(&mut hasher, input);
+        hash_input(hasher, input);
     }
-    hash_strings(&mut hasher, import_symbols);
-    hash_strings(&mut hasher, export_symbols);
-    hash_strings(&mut hasher, final_symbols);
+    hash_strings(hasher, import_symbols);
+    hash_strings(hasher, export_symbols);
+    hash_strings(hasher, final_symbols);
     hasher.update(output.max_bytes().to_le_bytes());
-    hasher.finalize().into()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1080,34 +1464,133 @@ fn calculate_first_build_request_id_v2(
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(FIRST_BUILD_REQUEST_DOMAIN_V2);
-    hasher.update(attempt.generation().to_le_bytes());
-    hasher.update(attempt.session().as_bytes());
-    hasher.update(attempt.invocation().as_bytes());
+    hash_attempt(&mut hasher, attempt);
     hasher.update(handoff_identity.as_bytes());
+    hash_first_build_request_v2(
+        &mut hasher,
+        measurement,
+        compiler_envelope_identity,
+        manifest_identity,
+        target,
+        code_object_version,
+        options,
+        compiler_module,
+        external_providers,
+        import_symbols,
+        export_symbols,
+        final_symbols,
+        output,
+    );
+    hasher.finalize().into()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calculate_protected_first_build_request_id_v2(
+    binding: &ProtectedCompilerHandoffBindingV2,
+    measurement: &WorkerMeasurementV1,
+    compiler_envelope_identity: [u8; 32],
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    options: WorkerOptionsV1,
+    compiler_module: &WorkerInputV1,
+    external_providers: &[WorkerInputV1],
+    import_symbols: &[String],
+    export_symbols: &[String],
+    final_symbols: &[String],
+    output: &WorkerOutputConstraintsV1,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V2);
+    hash_protected_handoff_binding(&mut hasher, binding);
+    hash_first_build_request_v2(
+        &mut hasher,
+        measurement,
+        compiler_envelope_identity,
+        manifest_identity,
+        target,
+        code_object_version,
+        options,
+        compiler_module,
+        external_providers,
+        import_symbols,
+        export_symbols,
+        final_symbols,
+        output,
+    );
+    hasher.finalize().into()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn hash_first_build_request_v2(
+    hasher: &mut Sha256,
+    measurement: &WorkerMeasurementV1,
+    compiler_envelope_identity: [u8; 32],
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    options: WorkerOptionsV1,
+    compiler_module: &WorkerInputV1,
+    external_providers: &[WorkerInputV1],
+    import_symbols: &[String],
+    export_symbols: &[String],
+    final_symbols: &[String],
+    output: &WorkerOutputConstraintsV1,
+) {
     hasher.update(compiler_envelope_identity);
     hasher.update(manifest_identity.sha256());
     hasher.update(manifest_identity.byte_len().to_le_bytes());
     hasher.update(measurement.executable().sha256());
     hasher.update(measurement.executable().byte_len().to_le_bytes());
-    hash_text(&mut hasher, measurement.worker_build_identity());
-    hash_text(&mut hasher, measurement.llvm_build_identity());
-    hash_text(&mut hasher, &target.to_string());
+    hash_text(hasher, measurement.worker_build_identity());
+    hash_text(hasher, measurement.llvm_build_identity());
+    hash_text(hasher, &target.to_string());
     hasher.update([code_object_version_byte(code_object_version)]);
     hasher.update([
         options.optimization() as u8,
         u8::from(options.strip_debug()),
         u8::from(options.verify_each()),
     ]);
-    hash_input(&mut hasher, compiler_module);
+    hash_input(hasher, compiler_module);
     hasher.update((external_providers.len() as u64).to_le_bytes());
     for input in external_providers {
-        hash_input(&mut hasher, input);
+        hash_input(hasher, input);
     }
-    hash_strings(&mut hasher, import_symbols);
-    hash_strings(&mut hasher, export_symbols);
-    hash_strings(&mut hasher, final_symbols);
+    hash_strings(hasher, import_symbols);
+    hash_strings(hasher, export_symbols);
+    hash_strings(hasher, final_symbols);
     hasher.update(output.max_bytes().to_le_bytes());
-    hasher.finalize().into()
+}
+
+fn hash_protected_handoff_binding(
+    hasher: &mut Sha256,
+    binding: &ProtectedCompilerHandoffBindingV2,
+) {
+    hash_attempt(hasher, binding.attempt);
+    hasher.update([binding.slot as u8]);
+    hasher.update(binding.handoff_identity.as_bytes());
+    hash_compiler_closure_v2(hasher, binding.compiler_closure);
+}
+
+fn hash_compiler_closure_v2(hasher: &mut Sha256, closure: CompilerClosureV2) {
+    hasher.update(closure.cargo_executable_sha256());
+    hasher.update(closure.cargo_binding_trampoline_sha256());
+    hasher.update(closure.cargo_fe2o3_binding_wrapper_sha256());
+    hasher.update(closure.rustc_executable_sha256());
+    hasher.update(closure.rustc_runtime_tree_sha256());
+    hasher.update(closure.codegen_backend_sha256());
+    hasher.update(
+        closure
+            .cargo_binding_transition_protocol_version()
+            .to_le_bytes(),
+    );
+    hasher.update(closure.identity_sha256());
+}
+
+fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
+    hasher.update(attempt.generation().to_le_bytes());
+    hasher.update(attempt.session().as_bytes());
+    hasher.update(attempt.invocation().as_bytes());
 }
 
 #[allow(dead_code)]

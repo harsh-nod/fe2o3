@@ -72,6 +72,7 @@ pub use compiler_ffi_observation::{
     StagedCompilerFfiEnvelopeInspectionV1, StagedCompilerFfiEnvelopeV1,
     stage_compiler_ffi_envelope_v1,
 };
+pub use fe2o3_build_authority::CompilerClosureV2;
 pub use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerFfiCodeObjectVersion, CompilerFfiContractV1,
     CompilerFfiEffectAbiIdentityV1, CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeError,
@@ -87,6 +88,8 @@ pub use fe2o3_compiler_ffi::{
 };
 pub use first_build_worker_v2::{
     FirstBuildWorkerV2Error, FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
+    InertProtectedFirstBuildWorkerV2EvidenceV1, ProtectedFirstBuildWorkerV2Error,
+    ProtectedFirstBuildWorkerV2IdentityV1, execute_protected_reproducible_first_build_worker_v2,
     execute_reproducible_first_build_worker_v2,
 };
 pub use flash_attention_v1_finalizer::{
@@ -143,7 +146,8 @@ pub use pliron_scalar_add_v1_finalizer::{
 };
 pub use request_construction::{
     CompilerHandoffWorkerRequestV2, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,
-    LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, WorkerRequestConstructionError,
+    LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, ProtectedCompilerHandoffWorkerRequestV2,
+    WorkerRequestConstructionError, construct_protected_worker_request_v2_from_consumed_handoff,
     construct_worker_request_v1, construct_worker_request_v2_from_consumed_handoff,
 };
 pub use reserved_fe2o3_symbols::{
@@ -202,9 +206,10 @@ pub use wave64_collectives_v1_worker::{
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertCompilerHandoffExecutionV2,
-    InertWorkerExecutionV1, MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES,
-    MAX_WORKER_TIMEOUT, PinnedWorkerV1, WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError,
-    WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
+    InertProtectedCompilerHandoffExecutionV2, InertWorkerExecutionV1, MAX_WORKER_EXECUTABLE_BYTES,
+    MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1, WORKER_ENVIRONMENT_ALLOWLIST_V1,
+    WorkerExecutionError, WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerMeasurementV1,
+    WorkerTerminationV1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,

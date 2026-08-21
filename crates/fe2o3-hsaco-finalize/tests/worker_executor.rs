@@ -11,8 +11,10 @@ use std::{
 
 use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
-    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    consume_compiler_module_handoff_v1, consume_compiler_module_handoff_v2,
+    publish_compiler_module_handoff_v1, publish_compiler_module_handoff_v2,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
     CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
@@ -24,6 +26,7 @@ use fe2o3_hsaco_finalize::{
     LinkOutputV1, MultiInputLinkPlanV1, PinnedWorkerV1, ProvenanceNodeV1, WorkerExecutionErrorKind,
     WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
     WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerRequestV1,
+    construct_protected_worker_request_v2_from_consumed_handoff,
     construct_worker_request_v2_from_consumed_handoff,
 };
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
@@ -228,6 +231,97 @@ define i32 @kernel_export(i32 %value) { ret i32 %value }\n";
         b"fixture-output"
     );
     assert!(execution.response().binds_request(request.sealed_request()));
+    assert!(!execution.grants_publication_authority());
+    assert!(!execution.grants_load_authority());
+    assert!(!execution.grants_launch_authority());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn protected_consumed_handoff_executes_without_losing_v2_identity_or_closure() {
+    let directory = std::env::temp_dir().join(format!(
+        "fe2o3-protected-worker-v2-handoff-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&directory);
+    fs::create_dir(&directory).unwrap();
+    let producer =
+        ProducerIdentity::from_codegen("fixture_crate", Some(Path::new("src/lib.rs"))).unwrap();
+    let attempt = begin_build_attempt(
+        &directory,
+        &producer,
+        BuildInvocation::from_bytes([0x71; 32]),
+        BuildSession::from_bytes([0x72; 16]),
+    )
+    .unwrap();
+    let closure =
+        CompilerClosureV2::new([1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]).unwrap();
+    let mut envelope = CompilerFfiEnvelopeBuilderV1::new(
+        CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+        CompilerCodeObjectVersion::V6,
+        1,
+    )
+    .unwrap();
+    envelope.push(compiler_export("kernel_export")).unwrap();
+    let module_bytes = b"define amdgpu_kernel void @kernel_main() { ret void }\n\
+define i32 @kernel_export(i32 %value) { ret i32 %value }\n";
+    let manifest = CompilerModuleSymbolManifestV1::new([
+        (CompilerModuleSymbolRoleV1::KernelEntry, "kernel_main"),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            "kernel_main.kd",
+        ),
+        (CompilerModuleSymbolRoleV1::DeviceFfiExport, "kernel_export"),
+    ])
+    .unwrap();
+    let handoff = CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+        CompilerCodeObjectVersion::V6,
+        envelope.finish().unwrap(),
+        manifest,
+        module_bytes,
+    )
+    .unwrap();
+    let receipt = publish_compiler_module_handoff_v2(
+        &directory,
+        &producer,
+        attempt,
+        closure,
+        handoff.canonical_bytes(),
+    )
+    .unwrap();
+    let consumed =
+        consume_compiler_module_handoff_v2(&directory, &producer, attempt, closure).unwrap();
+    let module = WorkerInputV1::new(WorkerInputKindV1::LlvmTextIr, module_bytes.to_vec()).unwrap();
+    let (plan, kinds) = handoff_plan(&module);
+    let pinned = pinned();
+    let request = construct_protected_worker_request_v2_from_consumed_handoff(
+        &plan,
+        pinned.measurement(),
+        consumed,
+        vec![],
+        &kinds,
+        WorkerOutputConstraintsV1::new(b"fixture-output".len() as u64).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(request.handoff_identity(), receipt.identity());
+    assert_eq!(request.compiler_closure(), closure);
+    assert!(!request.grants_compiler_authority());
+    assert!(!request.grants_link_authority());
+
+    let execution = pinned
+        .execute_protected_compiler_handoff_v2(&request, limits())
+        .unwrap();
+    assert_eq!(execution.handoff_identity(), receipt.identity());
+    assert_eq!(execution.compiler_closure(), closure);
+    assert_eq!(
+        execution.response().output().unwrap().bytes(),
+        b"fixture-output"
+    );
+    assert!(execution.response().binds_request(request.sealed_request()));
+    assert!(!execution.grants_compiler_authority());
+    assert!(!execution.grants_link_authority());
     assert!(!execution.grants_publication_authority());
     assert!(!execution.grants_load_authority());
     assert!(!execution.grants_launch_authority());
