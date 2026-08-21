@@ -22,8 +22,10 @@ use super::{
 };
 
 mod ranked;
+mod semantic_mir;
 
 pub use ranked::*;
+pub use semantic_mir::*;
 
 /// Hard cap for construction recipes registered during one production session.
 pub const HARD_MAX_PRODUCTION_CONSTRUCTIONS: usize = 4_096;

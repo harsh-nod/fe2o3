@@ -1196,7 +1196,9 @@ name = "fe2o3-pliron"
 version = "0.1.0"
 dependencies = [
  "dialect-kernel",
+ "dialect-mir",
  "fe2o3-kernel-analysis",
+ "fe2o3-mir-model",
  "fe2o3-pliron-owner-core",
  "pliron",
 ]

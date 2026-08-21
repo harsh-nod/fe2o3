@@ -15,6 +15,8 @@ internal-test-context-access = []
 
 [dependencies]
 dialect-kernel.workspace = true
+dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-kernel-analysis.workspace = true
+fe2o3-mir-model.workspace = true
 fe2o3-pliron-owner-core.workspace = true
 pliron.workspace = true
