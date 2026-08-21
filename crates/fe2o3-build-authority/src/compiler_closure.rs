@@ -210,17 +210,14 @@ pub fn derive_compiler_closure_identity_v1(
 }
 
 /// Canonical version of the Cargo-to-trampoline-to-wrapper transition protocol.
-#[allow(dead_code)]
 pub const CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1: u16 = 1;
 
 /// Domain for the canonical six-pin compiler-closure identity.
-#[allow(dead_code)]
 pub const COMPILER_CLOSURE_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3-compiler-closure-identity-v2\0";
 
 /// One content digest in the canonical V2 compiler closure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-#[allow(dead_code)]
 pub enum CompilerClosureDigestFieldV2 {
     /// The Cargo executable image.
     CargoExecutable,
@@ -256,7 +253,6 @@ impl fmt::Display for CompilerClosureDigestFieldV2 {
 /// A failure to construct or validate a canonical V2 compiler closure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-#[allow(dead_code)]
 pub enum CompilerClosureErrorV2 {
     /// A required SHA-256 content digest was all zero.
     ZeroDigest {
@@ -291,7 +287,6 @@ impl std::error::Error for CompilerClosureErrorV2 {}
 
 /// Six independently provisioned compiler pins, a transition protocol, and their aggregate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub struct CompilerClosureV2 {
     cargo_executable_sha256: [u8; 32],
     cargo_binding_trampoline_sha256: [u8; 32],
@@ -303,7 +298,6 @@ pub struct CompilerClosureV2 {
     identity_sha256: [u8; 32],
 }
 
-#[allow(dead_code)]
 impl CompilerClosureV2 {
     /// Derives the canonical aggregate from six nonzero content pins.
     pub fn new(
@@ -462,7 +456,6 @@ impl CompilerClosureV2 {
 /// The canonical transcript is the V2 domain, the little-endian protocol version, and the six
 /// content pins in the same order as the parameters below.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
 pub fn derive_compiler_closure_identity_v2(
     cargo_executable_sha256: [u8; 32],
     cargo_binding_trampoline_sha256: [u8; 32],

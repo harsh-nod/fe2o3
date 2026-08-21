@@ -16,7 +16,9 @@ mod broker_v3;
 mod broker_v4;
 mod cargo_environment_v1;
 mod compiler_closure;
+mod pipeline_v2;
 mod policy_v1;
+mod policy_v2;
 mod protocol_v1;
 
 pub use broker_v3::{
@@ -59,15 +61,25 @@ pub use cargo_environment_v1::{
     decode_authority_cargo_environment_v1, encode_authority_cargo_environment_v1,
 };
 pub use compiler_closure::{
-    COMPILER_CLOSURE_IDENTITY_DOMAIN_V1, CompilerClosureDigestFieldV1, CompilerClosureErrorV1,
-    CompilerClosureV1, RUSTC_EXECUTABLE_RUNTIME_IDENTITY_DOMAIN_V1,
-    derive_compiler_closure_identity_v1, derive_rustc_executable_runtime_identity_v1,
+    CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, COMPILER_CLOSURE_IDENTITY_DOMAIN_V1,
+    COMPILER_CLOSURE_IDENTITY_DOMAIN_V2, CompilerClosureDigestFieldV1,
+    CompilerClosureDigestFieldV2, CompilerClosureErrorV1, CompilerClosureErrorV2,
+    CompilerClosureV1, CompilerClosureV2, RUSTC_EXECUTABLE_RUNTIME_IDENTITY_DOMAIN_V1,
+    derive_compiler_closure_identity_v1, derive_compiler_closure_identity_v2,
+    derive_rustc_executable_runtime_identity_v1,
 };
+pub use pipeline_v2::{PipelineAllowlistV2, PipelineErrorV2, PipelineV2};
 pub use policy_v1::{
     AuthorityProfileV1, POLICY_IDENTITY_DOMAIN_V1, POLICY_V1_ENCODED_LEN, POLICY_V1_FIELD_COUNT,
     POLICY_V1_HEADER_LEN, POLICY_V1_MAGIC, POLICY_V1_TARGET, POLICY_V1_VERSION,
     PipelineAllowlistV1, PipelineV1, PolicyDigestFieldV1, PolicyErrorV1, PolicyV1,
     PublicationRightsV1, decode_policy_v1, encode_policy_v1, policy_identity_sha256_v1,
+};
+pub use policy_v2::{
+    AuthorityProfileV2, POLICY_IDENTITY_DOMAIN_V2, POLICY_V2_ENCODED_LEN, POLICY_V2_FIELD_COUNT,
+    POLICY_V2_HEADER_LEN, POLICY_V2_MAGIC, POLICY_V2_TARGET, POLICY_V2_VERSION,
+    PolicyCompatibilityErrorV2, PolicyDigestFieldV2, PolicyErrorV2, PolicyV2, PublicationRightsV2,
+    decode_policy_v2, encode_policy_v2, policy_identity_sha256_v2,
 };
 pub use protocol_v1::{
     ACCEPT_V1_PAYLOAD_LEN, ADMISSION_IDENTITY_DOMAIN_V1, ARGUMENT_VECTOR_IDENTITY_DOMAIN_V1,

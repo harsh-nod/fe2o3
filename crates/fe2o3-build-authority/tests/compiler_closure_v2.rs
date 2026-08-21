@@ -1,8 +1,4 @@
-#[path = "../src/compiler_closure.rs"]
-#[allow(dead_code)]
-mod compiler_closure;
-
-use compiler_closure::{
+use fe2o3_build_authority::{
     CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, COMPILER_CLOSURE_IDENTITY_DOMAIN_V1,
     COMPILER_CLOSURE_IDENTITY_DOMAIN_V2, CompilerClosureDigestFieldV2, CompilerClosureErrorV2,
     CompilerClosureV1, CompilerClosureV2, derive_compiler_closure_identity_v2,

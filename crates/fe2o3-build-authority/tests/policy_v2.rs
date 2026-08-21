@@ -2,30 +2,13 @@
 #![deny(missing_docs)]
 
 use fe2o3_build_authority::{
-    CompilerClosureErrorV1, CompilerClosureV1, PipelineAllowlistV1, PipelineV1, PolicyErrorV1,
-    PolicyV1, PublicationRightsV1, decode_policy_v1,
-};
-
-#[path = "../src/compiler_closure.rs"]
-#[allow(dead_code)]
-mod compiler_closure;
-/// The pending Pipeline V2 module, compiled before its primary-crate export lands.
-#[path = "../src/pipeline_v2.rs"]
-pub mod pipeline_v2;
-/// The pending Policy V2 module, compiled before its primary-crate export lands.
-#[path = "../src/policy_v2.rs"]
-pub mod policy_v2;
-
-use compiler_closure::{
-    CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, CompilerClosureDigestFieldV2,
-    CompilerClosureErrorV2, CompilerClosureV2,
-};
-use pipeline_v2::{PipelineAllowlistV2, PipelineErrorV2, PipelineV2};
-use policy_v2::{
-    AuthorityProfileV2, POLICY_IDENTITY_DOMAIN_V2, POLICY_V2_ENCODED_LEN, POLICY_V2_FIELD_COUNT,
-    POLICY_V2_HEADER_LEN, POLICY_V2_MAGIC, POLICY_V2_TARGET, POLICY_V2_VERSION,
-    PolicyCompatibilityErrorV2, PolicyErrorV2, PolicyV2, PublicationRightsV2, decode_policy_v2,
-    policy_identity_sha256_v2,
+    AuthorityProfileV2, CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, CompilerClosureDigestFieldV2,
+    CompilerClosureErrorV1, CompilerClosureErrorV2, CompilerClosureV1, CompilerClosureV2,
+    POLICY_IDENTITY_DOMAIN_V2, POLICY_V2_ENCODED_LEN, POLICY_V2_FIELD_COUNT, POLICY_V2_HEADER_LEN,
+    POLICY_V2_MAGIC, POLICY_V2_TARGET, POLICY_V2_VERSION, PipelineAllowlistV1, PipelineAllowlistV2,
+    PipelineErrorV2, PipelineV1, PipelineV2, PolicyCompatibilityErrorV2, PolicyErrorV1,
+    PolicyErrorV2, PolicyV1, PolicyV2, PublicationRightsV1, PublicationRightsV2, decode_policy_v1,
+    decode_policy_v2, policy_identity_sha256_v2,
 };
 
 const PROFILE_VALUE_OFFSET: usize = 136;
