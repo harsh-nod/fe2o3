@@ -3677,7 +3677,16 @@ impl WorkerV2ResumeStoreV2 {
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<(), ResumeMarkerErrorV1> {
         self.validate_complete_intent_snapshot(recovered, attempt, expected_compiler_closure)?;
-        let record = recovered.record();
+        let local = self.recover_complete_intent(attempt, expected_compiler_closure)?;
+        if local.record() != recovered.record()
+            || local.exact_output() != recovered.exact_output()
+            || local.compiler_closure() != recovered.compiler_closure()
+        {
+            return Err(self.inner.invalid(
+                "protected Ready promotion requires the exact durable local publication intent",
+            ));
+        }
+        let record = local.record();
         let intent = record.identity();
         match self.load()? {
             Some(ResumeMarkerStateV2::Pending {
@@ -3691,7 +3700,7 @@ impl WorkerV2ResumeStoreV2 {
                     publication,
                     record.plan(),
                     record.upstream_evidence(),
-                    recovered.exact_output(),
+                    local.exact_output(),
                     publication
                         .requires_envelope()
                         .then(|| WorkerV2EnvelopeInputsIdentityV1::from_bytes(envelope_inputs)),
@@ -3722,7 +3731,7 @@ impl WorkerV2ResumeStoreV2 {
                     publication,
                     record.plan(),
                     record.upstream_evidence(),
-                    recovered.exact_output(),
+                    local.exact_output(),
                     publication
                         .requires_envelope()
                         .then(|| WorkerV2EnvelopeInputsIdentityV1::from_bytes(envelope_inputs)),
@@ -6066,6 +6075,129 @@ mod tests {
         assert_eq!(store.load().unwrap(), Some(pending));
         store.clear_abandoned_pending(pending).unwrap();
         assert_eq!(store.load().unwrap(), None);
+    }
+
+    #[test]
+    fn protected_ready_rejects_cross_directory_intent_replay_without_marker_mutation() {
+        let local_directory = TestDirectory::new();
+        let foreign_directory = TestDirectory::new();
+        let producer = producer(140);
+        let local_attempt = attempt(&local_directory.0, &producer, 140);
+        let foreign_attempt = attempt(&foreign_directory.0, &producer, 140);
+        assert_eq!(local_attempt, foreign_attempt);
+        let closure = compiler_closure(140);
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let (output, plan, upstream) = publication_inputs(foreign_attempt, 140);
+        let foreign = persist_worker_v2_publication_intent_v2(
+            &foreign_directory.0,
+            &producer,
+            foreign_attempt,
+            plan,
+            upstream,
+            closure,
+            &output,
+        )
+        .unwrap();
+        let store = WorkerV2ResumeStoreV2::open(&local_directory.0, &producer).unwrap();
+        let admission = restart_admission_commitment_with_inputs_v2(
+            publication,
+            plan,
+            upstream,
+            &output,
+            None,
+            closure,
+        );
+        store
+            .persist_pending(publication, local_attempt, admission)
+            .unwrap();
+        let pending = store.load().unwrap().unwrap();
+        let marker_path = store
+            .inner
+            .display_path
+            .join(store.inner.marker_name.as_str());
+        let marker_before = fs::read(&marker_path).unwrap();
+
+        assert!(
+            store
+                .persist_ready(publication, local_attempt, &foreign, closure)
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap(), Some(pending));
+        assert_eq!(fs::read(marker_path).unwrap(), marker_before);
+        assert!(matches!(
+            recover_worker_v2_publication_intent_v2(
+                &local_directory.0,
+                &producer,
+                local_attempt,
+                closure,
+            ),
+            Err(WorkerV2PublicationIntentErrorV2::NotFound)
+        ));
+    }
+
+    #[test]
+    fn protected_ready_rejects_cross_producer_intent_replay_without_marker_mutation() {
+        let local_directory = TestDirectory::new();
+        let foreign_directory = TestDirectory::new();
+        let local_producer = producer(141);
+        let foreign_producer = producer(142);
+        let local_attempt = attempt(&local_directory.0, &local_producer, 141);
+        let foreign_attempt = begin_build_attempt(
+            &foreign_directory.0,
+            &foreign_producer,
+            local_attempt.invocation(),
+            local_attempt.session(),
+        )
+        .unwrap();
+        assert_eq!(local_attempt, foreign_attempt);
+        let closure = compiler_closure(141);
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let (output, plan, upstream) = publication_inputs(foreign_attempt, 141);
+        let foreign = persist_worker_v2_publication_intent_v2(
+            &foreign_directory.0,
+            &foreign_producer,
+            foreign_attempt,
+            plan,
+            upstream,
+            closure,
+            &output,
+        )
+        .unwrap();
+        let store = WorkerV2ResumeStoreV2::open(&local_directory.0, &local_producer).unwrap();
+        let admission = restart_admission_commitment_with_inputs_v2(
+            publication,
+            plan,
+            upstream,
+            &output,
+            None,
+            closure,
+        );
+        store
+            .persist_pending(publication, local_attempt, admission)
+            .unwrap();
+        let pending = store.load().unwrap().unwrap();
+        let marker_path = store
+            .inner
+            .display_path
+            .join(store.inner.marker_name.as_str());
+        let marker_before = fs::read(&marker_path).unwrap();
+
+        assert!(
+            store
+                .persist_ready(publication, local_attempt, &foreign, closure)
+                .is_err()
+        );
+        assert_eq!(store.load().unwrap(), Some(pending));
+        assert_eq!(fs::read(marker_path).unwrap(), marker_before);
+        assert!(matches!(
+            recover_worker_v2_publication_intent_v2(
+                &local_directory.0,
+                &local_producer,
+                local_attempt,
+                closure,
+            ),
+            Err(WorkerV2PublicationIntentErrorV2::NotFound)
+        ));
     }
 
     #[test]
