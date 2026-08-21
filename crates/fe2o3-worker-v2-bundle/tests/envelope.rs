@@ -2,9 +2,9 @@ use fe2o3_artifact_transaction::{
     BackendPublicationReceiptV2, BuildInvocation, BuildSession, DurableLinkPublicationPlanV1,
     DurablePublishedClaimCodecErrorV1, DurablePublishedHsacoClaimV1, DurablePublishedHsacoClaimV2,
     PackageIdentityV1, ProducerIdentity, UpstreamCodeObjectEvidenceIdentityV1,
-    WorkerV2PublicationIntentIdentityV2, begin_build_attempt, finish_build_attempt,
-    persist_worker_v2_publication_intent_v2, publish_exact_hsaco_evidence_for_attempt_v1,
-    publish_exact_hsaco_evidence_for_attempt_v2,
+    WorkerV2PublicationIntentIdentityV2, WorkerV2PublicationIntentRecordV2, begin_build_attempt,
+    finish_build_attempt, persist_worker_v2_publication_intent_v2,
+    publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
 };
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -39,7 +39,7 @@ use fe2o3_worker_v2_bundle::{
     WORKER_V2_FINAL_ARTIFACT_EVIDENCE_MAGIC_V2, WORKER_V2_LOAD_ENVELOPE_MAGIC_V2,
     WorkerV2EnvelopeInputsV1, WorkerV2FinalArtifactDecodeErrorV2, WorkerV2FinalArtifactEvidenceV2,
     WorkerV2FinalArtifactValidationErrorV2, WorkerV2LoadEnvelopeDecodeErrorV2,
-    WorkerV2LoadEnvelopeV1, WorkerV2LoadEnvelopeV2,
+    WorkerV2LoadEnvelopeV1, WorkerV2LoadEnvelopeV2, WorkerV2ProducerBindingV2,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -97,6 +97,7 @@ struct PartsV2 {
     final_artifact: WorkerV2FinalArtifactEvidenceV2,
     closure: CompilerClosureV2,
     intent: WorkerV2PublicationIntentIdentityV2,
+    intent_record: WorkerV2PublicationIntentRecordV2,
     receipt: BackendPublicationReceiptV2,
     claim: DurablePublishedHsacoClaimV2,
 }
@@ -165,6 +166,8 @@ fn manifest_target() -> TargetIdentity {
 }
 
 fn manifest_abi() -> AbiLayout {
+    let source_type = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
+    let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
     AbiLayout::new(
         4,
         4,
@@ -180,8 +183,12 @@ fn manifest_abi() -> AbiLayout {
                 Access::ByValue,
                 AddressSpace::Value,
                 TypeIdentity::new(
-                    DeclaredRustTypeIdentity::from_untrusted_bytes(digest(0xa1)),
-                    DeclaredRustLayoutIdentity::from_untrusted_bytes(digest(0xa2)),
+                    DeclaredRustTypeIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                        *source_type.identity().as_bytes(),
+                    )),
+                    DeclaredRustLayoutIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                        *layout.identity().as_bytes(),
+                    )),
                 ),
                 ArgumentOwnership::ByValue,
                 AliasClass::Value,
@@ -210,19 +217,28 @@ fn evidence(identity: u8, digest: u8) -> BuildEvidenceV1 {
     )
 }
 
-fn descriptor_launch() -> LaunchConstraintsV1 {
+fn descriptor_launch_with_dynamic_shared_memory(
+    max_dynamic_shared_memory_bytes: u32,
+) -> LaunchConstraintsV1 {
     LaunchConstraintsV1::new(
         1,
         BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
         DimensionsV1::new(65_535, 1, 1).unwrap(),
         256,
         0,
-        0,
+        max_dynamic_shared_memory_bytes,
     )
     .unwrap()
 }
 
-fn descriptor_table() -> DeviceDescriptorTableV1 {
+fn descriptor_table(canonical_digest: [u8; 32]) -> DeviceDescriptorTableV1 {
+    descriptor_table_with_dynamic_shared_memory(canonical_digest, 0)
+}
+
+fn descriptor_table_with_dynamic_shared_memory(
+    canonical_digest: [u8; 32],
+    max_dynamic_shared_memory_bytes: u32,
+) -> DeviceDescriptorTableV1 {
     let source_type = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
     let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
     let kernels = KERNELS
@@ -237,7 +253,7 @@ fn descriptor_table() -> DeviceDescriptorTableV1 {
                 evidence(id.wrapping_add(0x60), *executable),
                 vec![],
                 KernelAbiLayoutV1::new(4, 4, 4).unwrap(),
-                descriptor_launch(),
+                descriptor_launch_with_dynamic_shared_memory(max_dynamic_shared_memory_bytes),
                 vec![
                     LogicalArgumentV1::scalar(
                         0,
@@ -253,7 +269,7 @@ fn descriptor_table() -> DeviceDescriptorTableV1 {
         })
         .collect();
     DeviceDescriptorTableV1::new(
-        CanonicalCodeObjectDigest::from_bytes([0xc0; 32]),
+        CanonicalCodeObjectDigest::from_bytes(canonical_digest),
         CodeObjectVersion::V6,
         CompilerIdentityV1::new(
             descriptor_text("rustc"),
@@ -467,11 +483,17 @@ fn build_parts_with_upstream(upstream_override: Option<[u8; 32]>) -> Parts {
     let claim = publication.published_claim().clone();
     drop(publication);
     finish_build_attempt(&output, &owner, attempt).unwrap();
+    let descriptor = DescriptorLineageV1::new(descriptor_table(
+        *CanonicalCodeObjectDigest::calculate_from_canonicalized_hsaco(
+            container.payloads()[0].bytes(),
+        )
+        .as_bytes(),
+    ));
     Parts {
         container,
         bundle,
         evidence,
-        descriptor: DescriptorLineageV1::new(descriptor_table()),
+        descriptor,
         proofs: vec![proof(0x22), proof(0x21)],
         raw,
         claim,
@@ -589,7 +611,8 @@ fn build_parts_v2_with_closure(closure: CompilerClosureV2) -> PartsV2 {
         final_bytes,
     )
     .unwrap();
-    let intent = persisted.record().identity();
+    let intent_record = persisted.record();
+    let intent = intent_record.identity();
     drop(persisted);
     let publication = publish_exact_hsaco_evidence_for_attempt_v2(
         &output,
@@ -610,7 +633,12 @@ fn build_parts_v2_with_closure(closure: CompilerClosureV2) -> PartsV2 {
         &descriptor,
         &proofs,
         closure,
-        intent,
+        intent_record,
+        WorkerV2ProducerBindingV2::from_codegen(
+            "fe2o3_worker_v2_bundle_test_v2",
+            Some(Path::new("/src/worker-v2-bundle-test-v2.rs")),
+        )
+        .unwrap(),
         receipt,
         claim.clone(),
     )
@@ -625,16 +653,27 @@ fn build_parts_v2_with_closure(closure: CompilerClosureV2) -> PartsV2 {
         final_artifact,
         closure,
         intent,
+        intent_record,
         receipt,
         claim,
     }
 }
 
-const FINAL_ARTIFACT_CLOSURE_OFFSET: usize = 24;
-const FINAL_ARTIFACT_INTENT_OFFSET: usize = FINAL_ARTIFACT_CLOSURE_OFFSET + 226;
-const FINAL_ARTIFACT_FINAL_BYTES_OFFSET: usize = FINAL_ARTIFACT_INTENT_OFFSET + 32;
+const FINAL_ARTIFACT_CLOSURE_OFFSET: usize = 28;
+const FINAL_ARTIFACT_FINAL_BYTES_OFFSET: usize = FINAL_ARTIFACT_CLOSURE_OFFSET + 226;
 const FINAL_ARTIFACT_FACETS_OFFSET: usize = FINAL_ARTIFACT_FINAL_BYTES_OFFSET + 40;
 const FINAL_ARTIFACT_TARGET_TEXT_OFFSET: usize = FINAL_ARTIFACT_FACETS_OFFSET + (6 * 32);
+
+fn final_artifact_intent_offset(bytes: &[u8]) -> usize {
+    let target_len = u16::from_le_bytes(bytes[16..18].try_into().unwrap()) as usize;
+    FINAL_ARTIFACT_TARGET_TEXT_OFFSET + target_len
+}
+
+fn final_artifact_intent_range(bytes: &[u8]) -> std::ops::Range<usize> {
+    let start = final_artifact_intent_offset(bytes);
+    let len = u16::from_le_bytes(bytes[24..26].try_into().unwrap()) as usize;
+    start..start + len
+}
 
 fn checksum(domain: &[u8], body: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
@@ -670,6 +709,13 @@ fn v2_final_artifact_range(bytes: &[u8]) -> std::ops::Range<usize> {
     let start = 77 + read_u32(16) + read_u32(20) + read_u32(24) + read_u32(28);
     let len = u16::from_le_bytes(bytes[40..42].try_into().unwrap()) as usize;
     start..start + len
+}
+
+fn v2_descriptor_range(bytes: &[u8]) -> std::ops::Range<usize> {
+    let read_u32 =
+        |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+    let start = 77 + read_u32(16) + read_u32(20) + read_u32(24);
+    start..start + read_u32(28)
 }
 
 fn mutate_final_artifact_byte(mut bytes: Vec<u8>, relative_offset: usize) -> Vec<u8> {
@@ -904,10 +950,23 @@ fn protected_v2_round_trip_retains_exact_typed_evidence_and_is_inert() {
     let parts = build_parts_v2();
     let closure = parts.closure;
     let intent = parts.intent;
+    let intent_record = parts.intent_record;
     let receipt = parts.receipt;
     let claim = parts.claim.clone();
     assert_eq!(parts.final_artifact.compiler_closure(), closure);
     assert_eq!(parts.final_artifact.publication_intent_identity(), intent);
+    assert!(
+        parts
+            .final_artifact
+            .publication_intent_transcript()
+            .matches_source_record(intent_record)
+    );
+    assert!(
+        parts
+            .final_artifact
+            .publication_intent_transcript()
+            .matches_backend_receipt(receipt)
+    );
     assert_eq!(parts.final_artifact.backend_receipt(), receipt);
     assert_eq!(parts.final_artifact.published_claim(), &claim);
 
@@ -916,6 +975,11 @@ fn protected_v2_round_trip_retains_exact_typed_evidence_and_is_inert() {
     assert_eq!(evidence.to_bytes(), evidence_bytes);
     assert_eq!(evidence.compiler_closure(), closure);
     assert_eq!(evidence.publication_intent_identity(), intent);
+    assert!(
+        evidence
+            .publication_intent_transcript()
+            .matches_source_record(intent_record)
+    );
     assert_eq!(evidence.backend_receipt(), receipt);
     assert_eq!(evidence.published_claim(), &claim);
     assert!(!evidence.grants_compiler_authority());
@@ -1052,6 +1116,59 @@ fn every_protected_v2_final_evidence_truncation_trailing_and_header_error_fails_
 }
 
 #[test]
+fn protected_v2_rejects_resealed_and_valid_alternate_intent_substitution() {
+    let mut corrupted = build_parts_v2().final_artifact.to_bytes();
+    let intent_start = final_artifact_intent_offset(&corrupted);
+    corrupted[intent_start] ^= 1;
+    reseal_final_artifact(&mut corrupted);
+    assert!(matches!(
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(&corrupted),
+        Err(WorkerV2FinalArtifactDecodeErrorV2::InvalidPublicationIntentTranscript)
+    ));
+
+    let mut canonical = build_parts_v2().final_artifact.to_bytes();
+    let alternate = build_parts_v2_with_closure(compiler_closure(0x81))
+        .final_artifact
+        .to_bytes();
+    let canonical_range = final_artifact_intent_range(&canonical);
+    let alternate_range = final_artifact_intent_range(&alternate);
+    assert_eq!(canonical_range.len(), alternate_range.len());
+    canonical[canonical_range].copy_from_slice(&alternate[alternate_range]);
+    reseal_final_artifact(&mut canonical);
+    assert!(matches!(
+        WorkerV2FinalArtifactEvidenceV2::from_bytes(&canonical),
+        Err(WorkerV2FinalArtifactDecodeErrorV2::Validation(
+            WorkerV2FinalArtifactValidationErrorV2::PublicationIntentMismatch
+        ))
+    ));
+}
+
+#[test]
+fn protected_v2_intent_and_inspection_lengths_are_canonically_bounded() {
+    let canonical = build_parts_v2().final_artifact.to_bytes();
+    for offset in [24, 26] {
+        let mut oversized = canonical.clone();
+        oversized[offset..offset + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+        reseal_final_artifact(&mut oversized);
+        assert!(matches!(
+            WorkerV2FinalArtifactEvidenceV2::from_bytes(&oversized),
+            Err(WorkerV2FinalArtifactDecodeErrorV2::LengthOutOfRange { .. })
+        ));
+    }
+
+    let intent_len = u16::from_le_bytes(canonical[24..26].try_into().unwrap());
+    for noncanonical_len in [intent_len - 1, intent_len + 1] {
+        let mut noncanonical = canonical.clone();
+        noncanonical[24..26].copy_from_slice(&noncanonical_len.to_le_bytes());
+        reseal_final_artifact(&mut noncanonical);
+        assert!(matches!(
+            WorkerV2FinalArtifactEvidenceV2::from_bytes(&noncanonical),
+            Err(WorkerV2FinalArtifactDecodeErrorV2::InvalidPublicationIntentTranscript)
+        ));
+    }
+}
+
+#[test]
 fn protected_v2_final_evidence_rejects_every_closure_role_mutation() {
     let parts = build_parts_v2();
     let canonical = parts.final_artifact.to_bytes();
@@ -1096,6 +1213,35 @@ fn protected_v2_rejects_target_cov_abi_descriptor_symbol_resource_proof_and_fina
             "accepted final-artifact substitution at {relative_offset}"
         );
     }
+}
+
+#[test]
+fn protected_v2_rejects_coordinated_descriptor_and_facet_mutation() {
+    let parts = build_parts_v2();
+    let canonical_digest = *CanonicalCodeObjectDigest::calculate_from_canonicalized_hsaco(
+        parts.container.payloads()[0].bytes(),
+    )
+    .as_bytes();
+    let alternate_descriptor = DescriptorLineageV1::new(
+        descriptor_table_with_dynamic_shared_memory(canonical_digest, 1),
+    )
+    .canonical_bytes();
+    let mut bytes = parts.into_envelope().unwrap().to_bytes();
+    let descriptor_range = v2_descriptor_range(&bytes);
+    assert_eq!(descriptor_range.len(), alternate_descriptor.len());
+    bytes[descriptor_range].copy_from_slice(&alternate_descriptor);
+
+    let descriptor_identity = checksum(
+        b"FE2O3/PROTECTED-WORKER-V2/DESCRIPTOR-IDENTITY/V2\0",
+        &alternate_descriptor,
+    );
+    let final_range = v2_final_artifact_range(&bytes);
+    let facet_start = final_range.start + FINAL_ARTIFACT_FACETS_OFFSET + 64;
+    bytes[facet_start..facet_start + 32].copy_from_slice(&descriptor_identity);
+    reseal_final_artifact(&mut bytes[final_range]);
+    reseal_v2_envelope(&mut bytes);
+
+    assert!(WorkerV2LoadEnvelopeV2::from_bytes(&bytes).is_err());
 }
 
 #[test]

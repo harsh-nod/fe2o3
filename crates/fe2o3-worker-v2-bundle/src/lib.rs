@@ -9,6 +9,7 @@ mod error;
 mod inputs;
 mod load_envelope_name;
 mod model;
+mod protected_transcript_v2;
 mod protected_v2;
 mod static_application;
 
@@ -60,6 +61,12 @@ pub use model::{
     DescriptorLineageV1, ExactRawHsacoV1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
     MAX_WORKER_V2_PROOF_EVIDENCE_BYTES, MAX_WORKER_V2_RAW_HSACO_BYTES,
     WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
+};
+pub use protected_transcript_v2::{
+    WorkerV2ProducerBindingV2, WorkerV2ProtectedInspectionRouteV2,
+    WorkerV2ProtectedInspectionTranscriptIdentityV2, WorkerV2ProtectedInspectionTranscriptV2,
+    WorkerV2PublicationIntentTranscriptIdentityV2, WorkerV2PublicationIntentTranscriptV2,
+    WorkerV2TranscriptValidationErrorV2,
 };
 pub use protected_v2::{
     MAX_WORKER_V2_FINAL_ARTIFACT_EVIDENCE_BYTES_V2, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2,

@@ -3,14 +3,18 @@ use fe2o3_artifact_transaction::{
     MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, UpstreamCodeObjectEvidenceIdentityV1,
 };
 use fe2o3_artifacts::{
-    ArtifactContainerV1, BundleIndexV1, CallerClaimedPackageIdentityV1, CodeObjectFormat,
+    AbiKind, Access, AliasClass, ArgumentOwnership, ArtifactContainerV1, BlockSize, BundleIndexV1,
+    CallerClaimedPackageIdentityV1, Capability, CodeObjectFormat,
     DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm, DirectLinkBindingSourceV1,
     DirectLinkBundleEvidenceV1, Endianness, MAX_BUNDLE_INDEX_BYTES, MAX_CONTAINER_BYTES,
     MAX_DIRECT_LINK_EVIDENCE_BYTES, ManifestClaimDerivedLinkPublicationScopeV1,
     ManifestClaimDirectLinkPublicationBridgeV1, PayloadDigest, PointerWidth, ProofRecordV1,
+    ScalarType,
 };
 use fe2o3_kernel_descriptor::{
-    DeviceDescriptorTableV1, MAX_DESCRIPTOR_TABLE_BYTES, encode_device_descriptor_table_v1,
+    AccessMode, AliasSemantics, BlockSizeV1, CanonicalCodeObjectDigest, CapabilityV1,
+    DeviceDescriptorTableV1, MAX_DESCRIPTOR_TABLE_BYTES, OwnershipSemantics,
+    PhysicalAbiComponentKind, ScalarTypeV1, encode_device_descriptor_table_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -215,9 +219,54 @@ impl WorkerV2EnvelopeComponentsV1 {
         bundle_index: BundleIndexV1,
         direct_link_evidence: DirectLinkBundleEvidenceV1,
         descriptor_lineage: DescriptorLineageV1,
+        proof_records: Vec<ProofRecordV1>,
+        raw_hsaco: ExactRawHsacoV1,
+        claim: PublicationClaimViewV1,
+    ) -> Result<Self, EnvelopeValidationError> {
+        Self::new_with_descriptor_profile(
+            container,
+            bundle_index,
+            direct_link_evidence,
+            descriptor_lineage,
+            proof_records,
+            raw_hsaco,
+            claim,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_protected_v2(
+        container: ArtifactContainerV1,
+        bundle_index: BundleIndexV1,
+        direct_link_evidence: DirectLinkBundleEvidenceV1,
+        descriptor_lineage: DescriptorLineageV1,
+        proof_records: Vec<ProofRecordV1>,
+        raw_hsaco: ExactRawHsacoV1,
+        claim: PublicationClaimViewV1,
+    ) -> Result<Self, EnvelopeValidationError> {
+        Self::new_with_descriptor_profile(
+            container,
+            bundle_index,
+            direct_link_evidence,
+            descriptor_lineage,
+            proof_records,
+            raw_hsaco,
+            claim,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_descriptor_profile(
+        container: ArtifactContainerV1,
+        bundle_index: BundleIndexV1,
+        direct_link_evidence: DirectLinkBundleEvidenceV1,
+        descriptor_lineage: DescriptorLineageV1,
         mut proof_records: Vec<ProofRecordV1>,
         raw_hsaco: ExactRawHsacoV1,
         claim: PublicationClaimViewV1,
+        protected_v2: bool,
     ) -> Result<Self, EnvelopeValidationError> {
         validate_raw_hsaco(raw_hsaco.identity, &raw_hsaco.bytes)?;
         let derived = BundleIndexV1::from_containers(std::slice::from_ref(&container))?;
@@ -239,6 +288,9 @@ impl WorkerV2EnvelopeComponentsV1 {
         )?;
         validate_payloads(&container, binding.expectation(), &raw_hsaco)?;
         validate_descriptor(&container, descriptor_lineage.table())?;
+        if protected_v2 {
+            validate_protected_descriptor_semantics(&container, descriptor_lineage.table())?;
+        }
         canonicalize_and_validate_proofs(&container, &mut proof_records)?;
         validate_publication_claim(&container, &validated, claim)?;
 
@@ -429,6 +481,261 @@ pub(crate) fn validate_descriptor(
         }
     }
     Ok(())
+}
+
+fn validate_protected_descriptor_semantics(
+    container: &ArtifactContainerV1,
+    table: &DeviceDescriptorTableV1,
+) -> Result<(), EnvelopeValidationError> {
+    let Some(code_object_digest) = container
+        .manifest()
+        .kernels()
+        .first()
+        .map(|kernel| kernel.code_object_digest())
+    else {
+        return Err(EnvelopeValidationError::DescriptorKernelMismatch {
+            field: "canonical code-object digest",
+        });
+    };
+    let Some(finalized_payload) = container
+        .payloads()
+        .iter()
+        .find(|payload| payload.digest().bytes() == code_object_digest)
+    else {
+        return Err(EnvelopeValidationError::DescriptorKernelMismatch {
+            field: "canonical code-object digest",
+        });
+    };
+    if table.canonical_code_object_digest()
+        != CanonicalCodeObjectDigest::calculate_from_canonicalized_hsaco(finalized_payload.bytes())
+    {
+        return Err(EnvelopeValidationError::DescriptorKernelMismatch {
+            field: "canonical code-object digest",
+        });
+    }
+    for (descriptor, kernel) in table.kernels().iter().zip(container.manifest().kernels()) {
+        let capabilities_match = descriptor.capabilities().len()
+            == kernel.required_capabilities().len()
+            && descriptor
+                .capabilities()
+                .iter()
+                .zip(kernel.required_capabilities())
+                .all(|(descriptor, manifest)| capability_matches(*descriptor, *manifest));
+        if !capabilities_match {
+            return Err(EnvelopeValidationError::DescriptorKernelMismatch {
+                field: "capability closure",
+            });
+        }
+
+        let manifest_abi = kernel.abi();
+        let descriptor_abi = descriptor.abi_layout();
+        if u64::from(descriptor_abi.explicit_argument_size()) != manifest_abi.size()
+            || descriptor_abi.kernarg_segment_alignment() != manifest_abi.alignment()
+            || descriptor.arguments().len() != manifest_abi.fields().len()
+        {
+            return Err(EnvelopeValidationError::DescriptorKernelMismatch {
+                field: "physical ABI",
+            });
+        }
+        for (index, (argument, field)) in descriptor
+            .arguments()
+            .iter()
+            .zip(manifest_abi.fields())
+            .enumerate()
+        {
+            if usize::from(argument.source_index()) != index
+                || argument.name().as_str() != field.name().as_str()
+                || !ownership_matches(argument.ownership(), field.ownership())
+                || !access_matches(argument.access(), field.access())
+                || !alias_matches(argument.alias(), field.alias_class())
+                || !logical_argument_layout_matches(table, argument, field)
+            {
+                return Err(EnvelopeValidationError::DescriptorKernelMismatch {
+                    field: "logical argument or type/layout closure",
+                });
+            }
+        }
+
+        let manifest_launch = kernel.launch();
+        let descriptor_launch = descriptor.launch();
+        if descriptor_launch.rank() != manifest_launch.rank()
+            || !block_size_matches(descriptor_launch.block_size(), manifest_launch.block_size())
+            || !dimensions_match(descriptor_launch.max_grid(), manifest_launch.max_grid())
+            || descriptor_launch.static_shared_memory_bytes()
+                != manifest_launch.static_shared_memory_bytes()
+            || descriptor_launch.max_dynamic_shared_memory_bytes()
+                != manifest_launch.max_dynamic_shared_memory_bytes()
+        {
+            return Err(EnvelopeValidationError::DescriptorKernelMismatch {
+                field: "launch and shared-memory resource contract",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn capability_matches(descriptor: CapabilityV1, manifest: Capability) -> bool {
+    matches!(
+        (descriptor, manifest),
+        (CapabilityV1::Subgroup, Capability::Subgroup)
+            | (CapabilityV1::Ballot, Capability::Ballot)
+            | (CapabilityV1::Shuffle, Capability::Shuffle)
+            | (CapabilityV1::WorkgroupMemory, Capability::WorkgroupMemory)
+            | (CapabilityV1::MatrixMultiply, Capability::MatrixMultiply)
+            | (CapabilityV1::AsyncCopy, Capability::AsyncCopy)
+            | (CapabilityV1::Atomics, Capability::Atomics)
+            | (CapabilityV1::AmdWave, Capability::AmdWave)
+            | (CapabilityV1::AmdMfma, Capability::AmdMfma)
+            | (CapabilityV1::AmdWmma, Capability::AmdWmma)
+            | (CapabilityV1::AmdDsPermute, Capability::AmdDsPermute)
+    )
+}
+
+fn ownership_matches(descriptor: OwnershipSemantics, manifest: ArgumentOwnership) -> bool {
+    matches!(
+        (descriptor, manifest),
+        (OwnershipSemantics::ByValue, ArgumentOwnership::ByValue)
+            | (
+                OwnershipSemantics::SharedBorrow,
+                ArgumentOwnership::SharedBorrow
+            )
+            | (
+                OwnershipSemantics::UniqueBorrow,
+                ArgumentOwnership::UniqueBorrow
+            )
+    )
+}
+
+fn access_matches(descriptor: AccessMode, manifest: Access) -> bool {
+    matches!(
+        (descriptor, manifest),
+        (AccessMode::ByValue, Access::ByValue)
+            | (AccessMode::ReadOnly, Access::ReadOnly)
+            | (AccessMode::WriteOnly, Access::WriteOnly)
+            | (AccessMode::ReadWrite, Access::ReadWrite)
+    )
+}
+
+fn alias_matches(descriptor: AliasSemantics, manifest: AliasClass) -> bool {
+    matches!(
+        (descriptor, manifest),
+        (AliasSemantics::Value, AliasClass::Value)
+            | (AliasSemantics::SharedReadOnly, AliasClass::SharedReadOnly)
+            | (AliasSemantics::Exclusive, AliasClass::Exclusive)
+    )
+}
+
+fn logical_argument_layout_matches(
+    table: &DeviceDescriptorTableV1,
+    argument: &fe2o3_kernel_descriptor::LogicalArgumentV1,
+    field: &fe2o3_artifacts::AbiField,
+) -> bool {
+    let Some(source_type) = table
+        .type_records()
+        .iter()
+        .find(|record| record.identity() == argument.source_type())
+    else {
+        return false;
+    };
+    let Some(device_layout) = table
+        .layout_records()
+        .iter()
+        .find(|record| record.identity() == argument.device_layout())
+    else {
+        return false;
+    };
+    if argument.source_type().as_bytes() != field.type_identity().rust_type().bytes().as_bytes()
+        || argument.device_layout().as_bytes() != field.type_identity().layout().bytes().as_bytes()
+    {
+        return false;
+    }
+    let Ok(offset) = u32::try_from(field.offset()) else {
+        return false;
+    };
+    let components = argument.physical_components().collect::<Vec<_>>();
+    match field.kind() {
+        AbiKind::Scalar(manifest_scalar) => {
+            let descriptor_scalar = scalar_type_v1(manifest_scalar);
+            source_type.descriptor().is_scalar()
+                && device_layout.descriptor().size_bytes() == descriptor_scalar.size_bytes()
+                && device_layout.descriptor().alignment_bytes()
+                    == descriptor_scalar.alignment_bytes()
+                && source_type.descriptor().scalar_type() == descriptor_scalar
+                && device_layout.descriptor().scalar_type() == descriptor_scalar
+                && components.as_slice()
+                    == [(
+                        PhysicalAbiComponentKind::ScalarByValue(descriptor_scalar),
+                        offset,
+                        descriptor_scalar.size_bytes(),
+                        descriptor_scalar.alignment_bytes(),
+                    )]
+        }
+        AbiKind::Slice {
+            element_size,
+            element_alignment,
+        } => {
+            let Some(length_offset) = offset.checked_add(8) else {
+                return false;
+            };
+            let descriptor_scalar = source_type.descriptor().scalar_type();
+            let kind_matches = match field.ownership() {
+                ArgumentOwnership::SharedBorrow => source_type.descriptor().is_shared_slice(),
+                ArgumentOwnership::UniqueBorrow => source_type.descriptor().is_disjoint_slice(),
+                _ => false,
+            };
+            kind_matches
+                && device_layout.descriptor().scalar_type() == descriptor_scalar
+                && u64::from(descriptor_scalar.size_bytes()) == element_size
+                && u32::from(descriptor_scalar.alignment_bytes()) == element_alignment
+                && field.size() == 16
+                && field.alignment() == 8
+                && components.as_slice()
+                    == [
+                        (PhysicalAbiComponentKind::GlobalPointer, offset, 8, 8),
+                        (
+                            PhysicalAbiComponentKind::SliceLengthU64,
+                            length_offset,
+                            8,
+                            8,
+                        ),
+                    ]
+        }
+        AbiKind::Pointer { .. } => false,
+    }
+}
+
+const fn scalar_type_v1(value: ScalarType) -> ScalarTypeV1 {
+    match value {
+        ScalarType::I8 => ScalarTypeV1::I8,
+        ScalarType::U8 => ScalarTypeV1::U8,
+        ScalarType::I16 => ScalarTypeV1::I16,
+        ScalarType::U16 => ScalarTypeV1::U16,
+        ScalarType::I32 => ScalarTypeV1::I32,
+        ScalarType::U32 => ScalarTypeV1::U32,
+        ScalarType::I64 => ScalarTypeV1::I64,
+        ScalarType::U64 => ScalarTypeV1::U64,
+        ScalarType::F16 => ScalarTypeV1::F16,
+        ScalarType::F32 => ScalarTypeV1::F32,
+        ScalarType::F64 => ScalarTypeV1::F64,
+    }
+}
+
+fn block_size_matches(descriptor: BlockSizeV1, manifest: BlockSize) -> bool {
+    match (descriptor, manifest) {
+        (BlockSizeV1::Any, BlockSize::Any) => true,
+        (BlockSizeV1::Exact(left), BlockSize::Exact(right))
+        | (BlockSizeV1::AtMost(left), BlockSize::AtMost(right)) => dimensions_match(left, right),
+        _ => false,
+    }
+}
+
+fn dimensions_match(
+    descriptor: fe2o3_kernel_descriptor::DimensionsV1,
+    manifest: fe2o3_artifacts::Dimensions,
+) -> bool {
+    descriptor.x() == manifest.x()
+        && descriptor.y() == manifest.y()
+        && descriptor.z() == manifest.z()
 }
 
 pub(crate) fn canonicalize_and_validate_proofs(

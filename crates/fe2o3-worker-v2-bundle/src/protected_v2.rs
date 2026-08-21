@@ -3,7 +3,7 @@ use std::fmt;
 use fe2o3_artifact_transaction::{
     BackendPublicationReceiptV2, DurablePublishedClaimCodecErrorV2, DurablePublishedHsacoClaimV2,
     MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V2,
-    WorkerV2PublicationIntentIdentityV2,
+    WorkerV2PublicationIntentIdentityV2, WorkerV2PublicationIntentRecordV2,
 };
 use fe2o3_artifacts::{
     AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, ArtifactContainerV1, BlockSize,
@@ -14,7 +14,6 @@ use fe2o3_artifacts::{
     ProofRecordV1, ScalarType,
 };
 use fe2o3_build_authority::{CompilerClosureErrorV2, CompilerClosureV2};
-use fe2o3_hsaco_finalize::InspectedProtectedRawWorkerV2HsacoIdentityV1;
 use fe2o3_kernel_descriptor::{
     CodeObjectVersion, DecodeError as DescriptorDecodeError, DeviceTargetV1,
     MAX_DESCRIPTOR_TABLE_BYTES, decode_device_descriptor_table_v1,
@@ -22,6 +21,11 @@ use fe2o3_kernel_descriptor::{
 use sha2::{Digest, Sha256};
 
 use crate::model::{PublicationClaimViewV1, WorkerV2EnvelopeComponentsV1};
+use crate::protected_transcript_v2::{
+    MAX_PROTECTED_INSPECTION_TRANSCRIPT_BYTES_V2, MAX_PUBLICATION_INTENT_TRANSCRIPT_BYTES_V2,
+    WorkerV2ProducerBindingV2, WorkerV2ProtectedInspectionTranscriptV2,
+    WorkerV2PublicationIntentTranscriptV2, WorkerV2TranscriptValidationErrorV2,
+};
 use crate::{
     DescriptorLineageV1, EnvelopeValidationError, ExactRawHsacoV1,
     MAX_WORKER_V2_PROOF_EVIDENCE_BYTES, MAX_WORKER_V2_RAW_HSACO_BYTES,
@@ -32,16 +36,18 @@ pub const WORKER_V2_FINAL_ARTIFACT_EVIDENCE_VERSION_V2: u16 = 2;
 pub const WORKER_V2_LOAD_ENVELOPE_MAGIC_V2: [u8; 8] = *b"FE2W2B2\0";
 pub const WORKER_V2_LOAD_ENVELOPE_VERSION_V2: u16 = 2;
 
-const FINAL_ARTIFACT_HEADER_BYTES_V2: usize = 24;
+const FINAL_ARTIFACT_HEADER_BYTES_V2: usize = 28;
 const COMPILER_CLOSURE_BYTES_V2: usize = (6 * 32) + 2 + 32;
 const FINAL_ARTIFACT_FIXED_BODY_BYTES_V2: usize =
-    FINAL_ARTIFACT_HEADER_BYTES_V2 + COMPILER_CLOSURE_BYTES_V2 + 32 + 32 + 8 + (6 * 32);
+    FINAL_ARTIFACT_HEADER_BYTES_V2 + COMPILER_CLOSURE_BYTES_V2 + 32 + 8 + (6 * 32);
 const LOAD_ENVELOPE_HEADER_BYTES_V2: usize = 77;
 const CHECKSUM_BYTES_V2: usize = 32;
 const MAX_TARGET_TEXT_BYTES_V2: usize = 256;
 
 pub const MAX_WORKER_V2_FINAL_ARTIFACT_EVIDENCE_BYTES_V2: usize = FINAL_ARTIFACT_FIXED_BODY_BYTES_V2
     + MAX_TARGET_TEXT_BYTES_V2
+    + MAX_PUBLICATION_INTENT_TRANSCRIPT_BYTES_V2
+    + MAX_PROTECTED_INSPECTION_TRANSCRIPT_BYTES_V2
     + MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V2
     + CHECKSUM_BYTES_V2;
 pub const MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2: usize = MAX_CONTAINER_BYTES
@@ -168,12 +174,10 @@ impl WorkerV2ProofOrInspectionIdentityV2 {
         }
     }
 
-    pub const fn from_protected_inspection(
-        identity: InspectedProtectedRawWorkerV2HsacoIdentityV1,
-    ) -> Self {
+    pub fn from_protected_inspection(transcript: &WorkerV2ProtectedInspectionTranscriptV2) -> Self {
         Self {
             kind: WorkerV2ProofOrInspectionKindV2::ProtectedInspection,
-            identity: *identity.as_bytes(),
+            identity: transcript.identity().as_bytes(),
         }
     }
 
@@ -194,7 +198,7 @@ impl WorkerV2ProofOrInspectionIdentityV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerV2FinalArtifactEvidenceV2 {
     compiler_closure: CompilerClosureV2,
-    publication_intent: WorkerV2PublicationIntentIdentityV2,
+    publication_intent: WorkerV2PublicationIntentTranscriptV2,
     backend_receipt: BackendPublicationReceiptV2,
     published_claim: DurablePublishedHsacoClaimV2,
     final_bytes: WorkerV2FinalBytesIdentityV2,
@@ -206,6 +210,7 @@ pub struct WorkerV2FinalArtifactEvidenceV2 {
     symbol_identity: WorkerV2SymbolIdentityV2,
     resource_identity: WorkerV2ResourceIdentityV2,
     proof_or_inspection_identity: WorkerV2ProofOrInspectionIdentityV2,
+    protected_inspection: Option<WorkerV2ProtectedInspectionTranscriptV2>,
 }
 
 impl WorkerV2FinalArtifactEvidenceV2 {
@@ -215,7 +220,8 @@ impl WorkerV2FinalArtifactEvidenceV2 {
         descriptor_lineage: &DescriptorLineageV1,
         proof_records: &[ProofRecordV1],
         compiler_closure: CompilerClosureV2,
-        publication_intent: WorkerV2PublicationIntentIdentityV2,
+        publication_intent: WorkerV2PublicationIntentRecordV2,
+        producer_binding: WorkerV2ProducerBindingV2,
         backend_receipt: BackendPublicationReceiptV2,
         published_claim: DurablePublishedHsacoClaimV2,
     ) -> Result<Self, WorkerV2FinalArtifactValidationErrorV2> {
@@ -224,9 +230,11 @@ impl WorkerV2FinalArtifactEvidenceV2 {
             descriptor_lineage,
             compiler_closure,
             publication_intent,
+            producer_binding,
             backend_receipt,
             published_claim,
             WorkerV2ProofOrInspectionIdentityV2::from_proof_records(proof_records),
+            None,
         )
     }
 
@@ -234,9 +242,10 @@ impl WorkerV2FinalArtifactEvidenceV2 {
     pub fn from_protected_inspection(
         container: &ArtifactContainerV1,
         descriptor_lineage: &DescriptorLineageV1,
-        protected_inspection: InspectedProtectedRawWorkerV2HsacoIdentityV1,
+        protected_inspection: WorkerV2ProtectedInspectionTranscriptV2,
         compiler_closure: CompilerClosureV2,
-        publication_intent: WorkerV2PublicationIntentIdentityV2,
+        publication_intent: WorkerV2PublicationIntentRecordV2,
+        producer_binding: WorkerV2ProducerBindingV2,
         backend_receipt: BackendPublicationReceiptV2,
         published_claim: DurablePublishedHsacoClaimV2,
     ) -> Result<Self, WorkerV2FinalArtifactValidationErrorV2> {
@@ -245,9 +254,11 @@ impl WorkerV2FinalArtifactEvidenceV2 {
             descriptor_lineage,
             compiler_closure,
             publication_intent,
+            producer_binding,
             backend_receipt,
             published_claim,
-            WorkerV2ProofOrInspectionIdentityV2::from_protected_inspection(protected_inspection),
+            WorkerV2ProofOrInspectionIdentityV2::from_protected_inspection(&protected_inspection),
+            Some(protected_inspection),
         )
     }
 
@@ -256,10 +267,12 @@ impl WorkerV2FinalArtifactEvidenceV2 {
         container: &ArtifactContainerV1,
         descriptor_lineage: &DescriptorLineageV1,
         compiler_closure: CompilerClosureV2,
-        publication_intent: WorkerV2PublicationIntentIdentityV2,
+        publication_intent: WorkerV2PublicationIntentRecordV2,
+        producer_binding: WorkerV2ProducerBindingV2,
         backend_receipt: BackendPublicationReceiptV2,
         published_claim: DurablePublishedHsacoClaimV2,
         proof_or_inspection_identity: WorkerV2ProofOrInspectionIdentityV2,
+        protected_inspection: Option<WorkerV2ProtectedInspectionTranscriptV2>,
     ) -> Result<Self, WorkerV2FinalArtifactValidationErrorV2> {
         let final_output = backend_receipt.finalized_output_identity();
         let final_payload = container
@@ -271,6 +284,11 @@ impl WorkerV2FinalArtifactEvidenceV2 {
             })
             .ok_or(WorkerV2FinalArtifactValidationErrorV2::FinalBytesIdentityMismatch)?;
         let table = descriptor_lineage.table();
+        let publication_intent = WorkerV2PublicationIntentTranscriptV2::from_record(
+            publication_intent,
+            producer_binding,
+        )
+        .map_err(WorkerV2FinalArtifactValidationErrorV2::PublicationIntentTranscript)?;
         let value = Self {
             compiler_closure,
             publication_intent,
@@ -288,8 +306,18 @@ impl WorkerV2FinalArtifactEvidenceV2 {
             symbol_identity: WorkerV2SymbolIdentityV2(derive_symbol_identity_v2(container)),
             resource_identity: WorkerV2ResourceIdentityV2(derive_resource_identity_v2(container)),
             proof_or_inspection_identity,
+            protected_inspection,
         };
         value.validate_self()?;
+        value.validate_publication_intent()?;
+        if let Some(transcript) = &value.protected_inspection {
+            transcript
+                .validate_facets(container, descriptor_lineage)
+                .map_err(WorkerV2FinalArtifactValidationErrorV2::ProtectedInspectionTranscript)?;
+            if !transcript.validates_exact_final_bytes(final_payload.bytes()) {
+                return Err(WorkerV2FinalArtifactValidationErrorV2::FinalBytesIdentityMismatch);
+            }
+        }
         Ok(value)
     }
 
@@ -298,7 +326,11 @@ impl WorkerV2FinalArtifactEvidenceV2 {
     }
 
     pub const fn publication_intent_identity(&self) -> WorkerV2PublicationIntentIdentityV2 {
-        self.publication_intent
+        self.publication_intent.source_record_identity()
+    }
+
+    pub const fn publication_intent_transcript(&self) -> &WorkerV2PublicationIntentTranscriptV2 {
+        &self.publication_intent
     }
 
     pub const fn backend_receipt(&self) -> BackendPublicationReceiptV2 {
@@ -345,6 +377,12 @@ impl WorkerV2FinalArtifactEvidenceV2 {
         self.proof_or_inspection_identity
     }
 
+    pub const fn protected_inspection_transcript(
+        &self,
+    ) -> Option<&WorkerV2ProtectedInspectionTranscriptV2> {
+        self.protected_inspection.as_ref()
+    }
+
     pub fn identity(&self) -> WorkerV2FinalArtifactEvidenceIdentityV2 {
         WorkerV2FinalArtifactEvidenceIdentityV2(hash_domain_bytes(
             FINAL_ARTIFACT_IDENTITY_DOMAIN_V2,
@@ -373,9 +411,6 @@ impl WorkerV2FinalArtifactEvidenceV2 {
     }
 
     fn validate_self(&self) -> Result<(), WorkerV2FinalArtifactValidationErrorV2> {
-        if self.publication_intent.as_bytes() == [0; 32] {
-            return Err(WorkerV2FinalArtifactValidationErrorV2::ZeroPublicationIntent);
-        }
         if self.backend_receipt != self.published_claim.receipt() {
             return Err(WorkerV2FinalArtifactValidationErrorV2::BackendReceiptMismatch);
         }
@@ -401,6 +436,32 @@ impl WorkerV2FinalArtifactEvidenceV2 {
         self.published_claim
             .encode_canonical()
             .map_err(WorkerV2FinalArtifactValidationErrorV2::PublishedClaim)?;
+        match (
+            self.proof_or_inspection_identity.kind,
+            self.protected_inspection.as_ref(),
+        ) {
+            (WorkerV2ProofOrInspectionKindV2::ProofRecords, None) => {}
+            (WorkerV2ProofOrInspectionKindV2::ProtectedInspection, Some(transcript))
+                if self.proof_or_inspection_identity.identity
+                    == transcript.identity().as_bytes() => {}
+            _ => {
+                return Err(
+                    WorkerV2FinalArtifactValidationErrorV2::ProofOrInspectionIdentityMismatch,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_publication_intent(&self) -> Result<(), WorkerV2FinalArtifactValidationErrorV2> {
+        let intent = &self.publication_intent;
+        if intent.plan() != self.published_claim.plan()
+            || !intent.matches_backend_receipt(self.backend_receipt)
+            || intent.upstream_evidence() != self.published_claim.upstream_evidence()
+            || intent.output_length() != self.final_bytes.byte_len
+        {
+            return Err(WorkerV2FinalArtifactValidationErrorV2::PublicationIntentMismatch);
+        }
         Ok(())
     }
 
@@ -409,6 +470,7 @@ impl WorkerV2FinalArtifactEvidenceV2 {
         components: &WorkerV2EnvelopeComponentsV1,
     ) -> Result<(), WorkerV2FinalArtifactValidationErrorV2> {
         self.validate_self()?;
+        self.validate_publication_intent()?;
         if !self.final_bytes.matches(components.finalized_payload()) {
             return Err(WorkerV2FinalArtifactValidationErrorV2::FinalBytesIdentityMismatch);
         }
@@ -451,11 +513,37 @@ impl WorkerV2FinalArtifactEvidenceV2 {
                 return Err(WorkerV2FinalArtifactValidationErrorV2::FacetIdentityMismatch(field));
             }
         }
-        if self.proof_or_inspection_identity.kind == WorkerV2ProofOrInspectionKindV2::ProofRecords
-            && self.proof_or_inspection_identity.identity
-                != derive_proof_identity_v2(components.proof_records())
-        {
-            return Err(WorkerV2FinalArtifactValidationErrorV2::ProofOrInspectionIdentityMismatch);
+        match self.proof_or_inspection_identity.kind {
+            WorkerV2ProofOrInspectionKindV2::ProofRecords => {
+                if self.proof_or_inspection_identity.identity
+                    != derive_proof_identity_v2(components.proof_records())
+                {
+                    return Err(
+                        WorkerV2FinalArtifactValidationErrorV2::ProofOrInspectionIdentityMismatch,
+                    );
+                }
+            }
+            WorkerV2ProofOrInspectionKindV2::ProtectedInspection => {
+                let transcript = self.protected_inspection.as_ref().ok_or(
+                    WorkerV2FinalArtifactValidationErrorV2::ProofOrInspectionIdentityMismatch,
+                )?;
+                transcript
+                    .validate_facets(container, components.descriptor_lineage())
+                    .map_err(
+                        WorkerV2FinalArtifactValidationErrorV2::ProtectedInspectionTranscript,
+                    )?;
+                if transcript.compiler_closure() != self.compiler_closure
+                    || transcript.attempt() != self.publication_intent.attempt()
+                    || transcript.target() != self.target
+                    || transcript.code_object_version() != self.code_object_version
+                    || !transcript.validates_exact_raw_bytes(components.raw_hsaco().bytes())
+                    || !transcript.validates_exact_final_bytes(components.finalized_payload())
+                {
+                    return Err(
+                        WorkerV2FinalArtifactValidationErrorV2::ProtectedInspectionMismatch,
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -480,7 +568,7 @@ impl WorkerV2LoadEnvelopeV2 {
         final_artifact_evidence: WorkerV2FinalArtifactEvidenceV2,
     ) -> Result<Self, WorkerV2LoadEnvelopeValidationErrorV2> {
         let claim = final_artifact_evidence.published_claim();
-        let components = WorkerV2EnvelopeComponentsV1::new(
+        let components = WorkerV2EnvelopeComponentsV1::new_protected_v2(
             container,
             bundle_index,
             direct_link_evidence,
@@ -572,7 +660,10 @@ pub enum WorkerV2FinalArtifactFieldV2 {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WorkerV2FinalArtifactValidationErrorV2 {
-    ZeroPublicationIntent,
+    PublicationIntentTranscript(WorkerV2TranscriptValidationErrorV2),
+    PublicationIntentMismatch,
+    ProtectedInspectionTranscript(WorkerV2TranscriptValidationErrorV2),
+    ProtectedInspectionMismatch,
     BackendReceiptMismatch,
     CompilerClosureMismatch,
     FinalBytesSize { actual: usize, max: usize },
@@ -587,9 +678,14 @@ pub enum WorkerV2FinalArtifactValidationErrorV2 {
 impl fmt::Display for WorkerV2FinalArtifactValidationErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ZeroPublicationIntent => {
-                formatter.write_str("protected publication-intent identity must be nonzero")
-            }
+            Self::PublicationIntentTranscript(error) => error.fmt(formatter),
+            Self::PublicationIntentMismatch => formatter.write_str(
+                "protected publication intent differs from the receipt, claim, or final bytes",
+            ),
+            Self::ProtectedInspectionTranscript(error) => error.fmt(formatter),
+            Self::ProtectedInspectionMismatch => formatter.write_str(
+                "protected inspection transcript differs from the exact envelope lineage",
+            ),
             Self::BackendReceiptMismatch => formatter
                 .write_str("protected backend receipt does not equal the durable V2 claim receipt"),
             Self::CompilerClosureMismatch => formatter.write_str(
@@ -627,6 +723,8 @@ impl std::error::Error for WorkerV2FinalArtifactValidationErrorV2 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::PublishedClaim(error) => Some(error),
+            Self::PublicationIntentTranscript(error)
+            | Self::ProtectedInspectionTranscript(error) => Some(error),
             _ => None,
         }
     }
@@ -682,7 +780,7 @@ fn push_len_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
     bytes.extend_from_slice(value);
 }
 
-fn derive_target_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
+pub(crate) fn derive_target_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
     let target = container.manifest().target();
     let mut bytes = Vec::new();
     push_len_bytes(&mut bytes, target.triple().as_str().as_bytes());
@@ -696,7 +794,7 @@ fn derive_target_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
     hash_domain_bytes(TARGET_IDENTITY_DOMAIN_V2, &bytes)
 }
 
-fn derive_abi_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
+pub(crate) fn derive_abi_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(container.manifest().kernels().len() as u16).to_le_bytes());
     for kernel in container.manifest().kernels() {
@@ -745,7 +843,7 @@ fn derive_abi_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
     hash_domain_bytes(ABI_IDENTITY_DOMAIN_V2, &bytes)
 }
 
-fn derive_symbol_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
+pub(crate) fn derive_symbol_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(container.manifest().kernels().len() as u16).to_le_bytes());
     for kernel in container.manifest().kernels() {
@@ -756,7 +854,7 @@ fn derive_symbol_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
     hash_domain_bytes(SYMBOL_IDENTITY_DOMAIN_V2, &bytes)
 }
 
-fn derive_resource_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
+pub(crate) fn derive_resource_identity_v2(container: &ArtifactContainerV1) -> [u8; 32] {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(container.manifest().kernels().len() as u16).to_le_bytes());
     for kernel in container.manifest().kernels() {
@@ -933,12 +1031,22 @@ fn encode_compiler_closure(bytes: &mut Vec<u8>, closure: CompilerClosureV2) {
 impl WorkerV2FinalArtifactEvidenceV2 {
     pub fn to_bytes(&self) -> Vec<u8> {
         let target = self.target.to_string();
+        let publication_intent = self.publication_intent.canonical_bytes();
+        let protected_inspection = self
+            .protected_inspection
+            .as_ref()
+            .map(WorkerV2ProtectedInspectionTranscriptV2::canonical_bytes)
+            .unwrap_or_default();
         let claim = self
             .published_claim
             .encode_canonical()
             .expect("validated protected claim must encode canonically");
-        let total_len =
-            FINAL_ARTIFACT_FIXED_BODY_BYTES_V2 + target.len() + claim.len() + CHECKSUM_BYTES_V2;
+        let total_len = FINAL_ARTIFACT_FIXED_BODY_BYTES_V2
+            + target.len()
+            + publication_intent.len()
+            + protected_inspection.len()
+            + claim.len()
+            + CHECKSUM_BYTES_V2;
         let mut bytes = Vec::with_capacity(total_len);
         bytes.extend_from_slice(&WORKER_V2_FINAL_ARTIFACT_EVIDENCE_MAGIC_V2);
         bytes.extend_from_slice(&WORKER_V2_FINAL_ARTIFACT_EVIDENCE_VERSION_V2.to_le_bytes());
@@ -952,9 +1060,10 @@ impl WorkerV2FinalArtifactEvidenceV2 {
         });
         bytes.push(code_object_version_tag(self.code_object_version));
         bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&(publication_intent.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&(protected_inspection.len() as u16).to_le_bytes());
         debug_assert_eq!(bytes.len(), FINAL_ARTIFACT_HEADER_BYTES_V2);
         encode_compiler_closure(&mut bytes, self.compiler_closure);
-        bytes.extend_from_slice(&self.publication_intent.as_bytes());
         bytes.extend_from_slice(&self.final_bytes.sha256);
         bytes.extend_from_slice(&self.final_bytes.byte_len.to_le_bytes());
         for identity in [
@@ -968,6 +1077,8 @@ impl WorkerV2FinalArtifactEvidenceV2 {
             bytes.extend_from_slice(&identity);
         }
         bytes.extend_from_slice(target.as_bytes());
+        bytes.extend_from_slice(&publication_intent);
+        bytes.extend_from_slice(&protected_inspection);
         bytes.extend_from_slice(&claim);
         let checksum = hash_domain_bytes(FINAL_ARTIFACT_CHECKSUM_DOMAIN_V2, &bytes);
         bytes.extend_from_slice(&checksum);
@@ -1021,6 +1132,14 @@ impl WorkerV2FinalArtifactEvidenceV2 {
         if reader.u16()? != 0 {
             return Err(WorkerV2FinalArtifactDecodeErrorV2::NonZeroReserved);
         }
+        let publication_intent_len = reader.length_u16(
+            "publication intent transcript",
+            MAX_PUBLICATION_INTENT_TRANSCRIPT_BYTES_V2,
+        )?;
+        let protected_inspection_len = reader.length_u16(
+            "protected inspection transcript",
+            MAX_PROTECTED_INSPECTION_TRANSCRIPT_BYTES_V2,
+        )?;
         let compiler_closure = CompilerClosureV2::from_pins_and_identity(
             reader.array()?,
             reader.array()?,
@@ -1032,7 +1151,6 @@ impl WorkerV2FinalArtifactEvidenceV2 {
             reader.array()?,
         )
         .map_err(WorkerV2FinalArtifactDecodeErrorV2::CompilerClosure)?;
-        let publication_intent = WorkerV2PublicationIntentIdentityV2::from_bytes(reader.array()?);
         let final_bytes = WorkerV2FinalBytesIdentityV2 {
             sha256: reader.array()?,
             byte_len: reader.u64()?,
@@ -1049,6 +1167,22 @@ impl WorkerV2FinalArtifactEvidenceV2 {
             .map_err(|_| WorkerV2FinalArtifactDecodeErrorV2::InvalidTarget)?;
         let target = DeviceTargetV1::parse(target_text)
             .map_err(|_| WorkerV2FinalArtifactDecodeErrorV2::InvalidTarget)?;
+        let publication_intent = WorkerV2PublicationIntentTranscriptV2::decode_canonical(
+            reader.take(publication_intent_len)?,
+        )
+        .map_err(|_| WorkerV2FinalArtifactDecodeErrorV2::InvalidPublicationIntentTranscript)?;
+        let protected_inspection = if protected_inspection_len == 0 {
+            None
+        } else {
+            Some(
+                WorkerV2ProtectedInspectionTranscriptV2::decode_canonical(
+                    reader.take(protected_inspection_len)?,
+                )
+                .map_err(|_| {
+                    WorkerV2FinalArtifactDecodeErrorV2::InvalidProtectedInspectionTranscript
+                })?,
+            )
+        };
         let published_claim =
             DurablePublishedHsacoClaimV2::decode_canonical(reader.take(claim_len)?)
                 .map_err(WorkerV2FinalArtifactDecodeErrorV2::PublishedClaim)?;
@@ -1069,9 +1203,13 @@ impl WorkerV2FinalArtifactEvidenceV2 {
             symbol_identity,
             resource_identity,
             proof_or_inspection_identity,
+            protected_inspection,
         };
         value
             .validate_self()
+            .map_err(WorkerV2FinalArtifactDecodeErrorV2::Validation)?;
+        value
+            .validate_publication_intent()
             .map_err(WorkerV2FinalArtifactDecodeErrorV2::Validation)?;
         if value.to_bytes() != bytes {
             return Err(WorkerV2FinalArtifactDecodeErrorV2::NonCanonical);
@@ -1297,6 +1435,8 @@ pub enum WorkerV2FinalArtifactDecodeErrorV2 {
     UnknownEvidenceKind(u8),
     UnknownCodeObjectVersion(u8),
     InvalidTarget,
+    InvalidPublicationIntentTranscript,
+    InvalidProtectedInspectionTranscript,
     CompilerClosure(CompilerClosureErrorV2),
     PublishedClaim(DurablePublishedClaimCodecErrorV2),
     Validation(WorkerV2FinalArtifactValidationErrorV2),
@@ -1339,6 +1479,12 @@ impl fmt::Display for WorkerV2FinalArtifactDecodeErrorV2 {
             }
             Self::InvalidTarget => {
                 formatter.write_str("final artifact target is invalid or noncanonical")
+            }
+            Self::InvalidPublicationIntentTranscript => {
+                formatter.write_str("publication intent transcript is invalid or noncanonical")
+            }
+            Self::InvalidProtectedInspectionTranscript => {
+                formatter.write_str("protected inspection transcript is invalid or noncanonical")
             }
             Self::CompilerClosure(error) => error.fmt(formatter),
             Self::PublishedClaim(error) => error.fmt(formatter),
