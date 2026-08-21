@@ -9,7 +9,6 @@ mod capability_broker;
 mod cargo_binding_trampoline;
 mod cargo_invocation_boundary;
 mod clean;
-mod compiler_closure_capability;
 #[cfg(feature = "compiler-handoff-observation-test-only")]
 mod compiler_handoff_observation;
 mod compiler_toolchain;
@@ -79,7 +78,8 @@ const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
 const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
-const COMPILER_CLOSURE_CHILD_FD: std::os::fd::RawFd = 199;
+const COMPILER_CLOSURE_CHILD_FD: std::os::fd::RawFd =
+    fe2o3_compiler_closure_capability::COMPILER_CLOSURE_CHILD_FD_V1;
 const ARTIFACT_CHILD_FD: std::os::fd::RawFd =
     fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
 const BACKEND_CHILD_FD: std::os::fd::RawFd =

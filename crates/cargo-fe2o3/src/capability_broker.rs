@@ -57,10 +57,10 @@ mod platform {
     use sha2::{Digest, Sha256};
 
     use crate::cargo_invocation_boundary::{InvocationAuthorizationRegistryV1, ProcessIdentityV1};
-    use crate::compiler_closure_capability::CompilerClosureCapabilityV1;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
+    use fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
     const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V3\0";
@@ -3433,10 +3433,10 @@ mod unsupported {
     use fe2o3_artifact_transaction::{BrokeredInvocationCapabilityClaimV1, BuildSession};
 
     use crate::cargo_invocation_boundary::InvocationAuthorizationRegistryV1;
-    use crate::compiler_closure_capability::CompilerClosureCapabilityV1;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
+    use fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
     pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =

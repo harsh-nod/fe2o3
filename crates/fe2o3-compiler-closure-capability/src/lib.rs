@@ -1,4 +1,9 @@
 //! Sealed transport for one canonical protected compiler-closure preimage.
+//!
+//! The descriptor carries coordination evidence only. It does not grant compiler, publication,
+//! linking, loading, launch, or execution authority.
+
+#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -23,8 +28,11 @@ const REQUIRED_SEALS: rustix::fs::SealFlags = rustix::fs::SealFlags::WRITE
     .union(rustix::fs::SealFlags::SHRINK)
     .union(rustix::fs::SealFlags::SEAL);
 
+/// Reserved descriptor used to pass the protected compiler closure into rustc and its backend.
+pub const COMPILER_CLOSURE_CHILD_FD_V1: RawFd = 199;
+
 /// An immutable file capability containing one validated compiler closure.
-pub(crate) struct CompilerClosureCapabilityV1 {
+pub struct CompilerClosureCapabilityV1 {
     closure: CompilerClosureV2,
     image: File,
     device: u64,
@@ -33,7 +41,7 @@ pub(crate) struct CompilerClosureCapabilityV1 {
 
 impl CompilerClosureCapabilityV1 {
     /// Creates and seals a canonical capability image.
-    pub(crate) fn create(closure: CompilerClosureV2) -> Result<Self, String> {
+    pub fn create(closure: CompilerClosureV2) -> Result<Self, String> {
         let bytes = encode(closure);
         let image = rustix::fs::memfd_create(
             "fe2o3-compiler-closure-capability-v1",
@@ -64,7 +72,7 @@ impl CompilerClosureCapabilityV1 {
     }
 
     /// Admits an already transferred capability file.
-    pub(crate) fn from_file(image: File) -> Result<Self, String> {
+    pub fn from_file(image: File) -> Result<Self, String> {
         let metadata = validate_file(&image)?;
         let closure = decode(&read_exact_image(&image)?)?;
         let admitted = Self {
@@ -77,13 +85,40 @@ impl CompilerClosureCapabilityV1 {
         Ok(admitted)
     }
 
+    /// Admits the exact descriptor inherited at the canonical child capability number.
+    pub fn from_inherited_child() -> Result<Self, String> {
+        Self::from_inherited_at(COMPILER_CLOSURE_CHILD_FD_V1)
+    }
+
+    /// Admits an inherited descriptor after retaining a private close-on-exec duplicate.
+    pub fn from_inherited_at(child_fd: RawFd) -> Result<Self, String> {
+        if child_fd < 3 {
+            return Err("compiler-closure child descriptor overlaps stdio".to_owned());
+        }
+        // SAFETY: the descriptor is borrowed only for fcntl duplication and remains owned by the
+        // current process.
+        let inherited = unsafe { BorrowedFd::borrow_raw(child_fd) };
+        let flags = rustix::io::fcntl_getfd(inherited).map_err(|error| {
+            format!("cannot inspect inherited compiler-closure descriptor {child_fd}: {error}")
+        })?;
+        if flags.contains(rustix::io::FdFlags::CLOEXEC) {
+            return Err(
+                "inherited compiler-closure descriptor is unexpectedly close-on-exec".to_owned(),
+            );
+        }
+        let retained = rustix::io::fcntl_dupfd_cloexec(inherited, 3).map_err(|error| {
+            format!("cannot retain inherited compiler-closure descriptor {child_fd}: {error}")
+        })?;
+        Self::from_file(File::from(retained))
+    }
+
     /// Returns the exact canonical closure carried by this descriptor.
-    pub(crate) const fn closure(&self) -> CompilerClosureV2 {
+    pub const fn closure(&self) -> CompilerClosureV2 {
         self.closure
     }
 
     /// Revalidates object identity, seals, bytes, and canonical closure equality.
-    pub(crate) fn revalidate(&self) -> Result<(), String> {
+    pub fn revalidate(&self) -> Result<(), String> {
         let metadata = validate_file(&self.image)?;
         if metadata.dev() != self.device || metadata.ino() != self.inode {
             return Err("compiler-closure capability object identity changed".to_owned());
@@ -95,7 +130,7 @@ impl CompilerClosureCapabilityV1 {
     }
 
     /// Clones the exact sealed descriptor for one broker transfer.
-    pub(crate) fn try_clone_for_transfer(&self) -> Result<File, String> {
+    pub fn try_clone_for_transfer(&self) -> Result<File, String> {
         self.revalidate()?;
         let cloned = self
             .image
@@ -107,7 +142,7 @@ impl CompilerClosureCapabilityV1 {
     }
 
     /// Installs this exact immutable image at a reserved descriptor for a child process.
-    pub(crate) fn inherit_for_child_at(
+    pub fn inherit_for_child_at(
         &self,
         command: &mut Command,
         child_fd: RawFd,
@@ -419,5 +454,24 @@ mod tests {
             .unwrap();
         assert!(command.status().unwrap().success());
         capability.revalidate().unwrap();
+    }
+
+    #[test]
+    fn inherited_descriptor_is_retained_and_revalidated_before_use() {
+        let capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
+        let child_fd = 511;
+        let installed = rustix::io::fcntl_dupfd_cloexec(&capability.image, child_fd).unwrap();
+        assert_eq!(installed.as_raw_fd(), child_fd);
+        rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty()).unwrap();
+        let _installed = installed;
+
+        let retained = CompilerClosureCapabilityV1::from_inherited_at(child_fd).unwrap();
+        assert_eq!(retained.closure(), closure());
+        retained.revalidate().unwrap();
+        assert!(
+            rustix::io::fcntl_getfd(&retained.image)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
     }
 }

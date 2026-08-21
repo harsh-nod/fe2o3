@@ -2267,7 +2267,7 @@ struct CompilerCapabilities {
     binding: capability_broker::CapabilityBindingV3,
     backend: PinnedCodegenBackend,
     artifact: PinnedDirectory,
-    compiler_closure: Option<crate::compiler_closure_capability::CompilerClosureCapabilityV1>,
+    compiler_closure: Option<fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1>,
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
     output_dir: PathBuf,
     pinned_cargo_image_sha256: Option<[u8; 32]>,
