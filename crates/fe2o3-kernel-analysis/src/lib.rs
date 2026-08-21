@@ -3,16 +3,21 @@
 //! This crate reports analysis facts and rejected obligations. It does not
 //! grant `Checked`, `Verified`, safe-launch, or any other assurance authority.
 
+#[cfg(feature = "authenticated-machine-effect")]
 mod authenticated_machine_effect;
 mod control_flow;
 mod kernel_check_pipeline;
+#[cfg(feature = "authenticated-machine-effect")]
 mod machine_effect;
+#[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_effect;
 mod pliron_ranked_bounds;
+#[cfg(feature = "authenticated-machine-effect")]
 mod scalar_gemm_v1_physical_machine_effect;
 mod ssa;
 mod uniformity;
 
+#[cfg(feature = "authenticated-machine-effect")]
 pub use authenticated_machine_effect::*;
 pub use control_flow::{
     ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowDiagnosticV2, ControlFlowEdge,
@@ -23,9 +28,12 @@ pub use control_flow::{
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
 pub use kernel_check_pipeline::*;
+#[cfg(feature = "authenticated-machine-effect")]
 pub use machine_effect::*;
+#[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_effect::*;
 pub use pliron_ranked_bounds::*;
+#[cfg(feature = "authenticated-machine-effect")]
 pub use scalar_gemm_v1_physical_machine_effect::*;
 pub use ssa::{
     SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,

@@ -4,10 +4,14 @@
 mod production;
 
 pub use production::{
-    ConstructedGraphStageV1, ConstructionRegisteredStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS,
-    ProductionConstructionV1, ProductionPlironSessionV1, ProductionRootHandleV1,
-    ProductionSessionErrorV1, ProductionSessionLimitErrorV1, ProductionSessionLimitsV1,
-    ProductionStageHandleV1,
+    BoundsVerifiedGraphStageV1, ConstructedGraphStageV1, ConstructionRegisteredStageV1,
+    HARD_MAX_PRODUCTION_CONSTRUCTIONS, HARD_MAX_PRODUCTION_RANKED_ARGUMENTS,
+    ProductionConstructionV1, ProductionPlironSessionV1, ProductionRankedBlockV1,
+    ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
+    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionRootHandleV1, ProductionSessionErrorV1, ProductionSessionLimitErrorV1,
+    ProductionSessionLimitsV1, ProductionStageHandleV1, compile_ranked_kernel_for_lowering_v1,
 };
 
 use std::{
@@ -569,6 +573,79 @@ impl PlironSession {
             owner: self.identity,
             identity,
         })
+    }
+
+    /// Reaccounts and recursively verifies a root after a closed internal builder
+    /// appends typed children. This is crate-private so production callers cannot
+    /// mutate a registered graph or inject a construction callback.
+    pub(crate) fn finish_internal_root_construction(
+        &mut self,
+        handle: &OperationHandle,
+    ) -> Result<(), OperationHandleError> {
+        self.validate_identity()?;
+        if handle.owner != self.identity {
+            return Err(OperationHandleError::ForeignSession);
+        }
+        let pointer = self
+            .operations
+            .get(&handle.identity)
+            .copied()
+            .ok_or(OperationHandleError::StaleHandle)?;
+        let old_work = self
+            .owned_tree_work
+            .get(&handle.identity)
+            .copied()
+            .ok_or(OperationHandleError::OperationGraphOwnershipMismatch)?;
+        let tree_work = match catch_unwind(AssertUnwindSafe(|| {
+            inspect_operation_tree(pointer, &mut self.context)
+        })) {
+            Ok(Ok(tree_work)) => tree_work,
+            Ok(Err(error)) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+            Err(_) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::UpstreamPanicked);
+            }
+        };
+        let session_work = self
+            .operation_tree_work
+            .checked_sub(old_work)
+            .and_then(|work| work.checked_add(tree_work))
+            .filter(|work| *work <= HARD_MAX_SESSION_OPERATION_TREE_ITEMS);
+        let Some(session_work) = session_work else {
+            self.poisoned = true;
+            return Err(OperationHandleError::SessionOperationTreeLimitExceeded);
+        };
+        match catch_unwind(AssertUnwindSafe(|| {
+            verify_operation(pointer, &self.context)
+        })) {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::OperationVerificationRejected);
+            }
+            Err(_) => {
+                self.poisoned = true;
+                return Err(OperationHandleError::UpstreamPanicked);
+            }
+        }
+        self.owned_tree_work.insert(handle.identity, tree_work);
+        self.operation_tree_work = session_work;
+        Ok(())
+    }
+
+    /// Checks exact closed-builder tree work before any upstream allocation.
+    pub(crate) fn require_internal_tree_capacity(
+        &self,
+        tree_work: usize,
+    ) -> Result<(), OperationHandleError> {
+        self.operation_tree_work
+            .checked_add(tree_work)
+            .filter(|work| *work <= HARD_MAX_SESSION_OPERATION_TREE_ITEMS)
+            .map(|_| ())
+            .ok_or(OperationHandleError::SessionOperationTreeLimitExceeded)
     }
 
     /// Imports one byte- and tree-guarded textual Pliron root into this owner session.

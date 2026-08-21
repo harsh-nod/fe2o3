@@ -7,12 +7,16 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Conservative kernel IR and bounded machine-effect analyses for fe2o3"
 
+[features]
+default = ["authenticated-machine-effect"]
+authenticated-machine-effect = ["dep:rustix", "dep:sha2"]
+
 [dependencies]
 dialect-kernel.workspace = true
 fe2o3-kernel-ir.workspace = true
 pliron.workspace = true
-sha2.workspace = true
-rustix = { workspace = true, features = ["process", "thread"] }
+sha2 = { workspace = true, optional = true }
+rustix = { workspace = true, features = ["process", "thread"], optional = true }
 
 [lib]
 name = "fe2o3_kernel_analysis"
@@ -22,12 +26,14 @@ name = "fe2o3-machine-effect-worker-fixture"
 path = "tests/fixtures/machine_effect_worker_fixture.rs"
 test = false
 bench = false
+required-features = ["authenticated-machine-effect"]
 
 [[bin]]
 name = "fe2o3-machine-effect-worker-substitute-fixture"
 path = "tests/fixtures/machine_effect_worker_substitute_fixture.rs"
 test = false
 bench = false
+required-features = ["authenticated-machine-effect"]
 
 [lints.rust]
 unsafe_code = "deny"

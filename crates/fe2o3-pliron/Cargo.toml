@@ -14,5 +14,7 @@ default = []
 internal-test-context-access = []
 
 [dependencies]
+dialect-kernel.workspace = true
+fe2o3-kernel-analysis.workspace = true
 fe2o3-pliron-owner-core.workspace = true
 pliron.workspace = true

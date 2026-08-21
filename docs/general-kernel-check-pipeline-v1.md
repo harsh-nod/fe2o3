@@ -117,7 +117,10 @@ relation per block and stores must-facts in dense bitsets; predecessor
 intersection is word-wise rather than cloning hash sets. Its deterministic
 worklist revisits only successors whose input changed. Rank is bounded at 8,
 functions at 1,024 blocks and 65,536 operations, and every rejected access is
-reported once in block/operation/dimension order.
+reported once in block/operation/dimension order. The production recipe
+requires dense local IDs and validates and materializes them with indexed
+vectors, so recipe work is linear in blocks, operations, and operands; sparse
+IDs cannot force proportional allocation.
 
 Structural verification and formal-memory extraction each traverse the relevant
 IR once. Control-flow and barrier algorithms have explicit storage/work limits.
@@ -132,12 +135,16 @@ performs an unbounded fixed point.
 ## Current Boundary
 
 The production MIR-to-Kernel-IR translator invokes the Kernel IR pipeline for
-every translated kernel and stops on `Rejected`. The new ranked-memory Pliron
+every translated kernel and stops on `Rejected`. The ranked-memory Pliron
 operations, local verifiers, and pre-lowering bounds gate are implemented and
-tested as the target-neutral projection contract; the existing detached
-Pliron-to-GPU lowering does not yet consume ranked-memory functions. Connecting
-that projection to the unified production route remains gated on the same
-owner-aware operation-handle work rather than adding a second unchecked route.
+tested as the target-neutral projection contract. The closed
+`ProductionPlironSessionV1` now constructs bounded ranked recipes internally,
+retains the exact function privately, runs the bounds pass, and issues a
+move-only lowering input only from the verified typestate. The existing
+detached Pliron-to-GPU lowering does not yet consume ranked-memory functions,
+and `production-v1` still stops before canonical semantic-MIR-to-ranked-memory
+projection. Those two missing stages must consume the closed result; they may
+not add a second unchecked route or reconstruct a clean report.
 Dynamic launch sizes and unmodeled effects remain `Incomplete`; they are not
 silently accepted as proven. The general GEMM optimized-MIR mutation oracle
 continues to issue diagnostic-only source findings and cannot mint positive
