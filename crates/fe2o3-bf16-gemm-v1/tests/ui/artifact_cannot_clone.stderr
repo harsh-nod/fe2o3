@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `AdmittedBf16GemmKernelArtifactV1` in the current scope
+ --> tests/ui/artifact_cannot_clone.rs:4:19
+  |
+4 |     let _ = value.clone();
+  |                   ^^^^^ method not found in `AdmittedBf16GemmKernelArtifactV1`

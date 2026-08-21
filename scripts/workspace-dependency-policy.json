@@ -66,6 +66,7 @@
       "packages": [
         "dialect-amdgcn",
         "fe2o3-amdgcn-model",
+        "fe2o3-bf16-gemm-v1",
         "fe2o3-copy-kernel-v1",
         "fe2o3-hsaco-finalize",
         "fe2o3-llvm-text",

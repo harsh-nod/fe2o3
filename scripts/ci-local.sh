@@ -42,6 +42,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-amdhsa-loader
   fe2o3-aql
   fe2o3-artifact-transaction
+  fe2o3-bf16-gemm-v1
   fe2o3-completion
   fe2o3-compiler-api
   fe2o3-compiler-driver

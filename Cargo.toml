@@ -65,6 +65,7 @@ fe2o3-aql = { path = "crates/fe2o3-aql" }
 fe2o3-amd-target = { path = "crates/fe2o3-amd-target" }
 fe2o3-artifact-transaction = { path = "crates/fe2o3-artifact-transaction" }
 fe2o3-build-authority = { path = "crates/fe2o3-build-authority" }
+fe2o3-bf16-gemm-v1 = { path = "crates/fe2o3-bf16-gemm-v1" }
 fe2o3-completion = { path = "crates/fe2o3-completion" }
 fe2o3-copy-kernel-v1 = { path = "crates/fe2o3-copy-kernel-v1" }
 fe2o3-compiler-api = { path = "crates/fe2o3-compiler-api" }

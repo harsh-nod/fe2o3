@@ -738,6 +738,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-bf16-gemm-v1"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdhsa-loader",
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-ffi",
+ "fe2o3-hsaco",
+ "fe2o3-hsaco-finalize",
+ "fe2o3-llvm-handoff",
+ "fe2o3-llvm-text",
+ "fe2o3-llvm-worker-handoff",
+ "sha2 0.11.0",
+ "trybuild",
+]
+
+[[package]]
 name = "fe2o3-broker-authority-service"
 version = "0.1.0"
 dependencies = [
@@ -979,8 +995,10 @@ dependencies = [
  "cc",
  "dialect-amdgcn",
  "fe2o3-amd-target",
+ "fe2o3-amdhsa-loader",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-bf16-gemm-v1",
  "fe2o3-compiler-ffi",
  "fe2o3-core",
  "fe2o3-device",

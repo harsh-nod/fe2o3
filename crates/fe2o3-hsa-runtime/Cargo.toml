@@ -23,6 +23,8 @@ cc = "1"
 [dev-dependencies]
 dialect-amdgcn.workspace = true
 fe2o3-artifact-transaction.workspace = true
+fe2o3-amdhsa-loader.workspace = true
+fe2o3-bf16-gemm-v1.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-device.workspace = true
 fe2o3-hsaco.workspace = true

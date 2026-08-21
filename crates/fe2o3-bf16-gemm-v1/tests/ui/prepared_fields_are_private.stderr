@@ -1,0 +1,10 @@
+error[E0616]: field `compiler_handoff` of struct `PreparedBf16GemmKernelV1` is private
+ --> tests/ui/prepared_fields_are_private.rs:4:19
+  |
+4 |     let _ = value.compiler_handoff;
+  |                   ^^^^^^^^^^^^^^^^ private field
+  |
+help: a method `compiler_handoff` also exists, call it with parentheses
+  |
+4 |     let _ = value.compiler_handoff();
+  |                                   ++
