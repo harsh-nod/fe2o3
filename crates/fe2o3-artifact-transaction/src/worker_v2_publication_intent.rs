@@ -2480,6 +2480,8 @@ mod publication_intent_v2 {
         }
     }
 
+    include!("worker_v2_publication_intent_cleanup_escrow.rs");
+
     #[cfg(test)]
     mod tests {
         use super::*;

@@ -142,12 +142,19 @@ use std::sync::Weak;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 pub use worker_v2_publication_intent::{
+    MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1,
     MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES,
     MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2,
     MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES,
     MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES_V2, RecoveredWorkerV2PublicationIntentV1,
     RecoveredWorkerV2PublicationIntentV2, WorkerV2PublicationIntentBoundaryV1,
-    WorkerV2PublicationIntentBoundaryV2, WorkerV2PublicationIntentErrorV1,
+    WorkerV2PublicationIntentBoundaryV2, WorkerV2PublicationIntentCleanupEscrowBoundaryV1,
+    WorkerV2PublicationIntentCleanupEscrowErrorV1,
+    WorkerV2PublicationIntentCleanupEscrowFaultPointV1,
+    WorkerV2PublicationIntentCleanupEscrowFaultTimingV1,
+    WorkerV2PublicationIntentCleanupEscrowIdentityV1,
+    WorkerV2PublicationIntentCleanupEscrowOptionsV1, WorkerV2PublicationIntentCleanupEscrowStateV1,
+    WorkerV2PublicationIntentCleanupEscrowV1, WorkerV2PublicationIntentErrorV1,
     WorkerV2PublicationIntentErrorV2, WorkerV2PublicationIntentFaultPointV1,
     WorkerV2PublicationIntentFaultPointV2, WorkerV2PublicationIntentFaultTimingV1,
     WorkerV2PublicationIntentFaultTimingV2, WorkerV2PublicationIntentIdentityV1,
@@ -155,10 +162,16 @@ pub use worker_v2_publication_intent::{
     WorkerV2PublicationIntentOptionsV2, WorkerV2PublicationIntentOutcomeV1,
     WorkerV2PublicationIntentOutcomeV2, WorkerV2PublicationIntentRecordV1,
     WorkerV2PublicationIntentRecordV2, clear_worker_v2_publication_intent_v1,
-    clear_worker_v2_publication_intent_v2, persist_worker_v2_publication_intent_v1,
-    persist_worker_v2_publication_intent_v1_with_options, persist_worker_v2_publication_intent_v2,
-    persist_worker_v2_publication_intent_v2_with_options, recover_worker_v2_publication_intent_v1,
-    recover_worker_v2_publication_intent_v2,
+    clear_worker_v2_publication_intent_v2, commit_worker_v2_publication_intent_cleanup_escrow_v1,
+    commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options,
+    persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v1_with_options,
+    persist_worker_v2_publication_intent_v2, persist_worker_v2_publication_intent_v2_with_options,
+    prepare_worker_v2_publication_intent_cleanup_escrow_v1,
+    prepare_worker_v2_publication_intent_cleanup_escrow_v1_with_options,
+    recover_worker_v2_publication_intent_cleanup_escrow_v1,
+    recover_worker_v2_publication_intent_v1, recover_worker_v2_publication_intent_v2,
+    rollback_worker_v2_publication_intent_cleanup_escrow_v1,
+    rollback_worker_v2_publication_intent_cleanup_escrow_v1_with_options,
 };
 
 /// Immutable bytes captured from one finalized artifact while its publication lock was held.
