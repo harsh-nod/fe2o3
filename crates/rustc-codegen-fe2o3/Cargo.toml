@@ -18,7 +18,9 @@ dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-amd-target.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-artifact-transaction.workspace = true
+fe2o3-build-authority.workspace = true
 fe2o3-compiler-api.workspace = true
+fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-general-gemm-compiler.workspace = true
 fe2o3-hsaco.workspace = true

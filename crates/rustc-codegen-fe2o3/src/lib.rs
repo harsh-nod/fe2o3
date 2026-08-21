@@ -50,6 +50,7 @@ mod production_semantic_fn_abi_v1;
 mod production_semantic_terminal_v1;
 mod production_semantic_types_v1;
 mod production_target_v1;
+mod protected_rustc_invocation;
 mod record_lowering;
 mod rust_type_layout;
 mod rust_type_layout_general;
@@ -399,6 +400,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 .codegen_pipeline
                 .resolve()
                 .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
+            let protected_rustc_invocation =
+                protected_rustc_invocation::admit_for_codegen(codegen_pipeline)
+                    .unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
+                        ))
+                    });
             let mut production_target = None;
             if codegen_pipeline == CodegenPipeline::ProductionV1
                 && collector::count_production_roots_before_monomorphization_v1(tcx) > 0
@@ -929,6 +937,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 &self.config.target,
                                 custom_llvm_pipeline,
                                 attempt,
+                                protected_rustc_invocation.as_ref(),
                             )
                             .map_err(|error| error.to_string())?;
                         let root_instance_identity = receipt.root_instance_identity().to_owned();

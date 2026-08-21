@@ -23,6 +23,7 @@ use fe2o3_artifacts::{
     BlockSize, Capability, Dimensions, Endianness, IdentityText, LaunchContract,
     Mutability as ArtifactMutability, PointerWidth, RustScalarElementTypeV1, TargetIdentity,
 };
+use fe2o3_build_authority::{COMPILER_CLOSURE_IDENTITY_DOMAIN_V2, CompilerClosureV2};
 use fe2o3_compiler_ffi::CompilerDescriptorSourceV1;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
@@ -41,6 +42,7 @@ use crate::AmdGpuTarget;
 use crate::collector::{
     CollectedFunction, CollectedFunctionRole, CollectionResult, TypedKernelProfile,
 };
+use crate::protected_rustc_invocation::AdmittedProtectedRustcInvocationV1;
 use crate::rust_type_layout_v3::GeneralTypedArgumentKindV3;
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
@@ -82,6 +84,7 @@ const MAX_MANAGED_RUSTC_ARGUMENTS: usize = 4096;
 const MAX_MANAGED_RUSTC_ARGUMENT_BYTES: usize = 1024 * 1024;
 const CARGO_GENERATED_METADATA_SHAPE_V1: &[u8] = b"one-16-byte-lowercase-hex-token";
 const COLLECTED_AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.collected-authority.v1";
+const COLLECTED_AUTHORITY_DOMAIN_V2: &[u8] = b"fe2o3.row-softmax.collected-authority.v2";
 pub(crate) const MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1: usize = 4096;
 const ABI_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.abi-binding.v1";
 const FN_ABI_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.rustc-fn-abi.v1";
@@ -197,12 +200,36 @@ struct AdmittedCompilerSemanticsV1 {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+enum ManagedCompilerClosureAuthorityV1 {
+    UnprotectedQualificationV1([u8; 32]),
+    ProtectedV2(CompilerClosureV2),
+}
+
+impl ManagedCompilerClosureAuthorityV1 {
+    fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::UnprotectedQualificationV1(identity) if identity == &[0; 32] => {
+                Err("row-softmax compiler closure identity is absent")
+            }
+            Self::UnprotectedQualificationV1(_) | Self::ProtectedV2(_) => Ok(()),
+        }
+    }
+
+    const fn transcript_domain(&self) -> &'static [u8] {
+        match self {
+            Self::UnprotectedQualificationV1(_) => COLLECTED_AUTHORITY_DOMAIN_V1,
+            Self::ProtectedV2(_) => COLLECTED_AUTHORITY_DOMAIN_V2,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 struct ManagedBuildAuthorityV1 {
     generation: u64,
     session: [u8; 16],
     invocation: [u8; 32],
     cargo_metadata_transcript: [u8; 32],
-    compiler_closure: [u8; 32],
+    compiler_closure: ManagedCompilerClosureAuthorityV1,
     broker_executable: [u8; 32],
 }
 
@@ -214,9 +241,7 @@ impl ManagedBuildAuthorityV1 {
         if self.cargo_metadata_transcript == [0; 32] {
             return Err("row-softmax wrapper Cargo metadata transcript is absent");
         }
-        if self.compiler_closure == [0; 32] {
-            return Err("row-softmax compiler closure identity is absent");
-        }
+        self.compiler_closure.validate()?;
         Ok(())
     }
 
@@ -227,7 +252,9 @@ impl ManagedBuildAuthorityV1 {
             session: [0x11; 16],
             invocation: [0x22; 32],
             cargo_metadata_transcript,
-            compiler_closure: exact_compiler_closure_policy_for_test().identity_sha256(),
+            compiler_closure: ManagedCompilerClosureAuthorityV1::UnprotectedQualificationV1(
+                exact_compiler_closure_policy_for_test().identity_sha256(),
+            ),
             broker_executable: [0x04; 32],
         }
     }
@@ -480,6 +507,7 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
     target: &AmdGpuTarget,
     custom_llvm_pipeline: bool,
     build_attempt: fe2o3_artifact_transaction::BuildAttempt,
+    protected_rustc_invocation: Option<&AdmittedProtectedRustcInvocationV1>,
 ) -> Result<RowSoftmaxFrontendReceiptV1, CollectedRowSoftmaxErrorV1> {
     admit_execution_context(target.as_str(), custom_llvm_pipeline)?;
     let compiler_semantics = observe_compiler_semantics(tcx);
@@ -487,6 +515,7 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
     let managed_build_authority = require_managed_build_authority(
         build_attempt,
         &admitted_compiler_semantics.cargo_metadata_build_observation,
+        protected_rustc_invocation,
     )?;
     let root = exact_collected_root(&collection.functions)?;
     require_registration(root)?;
@@ -1039,12 +1068,25 @@ fn require_compiler_semantics(
 fn require_managed_build_authority(
     attempt: fe2o3_artifact_transaction::BuildAttempt,
     metadata: &CargoMetadataBuildObservationV1,
+    protected_rustc_invocation: Option<&AdmittedProtectedRustcInvocationV1>,
 ) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
     let observed = observed_metadata_transcript_for_managed_authority()
         .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
-    let compiler_closure =
-        require_nonzero_lower_sha256_environment(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1)
-            .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
+    let compiler_closure = match protected_rustc_invocation {
+        Some(admitted) => {
+            ManagedCompilerClosureAuthorityV1::ProtectedV2(admitted.compiler_closure().map_err(
+                |detail| CollectedRowSoftmaxErrorV1::CompilerSemantics {
+                    detail: format!(
+                        "cannot revalidate admitted protected compiler closure: {detail}"
+                    ),
+                },
+            )?)
+        }
+        None => ManagedCompilerClosureAuthorityV1::UnprotectedQualificationV1(
+            require_nonzero_lower_sha256_environment(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1)
+                .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?,
+        ),
+    };
     let observed_invocation = observe_managed_wrapper_effective_rustc_argv()?;
     let broker_executable = consume_brokered_invocation_authority(attempt, observed_invocation)?;
     admit_managed_build_authority(
@@ -1093,7 +1135,7 @@ fn admit_managed_build_authority(
     attempt: fe2o3_artifact_transaction::BuildAttempt,
     metadata: &CargoMetadataBuildObservationV1,
     observed_metadata_transcript: [u8; 32],
-    compiler_closure: [u8; 32],
+    compiler_closure: ManagedCompilerClosureAuthorityV1,
     observed_invocation: [u8; 32],
     broker_executable: [u8; 32],
 ) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
@@ -2113,7 +2155,13 @@ fn exp_operation(result: u32, argument: u32) -> Operation {
 
 fn collected_authority_transcript(authority: &RowSoftmaxFrontendAuthorityV1) -> Vec<u8> {
     let mut transcript = Vec::with_capacity(1024);
-    push_transcript_field(&mut transcript, COLLECTED_AUTHORITY_DOMAIN_V1);
+    push_transcript_field(
+        &mut transcript,
+        authority
+            .managed_build_authority
+            .compiler_closure
+            .transcript_domain(),
+    );
     push_transcript_field(&mut transcript, &authority.portable_mir_semantic_commitment);
     push_transcript_field(&mut transcript, &authority.compiler_semantics_commitment);
     push_transcript_field(&mut transcript, &authority.canonical_module_commitment);
@@ -2194,7 +2242,7 @@ fn collected_authority_transcript(authority: &RowSoftmaxFrontendAuthorityV1) -> 
         &mut transcript,
         &authority.managed_build_authority.cargo_metadata_transcript,
     );
-    push_transcript_field(
+    push_compiler_closure_transcript(
         &mut transcript,
         &authority.managed_build_authority.compiler_closure,
     );
@@ -2207,6 +2255,49 @@ fn collected_authority_transcript(authority: &RowSoftmaxFrontendAuthorityV1) -> 
         "row-softmax authority transcript exceeds its fixed compiler bound"
     );
     transcript
+}
+
+fn push_compiler_closure_transcript(
+    transcript: &mut Vec<u8>,
+    closure: &ManagedCompilerClosureAuthorityV1,
+) {
+    match closure {
+        ManagedCompilerClosureAuthorityV1::UnprotectedQualificationV1(identity) => {
+            push_transcript_field(transcript, identity);
+        }
+        ManagedCompilerClosureAuthorityV1::ProtectedV2(closure) => {
+            push_transcript_field(
+                transcript,
+                &compiler_closure_v2_canonical_preimage(*closure),
+            );
+            push_transcript_field(transcript, &closure.identity_sha256());
+        }
+    }
+}
+
+fn compiler_closure_v2_canonical_preimage(closure: CompilerClosureV2) -> Vec<u8> {
+    let mut preimage = Vec::with_capacity(COMPILER_CLOSURE_IDENTITY_DOMAIN_V2.len() + 2 + 6 * 32);
+    preimage.extend_from_slice(COMPILER_CLOSURE_IDENTITY_DOMAIN_V2);
+    preimage.extend_from_slice(
+        &closure
+            .cargo_binding_transition_protocol_version()
+            .to_le_bytes(),
+    );
+    for digest in [
+        closure.cargo_executable_sha256(),
+        closure.cargo_binding_trampoline_sha256(),
+        closure.cargo_fe2o3_binding_wrapper_sha256(),
+        closure.rustc_executable_sha256(),
+        closure.rustc_runtime_tree_sha256(),
+        closure.codegen_backend_sha256(),
+    ] {
+        preimage.extend_from_slice(&digest);
+    }
+    debug_assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(&preimage)),
+        closure.identity_sha256()
+    );
+    preimage
 }
 
 fn collected_authority_commitment(authority: &RowSoftmaxFrontendAuthorityV1) -> [u8; 32] {
@@ -2725,12 +2816,22 @@ mod tests {
 
         assert!(
             admit_managed_build_authority(
-                attempt, &metadata, transcript, [0x77; 32], [0x44; 32], [0x66; 32],
+                attempt,
+                &metadata,
+                transcript,
+                ManagedCompilerClosureAuthorityV1::UnprotectedQualificationV1([0x77; 32]),
+                [0x44; 32],
+                [0x66; 32],
             )
             .is_ok()
         );
         let metadata_mismatch = admit_managed_build_authority(
-            attempt, &metadata, [0x99; 32], [0x77; 32], [0x44; 32], [0x66; 32],
+            attempt,
+            &metadata,
+            [0x99; 32],
+            ManagedCompilerClosureAuthorityV1::UnprotectedQualificationV1([0x77; 32]),
+            [0x44; 32],
+            [0x66; 32],
         )
         .expect_err("substituted metadata transcript must fail");
         assert!(matches!(
@@ -2739,7 +2840,12 @@ mod tests {
                 if detail.contains("Cargo metadata transcript does not match")
         ));
         let mismatch = admit_managed_build_authority(
-            attempt, &metadata, transcript, [0x77; 32], [0x55; 32], [0x66; 32],
+            attempt,
+            &metadata,
+            transcript,
+            ManagedCompilerClosureAuthorityV1::UnprotectedQualificationV1([0x77; 32]),
+            [0x55; 32],
+            [0x66; 32],
         )
         .expect_err("substituted observed argv must fail");
         assert!(matches!(
@@ -3152,6 +3258,67 @@ mod tests {
     }
 
     #[test]
+    fn protected_authority_transcript_binds_full_v2_closure_without_changing_v1() {
+        let legacy = exact_frontend_receipt_for_test();
+        let legacy_transcript = legacy.authority_transcript.as_ref().unwrap();
+        let legacy_fields = decode_transcript_fields_for_test(legacy_transcript);
+        assert_eq!(legacy_fields[0], COLLECTED_AUTHORITY_DOMAIN_V1);
+        assert_eq!(
+            legacy_fields[legacy_fields.len() - 2],
+            exact_compiler_closure_policy_for_test()
+                .identity_sha256()
+                .as_slice()
+        );
+        assert_eq!(
+            crate::encode_hex(&Sha256::digest(legacy_transcript)),
+            "34ff0a12fe5ef73ec95d864357e65712c843303887cd834ccaf7231141ddaf13",
+            "unprotected qualification must preserve the V1 transcript wire image",
+        );
+
+        let closure = CompilerClosureV2::new(
+            [0x51; 32], [0x52; 32], [0x53; 32], [0x54; 32], [0x55; 32], [0x56; 32],
+        )
+        .unwrap();
+        let mut protected = exact_frontend_receipt_for_test();
+        let protected_transcript = {
+            let authority = protected.authority.as_mut().unwrap();
+            authority.managed_build_authority.compiler_closure =
+                ManagedCompilerClosureAuthorityV1::ProtectedV2(closure);
+            let transcript = collected_authority_transcript(authority);
+            authority.authority_commitment = Sha256::digest(&transcript).into();
+            transcript
+        };
+        protected.authority_transcript = Some(protected_transcript.clone());
+        protected
+            .consume()
+            .expect("protected transcript is complete");
+
+        let fields = decode_transcript_fields_for_test(&protected_transcript);
+        assert_eq!(fields[0], COLLECTED_AUTHORITY_DOMAIN_V2);
+        assert_eq!(fields.len(), legacy_fields.len() + 1);
+        let canonical_preimage = compiler_closure_v2_canonical_preimage(closure);
+        assert_eq!(
+            fields[fields.len() - 3],
+            canonical_preimage,
+            "protected authority must bind the exact canonical V2 identity preimage",
+        );
+        assert_eq!(fields[fields.len() - 2], closure.identity_sha256());
+    }
+
+    fn decode_transcript_fields_for_test(transcript: &[u8]) -> Vec<&[u8]> {
+        let mut fields = Vec::new();
+        let mut remaining = transcript;
+        while !remaining.is_empty() {
+            let (length, body) = remaining.split_at(8);
+            let length = usize::try_from(u64::from_le_bytes(length.try_into().unwrap())).unwrap();
+            let (field, tail) = body.split_at(length);
+            fields.push(field);
+            remaining = tail;
+        }
+        fields
+    }
+
+    #[test]
     fn kernel_root_build_identity_is_shape_checked_and_fully_receipt_bound() {
         let alternate = "__fe2o3_host_kernel_v1_87e4e114a09ea2b2153fa733dc5925596413c32908cb28f2cc773ff0b3f5102a";
         for identity in [
@@ -3285,7 +3452,10 @@ mod tests {
                 "wrapper Cargo metadata transcript",
             ),
             (
-                |value| value.managed_build_authority.compiler_closure = [0; 32],
+                |value| {
+                    value.managed_build_authority.compiler_closure =
+                        ManagedCompilerClosureAuthorityV1::UnprotectedQualificationV1([0; 32])
+                },
                 "managed wrapper build attempt",
             ),
             (
