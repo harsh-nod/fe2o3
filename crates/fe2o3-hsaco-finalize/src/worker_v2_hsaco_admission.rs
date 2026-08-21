@@ -165,6 +165,26 @@ impl WorkerV2RawLaunchContractV1 {
     pub const fn wavefront_size(self) -> u32 {
         self.wavefront_size
     }
+
+    pub(crate) const fn from_transcript_parts(
+        required_workgroup_size: [u32; 3],
+        max_flat_workgroup_size: u32,
+        wavefront_size: u32,
+    ) -> Option<Self> {
+        if required_workgroup_size[0] == 0
+            || required_workgroup_size[1] == 0
+            || required_workgroup_size[2] == 0
+            || max_flat_workgroup_size == 0
+            || wavefront_size == 0
+        {
+            return None;
+        }
+        Some(Self {
+            required_workgroup_size,
+            max_flat_workgroup_size,
+            wavefront_size,
+        })
+    }
 }
 
 /// Stable identity of policy facts derived from retained evidence and raw-HSACO observations.
@@ -393,6 +413,9 @@ pub struct InspectedProtectedRawWorkerV2HsacoV1 {
     identity: InspectedProtectedRawWorkerV2HsacoIdentityV1,
     response_identity: SealedWorkerV2ResponseIdentityV1,
     descriptor_section: CanonicalDescriptorSectionObservationV1,
+    descriptor_observation_preimage: Vec<u8>,
+    abi_observation_preimage: Vec<u8>,
+    resource_observation_preimage: Vec<u8>,
     policy: WorkerV2RawHsacoPolicyV1,
     source: InertProtectedFirstBuildWorkerV2EvidenceV1,
 }
@@ -483,6 +506,36 @@ impl InspectedProtectedRawWorkerV2HsacoV1 {
 
     pub const fn policy(&self) -> &WorkerV2RawHsacoPolicyV1 {
         &self.policy
+    }
+
+    pub(crate) const fn source_evidence(&self) -> &InertProtectedFirstBuildWorkerV2EvidenceV1 {
+        &self.source
+    }
+
+    pub(crate) fn descriptor_observation_preimage(&self) -> &[u8] {
+        &self.descriptor_observation_preimage
+    }
+
+    pub(crate) fn abi_observation_preimage(&self) -> &[u8] {
+        &self.abi_observation_preimage
+    }
+
+    pub(crate) fn resource_observation_preimage(&self) -> &[u8] {
+        &self.resource_observation_preimage
+    }
+
+    pub(crate) fn observation_identities(&self) -> ([u8; 32], [u8; 32], [u8; 32]) {
+        (
+            calculate_observation_identity(
+                PROTECTED_DESCRIPTOR_DOMAIN_V1,
+                &self.descriptor_observation_preimage,
+            ),
+            calculate_observation_identity(PROTECTED_ABI_DOMAIN_V1, &self.abi_observation_preimage),
+            calculate_observation_identity(
+                PROTECTED_RESOURCES_DOMAIN_V1,
+                &self.resource_observation_preimage,
+            ),
+        )
     }
 
     pub const fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1 {
@@ -1104,6 +1157,9 @@ fn inspect_protected_worker_v2_raw_hsaco_with_launch_v1(
         identity,
         response_identity,
         descriptor_section: raw.descriptor_section,
+        descriptor_observation_preimage: raw.descriptor_observation_preimage,
+        abi_observation_preimage: raw.abi_observation_preimage,
+        resource_observation_preimage: raw.resource_observation_preimage,
         policy: raw.policy,
         source,
     })
@@ -1161,12 +1217,15 @@ impl RawWorkerV2HsacoSourceV1 for InertProtectedFirstBuildWorkerV2EvidenceV1 {
     }
 }
 
-struct SharedRawWorkerV2HsacoInspectionV1 {
-    descriptor_section: CanonicalDescriptorSectionObservationV1,
-    policy: WorkerV2RawHsacoPolicyV1,
-    descriptor_identity: [u8; 32],
-    abi_identity: [u8; 32],
-    resource_identity: [u8; 32],
+pub(crate) struct SharedRawWorkerV2HsacoInspectionV1 {
+    pub(crate) descriptor_section: CanonicalDescriptorSectionObservationV1,
+    pub(crate) policy: WorkerV2RawHsacoPolicyV1,
+    pub(crate) descriptor_identity: [u8; 32],
+    pub(crate) abi_identity: [u8; 32],
+    pub(crate) resource_identity: [u8; 32],
+    pub(crate) descriptor_observation_preimage: Vec<u8>,
+    pub(crate) abi_observation_preimage: Vec<u8>,
+    pub(crate) resource_observation_preimage: Vec<u8>,
 }
 
 fn inspect_worker_v2_raw_hsaco_shared_v1(
@@ -1182,9 +1241,35 @@ fn inspect_worker_v2_raw_hsaco_shared_v1(
     }
     let (code_object_version, _) = decode_link_options(source.plan().options())
         .map_err(|_| WorkerV2RawHsacoInspectionError::LinkPolicy)?;
-    let symbol_manifest = source.symbol_manifest().clone();
-    let exact_bytes = source.output_bytes();
-    if !source.output_identity().matches(exact_bytes) {
+    inspect_worker_v2_raw_hsaco_preimage_v1(
+        target,
+        code_object_version,
+        source.symbol_manifest().clone(),
+        source.compiler_envelope_identity(),
+        source.output_identity(),
+        source.output_bytes(),
+        launch,
+        diagnostic_profile,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    symbol_manifest: CompilerModuleSymbolManifestV1,
+    compiler_envelope: CompilerFfiEnvelopeIdentityV1,
+    output_identity: ContentIdentityV1,
+    exact_bytes: &[u8],
+    launch: WorkerV2RawLaunchContractV1,
+    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
+) -> Result<SharedRawWorkerV2HsacoInspectionV1, WorkerV2RawHsacoInspectionError> {
+    if target.as_amd_target_id().processor() != EXPECTED_PROCESSOR {
+        return Err(WorkerV2RawHsacoInspectionError::UnsupportedTarget(
+            target.to_string(),
+        ));
+    }
+    if !output_identity.matches(exact_bytes) {
         return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
             "linked output identity",
         ));
@@ -1288,10 +1373,19 @@ fn inspect_worker_v2_raw_hsaco_shared_v1(
     }
 
     let descriptor_section = inspect_descriptor_section(exact_bytes)?;
-    let descriptor_identity = calculate_descriptor_identity(&inspected);
-    let abi_identity = calculate_abi_identity(&inspected);
-    let resource_identity = calculate_resource_identity(&inspected);
-    let compiler_envelope = source.compiler_envelope_identity();
+    let descriptor_observation_preimage = encode_descriptor_observation_preimage(&inspected);
+    let abi_observation_preimage = encode_abi_observation_preimage(&inspected);
+    let resource_observation_preimage = encode_resource_observation_preimage(&inspected);
+    let descriptor_identity = calculate_observation_identity(
+        PROTECTED_DESCRIPTOR_DOMAIN_V1,
+        &descriptor_observation_preimage,
+    );
+    let abi_identity =
+        calculate_observation_identity(PROTECTED_ABI_DOMAIN_V1, &abi_observation_preimage);
+    let resource_identity = calculate_observation_identity(
+        PROTECTED_RESOURCES_DOMAIN_V1,
+        &resource_observation_preimage,
+    );
     let expected_defined_symbols = expected_defined_symbols(&symbol_manifest);
     let policy = WorkerV2RawHsacoPolicyV1 {
         identity: calculate_policy_identity(
@@ -1317,6 +1411,9 @@ fn inspect_worker_v2_raw_hsaco_shared_v1(
         descriptor_identity,
         abi_identity,
         resource_identity,
+        descriptor_observation_preimage,
+        abi_observation_preimage,
+        resource_observation_preimage,
     })
 }
 
@@ -1834,160 +1931,188 @@ fn inspect_descriptor_section(
     Ok(CanonicalDescriptorSectionObservationV1::Missing)
 }
 
-fn calculate_descriptor_identity(inspected: &InspectedKernelBindings) -> [u8; 32] {
-    protected_component_identity(PROTECTED_DESCRIPTOR_DOMAIN_V1, |hasher| {
-        hasher.update((inspected.bindings().len() as u64).to_le_bytes());
-        for binding in inspected.bindings() {
-            let descriptor = binding.descriptor();
-            hasher.update((binding.kernel_index() as u64).to_le_bytes());
-            hasher.update(binding.descriptor_address().to_le_bytes());
-            hasher.update(binding.descriptor_file_offset().to_le_bytes());
-            hasher.update(binding.entry_address().to_le_bytes());
-            hasher.update(binding.entry_file_offset().to_le_bytes());
-            hasher.update(binding.entry_size().to_le_bytes());
-            hasher.update(descriptor.group_segment_fixed_size().to_le_bytes());
-            hasher.update(descriptor.private_segment_fixed_size().to_le_bytes());
-            hasher.update(descriptor.kernarg_size().to_le_bytes());
-            hasher.update(descriptor.kernel_code_entry_byte_offset().to_le_bytes());
-            hasher.update(descriptor.compute_pgm_rsrc3().to_le_bytes());
-            hasher.update(descriptor.compute_pgm_rsrc1().to_le_bytes());
-            hasher.update(descriptor.compute_pgm_rsrc2().to_le_bytes());
-            hasher.update(descriptor.kernel_code_properties().to_le_bytes());
-            hasher.update(descriptor.kernarg_preload().to_le_bytes());
+fn encode_descriptor_observation_preimage(inspected: &InspectedKernelBindings) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    push_u64(&mut bytes, inspected.bindings().len() as u64);
+    for binding in inspected.bindings() {
+        let descriptor = binding.descriptor();
+        push_u64(&mut bytes, binding.kernel_index() as u64);
+        push_u64(&mut bytes, binding.descriptor_address());
+        push_u64(&mut bytes, binding.descriptor_file_offset());
+        push_u64(&mut bytes, binding.entry_address());
+        push_u64(&mut bytes, binding.entry_file_offset());
+        push_u64(&mut bytes, binding.entry_size());
+        push_u32(&mut bytes, descriptor.group_segment_fixed_size());
+        push_u32(&mut bytes, descriptor.private_segment_fixed_size());
+        push_u32(&mut bytes, descriptor.kernarg_size());
+        push_i64(&mut bytes, descriptor.kernel_code_entry_byte_offset());
+        push_u32(&mut bytes, descriptor.compute_pgm_rsrc3());
+        push_u32(&mut bytes, descriptor.compute_pgm_rsrc1());
+        push_u32(&mut bytes, descriptor.compute_pgm_rsrc2());
+        push_u16(&mut bytes, descriptor.kernel_code_properties());
+        push_u16(&mut bytes, descriptor.kernarg_preload());
+    }
+    bytes
+}
+
+fn encode_abi_observation_preimage(inspected: &InspectedKernelBindings) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let metadata = inspected.inspection();
+    push_u32(&mut bytes, metadata.metadata_version().major());
+    push_u32(&mut bytes, metadata.metadata_version().minor());
+    push_u64(&mut bytes, metadata.kernels().len() as u64);
+    for kernel in metadata.kernels() {
+        push_text(&mut bytes, kernel.name());
+        push_text(&mut bytes, kernel.symbol());
+        push_u64(&mut bytes, kernel.kernarg_segment_size());
+        push_u64(&mut bytes, kernel.kernarg_segment_alignment());
+        push_optional_u64(&mut bytes, kernel.implicit_argument_offset());
+        push_u64(&mut bytes, kernel.implicit_argument_size());
+        push_u64(&mut bytes, kernel.explicit_arguments().len() as u64);
+        for argument in kernel.explicit_arguments() {
+            push_explicit_argument(&mut bytes, argument);
         }
-    })
-}
-
-fn calculate_abi_identity(inspected: &InspectedKernelBindings) -> [u8; 32] {
-    protected_component_identity(PROTECTED_ABI_DOMAIN_V1, |hasher| {
-        let metadata = inspected.inspection();
-        hasher.update(metadata.metadata_version().major().to_le_bytes());
-        hasher.update(metadata.metadata_version().minor().to_le_bytes());
-        hasher.update((metadata.kernels().len() as u64).to_le_bytes());
-        for kernel in metadata.kernels() {
-            hash_text(hasher, kernel.name());
-            hash_text(hasher, kernel.symbol());
-            hasher.update(kernel.kernarg_segment_size().to_le_bytes());
-            hasher.update(kernel.kernarg_segment_alignment().to_le_bytes());
-            hash_optional_u64(hasher, kernel.implicit_argument_offset());
-            hasher.update(kernel.implicit_argument_size().to_le_bytes());
-            hasher.update((kernel.explicit_arguments().len() as u64).to_le_bytes());
-            for argument in kernel.explicit_arguments() {
-                hash_explicit_argument(hasher, argument);
-            }
-            hasher.update((kernel.hidden_arguments().len() as u64).to_le_bytes());
-            for argument in kernel.hidden_arguments() {
-                hash_hidden_argument(hasher, *argument);
-            }
+        push_u64(&mut bytes, kernel.hidden_arguments().len() as u64);
+        for argument in kernel.hidden_arguments() {
+            push_hidden_argument(&mut bytes, *argument);
         }
-    })
+    }
+    bytes
 }
 
-fn calculate_resource_identity(inspected: &InspectedKernelBindings) -> [u8; 32] {
-    protected_component_identity(PROTECTED_RESOURCES_DOMAIN_V1, |hasher| {
-        let kernels = inspected.inspection().kernels();
-        hasher.update((kernels.len() as u64).to_le_bytes());
-        for kernel in kernels {
-            hash_text(hasher, kernel.name());
-            hasher.update(kernel.group_segment_fixed_size().to_le_bytes());
-            hasher.update(kernel.private_segment_fixed_size().to_le_bytes());
-            hasher.update(kernel.wavefront_size().to_le_bytes());
-            hasher.update(kernel.sgpr_count().to_le_bytes());
-            hasher.update(kernel.vgpr_count().to_le_bytes());
-            hash_optional_u32(hasher, kernel.agpr_count());
-            hash_optional_u32(hasher, kernel.sgpr_spill_count());
-            hash_optional_u32(hasher, kernel.vgpr_spill_count());
-            hasher.update(kernel.max_flat_workgroup_size().to_le_bytes());
-            hash_optional_dimensions(hasher, kernel.required_workgroup_size());
-            for limit in kernel.max_workgroups() {
-                hash_optional_u32(hasher, limit);
-            }
-            hash_optional_dimensions(hasher, kernel.cluster_dims());
-            hash_optional_bool(hasher, kernel.uniform_work_group_size_declaration());
-            hash_optional_bool(hasher, kernel.uses_dynamic_stack_declaration());
-            hash_optional_bool(hasher, kernel.workgroup_processor_mode());
+fn encode_resource_observation_preimage(inspected: &InspectedKernelBindings) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let kernels = inspected.inspection().kernels();
+    push_u64(&mut bytes, kernels.len() as u64);
+    for kernel in kernels {
+        push_text(&mut bytes, kernel.name());
+        push_u64(&mut bytes, kernel.group_segment_fixed_size());
+        push_u64(&mut bytes, kernel.private_segment_fixed_size());
+        push_u32(&mut bytes, kernel.wavefront_size());
+        push_u16(&mut bytes, kernel.sgpr_count());
+        push_u16(&mut bytes, kernel.vgpr_count());
+        push_optional_u32(&mut bytes, kernel.agpr_count());
+        push_optional_u32(&mut bytes, kernel.sgpr_spill_count());
+        push_optional_u32(&mut bytes, kernel.vgpr_spill_count());
+        push_u32(&mut bytes, kernel.max_flat_workgroup_size());
+        push_optional_dimensions(&mut bytes, kernel.required_workgroup_size());
+        for limit in kernel.max_workgroups() {
+            push_optional_u32(&mut bytes, limit);
         }
-    })
+        push_optional_dimensions(&mut bytes, kernel.cluster_dims());
+        push_optional_bool(&mut bytes, kernel.uniform_work_group_size_declaration());
+        push_optional_bool(&mut bytes, kernel.uses_dynamic_stack_declaration());
+        push_optional_bool(&mut bytes, kernel.workgroup_processor_mode());
+    }
+    bytes
 }
 
-fn hash_explicit_argument(hasher: &mut Sha256, argument: &ExplicitArgument) {
-    hash_optional_text(hasher, argument.name());
-    hash_optional_text(hasher, argument.type_name());
-    hasher.update(argument.offset().to_le_bytes());
-    hasher.update(argument.size().to_le_bytes());
-    hash_optional_u64(hasher, argument.alignment());
-    hasher.update([explicit_value_kind_tag(argument.value_kind())]);
-    hash_optional_tag(hasher, argument.value_type().map(explicit_value_type_tag));
-    hash_optional_tag(hasher, argument.address_space().map(address_space_tag));
-    hash_optional_tag(hasher, argument.access().map(argument_access_tag));
-    hash_optional_tag(hasher, argument.actual_access().map(argument_access_tag));
-    hash_optional_u64(hasher, argument.pointee_alignment());
-    hash_optional_bool(hasher, argument.is_const());
-    hash_optional_bool(hasher, argument.is_restrict());
-    hash_optional_bool(hasher, argument.is_volatile());
-    hash_optional_bool(hasher, argument.is_pipe());
+fn calculate_observation_identity(domain: &[u8], preimage: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(preimage);
+    hasher.finalize().into()
 }
 
-fn hash_hidden_argument(hasher: &mut Sha256, argument: HiddenArgument) {
-    hasher.update(argument.offset().to_le_bytes());
-    hasher.update(argument.size().to_le_bytes());
-    hasher.update([hidden_value_kind_tag(argument.value_kind())]);
+fn push_explicit_argument(bytes: &mut Vec<u8>, argument: &ExplicitArgument) {
+    push_optional_text(bytes, argument.name());
+    push_optional_text(bytes, argument.type_name());
+    push_u64(bytes, argument.offset());
+    push_u64(bytes, argument.size());
+    push_optional_u64(bytes, argument.alignment());
+    bytes.push(explicit_value_kind_tag(argument.value_kind()));
+    push_optional_tag(bytes, argument.value_type().map(explicit_value_type_tag));
+    push_optional_tag(bytes, argument.address_space().map(address_space_tag));
+    push_optional_tag(bytes, argument.access().map(argument_access_tag));
+    push_optional_tag(bytes, argument.actual_access().map(argument_access_tag));
+    push_optional_u64(bytes, argument.pointee_alignment());
+    push_optional_bool(bytes, argument.is_const());
+    push_optional_bool(bytes, argument.is_restrict());
+    push_optional_bool(bytes, argument.is_volatile());
+    push_optional_bool(bytes, argument.is_pipe());
 }
 
-fn hash_optional_text(hasher: &mut Sha256, value: Option<&str>) {
+fn push_hidden_argument(bytes: &mut Vec<u8>, argument: HiddenArgument) {
+    push_u64(bytes, argument.offset());
+    push_u64(bytes, argument.size());
+    bytes.push(hidden_value_kind_tag(argument.value_kind()));
+}
+
+fn push_optional_text(bytes: &mut Vec<u8>, value: Option<&str>) {
     match value {
         Some(value) => {
-            hasher.update([1]);
-            hash_text(hasher, value);
+            bytes.push(1);
+            push_text(bytes, value);
         }
-        None => hasher.update([0]),
+        None => bytes.push(0),
     }
 }
 
-fn hash_optional_u64(hasher: &mut Sha256, value: Option<u64>) {
+fn push_optional_u64(bytes: &mut Vec<u8>, value: Option<u64>) {
     match value {
         Some(value) => {
-            hasher.update([1]);
-            hasher.update(value.to_le_bytes());
+            bytes.push(1);
+            push_u64(bytes, value);
         }
-        None => hasher.update([0]),
+        None => bytes.push(0),
     }
 }
 
-fn hash_optional_u32(hasher: &mut Sha256, value: Option<u32>) {
+fn push_optional_u32(bytes: &mut Vec<u8>, value: Option<u32>) {
     match value {
         Some(value) => {
-            hasher.update([1]);
-            hasher.update(value.to_le_bytes());
+            bytes.push(1);
+            push_u32(bytes, value);
         }
-        None => hasher.update([0]),
+        None => bytes.push(0),
     }
 }
 
-fn hash_optional_bool(hasher: &mut Sha256, value: Option<bool>) {
+fn push_optional_bool(bytes: &mut Vec<u8>, value: Option<bool>) {
     match value {
-        Some(value) => hasher.update([1, u8::from(value)]),
-        None => hasher.update([0]),
+        Some(value) => bytes.extend_from_slice(&[1, u8::from(value)]),
+        None => bytes.push(0),
     }
 }
 
-fn hash_optional_tag(hasher: &mut Sha256, value: Option<u8>) {
+fn push_optional_tag(bytes: &mut Vec<u8>, value: Option<u8>) {
     match value {
-        Some(value) => hasher.update([1, value]),
-        None => hasher.update([0]),
+        Some(value) => bytes.extend_from_slice(&[1, value]),
+        None => bytes.push(0),
     }
 }
 
-fn hash_optional_dimensions(hasher: &mut Sha256, value: Option<[u32; 3]>) {
+fn push_optional_dimensions(bytes: &mut Vec<u8>, value: Option<[u32; 3]>) {
     match value {
         Some(value) => {
-            hasher.update([1]);
+            bytes.push(1);
             for dimension in value {
-                hasher.update(dimension.to_le_bytes());
+                push_u32(bytes, dimension);
             }
         }
-        None => hasher.update([0]),
+        None => bytes.push(0),
     }
+}
+
+fn push_text(bytes: &mut Vec<u8>, value: &str) {
+    push_u64(bytes, value.len() as u64);
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_i64(bytes: &mut Vec<u8>, value: i64) {
+    bytes.extend_from_slice(&value.to_le_bytes());
 }
 
 const fn explicit_value_kind_tag(kind: ExplicitValueKind) -> u8 {
@@ -2098,11 +2223,15 @@ fn calculate_policy_identity(
 }
 
 fn calculate_response_identity(bytes: &[u8]) -> SealedWorkerV2ResponseIdentityV1 {
+    SealedWorkerV2ResponseIdentityV1(calculate_response_identity_bytes_v1(bytes))
+}
+
+pub(crate) fn calculate_response_identity_bytes_v1(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(RESPONSE_IDENTITY_DOMAIN_V1);
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
-    SealedWorkerV2ResponseIdentityV1(hasher.finalize().into())
+    hasher.finalize().into()
 }
 
 fn calculate_inspection_identity(
@@ -2137,67 +2266,119 @@ fn calculate_protected_inspection_identity(
     raw: &SharedRawWorkerV2HsacoInspectionV1,
     response: SealedWorkerV2ResponseIdentityV1,
 ) -> InspectedProtectedRawWorkerV2HsacoIdentityV1 {
+    InspectedProtectedRawWorkerV2HsacoIdentityV1(calculate_protected_inspection_identity_v2(
+        &ProtectedInspectionIdentityPreimageV2 {
+            source_identity: *source.identity().as_bytes(),
+            attempt: source.attempt(),
+            slot: source.slot(),
+            handoff_identity: source.handoff_identity(),
+            compiler_closure: source.compiler_closure(),
+            worker: source.worker_measurement(),
+            bootstrap_request_bytes: source.bootstrap_request_bytes(),
+            bootstrap_response_bytes: source.bootstrap().response().canonical_bytes(),
+            authorized_request_bytes: source.authorized_request_bytes(),
+            authorized_response_bytes: source.authorized().response().canonical_bytes(),
+            response_identity: response.0,
+            raw_output_identity: source.output_identity(),
+            exact_raw_bytes: source.output_bytes(),
+            target: raw.policy.target,
+            code_object_version: raw.policy.code_object_version,
+            policy_identity: raw.policy.identity.0,
+            descriptor_section: raw.descriptor_section,
+            descriptor_identity: raw.descriptor_identity,
+            abi_identity: raw.abi_identity,
+            resource_identity: raw.resource_identity,
+        },
+    ))
+}
+
+pub(crate) struct ProtectedInspectionIdentityPreimageV2<'a> {
+    pub(crate) source_identity: [u8; 32],
+    pub(crate) attempt: BuildAttempt,
+    pub(crate) slot: CompilerModuleHandoffSlotV2,
+    pub(crate) handoff_identity: CompilerModuleHandoffIdentityV2,
+    pub(crate) compiler_closure: CompilerClosureV2,
+    pub(crate) worker: &'a WorkerMeasurementV1,
+    pub(crate) bootstrap_request_bytes: &'a [u8],
+    pub(crate) bootstrap_response_bytes: &'a [u8],
+    pub(crate) authorized_request_bytes: &'a [u8],
+    pub(crate) authorized_response_bytes: &'a [u8],
+    pub(crate) response_identity: [u8; 32],
+    pub(crate) raw_output_identity: ContentIdentityV1,
+    pub(crate) exact_raw_bytes: &'a [u8],
+    pub(crate) target: DeviceTargetV1,
+    pub(crate) code_object_version: CodeObjectVersion,
+    pub(crate) policy_identity: [u8; 32],
+    pub(crate) descriptor_section: CanonicalDescriptorSectionObservationV1,
+    pub(crate) descriptor_identity: [u8; 32],
+    pub(crate) abi_identity: [u8; 32],
+    pub(crate) resource_identity: [u8; 32],
+}
+
+pub(crate) fn calculate_protected_inspection_identity_v2(
+    preimage: &ProtectedInspectionIdentityPreimageV2<'_>,
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(PROTECTED_INSPECTION_IDENTITY_DOMAIN_V1);
     hasher.update(protected_component_identity(
         PROTECTED_SOURCE_EVIDENCE_DOMAIN_V1,
-        |component| component.update(source.identity().as_bytes()),
+        |component| component.update(preimage.source_identity),
     ));
     hasher.update(protected_component_identity(
         PROTECTED_ATTEMPT_DOMAIN_V1,
-        |component| hash_attempt(component, source.attempt()),
+        |component| hash_attempt(component, preimage.attempt),
     ));
     hasher.update(protected_component_identity(
         PROTECTED_HANDOFF_DOMAIN_V2,
         |component| {
-            component.update([source.slot() as u8]);
-            component.update(source.handoff_identity().as_bytes());
+            component.update([preimage.slot as u8]);
+            component.update(preimage.handoff_identity.as_bytes());
         },
     ));
     hasher.update(protected_component_identity(
         PROTECTED_COMPILER_CLOSURE_DOMAIN_V2,
-        |component| hash_compiler_closure_v2(component, source.compiler_closure()),
+        |component| hash_compiler_closure_v2(component, preimage.compiler_closure),
     ));
     hasher.update(protected_component_identity(
         PROTECTED_WORKER_EXCHANGE_DOMAIN_V1,
         |component| {
-            let worker = source.worker_measurement();
+            let worker = preimage.worker;
             hash_content(component, worker.executable());
             hash_text(component, worker.worker_build_identity());
             hash_text(component, worker.llvm_build_identity());
-            hash_bytes(component, source.bootstrap_request_bytes());
-            hash_bytes(component, source.bootstrap().response().canonical_bytes());
-            hash_bytes(component, source.authorized_request_bytes());
-            hash_bytes(component, source.authorized().response().canonical_bytes());
-            component.update(response.0);
+            hash_bytes(component, preimage.bootstrap_request_bytes);
+            hash_bytes(component, preimage.bootstrap_response_bytes);
+            hash_bytes(component, preimage.authorized_request_bytes);
+            hash_bytes(component, preimage.authorized_response_bytes);
+            component.update(preimage.response_identity);
         },
     ));
     hasher.update(protected_component_identity(
         PROTECTED_RAW_BYTES_DOMAIN_V1,
         |component| {
-            hash_content(component, source.output_identity());
-            hash_bytes(component, source.output_bytes());
+            hash_content(component, preimage.raw_output_identity);
+            hash_bytes(component, preimage.exact_raw_bytes);
         },
     ));
     hasher.update(protected_component_identity(
         PROTECTED_TARGET_DOMAIN_V1,
-        |component| hash_text(component, &raw.policy.target.to_string()),
+        |component| hash_text(component, &preimage.target.to_string()),
     ));
     hasher.update(protected_component_identity(
         PROTECTED_CODE_OBJECT_VERSION_DOMAIN_V1,
-        |component| component.update([code_object_version_tag(raw.policy.code_object_version)]),
+        |component| component.update([code_object_version_tag(preimage.code_object_version)]),
     ));
     hasher.update(protected_component_identity(
         PROTECTED_POLICY_DOMAIN_V1,
         |component| {
-            component.update(raw.policy.identity.0);
-            component.update([descriptor_section_tag(raw.descriptor_section)]);
+            component.update(preimage.policy_identity);
+            component.update([descriptor_section_tag(preimage.descriptor_section)]);
         },
     ));
-    hasher.update(raw.descriptor_identity);
-    hasher.update(raw.abi_identity);
-    hasher.update(raw.resource_identity);
-    InspectedProtectedRawWorkerV2HsacoIdentityV1(hasher.finalize().into())
+    hasher.update(preimage.descriptor_identity);
+    hasher.update(preimage.abi_identity);
+    hasher.update(preimage.resource_identity);
+    hasher.finalize().into()
 }
 
 fn protected_component_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {

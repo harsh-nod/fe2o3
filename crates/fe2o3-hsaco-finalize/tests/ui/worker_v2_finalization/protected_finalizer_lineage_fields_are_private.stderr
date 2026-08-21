@@ -1,0 +1,103 @@
+error[E0616]: field `route` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+ --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:4:21
+  |
+4 |     let _ = lineage.route;
+  |                     ^^^^^ private field
+  |
+help: a method `route` also exists, call it with parentheses
+  |
+4 |     let _ = lineage.route();
+  |                          ++
+
+error[E0616]: field `source_evidence_identity` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+ --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:5:21
+  |
+5 |     let _ = lineage.source_evidence_identity;
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^ private field
+  |
+help: a method `source_evidence_identity` also exists, call it with parentheses
+  |
+5 |     let _ = lineage.source_evidence_identity();
+  |                                             ++
+
+error[E0616]: field `raw_inspection_identity` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+ --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:6:21
+  |
+6 |     let _ = lineage.raw_inspection_identity;
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^ private field
+  |
+help: a method `raw_inspection_identity` also exists, call it with parentheses
+  |
+6 |     let _ = lineage.raw_inspection_identity();
+  |                                            ++
+
+error[E0616]: field `canonical_finalization_identity` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+ --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:7:21
+  |
+7 |     let _ = lineage.canonical_finalization_identity;
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+  |
+help: a method `canonical_finalization_identity` also exists, call it with parentheses
+  |
+7 |     let _ = lineage.canonical_finalization_identity();
+  |                                                    ++
+
+error[E0616]: field `compiler_envelope_bytes` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+ --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:8:22
+  |
+8 |     let _ = &lineage.compiler_envelope_bytes;
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `symbol_manifest_bytes` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+ --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:9:22
+  |
+9 |     let _ = &lineage.symbol_manifest_bytes;
+  |                      ^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `link_plan_bytes` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+  --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:10:22
+   |
+10 |     let _ = &lineage.link_plan_bytes;
+   |                      ^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `bootstrap_request_bytes` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+  --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:11:22
+   |
+11 |     let _ = &lineage.bootstrap_request_bytes;
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `bootstrap_response_bytes` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+  --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:12:22
+   |
+12 |     let _ = &lineage.bootstrap_response_bytes;
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `authorized_request_bytes` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+  --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:13:22
+   |
+13 |     let _ = &lineage.authorized_request_bytes;
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `authorized_response_bytes` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+  --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:14:22
+   |
+14 |     let _ = &lineage.authorized_response_bytes;
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `descriptor_observation_preimage` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+  --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:15:22
+   |
+15 |     let _ = &lineage.descriptor_observation_preimage;
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `abi_observation_preimage` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+  --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:16:22
+   |
+16 |     let _ = &lineage.abi_observation_preimage;
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `resource_observation_preimage` of struct `ProtectedWorkerV2FinalizerLineageV2` is private
+  --> tests/ui/worker_v2_finalization/protected_finalizer_lineage_fields_are_private.rs:17:22
+   |
+17 |     let _ = &lineage.resource_observation_preimage;
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private field

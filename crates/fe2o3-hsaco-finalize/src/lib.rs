@@ -238,9 +238,12 @@ pub use worker_v2_hsaco_admission::{
 };
 pub use worker_v2_hsaco_finalization::{
     DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV2HsacoIdentityV2,
-    FinalizedWorkerV2HsacoIdentityV1, MissingAuthenticatedDescriptorSourceEvidenceV1,
+    FinalizedWorkerV2HsacoIdentityV1, MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2,
+    MissingAuthenticatedDescriptorSourceEvidenceV1,
     MissingAuthenticatedProtectedDescriptorSourceEvidenceV2,
     PreparedFinalizedProtectedWorkerV2HsacoV2, PreparedFinalizedWorkerV2HsacoV1,
+    ProtectedWorkerV2FinalizerLineageDecodeErrorV2, ProtectedWorkerV2FinalizerLineageIdentityV2,
+    ProtectedWorkerV2FinalizerLineageRouteV2, ProtectedWorkerV2FinalizerLineageV2,
     WorkerV2HsacoFinalizationError, finalize_inspected_protected_worker_v2_hsaco_v2,
     finalize_inspected_worker_v2_hsaco_v1,
 };

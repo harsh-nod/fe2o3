@@ -23,6 +23,7 @@ use fe2o3_compiler_ffi::{
 use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1,
     DescriptorSourceEvidenceRequirementV1, FinalizationError, LinkOptionV1, PinnedWorkerV1,
+    ProtectedWorkerV2FinalizerLineageDecodeErrorV2, ProtectedWorkerV2FinalizerLineageV2,
     RowSoftmaxV1StructuralArtifactErrorV1, TiledGemmV1StructuralArtifactErrorV1,
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
     WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
@@ -42,12 +43,14 @@ use fe2o3_kernel_descriptor::{
     ProducerIdentityV1, RowSoftmaxV1StructuralDescriptorErrorV1,
     RowSoftmaxV1StructuralDescriptorExpectationV1, ScalarTypeV1, SourceTypeDescriptorV1,
     SourceTypeRecordV1, Text, TiledGemmV1StructuralDescriptorErrorV1,
-    TiledGemmV1StructuralDescriptorExpectationV1, ValidName, encode_device_descriptor_table_v1,
+    TiledGemmV1StructuralDescriptorExpectationV1, ValidName, decode_device_descriptor_table_v1,
+    encode_device_descriptor_table_v1,
 };
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
     derive_device_ffi_contract_id_v1,
 };
+use sha2::{Digest, Sha256};
 
 include!("fixtures/worker_v2_hsaco_test_support.rs");
 
@@ -347,9 +350,168 @@ fn protected_finalization_preserves_closure_handoff_and_exact_bytes() {
 }
 
 #[test]
+fn protected_finalizer_lineage_round_trips_real_raw_and_finalized_envelopes() {
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let exact_raw = fixture.bytes.clone();
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942",
+        0x74,
+        0x84,
+        compiler_closure(0x61),
+        CompilerModuleHandoffSlotV2::GeneralGemmReference,
+    ))
+    .unwrap();
+    let raw_transcript = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw);
+    let raw_wire = raw_transcript.canonical_bytes();
+    let decoded_raw =
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&raw_wire, &exact_raw, &exact_raw)
+            .unwrap();
+    assert_eq!(decoded_raw, raw_transcript);
+    assert!(decoded_raw.matches_inspected_source(&raw));
+    assert!(!decoded_raw.grants_compiler_authority());
+    assert!(!decoded_raw.grants_publication_authority());
+    assert!(!decoded_raw.grants_load_authority());
+    assert!(!decoded_raw.grants_launch_authority());
+
+    let finalized = finalize_inspected_protected_worker_v2_hsaco_v2(raw).unwrap();
+    let exact_final = finalized.exact_finalized_bytes();
+    let final_transcript = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&finalized);
+    let final_wire = final_transcript.canonical_bytes();
+    let decoded_final =
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&final_wire, &exact_raw, exact_final)
+            .unwrap();
+    assert_eq!(decoded_final, final_transcript);
+    assert!(decoded_final.matches_finalized_source(&finalized));
+    decoded_final
+        .validate_descriptor_table(verify_finalized(exact_final).unwrap().descriptor_table())
+        .unwrap();
+}
+
+#[test]
+fn protected_finalizer_lineage_rejects_resealed_substitutions_and_bad_bounds() {
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let exact_raw = fixture.bytes.clone();
+    let first = finalize_inspected_protected_worker_v2_hsaco_v2(
+        inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+            fixture.bytes.clone(),
+            "gfx942",
+            0x75,
+            0x85,
+            compiler_closure(0x71),
+            CompilerModuleHandoffSlotV2::Default,
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let second = finalize_inspected_protected_worker_v2_hsaco_v2(
+        inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+            fixture.bytes,
+            "gfx942",
+            0x75,
+            0x85,
+            compiler_closure(0x81),
+            CompilerModuleHandoffSlotV2::Default,
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let exact_final = first.exact_finalized_bytes();
+    assert_eq!(exact_final, second.exact_finalized_bytes());
+    let mut substituted =
+        ProtectedWorkerV2FinalizerLineageV2::from_finalized(&first).canonical_bytes();
+    let donor = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&second).canonical_bytes();
+    substituted[11..43].copy_from_slice(&donor[11..43]);
+    substituted[43..75].copy_from_slice(&donor[43..75]);
+    substituted[76..108].copy_from_slice(&donor[76..108]);
+    let closure_offset = lineage_closure_offset(&substituted);
+    let donor_closure_offset = lineage_closure_offset(&donor);
+    substituted[closure_offset - 32..closure_offset + 226]
+        .copy_from_slice(&donor[donor_closure_offset - 32..donor_closure_offset + 226]);
+    reseal_lineage_wire(&mut substituted);
+    assert!(
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
+            &substituted,
+            &exact_raw,
+            exact_final,
+        )
+        .is_err()
+    );
+
+    let canonical = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&first).canonical_bytes();
+    assert!(matches!(
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
+            &canonical[..canonical.len() - 1],
+            &exact_raw,
+            exact_final,
+        ),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Checksum)
+            | Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)
+    ));
+
+    let mut trailing = canonical.clone();
+    trailing.insert(trailing.len() - 32, 0);
+    reseal_lineage_wire(&mut trailing);
+    assert!(matches!(
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&trailing, &exact_raw, exact_final,),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::TrailingBytes)
+    ));
+
+    let mut oversized_segment = canonical;
+    let segment_offset = lineage_first_segment_offset(&oversized_segment);
+    oversized_segment[segment_offset..segment_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    reseal_lineage_wire(&mut oversized_segment);
+    assert!(matches!(
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
+            &oversized_segment,
+            &exact_raw,
+            exact_final,
+        ),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)
+    ));
+}
+
+#[test]
+fn protected_finalizer_lineage_joins_total_kernarg_and_max_flat_workgroup_fields() {
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942",
+        0x76,
+        0x86,
+        compiler_closure(0x91),
+        CompilerModuleHandoffSlotV2::Default,
+    ))
+    .unwrap();
+    let transcript = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw);
+    let correct = decode_device_descriptor_table_v1(&table).unwrap();
+    transcript.validate_descriptor_table(&correct).unwrap();
+
+    let wrong_kernarg = descriptor_table_with_launch("gfx942", 264, 256);
+    let wrong_kernarg = decode_device_descriptor_table_v1(&wrong_kernarg).unwrap();
+    assert!(
+        transcript
+            .validate_descriptor_table(&wrong_kernarg)
+            .is_err()
+    );
+
+    let wrong_max_flat = descriptor_table_with_launch("gfx942", 272, 512);
+    let wrong_max_flat = decode_device_descriptor_table_v1(&wrong_max_flat).unwrap();
+    assert!(
+        transcript
+            .validate_descriptor_table(&wrong_max_flat)
+            .is_err()
+    );
+}
+
+#[test]
 fn every_closure_role_mutation_changes_only_protected_finalization_lineage() {
     let table = descriptor_table("gfx942");
     let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let exact_raw = fixture.bytes.clone();
     let base = finalize_inspected_protected_worker_v2_hsaco_v2(
         inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
             fixture.bytes.clone(),
@@ -362,6 +524,7 @@ fn every_closure_role_mutation_changes_only_protected_finalization_lineage() {
         .unwrap(),
     )
     .unwrap();
+    let base_transcript = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&base);
 
     for role in 0..6 {
         let changed_closure = compiler_closure_with_mutated_role(0x51, role);
@@ -387,6 +550,14 @@ fn every_closure_role_mutation_changes_only_protected_finalization_lineage() {
         );
         assert_ne!(base.compiler_closure(), changed.compiler_closure());
         assert_ne!(base.identity(), changed.identity());
+        let changed_transcript = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&changed);
+        assert_ne!(base_transcript.identity(), changed_transcript.identity());
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
+            &changed_transcript.canonical_bytes(),
+            &exact_raw,
+            changed.exact_finalized_bytes(),
+        )
+        .unwrap();
     }
 }
 
@@ -1555,6 +1726,14 @@ fn prepare(
 }
 
 fn descriptor_table(target: &str) -> Vec<u8> {
+    descriptor_table_with_launch(target, 272, 256)
+}
+
+fn descriptor_table_with_launch(
+    target: &str,
+    kernarg_segment_size: u32,
+    max_flat_workgroup_size: u32,
+) -> Vec<u8> {
     let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
     let layout =
         DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
@@ -1566,12 +1745,12 @@ fn descriptor_table(target: &str) -> Vec<u8> {
         build_evidence(0x62, 0x63),
         build_evidence(0x64, 0x65),
         Vec::new(),
-        KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
+        KernelAbiLayoutV1::new(16, kernarg_segment_size, 8).unwrap(),
         LaunchConstraintsV1::new(
             1,
             BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
             DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
-            256,
+            max_flat_workgroup_size,
             0,
             64 * 1024,
         )
@@ -1591,6 +1770,39 @@ fn descriptor_table(target: &str) -> Vec<u8> {
     )
     .unwrap();
     encode_device_descriptor_table_v1(&table).unwrap()
+}
+
+fn lineage_closure_offset(bytes: &[u8]) -> usize {
+    let mut cursor = 108;
+    let attempt_len = usize::from(u16::from_le_bytes(
+        bytes[cursor..cursor + 2].try_into().unwrap(),
+    ));
+    cursor += 2 + attempt_len;
+    cursor + 1 + 32
+}
+
+fn lineage_first_segment_offset(bytes: &[u8]) -> usize {
+    let mut cursor = lineage_closure_offset(bytes) + 226;
+    let target_len = usize::from(u16::from_le_bytes(
+        bytes[cursor..cursor + 2].try_into().unwrap(),
+    ));
+    cursor += 2 + target_len + 1 + 20 + 40;
+    for _ in 0..2 {
+        let text_len = usize::from(u16::from_le_bytes(
+            bytes[cursor..cursor + 2].try_into().unwrap(),
+        ));
+        cursor += 2 + text_len;
+    }
+    cursor
+}
+
+fn reseal_lineage_wire(bytes: &mut [u8]) {
+    const DOMAIN: &[u8] = b"FE2O3/FINALIZER/PROTECTED-WORKER-V2-LINEAGE-CHECKSUM/V2\0";
+    let body_len = bytes.len() - 32;
+    let mut hasher = Sha256::new();
+    hasher.update(DOMAIN);
+    hasher.update(&bytes[..body_len]);
+    bytes[body_len..].copy_from_slice(&hasher.finalize());
 }
 
 fn name(value: &str) -> ValidName {
