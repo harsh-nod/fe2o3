@@ -230,6 +230,15 @@ assert_step_count() {
   assert_equals "${expected_count}" "$(step_count "${expected_name}")" "${context}"
 }
 
+assert_codegen_test_driver_once() {
+  assert_step_count rustc-codegen-driver-bootstrap 1 \
+    'codegen tests did not build the shared test driver exactly once'
+  assert_equals \
+    "env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 cargo build --locked -p ${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE} --bin ${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}" \
+    "$(step_command rustc-codegen-driver-bootstrap)" \
+    'codegen test driver bootstrap is not bounded or production-profiled'
+}
+
 assert_all_codegen_targets_once() {
   local -a shard_ids test_targets
   local shard_id test_target
@@ -254,6 +263,7 @@ assert_all_codegen_targets_once() {
 }
 
 run_tests
+assert_codegen_test_driver_once
 cpu_command="$(step_command cpu-tests)"
 if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
   printf 'generic CPU tests mixed %s into the shared Cargo process\n' \
@@ -301,6 +311,7 @@ done
 STEP_NAMES=()
 STEP_COMMANDS=()
 run_workspace_tests
+assert_codegen_test_driver_once
 assert_equals \
   "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE}" \
   "$(step_command workspace-tests)" \
@@ -318,6 +329,7 @@ assert_all_codegen_targets_once
 STEP_NAMES=()
 STEP_COMMANDS=()
 run_rustc_codegen_shard 01-control-flow
+assert_codegen_test_driver_once
 assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
@@ -388,10 +400,13 @@ for core_step in "${STEP_NAMES[@]}"; do
     exit 1
   fi
 done
+assert_step_count rustc-codegen-driver-bootstrap 0 \
+  'generic core unexpectedly built the codegen integration test driver'
 
 STEP_NAMES=()
 STEP_COMMANDS=()
 run_generic
+assert_codegen_test_driver_once
 assert_all_codegen_targets_once
 assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'

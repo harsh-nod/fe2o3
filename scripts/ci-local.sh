@@ -9,6 +9,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
+readonly RUSTC_CODEGEN_TEST_DRIVER_PACKAGE="cargo-fe2o3"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
@@ -368,6 +369,16 @@ run_rustc_codegen_lib_tests() {
     cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
 }
 
+run_rustc_codegen_test_driver() {
+  # Integration targets invoke cargo-fe2o3 from inside the test process. Build
+  # that shared driver once, with bounded parallelism, before any nested Cargo
+  # invocation can compete with the test harness on a small hosted runner.
+  run_step rustc-codegen-driver-bootstrap \
+    env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 \
+      cargo build --locked -p "${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}" \
+        --bin "${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}"
+}
+
 run_rustc_codegen_target() {
   local test_target="$1"
   local -a command=(
@@ -413,11 +424,13 @@ run_all_rustc_codegen_shards() {
 run_rustc_codegen_shard() {
   local shard_id="$1"
   run_shard_policy
+  run_rustc_codegen_test_driver
   run_rustc_codegen_shard_targets "${shard_id}"
 }
 
 run_rustc_codegen_tests() {
   run_shard_policy
+  run_rustc_codegen_test_driver
   run_rustc_codegen_lib_tests
   run_all_rustc_codegen_shards
 }
@@ -505,6 +518,7 @@ run_generic_core() {
 
 run_generic() {
   run_generic_core
+  run_rustc_codegen_test_driver
   run_all_rustc_codegen_shards
 }
 
