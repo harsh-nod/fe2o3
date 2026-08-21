@@ -69,6 +69,7 @@ version = "0.1.0"
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-build-authority",
  "libc",
  "rustix",
  "sha2",
@@ -79,6 +80,13 @@ name = "fe2o3-artifacts"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-build-authority"
+version = "0.1.0"
+dependencies = [
  "sha2",
 ]
 
