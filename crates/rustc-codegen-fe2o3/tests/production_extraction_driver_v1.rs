@@ -68,7 +68,7 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn production_fill_reaches_verified_target_neutral_kir() {
+fn production_fill_reaches_exact_gfx942_llvm() {
     let target = ScratchTarget::new();
     let artifacts = target.path().join("artifacts");
     std::fs::create_dir(&artifacts).expect("create production artifact directory");
@@ -125,14 +125,18 @@ fn production_fill_reaches_verified_target_neutral_kir() {
         "with 6 exact block correspondence record(s)",
         "admitted complete formal memory obligations for a 2-invocation structural witness",
         "with 1 allocation(s), 1 access(es), 1 runtime bounds requirement(s), 0 runtime alias requirement(s), and 0 inter-invocation conflict(s)",
+        "lowered exact target-bound KIR with compiler-selected-or-retained workgroup WorkgroupSize { x: 64, y: 1, z: 1 }",
+        "deterministic gfx942:xnack- LLVM text",
         "artifact/launch authority false",
-        "gfx942 target mapping remains disabled",
+        "upstream LLVM linking remains disabled",
     ] {
         assert!(stderr.contains(expected), "missing {expected:?}:\n{stderr}");
     }
     for forbidden in [
         "production-v1 target-neutral lowering failed",
         "production-v1 formal memory admission failed",
+        "production-v1 gfx942 target binding failed",
+        "production-v1 gfx942 LLVM lowering failed",
         "legacy-v1",
         "kernel-ir-v1",
         "published inert",

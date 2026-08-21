@@ -15,6 +15,7 @@ use crate::artifact_transaction::{BuildAttempt, ProducerIdentity};
 use crate::collector::AuthenticatedCollectedKernelClosureV1;
 
 pub(crate) const PRODUCTION_PIPELINE_V1: &str = "production-v1";
+const PRODUCTION_GFX942_DEFAULT_WORKGROUP_X_V1: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDispositionV1 {
@@ -39,6 +40,8 @@ pub(crate) enum ProductionPipelineErrorV1 {
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
+    TargetBinding(fe2o3_kernel_ir::VerificationErrors),
+    Gfx942Lowering(dialect_amdgcn::LoweringErrors),
 }
 
 impl fmt::Display for ProductionPipelineErrorV1 {
@@ -63,6 +66,12 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::FormalMemoryAdmission(error) => {
                 write!(formatter, "production-v1 formal memory admission failed: {error}")
             }
+            Self::TargetBinding(error) => {
+                write!(formatter, "production-v1 gfx942 target binding failed: {error}")
+            }
+            Self::Gfx942Lowering(error) => {
+                write!(formatter, "production-v1 gfx942 LLVM lowering failed: {error}")
+            }
         }
     }
 }
@@ -75,6 +84,8 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::RankedProjection(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
+            Self::TargetBinding(error) => Some(error),
+            Self::Gfx942Lowering(error) => Some(error),
             Self::CustomLlvmConfiguration | Self::EmptyCollectedDeviceClosure => None,
         }
     }
@@ -159,6 +170,19 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
     build_attempt: Option<BuildAttempt>,
 }
 
+/// Move-only production stage retaining formal admission, exact target-bound
+/// Kernel IR, deterministic gfx942 LLVM text, and transaction bindings.
+pub(crate) struct Gfx942LoweredProductionCompilationV1 {
+    admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    target_module: fe2o3_kernel_ir::Module,
+    llvm_ir: String,
+    rustc_identity_inventory_sha256: [u8; 32],
+    rustc_preflight_plan_sha256: [u8; 32],
+    producer: ProducerIdentity,
+    output_dir: PathBuf,
+    build_attempt: Option<BuildAttempt>,
+}
+
 impl TargetNeutralProductionCompilationV1 {
     fn admit_formal_memory(
         self,
@@ -185,8 +209,68 @@ impl TargetNeutralProductionCompilationV1 {
 }
 
 impl FormalMemoryAdmittedProductionCompilationV1 {
+    fn lower_gfx942(
+        self,
+    ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
+        let Self {
+            admitted,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        } = self;
+        let mut target_module = admitted.semantic_kir().module().clone();
+        let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
+        target_module.required_capabilities.insert(target.clone());
+        let kernel = target_module
+            .kernels
+            .first_mut()
+            .expect("formal admission requires exactly one kernel");
+        kernel.workgroup_size.get_or_insert_with(|| {
+            fe2o3_kernel_ir::WorkgroupSize::new(PRODUCTION_GFX942_DEFAULT_WORKGROUP_X_V1, 1, 1)
+        });
+        kernel.required_capabilities.insert(target.clone());
+        let kernel_id = kernel.id.clone();
+        let entry_id = kernel.entry.clone();
+        target_module
+            .functions
+            .iter_mut()
+            .find(|function| function.id == entry_id)
+            .expect("verified formal admission retains the kernel entry")
+            .required_capabilities
+            .insert(target);
+        fe2o3_kernel_ir::verify_module(&target_module)
+            .map_err(ProductionPipelineErrorV1::TargetBinding)?;
+        let llvm_ir =
+            dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&target_module, &kernel_id)
+                .map_err(ProductionPipelineErrorV1::Gfx942Lowering)?;
+        Ok(Gfx942LoweredProductionCompilationV1 {
+            admitted,
+            target_module,
+            llvm_ir,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        })
+    }
+}
+
+impl Gfx942LoweredProductionCompilationV1 {
     pub(crate) fn module(&self) -> &fe2o3_kernel_ir::Module {
-        self.admitted.semantic_kir().module()
+        &self.target_module
+    }
+
+    pub(crate) fn llvm_ir(&self) -> &str {
+        &self.llvm_ir
+    }
+
+    pub(crate) fn workgroup_size(&self) -> fe2o3_kernel_ir::WorkgroupSize {
+        self.target_module.kernels[0]
+            .workgroup_size
+            .expect("gfx942 lowering requires an exact workgroup size")
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
@@ -243,7 +327,7 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
-        self.admitted.grants_artifact_or_launch_authority()
+        false
     }
 }
 
@@ -345,14 +429,15 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     }
 
     /// Consumes the sole production transaction through exact semantic MIR,
-    /// verified target-neutral Kernel IR, and complete formal memory admission.
-    pub(crate) fn admit_formal_memory(
+    /// formal memory admission, and exact gfx942 LLVM lowering.
+    pub(crate) fn lower_gfx942(
         self,
-    ) -> Result<FormalMemoryAdmittedProductionCompilationV1, ProductionPipelineErrorV1> {
+    ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
         self.import_semantic_mir()?
             .construct_semantic_middle_end()?
             .lower_target_neutral()?
-            .admit_formal_memory()
+            .admit_formal_memory()?
+            .lower_gfx942()
     }
 
     /// Retains the original extraction milestone while consuming the same
