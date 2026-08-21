@@ -370,19 +370,25 @@ run_rustc_codegen_lib_tests() {
 
 run_rustc_codegen_target() {
   local test_target="$1"
+  local -a command=(
+    env CARGO_PROFILE_DEV_DEBUG=1
+    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}"
+    --test "${test_target}"
+  )
+
+  # Cargo can emit a test rlib and an unversioned backend dylib with different
+  # Rust symbol hashes during one --all-targets build. Each target-isolated
+  # invocation produces the exact backend dylib before running its linked test.
+  # Match the limited-debug profile used by the production automatic backend
+  # builder so clean and cache-restored shards exercise the same bounded image.
   if [[ "${test_target}" == general_gemm_semantic_frontend ]]; then
     run_step_with_timeout "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
       "rustc-codegen-test-${test_target}" \
-      cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
-        --test "${test_target}"
+      "${command[@]}"
     return
   fi
-  # Cargo can emit a test rlib and an unversioned backend dylib with different
-  # Rust symbol hashes during one --all-targets build. This target-isolated Cargo
-  # invocation produces the exact backend dylib before running its linked test.
   run_step "rustc-codegen-test-${test_target}" \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
-      --test "${test_target}"
+    "${command[@]}"
 }
 
 run_rustc_codegen_shard_targets() {
