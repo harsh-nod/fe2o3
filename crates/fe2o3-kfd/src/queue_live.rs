@@ -15,6 +15,12 @@ use fe2o3_runtime_model::{
 };
 use sha2::{Digest, Sha256};
 
+use super::completion::{
+    COMPLETION_SIGNAL_ARENA_BYTES_V1, CompletionPacketTemplateV1, CompletionSignalArenaOwnerV1,
+    Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
+    Gfx942CompletionPollV1, Gfx942CompletionRecycleObservationV1, NativeCompletionSignalBackendV1,
+    initialize_pending_completion_signal_arena,
+};
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
     initialize_control_atomics, initialize_invalid_ring,
@@ -26,10 +32,10 @@ use crate::queue_linux::{
     QueueExceptionWaitObservationV1,
 };
 use crate::shared_memory::{
-    AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1, AqlEndOfPipeResourceRoleV1,
-    AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableGttV1, GttGpuAccessibleExecutableV1,
-    GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1, SharedGttMemorySessionV1,
-    SharedGttQueueResourceAuthorityV1,
+    AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
+    AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableGttV1,
+    GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1,
+    SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1,
 };
 use crate::{
     CheckedGfx942XnackMinusDevice, GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
@@ -45,12 +51,13 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and private batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r7-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r8-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=1054b1c31ad143c7218eee24bcc529b17851338a152ed0cf028c46898c6a17a4\n",
+    "memory_profile_sha256=9761da91f900b7186d18aaec01dc8b67597049f8c2c9cf1eeac9a66e0cd7b938\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_batch_reservation_schema_sha256=0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83\n",
+    "aql_completion_schema_sha256=639120a81cd1bba9a94ca1a3550c7e3664de1e23e0d6c812f10a9283444b69dd\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -59,25 +66,26 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "source.kfd_debug.c=f6c688b75fd25ead43ce3c3961bd0af210f873bad1b29dce8e84bb7fb968fe4d\n",
     "source.kfd_chardev.c=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
-    "resources=linear-private-ring-control-eop-cwsr-authorities,exact-one-vm,transferred-model-ownership\n",
-    "gtt_policy=ring:aql-queue,control:host-visible-coherent,eop-and-cwsr:executable;fe2o3-policy-not-rocr-equivalence\n",
+    "resources=linear-private-ring-control-eop-cwsr-authorities-plus-separate-completion-signal-arena,exact-one-vm,transferred-model-ownership\n",
+    "gtt_policy=ring:aql-queue,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable;fe2o3-policy-not-rocr-equivalence\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
-    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
+    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-256-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,batch-count-1-through-256-and-ring-capacity-bounded,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
+    "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-kernarg-data-allocation-and-queue-generations-retained,bounded-atomic-acquire-poll,pending-ready-fault-timeout-distinct,release-reset-only-after-all-signals-zero\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
-    "lifecycle=runtime-enable,event-create,queue-create;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-and-resource-release;no-drop-ioctl-store-munmap-or-free\n",
+    "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
     "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
     "event-lifecycle=linear-private-kfd-event,no-event-page-mmap,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;exact-8-owned-fixed-private-anonymous-pages,prot-none-then-dontfork-then-rw;headers-mirrored-and-read-back-in-bo-and-shadows;cpu-visible-debug-suspend-checkpoint-wave-state-copy-unsupported;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms,wait-and-volatile-payload-must-agree,unknown-reason-rejected,timeout-is-terminal-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
-    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-or-teardown-error-terminally-poisons;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-pre-side-effect-full-or-insufficient-space-retryable\n",
-    "excluded=public-submission,kernel-launch,live-batch-execution-evidence,actual-fault-or-exception-delivery-evidence,code-kernarg-allocation-dispatch-generation-completion-authority,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
+    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-pre-side-effect-full-or-insufficient-space-retryable\n",
+    "excluded=public-submission,kernel-launch,live-batch-execution-evidence,actual-hardware-completion-fault-or-exception-delivery-evidence,code-kernarg-or-data-allocation-liveness-authority,copy-initialization-alias-proof,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "ab7327bd54f0af7940550d0610b1c75d1fd097f9780653a34e24fa559205ac5b";
+    "aa10da93e7a1d18eff71b01a90195f1eefff04337086f9ffd3af13ad595ff20c";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -99,6 +107,11 @@ type ContextSaveAuthority = SharedGttQueueResourceAuthorityV1<
     ExecutableGttV1,
     GttGpuAccessibleExecutableV1,
 >;
+type CompletionSignalAuthority = SharedGttQueueResourceAuthorityV1<
+    AqlCompletionSignalResourceRoleV1,
+    HostVisibleCoherentGttV1,
+    GttGpuAccessibleMutableV1,
+>;
 
 struct QueueResourceAuthorityV1 {
     ring: RingAuthority,
@@ -114,6 +127,47 @@ struct LinuxAqlSubmissionBackendV1<'a> {
     control: &'a mut ControlAuthority,
     doorbell: &'a mut LinuxDoorbellSliceV1,
     exception: &'a QueueExceptionStateV1,
+}
+
+struct LinuxCompletionSignalBackendV1<'a> {
+    memory: &'a mut SharedGttMemorySessionV1,
+    signals: &'a mut CompletionSignalAuthority,
+    exception: &'a QueueExceptionStateV1,
+}
+
+impl NativeCompletionSignalBackendV1 for LinuxCompletionSignalBackendV1<'_> {
+    fn check_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1> {
+        self.memory
+            .check_queue_currentness()
+            .map_err(|_| Gfx942CompletionErrorV1::Currentness)?;
+        self.exception
+            .runtime
+            .validate_queue_live(self.memory.kfd_fd(), self.memory.opener_pid())
+            .map_err(|_| Gfx942CompletionErrorV1::Currentness)?;
+        self.exception
+            .event
+            .validate_live_with_shadows(
+                self.memory.kfd_fd(),
+                self.memory.opener_pid(),
+                &self.exception.shadows,
+            )
+            .map_err(|_| Gfx942CompletionErrorV1::Currentness)
+    }
+
+    fn observe_acquire(
+        &mut self,
+        slot_index: u32,
+    ) -> Result<fe2o3_aql::AqlCompletionObservationV1, Gfx942CompletionErrorV1> {
+        self.memory
+            .observe_aql_completion_signal(self.signals, slot_index)
+            .map_err(|_| Gfx942CompletionErrorV1::Observation)
+    }
+
+    fn reset_pending_release(&mut self, slot_index: u32) -> Result<(), Gfx942CompletionErrorV1> {
+        self.memory
+            .reset_aql_completion_signal(self.signals, slot_index)
+            .map_err(|_| Gfx942CompletionErrorV1::Recycle)
+    }
 }
 
 impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
@@ -315,6 +369,7 @@ impl ComputeAqlQueueDestroyedV1 {
 pub enum ComputeAqlQueueSessionErrorV1 {
     Planning(Gfx942QueueResourcePlanningError),
     Memory(MemorySessionError),
+    Completion(Gfx942CompletionErrorV1),
     Contract(&'static str),
     Native(&'static str),
     Doorbell(String),
@@ -340,6 +395,12 @@ impl From<MemorySessionError> for ComputeAqlQueueSessionErrorV1 {
     }
 }
 
+impl From<Gfx942CompletionErrorV1> for ComputeAqlQueueSessionErrorV1 {
+    fn from(value: Gfx942CompletionErrorV1) -> Self {
+        Self::Completion(value)
+    }
+}
+
 impl From<LinuxDoorbellErrorV1> for ComputeAqlQueueSessionErrorV1 {
     fn from(value: LinuxDoorbellErrorV1) -> Self {
         Self::Doorbell(value.to_string())
@@ -352,6 +413,8 @@ pub struct ComputeAqlQueueSessionV1 {
     key: QueueKeyV1,
     doorbell: Option<LinuxDoorbellSliceV1>,
     submission: Option<NativeAqlSubmissionOwnerV1>,
+    completion_signals: Option<CompletionSignalAuthority>,
+    completion_owner: CompletionSignalArenaOwnerV1,
     exception: Option<QueueExceptionStateV1>,
     terminal_poisoned: bool,
     observation: ComputeAqlQueueObservationV1,
@@ -392,6 +455,8 @@ impl CheckedGfx942XnackMinusDevice {
                     ComputeAqlQueueSessionErrorV1::Contract("ring size conversion")
                 })?)?;
         let mut control = memory.allocate_host_visible_coherent(CONTROL_BYTES)?;
+        let mut completion_signals =
+            memory.allocate_host_visible_coherent(COMPLETION_SIGNAL_ARENA_BYTES_V1)?;
         let mut eop = memory.allocate_executable(
             usize::try_from(geometry.end_of_pipe().mapping_bytes())
                 .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("EOP size conversion"))?,
@@ -409,6 +474,11 @@ impl CheckedGfx942XnackMinusDevice {
         control_initialization.map_err(|_| {
             ComputeAqlQueueSessionErrorV1::Contract("AQL control atomic initialization")
         })?;
+        let completion_initialization = memory.with_bytes_mut(
+            &mut completion_signals,
+            initialize_pending_completion_signal_arena,
+        )?;
+        completion_initialization?;
         memory.with_bytes_mut(&mut eop, |bytes| bytes.fill(0))?;
         memory.with_bytes_mut(&mut context_save, |bytes| bytes.fill(0))?;
         memory.check_queue_currentness()?;
@@ -461,10 +531,13 @@ impl CheckedGfx942XnackMinusDevice {
         let context_save = memory.seal_executable(context_save)?;
         let ring = memory.map_to_gpu(ring)?;
         let control = memory.map_to_gpu(control)?;
+        let completion_signals = memory.map_to_gpu(completion_signals)?;
         let eop = memory.map_executable_to_gpu(eop)?;
         let context_save = memory.map_executable_to_gpu(context_save)?;
         let ring = memory.retain_aql_ring_resource(ring)?;
         let control = memory.retain_aql_control_resource(control)?;
+        let completion_signals =
+            memory.retain_aql_completion_signal_resource(completion_signals)?;
         let eop = memory.retain_aql_eop_resource(eop)?;
         let context_save = memory.retain_aql_context_save_resource(context_save)?;
         let authority = build_resource_authority(
@@ -474,6 +547,10 @@ impl CheckedGfx942XnackMinusDevice {
             control,
             eop,
             context_save,
+        )?;
+        let completion_owner = CompletionSignalArenaOwnerV1::new(
+            authority.view.plan.queue,
+            completion_signals.facts(),
         )?;
         let (identity, model) = memory.take_queue_model_foundation()?;
         let backend = LinuxNativeQueueBackendV1 {
@@ -503,6 +580,8 @@ impl CheckedGfx942XnackMinusDevice {
             submission: Some(NativeAqlSubmissionOwnerV1::new(ring_bytes).map_err(|_| {
                 ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model")
             })?),
+            completion_signals: Some(completion_signals),
+            completion_owner,
             exception: Some(QueueExceptionStateV1 {
                 runtime,
                 event,
@@ -624,8 +703,192 @@ impl ComputeAqlQueueSessionV1 {
         result
     }
 
+    /// Private dispatch-composition boundary. Each template is bound to one
+    /// unique retained completion signal before the existing all-body/then-
+    /// all-header batch publication. This remains unreachable from safe public
+    /// API because code, kernarg, and data-allocation authorities are not yet
+    /// available to mint the generation bindings.
+    #[allow(dead_code)]
+    pub(crate) fn submit_with_completions<const N: usize>(
+        &mut self,
+        templates: [CompletionPacketTemplateV1; N],
+    ) -> Result<Gfx942CompletionBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let bound = self.completion_owner.bind_batch(templates)?;
+        let (packets, retention) = bound.into_parts();
+        self.completion_owner.validate_bound(&retention)?;
+        match self.submit_prepared_batch(packets) {
+            Ok(last_packet_id) => {
+                match self
+                    .completion_owner
+                    .mark_published(retention, last_packet_id)
+                {
+                    Ok(batch) => Ok(batch),
+                    Err(error) => {
+                        self.poison_terminal();
+                        Err(error.into())
+                    }
+                }
+            }
+            Err(error) => {
+                let ordinary_occupancy = matches!(
+                    error,
+                    NativeAqlSubmissionErrorV1::Ring(
+                        fe2o3_aql::AqlRingReservationError::Full
+                            | fe2o3_aql::AqlRingReservationError::InsufficientSpace { .. }
+                    )
+                );
+                if ordinary_occupancy {
+                    if let Err(cancel_error) = self.completion_owner.cancel_bound(retention) {
+                        self.poison_terminal();
+                        return Err(cancel_error.into());
+                    }
+                } else {
+                    self.completion_owner.poison_owner();
+                }
+                Err(map_submission(error))
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn poll_completion_batch<const N: usize>(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<N>,
+    ) -> Result<Gfx942CompletionPollV1<N>, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let result =
+            {
+                let owner = &mut self.completion_owner;
+                let engine =
+                    self.engine
+                        .as_mut()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue engine",
+                        ))?;
+                if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                    return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "queue is not active",
+                    ));
+                }
+                let signals = self.completion_signals.as_mut().ok_or(
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                )?;
+                let exception =
+                    self.exception
+                        .as_ref()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue exception gate",
+                        ))?;
+                let mut backend = LinuxCompletionSignalBackendV1 {
+                    memory: &mut engine.backend.session,
+                    signals,
+                    exception,
+                };
+                owner.observe_once(batch, &mut backend)
+            };
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn wait_completion_batch<const N: usize>(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<N>,
+        polls: u32,
+    ) -> Result<Gfx942CompletedBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let result =
+            {
+                let owner = &mut self.completion_owner;
+                let engine =
+                    self.engine
+                        .as_mut()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue engine",
+                        ))?;
+                if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                    return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "queue is not active",
+                    ));
+                }
+                let signals = self.completion_signals.as_mut().ok_or(
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                )?;
+                let exception =
+                    self.exception
+                        .as_ref()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue exception gate",
+                        ))?;
+                let mut backend = LinuxCompletionSignalBackendV1 {
+                    memory: &mut engine.backend.session,
+                    signals,
+                    exception,
+                };
+                owner.wait_bounded(batch, polls, &mut backend)
+            };
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn recycle_completion_batch<const N: usize>(
+        &mut self,
+        completed: Gfx942CompletedBatchV1<N>,
+    ) -> Result<Gfx942CompletionRecycleObservationV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let result =
+            {
+                let owner = &mut self.completion_owner;
+                let engine =
+                    self.engine
+                        .as_mut()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue engine",
+                        ))?;
+                if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                    return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "queue is not active",
+                    ));
+                }
+                let signals = self.completion_signals.as_mut().ok_or(
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                )?;
+                let exception =
+                    self.exception
+                        .as_ref()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue exception gate",
+                        ))?;
+                let mut backend = LinuxCompletionSignalBackendV1 {
+                    memory: &mut engine.backend.session,
+                    signals,
+                    exception,
+                };
+                owner.recycle(completed, &mut backend)
+            };
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
     fn poison_terminal(&mut self) {
         self.terminal_poisoned = true;
+        self.completion_owner.poison_owner();
         if let Some(submission) = self.submission.as_mut() {
             submission.poison();
         }
@@ -700,6 +963,7 @@ impl ComputeAqlQueueSessionV1 {
                 "terminal queue session requires process teardown",
             ));
         }
+        self.completion_owner.ensure_releasable()?;
         let engine = self
             .engine
             .as_mut()
@@ -748,9 +1012,23 @@ impl ComputeAqlQueueSessionV1 {
             authority,
             shadow_release,
         )?;
+        let completion_signals =
+            self.completion_signals
+                .take()
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing completion signal arena",
+                ))?;
+        let memory = &mut self
+            .engine
+            .as_mut()
+            .expect("session engine")
+            .backend
+            .session;
+        let completion_signals = memory.unmap_from_gpu(completion_signals.into_token())?;
+        memory.release(completion_signals)?;
         Ok(ComputeAqlQueueDestroyedV1 {
             queue_id: self.observation.queue_id,
-            released_resources: 4,
+            released_resources: 5,
         })
     }
 
@@ -1018,6 +1296,24 @@ fn map_native(error: NativeQueueAdapterErrorV1) -> ComputeAqlQueueSessionErrorV1
     ComputeAqlQueueSessionErrorV1::Native(detail)
 }
 
+fn map_submission(error: NativeAqlSubmissionErrorV1) -> ComputeAqlQueueSessionErrorV1 {
+    let detail = match error {
+        NativeAqlSubmissionErrorV1::InvalidQueue(_) => "invalid submission queue",
+        NativeAqlSubmissionErrorV1::InvalidRing(_) => "invalid submission ring",
+        NativeAqlSubmissionErrorV1::InvalidCwsr(_) => "invalid submission CWSR",
+        NativeAqlSubmissionErrorV1::Poisoned => "submission owner poisoned",
+        NativeAqlSubmissionErrorV1::Currentness => "submission currentness lost",
+        NativeAqlSubmissionErrorV1::CounterObservation => "submission counter observation",
+        NativeAqlSubmissionErrorV1::WriteCounterReplay { .. } => "submission write replay",
+        NativeAqlSubmissionErrorV1::Ring(_) => "submission ring occupancy",
+        NativeAqlSubmissionErrorV1::WriteCounterRace { .. } => "submission write race",
+        NativeAqlSubmissionErrorV1::PacketBody => "submission packet body",
+        NativeAqlSubmissionErrorV1::PacketHeader => "submission packet header",
+        NativeAqlSubmissionErrorV1::Doorbell => "submission doorbell",
+    };
+    ComputeAqlQueueSessionErrorV1::Native(detail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1031,6 +1327,14 @@ mod tests {
         assert_eq!(
             fe2o3_aql::AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1,
             "0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83"
+        );
+        assert_eq!(
+            super::super::completion::GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1,
+            "639120a81cd1bba9a94ca1a3550c7e3664de1e23e0d6c812f10a9283444b69dd"
+        );
+        assert_eq!(
+            SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
+            "9761da91f900b7186d18aaec01dc8b67597049f8c2c9cf1eeac9a66e0cd7b938"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_RUNTIME_ENABLE_SCHEMA_SHA256,

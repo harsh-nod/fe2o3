@@ -211,13 +211,14 @@ the one permitted `FREE_MEMORY_OF_GPU` attempt; Drop performs no ioctl, munmap,
 FREE, or retry.
 
 The crate-private queue bridge can consume mapped tokens into distinct,
-non-Clone ring, control, EOP, and context-save role capabilities. Each retains
+non-Clone ring, control, EOP, context-save, and completion-signal role
+capabilities. Each retains
 the exact private GPU VA span, model mapping key, and proposed publication key;
 validated subranges are computed with checked bounds and alignment. Numeric
 addresses and bridge constructors are not public, and the bridge neither
 publishes a mapping nor grants queue authority. The eventual native queue
-adapter must retain all four role capabilities and admit their exact fe2o3
-backing policy before it can construct queue arguments.
+adapter retains the four CREATE_QUEUE role capabilities plus the separate
+completion arena and admits their exact fe2o3 backing policy before use.
 
 The completion journal projects exact profile kinds, allocation generations,
 non-overlapping GPU-VA spans, and successful map/unmap/release order into
@@ -350,8 +351,26 @@ side-effect failure poison the non-Clone owner; only full or insufficient
 space before the actual reservation is retryable. The private publication
 path revalidates the live process-global runtime transition, event, all shadow
 headers, payload, and currentness before publication. There is still no public
-launch API, code/kernarg/allocation generation binding, or completion authority
-in this slice.
+launch API or code/kernarg/data-allocation liveness authority.
+
+The private completion slice owns one separate 16 KiB host-coherent GTT arena
+containing exactly 256 distinct aligned `AmdBusyCompletionSignalV1` objects.
+All are constructed as exact pending user signals before GPU mapping. A batch
+of one through 256 packets receives one unique slot per packet; the private
+binding retains the exact queue, signal allocation, kernarg mapping, and data
+mapping generations without exposing a numeric signal address. The generation
+keys detect substitution but do not themselves mint code, kernarg, data
+allocation, initialization, alias, or copy authority.
+
+Completion observation performs bounded atomic `i64` acquire loads. A batch is
+ready only after every exact signal is zero; pending, unexpected-value fault,
+timeout, currentness loss, and native observation ambiguity are distinct.
+Fault, timeout, invalid poll bounds, generation exhaustion, ambiguity, or any
+partial reset terminally poison the queue and require process teardown.
+Completed slots can be recycled only by a checked
+release reset to pending, after which their slot generations advance. Queue
+destroy refuses any bound, published, or completed-but-unrecycled batch and
+releases the completion arena only after confirmed queue destruction.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
@@ -364,8 +383,9 @@ Each page transitions PROT_NONE, MADV_DONTFORK, then read/write. The same exact
 header names the event and one aligned zero reason word in the first shadow.
 No mapping address, pointer, fd, event handle, or MMIO capability is public.
 
-Explicit cleanup confirms queue DESTROY, event DESTROY, runtime disable,
-doorbell unmap, then CWSR/full-resource unmap and FREE. The process-global
+Explicit cleanup first requires every completion batch recycled, then confirms
+queue DESTROY, event DESTROY, runtime disable, doorbell unmap, and complete
+CWSR/queue-resource/completion-arena unmap and FREE. The process-global
 guard remains held through resource return. Drop performs none of those native
 operations. The isolated `kfd-compute-aql-queue` example confirms this lifecycle
 live on the selected MI300X while publishing zero packets and performing zero
@@ -384,12 +404,15 @@ This is queue-exception preparation, not actual fault-delivery evidence.
 CPU-visible debug suspend and checkpoint/wave-state control-stack copies remain
 unsupported because only the eight header pages are CPU shadows. Ordinary
 hardware CWSR preemption and restore use the GPUVM BO and remain Contracted,
-not excluded. Live kernel dispatch, completion, code/kernarg authority, and an
-injected-fault observation remain separate gates.
+not excluded. Live kernel dispatch, hardware completion evidence,
+code/kernarg/data liveness authority, and an injected-fault observation remain
+separate gates.
 
 The abstract Verus relation proves Active and Disabled are the only direct
 destroy sources and that failed-no-effect restores the exact retained source.
 It does not prove the Rust adapter, ioctl/mmap implementation, kernel, firmware,
 hardware, CPU/GPU atomic coherence, or concrete-to-model refinement. The
-private CPU publication sequence is implemented and hostile-tested, but live
-dispatch and completion remain excluded.
+private CPU publication and completion state machines are implemented and
+hostile-tested. GPU signal writes, their system-scope coherence, acquire
+visibility of device result writes, and dispatch quiescence remain Contracted;
+live dispatch and hardware completion evidence remain excluded.

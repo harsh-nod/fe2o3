@@ -176,25 +176,38 @@ MMIO stores; it does not inject a fault or prove actual exception delivery.
 Foreign KFD clients in the same process are also outside the crate-global
 runtime ownership claim.
 
-R4 still needs a dispatch authority that binds kernarg, code object, queue,
-dispatch, and completion generations. The existing inert packet carries only
-numeric address observations. A doorbell failure after publication is not
+The next dispatch layer still must consume real code, kernarg, and data
+allocation liveness authorities. The completion slice retains their exact
+mapping generations once a crate-private template is bound, but those keys are
+not allocation ownership and cannot make the existing inert numeric packet
+observations authoritative. A doorbell failure after publication is not
 rollback evidence and remains process-teardown-only poison.
 
-## Missing completion-signal boundary
+## Private completion-signal boundary
 
-The UAPI crate now independently oracles the KFD 1.18 event requests, layouts,
-nested event data, results, and queue context-save header. The owned event in
-this composition is only the queue-exception route. A completion slice must
-still pin the gfx942/ROCr signal-memory layout and atomics that bind an AQL
-completion signal to a specific dispatch and KFD wakeup.
+The owned KFD event remains only the queue-exception route. Dispatch completion
+uses a separate exact 16 KiB host-coherent allocation with 256 unique 64-byte
+ROCr user signals. Each signal object is initialized to pending before GPU map.
+The arena and its address facts stay crate-private and linearly owned by the
+queue session; no KFD wakeup or public address is introduced.
 
-The safe API must own a dedicated generation-bound signal for each admitted
-dispatch, initialize it before packet publication, wait against the exact
-dispatch identity, distinguish timeout from completion, acquire the device's
-result writes before exposing host reads, and destroy/recycle the event only
-after no packet can reference it. Neither a changed signal word nor a returned
-event ID alone is completion authority.
+One private batch binding reserves a distinct signal per packet and retains the
+exact queue, signal-allocation, kernarg-mapping, and data-mapping generations.
+It publishes through the existing one-reservation/one-doorbell primitive.
+Bounded polling acquires every signal value and distinguishes pending, all-zero
+ready, unexpected-value fault, and timeout. Only all-zero evidence permits a
+release reset and slot-generation advance. A live or completed-but-unrecycled
+batch prevents queue resource release; timeout, invalid poll bounds,
+generation exhaustion, currentness loss, observation ambiguity, and partial
+reset poison the session and require process teardown.
+
+The relationship between a firmware signal write, dispatch completion,
+system-scope coherence, visibility of device result writes, and dispatch
+quiescence is **Contracted**. Host mocks exercise the lifecycle and every
+effect boundary, but there is no concrete Verus refinement or hardware run.
+The remaining safe launch layer must consume actual code/kernarg/data
+allocation authorities and establish initialization, alias, copy, and
+quiescence obligations rather than treating generation keys as ownership.
 
 ## Verification boundary
 
