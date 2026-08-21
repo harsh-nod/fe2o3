@@ -9,10 +9,10 @@ use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiIdentityV1, SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticFunctionIdV1,
-    SemanticLayoutIdentityV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticMirLimitsV1,
-    SemanticMirResourceV1, SemanticSourceFileIdentityV1, SemanticSourceOriginV1,
-    SemanticSourceProvenanceV1, SemanticTargetDataLayoutV1, SemanticTypeIdV1,
-    SemanticTypeIdentityV1,
+    SemanticFunctionIdentityV1, SemanticLayoutIdentityV1, SemanticLocalIdV1,
+    SemanticLocalIdentityV1, SemanticMirLimitsV1, SemanticMirResourceV1,
+    SemanticSourceFileIdentityV1, SemanticSourceOriginV1, SemanticSourceProvenanceV1,
+    SemanticTargetDataLayoutV1, SemanticTypeIdV1, SemanticTypeIdentityV1,
 };
 use rustc_abi::ExternAbi;
 use rustc_middle::mir::{
@@ -22,8 +22,7 @@ use rustc_middle::mir::{
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf, TyAndLayout};
 use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::{
-    self, EarlyBinder, GenericArgKind, GenericArgsRef, Instance, Ty, TyCtxt, TyKind,
-    TypeVisitableExt, TypingEnv,
+    self, EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
 };
 use rustc_span::Span;
 use rustc_target::callconv::FnAbi;
@@ -45,11 +44,14 @@ const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-pla
 const MAX_DIAGNOSTIC_COMPONENT_CHARS_V1: usize = 512;
 const MAX_MACRO_EXPANSION_DEPTH_V1: usize = 256;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RetainedSemanticFunctionProducerV1<'tcx> {
     pub(crate) identities: CanonicalFunctionIdentitiesV1,
     pub(crate) instance: Instance<'tcx>,
     pub(crate) role: CollectedFunctionRole,
+    pub(crate) export_name: Option<String>,
+    pub(crate) kernel_binding: Option<reserved_fe2o3_symbols::KernelBindingIdV1>,
+    pub(crate) frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -61,7 +63,7 @@ pub(crate) struct RetainedSemanticTypeProducerV1<'tcx> {
     pub(crate) semantic_layout_identity: SemanticLayoutIdentityV1,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RetainedSemanticFunctionAbiProducerV1<'tcx> {
     pub(crate) function: SemanticFunctionIdV1,
     pub(crate) identity: SemanticAbiIdentityV1,
@@ -75,25 +77,25 @@ pub(crate) struct RetainedSemanticFunctionAbiProducerV1<'tcx> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct RetainedSemanticLocalProducerV1 {
-    identity: SemanticLocalIdentityV1,
-    rustc_local: u32,
-    ty: SemanticTypeIdV1,
-    source: RetainedSemanticSourceProducerV1,
+pub(crate) struct RetainedSemanticLocalProducerV1 {
+    pub(crate) identity: SemanticLocalIdentityV1,
+    pub(crate) rustc_local: u32,
+    pub(crate) ty: SemanticTypeIdV1,
+    pub(crate) source: RetainedSemanticSourceProducerV1,
 }
 
 #[derive(Debug)]
-struct RetainedSemanticBlockProducerV1 {
-    identity: SemanticBlockIdentityV1,
-    rustc_block: u32,
-    source: RetainedSemanticSourceProducerV1,
-    statements: Box<[RetainedSemanticSourceProducerV1]>,
-    terminator: RetainedSemanticSourceProducerV1,
+pub(crate) struct RetainedSemanticBlockProducerV1 {
+    pub(crate) identity: SemanticBlockIdentityV1,
+    pub(crate) rustc_block: u32,
+    pub(crate) source: RetainedSemanticSourceProducerV1,
+    pub(crate) statements: Box<[RetainedSemanticSourceProducerV1]>,
+    pub(crate) terminator: RetainedSemanticSourceProducerV1,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct RetainedSemanticSourceProducerV1 {
-    provenance: SemanticSourceProvenanceV1,
+pub(crate) struct RetainedSemanticSourceProducerV1 {
+    pub(crate) provenance: SemanticSourceProvenanceV1,
     expansion_chain_sha256: [u8; 32],
 }
 
@@ -112,14 +114,14 @@ struct RetainedRawBodySourceProducerV1 {
 }
 
 #[derive(Debug)]
-struct RetainedSemanticBodyProducerV1 {
-    function: SemanticFunctionIdV1,
-    source: RetainedSemanticSourceProducerV1,
-    locals: Box<[RetainedSemanticLocalProducerV1]>,
-    raw_to_semantic_locals: Box<[SemanticLocalIdV1]>,
-    entry: SemanticBlockIdV1,
-    blocks: Box<[RetainedSemanticBlockProducerV1]>,
-    raw_to_semantic_blocks: Box<[SemanticBlockIdV1]>,
+pub(crate) struct RetainedSemanticBodyProducerV1 {
+    pub(crate) function: SemanticFunctionIdV1,
+    pub(crate) source: RetainedSemanticSourceProducerV1,
+    pub(crate) locals: Box<[RetainedSemanticLocalProducerV1]>,
+    pub(crate) raw_to_semantic_locals: Box<[SemanticLocalIdV1]>,
+    pub(crate) entry: SemanticBlockIdV1,
+    pub(crate) blocks: Box<[RetainedSemanticBlockProducerV1]>,
+    pub(crate) raw_to_semantic_blocks: Box<[SemanticBlockIdV1]>,
 }
 
 struct CanonicalProducerTablesV1<'tcx> {
@@ -127,6 +129,11 @@ struct CanonicalProducerTablesV1<'tcx> {
     source_files: Box<[SemanticSourceFileIdentityV1]>,
     bodies: Box<[RetainedSemanticBodyProducerV1]>,
 }
+
+type RetainedTerminalTableV1<'tcx> = (
+    Box<[RetainedSemanticTerminalProducerV1<'tcx>]>,
+    BTreeMap<SemanticFunctionIdentityV1, u32>,
+);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RawMirPreflightCountsV1 {
@@ -211,18 +218,6 @@ impl RawMirPreflightCountsV1 {
             self.validation_work,
         ]
     }
-
-    pub(crate) const fn locals(self) -> u64 {
-        self.locals
-    }
-
-    pub(crate) const fn blocks(self) -> u64 {
-        self.blocks
-    }
-
-    pub(crate) const fn statements(self) -> u64 {
-        self.statements
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -232,23 +227,41 @@ struct CallEdgeV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct TerminalExpansionRecipeV1 {
-    caller: SemanticFunctionIdV1,
-    block: u32,
-    expansion: ProductionTerminalExpansionV1,
-    arguments: u32,
+pub(crate) struct DirectCallRecipeV1 {
+    pub(crate) caller: SemanticFunctionIdV1,
+    pub(crate) block: u32,
+    pub(crate) callee: SemanticFunctionIdV1,
+}
+
+#[derive(Debug)]
+pub(crate) struct RetainedSemanticTerminalProducerV1<'tcx> {
+    pub(crate) identities: CanonicalFunctionIdentitiesV1,
+    pub(crate) expansion: ProductionTerminalExpansionV1,
+    pub(crate) abi: RetainedSemanticFunctionAbiProducerV1<'tcx>,
+    pub(crate) source: RetainedSemanticSourceProducerV1,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TerminalExpansionRecipeV1<'tcx> {
+    pub(crate) caller: SemanticFunctionIdV1,
+    pub(crate) block: u32,
+    pub(crate) expansion: ProductionTerminalExpansionV1,
+    pub(crate) arguments: u32,
+    pub(crate) instance: Instance<'tcx>,
+    pub(crate) identities: CanonicalFunctionIdentitiesV1,
+    pub(crate) terminal: u32,
 }
 
 #[derive(Debug)]
 pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
-    source_files: Box<[SemanticSourceFileIdentityV1]>,
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
     function_abis: Box<[RetainedSemanticFunctionAbiProducerV1<'tcx>]>,
+    terminals: Box<[RetainedSemanticTerminalProducerV1<'tcx>]>,
     bodies: Box<[RetainedSemanticBodyProducerV1]>,
     roots: Box<[SemanticFunctionIdV1]>,
-    terminal_expansions: Box<[TerminalExpansionRecipeV1]>,
-    raw_counts: RawMirPreflightCountsV1,
+    direct_calls: Box<[DirectCallRecipeV1]>,
+    terminal_expansions: Box<[TerminalExpansionRecipeV1<'tcx>]>,
     sha256: [u8; 32],
 }
 
@@ -257,44 +270,32 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
         &self.types
     }
 
-    pub(crate) fn type_producer_count(&self) -> usize {
-        self.types.len()
-    }
-
-    pub(crate) fn layout_producer_count(&self) -> usize {
-        self.types.len()
-    }
-
-    pub(crate) fn function_count(&self) -> usize {
-        self.functions.len()
+    pub(crate) fn function_producers(&self) -> &[RetainedSemanticFunctionProducerV1<'tcx>] {
+        &self.functions
     }
 
     pub(crate) fn function_abi_producers(&self) -> &[RetainedSemanticFunctionAbiProducerV1<'tcx>] {
         &self.function_abis
     }
 
-    pub(crate) fn source_file_producer_count(&self) -> usize {
-        self.source_files.len()
+    pub(crate) fn terminal_producers(&self) -> &[RetainedSemanticTerminalProducerV1<'tcx>] {
+        &self.terminals
     }
 
-    pub(crate) fn source_provenance_producer_count(&self) -> usize {
-        source_provenance_producer_count_v1(&self.bodies)
+    pub(crate) fn body_producers(&self) -> &[RetainedSemanticBodyProducerV1] {
+        &self.bodies
     }
 
-    pub(crate) fn body_producer_count(&self) -> usize {
-        self.bodies.len()
+    pub(crate) fn roots(&self) -> &[SemanticFunctionIdV1] {
+        &self.roots
     }
 
-    pub(crate) fn root_count(&self) -> usize {
-        self.roots.len()
+    pub(crate) fn direct_call_producers(&self) -> &[DirectCallRecipeV1] {
+        &self.direct_calls
     }
 
-    pub(crate) fn terminal_expansion_count(&self) -> usize {
-        self.terminal_expansions.len()
-    }
-
-    pub(crate) const fn raw_counts(&self) -> RawMirPreflightCountsV1 {
-        self.raw_counts
+    pub(crate) fn terminal_expansion_producers(&self) -> &[TerminalExpansionRecipeV1<'tcx>] {
+        &self.terminal_expansions
     }
 
     pub(crate) const fn sha256(&self) -> [u8; 32] {
@@ -461,7 +462,8 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     // Pass one resolves the complete direct-call relation and freezes typed
     // terminal recipes before any body is accepted as representable.
     let mut edges = BTreeSet::new();
-    let mut terminal_expansions = BTreeSet::new();
+    let mut direct_calls = BTreeSet::new();
+    let mut terminal_expansions = Vec::new();
     let mut first_rejection = None;
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
@@ -503,11 +505,14 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                                 );
                                 continue;
                             };
-                            terminal_expansions.insert(TerminalExpansionRecipeV1 {
+                            terminal_expansions.push(TerminalExpansionRecipeV1 {
                                 caller: function_id,
                                 block: block.index() as u32,
                                 expansion,
                                 arguments,
+                                instance: resolved,
+                                identities: canonical_function_identities_v1(tcx, resolved),
+                                terminal: u32::MAX,
                             });
                         }
                         Some(ProductionSemanticTerminalRuleV1::Reject(item)) => {
@@ -523,6 +528,11 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                             if let Some(callee) = function_ids.get(&identity).copied() {
                                 edges.insert(CallEdgeV1 {
                                     caller: function_id,
+                                    callee,
+                                });
+                                direct_calls.insert(DirectCallRecipeV1 {
+                                    caller: function_id,
+                                    block: block.index() as u32,
                                     callee,
                                 });
                             } else {
@@ -566,6 +576,14 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         ));
     }
 
+    let (terminals, terminal_ids) =
+        build_terminal_producers_v1(tcx, target, &terminal_expansions, &mut counts, limits)?;
+    for recipe in &mut terminal_expansions {
+        recipe.terminal = terminal_ids
+            .get(&recipe.identities.function())
+            .copied()
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+    }
     let function_abis = build_function_abi_producers_v1(tcx, target, &functions)?;
 
     // Pass two walks every raw MIR node once, classifies the first supported
@@ -628,13 +646,67 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         }
     }
 
+    for terminal in &terminals {
+        let recipe = terminal_expansions
+            .iter()
+            .find(|recipe| recipe.terminal == terminal.abi.function.index())
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        let caller = functions
+            .get(recipe.caller.index() as usize)
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        let body = tcx.instance_mir(caller.instance.def);
+        let mut preflight = BodyPreflightV1 {
+            tcx,
+            instance: caller.instance,
+            body,
+            function: recipe.caller,
+            limits,
+            counts: &mut counts,
+            types: &mut types,
+        };
+        let site = RejectionSiteV1 {
+            function: recipe.caller,
+            block: Some(recipe.block),
+            statement: None,
+            local: None,
+            span: body.basic_blocks
+                [rustc_middle::mir::BasicBlock::from_usize(recipe.block as usize)]
+            .terminator()
+            .source_info
+            .span,
+        };
+        for ty in terminal
+            .abi
+            .source_inputs
+            .iter()
+            .copied()
+            .chain(std::iter::once(terminal.abi.source_output))
+            .chain(
+                terminal
+                    .abi
+                    .fn_abi
+                    .args
+                    .iter()
+                    .map(|argument| argument.layout.ty),
+            )
+            .chain(std::iter::once(terminal.abi.fn_abi.ret.layout.ty))
+        {
+            if let Err(rejection) = preflight.inspect_type(ty, site) {
+                return Err(materialize_rejection_v1(
+                    tcx, &functions, &roots, &edges, rejection,
+                ));
+            }
+        }
+    }
+
     let CanonicalProducerTablesV1 {
         types,
         source_files,
         bodies,
     } = build_canonical_producer_tables_v1(tcx, target, &functions, source_producers, types)?;
 
-    let terminal_expansions = terminal_expansions.into_iter().collect::<Box<[_]>>();
+    let direct_calls = direct_calls.into_iter().collect::<Box<[_]>>();
+    let terminal_expansions = terminal_expansions.into_boxed_slice();
     let sha256 = preflight_plan_sha256_v1(
         target,
         identity_inventory_sha256,
@@ -642,22 +714,24 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         &source_files,
         &functions,
         &function_abis,
+        &terminals,
         &bodies,
         &roots,
         &edges,
+        &direct_calls,
         &terminal_expansions,
         counts,
         tcx,
     );
     Ok(ProductionSemanticPreflightPlanV1 {
         types,
-        source_files,
         functions,
         function_abis,
+        terminals,
         bodies,
         roots,
+        direct_calls,
         terminal_expansions,
-        raw_counts: counts,
         sha256,
     })
 }
@@ -812,7 +886,6 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 self.charge(SemanticMirResourceV1::SwitchTargets, targets.iter().count())
             }
             TerminatorKind::Call {
-                func,
                 args,
                 destination,
                 unwind,
@@ -821,7 +894,10 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 if !matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) {
                     return Err(reject("call with executable unwind edge", site));
                 }
-                self.inspect_operand(func, site)?;
+                // Pass one already authenticated this as a direct callable.
+                // Its FnDef is retained by the callable owner, not as a
+                // zero-sized value in the layout-reachable type catalog.
+                self.charge(SemanticMirResourceV1::Operands, 1)?;
                 for argument in args {
                     self.inspect_operand(&argument.node, site)?;
                 }
@@ -933,7 +1009,10 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                     }
                 }
                 TyKind::Adt(definition, arguments) => {
-                    self.queue_generic_argument_types(&mut pending, arguments, site)?;
+                    // The semantic catalog is the exact layout-reachable type
+                    // graph. Nominal-only arguments remain authenticated by
+                    // the rustc type identity; substituted field types add
+                    // every argument that has physical semantics.
                     let variants = definition.variants();
                     self.require_type_cardinality(variants.len())?;
                     if definition.is_enum() {
@@ -951,9 +1030,7 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                         }
                     }
                 }
-                TyKind::FnDef(_, arguments) => {
-                    self.queue_generic_argument_types(&mut pending, arguments, site)?;
-                }
+                TyKind::FnDef(..) => {}
                 TyKind::Ref(_, pointee, _) | TyKind::RawPtr(pointee, _) => {
                     self.queue_type(&mut pending, *pointee)?;
                 }
@@ -1012,26 +1089,6 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
             ));
         }
         pending.push(ty);
-        Ok(())
-    }
-
-    fn queue_generic_argument_types(
-        &self,
-        pending: &mut Vec<Ty<'tcx>>,
-        arguments: GenericArgsRef<'tcx>,
-        site: RejectionSiteV1,
-    ) -> Result<(), PendingRejectionV1> {
-        for argument in arguments.iter() {
-            match argument.kind() {
-                GenericArgKind::Type(argument) => self.queue_type(pending, argument)?,
-                GenericArgKind::Const(argument)
-                    if argument.has_param() || argument.has_escaping_bound_vars() =>
-                {
-                    return Err(reject("non-monomorphic const generic argument", site));
-                }
-                GenericArgKind::Const(_) | GenericArgKind::Lifetime(_) => {}
-            }
-        }
         Ok(())
     }
 
@@ -1213,7 +1270,6 @@ fn build_function_abi_producers_v1<'tcx>(
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
 ) -> Result<Box<[RetainedSemanticFunctionAbiProducerV1<'tcx>]>, ProductionSemanticPreflightErrorV1>
 {
-    let typing_env = TypingEnv::fully_monomorphized();
     let mut producers = Vec::new();
     producers.try_reserve_exact(functions.len()).map_err(|_| {
         ProductionSemanticPreflightErrorV1::LimitExceeded {
@@ -1227,53 +1283,159 @@ fn build_function_abi_producers_v1<'tcx>(
             u32::try_from(index)
                 .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
         );
-        let source_signature = tcx.normalize_erasing_regions(
-            typing_env,
-            tcx.instantiate_bound_regions_with_erased(
-                tcx.fn_sig(function.instance.def_id())
-                    .instantiate(tcx, function.instance.args),
-            ),
-        );
-        let extern_abi = match function.role {
-            CollectedFunctionRole::KernelEntry => ExternAbi::GpuKernel,
-            CollectedFunctionRole::DeviceFfiExport => ExternAbi::C { unwind: false },
-            CollectedFunctionRole::InternalHelper => source_signature.abi,
+        let source_abi = source_signature_v1(tcx, function.instance).abi;
+        let (extern_abi, use_instance_abi) = match function.role {
+            CollectedFunctionRole::KernelEntry => (ExternAbi::GpuKernel, false),
+            CollectedFunctionRole::DeviceFfiExport => (ExternAbi::C { unwind: false }, false),
+            CollectedFunctionRole::InternalHelper => (source_abi, true),
         };
-        let fn_abi = if function.role == CollectedFunctionRole::InternalHelper {
-            let query = typing_env.as_query_input((function.instance, ty::List::empty()));
-            tcx.fn_abi_of_instance(query)
-        } else {
-            let promoted_signature = ty::Binder::dummy(tcx.mk_fn_sig(
-                source_signature.inputs().iter().copied(),
-                source_signature.output(),
-                source_signature.c_variadic,
-                source_signature.safety,
-                extern_abi,
-            ));
-            let query = typing_env.as_query_input((promoted_signature, ty::List::empty()));
-            tcx.fn_abi_of_fn_ptr(query)
-        }
-        .map_err(|error| ProductionSemanticPreflightErrorV1::FunctionAbi {
-            function: function_id,
-            detail: bounded_diagnostic_component_v1(&format!("{error:?}")),
-        })?;
-        producers.push(RetainedSemanticFunctionAbiProducerV1 {
-            function: function_id,
-            identity: rustc_semantic_fn_abi_identity_v1(
-                tcx,
-                function.identities.function(),
-                fn_abi,
-            ),
-            layout_identity: rustc_semantic_fn_abi_layout_identity_v1(tcx, target, fn_abi),
+        producers.push(build_retained_fn_abi_producer_v1(
+            tcx,
+            target,
+            function_id,
+            function.instance,
+            function.identities.function(),
             extern_abi,
-            source_inputs: source_signature.inputs().to_vec().into_boxed_slice(),
-            source_output: source_signature.output(),
-            fn_abi,
-            rustc_source_signature_sha256: rustc_fn_signature_sha256_v1(tcx, source_signature),
-            rustc_fn_abi_sha256: rustc_fn_abi_sha256_v1(tcx, fn_abi),
-        });
+            use_instance_abi,
+        )?);
     }
     Ok(producers.into_boxed_slice())
+}
+
+fn build_terminal_producers_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target: SemanticTargetDataLayoutV1,
+    recipes: &[TerminalExpansionRecipeV1<'tcx>],
+    counts: &mut RawMirPreflightCountsV1,
+    limits: SemanticMirLimitsV1,
+) -> Result<RetainedTerminalTableV1<'tcx>, ProductionSemanticPreflightErrorV1> {
+    let mut unique = BTreeMap::new();
+    for recipe in recipes {
+        counts.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+        let next_callable_count = counts
+            .functions
+            .checked_add(u64::try_from(unique.len()).unwrap_or(u64::MAX))
+            .and_then(|count| count.checked_add(1))
+            .unwrap_or(u64::MAX);
+        match unique.entry(recipe.identities.function()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let maximum = limits.limit(SemanticMirResourceV1::Callables);
+                if next_callable_count > maximum {
+                    return Err(ProductionSemanticPreflightErrorV1::LimitExceeded {
+                        resource: SemanticMirResourceV1::Callables,
+                        actual: next_callable_count,
+                        maximum,
+                    });
+                }
+                entry.insert((recipe.instance, recipe.identities, recipe.expansion));
+            }
+            std::collections::btree_map::Entry::Occupied(entry)
+                if entry.get().0 == recipe.instance && entry.get().2 == recipe.expansion => {}
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            }
+        }
+    }
+
+    let mut terminal_ids = BTreeMap::new();
+    let mut terminals = Vec::new();
+    terminals.try_reserve_exact(unique.len()).map_err(|_| {
+        ProductionSemanticPreflightErrorV1::LimitExceeded {
+            resource: SemanticMirResourceV1::Callables,
+            actual: u64::try_from(unique.len()).unwrap_or(u64::MAX),
+            maximum: limits.limit(SemanticMirResourceV1::Callables),
+        }
+    })?;
+    for (index, (identity, (instance, identities, expansion))) in unique.into_iter().enumerate() {
+        let terminal = u32::try_from(index)
+            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        terminal_ids.insert(identity, terminal);
+        let source_abi = source_signature_v1(tcx, instance).abi;
+        let captured = canonical_source_provenance_v1(
+            tcx,
+            tcx.instance_mir(instance.def).span,
+            MAX_MACRO_EXPANSION_DEPTH_V1,
+        )
+        .map_err(|error| ProductionSemanticPreflightErrorV1::FunctionAbi {
+            function: SemanticFunctionIdV1::from_index(terminal),
+            detail: bounded_diagnostic_component_v1(&format!(
+                "invalid terminal source provenance: {error}"
+            )),
+        })?;
+        counts.charge(
+            SemanticMirResourceV1::ValidationWork,
+            captured.expansion_depth().saturating_add(2),
+            limits,
+        )?;
+        terminals.push(RetainedSemanticTerminalProducerV1 {
+            identities,
+            expansion,
+            abi: build_retained_fn_abi_producer_v1(
+                tcx,
+                target,
+                SemanticFunctionIdV1::from_index(terminal),
+                instance,
+                identity,
+                source_abi,
+                true,
+            )?,
+            source: retained_source_v1(captured),
+        });
+    }
+    Ok((terminals.into_boxed_slice(), terminal_ids))
+}
+
+fn source_signature_v1<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> ty::FnSig<'tcx> {
+    tcx.normalize_erasing_regions(
+        TypingEnv::fully_monomorphized(),
+        tcx.instantiate_bound_regions_with_erased(
+            tcx.fn_sig(instance.def_id())
+                .instantiate(tcx, instance.args),
+        ),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_retained_fn_abi_producer_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target: SemanticTargetDataLayoutV1,
+    function: SemanticFunctionIdV1,
+    instance: Instance<'tcx>,
+    function_identity: SemanticFunctionIdentityV1,
+    extern_abi: ExternAbi,
+    use_instance_abi: bool,
+) -> Result<RetainedSemanticFunctionAbiProducerV1<'tcx>, ProductionSemanticPreflightErrorV1> {
+    let typing_env = TypingEnv::fully_monomorphized();
+    let source_signature = source_signature_v1(tcx, instance);
+    let fn_abi = if use_instance_abi {
+        let query = typing_env.as_query_input((instance, ty::List::empty()));
+        tcx.fn_abi_of_instance(query)
+    } else {
+        let promoted_signature = ty::Binder::dummy(tcx.mk_fn_sig(
+            source_signature.inputs().iter().copied(),
+            source_signature.output(),
+            source_signature.c_variadic,
+            source_signature.safety,
+            extern_abi,
+        ));
+        let query = typing_env.as_query_input((promoted_signature, ty::List::empty()));
+        tcx.fn_abi_of_fn_ptr(query)
+    }
+    .map_err(|error| ProductionSemanticPreflightErrorV1::FunctionAbi {
+        function,
+        detail: bounded_diagnostic_component_v1(&format!("{error:?}")),
+    })?;
+    Ok(RetainedSemanticFunctionAbiProducerV1 {
+        function,
+        identity: rustc_semantic_fn_abi_identity_v1(tcx, function_identity, fn_abi),
+        layout_identity: rustc_semantic_fn_abi_layout_identity_v1(tcx, target, fn_abi),
+        extern_abi,
+        source_inputs: source_signature.inputs().to_vec().into_boxed_slice(),
+        source_output: source_signature.output(),
+        fn_abi,
+        rustc_source_signature_sha256: rustc_fn_signature_sha256_v1(tcx, source_signature),
+        rustc_fn_abi_sha256: rustc_fn_abi_sha256_v1(tcx, fn_abi),
+    })
 }
 
 fn build_canonical_producer_tables_v1<'tcx>(
@@ -1644,10 +1806,12 @@ fn preflight_plan_sha256_v1<'tcx>(
     source_files: &[SemanticSourceFileIdentityV1],
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
     function_abis: &[RetainedSemanticFunctionAbiProducerV1<'tcx>],
+    terminals: &[RetainedSemanticTerminalProducerV1<'tcx>],
     bodies: &[RetainedSemanticBodyProducerV1],
     roots: &[SemanticFunctionIdV1],
     edges: &BTreeSet<CallEdgeV1>,
-    terminal_expansions: &[TerminalExpansionRecipeV1],
+    direct_calls: &[DirectCallRecipeV1],
+    terminal_expansions: &[TerminalExpansionRecipeV1<'tcx>],
     counts: RawMirPreflightCountsV1,
     tcx: TyCtxt<'tcx>,
 ) -> [u8; 32] {
@@ -1659,10 +1823,12 @@ fn preflight_plan_sha256_v1<'tcx>(
         source_files.len(),
         functions.len(),
         function_abis.len(),
+        terminals.len(),
         bodies.len(),
         source_provenance_producer_count_v1(bodies),
         roots.len(),
         edges.len(),
+        direct_calls.len(),
         terminal_expansions.len(),
     ] {
         digest.field(&u64::try_from(cardinality).unwrap_or(u64::MAX).to_le_bytes());
@@ -1701,6 +1867,17 @@ fn preflight_plan_sha256_v1<'tcx>(
         }
         digest.field(rustc_type_identity_v1(tcx, abi.source_output).as_bytes());
     }
+    for terminal in terminals {
+        digest.field(terminal.identities.function().as_bytes());
+        digest.field(terminal.identities.item_definition().as_bytes());
+        digest.field(terminal.identities.monomorphization().as_bytes());
+        digest.field(terminal.identities.generic_type_arguments().as_bytes());
+        digest.field(terminal.identities.const_generic_arguments().as_bytes());
+        digest.field(&[terminal_expansion_tag_v1(terminal.expansion)]);
+        digest.field(&terminal.abi.rustc_source_signature_sha256);
+        digest.field(&terminal.abi.rustc_fn_abi_sha256);
+        digest_source_producer_v1(&mut digest, terminal.source);
+    }
     for body in bodies {
         digest.field(&body.function.index().to_le_bytes());
         digest_source_producer_v1(&mut digest, body.source);
@@ -1734,11 +1911,23 @@ fn preflight_plan_sha256_v1<'tcx>(
         digest.field(&edge.caller.index().to_le_bytes());
         digest.field(&edge.callee.index().to_le_bytes());
     }
+    for call in direct_calls {
+        digest.field(&call.caller.index().to_le_bytes());
+        digest.field(&call.block.to_le_bytes());
+        digest.field(&call.callee.index().to_le_bytes());
+    }
     for recipe in terminal_expansions {
         digest.field(&recipe.caller.index().to_le_bytes());
         digest.field(&recipe.block.to_le_bytes());
         digest.field(&[terminal_expansion_tag_v1(recipe.expansion)]);
         digest.field(&recipe.arguments.to_le_bytes());
+        digest.field(recipe.identities.function().as_bytes());
+        digest.field(recipe.identities.item_definition().as_bytes());
+        digest.field(recipe.identities.monomorphization().as_bytes());
+        digest.field(recipe.identities.generic_type_arguments().as_bytes());
+        digest.field(recipe.identities.const_generic_arguments().as_bytes());
+        digest.field(&recipe.terminal.to_le_bytes());
+        digest.field(&rustc_mir_body_sha256_v1(tcx, recipe.instance));
     }
     digest.finish()
 }

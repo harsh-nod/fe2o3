@@ -35,10 +35,9 @@ use std::fmt;
 
 mod production_importer_v1;
 
-#[cfg(test)]
-pub(crate) use production_importer_v1::PendingSemanticRecordConstructionV1;
 pub(crate) use production_importer_v1::{
-    ProductionSemanticImportErrorV1, require_production_semantic_import_v1,
+    ProductionSemanticImportErrorV1, construct_production_semantic_mir_v1,
+    require_production_semantic_import_v1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -760,10 +759,6 @@ fn kernel_roots<'tcx>(
         )?);
     }
 
-    if traversal == CollectorTraversalPolicyV1::ProductionV1 {
-        reject_production_profile_registrations_v1(&records)?;
-    }
-
     let session_crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
     for record in &records {
         if record.target.def_id().krate != LOCAL_CRATE {
@@ -876,22 +871,6 @@ fn kernel_roots<'tcx>(
         }
     }
     Ok(roots)
-}
-
-fn reject_production_profile_registrations_v1<T>(
-    records: &[RegistrationRecord<T>],
-) -> Result<(), RegistrationError> {
-    for record in records {
-        if record.version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1
-            || record.kind != reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL
-        {
-            return Err(RegistrationError::new(
-                &record.registration_path,
-                "production-v1 accepts only ordinary #[kernel] V1 registrations; typed profile registrations are qualification oracles",
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn general_typed_launch_v3(
@@ -3529,7 +3508,6 @@ mod tests {
         KernelRoot, ObservedInlineAssemblyV1, RegistrationError, RegistrationRecord,
         TypedArgumentListError, TypedArgumentListV1, TypedKernelProfile, general_typed_launch_v3,
         reconcile_frontend_contract, reconstruct_call_chain,
-        reject_production_profile_registrations_v1,
         validate_registration_records as validate_records,
     };
     use fe2o3_artifacts::{
@@ -4418,17 +4396,38 @@ mod tests {
     }
 
     #[test]
-    fn production_registration_surface_rejects_typed_profile_roots() {
-        let ordinary = registration("fixture::__fe2o3_kernel_plain", "plain", "plain", 1);
-        assert!(reject_production_profile_registrations_v1(&[ordinary]).is_ok());
+    fn production_registration_surface_accepts_every_valid_registration_version() {
+        let ordinary = validate_registration_records(vec![registration(
+            "fixture::__fe2o3_kernel_plain",
+            "plain",
+            "plain",
+            1,
+        )])
+        .unwrap();
+        let typed = validate_registration_records(vec![typed_registration(
+            "fixture::__fe2o3_kernel_typed",
+            "typed",
+            "typed",
+            2,
+        )])
+        .unwrap();
+        let general = validate_registration_records(vec![general_typed_registration(
+            "fixture::__fe2o3_kernel_general",
+            "general",
+            "general",
+            3,
+        )])
+        .unwrap();
 
-        for typed in [
-            typed_registration("fixture::__fe2o3_kernel_typed", "typed", "typed", 2),
-            general_typed_registration("fixture::__fe2o3_kernel_general", "general", "general", 3),
-        ] {
-            let error = reject_production_profile_registrations_v1(&[typed]).unwrap_err();
-            assert!(error.to_string().contains("qualification oracles"));
-        }
+        assert!(ordinary[0].typed_profile.is_none());
+        assert!(matches!(
+            typed[0].typed_profile,
+            Some(TypedKernelProfile::VecAddRustcLayoutV2)
+        ));
+        assert!(matches!(
+            general[0].typed_profile,
+            Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. })
+        ));
     }
 
     #[test]

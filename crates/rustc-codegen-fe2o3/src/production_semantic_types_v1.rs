@@ -114,8 +114,8 @@ pub(crate) struct ConstructedSemanticTypesV1 {
 }
 
 impl ConstructedSemanticTypesV1 {
-    pub(crate) fn len(&self) -> usize {
-        self.records.len()
+    pub(crate) fn into_records(self) -> Vec<SemanticTypeDeclV1> {
+        self.records.into_vec()
     }
 }
 

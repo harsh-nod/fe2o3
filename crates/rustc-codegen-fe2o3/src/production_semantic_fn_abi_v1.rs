@@ -4,20 +4,17 @@
 //! producer API requires callers to supply every source-signature, identity,
 //! role, and adjusted-layout binding that is not present in `FnAbi` itself.
 
-#![allow(dead_code)] // The importer wiring intentionally lands in a later change.
-
 use std::collections::BTreeMap;
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    HARD_MAX_CALL_ARGUMENTS_V1, HARD_MAX_FUNCTIONS_V1, SemanticAbiAdjustedTypeV1,
-    SemanticAbiArgumentV1, SemanticAbiCastV1, SemanticAbiExtensionV1,
-    SemanticAbiHiddenArgumentRoleV1, SemanticAbiIdentityV1, SemanticAbiPassModeV1,
-    SemanticAbiPointeeInfoV1, SemanticAbiRegisterKindV1, SemanticAbiRegisterV1,
+    HARD_MAX_CALL_ARGUMENTS_V1, HARD_MAX_FUNCTIONS_V1, SemanticAbiArgumentV1, SemanticAbiCastV1,
+    SemanticAbiExtensionV1, SemanticAbiHiddenArgumentRoleV1, SemanticAbiIdentityV1,
+    SemanticAbiPassModeV1, SemanticAbiRegisterKindV1, SemanticAbiRegisterV1,
     SemanticAbiRegularAttributesV1, SemanticAbiUniformV1, SemanticAbiValueAttributesV1,
     SemanticAbiValueV1, SemanticArmCallV1, SemanticCanonAbiV1, SemanticExternAbiV1,
     SemanticFunctionAbiV1, SemanticInterruptKindV1, SemanticLayoutIdentityV1, SemanticMirErrorV1,
-    SemanticTypeIdV1, SemanticTypeLayoutV1, SemanticX86CallV1,
+    SemanticTypeIdV1, SemanticX86CallV1,
 };
 use rustc_abi::{ArmCall, CanonAbi, ExternAbi, InterruptKind, Reg, RegKind, X86Call};
 use rustc_middle::ty::layout::TyAndLayout;
@@ -111,8 +108,8 @@ pub(crate) struct ConstructedSemanticFunctionAbisV1 {
 }
 
 impl ConstructedSemanticFunctionAbisV1 {
-    pub(crate) fn len(&self) -> usize {
-        self.records.len()
+    pub(crate) fn into_records(self) -> Vec<SemanticFunctionAbiV1> {
+        self.records.into_vec()
     }
 }
 
@@ -291,59 +288,14 @@ impl<'tcx> ProductionSemanticFnAbiTypeProducerV1<'tcx> {
     }
 }
 
-/// Semantic layout record for a rustc ABI-only layout adjustment, such as a
-/// virtual receiver made thin by `fn_abi_of_instance`.
-#[derive(Clone, Debug)]
-pub(crate) struct ProductionSemanticFnAbiAdjustedLayoutProducerV1<'tcx> {
-    rustc_layout: TyAndLayout<'tcx>,
-    layout_identity: SemanticLayoutIdentityV1,
-    layout: SemanticTypeLayoutV1,
-}
-
-impl<'tcx> ProductionSemanticFnAbiAdjustedLayoutProducerV1<'tcx> {
-    pub(crate) const fn new(
-        rustc_layout: TyAndLayout<'tcx>,
-        layout_identity: SemanticLayoutIdentityV1,
-        layout: SemanticTypeLayoutV1,
-    ) -> Self {
-        Self {
-            rustc_layout,
-            layout_identity,
-            layout,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct ProductionSemanticFnAbiValueProducerV1<'tcx> {
     source: ProductionSemanticFnAbiTypeProducerV1<'tcx>,
-    adjusted: Option<ProductionSemanticFnAbiAdjustedLayoutProducerV1<'tcx>>,
-    pointee_override: Option<SemanticAbiPointeeInfoV1>,
 }
 
 impl<'tcx> ProductionSemanticFnAbiValueProducerV1<'tcx> {
     pub(crate) const fn new(source: ProductionSemanticFnAbiTypeProducerV1<'tcx>) -> Self {
-        Self {
-            source,
-            adjusted: None,
-            pointee_override: None,
-        }
-    }
-
-    pub(crate) fn with_adjusted_layout(
-        mut self,
-        adjusted: ProductionSemanticFnAbiAdjustedLayoutProducerV1<'tcx>,
-    ) -> Self {
-        self.adjusted = Some(adjusted);
-        self
-    }
-
-    pub(crate) const fn with_pointee_override(
-        mut self,
-        pointee_override: SemanticAbiPointeeInfoV1,
-    ) -> Self {
-        self.pointee_override = Some(pointee_override);
-        self
+        Self { source }
     }
 }
 
@@ -623,16 +575,10 @@ fn validate_value_producer_v1<'tcx>(
     if rustc_value.layout.ty != producer.source.rustc_layout.ty {
         return Err(mismatch_v1("rustc source type", argument));
     }
-    match &producer.adjusted {
-        None if rustc_value.layout == producer.source.rustc_layout => Ok(()),
-        Some(adjusted)
-            if rustc_value.layout != producer.source.rustc_layout
-                && rustc_value.layout == adjusted.rustc_layout =>
-        {
-            Ok(())
-        }
-        None => Err(mismatch_v1("missing adjusted layout", argument)),
-        Some(_) => Err(mismatch_v1("substituted adjusted layout", argument)),
+    if rustc_value.layout == producer.source.rustc_layout {
+        Ok(())
+    } else {
+        Err(mismatch_v1("adjusted layout", argument))
     }
 }
 
@@ -682,23 +628,7 @@ fn convert_value_v1<'tcx>(
     producer: ProductionSemanticFnAbiValueProducerV1<'tcx>,
 ) -> Result<SemanticAbiValueV1, ProductionSemanticFnAbiErrorV1> {
     let mode = convert_pass_mode_v1(&rustc_value.mode)?;
-    let mut value = if let Some(adjusted) = producer.adjusted {
-        SemanticAbiValueV1::new_with_adjusted_type(
-            producer.source.semantic_type,
-            SemanticAbiAdjustedTypeV1::new(
-                producer.source.semantic_type,
-                adjusted.layout_identity,
-                adjusted.layout,
-            ),
-            mode,
-        )
-    } else {
-        SemanticAbiValueV1::new(producer.source.semantic_type, mode)
-    };
-    if let Some(pointee_override) = producer.pointee_override {
-        value = value.with_pointee_override(pointee_override);
-    }
-    Ok(value)
+    Ok(SemanticAbiValueV1::new(producer.source.semantic_type, mode))
 }
 
 fn convert_extern_abi_v1(

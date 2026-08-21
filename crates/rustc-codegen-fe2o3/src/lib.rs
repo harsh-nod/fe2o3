@@ -44,6 +44,7 @@ mod monomorphization_dead;
 mod pipeline_selection;
 mod production_pipeline_v1;
 mod production_rustc_driver_v1;
+mod production_semantic_body_v1;
 mod production_semantic_fn_abi_v1;
 mod production_semantic_terminal_v1;
 mod production_semantic_types_v1;

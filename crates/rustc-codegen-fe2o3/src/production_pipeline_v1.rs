@@ -1,9 +1,9 @@
 //! Single production-pipeline transaction shell.
 //!
 //! This module owns the one integration point for issue #175. It deliberately
-//! contains no workload recognition. The sole semantic-MIR importer now owns
-//! the consuming target-authentication boundary and still fails closed before
-//! semantic-record construction or another code-generation route.
+//! contains no workload recognition. The sole semantic-MIR importer owns the
+//! consuming target-authentication boundary and moves an admitted request into
+//! a typed stage before the still-pending middle-end transition fails closed.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -78,6 +78,15 @@ pub(super) struct CollectedRustStageV1<'tcx> {
     build_attempt: Option<BuildAttempt>,
 }
 
+pub(super) struct AdmittedSemanticMirStageV1 {
+    semantic_mir: fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    rustc_identity_inventory_sha256: [u8; 32],
+    rustc_preflight_plan_sha256: [u8; 32],
+    producer: ProducerIdentity,
+    output_dir: PathBuf,
+    build_attempt: Option<BuildAttempt>,
+}
+
 /// Move-only owner of one production compilation stage.
 ///
 /// Its fields and stage types stay private so no caller can synthesize or
@@ -113,8 +122,10 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         })
     }
 
-    /// Consumes the only production transaction through the sole importer.
-    pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
+    fn import_semantic_mir(
+        self,
+    ) -> Result<ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1>, ProductionPipelineErrorV1>
+    {
         let CollectedRustStageV1 {
             tcx,
             closure,
@@ -122,8 +133,49 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             output_dir,
             build_attempt,
         } = self.stage;
-        let error = crate::collector::require_production_semantic_import_v1(tcx, closure);
-        drop((producer, output_dir, build_attempt));
+        let (semantic_mir, rustc_identity_inventory_sha256, rustc_preflight_plan_sha256) =
+            crate::collector::construct_production_semantic_mir_v1(tcx, closure)
+                .map_err(ProductionPipelineErrorV1::SemanticImport)?;
+        Ok(ProductionCompilationV1 {
+            stage: AdmittedSemanticMirStageV1 {
+                semantic_mir,
+                rustc_identity_inventory_sha256,
+                rustc_preflight_plan_sha256,
+                producer,
+                output_dir,
+                build_attempt,
+            },
+            invariant_session: PhantomData,
+        })
+    }
+
+    /// Consumes the only production transaction through the sole importer.
+    pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
+        match self.import_semantic_mir() {
+            Ok(transaction) => transaction.require_middle_end(),
+            Err(error) => error,
+        }
+    }
+}
+
+impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
+    fn require_middle_end(self) -> ProductionPipelineErrorV1 {
+        let AdmittedSemanticMirStageV1 {
+            semantic_mir,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            producer,
+            output_dir,
+            build_attempt,
+        } = self.stage;
+        let error = crate::collector::ProductionSemanticImportErrorV1::SemanticMiddleEndPending {
+            functions: semantic_mir.functions().len(),
+            callables: semantic_mir.callables().len(),
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            semantic_sha256: *semantic_mir.semantic_sha256().as_bytes(),
+        };
+        drop((semantic_mir, producer, output_dir, build_attempt));
         ProductionPipelineErrorV1::SemanticImport(error)
     }
 }
@@ -154,33 +206,21 @@ mod tests {
     #[test]
     fn unavailable_import_diagnostic_is_deterministic_and_fail_closed() {
         let error = ProductionPipelineErrorV1::SemanticImport(
-            crate::collector::ProductionSemanticImportErrorV1::SemanticRecordConstructionPending(
-                Box::new(crate::collector::PendingSemanticRecordConstructionV1 {
-                    collected_functions: 3,
-                    registered_roots: 2,
-                    terminal_expansions: 4,
-                    raw_locals: 10,
-                    raw_blocks: 8,
-                    raw_statements: 12,
-                    rustc_type_producers: 6,
-                    rustc_layout_producers: 6,
-                    semantic_type_records: 6,
-                    semantic_function_abi_records: 3,
-                    source_file_producers: 2,
-                    source_provenance_producers: 31,
-                    body_producer_tables: 3,
-                    llvm_target: "amdgcn-amd-amdhsa".to_owned(),
-                    rustc_identity_inventory_sha256: [0xab; 32],
-                    rustc_preflight_plan_sha256: [0xcd; 32],
-                }),
-            ),
+            crate::collector::ProductionSemanticImportErrorV1::SemanticMiddleEndPending {
+                functions: 3,
+                callables: 6,
+                rustc_identity_inventory_sha256: [0xab; 32],
+                rustc_preflight_plan_sha256: [0xcd; 32],
+                semantic_sha256: [0xef; 32],
+            },
         );
         assert_eq!(
             error.to_string(),
             format!(
-                "production-v1 semantic importer authenticated rustc target \"amdgcn-amd-amdhsa\", consumed 3 collected device function(s) with 2 external root(s), and derived rustc identity inventory {}, then completed bounded raw-MIR preflight {} with 10 local(s), 8 block(s), 12 statement(s), and 4 typed terminal expansion recipe(s), retaining 6 structurally closed rustc type producer(s), 6 target-resolved rustc layout producer(s), and constructing 6 schema-shaped semantic type record(s) and 3 schema-shaped semantic function ABI record(s), plus 2 stable source file identity producer(s), 31 canonical source provenance producer(s), and 3 canonical body ID table(s); body record construction remains pending; no fallback or artifact emission was entered",
+                "production-v1 semantic importer authenticated rustc identity inventory {} and bounded preflight plan {}, then admitted one complete semantic MIR request with 3 function(s), 6 callable(s), and canonical identity {}; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
                 "ab".repeat(32),
                 "cd".repeat(32),
+                "ef".repeat(32),
             )
         );
     }

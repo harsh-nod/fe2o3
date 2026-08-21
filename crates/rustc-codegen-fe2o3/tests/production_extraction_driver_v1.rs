@@ -52,6 +52,11 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
         preflight_plan_sha256(&repeated),
         "separate AMD rustc processes derived different raw-MIR preflight plans",
     );
+    assert_eq!(
+        semantic_mir_sha256(&first),
+        semantic_mir_sha256(&repeated),
+        "separate AMD rustc processes admitted different canonical semantic MIR requests",
+    );
 }
 
 fn run_extraction(target: &ScratchTarget) -> String {
@@ -91,24 +96,28 @@ fn run_extraction(target: &ScratchTarget) -> String {
         .expect("run AMD extraction fixture");
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
 
-    assert!(!output.status.success(), "importer unexpectedly completed");
     assert!(
-        stderr.contains("semantic importer authenticated rustc target \"amdgcn-amd-amdhsa\"")
-            && stderr.contains("1 external root(s)")
-            && stderr.contains("completed bounded raw-MIR preflight")
-            && stderr.contains(
-                "with 7 local(s), 6 block(s), 4 statement(s), and 2 typed terminal expansion recipe(s)",
-            )
-            && stderr.contains(
-                "retaining 17 structurally closed rustc type producer(s), 17 target-resolved rustc layout producer(s), and constructing 17 schema-shaped semantic type record(s) and 1 schema-shaped semantic function ABI record(s), plus 1 stable source file identity producer(s), 24 canonical source provenance producer(s), and 1 canonical body ID table(s)",
-            )
-            && stderr.contains("body record construction remains pending"),
-        "missing AMD extraction milestone diagnostic:\n{stderr}"
+        !output.status.success(),
+        "production pipeline unexpectedly passed the pending semantic middle-end boundary"
+    );
+    let inventory_sha256 = identity_inventory_sha256(&stderr);
+    let preflight_sha256 = preflight_plan_sha256(&stderr);
+    let semantic_sha256 = semantic_mir_sha256(&stderr);
+    let expected_milestone = format!(
+        "semantic importer authenticated rustc identity inventory {inventory_sha256} and bounded preflight plan {preflight_sha256}, then admitted one complete semantic MIR request with 1 function(s), 3 callable(s), and canonical identity {semantic_sha256}; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
+    );
+    assert!(
+        stderr.contains(&expected_milestone),
+        "missing exact admitted semantic MIR milestone diagnostic {expected_milestone:?}:\n{stderr}"
     );
     for forbidden in [
         "semantic import target rejection",
+        "semantic importer rejected complete semantic MIR",
+        "semantic importer rejected semantic body construction",
         "requires authoritative rustc LLVM target",
         "found no registered kernel",
+        "body record construction remains pending",
+        "schema-shaped semantic",
         "legacy-v1",
         "kernel-ir-v1",
     ] {
@@ -117,45 +126,63 @@ fn run_extraction(target: &ScratchTarget) -> String {
             "AMD extraction entered forbidden path {forbidden:?}:\n{stderr}"
         );
     }
-    let _ = identity_inventory_sha256(&stderr);
-    let _ = preflight_plan_sha256(&stderr);
     stderr
 }
 
 fn identity_inventory_sha256(stderr: &str) -> &str {
-    const PREFIX: &str = "and derived rustc identity inventory ";
-    let suffix = stderr
-        .split_once(PREFIX)
-        .unwrap_or_else(|| panic!("missing identity inventory diagnostic:\n{stderr}"))
-        .1;
-    let identity = suffix
-        .get(..64)
-        .unwrap_or_else(|| panic!("truncated identity inventory diagnostic:\n{stderr}"));
-    assert!(
-        identity
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-        "identity inventory is not canonical lowercase hexadecimal: {identity:?}",
-    );
-    assert_eq!(suffix.as_bytes().get(64), Some(&b','));
-    identity
+    canonical_sha256_after(
+        stderr,
+        "authenticated rustc identity inventory ",
+        " and bounded preflight plan ",
+        "rustc identity inventory",
+    )
 }
 
 fn preflight_plan_sha256(stderr: &str) -> &str {
-    const PREFIX: &str = "then completed bounded raw-MIR preflight ";
+    canonical_sha256_after(
+        stderr,
+        "and bounded preflight plan ",
+        ", then admitted one complete semantic MIR request with ",
+        "rustc preflight plan",
+    )
+}
+
+fn semantic_mir_sha256(stderr: &str) -> &str {
+    canonical_sha256_after(
+        stderr,
+        "and canonical identity ",
+        "; semantic middle-end construction remains pending; no fallback or artifact emission was entered",
+        "canonical semantic MIR",
+    )
+}
+
+fn canonical_sha256_after<'a>(
+    stderr: &'a str,
+    prefix: &str,
+    trailer: &str,
+    label: &str,
+) -> &'a str {
+    assert_eq!(
+        stderr.match_indices(prefix).count(),
+        1,
+        "expected exactly one {label} identity diagnostic:\n{stderr}",
+    );
     let suffix = stderr
-        .split_once(PREFIX)
-        .unwrap_or_else(|| panic!("missing raw-MIR preflight diagnostic:\n{stderr}"))
+        .split_once(prefix)
+        .unwrap_or_else(|| panic!("missing {label} identity diagnostic:\n{stderr}"))
         .1;
     let identity = suffix
         .get(..64)
-        .unwrap_or_else(|| panic!("truncated raw-MIR preflight diagnostic:\n{stderr}"));
+        .unwrap_or_else(|| panic!("truncated {label} identity diagnostic:\n{stderr}"));
     assert!(
         identity
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-        "raw-MIR preflight identity is not canonical lowercase hexadecimal: {identity:?}",
+        "{label} identity is not canonical lowercase hexadecimal: {identity:?}",
     );
-    assert_eq!(suffix.as_bytes().get(64), Some(&b' '));
+    assert!(
+        suffix[64..].starts_with(trailer),
+        "{label} identity has a non-canonical diagnostic trailer:\n{stderr}",
+    );
     identity
 }

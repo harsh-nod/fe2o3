@@ -27,7 +27,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::{
     AggregateKind, Body, BorrowKind, ConstValue, MutBorrowKind, Operand, Place, PlaceTy,
-    ProjectionElem, RETURN_PLACE, Rvalue, StatementKind, TerminatorKind, UnwindAction,
+    ProjectionElem, RETURN_PLACE, Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
@@ -144,7 +144,6 @@ pub(crate) struct ProductionSemanticDirectCallBindingV1<'tcx> {
     caller: SemanticFunctionIdV1,
     rustc_block: u32,
     expected_callee: Instance<'tcx>,
-    semantic_callee: SemanticCallableIdV1,
 }
 
 impl<'tcx> ProductionSemanticDirectCallBindingV1<'tcx> {
@@ -152,39 +151,209 @@ impl<'tcx> ProductionSemanticDirectCallBindingV1<'tcx> {
         caller: SemanticFunctionIdV1,
         rustc_block: u32,
         expected_callee: Instance<'tcx>,
-        semantic_callee: SemanticCallableIdV1,
     ) -> Self {
         Self {
             caller,
             rustc_block,
             expected_callee,
-            semantic_callee,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProductionSemanticTerminalExpansionRecipeV1<'tcx> {
+    caller: SemanticFunctionIdV1,
+    rustc_block: u32,
+    expected_callee: Instance<'tcx>,
+    expansion: ProductionTerminalExpansionV1,
+}
+
+impl<'tcx> ProductionSemanticTerminalExpansionRecipeV1<'tcx> {
+    pub(crate) const fn new(
+        caller: SemanticFunctionIdV1,
+        rustc_block: u32,
+        expected_callee: Instance<'tcx>,
+        expansion: ProductionTerminalExpansionV1,
+    ) -> Self {
+        Self {
+            caller,
+            rustc_block,
+            expected_callee,
+            expansion,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ProductionSemanticCallableOwnerEntryV1<'tcx> {
+    Defined {
+        rustc_instance: Instance<'tcx>,
+        semantic_callable: SemanticCallableIdV1,
+    },
+    Terminal {
+        rustc_instance: Instance<'tcx>,
+        expansion: ProductionTerminalExpansionV1,
+        semantic_callable: SemanticCallableIdV1,
+    },
+}
+
+impl<'tcx> ProductionSemanticCallableOwnerEntryV1<'tcx> {
+    pub(crate) const fn defined(
+        rustc_instance: Instance<'tcx>,
+        semantic_callable: SemanticCallableIdV1,
+    ) -> Self {
+        Self::Defined {
+            rustc_instance,
+            semantic_callable,
+        }
+    }
+
+    pub(crate) const fn terminal(
+        rustc_instance: Instance<'tcx>,
+        expansion: ProductionTerminalExpansionV1,
+        semantic_callable: SemanticCallableIdV1,
+    ) -> Self {
+        Self::Terminal {
+            rustc_instance,
+            expansion,
+            semantic_callable,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProductionSemanticTerminalExpansionRecipeV1 {
-    caller: SemanticFunctionIdV1,
-    rustc_block: u32,
-    expansion: ProductionTerminalExpansionV1,
-    semantic_callee: SemanticCallableIdV1,
+enum ProductionSemanticCallableOwnerKindV1 {
+    Defined,
+    Terminal(ProductionTerminalExpansionV1),
 }
 
-impl ProductionSemanticTerminalExpansionRecipeV1 {
-    pub(crate) const fn new(
-        caller: SemanticFunctionIdV1,
-        rustc_block: u32,
-        expansion: ProductionTerminalExpansionV1,
-        semantic_callee: SemanticCallableIdV1,
-    ) -> Self {
-        Self {
-            caller,
-            rustc_block,
-            expansion,
-            semantic_callee,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductionSemanticCallableOwnerRecordV1 {
+    kind: ProductionSemanticCallableOwnerKindV1,
+    semantic_callable: SemanticCallableIdV1,
+}
+
+/// Request-owned authority for callable identities and cumulative body limits.
+///
+/// The importer constructs this once, in canonical callable order, from the
+/// authenticated preflight plan. Individual call-site recipes cannot name a
+/// semantic callable and therefore cannot substitute an ABI-compatible callee.
+pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
+    limits: SemanticMirLimitsV1,
+    totals: ConstructionTotalsV1,
+    callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
+}
+
+impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
+    pub(crate) fn new(
+        limits: SemanticMirLimitsV1,
+        type_count: usize,
+        callable_entries: &[ProductionSemanticCallableOwnerEntryV1<'tcx>],
+    ) -> Result<Self, ProductionSemanticBodyErrorV1> {
+        let mut totals = ConstructionTotalsV1::default();
+        totals.charge(SemanticMirResourceV1::Types, type_count, limits)?;
+        totals.charge(
+            SemanticMirResourceV1::Callables,
+            callable_entries.len(),
+            limits,
+        )?;
+        let mut callables = HashMap::new();
+        callables
+            .try_reserve(callable_entries.len())
+            .map_err(|_| allocation(SemanticMirResourceV1::Callables))?;
+        for (index, entry) in callable_entries.iter().copied().enumerate() {
+            totals.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+            let (rustc_instance, record) = match entry {
+                ProductionSemanticCallableOwnerEntryV1::Defined {
+                    rustc_instance,
+                    semantic_callable,
+                } => (
+                    rustc_instance,
+                    ProductionSemanticCallableOwnerRecordV1 {
+                        kind: ProductionSemanticCallableOwnerKindV1::Defined,
+                        semantic_callable,
+                    },
+                ),
+                ProductionSemanticCallableOwnerEntryV1::Terminal {
+                    rustc_instance,
+                    expansion,
+                    semantic_callable,
+                } => (
+                    rustc_instance,
+                    ProductionSemanticCallableOwnerRecordV1 {
+                        kind: ProductionSemanticCallableOwnerKindV1::Terminal(expansion),
+                        semantic_callable,
+                    },
+                ),
+            };
+            require_canonical_callable_id_v1(index, record.semantic_callable)?;
+            if callables.insert(rustc_instance, record).is_some() {
+                return Err(table("callable owner table"));
+            }
         }
+        Ok(Self {
+            limits,
+            totals,
+            callables,
+        })
     }
+
+    fn charge(
+        &mut self,
+        resource: SemanticMirResourceV1,
+        amount: usize,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        self.totals.charge(resource, amount, self.limits)
+    }
+
+    fn defined_callable(
+        &self,
+        rustc_instance: Instance<'tcx>,
+    ) -> Result<SemanticCallableIdV1, ProductionSemanticBodyErrorV1> {
+        let record = self
+            .callables
+            .get(&rustc_instance)
+            .copied()
+            .ok_or_else(|| table("callable owner table"))?;
+        resolve_owned_callable_record_v1(record, ProductionSemanticCallableOwnerKindV1::Defined)
+    }
+
+    fn terminal_callable(
+        &self,
+        rustc_instance: Instance<'tcx>,
+        expansion: ProductionTerminalExpansionV1,
+    ) -> Result<SemanticCallableIdV1, ProductionSemanticBodyErrorV1> {
+        let record = self
+            .callables
+            .get(&rustc_instance)
+            .copied()
+            .ok_or_else(|| table("callable owner table"))?;
+        resolve_owned_callable_record_v1(
+            record,
+            ProductionSemanticCallableOwnerKindV1::Terminal(expansion),
+        )
+    }
+}
+
+fn resolve_owned_callable_record_v1(
+    record: ProductionSemanticCallableOwnerRecordV1,
+    expected: ProductionSemanticCallableOwnerKindV1,
+) -> Result<SemanticCallableIdV1, ProductionSemanticBodyErrorV1> {
+    if record.kind != expected {
+        return Err(table("callable owner table"));
+    }
+    Ok(record.semantic_callable)
+}
+
+fn require_canonical_callable_id_v1(
+    canonical_index: usize,
+    semantic_callable: SemanticCallableIdV1,
+) -> Result<(), ProductionSemanticBodyErrorV1> {
+    let expected = u32::try_from(canonical_index).map_err(|_| table("callable owner table"))?;
+    if semantic_callable.index() != expected {
+        return Err(table("callable owner table"));
+    }
+    Ok(())
 }
 
 pub(crate) struct ProductionSemanticBodyInputV1<'a, 'tcx> {
@@ -200,9 +369,9 @@ pub(crate) struct ProductionSemanticBodyInputV1<'a, 'tcx> {
     pub(crate) type_bindings: &'a [ProductionSemanticTypeBindingV1<'tcx>],
     pub(crate) local_bindings: &'a [ProductionSemanticLocalBindingV1],
     pub(crate) block_bindings: &'a [ProductionSemanticBlockBindingV1],
+    pub(crate) entry: SemanticBlockIdV1,
     pub(crate) direct_calls: &'a [ProductionSemanticDirectCallBindingV1<'tcx>],
-    pub(crate) terminal_expansions: &'a [ProductionSemanticTerminalExpansionRecipeV1],
-    pub(crate) limits: SemanticMirLimitsV1,
+    pub(crate) terminal_expansions: &'a [ProductionSemanticTerminalExpansionRecipeV1<'tcx>],
 }
 
 #[derive(Debug)]
@@ -287,6 +456,7 @@ impl From<SemanticMirErrorV1> for ProductionSemanticBodyErrorV1 {
 struct ConstructionTotalsV1 {
     types: u64,
     functions: u64,
+    callables: u64,
     locals: u64,
     blocks: u64,
     statements: u64,
@@ -303,6 +473,7 @@ impl ConstructionTotalsV1 {
         match resource {
             SemanticMirResourceV1::Types => Some(&mut self.types),
             SemanticMirResourceV1::Functions => Some(&mut self.functions),
+            SemanticMirResourceV1::Callables => Some(&mut self.callables),
             SemanticMirResourceV1::Locals => Some(&mut self.locals),
             SemanticMirResourceV1::Blocks => Some(&mut self.blocks),
             SemanticMirResourceV1::Statements => Some(&mut self.statements),
@@ -312,8 +483,7 @@ impl ConstructionTotalsV1 {
             SemanticMirResourceV1::SwitchTargets => Some(&mut self.switch_targets),
             SemanticMirResourceV1::ConstantBytes => Some(&mut self.constant_bytes),
             SemanticMirResourceV1::ValidationWork => Some(&mut self.validation_work),
-            SemanticMirResourceV1::Callables
-            | SemanticMirResourceV1::Allocations
+            SemanticMirResourceV1::Allocations
             | SemanticMirResourceV1::Statics
             | SemanticMirResourceV1::VTables
             | SemanticMirResourceV1::Roots
@@ -354,7 +524,7 @@ impl ConstructionTotalsV1 {
     }
 }
 
-struct BodyProducerV1<'a, 'tcx> {
+struct BodyProducerV1<'a, 'owner, 'tcx> {
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     body: &'a Body<'tcx>,
@@ -365,24 +535,29 @@ struct BodyProducerV1<'a, 'tcx> {
     blocks_by_raw: Vec<&'a ProductionSemanticBlockBindingV1>,
     blocks_by_semantic: Vec<&'a ProductionSemanticBlockBindingV1>,
     direct_calls_by_raw: Vec<Option<&'a ProductionSemanticDirectCallBindingV1<'tcx>>>,
-    terminal_expansions_by_raw: Vec<Option<&'a ProductionSemanticTerminalExpansionRecipeV1>>,
+    terminal_expansions_by_raw: Vec<Option<&'a ProductionSemanticTerminalExpansionRecipeV1<'tcx>>>,
     consumed_direct_calls: Vec<bool>,
     consumed_terminal_expansions: Vec<bool>,
-    limits: SemanticMirLimitsV1,
-    totals: ConstructionTotalsV1,
+    owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 }
 
 type DirectCallTableV1<'a, 'tcx> = Vec<Option<&'a ProductionSemanticDirectCallBindingV1<'tcx>>>;
-type TerminalExpansionTableV1<'a> = Vec<Option<&'a ProductionSemanticTerminalExpansionRecipeV1>>;
-type CallTablesV1<'a, 'tcx> = (DirectCallTableV1<'a, 'tcx>, TerminalExpansionTableV1<'a>);
+type TerminalExpansionTableV1<'a, 'tcx> =
+    Vec<Option<&'a ProductionSemanticTerminalExpansionRecipeV1<'tcx>>>;
+type CallTablesV1<'a, 'tcx> = (
+    DirectCallTableV1<'a, 'tcx>,
+    TerminalExpansionTableV1<'a, 'tcx>,
+);
 
-pub(crate) fn construct_production_semantic_body_v1<'a, 'tcx>(
+pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
     input: ProductionSemanticBodyInputV1<'a, 'tcx>,
+    owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<SemanticFunctionDeclV1, ProductionSemanticBodyErrorV1> {
     validate_export_role_v1(input.role, &input.export)?;
     let abi = input.abi.clone();
     let export = input.export.clone();
-    let mut producer = BodyProducerV1::new(&input)?;
+    let entry = input.entry;
+    let mut producer = BodyProducerV1::new(&input, owner)?;
     let locals = producer.construct_locals()?;
     let blocks = producer.construct_blocks()?;
     producer.require_all_call_bindings_consumed()?;
@@ -404,7 +579,7 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'tcx>(
         input.source,
         abi,
         locals,
-        producer.block_id(0)?,
+        entry,
         blocks,
     )?;
     function = match export {
@@ -417,46 +592,37 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'tcx>(
     Ok(function)
 }
 
-impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
+impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
     fn new(
         input: &'a ProductionSemanticBodyInputV1<'a, 'tcx>,
+        owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
     ) -> Result<Self, ProductionSemanticBodyErrorV1> {
-        let mut totals = ConstructionTotalsV1::default();
-        totals.charge(SemanticMirResourceV1::Functions, 1, input.limits)?;
-        totals.charge(
-            SemanticMirResourceV1::Types,
-            input.type_bindings.len(),
-            input.limits,
-        )?;
-        totals.charge(
-            SemanticMirResourceV1::Locals,
-            input.body.local_decls.len(),
-            input.limits,
-        )?;
-        totals.charge(
-            SemanticMirResourceV1::Blocks,
-            input.body.basic_blocks.len(),
-            input.limits,
-        )?;
+        let owned_callable = owner.defined_callable(input.instance)?;
+        if owned_callable.index() != input.function.index() {
+            return Err(table("function body owner"));
+        }
+        owner.charge(SemanticMirResourceV1::Functions, 1)?;
+        owner.charge(SemanticMirResourceV1::Locals, input.body.local_decls.len())?;
+        owner.charge(SemanticMirResourceV1::Blocks, input.body.basic_blocks.len())?;
 
-        let type_ids = build_type_table_v1(
-            input.tcx,
-            input.instance,
-            input.type_bindings,
-            input.limits,
-            &mut totals,
-        )?;
+        let type_ids = build_type_table_v1(input.tcx, input.instance, input.type_bindings, owner)?;
         let (locals_by_raw, locals_by_semantic) =
-            build_local_tables_v1(input.body, input.local_bindings, input.limits, &mut totals)?;
+            build_local_tables_v1(input.body, input.local_bindings, owner)?;
         let (blocks_by_raw, blocks_by_semantic) =
-            build_block_tables_v1(input.body, input.block_bindings, input.limits, &mut totals)?;
+            build_block_tables_v1(input.body, input.block_bindings, owner)?;
+        if blocks_by_raw
+            .get(START_BLOCK.index())
+            .map(|binding| binding.semantic_block)
+            != Some(input.entry)
+        {
+            return Err(table("entry block binding"));
+        }
         let (direct_calls_by_raw, terminal_expansions_by_raw) = build_call_tables_v1(
             input.function,
             input.body.basic_blocks.len(),
             input.direct_calls,
             input.terminal_expansions,
-            input.limits,
-            &mut totals,
+            owner,
         )?;
         let consumed_direct_calls = try_filled_vec_v1(
             input.body.basic_blocks.len(),
@@ -482,8 +648,7 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
             terminal_expansions_by_raw,
             consumed_direct_calls,
             consumed_terminal_expansions,
-            limits: input.limits,
-            totals,
+            owner,
         })
     }
 
@@ -491,7 +656,8 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
         &mut self,
     ) -> Result<Vec<SemanticLocalDeclV1>, ProductionSemanticBodyErrorV1> {
         let mut locals = try_vec_v1(self.locals_by_semantic.len(), SemanticMirResourceV1::Locals)?;
-        for binding in self.locals_by_semantic.clone() {
+        for index in 0..self.locals_by_semantic.len() {
+            let binding = self.locals_by_semantic[index];
             self.work()?;
             let raw = usize::try_from(binding.rustc_local).map_err(|_| table("local table"))?;
             let declaration = self
@@ -513,9 +679,9 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
     fn construct_blocks(
         &mut self,
     ) -> Result<Vec<SemanticBasicBlockV1>, ProductionSemanticBodyErrorV1> {
-        let bindings = self.blocks_by_semantic.clone();
-        let mut blocks = try_vec_v1(bindings.len(), SemanticMirResourceV1::Blocks)?;
-        for binding in bindings {
+        let mut blocks = try_vec_v1(self.blocks_by_semantic.len(), SemanticMirResourceV1::Blocks)?;
+        for index in 0..self.blocks_by_semantic.len() {
+            let binding = self.blocks_by_semantic[index];
             let raw_block = binding.rustc_block;
             let raw_index = usize::try_from(raw_block).map_err(|_| table("block table"))?;
             let data = self
@@ -526,11 +692,8 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
             if binding.statement_sources.len() != data.statements.len() {
                 return Err(table("statement source table"));
             }
-            self.totals.charge(
-                SemanticMirResourceV1::Statements,
-                data.statements.len(),
-                self.limits,
-            )?;
+            self.owner
+                .charge(SemanticMirResourceV1::Statements, data.statements.len())?;
             let mut statements =
                 try_vec_v1(data.statements.len(), SemanticMirResourceV1::Statements)?;
             for (statement_index, statement) in data.statements.iter().enumerate() {
@@ -625,22 +788,7 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
                 SemanticRvalueKindV1::Use(self.construct_operand(operand, block, statement)?)
             }
             Rvalue::Ref(_, borrow, place) => {
-                let kind = match borrow {
-                    BorrowKind::Shared => SemanticBorrowKindV1::Shared,
-                    BorrowKind::Fake(_) => SemanticBorrowKindV1::Fake,
-                    BorrowKind::Mut {
-                        kind: MutBorrowKind::Default | MutBorrowKind::TwoPhaseBorrow,
-                    } => SemanticBorrowKindV1::Mutable,
-                    BorrowKind::Mut {
-                        kind: MutBorrowKind::ClosureCapture,
-                    } => {
-                        return Err(unsupported(
-                            "closure-capture mutable borrow rvalue",
-                            block,
-                            statement,
-                        ));
-                    }
-                };
+                let kind = semantic_borrow_kind_v1(*borrow, block, statement)?;
                 SemanticRvalueKindV1::Borrow {
                     kind,
                     place: self.construct_place(*place, block, statement)?,
@@ -659,7 +807,11 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
                     AggregateKind::Array(_) => SemanticAggregateKindV1::Array,
                     AggregateKind::Tuple => SemanticAggregateKindV1::Tuple,
                     AggregateKind::Adt(definition, variant, ..) => {
-                        if self.tcx.adt_def(*definition).is_enum() {
+                        let definition = self.tcx.adt_def(*definition);
+                        if definition.is_union() {
+                            return Err(unsupported("union aggregate rvalue", block, statement));
+                        }
+                        if definition.is_enum() {
                             SemanticAggregateKindV1::EnumVariant(
                                 u32::try_from(variant.index())
                                     .map_err(|_| table("enum variant index"))?,
@@ -732,11 +884,8 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
                 self.edge(SemanticEdgeRoleV1::Goto, target.index())?,
             )),
             TerminatorKind::SwitchInt { discr, targets } => {
-                self.totals.charge(
-                    SemanticMirResourceV1::SwitchTargets,
-                    targets.iter().count(),
-                    self.limits,
-                )?;
+                self.owner
+                    .charge(SemanticMirResourceV1::SwitchTargets, targets.iter().count())?;
                 let discriminant = self.construct_operand(discr, block, None)?;
                 let mut values =
                     try_vec_v1(targets.iter().count(), SemanticMirResourceV1::SwitchTargets)?;
@@ -764,11 +913,8 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
                 unwind,
                 ..
             } => {
-                self.totals.charge(
-                    SemanticMirResourceV1::CallArguments,
-                    args.len(),
-                    self.limits,
-                )?;
+                self.owner
+                    .charge(SemanticMirResourceV1::CallArguments, args.len())?;
                 let resolved = resolve_direct_call_v1(self.tcx, self.instance, self.body, func)
                     .map_err(|construct| unsupported(construct, block, None))?;
                 let semantic_callee = self.resolve_call_binding(raw_block, resolved, args.len())?;
@@ -831,8 +977,7 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
         block: Option<u32>,
         statement: Option<u32>,
     ) -> Result<SemanticOperandV1, ProductionSemanticBodyErrorV1> {
-        self.totals
-            .charge(SemanticMirResourceV1::Operands, 1, self.limits)?;
+        self.owner.charge(SemanticMirResourceV1::Operands, 1)?;
         self.work()?;
         match operand {
             Operand::Copy(place) => Ok(SemanticOperandV1::Copy(
@@ -875,11 +1020,8 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
         block: Option<u32>,
         statement: Option<u32>,
     ) -> Result<SemanticPlaceV1, ProductionSemanticBodyErrorV1> {
-        self.totals.charge(
-            SemanticMirResourceV1::Projections,
-            place.projection.len(),
-            self.limits,
-        )?;
+        self.owner
+            .charge(SemanticMirResourceV1::Projections, place.projection.len())?;
         let local = self.local_id(place.local.index())?;
         let local_ty = self.body.local_decls[place.local].ty;
         let mut derived = PlaceTy::from_ty(local_ty);
@@ -893,18 +1035,41 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
                     u32::try_from(field.index()).map_err(|_| table("field projection"))?,
                 ),
                 ProjectionElem::Index(index) => {
+                    if !matches!(derived.ty.kind(), TyKind::Array(..)) {
+                        return Err(unsupported(
+                            "Index projection on a non-array place",
+                            block,
+                            statement,
+                        ));
+                    }
                     SemanticProjectionKindV1::Index(self.local_id(index.index())?)
                 }
                 ProjectionElem::ConstantIndex {
                     offset,
                     min_length,
                     from_end,
-                } => SemanticProjectionKindV1::ConstantIndex {
-                    offset,
-                    minimum_length: min_length,
-                    from_end,
-                },
+                } => {
+                    if !matches!(derived.ty.kind(), TyKind::Array(..)) {
+                        return Err(unsupported(
+                            "ConstantIndex projection on a non-array place",
+                            block,
+                            statement,
+                        ));
+                    }
+                    SemanticProjectionKindV1::ConstantIndex {
+                        offset,
+                        minimum_length: min_length,
+                        from_end,
+                    }
+                }
                 ProjectionElem::Subslice { from, to, from_end } => {
+                    if !matches!(derived.ty.kind(), TyKind::Array(..)) {
+                        return Err(unsupported(
+                            "Subslice projection on a non-array place",
+                            block,
+                            statement,
+                        ));
+                    }
                     SemanticProjectionKindV1::Subslice { from, to, from_end }
                 }
                 ProjectionElem::Downcast(_, variant) => SemanticProjectionKindV1::Downcast(
@@ -957,8 +1122,8 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
             .map_err(|_| unsupported("constant without target layout", block, statement))?;
         let size = usize::try_from(layout.size.bytes())
             .map_err(|_| unsupported("constant byte size outside host usize", block, statement))?;
-        self.totals
-            .charge(SemanticMirResourceV1::ConstantBytes, size, self.limits)?;
+        self.owner
+            .charge(SemanticMirResourceV1::ConstantBytes, size)?;
         let evaluated = constant
             .eval(self.tcx, TypingEnv::fully_monomorphized(), span)
             .map_err(|_| unsupported("constant evaluation failure", block, statement))?;
@@ -1002,18 +1167,21 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
                     ));
                 }
                 let pointer_width = self.tcx.data_layout.pointer_size().bytes_usize();
-                if allocation.provenance().ptrs().iter().any(|(at, _)| {
+                for (at, _) in allocation.provenance().ptrs().iter() {
+                    self.work()?;
                     let pointer_start = at.bytes_usize();
                     let pointer_end = pointer_start.saturating_add(pointer_width);
-                    pointer_start < end && pointer_end > start
-                }) {
-                    return Err(unsupported(
-                        "indirect constant with pointer provenance",
-                        block,
-                        statement,
-                    ));
+                    if pointer_start < end && pointer_end > start {
+                        return Err(unsupported(
+                            "indirect constant with pointer provenance",
+                            block,
+                            statement,
+                        ));
+                    }
                 }
                 let raw = allocation.inspect_with_uninit_and_ptr_outside_interpreter(start..end);
+                self.owner
+                    .charge(SemanticMirResourceV1::ValidationWork, raw.len())?;
                 let mut bytes = try_vec_v1(size, SemanticMirResourceV1::ConstantBytes)?;
                 for (index, byte) in raw.iter().copied().enumerate() {
                     if !allocation
@@ -1062,6 +1230,7 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
                 .flatten()
                 .ok_or_else(|| table("terminal expansion table"))?;
             if recipe.caller != self.function
+                || recipe.expected_callee != resolved
                 || recipe.expansion != expansion
                 || terminal_argument_count_v1(expansion) != Some(argument_count)
             {
@@ -1071,7 +1240,7 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
             if self.direct_calls_by_raw[index].is_some() {
                 return Err(table("call binding table"));
             }
-            Ok(recipe.semantic_callee)
+            self.owner.terminal_callable(resolved, expansion)
         } else {
             let binding = self
                 .direct_calls_by_raw
@@ -1086,7 +1255,7 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
             if self.terminal_expansions_by_raw[index].is_some() {
                 return Err(table("call binding table"));
             }
-            Ok(binding.semantic_callee)
+            self.owner.defined_callable(resolved)
         }
     }
 
@@ -1156,8 +1325,7 @@ impl<'a, 'tcx> BodyProducerV1<'a, 'tcx> {
     }
 
     fn work(&mut self) -> Result<(), ProductionSemanticBodyErrorV1> {
-        self.totals
-            .charge(SemanticMirResourceV1::ValidationWork, 1, self.limits)
+        self.owner.charge(SemanticMirResourceV1::ValidationWork, 1)
     }
 }
 
@@ -1165,8 +1333,7 @@ fn build_type_table_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     bindings: &[ProductionSemanticTypeBindingV1<'tcx>],
-    limits: SemanticMirLimitsV1,
-    totals: &mut ConstructionTotalsV1,
+    owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<HashMap<Ty<'tcx>, SemanticTypeIdV1>, ProductionSemanticBodyErrorV1> {
     let mut by_type = HashMap::new();
     by_type
@@ -1177,7 +1344,7 @@ fn build_type_table_v1<'tcx>(
         .try_reserve(bindings.len())
         .map_err(|_| allocation(SemanticMirResourceV1::Types))?;
     for binding in bindings {
-        totals.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+        owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
         let normalized = normalize_type_v1(tcx, instance, binding.rustc_type)
             .map_err(|_| table("canonical type binding table"))?;
         if normalized != binding.rustc_type
@@ -1194,11 +1361,10 @@ fn build_type_table_v1<'tcx>(
     Ok(by_type)
 }
 
-fn build_local_tables_v1<'a>(
+fn build_local_tables_v1<'a, 'tcx>(
     body: &Body<'_>,
     bindings: &'a [ProductionSemanticLocalBindingV1],
-    limits: SemanticMirLimitsV1,
-    totals: &mut ConstructionTotalsV1,
+    owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<
     (
         Vec<&'a ProductionSemanticLocalBindingV1>,
@@ -1212,7 +1378,7 @@ fn build_local_tables_v1<'a>(
     let mut by_raw = try_filled_vec_v1(bindings.len(), None, SemanticMirResourceV1::Locals)?;
     let mut by_semantic = try_filled_vec_v1(bindings.len(), None, SemanticMirResourceV1::Locals)?;
     for binding in bindings {
-        totals.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+        owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
         insert_dense_binding_v1(&mut by_raw, binding.rustc_local, binding, "local table")?;
         insert_dense_binding_v1(
             &mut by_semantic,
@@ -1227,11 +1393,10 @@ fn build_local_tables_v1<'a>(
     ))
 }
 
-fn build_block_tables_v1<'a>(
+fn build_block_tables_v1<'a, 'tcx>(
     body: &Body<'_>,
     bindings: &'a [ProductionSemanticBlockBindingV1],
-    limits: SemanticMirLimitsV1,
-    totals: &mut ConstructionTotalsV1,
+    owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<
     (
         Vec<&'a ProductionSemanticBlockBindingV1>,
@@ -1245,7 +1410,7 @@ fn build_block_tables_v1<'a>(
     let mut by_raw = try_filled_vec_v1(bindings.len(), None, SemanticMirResourceV1::Blocks)?;
     let mut by_semantic = try_filled_vec_v1(bindings.len(), None, SemanticMirResourceV1::Blocks)?;
     for binding in bindings {
-        totals.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+        owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
         insert_dense_binding_v1(&mut by_raw, binding.rustc_block, binding, "block table")?;
         insert_dense_binding_v1(
             &mut by_semantic,
@@ -1264,14 +1429,13 @@ fn build_call_tables_v1<'a, 'tcx>(
     function: SemanticFunctionIdV1,
     block_count: usize,
     direct_calls: &'a [ProductionSemanticDirectCallBindingV1<'tcx>],
-    terminal_expansions: &'a [ProductionSemanticTerminalExpansionRecipeV1],
-    limits: SemanticMirLimitsV1,
-    totals: &mut ConstructionTotalsV1,
+    terminal_expansions: &'a [ProductionSemanticTerminalExpansionRecipeV1<'tcx>],
+    owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<CallTablesV1<'a, 'tcx>, ProductionSemanticBodyErrorV1> {
     let mut direct_by_raw = try_filled_vec_v1(block_count, None, SemanticMirResourceV1::Blocks)?;
     let mut terminal_by_raw = try_filled_vec_v1(block_count, None, SemanticMirResourceV1::Blocks)?;
     for binding in direct_calls {
-        totals.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+        owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
         if binding.caller != function {
             return Err(table("direct-call binding table"));
         }
@@ -1283,7 +1447,7 @@ fn build_call_tables_v1<'a, 'tcx>(
         )?;
     }
     for recipe in terminal_expansions {
-        totals.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+        owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
         if recipe.caller != function || terminal_argument_count_v1(recipe.expansion).is_none() {
             return Err(table("terminal expansion table"));
         }
@@ -1415,6 +1579,27 @@ fn semantic_local_role_v1(
     }
 }
 
+fn semantic_borrow_kind_v1(
+    borrow: BorrowKind,
+    block: Option<u32>,
+    statement: Option<u32>,
+) -> Result<SemanticBorrowKindV1, ProductionSemanticBodyErrorV1> {
+    match borrow {
+        BorrowKind::Shared => Ok(SemanticBorrowKindV1::Shared),
+        BorrowKind::Fake(_) => Err(unsupported("fake borrow rvalue", block, statement)),
+        BorrowKind::Mut {
+            kind: MutBorrowKind::Default | MutBorrowKind::TwoPhaseBorrow,
+        } => Ok(SemanticBorrowKindV1::Mutable),
+        BorrowKind::Mut {
+            kind: MutBorrowKind::ClosureCapture,
+        } => Err(unsupported(
+            "closure-capture mutable borrow rvalue",
+            block,
+            statement,
+        )),
+    }
+}
+
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
         ProductionTerminalExpansionV1::ThreadIndex1d => Some(0),
@@ -1471,6 +1656,7 @@ fn unsupported(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustc_middle::mir::FakeBorrowKind;
 
     #[test]
     fn terminal_expansion_arities_are_closed() {
@@ -1519,5 +1705,102 @@ mod tests {
             panic!("unexpected error kind");
         };
         assert_eq!(construct.len(), MAX_ERROR_COMPONENT_CHARS_V1);
+    }
+
+    #[test]
+    fn request_owner_accounting_is_cumulative_across_bodies() {
+        let limits = SemanticMirLimitsV1::default()
+            .with_limit(SemanticMirResourceV1::Functions, 1)
+            .unwrap()
+            .with_limit(SemanticMirResourceV1::ConstantBytes, 3)
+            .unwrap();
+        let mut owner = ProductionSemanticBodyRequestOwnerV1 {
+            limits,
+            totals: ConstructionTotalsV1::default(),
+            callables: HashMap::new(),
+        };
+
+        owner.charge(SemanticMirResourceV1::Functions, 1).unwrap();
+        let error = owner
+            .charge(SemanticMirResourceV1::Functions, 1)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionSemanticBodyErrorV1::LimitExceeded {
+                resource: SemanticMirResourceV1::Functions,
+                actual: 2,
+                maximum: 1,
+            }
+        ));
+
+        owner
+            .charge(SemanticMirResourceV1::ConstantBytes, 2)
+            .unwrap();
+        let error = owner
+            .charge(SemanticMirResourceV1::ConstantBytes, 2)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionSemanticBodyErrorV1::LimitExceeded {
+                resource: SemanticMirResourceV1::ConstantBytes,
+                actual: 4,
+                maximum: 3,
+            }
+        ));
+    }
+
+    #[test]
+    fn callable_owner_rejects_id_and_kind_substitution() {
+        let callable = SemanticCallableIdV1::from_index(4);
+        assert!(require_canonical_callable_id_v1(4, callable).is_ok());
+        assert!(require_canonical_callable_id_v1(3, callable).is_err());
+
+        let record = ProductionSemanticCallableOwnerRecordV1 {
+            kind: ProductionSemanticCallableOwnerKindV1::Terminal(
+                ProductionTerminalExpansionV1::ThreadIndex1d,
+            ),
+            semantic_callable: callable,
+        };
+        assert!(
+            resolve_owned_callable_record_v1(
+                record,
+                ProductionSemanticCallableOwnerKindV1::Terminal(
+                    ProductionTerminalExpansionV1::ThreadIndex1d,
+                ),
+            )
+            .is_ok()
+        );
+        assert!(
+            resolve_owned_callable_record_v1(
+                record,
+                ProductionSemanticCallableOwnerKindV1::Terminal(
+                    ProductionTerminalExpansionV1::ThreadIndexGet,
+                ),
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_owned_callable_record_v1(
+                record,
+                ProductionSemanticCallableOwnerKindV1::Defined,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fake_borrows_fail_closed_before_schema_construction() {
+        for kind in [FakeBorrowKind::Deep, FakeBorrowKind::Shallow] {
+            let error = semantic_borrow_kind_v1(BorrowKind::Fake(kind), Some(9), Some(2))
+                .expect_err("fake borrows must never enter semantic MIR");
+            assert!(matches!(
+                error,
+                ProductionSemanticBodyErrorV1::Unsupported {
+                    block: Some(9),
+                    statement: Some(2),
+                    ..
+                }
+            ));
+        }
     }
 }
