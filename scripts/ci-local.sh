@@ -10,6 +10,8 @@ readonly REPO_ROOT
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
+readonly RUSTC_CODEGEN_BACKEND_PROFILE_POLICY="${REPO_ROOT}/scripts/rustc-codegen-backend-profile.py"
+readonly RUSTC_CODEGEN_BACKEND_ELF_CHECK="${REPO_ROOT}/scripts/check-rustc-codegen-backend-elf.sh"
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
 readonly WORKSPACE_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/workspace_dependency_policy.py"
@@ -256,6 +258,10 @@ run_auxiliary_tests() {
 }
 
 run_shard_policy() {
+  run_step rustc-codegen-backend-profile-policy-tests \
+    python3 "${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY}" self-test
+  run_step rustc-codegen-backend-profile-policy \
+    python3 "${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY}" check
   run_step rustc-codegen-shard-policy \
     python3 "${RUSTC_CODEGEN_SHARD_POLICY}" check
 }
@@ -393,6 +399,11 @@ run_rustc_codegen_shard_targets() {
   for test_target in "${test_targets[@]}"; do
     run_rustc_codegen_target "${test_target}"
   done
+  if [[ "${shard_id}" == 01-control-flow ]]; then
+    run_step rustc-codegen-backend-elf-profile \
+      bash "${RUSTC_CODEGEN_BACKEND_ELF_CHECK}" \
+        "${CARGO_TARGET_DIR:-${REPO_ROOT}/target}" "${RUSTC:-rustc}"
+  fi
 }
 
 run_all_rustc_codegen_shards() {

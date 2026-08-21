@@ -261,6 +261,14 @@ if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
   exit 1
 fi
 assert_equals \
+  "python3 ${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY} self-test" \
+  "$(step_command rustc-codegen-backend-profile-policy-tests)" \
+  'generic tests did not run the backend profile policy self-test'
+assert_equals \
+  "python3 ${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY} check" \
+  "$(step_command rustc-codegen-backend-profile-policy)" \
+  'generic tests did not validate the backend profile policy'
+assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'generic tests did not validate the codegen shard policy'
@@ -310,6 +318,14 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 run_rustc_codegen_shard 01-control-flow
 assert_equals \
+  "python3 ${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY} self-test" \
+  "$(step_command rustc-codegen-backend-profile-policy-tests)" \
+  'codegen shard did not run the backend profile policy self-test'
+assert_equals \
+  "python3 ${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY} check" \
+  "$(step_command rustc-codegen-backend-profile-policy)" \
+  'codegen shard did not validate the backend profile policy'
+assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'codegen shard did not validate the checked-in assignment'
@@ -317,6 +333,10 @@ assert_equals \
   "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test collected_executable_scalar_control_flow_v2" \
   "$(step_command rustc-codegen-test-collected_executable_scalar_control_flow_v2)" \
   'codegen shard did not keep its target isolated'
+assert_equals \
+  "bash ${RUSTC_CODEGEN_BACKEND_ELF_CHECK} ${CARGO_TARGET_DIR:-${REPO_ROOT}/target} ${RUSTC:-rustc}" \
+  "$(step_command rustc-codegen-backend-elf-profile)" \
+  'control-flow shard did not inspect and load the bounded backend ELF'
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
 for shard_step in "${STEP_NAMES[@]}"; do
