@@ -235,6 +235,7 @@ impl ProjectFixture {
             OsString::from("release"),
             OsString::from(action),
         ];
+        let trampoline = cargo_binding_trampoline(&self.root);
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
         command
             .env_clear()
@@ -261,6 +262,14 @@ impl ProjectFixture {
             )
             .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", authority_cargo_sha256())
             .env(
+                "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1",
+                &trampoline,
+            )
+            .env(
+                "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1",
+                file_sha256(&trampoline),
+            )
+            .env(
                 "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
                 file_sha256(&self.backend),
             );
@@ -277,21 +286,12 @@ impl ProjectFixture {
     fn protected_release_build_command(&self) -> Command {
         let cargo = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-release-cargo-fixture"));
         let rustc = release_rustc_fixture_executable(&self.root);
-        let trampoline = cargo_binding_trampoline(&self.root);
         let mut command = self.isolated_protected_release_command("build");
         command
             .env("CARGO", cargo)
             .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", file_sha256(cargo))
             .env("FE2O3_AUTHORITY_RUSTC_PATH_V1", &rustc)
             .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", file_sha256(&rustc))
-            .env(
-                "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1",
-                &trampoline,
-            )
-            .env(
-                "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1",
-                file_sha256(&trampoline),
-            )
             .env(
                 "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
                 runtime_tree_sha256(

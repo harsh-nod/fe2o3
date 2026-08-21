@@ -504,6 +504,8 @@ fn cargo_with_backend_result(
     let cargo_binding_trampoline = protected_release
         .map(|_| pin_authority_cargo_binding_trampoline())
         .transpose()?;
+    let protected_compiler_closure =
+        protected_release.map(authority_release::ProtectedReleaseAdmission::compiler_closure);
     let mut context = BackendRunContext::prepare(
         BackendRunPreparation {
             project,
@@ -513,6 +515,7 @@ fn cargo_with_backend_result(
             authority_backend,
             protected_binding_wrapper,
             cargo_binding_trampoline,
+            protected_compiler_closure,
             authorized_closure,
             protected_release_action,
         },
@@ -614,6 +617,7 @@ struct BackendRunPreparation {
     authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,
     protected_binding_wrapper: Option<pinned_executable::PinnedExecutable>,
     cargo_binding_trampoline: Option<pinned_executable::PinnedExecutable>,
+    protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     protected_release_action: Option<ProtectedReleaseAction>,
 }
@@ -628,6 +632,7 @@ impl BackendRunContext {
             authority_backend,
             protected_binding_wrapper,
             cargo_binding_trampoline,
+            protected_compiler_closure,
             authorized_closure,
             protected_release_action,
         } = preparation;
@@ -645,11 +650,62 @@ impl BackendRunContext {
             }
         };
         pinned_rustc.assert_lib_tree_unmutated()?;
-        let compiler_closure_sha256 = compiler_toolchain::compiler_closure_sha256_v1(
-            pinned_cargo.sha256(),
-            pinned_rustc.executable.sha256(),
-            pinned_rustc.lib_tree_sha256(),
-            pinned_backend.sha256(),
+        let binding_wrapper_path = env::current_exe()
+            .map_err(|error| format!("failed to locate cargo-fe2o3 executable: {error}"))?;
+        let pinned_binding_wrapper = match protected_binding_wrapper {
+            Some(wrapper) => wrapper,
+            None => pinned_executable::PinnedExecutable::open(&binding_wrapper_path)
+                .map_err(|error| format!("failed to pin cargo-fe2o3 wrapper: {error}"))?,
+        };
+        let protected_closure = match (
+            cargo_binding_trampoline.as_ref(),
+            protected_compiler_closure,
+        ) {
+            (Some(trampoline), Some(expected)) => {
+                if pinned_cargo.sha256() == trampoline.sha256()
+                    || pinned_cargo.sha256() == pinned_binding_wrapper.sha256()
+                    || trampoline.sha256() == pinned_binding_wrapper.sha256()
+                {
+                    return Err(
+                        "protected Cargo, binding trampoline, and full wrapper images must be distinct"
+                            .to_owned(),
+                    );
+                }
+                let actual = compiler_toolchain::compiler_closure_v2_from_pins(
+                    pinned_cargo.sha256(),
+                    trampoline.sha256(),
+                    pinned_binding_wrapper.sha256(),
+                    pinned_rustc.executable.sha256(),
+                    pinned_rustc.lib_tree_sha256(),
+                    pinned_backend.sha256(),
+                )
+                .map_err(|error| format!("invalid protected compiler closure: {error}"))?;
+                if actual != expected {
+                    return Err(
+                        "retained protected compiler closure differs from release admission"
+                            .to_owned(),
+                    );
+                }
+                Some(actual)
+            }
+            (None, None) => None,
+            _ => {
+                return Err(
+                    "protected compiler closure and static binding trampoline must be admitted together"
+                        .to_owned(),
+                );
+            }
+        };
+        let compiler_closure_sha256 = protected_closure.map_or_else(
+            || {
+                compiler_toolchain::compiler_closure_sha256_v1(
+                    pinned_cargo.sha256(),
+                    pinned_rustc.executable.sha256(),
+                    pinned_rustc.lib_tree_sha256(),
+                    pinned_backend.sha256(),
+                )
+            },
+            fe2o3_build_authority::CompilerClosureV2::identity_sha256,
         );
         let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
         let mut cargo_configuration = project.semantic_configuration(
@@ -675,13 +731,6 @@ impl BackendRunContext {
             .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
         let managed_rustc_args =
             generation::managed_rustc_args(&backend_reference, generation.token())?;
-        let binding_wrapper_path = env::current_exe()
-            .map_err(|error| format!("failed to locate cargo-fe2o3 executable: {error}"))?;
-        let pinned_binding_wrapper = match protected_binding_wrapper {
-            Some(wrapper) => wrapper,
-            None => pinned_executable::PinnedExecutable::open(&binding_wrapper_path)
-                .map_err(|error| format!("failed to pin cargo-fe2o3 wrapper: {error}"))?,
-        };
         let build_session = random_build_session()?;
 
         Ok(Self {
