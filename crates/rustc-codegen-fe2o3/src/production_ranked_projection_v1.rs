@@ -9,7 +9,8 @@ use std::fmt;
 use dialect_kernel::{AccessKindAttr, MAX_RANKED_MEMORY_RANK, SUPPORTED_ELEMENT_WIDTHS};
 use fe2o3_kernel_analysis::MAX_RANKED_BOUNDS_OPERATIONS;
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticConstantValueV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1,
+    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticConstantValueV1, SemanticDirectCallV1,
+    SemanticDirectTailCallV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1,
     SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
     SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
     SemanticTypeIdV1, SemanticTypeShapeV1,
@@ -72,6 +73,7 @@ impl ProductionRankedSemanticProgramV1 {
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticOwner(ProductionSemanticMirErrorV1),
+    Incomplete(&'static str),
     Unsupported(&'static str),
     Recipe(ProductionRankedKernelErrorV1),
     Construction(fe2o3_pliron::NameError),
@@ -90,6 +92,12 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
             }
             Self::Unsupported(detail) => {
                 write!(formatter, "semantic-to-ranked projection rejected {detail}")
+            }
+            Self::Incomplete(detail) => {
+                write!(
+                    formatter,
+                    "semantic-to-ranked projection incomplete: {detail}"
+                )
             }
             Self::Recipe(error) => write!(formatter, "semantic-to-ranked recipe failed: {error}"),
             Self::Construction(error) => write!(
@@ -144,7 +152,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::Recipe(error) => Some(error),
             Self::Compile { error, .. } => Some(error),
-            Self::Unsupported(_) | Self::Construction(_) => None,
+            Self::Incomplete(_) | Self::Unsupported(_) | Self::Construction(_) => None,
         }
     }
 }
@@ -176,36 +184,47 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let mut sources = Vec::new();
     let mut next_value = 0_u32;
     let mut ranked_ir = String::new();
+    let mut incomplete = None;
     push_ranked_ir(
         &mut ranked_ir,
         &format!("func @{} {{\n", function_name(function)?),
     )?;
     for block in function.blocks() {
         for statement in block.statements() {
-            project_statement_accesses(
+            retain_incomplete(
+                project_statement_accesses(
+                    semantic.types(),
+                    function,
+                    statement,
+                    &constants,
+                    &mut operations,
+                    &mut sources,
+                    &mut next_value,
+                    &mut ranked_ir,
+                ),
+                &mut incomplete,
+            )?;
+        }
+        retain_incomplete(
+            project_terminator_accesses(
+                semantic.callables(),
                 semantic.types(),
                 function,
-                statement,
+                block.terminator().kind(),
+                block.terminator().source(),
                 &constants,
                 &mut operations,
                 &mut sources,
                 &mut next_value,
                 &mut ranked_ir,
-            )?;
-        }
-        project_terminator_accesses(
-            semantic.types(),
-            function,
-            block.terminator().kind(),
-            block.terminator().source(),
-            &constants,
-            &mut operations,
-            &mut sources,
-            &mut next_value,
-            &mut ranked_ir,
+            ),
+            &mut incomplete,
         )?;
     }
     if sources.is_empty() {
+        if let Some(detail) = incomplete {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
+        }
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "a kernel without a statically ranked indexed memory access",
         ));
@@ -230,11 +249,27 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             ranked_ir: ranked_ir.clone(),
             access_sources: sources,
         })?;
+    if let Some(detail) = incomplete {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
+    }
     Ok(ProductionRankedSemanticProgramV1 {
         semantic: semantic_owner,
         lowering,
         ranked_ir,
     })
+}
+
+fn retain_incomplete(
+    result: Result<(), ProductionRankedProjectionErrorV1>,
+    incomplete: &mut Option<&'static str>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    match result {
+        Err(ProductionRankedProjectionErrorV1::Incomplete(detail)) => {
+            incomplete.get_or_insert(detail);
+            Ok(())
+        }
+        result => result,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -447,6 +482,7 @@ fn project_atomic_address(
 
 #[allow(clippy::too_many_arguments)]
 fn project_terminator_accesses(
+    callables: &[SemanticCallableDeclV1],
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     terminator: &SemanticTerminatorKindV1,
@@ -469,13 +505,16 @@ fn project_terminator_accesses(
             next_value,
             ranked_ir,
         ),
-        SemanticTerminatorKindV1::Call(_) | SemanticTerminatorKindV1::TailCall(_) => {
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "a call terminator before exact callable memory-effect summaries are available",
-            ))
-        }
+        SemanticTerminatorKindV1::Call(call) => project_direct_call_accesses(
+            callables, types, function, call, source, constants, operations, sources, next_value,
+            ranked_ir,
+        ),
+        SemanticTerminatorKindV1::TailCall(call) => project_tail_call_accesses(
+            callables, types, function, call, source, constants, operations, sources, next_value,
+            ranked_ir,
+        ),
         SemanticTerminatorKindV1::Drop { .. } => {
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a drop terminator before exact drop-glue memory-effect summaries are available",
             ))
         }
@@ -490,6 +529,82 @@ fn project_terminator_accesses(
         | SemanticTerminatorKindV1::UnwindTerminate
         | SemanticTerminatorKindV1::Abort
         | SemanticTerminatorKindV1::Unreachable => Ok(()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_direct_call_accesses(
+    callables: &[SemanticCallableDeclV1],
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    call: &SemanticDirectCallV1,
+    source: SemanticSourceProvenanceV1,
+    constants: &[Option<u64>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    sources: &mut Vec<ProjectedAccessSourceV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    require_bounds_neutral_callable(callables, call.callee())?;
+    for argument in call.arguments() {
+        project_operand_read(
+            types, function, argument, source, constants, operations, sources, next_value,
+            ranked_ir,
+        )?;
+    }
+    if let Some(destination) = call.destination() {
+        project_place_access(
+            types,
+            function,
+            destination.place(),
+            AccessKindAttr::Write,
+            PlaceAccessRequirementV1::IfMemory,
+            source,
+            constants,
+            operations,
+            sources,
+            next_value,
+            ranked_ir,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_tail_call_accesses(
+    callables: &[SemanticCallableDeclV1],
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    call: &SemanticDirectTailCallV1,
+    source: SemanticSourceProvenanceV1,
+    constants: &[Option<u64>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    sources: &mut Vec<ProjectedAccessSourceV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    require_bounds_neutral_callable(callables, call.callee())?;
+    for argument in call.arguments() {
+        project_operand_read(
+            types, function, argument, source, constants, operations, sources, next_value,
+            ranked_ir,
+        )?;
+    }
+    Ok(())
+}
+
+fn require_bounds_neutral_callable(
+    callables: &[SemanticCallableDeclV1],
+    callable: SemanticCallableIdV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    match callables.get(callable.index() as usize) {
+        Some(SemanticCallableDeclV1::CompilerIntrinsic { .. }) => Ok(()),
+        Some(
+            SemanticCallableDeclV1::Defined { .. } | SemanticCallableDeclV1::DeviceFfiImport { .. },
+        )
+        | None => Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a call terminator before exact callable memory-effect summaries are available",
+        )),
     }
 }
 
@@ -798,7 +913,7 @@ fn project_place_access(
                     .get(index.index() as usize)
                     .copied()
                     .flatten()
-                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                         "a dynamic index before dynamic ranked-value projection is available",
                     ))?;
                 shape.push(extent);
@@ -833,7 +948,7 @@ fn project_place_access(
             | SemanticProjectionKindV1::OpaqueCast
             | SemanticProjectionKindV1::Subtype => current = projection.result_type(),
             SemanticProjectionKindV1::Subslice { .. } => {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "an indexed place containing a subslice projection",
                 ));
             }
@@ -841,12 +956,12 @@ fn project_place_access(
     }
     if indices.is_empty() {
         if crosses_memory_boundary {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a dereferenced memory access without a ranked index projection",
             ));
         }
         if requirement == PlaceAccessRequirementV1::ExplicitMemory {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "an explicit memory operation without a ranked index projection",
             ));
         }
@@ -972,7 +1087,7 @@ fn static_array_extent(
     match types.get(ty.index() as usize).map(|ty| ty.shape()) {
         Some(SemanticTypeShapeV1::Array { length, .. }) => Ok(*length),
         Some(SemanticTypeShapeV1::Slice { .. }) => {
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a slice access before dynamic extent projection is available",
             ))
         }
@@ -1242,6 +1357,7 @@ mod tests {
                 )?;
             }
             project_terminator_accesses(
+                &[],
                 &types,
                 function,
                 basic_block.terminator().kind(),
@@ -1283,7 +1399,10 @@ mod tests {
         expected: &'static str,
     ) {
         match result {
-            Err(ProductionRankedProjectionErrorV1::Unsupported(detail)) => {
+            Err(
+                ProductionRankedProjectionErrorV1::Incomplete(detail)
+                | ProductionRankedProjectionErrorV1::Unsupported(detail),
+            ) => {
                 assert_eq!(detail, expected)
             }
             Err(other) => panic!("expected unsupported projection, got {other}"),
