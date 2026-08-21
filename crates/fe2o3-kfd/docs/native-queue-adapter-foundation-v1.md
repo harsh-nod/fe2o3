@@ -1,6 +1,6 @@
 # Native queue adapter foundation V1
 
-This R4 slice executes the compute-AQL queue lifecycle against a private
+This R6 slice executes the compute-AQL queue lifecycle against a private
 backend and projects every attempted lifecycle operation into the existing
 bounded `QueueLifecycleStateV1`. The production composition consumes the
 checked device and exact shared-GTT capabilities; callers cannot construct a
@@ -176,12 +176,13 @@ MMIO stores; it does not inject a fault or prove actual exception delivery.
 Foreign KFD clients in the same process are also outside the crate-global
 runtime ownership claim.
 
-The next dispatch layer still must consume real code, kernarg, and data
-allocation liveness authorities. The completion slice retains their exact
-mapping generations once a crate-private template is bound, but those keys are
-not allocation ownership and cannot make the existing inert numeric packet
-observations authoritative. A doorbell failure after publication is not
-rollback evidence and remains process-teardown-only poison.
+The private C5 dispatch layer now consumes real code, kernarg, and C3
+device-data allocation liveness authorities. Exact-set admission permits
+queue-model transfer only when every retained device lease is represented once.
+The queue owns those resources through C2 publication, C4 completion, and
+signal recycle; generation keys are substitution checks rather than ownership.
+A doorbell failure after publication is not rollback evidence and remains
+process-teardown-only poison.
 
 ## Private completion-signal boundary
 
@@ -192,7 +193,8 @@ The arena and its address facts stay crate-private and linearly owned by the
 queue session; no KFD wakeup or public address is introduced.
 
 One private batch binding reserves a distinct signal per packet and retains the
-exact queue, signal-allocation, kernarg-mapping, and data-mapping generations.
+exact queue, signal-allocation, code-mapping, kernarg-mapping, and dispatch
+generations.
 It publishes through the existing one-reservation/one-doorbell primitive.
 Bounded polling acquires every signal value and distinguishes pending, all-zero
 ready, unexpected-value fault, and timeout. Only all-zero evidence permits a
@@ -205,9 +207,10 @@ The relationship between a firmware signal write, dispatch completion,
 system-scope coherence, visibility of device result writes, and dispatch
 quiescence is **Contracted**. Host mocks exercise the lifecycle and every
 effect boundary, but there is no concrete Verus refinement or hardware run.
-The remaining safe launch layer must consume actual code/kernarg/data
-allocation authorities and establish initialization, alias, copy, and
-quiescence obligations rather than treating generation keys as ownership.
+No safe launch layer is public. Production data-copy initialization,
+implicit-kernarg construction, concrete alias/effect semantics, and hardware
+quiescence remain unimplemented obligations rather than properties inferred
+from generation keys.
 
 ## Verification boundary
 
