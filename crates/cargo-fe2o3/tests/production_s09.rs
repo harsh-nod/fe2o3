@@ -18,6 +18,8 @@ const CAPTURE_PREFIX: &str =
     "[cargo-fe2o3] inert prepared RustcInvocationDescriptorV2 observation sha256=";
 const CAPTURE_SUFFIX: &str = "; no execution or authority claim";
 const SOURCE: &str = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs";
+const PRODUCTION_V1_SOURCE: &str =
+    "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/lib.rs";
 const RETAIN_BASENAME_PREFIX: &str = "cargo-fe2o3-s09-retain-";
 const RETAIN_SENTINEL: &str = ".fe2o3-s09-retain-v1";
 const RETAIN_SENTINEL_BYTES: &[u8] = b"cargo-fe2o3 production S09 retained directory v1\n";
@@ -236,6 +238,48 @@ fn write_s09_config(
     path
 }
 
+fn write_production_v1_config(
+    root: &Path,
+    workspace: &Path,
+    worker: &Path,
+    worker_build_identity: &str,
+    llvm_build_identity: &str,
+) -> PathBuf {
+    let worker_bytes = fs::read(worker).expect("read configured Worker V2 executable");
+    let config = json!({
+        "candidate_output_max_bytes": 67_108_864,
+        "format": "fe2o3-worker-v2-config-v2",
+        "limits": {
+            "stderr_bytes": 16_384,
+            "stdout_bytes": 16_384,
+            "timeout_ms": 60_000
+        },
+        "link_options": [
+            {"name": "code-object-version", "value": "6"},
+            {"name": "opt-level", "value": "2"},
+            {"name": "strip-debug", "value": "true"},
+            {"name": "verify-each", "value": "true"}
+        ],
+        "providers": [],
+        "units": [{
+            "crate_name": "fe2o3_production_extraction_fixture",
+            "source": PRODUCTION_V1_SOURCE,
+            "working_directory": workspace
+        }],
+        "worker": {
+            "byte_len": worker_bytes.len(),
+            "llvm_build_identity": llvm_build_identity,
+            "path": worker,
+            "sha256": hex(&Sha256::digest(&worker_bytes)),
+            "worker_build_identity": worker_build_identity
+        }
+    });
+    let path = root.join("worker-v2-production-v1.json");
+    fs::write(&path, serde_json::to_vec(&config).unwrap())
+        .expect("write production-v1 Worker config");
+    path
+}
+
 fn assert_success(output: &Output) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -283,7 +327,7 @@ struct PublishedS09Observation {
     publication_identity: String,
 }
 
-fn published_s09_hsaco(artifact_dir: &Path) -> PublishedS09Observation {
+fn published_hsaco(artifact_dir: &Path, expected_kernel: &str) -> PublishedS09Observation {
     let mut hsaco = Vec::new();
     let mut records = Vec::new();
     for entry in fs::read_dir(artifact_dir).expect("read production S09 artifact directory") {
@@ -334,7 +378,7 @@ fn published_s09_hsaco(artifact_dir: &Path) -> PublishedS09Observation {
         Some(expected_artifact_name.as_str())
     );
 
-    let inspection = fe2o3_hsaco::inspect(&bytes).expect("inspect production S09 HSACO");
+    let inspection = fe2o3_hsaco::inspect(&bytes).expect("inspect production Worker V2 HSACO");
     let target = inspection.target().to_string();
     assert_eq!(target, "gfx942:xnack-");
     assert_eq!(
@@ -347,7 +391,16 @@ fn published_s09_hsaco(artifact_dir: &Path) -> PublishedS09Observation {
             .iter()
             .map(|kernel| kernel.name())
             .collect::<Vec<_>>(),
-        ["alpha"]
+        [expected_kernel]
+    );
+    let finalized = fe2o3_hsaco_finalize::verify_finalized(&bytes)
+        .expect("verify the canonical embedded descriptor digest");
+    assert_eq!(finalized.descriptor_table().kernels().len(), 1);
+    assert_eq!(
+        finalized.descriptor_table().kernels()[0]
+            .entry_name()
+            .as_str(),
+        expected_kernel
     );
     PublishedS09Observation {
         hsaco,
@@ -561,7 +614,7 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
         "S09 build claim did not bind the brokered pinned Cargo image:\n{stderr}"
     );
 
-    let published = published_s09_hsaco(&target.join("fe2o3"));
+    let published = published_hsaco(&target.join("fe2o3"), "alpha");
     println!(
         "FE2O3_S09_PRODUCTION_OBSERVATION_V1 capture_sha256={capture} rustc_sha256={} backend_sha256={} cargo_sha256={cargo_sha256} worker_sha256={} hsaco_sha256={} publication_record_sha256={} publication_kernel_set_identity={} publication_target_identity={} publication_request_identity={} publication_worker_identity={} publication_identity={} target={}; observation only, no execution or authority claim",
         rustc_sha256,
@@ -577,6 +630,100 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
         published.target,
     );
     assert_eq!(sha256(&published.hsaco), published.hsaco_sha256);
+}
+
+#[test]
+#[ignore = "requires explicit upstream Cargo/rustc/backend, Cargo cache, and native LLVM Worker pins; see crates/cargo-fe2o3/README.md"]
+fn production_v1_fill_compiles_and_publishes_finalized_worker_output() {
+    let workspace = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .expect("canonical workspace");
+    let rustc = required_canonical_file("FE2O3_TEST_UPSTREAM_RUSTC");
+    let cargo = required_canonical_file("FE2O3_TEST_UPSTREAM_CARGO");
+    let backend = required_canonical_file("FE2O3_TEST_CODEGEN_BACKEND");
+    let cargo_home = required_canonical_directory("FE2O3_TEST_CARGO_HOME");
+    let worker = required_canonical_file("FE2O3_LLVM_LINK_WORKER");
+    let worker_build_identity = std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID")
+        .expect("required test input FE2O3_LLVM_LINK_WORKER_BUILD_ID");
+    let llvm_build_identity =
+        std::env::var("FE2O3_LLVM_BUILD_ID").expect("required test input FE2O3_LLVM_BUILD_ID");
+    let directory = TestDirectory::new();
+    let config = write_production_v1_config(
+        &directory.path,
+        &workspace,
+        &worker,
+        &worker_build_identity,
+        &llvm_build_identity,
+    );
+    let target = directory.path.join("cargo-target");
+    let rustc_bin = directory.path.join("pinned-rustc-bin");
+    fs::create_dir(&rustc_bin).expect("create pinned rustc bin directory");
+    symlink(&rustc, rustc_bin.join("rustc")).expect("install pinned rustc path entry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .env_clear()
+        .current_dir(&workspace)
+        .args([
+            "build",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--locked",
+            "--offline",
+            "-Zbuild-std=core",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(&target)
+        .env("CARGO", &cargo)
+        .env("CARGO_HOME", &cargo_home)
+        .env("HOME", directory.path.join("home"))
+        .env("LANG", "C.UTF-8")
+        .env("PATH", format!("{}:/usr/bin:/bin", rustc_bin.display()))
+        .env("FE2O3_BACKEND", &backend)
+        .env("FE2O3_CODEGEN_PIPELINE", "production-v1")
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
+        .env("FE2O3_TARGET", "gfx942")
+        .env("FE2O3_WORKER_V2_CONFIG_V2", &config)
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            format!(
+                "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32 --remap-path-prefix={}/=",
+                workspace.display()
+            ),
+        )
+        .output()
+        .expect("run production-v1 cargo-fe2o3 compile");
+    let stderr = assert_success(&output);
+    assert!(
+        stderr.contains("production-v1 published")
+            && stderr.contains("managed Worker V2 transaction"),
+        "production backend did not publish its managed handoff:\n{stderr}"
+    );
+
+    let published = published_hsaco(&target.join("fe2o3"), "fill");
+    let bytes = fs::read(&published.hsaco).expect("read production-v1 fill HSACO");
+    let finalized = fe2o3_hsaco_finalize::verify_finalized(&bytes)
+        .expect("verify production-v1 fill descriptor");
+    let kernel = &finalized.descriptor_table().kernels()[0];
+    assert_eq!(kernel.descriptor_symbol().as_str(), "fill.kd");
+    assert_eq!(kernel.abi_layout().explicit_argument_size(), 16);
+    assert_eq!(kernel.abi_layout().kernarg_segment_size(), 272);
+    assert_eq!(kernel.abi_layout().kernarg_segment_alignment(), 8);
+    assert_eq!(kernel.arguments().len(), 1);
+    assert_eq!(kernel.launch().max_flat_workgroup_size(), 64);
+
+    println!(
+        "FE2O3_PRODUCTION_V1_FILL_OBSERVATION_V1 backend_sha256={} cargo_sha256={} worker_sha256={} hsaco_sha256={} publication_record_sha256={} target={}; non-authoritative integration observation",
+        sha256(&backend),
+        sha256(&cargo),
+        sha256(&worker),
+        published.hsaco_sha256,
+        published.record_sha256,
+        published.target,
+    );
 }
 
 #[test]

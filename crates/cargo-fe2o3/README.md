@@ -438,6 +438,31 @@ cargo test --locked -p cargo-fe2o3 --test production_s09 \
   -- --ignored --exact --nocapture
 ```
 
+The same explicit tool inputs run the unified `production-v1` fill regression:
+
+```text
+FE2O3_TEST_UPSTREAM_CARGO=/absolute/toolchain/bin/cargo \
+FE2O3_TEST_UPSTREAM_RUSTC=/absolute/toolchain/bin/rustc \
+FE2O3_TEST_CODEGEN_BACKEND=/absolute/librustc_codegen_fe2o3.so \
+FE2O3_TEST_CARGO_HOME=/absolute/cargo-home \
+FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
+FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
+FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
+cargo test --locked -p cargo-fe2o3 --test production_s09 \
+  production_v1_fill_compiles_and_publishes_finalized_worker_output \
+  -- --ignored --exact --nocapture
+```
+
+This test compiles ordinary attributed Rust for `amdgcn-amd-amdhsa` through
+the sole production importer, target-neutral Kernel IR, formal memory checks,
+deterministic gfx942 LLVM lowering, the measured upstream LLVM/LLD worker, raw
+HSACO inspection, canonical descriptor finalization, and durable publication.
+It independently verifies the embedded descriptor digest and requires
+`fill`/`fill.kd`, a 16-byte explicit ABI, a 272-byte complete kernarg segment,
+and a 64-thread workgroup. It uses the debug-only unprotected validation
+switch because the integrated static Cargo-wrapper boundary is still open;
+passing the test grants no compiler, artifact, load, launch, or GPU authority.
+
 `FE2O3_TEST_RUSTC_LIBRARY_PATH` configures only the outer Cargo harness. The
 selected S09 rustc still receives the production closed child environment.
 `FE2O3_TEST_S09_RETAIN_DIR` may select a pre-created, empty, canonical absolute
