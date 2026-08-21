@@ -4431,17 +4431,20 @@ mod tests {
     use super::{
         BindingWrapperError, BuildExecutableSnapshot,
         CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
-        CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, CompileBuildObservationV2,
-        CompleteReviewedChildEnvironmentV2, DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        GeneralGemmChildPinsV1, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
+        CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, CompileBuildObservationV2, CompilerCapabilities,
+        CompleteReviewedChildEnvironmentV2, CompletionFailure,
+        DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, GeneralGemmChildPinsV1,
+        LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3, ManagedAttempt,
         ManagedAttemptRevocationGuard, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
         ProtectedWorkerV2TransitionBlocker, ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1,
-        ROW_SOFTMAX_V1_PIPELINE, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
-        WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        WorkerV2BindingSchema, append_prepared_rustc_arguments,
-        canonicalize_rustc_metadata, configure_build_observation_environment,
+        ROW_SOFTMAX_V1_PIPELINE, ROW_SOFTMAX_V1_RUN_VALUE, RustcInvocationV2,
+        WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
+        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, WorkerV2BindingSchema,
+        append_prepared_rustc_arguments, canonicalize_rustc_metadata, classify_rustc_invocation_v2,
+        complete_recovered_protected_worker_v2, complete_recovered_worker_v2,
+        configure_build_observation_environment,
         configure_build_observation_environment_with_test_mutation,
         configure_worker_build_observation_environment, decode_managed_rustc_args,
         derive_build_attempt_input_with_config_identity, hex, is_cargo_stdin_probe,
@@ -4449,40 +4452,52 @@ mod tests {
         materialize_row_softmax_v1_child_environment, materialize_s09_child_environment,
         materialize_scalar_gemm_v1_child_environment, measure_build_executable,
         observe_pinned_cargo_image_and_parent, ordered_metadata_values, os_bytes,
-        pre_spawn_failure, prepared_rustc_command_sha256, process_start_time_ticks,
-        protected_worker_v2_transition_blocker, reject_authority_linker_arguments,
-        reject_uninspectable_rustc_args, resolve_command_executable_with_path,
-        row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
+        pre_spawn_failure, prepare_managed_attempt, prepared_rustc_command_sha256,
+        process_start_time_ticks, protected_worker_v2_transition_blocker, publish_finish_and_clear,
+        reject_authority_linker_arguments, reject_uninspectable_rustc_args,
+        resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
+        row_softmax_provider_observation_json,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
+    use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
+    use crate::project::PinnedDirectory;
     use crate::worker_v2::{
         GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV,
-        GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV, WorkerV2BuildObservation,
+        GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV, PreparedWorkerV2Config, WorkerV2BuildObservation,
         WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigIdentity,
     };
     use crate::worker_v2_restart::{
-        WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1, WorkerV2ResumeStoreV2,
+        ResumeMarkerStateV2, WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1,
+        WorkerV2ResumeStoreV2, persist_admitted_worker_v2_intent_v2,
         restart_admission_commitment_with_inputs_v1,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
         DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
         KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
-        PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
-        UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
-        finish_build_attempt, persist_worker_v2_publication_intent_v1,
-        persist_worker_v2_publication_intent_v2, publish_exact_hsaco_evidence_for_attempt_v1,
+        PersistedBackendReceiptV1, PersistedBackendReceiptV2, PinnedWorkerIdentityV1,
+        ProducerIdentity, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+        ValidatedResponseIdentityV1, begin_build_attempt, finish_build_attempt,
+        persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v2,
+        publish_compiler_module_handoff_v1, publish_compiler_module_handoff_v2,
+        publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
+        read_backend_publication_receipt_v1, read_backend_publication_receipt_v2,
         recover_worker_v2_publication_intent_v1, recover_worker_v2_publication_intent_v2,
     };
     use fe2o3_build_authority::CompilerClosureV2;
+    use fe2o3_hsaco_finalize::{
+        ContentIdentityV1, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
+        ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
+    };
     use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
-    use sha2::Digest;
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
     use std::ffi::{OsStr, OsString};
     use std::fs;
     #[cfg(target_os = "linux")]
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     fn args(values: &[&str]) -> Vec<OsString> {
@@ -6358,6 +6373,785 @@ mod tests {
             .filter(|entry| entry.file_type().unwrap().is_file())
             .map(|entry| (entry.file_name(), fs::read(entry.path()).unwrap()))
             .collect()
+    }
+
+    fn recursive_file_snapshot(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn visit(root: &Path, directory: &Path, snapshot: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            let mut entries = fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect::<Vec<_>>();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let file_type = entry.file_type().unwrap();
+                if file_type.is_dir() {
+                    visit(root, &entry.path(), snapshot);
+                } else if file_type.is_file() {
+                    snapshot.insert(
+                        entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                        fs::read(entry.path()).unwrap(),
+                    );
+                }
+            }
+        }
+
+        let mut snapshot = BTreeMap::new();
+        visit(path, path, &mut snapshot);
+        snapshot
+    }
+
+    fn v1_coordination_snapshot(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        recursive_file_snapshot(path)
+            .into_iter()
+            .filter(|(relative, _)| {
+                relative
+                    .components()
+                    .next()
+                    .and_then(|component| component.as_os_str().to_str())
+                    .is_some_and(|name| {
+                        name.starts_with(".fe2o3-compiler-module-handoff-v1-")
+                            || name.starts_with(".fe2o3-worker-v2-publication-intent-v1-")
+                    })
+            })
+            .collect()
+    }
+
+    fn managed_attempt_for_test(
+        output_dir: &Path,
+        producer: ProducerIdentity,
+        attempt: fe2o3_artifact_transaction::BuildAttempt,
+    ) -> ManagedAttempt {
+        ManagedAttempt {
+            output_dir: output_dir.to_path_buf(),
+            producer,
+            attempt,
+            protected_source_path: None,
+            compile_environment_profile: None,
+            worker_v2: None,
+            row_softmax_release: None,
+            row_softmax_provision: false,
+            #[cfg(feature = "compiler-handoff-observation-test-only")]
+            compiler_handoff_observation: None,
+        }
+    }
+
+    fn assert_completion_succeeded(result: Result<(), CompletionFailure>) {
+        match result {
+            Ok(()) => {}
+            Err(CompletionFailure::Uncommitted(message)) => {
+                panic!("completion terminated the attempt: {message}")
+            }
+            Err(CompletionFailure::PreserveAttempt(message)) => {
+                panic!("completion preserved the attempt: {message}")
+            }
+        }
+    }
+
+    fn finalized_artifact_path(path: &Path, plan: DurableLinkPublicationPlanV1) -> PathBuf {
+        path.join(format!(
+            ".fe2o3-link-artifact-v1-{}.bin",
+            hex(plan.finalized_output().as_bytes())
+        ))
+    }
+
+    fn persisted_v1_receipt(
+        path: &Path,
+        producer: &ProducerIdentity,
+        attempt: fe2o3_artifact_transaction::BuildAttempt,
+    ) -> fe2o3_artifact_transaction::BackendPublicationReceiptV1 {
+        match read_backend_publication_receipt_v1(path, producer, attempt).unwrap() {
+            PersistedBackendReceiptV1::Provenance(receipt) => receipt,
+            receipt => panic!("expected durable ordinary V1 receipt, got {receipt:?}"),
+        }
+    }
+
+    fn persisted_v2_receipt(
+        path: &Path,
+        producer: &ProducerIdentity,
+        attempt: fe2o3_artifact_transaction::BuildAttempt,
+    ) -> fe2o3_artifact_transaction::BackendPublicationReceiptV2 {
+        match read_backend_publication_receipt_v2(path, producer, attempt).unwrap() {
+            PersistedBackendReceiptV2::Provenance(receipt) => receipt,
+            receipt => panic!("expected durable protected V2 receipt, got {receipt:?}"),
+        }
+    }
+
+    fn prepare_v1_ready_publication(
+        path: &Path,
+        producer: &ProducerIdentity,
+        attempt: fe2o3_artifact_transaction::BuildAttempt,
+        output: &[u8],
+        plan: DurableLinkPublicationPlanV1,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    ) -> fe2o3_artifact_transaction::RecoveredWorkerV2PublicationIntentV1 {
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let admission =
+            restart_admission_commitment_with_inputs_v1(publication, plan, upstream, output, None);
+        let store = WorkerV2ResumeStoreV1::open(path, producer).unwrap();
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
+        let intent = persist_worker_v2_publication_intent_v1(
+            path, producer, attempt, plan, upstream, output,
+        )
+        .unwrap();
+        store
+            .persist_ready(publication, attempt, intent.record().identity())
+            .unwrap();
+        intent
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const PROTECTED_RESTART_CHILD_DIRECTORY_ENV: &str =
+        "FE2O3_TEST_BINDING_PROTECTED_RESTART_DIRECTORY";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const PROTECTED_RESTART_CHILD_LABEL_ENV: &str = "FE2O3_TEST_BINDING_PROTECTED_RESTART_LABEL";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const PROTECTED_RESTART_CHILD_CLOSURE_SEED_ENV: &str =
+        "FE2O3_TEST_BINDING_PROTECTED_RESTART_CLOSURE_SEED";
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn protected_restart_producer(label: &str) -> ProducerIdentity {
+        ProducerIdentity::from_codegen(
+            &format!("protected_restart_{label}"),
+            Some(Path::new("/workspace/protected_restart.rs")),
+        )
+        .unwrap()
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn protected_crash_restart_child() {
+        let Some(directory) = std::env::var_os(PROTECTED_RESTART_CHILD_DIRECTORY_ENV) else {
+            return;
+        };
+        let label = std::env::var(PROTECTED_RESTART_CHILD_LABEL_ENV).unwrap();
+        let seed = std::env::var(PROTECTED_RESTART_CHILD_CLOSURE_SEED_ENV)
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+        let directory = PathBuf::from(directory);
+        let producer = protected_restart_producer(&label);
+        let compiler_closure = protected_test_closure(seed);
+        let resume = WorkerV2ResumeStoreV2::open(&directory, &producer).unwrap();
+        let state = resume.load().unwrap().expect("protected ready marker");
+        let managed = managed_attempt_for_test(&directory, producer, state.attempt());
+        match complete_recovered_protected_worker_v2(&managed, &resume, state, compiler_closure) {
+            Ok(()) => panic!("protected crash child crossed its configured fault point"),
+            Err(CompletionFailure::Uncommitted(message)) => {
+                panic!("protected crash child terminated the attempt: {message}")
+            }
+            Err(CompletionFailure::PreserveAttempt(message)) => {
+                panic!("protected crash child preserved the attempt: {message}")
+            }
+        }
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn run_protected_crash_restart_case(fault_point: &str, seed: u8) {
+        let label = fault_point.replace('-', "_");
+        let directory = test_artifact_directory(&format!("protected-restart-{label}"));
+        let producer = protected_restart_producer(&label);
+        let compiler_closure = protected_test_closure(seed);
+        let attempt = begin_build_attempt(
+            &directory,
+            &producer,
+            BuildInvocation::from_bytes([seed.wrapping_add(1); 32]),
+            BuildSession::from_bytes([seed.wrapping_add(2); 16]),
+        )
+        .unwrap();
+        let (output, plan, upstream) =
+            protected_test_publication_inputs(attempt, seed.wrapping_add(3));
+
+        publish_compiler_module_handoff_v1(
+            &directory,
+            &producer,
+            attempt,
+            b"ordinary-v1-handoff-canary",
+        )
+        .unwrap();
+        persist_worker_v2_publication_intent_v1(
+            &directory, &producer, attempt, plan, upstream, &output,
+        )
+        .unwrap();
+        let v1_before = v1_coordination_snapshot(&directory);
+        assert!(!v1_before.is_empty());
+
+        let resume = WorkerV2ResumeStoreV2::open(&directory, &producer).unwrap();
+        let persisted = persist_admitted_worker_v2_intent_v2(
+            &resume,
+            &producer,
+            WorkerV2PublicationKindV1::Finalized,
+            plan,
+            upstream,
+            &output,
+            None,
+            compiler_closure,
+        )
+        .unwrap();
+        let intent_identity = persisted.intent.record().identity();
+        assert!(matches!(
+            resume.load().unwrap(),
+            Some(ResumeMarkerStateV2::Ready { .. })
+        ));
+        drop(resume);
+
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("binding_wrapper::tests::protected_crash_restart_child")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(PROTECTED_RESTART_CHILD_DIRECTORY_ENV, &directory)
+            .env(PROTECTED_RESTART_CHILD_LABEL_ENV, &label)
+            .env(PROTECTED_RESTART_CHILD_CLOSURE_SEED_ENV, seed.to_string())
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault_point)
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(86));
+        assert_eq!(v1_coordination_snapshot(&directory), v1_before);
+
+        let receipt_before = persisted_v2_receipt(&directory, &producer, attempt);
+        assert_eq!(receipt_before.compiler_closure(), compiler_closure);
+        assert_eq!(
+            fs::read(finalized_artifact_path(&directory, plan)).unwrap(),
+            output
+        );
+        let resume = WorkerV2ResumeStoreV2::open(&directory, &producer).unwrap();
+        let state = resume.load().unwrap().expect("crash left a V2 marker");
+        if fault_point == "protected-published" {
+            assert!(matches!(state, ResumeMarkerStateV2::Ready { .. }));
+        } else {
+            assert!(matches!(state, ResumeMarkerStateV2::Completed { .. }));
+        }
+        let intent_after_crash = recover_worker_v2_publication_intent_v2(
+            &directory,
+            &producer,
+            attempt,
+            compiler_closure,
+        );
+        if matches!(fault_point, "protected-published" | "protected-completed") {
+            assert_eq!(
+                intent_after_crash.unwrap().record().identity(),
+                intent_identity
+            );
+        } else {
+            assert!(intent_after_crash.is_err());
+        }
+
+        let managed = managed_attempt_for_test(&directory, producer.clone(), attempt);
+        assert_completion_succeeded(complete_recovered_protected_worker_v2(
+            &managed,
+            &resume,
+            state,
+            compiler_closure,
+        ));
+        assert!(resume.load().unwrap().is_none());
+        drop(resume);
+        assert!(
+            recover_worker_v2_publication_intent_v2(
+                &directory,
+                &producer,
+                attempt,
+                compiler_closure,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            persisted_v2_receipt(&directory, &producer, attempt),
+            receipt_before
+        );
+        assert_eq!(
+            fs::read(finalized_artifact_path(&directory, plan)).unwrap(),
+            output
+        );
+        assert_eq!(v1_coordination_snapshot(&directory), v1_before);
+
+        let stable = recursive_file_snapshot(&directory);
+        finish_build_attempt(&directory, &producer, attempt).unwrap();
+        let reopened = WorkerV2ResumeStoreV2::open(&directory, &producer).unwrap();
+        assert!(reopened.load().unwrap().is_none());
+        drop(reopened);
+        assert_eq!(recursive_file_snapshot(&directory), stable);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    #[ignore = "blocked: V2 intent cleanup currently authorizes only a V1 backend receipt"]
+    fn protected_published_crash_recovers_exactly_once_without_v1_probing() {
+        run_protected_crash_restart_case("protected-published", 0x71);
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    #[ignore = "blocked: V2 intent cleanup currently authorizes only a V1 backend receipt"]
+    fn protected_completed_crash_recovers_exactly_once_without_v1_probing() {
+        run_protected_crash_restart_case("protected-completed", 0x81);
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    #[ignore = "blocked: V2 intent cleanup currently authorizes only a V1 backend receipt"]
+    fn protected_intent_cleared_crash_recovers_exactly_once_without_v1_probing() {
+        run_protected_crash_restart_case("protected-intent-cleared", 0x91);
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    #[ignore = "blocked: V2 intent cleanup currently authorizes only a V1 backend receipt"]
+    fn protected_finished_crash_recovers_exactly_once_without_v1_probing() {
+        run_protected_crash_restart_case("protected-finished", 0xa1);
+    }
+
+    #[derive(Clone, Copy)]
+    enum FailClosedCase {
+        RowSoftmax,
+        RequiredEnvelope,
+    }
+
+    impl FailClosedCase {
+        const fn label(self) -> &'static str {
+            match self {
+                Self::RowSoftmax => "row-softmax",
+                Self::RequiredEnvelope => "required-envelope",
+            }
+        }
+
+        const fn pipeline(self) -> &'static str {
+            match self {
+                Self::RowSoftmax => ROW_SOFTMAX_V1_PIPELINE,
+                Self::RequiredEnvelope => "kernel-ir-worker-v2",
+            }
+        }
+
+        const fn expected_error(self) -> &'static str {
+            match self {
+                Self::RowSoftmax => "protected row-softmax requires",
+                Self::RequiredEnvelope => "protected finalized Worker V2 output requires",
+            }
+        }
+    }
+
+    fn write_fail_closed_manifest(workspace: &Path, case: FailClosedCase) -> PathBuf {
+        let worker = std::env::current_exe().unwrap();
+        let worker_bytes = fs::read(&worker).unwrap();
+        let worker_identity = ContentIdentityV1::calculate(&worker_bytes);
+        let provider = workspace.join("provider.o");
+        fs::write(&provider, b"provider").unwrap();
+        let provider_identity = ContentIdentityV1::calculate(b"provider");
+        let mut value = json!({
+            "candidate_output_max_bytes": 4096,
+            "format": "fe2o3-worker-v2-config-v2",
+            "limits": {
+                "stderr_bytes": 1024,
+                "stdout_bytes": 16384,
+                "timeout_ms": 2000
+            },
+            "link_options": [
+                {"name": "code-object-version", "value": "6"},
+                {"name": "opt-level", "value": "2"},
+                {"name": "strip-debug", "value": "true"},
+                {"name": "verify-each", "value": "true"}
+            ],
+            "providers": [{
+                "byte_len": provider_identity.byte_len(),
+                "kind": "amdgpu-relocatable",
+                "path": provider,
+                "sha256": hex(provider_identity.sha256())
+            }],
+            "units": [{
+                "crate_name": "protected_fail_closed",
+                "source": "src/lib.rs",
+                "working_directory": workspace
+            }],
+            "worker": {
+                "byte_len": worker_identity.byte_len(),
+                "llvm_build_identity": "llvm-test-v1",
+                "path": worker,
+                "sha256": hex(worker_identity.sha256()),
+                "worker_build_identity": "worker-test-v1"
+            }
+        });
+
+        match case {
+            FailClosedCase::RowSoftmax => {
+                value["candidate_output_max_bytes"] = json!(fe2o3_hsaco::MAX_HSACO_BYTES);
+                value["link_options"][1]["value"] = json!("0");
+                value["providers"] = json!([]);
+                value["worker"]["llvm_build_identity"] =
+                    json!(ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1);
+                let definitions = (1_u8..=ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT as u8)
+                    .map(|byte| hex(&[byte; 16]))
+                    .collect::<Vec<_>>();
+                let sources = [1_u8, 2, 2, 2, 1, 3, 3, 3].map(|byte| hex(&[byte; 32]));
+                value["row_softmax_v1"] = json!({
+                    "case": "normal",
+                    "comparison_policy": crate::production_release::ROW_SOFTMAX_V1_PRODUCTION_POLICY,
+                    "mask": "unmasked",
+                    "ocml_file_sha256": [
+                        hex(&[0x31; 32]),
+                        hex(&[0x32; 32]),
+                        hex(&[0x33; 32]),
+                        hex(&[0x34; 32])
+                    ],
+                    "ocml_manifest_sha256": hex(&[0x35; 32]),
+                    "provider_crate_hash": hex(&[0x21; 16]),
+                    "provider_definition_identities": definitions,
+                    "provider_source_identities": sources,
+                    "provider_stable_crate_id": 7,
+                    "row_elements": 64
+                });
+            }
+            FailClosedCase::RequiredEnvelope => {
+                let capsule = workspace.join("envelope-inputs.capsule");
+                fs::write(&capsule, b"capsule-canary").unwrap();
+                value["load_envelope"] = json!("required");
+                value["load_envelope_inputs"] = json!({
+                    "byte_len": 14,
+                    "path": capsule,
+                    "sha256": hex(&Sha256::digest(b"capsule-canary"))
+                });
+            }
+        }
+
+        let path = workspace.join(format!("{}-config.json", case.label()));
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        path
+    }
+
+    fn protected_compiler_capabilities_for_test(
+        output_dir: &Path,
+        config_identity: WorkerV2ConfigIdentity,
+    ) -> CompilerCapabilities {
+        let backend = PinnedCodegenBackend::open(&std::env::current_exe().unwrap()).unwrap();
+        let compiler_closure = CompilerClosureV2::new(
+            [0xb1; 32],
+            [0xb2; 32],
+            [0xb3; 32],
+            [0xb4; 32],
+            [0xb5; 32],
+            *backend.sha256(),
+        )
+        .unwrap();
+        let binding = crate::capability_broker::CapabilityBindingV3::new_protected(
+            crate::capability_broker::CapabilityProfileV1::Ordinary,
+            Some(*config_identity.as_bytes()),
+            compiler_closure,
+            [0xb6; 32],
+        )
+        .unwrap();
+        let artifact =
+            PinnedDirectory::open_existing(output_dir.to_path_buf(), "fail-closed artifact")
+                .unwrap();
+        CompilerCapabilities {
+            binding,
+            backend,
+            artifact,
+            compiler_closure: Some(
+                fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1::create(
+                    compiler_closure,
+                )
+                .unwrap(),
+            ),
+            invocation_authority: None,
+            output_dir: output_dir.to_path_buf(),
+            pinned_cargo_image_sha256: Some(compiler_closure.cargo_executable_sha256()),
+        }
+    }
+
+    fn seed_fail_closed_artifact_canaries(path: &Path) {
+        let ordinary_producer = ProducerIdentity::from_codegen(
+            "fail_closed_v1_canary",
+            Some(Path::new("/workspace/fail_closed_v1_canary.rs")),
+        )
+        .unwrap();
+        let ordinary_attempt = begin_build_attempt(
+            path,
+            &ordinary_producer,
+            BuildInvocation::from_bytes([0xc1; 32]),
+            BuildSession::from_bytes([0xc2; 16]),
+        )
+        .unwrap();
+        let (ordinary_output, ordinary_plan, ordinary_upstream) =
+            protected_test_publication_inputs(ordinary_attempt, 0xc3);
+        publish_compiler_module_handoff_v1(
+            path,
+            &ordinary_producer,
+            ordinary_attempt,
+            b"fail-closed-v1-handoff",
+        )
+        .unwrap();
+        prepare_v1_ready_publication(
+            path,
+            &ordinary_producer,
+            ordinary_attempt,
+            &ordinary_output,
+            ordinary_plan,
+            ordinary_upstream,
+        );
+        publish_exact_hsaco_evidence_for_attempt_v1(
+            path,
+            &ordinary_producer,
+            ordinary_attempt,
+            ordinary_plan,
+            ordinary_upstream,
+            &ordinary_output,
+        )
+        .unwrap();
+
+        let protected_producer = ProducerIdentity::from_codegen(
+            "fail_closed_v2_canary",
+            Some(Path::new("/workspace/fail_closed_v2_canary.rs")),
+        )
+        .unwrap();
+        let protected_attempt = begin_build_attempt(
+            path,
+            &protected_producer,
+            BuildInvocation::from_bytes([0xd1; 32]),
+            BuildSession::from_bytes([0xd2; 16]),
+        )
+        .unwrap();
+        let compiler_closure = protected_test_closure(0xd3);
+        let (protected_output, protected_plan, protected_upstream) =
+            protected_test_publication_inputs(protected_attempt, 0xd4);
+        publish_compiler_module_handoff_v2(
+            path,
+            &protected_producer,
+            protected_attempt,
+            compiler_closure,
+            b"fail-closed-v2-handoff",
+        )
+        .unwrap();
+        let protected_store = WorkerV2ResumeStoreV2::open(path, &protected_producer).unwrap();
+        persist_admitted_worker_v2_intent_v2(
+            &protected_store,
+            &protected_producer,
+            WorkerV2PublicationKindV1::Finalized,
+            protected_plan,
+            protected_upstream,
+            &protected_output,
+            None,
+            compiler_closure,
+        )
+        .unwrap();
+        publish_exact_hsaco_evidence_for_attempt_v2(
+            path,
+            &protected_producer,
+            protected_attempt,
+            protected_plan,
+            protected_upstream,
+            compiler_closure,
+            &protected_output,
+        )
+        .unwrap();
+    }
+
+    const FAIL_CLOSED_CHILD_CASE_ENV: &str = "FE2O3_TEST_BINDING_FAIL_CLOSED_CASE";
+    const FAIL_CLOSED_CHILD_ARTIFACT_ENV: &str = "FE2O3_TEST_BINDING_FAIL_CLOSED_ARTIFACT";
+
+    #[test]
+    fn protected_fail_closed_preparation_child() {
+        let Some(case) = std::env::var_os(FAIL_CLOSED_CHILD_CASE_ENV) else {
+            return;
+        };
+        let case = match case.to_str().unwrap() {
+            "row-softmax" => FailClosedCase::RowSoftmax,
+            "required-envelope" => FailClosedCase::RequiredEnvelope,
+            value => panic!("unknown fail-closed child case {value:?}"),
+        };
+        let output_dir = PathBuf::from(std::env::var_os(FAIL_CLOSED_CHILD_ARTIFACT_ENV).unwrap());
+        let worker_v2 = PreparedWorkerV2Config::from_environment()
+            .unwrap()
+            .expect("fail-closed Worker V2 config");
+        let capabilities =
+            protected_compiler_capabilities_for_test(&output_dir, worker_v2.identity());
+        let current_dir = std::env::current_dir().unwrap();
+        let argv = args(&["rustc", "--crate-name=protected_fail_closed", "src/lib.rs"]);
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap()
+        else {
+            panic!("fail-closed fixture did not classify as a compile");
+        };
+        match prepare_managed_attempt(
+            compile,
+            Some(worker_v2),
+            &current_dir,
+            &output_dir,
+            &[],
+            &capabilities,
+        ) {
+            Err(BindingWrapperError::BuildObservation(message)) => {
+                assert!(message.contains(case.expected_error()), "{message}");
+            }
+            Err(error) => panic!("unexpected fail-closed error: {error}"),
+            Ok(_) => panic!("protected unavailable transition created a managed attempt"),
+        }
+    }
+
+    fn run_fail_closed_artifact_immutability_case(case: FailClosedCase) {
+        let root = test_artifact_directory(&format!("fail-closed-{}", case.label()));
+        let workspace = root.join("workspace");
+        let artifacts = root.join("artifacts");
+        fs::create_dir(&workspace).unwrap();
+        fs::create_dir(&artifacts).unwrap();
+        let manifest = write_fail_closed_manifest(&workspace, case);
+        seed_fail_closed_artifact_canaries(&artifacts);
+        let before = recursive_file_snapshot(&artifacts);
+        assert!(!before.is_empty());
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("binding_wrapper::tests::protected_fail_closed_preparation_child")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .current_dir(&workspace)
+            .env(FAIL_CLOSED_CHILD_CASE_ENV, case.label())
+            .env(FAIL_CLOSED_CHILD_ARTIFACT_ENV, &artifacts)
+            .env("FE2O3_CODEGEN_PIPELINE", case.pipeline())
+            .env("FE2O3_WORKER_V2_CONFIG_V2", &manifest)
+            .env("FE2O3_BUILD_SESSION_V1", "e1".repeat(16));
+        if matches!(case, FailClosedCase::RowSoftmax) {
+            command.env(
+                crate::PROTECTED_RELEASE_ACTION_ENV,
+                ROW_SOFTMAX_V1_RUN_VALUE,
+            );
+        } else {
+            command.env_remove(crate::PROTECTED_RELEASE_ACTION_ENV);
+        }
+        let status = command.status().unwrap();
+        assert!(status.success());
+        assert_eq!(recursive_file_snapshot(&artifacts), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protected_row_softmax_fails_before_any_artifact_state_mutation() {
+        run_fail_closed_artifact_immutability_case(FailClosedCase::RowSoftmax);
+    }
+
+    #[test]
+    fn protected_required_envelope_fails_before_any_artifact_state_mutation() {
+        run_fail_closed_artifact_immutability_case(FailClosedCase::RequiredEnvelope);
+    }
+
+    #[test]
+    fn ordinary_v1_publication_and_completed_recovery_remain_stable() {
+        let directory = test_artifact_directory("ordinary-v1-orchestration");
+        let fresh_producer = ProducerIdentity::from_codegen(
+            "ordinary_v1_fresh",
+            Some(Path::new("/workspace/ordinary_v1_fresh.rs")),
+        )
+        .unwrap();
+        let fresh_attempt = begin_build_attempt(
+            &directory,
+            &fresh_producer,
+            BuildInvocation::from_bytes([0xe1; 32]),
+            BuildSession::from_bytes([0xe2; 16]),
+        )
+        .unwrap();
+        let (fresh_output, fresh_plan, fresh_upstream) =
+            protected_test_publication_inputs(fresh_attempt, 0xe3);
+        let fresh_intent = prepare_v1_ready_publication(
+            &directory,
+            &fresh_producer,
+            fresh_attempt,
+            &fresh_output,
+            fresh_plan,
+            fresh_upstream,
+        );
+        let fresh_store = WorkerV2ResumeStoreV1::open(&directory, &fresh_producer).unwrap();
+        let fresh_managed =
+            managed_attempt_for_test(&directory, fresh_producer.clone(), fresh_attempt);
+        assert_completion_succeeded(publish_finish_and_clear(
+            &fresh_managed,
+            &fresh_store,
+            WorkerV2PublicationKindV1::Finalized,
+            fresh_intent,
+        ));
+        assert!(fresh_store.load().unwrap().is_none());
+        assert!(
+            recover_worker_v2_publication_intent_v1(&directory, &fresh_producer, fresh_attempt,)
+                .is_err()
+        );
+        let fresh_receipt = persisted_v1_receipt(&directory, &fresh_producer, fresh_attempt);
+        assert_eq!(
+            fs::read(finalized_artifact_path(&directory, fresh_plan)).unwrap(),
+            fresh_output
+        );
+        drop(fresh_store);
+
+        let recovery_producer = ProducerIdentity::from_codegen(
+            "ordinary_v1_recovery",
+            Some(Path::new("/workspace/ordinary_v1_recovery.rs")),
+        )
+        .unwrap();
+        let recovery_attempt = begin_build_attempt(
+            &directory,
+            &recovery_producer,
+            BuildInvocation::from_bytes([0xf1; 32]),
+            BuildSession::from_bytes([0xf2; 16]),
+        )
+        .unwrap();
+        let (recovery_output, recovery_plan, recovery_upstream) =
+            protected_test_publication_inputs(recovery_attempt, 0xf3);
+        let recovery_intent = prepare_v1_ready_publication(
+            &directory,
+            &recovery_producer,
+            recovery_attempt,
+            &recovery_output,
+            recovery_plan,
+            recovery_upstream,
+        );
+        let recovery_publication = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory,
+            &recovery_producer,
+            recovery_attempt,
+            recovery_plan,
+            recovery_upstream,
+            &recovery_output,
+        )
+        .unwrap();
+        let recovery_store = WorkerV2ResumeStoreV1::open(&directory, &recovery_producer).unwrap();
+        let completed = recovery_store
+            .persist_completed(
+                WorkerV2PublicationKindV1::Finalized,
+                recovery_attempt,
+                recovery_intent.record().identity(),
+                recovery_publication.receipt(),
+            )
+            .unwrap();
+        let recovery_managed =
+            managed_attempt_for_test(&directory, recovery_producer.clone(), recovery_attempt);
+        assert_completion_succeeded(complete_recovered_worker_v2(
+            &recovery_managed,
+            &recovery_store,
+            completed,
+        ));
+        assert!(recovery_store.load().unwrap().is_none());
+        assert!(
+            recover_worker_v2_publication_intent_v1(
+                &directory,
+                &recovery_producer,
+                recovery_attempt,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            persisted_v1_receipt(&directory, &recovery_producer, recovery_attempt),
+            recovery_publication.receipt()
+        );
+        assert_eq!(
+            fs::read(finalized_artifact_path(&directory, recovery_plan)).unwrap(),
+            recovery_output
+        );
+        assert_ne!(fresh_receipt, recovery_publication.receipt());
+        drop(recovery_store);
+
+        let stable = recursive_file_snapshot(&directory);
+        finish_build_attempt(&directory, &fresh_producer, fresh_attempt).unwrap();
+        finish_build_attempt(&directory, &recovery_producer, recovery_attempt).unwrap();
+        assert_eq!(recursive_file_snapshot(&directory), stable);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
