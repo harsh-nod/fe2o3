@@ -4,24 +4,33 @@
 
 mod decode;
 mod decode_v2;
+mod decode_v3;
 mod digest;
 mod digest_v2;
+mod digest_v3;
 mod encode;
 mod encode_v2;
+mod encode_v3;
 mod error;
 mod model;
 mod model_v2;
+mod model_v3;
 mod rustc_args_v2;
 
 pub use decode::decode_descriptor_v1;
 pub use decode_v2::decode_descriptor_v2;
+pub use decode_v3::decode_descriptor_v3;
 pub use digest::{INVOCATION_DIGEST_DOMAIN_V1, InvocationDigest};
 pub use digest_v2::{INVOCATION_DIGEST_DOMAIN_V2, InvocationDigestV2};
+pub use digest_v3::{INVOCATION_DIGEST_DOMAIN_V3, InvocationDigestV3};
 pub use encode::{
     INVOCATION_DESCRIPTOR_MAGIC, INVOCATION_DESCRIPTOR_VERSION, encode_descriptor_v1,
 };
 pub use encode_v2::{
     INVOCATION_DESCRIPTOR_MAGIC_V2, INVOCATION_DESCRIPTOR_VERSION_V2, encode_descriptor_v2,
+};
+pub use encode_v3::{
+    INVOCATION_DESCRIPTOR_MAGIC_V3, INVOCATION_DESCRIPTOR_VERSION_V3, encode_descriptor_v3,
 };
 pub use error::{DecodeError, DigestError, ValidationError};
 pub use model::{
@@ -38,6 +47,7 @@ pub use model_v2::{
     MAX_NAME_BYTES_V2, MAX_PATH_BYTES_V2, MAX_RUSTC_ARGUMENTS_V2, RustcInvocationDescriptorV2,
     RustcUnitV2,
 };
+pub use model_v3::{MAX_DESCRIPTOR_BYTES_V3, RustcInvocationDescriptorV3};
 pub use rustc_args_v2::{
     RUSTC_SEPARATE_VALUE_OPTIONS_V2, RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2,
     RustcPassthroughInvocationV2, classify_rustc_invocation_v2,
@@ -49,3 +59,5 @@ pub use rustc_args_v2::{
 mod tests;
 #[cfg(test)]
 mod tests_v2;
+#[cfg(test)]
+mod tests_v3;

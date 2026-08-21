@@ -22,6 +22,41 @@ wire reference is retained in [`V1_FORMAT.md`](V1_FORMAT.md).
 V2 represents each compiler-visible input once. V1 and V2 use explicit wire
 versions and distinct digest domains; each decoder rejects the other version.
 
+V3 preserves the exact V2 rustc unit and environment semantics and adds the
+canonical `fe2o3_build_authority::CompilerClosureV2` identity preimage. All
+three versions have disjoint wire versions and digest domains. V1 and V2 bytes,
+APIs, and digest constructions remain frozen.
+
+## V3 model
+
+`RustcInvocationDescriptorV3` owns a complete `RustcInvocationDescriptorV2`
+and a `CompilerClosureV2`. `from_v2_and_compiler_closure` is the explicit
+upgrade operation. It rejects the upgrade unless the V2 rustc-executable and
+codegen-backend digests equal the closure pins assigned those exact roles.
+The closure's aggregate identity remains derived rather than independently
+declared in the V3 wire format.
+
+The V3 closure preimage is encoded in the same order used by
+`derive_compiler_closure_identity_v2`:
+
+```text
+Cargo binding transition protocol version, u16 little-endian
+Cargo executable SHA-256 digest
+Cargo binding trampoline SHA-256 digest
+cargo-fe2o3 binding wrapper SHA-256 digest
+rustc executable SHA-256 digest
+rustc runtime-tree SHA-256 digest
+codegen backend SHA-256 digest
+```
+
+The fixed `COMPILER_CLOSURE_IDENTITY_DOMAIN_V2` is implicit in the typed
+schema. These fields are followed by the V2 body byte-for-byte, including its
+rustc/backend digest fields, working directory, exact argv, and complete sorted
+environment. The intentional duplicate rustc/backend pins are cross-checked on
+construction, encoding, and decoding. The V3 size bound is the V2 bound plus
+the fixed 194-byte closure preimage, so every valid V2 descriptor remains
+eligible for an upgrade.
+
 ## V2 model
 
 `RustcInvocationDescriptorV2` records:
@@ -135,6 +170,16 @@ allocation, revalidates typed and cross-field invariants, and requires
 byte-identical re-encoding.
 
 ## Digests
+
+The V3 coordination digest is:
+
+```text
+SHA256(
+    "FE2O3/RUSTC-BUILD-INVOCATION/V3\0" ||
+    u64_le(encoded_descriptor_length) ||
+    encoded_descriptor
+)
+```
 
 The V2 coordination digest is:
 

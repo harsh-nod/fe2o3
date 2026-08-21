@@ -1,5 +1,7 @@
 use std::fmt;
 
+use fe2o3_build_authority::CompilerClosureErrorV2;
+
 /// Why a typed invocation input was rejected.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -36,6 +38,11 @@ pub enum ValidationError {
     /// Two individually valid fields formed an invalid combination.
     InvalidCombination {
         /// The rejected combination.
+        field: &'static str,
+    },
+    /// A descriptor digest did not match the corresponding compiler-closure pin.
+    CompilerClosurePinMismatch {
+        /// The rustc or codegen-backend role whose digests differed.
         field: &'static str,
     },
     /// A process-environment key or value was not valid UTF-8.
@@ -82,6 +89,12 @@ impl fmt::Display for ValidationError {
             Self::InvalidPath { field } => write!(formatter, "{field} is not a canonical path"),
             Self::InvalidCombination { field } => {
                 write!(formatter, "{field} contains an invalid combination")
+            }
+            Self::CompilerClosurePinMismatch { field } => {
+                write!(
+                    formatter,
+                    "descriptor {field} digest does not match the compiler-closure pin"
+                )
             }
             Self::NonUtf8Environment { field } => {
                 write!(formatter, "compile environment {field} is not UTF-8")
@@ -167,6 +180,8 @@ pub enum DecodeError {
     NonCanonical,
     /// A typed field or cross-field invariant was invalid.
     Validation(ValidationError),
+    /// A compiler-closure preimage was invalid.
+    CompilerClosure(CompilerClosureErrorV2),
 }
 
 impl fmt::Display for DecodeError {
@@ -195,6 +210,7 @@ impl fmt::Display for DecodeError {
             }
             Self::NonCanonical => formatter.write_str("descriptor is not canonically encoded"),
             Self::Validation(error) => error.fmt(formatter),
+            Self::CompilerClosure(error) => error.fmt(formatter),
         }
     }
 }
@@ -203,6 +219,7 @@ impl std::error::Error for DecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Validation(error) => Some(error),
+            Self::CompilerClosure(error) => Some(error),
             _ => None,
         }
     }
@@ -211,6 +228,12 @@ impl std::error::Error for DecodeError {
 impl From<ValidationError> for DecodeError {
     fn from(value: ValidationError) -> Self {
         Self::Validation(value)
+    }
+}
+
+impl From<CompilerClosureErrorV2> for DecodeError {
+    fn from(value: CompilerClosureErrorV2) -> Self {
+        Self::CompilerClosure(value)
     }
 }
 
