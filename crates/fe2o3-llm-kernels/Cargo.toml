@@ -1,0 +1,27 @@
+[package]
+name = "fe2o3-llm-kernels"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded Qwen3 gfx942 LLM kernel compiler profiles."
+publish = false
+
+[dependencies]
+fe2o3-amdhsa-loader.workspace = true
+fe2o3-artifact-transaction.workspace = true
+fe2o3-compiler-api.workspace = true
+fe2o3-compiler-ffi.workspace = true
+fe2o3-general-gemm-compiler.workspace = true
+fe2o3-hsaco-finalize = { workspace = true, features = ["general-gemm-v1"] }
+fe2o3-kernel-ir.workspace = true
+fe2o3-llvm-handoff.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+trybuild = "1"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"

@@ -1,0 +1,21 @@
+warning: unreachable expression
+ --> tests/ui/prepared_fields_are_private.rs:9:21
+  |
+8 |         reference: todo!(),
+  |                    ------- any code following this expression is unreachable
+9 |         vectorized: todo!(),
+  |                     ^^^^^^^ unreachable expression
+  |
+  = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+error[E0451]: fields `catalog`, `reference` and `vectorized` of struct `PreparedQwen3GemmKernelSetV1` are private
+ --> tests/ui/prepared_fields_are_private.rs:7:9
+  |
+6 |     PreparedQwen3GemmKernelSetV1 {
+  |     ---------------------------- in this type
+7 |         catalog,
+  |         ^^^^^^^ private field
+8 |         reference: todo!(),
+  |         ^^^^^^^^^ private field
+9 |         vectorized: todo!(),
+  |         ^^^^^^^^^^ private field

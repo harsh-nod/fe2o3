@@ -93,6 +93,7 @@ fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis", default-feature
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
 fe2o3-kir-pliron-bridge = { path = "crates/fe2o3-kir-pliron-bridge" }
 fe2o3-legacy-compiler = { path = "crates/fe2o3-legacy-compiler" }
+fe2o3-llm-kernels = { path = "crates/fe2o3-llm-kernels" }
 fe2o3-llvm-handoff = { path = "crates/fe2o3-llvm-handoff" }
 fe2o3-llvm-route-conformance = { path = "crates/fe2o3-llvm-route-conformance" }
 fe2o3-llvm-text = { path = "crates/fe2o3-llvm-text" }
