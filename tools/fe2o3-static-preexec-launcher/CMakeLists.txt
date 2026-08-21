@@ -118,8 +118,12 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:fe2o3-static-preexec-launcher>"
       "$<TARGET_FILE:fe2o3-static-preexec-parent-death-target>")
 
+  set(FE2O3_STATIC_PREEXEC_TEST_LABELS
+    "security;static-preexec;authority-none")
+  # Static binutils inspection can be CPU-starved on saturated hosted runners.
+  set_tests_properties(fe2o3-static-preexec-static-elf PROPERTIES
+    TIMEOUT 60 LABELS "${FE2O3_STATIC_PREEXEC_TEST_LABELS}")
   set_tests_properties(
-    fe2o3-static-preexec-static-elf
     fe2o3-static-preexec-success
     fe2o3-static-preexec-signal-state
     fe2o3-static-preexec-alias
@@ -133,5 +137,5 @@ if(BUILD_TESTING)
     fe2o3-static-preexec-parent-identity
     fe2o3-static-preexec-close-fallback
     fe2o3-static-preexec-parent-death
-    PROPERTIES TIMEOUT 10 LABELS "security;static-preexec;authority-none")
+    PROPERTIES TIMEOUT 10 LABELS "${FE2O3_STATIC_PREEXEC_TEST_LABELS}")
 endif()
