@@ -149,6 +149,14 @@ impl InertCompilerModuleTextV1 {
     }
 }
 
+struct CompilerModuleSymbolClosureV1 {
+    kernel_entries: Vec<String>,
+    device_definitions: Vec<String>,
+    internal_helpers: Vec<String>,
+    device_ffi_exports: Vec<String>,
+    external_declarations: Vec<String>,
+}
+
 /// Fail-closed compiler-module construction error.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CompilerModuleConstructionError {
@@ -169,6 +177,7 @@ pub(crate) enum CompilerModuleConstructionError {
     RowSoftmaxLowering(String),
     MoeTop2Lowering(String),
     FlashAttentionLowering(String),
+    Verification(fe2o3_kernel_ir::VerificationErrors),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -215,6 +224,7 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::FlashAttentionLowering(error) => {
                 write!(formatter, "exact FlashAttention lowering rejected: {error}")
             }
+            Self::Verification(error) => write!(formatter, "{error}"),
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
     }
@@ -303,6 +313,42 @@ pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
     }
     .map_err(CompilerModuleConstructionError::Lowering)?;
 
+    let symbols = compiler_module_symbol_closure_v1(module);
+
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: symbols.kernel_entries,
+        device_definitions: symbols.device_definitions,
+        internal_helpers: symbols.internal_helpers,
+        device_ffi_exports: symbols.device_ffi_exports,
+        external_declarations: symbols.external_declarations,
+        descriptor_source_identity: None,
+    })
+}
+
+/// Retains exact gfx942 LLVM text already produced by the move-only
+/// production transaction. This path performs no profile recognition,
+/// target rebinding, or second KIR-to-LLVM lowering.
+pub(crate) fn retain_production_gfx942_compiler_module_text_v1(
+    module: &Module,
+    llvm_ir: String,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    enforce_compiler_module_bounds(module)?;
+    verify_module(module).map_err(CompilerModuleConstructionError::Verification)?;
+    enforce_source_debug_text_bound(&llvm_ir)?;
+    let symbols = compiler_module_symbol_closure_v1(module);
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: symbols.kernel_entries,
+        device_definitions: symbols.device_definitions,
+        internal_helpers: symbols.internal_helpers,
+        device_ffi_exports: symbols.device_ffi_exports,
+        external_declarations: symbols.external_declarations,
+        descriptor_source_identity: None,
+    })
+}
+
+fn compiler_module_symbol_closure_v1(module: &Module) -> CompilerModuleSymbolClosureV1 {
     let mut kernel_entries = module
         .kernels
         .iter()
@@ -347,15 +393,13 @@ pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
     device_ffi_exports.sort();
     external_declarations.sort();
 
-    Ok(InertCompilerModuleTextV1 {
-        llvm_ir,
+    CompilerModuleSymbolClosureV1 {
         kernel_entries,
         device_definitions,
         internal_helpers,
         device_ffi_exports,
         external_declarations,
-        descriptor_source_identity: None,
-    })
+    }
 }
 
 /// Constructs the exact reviewed gfx942:xnack-/COV6 scalar GEMM LLVM module.

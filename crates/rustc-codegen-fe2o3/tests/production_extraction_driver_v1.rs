@@ -68,7 +68,7 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn production_fill_reaches_exact_gfx942_llvm() {
+fn production_fill_prepares_worker_handoff_before_requiring_managed_attempt() {
     let target = ScratchTarget::new();
     let artifacts = target.path().join("artifacts");
     std::fs::create_dir(&artifacts).expect("create production artifact directory");
@@ -128,7 +128,8 @@ fn production_fill_reaches_exact_gfx942_llvm() {
         "lowered exact target-bound KIR with compiler-selected-or-retained workgroup WorkgroupSize { x: 64, y: 1, z: 1 }",
         "deterministic gfx942:xnack- LLVM text",
         "artifact/launch authority false",
-        "upstream LLVM linking remains disabled",
+        "preparing exact Worker V2 handoff",
+        "production-v1 Worker V2 handoff failed: kernel-ir-worker-v2 requires a managed FE2O3_BUILD_ATTEMPT_V1",
     ] {
         assert!(stderr.contains(expected), "missing {expected:?}:\n{stderr}");
     }

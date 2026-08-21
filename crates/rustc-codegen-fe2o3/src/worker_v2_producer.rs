@@ -14,6 +14,7 @@ use crate::compiler_descriptor::{
 use crate::kernel_ir_codegen::{
     CompilerModuleConstructionError, InertCompilerModuleTextV1, bind_compiler_descriptor_source_v1,
     bind_source_debug_metadata_v1, construct_inert_compiler_module_text_for_target_v1,
+    retain_production_gfx942_compiler_module_text_v1,
 };
 use fe2o3_amd_target::{CapabilityDerivationError, WavefrontWidth};
 use fe2o3_artifact_transaction::{
@@ -65,6 +66,15 @@ const FLASH_ATTENTION_OCML_BOUNDARY_V1: &[u8] = b"fe2o3.flash-attention.ocml-exp
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct PreparedScalarGemmV1WorkerHandoffV1 {
     frontend_authority_commitment: [u8; 32],
+    handoff: CompilerModuleHandoffV2,
+}
+
+/// Inert Worker V2 handoff prepared by the single production compiler
+/// pipeline. Its LLVM bytes already passed semantic, formal-memory, and exact
+/// gfx942 lowering stages; this value grants no publication authority.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PreparedProductionV1WorkerHandoffV1 {
+    llvm_ir_sha256: [u8; 32],
     handoff: CompilerModuleHandoffV2,
 }
 
@@ -213,6 +223,24 @@ impl PreparedRowSoftmaxV1WorkerHandoffV1 {
     pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
         &self.handoff
     }
+}
+
+pub(crate) fn publish_prepared_production_v1_worker_handoff(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    prepared: PreparedProductionV1WorkerHandoffV1,
+) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
+    if Sha256::digest(prepared.handoff.module_bytes()).as_slice() != prepared.llvm_ir_sha256 {
+        return Err(WorkerV2ProducerError::MissingProductionBindings);
+    }
+    publish_compiler_module_handoff_v1(
+        output_dir,
+        producer,
+        attempt,
+        prepared.handoff.canonical_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Publication)
 }
 
 /// Consumes the exact scalar frontend handoff into the managed attempt's
@@ -628,6 +656,45 @@ fn module_asm_commitment_section(section: &str, bytes: &[u8]) -> String {
         text.push('\n');
     }
     text
+}
+
+/// Prepares the generic production pipeline's exact LLVM text for Worker V2.
+///
+/// The module has already been target-bound and lowered. This transition only
+/// derives the closed symbol manifest, binds the target/COV envelope, and
+/// constructs canonical coordination bytes. It performs no LLVM invocation,
+/// linking, artifact publication, load, or launch.
+pub(crate) fn prepare_production_v1_worker_handoff(
+    authenticated: crate::production_pipeline_v1::AuthenticatedProductionGfx942ModuleV1,
+) -> Result<PreparedProductionV1WorkerHandoffV1, WorkerV2ProducerError> {
+    let (module, llvm_ir, compiler_ffi_envelope) = authenticated.into_parts();
+    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        .expect("fixed production target is valid");
+    validate_exact_target_binding(target, &module)?;
+    let compiler_module = retain_production_gfx942_compiler_module_text_v1(&module, llvm_ir)
+        .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let envelope = match compiler_ffi_envelope {
+        Some(envelope) => envelope,
+        None => CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .map_err(WorkerV2ProducerError::CompilerEnvelope)?,
+    };
+    validate_exact_target_binding(envelope.target(), &module)?;
+    validate_envelope_module_roles(&envelope, &compiler_module)?;
+    let symbol_manifest = construct_symbol_manifest(&compiler_module)?;
+    let llvm_ir_sha256 = Sha256::digest(compiler_module.llvm_ir().as_bytes()).into();
+    let handoff = CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        target,
+        CodeObjectVersion::V6,
+        envelope,
+        symbol_manifest,
+        compiler_module.llvm_ir().as_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Handoff)?;
+    Ok(PreparedProductionV1WorkerHandoffV1 {
+        llvm_ir_sha256,
+        handoff,
+    })
 }
 
 /// Consumes exact frontend authority and prepares the canonical scalar GEMM V1
@@ -1434,6 +1501,7 @@ fn validate_envelope_module_roles(
 pub(crate) enum WorkerV2ProducerError {
     MissingBuildAttempt,
     MissingCompilerFfiEnvelope,
+    MissingProductionBindings,
     MissingScalarFrontendAuthority,
     MissingTiledFrontendAuthority,
     MissingTiledGemmLdsSlice1Bindings,
@@ -1476,6 +1544,9 @@ impl fmt::Display for WorkerV2ProducerError {
             Self::MissingCompilerFfiEnvelope => {
                 formatter.write_str("kernel-ir-worker-v2 requires a complete compiler FFI envelope")
             }
+            Self::MissingProductionBindings => formatter.write_str(
+                "production-v1 Worker V2 handoff lost its exact LLVM identity binding",
+            ),
             Self::MissingScalarFrontendAuthority => formatter.write_str(
                 "scalar GEMM compiler-module handoff lost its embedded frontend authority",
             ),
@@ -1586,6 +1657,7 @@ impl Error for WorkerV2ProducerError {
             Self::Publication(error) => Some(error),
             Self::MissingBuildAttempt
             | Self::MissingCompilerFfiEnvelope
+            | Self::MissingProductionBindings
             | Self::MissingScalarFrontendAuthority
             | Self::MissingTiledFrontendAuthority
             | Self::MissingTiledGemmLdsSlice1Bindings

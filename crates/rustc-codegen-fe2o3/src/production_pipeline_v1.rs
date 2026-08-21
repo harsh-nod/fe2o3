@@ -42,6 +42,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
     Gfx942Lowering(dialect_amdgcn::LoweringErrors),
+    WorkerHandoff(crate::worker_v2_producer::WorkerV2ProducerError),
 }
 
 impl fmt::Display for ProductionPipelineErrorV1 {
@@ -72,6 +73,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::Gfx942Lowering(error) => {
                 write!(formatter, "production-v1 gfx942 LLVM lowering failed: {error}")
             }
+            Self::WorkerHandoff(error) => {
+                write!(formatter, "production-v1 Worker V2 handoff failed: {error}")
+            }
         }
     }
 }
@@ -86,6 +90,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
             Self::Gfx942Lowering(error) => Some(error),
+            Self::WorkerHandoff(error) => Some(error),
             Self::CustomLlvmConfiguration | Self::EmptyCollectedDeviceClosure => None,
         }
     }
@@ -168,6 +173,26 @@ pub(crate) struct Gfx942LoweredProductionCompilationV1 {
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
     bindings: AuthenticatedProductionBindingsV1,
+}
+
+/// Private handoff input that can only be constructed by the exact production
+/// target-lowering stage. It grants no publication or artifact authority.
+pub(crate) struct AuthenticatedProductionGfx942ModuleV1 {
+    target_module: fe2o3_kernel_ir::Module,
+    llvm_ir: String,
+    compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+}
+
+impl AuthenticatedProductionGfx942ModuleV1 {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        fe2o3_kernel_ir::Module,
+        String,
+        Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+    ) {
+        (self.target_module, self.llvm_ir, self.compiler_ffi_envelope)
+    }
 }
 
 impl TargetNeutralProductionCompilationV1 {
@@ -292,6 +317,71 @@ impl Gfx942LoweredProductionCompilationV1 {
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }
+
+    fn publish_worker_handoff(
+        self,
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
+    {
+        eprintln!(
+            "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted complete formal memory obligations for a {}-invocation structural witness with {} allocation(s), {} access(es), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact Worker V2 handoff",
+            self.semantic_function_count(),
+            self.module().id,
+            self.correspondence_block_count(),
+            self.formal_witness_extent(),
+            self.formal_allocation_count(),
+            self.formal_access_count(),
+            self.runtime_bounds_requirement_count(),
+            self.runtime_alias_requirement_count(),
+            self.inter_invocation_conflict_count(),
+            self.workgroup_size(),
+            self.llvm_ir().len(),
+            self.retained_identity_and_transaction_binding_count(),
+            self.grants_artifact_or_launch_authority(),
+        );
+        let Self {
+            admitted,
+            target_module,
+            llvm_ir,
+            bindings,
+        } = self;
+        let AuthenticatedProductionBindingsV1 {
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+            transaction,
+        } = bindings;
+        let ProductionTransactionBindingsV1 {
+            producer,
+            output_dir,
+            build_attempt,
+            compiler_ffi_envelope,
+        } = transaction;
+        let compiler_module = AuthenticatedProductionGfx942ModuleV1 {
+            target_module,
+            llvm_ir,
+            compiler_ffi_envelope,
+        };
+        let prepared =
+            crate::worker_v2_producer::prepare_production_v1_worker_handoff(compiler_module)
+                .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
+        let attempt = build_attempt.ok_or({
+            ProductionPipelineErrorV1::WorkerHandoff(
+                crate::worker_v2_producer::WorkerV2ProducerError::MissingBuildAttempt,
+            )
+        })?;
+        let receipt = crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff(
+            &output_dir,
+            &producer,
+            attempt,
+            prepared,
+        )
+        .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
+        drop((
+            admitted,
+            rustc_identity_inventory_sha256,
+            rustc_preflight_plan_sha256,
+        ));
+        Ok(receipt)
+    }
 }
 
 impl RankedVerifiedProductionCompilationV1 {
@@ -404,6 +494,16 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             .lower_target_neutral()?
             .admit_formal_memory()?
             .lower_gfx942()
+    }
+
+    /// Publishes the exact production compiler module into the managed,
+    /// attempt-scoped Worker V2 protocol. This grants no link, artifact, load,
+    /// or launch authority.
+    pub(crate) fn publish_worker_handoff(
+        self,
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
+    {
+        self.lower_gfx942()?.publish_worker_handoff()
     }
 
     /// Retains the original extraction milestone while consuming the same

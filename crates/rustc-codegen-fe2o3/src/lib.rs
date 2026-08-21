@@ -454,6 +454,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
             let mut generated_host_objects = host_object::GeneratedHostObjects::default();
             let mut temporary_host_objects = TemporaryHostObjects::default();
+            let mut production_device_transaction_complete = false;
             if codegen_pipeline == CodegenPipeline::ProductionV1 {
                 match production_pipeline_v1::disposition(kernel_count) {
                     production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
@@ -494,26 +495,15 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
                             }
                         };
-                        match transaction.lower_gfx942() {
-                            Ok(verified) => tcx.dcx().fatal(format!(
-                                "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted complete formal memory obligations for a {}-invocation structural witness with {} allocation(s), {} access(es), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; upstream LLVM linking remains disabled",
-                                verified.semantic_function_count(),
-                                verified.module().id,
-                                verified.correspondence_block_count(),
-                                verified.formal_witness_extent(),
-                                verified.formal_allocation_count(),
-                                verified.formal_access_count(),
-                                verified.runtime_bounds_requirement_count(),
-                                verified.runtime_alias_requirement_count(),
-                                verified.inter_invocation_conflict_count(),
-                                verified.workgroup_size(),
-                                verified.llvm_ir().len(),
-                                verified.retained_identity_and_transaction_binding_count(),
-                                verified.grants_artifact_or_launch_authority(),
-                            )),
-                            Err(error) => {
-                                tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
+                        match transaction.publish_worker_handoff() {
+                            Ok(receipt) => {
+                                production_device_transaction_complete = true;
+                                eprintln!(
+                                    "[rustc-codegen-fe2o3] production-v1 published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the managed Worker V2 transaction; link, artifact, load, and launch authority remain false",
+                                    receipt.length(),
+                                );
                             }
+                            Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
                         }
                     }
                 }
@@ -524,7 +514,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
                 ));
             }
-            if kernel_count > 0 {
+            if kernel_count > 0 && !production_device_transaction_complete {
                 let output_dir = output_dir.expect("kernel output was required above");
                 if codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
                     let qualification = (|| -> Result<_, String> {
