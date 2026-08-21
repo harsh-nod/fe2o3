@@ -450,6 +450,8 @@ run_authority_launcher_tests() {
 run_rustc_trampoline_tests() {
   run_step rustc-trampoline-tests \
     bash scripts/tests/fe2o3-rustc-trampoline.sh
+  run_step cargo-binding-trampoline-tests \
+    bash scripts/tests/fe2o3-cargo-binding-trampoline.sh
 }
 
 run_parity_matrix_checks() {

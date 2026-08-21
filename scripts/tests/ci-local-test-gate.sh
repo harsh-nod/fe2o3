@@ -343,6 +343,7 @@ for core_step in \
   parity-oci-operator-tests \
   authority-launcher-tests \
   rustc-trampoline-tests \
+  cargo-binding-trampoline-tests \
   parity-row-evidence-tests \
   parity-publisher-client-tests \
   parity-signed-evidence-fd-tests \

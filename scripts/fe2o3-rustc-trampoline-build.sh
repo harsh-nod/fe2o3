@@ -17,17 +17,26 @@ readonly SCRIPT_DIR
 readonly SOURCE="${SCRIPT_DIR}/fe2o3-rustc-trampoline.c"
 
 mode=build
+profile=foundation
 candidate=
 if (($# == 1)) && [[ "$1" == /* ]]; then
   candidate="$1"
 elif (($# == 2)) && [[ "$1" == --verify && "$2" == /* ]]; then
   mode=verify
   candidate="$2"
+elif (($# == 2)) && [[ "$1" == --cargo-binding && "$2" == /* ]]; then
+  profile=cargo-binding
+  candidate="$2"
+elif (($# == 2)) && [[ "$1" == --verify-cargo-binding && "$2" == /* ]]; then
+  mode=verify
+  profile=cargo-binding
+  candidate="$2"
 else
-  printf 'usage: %s [--verify] /absolute/path\n' "$0" >&2
+  printf 'usage: %s [--verify|--cargo-binding|--verify-cargo-binding] /absolute/path\n' "$0" >&2
   exit 2
 fi
 readonly MODE="${mode}"
+readonly PROFILE="${profile}"
 readonly CANDIDATE="${candidate}"
 readonly CANDIDATE_PARENT="${CANDIDATE%/*}"
 readonly CANDIDATE_NAME="${CANDIDATE##*/}"
@@ -244,25 +253,33 @@ verify_elf() {
       run_clean /usr/bin/grep -E '\(FLAGS_1\)[[:space:]]+Flags: NOW PIE$' >/dev/null; then
     fail 'rustc trampoline does not require immediate binding for static PIE'
   fi
-  if ! run_clean /usr/bin/strings --all -- "${executable}" |
-    run_clean /usr/bin/grep -Fx \
-      'FE2O3_RUSTC_TRAMPOLINE_FOUNDATION_NON_AUTHORITATIVE' >/dev/null; then
-    fail 'rustc trampoline lacks the non-authoritative foundation marker'
-  fi
-  if ! run_clean /usr/bin/strings --all -- "${executable}" |
-    run_clean /usr/bin/grep -Fx \
-      'FE2O3_RUSTC_TRAMPOLINE_REPLAY_GATE_POST_EXEC_REQUIRED' >/dev/null; then
-    fail 'rustc trampoline lacks the post-exec replay-gate marker'
-  fi
-  if ! run_clean /usr/bin/strings --all -- "${executable}" |
-    run_clean /usr/bin/grep -Fx \
-      'FE2O3_RUSTC_TRAMPOLINE_DUMPABLE_NOT_PRESERVED_ACROSS_EXEC' >/dev/null; then
-    fail 'rustc trampoline lacks the dumpability reset marker'
-  fi
-  if ! run_clean /usr/bin/strings --all -- "${executable}" |
-    run_clean /usr/bin/grep -Fx \
-      'FE2O3_RUSTC_TRAMPOLINE_PRODUCTION_BLOCKED_UNTIL_KERNEL_UNTRACEABLE_EXEC_BOUNDARY_OR_STATIC_BINDING_WRAPPER' >/dev/null; then
-    fail 'rustc trampoline lacks the untraceable-exec production blocker'
+  if [[ "${PROFILE}" == cargo-binding ]]; then
+    if ! run_clean /usr/bin/strings --all -- "${executable}" |
+      run_clean /usr/bin/grep -Fx \
+        'FE2O3_CARGO_BINDING_TRAMPOLINE_SECCOMP_EXEC_V1' >/dev/null; then
+      fail 'cargo binding trampoline lacks its seccomp-exec marker'
+    fi
+  else
+    if ! run_clean /usr/bin/strings --all -- "${executable}" |
+      run_clean /usr/bin/grep -Fx \
+        'FE2O3_RUSTC_TRAMPOLINE_FOUNDATION_NON_AUTHORITATIVE' >/dev/null; then
+      fail 'rustc trampoline lacks the non-authoritative foundation marker'
+    fi
+    if ! run_clean /usr/bin/strings --all -- "${executable}" |
+      run_clean /usr/bin/grep -Fx \
+        'FE2O3_RUSTC_TRAMPOLINE_REPLAY_GATE_POST_EXEC_REQUIRED' >/dev/null; then
+      fail 'rustc trampoline lacks the post-exec replay-gate marker'
+    fi
+    if ! run_clean /usr/bin/strings --all -- "${executable}" |
+      run_clean /usr/bin/grep -Fx \
+        'FE2O3_RUSTC_TRAMPOLINE_DUMPABLE_NOT_PRESERVED_ACROSS_EXEC' >/dev/null; then
+      fail 'rustc trampoline lacks the dumpability reset marker'
+    fi
+    if ! run_clean /usr/bin/strings --all -- "${executable}" |
+      run_clean /usr/bin/grep -Fx \
+        'FE2O3_RUSTC_TRAMPOLINE_PRODUCTION_BLOCKED_UNTIL_KERNEL_UNTRACEABLE_EXEC_BOUNDARY_OR_STATIC_BINDING_WRAPPER' >/dev/null; then
+      fail 'rustc trampoline lacks the untraceable-exec production blocker'
+    fi
   fi
   if run_clean /usr/bin/strings --all -- "${executable}" |
     run_clean /usr/bin/grep -Fx \
@@ -329,6 +346,12 @@ readonly STAGING_POLICY="${staging_policy}"
 [[ "${STAGING_POLICY}" == "${EUID}:700:directory" ]] ||
   fail 'rustc trampoline staging directory is not caller-owned mode 0700'
 
+profile_define=()
+if [[ "${PROFILE}" == cargo-binding ]]; then
+  profile_define=(-DFE2O3_CARGO_BINDING_TRAMPOLINE_V1=1)
+fi
+readonly -a PROFILE_DEFINE=("${profile_define[@]}")
+
 run_clean /usr/bin/cc \
   -std=c11 -O2 -fPIE -static-pie -march=x86-64 -mtune=generic \
   -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
@@ -336,6 +359,7 @@ run_clean /usr/bin/cc \
   -fno-ident -ffile-prefix-map="${SCRIPT_DIR}"=. \
   -fdebug-prefix-map="${SCRIPT_DIR}"=. \
   -Wl,-z,relro,-z,now,-z,noexecstack,--fatal-warnings,--build-id=none \
+  "${PROFILE_DEFINE[@]}" \
   "${SOURCE}" -o "${TEMPORARY}"
 run_clean /usr/bin/chmod 0555 "${TEMPORARY}"
 [[ ! -L "${TEMPORARY}" ]] || fail 'compiler produced a symlink instead of an ELF object'
@@ -362,7 +386,12 @@ readonly INSTALLED_IDENTITY="${installed_identity}"
 [[ "${INSTALLED_IDENTITY}" == "${ARTIFACT_IDENTITY}" ]] ||
   fail 'installed rustc trampoline is not the retained verified object'
 run_clean /usr/bin/sha256sum -- "${ARTIFACT_REF}"
-printf '%s\n' \
-  'non-authoritative foundation: Rust broker, seccomp, and policy integration remain required' >&2
-printf '%s\n' \
-  'production blocked: kernel-untraceable exec boundary or static binding-wrapper bootstrap required' >&2
+if [[ "${PROFILE}" == cargo-binding ]]; then
+  printf '%s\n' \
+    'cargo binding trampoline: authority requires the integrated two-exec seccomp supervisor' >&2
+else
+  printf '%s\n' \
+    'non-authoritative foundation: Rust broker, seccomp, and policy integration remain required' >&2
+  printf '%s\n' \
+    'production blocked: kernel-untraceable exec boundary or static binding-wrapper bootstrap required' >&2
+fi

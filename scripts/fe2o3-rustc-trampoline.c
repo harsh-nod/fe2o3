@@ -19,6 +19,139 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(FE2O3_CARGO_BINDING_TRAMPOLINE_V1)
+
+#ifndef AT_EMPTY_PATH
+#define AT_EMPTY_PATH 0x1000
+#endif
+#ifndef F_GET_SEALS
+#define F_GET_SEALS 1034
+#endif
+#ifndef F_SEAL_SEAL
+#define F_SEAL_SEAL 0x0001
+#endif
+#ifndef F_SEAL_SHRINK
+#define F_SEAL_SHRINK 0x0002
+#endif
+#ifndef F_SEAL_GROW
+#define F_SEAL_GROW 0x0004
+#endif
+#ifndef F_SEAL_WRITE
+#define F_SEAL_WRITE 0x0008
+#endif
+
+#define FE2O3_WRAPPER_FD 191
+#define FE2O3_RUSTC_LIBRARY_PATH "/proc/self/fd/193"
+#define FE2O3_MAX_WRAPPER_BYTES (512U * 1024U * 1024U)
+#define FE2O3_REQUIRED_SEALS                                                   \
+  (F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE)
+
+extern char **environ;
+
+__attribute__((used, section(".rodata.fe2o3_cargo_binding_marker"))) static
+    const char fe2o3_cargo_binding_marker[] =
+        "FE2O3_CARGO_BINDING_TRAMPOLINE_SECCOMP_EXEC_V1";
+
+static void write_best_effort(int descriptor, const void *bytes, size_t length) {
+  const ssize_t ignored = write(descriptor, bytes, length);
+  (void)ignored;
+}
+
+static int fail(const char *message) {
+  static const char prefix[] = "fe2o3-cargo-binding-trampoline: ";
+  write_best_effort(STDERR_FILENO, prefix, sizeof(prefix) - 1U);
+  write_best_effort(STDERR_FILENO, message, strlen(message));
+  write_best_effort(STDERR_FILENO, "\n", 1U);
+  return 125;
+}
+
+static bool dynamic_loader_name(const char *entry) {
+  const char *separator = strchr(entry, '=');
+  if (separator == NULL) {
+    return true;
+  }
+  const size_t length = (size_t)(separator - entry);
+  return (length >= 3U && memcmp(entry, "LD_", 3U) == 0) ||
+         (length >= 5U && memcmp(entry, "DYLD_", 5U) == 0) ||
+         (length == sizeof("GLIBC_TUNABLES") - 1U &&
+          memcmp(entry, "GLIBC_TUNABLES", length) == 0);
+}
+
+static int validate_loader_environment(void) {
+  const char *loader_path = getenv("LD_LIBRARY_PATH");
+  if (loader_path == NULL || loader_path[0] != '/') {
+    return -1;
+  }
+  const char *last = strrchr(loader_path, ':');
+  last = last == NULL ? loader_path : last + 1;
+  if (strcmp(last, FE2O3_RUSTC_LIBRARY_PATH) != 0) {
+    return -1;
+  }
+  for (char **entry = environ; *entry != NULL; ++entry) {
+    if (dynamic_loader_name(*entry) &&
+        strncmp(*entry, "LD_LIBRARY_PATH=", sizeof("LD_LIBRARY_PATH=") - 1U) !=
+            0) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int validate_wrapper_descriptor(void) {
+  struct stat status;
+  const int descriptor_flags = fcntl(FE2O3_WRAPPER_FD, F_GETFD);
+  const int status_flags = fcntl(FE2O3_WRAPPER_FD, F_GETFL);
+  const int seals = fcntl(FE2O3_WRAPPER_FD, F_GET_SEALS);
+  if (descriptor_flags != 0 ||
+      status_flags < 0 || (status_flags & O_PATH) != 0 ||
+      (status_flags & O_ACCMODE) != O_RDONLY ||
+      fstat(FE2O3_WRAPPER_FD, &status) != 0 || !S_ISREG(status.st_mode) ||
+      status.st_nlink != 0 || status.st_size <= 0 ||
+      (uint64_t)status.st_size > FE2O3_MAX_WRAPPER_BYTES ||
+      (status.st_mode & 07777) != 0500 || seals < 0 ||
+      (seals & FE2O3_REQUIRED_SEALS) != FE2O3_REQUIRED_SEALS) {
+    return -1;
+  }
+  return 0;
+}
+
+static int normalize_process_state(void) {
+  struct rlimit disabled_core = {.rlim_cur = 0, .rlim_max = 0};
+  if (setrlimit(RLIMIT_CORE, &disabled_core) != 0 ||
+      prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 ||
+      prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+int main(int argument_count, char *arguments[]) {
+  if (argument_count < 2 || arguments == NULL || arguments[0] == NULL) {
+    return fail("invalid rustc wrapper argument vector");
+  }
+  if (validate_loader_environment() != 0) {
+    return fail("unexpected Cargo dynamic-loader environment");
+  }
+  if (validate_wrapper_descriptor() != 0) {
+    return fail("invalid sealed cargo-fe2o3 wrapper descriptor");
+  }
+  if (unsetenv("LD_LIBRARY_PATH") != 0 ||
+      fcntl(FE2O3_WRAPPER_FD, F_SETFD, FD_CLOEXEC) != 0 ||
+      normalize_process_state() != 0) {
+    return fail("cannot normalize the wrapper process boundary");
+  }
+  for (char **entry = environ; *entry != NULL; ++entry) {
+    if (dynamic_loader_name(*entry)) {
+      return fail("dynamic-loader environment survived normalization");
+    }
+  }
+  (void)syscall(SYS_execveat, FE2O3_WRAPPER_FD, "", arguments, environ,
+                AT_EMPTY_PATH);
+  return fail("execveat of sealed cargo-fe2o3 wrapper failed");
+}
+
+#else
+
 #ifndef AT_EMPTY_PATH
 #define AT_EMPTY_PATH 0x1000
 #endif
@@ -974,3 +1107,5 @@ int main(int argument_count, char *arguments[]) {
                 environment, AT_EMPTY_PATH);
   return fail("execveat of sealed cargo-fe2o3 wrapper failed");
 }
+
+#endif
