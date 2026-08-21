@@ -1079,6 +1079,7 @@ fn expand_legacy_kernel_with_imports(
         let binding_bytes = kernel_binding.as_bytes().into_iter();
 
         quote! {
+            #[cfg(not(target_arch = "amdgpu"))]
             pub mod #module_ident {
                 unsafe extern "C" {
                     fn #artifact_pointer_ident() -> *const u8;
@@ -1356,6 +1357,7 @@ fn expand_general_typed_kernel_with_imports(
     let generated_host_contract_profile_bytes = generated_host_contract.as_bytes().into_iter();
     let generated_host_contract_witness_bytes = generated_host_contract.as_bytes().into_iter();
     let typed_module = quote! {
+        #[cfg(not(target_arch = "amdgpu"))]
         pub mod #module_ident {
             unsafe extern "C" {
                 fn #semantic_witness_pointer_ident() -> *const u8;

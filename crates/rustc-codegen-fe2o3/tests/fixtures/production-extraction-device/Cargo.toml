@@ -10,6 +10,9 @@ publish = false
 [dependencies]
 fe2o3-device.workspace = true
 
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
+fe2o3-host.workspace = true
+
 [lib]
 name = "fe2o3_production_extraction_fixture"
 path = "src/lib.rs"
