@@ -353,26 +353,155 @@ impl FileIdentity {
     }
 }
 
-struct HandoffRecord {
+trait HandoffSchema: Sized {
+    type Slot: Copy + Eq;
+    type Binding: Copy + Eq;
+
+    const PARENT_PREFIX: &'static str;
+    const SLOT_PREFIX: &'static str;
+    const RECORD_MAGIC: &'static [u8];
+    const RECORD_VERSION: u16;
+    const PRODUCER_DOMAIN: &'static [u8];
+    const SLOT_DOMAIN: &'static [u8];
+    const NAMED_SLOT_DOMAIN: &'static [u8];
+    const RECORD_DOMAIN: &'static [u8];
+    const RECORD_BYTES: usize;
+    const VALIDATE_RECORD_DURING_RECOVERY: bool;
+    const ALL_SLOTS: [Self::Slot; 3];
+
+    fn default_slot() -> Self::Slot;
+    fn slot_tag(slot: Self::Slot) -> u8;
+    fn encode_binding(binding: Self::Binding, bytes: &mut Vec<u8>);
+    fn decode_binding(decoder: &mut Decoder<'_>) -> Result<Self::Binding, &'static str>;
+    fn derive_identity(
+        producer: [u8; 32],
+        slot: [u8; 32],
+        attempt: BuildAttempt,
+        binding: Self::Binding,
+        handoff_bytes: &[u8],
+    ) -> [u8; 32];
+}
+
+struct HandoffV1Schema;
+
+impl HandoffSchema for HandoffV1Schema {
+    type Slot = CompilerModuleHandoffSlotV1;
+    type Binding = ();
+
+    const PARENT_PREFIX: &'static str = PARENT_PREFIX;
+    const SLOT_PREFIX: &'static str = SLOT_PREFIX;
+    const RECORD_MAGIC: &'static [u8] = RECORD_MAGIC;
+    const RECORD_VERSION: u16 = RECORD_VERSION;
+    const PRODUCER_DOMAIN: &'static [u8] = PRODUCER_DOMAIN;
+    const SLOT_DOMAIN: &'static [u8] = SLOT_DOMAIN;
+    const NAMED_SLOT_DOMAIN: &'static [u8] = NAMED_SLOT_DOMAIN;
+    const RECORD_DOMAIN: &'static [u8] = RECORD_DOMAIN;
+    const RECORD_BYTES: usize = RECORD_BYTES;
+    const VALIDATE_RECORD_DURING_RECOVERY: bool = false;
+    const ALL_SLOTS: [Self::Slot; 3] = [
+        CompilerModuleHandoffSlotV1::Default,
+        CompilerModuleHandoffSlotV1::GeneralGemmReference,
+        CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
+    ];
+
+    fn default_slot() -> Self::Slot {
+        CompilerModuleHandoffSlotV1::Default
+    }
+
+    fn slot_tag(slot: Self::Slot) -> u8 {
+        slot as u8
+    }
+
+    fn encode_binding(_binding: Self::Binding, _bytes: &mut Vec<u8>) {}
+
+    fn decode_binding(_decoder: &mut Decoder<'_>) -> Result<Self::Binding, &'static str> {
+        Ok(())
+    }
+
+    fn derive_identity(
+        _producer: [u8; 32],
+        _slot: [u8; 32],
+        _attempt: BuildAttempt,
+        _binding: Self::Binding,
+        handoff_bytes: &[u8],
+    ) -> [u8; 32] {
+        sha256(handoff_bytes)
+    }
+}
+
+enum HandoffEngineError {
+    Common(CompilerModuleHandoffErrorV1),
+    WrongBinding,
+}
+
+impl From<CompilerModuleHandoffErrorV1> for HandoffEngineError {
+    fn from(error: CompilerModuleHandoffErrorV1) -> Self {
+        Self::Common(error)
+    }
+}
+
+impl From<std::io::Error> for HandoffEngineError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Common(error.into())
+    }
+}
+
+impl From<EmitError> for HandoffEngineError {
+    fn from(error: EmitError) -> Self {
+        Self::Common(error.into())
+    }
+}
+
+impl HandoffEngineError {
+    fn into_v1(self) -> CompilerModuleHandoffErrorV1 {
+        match self {
+            Self::Common(error) => error,
+            Self::WrongBinding => invalid_slot(
+                Path::new(""),
+                "V1 handoff unexpectedly carried a protocol binding",
+            ),
+        }
+    }
+}
+
+struct PublishedHandoff<S: HandoffSchema> {
+    attempt: BuildAttempt,
+    slot: S::Slot,
+    binding: S::Binding,
+    identity: [u8; 32],
+    length: usize,
+}
+
+struct ConsumedHandoff<S: HandoffSchema> {
+    attempt: BuildAttempt,
+    slot: S::Slot,
+    binding: S::Binding,
+    identity: [u8; 32],
+    bytes: Arc<[u8]>,
+}
+
+struct HandoffRecord<S: HandoffSchema> {
     slot: [u8; 32],
     attempt: BuildAttempt,
     producer: [u8; 32],
-    identity: CompilerModuleHandoffIdentityV1,
+    binding: S::Binding,
+    identity: [u8; 32],
     length: usize,
     file: FileIdentity,
 }
 
-impl HandoffRecord {
+impl<S: HandoffSchema> HandoffRecord<S> {
     fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(RECORD_BYTES);
-        bytes.extend_from_slice(RECORD_MAGIC);
-        bytes.extend_from_slice(&RECORD_VERSION.to_le_bytes());
+        let mut bytes = Vec::with_capacity(S::RECORD_BYTES);
+        bytes.extend_from_slice(S::RECORD_MAGIC);
+        bytes.extend_from_slice(&S::RECORD_VERSION.to_le_bytes());
         bytes.extend_from_slice(&self.slot);
         bytes.extend_from_slice(&self.attempt.generation().to_le_bytes());
         bytes.extend_from_slice(self.attempt.session().as_bytes());
         bytes.extend_from_slice(self.attempt.invocation().as_bytes());
         bytes.extend_from_slice(&self.producer);
-        bytes.extend_from_slice(self.identity.as_bytes());
+        S::encode_binding(self.binding, &mut bytes);
+        bytes.extend_from_slice(&self.identity);
         bytes.extend_from_slice(&(self.length as u64).to_le_bytes());
         bytes.extend_from_slice(&self.file.device.to_le_bytes());
         bytes.extend_from_slice(&self.file.inode.to_le_bytes());
@@ -381,25 +510,25 @@ impl HandoffRecord {
         bytes.extend_from_slice(&self.file.changed_seconds.to_le_bytes());
         bytes.extend_from_slice(&self.file.changed_nanoseconds.to_le_bytes());
         bytes.extend_from_slice(&(self.file.length as u64).to_le_bytes());
-        let checksum = sha256_parts(&[RECORD_DOMAIN, &bytes]);
+        let checksum = sha256_parts(&[S::RECORD_DOMAIN, &bytes]);
         bytes.extend_from_slice(&checksum);
-        debug_assert_eq!(bytes.len(), RECORD_BYTES);
+        debug_assert_eq!(bytes.len(), S::RECORD_BYTES);
         bytes
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() != RECORD_BYTES {
+        if bytes.len() != S::RECORD_BYTES {
             return Err("record has a noncanonical length");
         }
         let (body, checksum) = bytes.split_at(bytes.len() - 32);
-        if sha256_parts(&[RECORD_DOMAIN, body]).as_slice() != checksum {
+        if sha256_parts(&[S::RECORD_DOMAIN, body]).as_slice() != checksum {
             return Err("record checksum mismatch");
         }
         let mut decoder = Decoder::new(body);
-        if decoder.take(RECORD_MAGIC.len())? != RECORD_MAGIC {
+        if decoder.take(S::RECORD_MAGIC.len())? != S::RECORD_MAGIC {
             return Err("record magic mismatch");
         }
-        if decoder.u16()? != RECORD_VERSION {
+        if decoder.u16()? != S::RECORD_VERSION {
             return Err("unsupported record version");
         }
         let slot = decoder.array()?;
@@ -413,7 +542,8 @@ impl HandoffRecord {
         ))
         .map_err(|_| "record contains an invalid attempt")?;
         let producer = decoder.array()?;
-        let identity = CompilerModuleHandoffIdentityV1(decoder.array()?);
+        let binding = S::decode_binding(&mut decoder)?;
+        let identity = decoder.array()?;
         let length = usize::try_from(decoder.u64()?).map_err(|_| "record length is invalid")?;
         let file = FileIdentity {
             device: decoder.u64()?,
@@ -431,6 +561,7 @@ impl HandoffRecord {
             slot,
             attempt,
             producer,
+            binding,
             identity,
             length,
             file,
@@ -530,43 +661,78 @@ fn publish_in_slot_with_hooks(
     handoff_bytes: &[u8],
     hooks: &mut impl HandoffHooks,
 ) -> Result<CompilerModuleHandoffReceiptV1, CompilerModuleHandoffErrorV1> {
+    publish_in_slot_engine::<HandoffV1Schema>(
+        output_dir,
+        producer,
+        attempt,
+        handoff_slot,
+        (),
+        handoff_bytes,
+        hooks,
+    )
+    .map(|published| CompilerModuleHandoffReceiptV1 {
+        attempt: published.attempt,
+        slot: published.slot,
+        identity: CompilerModuleHandoffIdentityV1(published.identity),
+        length: published.length,
+    })
+    .map_err(HandoffEngineError::into_v1)
+}
+
+fn publish_in_slot_engine<S: HandoffSchema>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    handoff_slot: S::Slot,
+    binding: S::Binding,
+    handoff_bytes: &[u8],
+    hooks: &mut impl HandoffHooks,
+) -> Result<PublishedHandoff<S>, HandoffEngineError> {
     validate_handoff_size(handoff_bytes.len())?;
     let output = PinnedOutput::open(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
     authorize(&output, producer, attempt)?;
-    let producer_id = producer_identity(producer);
-    let slot_id = slot_identity(producer_id, attempt, handoff_slot);
+    let producer_id = producer_identity_for::<S>(producer);
+    let slot_id = slot_identity_for::<S>(producer_id, attempt, handoff_slot);
     let parent = open_or_create_private_directory(
         &output.fd,
         &output.display_path,
-        &format!("{PARENT_PREFIX}{}", hex(&producer_id)),
+        &format!("{}{}", S::PARENT_PREFIX, hex(&producer_id)),
         hooks,
     )?;
-    cleanup_stale_slots(&parent, producer_id, attempt)?;
+    cleanup_stale_slots::<S>(&parent, producer_id, attempt)?;
     let slot = open_or_create_private_directory(
         &parent.fd,
         &parent.path,
-        &format!("{SLOT_PREFIX}{}", hex(&slot_id)),
+        &format!("{}{}", S::SLOT_PREFIX, hex(&slot_id)),
         hooks,
     )?;
-    recover_slot(&slot)?;
+    recover_slot::<S>(&slot)?;
     if entry_exists(&slot, CONSUMED_ENTRY)? {
-        read_bound_record(&slot, CONSUMED_ENTRY, producer_id, slot_id, attempt)?;
+        read_bound_record::<S>(
+            &slot,
+            CONSUMED_ENTRY,
+            producer_id,
+            slot_id,
+            attempt,
+            binding,
+        )?;
         cleanup_consumed_payload(&slot);
-        return Err(CompilerModuleHandoffErrorV1::AlreadyConsumed);
+        return Err(CompilerModuleHandoffErrorV1::AlreadyConsumed.into());
     }
     if entry_exists(&slot, READY_ENTRY)? {
-        let committed = read_bound_record(&slot, READY_ENTRY, producer_id, slot_id, attempt)?;
-        let committed_bytes = read_payload(&slot, &committed)?;
+        let committed =
+            read_bound_record::<S>(&slot, READY_ENTRY, producer_id, slot_id, attempt, binding)?;
+        let committed_bytes = read_payload::<S>(&slot, &committed)?;
         return if committed_bytes == handoff_bytes {
-            Err(CompilerModuleHandoffErrorV1::AlreadyPublished)
+            Err(CompilerModuleHandoffErrorV1::AlreadyPublished.into())
         } else {
-            Err(CompilerModuleHandoffErrorV1::ConflictingPublication)
+            Err(CompilerModuleHandoffErrorV1::ConflictingPublication.into())
         };
     }
 
-    let identity = CompilerModuleHandoffIdentityV1(sha256(handoff_bytes));
+    let identity = S::derive_identity(producer_id, slot_id, attempt, binding, handoff_bytes);
     let (payload_temp, mut payload) = create_temp(&slot, "module")?;
     hooks.hit(FaultPoint::PayloadCreated)?;
     payload.write_all(handoff_bytes)?;
@@ -591,12 +757,14 @@ fn publish_in_slot_with_hooks(
         return Err(invalid_slot(
             &slot.path,
             "published payload does not match its pinned descriptor",
-        ));
+        )
+        .into());
     }
-    let record = HandoffRecord {
+    let record = HandoffRecord::<S> {
         slot: slot_id,
         attempt,
         producer: producer_id,
+        binding,
         identity,
         length: handoff_bytes.len(),
         file: FileIdentity::from_stat(&named),
@@ -619,10 +787,11 @@ fn publish_in_slot_with_hooks(
     fsync(&slot.fd).map_err(std::io::Error::from)?;
     hooks.hit(FaultPoint::PublishedSynced)?;
     slot.verify()?;
-    validate_named_record(&slot, READY_ENTRY, &record_bytes)?;
-    Ok(CompilerModuleHandoffReceiptV1 {
+    validate_named_record::<S>(&slot, READY_ENTRY, &record_bytes)?;
+    Ok(PublishedHandoff::<S> {
         attempt,
         slot: handoff_slot,
+        binding,
         identity,
         length: handoff_bytes.len(),
     })
@@ -650,33 +819,66 @@ fn consume_in_slot_with_hooks(
     handoff_slot: CompilerModuleHandoffSlotV1,
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedCompilerModuleHandoffV1, CompilerModuleHandoffErrorV1> {
+    consume_in_slot_engine::<HandoffV1Schema>(
+        output_dir,
+        producer,
+        attempt,
+        handoff_slot,
+        (),
+        hooks,
+    )
+    .map(|consumed| ConsumedCompilerModuleHandoffV1 {
+        attempt: consumed.attempt,
+        slot: consumed.slot,
+        identity: CompilerModuleHandoffIdentityV1(consumed.identity),
+        bytes: consumed.bytes,
+    })
+    .map_err(HandoffEngineError::into_v1)
+}
+
+fn consume_in_slot_engine<S: HandoffSchema>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    handoff_slot: S::Slot,
+    binding: S::Binding,
+    hooks: &mut impl HandoffHooks,
+) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
     authorize(&output, producer, attempt)?;
-    let producer_id = producer_identity(producer);
-    let slot_id = slot_identity(producer_id, attempt, handoff_slot);
+    let producer_id = producer_identity_for::<S>(producer);
+    let slot_id = slot_identity_for::<S>(producer_id, attempt, handoff_slot);
     let parent = open_private_directory(
         &output.fd,
         &output.display_path,
-        &format!("{PARENT_PREFIX}{}", hex(&producer_id)),
+        &format!("{}{}", S::PARENT_PREFIX, hex(&producer_id)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-    cleanup_stale_slots(&parent, producer_id, attempt)?;
+    cleanup_stale_slots::<S>(&parent, producer_id, attempt)?;
     let slot = open_private_directory(
         &parent.fd,
         &parent.path,
-        &format!("{SLOT_PREFIX}{}", hex(&slot_id)),
+        &format!("{}{}", S::SLOT_PREFIX, hex(&slot_id)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-    recover_slot(&slot)?;
+    recover_slot::<S>(&slot)?;
     if entry_exists(&slot, CONSUMED_ENTRY)? {
-        read_bound_record(&slot, CONSUMED_ENTRY, producer_id, slot_id, attempt)?;
+        read_bound_record::<S>(
+            &slot,
+            CONSUMED_ENTRY,
+            producer_id,
+            slot_id,
+            attempt,
+            binding,
+        )?;
         cleanup_consumed_payload(&slot);
-        return Err(CompilerModuleHandoffErrorV1::AlreadyConsumed);
+        return Err(CompilerModuleHandoffErrorV1::AlreadyConsumed.into());
     }
-    let record = read_bound_record(&slot, READY_ENTRY, producer_id, slot_id, attempt)?;
-    let bytes = read_payload(&slot, &record)?;
+    let record =
+        read_bound_record::<S>(&slot, READY_ENTRY, producer_id, slot_id, attempt, binding)?;
+    let bytes = read_payload::<S>(&slot, &record)?;
     hooks.hit(FaultPoint::PayloadValidated)?;
     slot.verify()?;
     renameat_with(
@@ -692,9 +894,10 @@ fn consume_in_slot_with_hooks(
     hooks.hit(FaultPoint::ConsumedSynced)?;
     slot.verify()?;
     cleanup_consumed_payload(&slot);
-    Ok(ConsumedCompilerModuleHandoffV1 {
+    Ok(ConsumedHandoff::<S> {
         attempt,
         slot: handoff_slot,
+        binding: record.binding,
         identity: record.identity,
         bytes: Arc::from(bytes),
     })
@@ -727,9 +930,9 @@ fn authorize(
     Ok(())
 }
 
-fn producer_identity(producer: &ProducerIdentity) -> [u8; 32] {
+fn producer_identity_for<S: HandoffSchema>(producer: &ProducerIdentity) -> [u8; 32] {
     sha256_parts(&[
-        PRODUCER_DOMAIN,
+        S::PRODUCER_DOMAIN,
         &(producer.stable_source.len() as u64).to_le_bytes(),
         producer.stable_source.as_bytes(),
         &(producer.crate_name.len() as u64).to_le_bytes(),
@@ -737,15 +940,20 @@ fn producer_identity(producer: &ProducerIdentity) -> [u8; 32] {
     ])
 }
 
-fn slot_identity(
+#[cfg(test)]
+fn producer_identity(producer: &ProducerIdentity) -> [u8; 32] {
+    producer_identity_for::<HandoffV1Schema>(producer)
+}
+
+fn slot_identity_for<S: HandoffSchema>(
     producer: [u8; 32],
     attempt: BuildAttempt,
-    slot: CompilerModuleHandoffSlotV1,
+    slot: S::Slot,
 ) -> [u8; 32] {
     let generation = attempt.generation().to_le_bytes();
-    if slot == CompilerModuleHandoffSlotV1::Default {
+    if slot == S::default_slot() {
         return sha256_parts(&[
-            SLOT_DOMAIN,
+            S::SLOT_DOMAIN,
             &producer,
             &generation,
             attempt.session().as_bytes(),
@@ -753,13 +961,22 @@ fn slot_identity(
         ]);
     }
     sha256_parts(&[
-        NAMED_SLOT_DOMAIN,
+        S::NAMED_SLOT_DOMAIN,
         &producer,
         &generation,
         attempt.session().as_bytes(),
         attempt.invocation().as_bytes(),
-        &[slot as u8],
+        &[S::slot_tag(slot)],
     ])
+}
+
+#[cfg(test)]
+fn slot_identity(
+    producer: [u8; 32],
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV1,
+) -> [u8; 32] {
+    slot_identity_for::<HandoffV1Schema>(producer, attempt, slot)
 }
 
 fn open_or_create_private_directory(
@@ -823,20 +1040,16 @@ fn open_private_directory(
     Ok(Some(directory))
 }
 
-fn cleanup_stale_slots(
+fn cleanup_stale_slots<S: HandoffSchema>(
     parent: &PinnedDirectory,
     producer: [u8; 32],
     attempt: BuildAttempt,
-) -> Result<(), CompilerModuleHandoffErrorV1> {
-    let current = [
-        CompilerModuleHandoffSlotV1::Default,
-        CompilerModuleHandoffSlotV1::GeneralGemmReference,
-        CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
-    ]
-    .map(|slot| {
+) -> Result<(), HandoffEngineError> {
+    let current = S::ALL_SLOTS.map(|slot| {
         format!(
-            "{SLOT_PREFIX}{}",
-            hex(&slot_identity(producer, attempt, slot))
+            "{}{}",
+            S::SLOT_PREFIX,
+            hex(&slot_identity_for::<S>(producer, attempt, slot))
         )
     });
     let scan = rustix::io::fcntl_dupfd_cloexec(&parent.fd, 0).map_err(std::io::Error::from)?;
@@ -848,14 +1061,15 @@ fn cleanup_stale_slots(
         if name == "." || name == ".." || current.iter().any(|current| name == current.as_str()) {
             continue;
         }
-        if !name.starts_with(SLOT_PREFIX) {
+        if !name.starts_with(S::SLOT_PREFIX) {
             return Err(invalid_slot(
                 &parent.path.join(name.as_ref()),
                 "unexpected producer handoff entry",
-            ));
+            )
+            .into());
         }
         if stale.len() == MAX_STALE_SLOTS {
-            return Err(invalid_slot(&parent.path, "too many stale handoff slots"));
+            return Err(invalid_slot(&parent.path, "too many stale handoff slots").into());
         }
         stale.push(name.into_owned());
     }
@@ -866,7 +1080,8 @@ fn cleanup_stale_slots(
         return Err(invalid_slot(
             &parent.path,
             "handoff producer directory exceeds its entry bound",
-        ));
+        )
+        .into());
     }
     parent.verify()?;
     Ok(())
@@ -922,39 +1137,48 @@ fn remove_all_slot_entries(slot: &PinnedDirectory) -> Result<(), CompilerModuleH
     Ok(())
 }
 
-fn recover_slot(slot: &PinnedDirectory) -> Result<(), CompilerModuleHandoffErrorV1> {
+fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffEngineError> {
     let names = slot_entries(slot)?;
     for name in &names {
         if !matches!(name.as_str(), PAYLOAD_ENTRY | READY_ENTRY | CONSUMED_ENTRY)
             && !name.starts_with(TEMP_PREFIX)
         {
-            return Err(invalid_slot(&slot.path.join(name), "unexpected slot entry"));
+            return Err(invalid_slot(&slot.path.join(name), "unexpected slot entry").into());
         }
     }
     if names.iter().any(|name| name == READY_ENTRY)
         && names.iter().any(|name| name == CONSUMED_ENTRY)
     {
-        return Err(invalid_slot(
-            &slot.path,
-            "ready and consumed records coexist",
-        ));
+        return Err(invalid_slot(&slot.path, "ready and consumed records coexist").into());
     }
-    let committed = names
-        .iter()
-        .any(|name| name == READY_ENTRY || name == CONSUMED_ENTRY);
+    let committed_entry = names.iter().find_map(|name| match name.as_str() {
+        READY_ENTRY => Some(READY_ENTRY),
+        CONSUMED_ENTRY => Some(CONSUMED_ENTRY),
+        _ => None,
+    });
     let residue = names
         .into_iter()
-        .filter(|name| name.starts_with(TEMP_PREFIX) || (!committed && name == PAYLOAD_ENTRY))
+        .filter(|name| {
+            name.starts_with(TEMP_PREFIX) || (committed_entry.is_none() && name == PAYLOAD_ENTRY)
+        })
         .collect::<Vec<_>>();
     for name in &residue {
         reject_nonregular_before_cleanup(slot, name)?;
+    }
+    if S::VALIDATE_RECORD_DURING_RECOVERY
+        && let Some(entry) = committed_entry
+    {
+        let record = read_private_file(slot, entry, S::RECORD_BYTES)?
+            .ok_or_else(|| invalid_slot(&slot.path.join(entry), "record disappeared"))?;
+        HandoffRecord::<S>::decode(&record)
+            .map_err(|reason| invalid_slot(&slot.path.join(entry), reason))?;
     }
     for name in residue {
         if name.starts_with(TEMP_PREFIX) || name == PAYLOAD_ENTRY {
             unlinkat(&slot.fd, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
         }
     }
-    if !committed {
+    if committed_entry.is_none() {
         fsync(&slot.fd).map_err(std::io::Error::from)?;
     }
     slot.verify()?;
@@ -1021,10 +1245,10 @@ fn create_temp(
     ))
 }
 
-fn read_payload(
+fn read_payload<S: HandoffSchema>(
     slot: &PinnedDirectory,
-    record: &HandoffRecord,
-) -> Result<Vec<u8>, CompilerModuleHandoffErrorV1> {
+    record: &HandoffRecord<S>,
+) -> Result<Vec<u8>, HandoffEngineError> {
     let fd = openat(
         &slot.fd,
         PAYLOAD_ENTRY,
@@ -1045,7 +1269,8 @@ fn read_payload(
         return Err(invalid_slot(
             &slot.path.join(PAYLOAD_ENTRY),
             "payload identity metadata mismatch",
-        ));
+        )
+        .into());
     }
     let mut bytes = Vec::with_capacity(record.length);
     Read::by_ref(&mut file)
@@ -1061,30 +1286,43 @@ fn read_payload(
         return Err(invalid_slot(
             &slot.path.join(PAYLOAD_ENTRY),
             "payload changed while its descriptor was read",
-        ));
+        )
+        .into());
     }
-    if sha256(&bytes) != *record.identity.as_bytes() {
-        return Err(CompilerModuleHandoffErrorV1::DigestMismatch);
+    let identity = S::derive_identity(
+        record.producer,
+        record.slot,
+        record.attempt,
+        record.binding,
+        &bytes,
+    );
+    if identity != record.identity {
+        return Err(CompilerModuleHandoffErrorV1::DigestMismatch.into());
     }
     Ok(bytes)
 }
 
-fn read_bound_record(
+fn read_bound_record<S: HandoffSchema>(
     slot: &PinnedDirectory,
     entry: &str,
     producer: [u8; 32],
     slot_identity: [u8; 32],
     attempt: BuildAttempt,
-) -> Result<HandoffRecord, CompilerModuleHandoffErrorV1> {
-    let bytes = read_private_file(slot, entry, RECORD_BYTES)?
+    binding: S::Binding,
+) -> Result<HandoffRecord<S>, HandoffEngineError> {
+    let bytes = read_private_file(slot, entry, S::RECORD_BYTES)?
         .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-    let record = HandoffRecord::decode(&bytes)
+    let record = HandoffRecord::<S>::decode(&bytes)
         .map_err(|reason| invalid_slot(&slot.path.join(entry), reason))?;
     if record.slot != slot_identity || record.producer != producer || record.attempt != attempt {
         return Err(invalid_slot(
             &slot.path.join(entry),
             "record binding does not match the requested attempt and producer",
-        ));
+        )
+        .into());
+    }
+    if record.binding != binding {
+        return Err(HandoffEngineError::WrongBinding);
     }
     Ok(record)
 }
@@ -1136,18 +1374,15 @@ fn read_private_file(
     Ok(Some(bytes))
 }
 
-fn validate_named_record(
+fn validate_named_record<S: HandoffSchema>(
     slot: &PinnedDirectory,
     entry: &str,
     expected: &[u8],
-) -> Result<(), CompilerModuleHandoffErrorV1> {
-    let actual = read_private_file(slot, entry, RECORD_BYTES)?
+) -> Result<(), HandoffEngineError> {
+    let actual = read_private_file(slot, entry, S::RECORD_BYTES)?
         .ok_or_else(|| invalid_slot(&slot.path.join(entry), "record disappeared after commit"))?;
     if actual != expected {
-        return Err(invalid_slot(
-            &slot.path.join(entry),
-            "record changed after commit",
-        ));
+        return Err(invalid_slot(&slot.path.join(entry), "record changed after commit").into());
     }
     Ok(())
 }
@@ -1284,12 +1519,8 @@ trait HandoffHooks {
 struct NoFaults;
 impl HandoffHooks for NoFaults {}
 
-// The primary integration exports this side-by-side surface from `lib.rs`. Keep the complete V2
-// implementation scoped so this isolated handoff commit remains warning-free before that export.
-#[allow(dead_code)]
 mod protected_v2 {
     use super::*;
-    use crate::BuildInvocation;
 
     const PARENT_PREFIX_V2: &str = ".fe2o3-compiler-module-handoff-v2-";
     const SLOT_PREFIX_V2: &str = "attempt-";
@@ -1623,96 +1854,69 @@ mod protected_v2 {
         )
     }
 
-    struct HandoffRecordV2 {
-        slot: [u8; 32],
-        attempt: BuildAttempt,
-        producer: [u8; 32],
-        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
-        identity: CompilerModuleHandoffIdentityV2,
-        length: usize,
-        file: FileIdentity,
-    }
+    struct HandoffV2Schema;
 
-    impl HandoffRecordV2 {
-        fn encode(&self) -> Vec<u8> {
-            let mut bytes = Vec::with_capacity(RECORD_BYTES_V2);
-            bytes.extend_from_slice(RECORD_MAGIC_V2);
-            bytes.extend_from_slice(&RECORD_VERSION_V2.to_le_bytes());
-            bytes.extend_from_slice(&self.slot);
-            bytes.extend_from_slice(&self.attempt.generation().to_le_bytes());
-            bytes.extend_from_slice(self.attempt.session().as_bytes());
-            bytes.extend_from_slice(self.attempt.invocation().as_bytes());
-            bytes.extend_from_slice(&self.producer);
-            bytes.extend_from_slice(&compiler_closure_bytes_v2(self.compiler_closure));
-            bytes.extend_from_slice(self.identity.as_bytes());
-            bytes.extend_from_slice(&(self.length as u64).to_le_bytes());
-            bytes.extend_from_slice(&self.file.device.to_le_bytes());
-            bytes.extend_from_slice(&self.file.inode.to_le_bytes());
-            bytes.extend_from_slice(&self.file.modified_seconds.to_le_bytes());
-            bytes.extend_from_slice(&self.file.modified_nanoseconds.to_le_bytes());
-            bytes.extend_from_slice(&self.file.changed_seconds.to_le_bytes());
-            bytes.extend_from_slice(&self.file.changed_nanoseconds.to_le_bytes());
-            bytes.extend_from_slice(&(self.file.length as u64).to_le_bytes());
-            let checksum = sha256_parts(&[RECORD_DOMAIN_V2, &bytes]);
-            bytes.extend_from_slice(&checksum);
-            debug_assert_eq!(bytes.len(), RECORD_BYTES_V2);
-            bytes
+    impl HandoffSchema for HandoffV2Schema {
+        type Slot = CompilerModuleHandoffSlotV2;
+        type Binding = fe2o3_build_authority::CompilerClosureV2;
+
+        const PARENT_PREFIX: &'static str = PARENT_PREFIX_V2;
+        const SLOT_PREFIX: &'static str = SLOT_PREFIX_V2;
+        const RECORD_MAGIC: &'static [u8] = RECORD_MAGIC_V2;
+        const RECORD_VERSION: u16 = RECORD_VERSION_V2;
+        const PRODUCER_DOMAIN: &'static [u8] = PRODUCER_DOMAIN_V2;
+        const SLOT_DOMAIN: &'static [u8] = SLOT_DOMAIN_V2;
+        const NAMED_SLOT_DOMAIN: &'static [u8] = NAMED_SLOT_DOMAIN_V2;
+        const RECORD_DOMAIN: &'static [u8] = RECORD_DOMAIN_V2;
+        const RECORD_BYTES: usize = RECORD_BYTES_V2;
+        const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
+        const ALL_SLOTS: [Self::Slot; 3] = [
+            CompilerModuleHandoffSlotV2::Default,
+            CompilerModuleHandoffSlotV2::GeneralGemmReference,
+            CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly,
+        ];
+
+        fn default_slot() -> Self::Slot {
+            CompilerModuleHandoffSlotV2::Default
         }
 
-        fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
-            if bytes.len() != RECORD_BYTES_V2 {
-                return Err("V2 record has a noncanonical length");
-            }
-            let (body, checksum) = bytes.split_at(bytes.len() - 32);
-            if sha256_parts(&[RECORD_DOMAIN_V2, body]).as_slice() != checksum {
-                return Err("V2 record checksum mismatch");
-            }
-            let mut decoder = Decoder::new(body);
-            if decoder.take(RECORD_MAGIC_V2.len())? != RECORD_MAGIC_V2 {
-                return Err("V2 record magic mismatch");
-            }
-            if decoder.u16()? != RECORD_VERSION_V2 {
-                return Err("unsupported V2 record version");
-            }
-            let slot = decoder.array()?;
-            let generation = decoder.u64()?;
-            let session = super::BuildSession::from_bytes(decoder.array()?);
-            let invocation = BuildInvocation::from_bytes(decoder.array()?);
-            let attempt = BuildAttempt::from_env_value(&format!(
-                "{generation}:{}:{}",
-                session.to_hex(),
-                invocation.to_hex()
-            ))
-            .map_err(|_| "V2 record contains an invalid attempt")?;
-            let producer = decoder.array()?;
-            let compiler_closure =
-                decode_compiler_closure_v2(decoder.take(COMPILER_CLOSURE_BYTES_V2)?)?;
-            let identity = CompilerModuleHandoffIdentityV2(decoder.array()?);
-            let length =
-                usize::try_from(decoder.u64()?).map_err(|_| "V2 record length is invalid")?;
-            let file = FileIdentity {
-                device: decoder.u64()?,
-                inode: decoder.u64()?,
-                modified_seconds: decoder.u64()? as i64,
-                modified_nanoseconds: decoder.u64()?,
-                changed_seconds: decoder.u64()? as i64,
-                changed_nanoseconds: decoder.u64()?,
-                length: decoder.u64()? as i64,
-            };
-            if !decoder.finished() || length == 0 || length > MAX_COMPILER_MODULE_HANDOFF_BYTES {
-                return Err("V2 record contains an invalid module length");
-            }
-            Ok(Self {
-                slot,
-                attempt,
-                producer,
-                compiler_closure,
-                identity,
-                length,
-                file,
-            })
+        fn slot_tag(slot: Self::Slot) -> u8 {
+            slot as u8
+        }
+
+        fn encode_binding(binding: Self::Binding, bytes: &mut Vec<u8>) {
+            bytes.extend_from_slice(&compiler_closure_bytes_v2(binding));
+        }
+
+        fn decode_binding(decoder: &mut Decoder<'_>) -> Result<Self::Binding, &'static str> {
+            decode_compiler_closure_v2(decoder.take(COMPILER_CLOSURE_BYTES_V2)?)
+        }
+
+        fn derive_identity(
+            producer: [u8; 32],
+            slot: [u8; 32],
+            attempt: BuildAttempt,
+            binding: Self::Binding,
+            handoff_bytes: &[u8],
+        ) -> [u8; 32] {
+            let generation = attempt.generation().to_le_bytes();
+            let length = (handoff_bytes.len() as u64).to_le_bytes();
+            sha256_parts(&[
+                HANDOFF_IDENTITY_DOMAIN_V2,
+                &compiler_closure_bytes_v2(binding),
+                &slot,
+                &producer,
+                &generation,
+                attempt.session().as_bytes(),
+                attempt.invocation().as_bytes(),
+                &length,
+                handoff_bytes,
+            ])
         }
     }
+
+    #[cfg(test)]
+    type HandoffRecordV2 = HandoffRecord<HandoffV2Schema>;
 
     fn compiler_closure_bytes_v2(
         closure: fe2o3_build_authority::CompilerClosureV2,
@@ -1802,128 +2006,23 @@ mod protected_v2 {
         handoff_bytes: &[u8],
         hooks: &mut impl HandoffHooks,
     ) -> Result<CompilerModuleHandoffReceiptV2, CompilerModuleHandoffErrorV2> {
-        validate_handoff_size_v2(handoff_bytes.len())?;
-        let output = PinnedOutput::open(output_dir)?;
-        let _lock = output.lock()?;
-        output.verify_path_identity()?;
-        authorize(&output, producer, attempt).map_err(CompilerModuleHandoffErrorV2::from)?;
-        let producer_id = producer_identity_v2(producer);
-        let slot_id = slot_identity_v2(producer_id, attempt, handoff_slot);
-        let parent = open_or_create_private_directory(
-            &output.fd,
-            &output.display_path,
-            &format!("{PARENT_PREFIX_V2}{}", hex(&producer_id)),
-            hooks,
-        )
-        .map_err(CompilerModuleHandoffErrorV2::from)?;
-        cleanup_stale_slots_v2(&parent, producer_id, attempt)?;
-        let slot = open_or_create_private_directory(
-            &parent.fd,
-            &parent.path,
-            &format!("{SLOT_PREFIX_V2}{}", hex(&slot_id)),
-            hooks,
-        )
-        .map_err(CompilerModuleHandoffErrorV2::from)?;
-        recover_slot_v2(&slot)?;
-        if entry_exists(&slot, CONSUMED_ENTRY).map_err(CompilerModuleHandoffErrorV2::from)? {
-            read_bound_record_v2(
-                &slot,
-                CONSUMED_ENTRY,
-                producer_id,
-                slot_id,
-                attempt,
-                compiler_closure,
-            )?;
-            cleanup_consumed_payload(&slot);
-            return Err(CompilerModuleHandoffErrorV2::AlreadyConsumed);
-        }
-        if entry_exists(&slot, READY_ENTRY).map_err(CompilerModuleHandoffErrorV2::from)? {
-            let committed = read_bound_record_v2(
-                &slot,
-                READY_ENTRY,
-                producer_id,
-                slot_id,
-                attempt,
-                compiler_closure,
-            )?;
-            let committed_bytes = read_payload_v2(&slot, &committed)?;
-            return if committed_bytes == handoff_bytes {
-                Err(CompilerModuleHandoffErrorV2::AlreadyPublished)
-            } else {
-                Err(CompilerModuleHandoffErrorV2::ConflictingPublication)
-            };
-        }
-
-        let identity = CompilerModuleHandoffIdentityV2(handoff_identity_v2(
-            producer_id,
-            slot_id,
+        publish_in_slot_engine::<HandoffV2Schema>(
+            output_dir,
+            producer,
             attempt,
+            handoff_slot,
             compiler_closure,
             handoff_bytes,
-        ));
-        let (payload_temp, mut payload) =
-            create_temp(&slot, "module").map_err(CompilerModuleHandoffErrorV2::from)?;
-        hooks.hit(FaultPoint::PayloadCreated)?;
-        payload.write_all(handoff_bytes)?;
-        hooks.hit(FaultPoint::PayloadWritten)?;
-        payload.sync_all()?;
-        hooks.hit(FaultPoint::PayloadSynced)?;
-        renameat_with(
-            &slot.fd,
-            &payload_temp,
-            &slot.fd,
-            PAYLOAD_ENTRY,
-            RenameFlags::NOREPLACE,
+            hooks,
         )
-        .map_err(std::io::Error::from)?;
-        hooks.hit(FaultPoint::PayloadRenamed)?;
-        fsync(&slot.fd).map_err(std::io::Error::from)?;
-        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
-        let payload_stat = fstat(&payload).map_err(std::io::Error::from)?;
-        let named = statat(&slot.fd, PAYLOAD_ENTRY, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(std::io::Error::from)?;
-        if !same_private_file(&payload_stat, &named, handoff_bytes.len()) {
-            return Err(invalid_slot_v2(
-                &slot.path,
-                "published payload does not match its pinned descriptor",
-            ));
-        }
-        let record = HandoffRecordV2 {
-            slot: slot_id,
-            attempt,
-            producer: producer_id,
-            compiler_closure,
-            identity,
-            length: handoff_bytes.len(),
-            file: FileIdentity::from_stat(&named),
-        };
-        let record_bytes = record.encode();
-        let (record_temp, mut record_file) =
-            create_temp(&slot, "record").map_err(CompilerModuleHandoffErrorV2::from)?;
-        record_file.write_all(&record_bytes)?;
-        hooks.hit(FaultPoint::RecordWritten)?;
-        record_file.sync_all()?;
-        hooks.hit(FaultPoint::RecordSynced)?;
-        renameat_with(
-            &slot.fd,
-            &record_temp,
-            &slot.fd,
-            READY_ENTRY,
-            RenameFlags::NOREPLACE,
-        )
-        .map_err(std::io::Error::from)?;
-        hooks.hit(FaultPoint::RecordRenamed)?;
-        fsync(&slot.fd).map_err(std::io::Error::from)?;
-        hooks.hit(FaultPoint::PublishedSynced)?;
-        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
-        validate_named_record_v2(&slot, READY_ENTRY, &record_bytes)?;
-        Ok(CompilerModuleHandoffReceiptV2 {
-            attempt,
-            slot: handoff_slot,
-            compiler_closure,
-            identity,
-            length: handoff_bytes.len(),
+        .map(|published| CompilerModuleHandoffReceiptV2 {
+            attempt: published.attempt,
+            slot: published.slot,
+            compiler_closure: published.binding,
+            identity: CompilerModuleHandoffIdentityV2(published.identity),
+            length: published.length,
         })
+        .map_err(engine_error_v2)
     }
 
     fn consume_with_hooks_v2(
@@ -1951,108 +2050,39 @@ mod protected_v2 {
         compiler_closure: fe2o3_build_authority::CompilerClosureV2,
         hooks: &mut impl HandoffHooks,
     ) -> Result<ConsumedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
-        let output = PinnedOutput::open_existing(output_dir)?;
-        let _lock = output.lock()?;
-        output.verify_path_identity()?;
-        authorize(&output, producer, attempt).map_err(CompilerModuleHandoffErrorV2::from)?;
-        let producer_id = producer_identity_v2(producer);
-        let slot_id = slot_identity_v2(producer_id, attempt, handoff_slot);
-        let parent = open_private_directory(
-            &output.fd,
-            &output.display_path,
-            &format!("{PARENT_PREFIX_V2}{}", hex(&producer_id)),
-        )
-        .map_err(CompilerModuleHandoffErrorV2::from)?
-        .ok_or(CompilerModuleHandoffErrorV2::NotPublished)?;
-        cleanup_stale_slots_v2(&parent, producer_id, attempt)?;
-        let slot = open_private_directory(
-            &parent.fd,
-            &parent.path,
-            &format!("{SLOT_PREFIX_V2}{}", hex(&slot_id)),
-        )
-        .map_err(CompilerModuleHandoffErrorV2::from)?
-        .ok_or(CompilerModuleHandoffErrorV2::NotPublished)?;
-        recover_slot_v2(&slot)?;
-        if entry_exists(&slot, CONSUMED_ENTRY).map_err(CompilerModuleHandoffErrorV2::from)? {
-            read_bound_record_v2(
-                &slot,
-                CONSUMED_ENTRY,
-                producer_id,
-                slot_id,
-                attempt,
-                compiler_closure,
-            )?;
-            cleanup_consumed_payload(&slot);
-            return Err(CompilerModuleHandoffErrorV2::AlreadyConsumed);
-        }
-        let record = read_bound_record_v2(
-            &slot,
-            READY_ENTRY,
-            producer_id,
-            slot_id,
+        consume_in_slot_engine::<HandoffV2Schema>(
+            output_dir,
+            producer,
             attempt,
+            handoff_slot,
             compiler_closure,
-        )?;
-        let bytes = read_payload_v2(&slot, &record)?;
-        hooks.hit(FaultPoint::PayloadValidated)?;
-        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
-        renameat_with(
-            &slot.fd,
-            READY_ENTRY,
-            &slot.fd,
-            CONSUMED_ENTRY,
-            RenameFlags::NOREPLACE,
+            hooks,
         )
-        .map_err(std::io::Error::from)?;
-        hooks.hit(FaultPoint::ConsumedRenamed)?;
-        fsync(&slot.fd).map_err(std::io::Error::from)?;
-        hooks.hit(FaultPoint::ConsumedSynced)?;
-        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
-        cleanup_consumed_payload(&slot);
-        Ok(ConsumedCompilerModuleHandoffV2 {
-            attempt,
-            slot: handoff_slot,
-            compiler_closure: record.compiler_closure,
-            identity: record.identity,
-            bytes: Arc::from(bytes),
+        .map(|consumed| ConsumedCompilerModuleHandoffV2 {
+            attempt: consumed.attempt,
+            slot: consumed.slot,
+            compiler_closure: consumed.binding,
+            identity: CompilerModuleHandoffIdentityV2(consumed.identity),
+            bytes: consumed.bytes,
         })
+        .map_err(engine_error_v2)
     }
 
+    #[cfg(test)]
     fn producer_identity_v2(producer: &ProducerIdentity) -> [u8; 32] {
-        sha256_parts(&[
-            PRODUCER_DOMAIN_V2,
-            &(producer.stable_source.len() as u64).to_le_bytes(),
-            producer.stable_source.as_bytes(),
-            &(producer.crate_name.len() as u64).to_le_bytes(),
-            producer.crate_name.as_bytes(),
-        ])
+        producer_identity_for::<HandoffV2Schema>(producer)
     }
 
+    #[cfg(test)]
     fn slot_identity_v2(
         producer: [u8; 32],
         attempt: BuildAttempt,
         slot: CompilerModuleHandoffSlotV2,
     ) -> [u8; 32] {
-        let generation = attempt.generation().to_le_bytes();
-        if slot == CompilerModuleHandoffSlotV2::Default {
-            return sha256_parts(&[
-                SLOT_DOMAIN_V2,
-                &producer,
-                &generation,
-                attempt.session().as_bytes(),
-                attempt.invocation().as_bytes(),
-            ]);
-        }
-        sha256_parts(&[
-            NAMED_SLOT_DOMAIN_V2,
-            &producer,
-            &generation,
-            attempt.session().as_bytes(),
-            attempt.invocation().as_bytes(),
-            &[slot as u8],
-        ])
+        slot_identity_for::<HandoffV2Schema>(producer, attempt, slot)
     }
 
+    #[cfg(test)]
     fn handoff_identity_v2(
         producer: [u8; 32],
         slot: [u8; 32],
@@ -2060,250 +2090,20 @@ mod protected_v2 {
         compiler_closure: fe2o3_build_authority::CompilerClosureV2,
         handoff_bytes: &[u8],
     ) -> [u8; 32] {
-        let generation = attempt.generation().to_le_bytes();
-        let length = (handoff_bytes.len() as u64).to_le_bytes();
-        sha256_parts(&[
-            HANDOFF_IDENTITY_DOMAIN_V2,
-            &compiler_closure_bytes_v2(compiler_closure),
-            &slot,
-            &producer,
-            &generation,
-            attempt.session().as_bytes(),
-            attempt.invocation().as_bytes(),
-            &length,
-            handoff_bytes,
-        ])
+        HandoffV2Schema::derive_identity(producer, slot, attempt, compiler_closure, handoff_bytes)
     }
 
-    fn cleanup_stale_slots_v2(
-        parent: &PinnedDirectory,
-        producer: [u8; 32],
-        attempt: BuildAttempt,
-    ) -> Result<(), CompilerModuleHandoffErrorV2> {
-        let current = [
-            CompilerModuleHandoffSlotV2::Default,
-            CompilerModuleHandoffSlotV2::GeneralGemmReference,
-            CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly,
-        ]
-        .map(|slot| {
-            format!(
-                "{SLOT_PREFIX_V2}{}",
-                hex(&slot_identity_v2(producer, attempt, slot))
-            )
-        });
-        let scan = rustix::io::fcntl_dupfd_cloexec(&parent.fd, 0).map_err(std::io::Error::from)?;
-        let mut entries = Dir::read_from(&scan).map_err(std::io::Error::from)?;
-        let mut stale = Vec::new();
-        for entry in &mut entries {
-            let entry = entry.map_err(std::io::Error::from)?;
-            let name = entry.file_name().to_string_lossy();
-            if name == "." || name == ".." || current.iter().any(|current| name == current.as_str())
-            {
-                continue;
-            }
-            if !name.starts_with(SLOT_PREFIX_V2) {
-                return Err(invalid_slot_v2(
-                    &parent.path.join(name.as_ref()),
-                    "unexpected V2 producer handoff entry",
-                ));
-            }
-            if stale.len() == MAX_STALE_SLOTS {
-                return Err(invalid_slot_v2(
-                    &parent.path,
-                    "too many stale V2 handoff slots",
-                ));
-            }
-            stale.push(name.into_owned());
-        }
-        for name in stale {
-            remove_slot_entry(parent, &name).map_err(CompilerModuleHandoffErrorV2::from)?;
-        }
-        if parent_entry_count(parent).map_err(CompilerModuleHandoffErrorV2::from)? > current.len() {
-            return Err(invalid_slot_v2(
-                &parent.path,
-                "V2 handoff producer directory exceeds its entry bound",
-            ));
-        }
-        parent
-            .verify()
-            .map_err(CompilerModuleHandoffErrorV2::from)?;
-        Ok(())
-    }
-
-    fn recover_slot_v2(slot: &PinnedDirectory) -> Result<(), CompilerModuleHandoffErrorV2> {
-        let names = slot_entries(slot).map_err(CompilerModuleHandoffErrorV2::from)?;
-        for name in &names {
-            if !matches!(name.as_str(), PAYLOAD_ENTRY | READY_ENTRY | CONSUMED_ENTRY)
-                && !name.starts_with(TEMP_PREFIX)
-            {
-                return Err(invalid_slot_v2(
-                    &slot.path.join(name),
-                    "unexpected V2 slot entry",
-                ));
-            }
-        }
-        if names.iter().any(|name| name == READY_ENTRY)
-            && names.iter().any(|name| name == CONSUMED_ENTRY)
-        {
-            return Err(invalid_slot_v2(
-                &slot.path,
-                "V2 ready and consumed records coexist",
-            ));
-        }
-        let committed_entry = names.iter().find_map(|name| match name.as_str() {
-            READY_ENTRY => Some(READY_ENTRY),
-            CONSUMED_ENTRY => Some(CONSUMED_ENTRY),
-            _ => None,
-        });
-        let residue = names
-            .into_iter()
-            .filter(|name| {
-                name.starts_with(TEMP_PREFIX)
-                    || (committed_entry.is_none() && name == PAYLOAD_ENTRY)
-            })
-            .collect::<Vec<_>>();
-        for name in &residue {
-            reject_nonregular_before_cleanup(slot, name)
-                .map_err(CompilerModuleHandoffErrorV2::from)?;
-        }
-        if let Some(entry) = committed_entry {
-            let record = read_private_file(slot, entry, RECORD_BYTES_V2)
-                .map_err(CompilerModuleHandoffErrorV2::from)?
-                .ok_or_else(|| invalid_slot_v2(&slot.path.join(entry), "V2 record disappeared"))?;
-            HandoffRecordV2::decode(&record)
-                .map_err(|reason| invalid_slot_v2(&slot.path.join(entry), reason))?;
-        }
-        for name in residue {
-            unlinkat(&slot.fd, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
-        }
-        if committed_entry.is_none() {
-            fsync(&slot.fd).map_err(std::io::Error::from)?;
-        }
-        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
-        Ok(())
-    }
-
-    fn read_payload_v2(
-        slot: &PinnedDirectory,
-        record: &HandoffRecordV2,
-    ) -> Result<Vec<u8>, CompilerModuleHandoffErrorV2> {
-        let fd = openat(
-            &slot.fd,
-            PAYLOAD_ENTRY,
-            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(|error| {
-            invalid_slot_v2(
-                &slot.path.join(PAYLOAD_ENTRY),
-                std::io::Error::from(error).to_string(),
-            )
-        })?;
-        let mut file = fs::File::from(fd);
-        let before = fstat(&file).map_err(std::io::Error::from)?;
-        let named = statat(&slot.fd, PAYLOAD_ENTRY, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(std::io::Error::from)?;
-        if !record.file.matches(&before) || !record.file.matches(&named) {
-            return Err(invalid_slot_v2(
-                &slot.path.join(PAYLOAD_ENTRY),
-                "V2 payload identity metadata mismatch",
-            ));
-        }
-        let mut bytes = Vec::with_capacity(record.length);
-        Read::by_ref(&mut file)
-            .take((MAX_COMPILER_MODULE_HANDOFF_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)?;
-        let after = fstat(&file).map_err(std::io::Error::from)?;
-        let still_named = statat(&slot.fd, PAYLOAD_ENTRY, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(std::io::Error::from)?;
-        if bytes.len() != record.length
-            || !record.file.matches(&after)
-            || !record.file.matches(&still_named)
-        {
-            return Err(invalid_slot_v2(
-                &slot.path.join(PAYLOAD_ENTRY),
-                "V2 payload changed while its descriptor was read",
-            ));
-        }
-        let identity = handoff_identity_v2(
-            record.producer,
-            record.slot,
-            record.attempt,
-            record.compiler_closure,
-            &bytes,
-        );
-        if identity != *record.identity.as_bytes() {
-            return Err(CompilerModuleHandoffErrorV2::DigestMismatch);
-        }
-        Ok(bytes)
-    }
-
-    fn read_bound_record_v2(
-        slot: &PinnedDirectory,
-        entry: &str,
-        producer: [u8; 32],
-        slot_identity: [u8; 32],
-        attempt: BuildAttempt,
-        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
-    ) -> Result<HandoffRecordV2, CompilerModuleHandoffErrorV2> {
-        let bytes = read_private_file(slot, entry, RECORD_BYTES_V2)
-            .map_err(CompilerModuleHandoffErrorV2::from)?
-            .ok_or(CompilerModuleHandoffErrorV2::NotPublished)?;
-        let record = HandoffRecordV2::decode(&bytes)
-            .map_err(|reason| invalid_slot_v2(&slot.path.join(entry), reason))?;
-        if record.slot != slot_identity || record.producer != producer || record.attempt != attempt
-        {
-            return Err(invalid_slot_v2(
-                &slot.path.join(entry),
-                "V2 record binding does not match the requested slot, attempt, and producer",
-            ));
-        }
-        if record.compiler_closure != compiler_closure {
-            return Err(CompilerModuleHandoffErrorV2::WrongCompilerClosure);
-        }
-        Ok(record)
-    }
-
-    fn validate_named_record_v2(
-        slot: &PinnedDirectory,
-        entry: &str,
-        expected: &[u8],
-    ) -> Result<(), CompilerModuleHandoffErrorV2> {
-        let actual = read_private_file(slot, entry, RECORD_BYTES_V2)
-            .map_err(CompilerModuleHandoffErrorV2::from)?
-            .ok_or_else(|| {
-                invalid_slot_v2(&slot.path.join(entry), "V2 record disappeared after commit")
-            })?;
-        if actual != expected {
-            return Err(invalid_slot_v2(
-                &slot.path.join(entry),
-                "V2 record changed after commit",
-            ));
-        }
-        Ok(())
-    }
-
-    fn validate_handoff_size_v2(length: usize) -> Result<(), CompilerModuleHandoffErrorV2> {
-        if length == 0 || length > MAX_COMPILER_MODULE_HANDOFF_BYTES {
-            return Err(CompilerModuleHandoffErrorV2::InvalidHandoffSize {
-                actual: length,
-                maximum: MAX_COMPILER_MODULE_HANDOFF_BYTES,
-            });
-        }
-        Ok(())
-    }
-
-    fn invalid_slot_v2(path: &Path, reason: impl Into<String>) -> CompilerModuleHandoffErrorV2 {
-        CompilerModuleHandoffErrorV2::InvalidSlot {
-            path: path.to_path_buf(),
-            reason: reason.into(),
+    fn engine_error_v2(error: HandoffEngineError) -> CompilerModuleHandoffErrorV2 {
+        match error {
+            HandoffEngineError::Common(error) => error.into(),
+            HandoffEngineError::WrongBinding => CompilerModuleHandoffErrorV2::WrongCompilerClosure,
         }
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::{BuildSession, begin_build_attempt};
+        use crate::{BuildInvocation, BuildSession, begin_build_attempt};
         use std::os::unix::fs::PermissionsExt;
         use std::sync::{Arc, Barrier};
         use std::thread;
@@ -2444,8 +2244,11 @@ mod protected_v2 {
             );
             let record_bytes = fs::read(slot.join(READY_ENTRY)).unwrap();
             let record = HandoffRecordV2::decode(&record_bytes).unwrap();
-            assert_eq!(record.compiler_closure, closure);
-            assert_eq!(record.identity, receipt.identity());
+            assert_eq!(record.binding, closure);
+            assert_eq!(
+                CompilerModuleHandoffIdentityV2(record.identity),
+                receipt.identity()
+            );
             assert!(record_bytes.starts_with(RECORD_MAGIC_V2));
             assert_eq!(
                 &record_bytes[closure_offset()..closure_offset() + COMPILER_CLOSURE_BYTES_V2],
@@ -2969,7 +2772,6 @@ mod protected_v2 {
     }
 }
 
-#[allow(unused_imports)]
 pub use protected_v2::{
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffReceiptV2,
     CompilerModuleHandoffSlotV2, ConsumedCompilerModuleHandoffV2,
