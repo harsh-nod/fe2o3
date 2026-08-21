@@ -20,8 +20,11 @@ use crate::kernel_ir_codegen::{
 use fe2o3_amd_target::{CapabilityDerivationError, WavefrontWidth};
 use fe2o3_artifact_transaction::{
     BuildAttempt, CompilerModuleHandoffErrorV1 as HandoffPublicationErrorV1,
-    CompilerModuleHandoffReceiptV1, ProducerIdentity, publish_compiler_module_handoff_v1,
+    CompilerModuleHandoffErrorV2 as HandoffPublicationErrorV2, CompilerModuleHandoffReceiptV1,
+    CompilerModuleHandoffReceiptV2, ProducerIdentity, publish_compiler_module_handoff_v1,
+    publish_compiler_module_handoff_v2,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1,
     CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
@@ -232,16 +235,36 @@ pub(crate) fn publish_prepared_production_v1_worker_handoff(
     attempt: BuildAttempt,
     prepared: PreparedProductionV1WorkerHandoffV1,
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
-    if Sha256::digest(prepared.handoff.module_bytes()).as_slice() != prepared.llvm_ir_sha256 {
-        return Err(WorkerV2ProducerError::MissingProductionBindings);
-    }
-    publish_compiler_module_handoff_v1(
+    let handoff = validate_prepared_production_v1_worker_handoff(prepared)?;
+    publish_compiler_module_handoff_v1(output_dir, producer, attempt, handoff.canonical_bytes())
+        .map_err(WorkerV2ProducerError::Publication)
+}
+
+pub(crate) fn publish_prepared_production_v1_worker_handoff_v2(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    compiler_closure: CompilerClosureV2,
+    prepared: PreparedProductionV1WorkerHandoffV1,
+) -> Result<CompilerModuleHandoffReceiptV2, WorkerV2ProducerError> {
+    let handoff = validate_prepared_production_v1_worker_handoff(prepared)?;
+    publish_compiler_module_handoff_v2(
         output_dir,
         producer,
         attempt,
-        prepared.handoff.canonical_bytes(),
+        compiler_closure,
+        handoff.canonical_bytes(),
     )
-    .map_err(WorkerV2ProducerError::Publication)
+    .map_err(WorkerV2ProducerError::ProtectedPublication)
+}
+
+fn validate_prepared_production_v1_worker_handoff(
+    prepared: PreparedProductionV1WorkerHandoffV1,
+) -> Result<CompilerModuleHandoffV2, WorkerV2ProducerError> {
+    if Sha256::digest(prepared.handoff.module_bytes()).as_slice() != prepared.llvm_ir_sha256 {
+        return Err(WorkerV2ProducerError::MissingProductionBindings);
+    }
+    Ok(prepared.handoff)
 }
 
 /// Consumes the exact scalar frontend handoff into the managed attempt's
@@ -451,6 +474,57 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
     attempt: BuildAttempt,
     prepared: PreparedRowSoftmaxV1WorkerHandoffV1,
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
+    let validated = validate_prepared_row_softmax_v1_worker_handoff(prepared)?;
+    let receipt = publish_compiler_module_handoff_v1(
+        output_dir,
+        producer,
+        attempt,
+        validated.handoff.canonical_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Publication)?;
+    validated.report_publication();
+    Ok(receipt)
+}
+
+pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff_v2(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    compiler_closure: CompilerClosureV2,
+    prepared: PreparedRowSoftmaxV1WorkerHandoffV1,
+) -> Result<CompilerModuleHandoffReceiptV2, WorkerV2ProducerError> {
+    let validated = validate_prepared_row_softmax_v1_worker_handoff(prepared)?;
+    let receipt = publish_compiler_module_handoff_v2(
+        output_dir,
+        producer,
+        attempt,
+        compiler_closure,
+        validated.handoff.canonical_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::ProtectedPublication)?;
+    validated.report_publication();
+    Ok(receipt)
+}
+
+struct ValidatedRowSoftmaxWorkerHandoffV1 {
+    frontend_authority_commitment: [u8; 32],
+    exponential_boundary_commitment: [u8; 32],
+    handoff: CompilerModuleHandoffV2,
+}
+
+impl ValidatedRowSoftmaxWorkerHandoffV1 {
+    fn report_publication(&self) {
+        eprintln!(
+            "[rustc-codegen-fe2o3] published row-softmax Worker V2 handoff bound to frontend authority {} and exponential boundary {}",
+            crate::encode_hex(&self.frontend_authority_commitment),
+            crate::encode_hex(&self.exponential_boundary_commitment),
+        );
+    }
+}
+
+fn validate_prepared_row_softmax_v1_worker_handoff(
+    prepared: PreparedRowSoftmaxV1WorkerHandoffV1,
+) -> Result<ValidatedRowSoftmaxWorkerHandoffV1, WorkerV2ProducerError> {
     let sections = decode_row_softmax_compiler_sections_v1(prepared.handoff.module_bytes())
         .map_err(|_| WorkerV2ProducerError::MissingRowSoftmaxBindings)?;
     if sections.authority_transcript() != prepared.authority_transcript
@@ -459,25 +533,11 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
     {
         return Err(WorkerV2ProducerError::MissingRowSoftmaxBindings);
     }
-    let PreparedRowSoftmaxV1WorkerHandoffV1 {
-        authority_transcript: _,
-        frontend_authority_commitment,
-        exponential_boundary_commitment,
-        handoff,
-    } = prepared;
-    let receipt = publish_compiler_module_handoff_v1(
-        output_dir,
-        producer,
-        attempt,
-        handoff.canonical_bytes(),
-    )
-    .map_err(WorkerV2ProducerError::Publication)?;
-    eprintln!(
-        "[rustc-codegen-fe2o3] published row-softmax Worker V2 handoff bound to frontend authority {} and exponential boundary {}",
-        crate::encode_hex(&frontend_authority_commitment),
-        crate::encode_hex(&exponential_boundary_commitment),
-    );
-    Ok(receipt)
+    Ok(ValidatedRowSoftmaxWorkerHandoffV1 {
+        frontend_authority_commitment: prepared.frontend_authority_commitment,
+        exponential_boundary_commitment: prepared.exponential_boundary_commitment,
+        handoff: prepared.handoff,
+    })
 }
 
 pub(crate) fn publish_prepared_flash_attention_v1_worker_handoff(
@@ -1544,6 +1604,7 @@ pub(crate) enum WorkerV2ProducerError {
     SymbolManifest(CompilerModuleSymbolManifestErrorV1),
     Handoff(CompilerModuleHandoffErrorV2),
     Publication(HandoffPublicationErrorV1),
+    ProtectedPublication(HandoffPublicationErrorV2),
 }
 
 impl fmt::Display for WorkerV2ProducerError {
@@ -1652,6 +1713,10 @@ impl fmt::Display for WorkerV2ProducerError {
                     "compiler-module handoff publication failed: {error}"
                 )
             }
+            Self::ProtectedPublication(error) => write!(
+                formatter,
+                "protected compiler-module V2 handoff publication failed: {error}"
+            ),
         }
     }
 }
@@ -1666,6 +1731,7 @@ impl Error for WorkerV2ProducerError {
             Self::TargetCapabilities(error) => Some(error),
             Self::Handoff(error) => Some(error),
             Self::Publication(error) => Some(error),
+            Self::ProtectedPublication(error) => Some(error),
             Self::MissingBuildAttempt
             | Self::MissingCompilerFfiEnvelope
             | Self::MissingProductionBindings
@@ -1744,7 +1810,8 @@ mod tests {
     }
     use fe2o3_artifact_transaction::{
         BuildInvocation, BuildSession, CompilerModuleHandoffErrorV1 as PublicationError,
-        begin_build_attempt, consume_compiler_module_handoff_v1,
+        CompilerModuleHandoffErrorV2 as ProtectedPublicationError, begin_build_attempt,
+        consume_compiler_module_handoff_v1, consume_compiler_module_handoff_v2,
     };
     use fe2o3_compiler_ffi::{
         CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiContractV1,
@@ -2531,6 +2598,160 @@ mod tests {
     }
 
     #[test]
+    fn protected_row_publication_binds_every_closure_role_and_exact_canonical_bytes() {
+        let directory = TestDirectory::new();
+        let producer = producer();
+        let attempt = begin_attempt(&directory.0, &producer);
+        let expected_closure = compiler_closure(compiler_closure_pins());
+        let mut frontend_receipt = exact_row_frontend_receipt_for_test();
+        let prepared =
+            prepare_row_softmax_v1_worker_handoff(frontend_receipt.consume().unwrap()).unwrap();
+        let expected_bytes = prepared.handoff().canonical_bytes().to_vec();
+
+        let receipt = publish_prepared_row_softmax_v1_worker_handoff_v2(
+            &directory.0,
+            &producer,
+            attempt,
+            expected_closure,
+            prepared,
+        )
+        .unwrap();
+        assert_eq!(receipt.compiler_closure(), expected_closure);
+        assert_eq!(receipt.length(), expected_bytes.len());
+        let _distinct_v2_identity: fe2o3_artifact_transaction::CompilerModuleHandoffIdentityV2 =
+            receipt.identity();
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt),
+            Err(PublicationError::NotPublished)
+        ));
+
+        for role in 0..compiler_closure_pins().len() {
+            let mut substituted = compiler_closure_pins();
+            substituted[role][role] ^= 0x80;
+            assert!(matches!(
+                consume_compiler_module_handoff_v2(
+                    &directory.0,
+                    &producer,
+                    attempt,
+                    compiler_closure(substituted),
+                ),
+                Err(ProtectedPublicationError::WrongCompilerClosure)
+            ));
+        }
+
+        let consumed =
+            consume_compiler_module_handoff_v2(&directory.0, &producer, attempt, expected_closure)
+                .unwrap();
+        assert_eq!(consumed.compiler_closure(), expected_closure);
+        assert_eq!(consumed.bytes(), expected_bytes);
+    }
+
+    #[test]
+    fn protected_production_publication_returns_the_native_v2_receipt() {
+        let directory = TestDirectory::new();
+        let producer = producer();
+        let attempt = begin_attempt(&directory.0, &producer);
+        let closure = compiler_closure(compiler_closure_pins());
+        let mut frontend_receipt = exact_row_frontend_receipt_for_test();
+        let row =
+            prepare_row_softmax_v1_worker_handoff(frontend_receipt.consume().unwrap()).unwrap();
+        let PreparedRowSoftmaxV1WorkerHandoffV1 { handoff, .. } = row;
+        let expected_bytes = handoff.canonical_bytes().to_vec();
+        let production = PreparedProductionV1WorkerHandoffV1 {
+            llvm_ir_sha256: Sha256::digest(handoff.module_bytes()).into(),
+            handoff,
+        };
+
+        let receipt = publish_prepared_production_v1_worker_handoff_v2(
+            &directory.0,
+            &producer,
+            attempt,
+            closure,
+            production,
+        )
+        .unwrap();
+        let _identity: fe2o3_artifact_transaction::CompilerModuleHandoffIdentityV2 =
+            receipt.identity();
+        assert_eq!(receipt.compiler_closure(), closure);
+        assert_eq!(receipt.length(), expected_bytes.len());
+        let consumed =
+            consume_compiler_module_handoff_v2(&directory.0, &producer, attempt, closure).unwrap();
+        assert_eq!(consumed.compiler_closure(), closure);
+        assert_eq!(consumed.bytes(), expected_bytes);
+    }
+
+    #[test]
+    fn ordinary_v1_cannot_cross_into_v2_and_protected_failure_has_no_v1_fallback() {
+        let producer = producer();
+        let closure = compiler_closure(compiler_closure_pins());
+
+        let ordinary_directory = TestDirectory::new();
+        let ordinary_attempt = begin_attempt(&ordinary_directory.0, &producer);
+        let mut ordinary_receipt = exact_row_frontend_receipt_for_test();
+        let ordinary =
+            prepare_row_softmax_v1_worker_handoff(ordinary_receipt.consume().unwrap()).unwrap();
+        let ordinary_bytes = ordinary.handoff().canonical_bytes().to_vec();
+        let receipt = publish_prepared_row_softmax_v1_worker_handoff(
+            &ordinary_directory.0,
+            &producer,
+            ordinary_attempt,
+            ordinary,
+        )
+        .unwrap();
+        let _distinct_v1_identity: fe2o3_artifact_transaction::CompilerModuleHandoffIdentityV1 =
+            receipt.identity();
+        assert!(matches!(
+            consume_compiler_module_handoff_v2(
+                &ordinary_directory.0,
+                &producer,
+                ordinary_attempt,
+                closure,
+            ),
+            Err(ProtectedPublicationError::NotPublished)
+        ));
+        assert_eq!(
+            consume_compiler_module_handoff_v1(&ordinary_directory.0, &producer, ordinary_attempt,)
+                .unwrap()
+                .bytes(),
+            ordinary_bytes,
+        );
+
+        let protected_directory = TestDirectory::new();
+        let protected_attempt = begin_attempt(&protected_directory.0, &producer);
+        let mut protected_receipt = exact_row_frontend_receipt_for_test();
+        let mut invalid =
+            prepare_row_softmax_v1_worker_handoff(protected_receipt.consume().unwrap()).unwrap();
+        invalid.frontend_authority_commitment[0] ^= 1;
+        assert!(matches!(
+            publish_prepared_row_softmax_v1_worker_handoff_v2(
+                &protected_directory.0,
+                &producer,
+                protected_attempt,
+                closure,
+                invalid,
+            ),
+            Err(WorkerV2ProducerError::MissingRowSoftmaxBindings)
+        ));
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(
+                &protected_directory.0,
+                &producer,
+                protected_attempt,
+            ),
+            Err(PublicationError::NotPublished)
+        ));
+        assert!(matches!(
+            consume_compiler_module_handoff_v2(
+                &protected_directory.0,
+                &producer,
+                protected_attempt,
+                closure,
+            ),
+            Err(ProtectedPublicationError::NotPublished)
+        ));
+    }
+
+    #[test]
     fn row_publication_rejects_nonclosed_section_suffixes_before_publishing_attempt() {
         let producer = producer();
         let cases = [
@@ -2701,6 +2922,16 @@ mod tests {
             BuildSession::from_bytes([0x31; 16]),
         )
         .unwrap()
+    }
+
+    fn compiler_closure(pins: [[u8; 32]; 6]) -> CompilerClosureV2 {
+        CompilerClosureV2::new(pins[0], pins[1], pins[2], pins[3], pins[4], pins[5]).unwrap()
+    }
+
+    fn compiler_closure_pins() -> [[u8; 32]; 6] {
+        [
+            [0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], [0x55; 32], [0x66; 32],
+        ]
     }
 
     fn owner(byte: u8, item: &str) -> CompilerFfiSourceOwnerV1 {

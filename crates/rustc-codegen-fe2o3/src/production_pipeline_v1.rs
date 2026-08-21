@@ -13,6 +13,7 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::artifact_transaction::{BuildAttempt, ProducerIdentity};
 use crate::collector::AuthenticatedCollectedKernelClosureV1;
+use fe2o3_build_authority::CompilerClosureV2;
 
 pub(crate) const PRODUCTION_PIPELINE_V1: &str = "production-v1";
 const PRODUCTION_GFX942_DEFAULT_WORKGROUP_X_V1: u32 = 64;
@@ -44,6 +45,8 @@ pub(crate) enum ProductionPipelineErrorV1 {
     Gfx942Lowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(String),
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
+    ProtectedHandoffRequiresV2,
+    UnprotectedHandoffRequiresV1,
     WorkerHandoff(crate::worker_v2_producer::WorkerV2ProducerError),
 }
 
@@ -81,6 +84,12 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::DescriptorEvidence(error) => {
                 write!(formatter, "production-v1 descriptor evidence failed: {error}")
             }
+            Self::ProtectedHandoffRequiresV2 => formatter.write_str(
+                "production-v1 protected compiler closure cannot publish through the V1 handoff protocol",
+            ),
+            Self::UnprotectedHandoffRequiresV1 => formatter.write_str(
+                "production-v1 unprotected qualification cannot publish through the V2 handoff protocol",
+            ),
             Self::WorkerHandoff(error) => {
                 write!(formatter, "production-v1 Worker V2 handoff failed: {error}")
             }
@@ -102,6 +111,8 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::WorkerHandoff(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
+            | Self::ProtectedHandoffRequiresV2
+            | Self::UnprotectedHandoffRequiresV1
             | Self::UpstreamLlvmLayoutBinding(_) => None,
         }
     }
@@ -129,6 +140,37 @@ struct ProductionTransactionBindingsV1 {
     output_dir: PathBuf,
     build_attempt: Option<BuildAttempt>,
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+    publication: ProductionCompilerModulePublicationV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductionCompilerModulePublicationV1 {
+    compiler_closure: Option<CompilerClosureV2>,
+}
+
+impl ProductionCompilerModulePublicationV1 {
+    const ORDINARY_V1: Self = Self {
+        compiler_closure: None,
+    };
+
+    const fn protected_v2(compiler_closure: CompilerClosureV2) -> Self {
+        Self {
+            compiler_closure: Some(compiler_closure),
+        }
+    }
+
+    fn require_v1(self) -> Result<(), ProductionPipelineErrorV1> {
+        if self.compiler_closure.is_none() {
+            Ok(())
+        } else {
+            Err(ProductionPipelineErrorV1::ProtectedHandoffRequiresV2)
+        }
+    }
+
+    fn require_v2(self) -> Result<CompilerClosureV2, ProductionPipelineErrorV1> {
+        self.compiler_closure
+            .ok_or(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1)
+    }
 }
 
 struct AuthenticatedProductionBindingsV1 {
@@ -196,6 +238,14 @@ pub(crate) struct AuthenticatedProductionGfx942ModuleV1 {
     llvm_ir: String,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+}
+
+struct PreparedProductionWorkerPublicationV1 {
+    producer: ProducerIdentity,
+    output_dir: PathBuf,
+    attempt: BuildAttempt,
+    publication: ProductionCompilerModulePublicationV1,
+    prepared: crate::worker_v2_producer::PreparedProductionV1WorkerHandoffV1,
 }
 
 impl AuthenticatedProductionGfx942ModuleV1 {
@@ -375,10 +425,9 @@ impl Gfx942LoweredProductionCompilationV1 {
         false
     }
 
-    fn publish_worker_handoff(
+    fn prepare_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
-    {
+    ) -> Result<PreparedProductionWorkerPublicationV1, ProductionPipelineErrorV1> {
         eprintln!(
             "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted complete formal memory obligations for a {}-invocation structural witness with {} allocation(s), {} access(es), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact Worker V2 handoff",
             self.semantic_function_count(),
@@ -412,6 +461,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             output_dir,
             build_attempt,
             compiler_ffi_envelope,
+            publication,
         } = transaction;
         let compiler_module = AuthenticatedProductionGfx942ModuleV1 {
             admitted,
@@ -428,15 +478,45 @@ impl Gfx942LoweredProductionCompilationV1 {
                 crate::worker_v2_producer::WorkerV2ProducerError::MissingBuildAttempt,
             )
         })?;
-        let receipt = crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff(
-            &output_dir,
-            &producer,
-            attempt,
-            prepared,
-        )
-        .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
         let _ = (rustc_identity_inventory_sha256, rustc_preflight_plan_sha256);
-        Ok(receipt)
+        Ok(PreparedProductionWorkerPublicationV1 {
+            producer,
+            output_dir,
+            attempt,
+            publication,
+            prepared,
+        })
+    }
+
+    fn publish_worker_handoff(
+        self,
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
+    {
+        let publication = self.prepare_worker_handoff()?;
+        publication.publication.require_v1()?;
+        crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff(
+            &publication.output_dir,
+            &publication.producer,
+            publication.attempt,
+            publication.prepared,
+        )
+        .map_err(ProductionPipelineErrorV1::WorkerHandoff)
+    }
+
+    fn publish_worker_handoff_v2(
+        self,
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV2, ProductionPipelineErrorV1>
+    {
+        let publication = self.prepare_worker_handoff()?;
+        let compiler_closure = publication.publication.require_v2()?;
+        crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff_v2(
+            &publication.output_dir,
+            &publication.producer,
+            publication.attempt,
+            compiler_closure,
+            publication.prepared,
+        )
+        .map_err(ProductionPipelineErrorV1::WorkerHandoff)
     }
 }
 
@@ -492,6 +572,42 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         output_dir: PathBuf,
         build_attempt: Option<BuildAttempt>,
     ) -> Result<Self, ProductionPipelineErrorV1> {
+        Self::from_collected_device_closure_with_publication(
+            tcx,
+            closure,
+            producer,
+            output_dir,
+            build_attempt,
+            ProductionCompilerModulePublicationV1::ORDINARY_V1,
+        )
+    }
+
+    pub(crate) fn from_collected_device_closure_with_compiler_closure_v2(
+        tcx: TyCtxt<'tcx>,
+        closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+        producer: ProducerIdentity,
+        output_dir: PathBuf,
+        build_attempt: Option<BuildAttempt>,
+        compiler_closure: CompilerClosureV2,
+    ) -> Result<Self, ProductionPipelineErrorV1> {
+        Self::from_collected_device_closure_with_publication(
+            tcx,
+            closure,
+            producer,
+            output_dir,
+            build_attempt,
+            ProductionCompilerModulePublicationV1::protected_v2(compiler_closure),
+        )
+    }
+
+    fn from_collected_device_closure_with_publication(
+        tcx: TyCtxt<'tcx>,
+        closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+        producer: ProducerIdentity,
+        output_dir: PathBuf,
+        build_attempt: Option<BuildAttempt>,
+        publication: ProductionCompilerModulePublicationV1,
+    ) -> Result<Self, ProductionPipelineErrorV1> {
         if closure.function_count() == 0 {
             return Err(ProductionPipelineErrorV1::EmptyCollectedDeviceClosure);
         }
@@ -509,6 +625,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
                     output_dir,
                     build_attempt,
                     compiler_ffi_envelope,
+                    publication,
                 },
             },
             invariant_session: PhantomData,
@@ -572,6 +689,13 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
     {
         self.lower_gfx942()?.publish_worker_handoff()
+    }
+
+    pub(crate) fn publish_worker_handoff_v2(
+        self,
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV2, ProductionPipelineErrorV1>
+    {
+        self.lower_gfx942()?.publish_worker_handoff_v2()
     }
 
     /// Retains the original extraction milestone while consuming the same
@@ -673,6 +797,23 @@ mod tests {
             disposition(usize::MAX),
             ProductionDispositionV1::DeviceTransaction
         );
+
+        let protected = ProductionCompilerModulePublicationV1::protected_v2(
+            CompilerClosureV2::new(
+                [0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], [0x55; 32], [0x66; 32],
+            )
+            .unwrap(),
+        );
+        assert_eq!(disposition(0), ProductionDispositionV1::HostOnly);
+        assert!(protected.require_v2().is_ok());
+        assert!(matches!(
+            protected.require_v1(),
+            Err(ProductionPipelineErrorV1::ProtectedHandoffRequiresV2)
+        ));
+        assert!(matches!(
+            ProductionCompilerModulePublicationV1::ORDINARY_V1.require_v2(),
+            Err(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1)
+        ));
     }
 
     #[test]

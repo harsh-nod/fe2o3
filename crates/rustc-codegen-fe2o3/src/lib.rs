@@ -407,6 +407,15 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
                         ))
                     });
+            let protected_compiler_closure = protected_rustc_invocation
+                .as_ref()
+                .map(|admitted| admitted.compiler_closure())
+                .transpose()
+                .unwrap_or_else(|error| {
+                    tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] admitted protected compiler closure revalidation failed without fallback: {error}"
+                    ))
+                });
             let mut production_target = None;
             if codegen_pipeline == CodegenPipeline::ProductionV1
                 && collector::count_production_roots_before_monomorphization_v1(tcx) > 0
@@ -489,26 +498,36 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 "[rustc-codegen-fe2o3] production-v1 collection failed without fallback: {error}"
                             )),
                         };
-                        let transaction = match production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
-                            tcx,
-                            closure,
-                            producer.clone(),
-                            output_dir
-                                .expect("device output was required above")
-                                .to_path_buf(),
-                            build_attempt,
-                        ) {
-                            Ok(transaction) => transaction,
-                            Err(error) => {
-                                tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
-                            }
+                        let output_dir = output_dir
+                            .expect("device output was required above")
+                            .to_path_buf();
+                        let publication = match protected_compiler_closure {
+                            Some(compiler_closure) => production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure_with_compiler_closure_v2(
+                                tcx,
+                                closure,
+                                producer.clone(),
+                                output_dir,
+                                build_attempt,
+                                compiler_closure,
+                            )
+                            .and_then(|transaction| transaction.publish_worker_handoff_v2())
+                            .map(|receipt| receipt.length()),
+                            None => production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
+                                tcx,
+                                closure,
+                                producer.clone(),
+                                output_dir,
+                                build_attempt,
+                            )
+                            .and_then(|transaction| transaction.publish_worker_handoff())
+                            .map(|receipt| receipt.length()),
                         };
-                        match transaction.publish_worker_handoff() {
-                            Ok(receipt) => {
+                        match publication {
+                            Ok(publication_length) => {
                                 production_device_transaction_complete = true;
                                 eprintln!(
                                     "[rustc-codegen-fe2o3] production-v1 published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the managed Worker V2 transaction; link, artifact, load, and launch authority remain false",
-                                    receipt.length(),
+                                    publication_length,
                                 );
                             }
                             Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
@@ -965,11 +984,24 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         }
                         let canonical_handoff_bytes = handoff.handoff().canonical_bytes().len();
                         let llvm_bytes = handoff.handoff().module_bytes().len();
-                        let publication =
-                            worker_v2_producer::publish_prepared_row_softmax_v1_worker_handoff(
-                                output_dir, &producer, attempt, handoff,
+                        let publication_length = match protected_compiler_closure {
+                            Some(compiler_closure) => worker_v2_producer::publish_prepared_row_softmax_v1_worker_handoff_v2(
+                                output_dir,
+                                &producer,
+                                attempt,
+                                compiler_closure,
+                                handoff,
                             )
-                            .map_err(|error| error.to_string())?;
+                            .map(|receipt| receipt.length()),
+                            None => worker_v2_producer::publish_prepared_row_softmax_v1_worker_handoff(
+                                output_dir,
+                                &producer,
+                                attempt,
+                                handoff,
+                            )
+                            .map(|receipt| receipt.length()),
+                        }
+                        .map_err(|error| error.to_string())?;
                         Ok((
                             root_instance_identity,
                             kernel_export,
@@ -978,7 +1010,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             frontend_authority,
                             canonical_handoff_bytes,
                             llvm_bytes,
-                            publication.length(),
+                            publication_length,
                         ))
                     })();
                     match preparation {
@@ -2423,6 +2455,31 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn admitted_protected_modules_route_only_through_v2_publication() {
+        let backend = include_str!("lib.rs");
+        let mut protected_arms = backend
+            .split("match protected_compiler_closure")
+            .skip(1)
+            .take(2)
+            .map(|body| {
+                body.split_once("None =>")
+                    .expect("protected and ordinary publication arms")
+            });
+
+        let (production_v2, production_v1) = protected_arms.next().unwrap();
+        assert!(production_v2.contains("from_collected_device_closure_with_compiler_closure_v2"));
+        assert!(production_v2.contains("publish_worker_handoff_v2"));
+        assert!(!production_v2.contains("publish_worker_handoff()"));
+        assert!(production_v1.contains("from_collected_device_closure("));
+        assert!(production_v1.contains("publish_worker_handoff()"));
+
+        let (row_v2, row_v1) = protected_arms.next().unwrap();
+        assert!(row_v2.contains("publish_prepared_row_softmax_v1_worker_handoff_v2"));
+        assert!(!row_v2.contains("publish_prepared_row_softmax_v1_worker_handoff("));
+        assert!(row_v1.contains("publish_prepared_row_softmax_v1_worker_handoff("));
+    }
 
     struct TestDirectory(PathBuf);
 
