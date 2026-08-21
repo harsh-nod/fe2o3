@@ -1284,6 +1284,1699 @@ trait HandoffHooks {
 struct NoFaults;
 impl HandoffHooks for NoFaults {}
 
+// The primary integration exports this side-by-side surface from `lib.rs`. Keep the complete V2
+// implementation scoped so this isolated handoff commit remains warning-free before that export.
+#[allow(dead_code)]
+mod protected_v2 {
+    use super::*;
+    use crate::BuildInvocation;
+
+    const PARENT_PREFIX_V2: &str = ".fe2o3-compiler-module-handoff-v2-";
+    const SLOT_PREFIX_V2: &str = "attempt-";
+    const RECORD_MAGIC_V2: &[u8] = b"FE2O3-COMPILER-MODULE-HANDOFF-V2\0";
+    const RECORD_VERSION_V2: u16 = 2;
+    const PRODUCER_DOMAIN_V2: &[u8] = b"fe2o3.compiler-module-handoff.producer.v2\0";
+    const SLOT_DOMAIN_V2: &[u8] = b"fe2o3.compiler-module-handoff.slot.v2\0";
+    const NAMED_SLOT_DOMAIN_V2: &[u8] = b"fe2o3.compiler-module-handoff.named-slot.v2\0";
+    const HANDOFF_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.compiler-module-handoff.identity.v2\0";
+    const RECORD_DOMAIN_V2: &[u8] = b"fe2o3.compiler-module-handoff.record.v2\0";
+    const COMPILER_CLOSURE_BYTES_V2: usize = (6 * 32) + 2 + 32;
+    const RECORD_BYTES_V2: usize = RECORD_MAGIC_V2.len()
+        + 2
+        + 32
+        + 8
+        + 16
+        + 32
+        + 32
+        + COMPILER_CLOSURE_BYTES_V2
+        + 32
+        + 8
+        + (7 * 8)
+        + 32;
+
+    /// Closed attempt-local transport slot for a closure-protected compiler module handoff.
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    #[repr(u8)]
+    pub enum CompilerModuleHandoffSlotV2 {
+        /// Original one-module transport slot.
+        Default = 0,
+        /// Issue #138 reference wave64 XOR4 schedule.
+        GeneralGemmReference = 1,
+        /// Issue #138 A-only BF16 vector-transfer schedule.
+        GeneralGemmVectorizedAOnly = 2,
+    }
+
+    /// SHA-256 commitment to a V2 closure, slot, attempt, producer, and exact module bytes.
+    ///
+    /// The identity authenticates equality inside this cooperative protocol only. It grants no
+    /// compiler, publication, linking, loading, launch, or execution authority.
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    pub struct CompilerModuleHandoffIdentityV2([u8; 32]);
+
+    impl CompilerModuleHandoffIdentityV2 {
+        /// Constructs an identity from its exact SHA-256 representation.
+        pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+            Self(bytes)
+        }
+
+        /// Returns the exact SHA-256 representation.
+        pub const fn as_bytes(&self) -> &[u8; 32] {
+            &self.0
+        }
+    }
+
+    /// Durable inert receipt for one closure-protected compiler module handoff.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct CompilerModuleHandoffReceiptV2 {
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV2,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        identity: CompilerModuleHandoffIdentityV2,
+        length: usize,
+    }
+
+    impl CompilerModuleHandoffReceiptV2 {
+        pub const fn attempt(self) -> BuildAttempt {
+            self.attempt
+        }
+
+        /// Returns the exact attempt-local transport slot.
+        pub const fn slot(self) -> CompilerModuleHandoffSlotV2 {
+            self.slot
+        }
+
+        /// Returns the complete canonical compiler-closure preimage bound to the handoff.
+        pub const fn compiler_closure(self) -> fe2o3_build_authority::CompilerClosureV2 {
+            self.compiler_closure
+        }
+
+        pub const fn identity(self) -> CompilerModuleHandoffIdentityV2 {
+            self.identity
+        }
+
+        pub const fn length(self) -> usize {
+            self.length
+        }
+
+        /// A handoff receipt is inert coordination evidence.
+        pub const fn grants_publication_authority(self) -> bool {
+            false
+        }
+
+        /// Closure possession does not authenticate compiler authorship.
+        pub const fn grants_compiler_authority(self) -> bool {
+            false
+        }
+    }
+
+    /// Immutable bytes returned by the one successful consumption of a V2 handoff slot.
+    #[derive(Clone, Debug)]
+    pub struct ConsumedCompilerModuleHandoffV2 {
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV2,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        identity: CompilerModuleHandoffIdentityV2,
+        bytes: Arc<[u8]>,
+    }
+
+    impl ConsumedCompilerModuleHandoffV2 {
+        pub const fn attempt(&self) -> BuildAttempt {
+            self.attempt
+        }
+
+        /// Returns the exact attempt-local transport slot.
+        pub const fn slot(&self) -> CompilerModuleHandoffSlotV2 {
+            self.slot
+        }
+
+        /// Returns the complete canonical compiler-closure preimage bound to the bytes.
+        pub const fn compiler_closure(&self) -> fe2o3_build_authority::CompilerClosureV2 {
+            self.compiler_closure
+        }
+
+        pub const fn identity(&self) -> CompilerModuleHandoffIdentityV2 {
+            self.identity
+        }
+
+        pub fn bytes(&self) -> &[u8] {
+            &self.bytes
+        }
+
+        /// Consumed bytes still require the finalizer's independent validation chain.
+        pub const fn grants_publication_authority(&self) -> bool {
+            false
+        }
+
+        /// Closure possession does not authenticate compiler authorship.
+        pub const fn grants_compiler_authority(&self) -> bool {
+            false
+        }
+
+        /// Consumed handoff bytes do not authorize linking.
+        pub const fn grants_link_authority(&self) -> bool {
+            false
+        }
+
+        /// Consumed handoff bytes do not authorize module loading.
+        pub const fn grants_load_authority(&self) -> bool {
+            false
+        }
+
+        /// Consumed handoff bytes do not authorize kernel launch.
+        pub const fn grants_launch_authority(&self) -> bool {
+            false
+        }
+    }
+
+    /// Failure to publish, recover, or consume a closure-protected compiler module handoff.
+    #[derive(Debug)]
+    pub enum CompilerModuleHandoffErrorV2 {
+        Io(std::io::Error),
+        Attempt { reason: String },
+        InvalidSlot { path: PathBuf, reason: String },
+        InvalidHandoffSize { actual: usize, maximum: usize },
+        AlreadyPublished,
+        ConflictingPublication,
+        AlreadyConsumed,
+        NotPublished,
+        DigestMismatch,
+        WrongCompilerClosure,
+    }
+
+    impl fmt::Display for CompilerModuleHandoffErrorV2 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Io(error) => write!(formatter, "{error}"),
+                Self::Attempt { reason } => {
+                    write!(formatter, "invalid V2 build-attempt handoff: {reason}")
+                }
+                Self::InvalidSlot { path, reason } => write!(
+                    formatter,
+                    "invalid V2 compiler module handoff {}: {reason}",
+                    path.display()
+                ),
+                Self::InvalidHandoffSize { actual, maximum } => write!(
+                    formatter,
+                    "canonical compiler module handoff size {actual} is outside 1..={maximum} bytes"
+                ),
+                Self::AlreadyPublished => {
+                    formatter.write_str("V2 compiler module handoff is already published")
+                }
+                Self::ConflictingPublication => formatter
+                    .write_str("V2 compiler module handoff conflicts with the committed module"),
+                Self::AlreadyConsumed => {
+                    formatter.write_str("V2 compiler module handoff was already consumed")
+                }
+                Self::NotPublished => {
+                    formatter.write_str("V2 compiler module handoff is not published")
+                }
+                Self::DigestMismatch => formatter
+                    .write_str("V2 compiler module handoff closure-bound identity mismatch"),
+                Self::WrongCompilerClosure => formatter.write_str(
+                    "V2 compiler module handoff is bound to a different compiler closure",
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for CompilerModuleHandoffErrorV2 {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::Io(error) => Some(error),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for CompilerModuleHandoffErrorV2 {
+        fn from(error: std::io::Error) -> Self {
+            Self::Io(error)
+        }
+    }
+
+    impl From<EmitError> for CompilerModuleHandoffErrorV2 {
+        fn from(error: EmitError) -> Self {
+            match error {
+                EmitError::BuildAttempt { reason } => Self::Attempt { reason },
+                error => Self::InvalidSlot {
+                    path: PathBuf::new(),
+                    reason: error.to_string(),
+                },
+            }
+        }
+    }
+
+    impl From<CompilerModuleHandoffErrorV1> for CompilerModuleHandoffErrorV2 {
+        fn from(error: CompilerModuleHandoffErrorV1) -> Self {
+            match error {
+                CompilerModuleHandoffErrorV1::Io(error) => Self::Io(error),
+                CompilerModuleHandoffErrorV1::Attempt { reason } => Self::Attempt { reason },
+                CompilerModuleHandoffErrorV1::InvalidSlot { path, reason } => {
+                    Self::InvalidSlot { path, reason }
+                }
+                CompilerModuleHandoffErrorV1::InvalidHandoffSize { actual, maximum } => {
+                    Self::InvalidHandoffSize { actual, maximum }
+                }
+                CompilerModuleHandoffErrorV1::AlreadyPublished => Self::AlreadyPublished,
+                CompilerModuleHandoffErrorV1::ConflictingPublication => {
+                    Self::ConflictingPublication
+                }
+                CompilerModuleHandoffErrorV1::AlreadyConsumed => Self::AlreadyConsumed,
+                CompilerModuleHandoffErrorV1::NotPublished => Self::NotPublished,
+                CompilerModuleHandoffErrorV1::DigestMismatch => Self::DigestMismatch,
+            }
+        }
+    }
+
+    /// Atomically publishes bytes under one attempt and complete canonical compiler closure.
+    ///
+    /// Success establishes only a durable cooperative-protocol commitment. The receipt remains inert
+    /// and does not claim that any compiler authored the bytes or authorize their publication.
+    pub fn publish_compiler_module_handoff_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        handoff_bytes: &[u8],
+    ) -> Result<CompilerModuleHandoffReceiptV2, CompilerModuleHandoffErrorV2> {
+        publish_with_hooks_v2(
+            output_dir,
+            producer,
+            attempt,
+            compiler_closure,
+            handoff_bytes,
+            &mut NoFaults,
+        )
+    }
+
+    /// Atomically publishes closure-protected bytes in one closed attempt-local named slot.
+    pub fn publish_compiler_module_handoff_in_slot_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV2,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        handoff_bytes: &[u8],
+    ) -> Result<CompilerModuleHandoffReceiptV2, CompilerModuleHandoffErrorV2> {
+        publish_in_slot_with_hooks_v2(
+            output_dir,
+            producer,
+            attempt,
+            slot,
+            compiler_closure,
+            handoff_bytes,
+            &mut NoFaults,
+        )
+    }
+
+    /// Consumes one attempt's handoff exactly once under the expected compiler closure.
+    pub fn consume_compiler_module_handoff_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+    ) -> Result<ConsumedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
+        consume_with_hooks_v2(
+            output_dir,
+            producer,
+            attempt,
+            compiler_closure,
+            &mut NoFaults,
+        )
+    }
+
+    /// Consumes one closure-protected named slot exactly once.
+    pub fn consume_compiler_module_handoff_in_slot_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV2,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+    ) -> Result<ConsumedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
+        consume_in_slot_with_hooks_v2(
+            output_dir,
+            producer,
+            attempt,
+            slot,
+            compiler_closure,
+            &mut NoFaults,
+        )
+    }
+
+    struct HandoffRecordV2 {
+        slot: [u8; 32],
+        attempt: BuildAttempt,
+        producer: [u8; 32],
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        identity: CompilerModuleHandoffIdentityV2,
+        length: usize,
+        file: FileIdentity,
+    }
+
+    impl HandoffRecordV2 {
+        fn encode(&self) -> Vec<u8> {
+            let mut bytes = Vec::with_capacity(RECORD_BYTES_V2);
+            bytes.extend_from_slice(RECORD_MAGIC_V2);
+            bytes.extend_from_slice(&RECORD_VERSION_V2.to_le_bytes());
+            bytes.extend_from_slice(&self.slot);
+            bytes.extend_from_slice(&self.attempt.generation().to_le_bytes());
+            bytes.extend_from_slice(self.attempt.session().as_bytes());
+            bytes.extend_from_slice(self.attempt.invocation().as_bytes());
+            bytes.extend_from_slice(&self.producer);
+            bytes.extend_from_slice(&compiler_closure_bytes_v2(self.compiler_closure));
+            bytes.extend_from_slice(self.identity.as_bytes());
+            bytes.extend_from_slice(&(self.length as u64).to_le_bytes());
+            bytes.extend_from_slice(&self.file.device.to_le_bytes());
+            bytes.extend_from_slice(&self.file.inode.to_le_bytes());
+            bytes.extend_from_slice(&self.file.modified_seconds.to_le_bytes());
+            bytes.extend_from_slice(&self.file.modified_nanoseconds.to_le_bytes());
+            bytes.extend_from_slice(&self.file.changed_seconds.to_le_bytes());
+            bytes.extend_from_slice(&self.file.changed_nanoseconds.to_le_bytes());
+            bytes.extend_from_slice(&(self.file.length as u64).to_le_bytes());
+            let checksum = sha256_parts(&[RECORD_DOMAIN_V2, &bytes]);
+            bytes.extend_from_slice(&checksum);
+            debug_assert_eq!(bytes.len(), RECORD_BYTES_V2);
+            bytes
+        }
+
+        fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
+            if bytes.len() != RECORD_BYTES_V2 {
+                return Err("V2 record has a noncanonical length");
+            }
+            let (body, checksum) = bytes.split_at(bytes.len() - 32);
+            if sha256_parts(&[RECORD_DOMAIN_V2, body]).as_slice() != checksum {
+                return Err("V2 record checksum mismatch");
+            }
+            let mut decoder = Decoder::new(body);
+            if decoder.take(RECORD_MAGIC_V2.len())? != RECORD_MAGIC_V2 {
+                return Err("V2 record magic mismatch");
+            }
+            if decoder.u16()? != RECORD_VERSION_V2 {
+                return Err("unsupported V2 record version");
+            }
+            let slot = decoder.array()?;
+            let generation = decoder.u64()?;
+            let session = super::BuildSession::from_bytes(decoder.array()?);
+            let invocation = BuildInvocation::from_bytes(decoder.array()?);
+            let attempt = BuildAttempt::from_env_value(&format!(
+                "{generation}:{}:{}",
+                session.to_hex(),
+                invocation.to_hex()
+            ))
+            .map_err(|_| "V2 record contains an invalid attempt")?;
+            let producer = decoder.array()?;
+            let compiler_closure =
+                decode_compiler_closure_v2(decoder.take(COMPILER_CLOSURE_BYTES_V2)?)?;
+            let identity = CompilerModuleHandoffIdentityV2(decoder.array()?);
+            let length =
+                usize::try_from(decoder.u64()?).map_err(|_| "V2 record length is invalid")?;
+            let file = FileIdentity {
+                device: decoder.u64()?,
+                inode: decoder.u64()?,
+                modified_seconds: decoder.u64()? as i64,
+                modified_nanoseconds: decoder.u64()?,
+                changed_seconds: decoder.u64()? as i64,
+                changed_nanoseconds: decoder.u64()?,
+                length: decoder.u64()? as i64,
+            };
+            if !decoder.finished() || length == 0 || length > MAX_COMPILER_MODULE_HANDOFF_BYTES {
+                return Err("V2 record contains an invalid module length");
+            }
+            Ok(Self {
+                slot,
+                attempt,
+                producer,
+                compiler_closure,
+                identity,
+                length,
+                file,
+            })
+        }
+    }
+
+    fn compiler_closure_bytes_v2(
+        closure: fe2o3_build_authority::CompilerClosureV2,
+    ) -> [u8; COMPILER_CLOSURE_BYTES_V2] {
+        let mut bytes = [0; COMPILER_CLOSURE_BYTES_V2];
+        bytes[0..32].copy_from_slice(&closure.cargo_executable_sha256());
+        bytes[32..64].copy_from_slice(&closure.cargo_binding_trampoline_sha256());
+        bytes[64..96].copy_from_slice(&closure.cargo_fe2o3_binding_wrapper_sha256());
+        bytes[96..128].copy_from_slice(&closure.rustc_executable_sha256());
+        bytes[128..160].copy_from_slice(&closure.rustc_runtime_tree_sha256());
+        bytes[160..192].copy_from_slice(&closure.codegen_backend_sha256());
+        bytes[192..194].copy_from_slice(
+            &closure
+                .cargo_binding_transition_protocol_version()
+                .to_le_bytes(),
+        );
+        bytes[194..226].copy_from_slice(&closure.identity_sha256());
+        bytes
+    }
+
+    fn decode_compiler_closure_v2(
+        bytes: &[u8],
+    ) -> Result<fe2o3_build_authority::CompilerClosureV2, &'static str> {
+        let mut decoder = Decoder::new(bytes);
+        let cargo_executable = decoder.array()?;
+        let cargo_binding_trampoline = decoder.array()?;
+        let cargo_fe2o3_binding_wrapper = decoder.array()?;
+        let rustc_executable = decoder.array()?;
+        let rustc_runtime_tree = decoder.array()?;
+        let codegen_backend = decoder.array()?;
+        let transition_protocol = decoder.u16()?;
+        let identity = decoder.array()?;
+        if !decoder.finished() {
+            return Err("compiler closure preimage has trailing bytes");
+        }
+        fe2o3_build_authority::CompilerClosureV2::from_pins_and_identity(
+            cargo_executable,
+            cargo_binding_trampoline,
+            cargo_fe2o3_binding_wrapper,
+            rustc_executable,
+            rustc_runtime_tree,
+            codegen_backend,
+            transition_protocol,
+            identity,
+        )
+        .map_err(|error| {
+            match error {
+        fe2o3_build_authority::CompilerClosureErrorV2::ZeroDigest { .. } => {
+            "compiler closure preimage contains a zero digest"
+        }
+        fe2o3_build_authority::CompilerClosureErrorV2::UnsupportedTransitionProtocolVersion {
+            ..
+        } => "compiler closure preimage has an unsupported transition protocol version",
+        fe2o3_build_authority::CompilerClosureErrorV2::IdentityMismatch => {
+            "compiler closure preimage identity mismatch"
+        }
+        _ => "compiler closure preimage is not canonical",
+    }
+        })
+    }
+
+    fn publish_with_hooks_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        handoff_bytes: &[u8],
+        hooks: &mut impl HandoffHooks,
+    ) -> Result<CompilerModuleHandoffReceiptV2, CompilerModuleHandoffErrorV2> {
+        publish_in_slot_with_hooks_v2(
+            output_dir,
+            producer,
+            attempt,
+            CompilerModuleHandoffSlotV2::Default,
+            compiler_closure,
+            handoff_bytes,
+            hooks,
+        )
+    }
+
+    fn publish_in_slot_with_hooks_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        handoff_slot: CompilerModuleHandoffSlotV2,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        handoff_bytes: &[u8],
+        hooks: &mut impl HandoffHooks,
+    ) -> Result<CompilerModuleHandoffReceiptV2, CompilerModuleHandoffErrorV2> {
+        validate_handoff_size_v2(handoff_bytes.len())?;
+        let output = PinnedOutput::open(output_dir)?;
+        let _lock = output.lock()?;
+        output.verify_path_identity()?;
+        authorize(&output, producer, attempt).map_err(CompilerModuleHandoffErrorV2::from)?;
+        let producer_id = producer_identity_v2(producer);
+        let slot_id = slot_identity_v2(producer_id, attempt, handoff_slot);
+        let parent = open_or_create_private_directory(
+            &output.fd,
+            &output.display_path,
+            &format!("{PARENT_PREFIX_V2}{}", hex(&producer_id)),
+            hooks,
+        )
+        .map_err(CompilerModuleHandoffErrorV2::from)?;
+        cleanup_stale_slots_v2(&parent, producer_id, attempt)?;
+        let slot = open_or_create_private_directory(
+            &parent.fd,
+            &parent.path,
+            &format!("{SLOT_PREFIX_V2}{}", hex(&slot_id)),
+            hooks,
+        )
+        .map_err(CompilerModuleHandoffErrorV2::from)?;
+        recover_slot_v2(&slot)?;
+        if entry_exists(&slot, CONSUMED_ENTRY).map_err(CompilerModuleHandoffErrorV2::from)? {
+            read_bound_record_v2(
+                &slot,
+                CONSUMED_ENTRY,
+                producer_id,
+                slot_id,
+                attempt,
+                compiler_closure,
+            )?;
+            cleanup_consumed_payload(&slot);
+            return Err(CompilerModuleHandoffErrorV2::AlreadyConsumed);
+        }
+        if entry_exists(&slot, READY_ENTRY).map_err(CompilerModuleHandoffErrorV2::from)? {
+            let committed = read_bound_record_v2(
+                &slot,
+                READY_ENTRY,
+                producer_id,
+                slot_id,
+                attempt,
+                compiler_closure,
+            )?;
+            let committed_bytes = read_payload_v2(&slot, &committed)?;
+            return if committed_bytes == handoff_bytes {
+                Err(CompilerModuleHandoffErrorV2::AlreadyPublished)
+            } else {
+                Err(CompilerModuleHandoffErrorV2::ConflictingPublication)
+            };
+        }
+
+        let identity = CompilerModuleHandoffIdentityV2(handoff_identity_v2(
+            producer_id,
+            slot_id,
+            attempt,
+            compiler_closure,
+            handoff_bytes,
+        ));
+        let (payload_temp, mut payload) =
+            create_temp(&slot, "module").map_err(CompilerModuleHandoffErrorV2::from)?;
+        hooks.hit(FaultPoint::PayloadCreated)?;
+        payload.write_all(handoff_bytes)?;
+        hooks.hit(FaultPoint::PayloadWritten)?;
+        payload.sync_all()?;
+        hooks.hit(FaultPoint::PayloadSynced)?;
+        renameat_with(
+            &slot.fd,
+            &payload_temp,
+            &slot.fd,
+            PAYLOAD_ENTRY,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        hooks.hit(FaultPoint::PayloadRenamed)?;
+        fsync(&slot.fd).map_err(std::io::Error::from)?;
+        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
+        let payload_stat = fstat(&payload).map_err(std::io::Error::from)?;
+        let named = statat(&slot.fd, PAYLOAD_ENTRY, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)?;
+        if !same_private_file(&payload_stat, &named, handoff_bytes.len()) {
+            return Err(invalid_slot_v2(
+                &slot.path,
+                "published payload does not match its pinned descriptor",
+            ));
+        }
+        let record = HandoffRecordV2 {
+            slot: slot_id,
+            attempt,
+            producer: producer_id,
+            compiler_closure,
+            identity,
+            length: handoff_bytes.len(),
+            file: FileIdentity::from_stat(&named),
+        };
+        let record_bytes = record.encode();
+        let (record_temp, mut record_file) =
+            create_temp(&slot, "record").map_err(CompilerModuleHandoffErrorV2::from)?;
+        record_file.write_all(&record_bytes)?;
+        hooks.hit(FaultPoint::RecordWritten)?;
+        record_file.sync_all()?;
+        hooks.hit(FaultPoint::RecordSynced)?;
+        renameat_with(
+            &slot.fd,
+            &record_temp,
+            &slot.fd,
+            READY_ENTRY,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        hooks.hit(FaultPoint::RecordRenamed)?;
+        fsync(&slot.fd).map_err(std::io::Error::from)?;
+        hooks.hit(FaultPoint::PublishedSynced)?;
+        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
+        validate_named_record_v2(&slot, READY_ENTRY, &record_bytes)?;
+        Ok(CompilerModuleHandoffReceiptV2 {
+            attempt,
+            slot: handoff_slot,
+            compiler_closure,
+            identity,
+            length: handoff_bytes.len(),
+        })
+    }
+
+    fn consume_with_hooks_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        hooks: &mut impl HandoffHooks,
+    ) -> Result<ConsumedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
+        consume_in_slot_with_hooks_v2(
+            output_dir,
+            producer,
+            attempt,
+            CompilerModuleHandoffSlotV2::Default,
+            compiler_closure,
+            hooks,
+        )
+    }
+
+    fn consume_in_slot_with_hooks_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        handoff_slot: CompilerModuleHandoffSlotV2,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        hooks: &mut impl HandoffHooks,
+    ) -> Result<ConsumedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output.lock()?;
+        output.verify_path_identity()?;
+        authorize(&output, producer, attempt).map_err(CompilerModuleHandoffErrorV2::from)?;
+        let producer_id = producer_identity_v2(producer);
+        let slot_id = slot_identity_v2(producer_id, attempt, handoff_slot);
+        let parent = open_private_directory(
+            &output.fd,
+            &output.display_path,
+            &format!("{PARENT_PREFIX_V2}{}", hex(&producer_id)),
+        )
+        .map_err(CompilerModuleHandoffErrorV2::from)?
+        .ok_or(CompilerModuleHandoffErrorV2::NotPublished)?;
+        cleanup_stale_slots_v2(&parent, producer_id, attempt)?;
+        let slot = open_private_directory(
+            &parent.fd,
+            &parent.path,
+            &format!("{SLOT_PREFIX_V2}{}", hex(&slot_id)),
+        )
+        .map_err(CompilerModuleHandoffErrorV2::from)?
+        .ok_or(CompilerModuleHandoffErrorV2::NotPublished)?;
+        recover_slot_v2(&slot)?;
+        if entry_exists(&slot, CONSUMED_ENTRY).map_err(CompilerModuleHandoffErrorV2::from)? {
+            read_bound_record_v2(
+                &slot,
+                CONSUMED_ENTRY,
+                producer_id,
+                slot_id,
+                attempt,
+                compiler_closure,
+            )?;
+            cleanup_consumed_payload(&slot);
+            return Err(CompilerModuleHandoffErrorV2::AlreadyConsumed);
+        }
+        let record = read_bound_record_v2(
+            &slot,
+            READY_ENTRY,
+            producer_id,
+            slot_id,
+            attempt,
+            compiler_closure,
+        )?;
+        let bytes = read_payload_v2(&slot, &record)?;
+        hooks.hit(FaultPoint::PayloadValidated)?;
+        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
+        renameat_with(
+            &slot.fd,
+            READY_ENTRY,
+            &slot.fd,
+            CONSUMED_ENTRY,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        hooks.hit(FaultPoint::ConsumedRenamed)?;
+        fsync(&slot.fd).map_err(std::io::Error::from)?;
+        hooks.hit(FaultPoint::ConsumedSynced)?;
+        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
+        cleanup_consumed_payload(&slot);
+        Ok(ConsumedCompilerModuleHandoffV2 {
+            attempt,
+            slot: handoff_slot,
+            compiler_closure: record.compiler_closure,
+            identity: record.identity,
+            bytes: Arc::from(bytes),
+        })
+    }
+
+    fn producer_identity_v2(producer: &ProducerIdentity) -> [u8; 32] {
+        sha256_parts(&[
+            PRODUCER_DOMAIN_V2,
+            &(producer.stable_source.len() as u64).to_le_bytes(),
+            producer.stable_source.as_bytes(),
+            &(producer.crate_name.len() as u64).to_le_bytes(),
+            producer.crate_name.as_bytes(),
+        ])
+    }
+
+    fn slot_identity_v2(
+        producer: [u8; 32],
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV2,
+    ) -> [u8; 32] {
+        let generation = attempt.generation().to_le_bytes();
+        if slot == CompilerModuleHandoffSlotV2::Default {
+            return sha256_parts(&[
+                SLOT_DOMAIN_V2,
+                &producer,
+                &generation,
+                attempt.session().as_bytes(),
+                attempt.invocation().as_bytes(),
+            ]);
+        }
+        sha256_parts(&[
+            NAMED_SLOT_DOMAIN_V2,
+            &producer,
+            &generation,
+            attempt.session().as_bytes(),
+            attempt.invocation().as_bytes(),
+            &[slot as u8],
+        ])
+    }
+
+    fn handoff_identity_v2(
+        producer: [u8; 32],
+        slot: [u8; 32],
+        attempt: BuildAttempt,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+        handoff_bytes: &[u8],
+    ) -> [u8; 32] {
+        let generation = attempt.generation().to_le_bytes();
+        let length = (handoff_bytes.len() as u64).to_le_bytes();
+        sha256_parts(&[
+            HANDOFF_IDENTITY_DOMAIN_V2,
+            &compiler_closure_bytes_v2(compiler_closure),
+            &slot,
+            &producer,
+            &generation,
+            attempt.session().as_bytes(),
+            attempt.invocation().as_bytes(),
+            &length,
+            handoff_bytes,
+        ])
+    }
+
+    fn cleanup_stale_slots_v2(
+        parent: &PinnedDirectory,
+        producer: [u8; 32],
+        attempt: BuildAttempt,
+    ) -> Result<(), CompilerModuleHandoffErrorV2> {
+        let current = [
+            CompilerModuleHandoffSlotV2::Default,
+            CompilerModuleHandoffSlotV2::GeneralGemmReference,
+            CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly,
+        ]
+        .map(|slot| {
+            format!(
+                "{SLOT_PREFIX_V2}{}",
+                hex(&slot_identity_v2(producer, attempt, slot))
+            )
+        });
+        let scan = rustix::io::fcntl_dupfd_cloexec(&parent.fd, 0).map_err(std::io::Error::from)?;
+        let mut entries = Dir::read_from(&scan).map_err(std::io::Error::from)?;
+        let mut stale = Vec::new();
+        for entry in &mut entries {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let name = entry.file_name().to_string_lossy();
+            if name == "." || name == ".." || current.iter().any(|current| name == current.as_str())
+            {
+                continue;
+            }
+            if !name.starts_with(SLOT_PREFIX_V2) {
+                return Err(invalid_slot_v2(
+                    &parent.path.join(name.as_ref()),
+                    "unexpected V2 producer handoff entry",
+                ));
+            }
+            if stale.len() == MAX_STALE_SLOTS {
+                return Err(invalid_slot_v2(
+                    &parent.path,
+                    "too many stale V2 handoff slots",
+                ));
+            }
+            stale.push(name.into_owned());
+        }
+        for name in stale {
+            remove_slot_entry(parent, &name).map_err(CompilerModuleHandoffErrorV2::from)?;
+        }
+        if parent_entry_count(parent).map_err(CompilerModuleHandoffErrorV2::from)? > current.len() {
+            return Err(invalid_slot_v2(
+                &parent.path,
+                "V2 handoff producer directory exceeds its entry bound",
+            ));
+        }
+        parent
+            .verify()
+            .map_err(CompilerModuleHandoffErrorV2::from)?;
+        Ok(())
+    }
+
+    fn recover_slot_v2(slot: &PinnedDirectory) -> Result<(), CompilerModuleHandoffErrorV2> {
+        let names = slot_entries(slot).map_err(CompilerModuleHandoffErrorV2::from)?;
+        for name in &names {
+            if !matches!(name.as_str(), PAYLOAD_ENTRY | READY_ENTRY | CONSUMED_ENTRY)
+                && !name.starts_with(TEMP_PREFIX)
+            {
+                return Err(invalid_slot_v2(
+                    &slot.path.join(name),
+                    "unexpected V2 slot entry",
+                ));
+            }
+        }
+        if names.iter().any(|name| name == READY_ENTRY)
+            && names.iter().any(|name| name == CONSUMED_ENTRY)
+        {
+            return Err(invalid_slot_v2(
+                &slot.path,
+                "V2 ready and consumed records coexist",
+            ));
+        }
+        let committed_entry = names.iter().find_map(|name| match name.as_str() {
+            READY_ENTRY => Some(READY_ENTRY),
+            CONSUMED_ENTRY => Some(CONSUMED_ENTRY),
+            _ => None,
+        });
+        let residue = names
+            .into_iter()
+            .filter(|name| {
+                name.starts_with(TEMP_PREFIX)
+                    || (committed_entry.is_none() && name == PAYLOAD_ENTRY)
+            })
+            .collect::<Vec<_>>();
+        for name in &residue {
+            reject_nonregular_before_cleanup(slot, name)
+                .map_err(CompilerModuleHandoffErrorV2::from)?;
+        }
+        if let Some(entry) = committed_entry {
+            let record = read_private_file(slot, entry, RECORD_BYTES_V2)
+                .map_err(CompilerModuleHandoffErrorV2::from)?
+                .ok_or_else(|| invalid_slot_v2(&slot.path.join(entry), "V2 record disappeared"))?;
+            HandoffRecordV2::decode(&record)
+                .map_err(|reason| invalid_slot_v2(&slot.path.join(entry), reason))?;
+        }
+        for name in residue {
+            unlinkat(&slot.fd, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+        }
+        if committed_entry.is_none() {
+            fsync(&slot.fd).map_err(std::io::Error::from)?;
+        }
+        slot.verify().map_err(CompilerModuleHandoffErrorV2::from)?;
+        Ok(())
+    }
+
+    fn read_payload_v2(
+        slot: &PinnedDirectory,
+        record: &HandoffRecordV2,
+    ) -> Result<Vec<u8>, CompilerModuleHandoffErrorV2> {
+        let fd = openat(
+            &slot.fd,
+            PAYLOAD_ENTRY,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            invalid_slot_v2(
+                &slot.path.join(PAYLOAD_ENTRY),
+                std::io::Error::from(error).to_string(),
+            )
+        })?;
+        let mut file = fs::File::from(fd);
+        let before = fstat(&file).map_err(std::io::Error::from)?;
+        let named = statat(&slot.fd, PAYLOAD_ENTRY, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)?;
+        if !record.file.matches(&before) || !record.file.matches(&named) {
+            return Err(invalid_slot_v2(
+                &slot.path.join(PAYLOAD_ENTRY),
+                "V2 payload identity metadata mismatch",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(record.length);
+        Read::by_ref(&mut file)
+            .take((MAX_COMPILER_MODULE_HANDOFF_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        let after = fstat(&file).map_err(std::io::Error::from)?;
+        let still_named = statat(&slot.fd, PAYLOAD_ENTRY, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)?;
+        if bytes.len() != record.length
+            || !record.file.matches(&after)
+            || !record.file.matches(&still_named)
+        {
+            return Err(invalid_slot_v2(
+                &slot.path.join(PAYLOAD_ENTRY),
+                "V2 payload changed while its descriptor was read",
+            ));
+        }
+        let identity = handoff_identity_v2(
+            record.producer,
+            record.slot,
+            record.attempt,
+            record.compiler_closure,
+            &bytes,
+        );
+        if identity != *record.identity.as_bytes() {
+            return Err(CompilerModuleHandoffErrorV2::DigestMismatch);
+        }
+        Ok(bytes)
+    }
+
+    fn read_bound_record_v2(
+        slot: &PinnedDirectory,
+        entry: &str,
+        producer: [u8; 32],
+        slot_identity: [u8; 32],
+        attempt: BuildAttempt,
+        compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+    ) -> Result<HandoffRecordV2, CompilerModuleHandoffErrorV2> {
+        let bytes = read_private_file(slot, entry, RECORD_BYTES_V2)
+            .map_err(CompilerModuleHandoffErrorV2::from)?
+            .ok_or(CompilerModuleHandoffErrorV2::NotPublished)?;
+        let record = HandoffRecordV2::decode(&bytes)
+            .map_err(|reason| invalid_slot_v2(&slot.path.join(entry), reason))?;
+        if record.slot != slot_identity || record.producer != producer || record.attempt != attempt
+        {
+            return Err(invalid_slot_v2(
+                &slot.path.join(entry),
+                "V2 record binding does not match the requested slot, attempt, and producer",
+            ));
+        }
+        if record.compiler_closure != compiler_closure {
+            return Err(CompilerModuleHandoffErrorV2::WrongCompilerClosure);
+        }
+        Ok(record)
+    }
+
+    fn validate_named_record_v2(
+        slot: &PinnedDirectory,
+        entry: &str,
+        expected: &[u8],
+    ) -> Result<(), CompilerModuleHandoffErrorV2> {
+        let actual = read_private_file(slot, entry, RECORD_BYTES_V2)
+            .map_err(CompilerModuleHandoffErrorV2::from)?
+            .ok_or_else(|| {
+                invalid_slot_v2(&slot.path.join(entry), "V2 record disappeared after commit")
+            })?;
+        if actual != expected {
+            return Err(invalid_slot_v2(
+                &slot.path.join(entry),
+                "V2 record changed after commit",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_handoff_size_v2(length: usize) -> Result<(), CompilerModuleHandoffErrorV2> {
+        if length == 0 || length > MAX_COMPILER_MODULE_HANDOFF_BYTES {
+            return Err(CompilerModuleHandoffErrorV2::InvalidHandoffSize {
+                actual: length,
+                maximum: MAX_COMPILER_MODULE_HANDOFF_BYTES,
+            });
+        }
+        Ok(())
+    }
+
+    fn invalid_slot_v2(path: &Path, reason: impl Into<String>) -> CompilerModuleHandoffErrorV2 {
+        CompilerModuleHandoffErrorV2::InvalidSlot {
+            path: path.to_path_buf(),
+            reason: reason.into(),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::{BuildSession, begin_build_attempt};
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        struct TestDirectory(PathBuf);
+
+        impl TestDirectory {
+            fn new() -> Self {
+                static NEXT: AtomicU64 = AtomicU64::new(1);
+                let path = std::env::temp_dir().join(format!(
+                    "fe2o3-protected-module-handoff-v2-test-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ));
+                fs::create_dir(&path).unwrap();
+                Self(path)
+            }
+        }
+
+        impl Drop for TestDirectory {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn producer(name: &str) -> ProducerIdentity {
+            ProducerIdentity::from_codegen(name, Some(Path::new("/src/protected-kernel.rs")))
+                .unwrap()
+        }
+
+        fn begin(path: &Path, producer: &ProducerIdentity, seed: u8) -> BuildAttempt {
+            begin_build_attempt(
+                path,
+                producer,
+                BuildInvocation::from_bytes([seed; 32]),
+                BuildSession::from_bytes([seed.wrapping_add(1); 16]),
+            )
+            .unwrap()
+        }
+
+        fn closure(seed: u8) -> fe2o3_build_authority::CompilerClosureV2 {
+            fe2o3_build_authority::CompilerClosureV2::new(
+                [seed; 32],
+                [seed.wrapping_add(1); 32],
+                [seed.wrapping_add(2); 32],
+                [seed.wrapping_add(3); 32],
+                [seed.wrapping_add(4); 32],
+                [seed.wrapping_add(5); 32],
+            )
+            .unwrap()
+        }
+
+        fn slot_path_v2(
+            path: &Path,
+            producer: &ProducerIdentity,
+            attempt: BuildAttempt,
+            slot: CompilerModuleHandoffSlotV2,
+        ) -> PathBuf {
+            let producer_id = producer_identity_v2(producer);
+            path.join(format!("{PARENT_PREFIX_V2}{}", hex(&producer_id)))
+                .join(format!(
+                    "{SLOT_PREFIX_V2}{}",
+                    hex(&slot_identity_v2(producer_id, attempt, slot))
+                ))
+        }
+
+        fn slot_path_v1(
+            path: &Path,
+            producer: &ProducerIdentity,
+            attempt: BuildAttempt,
+        ) -> PathBuf {
+            let producer_id = producer_identity(producer);
+            path.join(format!("{PARENT_PREFIX}{}", hex(&producer_id)))
+                .join(format!(
+                    "{SLOT_PREFIX}{}",
+                    hex(&slot_identity(
+                        producer_id,
+                        attempt,
+                        CompilerModuleHandoffSlotV1::Default
+                    ))
+                ))
+        }
+
+        fn closure_offset() -> usize {
+            RECORD_MAGIC_V2.len() + 2 + 32 + 8 + 16 + 32 + 32
+        }
+
+        fn refresh_record_checksum(bytes: &mut [u8]) {
+            let body_length = bytes.len() - 32;
+            let checksum = sha256_parts(&[RECORD_DOMAIN_V2, &bytes[..body_length]]);
+            bytes[body_length..].copy_from_slice(&checksum);
+        }
+
+        fn rewrite_ready_record(slot: &Path, mutate: impl FnOnce(&mut [u8])) -> Vec<u8> {
+            let path = slot.join(READY_ENTRY);
+            let mut bytes = fs::read(&path).unwrap();
+            mutate(&mut bytes);
+            refresh_record_checksum(&mut bytes);
+            fs::write(path, &bytes).unwrap();
+            bytes
+        }
+
+        #[test]
+        fn canonical_closure_preimage_receipt_and_consumed_value_are_exact_and_inert() {
+            let temp = TestDirectory::new();
+            let producer = producer("protected");
+            let attempt = begin(&temp.0, &producer, 31);
+            let closure = closure(11);
+            let module = b"closure-protected compiler module";
+            let closure_bytes = compiler_closure_bytes_v2(closure);
+
+            assert_eq!(closure_bytes.len(), 226);
+            assert_eq!(&closure_bytes[0..32], &[11; 32]);
+            assert_eq!(&closure_bytes[32..64], &[12; 32]);
+            assert_eq!(&closure_bytes[64..96], &[13; 32]);
+            assert_eq!(&closure_bytes[96..128], &[14; 32]);
+            assert_eq!(&closure_bytes[128..160], &[15; 32]);
+            assert_eq!(&closure_bytes[160..192], &[16; 32]);
+            assert_eq!(&closure_bytes[192..194], &1u16.to_le_bytes());
+            assert_eq!(&closure_bytes[194..226], &closure.identity_sha256());
+            assert_eq!(decode_compiler_closure_v2(&closure_bytes).unwrap(), closure);
+
+            let receipt =
+                publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure, module)
+                    .unwrap();
+            assert_eq!(receipt.attempt(), attempt);
+            assert_eq!(receipt.slot(), CompilerModuleHandoffSlotV2::Default);
+            assert_eq!(receipt.compiler_closure(), closure);
+            assert_eq!(receipt.length(), module.len());
+            assert!(!receipt.grants_publication_authority());
+            assert!(!receipt.grants_compiler_authority());
+
+            let slot = slot_path_v2(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV2::Default,
+            );
+            let record_bytes = fs::read(slot.join(READY_ENTRY)).unwrap();
+            let record = HandoffRecordV2::decode(&record_bytes).unwrap();
+            assert_eq!(record.compiler_closure, closure);
+            assert_eq!(record.identity, receipt.identity());
+            assert!(record_bytes.starts_with(RECORD_MAGIC_V2));
+            assert_eq!(
+                &record_bytes[closure_offset()..closure_offset() + COMPILER_CLOSURE_BYTES_V2],
+                &closure_bytes
+            );
+            assert_eq!(
+                fs::metadata(slot.join(READY_ENTRY))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+
+            let consumed =
+                consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure).unwrap();
+            assert_eq!(consumed.attempt(), attempt);
+            assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV2::Default);
+            assert_eq!(consumed.compiler_closure(), closure);
+            assert_eq!(consumed.identity(), receipt.identity());
+            assert_eq!(consumed.bytes(), module);
+            assert!(!consumed.grants_publication_authority());
+            assert!(!consumed.grants_compiler_authority());
+            assert!(!consumed.grants_link_authority());
+            assert!(!consumed.grants_load_authority());
+            assert!(!consumed.grants_launch_authority());
+            assert!(matches!(
+                consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure),
+                Err(CompilerModuleHandoffErrorV2::AlreadyConsumed)
+            ));
+        }
+
+        #[test]
+        fn identity_binds_closure_slot_attempt_producer_and_module_bytes() {
+            let temp = TestDirectory::new();
+            let primary_producer = producer("binding");
+            let other_producer = producer("binding_other");
+            let attempt = begin(&temp.0, &primary_producer, 32);
+            let producer_id = producer_identity_v2(&primary_producer);
+            let slot = slot_identity_v2(producer_id, attempt, CompilerModuleHandoffSlotV2::Default);
+            let compiler_closure = closure(21);
+            let baseline =
+                handoff_identity_v2(producer_id, slot, attempt, compiler_closure, b"module");
+
+            assert_ne!(
+                baseline,
+                handoff_identity_v2(
+                    producer_identity_v2(&other_producer),
+                    slot,
+                    attempt,
+                    compiler_closure,
+                    b"module"
+                )
+            );
+            assert_ne!(
+                baseline,
+                handoff_identity_v2(
+                    producer_id,
+                    slot_identity_v2(
+                        producer_id,
+                        attempt,
+                        CompilerModuleHandoffSlotV2::GeneralGemmReference
+                    ),
+                    attempt,
+                    compiler_closure,
+                    b"module"
+                )
+            );
+            let other_attempt = BuildAttempt::from_env_value(&format!(
+                "{}:{}:{}",
+                attempt.generation().wrapping_add(1),
+                attempt.session().to_hex(),
+                attempt.invocation().to_hex()
+            ))
+            .unwrap();
+            assert_ne!(
+                baseline,
+                handoff_identity_v2(
+                    producer_id,
+                    slot,
+                    other_attempt,
+                    compiler_closure,
+                    b"module"
+                )
+            );
+            assert_ne!(
+                baseline,
+                handoff_identity_v2(producer_id, slot, attempt, closure(22), b"module")
+            );
+            assert_ne!(
+                baseline,
+                handoff_identity_v2(producer_id, slot, attempt, compiler_closure, b"module!")
+            );
+        }
+
+        #[test]
+        fn named_slot_record_cannot_be_replayed_as_default() {
+            let temp = TestDirectory::new();
+            let producer = producer("slot_binding");
+            let attempt = begin(&temp.0, &producer, 33);
+            let closure = closure(31);
+            let module = b"same module";
+            let default =
+                publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure, module)
+                    .unwrap();
+            let named = publish_compiler_module_handoff_in_slot_v2(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV2::GeneralGemmReference,
+                closure,
+                module,
+            )
+            .unwrap();
+            assert_ne!(default.identity(), named.identity());
+
+            let default_slot = slot_path_v2(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV2::Default,
+            );
+            let named_slot = slot_path_v2(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV2::GeneralGemmReference,
+            );
+            fs::remove_file(default_slot.join(READY_ENTRY)).unwrap();
+            fs::copy(named_slot.join(READY_ENTRY), default_slot.join(READY_ENTRY)).unwrap();
+            assert!(matches!(
+                consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure),
+                Err(CompilerModuleHandoffErrorV2::InvalidSlot { .. })
+            ));
+            assert_eq!(
+                consume_compiler_module_handoff_in_slot_v2(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    CompilerModuleHandoffSlotV2::GeneralGemmReference,
+                    closure,
+                )
+                .unwrap()
+                .bytes(),
+                module
+            );
+        }
+
+        #[test]
+        fn wrong_closure_fails_without_consuming_the_committed_bytes() {
+            let temp = TestDirectory::new();
+            let producer = producer("wrong_closure");
+            let attempt = begin(&temp.0, &producer, 34);
+            let expected = closure(41);
+            let wrong = closure(51);
+            publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, expected, b"module")
+                .unwrap();
+
+            assert!(matches!(
+                consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, wrong),
+                Err(CompilerModuleHandoffErrorV2::WrongCompilerClosure)
+            ));
+            assert!(matches!(
+                publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, wrong, b"module"),
+                Err(CompilerModuleHandoffErrorV2::WrongCompilerClosure)
+            ));
+            assert_eq!(
+                consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, expected)
+                    .unwrap()
+                    .bytes(),
+                b"module"
+            );
+        }
+
+        #[test]
+        fn hostile_payload_record_and_closure_mutations_fail_closed() {
+            for attack in ["payload", "record-identity", "closure-pin"] {
+                let temp = TestDirectory::new();
+                let producer = producer("hostile_mutation");
+                let attempt = begin(&temp.0, &producer, 35);
+                let closure = closure(61);
+                publish_compiler_module_handoff_v2(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    closure,
+                    b"original",
+                )
+                .unwrap();
+                let slot = slot_path_v2(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    CompilerModuleHandoffSlotV2::Default,
+                );
+                match attack {
+                    "payload" => fs::write(slot.join(PAYLOAD_ENTRY), b"changed!").unwrap(),
+                    "record-identity" => {
+                        rewrite_ready_record(&slot, |bytes| {
+                            let identity_offset = closure_offset() + COMPILER_CLOSURE_BYTES_V2;
+                            bytes[identity_offset] ^= 0x80;
+                        });
+                    }
+                    "closure-pin" => {
+                        rewrite_ready_record(&slot, |bytes| {
+                            bytes[closure_offset() + 7] ^= 0x80;
+                        });
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(
+                    consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure)
+                        .is_err(),
+                    "attack={attack}"
+                );
+            }
+        }
+
+        #[test]
+        fn compiler_closure_digest_roles_cannot_be_swapped() {
+            let temp = TestDirectory::new();
+            let producer = producer("role_mismatch");
+            let attempt = begin(&temp.0, &producer, 36);
+            let closure = closure(71);
+            publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure, b"module")
+                .unwrap();
+            let slot = slot_path_v2(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV2::Default,
+            );
+            rewrite_ready_record(&slot, |bytes| {
+                let offset = closure_offset();
+                let first: [u8; 32] = bytes[offset..offset + 32].try_into().unwrap();
+                let second: [u8; 32] = bytes[offset + 32..offset + 64].try_into().unwrap();
+                bytes[offset..offset + 32].copy_from_slice(&second);
+                bytes[offset + 32..offset + 64].copy_from_slice(&first);
+            });
+            assert!(matches!(
+                consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure),
+                Err(CompilerModuleHandoffErrorV2::InvalidSlot { .. })
+            ));
+        }
+
+        #[test]
+        fn unknown_record_version_and_closure_protocol_fail_closed() {
+            for attack in ["record-version", "closure-protocol"] {
+                let temp = TestDirectory::new();
+                let producer = producer("unknown_version");
+                let attempt = begin(&temp.0, &producer, 37);
+                let closure = closure(81);
+                publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure, b"module")
+                    .unwrap();
+                let slot = slot_path_v2(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    CompilerModuleHandoffSlotV2::Default,
+                );
+                rewrite_ready_record(&slot, |bytes| match attack {
+                    "record-version" => bytes[RECORD_MAGIC_V2.len()..RECORD_MAGIC_V2.len() + 2]
+                        .copy_from_slice(&3u16.to_le_bytes()),
+                    "closure-protocol" => bytes[closure_offset() + 192..closure_offset() + 194]
+                        .copy_from_slice(&2u16.to_le_bytes()),
+                    _ => unreachable!(),
+                });
+                assert!(matches!(
+                    consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure),
+                    Err(CompilerModuleHandoffErrorV2::InvalidSlot { .. })
+                ));
+            }
+        }
+
+        #[test]
+        fn v1_record_downgrade_is_rejected_by_v2_recovery_and_consume() {
+            for operation in ["recover-publish", "consume"] {
+                let temp = TestDirectory::new();
+                let producer = producer("v1_downgrade");
+                let attempt = begin(&temp.0, &producer, 38);
+                let closure = closure(91);
+                publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, b"V1 module")
+                    .unwrap();
+                publish_compiler_module_handoff_v2(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    closure,
+                    b"V2 module",
+                )
+                .unwrap();
+                let v1_slot = slot_path_v1(&temp.0, &producer, attempt);
+                let v2_slot = slot_path_v2(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    CompilerModuleHandoffSlotV2::Default,
+                );
+                assert_ne!(v1_slot, v2_slot);
+                assert!(
+                    fs::read(v1_slot.join(READY_ENTRY))
+                        .unwrap()
+                        .starts_with(RECORD_MAGIC)
+                );
+                assert!(
+                    fs::read(v2_slot.join(READY_ENTRY))
+                        .unwrap()
+                        .starts_with(RECORD_MAGIC_V2)
+                );
+                fs::remove_file(v2_slot.join(READY_ENTRY)).unwrap();
+                fs::copy(v1_slot.join(READY_ENTRY), v2_slot.join(READY_ENTRY)).unwrap();
+
+                let result = match operation {
+                    "recover-publish" => publish_compiler_module_handoff_v2(
+                        &temp.0,
+                        &producer,
+                        attempt,
+                        closure,
+                        b"V2 module",
+                    )
+                    .map(|_| ()),
+                    "consume" => {
+                        consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure)
+                            .map(|_| ())
+                    }
+                    _ => unreachable!(),
+                };
+                assert!(matches!(
+                    result,
+                    Err(CompilerModuleHandoffErrorV2::InvalidSlot { .. })
+                ));
+                assert_eq!(
+                    consume_compiler_module_handoff_v1(&temp.0, &producer, attempt)
+                        .unwrap()
+                        .bytes(),
+                    b"V1 module"
+                );
+            }
+        }
+
+        #[test]
+        fn concurrent_v2_publish_and_consume_have_single_winners() {
+            let temp = Arc::new(TestDirectory::new());
+            let producer = Arc::new(producer("concurrent_v2"));
+            let attempt = begin(&temp.0, &producer, 39);
+            let closure = closure(101);
+            let barrier = Arc::new(Barrier::new(8));
+            let publishers = (0..8)
+                .map(|_| {
+                    let temp = Arc::clone(&temp);
+                    let producer = Arc::clone(&producer);
+                    let barrier = Arc::clone(&barrier);
+                    thread::spawn(move || {
+                        barrier.wait();
+                        publish_compiler_module_handoff_v2(
+                            &temp.0,
+                            &producer,
+                            attempt,
+                            closure,
+                            b"concurrent V2 module",
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let results = publishers
+                .into_iter()
+                .map(|join| join.join().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+            assert_eq!(
+                results
+                    .iter()
+                    .filter(|result| matches!(
+                        result,
+                        Err(CompilerModuleHandoffErrorV2::AlreadyPublished)
+                    ))
+                    .count(),
+                7
+            );
+
+            let barrier = Arc::new(Barrier::new(8));
+            let consumers = (0..8)
+                .map(|_| {
+                    let temp = Arc::clone(&temp);
+                    let producer = Arc::clone(&producer);
+                    let barrier = Arc::clone(&barrier);
+                    thread::spawn(move || {
+                        barrier.wait();
+                        consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let results = consumers
+                .into_iter()
+                .map(|join| join.join().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+            assert_eq!(
+                results
+                    .iter()
+                    .filter(|result| matches!(
+                        result,
+                        Err(CompilerModuleHandoffErrorV2::AlreadyConsumed)
+                    ))
+                    .count(),
+                7
+            );
+        }
+
+        struct FailAt(FaultPoint);
+
+        impl HandoffHooks for FailAt {
+            fn hit(&mut self, point: FaultPoint) -> std::io::Result<()> {
+                if point == self.0 {
+                    Err(std::io::Error::other("simulated V2 crash"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        #[test]
+        fn v2_publish_crash_residue_recovers_or_preserves_committed_state() {
+            let points = [
+                FaultPoint::DirectoryCreated,
+                FaultPoint::PayloadCreated,
+                FaultPoint::PayloadWritten,
+                FaultPoint::PayloadSynced,
+                FaultPoint::PayloadRenamed,
+                FaultPoint::RecordWritten,
+                FaultPoint::RecordSynced,
+                FaultPoint::RecordRenamed,
+                FaultPoint::PublishedSynced,
+            ];
+            for point in points {
+                let temp = TestDirectory::new();
+                let producer = producer("publish_crash_v2");
+                let attempt = begin(&temp.0, &producer, 40);
+                let closure = closure(111);
+                assert!(
+                    publish_with_hooks_v2(
+                        &temp.0,
+                        &producer,
+                        attempt,
+                        closure,
+                        b"module",
+                        &mut FailAt(point),
+                    )
+                    .is_err()
+                );
+                let retry = publish_compiler_module_handoff_v2(
+                    &temp.0, &producer, attempt, closure, b"module",
+                );
+                if matches!(
+                    point,
+                    FaultPoint::RecordRenamed | FaultPoint::PublishedSynced
+                ) {
+                    assert!(matches!(
+                        retry,
+                        Err(CompilerModuleHandoffErrorV2::AlreadyPublished)
+                    ));
+                } else {
+                    retry.unwrap();
+                }
+                let consumed =
+                    consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure)
+                        .unwrap();
+                assert_eq!(consumed.compiler_closure(), closure);
+                assert_eq!(consumed.bytes(), b"module");
+            }
+        }
+
+        #[test]
+        fn v2_consumption_crashes_are_exactly_once_or_retryable_at_the_commit_boundary() {
+            for point in [FaultPoint::ConsumedRenamed, FaultPoint::ConsumedSynced] {
+                let temp = TestDirectory::new();
+                let producer = producer("consume_crash_v2");
+                let attempt = begin(&temp.0, &producer, 41);
+                let closure = closure(121);
+                publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure, b"module")
+                    .unwrap();
+                assert!(
+                consume_with_hooks_v2(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    closure,
+                    &mut FailAt(point),
+                )
+                .is_err()
+            );
+                assert!(matches!(
+                    consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure),
+                    Err(CompilerModuleHandoffErrorV2::AlreadyConsumed)
+                ));
+            }
+
+            let temp = TestDirectory::new();
+            let producer = producer("consume_retry_v2");
+            let attempt = begin(&temp.0, &producer, 42);
+            let closure = closure(131);
+            publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure, b"module")
+                .unwrap();
+            assert!(
+                consume_with_hooks_v2(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    closure,
+                    &mut FailAt(FaultPoint::PayloadValidated),
+                )
+                .is_err()
+            );
+            assert_eq!(
+                consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure)
+                    .unwrap()
+                    .bytes(),
+                b"module"
+            );
+        }
+    }
+}
+
+#[allow(unused_imports)]
+pub use protected_v2::{
+    CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffReceiptV2,
+    CompilerModuleHandoffSlotV2, ConsumedCompilerModuleHandoffV2,
+    consume_compiler_module_handoff_in_slot_v2, consume_compiler_module_handoff_v2,
+    publish_compiler_module_handoff_in_slot_v2, publish_compiler_module_handoff_v2,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

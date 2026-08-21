@@ -12,6 +12,7 @@ readme = "README.md"
 test-hooks = []
 
 [dependencies]
+fe2o3-build-authority.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["process"] }
 sha2.workspace = true
