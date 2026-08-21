@@ -101,11 +101,13 @@ target-neutral ranked-memory schema. It admits only bounded data recipes,
 constructs the module and function inside `ProductionPlironSessionV1`, performs
 recursive Pliron verification, and consumes a `ConstructedGraphStageV1`
 through the fixed bounds, global race, barrier convergence, workgroup-memory,
-and declared semantic-refinement passes. Each successful pass moves a private
-typestate capability into the next stage. Only the final transition can create
-the move-only `ProductionRankedKernelLoweringInputV1`; an empty module, a
-foreign root, a same-session substituted root, a changed graph, or any rejected
-report cannot be relabeled as verified.
+and declared semantic-refinement passes. The complete fixed sequence produces
+one private `KernelChecksVerifiedGraphStageV1`; there are no public or internal
+per-pass stage transitions that could be reordered or partially consumed. Only
+that aggregate transition can create the move-only
+`ProductionRankedKernelLoweringInputV1`; an empty module, a foreign root, a
+same-session substituted root, a changed graph, or any rejected report cannot
+be relabeled as verified.
 
 The output transitively owns the exact session graph while exposing no raw
 pointer, and it grants no source correspondence, compiler refinement, artifact,

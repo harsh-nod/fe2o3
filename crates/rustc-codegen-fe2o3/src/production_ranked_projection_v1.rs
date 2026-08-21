@@ -4,18 +4,20 @@
 //! Rust bounds-assert terminators are retained in semantic MIR but do not
 //! manufacture a static extent or authorize an access in this projection.
 
-use std::fmt;
+use std::{collections::VecDeque, fmt};
 
 use dialect_kernel::{
-    AccessKindAttr, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, SUPPORTED_ELEMENT_WIDTHS,
+    AccessKindAttr, DYNAMIC_EXTENT, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
+    SUPPORTED_ELEMENT_WIDTHS,
 };
 use fe2o3_kernel_analysis::MAX_RANKED_BOUNDS_OPERATIONS;
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDirectTailCallV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1,
-    SemanticLocalRoleV1, SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1,
-    SemanticRvalueKindV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
-    SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
+    SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
+    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
+    SemanticTypeIdV1, SemanticTypeShapeV1,
 };
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
@@ -33,10 +35,34 @@ const MAX_PROJECTED_RANKED_IR_BYTES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 2
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedAccessSourceV1 {
+    block: usize,
     operation: usize,
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GuardedDisjointAccessV1 {
+    view: ProductionRankedValueIdV1,
+    index: ProductionRankedValueIdV1,
+    extent_argument: u32,
+    access: AccessKindAttr,
+    source: SemanticSourceProvenanceV1,
+}
+
+struct IntrinsicProjectionV1 {
+    checked_reference_origins: Vec<Option<usize>>,
+    guarded_accesses: Vec<GuardedDisjointAccessV1>,
+    extent_argument_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectedViewV1 {
+    result: ProductionRankedValueIdV1,
+    element_width: u32,
+    shape: Vec<u64>,
+    memory_space: MemorySpaceAttr,
 }
 
 /// Move-only result retaining both the exact admitted Rust semantics and the
@@ -137,22 +163,24 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                 {
                     for finding in bounds.report().findings() {
                         if let fe2o3_kernel_analysis::RankedBoundsFindingV1::StaticOutOfBounds {
+                            block,
                             operation,
                             ..
                         }
                         | fe2o3_kernel_analysis::RankedBoundsFindingV1::UnprovedBound {
+                            block,
                             operation,
                             ..
                         } = finding
-                            && let Some(access) = access_sources
-                                .iter()
-                                .find(|source| source.operation == *operation)
+                            && let Some(access) = access_sources.iter().find(|source| {
+                                source.block == *block && source.operation == *operation
+                            })
                         {
                             write!(formatter, "\n  --> {}", source_label(access.source))?;
                             write!(
                                 formatter,
-                                "\n  = Rust {:?} projected to kernel.access at block 0 op {}",
-                                access.access, access.operation,
+                                "\n  = Rust {:?} projected to kernel.access at block {} op {}",
+                                access.access, access.block, access.operation,
                             )?;
                         }
                     }
@@ -206,9 +234,18 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let mut next_value = 0_u32;
     let mut ranked_ir = String::new();
     let mut incomplete = None;
+    let mut projected_views = vec![None; function.locals().len()];
     push_ranked_ir(
         &mut ranked_ir,
         &format!("func @{} {{\n", function_name(function)?),
+    )?;
+    let intrinsic = project_intrinsic_contracts(
+        semantic.callables(),
+        semantic.types(),
+        function,
+        &mut operations,
+        &mut next_value,
+        &mut ranked_ir,
     )?;
     for block in function.blocks() {
         for statement in block.statements() {
@@ -218,6 +255,8 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                     function,
                     statement,
                     &constants,
+                    &intrinsic.checked_reference_origins,
+                    &mut projected_views,
                     &mut operations,
                     &mut sources,
                     &mut next_value,
@@ -234,6 +273,8 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 block.terminator().kind(),
                 block.terminator().source(),
                 &constants,
+                &intrinsic.checked_reference_origins,
+                &mut projected_views,
                 &mut operations,
                 &mut sources,
                 &mut next_value,
@@ -242,7 +283,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             &mut incomplete,
         )?;
     }
-    if sources.is_empty() {
+    if sources.is_empty() && intrinsic.guarded_accesses.is_empty() {
         if let Some(detail) = incomplete {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
         }
@@ -264,15 +305,18 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             "a concurrent memory effect before exact invocation-index projection is available",
         );
     }
-    push_ranked_ir(&mut ranked_ir, "  kernel.return\n}\n")?;
+    let blocks = finish_guarded_access_graph(
+        operations,
+        &intrinsic.guarded_accesses,
+        &mut sources,
+        &mut ranked_ir,
+    )?;
+    push_ranked_ir(&mut ranked_ir, "}\n")?;
 
     let kernel = ProductionRankedKernelV1::new(
         function_name(function)?,
-        0,
-        vec![ProductionRankedBlockV1::new(
-            operations,
-            ProductionRankedTerminatorV1::Return,
-        )],
+        intrinsic.extent_argument_count,
+        blocks,
     )
     .map_err(ProductionRankedProjectionErrorV1::Recipe)?;
     let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
@@ -291,6 +335,460 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         semantic: semantic_owner,
         lowering,
         ranked_ir,
+    })
+}
+
+fn project_intrinsic_contracts(
+    callables: &[SemanticCallableDeclV1],
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
+    for block in function.blocks() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        if matches!(
+            callables.get(call.callee().index() as usize),
+            Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
+                    | SemanticCompilerIntrinsicOperationV1::WaveBarrier,
+                ..
+            })
+        ) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a barrier before exact semantic CFG projection is available",
+            ));
+        }
+    }
+    let mut invocation_values = vec![None; function.locals().len()];
+    for block in function.blocks() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let destination = simple_call_destination(call)?;
+        let slot = invocation_values
+            .get_mut(destination.index() as usize)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a thread-index destination outside the semantic local table",
+            ))?;
+        if slot.is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "multiple thread-index definitions for one semantic local",
+            ));
+        }
+        reserve_operation(operations)?;
+        let result = next_value_id(next_value)?;
+        operations.push(ProductionRankedOperationV1::InvocationIndex {
+            result,
+            dimension: 0,
+            launch_extent: 0,
+        });
+        push_ranked_ir(
+            ranked_ir,
+            &format!(
+                "  %{} = kernel.invocation_index <0, dynamic>\n",
+                result.get()
+            ),
+        )?;
+        *slot = Some(result);
+    }
+
+    let mut guarded_accesses = Vec::new();
+    for block in function.blocks() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        if call.arguments().len() != 2 {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a checked disjoint access with a noncanonical argument count",
+            ));
+        }
+        let index_local = simple_operand_local(&call.arguments()[1]).ok_or(
+            ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked disjoint access whose index witness is not one exact local",
+            ),
+        )?;
+        let index = invocation_values
+            .get(index_local.index() as usize)
+            .copied()
+            .flatten()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked disjoint access not bound to the current invocation index",
+            ))?;
+        let extent_argument = u32::try_from(guarded_accesses.len()).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "too many checked disjoint extents for the ranked recipe",
+            )
+        })?;
+        reserve_operation(operations)?;
+        let view = next_value_id(next_value)?;
+        operations.push(ProductionRankedOperationV1::ViewInSpace {
+            result: view,
+            element_width: type_width(types, *element)?,
+            writable: true,
+            shape: vec![DYNAMIC_EXTENT],
+            dynamic_extents: vec![ProductionRankedValueV1::Argument(extent_argument)],
+            memory_space: MemorySpaceAttr::Global,
+        });
+        push_ranked_ir(
+            ranked_ir,
+            &format!(
+                "  %{} = kernel.ranked_view <{}, true, [dynamic], Global>(%arg{})\n",
+                view.get(),
+                type_width(types, *element)?,
+                extent_argument,
+            ),
+        )?;
+        guarded_accesses.push(GuardedDisjointAccessV1 {
+            view,
+            index,
+            extent_argument,
+            access: AccessKindAttr::Write,
+            source: block.terminator().source(),
+        });
+    }
+
+    let checked_reference_origins =
+        checked_reference_origins(function, callables, guarded_accesses.len())?;
+    Ok(IntrinsicProjectionV1 {
+        checked_reference_origins,
+        extent_argument_count: guarded_accesses.len(),
+        guarded_accesses,
+    })
+}
+
+fn finish_guarded_access_graph(
+    entry_operations: Vec<ProductionRankedOperationV1>,
+    guarded: &[GuardedDisjointAccessV1],
+    sources: &mut Vec<ProjectedAccessSourceV1>,
+    ranked_ir: &mut String,
+) -> Result<Vec<ProductionRankedBlockV1>, ProductionRankedProjectionErrorV1> {
+    if guarded.is_empty() {
+        push_ranked_ir(ranked_ir, "  kernel.return\n")?;
+        return Ok(vec![ProductionRankedBlockV1::new(
+            entry_operations,
+            ProductionRankedTerminatorV1::Return,
+        )]);
+    }
+    let block_count = guarded
+        .len()
+        .checked_mul(2)
+        .and_then(|count| count.checked_add(2))
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "checked-access CFG block count overflow",
+        ))?;
+    if entry_operations
+        .len()
+        .checked_add(guarded.len())
+        .and_then(|count| count.checked_add(block_count))
+        .is_none_or(|count| count > MAX_RANKED_BOUNDS_OPERATIONS)
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "checked-access CFG exceeds the ranked operation limit",
+        ));
+    }
+    let final_block = u32::try_from(block_count - 1).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "checked-access CFG block identity does not fit u32",
+        )
+    })?;
+    let mut blocks = Vec::new();
+    blocks.try_reserve_exact(block_count).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "checked-access CFG storage cannot be reserved",
+        )
+    })?;
+    blocks.push(ProductionRankedBlockV1::new(
+        entry_operations,
+        ProductionRankedTerminatorV1::Branch { target: 1 },
+    ));
+    push_ranked_ir(ranked_ir, "  kernel.br ^guard0\n")?;
+    for (access_index, access) in guarded.iter().enumerate() {
+        let guard_block = u32::try_from(1 + access_index * 2).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "checked-access guard block identity does not fit u32",
+            )
+        })?;
+        let access_block = guard_block + 1;
+        let next_guard = if access_index + 1 == guarded.len() {
+            final_block
+        } else {
+            guard_block + 2
+        };
+        let next_label = if access_index + 1 == guarded.len() {
+            "exit".to_owned()
+        } else {
+            format!("guard{}", access_index + 1)
+        };
+        blocks.push(ProductionRankedBlockV1::new(
+            vec![],
+            ProductionRankedTerminatorV1::IndexLessThan {
+                lhs: ProductionRankedValueV1::Local(access.index),
+                rhs: ProductionRankedValueV1::Argument(access.extent_argument),
+                true_block: access_block,
+                false_block: next_guard,
+            },
+        ));
+        blocks.push(ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::Access {
+                kind: access.access,
+                view: ProductionRankedValueV1::Local(access.view),
+                indices: vec![ProductionRankedValueV1::Local(access.index)],
+            }],
+            ProductionRankedTerminatorV1::Branch { target: next_guard },
+        ));
+        sources.push(ProjectedAccessSourceV1 {
+            block: access_block as usize,
+            operation: 0,
+            access: access.access,
+            memory_space: MemorySpaceAttr::Global,
+            source: access.source,
+        });
+        push_ranked_ir(
+            ranked_ir,
+            &format!(
+                "^guard{access_index}:\n  kernel.cond_br %{} < %arg{} ^access{access_index}, ^{next_label}\n^access{access_index}:\n  kernel.access {:?} %{}[%{}]\n  kernel.br ^{next_label}\n",
+                access.index.get(),
+                access.extent_argument,
+                access.access,
+                access.view.get(),
+                access.index.get(),
+            ),
+        )?;
+    }
+    blocks.push(ProductionRankedBlockV1::new(
+        vec![],
+        ProductionRankedTerminatorV1::Return,
+    ));
+    push_ranked_ir(ranked_ir, "^exit:\n  kernel.return\n")?;
+    Ok(blocks)
+}
+
+fn checked_reference_origins(
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    guarded_access_count: usize,
+) -> Result<Vec<Option<usize>>, ProductionRankedProjectionErrorV1> {
+    let definitions = local_definition_counts(function);
+    let mut origins = vec![None; function.locals().len()];
+    let mut aliases_by_source = vec![Vec::new(); function.locals().len()];
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            let destination = assignment.destination();
+            if !destination.projections().is_empty()
+                || definitions
+                    .get(destination.local().index() as usize)
+                    .copied()
+                    != Some(1)
+            {
+                continue;
+            }
+            let source = match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) => transparent_operand_place(operand),
+                SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => {
+                    transparent_place(load.source())
+                }
+                _ => None,
+            };
+            let Some(source) = source else {
+                continue;
+            };
+            let edges = aliases_by_source
+                .get_mut(source.local().index() as usize)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a checked reference alias outside the semantic local table",
+                ))?;
+            edges.push(destination.local().index() as usize);
+        }
+    }
+
+    let mut worklist = VecDeque::new();
+    let mut access = 0_usize;
+    for block in function.blocks() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        if !matches!(
+            callables.get(call.callee().index() as usize),
+            Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. },
+                ..
+            })
+        ) {
+            continue;
+        }
+        let destination = simple_call_destination(call)?;
+        if definitions.get(destination.index() as usize).copied() != Some(1) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked disjoint result without one exact definition",
+            ));
+        }
+        origins[destination.index() as usize] = Some(access);
+        worklist.push_back(destination.index() as usize);
+        access += 1;
+    }
+    if access != guarded_access_count {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "checked disjoint access inventory changed during projection",
+        ));
+    }
+    while let Some(source) = worklist.pop_front() {
+        let Some(origin) = origins[source] else {
+            continue;
+        };
+        for &destination in &aliases_by_source[source] {
+            let slot = &mut origins[destination];
+            if slot.is_none() {
+                *slot = Some(origin);
+                worklist.push_back(destination);
+            } else if *slot != Some(origin) {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a checked disjoint reference with conflicting origins",
+                ));
+            }
+        }
+    }
+    Ok(origins)
+}
+
+fn local_definition_counts(function: &SemanticFunctionDeclV1) -> Vec<u8> {
+    let mut definitions = vec![0_u8; function.locals().len()];
+    let mut record = |place: &SemanticPlaceV1| {
+        if matches!(
+            place
+                .projections()
+                .first()
+                .map(|projection| projection.kind()),
+            Some(SemanticProjectionKindV1::Dereference)
+        ) {
+            return;
+        }
+        if let Some(slot) = definitions.get_mut(place.local().index() as usize) {
+            *slot = slot.saturating_add(1);
+        }
+    };
+    for block in function.blocks() {
+        for statement in block.statements() {
+            match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => record(assignment.destination()),
+                SemanticStatementKindV1::Store(store) => record(store.destination()),
+                SemanticStatementKindV1::AtomicRmw(atomic) => record(atomic.destination()),
+                SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
+                    record(atomic.destination())
+                }
+                SemanticStatementKindV1::SetDiscriminant { place, .. }
+                | SemanticStatementKindV1::Deinitialize(place) => record(place),
+                SemanticStatementKindV1::StorageLive(_)
+                | SemanticStatementKindV1::StorageDead(_)
+                | SemanticStatementKindV1::Nop => {}
+            }
+        }
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+            && let Some(destination) = call.destination()
+        {
+            record(destination.place());
+        }
+    }
+    definitions
+}
+
+fn checked_reference_origin(place: &SemanticPlaceV1, origins: &[Option<usize>]) -> Option<usize> {
+    let origin = origins
+        .get(place.local().index() as usize)
+        .copied()
+        .flatten()?;
+    let mut projections = place.projections().iter();
+    if !matches!(
+        projections.next().map(|projection| projection.kind()),
+        Some(SemanticProjectionKindV1::Dereference)
+    ) || !projections.all(|projection| {
+        matches!(
+            projection.kind(),
+            SemanticProjectionKindV1::Field(_)
+                | SemanticProjectionKindV1::Downcast(_)
+                | SemanticProjectionKindV1::OpaqueCast
+                | SemanticProjectionKindV1::Subtype
+        )
+    }) {
+        return None;
+    }
+    Some(origin)
+}
+
+fn transparent_operand_place(operand: &SemanticOperandV1) -> Option<&SemanticPlaceV1> {
+    let place = match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
+        SemanticOperandV1::Constant(_) => return None,
+    };
+    transparent_place(place)
+}
+
+fn transparent_place(place: &SemanticPlaceV1) -> Option<&SemanticPlaceV1> {
+    place
+        .projections()
+        .iter()
+        .all(|projection| {
+            matches!(
+                projection.kind(),
+                SemanticProjectionKindV1::Field(_)
+                    | SemanticProjectionKindV1::Downcast(_)
+                    | SemanticProjectionKindV1::OpaqueCast
+                    | SemanticProjectionKindV1::Subtype
+            )
+        })
+        .then_some(place)
+}
+
+fn simple_operand_local(operand: &SemanticOperandV1) -> Option<SemanticLocalIdV1> {
+    transparent_operand_place(operand)
+        .filter(|place| place.projections().is_empty())
+        .map(SemanticPlaceV1::local)
+}
+
+fn simple_call_destination(
+    call: &SemanticDirectCallV1,
+) -> Result<SemanticLocalIdV1, ProductionRankedProjectionErrorV1> {
+    call.destination()
+        .map(|destination| destination.place())
+        .filter(|place| place.projections().is_empty())
+        .map(SemanticPlaceV1::local)
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "a compiler intrinsic without one exact local destination",
+        ))
+}
+
+fn reserve_operation(
+    operations: &mut Vec<ProductionRankedOperationV1>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if operations.len() == MAX_PROJECTED_OPERATIONS_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a semantic intrinsic projection exceeding the ranked operation limit",
+        ));
+    }
+    operations.try_reserve(1).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "semantic intrinsic projection storage cannot be reserved",
+        )
     })
 }
 
@@ -313,6 +811,8 @@ fn project_statement_accesses(
     function: &SemanticFunctionDeclV1,
     statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
     constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -329,6 +829,8 @@ fn project_statement_accesses(
                 PlaceAccessRequirementV1::IfMemory,
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -340,6 +842,8 @@ fn project_statement_accesses(
                 assignment.value().kind(),
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -359,6 +863,8 @@ fn project_statement_accesses(
                 PlaceAccessRequirementV1::ExplicitMemory,
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -370,6 +876,8 @@ fn project_statement_accesses(
                 store.value(),
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -385,6 +893,8 @@ fn project_statement_accesses(
                 PlaceAccessRequirementV1::IfMemory,
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -396,6 +906,8 @@ fn project_statement_accesses(
                 atomic.address(),
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -407,6 +919,8 @@ fn project_statement_accesses(
                 atomic.value(),
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -422,6 +936,8 @@ fn project_statement_accesses(
                 PlaceAccessRequirementV1::IfMemory,
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -433,6 +949,8 @@ fn project_statement_accesses(
                 atomic.address(),
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -444,6 +962,8 @@ fn project_statement_accesses(
                 atomic.expected(),
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -455,6 +975,8 @@ fn project_statement_accesses(
                 atomic.replacement(),
                 source,
                 constants,
+                checked_reference_origins,
+                projected_views,
                 operations,
                 sources,
                 next_value,
@@ -470,6 +992,8 @@ fn project_statement_accesses(
             PlaceAccessRequirementV1::IfMemory,
             source,
             constants,
+            checked_reference_origins,
+            projected_views,
             operations,
             sources,
             next_value,
@@ -496,6 +1020,8 @@ fn project_atomic_address(
     address: &SemanticPlaceV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -509,6 +1035,8 @@ fn project_atomic_address(
         PlaceAccessRequirementV1::ExplicitMemory,
         source,
         constants,
+        checked_reference_origins,
+        projected_views,
         operations,
         sources,
         next_value,
@@ -524,6 +1052,8 @@ fn project_terminator_accesses(
     terminator: &SemanticTerminatorKindV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -536,17 +1066,39 @@ fn project_terminator_accesses(
             discriminant,
             source,
             constants,
+            checked_reference_origins,
+            projected_views,
             operations,
             sources,
             next_value,
             ranked_ir,
         ),
         SemanticTerminatorKindV1::Call(call) => project_direct_call_accesses(
-            callables, types, function, call, source, constants, operations, sources, next_value,
+            callables,
+            types,
+            function,
+            call,
+            source,
+            constants,
+            checked_reference_origins,
+            projected_views,
+            operations,
+            sources,
+            next_value,
             ranked_ir,
         ),
         SemanticTerminatorKindV1::TailCall(call) => project_tail_call_accesses(
-            callables, types, function, call, source, constants, operations, sources, next_value,
+            callables,
+            types,
+            function,
+            call,
+            source,
+            constants,
+            checked_reference_origins,
+            projected_views,
+            operations,
+            sources,
+            next_value,
             ranked_ir,
         ),
         SemanticTerminatorKindV1::Drop { .. } => {
@@ -555,7 +1107,16 @@ fn project_terminator_accesses(
             ))
         }
         SemanticTerminatorKindV1::Assert { condition, .. } => project_operand_read(
-            types, function, condition, source, constants, operations, sources, next_value,
+            types,
+            function,
+            condition,
+            source,
+            constants,
+            checked_reference_origins,
+            projected_views,
+            operations,
+            sources,
+            next_value,
             ranked_ir,
         ),
         SemanticTerminatorKindV1::Goto(_)
@@ -576,15 +1137,36 @@ fn project_direct_call_accesses(
     call: &SemanticDirectCallV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if matches!(
+        callables.get(call.callee().index() as usize),
+        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. },
+            ..
+        })
+    ) {
+        return Ok(());
+    }
     require_bounds_neutral_callable(callables, call.callee())?;
     for argument in call.arguments() {
         project_operand_read(
-            types, function, argument, source, constants, operations, sources, next_value,
+            types,
+            function,
+            argument,
+            source,
+            constants,
+            checked_reference_origins,
+            projected_views,
+            operations,
+            sources,
+            next_value,
             ranked_ir,
         )?;
     }
@@ -597,6 +1179,8 @@ fn project_direct_call_accesses(
             PlaceAccessRequirementV1::IfMemory,
             source,
             constants,
+            checked_reference_origins,
+            projected_views,
             operations,
             sources,
             next_value,
@@ -614,6 +1198,8 @@ fn project_tail_call_accesses(
     call: &SemanticDirectTailCallV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -622,7 +1208,16 @@ fn project_tail_call_accesses(
     require_bounds_neutral_callable(callables, call.callee())?;
     for argument in call.arguments() {
         project_operand_read(
-            types, function, argument, source, constants, operations, sources, next_value,
+            types,
+            function,
+            argument,
+            source,
+            constants,
+            checked_reference_origins,
+            projected_views,
+            operations,
+            sources,
+            next_value,
             ranked_ir,
         )?;
     }
@@ -798,6 +1393,8 @@ fn project_rvalue_reads(
     value: &SemanticRvalueKindV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -805,26 +1402,73 @@ fn project_rvalue_reads(
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     match value {
         SemanticRvalueKindV1::Use(operand) => project_operand_read(
-            types, function, operand, source, constants, operations, sources, next_value, ranked_ir,
+            types,
+            function,
+            operand,
+            source,
+            constants,
+            checked_reference_origins,
+            projected_views,
+            operations,
+            sources,
+            next_value,
+            ranked_ir,
         ),
         SemanticRvalueKindV1::Unary { operand, .. }
         | SemanticRvalueKindV1::Cast { operand, .. } => project_operand_read(
-            types, function, operand, source, constants, operations, sources, next_value, ranked_ir,
+            types,
+            function,
+            operand,
+            source,
+            constants,
+            checked_reference_origins,
+            projected_views,
+            operations,
+            sources,
+            next_value,
+            ranked_ir,
         ),
         SemanticRvalueKindV1::Binary { left, right, .. } => {
             project_operand_read(
-                types, function, left, source, constants, operations, sources, next_value,
+                types,
+                function,
+                left,
+                source,
+                constants,
+                checked_reference_origins,
+                projected_views,
+                operations,
+                sources,
+                next_value,
                 ranked_ir,
             )?;
             project_operand_read(
-                types, function, right, source, constants, operations, sources, next_value,
+                types,
+                function,
+                right,
+                source,
+                constants,
+                checked_reference_origins,
+                projected_views,
+                operations,
+                sources,
+                next_value,
                 ranked_ir,
             )
         }
         SemanticRvalueKindV1::Aggregate(aggregate) => {
             for operand in aggregate.operands() {
                 project_operand_read(
-                    types, function, operand, source, constants, operations, sources, next_value,
+                    types,
+                    function,
+                    operand,
+                    source,
+                    constants,
+                    checked_reference_origins,
+                    projected_views,
+                    operations,
+                    sources,
+                    next_value,
                     ranked_ir,
                 )?;
             }
@@ -842,6 +1486,8 @@ fn project_rvalue_reads(
             PlaceAccessRequirementV1::ExplicitMemory,
             source,
             constants,
+            checked_reference_origins,
+            projected_views,
             operations,
             sources,
             next_value,
@@ -858,6 +1504,8 @@ fn project_rvalue_reads(
             PlaceAccessRequirementV1::IfMemory,
             source,
             constants,
+            checked_reference_origins,
+            projected_views,
             operations,
             sources,
             next_value,
@@ -873,6 +1521,8 @@ fn project_operand_read(
     operand: &SemanticOperandV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -887,6 +1537,8 @@ fn project_operand_read(
             PlaceAccessRequirementV1::IfMemory,
             source,
             constants,
+            checked_reference_origins,
+            projected_views,
             operations,
             sources,
             next_value,
@@ -911,11 +1563,16 @@ fn project_place_access(
     requirement: PlaceAccessRequirementV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if checked_reference_origin(place, checked_reference_origins).is_some() {
+        return Ok(());
+    }
     let Some(local) = function.locals().get(place.local().index() as usize) else {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "an indexed place with an out-of-range local",
@@ -925,12 +1582,11 @@ fn project_place_access(
     let mut shape = Vec::new();
     let mut indices = Vec::new();
     let mut crosses_memory_boundary = false;
-    let mut dereferenced = false;
+    let mut dereferenced_memory_space = None;
     for projection in place.projections() {
         match projection.kind() {
             SemanticProjectionKindV1::Dereference => {
                 crosses_memory_boundary = true;
-                dereferenced = true;
                 let Some(ty) = types.get(current.index() as usize) else {
                     return Err(ProductionRankedProjectionErrorV1::Unsupported(
                         "an indexed place with an out-of-range type",
@@ -941,6 +1597,7 @@ fn project_place_access(
                         "a dereference whose semantic type is not a pointer",
                     ));
                 };
+                dereferenced_memory_space = Some(memory_space(pointer.address_space())?);
                 current = pointer.pointee();
             }
             SemanticProjectionKindV1::Index(index) => {
@@ -1011,31 +1668,61 @@ fn project_place_access(
     }
     reserve_projected_access(operations, sources, indices.len() + 2)?;
     let element_width = type_width(types, place.ty())?;
-    let view_id = next_value_id(next_value)?;
-    let memory_space = if dereferenced || matches!(local.role(), SemanticLocalRoleV1::Argument(_)) {
+    let memory_space = if let Some(memory_space) = dereferenced_memory_space {
+        memory_space
+    } else if matches!(local.role(), SemanticLocalRoleV1::Argument(_)) {
         MemorySpaceAttr::Global
     } else {
         MemorySpaceAttr::Private
     };
-    operations.push(ProductionRankedOperationV1::ViewInSpace {
-        result: view_id,
-        element_width,
-        writable: access.writes_memory(),
-        shape: shape.clone(),
-        dynamic_extents: vec![],
-        memory_space,
-    });
-    push_ranked_ir(
-        ranked_ir,
-        &format!(
-            "  %{} = kernel.ranked_view <{}, {}, {:?}, {:?}>\n",
-            view_id.get(),
+    if memory_space == MemorySpaceAttr::Workgroup {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "workgroup memory before exact semantic CFG projection is available",
+        ));
+    }
+    let view_slot = projected_views
+        .get_mut(place.local().index() as usize)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "an indexed place outside the ranked view table",
+        ))?;
+    let view_id = if let Some(view) = view_slot {
+        if view.element_width != element_width
+            || view.shape != shape
+            || view.memory_space != memory_space
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "one semantic allocation used through inconsistent ranked views",
+            ));
+        }
+        view.result
+    } else {
+        let view_id = next_value_id(next_value)?;
+        operations.push(ProductionRankedOperationV1::ViewInSpace {
+            result: view_id,
             element_width,
-            access.writes_memory(),
-            shape,
+            writable: true,
+            shape: shape.clone(),
+            dynamic_extents: vec![],
             memory_space,
-        ),
-    )?;
+        });
+        push_ranked_ir(
+            ranked_ir,
+            &format!(
+                "  %{} = kernel.ranked_view <{}, true, {:?}, {:?}>\n",
+                view_id.get(),
+                element_width,
+                shape,
+                memory_space,
+            ),
+        )?;
+        *view_slot = Some(ProjectedViewV1 {
+            result: view_id,
+            element_width,
+            shape: shape.clone(),
+            memory_space,
+        });
+        view_id
+    };
     let mut ranked_indices = Vec::with_capacity(indices.len());
     for value in indices {
         let index_id = next_value_id(next_value)?;
@@ -1072,6 +1759,7 @@ fn project_place_access(
         ),
     )?;
     sources.push(ProjectedAccessSourceV1 {
+        block: 0,
         operation,
         access,
         memory_space,
@@ -1143,6 +1831,17 @@ fn static_array_extent(
         }
         _ => Err(ProductionRankedProjectionErrorV1::Unsupported(
             "an index projection whose base is not an array or slice",
+        )),
+    }
+}
+
+fn memory_space(address_space: u32) -> Result<MemorySpaceAttr, ProductionRankedProjectionErrorV1> {
+    match address_space {
+        0 | 1 | 4 => Ok(MemorySpaceAttr::Global),
+        3 => Ok(MemorySpaceAttr::Workgroup),
+        5 => Ok(MemorySpaceAttr::Private),
+        _ => Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a pointer address space outside the generic memory model",
         )),
     }
 }
@@ -1391,6 +2090,7 @@ mod tests {
         let constants = constant_locals(function);
         let mut operations = Vec::new();
         let mut sources = Vec::new();
+        let mut projected_views = vec![None; function.locals().len()];
         let mut next_value = 0;
         let mut ranked_ir = String::new();
         for basic_block in function.blocks() {
@@ -1400,6 +2100,8 @@ mod tests {
                     function,
                     semantic_statement,
                     &constants,
+                    &[],
+                    &mut projected_views,
                     &mut operations,
                     &mut sources,
                     &mut next_value,
@@ -1413,6 +2115,8 @@ mod tests {
                 basic_block.terminator().kind(),
                 basic_block.terminator().source(),
                 &constants,
+                &[],
+                &mut projected_views,
                 &mut operations,
                 &mut sources,
                 &mut next_value,
@@ -1492,7 +2196,119 @@ mod tests {
                 ]
             );
             assert_eq!(sources.len(), 2);
+            assert_eq!(
+                operations
+                    .iter()
+                    .filter(|operation| matches!(
+                        operation,
+                        ProductionRankedOperationV1::ViewInSpace { .. }
+                    ))
+                    .count(),
+                1,
+                "two effects on one semantic allocation created different PLIRON views",
+            );
         }
+    }
+
+    #[test]
+    fn guarded_disjoint_access_is_ordinary_clean_pliron_cfg() {
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let view = ProductionRankedValueIdV1::new(1);
+        let entry = vec![
+            ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 0,
+            },
+            ProductionRankedOperationV1::ViewInSpace {
+                result: view,
+                element_width: 32,
+                writable: true,
+                shape: vec![DYNAMIC_EXTENT],
+                dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
+                memory_space: MemorySpaceAttr::Global,
+            },
+        ];
+        let guarded = [GuardedDisjointAccessV1 {
+            view,
+            index: invocation,
+            extent_argument: 0,
+            access: AccessKindAttr::Write,
+            source: SemanticSourceProvenanceV1::unavailable(),
+        }];
+        let mut sources = Vec::new();
+        let mut ranked_ir = String::new();
+        let blocks =
+            finish_guarded_access_graph(entry, &guarded, &mut sources, &mut ranked_ir).unwrap();
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].block, 2);
+        let kernel = ProductionRankedKernelV1::new("generic_checked_access", 1, blocks).unwrap();
+        let construction =
+            ProductionConstructionV1::ranked_kernel("checked_access_module", kernel).unwrap();
+        let lowering = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        assert!(lowering.bounds_report().is_clean());
+        assert!(lowering.race_report().is_clean());
+        assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
+    }
+
+    #[test]
+    fn checked_reference_provenance_covers_only_the_exact_pointee() {
+        let origins = [None, None, None, Some(7)];
+        assert_eq!(
+            checked_reference_origin(&dereferenced_place(), &origins),
+            Some(7)
+        );
+        let nested_index = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(3),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, ARRAY_TYPE)
+                    .unwrap(),
+                SemanticProjectionV1::new(
+                    SemanticProjectionKindV1::ConstantIndex {
+                        offset: 0,
+                        minimum_length: 4,
+                        from_end: false,
+                    },
+                    SCALAR_TYPE,
+                )
+                .unwrap(),
+            ],
+            SCALAR_TYPE,
+        )
+        .unwrap();
+        assert_eq!(checked_reference_origin(&nested_index, &origins), None);
+
+        let function = projection_function(vec![block(
+            31,
+            vec![
+                statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), vec![], POINTER_TYPE)
+                        .unwrap(),
+                    SemanticRvalueV1::new(
+                        POINTER_TYPE,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(
+                                SemanticLocalIdV1::from_index(3),
+                                vec![],
+                                POINTER_TYPE,
+                            )
+                            .unwrap(),
+                        )),
+                    ),
+                ))),
+                statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    dereferenced_place(),
+                    SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(1))),
+                ))),
+            ],
+            SemanticTerminatorKindV1::Return,
+        )]);
+        assert_eq!(local_definition_counts(&function)[3], 1);
     }
 
     #[test]
@@ -1749,6 +2565,7 @@ mod tests {
         ];
         let original = operations.len();
         let mut sources = Vec::new();
+        let mut projected_views = vec![None; function.locals().len()];
         let mut next_value = 0;
         let mut ranked_ir = String::new();
         let error = project_statement_accesses(
@@ -1756,6 +2573,8 @@ mod tests {
             &function,
             &semantic_statement,
             &[None; 4],
+            &[],
+            &mut projected_views,
             &mut operations,
             &mut sources,
             &mut next_value,

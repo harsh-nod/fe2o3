@@ -765,6 +765,17 @@ turn the foundations below into end-to-end features.
   accepts the exact fill and vecadd shapes, and `kernel-ir-worker-v2` additionally
   accepts only the exact alpha/zeta General-V3 shapes on `gfx942:xnack-`; the
   elementwise recognizer remains the default emitter.
+- The production semantic-MIR route now has one mandatory target-neutral
+  ranked-PLIRON verifier sequence before Kernel IR lowering: memory bounds,
+  global race freedom, barrier convergence, workgroup-memory initialization
+  and publication, and declared semantic refinement. The passes are generic
+  dialect checks rather than workload recognizers and share a bounded sparse
+  index/dataflow analysis. Rust projection is complete for static ranked
+  accesses and the checked `ThreadIndex`/`DisjointSlice` dynamic-access
+  contract. Other dynamic pointer provenance, semantic CFG projection for
+  barriers/workgroup memory, and source-declared equivalence still fail closed;
+  the PLIRON passes and textual lit coverage do not by themselves establish
+  source-to-machine correspondence.
 - General V3 lexical registration, rustc-semantic
   scalar/shared-slice/`DisjointSlice` reconstruction, variable COV6 descriptor
   generation, safe value binding, checked buffer regions, lifetime-retaining
@@ -808,9 +819,10 @@ turn the foundations below into end-to-end features.
   authority chain does not yet authenticate that extraction for each finalized
   payload, and neither mechanism proves correspondence to every executable
   memory access. The fixed lowering, Kernel IR checks, host alias admission,
-  and tests provide separate defenses, but general illegal-access and race
-  freedom still require authenticated analysis and Verus/compiler-refinement
-  evidence.
+  and tests provide separate defenses. The generic ranked-PLIRON bounds and
+  race analyses now reject unsupported or conflicting compiler IR before
+  lowering, but end-to-end source-to-machine safety still requires complete
+  frontend projection plus authenticated compiler-refinement evidence.
   Trusted rustc diagnostic-item classification also remains part of the
   compiler TCB.
 - The generated vecadd API has synchronous launch and a scoped asynchronous

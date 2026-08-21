@@ -48,12 +48,14 @@ fn workspace() -> PathBuf {
 fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
     let safe = run_extraction(&ScratchTarget::new(), false);
     assert!(
-        !safe.status.success()
-            && safe.stderr.contains(
-                "semantic-to-ranked projection incomplete: a dereferenced memory access without a ranked index projection"
-            )
+        safe.status.success()
+            && safe
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && safe.stderr.contains("kernel.cond_br")
+            && safe.stderr.contains("kernel.access Write")
             && !safe.stderr.contains("error[FE2O3-BOUNDS-001]"),
-        "safe static access did not stop at the unproved dynamic output access:\n{}",
+        "safe checked dynamic access did not pass generic PLIRON verification:\n{}",
         safe.stderr
     );
 
@@ -95,14 +97,11 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         !safe_production.status.success()
             && safe_production
                 .stderr
-                .contains("production-v1 general kernel verification failed")
-            && safe_production.stderr.contains(
-                "semantic-to-ranked projection incomplete: a dereferenced memory access without a ranked index projection"
-            )
+                .contains("production-v1 target-neutral lowering failed")
             && !safe_production
                 .stderr
-                .contains("production-v1 target-neutral lowering failed"),
-        "safe kernel bypassed the mandatory production PLIRON checks:\n{}",
+                .contains("production-v1 general kernel verification failed"),
+        "safe kernel did not pass PLIRON before the later lowering boundary:\n{}",
         safe_production.stderr,
     );
 
