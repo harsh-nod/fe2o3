@@ -56,8 +56,11 @@ pub use queue_resources::*;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use queue::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
-    ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
-    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
+    ComputeAqlQueueSessionV1, GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1,
+    GFX942_AQL_COMPLETION_MANIFEST_V1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
+    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1, Gfx942CompletedBatchV1, Gfx942CompletionBatchV1,
+    Gfx942CompletionErrorV1, Gfx942CompletionPollV1, Gfx942CompletionRecycleObservationV1,
+    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1,
 };
 

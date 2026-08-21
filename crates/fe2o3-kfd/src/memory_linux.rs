@@ -2,12 +2,13 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
 use fe2o3_aql::{
-    AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
-    AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+    AMD_SIGNAL_BYTES_V1, AMD_SIGNAL_VALUE_PENDING_V1, AQL_INVALID_PACKET_HEADER_V1,
+    AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+    AqlCompletionObservationV1, classify_acquired_completion_value_v1,
 };
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
@@ -577,6 +578,26 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(())
     }
 
+    fn observe_completion_signal_acquire(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+    ) -> Result<AqlCompletionObservationV1, MemorySessionError> {
+        let value =
+            checked_completion_value(mapping, requested_bytes, slot_index)?.load(Ordering::Acquire);
+        Ok(classify_acquired_completion_value_v1(value))
+    }
+
+    fn reset_completion_signal_release(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
+        checked_completion_value(mapping, requested_bytes, slot_index)?
+            .store(AMD_SIGNAL_VALUE_PENDING_V1, Ordering::Release);
+        Ok(())
+    }
+
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
         if !mapping.active || !mapping.accessible {
             return Err(MemorySessionError::KernelResultMalformed(
@@ -670,6 +691,31 @@ fn checked_atomic_u64(
     Ok(unsafe { &*pointer.cast::<AtomicU64>() })
 }
 
+fn checked_completion_value(
+    mapping: &mut LinuxCpuMapping,
+    requested_bytes: usize,
+    slot_index: u32,
+) -> Result<&AtomicI64, MemorySessionError> {
+    let signal_offset = usize::try_from(slot_index)
+        .ok()
+        .and_then(|index| index.checked_mul(AMD_SIGNAL_BYTES_V1))
+        .ok_or_else(|| malformed_aql_mapping("completion signal offset"))?;
+    let signal = checked_mapping_pointer(
+        mapping,
+        requested_bytes,
+        signal_offset,
+        AMD_SIGNAL_BYTES_V1,
+        AMD_SIGNAL_BYTES_V1,
+    )?;
+    // SAFETY: the checked signal range contains 64 bytes, and the frozen ABI
+    // places the AtomicI64 value at byte offset eight.
+    let pointer = unsafe { signal.add(8) };
+    // SAFETY: the completion arena initializer created one exact signal
+    // object in every 64-byte slot before GPU mapping. Its AtomicI64 value
+    // remains alive and mapped until explicit queue teardown.
+    Ok(unsafe { &*pointer.cast::<AtomicI64>() })
+}
+
 impl Drop for LinuxVaReservation {
     fn drop(&mut self) {
         // Deliberately no implicit munmap after an ambiguous operation.
@@ -679,5 +725,72 @@ impl Drop for LinuxVaReservation {
 impl Drop for LinuxCpuMapping {
     fn drop(&mut self) {
         // Deliberately no implicit munmap or FREE retry.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fe2o3_aql::{AmdBusyCompletionSignalV1, AqlCompletionObservationV1};
+
+    #[repr(C, align(64))]
+    struct TwoSignals([AmdBusyCompletionSignalV1; 2]);
+
+    #[test]
+    fn mapped_completion_slots_use_exact_acquire_and_release_atomics() {
+        let mut signals = TwoSignals([
+            AmdBusyCompletionSignalV1::new_pending(),
+            AmdBusyCompletionSignalV1::new_pending(),
+        ]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut signals).cast(),
+            bytes: 2 * AMD_SIGNAL_BYTES_V1,
+            active: true,
+            accessible: true,
+        };
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            AqlCompletionObservationV1::Pending
+        );
+        checked_completion_value(&mut mapping, 2 * AMD_SIGNAL_BYTES_V1, 1)
+            .unwrap()
+            .store(0, Ordering::Release);
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            AqlCompletionObservationV1::Completed
+        );
+        LinuxMemoryBackend::reset_completion_signal_release(
+            &mut mapping,
+            2 * AMD_SIGNAL_BYTES_V1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            AqlCompletionObservationV1::Pending
+        );
+        assert!(
+            LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                2,
+            )
+            .is_err()
+        );
     }
 }

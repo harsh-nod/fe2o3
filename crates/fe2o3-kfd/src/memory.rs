@@ -364,6 +364,24 @@ pub(super) trait MemoryBackend {
             "AQL mapped publication backend",
         ))
     }
+    fn observe_completion_signal_acquire(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+    ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL completion observation backend",
+        ))
+    }
+    fn reset_completion_signal_release(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL completion reset backend",
+        ))
+    }
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError>;
     fn release_va_reservation(
         &mut self,

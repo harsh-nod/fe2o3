@@ -28,6 +28,16 @@ mod live;
 #[path = "queue_submit.rs"]
 pub(crate) mod submit;
 
+#[allow(unsafe_code)]
+#[path = "queue_completion.rs"]
+pub(crate) mod completion;
+
+pub use completion::{
+    GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1, GFX942_AQL_COMPLETION_MANIFEST_V1,
+    Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
+    Gfx942CompletionPollV1, Gfx942CompletionRecycleObservationV1,
+};
+
 pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
@@ -36,7 +46,7 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r4-v1\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r5-v1\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -46,14 +56,15 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
     "composition=shared-gtt-linear-role-authorities,transferred-model-foundation,whole-slice-doorbell-mmap\n",
     "submission=crate-private-single-producer-bounded-batch-reservation,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
-    "missing=public-dispatch,kernel-launch,code-kernarg-allocation-generation-signal-binding,completion-and-exception-observation,live-batch-evidence\n",
+    "completion=separate-linear-256-signal-host-coherent-arena,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,release-reset-after-exact-batch-completion\n",
+    "missing=public-dispatch,kernel-launch,code-kernarg-data-allocation-liveness-authority,hardware-completion-and-exception-evidence,live-batch-evidence\n",
     "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
     "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
 );
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "6c5b7d7687934e57dc1b80c44e8f9ac21a345823447b4f4c6ce3f23d30165e3e";
+    "c0cf3a4f9de742b7633cc0400a65a5cd6d8d3d9833e3578c193448923cf1c783";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
