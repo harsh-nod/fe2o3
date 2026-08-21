@@ -1067,6 +1067,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-llm-kernels"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-tiled-gemm-v1",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-llvm-handoff"
 version = "0.1.0"
 dependencies = [
@@ -1481,6 +1489,19 @@ dependencies = [
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-host",
+]
+
+[[package]]
+name = "fe2o3-tiled-gemm-v1"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "fe2o3-compiler-api",
+ "fe2o3-compiler-driver",
+ "fe2o3-device",
+ "fe2o3-host",
+ "sha2 0.11.0",
+ "syn 2.0.117",
 ]
 
 [[package]]

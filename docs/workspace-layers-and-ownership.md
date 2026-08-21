@@ -185,8 +185,10 @@ descriptor kernarg alignment of 8, and a runtime storage alignment of 16.
 
 ### Fixtures
 
-Examples and nested test fixtures may exercise any layer. Production crates
-MUST NOT depend on them. A fixture is never an authority-bearing implementation.
+Examples and nested test fixtures may exercise any layer. The
+`fe2o3-llm-kernels` crate is also fixture-classified while its bounded M1 host
+models specialize example-owned operator routes. Production crates MUST NOT
+depend on fixtures. A fixture is never an authority-bearing implementation.
 
 ## Dependency Matrix
 

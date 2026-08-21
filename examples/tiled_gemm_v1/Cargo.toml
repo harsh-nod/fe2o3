@@ -7,10 +7,6 @@ repository = "https://github.com/fe2o3-gpu/fe2o3"
 rust-version = "1.94"
 publish = false
 
-# This example is intentionally standalone until its compiler and runtime
-# vertical slice is ready to join the root workspace.
-[workspace]
-
 [dependencies]
 fe2o3-amd-target = { path = "../../crates/fe2o3-amd-target" }
 fe2o3-compiler-api = { path = "../../crates/fe2o3-compiler-api" }

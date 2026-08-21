@@ -36,6 +36,7 @@ members = [
     "examples/scale",
     "examples/shift",
     "examples/stencil",
+    "examples/tiled_gemm_v1",
     "examples/vecadd",
     "examples/vecadd_f64",
     "examples/verus_vecadd",
