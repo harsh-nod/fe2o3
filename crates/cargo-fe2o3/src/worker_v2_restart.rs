@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,20 +10,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::OsStr;
 
 use fe2o3_artifact_transaction::{
-    AtomicPublicationIdentityV1, BackendPublicationReceiptV1, BackendPublicationReceiptV2,
-    BuildAttempt, BuildSession, CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1,
-    DurablePublishedHsacoClaimV2, FinalizationIdentityV1, FinalizedOutputIdentityV1,
-    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
-    MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2, PackageIdentityV1, PersistedBackendReceiptV2,
-    PinnedWorkerIdentityV1, ProducerIdentity, RecoveredWorkerV2PublicationIntentV1,
-    RecoveredWorkerV2PublicationIntentV2, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
-    ValidatedResponseIdentityV1, WorkerV2PublicationIntentErrorV1,
+    BackendPublicationReceiptV1, BackendPublicationReceiptV2, BuildAttempt, BuildSession,
+    DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV2,
+    MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1, PersistedBackendReceiptV2,
+    ProducerIdentity, RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
+    UpstreamCodeObjectEvidenceIdentityV1, WorkerV2PublicationIntentCleanupEscrowStateV1,
+    WorkerV2PublicationIntentCleanupEscrowV1, WorkerV2PublicationIntentErrorV1,
     WorkerV2PublicationIntentErrorV2, WorkerV2PublicationIntentIdentityV1,
-    WorkerV2PublicationIntentIdentityV2, clear_worker_v2_publication_intent_v2,
+    WorkerV2PublicationIntentIdentityV2, acquire_worker_v2_publication_intent_lease_v2,
+    clear_worker_v2_publication_intent_v2, commit_worker_v2_publication_intent_cleanup_escrow_v1,
     persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v2,
-    producer_package_identity_v1, read_backend_publication_receipt_v2,
-    recover_published_hsaco_claim_for_attempt_v2, recover_worker_v2_publication_intent_v1,
-    recover_worker_v2_publication_intent_v2,
+    prepare_worker_v2_publication_intent_cleanup_escrow_v1, producer_package_identity_v1,
+    read_backend_publication_receipt_v2, recover_published_hsaco_claim_for_attempt_v2,
+    recover_worker_v2_publication_intent_cleanup_escrow_v1,
+    recover_worker_v2_publication_intent_v1, recover_worker_v2_publication_intent_v2,
+    rollback_worker_v2_publication_intent_cleanup_escrow_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::CodeObjectVersion;
@@ -86,6 +88,12 @@ const PROTECTED_CLEANUP_EVIDENCE_MARKER_DOMAIN_V1: &[u8] =
 const PROTECTED_CLEANUP_EVIDENCE_PREFIX_V1: &str =
     ".fe2o3-cargo-worker-v2-protected-cleanup-evidence-v1-";
 const PROTECTED_CLEANUP_EVIDENCE_SUFFIX_V1: &str = ".evidence";
+const PROTECTED_CLEANUP_LOCAL_NAME_DOMAIN_V1: &[u8] =
+    b"FE2O3/CARGO-WORKER-V2-PROTECTED-CLEANUP-LOCAL-NAME/V1\0";
+const PROTECTED_CLEANUP_LOCAL_PREFIX_V1: &str =
+    ".fe2o3-cargo-worker-v2-protected-cleanup-local-v1-";
+const PROTECTED_CLEANUP_MARKER_QUARANTINE_SUFFIX_V1: &str = ".marker.quarantine";
+const PROTECTED_CLEANUP_INPUTS_QUARANTINE_SUFFIX_V1: &str = ".inputs.quarantine";
 const MAX_ENVELOPE_INPUT_RESIDUE_ENTRIES: usize = 256;
 const MAX_ENVELOPE_TEMP_RESIDUE_ENTRIES: usize = 256;
 const MAX_MARKER_TEMP_RESIDUE_ENTRIES: usize = 256;
@@ -102,6 +110,7 @@ const PROTECTED_MARKER_BYTES: usize =
 const MAX_MARKER_BYTES: usize = PROTECTED_MARKER_BYTES;
 const LEGACY_MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 32 + 8 + 16 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
+const PROTECTED_CLEANUP_LOCAL_FILE_SNAPSHOT_BYTES_V1: usize = 5 * 8;
 const PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1: usize = PROTECTED_CLEANUP_EVIDENCE_MAGIC_V1
     .len()
     + 2
@@ -112,21 +121,15 @@ const PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1: usize = PROTECTED_CLEANUP_
     + 32
     + 32
     + 32
-    + 3 * 32
-    + 7 * 32
-    + 32
-    + 32
     + 32
     + 32
     + RECEIPT_FIELDS * 32
     + COMPILER_CLOSURE_BYTES_V2
-    + 8
-    + 8;
+    + 32
+    + 2 * PROTECTED_CLEANUP_LOCAL_FILE_SNAPSHOT_BYTES_V1
+    + MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1;
 const MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1: usize =
-    PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1
-        + MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES
-        + MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2
-        + 32;
+    PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1 + 32;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -1010,25 +1013,23 @@ pub(crate) fn clear_worker_v2_intent_v2(
     store
         .verify_output_path()
         .map_err(RestartIntentErrorV2::Marker)?;
+    if completed.publication().requires_envelope() {
+        if store.load().map_err(RestartIntentErrorV2::Marker)? != Some(completed) {
+            return Err(RestartIntentErrorV2::Marker(
+                ResumeMarkerErrorV1::InvalidTransition,
+            ));
+        }
+        store
+            .ensure_protected_cleanup_evidence(completed, expected_compiler_closure)
+            .map_err(RestartIntentErrorV2::Marker)?;
+        return Ok(());
+    }
     if let Err(error) = store.validate_completed_restart_inputs(
         completed,
         receipt,
         expected_compiler_closure,
         recovered.as_ref(),
     ) {
-        if recovered.is_none()
-            && completed.publication().requires_envelope()
-            && let Some(evidence) = store
-                .read_protected_cleanup_evidence()
-                .map_err(RestartIntentErrorV2::Marker)?
-        {
-            store
-                .validate_protected_cleanup_evidence(&evidence, completed)
-                .map_err(RestartIntentErrorV2::Marker)?;
-            store
-                .restore_protected_completed_from_cleanup_evidence(&evidence)
-                .map_err(RestartIntentErrorV2::Marker)?;
-        }
         return Err(RestartIntentErrorV2::Marker(error));
     }
     if store.load().map_err(RestartIntentErrorV2::Marker)? != Some(completed) {
@@ -1042,35 +1043,6 @@ pub(crate) fn clear_worker_v2_intent_v2(
     if recovered.record().identity() != intent {
         return Err(RestartIntentErrorV2::IntentIdentityMismatch);
     }
-    let cleanup_evidence = if completed.publication().requires_envelope() {
-        let envelope_inputs = store
-            .recover_envelope_inputs(completed.attempt())
-            .map_err(RestartIntentErrorV2::Marker)?;
-        let evidence = ProtectedIntentCleanupEvidenceV1::new(
-            store.inner.package,
-            completed,
-            &recovered,
-            envelope_inputs,
-        )
-        .map_err(|reason| RestartIntentErrorV2::Marker(store.inner.invalid(reason)))?;
-        store
-            .persist_protected_cleanup_evidence(&evidence)
-            .map_err(RestartIntentErrorV2::Marker)?;
-        store
-            .validate_protected_cleanup_evidence(&evidence, completed)
-            .map_err(RestartIntentErrorV2::Marker)?;
-        store
-            .validate_completed_restart_inputs(
-                completed,
-                receipt,
-                expected_compiler_closure,
-                Some(&recovered),
-            )
-            .map_err(RestartIntentErrorV2::Marker)?;
-        Some(evidence)
-    } else {
-        None
-    };
     if store.load().map_err(RestartIntentErrorV2::Marker)? != Some(completed) {
         return Err(RestartIntentErrorV2::Marker(
             ResumeMarkerErrorV1::InvalidTransition,
@@ -1079,9 +1051,6 @@ pub(crate) fn clear_worker_v2_intent_v2(
     store
         .verify_output_path()
         .map_err(RestartIntentErrorV2::Marker)?;
-    if cleanup_evidence.is_some() {
-        return Ok(());
-    }
     clear_worker_v2_publication_intent_v2(
         &store.inner.display_path,
         producer,
@@ -1709,6 +1678,36 @@ fn is_protected_cleanup_evidence_temp_name_v1(name: &str, prefix: &str) -> bool 
         && has_decimal_temp_counters(&name.as_bytes()[prefix.len()..])
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProtectedCleanupLocalNamesV1 {
+    marker: String,
+    inputs: String,
+}
+
+enum ProtectedCleanupLocalEntryV1 {
+    Canonical(PinnedProtectedCleanupFileV1),
+    Quarantined(PinnedProtectedCleanupFileV1),
+    Absent,
+}
+
+impl ProtectedCleanupLocalNamesV1 {
+    fn new(evidence: &ProtectedIntentCleanupEvidenceV1) -> Self {
+        let identity = hash_identity(PROTECTED_CLEANUP_LOCAL_NAME_DOMAIN_V1, |digest| {
+            digest.update(evidence.package);
+            digest.update(evidence.attempt.generation().to_le_bytes());
+            digest.update(evidence.attempt.session().as_bytes());
+            digest.update(evidence.attempt.invocation().as_bytes());
+            digest.update(evidence.intent.as_bytes());
+            digest.update(evidence.escrow.identity().as_bytes());
+        });
+        let stem = format!("{PROTECTED_CLEANUP_LOCAL_PREFIX_V1}{}", hex(&identity));
+        Self {
+            marker: format!("{stem}{PROTECTED_CLEANUP_MARKER_QUARANTINE_SUFFIX_V1}"),
+            inputs: format!("{stem}{PROTECTED_CLEANUP_INPUTS_QUARANTINE_SUFFIX_V1}"),
+        }
+    }
+}
+
 fn marker_temp_prefix(marker_name: &str) -> String {
     format!("{marker_name}{TEMP_SUFFIX}")
 }
@@ -1933,35 +1932,110 @@ impl ResumeMarkerStateV2 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProtectedCleanupLocalFileSnapshotV1 {
+    device: u64,
+    inode: u64,
+    byte_len: u64,
+    mode: u64,
+    links: u64,
+}
+
+impl ProtectedCleanupLocalFileSnapshotV1 {
+    fn from_stat(stat: &rustix::fs::Stat) -> Result<Self, &'static str> {
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_nlink != 1
+            || stat.st_mode & 0o077 != 0
+        {
+            return Err("cleanup local snapshot requires one private single-link regular file");
+        }
+        Ok(Self {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            byte_len: u64::try_from(stat.st_size)
+                .map_err(|_| "cleanup local snapshot size is invalid")?,
+            mode: u64::from(stat.st_mode),
+            links: stat.st_nlink,
+        })
+    }
+
+    fn encode(self, bytes: &mut Vec<u8>) {
+        for field in [
+            self.device,
+            self.inode,
+            self.byte_len,
+            self.mode,
+            self.links,
+        ] {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
+    }
+
+    fn decode(decoder: &mut Decoder<'_>) -> Result<Self, &'static str> {
+        let snapshot = Self {
+            device: decoder.u64()?,
+            inode: decoder.u64()?,
+            byte_len: decoder.u64()?,
+            mode: decoder.u64()?,
+            links: decoder.u64()?,
+        };
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    fn validate(self) -> Result<(), &'static str> {
+        if self.device == 0
+            || self.inode == 0
+            || self.byte_len == 0
+            || self.links != 1
+            || self.mode & 0o077 != 0
+            || FileType::from_raw_mode(self.mode as _) != FileType::RegularFile
+        {
+            return Err("cleanup local snapshot metadata is invalid");
+        }
+        Ok(())
+    }
+
+    fn matches(self, stat: &rustix::fs::Stat) -> bool {
+        self.device == stat.st_dev
+            && self.inode == stat.st_ino
+            && u64::try_from(stat.st_size) == Ok(self.byte_len)
+            && u64::from(stat.st_mode) == self.mode
+            && stat.st_nlink == self.links
+            && FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
+            && stat.st_mode & 0o077 == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProtectedIntentCleanupEvidenceV1 {
     package: [u8; 32],
     publication: WorkerV2PublicationKindV1,
     attempt: BuildAttempt,
-    producer_identity: [u8; 32],
     intent: WorkerV2PublicationIntentIdentityV2,
-    plan: DurableLinkPublicationPlanV1,
-    upstream: UpstreamCodeObjectEvidenceIdentityV1,
     envelope: [u8; 32],
     admission: [u8; 32],
     marker: [u8; 32],
     receipt: ReceiptRecordV2,
-    envelope_inputs: WorkerV2EnvelopeInputsV1,
-    exact_output: Vec<u8>,
+    envelope_inputs: [u8; 32],
+    marker_file: ProtectedCleanupLocalFileSnapshotV1,
+    inputs_file: ProtectedCleanupLocalFileSnapshotV1,
+    escrow: WorkerV2PublicationIntentCleanupEscrowV1,
 }
 
 impl ProtectedIntentCleanupEvidenceV1 {
     fn new(
         package: [u8; 32],
         completed: ResumeMarkerStateV2,
-        recovered: &RecoveredWorkerV2PublicationIntentV2,
-        envelope_inputs: WorkerV2EnvelopeInputsV1,
+        marker_file: ProtectedCleanupLocalFileSnapshotV1,
+        inputs_file: ProtectedCleanupLocalFileSnapshotV1,
+        escrow: WorkerV2PublicationIntentCleanupEscrowV1,
     ) -> Result<Self, &'static str> {
         let ResumeMarkerStateV2::Completed {
             publication,
             attempt,
             admission,
-            envelope_inputs: marker_inputs,
+            envelope_inputs,
             envelope,
             intent,
             receipt,
@@ -1969,32 +2043,21 @@ impl ProtectedIntentCleanupEvidenceV1 {
         else {
             return Err("cleanup evidence requires a completed protected marker");
         };
-        let record = recovered.record();
         let evidence = Self {
             package,
             publication,
             attempt,
-            producer_identity: record.producer_identity(),
             intent,
-            plan: record.plan(),
-            upstream: record.upstream_evidence(),
             envelope,
             admission,
             marker: protected_cleanup_marker_commitment_v1(package, completed),
             receipt,
             envelope_inputs,
-            exact_output: recovered.exact_output().to_vec(),
+            marker_file,
+            inputs_file,
+            escrow,
         };
         evidence.validate()?;
-        if evidence.envelope_inputs.identity().as_bytes() != marker_inputs
-            || record.identity() != evidence.intent
-            || record.attempt() != evidence.attempt
-            || record.compiler_closure() != evidence.compiler_closure()
-            || record.output_length() != evidence.exact_output.len()
-            || record.output_identity() != evidence.plan.finalized_output()
-        {
-            return Err("cleanup evidence differs from its recovered protected intent");
-        }
         Ok(evidence)
     }
 
@@ -2005,40 +2068,28 @@ impl ProtectedIntentCleanupEvidenceV1 {
     }
 
     fn validate(&self) -> Result<(), &'static str> {
-        let output_identity: [u8; 32] = Sha256::digest(&self.exact_output).into();
         if !self.publication.requires_envelope() {
             return Err("cleanup evidence requires a protected envelope publication");
         }
-        if self.attempt != self.plan.attempt() {
-            return Err("cleanup evidence plan names a different attempt");
-        }
-        if self.package != *self.plan.scope().package().as_bytes() {
-            return Err("cleanup evidence plan names a different package");
-        }
-        if self.producer_identity == [0; 32]
-            || self.intent.as_bytes() == [0; 32]
+        if self.intent.as_bytes() == [0; 32]
             || self.envelope == [0; 32]
             || self.admission == [0; 32]
             || self.marker == [0; 32]
+            || self.envelope_inputs == [0; 32]
             || !self.receipt.is_complete()
         {
             return Err("cleanup evidence contains an empty required identity");
         }
-        if self.exact_output.is_empty()
-            || self.exact_output.len() > MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2
-            || self.plan.finalized_output().as_bytes() != &output_identity
+        if self.escrow.package_identity() != self.package
+            || self.escrow.attempt() != self.attempt
+            || self.escrow.intent() != self.intent
+            || !self.receipt.matches(self.escrow.receipt())
+            || self.escrow.receipt().compiler_closure() != self.compiler_closure()
         {
-            return Err("cleanup evidence contains invalid exact output bytes");
+            return Err("cleanup evidence differs from its artifact-owned escrow capsule");
         }
-        let envelope_inputs = self.envelope_inputs.to_bytes();
-        if envelope_inputs.is_empty()
-            || envelope_inputs.len() > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES
-            || WorkerV2EnvelopeInputsV1::from_bytes(&envelope_inputs)
-                .map_err(|_| "cleanup evidence contains invalid envelope inputs")?
-                != self.envelope_inputs
-        {
-            return Err("cleanup evidence contains invalid envelope inputs");
-        }
+        self.marker_file.validate()?;
+        self.inputs_file.validate()?;
         if protected_cleanup_marker_commitment_v1(self.package, self.completed_state())
             != self.marker
         {
@@ -2052,7 +2103,7 @@ impl ProtectedIntentCleanupEvidenceV1 {
             publication: self.publication,
             attempt: self.attempt,
             admission: self.admission,
-            envelope_inputs: self.envelope_inputs.identity().as_bytes(),
+            envelope_inputs: self.envelope_inputs,
             envelope: self.envelope,
             intent: self.intent,
             receipt: self.receipt,
@@ -2076,7 +2127,7 @@ impl ProtectedIntentCleanupEvidenceV1 {
             && self.publication == publication
             && self.attempt == attempt
             && self.admission == admission
-            && self.envelope_inputs.identity().as_bytes() == envelope_inputs
+            && self.envelope_inputs == envelope_inputs
             && self.envelope == envelope
             && self.intent == intent
             && self.receipt == receipt
@@ -2086,25 +2137,17 @@ impl ProtectedIntentCleanupEvidenceV1 {
     fn matches_recovered(&self, recovered: &RecoveredWorkerV2PublicationIntentV2) -> bool {
         let record = recovered.record();
         record.attempt() == self.attempt
-            && record.producer_identity() == self.producer_identity
+            && record.producer_identity() == self.escrow.producer_identity()
             && record.identity() == self.intent
-            && record.plan() == self.plan
-            && record.upstream_evidence() == self.upstream
-            && record.output_length() == self.exact_output.len()
-            && record.output_identity() == self.plan.finalized_output()
             && record.compiler_closure() == self.compiler_closure()
             && recovered.compiler_closure() == self.compiler_closure()
-            && recovered.exact_output() == self.exact_output
+            && Sha256::digest(recovered.exact_output()).as_slice()
+                == self.escrow.receipt().finalized_output_identity()
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
+    fn to_bytes(self) -> Vec<u8> {
         debug_assert!(self.validate().is_ok());
-        let mut bytes = Vec::with_capacity(
-            PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1
-                + self.envelope_inputs.to_bytes().len()
-                + self.exact_output.len()
-                + 32,
-        );
+        let mut bytes = Vec::with_capacity(MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1);
         bytes.extend_from_slice(PROTECTED_CLEANUP_EVIDENCE_MAGIC_V1);
         bytes.extend_from_slice(&PROTECTED_CLEANUP_EVIDENCE_VERSION_V1.to_le_bytes());
         bytes.extend_from_slice(&self.package);
@@ -2112,45 +2155,24 @@ impl ProtectedIntentCleanupEvidenceV1 {
         bytes.extend_from_slice(&self.attempt.generation().to_le_bytes());
         bytes.extend_from_slice(self.attempt.session().as_bytes());
         bytes.extend_from_slice(self.attempt.invocation().as_bytes());
-        bytes.extend_from_slice(&self.producer_identity);
         bytes.extend_from_slice(&self.intent.as_bytes());
-        let scope = self.plan.scope();
-        bytes.extend_from_slice(scope.package().as_bytes());
-        bytes.extend_from_slice(scope.kernel_set().as_bytes());
-        bytes.extend_from_slice(scope.target().as_bytes());
-        for identity in [
-            self.plan.request().as_bytes(),
-            self.plan.worker().as_bytes(),
-            self.plan.response().as_bytes(),
-            self.plan.linked_output().as_bytes(),
-            self.plan.finalization().as_bytes(),
-            self.plan.finalized_output().as_bytes(),
-            self.plan.publication().as_bytes(),
-        ] {
-            bytes.extend_from_slice(identity);
-        }
-        bytes.extend_from_slice(&self.upstream.as_bytes());
         bytes.extend_from_slice(&self.envelope);
         bytes.extend_from_slice(&self.admission);
         bytes.extend_from_slice(&self.marker);
         self.receipt.encode(&mut bytes);
-        let envelope_inputs = self.envelope_inputs.to_bytes();
-        bytes.extend_from_slice(&(envelope_inputs.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(&(self.exact_output.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&self.envelope_inputs);
+        self.marker_file.encode(&mut bytes);
+        self.inputs_file.encode(&mut bytes);
+        bytes.extend_from_slice(&self.escrow.to_bytes());
         debug_assert_eq!(bytes.len(), PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1);
-        bytes.extend_from_slice(&envelope_inputs);
-        bytes.extend_from_slice(&self.exact_output);
         let checksum = protected_cleanup_evidence_checksum_v1(&bytes);
         bytes.extend_from_slice(&checksum);
         bytes
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() > MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1 {
-            return Err("cleanup evidence exceeds its canonical bound");
-        }
-        if bytes.len() < PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1 + 2 + 32 {
-            return Err("cleanup evidence is truncated");
+        if bytes.len() != MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1 {
+            return Err("cleanup evidence has a noncanonical fixed length");
         }
         let (body, checksum) = bytes.split_at(bytes.len() - 32);
         if protected_cleanup_evidence_checksum_v1(body) != checksum {
@@ -2177,37 +2199,18 @@ impl ProtectedIntentCleanupEvidenceV1 {
             invocation.to_hex()
         ))
         .map_err(|_| "cleanup evidence contains an invalid attempt")?;
-        let producer_identity = decoder.array()?;
         let intent = WorkerV2PublicationIntentIdentityV2::from_bytes(decoder.array()?);
-        let scope = LinkPublicationScopeV1::new(
-            PackageIdentityV1::from_bytes(decoder.array()?),
-            KernelSetIdentityV1::from_bytes(decoder.array()?),
-            TargetIdentityV1::from_bytes(decoder.array()?),
-        );
-        let plan = DurableLinkPublicationPlanV1::new(
-            attempt,
-            scope,
-            CanonicalLinkRequestIdentityV1::from_bytes(decoder.array()?),
-            PinnedWorkerIdentityV1::from_bytes(decoder.array()?),
-            ValidatedResponseIdentityV1::from_bytes(decoder.array()?),
-            LinkedOutputIdentityV1::from_bytes(decoder.array()?),
-            FinalizationIdentityV1::from_bytes(decoder.array()?),
-            FinalizedOutputIdentityV1::from_bytes(decoder.array()?),
-            AtomicPublicationIdentityV1::from_bytes(decoder.array()?),
-        );
-        let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(decoder.array()?);
         let envelope = decoder.array()?;
         let admission = decoder.array()?;
         let marker = decoder.array()?;
         let receipt = ReceiptRecordV2::decode(&mut decoder)?;
-        let envelope_inputs_length = usize::try_from(decoder.u64()?)
-            .map_err(|_| "cleanup evidence envelope-input length is invalid")?;
-        let output_length = usize::try_from(decoder.u64()?)
-            .map_err(|_| "cleanup evidence output length is invalid")?;
-        let envelope_inputs =
-            WorkerV2EnvelopeInputsV1::from_bytes(decoder.take(envelope_inputs_length)?)
-                .map_err(|_| "cleanup evidence contains invalid envelope inputs")?;
-        let exact_output = decoder.take(output_length)?.to_vec();
+        let envelope_inputs = decoder.array()?;
+        let marker_file = ProtectedCleanupLocalFileSnapshotV1::decode(&mut decoder)?;
+        let inputs_file = ProtectedCleanupLocalFileSnapshotV1::decode(&mut decoder)?;
+        let escrow = WorkerV2PublicationIntentCleanupEscrowV1::from_bytes(
+            decoder.take(MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1)?,
+        )
+        .map_err(|_| "cleanup evidence contains an invalid artifact escrow capsule")?;
         if !decoder.finished() {
             return Err("cleanup evidence has trailing body bytes");
         }
@@ -2215,16 +2218,15 @@ impl ProtectedIntentCleanupEvidenceV1 {
             package,
             publication,
             attempt,
-            producer_identity,
             intent,
-            plan,
-            upstream,
             envelope,
             admission,
             marker,
             receipt,
             envelope_inputs,
-            exact_output,
+            marker_file,
+            inputs_file,
+            escrow,
         };
         evidence.validate()?;
         if evidence.to_bytes() != bytes {
@@ -3423,10 +3425,6 @@ impl WorkerV2ResumeStoreV2 {
         producer: &ProducerIdentity,
     ) -> Result<Self, ResumeMarkerErrorV1> {
         let inner = WorkerV2ResumeStoreV1::open_locked(output_dir, producer)?;
-        let retained = inner
-            .load_protected()?
-            .map(|state| (state.publication(), state.attempt()));
-        inner.cleanup_envelope_input_residue(retained)?;
         let store = Self {
             inner,
             producer: producer.clone(),
@@ -3434,6 +3432,10 @@ impl WorkerV2ResumeStoreV2 {
         store.cleanup_protected_envelope_temp_residue()?;
         store.cleanup_protected_cleanup_evidence_temp_residue()?;
         store.reconcile_protected_cleanup_evidence_on_open()?;
+        let retained = store
+            .load()?
+            .map(|state| (state.publication(), state.attempt()));
+        store.inner.cleanup_envelope_input_residue(retained)?;
         Ok(store)
     }
 
@@ -3676,19 +3678,25 @@ impl WorkerV2ResumeStoreV2 {
                 &self.inner.display_path,
                 None,
             )?;
-            residue.push((name.to_owned(), descriptor));
+            let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+            residue.push((
+                name.to_owned(),
+                PinnedProtectedCleanupFileV1 {
+                    file: File::from(descriptor),
+                    initial,
+                },
+            ));
         }
         if !residue.is_empty() {
-            for (name, descriptor) in residue {
-                validate_private_file(
+            for (name, pinned) in residue {
+                pinned.unlink_and_sync(
                     &self.inner.directory,
-                    &descriptor,
                     &name,
                     &self.inner.display_path,
-                    None,
+                    "protected-cleanup-evidence-temp-before-unlink",
+                    "protected-cleanup-evidence-temp-after-unlink",
+                    "protected-cleanup-evidence-temp-directory-synced",
                 )?;
-                unlinkat(&self.inner.directory, &name, AtFlags::empty())
-                    .map_err(std::io::Error::from)?;
             }
             fsync(&self.inner.directory).map_err(std::io::Error::from)?;
             self.verify_output_path()?;
@@ -3710,7 +3718,7 @@ impl WorkerV2ResumeStoreV2 {
         }
         self.verify_output_path()?;
         let bytes = evidence.to_bytes();
-        if bytes.len() > MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1 {
+        if bytes.len() != MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1 {
             return Err(self
                 .inner
                 .invalid("protected cleanup evidence exceeds its canonical bound"));
@@ -3718,25 +3726,13 @@ impl WorkerV2ResumeStoreV2 {
         let name = protected_cleanup_evidence_name_v1(self.inner.package);
         if let Some(existing) = self.read_protected_cleanup_evidence()? {
             if existing == *evidence {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+                self.verify_output_path()?;
                 return Ok(());
             }
-            let completed = self.load()?.ok_or_else(|| {
-                self.inner.invalid_at_name(
-                    &name,
-                    "conflicting cleanup evidence has no superseding completed marker",
-                )
-            })?;
-            let recovered =
-                self.recover_complete_intent(evidence.attempt, evidence.compiler_closure())?;
-            if existing.attempt == evidence.attempt
-                || !evidence.matches_completed(self.inner.package, completed)
-                || !evidence.matches_recovered(&recovered)
-            {
-                return Err(self
-                    .inner
-                    .invalid_at_name(&name, "conflicting protected cleanup evidence"));
-            }
-            self.remove_protected_cleanup_evidence(&existing)?;
+            return Err(self
+                .inner
+                .invalid_at_name(&name, "conflicting protected cleanup evidence"));
         }
         let temp_name = protected_cleanup_evidence_temp_name_v1(
             self.inner.package,
@@ -3744,6 +3740,8 @@ impl WorkerV2ResumeStoreV2 {
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
         );
         let result = (|| {
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-before-temp-create");
             let descriptor = openat(
                 &self.inner.directory,
                 &temp_name,
@@ -3751,10 +3749,20 @@ impl WorkerV2ResumeStoreV2 {
                 Mode::RUSR | Mode::WUSR,
             )
             .map_err(std::io::Error::from)?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-after-temp-create");
             let mut file = File::from(descriptor);
             file.set_len(bytes.len() as u64)?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-before-temp-write");
             file.write_all(&bytes)?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-after-temp-write");
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-before-temp-sync");
             file.sync_all()?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-after-temp-sync");
             validate_private_file(
                 &self.inner.directory,
                 &file,
@@ -3763,6 +3771,8 @@ impl WorkerV2ResumeStoreV2 {
                 Some(bytes.len()),
             )?;
             self.verify_output_path()?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-before-rename");
             match renameat_with(
                 &self.inner.directory,
                 &temp_name,
@@ -3781,6 +3791,7 @@ impl WorkerV2ResumeStoreV2 {
                         )
                     })?;
                     return if existing == *evidence {
+                        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
                         Ok(())
                     } else {
                         Err(self
@@ -3790,7 +3801,13 @@ impl WorkerV2ResumeStoreV2 {
                 }
                 Err(error) => return Err(std::io::Error::from(error).into()),
             }
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-after-rename");
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-before-directory-sync");
             fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-after-directory-sync");
             self.verify_output_path()?;
             #[cfg(feature = "worker-v2-fault-injection-test-only")]
             injected_fault_point_v1("protected-cleanup-evidence-published");
@@ -3838,11 +3855,7 @@ impl WorkerV2ResumeStoreV2 {
         )?;
         let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
         let initial_size = usize::try_from(initial.st_size).ok();
-        if initial_size.is_none_or(|size| {
-            !(PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1 + 2 + 32
-                ..=MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1)
-                .contains(&size)
-        }) {
+        if initial_size != Some(MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1) {
             return Err(self
                 .inner
                 .invalid_at_name(&name, "protected cleanup evidence size is invalid"));
@@ -3862,7 +3875,7 @@ impl WorkerV2ResumeStoreV2 {
             || final_stat.st_ctime != initial.st_ctime
             || final_stat.st_ctime_nsec != initial.st_ctime_nsec
             || usize::try_from(final_stat.st_size).ok() != Some(bytes.len())
-            || bytes.len() > MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1
+            || bytes.len() != MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1
         {
             return Err(self.inner.invalid_at_name(
                 &name,
@@ -3903,7 +3916,49 @@ impl WorkerV2ResumeStoreV2 {
         Ok(receipt)
     }
 
+    fn ensure_protected_cleanup_escrow_prepared(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let escrow = prepare_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            evidence.attempt,
+            evidence.compiler_closure(),
+            evidence.intent,
+            evidence.escrow.receipt(),
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "artifact-owned protected cleanup escrow retry failed: {error}"
+            ))
+        })?;
+        if escrow != evidence.escrow {
+            return Err(self
+                .inner
+                .invalid("protected cleanup evidence differs from its retried artifact escrow"));
+        }
+        Ok(())
+    }
+
     fn validate_protected_cleanup_envelope(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<BackendPublicationReceiptV2, ResumeMarkerErrorV1> {
+        recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            evidence.escrow,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "protected cleanup envelope escrow recovery failed: {error}"
+            ))
+        })?;
+        self.validate_protected_cleanup_envelope_facts(evidence)
+    }
+
+    fn validate_protected_cleanup_envelope_facts(
         &self,
         evidence: &ProtectedIntentCleanupEvidenceV1,
     ) -> Result<BackendPublicationReceiptV2, ResumeMarkerErrorV1> {
@@ -3915,7 +3970,7 @@ impl WorkerV2ResumeStoreV2 {
                 .inner
                 .invalid("protected cleanup evidence names a different package"));
         }
-        let receipt = self.durable_receipt(evidence.attempt)?;
+        let receipt = evidence.escrow.receipt();
         if !evidence.receipt.matches(receipt)
             || receipt.compiler_closure() != evidence.compiler_closure()
         {
@@ -3924,14 +3979,12 @@ impl WorkerV2ResumeStoreV2 {
             ));
         }
         let name = protected_envelope_name_v2(receipt.publication_identity());
-        let envelope = self
-            .read_load_envelope(&name, receipt, evidence.compiler_closure())?
-            .ok_or_else(|| {
-                self.inner.invalid_at_name(
-                    &name,
-                    "canonical protected Worker V2 cleanup envelope is missing",
-                )
-            })?;
+        let envelope = self.read_cleanup_load_envelope(&name)?.ok_or_else(|| {
+            self.inner.invalid_at_name(
+                &name,
+                "canonical protected Worker V2 cleanup envelope is missing",
+            )
+        })?;
         let artifact = envelope.final_artifact_evidence();
         let claim = artifact.published_claim();
         let intent = artifact.publication_intent_transcript();
@@ -3945,25 +3998,28 @@ impl WorkerV2ResumeStoreV2 {
                 "protected cleanup envelope inputs are invalid: {error}"
             ))
         })?;
+        let finalized_payload_identity: [u8; 32] =
+            Sha256::digest(envelope.finalized_payload()).into();
         if envelope.identity().as_bytes() != evidence.envelope
-            || claim.plan() != evidence.plan
-            || claim.upstream_evidence() != evidence.upstream
+            || claim.plan().scope().package().as_bytes() != &evidence.package
+            || claim.plan() != intent.plan()
+            || claim.upstream_evidence() != intent.upstream_evidence()
+            || claim.receipt() != receipt
+            || claim.compiler_closure() != evidence.compiler_closure()
             || intent.source_record_identity() != evidence.intent
             || intent.attempt() != evidence.attempt
-            || intent.plan() != evidence.plan
-            || intent.producer_identity() != evidence.producer_identity
-            || intent.upstream_evidence() != evidence.upstream
-            || intent.output_identity() != evidence.plan.finalized_output()
-            || usize::try_from(intent.output_length()) != Ok(evidence.exact_output.len())
+            || intent.producer_identity() != evidence.escrow.producer_identity()
+            || intent.output_identity().as_bytes() != &receipt.finalized_output_identity()
+            || usize::try_from(intent.output_length()) != Ok(envelope.finalized_payload().len())
             || intent.compiler_closure() != evidence.compiler_closure()
-            || envelope.finalized_payload() != evidence.exact_output
-            || carried_inputs != evidence.envelope_inputs
+            || finalized_payload_identity != receipt.finalized_output_identity()
+            || carried_inputs.identity().as_bytes() != evidence.envelope_inputs
             || restart_admission_commitment_with_inputs_v2(
                 evidence.publication,
-                evidence.plan,
-                evidence.upstream,
-                &evidence.exact_output,
-                Some(evidence.envelope_inputs.identity()),
+                intent.plan(),
+                intent.upstream_evidence(),
+                envelope.finalized_payload(),
+                Some(carried_inputs.identity()),
                 evidence.compiler_closure(),
             ) != evidence.admission
         {
@@ -3974,10 +4030,574 @@ impl WorkerV2ResumeStoreV2 {
         Ok(receipt)
     }
 
+    fn read_cleanup_load_envelope(
+        &self,
+        name: &str,
+    ) -> Result<Option<WorkerV2LoadEnvelopeV2>, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        let descriptor = match openat(
+            &self.inner.directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+        validate_private_file(
+            &self.inner.directory,
+            &descriptor,
+            name,
+            &self.inner.display_path,
+            None,
+        )?;
+        let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+        let initial_size = usize::try_from(initial.st_size).ok();
+        if initial_size.is_none_or(|size| size == 0 || size > MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2)
+        {
+            return Err(self.inner.invalid_at_name(
+                name,
+                "protected cleanup envelope exceeds its canonical V2 bound",
+            ));
+        }
+        let mut file = File::from(descriptor);
+        let mut bytes = Vec::with_capacity(initial_size.unwrap_or(0).saturating_add(1));
+        Read::by_ref(&mut file)
+            .take((MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2 + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        let final_stat = fstat(&file).map_err(std::io::Error::from)?;
+        if final_stat.st_dev != initial.st_dev
+            || final_stat.st_ino != initial.st_ino
+            || final_stat.st_mode != initial.st_mode
+            || final_stat.st_nlink != 1
+            || final_stat.st_mtime != initial.st_mtime
+            || final_stat.st_mtime_nsec != initial.st_mtime_nsec
+            || final_stat.st_ctime != initial.st_ctime
+            || final_stat.st_ctime_nsec != initial.st_ctime_nsec
+            || usize::try_from(final_stat.st_size).ok() != Some(bytes.len())
+            || bytes.len() > MAX_WORKER_V2_LOAD_ENVELOPE_BYTES_V2
+        {
+            return Err(self
+                .inner
+                .invalid_at_name(name, "protected cleanup envelope changed while it was read"));
+        }
+        let envelope = WorkerV2LoadEnvelopeV2::from_bytes(&bytes).map_err(|error| {
+            self.inner.invalid_at_name(
+                name,
+                format!("invalid protected cleanup V2 envelope: {error}"),
+            )
+        })?;
+        if envelope.to_bytes() != bytes {
+            return Err(self.inner.invalid_at_name(
+                name,
+                "protected cleanup V2 envelope encoding is not canonical",
+            ));
+        }
+        Ok(Some(envelope))
+    }
+
+    fn protected_cleanup_marker_entry(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+        names: &ProtectedCleanupLocalNamesV1,
+    ) -> Result<ProtectedCleanupLocalEntryV1, ResumeMarkerErrorV1> {
+        let canonical = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &self.inner.marker_name,
+            &self.inner.display_path,
+        )?;
+        let quarantined = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &names.marker,
+            &self.inner.display_path,
+        )?;
+        match (canonical, quarantined) {
+            (Some(_), Some(_)) => Err(self
+                .inner
+                .invalid("protected cleanup marker exists in canonical and quarantine namespaces")),
+            (Some(pinned), None) => {
+                pinned.require_snapshot(
+                    evidence.marker_file,
+                    &self.inner.marker_name,
+                    &self.inner.display_path,
+                )?;
+                self.validate_protected_cleanup_marker_bytes(
+                    &pinned,
+                    &self.inner.marker_name,
+                    evidence,
+                )?;
+                Ok(ProtectedCleanupLocalEntryV1::Canonical(pinned))
+            }
+            (None, Some(pinned)) => {
+                pinned.require_snapshot(
+                    evidence.marker_file,
+                    &names.marker,
+                    &self.inner.display_path,
+                )?;
+                self.validate_protected_cleanup_marker_bytes(&pinned, &names.marker, evidence)?;
+                Ok(ProtectedCleanupLocalEntryV1::Quarantined(pinned))
+            }
+            (None, None) => Ok(ProtectedCleanupLocalEntryV1::Absent),
+        }
+    }
+
+    fn validate_protected_cleanup_marker_bytes(
+        &self,
+        pinned: &PinnedProtectedCleanupFileV1,
+        name: &str,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let bytes = pinned.read_bounded(
+            &self.inner.directory,
+            name,
+            &self.inner.display_path,
+            PROTECTED_MARKER_BYTES,
+        )?;
+        if bytes != encode_protected_marker(self.inner.package, evidence.completed_state()) {
+            return Err(self
+                .inner
+                .invalid_at_name(name, "protected cleanup marker bytes were replaced"));
+        }
+        Ok(())
+    }
+
+    fn protected_cleanup_inputs_entry(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+        names: &ProtectedCleanupLocalNamesV1,
+    ) -> Result<ProtectedCleanupLocalEntryV1, ResumeMarkerErrorV1> {
+        let canonical_name = envelope_inputs_name(self.inner.package, evidence.attempt);
+        let canonical = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &canonical_name,
+            &self.inner.display_path,
+        )?;
+        let quarantined = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &names.inputs,
+            &self.inner.display_path,
+        )?;
+        match (canonical, quarantined) {
+            (Some(_), Some(_)) => Err(self
+                .inner
+                .invalid("protected cleanup inputs exist in canonical and quarantine namespaces")),
+            (Some(pinned), None) => {
+                pinned.require_snapshot(
+                    evidence.inputs_file,
+                    &canonical_name,
+                    &self.inner.display_path,
+                )?;
+                self.validate_protected_cleanup_inputs_bytes(&pinned, &canonical_name, evidence)?;
+                Ok(ProtectedCleanupLocalEntryV1::Canonical(pinned))
+            }
+            (None, Some(pinned)) => {
+                pinned.require_snapshot(
+                    evidence.inputs_file,
+                    &names.inputs,
+                    &self.inner.display_path,
+                )?;
+                self.validate_protected_cleanup_inputs_bytes(&pinned, &names.inputs, evidence)?;
+                Ok(ProtectedCleanupLocalEntryV1::Quarantined(pinned))
+            }
+            (None, None) => Ok(ProtectedCleanupLocalEntryV1::Absent),
+        }
+    }
+
+    fn validate_protected_cleanup_inputs_bytes(
+        &self,
+        pinned: &PinnedProtectedCleanupFileV1,
+        name: &str,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let bytes = pinned.read_bounded(
+            &self.inner.directory,
+            name,
+            &self.inner.display_path,
+            MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES,
+        )?;
+        let decoded = WorkerV2EnvelopeInputsV1::from_bytes(&bytes).map_err(|error| {
+            self.inner.invalid_at_name(
+                name,
+                format!("protected cleanup input capsule is invalid: {error}"),
+            )
+        })?;
+        if decoded.identity().as_bytes() != evidence.envelope_inputs || decoded.to_bytes() != bytes
+        {
+            return Err(self
+                .inner
+                .invalid_at_name(name, "protected cleanup input capsule was replaced"));
+        }
+        Ok(())
+    }
+
+    fn prepare_protected_cleanup_local_quarantine(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let names = ProtectedCleanupLocalNamesV1::new(evidence);
+        let marker = self.protected_cleanup_marker_entry(evidence, &names)?;
+        let inputs = self.protected_cleanup_inputs_entry(evidence, &names)?;
+        match (marker, inputs) {
+            (
+                ProtectedCleanupLocalEntryV1::Canonical(marker),
+                ProtectedCleanupLocalEntryV1::Canonical(inputs),
+            ) => {
+                marker.rename_and_sync(
+                    &self.inner.directory,
+                    &self.inner.marker_name,
+                    &names.marker,
+                    &self.inner.display_path,
+                    ProtectedCleanupRenameFaultsV1 {
+                        _before_rename: "protected-cleanup-marker-before-quarantine-rename",
+                        _after_rename: "protected-cleanup-marker-after-quarantine-rename",
+                        _after_sync: "protected-cleanup-marker-quarantine-directory-synced",
+                    },
+                )?;
+                self.validate_protected_cleanup_marker_bytes(&marker, &names.marker, evidence)?;
+                inputs.rename_and_sync(
+                    &self.inner.directory,
+                    &envelope_inputs_name(self.inner.package, evidence.attempt),
+                    &names.inputs,
+                    &self.inner.display_path,
+                    ProtectedCleanupRenameFaultsV1 {
+                        _before_rename: "protected-cleanup-input-before-quarantine-rename",
+                        _after_rename: "protected-cleanup-input-after-quarantine-rename",
+                        _after_sync: "protected-cleanup-input-quarantine-directory-synced",
+                    },
+                )?;
+                self.validate_protected_cleanup_inputs_bytes(&inputs, &names.inputs, evidence)?;
+            }
+            (
+                ProtectedCleanupLocalEntryV1::Quarantined(marker),
+                ProtectedCleanupLocalEntryV1::Canonical(inputs),
+            ) => {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+                self.validate_protected_cleanup_marker_bytes(&marker, &names.marker, evidence)?;
+                inputs.rename_and_sync(
+                    &self.inner.directory,
+                    &envelope_inputs_name(self.inner.package, evidence.attempt),
+                    &names.inputs,
+                    &self.inner.display_path,
+                    ProtectedCleanupRenameFaultsV1 {
+                        _before_rename: "protected-cleanup-input-before-quarantine-rename",
+                        _after_rename: "protected-cleanup-input-after-quarantine-rename",
+                        _after_sync: "protected-cleanup-input-quarantine-directory-synced",
+                    },
+                )?;
+                self.validate_protected_cleanup_inputs_bytes(&inputs, &names.inputs, evidence)?;
+            }
+            (
+                ProtectedCleanupLocalEntryV1::Quarantined(marker),
+                ProtectedCleanupLocalEntryV1::Quarantined(inputs),
+            ) => {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+                self.validate_protected_cleanup_marker_bytes(&marker, &names.marker, evidence)?;
+                self.validate_protected_cleanup_inputs_bytes(&inputs, &names.inputs, evidence)?;
+            }
+            _ => {
+                return Err(self.inner.invalid(
+                    "protected cleanup marker/input quarantine is in an impossible mixed state",
+                ));
+            }
+        }
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        let marker = self.protected_cleanup_marker_entry(evidence, &names)?;
+        let inputs = self.protected_cleanup_inputs_entry(evidence, &names)?;
+        if !matches!(marker, ProtectedCleanupLocalEntryV1::Quarantined(_))
+            || !matches!(inputs, ProtectedCleanupLocalEntryV1::Quarantined(_))
+        {
+            return Err(self
+                .inner
+                .invalid("protected cleanup local quarantine did not retain both exact files"));
+        }
+        self.verify_output_path()
+    }
+
+    fn finish_committed_protected_cleanup_local_unlink(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let names = ProtectedCleanupLocalNamesV1::new(evidence);
+        let marker = self.protected_cleanup_marker_entry(evidence, &names)?;
+        let inputs = self.protected_cleanup_inputs_entry(evidence, &names)?;
+        let (marker, inputs) = match (marker, inputs) {
+            (
+                ProtectedCleanupLocalEntryV1::Quarantined(marker),
+                ProtectedCleanupLocalEntryV1::Quarantined(inputs),
+            ) => {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+                (Some(marker), Some(inputs))
+            }
+            (
+                ProtectedCleanupLocalEntryV1::Absent,
+                ProtectedCleanupLocalEntryV1::Quarantined(inputs),
+            ) => {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+                (None, Some(inputs))
+            }
+            (ProtectedCleanupLocalEntryV1::Absent, ProtectedCleanupLocalEntryV1::Absent) => {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+                (None, None)
+            }
+            _ => {
+                return Err(self.inner.invalid(
+                    "committed protected cleanup has impossible canonical/quarantine state",
+                ));
+            }
+        };
+        if let Some(marker) = marker {
+            marker.unlink_and_sync(
+                &self.inner.directory,
+                &names.marker,
+                &self.inner.display_path,
+                "protected-cleanup-marker-before-unlink",
+                "protected-cleanup-marker-after-unlink",
+                "protected-cleanup-marker-directory-synced",
+            )?;
+        }
+        if let Some(inputs) = inputs {
+            inputs.unlink_and_sync(
+                &self.inner.directory,
+                &names.inputs,
+                &self.inner.display_path,
+                "protected-cleanup-input-before-unlink",
+                "protected-cleanup-input-after-unlink",
+                "protected-cleanup-input-directory-synced",
+            )?;
+        }
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        if !entry_is_absent_v1(&self.inner.directory, &self.inner.marker_name)?
+            || !entry_is_absent_v1(
+                &self.inner.directory,
+                &envelope_inputs_name(self.inner.package, evidence.attempt),
+            )?
+            || !entry_is_absent_v1(&self.inner.directory, &names.marker)?
+            || !entry_is_absent_v1(&self.inner.directory, &names.inputs)?
+        {
+            return Err(self
+                .inner
+                .invalid("committed protected cleanup left Cargo namespace state behind"));
+        }
+        self.verify_output_path()
+    }
+
+    fn finish_committed_superseded_cleanup_local_unlink(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let names = ProtectedCleanupLocalNamesV1::new(evidence);
+        let marker = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &names.marker,
+            &self.inner.display_path,
+        )?;
+        if let Some(marker) = &marker {
+            marker.require_snapshot(
+                evidence.marker_file,
+                &names.marker,
+                &self.inner.display_path,
+            )?;
+            self.validate_protected_cleanup_marker_bytes(marker, &names.marker, evidence)?;
+        }
+        let canonical_inputs = envelope_inputs_name(self.inner.package, evidence.attempt);
+        if !entry_is_absent_v1(&self.inner.directory, &canonical_inputs)? {
+            return Err(self.inner.invalid_at_name(
+                &canonical_inputs,
+                "committed superseded cleanup retained canonical predecessor inputs",
+            ));
+        }
+        let inputs = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &names.inputs,
+            &self.inner.display_path,
+        )?;
+        if let Some(inputs) = &inputs {
+            inputs.require_snapshot(
+                evidence.inputs_file,
+                &names.inputs,
+                &self.inner.display_path,
+            )?;
+            self.validate_protected_cleanup_inputs_bytes(inputs, &names.inputs, evidence)?;
+        }
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        if let Some(marker) = marker {
+            marker.unlink_and_sync(
+                &self.inner.directory,
+                &names.marker,
+                &self.inner.display_path,
+                "protected-cleanup-marker-before-unlink",
+                "protected-cleanup-marker-after-unlink",
+                "protected-cleanup-marker-directory-synced",
+            )?;
+        }
+        if let Some(inputs) = inputs {
+            inputs.unlink_and_sync(
+                &self.inner.directory,
+                &names.inputs,
+                &self.inner.display_path,
+                "protected-cleanup-input-before-unlink",
+                "protected-cleanup-input-after-unlink",
+                "protected-cleanup-input-directory-synced",
+            )?;
+        }
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        if !entry_is_absent_v1(&self.inner.directory, &names.marker)?
+            || !entry_is_absent_v1(&self.inner.directory, &names.inputs)?
+            || !entry_is_absent_v1(&self.inner.directory, &canonical_inputs)?
+        {
+            return Err(self
+                .inner
+                .invalid("committed superseded cleanup left predecessor Cargo state behind"));
+        }
+        self.verify_output_path()
+    }
+
+    fn validate_prepared_superseded_cleanup_local_quarantine(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let names = ProtectedCleanupLocalNamesV1::new(evidence);
+        let marker = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &names.marker,
+            &self.inner.display_path,
+        )?
+        .ok_or_else(|| {
+            self.inner.invalid_at_name(
+                &names.marker,
+                "prepared superseded cleanup lost its quarantined marker",
+            )
+        })?;
+        marker.require_snapshot(
+            evidence.marker_file,
+            &names.marker,
+            &self.inner.display_path,
+        )?;
+        self.validate_protected_cleanup_marker_bytes(&marker, &names.marker, evidence)?;
+        let canonical_inputs = envelope_inputs_name(self.inner.package, evidence.attempt);
+        if !entry_is_absent_v1(&self.inner.directory, &canonical_inputs)? {
+            return Err(self.inner.invalid_at_name(
+                &canonical_inputs,
+                "prepared superseded cleanup retained canonical predecessor inputs",
+            ));
+        }
+        let inputs = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &names.inputs,
+            &self.inner.display_path,
+        )?
+        .ok_or_else(|| {
+            self.inner.invalid_at_name(
+                &names.inputs,
+                "prepared superseded cleanup lost its quarantined inputs",
+            )
+        })?;
+        inputs.require_snapshot(
+            evidence.inputs_file,
+            &names.inputs,
+            &self.inner.display_path,
+        )?;
+        self.validate_protected_cleanup_inputs_bytes(&inputs, &names.inputs, evidence)?;
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        self.verify_output_path()
+    }
+
+    fn rollback_protected_cleanup_local_quarantine(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let names = ProtectedCleanupLocalNamesV1::new(evidence);
+        let marker = self.protected_cleanup_marker_entry(evidence, &names)?;
+        let inputs = self.protected_cleanup_inputs_entry(evidence, &names)?;
+        match (marker, inputs) {
+            (
+                ProtectedCleanupLocalEntryV1::Canonical(_),
+                ProtectedCleanupLocalEntryV1::Canonical(_),
+            ) => {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+            }
+            (
+                ProtectedCleanupLocalEntryV1::Quarantined(marker),
+                ProtectedCleanupLocalEntryV1::Canonical(_),
+            ) => {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+                marker.rename_and_sync(
+                    &self.inner.directory,
+                    &names.marker,
+                    &self.inner.marker_name,
+                    &self.inner.display_path,
+                    ProtectedCleanupRenameFaultsV1 {
+                        _before_rename: "protected-cleanup-marker-before-rollback-rename",
+                        _after_rename: "protected-cleanup-marker-after-rollback-rename",
+                        _after_sync: "protected-cleanup-marker-rollback-directory-synced",
+                    },
+                )?;
+            }
+            (
+                ProtectedCleanupLocalEntryV1::Quarantined(marker),
+                ProtectedCleanupLocalEntryV1::Quarantined(inputs),
+            ) => {
+                fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+                inputs.rename_and_sync(
+                    &self.inner.directory,
+                    &names.inputs,
+                    &envelope_inputs_name(self.inner.package, evidence.attempt),
+                    &self.inner.display_path,
+                    ProtectedCleanupRenameFaultsV1 {
+                        _before_rename: "protected-cleanup-input-before-rollback-rename",
+                        _after_rename: "protected-cleanup-input-after-rollback-rename",
+                        _after_sync: "protected-cleanup-input-rollback-directory-synced",
+                    },
+                )?;
+                marker.rename_and_sync(
+                    &self.inner.directory,
+                    &names.marker,
+                    &self.inner.marker_name,
+                    &self.inner.display_path,
+                    ProtectedCleanupRenameFaultsV1 {
+                        _before_rename: "protected-cleanup-marker-before-rollback-rename",
+                        _after_rename: "protected-cleanup-marker-after-rollback-rename",
+                        _after_sync: "protected-cleanup-marker-rollback-directory-synced",
+                    },
+                )?;
+            }
+            _ => {
+                return Err(self.inner.invalid(
+                    "protected cleanup rollback cannot reconstruct deleted Cargo-owned state",
+                ));
+            }
+        }
+        if self.load()? != Some(evidence.completed_state())
+            || self
+                .recover_envelope_inputs(evidence.attempt)?
+                .identity()
+                .as_bytes()
+                != evidence.envelope_inputs
+        {
+            return Err(self
+                .inner
+                .invalid("protected cleanup local rollback did not restore exact state"));
+        }
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        self.verify_output_path()
+    }
+
     fn recover_or_restore_protected_intent(
         &self,
         evidence: &ProtectedIntentCleanupEvidenceV1,
     ) -> Result<RecoveredWorkerV2PublicationIntentV2, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        rollback_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            evidence.escrow,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "artifact-owned protected cleanup escrow rollback failed: {error}"
+            ))
+        })?;
         self.verify_output_path()?;
         let recovered = match recover_worker_v2_publication_intent_v2(
             &self.inner.display_path,
@@ -3988,7 +4608,7 @@ impl WorkerV2ResumeStoreV2 {
             Ok(recovered) => recovered,
             Err(WorkerV2PublicationIntentErrorV2::NotFound) => {
                 return Err(self.inner.invalid(
-                    "protected cleanup intent disappeared before a superseding Ready state",
+                    "artifact-owned cleanup rollback did not restore the protected intent",
                 ));
             }
             Err(error) => {
@@ -4022,24 +4642,7 @@ impl WorkerV2ResumeStoreV2 {
                 .invalid("protected cleanup evidence cannot restore a different durable receipt"));
         }
         self.recover_or_restore_protected_intent(evidence)?;
-        self.persist_envelope_inputs(evidence.attempt, &evidence.envelope_inputs)?;
-        let completed = evidence.completed_state();
-        match self.load()? {
-            None => self.inner.write_protected(completed, false)?,
-            Some(existing) if existing == completed => {}
-            Some(_) => {
-                return Err(self.inner.invalid(
-                    "protected cleanup evidence cannot replace a different resume marker",
-                ));
-            }
-        }
-        if self.load()? != Some(completed)
-            || self.recover_envelope_inputs(evidence.attempt)? != evidence.envelope_inputs
-        {
-            return Err(self
-                .inner
-                .invalid("protected completed-state restoration did not persist exactly"));
-        }
+        self.rollback_protected_cleanup_local_quarantine(evidence)?;
         self.recover_or_restore_protected_intent(evidence)?;
         Ok(())
     }
@@ -4048,35 +4651,136 @@ impl WorkerV2ResumeStoreV2 {
         let state = self.load()?;
         let evidence = self.read_protected_cleanup_evidence()?;
         match (state, evidence) {
-            (None, None) | (Some(_), None) => Ok(()),
-            (None, Some(evidence)) => {
-                if let Err(error) = self.validate_protected_cleanup_envelope(&evidence) {
-                    self.restore_protected_completed_from_cleanup_evidence(&evidence)?;
-                    return Err(error);
+            (None, None) => Ok(()),
+            (Some(completed @ ResumeMarkerStateV2::Completed { .. }), None)
+                if completed.publication().requires_envelope() =>
+            {
+                let closure = completed
+                    .completed_receipt()
+                    .and_then(ReceiptRecordV2::compiler_closure)
+                    .ok_or_else(|| {
+                        self.inner
+                            .invalid("protected completed marker lacks its exact compiler closure")
+                    })?;
+                match recover_worker_v2_publication_intent_v2(
+                    &self.inner.display_path,
+                    &self.producer,
+                    completed.attempt(),
+                    closure,
+                ) {
+                    Ok(_) => Ok(()),
+                    Err(WorkerV2PublicationIntentErrorV2::NotFound) => {
+                        self.ensure_protected_cleanup_evidence(completed, closure)?;
+                        let evidence = self.read_protected_cleanup_evidence()?.ok_or_else(|| {
+                            self.inner.invalid(
+                                "protected cleanup escrow recovery did not publish evidence",
+                            )
+                        })?;
+                        self.reconcile_current_protected_cleanup(&evidence)
+                    }
+                    Err(error) => Err(self.inner.invalid(format!(
+                        "protected completed intent recovery failed without cleanup evidence: {error}"
+                    ))),
                 }
-                Ok(())
             }
+            (Some(_), None) => Ok(()),
+            (None, Some(evidence)) => self.reconcile_current_protected_cleanup(&evidence),
             (Some(completed @ ResumeMarkerStateV2::Completed { .. }), Some(evidence)) => {
                 if completed.attempt() == evidence.attempt {
                     self.validate_protected_cleanup_evidence(&evidence, completed)?;
-                    self.recover_or_restore_protected_intent(&evidence)?;
-                    if let Err(error) = self.validate_protected_cleanup_envelope(&evidence) {
-                        self.restore_protected_completed_from_cleanup_evidence(&evidence)?;
-                        return Err(error);
-                    }
-                    if self.load()? != Some(completed) {
-                        return Err(self.inner.invalid(
-                            "protected marker changed during cleanup-intent restoration",
-                        ));
-                    }
+                    return self.reconcile_current_protected_cleanup(&evidence);
                 }
-                Ok(())
+                Err(self.inner.invalid(
+                    "protected cleanup evidence conflicts with a different completed attempt",
+                ))
             }
-            (Some(state), Some(evidence)) if state.attempt() != evidence.attempt => Ok(()),
+            (Some(state @ ResumeMarkerStateV2::Ready { .. }), Some(evidence))
+                if strictly_newer_attempt_generation_v1(state.attempt(), evidence.attempt) =>
+            {
+                self.reconcile_superseded_protected_cleanup(&evidence)
+            }
+            (Some(state @ ResumeMarkerStateV2::Pending { .. }), Some(evidence))
+                if strictly_newer_attempt_generation_v1(state.attempt(), evidence.attempt) =>
+            {
+                self.reconcile_superseded_protected_cleanup(&evidence)
+            }
             (Some(_), Some(_)) => Err(self.inner.invalid(
                 "protected cleanup evidence conflicts with its attempt's non-completed marker",
             )),
         }
+    }
+
+    fn reconcile_current_protected_cleanup(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        match recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            evidence.escrow,
+        ) {
+            Ok(WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared) => {
+                let envelope = self.validate_protected_cleanup_envelope(evidence);
+                self.restore_protected_completed_from_cleanup_evidence(evidence)?;
+                envelope.map(|_| ())
+            }
+            Ok(WorkerV2PublicationIntentCleanupEscrowStateV1::Committed) => {
+                self.finish_committed_protected_cleanup_local_unlink(evidence)?;
+                self.remove_protected_cleanup_evidence(evidence)
+            }
+            Err(_) => {
+                self.restore_protected_completed_from_cleanup_evidence(evidence)?;
+                self.validate_protected_cleanup_envelope_facts(evidence)
+                    .map(|_| ())
+            }
+        }
+    }
+
+    fn reconcile_superseded_protected_cleanup(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let state = recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            evidence.escrow,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "superseded protected cleanup escrow recovery failed: {error}"
+            ))
+        })?;
+        match state {
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared => {
+                self.validate_prepared_superseded_cleanup_local_quarantine(evidence)
+            }
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Committed => {
+                self.finish_committed_superseded_cleanup_local_unlink(evidence)?;
+                self.remove_protected_cleanup_evidence(evidence)
+            }
+        }
+    }
+
+    fn commit_protected_cleanup_escrow(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-before-artifact-escrow-commit");
+        commit_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            evidence.escrow,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "artifact-owned protected cleanup escrow commit failed: {error}"
+            ))
+        })?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-after-artifact-escrow-commit");
+        self.verify_output_path()
     }
 
     fn retire_protected_cleanup_evidence_after_ready(
@@ -4090,7 +4794,7 @@ impl WorkerV2ResumeStoreV2 {
         let ResumeMarkerStateV2::Ready { intent, .. } = ready else {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         };
-        if evidence.attempt == ready.attempt()
+        if !strictly_newer_attempt_generation_v1(ready.attempt(), evidence.attempt)
             || self.load()? != Some(ready)
             || recovered.record().attempt() != ready.attempt()
             || recovered.record().identity() != intent
@@ -4099,8 +4803,33 @@ impl WorkerV2ResumeStoreV2 {
                 "protected cleanup evidence cannot be retired without a newer exact Ready state",
             ));
         }
-        let current =
-            self.recover_complete_intent(ready.attempt(), recovered.compiler_closure())?;
+        let escrow_state = recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            evidence.escrow,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "superseded protected cleanup escrow recovery failed: {error}"
+            ))
+        })?;
+        if escrow_state == WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared {
+            self.validate_prepared_superseded_cleanup_local_quarantine(&evidence)?;
+            self.validate_protected_cleanup_envelope(&evidence)?;
+        }
+        let lease = acquire_worker_v2_publication_intent_lease_v2(
+            &self.inner.display_path,
+            &self.producer,
+            ready.attempt(),
+            recovered.compiler_closure(),
+            intent,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "superseding Ready intent lease acquisition failed: {error}"
+            ))
+        })?;
+        let current = lease.recovered();
         if self.load()? != Some(ready)
             || current.record() != recovered.record()
             || current.exact_output() != recovered.exact_output()
@@ -4109,6 +4838,45 @@ impl WorkerV2ResumeStoreV2 {
                 .inner
                 .invalid("protected Ready state changed during superseded cleanup retirement"));
         }
+        lease.revalidate().map_err(|error| {
+            self.inner.invalid(format!(
+                "superseding Ready intent lease revalidation failed: {error}"
+            ))
+        })?;
+        // The artifact lock is not nestable. Once the predecessor commit starts it is
+        // irreversible, so restart treats its Committed escrow as cleanup-only; authority for
+        // the superseding Ready attempt still requires reacquiring this exact lease below.
+        drop(lease);
+        self.commit_protected_cleanup_escrow(&evidence)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-newer-ready-after-predecessor-commit");
+        let lease = acquire_worker_v2_publication_intent_lease_v2(
+            &self.inner.display_path,
+            &self.producer,
+            ready.attempt(),
+            recovered.compiler_closure(),
+            intent,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "superseding Ready intent changed after predecessor escrow commit: {error}"
+            ))
+        })?;
+        if self.load()? != Some(ready)
+            || lease.recovered().record() != recovered.record()
+            || lease.recovered().exact_output() != recovered.exact_output()
+        {
+            return Err(self
+                .inner
+                .invalid("superseding Ready state changed after predecessor escrow commit"));
+        }
+        lease.revalidate().map_err(|error| {
+            self.inner.invalid(format!(
+                "superseding Ready intent failed final revalidation: {error}"
+            ))
+        })?;
+        drop(lease);
+        self.finish_committed_superseded_cleanup_local_unlink(&evidence)?;
         self.remove_protected_cleanup_evidence(&evidence)
     }
 
@@ -4117,42 +4885,69 @@ impl WorkerV2ResumeStoreV2 {
         expected: &ProtectedIntentCleanupEvidenceV1,
     ) -> Result<(), ResumeMarkerErrorV1> {
         let name = protected_cleanup_evidence_name_v1(self.inner.package);
-        if self.read_protected_cleanup_evidence()?.as_ref() != Some(expected) {
+        let Some(pinned) = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &name,
+            &self.inner.display_path,
+        )?
+        else {
+            let state = recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                &self.inner.display_path,
+                &self.producer,
+                expected.escrow,
+            )
+            .map_err(|error| {
+                self.inner.invalid(format!(
+                    "missing cleanup evidence has invalid artifact escrow state: {error}"
+                ))
+            })?;
+            if state != WorkerV2PublicationIntentCleanupEscrowStateV1::Committed {
+                return Err(self.inner.invalid_at_name(
+                    &name,
+                    "protected cleanup evidence disappeared before escrow commit",
+                ));
+            }
+            fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+            return self.verify_output_path();
+        };
+        let bytes = pinned.read_bounded(
+            &self.inner.directory,
+            &name,
+            &self.inner.display_path,
+            MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1,
+        )?;
+        let decoded = ProtectedIntentCleanupEvidenceV1::from_bytes(&bytes)
+            .map_err(|reason| self.inner.invalid_at_name(&name, reason))?;
+        if decoded != *expected {
             return Err(self.inner.invalid_at_name(
                 &name,
                 "protected cleanup evidence changed before retirement",
             ));
         }
-        let descriptor = match openat(
+        let state = recover_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            expected.escrow,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "protected cleanup evidence escrow recovery failed before retirement: {error}"
+            ))
+        })?;
+        if state != WorkerV2PublicationIntentCleanupEscrowStateV1::Committed {
+            return Err(self.inner.invalid_at_name(
+                &name,
+                "protected cleanup evidence cannot be removed before artifact escrow commit",
+            ));
+        }
+        pinned.unlink_and_sync(
             &self.inner.directory,
-            &name,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
-            Mode::empty(),
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(rustix::io::Errno::NOENT) => {
-                return Err(self.inner.invalid_at_name(
-                    &name,
-                    "protected cleanup evidence disappeared before retirement",
-                ));
-            }
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        };
-        validate_private_file(
-            &self.inner.directory,
-            &descriptor,
             &name,
             &self.inner.display_path,
-            None,
+            "protected-cleanup-evidence-before-unlink",
+            "protected-cleanup-evidence-after-unlink",
+            "protected-cleanup-evidence-directory-synced",
         )?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-evidence-before-unlink");
-        unlinkat(&self.inner.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-evidence-after-unlink");
-        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-evidence-directory-synced");
         self.verify_output_path()
     }
 
@@ -4647,7 +5442,19 @@ impl WorkerV2ResumeStoreV2 {
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<(), ResumeMarkerErrorV1> {
         self.validate_complete_intent_snapshot(recovered, attempt, expected_compiler_closure)?;
-        let local = self.recover_complete_intent(attempt, expected_compiler_closure)?;
+        let lease = acquire_worker_v2_publication_intent_lease_v2(
+            &self.inner.display_path,
+            &self.producer,
+            attempt,
+            expected_compiler_closure,
+            recovered.record().identity(),
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "protected Ready promotion could not acquire its exact local intent lease: {error}"
+            ))
+        })?;
+        let local = lease.recovered();
         if local.record() != recovered.record()
             || local.exact_output() != recovered.exact_output()
             || local.compiler_closure() != recovered.compiler_closure()
@@ -4713,7 +5520,18 @@ impl WorkerV2ResumeStoreV2 {
             }
             _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
         };
-        self.retire_protected_cleanup_evidence_after_ready(ready, &local)
+        lease.revalidate().map_err(|error| {
+            self.inner.invalid(format!(
+                "protected Ready promotion lost its exact local intent lease: {error}"
+            ))
+        })?;
+        if self.load()? != Some(ready) {
+            return Err(self
+                .inner
+                .invalid("protected Ready marker changed after durable publication"));
+        }
+        drop(lease);
+        self.retire_protected_cleanup_evidence_after_ready(ready, recovered)
     }
 
     pub(crate) fn persist_completed(
@@ -5072,6 +5890,62 @@ impl WorkerV2ResumeStoreV2 {
         Ok(())
     }
 
+    fn capture_protected_cleanup_local_snapshots(
+        &self,
+        completed: ResumeMarkerStateV2,
+    ) -> Result<
+        (
+            ProtectedCleanupLocalFileSnapshotV1,
+            ProtectedCleanupLocalFileSnapshotV1,
+        ),
+        ResumeMarkerErrorV1,
+    > {
+        let marker = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &self.inner.marker_name,
+            &self.inner.display_path,
+        )?
+        .ok_or(ResumeMarkerErrorV1::InvalidTransition)?;
+        let marker_bytes = marker.read_bounded(
+            &self.inner.directory,
+            &self.inner.marker_name,
+            &self.inner.display_path,
+            PROTECTED_MARKER_BYTES,
+        )?;
+        if marker_bytes != encode_protected_marker(self.inner.package, completed) {
+            return Err(self
+                .inner
+                .invalid("cleanup snapshot marker differs from the exact completed state"));
+        }
+        let inputs_name = envelope_inputs_name(self.inner.package, completed.attempt());
+        let inputs = PinnedProtectedCleanupFileV1::open(
+            &self.inner.directory,
+            &inputs_name,
+            &self.inner.display_path,
+        )?
+        .ok_or(ResumeMarkerErrorV1::InvalidTransition)?;
+        let inputs_bytes = inputs.read_bounded(
+            &self.inner.directory,
+            &inputs_name,
+            &self.inner.display_path,
+            MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES,
+        )?;
+        let decoded = WorkerV2EnvelopeInputsV1::from_bytes(&inputs_bytes).map_err(|error| {
+            self.inner.invalid_at_name(
+                &inputs_name,
+                format!("cleanup snapshot input capsule is invalid: {error}"),
+            )
+        })?;
+        if decoded.identity().as_bytes() != completed.envelope_inputs()
+            || decoded.to_bytes() != inputs_bytes
+        {
+            return Err(self
+                .inner
+                .invalid("cleanup snapshot inputs differ from the exact completed state"));
+        }
+        Ok((marker.snapshot()?, inputs.snapshot()?))
+    }
+
     fn ensure_protected_cleanup_evidence(
         &self,
         completed: ResumeMarkerStateV2,
@@ -5079,20 +5953,53 @@ impl WorkerV2ResumeStoreV2 {
     ) -> Result<(), ResumeMarkerErrorV1> {
         if let Some(evidence) = self.read_protected_cleanup_evidence()? {
             self.validate_protected_cleanup_evidence(&evidence, completed)?;
+            self.ensure_protected_cleanup_escrow_prepared(&evidence)?;
+            if let Err(error) = self.validate_protected_cleanup_envelope(&evidence) {
+                self.restore_protected_completed_from_cleanup_evidence(&evidence)?;
+                return Err(error);
+            }
             return Ok(());
         }
-        let recovered =
-            self.recover_complete_intent(completed.attempt(), expected_compiler_closure)?;
-        let envelope_inputs = self.recover_envelope_inputs(completed.attempt())?;
+        let ResumeMarkerStateV2::Completed { intent, .. } = completed else {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        };
+        let inputs = self.recover_envelope_inputs(completed.attempt())?;
+        if inputs.identity().as_bytes() != completed.envelope_inputs() {
+            return Err(self
+                .inner
+                .invalid("completed marker disagrees with its envelope input capsule"));
+        }
+        let receipt = self.durable_receipt(completed.attempt())?;
+        self.validate_completed_receipt(completed, receipt, expected_compiler_closure)?;
+        let (marker_file, inputs_file) =
+            self.capture_protected_cleanup_local_snapshots(completed)?;
+        let escrow = prepare_worker_v2_publication_intent_cleanup_escrow_v1(
+            &self.inner.display_path,
+            &self.producer,
+            completed.attempt(),
+            expected_compiler_closure,
+            intent,
+            receipt,
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "artifact-owned protected cleanup escrow preparation failed: {error}"
+            ))
+        })?;
         let evidence = ProtectedIntentCleanupEvidenceV1::new(
             self.inner.package,
             completed,
-            &recovered,
-            envelope_inputs,
+            marker_file,
+            inputs_file,
+            escrow,
         )
         .map_err(|reason| self.inner.invalid(reason))?;
         self.persist_protected_cleanup_evidence(&evidence)?;
         self.validate_protected_cleanup_evidence(&evidence, completed)?;
+        if let Err(error) = self.validate_protected_cleanup_envelope(&evidence) {
+            self.restore_protected_completed_from_cleanup_evidence(&evidence)?;
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -5107,7 +6014,7 @@ impl WorkerV2ResumeStoreV2 {
         self.validate_protected_cleanup_evidence(&evidence, expected)?;
         self.validate_protected_cleanup_envelope(&evidence)?;
         let inputs = self.recover_envelope_inputs(expected.attempt())?;
-        if inputs != evidence.envelope_inputs
+        if inputs.identity().as_bytes() != evidence.envelope_inputs
             || inputs.identity().as_bytes() != expected.envelope_inputs()
         {
             return Err(self
@@ -5115,111 +6022,14 @@ impl WorkerV2ResumeStoreV2 {
                 .invalid("completed marker disagrees with its cleanup envelope inputs"));
         }
 
-        let retirement = (|| {
-            self.clear_protected_completed_marker_exact(expected)?;
-            self.remove_protected_envelope_inputs_exact(expected.attempt(), &inputs)?;
-            if self.read_protected_cleanup_evidence()?.as_ref() != Some(&evidence) {
-                return Err(self
-                    .inner
-                    .invalid("protected cleanup evidence changed during state retirement"));
-            }
-            self.validate_protected_cleanup_envelope(&evidence)?;
-            Ok(())
-        })();
-        if let Err(error) = retirement {
+        self.prepare_protected_cleanup_local_quarantine(&evidence)?;
+        if let Err(error) = self.validate_protected_cleanup_envelope(&evidence) {
             self.restore_protected_completed_from_cleanup_evidence(&evidence)?;
             return Err(error);
         }
-        Ok(())
-    }
-
-    fn clear_protected_completed_marker_exact(
-        &self,
-        expected: ResumeMarkerStateV2,
-    ) -> Result<(), ResumeMarkerErrorV1> {
-        if self.load()? != Some(expected) {
-            return Err(ResumeMarkerErrorV1::InvalidTransition);
-        }
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-marker-before-unlink");
-        unlinkat(
-            &self.inner.directory,
-            &self.inner.marker_name,
-            AtFlags::empty(),
-        )
-        .map_err(std::io::Error::from)?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-marker-after-unlink");
-        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-marker-directory-synced");
-        self.verify_output_path()
-    }
-
-    fn remove_protected_envelope_inputs_exact(
-        &self,
-        attempt: BuildAttempt,
-        expected: &WorkerV2EnvelopeInputsV1,
-    ) -> Result<(), ResumeMarkerErrorV1> {
-        let name = envelope_inputs_name(self.inner.package, attempt);
-        let descriptor = openat(
-            &self.inner.directory,
-            &name,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
-            Mode::empty(),
-        )
-        .map_err(std::io::Error::from)?;
-        validate_private_file(
-            &self.inner.directory,
-            &descriptor,
-            &name,
-            &self.inner.display_path,
-            None,
-        )?;
-        let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
-        let initial_size = usize::try_from(initial.st_size).ok();
-        if initial_size.is_none_or(|size| size == 0 || size > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES) {
-            return Err(self
-                .inner
-                .invalid_at_name(&name, "cleanup capsule size exceeds its canonical bound"));
-        }
-        let mut file = File::from(descriptor);
-        let mut bytes = Vec::with_capacity(initial_size.unwrap_or(0).saturating_add(1));
-        Read::by_ref(&mut file)
-            .take((MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)?;
-        let final_stat = fstat(&file).map_err(std::io::Error::from)?;
-        let decoded = WorkerV2EnvelopeInputsV1::from_bytes(&bytes).map_err(|error| {
-            self.inner.invalid_at_name(
-                &name,
-                format!("protected cleanup capsule is invalid: {error}"),
-            )
-        })?;
-        if final_stat.st_dev != initial.st_dev
-            || final_stat.st_ino != initial.st_ino
-            || final_stat.st_mode != initial.st_mode
-            || final_stat.st_nlink != 1
-            || final_stat.st_mtime != initial.st_mtime
-            || final_stat.st_mtime_nsec != initial.st_mtime_nsec
-            || final_stat.st_ctime != initial.st_ctime
-            || final_stat.st_ctime_nsec != initial.st_ctime_nsec
-            || usize::try_from(final_stat.st_size).ok() != Some(bytes.len())
-            || decoded != *expected
-            || decoded.to_bytes() != bytes
-        {
-            return Err(self
-                .inner
-                .invalid_at_name(&name, "protected cleanup capsule changed before retirement"));
-        }
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-input-before-unlink");
-        unlinkat(&self.inner.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-input-after-unlink");
-        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("protected-cleanup-input-directory-synced");
-        self.verify_output_path()
+        self.commit_protected_cleanup_escrow(&evidence)?;
+        self.finish_committed_protected_cleanup_local_unlink(&evidence)?;
+        self.remove_protected_cleanup_evidence(&evidence)
     }
 
     fn clear_exact(&self, expected: ResumeMarkerStateV2) -> Result<(), ResumeMarkerErrorV1> {
@@ -5236,6 +6046,13 @@ impl WorkerV2ResumeStoreV2 {
         self.verify_output_path()?;
         Ok(())
     }
+}
+
+fn strictly_newer_attempt_generation_v1(
+    candidate: BuildAttempt,
+    predecessor: BuildAttempt,
+) -> bool {
+    candidate.generation() > predecessor.generation()
 }
 
 fn open_output_directory(path: &Path, create: bool) -> Result<OwnedFd, ResumeMarkerErrorV1> {
@@ -5328,6 +6145,250 @@ fn validate_private_file(
         });
     }
     Ok(())
+}
+
+struct PinnedProtectedCleanupFileV1 {
+    file: File,
+    initial: rustix::fs::Stat,
+}
+
+struct ProtectedCleanupRenameFaultsV1 {
+    _before_rename: &'static str,
+    _after_rename: &'static str,
+    _after_sync: &'static str,
+}
+
+#[cfg(test)]
+struct ProtectedCleanupBeforeUnlinkTestHookV1 {
+    expected_name: String,
+    hook: Box<dyn FnOnce()>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PROTECTED_CLEANUP_BEFORE_UNLINK_TEST_HOOK_V1:
+        std::cell::RefCell<Option<ProtectedCleanupBeforeUnlinkTestHookV1>> = const {
+            std::cell::RefCell::new(None)
+        };
+}
+
+#[cfg(test)]
+fn install_protected_cleanup_before_unlink_test_hook_v1(
+    expected_name: String,
+    hook: impl FnOnce() + 'static,
+) {
+    PROTECTED_CLEANUP_BEFORE_UNLINK_TEST_HOOK_V1.with(|installed| {
+        assert!(
+            installed
+                .borrow_mut()
+                .replace(ProtectedCleanupBeforeUnlinkTestHookV1 {
+                    expected_name,
+                    hook: Box::new(hook),
+                })
+                .is_none(),
+            "a protected-cleanup unlink test hook is already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn run_protected_cleanup_before_unlink_test_hook_v1(name: &str) {
+    PROTECTED_CLEANUP_BEFORE_UNLINK_TEST_HOOK_V1.with(|installed| {
+        let matches = installed
+            .borrow()
+            .as_ref()
+            .is_some_and(|hook| hook.expected_name == name);
+        if matches {
+            let installed = installed
+                .borrow_mut()
+                .take()
+                .expect("matching protected-cleanup unlink test hook disappeared");
+            (installed.hook)();
+        }
+    });
+}
+
+impl PinnedProtectedCleanupFileV1 {
+    fn open(
+        directory: &OwnedFd,
+        name: &str,
+        display_path: &Path,
+    ) -> Result<Option<Self>, ResumeMarkerErrorV1> {
+        let descriptor = match openat(
+            directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+        validate_private_file(directory, &descriptor, name, display_path, None)?;
+        let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+        Ok(Some(Self {
+            file: File::from(descriptor),
+            initial,
+        }))
+    }
+
+    fn require_named_as(
+        &self,
+        directory: &OwnedFd,
+        name: &str,
+        display_path: &Path,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        validate_private_file(directory, &self.file, name, display_path, None)?;
+        let current = fstat(&self.file).map_err(std::io::Error::from)?;
+        if current.st_dev != self.initial.st_dev
+            || current.st_ino != self.initial.st_ino
+            || current.st_mode != self.initial.st_mode
+            || current.st_size != self.initial.st_size
+            || current.st_nlink != 1
+            || current.st_mtime != self.initial.st_mtime
+            || current.st_mtime_nsec != self.initial.st_mtime_nsec
+        {
+            return Err(ResumeMarkerErrorV1::InvalidMarker {
+                path: display_path.join(name),
+                reason: "protected cleanup entry changed while pinned".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Result<ProtectedCleanupLocalFileSnapshotV1, ResumeMarkerErrorV1> {
+        ProtectedCleanupLocalFileSnapshotV1::from_stat(&self.initial)
+            .map_err(|_| ResumeMarkerErrorV1::InvalidTransition)
+    }
+
+    fn require_snapshot(
+        &self,
+        expected: ProtectedCleanupLocalFileSnapshotV1,
+        name: &str,
+        display_path: &Path,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let current = fstat(&self.file).map_err(std::io::Error::from)?;
+        if !expected.matches(&current) {
+            return Err(ResumeMarkerErrorV1::InvalidMarker {
+                path: display_path.join(name),
+                reason: "protected cleanup entry inode differs from durable evidence".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn read_bounded(
+        &self,
+        directory: &OwnedFd,
+        name: &str,
+        display_path: &Path,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ResumeMarkerErrorV1> {
+        self.require_named_as(directory, name, display_path)?;
+        let length = usize::try_from(self.initial.st_size).ok();
+        if length.is_none_or(|length| length == 0 || length > maximum) {
+            return Err(ResumeMarkerErrorV1::InvalidMarker {
+                path: display_path.join(name),
+                reason: "protected cleanup entry exceeds its canonical bound".into(),
+            });
+        }
+        let mut bytes = vec![0; length.unwrap_or(0)];
+        self.file.read_exact_at(&mut bytes, 0)?;
+        self.require_named_as(directory, name, display_path)?;
+        Ok(bytes)
+    }
+
+    fn rename_and_sync(
+        &self,
+        directory: &OwnedFd,
+        source: &str,
+        destination: &str,
+        display_path: &Path,
+        faults: ProtectedCleanupRenameFaultsV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        self.require_named_as(directory, source, display_path)?;
+        match statat(directory, destination, AtFlags::SYMLINK_NOFOLLOW) {
+            Err(rustix::io::Errno::NOENT) => {}
+            Ok(_) => {
+                return Err(ResumeMarkerErrorV1::InvalidMarker {
+                    path: display_path.join(destination),
+                    reason: "protected cleanup quarantine destination already exists".into(),
+                });
+            }
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1(faults._before_rename);
+        renameat_with(
+            directory,
+            source,
+            directory,
+            destination,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1(faults._after_rename);
+        self.require_named_as(directory, destination, display_path)?;
+        fsync(directory).map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1(faults._after_sync);
+        #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
+        let _ = faults;
+        self.require_named_as(directory, destination, display_path)
+    }
+
+    fn unlink_and_sync(
+        &self,
+        directory: &OwnedFd,
+        name: &str,
+        display_path: &Path,
+        _before_unlink: &'static str,
+        _after_unlink: &'static str,
+        _after_sync: &'static str,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        self.require_named_as(directory, name, display_path)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1(_before_unlink);
+        #[cfg(test)]
+        run_protected_cleanup_before_unlink_test_hook_v1(name);
+        unlinkat(directory, name, AtFlags::empty()).map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1(_after_unlink);
+        let unlinked = fstat(&self.file).map_err(std::io::Error::from)?;
+        if unlinked.st_dev != self.initial.st_dev
+            || unlinked.st_ino != self.initial.st_ino
+            || unlinked.st_mode != self.initial.st_mode
+            || unlinked.st_size != self.initial.st_size
+            || unlinked.st_nlink != 0
+            || !entry_is_absent_v1(directory, name)?
+        {
+            return Err(ResumeMarkerErrorV1::InvalidMarker {
+                path: display_path.join(name),
+                reason: "protected cleanup unlink did not remove the pinned exact inode".into(),
+            });
+        }
+        fsync(directory).map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1(_after_sync);
+        if fstat(&self.file).map_err(std::io::Error::from)?.st_nlink != 0
+            || !entry_is_absent_v1(directory, name)?
+        {
+            return Err(ResumeMarkerErrorV1::InvalidMarker {
+                path: display_path.join(name),
+                reason: "protected cleanup unlink was not durably stable".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn entry_is_absent_v1(directory: &OwnedFd, name: &str) -> Result<bool, ResumeMarkerErrorV1> {
+    match statat(directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Err(rustix::io::Errno::NOENT) => Ok(true),
+        Ok(_) => Ok(false),
+        Err(error) => Err(std::io::Error::from(error).into()),
+    }
 }
 
 trait MarkerIntentIdentity: Copy + Eq {
@@ -6198,6 +7259,29 @@ mod tests {
             Some(Path::new(&format!("/src/resume-{seed}.rs"))),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn cleanup_evidence_retirement_requires_strictly_greater_generation() {
+        let build_attempt = |generation: u64, seed: u8| {
+            BuildAttempt::from_env_value(&format!(
+                "{generation}:{}:{}",
+                BuildSession::from_bytes([seed; 16]).to_hex(),
+                BuildInvocation::from_bytes([seed.wrapping_add(1); 32]).to_hex(),
+            ))
+            .unwrap()
+        };
+        let predecessor = build_attempt(7, 1);
+        let lower = build_attempt(6, 2);
+        let equal_but_different = build_attempt(7, 3);
+        let newer = build_attempt(8, 4);
+
+        assert!(!strictly_newer_attempt_generation_v1(lower, predecessor));
+        assert!(!strictly_newer_attempt_generation_v1(
+            equal_but_different,
+            predecessor
+        ));
+        assert!(strictly_newer_attempt_generation_v1(newer, predecessor));
     }
 
     fn attempt(path: &Path, producer: &ProducerIdentity, seed: u8) -> BuildAttempt {
@@ -8222,15 +9306,26 @@ mod tests {
             .unwrap();
 
         clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure).unwrap();
-        assert!(
-            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
-                .is_ok()
-        );
         assert_eq!(store.load().unwrap(), Some(completed));
         let evidence = store.read_protected_cleanup_evidence().unwrap().unwrap();
+        assert_eq!(
+            recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                &directory.0,
+                &producer,
+                evidence.escrow,
+            )
+            .unwrap(),
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared
+        );
         assert_eq!(evidence.completed_state(), completed);
-        assert_eq!(evidence.envelope_inputs, fixture.envelope_inputs);
-        assert_eq!(evidence.exact_output, fixture.output);
+        assert_eq!(
+            evidence.envelope_inputs,
+            fixture.envelope_inputs.identity().as_bytes()
+        );
+        assert_eq!(
+            evidence.escrow.receipt().finalized_output_identity(),
+            Sha256::digest(&fixture.output).as_slice()
+        );
         let canonical_evidence = evidence.to_bytes();
         assert_eq!(
             ProtectedIntentCleanupEvidenceV1::from_bytes(&canonical_evidence).unwrap(),
@@ -8245,11 +9340,164 @@ mod tests {
             .clear_completed_and_envelope_inputs(completed, fixture.receipt, closure)
             .unwrap();
         assert_eq!(store.load().unwrap(), None);
-        assert!(
-            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
-                .is_ok()
+        assert!(matches!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure),
+            Err(WorkerV2PublicationIntentErrorV2::NotFound)
+        ));
+        assert_eq!(
+            recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                &directory.0,
+                &producer,
+                evidence.escrow,
+            )
+            .unwrap(),
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Committed
         );
-        assert!(store.read_protected_cleanup_evidence().unwrap().is_some());
+        assert!(store.read_protected_cleanup_evidence().unwrap().is_none());
+    }
+
+    #[test]
+    fn protected_cleanup_evidence_owner_rejects_removal_while_escrow_is_prepared() {
+        let seed = 219;
+        let directory = TestDirectory::new();
+        let producer = producer(seed);
+        let attempt = attempt(&directory.0, &producer, seed);
+        let closure = compiler_closure(seed);
+        let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &fixture, closure);
+        let completed = store
+            .persist_envelope_and_completed(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                attempt,
+                fixture.intent,
+                fixture.receipt,
+                closure,
+                &fixture.envelope,
+            )
+            .unwrap();
+        clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure).unwrap();
+        let evidence = store.read_protected_cleanup_evidence().unwrap().unwrap();
+
+        assert!(store.remove_protected_cleanup_evidence(&evidence).is_err());
+        assert_eq!(
+            store.read_protected_cleanup_evidence().unwrap(),
+            Some(evidence)
+        );
+        assert_eq!(
+            recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                &directory.0,
+                &producer,
+                evidence.escrow,
+            )
+            .unwrap(),
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared
+        );
+    }
+
+    #[test]
+    fn protected_cleanup_local_unlink_rejects_preexisting_and_racing_path_attacks() {
+        let mut case = 0_u8;
+        for target in ["marker", "inputs"] {
+            for attack in ["replacement", "hardlink", "symlink"] {
+                for racing in [false, true] {
+                    let seed = 220 + case;
+                    case += 1;
+                    let directory = TestDirectory::new();
+                    let producer = producer(seed);
+                    let attempt = attempt(&directory.0, &producer, seed);
+                    let closure = compiler_closure(seed);
+                    let fixture =
+                        protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+                    let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+                    stage_protected_required_ready(&store, &fixture, closure);
+                    let completed = store
+                        .persist_envelope_and_completed(
+                            WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                            attempt,
+                            fixture.intent,
+                            fixture.receipt,
+                            closure,
+                            &fixture.envelope,
+                        )
+                        .unwrap();
+                    clear_worker_v2_intent_v2(
+                        &store,
+                        &producer,
+                        completed,
+                        fixture.receipt,
+                        closure,
+                    )
+                    .unwrap();
+                    let evidence = store.read_protected_cleanup_evidence().unwrap().unwrap();
+                    store
+                        .prepare_protected_cleanup_local_quarantine(&evidence)
+                        .unwrap();
+                    store.commit_protected_cleanup_escrow(&evidence).unwrap();
+
+                    let names = ProtectedCleanupLocalNamesV1::new(&evidence);
+                    let target_name = match target {
+                        "marker" => names.marker.clone(),
+                        "inputs" => names.inputs.clone(),
+                        _ => unreachable!(),
+                    };
+                    let target_path = directory.0.join(&target_name);
+                    let backup_path = directory
+                        .0
+                        .join(format!("hostile-protected-cleanup-backup-{case}"));
+                    let extra_path = directory
+                        .0
+                        .join(format!("hostile-protected-cleanup-link-{case}"));
+                    let exact_bytes = fs::read(&target_path).unwrap();
+                    let mutate = move || match attack {
+                        "replacement" => {
+                            fs::rename(&target_path, &backup_path).unwrap();
+                            fs::write(&target_path, &exact_bytes).unwrap();
+                            fs::set_permissions(&target_path, fs::Permissions::from_mode(0o600))
+                                .unwrap();
+                        }
+                        "hardlink" => fs::hard_link(&target_path, &extra_path).unwrap(),
+                        "symlink" => {
+                            fs::rename(&target_path, &backup_path).unwrap();
+                            symlink(&backup_path, &target_path).unwrap();
+                        }
+                        _ => unreachable!(),
+                    };
+                    if racing {
+                        install_protected_cleanup_before_unlink_test_hook_v1(target_name, mutate);
+                    } else {
+                        mutate();
+                    }
+
+                    assert!(
+                        store
+                            .finish_committed_protected_cleanup_local_unlink(&evidence)
+                            .is_err(),
+                        "accepted {attack} attack on {target} (racing={racing})"
+                    );
+                    PROTECTED_CLEANUP_BEFORE_UNLINK_TEST_HOOK_V1.with(|installed| {
+                        assert!(
+                            installed.borrow().is_none(),
+                            "unlink test hook was not consumed"
+                        );
+                    });
+                    assert_eq!(
+                        store.read_protected_cleanup_evidence().unwrap(),
+                        Some(evidence),
+                        "retired evidence after {attack} attack on {target} (racing={racing})"
+                    );
+                    assert_eq!(
+                        recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                            &directory.0,
+                            &producer,
+                            evidence.escrow,
+                        )
+                        .unwrap(),
+                        WorkerV2PublicationIntentCleanupEscrowStateV1::Committed
+                    );
+                }
+            }
+        }
     }
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -8257,17 +9505,112 @@ mod tests {
     fn protected_cleanup_reopens_every_intent_marker_and_input_boundary_after_hostile_envelope_removal_and_substitution()
      {
         let boundaries = [
-            ("intent", "protected-cleanup-evidence-published"),
-            ("completed", "protected-cleanup-marker-before-unlink"),
-            ("completed", "protected-cleanup-marker-after-unlink"),
-            ("completed", "protected-cleanup-marker-directory-synced"),
-            ("completed", "protected-cleanup-input-before-unlink"),
-            ("completed", "protected-cleanup-input-after-unlink"),
-            ("completed", "protected-cleanup-input-directory-synced"),
+            (
+                "intent",
+                "protected-cleanup-evidence-before-temp-create",
+                false,
+            ),
+            (
+                "intent",
+                "protected-cleanup-evidence-after-temp-create",
+                false,
+            ),
+            (
+                "intent",
+                "protected-cleanup-evidence-before-temp-write",
+                false,
+            ),
+            (
+                "intent",
+                "protected-cleanup-evidence-after-temp-write",
+                false,
+            ),
+            (
+                "intent",
+                "protected-cleanup-evidence-before-temp-sync",
+                false,
+            ),
+            (
+                "intent",
+                "protected-cleanup-evidence-after-temp-sync",
+                false,
+            ),
+            ("intent", "protected-cleanup-evidence-before-rename", false),
+            ("intent", "protected-cleanup-evidence-after-rename", false),
+            (
+                "intent",
+                "protected-cleanup-evidence-before-directory-sync",
+                false,
+            ),
+            (
+                "intent",
+                "protected-cleanup-evidence-after-directory-sync",
+                false,
+            ),
+            ("intent", "protected-cleanup-evidence-published", false),
+            (
+                "completed",
+                "protected-cleanup-marker-before-quarantine-rename",
+                false,
+            ),
+            (
+                "completed",
+                "protected-cleanup-marker-after-quarantine-rename",
+                false,
+            ),
+            (
+                "completed",
+                "protected-cleanup-marker-quarantine-directory-synced",
+                false,
+            ),
+            (
+                "completed",
+                "protected-cleanup-input-before-quarantine-rename",
+                false,
+            ),
+            (
+                "completed",
+                "protected-cleanup-input-after-quarantine-rename",
+                false,
+            ),
+            (
+                "completed",
+                "protected-cleanup-input-quarantine-directory-synced",
+                false,
+            ),
+            (
+                "completed",
+                "protected-cleanup-before-artifact-escrow-commit",
+                false,
+            ),
+            (
+                "completed",
+                "protected-cleanup-after-artifact-escrow-commit",
+                true,
+            ),
+            ("completed", "protected-cleanup-marker-before-unlink", true),
+            ("completed", "protected-cleanup-marker-after-unlink", true),
+            (
+                "completed",
+                "protected-cleanup-marker-directory-synced",
+                true,
+            ),
+            ("completed", "protected-cleanup-input-before-unlink", true),
+            ("completed", "protected-cleanup-input-after-unlink", true),
+            (
+                "completed",
+                "protected-cleanup-input-directory-synced",
+                true,
+            ),
         ];
-        for (case, (action, fault, remove_envelope)) in boundaries
+        for (case, (action, fault, committed, remove_envelope)) in boundaries
             .into_iter()
-            .flat_map(|(action, fault)| [(action, fault, true), (action, fault, false)])
+            .flat_map(|(action, fault, committed)| {
+                [
+                    (action, fault, committed, true),
+                    (action, fault, committed, false),
+                ]
+            })
             .enumerate()
         {
             let boundary_case = case / 2;
@@ -8316,14 +9659,124 @@ mod tests {
                 );
                 fs::write(&envelope_path, hostile.to_bytes()).unwrap();
             }
+            if committed {
+                let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+                assert_eq!(restarted.load().unwrap(), None, "{fault}");
+                assert!(
+                    restarted
+                        .read_protected_cleanup_evidence()
+                        .unwrap()
+                        .is_none(),
+                    "{fault}"
+                );
+                assert!(!marker_path.exists(), "{fault}");
+                assert!(matches!(
+                    recover_worker_v2_publication_intent_v2(
+                        &directory.0,
+                        &producer,
+                        attempt,
+                        closure,
+                    ),
+                    Err(WorkerV2PublicationIntentErrorV2::NotFound)
+                ));
+            } else {
+                let reopen = WorkerV2ResumeStoreV2::open(&directory.0, &producer);
+                let reopen_error = reopen.err();
+                assert!(
+                    reopen_error.is_some(),
+                    "{fault} accepted pre-commit envelope tamper case {tamper_case}"
+                );
+                assert!(
+                    marker_path.is_file(),
+                    "{fault} did not restore Completed for tamper case {tamper_case}: {reopen_error:?}"
+                );
+                fs::write(&envelope_path, fixture.envelope.to_bytes()).unwrap();
+                fs::set_permissions(&envelope_path, fs::Permissions::from_mode(0o600)).unwrap();
+                let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+                assert_eq!(restarted.load().unwrap(), Some(completed), "{fault}");
+                assert_eq!(
+                    restarted.recover_envelope_inputs(attempt).unwrap(),
+                    fixture.envelope_inputs,
+                    "{fault}"
+                );
+                let recovered = recover_worker_v2_publication_intent_v2(
+                    &directory.0,
+                    &producer,
+                    attempt,
+                    closure,
+                )
+                .unwrap();
+                assert_eq!(recovered.record().identity(), fixture.intent, "{fault}");
+                assert_eq!(recovered.exact_output(), fixture.output, "{fault}");
+            }
+        }
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn protected_cleanup_reopens_every_local_rollback_boundary() {
+        for (case, fault) in [
+            "protected-cleanup-input-before-rollback-rename",
+            "protected-cleanup-input-after-rollback-rename",
+            "protected-cleanup-input-rollback-directory-synced",
+            "protected-cleanup-marker-before-rollback-rename",
+            "protected-cleanup-marker-after-rollback-rename",
+            "protected-cleanup-marker-rollback-directory-synced",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let seed = 232 + case as u8;
+            let directory = TestDirectory::new();
+            let producer = producer(seed);
+            let attempt = attempt(&directory.0, &producer, seed);
+            let closure = compiler_closure(seed);
+            let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+            let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            stage_protected_required_ready(&store, &fixture, closure);
+            let completed = store
+                .persist_envelope_and_completed(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    attempt,
+                    fixture.intent,
+                    fixture.receipt,
+                    closure,
+                    &fixture.envelope,
+                )
+                .unwrap();
+            clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure)
+                .unwrap();
+            let evidence = store.read_protected_cleanup_evidence().unwrap().unwrap();
+            store
+                .prepare_protected_cleanup_local_quarantine(&evidence)
+                .unwrap();
+            let names = ProtectedCleanupLocalNamesV1::new(&evidence);
+            let marker_path = directory.0.join(&store.inner.marker_name);
+            let inputs_path = directory
+                .0
+                .join(envelope_inputs_name(store.inner.package, attempt));
+            assert!(!marker_path.exists());
+            assert!(!inputs_path.exists());
+            assert!(directory.0.join(&names.marker).is_file());
+            assert!(directory.0.join(&names.inputs).is_file());
+            drop(store);
+
+            let envelope_path = directory.0.join(protected_envelope_name_v2(
+                fixture.receipt.publication_identity(),
+            ));
+            fs::remove_file(&envelope_path).unwrap();
+            let output =
+                run_protected_cleanup_crash_helper(&directory.0, seed, seed, "completed", fault);
+            assert_eq!(output.status.code(), Some(86), "{fault}: {output:?}");
+
             assert!(
                 WorkerV2ResumeStoreV2::open(&directory.0, &producer).is_err(),
-                "{fault} accepted hostile envelope tamper case {tamper_case}"
+                "{fault} accepted a missing envelope while restoring Prepared cleanup"
             );
-            assert!(
-                marker_path.is_file(),
-                "{fault} did not restore Completed for tamper case {tamper_case}"
-            );
+            assert!(marker_path.is_file(), "{fault}");
+            assert!(inputs_path.is_file(), "{fault}");
+            assert!(!directory.0.join(&names.marker).exists(), "{fault}");
+            assert!(!directory.0.join(&names.inputs).exists(), "{fault}");
 
             fs::write(&envelope_path, fixture.envelope.to_bytes()).unwrap();
             fs::set_permissions(&envelope_path, fs::Permissions::from_mode(0o600)).unwrap();
@@ -8339,6 +9792,11 @@ mod tests {
                     .unwrap();
             assert_eq!(recovered.record().identity(), fixture.intent, "{fault}");
             assert_eq!(recovered.exact_output(), fixture.output, "{fault}");
+            assert_eq!(
+                restarted.read_protected_cleanup_evidence().unwrap(),
+                Some(evidence),
+                "{fault}"
+            );
         }
     }
 
@@ -8376,10 +9834,20 @@ mod tests {
                 .unwrap();
             clear_worker_v2_intent_v2(&store, &producer, old_completed, old.receipt, old_closure)
                 .unwrap();
+            let old_evidence = store.read_protected_cleanup_evidence().unwrap().unwrap();
             store
-                .clear_completed_and_envelope_inputs(old_completed, old.receipt, old_closure)
+                .prepare_protected_cleanup_local_quarantine(&old_evidence)
                 .unwrap();
             assert_eq!(store.load().unwrap(), None);
+            assert_eq!(
+                recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                    &directory.0,
+                    &producer,
+                    old_evidence.escrow,
+                )
+                .unwrap(),
+                WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared
+            );
 
             let next_attempt = attempt(&directory.0, &producer, next_seed);
             let next_closure = compiler_closure(next_seed);
@@ -8461,7 +9929,130 @@ mod tests {
                 "{fault}"
             );
             assert_eq!(restarted.load().unwrap(), Some(ready), "{fault}");
+            assert_eq!(
+                recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                    &directory.0,
+                    &producer,
+                    old_evidence.escrow,
+                )
+                .unwrap(),
+                WorkerV2PublicationIntentCleanupEscrowStateV1::Committed,
+                "{fault}"
+            );
         }
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn newer_ready_retirement_fails_closed_when_current_intent_changes_after_old_commit() {
+        let producer_seed = 210;
+        let next_seed = 211;
+        let directory = TestDirectory::new();
+        let producer = producer(producer_seed);
+        let old_attempt = attempt(&directory.0, &producer, producer_seed);
+        let old_closure = compiler_closure(producer_seed);
+        let old = protected_envelope_fixture(&directory.0, &producer, old_attempt, old_closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &old, old_closure);
+        let old_completed = store
+            .persist_envelope_and_completed(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                old_attempt,
+                old.intent,
+                old.receipt,
+                old_closure,
+                &old.envelope,
+            )
+            .unwrap();
+        clear_worker_v2_intent_v2(&store, &producer, old_completed, old.receipt, old_closure)
+            .unwrap();
+        let old_evidence = store.read_protected_cleanup_evidence().unwrap().unwrap();
+        store
+            .prepare_protected_cleanup_local_quarantine(&old_evidence)
+            .unwrap();
+
+        let next_attempt = attempt(&directory.0, &producer, next_seed);
+        let next_closure = compiler_closure(next_seed);
+        let next = protected_envelope_fixture_with_binding_seed(
+            &directory.0,
+            &producer,
+            next_attempt,
+            next_closure,
+            producer_seed,
+        );
+        store
+            .persist_envelope_inputs(next_attempt, &next.envelope_inputs)
+            .unwrap();
+        store
+            .persist_pending_with_envelope_inputs(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                next_attempt,
+                restart_admission_commitment_with_inputs_v2(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    next.plan,
+                    next.upstream,
+                    &next.output,
+                    Some(next.envelope_inputs.identity()),
+                    next_closure,
+                ),
+                Some(next.envelope_inputs.identity()),
+            )
+            .unwrap();
+        let next_recovered = recover_worker_v2_publication_intent_v2(
+            &directory.0,
+            &producer,
+            next_attempt,
+            next_closure,
+        )
+        .unwrap();
+        drop(store);
+
+        let output = run_protected_cleanup_crash_helper(
+            &directory.0,
+            producer_seed,
+            next_seed,
+            "ready",
+            "protected-cleanup-newer-ready-after-predecessor-commit",
+        );
+        assert_eq!(output.status.code(), Some(86), "{output:?}");
+        assert_eq!(
+            recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                &directory.0,
+                &producer,
+                old_evidence.escrow,
+            )
+            .unwrap(),
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Committed
+        );
+        clear_worker_v2_publication_intent_v2(
+            &directory.0,
+            &producer,
+            next_attempt,
+            next_closure,
+            next.intent,
+        )
+        .unwrap();
+
+        let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let ready = restarted.load().unwrap().unwrap();
+        assert!(matches!(ready, ResumeMarkerStateV2::Ready { .. }));
+        assert!(
+            restarted
+                .persist_ready(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    next_attempt,
+                    &next_recovered,
+                    next_closure,
+                )
+                .is_err()
+        );
+        assert!(
+            restarted
+                .read_protected_cleanup_evidence()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(restarted.load().unwrap(), Some(ready));
     }
 
     #[test]
