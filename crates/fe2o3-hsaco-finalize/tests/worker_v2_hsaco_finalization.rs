@@ -22,8 +22,8 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1,
-    DescriptorSourceEvidenceRequirementV1, FinalizationError, LinkOptionV1,
-    MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2, PinnedWorkerV1,
+    DEVICE_DESCRIPTOR_SECTION_ALIGNMENT, DescriptorSourceEvidenceRequirementV1, FinalizationError,
+    LinkOptionV1, MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2, PinnedWorkerV1,
     ProtectedWorkerV2FinalizerLineageDecodeErrorV2, ProtectedWorkerV2FinalizerLineageV2,
     RowSoftmaxV1StructuralArtifactErrorV1, TiledGemmV1StructuralArtifactErrorV1,
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
@@ -525,14 +525,38 @@ fn protected_finalizer_lineage_rejects_coordinated_module_and_exchange_substitut
 
 #[test]
 fn protected_finalizer_lineage_enforces_the_aggregate_wire_maximum() {
-    let mut wire = vec![0; MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2];
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let exact_raw = fixture.bytes.clone();
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942",
+        0x31,
+        0x41,
+        compiler_closure(0x51),
+        CompilerModuleHandoffSlotV2::Default,
+    ))
+    .unwrap();
+    let mut wire = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw)
+        .unwrap()
+        .canonical_bytes();
+    let padding_bytes = MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2 - wire.len();
+    let mut padded_observation = lineage_segment(&wire, 7).to_vec();
+    padded_observation.resize(padded_observation.len() + padding_bytes, 0);
+    replace_lineage_segment(&mut wire, 7, &padded_observation);
+    assert_eq!(
+        wire.len(),
+        MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2
+    );
     assert!(matches!(
-        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &[], &[]),
-        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Checksum)
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &exact_raw, &exact_raw),
+        Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::RawLineage(
+            "policy or parsed observation"
+        ))
     ));
     wire.push(0);
     assert!(matches!(
-        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &[], &[]),
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&wire, &exact_raw, &exact_raw),
         Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)
     ));
 }
@@ -629,7 +653,7 @@ fn protected_finalizer_lineage_rejects_resealed_substitutions_and_bad_bounds() {
 }
 
 #[test]
-fn protected_finalizer_lineage_joins_total_kernarg_and_max_flat_workgroup_fields() {
+fn protected_finalizer_lineage_requires_the_exact_canonical_descriptor_table() {
     let table = descriptor_table("gfx942");
     let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
@@ -645,21 +669,202 @@ fn protected_finalizer_lineage_joins_total_kernarg_and_max_flat_workgroup_fields
     let correct = decode_device_descriptor_table_v1(&table).unwrap();
     transcript.validate_descriptor_table(&correct).unwrap();
 
-    let wrong_kernarg = descriptor_table_with_launch("gfx942", 264, 256);
-    let wrong_kernarg = decode_device_descriptor_table_v1(&wrong_kernarg).unwrap();
-    assert!(
-        transcript
-            .validate_descriptor_table(&wrong_kernarg)
-            .is_err()
+    let substituted = coordinated_semantic_substitution_table("gfx942");
+    let correct_kernel = &correct.kernels()[0];
+    let substituted_kernel = &substituted.kernels()[0];
+    assert_eq!(
+        substituted.canonical_code_object_digest(),
+        correct.canonical_code_object_digest()
+    );
+    assert_eq!(substituted.device_target(), correct.device_target());
+    assert_eq!(
+        substituted.code_object_version(),
+        correct.code_object_version()
+    );
+    assert_eq!(substituted_kernel.entry_name(), correct_kernel.entry_name());
+    assert_eq!(
+        substituted_kernel.descriptor_symbol(),
+        correct_kernel.descriptor_symbol()
+    );
+    assert_eq!(
+        substituted_kernel.abi_layout().kernarg_segment_size(),
+        correct_kernel.abi_layout().kernarg_segment_size()
+    );
+    assert_eq!(
+        substituted_kernel.abi_layout().kernarg_segment_alignment(),
+        correct_kernel.abi_layout().kernarg_segment_alignment()
+    );
+    assert_eq!(
+        substituted_kernel.launch().block_size(),
+        correct_kernel.launch().block_size()
+    );
+    assert_eq!(
+        substituted_kernel.launch().max_flat_workgroup_size(),
+        correct_kernel.launch().max_flat_workgroup_size()
+    );
+    assert_eq!(
+        substituted_kernel.launch().static_shared_memory_bytes(),
+        correct_kernel.launch().static_shared_memory_bytes()
+    );
+    assert_ne!(substituted, correct);
+    assert!(matches!(
+        transcript.validate_descriptor_table(&substituted),
+        Err(
+            ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
+                "canonical descriptor table"
+            )
+        )
+    ));
+}
+
+#[test]
+fn protected_finalizer_lineage_fails_closed_without_a_descriptor_section() {
+    let fixture = fixture(FixtureOptions::valid());
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942",
+        0x77,
+        0x87,
+        compiler_closure(0x97),
+        CompilerModuleHandoffSlotV2::Default,
+    ))
+    .unwrap();
+    let transcript = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw).unwrap();
+    let candidate = decode_device_descriptor_table_v1(&descriptor_table("gfx942")).unwrap();
+    assert!(matches!(
+        transcript.validate_descriptor_table(&candidate),
+        Err(
+            ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
+                "canonical descriptor section is missing"
+            )
+        )
+    ));
+}
+
+#[test]
+fn protected_finalizer_lineage_preserves_cov6_explicit_only_kernarg_reconciliation() {
+    let explicit_size = 40;
+    let total_size = 296;
+    let table = cov6_explicit_only_descriptor_table(explicit_size, total_size);
+    let mut options = FixtureOptions::valid();
+    options.target = "gfx942:xnack-";
+    options.kernarg_segment_size_override = Some(u64::from(explicit_size));
+    let mut fixture = fixture_with_descriptor_table(options, Some(&table));
+    replace_fixture_metadata_with_explicit_only_cov6(&mut fixture.bytes, options, explicit_size);
+    let exact_raw = fixture.bytes.clone();
+
+    let unfinalized = inspect_unfinalized(&exact_raw).unwrap();
+    assert_eq!(
+        unfinalized.descriptor_table().kernels()[0]
+            .abi_layout()
+            .explicit_argument_size(),
+        explicit_size
+    );
+    assert_eq!(
+        unfinalized.descriptor_table().kernels()[0]
+            .abi_layout()
+            .kernarg_segment_size(),
+        total_size
+    );
+    assert_eq!(
+        unfinalized.hsaco().kernels()[0].kernarg_segment_size(),
+        u64::from(explicit_size)
     );
 
-    let wrong_max_flat = descriptor_table_with_launch("gfx942", 272, 512);
-    let wrong_max_flat = decode_device_descriptor_table_v1(&wrong_max_flat).unwrap();
-    assert!(
-        transcript
-            .validate_descriptor_table(&wrong_max_flat)
-            .is_err()
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "gfx942:xnack-",
+        0x78,
+        0x88,
+        compiler_closure(0x98),
+        CompilerModuleHandoffSlotV2::Default,
+    ))
+    .unwrap();
+    let raw_lineage = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw).unwrap();
+    raw_lineage
+        .validate_descriptor_table(unfinalized.descriptor_table())
+        .unwrap();
+
+    let finalized = finalize_inspected_protected_worker_v2_hsaco_v2(raw).unwrap();
+    let final_inspection = verify_finalized(finalized.exact_finalized_bytes()).unwrap();
+    let final_lineage = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&finalized).unwrap();
+    final_lineage
+        .validate_descriptor_table(final_inspection.descriptor_table())
+        .unwrap();
+    let wire = final_lineage.canonical_bytes();
+    ProtectedWorkerV2FinalizerLineageV2::decode_canonical(
+        &wire,
+        &exact_raw,
+        finalized.exact_finalized_bytes(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn protected_finalizer_lineage_derives_and_joins_an_exact_two_kernel_table() {
+    let kernels = [("alpha", "alpha.kd"), ("zeta", "zeta.kd")];
+    let raw_table =
+        two_kernel_descriptor_table(CanonicalCodeObjectDigest::from_bytes([0; 32]), false);
+    let table_bytes = encode_device_descriptor_table_v1(&raw_table).unwrap();
+    let metadata = two_kernel_metadata(&kernels);
+    let fixture = two_kernel_fixture(&table_bytes, &metadata, &kernels);
+    let exact_raw = fixture.bytes.clone();
+    let unfinalized = inspect_unfinalized(&exact_raw).unwrap();
+    assert_eq!(unfinalized.descriptor_table(), &raw_table);
+    assert_eq!(unfinalized.descriptor_table().kernels().len(), 2);
+
+    let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence_for_kernels(
+        fixture.bytes,
+        "gfx942",
+        0x79,
+        0x89,
+        compiler_closure(0x99),
+        CompilerModuleHandoffSlotV2::Default,
+        &kernels,
+    ))
+    .unwrap();
+    let raw_lineage = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw).unwrap();
+    raw_lineage.validate_descriptor_table(&raw_table).unwrap();
+    let raw_wire = raw_lineage.canonical_bytes();
+    let decoded_raw =
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&raw_wire, &exact_raw, &exact_raw)
+            .unwrap();
+    decoded_raw.validate_descriptor_table(&raw_table).unwrap();
+
+    let finalized = finalize_inspected_protected_worker_v2_hsaco_v2(raw).unwrap();
+    let exact_final = finalized.exact_finalized_bytes();
+    let verified = verify_finalized(exact_final).unwrap();
+    assert_eq!(verified.descriptor_table().kernels().len(), 2);
+    let final_lineage = ProtectedWorkerV2FinalizerLineageV2::from_finalized(&finalized).unwrap();
+    final_lineage
+        .validate_descriptor_table(verified.descriptor_table())
+        .unwrap();
+    let final_wire = final_lineage.canonical_bytes();
+    let decoded_final =
+        ProtectedWorkerV2FinalizerLineageV2::decode_canonical(&final_wire, &exact_raw, exact_final)
+            .unwrap();
+    decoded_final
+        .validate_descriptor_table(verified.descriptor_table())
+        .unwrap();
+
+    let substituted = two_kernel_descriptor_table(verified.digest(), true);
+    assert_eq!(
+        &substituted.kernels()[0],
+        &verified.descriptor_table().kernels()[0],
+        "the non-substituted kernel must remain exactly unchanged"
     );
+    assert_ne!(
+        &substituted.kernels()[1],
+        &verified.descriptor_table().kernels()[1]
+    );
+    assert!(matches!(
+        decoded_final.validate_descriptor_table(&substituted),
+        Err(
+            ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
+                "canonical descriptor table"
+            )
+        )
+    ));
 }
 
 #[test]
@@ -2018,6 +2223,651 @@ fn descriptor_table_with_launch(
     encode_device_descriptor_table_v1(&table).unwrap()
 }
 
+fn coordinated_semantic_substitution_table(target: &str) -> DeviceDescriptorTableV1 {
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::U32));
+    let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::U32));
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([0xa1; 32]),
+        name("coordinated_vecadd"),
+        name("vecadd"),
+        name("vecadd.kd"),
+        build_evidence(0xa2, 0xa3),
+        build_evidence(0xa4, 0xa5),
+        vec![CapabilityV1::AmdWave],
+        KernelAbiLayoutV1::new(4, 272, 8).unwrap(),
+        LaunchConstraintsV1::new(
+            2,
+            BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+            DimensionsV1::new(u32::MAX, 7, 1).unwrap(),
+            256,
+            0,
+            1_024,
+        )
+        .unwrap(),
+        vec![LogicalArgumentV1::scalar(0, name("element"), &source, &layout, 0).unwrap()],
+    )
+    .unwrap();
+    DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(text("alternate-rustc"), text("substituted"), [0xa6; 20]),
+        ProducerIdentityV1::new(text("alternate-producer"), text("substituted")),
+        DeviceTargetV1::parse(target).unwrap(),
+        vec![source],
+        vec![layout],
+        vec![kernel],
+    )
+    .unwrap()
+}
+
+fn cov6_explicit_only_descriptor_table(explicit_size: u32, total_size: u32) -> Vec<u8> {
+    let scalar_source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
+    let scalar_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
+    let shared_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let shared_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let disjoint_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let disjoint_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([0xb1; 32]),
+        name("vecadd"),
+        name("vecadd"),
+        name("vecadd.kd"),
+        build_evidence(0xb2, 0xb3),
+        build_evidence(0xb4, 0xb5),
+        vec![CapabilityV1::AmdWave],
+        KernelAbiLayoutV1::new(explicit_size, total_size, 8).unwrap(),
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+            256,
+            0,
+            64 * 1024,
+        )
+        .unwrap(),
+        vec![
+            LogicalArgumentV1::scalar(0, name("scale"), &scalar_source, &scalar_layout, 0).unwrap(),
+            LogicalArgumentV1::shared_slice(1, name("input"), &shared_source, &shared_layout, 8)
+                .unwrap(),
+            LogicalArgumentV1::disjoint_slice(
+                2,
+                name("output"),
+                &disjoint_source,
+                &disjoint_layout,
+                AccessMode::ReadWrite,
+                24,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(text("rustc-codegen-fe2o3"), text("test"), [0xb6; 20]),
+        ProducerIdentityV1::new(
+            text("rustc-codegen-fe2o3-worker-v2"),
+            text("typed-general-gfx942-cov6-v1"),
+        ),
+        DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+        vec![scalar_source, shared_source, disjoint_source],
+        vec![scalar_layout, shared_layout, disjoint_layout],
+        vec![kernel],
+    )
+    .unwrap();
+    encode_device_descriptor_table_v1(&table).unwrap()
+}
+
+fn replace_fixture_metadata_with_explicit_only_cov6(
+    bytes: &mut [u8],
+    options: FixtureOptions<'_>,
+    explicit_size: u32,
+) {
+    let owner_offset = bytes
+        .windows(b"AMDGPU\0".len())
+        .position(|window| window == b"AMDGPU\0")
+        .unwrap();
+    let note_offset = owner_offset - 12;
+    let metadata_len =
+        u32::from_le_bytes(bytes[note_offset + 4..note_offset + 8].try_into().unwrap()) as usize;
+    let metadata_offset = owner_offset + 8;
+    let metadata = (0..=metadata_len)
+        .find_map(|padding| {
+            let candidate = explicit_only_cov6_metadata(options, explicit_size, padding);
+            (candidate.len() == metadata_len).then_some(candidate)
+        })
+        .expect("a language field can pad explicit-only metadata to the original note size");
+    bytes[metadata_offset..metadata_offset + metadata_len].copy_from_slice(&metadata);
+}
+
+fn explicit_only_cov6_metadata(
+    options: FixtureOptions<'_>,
+    explicit_size: u32,
+    language_padding: usize,
+) -> Vec<u8> {
+    use msgpack::Value;
+
+    let arguments = vec![
+        explicit_argument(Some("scale"), 0, 4, None, "by_value", None),
+        explicit_pointer_argument(
+            Some("input_ptr"),
+            8,
+            8,
+            None,
+            "global_buffer",
+            Some("global"),
+            None,
+        ),
+        explicit_argument(Some("input_len"), 16, 8, None, "by_value", None),
+        explicit_pointer_argument(
+            Some("output_ptr"),
+            24,
+            8,
+            None,
+            "global_buffer",
+            Some("global"),
+            None,
+        ),
+        explicit_argument(Some("output_len"), 32, 8, None, "by_value", None),
+    ];
+    let kernel = Value::Map(vec![
+        (Value::from(".name"), Value::from(options.entry)),
+        (Value::from(".symbol"), Value::from(options.descriptor)),
+        (Value::from(".args"), Value::Array(arguments)),
+        (
+            Value::from(".kernarg_segment_size"),
+            Value::from(explicit_size),
+        ),
+        (Value::from(".kernarg_segment_align"), Value::from(8)),
+        (Value::from(".group_segment_fixed_size"), Value::from(0)),
+        (Value::from(".private_segment_fixed_size"), Value::from(0)),
+        (Value::from(".wavefront_size"), Value::from(64)),
+        (Value::from(".sgpr_count"), Value::from(14)),
+        (Value::from(".vgpr_count"), Value::from(11)),
+        (Value::from(".agpr_count"), Value::from(3)),
+        (Value::from(".sgpr_spill_count"), Value::from(2)),
+        (Value::from(".vgpr_spill_count"), Value::from(4)),
+        (Value::from(".max_flat_workgroup_size"), Value::from(256)),
+        (
+            Value::from(".reqd_workgroup_size"),
+            Value::Array(vec![Value::from(256), Value::from(1), Value::from(1)]),
+        ),
+        (
+            Value::from(".language"),
+            Value::from("R".repeat(language_padding)),
+        ),
+    ]);
+    let root = Value::Map(vec![
+        (
+            Value::from("amdhsa.version"),
+            Value::Array(vec![Value::from(1), Value::from(2)]),
+        ),
+        (
+            Value::from("amdhsa.target"),
+            Value::from(format!("amdgcn-amd-amdhsa--{}", options.target)),
+        ),
+        (Value::from("amdhsa.kernels"), Value::Array(vec![kernel])),
+    ]);
+    let mut encoded = Vec::new();
+    msgpack::write_value(&mut encoded, &root).unwrap();
+    encoded
+}
+
+fn two_kernel_descriptor_table(
+    digest: CanonicalCodeObjectDigest,
+    substitute_zeta: bool,
+) -> DeviceDescriptorTableV1 {
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let kernels = [("alpha", "alpha.kd", 0xc1), ("zeta", "zeta.kd", 0xd1)]
+        .into_iter()
+        .map(|(entry, descriptor, seed)| {
+            let substituted = substitute_zeta && entry == "zeta";
+            KernelDescriptorV1::new(
+                KernelId::from_bytes([if substituted { 0xe1 } else { seed }; 32]),
+                name(if substituted {
+                    "zeta_substituted"
+                } else {
+                    entry
+                }),
+                name(entry),
+                name(descriptor),
+                build_evidence(
+                    if substituted {
+                        0xe2
+                    } else {
+                        seed.wrapping_add(1)
+                    },
+                    if substituted {
+                        0xe3
+                    } else {
+                        seed.wrapping_add(2)
+                    },
+                ),
+                build_evidence(
+                    if substituted {
+                        0xe4
+                    } else {
+                        seed.wrapping_add(3)
+                    },
+                    if substituted {
+                        0xe5
+                    } else {
+                        seed.wrapping_add(4)
+                    },
+                ),
+                if substituted {
+                    vec![CapabilityV1::AmdWave]
+                } else {
+                    Vec::new()
+                },
+                KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
+                LaunchConstraintsV1::new(
+                    1,
+                    BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+                    DimensionsV1::new(if substituted { 17 } else { u32::MAX }, 1, 1).unwrap(),
+                    256,
+                    0,
+                    if substituted { 2_048 } else { 64 * 1024 },
+                )
+                .unwrap(),
+                vec![
+                    LogicalArgumentV1::shared_slice(
+                        0,
+                        name(if substituted {
+                            "substituted_values"
+                        } else {
+                            "values"
+                        }),
+                        &source,
+                        &layout,
+                        0,
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    DeviceDescriptorTableV1::new(
+        digest,
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(text("rustc"), text("two-kernel-test"), [0xc6; 20]),
+        ProducerIdentityV1::new(text("fe2o3-test"), text("two-kernel-test")),
+        DeviceTargetV1::parse("gfx942").unwrap(),
+        vec![source],
+        vec![layout],
+        kernels,
+    )
+    .unwrap()
+}
+
+fn two_kernel_metadata(kernels: &[(&str, &str)]) -> Vec<u8> {
+    use msgpack::Value;
+
+    let kernels = kernels
+        .iter()
+        .map(|(entry, descriptor)| {
+            let mut arguments = vec![
+                argument(Some("values_ptr"), 0, 8, "global_buffer", Some("global")),
+                argument(Some("values_len"), 8, 8, "by_value", None),
+            ];
+            arguments.extend(v5_hidden_arguments(16));
+            Value::Map(vec![
+                (Value::from(".name"), Value::from(*entry)),
+                (Value::from(".symbol"), Value::from(*descriptor)),
+                (Value::from(".args"), Value::Array(arguments)),
+                (Value::from(".kernarg_segment_size"), Value::from(272)),
+                (Value::from(".kernarg_segment_align"), Value::from(8)),
+                (Value::from(".group_segment_fixed_size"), Value::from(0)),
+                (Value::from(".private_segment_fixed_size"), Value::from(0)),
+                (Value::from(".wavefront_size"), Value::from(64)),
+                (Value::from(".sgpr_count"), Value::from(14)),
+                (Value::from(".vgpr_count"), Value::from(11)),
+                (Value::from(".agpr_count"), Value::from(3)),
+                (Value::from(".sgpr_spill_count"), Value::from(2)),
+                (Value::from(".vgpr_spill_count"), Value::from(4)),
+                (Value::from(".max_flat_workgroup_size"), Value::from(256)),
+                (
+                    Value::from(".reqd_workgroup_size"),
+                    Value::Array(vec![Value::from(256), Value::from(1), Value::from(1)]),
+                ),
+            ])
+        })
+        .collect();
+    let root = Value::Map(vec![
+        (
+            Value::from("amdhsa.version"),
+            Value::Array(vec![Value::from(1), Value::from(2)]),
+        ),
+        (
+            Value::from("amdhsa.target"),
+            Value::from("amdgcn-amd-amdhsa--gfx942"),
+        ),
+        (Value::from("amdhsa.kernels"), Value::Array(kernels)),
+    ]);
+    let mut encoded = Vec::new();
+    msgpack::write_value(&mut encoded, &root).unwrap();
+    encoded
+}
+
+fn two_kernel_fixture(table: &[u8], metadata: &[u8], kernels: &[(&str, &str)]) -> Fixture {
+    const PROGRAM_COUNT: usize = 3;
+    const SHSTRTAB_INDEX: usize = 7;
+
+    let note = metadata_note(metadata);
+    let mut bytes = vec![0; ELF_HEADER_BYTES + PROGRAM_COUNT * PROGRAM_HEADER_BYTES];
+    align(&mut bytes, 64);
+    let note_offset = bytes.len();
+    bytes.extend_from_slice(&note);
+
+    align(&mut bytes, 64);
+    let rodata_offset = bytes.len();
+    let descriptor_offsets = kernels
+        .iter()
+        .map(|_| {
+            align(&mut bytes, 64);
+            let offset = bytes.len();
+            bytes.resize(offset + 64, 0);
+            offset
+        })
+        .collect::<Vec<_>>();
+    let rodata_end = bytes.len();
+
+    let entry_offsets = kernels
+        .iter()
+        .map(|_| {
+            align(&mut bytes, 256);
+            let offset = bytes.len();
+            bytes.resize(offset + 64, 0xbf);
+            offset
+        })
+        .collect::<Vec<_>>();
+    align(&mut bytes, 256);
+    let export_offset = bytes.len();
+    bytes.resize(export_offset + 64, 0xbe);
+    let text_offset = entry_offsets[0];
+    let text_end = bytes.len();
+
+    let mut strtab = vec![0];
+    let symbol_names = kernels
+        .iter()
+        .map(|(entry, descriptor)| {
+            (
+                push_name(&mut strtab, entry),
+                push_name(&mut strtab, descriptor),
+            )
+        })
+        .collect::<Vec<_>>();
+    let export_name = push_name(&mut strtab, "ffi_export");
+    let strtab_offset = bytes.len();
+    bytes.extend_from_slice(&strtab);
+    align(&mut bytes, 8);
+    let symtab_offset = bytes.len();
+    let symbol_count = 2 + kernels.len() * 2;
+    bytes.resize(symtab_offset + symbol_count * 24, 0);
+
+    for (index, ((entry_name, descriptor_name), descriptor_offset)) in
+        symbol_names.iter().zip(&descriptor_offsets).enumerate()
+    {
+        let entry_symbol = symtab_offset + (1 + index * 2) * 24;
+        write_u32(&mut bytes, entry_symbol, *entry_name);
+        bytes[entry_symbol + 4] = 0x12;
+        bytes[entry_symbol + 5] = 3;
+        write_u16(&mut bytes, entry_symbol + 6, TEXT_SECTION_INDEX as u16);
+        let entry_address = (entry_offsets[index] + 0x1000) as u64;
+        write_u64(&mut bytes, entry_symbol + 8, entry_address);
+        write_u64(&mut bytes, entry_symbol + 16, 64);
+
+        let descriptor_symbol = symtab_offset + (2 + index * 2) * 24;
+        write_u32(&mut bytes, descriptor_symbol, *descriptor_name);
+        bytes[descriptor_symbol + 4] = 0x11;
+        write_u16(
+            &mut bytes,
+            descriptor_symbol + 6,
+            RODATA_SECTION_INDEX as u16,
+        );
+        write_u64(&mut bytes, descriptor_symbol + 8, *descriptor_offset as u64);
+        write_u64(&mut bytes, descriptor_symbol + 16, 64);
+
+        write_u32(&mut bytes, *descriptor_offset + 8, 272);
+        write_i64(
+            &mut bytes,
+            *descriptor_offset + 16,
+            i64::try_from(entry_address - *descriptor_offset as u64).unwrap(),
+        );
+        write_u32(&mut bytes, *descriptor_offset + 44, 1);
+        write_u32(&mut bytes, *descriptor_offset + 48, 0x00af_0081);
+        write_u32(&mut bytes, *descriptor_offset + 52, 0x1390);
+        write_u16(&mut bytes, *descriptor_offset + 56, 0x001e);
+    }
+    let export_symbol = symtab_offset + (symbol_count - 1) * 24;
+    write_u32(&mut bytes, export_symbol, export_name);
+    bytes[export_symbol + 4] = 0x12;
+    bytes[export_symbol + 5] = 3;
+    write_u16(&mut bytes, export_symbol + 6, TEXT_SECTION_INDEX as u16);
+    write_u64(
+        &mut bytes,
+        export_symbol + 8,
+        (export_offset + 0x1000) as u64,
+    );
+    write_u64(&mut bytes, export_symbol + 16, 64);
+
+    align(
+        &mut bytes,
+        usize::try_from(DEVICE_DESCRIPTOR_SECTION_ALIGNMENT).unwrap(),
+    );
+    let table_offset = bytes.len();
+    bytes.extend_from_slice(table);
+
+    let mut shstr = vec![0];
+    let note_name = push_name(&mut shstr, ".note");
+    let rodata_name = push_name(&mut shstr, ".rodata");
+    let text_name = push_name(&mut shstr, ".text");
+    let strtab_name = push_name(&mut shstr, ".strtab");
+    let symtab_name = push_name(&mut shstr, ".symtab");
+    let descriptor_name = push_name(&mut shstr, DEVICE_DESCRIPTOR_SECTION_NAME);
+    let shstr_name = push_name(&mut shstr, ".shstrtab");
+    let shstr_offset = bytes.len();
+    bytes.extend_from_slice(&shstr);
+    align(&mut bytes, 8);
+    let section_table_offset = bytes.len();
+    bytes.resize(section_table_offset + 8 * SECTION_HEADER_BYTES, 0);
+
+    bytes[..4].copy_from_slice(b"\x7fELF");
+    bytes[4] = 2;
+    bytes[5] = 1;
+    bytes[6] = 1;
+    bytes[7] = 64;
+    bytes[8] = 4;
+    write_u16(&mut bytes, 16, 3);
+    write_u16(&mut bytes, 18, 224);
+    write_u32(&mut bytes, 20, 1);
+    write_u64(&mut bytes, 32, ELF_HEADER_BYTES as u64);
+    write_u64(&mut bytes, 40, section_table_offset as u64);
+    write_u32(&mut bytes, 48, target_flags("gfx942"));
+    write_u16(&mut bytes, 52, ELF_HEADER_BYTES as u16);
+    write_u16(&mut bytes, 54, PROGRAM_HEADER_BYTES as u16);
+    write_u16(&mut bytes, 56, PROGRAM_COUNT as u16);
+    write_u16(&mut bytes, 58, SECTION_HEADER_BYTES as u16);
+    write_u16(&mut bytes, 60, 8);
+    write_u16(&mut bytes, 62, SHSTRTAB_INDEX as u16);
+
+    let read_program = ELF_HEADER_BYTES;
+    write_u32(&mut bytes, read_program, 1);
+    write_u32(&mut bytes, read_program + 4, 4);
+    write_u64(&mut bytes, read_program + 32, rodata_end as u64);
+    write_u64(&mut bytes, read_program + 40, rodata_end as u64);
+    write_u64(&mut bytes, read_program + 48, 0x1000);
+    let execute_program = read_program + PROGRAM_HEADER_BYTES;
+    write_u32(&mut bytes, execute_program, 1);
+    write_u32(&mut bytes, execute_program + 4, 5);
+    write_u64(&mut bytes, execute_program + 8, text_offset as u64);
+    write_u64(
+        &mut bytes,
+        execute_program + 16,
+        (text_offset + 0x1000) as u64,
+    );
+    write_u64(
+        &mut bytes,
+        execute_program + 32,
+        (text_end - text_offset) as u64,
+    );
+    write_u64(
+        &mut bytes,
+        execute_program + 40,
+        (text_end - text_offset) as u64,
+    );
+    write_u64(&mut bytes, execute_program + 48, 0x1000);
+
+    write_test_section_header(
+        &mut bytes,
+        section_table_offset,
+        NOTE_SECTION_INDEX,
+        note_name,
+        7,
+        2,
+        0,
+        note_offset,
+        note.len(),
+        0,
+        0,
+        4,
+        0,
+    );
+    write_test_section_header(
+        &mut bytes,
+        section_table_offset,
+        RODATA_SECTION_INDEX,
+        rodata_name,
+        1,
+        2,
+        rodata_offset,
+        rodata_offset,
+        rodata_end - rodata_offset,
+        0,
+        0,
+        64,
+        0,
+    );
+    write_test_section_header(
+        &mut bytes,
+        section_table_offset,
+        TEXT_SECTION_INDEX,
+        text_name,
+        1,
+        6,
+        text_offset + 0x1000,
+        text_offset,
+        text_end - text_offset,
+        0,
+        0,
+        256,
+        0,
+    );
+    write_test_section_header(
+        &mut bytes,
+        section_table_offset,
+        STRTAB_SECTION_INDEX,
+        strtab_name,
+        3,
+        0,
+        0,
+        strtab_offset,
+        strtab.len(),
+        0,
+        0,
+        1,
+        0,
+    );
+    write_test_section_header(
+        &mut bytes,
+        section_table_offset,
+        SYMTAB_SECTION_INDEX,
+        symtab_name,
+        2,
+        0,
+        0,
+        symtab_offset,
+        symbol_count * 24,
+        STRTAB_SECTION_INDEX,
+        1,
+        8,
+        24,
+    );
+    write_test_section_header(
+        &mut bytes,
+        section_table_offset,
+        CANONICAL_DESCRIPTOR_SECTION_INDEX,
+        descriptor_name,
+        1,
+        0,
+        0,
+        table_offset,
+        table.len(),
+        0,
+        0,
+        usize::try_from(DEVICE_DESCRIPTOR_SECTION_ALIGNMENT).unwrap(),
+        0,
+    );
+    write_test_section_header(
+        &mut bytes,
+        section_table_offset,
+        SHSTRTAB_INDEX,
+        shstr_name,
+        3,
+        0,
+        0,
+        shstr_offset,
+        shstr.len(),
+        0,
+        0,
+        1,
+        0,
+    );
+
+    Fixture {
+        bytes,
+        text_offset,
+        descriptor_offset: descriptor_offsets[0],
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_test_section_header(
+    bytes: &mut [u8],
+    section_table_offset: usize,
+    index: usize,
+    name: u32,
+    section_type: u32,
+    flags: u64,
+    address: usize,
+    offset: usize,
+    size: usize,
+    link: usize,
+    info: usize,
+    alignment: usize,
+    entry_size: usize,
+) {
+    let header = section_table_offset + index * SECTION_HEADER_BYTES;
+    write_u32(bytes, header, name);
+    write_u32(bytes, header + 4, section_type);
+    write_u64(bytes, header + 8, flags);
+    write_u64(bytes, header + 16, address as u64);
+    write_u64(bytes, header + 24, offset as u64);
+    write_u64(bytes, header + 32, size as u64);
+    write_u32(bytes, header + 40, link as u32);
+    write_u32(bytes, header + 44, info as u32);
+    write_u64(bytes, header + 48, alignment as u64);
+    write_u64(bytes, header + 56, entry_size as u64);
+}
+
 fn lineage_closure_offset(bytes: &[u8]) -> usize {
     let mut cursor = 108;
     let attempt_len = usize::from(u16::from_le_bytes(
@@ -2221,6 +3071,51 @@ fn protected_evidence_with_module_prefix(
     slot: CompilerModuleHandoffSlotV2,
     module_prefix: &[u8],
 ) -> fe2o3_hsaco_finalize::InertProtectedFirstBuildWorkerV2EvidenceV1 {
+    protected_evidence_for_kernels_with_module_prefix(
+        bytes,
+        target,
+        invocation_seed,
+        semantic_seed,
+        closure,
+        slot,
+        &[("vecadd", "vecadd.kd")],
+        module_prefix,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn protected_evidence_for_kernels(
+    bytes: Vec<u8>,
+    target: &str,
+    invocation_seed: u8,
+    semantic_seed: u8,
+    closure: CompilerClosureV2,
+    slot: CompilerModuleHandoffSlotV2,
+    kernels: &[(&str, &str)],
+) -> fe2o3_hsaco_finalize::InertProtectedFirstBuildWorkerV2EvidenceV1 {
+    protected_evidence_for_kernels_with_module_prefix(
+        bytes,
+        target,
+        invocation_seed,
+        semantic_seed,
+        closure,
+        slot,
+        kernels,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn protected_evidence_for_kernels_with_module_prefix(
+    bytes: Vec<u8>,
+    target: &str,
+    invocation_seed: u8,
+    semantic_seed: u8,
+    closure: CompilerClosureV2,
+    slot: CompilerModuleHandoffSlotV2,
+    kernels: &[(&str, &str)],
+    module_prefix: &[u8],
+) -> fe2o3_hsaco_finalize::InertProtectedFirstBuildWorkerV2EvidenceV1 {
     let directory = TestDirectory::new();
     let producer = ProducerIdentity::from_codegen(
         "protected_worker_v2_hsaco_finalization_fixture",
@@ -2234,12 +3129,11 @@ fn protected_evidence_with_module_prefix(
         BuildSession::from_bytes([invocation_seed.wrapping_add(1); 16]),
     )
     .unwrap();
-    let handoff = compiler_handoff_with_module_prefix(
+    let handoff = compiler_handoff_for_kernels_with_module_prefix(
         &bytes,
         target,
         semantic_seed,
-        "vecadd",
-        "vecadd.kd",
+        kernels,
         module_prefix,
     );
     publish_compiler_module_handoff_in_slot_v2(
@@ -2337,14 +3231,40 @@ fn compiler_handoff_with_module_prefix(
     descriptor: &str,
     module_prefix: &[u8],
 ) -> CompilerModuleHandoffV2 {
+    compiler_handoff_for_kernels_with_module_prefix(
+        bytes,
+        target,
+        semantic_seed,
+        &[(entry, descriptor)],
+        module_prefix,
+    )
+}
+
+fn compiler_handoff_for_kernels_with_module_prefix(
+    bytes: &[u8],
+    target: &str,
+    semantic_seed: u8,
+    kernels: &[(&str, &str)],
+    module_prefix: &[u8],
+) -> CompilerModuleHandoffV2 {
     const PAYLOAD_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
     let target = CompilerDeviceTargetV1::parse(target).unwrap();
-    let manifest = CompilerModuleSymbolManifestV1::new([
-        (CompilerModuleSymbolRoleV1::KernelEntry, entry),
-        (CompilerModuleSymbolRoleV1::KernelDescriptor, descriptor),
-        (CompilerModuleSymbolRoleV1::DeviceFfiExport, "ffi_export"),
-    ])
-    .unwrap();
+    let mut symbols = kernels
+        .iter()
+        .map(|(entry, _)| (CompilerModuleSymbolRoleV1::KernelEntry, (*entry).to_owned()))
+        .chain(kernels.iter().map(|(_, descriptor)| {
+            (
+                CompilerModuleSymbolRoleV1::KernelDescriptor,
+                (*descriptor).to_owned(),
+            )
+        }))
+        .chain(std::iter::once((
+            CompilerModuleSymbolRoleV1::DeviceFfiExport,
+            "ffi_export".to_owned(),
+        )))
+        .collect::<Vec<_>>();
+    symbols.sort_unstable();
+    let manifest = CompilerModuleSymbolManifestV1::new(symbols).unwrap();
     let mut envelope =
         CompilerFfiEnvelopeBuilderV1::new(target, CompilerCodeObjectVersion::V6, 1).unwrap();
     envelope

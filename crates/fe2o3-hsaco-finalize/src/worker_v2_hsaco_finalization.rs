@@ -34,14 +34,14 @@ use crate::{
     LinkOutputV1, MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES,
     MAX_LINK_OPTIONS, MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES,
     MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES,
-    MAX_WORKER_SYMBOLS, MAX_WORKER_TOOLCHAIN_ID_BYTES, MultiInputLinkPlanV1,
-    ObservedWorkerV2KernelSymbolsV1, ProtectedFirstBuildWorkerV2IdentityV1, ProvenanceNodeV1,
-    WorkerMeasurementV1, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
-    WorkerV2RawLaunchContractV1, finalize_allocated_read_only_unfinalized, finalize_unfinalized,
+    MAX_WORKER_TOOLCHAIN_ID_BYTES, MultiInputLinkPlanV1, ObservedWorkerV2KernelSymbolsV1,
+    ProtectedFirstBuildWorkerV2IdentityV1, ProvenanceNodeV1, WorkerMeasurementV1,
+    WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1, WorkerV2RawLaunchContractV1,
+    finalize_allocated_read_only_unfinalized, finalize_unfinalized,
     first_build_worker_v2::{
         ProtectedFirstBuildReplayValidationV2, validate_protected_first_build_replay_v2,
     },
-    verify_allocated_read_only_finalized, verify_finalized,
+    inspect_unfinalized, verify_allocated_read_only_finalized, verify_finalized,
     worker_v2_hsaco_admission::{
         ProtectedInspectionIdentityPreimageV2, WorkerV2RawLaunchDiagnosticProfileV1,
         calculate_protected_inspection_identity_v2, calculate_response_identity_bytes_v1,
@@ -542,6 +542,7 @@ pub struct ProtectedWorkerV2FinalizerLineageV2 {
     abi_observation_preimage: Vec<u8>,
     resource_observation_preimage: Vec<u8>,
     canonical_code_object_digest: [u8; 32],
+    canonical_descriptor_table: Option<DeviceDescriptorTableV1>,
 }
 
 impl ProtectedWorkerV2FinalizerLineageV2 {
@@ -568,6 +569,14 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
         } else {
             ProtectedWorkerV2FinalizerLineageRouteV2::InspectedRaw
         };
+        let exact_final_bytes =
+            finalized.map_or(raw.exact_bytes(), |value| value.exact_finalized_bytes());
+        let canonical_descriptor_table = derive_canonical_descriptor_table_v2(
+            route,
+            raw.canonical_descriptor_section(),
+            raw.exact_bytes(),
+            exact_final_bytes,
+        )?;
         let link_plan_bytes = source.plan().canonical_bytes();
         validate_protected_lineage_encoded_length([
             raw.attempt().to_env_value().len(),
@@ -620,6 +629,7 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
             resource_observation_preimage: raw.resource_observation_preimage().to_vec(),
             canonical_code_object_digest: finalized
                 .map_or([0; 32], |value| *value.canonical_digest().as_bytes()),
+            canonical_descriptor_table,
         })
     }
 
@@ -992,7 +1002,24 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
         let descriptor_observation_preimage = reader.segment(MAX_OBSERVATION_PREIMAGE_BYTES_V2)?;
         let abi_observation_preimage = reader.segment(MAX_OBSERVATION_PREIMAGE_BYTES_V2)?;
         let resource_observation_preimage = reader.segment(MAX_OBSERVATION_PREIMAGE_BYTES_V2)?;
-        let value = Self {
+        let response_identity = reader.array()?;
+        let raw_output_identity = decode_content_identity_v2(&mut reader, MAX_HSACO_BYTES as u64)?;
+        let final_output_identity =
+            decode_content_identity_v2(&mut reader, MAX_HSACO_BYTES as u64)?;
+        let policy_identity = reader.array()?;
+        let descriptor_section = match reader.u8()? {
+            0 => CanonicalDescriptorSectionObservationV1::Missing,
+            1 => CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection,
+            _ => return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Tag),
+        };
+        let descriptor_identity = reader.array()?;
+        let abi_identity = reader.array()?;
+        let resource_identity = reader.array()?;
+        let canonical_code_object_digest = reader.array()?;
+        if !reader.finished() {
+            return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::TrailingBytes);
+        }
+        let mut value = Self {
             route,
             source_evidence_identity,
             raw_inspection_identity,
@@ -1015,26 +1042,19 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
             descriptor_observation_preimage,
             abi_observation_preimage,
             resource_observation_preimage,
-            response_identity: reader.array()?,
-            raw_output_identity: decode_content_identity_v2(&mut reader, MAX_HSACO_BYTES as u64)?,
-            final_output_identity: decode_content_identity_v2(&mut reader, MAX_HSACO_BYTES as u64)?,
-            policy_identity: reader.array()?,
-            descriptor_section: match reader.u8()? {
-                0 => CanonicalDescriptorSectionObservationV1::Missing,
-                1 => {
-                    CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection
-                }
-                _ => return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Tag),
-            },
-            descriptor_identity: reader.array()?,
-            abi_identity: reader.array()?,
-            resource_identity: reader.array()?,
-            canonical_code_object_digest: reader.array()?,
+            response_identity,
+            raw_output_identity,
+            final_output_identity,
+            policy_identity,
+            descriptor_section,
+            descriptor_identity,
+            abi_identity,
+            resource_identity,
+            canonical_code_object_digest,
+            canonical_descriptor_table: None,
         };
-        if !reader.finished() {
-            return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::TrailingBytes);
-        }
-        value.validate_recomputed(exact_raw_bytes, exact_final_bytes)?;
+        value.canonical_descriptor_table =
+            value.validate_recomputed(exact_raw_bytes, exact_final_bytes)?;
         Ok(value)
     }
 
@@ -1042,7 +1062,8 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
         &self,
         exact_raw_bytes: &[u8],
         exact_final_bytes: &[u8],
-    ) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
+    ) -> Result<Option<DeviceDescriptorTableV1>, ProtectedWorkerV2FinalizerLineageDecodeErrorV2>
+    {
         if !self.raw_output_identity.matches(exact_raw_bytes) {
             return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::RawLineage(
                 "exact raw bytes",
@@ -1165,7 +1186,7 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
             ));
         }
 
-        match self.route {
+        let canonical_descriptor_table = match self.route {
             ProtectedWorkerV2FinalizerLineageRouteV2::InspectedRaw => {
                 if self.canonical_finalization_identity.is_some()
                     || self.final_output_identity != self.raw_output_identity
@@ -1177,6 +1198,19 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
                             "raw route final fields",
                         ),
                     );
+                }
+                match self.descriptor_section {
+                    CanonicalDescriptorSectionObservationV1::Missing => None,
+                    CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection => {
+                        Some(
+                            inspect_unfinalized(exact_raw_bytes)
+                                .map_err(
+                                    ProtectedWorkerV2FinalizerLineageDecodeErrorV2::CanonicalFinalization,
+                                )?
+                                .descriptor_table()
+                                .clone(),
+                        )
+                    }
                 }
             }
             ProtectedWorkerV2FinalizerLineageRouteV2::CanonicallyFinalized => {
@@ -1241,79 +1275,55 @@ impl ProtectedWorkerV2FinalizerLineageV2 {
                         ),
                     );
                 }
+                Some(verified.descriptor_table().clone())
             }
-        }
-        Ok(())
+        };
+        Ok(canonical_descriptor_table)
     }
 
     pub fn validate_descriptor_table(
         &self,
         table: &DeviceDescriptorTableV1,
     ) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-        if table.device_target() != self.target
-            || table.code_object_version() != self.code_object_version
-            || (self.route == ProtectedWorkerV2FinalizerLineageRouteV2::CanonicallyFinalized
-                && table.canonical_code_object_digest().as_bytes()
-                    != &self.canonical_code_object_digest)
-        {
+        let Some(expected) = &self.canonical_descriptor_table else {
             return Err(
                 ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
-                    "target, code-object version, or canonical digest",
+                    "canonical descriptor section is missing",
+                ),
+            );
+        };
+        if table != expected {
+            return Err(
+                ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
+                    "canonical descriptor table",
                 ),
             );
         }
-        let mut abi = decode_abi_observation_summaries_v2(&self.abi_observation_preimage)?;
-        let mut resources =
-            decode_resource_observation_summaries_v2(&self.resource_observation_preimage)?;
-        if table.kernels().len() != abi.len() || table.kernels().len() != resources.len() {
-            return Err(
-                ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin("kernel count"),
-            );
-        }
-        let mut kernels: Vec<_> = table.kernels().iter().collect();
-        kernels.sort_unstable_by_key(|kernel| kernel.entry_name().as_str());
-        abi.sort_unstable_by(|left, right| left.entry.cmp(&right.entry));
-        resources.sort_unstable_by(|left, right| left.entry.cmp(&right.entry));
-        validate_sorted_descriptor_entries_v2(
-            kernels.iter().map(|kernel| kernel.entry_name().as_str()),
-            abi.iter().map(|value| value.entry.as_str()),
-            resources.iter().map(|value| value.entry.as_str()),
-        )?;
-        for ((kernel, abi), resource) in kernels.into_iter().zip(&abi).zip(&resources) {
-            let required_block = resource
-                .required_workgroup_size
-                .map(|required| {
-                    fe2o3_kernel_descriptor::DimensionsV1::new(
-                        required[0],
-                        required[1],
-                        required[2],
-                    )
-                    .map(fe2o3_kernel_descriptor::BlockSizeV1::Exact)
-                })
-                .transpose()
-                .map_err(|_| {
-                    ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
-                        "required workgroup size",
-                    )
-                })?;
-            if kernel.descriptor_symbol().as_str() != abi.descriptor
-                || u64::from(kernel.abi_layout().kernarg_segment_size()) != abi.kernarg_segment_size
-                || u64::from(kernel.abi_layout().kernarg_segment_alignment())
-                    != abi.kernarg_segment_alignment
-                || kernel.launch().max_flat_workgroup_size() != resource.max_flat_workgroup_size
-                || u64::from(kernel.launch().static_shared_memory_bytes())
-                    != resource.group_segment_fixed_size
-                || required_block.is_some_and(|required| kernel.launch().block_size() != required)
-            {
-                return Err(
-                    ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
-                        "symbol, kernarg segment, alignment, launch, or resource facet",
-                    ),
-                );
-            }
-        }
         Ok(())
     }
+}
+
+fn derive_canonical_descriptor_table_v2(
+    route: ProtectedWorkerV2FinalizerLineageRouteV2,
+    descriptor_section: CanonicalDescriptorSectionObservationV1,
+    exact_raw_bytes: &[u8],
+    exact_final_bytes: &[u8],
+) -> Result<Option<DeviceDescriptorTableV1>, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
+    if descriptor_section == CanonicalDescriptorSectionObservationV1::Missing {
+        return Ok(None);
+    }
+    let table = match route {
+        ProtectedWorkerV2FinalizerLineageRouteV2::InspectedRaw => {
+            inspect_unfinalized(exact_raw_bytes)
+                .map(|inspection| inspection.descriptor_table().clone())
+        }
+        ProtectedWorkerV2FinalizerLineageRouteV2::CanonicallyFinalized => {
+            verify_finalized(exact_final_bytes)
+                .map(|inspection| inspection.descriptor_table().clone())
+        }
+    }
+    .map_err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::CanonicalFinalization)?;
+    Ok(Some(table))
 }
 
 fn validate_protected_lineage_encoded_length(
@@ -1333,41 +1343,6 @@ fn protected_lineage_encoded_length(
     variable_bytes
         .into_iter()
         .try_fold(PROTECTED_LINEAGE_FIXED_BYTES_V2, usize::checked_add)
-}
-
-fn validate_sorted_descriptor_entries_v2<'a>(
-    mut kernels: impl Iterator<Item = &'a str>,
-    mut abi: impl Iterator<Item = &'a str>,
-    mut resources: impl Iterator<Item = &'a str>,
-) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    let mut previous = None;
-    loop {
-        match (kernels.next(), abi.next(), resources.next()) {
-            (None, None, None) => return Ok(()),
-            (Some(kernel), Some(abi), Some(resource)) => {
-                if previous == Some(kernel) {
-                    return Err(
-                        ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
-                            "duplicate kernel entry",
-                        ),
-                    );
-                }
-                if kernel != abi || kernel != resource {
-                    return Err(
-                        ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
-                            "kernel entry",
-                        ),
-                    );
-                }
-                previous = Some(kernel);
-            }
-            _ => {
-                return Err(
-                    ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin("kernel count"),
-                );
-            }
-        }
-    }
 }
 
 fn hash_domain_bytes(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
@@ -1745,191 +1720,6 @@ fn decode_link_plan_v1(
         return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::NonCanonical);
     }
     Ok(value)
-}
-
-struct AbiObservationSummaryV2 {
-    entry: String,
-    descriptor: String,
-    kernarg_segment_size: u64,
-    kernarg_segment_alignment: u64,
-}
-
-struct ResourceObservationSummaryV2 {
-    entry: String,
-    group_segment_fixed_size: u64,
-    max_flat_workgroup_size: u32,
-    required_workgroup_size: Option<[u32; 3]>,
-}
-
-fn decode_abi_observation_summaries_v2(
-    bytes: &[u8],
-) -> Result<Vec<AbiObservationSummaryV2>, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    let mut reader = FinalizerLineageReaderV2::new(bytes);
-    let _metadata_major = reader.u32()?;
-    let _metadata_minor = reader.u32()?;
-    let count = bounded_observation_count(reader.u64()?)?;
-    let mut summaries = Vec::with_capacity(count);
-    for _ in 0..count {
-        let entry = reader.text_u64(MAX_HSACO_BYTES)?.to_owned();
-        let descriptor = reader.text_u64(MAX_HSACO_BYTES)?.to_owned();
-        let kernarg_segment_size = reader.u64()?;
-        let kernarg_segment_alignment = reader.u64()?;
-        skip_optional_u64(&mut reader)?;
-        let _implicit_argument_size = reader.u64()?;
-        let explicit_count = bounded_observation_count(reader.u64()?)?;
-        for _ in 0..explicit_count {
-            skip_optional_text_u64(&mut reader)?;
-            skip_optional_text_u64(&mut reader)?;
-            reader.take(16)?;
-            skip_optional_u64(&mut reader)?;
-            reader.u8()?;
-            for _ in 0..4 {
-                skip_optional_tag(&mut reader)?;
-            }
-            skip_optional_u64(&mut reader)?;
-            for _ in 0..4 {
-                skip_optional_bool(&mut reader)?;
-            }
-        }
-        let hidden_count = bounded_observation_count(reader.u64()?)?;
-        for _ in 0..hidden_count {
-            reader.take(17)?;
-        }
-        summaries.push(AbiObservationSummaryV2 {
-            entry,
-            descriptor,
-            kernarg_segment_size,
-            kernarg_segment_alignment,
-        });
-    }
-    if !reader.finished() {
-        return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::TrailingBytes);
-    }
-    Ok(summaries)
-}
-
-fn decode_resource_observation_summaries_v2(
-    bytes: &[u8],
-) -> Result<Vec<ResourceObservationSummaryV2>, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    let mut reader = FinalizerLineageReaderV2::new(bytes);
-    let count = bounded_observation_count(reader.u64()?)?;
-    let mut summaries = Vec::with_capacity(count);
-    for _ in 0..count {
-        let entry = reader.text_u64(MAX_HSACO_BYTES)?.to_owned();
-        let group_segment_fixed_size = reader.u64()?;
-        let _private_segment_fixed_size = reader.u64()?;
-        let _wavefront_size = reader.u32()?;
-        reader.take(4)?;
-        for _ in 0..3 {
-            skip_optional_u32(&mut reader)?;
-        }
-        let max_flat_workgroup_size = reader.u32()?;
-        let required_workgroup_size = decode_optional_dimensions(&mut reader)?;
-        for _ in 0..3 {
-            skip_optional_u32(&mut reader)?;
-        }
-        let _cluster_dims = decode_optional_dimensions(&mut reader)?;
-        for _ in 0..3 {
-            skip_optional_bool(&mut reader)?;
-        }
-        summaries.push(ResourceObservationSummaryV2 {
-            entry,
-            group_segment_fixed_size,
-            max_flat_workgroup_size,
-            required_workgroup_size,
-        });
-    }
-    if !reader.finished() {
-        return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::TrailingBytes);
-    }
-    Ok(summaries)
-}
-
-fn bounded_observation_count(
-    value: u64,
-) -> Result<usize, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    let value = usize::try_from(value)
-        .map_err(|_| ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)?;
-    if value > MAX_WORKER_SYMBOLS {
-        return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length);
-    }
-    Ok(value)
-}
-
-impl<'a> FinalizerLineageReaderV2<'a> {
-    fn text_u64(
-        &mut self,
-        maximum: usize,
-    ) -> Result<&'a str, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-        let length = usize::try_from(self.u64()?)
-            .map_err(|_| ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)?;
-        self.text(length, maximum)
-    }
-}
-
-fn optional_tag(
-    reader: &mut FinalizerLineageReaderV2<'_>,
-) -> Result<bool, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    match reader.u8()? {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Tag),
-    }
-}
-
-fn skip_optional_text_u64(
-    reader: &mut FinalizerLineageReaderV2<'_>,
-) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    if optional_tag(reader)? {
-        reader.text_u64(MAX_HSACO_BYTES)?;
-    }
-    Ok(())
-}
-
-fn skip_optional_u64(
-    reader: &mut FinalizerLineageReaderV2<'_>,
-) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    if optional_tag(reader)? {
-        reader.u64()?;
-    }
-    Ok(())
-}
-
-fn skip_optional_u32(
-    reader: &mut FinalizerLineageReaderV2<'_>,
-) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    if optional_tag(reader)? {
-        reader.u32()?;
-    }
-    Ok(())
-}
-
-fn skip_optional_tag(
-    reader: &mut FinalizerLineageReaderV2<'_>,
-) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    if optional_tag(reader)? {
-        reader.u8()?;
-    }
-    Ok(())
-}
-
-fn skip_optional_bool(
-    reader: &mut FinalizerLineageReaderV2<'_>,
-) -> Result<(), ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    if optional_tag(reader)? && reader.u8()? > 1 {
-        return Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Tag);
-    }
-    Ok(())
-}
-
-fn decode_optional_dimensions(
-    reader: &mut FinalizerLineageReaderV2<'_>,
-) -> Result<Option<[u32; 3]>, ProtectedWorkerV2FinalizerLineageDecodeErrorV2> {
-    if optional_tag(reader)? {
-        Ok(Some([reader.u32()?, reader.u32()?, reader.u32()?]))
-    } else {
-        Ok(None)
-    }
 }
 
 /// Failure while turning admitted raw Worker V2 output into inert canonical-finalization evidence.
@@ -2376,69 +2166,5 @@ const fn code_object_version_tag(version: CodeObjectVersion) -> u8 {
         CodeObjectVersion::V4 => 4,
         CodeObjectVersion::V5 => 5,
         CodeObjectVersion::V6 => 6,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2, PROTECTED_LINEAGE_FIXED_BYTES_V2,
-        ProtectedWorkerV2FinalizerLineageDecodeErrorV2, validate_protected_lineage_encoded_length,
-        validate_sorted_descriptor_entries_v2,
-    };
-
-    #[test]
-    fn aggregate_lineage_bound_is_exact_without_allocating_the_limit() {
-        let maximum_variable_bytes =
-            MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2 - PROTECTED_LINEAGE_FIXED_BYTES_V2;
-        assert!(
-            validate_protected_lineage_encoded_length([maximum_variable_bytes]).is_ok(),
-            "the exact aggregate maximum must remain encodable"
-        );
-        assert!(matches!(
-            validate_protected_lineage_encoded_length([maximum_variable_bytes, 1]),
-            Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)
-        ));
-        assert!(matches!(
-            validate_protected_lineage_encoded_length([usize::MAX]),
-            Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::Length)
-        ));
-    }
-
-    #[test]
-    fn bounded_multi_kernel_entry_join_is_total_and_rejects_aliases() {
-        let kernels = ["attention", "gemm", "moe", "softmax"];
-        assert!(
-            validate_sorted_descriptor_entries_v2(
-                kernels.into_iter(),
-                kernels.into_iter(),
-                kernels.into_iter(),
-            )
-            .is_ok()
-        );
-
-        let wrong_resource = ["attention", "gemm", "moe", "transpose"];
-        assert!(matches!(
-            validate_sorted_descriptor_entries_v2(
-                kernels.into_iter(),
-                kernels.into_iter(),
-                wrong_resource.into_iter(),
-            ),
-            Err(ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin("kernel entry"))
-        ));
-
-        let duplicate = ["attention", "gemm", "gemm", "softmax"];
-        assert!(matches!(
-            validate_sorted_descriptor_entries_v2(
-                duplicate.into_iter(),
-                duplicate.into_iter(),
-                duplicate.into_iter(),
-            ),
-            Err(
-                ProtectedWorkerV2FinalizerLineageDecodeErrorV2::DescriptorJoin(
-                    "duplicate kernel entry"
-                )
-            )
-        ));
     }
 }
