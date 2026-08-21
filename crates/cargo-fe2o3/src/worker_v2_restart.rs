@@ -9,10 +9,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::OsStr;
 
 use fe2o3_artifact_transaction::{
-    BackendPublicationReceiptV1, BackendPublicationReceiptV2, BuildAttempt, BuildSession,
-    DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV2, PersistedBackendReceiptV2,
-    ProducerIdentity, RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
-    UpstreamCodeObjectEvidenceIdentityV1, WorkerV2PublicationIntentErrorV1,
+    AtomicPublicationIdentityV1, BackendPublicationReceiptV1, BackendPublicationReceiptV2,
+    BuildAttempt, BuildSession, CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1,
+    DurablePublishedHsacoClaimV2, FinalizationIdentityV1, FinalizedOutputIdentityV1,
+    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
+    MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2, PackageIdentityV1, PersistedBackendReceiptV2,
+    PinnedWorkerIdentityV1, ProducerIdentity, RecoveredWorkerV2PublicationIntentV1,
+    RecoveredWorkerV2PublicationIntentV2, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+    ValidatedResponseIdentityV1, WorkerV2PublicationIntentErrorV1,
     WorkerV2PublicationIntentErrorV2, WorkerV2PublicationIntentIdentityV1,
     WorkerV2PublicationIntentIdentityV2, clear_worker_v2_publication_intent_v2,
     persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v2,
@@ -72,9 +76,20 @@ const ENVELOPE_INPUTS_NAME_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-ENVELOPE-INPUTS-NAM
 const PROTECTED_ENVELOPE_PREFIX_V2: &str = ".fe2o3-worker-v2-protected-load-envelope-v2-";
 const PROTECTED_ENVELOPE_SUFFIX_V2: &str = ".envelope";
 const PROTECTED_ENVELOPE_TEMP_PREFIX_V2: &str = ".fe2o3-worker-v2-protected-load-envelope-temp-v2-";
+const PROTECTED_CLEANUP_EVIDENCE_MAGIC_V1: &[u8] =
+    b"FE2O3-CARGO-WORKER-V2-PROTECTED-CLEANUP-EVIDENCE-V1\0";
+const PROTECTED_CLEANUP_EVIDENCE_VERSION_V1: u16 = 1;
+const PROTECTED_CLEANUP_EVIDENCE_CHECKSUM_DOMAIN_V1: &[u8] =
+    b"FE2O3/CARGO-WORKER-V2-PROTECTED-CLEANUP-EVIDENCE-CHECKSUM/V1\0";
+const PROTECTED_CLEANUP_EVIDENCE_MARKER_DOMAIN_V1: &[u8] =
+    b"FE2O3/CARGO-WORKER-V2-PROTECTED-CLEANUP-EVIDENCE-MARKER/V1\0";
+const PROTECTED_CLEANUP_EVIDENCE_PREFIX_V1: &str =
+    ".fe2o3-cargo-worker-v2-protected-cleanup-evidence-v1-";
+const PROTECTED_CLEANUP_EVIDENCE_SUFFIX_V1: &str = ".evidence";
 const MAX_ENVELOPE_INPUT_RESIDUE_ENTRIES: usize = 256;
 const MAX_ENVELOPE_TEMP_RESIDUE_ENTRIES: usize = 256;
 const MAX_MARKER_TEMP_RESIDUE_ENTRIES: usize = 256;
+const MAX_PROTECTED_CLEANUP_TEMP_RESIDUE_ENTRIES_V1: usize = 256;
 const RECEIPT_FIELDS: usize = 7;
 const COMPILER_CLOSURE_DIGEST_FIELDS_V2: usize = 7;
 const COMPILER_CLOSURE_BYTES_V2: usize = COMPILER_CLOSURE_DIGEST_FIELDS_V2 * 32 + 2;
@@ -87,6 +102,31 @@ const PROTECTED_MARKER_BYTES: usize =
 const MAX_MARKER_BYTES: usize = PROTECTED_MARKER_BYTES;
 const LEGACY_MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 32 + 8 + 16 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
+const PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1: usize = PROTECTED_CLEANUP_EVIDENCE_MAGIC_V1
+    .len()
+    + 2
+    + 32
+    + 1
+    + 8
+    + 16
+    + 32
+    + 32
+    + 32
+    + 3 * 32
+    + 7 * 32
+    + 32
+    + 32
+    + 32
+    + 32
+    + RECEIPT_FIELDS * 32
+    + COMPILER_CLOSURE_BYTES_V2
+    + 8
+    + 8;
+const MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1: usize =
+    PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1
+        + MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES
+        + MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2
+        + 32;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -970,14 +1010,27 @@ pub(crate) fn clear_worker_v2_intent_v2(
     store
         .verify_output_path()
         .map_err(RestartIntentErrorV2::Marker)?;
-    store
-        .validate_completed_restart_inputs(
-            completed,
-            receipt,
-            expected_compiler_closure,
-            recovered.as_ref(),
-        )
-        .map_err(RestartIntentErrorV2::Marker)?;
+    if let Err(error) = store.validate_completed_restart_inputs(
+        completed,
+        receipt,
+        expected_compiler_closure,
+        recovered.as_ref(),
+    ) {
+        if recovered.is_none()
+            && completed.publication().requires_envelope()
+            && let Some(evidence) = store
+                .read_protected_cleanup_evidence()
+                .map_err(RestartIntentErrorV2::Marker)?
+        {
+            store
+                .validate_protected_cleanup_evidence(&evidence, completed)
+                .map_err(RestartIntentErrorV2::Marker)?;
+            store
+                .restore_protected_completed_from_cleanup_evidence(&evidence)
+                .map_err(RestartIntentErrorV2::Marker)?;
+        }
+        return Err(RestartIntentErrorV2::Marker(error));
+    }
     if store.load().map_err(RestartIntentErrorV2::Marker)? != Some(completed) {
         return Err(RestartIntentErrorV2::Marker(
             ResumeMarkerErrorV1::InvalidTransition,
@@ -989,9 +1042,46 @@ pub(crate) fn clear_worker_v2_intent_v2(
     if recovered.record().identity() != intent {
         return Err(RestartIntentErrorV2::IntentIdentityMismatch);
     }
+    let cleanup_evidence = if completed.publication().requires_envelope() {
+        let envelope_inputs = store
+            .recover_envelope_inputs(completed.attempt())
+            .map_err(RestartIntentErrorV2::Marker)?;
+        let evidence = ProtectedIntentCleanupEvidenceV1::new(
+            store.inner.package,
+            completed,
+            &recovered,
+            envelope_inputs,
+        )
+        .map_err(|reason| RestartIntentErrorV2::Marker(store.inner.invalid(reason)))?;
+        store
+            .persist_protected_cleanup_evidence(&evidence)
+            .map_err(RestartIntentErrorV2::Marker)?;
+        store
+            .validate_protected_cleanup_evidence(&evidence, completed)
+            .map_err(RestartIntentErrorV2::Marker)?;
+        store
+            .validate_completed_restart_inputs(
+                completed,
+                receipt,
+                expected_compiler_closure,
+                Some(&recovered),
+            )
+            .map_err(RestartIntentErrorV2::Marker)?;
+        Some(evidence)
+    } else {
+        None
+    };
+    if store.load().map_err(RestartIntentErrorV2::Marker)? != Some(completed) {
+        return Err(RestartIntentErrorV2::Marker(
+            ResumeMarkerErrorV1::InvalidTransition,
+        ));
+    }
     store
         .verify_output_path()
         .map_err(RestartIntentErrorV2::Marker)?;
+    if cleanup_evidence.is_some() {
+        return Ok(());
+    }
     clear_worker_v2_publication_intent_v2(
         &store.inner.display_path,
         producer,
@@ -1002,7 +1092,8 @@ pub(crate) fn clear_worker_v2_intent_v2(
     .map_err(RestartIntentErrorV2::Intent)?;
     store
         .verify_output_path()
-        .map_err(RestartIntentErrorV2::Marker)
+        .map_err(RestartIntentErrorV2::Marker)?;
+    Ok(())
 }
 
 fn recover_worker_v2_intent<S: WorkerV2IntentSchema>(
@@ -1588,6 +1679,36 @@ fn is_protected_envelope_temp_name_v2(name: &str, package_prefix: &str) -> bool 
         && has_decimal_temp_counters(&bytes[temp_end..])
 }
 
+fn protected_cleanup_evidence_name_v1(package: [u8; 32]) -> String {
+    format!(
+        "{PROTECTED_CLEANUP_EVIDENCE_PREFIX_V1}{}{PROTECTED_CLEANUP_EVIDENCE_SUFFIX_V1}",
+        hex(&package)
+    )
+}
+
+fn protected_cleanup_evidence_temp_prefix_v1(package: [u8; 32]) -> String {
+    format!(
+        "{}{TEMP_SUFFIX}",
+        protected_cleanup_evidence_name_v1(package)
+    )
+}
+
+fn protected_cleanup_evidence_temp_name_v1(
+    package: [u8; 32],
+    process: u32,
+    counter: u64,
+) -> String {
+    format!(
+        "{}{process}-{counter}",
+        protected_cleanup_evidence_temp_prefix_v1(package)
+    )
+}
+
+fn is_protected_cleanup_evidence_temp_name_v1(name: &str, prefix: &str) -> bool {
+    name.as_bytes().starts_with(prefix.as_bytes())
+        && has_decimal_temp_counters(&name.as_bytes()[prefix.len()..])
+}
+
 fn marker_temp_prefix(marker_name: &str) -> String {
     format!("{marker_name}{TEMP_SUFFIX}")
 }
@@ -1810,6 +1931,325 @@ impl ResumeMarkerStateV2 {
             Self::Completed { receipt, .. } => Some(receipt),
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProtectedIntentCleanupEvidenceV1 {
+    package: [u8; 32],
+    publication: WorkerV2PublicationKindV1,
+    attempt: BuildAttempt,
+    producer_identity: [u8; 32],
+    intent: WorkerV2PublicationIntentIdentityV2,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    envelope: [u8; 32],
+    admission: [u8; 32],
+    marker: [u8; 32],
+    receipt: ReceiptRecordV2,
+    envelope_inputs: WorkerV2EnvelopeInputsV1,
+    exact_output: Vec<u8>,
+}
+
+impl ProtectedIntentCleanupEvidenceV1 {
+    fn new(
+        package: [u8; 32],
+        completed: ResumeMarkerStateV2,
+        recovered: &RecoveredWorkerV2PublicationIntentV2,
+        envelope_inputs: WorkerV2EnvelopeInputsV1,
+    ) -> Result<Self, &'static str> {
+        let ResumeMarkerStateV2::Completed {
+            publication,
+            attempt,
+            admission,
+            envelope_inputs: marker_inputs,
+            envelope,
+            intent,
+            receipt,
+        } = completed
+        else {
+            return Err("cleanup evidence requires a completed protected marker");
+        };
+        let record = recovered.record();
+        let evidence = Self {
+            package,
+            publication,
+            attempt,
+            producer_identity: record.producer_identity(),
+            intent,
+            plan: record.plan(),
+            upstream: record.upstream_evidence(),
+            envelope,
+            admission,
+            marker: protected_cleanup_marker_commitment_v1(package, completed),
+            receipt,
+            envelope_inputs,
+            exact_output: recovered.exact_output().to_vec(),
+        };
+        evidence.validate()?;
+        if evidence.envelope_inputs.identity().as_bytes() != marker_inputs
+            || record.identity() != evidence.intent
+            || record.attempt() != evidence.attempt
+            || record.compiler_closure() != evidence.compiler_closure()
+            || record.output_length() != evidence.exact_output.len()
+            || record.output_identity() != evidence.plan.finalized_output()
+        {
+            return Err("cleanup evidence differs from its recovered protected intent");
+        }
+        Ok(evidence)
+    }
+
+    fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.receipt
+            .compiler_closure()
+            .expect("validated cleanup evidence has a compiler closure")
+    }
+
+    fn validate(&self) -> Result<(), &'static str> {
+        let output_identity: [u8; 32] = Sha256::digest(&self.exact_output).into();
+        if !self.publication.requires_envelope() {
+            return Err("cleanup evidence requires a protected envelope publication");
+        }
+        if self.attempt != self.plan.attempt() {
+            return Err("cleanup evidence plan names a different attempt");
+        }
+        if self.package != *self.plan.scope().package().as_bytes() {
+            return Err("cleanup evidence plan names a different package");
+        }
+        if self.producer_identity == [0; 32]
+            || self.intent.as_bytes() == [0; 32]
+            || self.envelope == [0; 32]
+            || self.admission == [0; 32]
+            || self.marker == [0; 32]
+            || !self.receipt.is_complete()
+        {
+            return Err("cleanup evidence contains an empty required identity");
+        }
+        if self.exact_output.is_empty()
+            || self.exact_output.len() > MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES_V2
+            || self.plan.finalized_output().as_bytes() != &output_identity
+        {
+            return Err("cleanup evidence contains invalid exact output bytes");
+        }
+        let envelope_inputs = self.envelope_inputs.to_bytes();
+        if envelope_inputs.is_empty()
+            || envelope_inputs.len() > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES
+            || WorkerV2EnvelopeInputsV1::from_bytes(&envelope_inputs)
+                .map_err(|_| "cleanup evidence contains invalid envelope inputs")?
+                != self.envelope_inputs
+        {
+            return Err("cleanup evidence contains invalid envelope inputs");
+        }
+        if protected_cleanup_marker_commitment_v1(self.package, self.completed_state())
+            != self.marker
+        {
+            return Err("cleanup evidence completed marker commitment is invalid");
+        }
+        Ok(())
+    }
+
+    fn completed_state(&self) -> ResumeMarkerStateV2 {
+        ResumeMarkerStateV2::Completed {
+            publication: self.publication,
+            attempt: self.attempt,
+            admission: self.admission,
+            envelope_inputs: self.envelope_inputs.identity().as_bytes(),
+            envelope: self.envelope,
+            intent: self.intent,
+            receipt: self.receipt,
+        }
+    }
+
+    fn matches_completed(&self, package: [u8; 32], completed: ResumeMarkerStateV2) -> bool {
+        let ResumeMarkerStateV2::Completed {
+            publication,
+            attempt,
+            admission,
+            envelope_inputs,
+            envelope,
+            intent,
+            receipt,
+        } = completed
+        else {
+            return false;
+        };
+        self.package == package
+            && self.publication == publication
+            && self.attempt == attempt
+            && self.admission == admission
+            && self.envelope_inputs.identity().as_bytes() == envelope_inputs
+            && self.envelope == envelope
+            && self.intent == intent
+            && self.receipt == receipt
+            && self.marker == protected_cleanup_marker_commitment_v1(package, completed)
+    }
+
+    fn matches_recovered(&self, recovered: &RecoveredWorkerV2PublicationIntentV2) -> bool {
+        let record = recovered.record();
+        record.attempt() == self.attempt
+            && record.producer_identity() == self.producer_identity
+            && record.identity() == self.intent
+            && record.plan() == self.plan
+            && record.upstream_evidence() == self.upstream
+            && record.output_length() == self.exact_output.len()
+            && record.output_identity() == self.plan.finalized_output()
+            && record.compiler_closure() == self.compiler_closure()
+            && recovered.compiler_closure() == self.compiler_closure()
+            && recovered.exact_output() == self.exact_output
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        debug_assert!(self.validate().is_ok());
+        let mut bytes = Vec::with_capacity(
+            PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1
+                + self.envelope_inputs.to_bytes().len()
+                + self.exact_output.len()
+                + 32,
+        );
+        bytes.extend_from_slice(PROTECTED_CLEANUP_EVIDENCE_MAGIC_V1);
+        bytes.extend_from_slice(&PROTECTED_CLEANUP_EVIDENCE_VERSION_V1.to_le_bytes());
+        bytes.extend_from_slice(&self.package);
+        bytes.push(self.publication.tag());
+        bytes.extend_from_slice(&self.attempt.generation().to_le_bytes());
+        bytes.extend_from_slice(self.attempt.session().as_bytes());
+        bytes.extend_from_slice(self.attempt.invocation().as_bytes());
+        bytes.extend_from_slice(&self.producer_identity);
+        bytes.extend_from_slice(&self.intent.as_bytes());
+        let scope = self.plan.scope();
+        bytes.extend_from_slice(scope.package().as_bytes());
+        bytes.extend_from_slice(scope.kernel_set().as_bytes());
+        bytes.extend_from_slice(scope.target().as_bytes());
+        for identity in [
+            self.plan.request().as_bytes(),
+            self.plan.worker().as_bytes(),
+            self.plan.response().as_bytes(),
+            self.plan.linked_output().as_bytes(),
+            self.plan.finalization().as_bytes(),
+            self.plan.finalized_output().as_bytes(),
+            self.plan.publication().as_bytes(),
+        ] {
+            bytes.extend_from_slice(identity);
+        }
+        bytes.extend_from_slice(&self.upstream.as_bytes());
+        bytes.extend_from_slice(&self.envelope);
+        bytes.extend_from_slice(&self.admission);
+        bytes.extend_from_slice(&self.marker);
+        self.receipt.encode(&mut bytes);
+        let envelope_inputs = self.envelope_inputs.to_bytes();
+        bytes.extend_from_slice(&(envelope_inputs.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&(self.exact_output.len() as u64).to_le_bytes());
+        debug_assert_eq!(bytes.len(), PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1);
+        bytes.extend_from_slice(&envelope_inputs);
+        bytes.extend_from_slice(&self.exact_output);
+        let checksum = protected_cleanup_evidence_checksum_v1(&bytes);
+        bytes.extend_from_slice(&checksum);
+        bytes
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() > MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1 {
+            return Err("cleanup evidence exceeds its canonical bound");
+        }
+        if bytes.len() < PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1 + 2 + 32 {
+            return Err("cleanup evidence is truncated");
+        }
+        let (body, checksum) = bytes.split_at(bytes.len() - 32);
+        if protected_cleanup_evidence_checksum_v1(body) != checksum {
+            return Err("cleanup evidence checksum mismatch");
+        }
+        let mut decoder = Decoder::new(body);
+        if decoder.take(PROTECTED_CLEANUP_EVIDENCE_MAGIC_V1.len())?
+            != PROTECTED_CLEANUP_EVIDENCE_MAGIC_V1
+        {
+            return Err("cleanup evidence magic mismatch");
+        }
+        if decoder.u16()? != PROTECTED_CLEANUP_EVIDENCE_VERSION_V1 {
+            return Err("unsupported cleanup evidence version");
+        }
+        let package = decoder.array()?;
+        let publication = WorkerV2PublicationKindV1::from_tag(decoder.byte()?)
+            .ok_or("cleanup evidence publication tag is invalid")?;
+        let generation = decoder.u64()?;
+        let session = BuildSession::from_bytes(decoder.array()?);
+        let invocation = fe2o3_artifact_transaction::BuildInvocation::from_bytes(decoder.array()?);
+        let attempt = BuildAttempt::from_env_value(&format!(
+            "{generation}:{}:{}",
+            session.to_hex(),
+            invocation.to_hex()
+        ))
+        .map_err(|_| "cleanup evidence contains an invalid attempt")?;
+        let producer_identity = decoder.array()?;
+        let intent = WorkerV2PublicationIntentIdentityV2::from_bytes(decoder.array()?);
+        let scope = LinkPublicationScopeV1::new(
+            PackageIdentityV1::from_bytes(decoder.array()?),
+            KernelSetIdentityV1::from_bytes(decoder.array()?),
+            TargetIdentityV1::from_bytes(decoder.array()?),
+        );
+        let plan = DurableLinkPublicationPlanV1::new(
+            attempt,
+            scope,
+            CanonicalLinkRequestIdentityV1::from_bytes(decoder.array()?),
+            PinnedWorkerIdentityV1::from_bytes(decoder.array()?),
+            ValidatedResponseIdentityV1::from_bytes(decoder.array()?),
+            LinkedOutputIdentityV1::from_bytes(decoder.array()?),
+            FinalizationIdentityV1::from_bytes(decoder.array()?),
+            FinalizedOutputIdentityV1::from_bytes(decoder.array()?),
+            AtomicPublicationIdentityV1::from_bytes(decoder.array()?),
+        );
+        let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(decoder.array()?);
+        let envelope = decoder.array()?;
+        let admission = decoder.array()?;
+        let marker = decoder.array()?;
+        let receipt = ReceiptRecordV2::decode(&mut decoder)?;
+        let envelope_inputs_length = usize::try_from(decoder.u64()?)
+            .map_err(|_| "cleanup evidence envelope-input length is invalid")?;
+        let output_length = usize::try_from(decoder.u64()?)
+            .map_err(|_| "cleanup evidence output length is invalid")?;
+        let envelope_inputs =
+            WorkerV2EnvelopeInputsV1::from_bytes(decoder.take(envelope_inputs_length)?)
+                .map_err(|_| "cleanup evidence contains invalid envelope inputs")?;
+        let exact_output = decoder.take(output_length)?.to_vec();
+        if !decoder.finished() {
+            return Err("cleanup evidence has trailing body bytes");
+        }
+        let evidence = Self {
+            package,
+            publication,
+            attempt,
+            producer_identity,
+            intent,
+            plan,
+            upstream,
+            envelope,
+            admission,
+            marker,
+            receipt,
+            envelope_inputs,
+            exact_output,
+        };
+        evidence.validate()?;
+        if evidence.to_bytes() != bytes {
+            return Err("cleanup evidence encoding is not canonical");
+        }
+        Ok(evidence)
+    }
+}
+
+fn protected_cleanup_marker_commitment_v1(
+    package: [u8; 32],
+    completed: ResumeMarkerStateV2,
+) -> [u8; 32] {
+    checksum_for(
+        PROTECTED_CLEANUP_EVIDENCE_MARKER_DOMAIN_V1,
+        &encode_protected_marker(package, completed),
+    )
+}
+
+fn protected_cleanup_evidence_checksum_v1(bytes: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(PROTECTED_CLEANUP_EVIDENCE_CHECKSUM_DOMAIN_V1);
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+    digest.finalize().into()
 }
 
 #[derive(Debug)]
@@ -2992,6 +3432,8 @@ impl WorkerV2ResumeStoreV2 {
             producer: producer.clone(),
         };
         store.cleanup_protected_envelope_temp_residue()?;
+        store.cleanup_protected_cleanup_evidence_temp_residue()?;
+        store.reconcile_protected_cleanup_evidence_on_open()?;
         Ok(store)
     }
 
@@ -3184,6 +3626,534 @@ impl WorkerV2ResumeStoreV2 {
             self.verify_output_path()?;
         }
         Ok(())
+    }
+
+    fn cleanup_protected_cleanup_evidence_temp_residue(&self) -> Result<(), ResumeMarkerErrorV1> {
+        let prefix = protected_cleanup_evidence_temp_prefix_v1(self.inner.package);
+        let scan = rustix::io::fcntl_dupfd_cloexec(&self.inner.directory, 0)
+            .map_err(std::io::Error::from)?;
+        let mut directory = rustix::fs::Dir::read_from(&scan).map_err(std::io::Error::from)?;
+        let mut entries = 0_usize;
+        let mut residue = Vec::new();
+        for entry in &mut directory {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let bytes = entry.file_name().to_bytes();
+            if !count_restart_artifact_entry(&mut entries, bytes).map_err(|()| {
+                self.inner
+                    .invalid("artifact directory exceeds its scan bound")
+            })? {
+                continue;
+            }
+            if !bytes.starts_with(prefix.as_bytes()) {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes).map_err(|_| {
+                self.inner
+                    .invalid("protected cleanup-evidence temp name is not UTF-8")
+            })?;
+            if !is_protected_cleanup_evidence_temp_name_v1(name, &prefix) {
+                return Err(self.inner.invalid_at_name(
+                    name,
+                    "malformed package-owned protected cleanup-evidence temp name",
+                ));
+            }
+            if residue.len() == MAX_PROTECTED_CLEANUP_TEMP_RESIDUE_ENTRIES_V1 {
+                return Err(self
+                    .inner
+                    .invalid("too many package-owned protected cleanup-evidence temp residues"));
+            }
+            let descriptor = openat(
+                &self.inner.directory,
+                name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            validate_private_file(
+                &self.inner.directory,
+                &descriptor,
+                name,
+                &self.inner.display_path,
+                None,
+            )?;
+            residue.push((name.to_owned(), descriptor));
+        }
+        if !residue.is_empty() {
+            for (name, descriptor) in residue {
+                validate_private_file(
+                    &self.inner.directory,
+                    &descriptor,
+                    &name,
+                    &self.inner.display_path,
+                    None,
+                )?;
+                unlinkat(&self.inner.directory, &name, AtFlags::empty())
+                    .map_err(std::io::Error::from)?;
+            }
+            fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+            self.verify_output_path()?;
+        }
+        Ok(())
+    }
+
+    fn persist_protected_cleanup_evidence(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        evidence
+            .validate()
+            .map_err(|reason| self.inner.invalid(reason))?;
+        if evidence.package != self.inner.package {
+            return Err(self
+                .inner
+                .invalid("protected cleanup evidence names a different package"));
+        }
+        self.verify_output_path()?;
+        let bytes = evidence.to_bytes();
+        if bytes.len() > MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1 {
+            return Err(self
+                .inner
+                .invalid("protected cleanup evidence exceeds its canonical bound"));
+        }
+        let name = protected_cleanup_evidence_name_v1(self.inner.package);
+        if let Some(existing) = self.read_protected_cleanup_evidence()? {
+            if existing == *evidence {
+                return Ok(());
+            }
+            let completed = self.load()?.ok_or_else(|| {
+                self.inner.invalid_at_name(
+                    &name,
+                    "conflicting cleanup evidence has no superseding completed marker",
+                )
+            })?;
+            let recovered =
+                self.recover_complete_intent(evidence.attempt, evidence.compiler_closure())?;
+            if existing.attempt == evidence.attempt
+                || !evidence.matches_completed(self.inner.package, completed)
+                || !evidence.matches_recovered(&recovered)
+            {
+                return Err(self
+                    .inner
+                    .invalid_at_name(&name, "conflicting protected cleanup evidence"));
+            }
+            self.remove_protected_cleanup_evidence(&existing)?;
+        }
+        let temp_name = protected_cleanup_evidence_temp_name_v1(
+            self.inner.package,
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
+        );
+        let result = (|| {
+            let descriptor = openat(
+                &self.inner.directory,
+                &temp_name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)?;
+            let mut file = File::from(descriptor);
+            file.set_len(bytes.len() as u64)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            validate_private_file(
+                &self.inner.directory,
+                &file,
+                &temp_name,
+                &self.inner.display_path,
+                Some(bytes.len()),
+            )?;
+            self.verify_output_path()?;
+            match renameat_with(
+                &self.inner.directory,
+                &temp_name,
+                &self.inner.directory,
+                &name,
+                RenameFlags::NOREPLACE,
+            ) {
+                Ok(()) => {}
+                Err(rustix::io::Errno::EXIST) => {
+                    unlinkat(&self.inner.directory, &temp_name, AtFlags::empty())
+                        .map_err(std::io::Error::from)?;
+                    let existing = self.read_protected_cleanup_evidence()?.ok_or_else(|| {
+                        self.inner.invalid_at_name(
+                            &name,
+                            "protected cleanup evidence disappeared after create-new conflict",
+                        )
+                    })?;
+                    return if existing == *evidence {
+                        Ok(())
+                    } else {
+                        Err(self
+                            .inner
+                            .invalid_at_name(&name, "conflicting protected cleanup evidence"))
+                    };
+                }
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+            fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+            self.verify_output_path()?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("protected-cleanup-evidence-published");
+            let published = self.read_protected_cleanup_evidence()?.ok_or_else(|| {
+                self.inner.invalid_at_name(
+                    &name,
+                    "protected cleanup evidence is absent after durable publication",
+                )
+            })?;
+            if published != *evidence {
+                return Err(self.inner.invalid_at_name(
+                    &name,
+                    "protected cleanup evidence changed after publication",
+                ));
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = unlinkat(&self.inner.directory, &temp_name, AtFlags::empty());
+        }
+        result
+    }
+
+    fn read_protected_cleanup_evidence(
+        &self,
+    ) -> Result<Option<ProtectedIntentCleanupEvidenceV1>, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        let name = protected_cleanup_evidence_name_v1(self.inner.package);
+        let descriptor = match openat(
+            &self.inner.directory,
+            &name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+        validate_private_file(
+            &self.inner.directory,
+            &descriptor,
+            &name,
+            &self.inner.display_path,
+            None,
+        )?;
+        let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+        let initial_size = usize::try_from(initial.st_size).ok();
+        if initial_size.is_none_or(|size| {
+            !(PROTECTED_CLEANUP_EVIDENCE_FIXED_BODY_BYTES_V1 + 2 + 32
+                ..=MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1)
+                .contains(&size)
+        }) {
+            return Err(self
+                .inner
+                .invalid_at_name(&name, "protected cleanup evidence size is invalid"));
+        }
+        let mut file = File::from(descriptor);
+        let mut bytes = Vec::with_capacity(initial_size.unwrap_or(0).saturating_add(1));
+        Read::by_ref(&mut file)
+            .take((MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1 + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        let final_stat = fstat(&file).map_err(std::io::Error::from)?;
+        if final_stat.st_dev != initial.st_dev
+            || final_stat.st_ino != initial.st_ino
+            || final_stat.st_mode != initial.st_mode
+            || final_stat.st_nlink != 1
+            || final_stat.st_mtime != initial.st_mtime
+            || final_stat.st_mtime_nsec != initial.st_mtime_nsec
+            || final_stat.st_ctime != initial.st_ctime
+            || final_stat.st_ctime_nsec != initial.st_ctime_nsec
+            || usize::try_from(final_stat.st_size).ok() != Some(bytes.len())
+            || bytes.len() > MAX_PROTECTED_CLEANUP_EVIDENCE_BYTES_V1
+        {
+            return Err(self.inner.invalid_at_name(
+                &name,
+                "protected cleanup evidence changed while it was read",
+            ));
+        }
+        let evidence = ProtectedIntentCleanupEvidenceV1::from_bytes(&bytes)
+            .map_err(|reason| self.inner.invalid_at_name(&name, reason))?;
+        if evidence.package != self.inner.package {
+            return Err(self
+                .inner
+                .invalid_at_name(&name, "protected cleanup evidence package was substituted"));
+        }
+        Ok(Some(evidence))
+    }
+
+    fn validate_protected_cleanup_evidence(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+        completed: ResumeMarkerStateV2,
+    ) -> Result<BackendPublicationReceiptV2, ResumeMarkerErrorV1> {
+        if !evidence.matches_completed(self.inner.package, completed) {
+            return Err(self
+                .inner
+                .invalid("protected cleanup evidence differs from its completed marker"));
+        }
+        evidence
+            .validate()
+            .map_err(|reason| self.inner.invalid(reason))?;
+        let receipt = self.durable_receipt(completed.attempt())?;
+        if !evidence.receipt.matches(receipt)
+            || receipt.compiler_closure() != evidence.compiler_closure()
+        {
+            return Err(self.inner.invalid(
+                "protected cleanup evidence differs from the durable V2 publication receipt",
+            ));
+        }
+        Ok(receipt)
+    }
+
+    fn validate_protected_cleanup_envelope(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<BackendPublicationReceiptV2, ResumeMarkerErrorV1> {
+        evidence
+            .validate()
+            .map_err(|reason| self.inner.invalid(reason))?;
+        if evidence.package != self.inner.package {
+            return Err(self
+                .inner
+                .invalid("protected cleanup evidence names a different package"));
+        }
+        let receipt = self.durable_receipt(evidence.attempt)?;
+        if !evidence.receipt.matches(receipt)
+            || receipt.compiler_closure() != evidence.compiler_closure()
+        {
+            return Err(self.inner.invalid(
+                "protected cleanup evidence differs from the durable V2 publication receipt",
+            ));
+        }
+        let name = protected_envelope_name_v2(receipt.publication_identity());
+        let envelope = self
+            .read_load_envelope(&name, receipt, evidence.compiler_closure())?
+            .ok_or_else(|| {
+                self.inner.invalid_at_name(
+                    &name,
+                    "canonical protected Worker V2 cleanup envelope is missing",
+                )
+            })?;
+        let artifact = envelope.final_artifact_evidence();
+        let claim = artifact.published_claim();
+        let intent = artifact.publication_intent_transcript();
+        let carried_inputs = WorkerV2EnvelopeInputsV1::new(
+            envelope.direct_link_evidence().clone(),
+            envelope.proof_records().to_vec(),
+            envelope.raw_hsaco().clone(),
+        )
+        .map_err(|error| {
+            self.inner.invalid(format!(
+                "protected cleanup envelope inputs are invalid: {error}"
+            ))
+        })?;
+        if envelope.identity().as_bytes() != evidence.envelope
+            || claim.plan() != evidence.plan
+            || claim.upstream_evidence() != evidence.upstream
+            || intent.source_record_identity() != evidence.intent
+            || intent.attempt() != evidence.attempt
+            || intent.plan() != evidence.plan
+            || intent.producer_identity() != evidence.producer_identity
+            || intent.upstream_evidence() != evidence.upstream
+            || intent.output_identity() != evidence.plan.finalized_output()
+            || usize::try_from(intent.output_length()) != Ok(evidence.exact_output.len())
+            || intent.compiler_closure() != evidence.compiler_closure()
+            || envelope.finalized_payload() != evidence.exact_output
+            || carried_inputs != evidence.envelope_inputs
+            || restart_admission_commitment_with_inputs_v2(
+                evidence.publication,
+                evidence.plan,
+                evidence.upstream,
+                &evidence.exact_output,
+                Some(evidence.envelope_inputs.identity()),
+                evidence.compiler_closure(),
+            ) != evidence.admission
+        {
+            return Err(self
+                .inner
+                .invalid("protected cleanup envelope differs from its durable recovery evidence"));
+        }
+        Ok(receipt)
+    }
+
+    fn recover_or_restore_protected_intent(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<RecoveredWorkerV2PublicationIntentV2, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        let recovered = match recover_worker_v2_publication_intent_v2(
+            &self.inner.display_path,
+            &self.producer,
+            evidence.attempt,
+            evidence.compiler_closure(),
+        ) {
+            Ok(recovered) => recovered,
+            Err(WorkerV2PublicationIntentErrorV2::NotFound) => {
+                return Err(self.inner.invalid(
+                    "protected cleanup intent disappeared before a superseding Ready state",
+                ));
+            }
+            Err(error) => {
+                return Err(self
+                    .inner
+                    .invalid(format!("protected cleanup intent recovery failed: {error}")));
+            }
+        };
+        self.verify_output_path()?;
+        if !evidence.matches_recovered(&recovered) {
+            return Err(self
+                .inner
+                .invalid("restored protected intent differs from cleanup evidence"));
+        }
+        Ok(recovered)
+    }
+
+    fn restore_protected_completed_from_cleanup_evidence(
+        &self,
+        evidence: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        evidence
+            .validate()
+            .map_err(|reason| self.inner.invalid(reason))?;
+        let receipt = self.durable_receipt(evidence.attempt)?;
+        if !evidence.receipt.matches(receipt)
+            || receipt.compiler_closure() != evidence.compiler_closure()
+        {
+            return Err(self
+                .inner
+                .invalid("protected cleanup evidence cannot restore a different durable receipt"));
+        }
+        self.recover_or_restore_protected_intent(evidence)?;
+        self.persist_envelope_inputs(evidence.attempt, &evidence.envelope_inputs)?;
+        let completed = evidence.completed_state();
+        match self.load()? {
+            None => self.inner.write_protected(completed, false)?,
+            Some(existing) if existing == completed => {}
+            Some(_) => {
+                return Err(self.inner.invalid(
+                    "protected cleanup evidence cannot replace a different resume marker",
+                ));
+            }
+        }
+        if self.load()? != Some(completed)
+            || self.recover_envelope_inputs(evidence.attempt)? != evidence.envelope_inputs
+        {
+            return Err(self
+                .inner
+                .invalid("protected completed-state restoration did not persist exactly"));
+        }
+        self.recover_or_restore_protected_intent(evidence)?;
+        Ok(())
+    }
+
+    fn reconcile_protected_cleanup_evidence_on_open(&self) -> Result<(), ResumeMarkerErrorV1> {
+        let state = self.load()?;
+        let evidence = self.read_protected_cleanup_evidence()?;
+        match (state, evidence) {
+            (None, None) | (Some(_), None) => Ok(()),
+            (None, Some(evidence)) => {
+                if let Err(error) = self.validate_protected_cleanup_envelope(&evidence) {
+                    self.restore_protected_completed_from_cleanup_evidence(&evidence)?;
+                    return Err(error);
+                }
+                Ok(())
+            }
+            (Some(completed @ ResumeMarkerStateV2::Completed { .. }), Some(evidence)) => {
+                if completed.attempt() == evidence.attempt {
+                    self.validate_protected_cleanup_evidence(&evidence, completed)?;
+                    self.recover_or_restore_protected_intent(&evidence)?;
+                    if let Err(error) = self.validate_protected_cleanup_envelope(&evidence) {
+                        self.restore_protected_completed_from_cleanup_evidence(&evidence)?;
+                        return Err(error);
+                    }
+                    if self.load()? != Some(completed) {
+                        return Err(self.inner.invalid(
+                            "protected marker changed during cleanup-intent restoration",
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            (Some(state), Some(evidence)) if state.attempt() != evidence.attempt => Ok(()),
+            (Some(_), Some(_)) => Err(self.inner.invalid(
+                "protected cleanup evidence conflicts with its attempt's non-completed marker",
+            )),
+        }
+    }
+
+    fn retire_protected_cleanup_evidence_after_ready(
+        &self,
+        ready: ResumeMarkerStateV2,
+        recovered: &RecoveredWorkerV2PublicationIntentV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let Some(evidence) = self.read_protected_cleanup_evidence()? else {
+            return Ok(());
+        };
+        let ResumeMarkerStateV2::Ready { intent, .. } = ready else {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        };
+        if evidence.attempt == ready.attempt()
+            || self.load()? != Some(ready)
+            || recovered.record().attempt() != ready.attempt()
+            || recovered.record().identity() != intent
+        {
+            return Err(self.inner.invalid(
+                "protected cleanup evidence cannot be retired without a newer exact Ready state",
+            ));
+        }
+        let current =
+            self.recover_complete_intent(ready.attempt(), recovered.compiler_closure())?;
+        if self.load()? != Some(ready)
+            || current.record() != recovered.record()
+            || current.exact_output() != recovered.exact_output()
+        {
+            return Err(self
+                .inner
+                .invalid("protected Ready state changed during superseded cleanup retirement"));
+        }
+        self.remove_protected_cleanup_evidence(&evidence)
+    }
+
+    fn remove_protected_cleanup_evidence(
+        &self,
+        expected: &ProtectedIntentCleanupEvidenceV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let name = protected_cleanup_evidence_name_v1(self.inner.package);
+        if self.read_protected_cleanup_evidence()?.as_ref() != Some(expected) {
+            return Err(self.inner.invalid_at_name(
+                &name,
+                "protected cleanup evidence changed before retirement",
+            ));
+        }
+        let descriptor = match openat(
+            &self.inner.directory,
+            &name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => {
+                return Err(self.inner.invalid_at_name(
+                    &name,
+                    "protected cleanup evidence disappeared before retirement",
+                ));
+            }
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+        validate_private_file(
+            &self.inner.directory,
+            &descriptor,
+            &name,
+            &self.inner.display_path,
+            None,
+        )?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-evidence-before-unlink");
+        unlinkat(&self.inner.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-evidence-after-unlink");
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-evidence-directory-synced");
+        self.verify_output_path()
     }
 
     pub(crate) fn publish_load_envelope(
@@ -3688,7 +4658,7 @@ impl WorkerV2ResumeStoreV2 {
         }
         let record = local.record();
         let intent = record.identity();
-        match self.load()? {
+        let ready = match self.load()? {
             Some(ResumeMarkerStateV2::Pending {
                 publication: current_publication,
                 attempt: current_attempt,
@@ -3707,24 +4677,25 @@ impl WorkerV2ResumeStoreV2 {
                     expected_compiler_closure,
                 ) == admission =>
             {
-                self.inner.write_protected(
-                    ResumeMarkerStateV2::Ready {
-                        publication,
-                        attempt,
-                        admission,
-                        envelope_inputs,
-                        intent,
-                    },
-                    true,
-                )
+                let ready = ResumeMarkerStateV2::Ready {
+                    publication,
+                    attempt,
+                    admission,
+                    envelope_inputs,
+                    intent,
+                };
+                self.inner.write_protected(ready, true)?;
+                ready
             }
-            Some(ResumeMarkerStateV2::Ready {
-                publication: current_publication,
-                attempt: current_attempt,
-                admission,
-                envelope_inputs,
-                intent: current_intent,
-            }) if current_publication == publication
+            Some(
+                ready @ ResumeMarkerStateV2::Ready {
+                    publication: current_publication,
+                    attempt: current_attempt,
+                    admission,
+                    envelope_inputs,
+                    intent: current_intent,
+                },
+            ) if current_publication == publication
                 && current_attempt == attempt
                 && current_intent == intent
                 && restart_admission_commitment_with_inputs_v2(
@@ -3738,10 +4709,11 @@ impl WorkerV2ResumeStoreV2 {
                     expected_compiler_closure,
                 ) == admission =>
             {
-                Ok(())
+                ready
             }
-            _ => Err(ResumeMarkerErrorV1::InvalidTransition),
-        }
+            _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
+        };
+        self.retire_protected_cleanup_evidence_after_ready(ready, &local)
     }
 
     pub(crate) fn persist_completed(
@@ -4059,7 +5031,12 @@ impl WorkerV2ResumeStoreV2 {
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<(), ResumeMarkerErrorV1> {
         self.validate_completed_restart_inputs(expected, receipt, expected_compiler_closure, None)?;
-        self.clear_exact_and_envelope_inputs(expected)
+        if expected.publication().requires_envelope() {
+            self.ensure_protected_cleanup_evidence(expected, expected_compiler_closure)?;
+            self.clear_protected_completed_and_envelope_inputs(expected)
+        } else {
+            self.clear_exact_and_envelope_inputs(expected)
+        }
     }
 
     pub(crate) fn clear_abandoned_pending(
@@ -4093,6 +5070,156 @@ impl WorkerV2ResumeStoreV2 {
                 .remove_envelope_inputs(expected.attempt(), identity)?;
         }
         Ok(())
+    }
+
+    fn ensure_protected_cleanup_evidence(
+        &self,
+        completed: ResumeMarkerStateV2,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if let Some(evidence) = self.read_protected_cleanup_evidence()? {
+            self.validate_protected_cleanup_evidence(&evidence, completed)?;
+            return Ok(());
+        }
+        let recovered =
+            self.recover_complete_intent(completed.attempt(), expected_compiler_closure)?;
+        let envelope_inputs = self.recover_envelope_inputs(completed.attempt())?;
+        let evidence = ProtectedIntentCleanupEvidenceV1::new(
+            self.inner.package,
+            completed,
+            &recovered,
+            envelope_inputs,
+        )
+        .map_err(|reason| self.inner.invalid(reason))?;
+        self.persist_protected_cleanup_evidence(&evidence)?;
+        self.validate_protected_cleanup_evidence(&evidence, completed)?;
+        Ok(())
+    }
+
+    fn clear_protected_completed_and_envelope_inputs(
+        &self,
+        expected: ResumeMarkerStateV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let evidence = self.read_protected_cleanup_evidence()?.ok_or_else(|| {
+            self.inner
+                .invalid("protected completed-state cleanup requires durable recovery evidence")
+        })?;
+        self.validate_protected_cleanup_evidence(&evidence, expected)?;
+        self.validate_protected_cleanup_envelope(&evidence)?;
+        let inputs = self.recover_envelope_inputs(expected.attempt())?;
+        if inputs != evidence.envelope_inputs
+            || inputs.identity().as_bytes() != expected.envelope_inputs()
+        {
+            return Err(self
+                .inner
+                .invalid("completed marker disagrees with its cleanup envelope inputs"));
+        }
+
+        let retirement = (|| {
+            self.clear_protected_completed_marker_exact(expected)?;
+            self.remove_protected_envelope_inputs_exact(expected.attempt(), &inputs)?;
+            if self.read_protected_cleanup_evidence()?.as_ref() != Some(&evidence) {
+                return Err(self
+                    .inner
+                    .invalid("protected cleanup evidence changed during state retirement"));
+            }
+            self.validate_protected_cleanup_envelope(&evidence)?;
+            Ok(())
+        })();
+        if let Err(error) = retirement {
+            self.restore_protected_completed_from_cleanup_evidence(&evidence)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn clear_protected_completed_marker_exact(
+        &self,
+        expected: ResumeMarkerStateV2,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if self.load()? != Some(expected) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-marker-before-unlink");
+        unlinkat(
+            &self.inner.directory,
+            &self.inner.marker_name,
+            AtFlags::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-marker-after-unlink");
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-marker-directory-synced");
+        self.verify_output_path()
+    }
+
+    fn remove_protected_envelope_inputs_exact(
+        &self,
+        attempt: BuildAttempt,
+        expected: &WorkerV2EnvelopeInputsV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let name = envelope_inputs_name(self.inner.package, attempt);
+        let descriptor = openat(
+            &self.inner.directory,
+            &name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        validate_private_file(
+            &self.inner.directory,
+            &descriptor,
+            &name,
+            &self.inner.display_path,
+            None,
+        )?;
+        let initial = fstat(&descriptor).map_err(std::io::Error::from)?;
+        let initial_size = usize::try_from(initial.st_size).ok();
+        if initial_size.is_none_or(|size| size == 0 || size > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES) {
+            return Err(self
+                .inner
+                .invalid_at_name(&name, "cleanup capsule size exceeds its canonical bound"));
+        }
+        let mut file = File::from(descriptor);
+        let mut bytes = Vec::with_capacity(initial_size.unwrap_or(0).saturating_add(1));
+        Read::by_ref(&mut file)
+            .take((MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        let final_stat = fstat(&file).map_err(std::io::Error::from)?;
+        let decoded = WorkerV2EnvelopeInputsV1::from_bytes(&bytes).map_err(|error| {
+            self.inner.invalid_at_name(
+                &name,
+                format!("protected cleanup capsule is invalid: {error}"),
+            )
+        })?;
+        if final_stat.st_dev != initial.st_dev
+            || final_stat.st_ino != initial.st_ino
+            || final_stat.st_mode != initial.st_mode
+            || final_stat.st_nlink != 1
+            || final_stat.st_mtime != initial.st_mtime
+            || final_stat.st_mtime_nsec != initial.st_mtime_nsec
+            || final_stat.st_ctime != initial.st_ctime
+            || final_stat.st_ctime_nsec != initial.st_ctime_nsec
+            || usize::try_from(final_stat.st_size).ok() != Some(bytes.len())
+            || decoded != *expected
+            || decoded.to_bytes() != bytes
+        {
+            return Err(self
+                .inner
+                .invalid_at_name(&name, "protected cleanup capsule changed before retirement"));
+        }
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-input-before-unlink");
+        unlinkat(&self.inner.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-input-after-unlink");
+        fsync(&self.inner.directory).map_err(std::io::Error::from)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("protected-cleanup-input-directory-synced");
+        self.verify_output_path()
     }
 
     fn clear_exact(&self, expected: ResumeMarkerStateV2) -> Result<(), ResumeMarkerErrorV1> {
@@ -5339,6 +6466,22 @@ mod tests {
         attempt: BuildAttempt,
         closure: CompilerClosureV2,
     ) -> ProtectedEnvelopeFixture {
+        protected_envelope_fixture_with_binding_seed(
+            path,
+            producer,
+            attempt,
+            closure,
+            attempt.invocation().as_bytes()[0],
+        )
+    }
+
+    fn protected_envelope_fixture_with_binding_seed(
+        path: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        closure: CompilerClosureV2,
+        binding_seed: u8,
+    ) -> ProtectedEnvelopeFixture {
         let output = vec![0xf1; 64];
         let raw_bytes = vec![0x71; 64];
         let payload =
@@ -5466,7 +6609,7 @@ mod tests {
         drop(publication);
         let descriptor = fixture_descriptor_lineage(&output);
         let proofs = vec![fixture_proof()];
-        let seed = attempt.invocation().as_bytes()[0];
+        let seed = binding_seed;
         let source = format!("/src/resume-{seed}.rs");
         let producer_binding = WorkerV2ProducerBindingV2::from_codegen(
             &format!("resume_{seed}"),
@@ -5749,6 +6892,17 @@ mod tests {
     const MARKER_CRASH_HELPER_ATTEMPT_ENV: &str = "FE2O3_TEST_RESTART_MARKER_CRASH_HELPER_ATTEMPT";
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     const MARKER_CRASH_HELPER_SEED_ENV: &str = "FE2O3_TEST_RESTART_MARKER_CRASH_HELPER_SEED";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const CLEANUP_CRASH_HELPER_DIRECTORY_ENV: &str =
+        "FE2O3_TEST_RESTART_CLEANUP_CRASH_HELPER_DIRECTORY";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const CLEANUP_CRASH_HELPER_PRODUCER_SEED_ENV: &str =
+        "FE2O3_TEST_RESTART_CLEANUP_CRASH_HELPER_PRODUCER_SEED";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const CLEANUP_CRASH_HELPER_CLOSURE_SEED_ENV: &str =
+        "FE2O3_TEST_RESTART_CLEANUP_CRASH_HELPER_CLOSURE_SEED";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const CLEANUP_CRASH_HELPER_ACTION_ENV: &str = "FE2O3_TEST_RESTART_CLEANUP_CRASH_HELPER_ACTION";
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     fn run_marker_crash_helper(
@@ -5764,6 +6918,33 @@ mod tests {
             .env(MARKER_CRASH_HELPER_DIRECTORY_ENV, directory)
             .env(MARKER_CRASH_HELPER_ATTEMPT_ENV, attempt.to_env_value())
             .env(MARKER_CRASH_HELPER_SEED_ENV, seed.to_string())
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault)
+            .output()
+            .unwrap()
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn run_protected_cleanup_crash_helper(
+        directory: &Path,
+        producer_seed: u8,
+        closure_seed: u8,
+        action: &str,
+        fault: &str,
+    ) -> std::process::Output {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("worker_v2_restart::tests::protected_cleanup_crash_subprocess_helper")
+            .arg("--nocapture")
+            .env(CLEANUP_CRASH_HELPER_DIRECTORY_ENV, directory)
+            .env(
+                CLEANUP_CRASH_HELPER_PRODUCER_SEED_ENV,
+                producer_seed.to_string(),
+            )
+            .env(
+                CLEANUP_CRASH_HELPER_CLOSURE_SEED_ENV,
+                closure_seed.to_string(),
+            )
+            .env(CLEANUP_CRASH_HELPER_ACTION_ENV, action)
             .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault)
             .output()
             .unwrap()
@@ -7020,7 +8201,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_v2_intent_cleanup_retry_after_durable_removal_is_idempotent() {
+    fn protected_v2_intent_cleanup_retry_retains_a_recoverable_anchor() {
         let seed = 138;
         let directory = TestDirectory::new();
         let producer = producer(seed);
@@ -7041,17 +8222,221 @@ mod tests {
             .unwrap();
 
         clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure).unwrap();
-        assert!(matches!(
-            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,),
-            Err(WorkerV2PublicationIntentErrorV2::NotFound)
-        ));
+        assert!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
+                .is_ok()
+        );
         assert_eq!(store.load().unwrap(), Some(completed));
+        let evidence = store.read_protected_cleanup_evidence().unwrap().unwrap();
+        assert_eq!(evidence.completed_state(), completed);
+        assert_eq!(evidence.envelope_inputs, fixture.envelope_inputs);
+        assert_eq!(evidence.exact_output, fixture.output);
+        let canonical_evidence = evidence.to_bytes();
+        assert_eq!(
+            ProtectedIntentCleanupEvidenceV1::from_bytes(&canonical_evidence).unwrap(),
+            evidence
+        );
+        let mut malformed_evidence = canonical_evidence;
+        malformed_evidence[PROTECTED_CLEANUP_EVIDENCE_MAGIC_V1.len() + 3] ^= 1;
+        assert!(ProtectedIntentCleanupEvidenceV1::from_bytes(&malformed_evidence).is_err());
         clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure).unwrap();
         assert_eq!(store.load().unwrap(), Some(completed));
         store
             .clear_completed_and_envelope_inputs(completed, fixture.receipt, closure)
             .unwrap();
         assert_eq!(store.load().unwrap(), None);
+        assert!(
+            recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure,)
+                .is_ok()
+        );
+        assert!(store.read_protected_cleanup_evidence().unwrap().is_some());
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn protected_cleanup_reopens_every_intent_marker_and_input_boundary_after_hostile_envelope_substitution()
+     {
+        let boundaries = [
+            ("intent", "protected-cleanup-evidence-published"),
+            ("completed", "protected-cleanup-marker-before-unlink"),
+            ("completed", "protected-cleanup-marker-after-unlink"),
+            ("completed", "protected-cleanup-marker-directory-synced"),
+            ("completed", "protected-cleanup-input-before-unlink"),
+            ("completed", "protected-cleanup-input-after-unlink"),
+            ("completed", "protected-cleanup-input-directory-synced"),
+        ];
+        for (case, (action, fault)) in boundaries.into_iter().enumerate() {
+            let seed = 140 + case as u8;
+            let directory = TestDirectory::new();
+            let producer = producer(seed);
+            let attempt = attempt(&directory.0, &producer, seed);
+            let closure = compiler_closure(seed);
+            let fixture = protected_envelope_fixture(&directory.0, &producer, attempt, closure);
+            let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            stage_protected_required_ready(&store, &fixture, closure);
+            let completed = store
+                .persist_envelope_and_completed(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    attempt,
+                    fixture.intent,
+                    fixture.receipt,
+                    closure,
+                    &fixture.envelope,
+                )
+                .unwrap();
+            if action == "completed" {
+                clear_worker_v2_intent_v2(&store, &producer, completed, fixture.receipt, closure)
+                    .unwrap();
+            }
+            let marker_path = store
+                .inner
+                .display_path
+                .join(store.inner.marker_name.as_str());
+            drop(store);
+
+            let output =
+                run_protected_cleanup_crash_helper(&directory.0, seed, seed, action, fault);
+            assert_eq!(output.status.code(), Some(86), "{fault}: {output:?}");
+
+            let envelope_path = directory.0.join(protected_envelope_name_v2(
+                fixture.receipt.publication_identity(),
+            ));
+            let hostile =
+                envelope_with_resealed_claim_substitution(&fixture.envelope, (case % 4) * 16);
+            fs::write(&envelope_path, hostile.to_bytes()).unwrap();
+            assert!(
+                WorkerV2ResumeStoreV2::open(&directory.0, &producer).is_err(),
+                "{fault} accepted a hostile cleanup envelope"
+            );
+            assert!(marker_path.is_file(), "{fault} did not restore Completed");
+
+            fs::write(&envelope_path, fixture.envelope.to_bytes()).unwrap();
+            let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            assert_eq!(restarted.load().unwrap(), Some(completed), "{fault}");
+            assert_eq!(
+                restarted.recover_envelope_inputs(attempt).unwrap(),
+                fixture.envelope_inputs,
+                "{fault}"
+            );
+            let recovered =
+                recover_worker_v2_publication_intent_v2(&directory.0, &producer, attempt, closure)
+                    .unwrap();
+            assert_eq!(recovered.record().identity(), fixture.intent, "{fault}");
+            assert_eq!(recovered.exact_output(), fixture.output, "{fault}");
+        }
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn protected_cleanup_evidence_retirement_reopens_every_boundary_with_a_new_ready_state() {
+        for (case, fault) in [
+            "protected-cleanup-evidence-before-unlink",
+            "protected-cleanup-evidence-after-unlink",
+            "protected-cleanup-evidence-directory-synced",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let producer_seed = 150 + case as u8 * 2;
+            let next_seed = producer_seed + 1;
+            let directory = TestDirectory::new();
+            let producer = producer(producer_seed);
+            let old_attempt = attempt(&directory.0, &producer, producer_seed);
+            let old_closure = compiler_closure(producer_seed);
+            let old = protected_envelope_fixture(&directory.0, &producer, old_attempt, old_closure);
+            let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            stage_protected_required_ready(&store, &old, old_closure);
+            let old_completed = store
+                .persist_envelope_and_completed(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    old_attempt,
+                    old.intent,
+                    old.receipt,
+                    old_closure,
+                    &old.envelope,
+                )
+                .unwrap();
+            clear_worker_v2_intent_v2(&store, &producer, old_completed, old.receipt, old_closure)
+                .unwrap();
+            store
+                .clear_completed_and_envelope_inputs(old_completed, old.receipt, old_closure)
+                .unwrap();
+            assert_eq!(store.load().unwrap(), None);
+
+            let next_attempt = attempt(&directory.0, &producer, next_seed);
+            let next_closure = compiler_closure(next_seed);
+            let next = protected_envelope_fixture_with_binding_seed(
+                &directory.0,
+                &producer,
+                next_attempt,
+                next_closure,
+                producer_seed,
+            );
+            store
+                .persist_envelope_inputs(next_attempt, &next.envelope_inputs)
+                .unwrap();
+            store
+                .persist_pending_with_envelope_inputs(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    next_attempt,
+                    restart_admission_commitment_with_inputs_v2(
+                        WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                        next.plan,
+                        next.upstream,
+                        &next.output,
+                        Some(next.envelope_inputs.identity()),
+                        next_closure,
+                    ),
+                    Some(next.envelope_inputs.identity()),
+                )
+                .unwrap();
+            drop(store);
+
+            let output = run_protected_cleanup_crash_helper(
+                &directory.0,
+                producer_seed,
+                next_seed,
+                "ready",
+                fault,
+            );
+            assert_eq!(output.status.code(), Some(86), "{fault}: {output:?}");
+            let old_envelope_path = directory.0.join(protected_envelope_name_v2(
+                old.receipt.publication_identity(),
+            ));
+            let hostile = envelope_with_resealed_claim_substitution(&old.envelope, case * 16);
+            fs::write(old_envelope_path, hostile.to_bytes()).unwrap();
+
+            let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+            let ready = restarted.load().unwrap().unwrap();
+            assert!(
+                matches!(ready, ResumeMarkerStateV2::Ready { .. }),
+                "{fault}"
+            );
+            assert_eq!(ready.attempt(), next_attempt, "{fault}");
+            let recovered = recover_worker_v2_publication_intent_v2(
+                &directory.0,
+                &producer,
+                next_attempt,
+                next_closure,
+            )
+            .unwrap();
+            restarted
+                .persist_ready(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    next_attempt,
+                    &recovered,
+                    next_closure,
+                )
+                .unwrap();
+            assert!(
+                restarted
+                    .read_protected_cleanup_evidence()
+                    .unwrap()
+                    .is_none(),
+                "{fault}"
+            );
+            assert_eq!(restarted.load().unwrap(), Some(ready), "{fault}");
+        }
     }
 
     #[test]
@@ -7111,6 +8496,173 @@ mod tests {
         assert_eq!(protected.load().unwrap(), None);
         assert!(!directory.0.join(protected_temp).exists());
         assert!(directory.0.join(ordinary_temp).exists());
+    }
+
+    #[test]
+    fn protected_cleanup_evidence_rejects_malformed_files_and_symlinks_without_removal() {
+        let malformed_directory = TestDirectory::new();
+        let malformed_producer = producer(160);
+        let store =
+            WorkerV2ResumeStoreV2::open(&malformed_directory.0, &malformed_producer).unwrap();
+        let name = protected_cleanup_evidence_name_v1(store.inner.package);
+        drop(store);
+        let malformed = b"not protected cleanup evidence";
+        fs::write(malformed_directory.0.join(&name), malformed).unwrap();
+        fs::set_permissions(
+            malformed_directory.0.join(&name),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assert!(WorkerV2ResumeStoreV2::open(&malformed_directory.0, &malformed_producer).is_err());
+        assert_eq!(
+            fs::read(malformed_directory.0.join(name)).unwrap(),
+            malformed
+        );
+
+        let symlink_directory = TestDirectory::new();
+        let symlink_producer = producer(161);
+        let store = WorkerV2ResumeStoreV2::open(&symlink_directory.0, &symlink_producer).unwrap();
+        let name = protected_cleanup_evidence_name_v1(store.inner.package);
+        drop(store);
+        fs::write(symlink_directory.0.join("outside"), b"outside").unwrap();
+        symlink("outside", symlink_directory.0.join(&name)).unwrap();
+        assert!(WorkerV2ResumeStoreV2::open(&symlink_directory.0, &symlink_producer).is_err());
+        assert!(
+            fs::symlink_metadata(symlink_directory.0.join(name))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read(symlink_directory.0.join("outside")).unwrap(),
+            b"outside"
+        );
+    }
+
+    #[test]
+    fn protected_cleanup_temp_residue_cleanup_is_bounded_and_rejects_symlinks() {
+        let exact_directory = TestDirectory::new();
+        let exact_producer = producer(162);
+        let store = WorkerV2ResumeStoreV2::open(&exact_directory.0, &exact_producer).unwrap();
+        let package = store.inner.package;
+        drop(store);
+        for index in 0..MAX_PROTECTED_CLEANUP_TEMP_RESIDUE_ENTRIES_V1 {
+            let name = protected_cleanup_evidence_temp_name_v1(package, 1, index as u64 + 1);
+            fs::write(exact_directory.0.join(&name), b"residue").unwrap();
+            fs::set_permissions(
+                exact_directory.0.join(name),
+                fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        let reopened = WorkerV2ResumeStoreV2::open(&exact_directory.0, &exact_producer).unwrap();
+        assert_eq!(reopened.load().unwrap(), None);
+        let prefix = protected_cleanup_evidence_temp_prefix_v1(package);
+        assert_eq!(
+            fs::read_dir(&exact_directory.0)
+                .unwrap()
+                .filter(|entry| entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&prefix))
+                .count(),
+            0
+        );
+
+        let overflow_directory = TestDirectory::new();
+        let overflow_producer = producer(163);
+        let store = WorkerV2ResumeStoreV2::open(&overflow_directory.0, &overflow_producer).unwrap();
+        let package = store.inner.package;
+        drop(store);
+        for index in 0..=MAX_PROTECTED_CLEANUP_TEMP_RESIDUE_ENTRIES_V1 {
+            let name = protected_cleanup_evidence_temp_name_v1(package, 2, index as u64 + 1);
+            fs::write(overflow_directory.0.join(&name), b"residue").unwrap();
+            fs::set_permissions(
+                overflow_directory.0.join(name),
+                fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        assert!(WorkerV2ResumeStoreV2::open(&overflow_directory.0, &overflow_producer).is_err());
+        let prefix = protected_cleanup_evidence_temp_prefix_v1(package);
+        assert_eq!(
+            fs::read_dir(&overflow_directory.0)
+                .unwrap()
+                .filter(|entry| entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&prefix))
+                .count(),
+            MAX_PROTECTED_CLEANUP_TEMP_RESIDUE_ENTRIES_V1 + 1
+        );
+
+        let symlink_directory = TestDirectory::new();
+        let symlink_producer = producer(164);
+        let store = WorkerV2ResumeStoreV2::open(&symlink_directory.0, &symlink_producer).unwrap();
+        let package = store.inner.package;
+        drop(store);
+        fs::write(symlink_directory.0.join("outside"), b"outside").unwrap();
+        let name = protected_cleanup_evidence_temp_name_v1(package, 3, 1);
+        symlink("outside", symlink_directory.0.join(&name)).unwrap();
+        assert!(WorkerV2ResumeStoreV2::open(&symlink_directory.0, &symlink_producer).is_err());
+        assert!(
+            fs::symlink_metadata(symlink_directory.0.join(name))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
+    fn protected_cleanup_crash_subprocess_helper() {
+        let Some(directory) = std::env::var_os(CLEANUP_CRASH_HELPER_DIRECTORY_ENV) else {
+            return;
+        };
+        let producer_seed = std::env::var(CLEANUP_CRASH_HELPER_PRODUCER_SEED_ENV)
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+        let closure_seed = std::env::var(CLEANUP_CRASH_HELPER_CLOSURE_SEED_ENV)
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+        let producer = producer(producer_seed);
+        let closure = compiler_closure(closure_seed);
+        let store = WorkerV2ResumeStoreV2::open(Path::new(&directory), &producer).unwrap();
+        let state = store.load().unwrap().unwrap();
+        match std::env::var(CLEANUP_CRASH_HELPER_ACTION_ENV)
+            .unwrap()
+            .as_str()
+        {
+            "intent" => {
+                let receipt = store.durable_receipt(state.attempt()).unwrap();
+                clear_worker_v2_intent_v2(&store, &producer, state, receipt, closure).unwrap();
+            }
+            "completed" => {
+                let receipt = store.durable_receipt(state.attempt()).unwrap();
+                store
+                    .clear_completed_and_envelope_inputs(state, receipt, closure)
+                    .unwrap();
+            }
+            "ready" => {
+                let recovered = recover_worker_v2_publication_intent_v2(
+                    Path::new(&directory),
+                    &producer,
+                    state.attempt(),
+                    closure,
+                )
+                .unwrap();
+                store
+                    .persist_ready(state.publication(), state.attempt(), &recovered, closure)
+                    .unwrap();
+            }
+            action => panic!("unknown protected cleanup crash action {action}"),
+        }
     }
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
