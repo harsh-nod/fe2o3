@@ -52,7 +52,7 @@ mod platform {
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const MAX_PROC_STATUS_BYTES: usize = 64 * 1024;
     const MAX_PENDING_PERMITS: usize = 256;
-    const MAX_PENDING_TRAMPOLINES: usize = 256;
+    const MAX_TRACKED_CARGO_CHILDREN: usize = 256;
 
     #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
     pub(crate) struct ProcessIdentityV1 {
@@ -104,7 +104,9 @@ mod platform {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let now = Instant::now();
-            state.retain(|_, permit| permit.expires_at > now);
+            state.retain(|_, permit| {
+                permit.expires_at > now && permit.process.as_ref().is_none_or(pidfd_is_live)
+            });
             if state.len() >= MAX_PENDING_PERMITS {
                 return Err("Cargo invocation authorization registry is full".to_owned());
             }
@@ -413,7 +415,7 @@ mod platform {
             wrapper,
             trampoline,
         };
-        let mut pending_trampolines = BTreeMap::new();
+        let mut tracked_cargo_children = BTreeMap::new();
         while let Some(notification) =
             wait_for_notification(listener.as_raw_fd(), shutdown.as_raw_fd())?
         {
@@ -422,7 +424,7 @@ mod platform {
                 notification,
                 &context,
                 &authorization,
-                &mut pending_trampolines,
+                &mut tracked_cargo_children,
             );
             match outcome {
                 Ok(admission) => {
@@ -433,7 +435,7 @@ mod platform {
                             authorization.revoke(process);
                         }
                         if let Some(process) = admission.trampoline {
-                            pending_trampolines.remove(&process);
+                            tracked_cargo_children.remove(&process);
                         }
                         if !notification_is_live(listener.as_raw_fd(), notification.id)? {
                             continue;
@@ -462,9 +464,9 @@ mod platform {
         trampoline: Option<ExecutableIdentityV1>,
     }
 
-    struct PendingTrampolineV1 {
-        expires_at: Instant,
+    struct CargoChildExecStateV1 {
         process_fd: File,
+        entered_trampoline: bool,
     }
 
     fn authorize_notification(
@@ -472,14 +474,11 @@ mod platform {
         notification: libc::seccomp_notif,
         context: &CargoInvocationBoundaryContextV1,
         authorization: &InvocationAuthorizationRegistryV1,
-        pending_trampolines: &mut BTreeMap<ProcessIdentityV1, PendingTrampolineV1>,
+        tracked_cargo_children: &mut BTreeMap<ProcessIdentityV1, CargoChildExecStateV1>,
     ) -> Result<NotificationAdmissionV1, String> {
         validate_notification(&notification)?;
-        let now = Instant::now();
-        pending_trampolines.retain(|process, admission| {
-            admission.expires_at > now
-                && pidfd_is_live(&admission.process_fd)
-                && process.require_current().is_ok()
+        tracked_cargo_children.retain(|process, state| {
+            pidfd_is_live(&state.process_fd) && process.require_current().is_ok()
         });
         // A permit belongs to exactly one successful transition into the wrapper image. Any
         // later exec by the same PID invalidates it before that new image can run, including a
@@ -501,45 +500,53 @@ mod platform {
         let current = process_executable_object(process_pid)?;
         let cargo_process_is_current = pidfd_is_live(&context.cargo_process_fd)
             && ProcessIdentityV1::observe(context.cargo_pid)? == context.cargo_process;
-        let direct_cargo_child = is_direct_pinned_cargo_child(
+        let first_direct_cargo_child_exec = is_direct_pinned_cargo_child(
             observation.parent_pid,
             context.cargo_pid,
             cargo_process_is_current,
             current == context.cargo.object,
+            !tracked_cargo_children.contains_key(&process),
         );
+        if first_direct_cargo_child_exec {
+            if tracked_cargo_children.len() >= MAX_TRACKED_CARGO_CHILDREN {
+                return Err("Cargo child exec tracking set is full".to_owned());
+            }
+            let process_fd = open_process_pidfd(process.pid)?;
+            notification_is_valid(listener, notification.id)?;
+            process.require_current()?;
+            tracked_cargo_children.insert(
+                process,
+                CargoChildExecStateV1 {
+                    process_fd,
+                    entered_trampoline: false,
+                },
+            );
+        }
         if requested_trampoline {
-            pending_trampolines.retain(|candidate, _| candidate.pid != process_pid);
-            if direct_cargo_child {
-                if pending_trampolines.len() >= MAX_PENDING_TRAMPOLINES {
-                    return Err("Cargo trampoline admission set is full".to_owned());
-                }
-                let process_fd = open_process_pidfd(process.pid)?;
-                notification_is_valid(listener, notification.id)?;
-                process.require_current()?;
-                pending_trampolines.insert(
-                    process,
-                    PendingTrampolineV1 {
-                        expires_at: now + INVOCATION_PERMIT_LIFETIME,
-                        process_fd,
-                    },
-                );
+            if first_direct_cargo_child_exec {
+                tracked_cargo_children
+                    .get_mut(&process)
+                    .expect("fresh Cargo child was inserted")
+                    .entered_trampoline = true;
                 return Ok(NotificationAdmissionV1 {
                     authorized: None,
                     trampoline: Some(process),
                 });
             }
+            if let Some(state) = tracked_cargo_children.get_mut(&process) {
+                state.entered_trampoline = false;
+            }
             return Ok(NotificationAdmissionV1::NONE);
         }
 
-        let entered_trampoline = pending_trampolines
-            .remove(&process)
-            .is_some_and(|admission| pidfd_is_live(&admission.process_fd));
-        pending_trampolines.retain(|candidate, _| candidate.pid != process_pid);
+        let entered_trampoline = tracked_cargo_children
+            .get_mut(&process)
+            .is_some_and(|state| std::mem::take(&mut state.entered_trampoline));
         if !requested_wrapper {
             return Ok(NotificationAdmissionV1::NONE);
         }
         let admitted = match context.trampoline {
-            None => direct_cargo_child,
+            None => first_direct_cargo_child_exec,
             Some(trampoline) => is_admitted_trampoline_wrapper_exec(
                 observation.parent_pid,
                 context.cargo_pid,
@@ -609,8 +616,12 @@ mod platform {
         cargo_pid: u32,
         cargo_process_is_current: bool,
         caller_runs_pinned_cargo: bool,
+        first_exec_notification: bool,
     ) -> bool {
-        parent_pid == cargo_pid && cargo_process_is_current && caller_runs_pinned_cargo
+        parent_pid == cargo_pid
+            && cargo_process_is_current
+            && caller_runs_pinned_cargo
+            && first_exec_notification
     }
 
     const fn is_admitted_trampoline_wrapper_exec(
@@ -928,6 +939,28 @@ mod platform {
         }
 
         #[test]
+        fn dead_wrapper_permits_are_pruned_before_capacity_accounting() {
+            let mut child = Command::new("/bin/sleep").arg("60").spawn().unwrap();
+            let child_identity = ProcessIdentityV1::observe(child.id()).unwrap();
+            let child_pidfd = open_process_pidfd(child.id()).unwrap();
+            let registry = InvocationAuthorizationRegistryV1::new();
+            registry
+                .authorize_with_process_fd(child_identity, Some(child_pidfd))
+                .unwrap();
+            child.kill().unwrap();
+            child.wait().unwrap();
+
+            let current = ProcessIdentityV1::observe(std::process::id()).unwrap();
+            registry.authorize_test_process(current).unwrap();
+            let state = registry
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert_eq!(state.len(), 1);
+            assert!(state.contains_key(&current));
+        }
+
+        #[test]
         fn non_leader_thread_is_normalized_to_process_tgid() {
             let (tid_sender, tid_receiver) = std::sync::mpsc::sync_channel(1);
             let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
@@ -946,16 +979,20 @@ mod platform {
 
         #[test]
         fn clone_parent_and_non_cargo_images_cannot_qualify_as_cargo_launches() {
-            assert!(is_direct_pinned_cargo_child(41, 41, true, true));
+            assert!(is_direct_pinned_cargo_child(41, 41, true, true, true));
             assert!(
-                !is_direct_pinned_cargo_child(7, 41, true, true),
+                !is_direct_pinned_cargo_child(7, 41, true, true, true),
                 "CLONE_PARENT cannot substitute a different parent"
             );
             assert!(
-                !is_direct_pinned_cargo_child(41, 41, true, false),
+                !is_direct_pinned_cargo_child(41, 41, true, false, true),
                 "a build-script image with Cargo as parent cannot qualify"
             );
-            assert!(!is_direct_pinned_cargo_child(41, 41, false, true));
+            assert!(!is_direct_pinned_cargo_child(41, 41, false, true, true));
+            assert!(
+                !is_direct_pinned_cargo_child(41, 41, true, true, false),
+                "re-entering the Cargo image cannot restore first-exec eligibility"
+            );
         }
 
         #[test]
