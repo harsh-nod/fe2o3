@@ -11,6 +11,7 @@
         "fe2o3-artifacts",
         "fe2o3-build-authority",
         "fe2o3-compiler-api",
+        "fe2o3-compiler-closure-capability",
         "fe2o3-compiler-ffi",
         "fe2o3-completion",
         "fe2o3-contracts",
