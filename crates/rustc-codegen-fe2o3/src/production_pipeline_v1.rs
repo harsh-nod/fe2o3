@@ -213,7 +213,9 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
         let Self { admitted, bindings } = self;
         let mut target_module = admitted.semantic_kir().module().clone();
         let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
+        let wave = fe2o3_kernel_ir::TargetCapability::WaveWidth(fe2o3_kernel_ir::WaveWidth::Wave64);
         target_module.required_capabilities.insert(target.clone());
+        target_module.required_capabilities.insert(wave.clone());
         let kernel = target_module
             .kernels
             .first_mut()
@@ -222,15 +224,16 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             fe2o3_kernel_ir::WorkgroupSize::new(PRODUCTION_GFX942_DEFAULT_WORKGROUP_X_V1, 1, 1)
         });
         kernel.required_capabilities.insert(target.clone());
+        kernel.required_capabilities.insert(wave.clone());
         let kernel_id = kernel.id.clone();
         let entry_id = kernel.entry.clone();
-        target_module
+        let entry = target_module
             .functions
             .iter_mut()
             .find(|function| function.id == entry_id)
-            .expect("verified formal admission retains the kernel entry")
-            .required_capabilities
-            .insert(target);
+            .expect("verified formal admission retains the kernel entry");
+        entry.required_capabilities.insert(target);
+        entry.required_capabilities.insert(wave);
         fe2o3_kernel_ir::verify_module(&target_module)
             .map_err(ProductionPipelineErrorV1::TargetBinding)?;
         let llvm_ir =

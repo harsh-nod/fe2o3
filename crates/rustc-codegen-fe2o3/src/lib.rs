@@ -1572,7 +1572,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         }
                     }
                 }
-            } else if let Some(output_dir) = output_dir {
+            }
+            if kernel_count == 0
+                && let Some(output_dir) = output_dir
+            {
                 let collection = collector::CollectionResult::default();
                 if let Err(error) = amdgpu_llvm::emit_collection(
                     tcx,

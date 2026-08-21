@@ -1,3 +1,10 @@
+use fe2o3_artifact_transaction::{
+    BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+    consume_compiler_module_handoff_v1, fail_build_attempt,
+};
+use fe2o3_compiler_ffi::{
+    CodeObjectVersion, CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolRoleV1,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,6 +48,53 @@ fn workspace() -> PathBuf {
         .expect("canonical workspace")
 }
 
+fn production_backend() -> PathBuf {
+    let backend = Path::new(env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
+        .parent()
+        .expect("extractor binary directory")
+        .join(format!(
+            "{}rustc_codegen_fe2o3{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX,
+        ));
+    assert!(backend.is_file(), "missing backend {}", backend.display());
+    backend
+}
+
+fn production_fill_command(target: &ScratchTarget, artifacts: &Path, backend: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace())
+        .env("FE2O3_CODEGEN_PIPELINE", "production-v1")
+        .env("FE2O3_HSACO_DIR", artifacts)
+        .env("FE2O3_TARGET", "gfx942")
+        .env(
+            "FE2O3_CRATE_BINDING_ID_V1",
+            PRODUCTION_FILL_CRATE_BINDING_V1,
+        )
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "rustc",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(target.path().join("cargo"))
+        .args(["--", &format!("-Zcodegen-backend={}", backend.display())]);
+    command
+}
+
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
@@ -72,45 +126,7 @@ fn production_fill_prepares_worker_handoff_before_requiring_managed_attempt() {
     let target = ScratchTarget::new();
     let artifacts = target.path().join("artifacts");
     std::fs::create_dir(&artifacts).expect("create production artifact directory");
-    let backend = Path::new(env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
-        .parent()
-        .expect("extractor binary directory")
-        .join(format!(
-            "{}rustc_codegen_fe2o3{}",
-            std::env::consts::DLL_PREFIX,
-            std::env::consts::DLL_SUFFIX,
-        ));
-    assert!(backend.is_file(), "missing backend {}", backend.display());
-
-    let output = Command::new(env!("CARGO"))
-        .current_dir(workspace())
-        .env("FE2O3_CODEGEN_PIPELINE", "production-v1")
-        .env("FE2O3_HSACO_DIR", &artifacts)
-        .env("FE2O3_TARGET", "gfx942")
-        .env(
-            "FE2O3_CRATE_BINDING_ID_V1",
-            PRODUCTION_FILL_CRATE_BINDING_V1,
-        )
-        .env(
-            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
-            "1111111111111111111111111111111111111111111111111111111111111111",
-        )
-        .env(
-            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
-            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
-        )
-        .args([
-            "rustc",
-            "--locked",
-            "-Zbuild-std=core",
-            "-p",
-            "fe2o3-production-extraction-fixture",
-            "--target",
-            "amdgcn-amd-amdhsa",
-            "--target-dir",
-        ])
-        .arg(target.path().join("cargo"))
-        .args(["--", &format!("-Zcodegen-backend={}", backend.display())])
+    let output = production_fill_command(&target, &artifacts, &production_backend())
         .output()
         .expect("run production fill codegen route");
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
@@ -154,6 +170,78 @@ fn production_fill_prepares_worker_handoff_before_requiring_managed_attempt() {
             .is_none(),
         "target-neutral fill lowering emitted a production artifact",
     );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn production_fill_publishes_exact_managed_worker_handoff() {
+    let target = ScratchTarget::new();
+    let artifacts = target.path().join("artifacts");
+    std::fs::create_dir(&artifacts).expect("create production artifact directory");
+    let source = Path::new(
+        "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/lib.rs",
+    );
+    let producer =
+        ProducerIdentity::from_codegen("fe2o3_production_extraction_fixture", Some(source))
+            .expect("production fixture producer");
+    let attempt = begin_build_attempt(
+        &artifacts,
+        &producer,
+        BuildInvocation::from_bytes([0x50; 32]),
+        BuildSession::from_bytes([0x51; 16]),
+    )
+    .expect("begin managed production fixture attempt");
+    let output = production_fill_command(&target, &artifacts, &production_backend())
+        .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
+        .output()
+        .expect("run managed production fill codegen route");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "managed production build failed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("production-v1 published")
+            && stderr.contains("inert exact gfx942:xnack- LLVM handoff")
+    );
+
+    let consumed = consume_compiler_module_handoff_v1(&artifacts, &producer, attempt)
+        .expect("consume production compiler-module handoff");
+    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
+        .expect("decode canonical production handoff");
+    assert_eq!(handoff.kind(), CompilerModuleKindV1::LlvmTextIr);
+    assert_eq!(handoff.target().to_string(), "gfx942:xnack-");
+    assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
+    assert_eq!(handoff.envelope().inspection().import_count(), 0);
+    assert_eq!(handoff.envelope().inspection().export_count(), 0);
+    assert_eq!(
+        handoff
+            .symbol_manifest()
+            .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+            .count(),
+        1,
+    );
+    assert_eq!(
+        handoff
+            .symbol_manifest()
+            .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
+            .count(),
+        1,
+    );
+    let llvm = std::str::from_utf8(handoff.module_bytes()).expect("production LLVM is UTF-8");
+    for required in [
+        "define amdgpu_kernel",
+        "\"target-cpu\"=\"gfx942\"",
+        "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
+        "!{i32 64, i32 1, i32 1}",
+    ] {
+        assert!(llvm.contains(required), "missing {required:?}:\n{llvm}");
+    }
+    assert!(!handoff.grants_worker_authority());
+    assert!(!handoff.grants_link_authority());
+    assert!(!handoff.grants_load_authority());
+    assert!(!handoff.grants_launch_authority());
+    fail_build_attempt(&artifacts, &producer, attempt).expect("close production fixture attempt");
 }
 
 fn run_extraction(target: &ScratchTarget) -> String {
