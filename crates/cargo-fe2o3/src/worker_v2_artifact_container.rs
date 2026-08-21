@@ -13,7 +13,8 @@ use fe2o3_artifact_transaction::{
     BackendPublicationReceiptValidationErrorV2, BuildAttempt, DurableLinkPublicationPlanV1,
     DurablePublishedHsacoClaimV1, DurablePublishedHsacoClaimV2, ProducerIdentity,
     UpstreamCodeObjectEvidenceIdentityV1, WorkerV2PublicationIntentIdentityV2,
-    validate_backend_publication_receipt_v1, validate_backend_publication_receipt_v2,
+    WorkerV2PublicationIntentRecordV2, validate_backend_publication_receipt_v1,
+    validate_backend_publication_receipt_v2,
 };
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -36,6 +37,7 @@ use fe2o3_worker_v2_bundle::{
     DescriptorLineageV1, EnvelopeValidationError, ExactRawHsacoV1, WorkerV2EnvelopeInputsV1,
     WorkerV2FinalArtifactEvidenceV2, WorkerV2FinalArtifactValidationErrorV2,
     WorkerV2LoadEnvelopeV1, WorkerV2LoadEnvelopeV2, WorkerV2LoadEnvelopeValidationErrorV2,
+    WorkerV2ProducerBindingV2,
 };
 use sha2::{Digest, Sha256};
 
@@ -965,7 +967,8 @@ pub(crate) fn assemble_recovered_worker_v2_load_envelope_v2(
     exact_finalized_hsaco: &[u8],
     claim: DurablePublishedHsacoClaimV2,
     inputs: &WorkerV2EnvelopeInputsV1,
-    publication_intent: WorkerV2PublicationIntentIdentityV2,
+    publication_intent: WorkerV2PublicationIntentRecordV2,
+    producer_binding: WorkerV2ProducerBindingV2,
     backend_receipt: BackendPublicationReceiptV2,
     compiler_closure: CompilerClosureV2,
 ) -> Result<PreparedWorkerV2LoadEnvelopeV2, WorkerV2ArtifactContainerAssemblyErrorV2> {
@@ -1011,6 +1014,7 @@ pub(crate) fn assemble_recovered_worker_v2_load_envelope_v2(
         inputs.proof_records(),
         compiler_closure,
         publication_intent,
+        producer_binding,
         backend_receipt,
         claim,
     )
@@ -1029,7 +1033,7 @@ pub(crate) fn assemble_recovered_worker_v2_load_envelope_v2(
     Ok(PreparedWorkerV2LoadEnvelopeV2 {
         envelope,
         compiler_closure,
-        publication_intent,
+        publication_intent: publication_intent.identity(),
         backend_receipt,
     })
 }
@@ -1875,6 +1879,8 @@ mod tests {
         claim: DurablePublishedHsacoClaimV2,
         inputs: WorkerV2EnvelopeInputsV1,
         intent: WorkerV2PublicationIntentIdentityV2,
+        intent_record: WorkerV2PublicationIntentRecordV2,
+        producer_binding: WorkerV2ProducerBindingV2,
         receipt: BackendPublicationReceiptV2,
         closure: CompilerClosureV2,
     }
@@ -1938,7 +1944,10 @@ mod tests {
             &exact_finalized,
         )
         .unwrap();
-        let intent = persisted.record().identity();
+        let intent_record = persisted.record();
+        let intent = intent_record.identity();
+        let producer_binding =
+            WorkerV2ProducerBindingV2::from_codegen(&name, Some(Path::new(&source))).unwrap();
         drop(persisted);
         let publication = publish_exact_hsaco_evidence_for_attempt_v2(
             &directory.0,
@@ -1959,7 +1968,8 @@ mod tests {
             &exact_finalized,
             claim.clone(),
             &inputs,
-            intent,
+            intent_record,
+            producer_binding.clone(),
             receipt,
             closure,
         )
@@ -1976,6 +1986,8 @@ mod tests {
             claim,
             inputs,
             intent,
+            intent_record,
+            producer_binding,
             receipt,
             closure,
         }
@@ -3415,7 +3427,8 @@ mod tests {
             &fixture.exact_finalized,
             fixture.claim.clone(),
             &fixture.inputs,
-            fixture.intent,
+            fixture.intent_record,
+            fixture.producer_binding.clone(),
             fixture.receipt,
             fixture.closure,
         )
@@ -3456,7 +3469,8 @@ mod tests {
                 &fixture.exact_finalized,
                 fixture.claim.clone(),
                 &fixture.inputs,
-                fixture.intent,
+                fixture.intent_record,
+                fixture.producer_binding.clone(),
                 fixture.receipt,
                 compiler_closure_with_mutated_role(0x91, role),
             )
@@ -3485,7 +3499,8 @@ mod tests {
             &first.exact_finalized,
             second.claim.clone(),
             &first.inputs,
-            first.intent,
+            first.intent_record,
+            first.producer_binding.clone(),
             first.receipt,
             first.closure,
         )
@@ -3502,7 +3517,8 @@ mod tests {
             &first.exact_finalized,
             first.claim.clone(),
             &first.inputs,
-            first.intent,
+            first.intent_record,
+            first.producer_binding.clone(),
             second.receipt,
             first.closure,
         )
@@ -3519,7 +3535,8 @@ mod tests {
             &first.exact_finalized,
             first.claim.clone(),
             &first.inputs,
-            first.intent,
+            first.intent_record,
+            first.producer_binding.clone(),
             first.receipt,
             first.closure,
         )
@@ -3535,7 +3552,9 @@ mod tests {
     #[test]
     fn protected_v2_recovered_assembly_rejects_output_upstream_and_intent_substitution() {
         let first_directory = TestDirectory::new();
+        let second_directory = TestDirectory::new();
         let first = canonical_v2_fixture(&first_directory, 0xb6);
+        let second = canonical_v2_fixture(&second_directory, 0xb7);
 
         let mut changed_output = first.exact_finalized.clone();
         changed_output[0] ^= 1;
@@ -3546,7 +3565,8 @@ mod tests {
             &changed_output,
             first.claim.clone(),
             &first.inputs,
-            first.intent,
+            first.intent_record,
+            first.producer_binding.clone(),
             first.receipt,
             first.closure,
         )
@@ -3563,7 +3583,8 @@ mod tests {
             &first.exact_finalized,
             first.claim.clone(),
             &first.inputs,
-            first.intent,
+            first.intent_record,
+            first.producer_binding.clone(),
             first.receipt,
             first.closure,
         )
@@ -3573,22 +3594,23 @@ mod tests {
             WorkerV2ArtifactContainerAssemblyErrorV2::ClaimUpstreamEvidenceMismatch
         ));
 
-        let zero_intent = assemble_recovered_worker_v2_load_envelope_v2(
+        let wrong_intent = assemble_recovered_worker_v2_load_envelope_v2(
             &first.publisher,
             first.plan,
             first.upstream,
             &first.exact_finalized,
             first.claim,
             &first.inputs,
-            WorkerV2PublicationIntentIdentityV2::from_bytes([0; 32]),
+            second.intent_record,
+            second.producer_binding,
             first.receipt,
             first.closure,
         )
         .unwrap_err();
         assert!(matches!(
-            zero_intent,
+            wrong_intent,
             WorkerV2ArtifactContainerAssemblyErrorV2::FinalArtifact(
-                WorkerV2FinalArtifactValidationErrorV2::ZeroPublicationIntent
+                WorkerV2FinalArtifactValidationErrorV2::PublicationIntentMismatch
             )
         ));
     }

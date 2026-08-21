@@ -11,6 +11,7 @@ use fe2o3_artifacts::{
     ManifestClaimDirectLinkPublicationBridgeV1, PayloadDigest, PointerWidth, ProofRecordV1,
     ScalarType,
 };
+use fe2o3_hsaco_finalize::inspect_finalized;
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CanonicalCodeObjectDigest, CapabilityV1,
     DeviceDescriptorTableV1, MAX_DESCRIPTOR_TABLE_BYTES, OwnershipSemantics,
@@ -506,9 +507,19 @@ fn validate_protected_descriptor_semantics(
             field: "canonical code-object digest",
         });
     };
-    if table.canonical_code_object_digest()
-        != CanonicalCodeObjectDigest::calculate_from_canonicalized_hsaco(finalized_payload.bytes())
-    {
+    let descriptor_matches_payload = match inspect_finalized(finalized_payload.bytes()) {
+        Ok(inspection) => {
+            inspection.digest() == table.canonical_code_object_digest()
+                && inspection.descriptor_table() == table
+        }
+        Err(_) => {
+            table.canonical_code_object_digest()
+                == CanonicalCodeObjectDigest::calculate_from_canonicalized_hsaco(
+                    finalized_payload.bytes(),
+                )
+        }
+    };
+    if !descriptor_matches_payload {
         return Err(EnvelopeValidationError::DescriptorKernelMismatch {
             field: "canonical code-object digest",
         });
