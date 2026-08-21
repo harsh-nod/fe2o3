@@ -2,6 +2,10 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+mod production_semantic_kir_v1;
+
+pub use production_semantic_kir_v1::*;
+
 use std::{
     error::Error,
     fmt,
