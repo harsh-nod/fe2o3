@@ -16,7 +16,8 @@ use fe2o3_artifact_transaction::{
     WorkerV2PublicationIntentCleanupEscrowV1, WorkerV2PublicationIntentErrorV1,
     WorkerV2PublicationIntentErrorV2, WorkerV2PublicationIntentFaultPointV2,
     WorkerV2PublicationIntentFaultTimingV2, WorkerV2PublicationIntentIdentityV2,
-    WorkerV2PublicationIntentOptionsV2, begin_build_attempt, clear_worker_v2_publication_intent_v1,
+    WorkerV2PublicationIntentOptionsV2, acquire_worker_v2_publication_intent_lease_v2,
+    begin_build_attempt, clear_worker_v2_publication_intent_v1,
     clear_worker_v2_publication_intent_v2, commit_worker_v2_publication_intent_cleanup_escrow_v1,
     commit_worker_v2_publication_intent_cleanup_escrow_v1_with_options,
     emit_artifact_transaction_for_attempt, finish_build_attempt,
@@ -465,6 +466,35 @@ fn cleanup_escrow_subprocess_crash_helper() {
         }
         result => panic!("expected injected crash at {point:?}, got {result:?}"),
     }
+}
+
+#[test]
+fn exact_v2_intent_lease_revalidates_the_pinned_local_snapshot() {
+    let fixture = CleanupEscrowFixture::new(0x19, "exact-local-lease");
+    let lease = acquire_worker_v2_publication_intent_lease_v2(
+        &fixture.output,
+        &fixture.owner,
+        fixture.attempt,
+        fixture.closure,
+        fixture.intent,
+    )
+    .unwrap();
+    assert_eq!(lease.recovered().record().identity(), fixture.intent);
+    assert!(!lease.grants_publication_authority());
+    assert!(!lease.grants_load_authority());
+    lease.revalidate().unwrap();
+    drop(lease);
+
+    assert!(matches!(
+        acquire_worker_v2_publication_intent_lease_v2(
+            &fixture.output,
+            &fixture.owner,
+            fixture.attempt,
+            fixture.closure,
+            WorkerV2PublicationIntentIdentityV2::from_bytes([0x55; 32]),
+        ),
+        Err(WorkerV2PublicationIntentErrorV2::IntentIdentityMismatch)
+    ));
 }
 
 #[test]

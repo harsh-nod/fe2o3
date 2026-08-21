@@ -15,9 +15,9 @@ use crate::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildSession, CanonicalLinkRequestIdentityV1,
     DurableLinkPublicationPlanV1, EmitError, FinalizationIdentityV1, FinalizedOutputIdentityV1,
     KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
-    MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, PackageIdentityV1, PinnedOutput, PinnedWorkerIdentityV1,
-    ProducerIdentity, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
-    ValidatedResponseIdentityV1, read_attempt_registry,
+    MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, OutputLock, PackageIdentityV1, PinnedOutput,
+    PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
+    UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, read_attempt_registry,
 };
 use fe2o3_build_authority::{CompilerClosureErrorV2, CompilerClosureV2};
 use rustix::fs::{
@@ -2384,6 +2384,104 @@ mod publication_intent_v2 {
             compiler_closure,
             identity.as_bytes(),
         )
+    }
+
+    /// Exclusive local intent lease retained across a caller's related durable publication.
+    pub struct WorkerV2PublicationIntentLeaseV2 {
+        _lock: OutputLock,
+        output: PinnedOutput,
+        producer: ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: CompilerClosureV2,
+        recovered: RecoveredWorkerV2PublicationIntentV2,
+    }
+
+    impl WorkerV2PublicationIntentLeaseV2 {
+        /// Returns the exact intent snapshot validated while this lease was acquired.
+        pub const fn recovered(&self) -> &RecoveredWorkerV2PublicationIntentV2 {
+            &self.recovered
+        }
+
+        /// Revalidates the exact intent and output while retaining the same artifact lock.
+        pub fn revalidate(&self) -> Result<(), WorkerV2PublicationIntentErrorV2> {
+            self.output.verify_path_identity()?;
+            authorize::<PublicationIntentSchemaV2>(&self.output, &self.producer, self.attempt)?;
+            let producer_identity = producer_identity_v2(&self.producer);
+            let names = IntentNames::new::<PublicationIntentSchemaV2>(
+                producer_identity,
+                slot_identity_v2(producer_identity, self.attempt),
+            );
+            cleanup_temps::<PublicationIntentSchemaV2>(&self.output, &names)?;
+            let recovered = recover_locked::<PublicationIntentSchemaV2>(
+                &self.output,
+                &names,
+                &self.producer,
+                self.attempt,
+            )?
+            .ok_or(WorkerV2PublicationIntentErrorV2::NotFound)?;
+            if recovered.record.compiler_closure() != self.compiler_closure {
+                return Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch);
+            }
+            if recovered.record != self.recovered.record
+                || recovered.exact_output.as_ref() != self.recovered.exact_output.as_ref()
+            {
+                return Err(WorkerV2PublicationIntentErrorV2::ConflictingIntent);
+            }
+            self.output.verify_path_identity()?;
+            Ok(())
+        }
+
+        /// A local lease coordinates mutation but grants no publication authority.
+        pub const fn grants_publication_authority(&self) -> bool {
+            false
+        }
+
+        /// A local lease grants no load authority.
+        pub const fn grants_load_authority(&self) -> bool {
+            false
+        }
+    }
+
+    /// Acquires the exact local V2 intent lease until the returned guard is dropped.
+    pub fn acquire_worker_v2_publication_intent_lease_v2(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        compiler_closure: CompilerClosureV2,
+        identity: WorkerV2PublicationIntentIdentityV2,
+    ) -> Result<WorkerV2PublicationIntentLeaseV2, WorkerV2PublicationIntentErrorV2> {
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let lock = output.lock()?;
+        output.verify_path_identity()?;
+        authorize::<PublicationIntentSchemaV2>(&output, producer, attempt)?;
+        let producer_identity = producer_identity_v2(producer);
+        let names = IntentNames::new::<PublicationIntentSchemaV2>(
+            producer_identity,
+            slot_identity_v2(producer_identity, attempt),
+        );
+        cleanup_temps::<PublicationIntentSchemaV2>(&output, &names)?;
+        let recovered =
+            recover_locked::<PublicationIntentSchemaV2>(&output, &names, producer, attempt)?
+                .ok_or(WorkerV2PublicationIntentErrorV2::NotFound)?;
+        if recovered.record.compiler_closure() != compiler_closure {
+            return Err(WorkerV2PublicationIntentErrorV2::CompilerClosureMismatch);
+        }
+        if recovered.record.identity() != identity {
+            return Err(WorkerV2PublicationIntentErrorV2::IntentIdentityMismatch);
+        }
+        output.verify_path_identity()?;
+        Ok(WorkerV2PublicationIntentLeaseV2 {
+            _lock: lock,
+            output,
+            producer: producer.clone(),
+            attempt,
+            compiler_closure,
+            recovered: RecoveredWorkerV2PublicationIntentV2 {
+                outcome: WorkerV2PublicationIntentOutcomeV2::Recovered,
+                record: recovered.record,
+                exact_output: recovered.exact_output,
+            },
+        })
     }
 
     fn producer_identity_v2(producer: &ProducerIdentity) -> [u8; 32] {
