@@ -8,9 +8,11 @@ use std::{
 };
 
 use fe2o3_artifact_transaction::{
-    BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
-    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    BuildInvocation, BuildSession, CompilerModuleHandoffIdentityV2, ProducerIdentity,
+    begin_build_attempt, consume_compiler_module_handoff_v1, consume_compiler_module_handoff_v2,
+    publish_compiler_module_handoff_v1, publish_compiler_module_handoff_v2,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
     CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
@@ -21,7 +23,10 @@ use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME,
     LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
     WorkerOutputConstraintsV1, WorkerV2RawHsacoInspectionError,
-    execute_reproducible_first_build_worker_v2, inspect_worker_v2_raw_hsaco_v1,
+    execute_protected_reproducible_first_build_worker_v2,
+    execute_reproducible_first_build_worker_v2,
+    inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
+    inspect_protected_worker_v2_raw_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
 };
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
@@ -49,6 +54,8 @@ struct FixtureOptions<'a> {
     max_flat_workgroup_size: u32,
     wavefront_size: u32,
     descriptor_wavefront_size: u32,
+    kernarg_segment_alignment: u64,
+    group_segment_fixed_size: u32,
     include_export: bool,
     include_canonical_descriptor_section_name: bool,
 }
@@ -64,8 +71,18 @@ impl FixtureOptions<'static> {
             max_flat_workgroup_size: 256,
             wavefront_size: 64,
             descriptor_wavefront_size: 64,
+            kernarg_segment_alignment: 8,
+            group_segment_fixed_size: 0,
             include_export: true,
             include_canonical_descriptor_section_name: false,
+        }
+    }
+
+    fn production_v1() -> Self {
+        Self {
+            required_workgroup_size: [64, 1, 1],
+            max_flat_workgroup_size: 64,
+            ..Self::valid()
         }
     }
 }
@@ -285,6 +302,187 @@ fn executable_byte_changes_are_bound_to_distinct_evidence_identities() {
     assert_ne!(original.exact_bytes(), changed.exact_bytes());
 }
 
+#[test]
+fn protected_inspection_retains_exact_v2_closure_lineage_and_restart_inputs() {
+    let fixture = fixture(FixtureOptions::valid());
+    let original = fixture.bytes.clone();
+    let closure = compiler_closure(0x20);
+    let evidence = protected_evidence(fixture.bytes, "vecadd", "vecadd.kd", closure);
+    let upstream = evidence.identity();
+    let attempt = evidence.attempt();
+    let handoff = evidence.handoff_identity();
+    let plan = evidence.link_plan_identity();
+
+    let inspected = inspect_protected_worker_v2_raw_hsaco_v1(evidence).unwrap();
+    require_v2_handoff_identity(inspected.handoff_identity());
+    assert_eq!(inspected.source_evidence_identity(), upstream);
+    assert_eq!(inspected.upstream_evidence_identity(), upstream);
+    assert_eq!(inspected.attempt(), attempt);
+    assert_eq!(inspected.handoff_identity(), handoff);
+    assert_eq!(inspected.compiler_closure(), closure);
+    assert_eq!(inspected.plan().identity(), plan);
+    assert_eq!(inspected.link_plan_identity(), plan);
+    assert_eq!(inspected.exact_bytes(), original);
+    assert!(
+        inspected
+            .linked_output_identity()
+            .matches(inspected.exact_bytes())
+    );
+    assert!(!inspected.canonical_descriptor_finalization_ran());
+    assert!(!inspected.authenticates_compiler_origin());
+    assert!(!inspected.grants_compiler_authority());
+    assert!(!inspected.grants_link_authority());
+    assert!(!inspected.grants_publication_authority());
+    assert!(!inspected.grants_load_authority());
+    assert!(!inspected.grants_launch_authority());
+}
+
+#[test]
+fn protected_and_v1_inspection_schemas_remain_side_by_side_without_downgrade() {
+    let fixture = fixture(FixtureOptions::valid());
+    let ordinary =
+        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes.clone(), "vecadd", "vecadd.kd"))
+            .unwrap();
+    let closure = compiler_closure(0x30);
+    let protected = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        fixture.bytes,
+        "vecadd",
+        "vecadd.kd",
+        closure,
+    ))
+    .unwrap();
+
+    require_v2_handoff_identity(protected.handoff_identity());
+    assert_eq!(protected.compiler_closure(), closure);
+    assert_eq!(ordinary.exact_bytes(), protected.exact_bytes());
+    assert_eq!(ordinary.policy(), protected.policy());
+    assert_ne!(
+        ordinary.identity().as_bytes(),
+        protected.identity().as_bytes()
+    );
+}
+
+#[test]
+fn protected_production_v1_route_is_closed_over_its_wave64_contract() {
+    let generic_fixture = fixture(FixtureOptions::production_v1());
+    assert!(matches!(
+        inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+            generic_fixture.bytes,
+            "vecadd",
+            "vecadd.kd",
+            compiler_closure(0x40),
+        )),
+        Err(WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch { .. })
+    ));
+
+    let production_fixture = fixture(FixtureOptions::production_v1());
+    let inspected = inspect_protected_production_v1_worker_v2_raw_hsaco_v1(protected_evidence(
+        production_fixture.bytes,
+        "vecadd",
+        "vecadd.kd",
+        compiler_closure(0x40),
+    ))
+    .unwrap();
+    assert_eq!(
+        inspected.policy().launch().required_workgroup_size(),
+        [64, 1, 1]
+    );
+    assert_eq!(inspected.policy().launch().max_flat_workgroup_size(), 64);
+    assert_eq!(inspected.policy().launch().wavefront_size(), 64);
+}
+
+#[test]
+fn closure_and_valid_abi_resource_mutations_change_protected_inspection_identity() {
+    let original = fixture(FixtureOptions::valid());
+    let first = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        original.bytes.clone(),
+        "vecadd",
+        "vecadd.kd",
+        compiler_closure(0x50),
+    ))
+    .unwrap();
+    let changed_closure = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        original.bytes,
+        "vecadd",
+        "vecadd.kd",
+        compiler_closure(0x60),
+    ))
+    .unwrap();
+    let changed_abi = fixture(FixtureOptions {
+        kernarg_segment_alignment: 16,
+        ..FixtureOptions::valid()
+    });
+    let changed_abi = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        changed_abi.bytes,
+        "vecadd",
+        "vecadd.kd",
+        compiler_closure(0x50),
+    ))
+    .unwrap();
+    let changed_resources = fixture(FixtureOptions {
+        group_segment_fixed_size: 64,
+        ..FixtureOptions::valid()
+    });
+    let changed_resources = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+        changed_resources.bytes,
+        "vecadd",
+        "vecadd.kd",
+        compiler_closure(0x50),
+    ))
+    .unwrap();
+
+    assert_eq!(first.exact_bytes(), changed_closure.exact_bytes());
+    assert_ne!(first.compiler_closure(), changed_closure.compiler_closure());
+    assert_ne!(first.identity(), changed_closure.identity());
+    assert_ne!(first.identity(), changed_abi.identity());
+    assert_ne!(first.identity(), changed_resources.identity());
+}
+
+#[test]
+fn protected_inspection_rejects_descriptor_and_target_mutations() {
+    let valid_fixture = fixture(FixtureOptions::valid());
+    let descriptor_offset = valid_fixture.descriptor_offset;
+    let mut descriptor = valid_fixture.bytes;
+    descriptor[descriptor_offset + 16] ^= 1;
+    assert!(matches!(
+        inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+            descriptor,
+            "vecadd",
+            "vecadd.kd",
+            compiler_closure(0x70),
+        )),
+        Err(WorkerV2RawHsacoInspectionError::HsacoBinding(_))
+    ));
+
+    let target = fixture(FixtureOptions {
+        target: "gfx950",
+        ..FixtureOptions::valid()
+    });
+    assert!(matches!(
+        inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
+            target.bytes,
+            "vecadd",
+            "vecadd.kd",
+            compiler_closure(0x70),
+        )),
+        Err(WorkerV2RawHsacoInspectionError::TargetMismatch { .. })
+    ));
+}
+
+fn require_v2_handoff_identity(_: CompilerModuleHandoffIdentityV2) {}
+
+fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+    CompilerClosureV2::new(
+        [seed; 32],
+        [seed.wrapping_add(1); 32],
+        [seed.wrapping_add(2); 32],
+        [seed.wrapping_add(3); 32],
+        [seed.wrapping_add(4); 32],
+        [seed.wrapping_add(5); 32],
+    )
+    .unwrap()
+}
+
 fn evidence(
     bytes: Vec<u8>,
     manifest_entry: &str,
@@ -308,6 +506,47 @@ fn evidence(
         .unwrap();
     let consumed = consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
     execute_reproducible_first_build_worker_v2(
+        consumed,
+        &pinned_worker(),
+        Vec::new(),
+        link_options(),
+        WorkerOutputConstraintsV1::new(64 * 1024).unwrap(),
+        WorkerExecutionLimitsV1::new(Duration::from_secs(2), 16 * 1024, 64 * 1024).unwrap(),
+    )
+    .unwrap()
+}
+
+fn protected_evidence(
+    bytes: Vec<u8>,
+    manifest_entry: &str,
+    manifest_descriptor: &str,
+    closure: CompilerClosureV2,
+) -> fe2o3_hsaco_finalize::InertProtectedFirstBuildWorkerV2EvidenceV1 {
+    let directory = TestDirectory::new();
+    let producer = ProducerIdentity::from_codegen(
+        "protected_worker_v2_hsaco_admission_fixture",
+        Some(Path::new("tests/worker_v2_hsaco_admission.rs")),
+    )
+    .unwrap();
+    let attempt = begin_build_attempt(
+        &directory.0,
+        &producer,
+        BuildInvocation::from_bytes([0xa1; 32]),
+        BuildSession::from_bytes([0xa2; 16]),
+    )
+    .unwrap();
+    let handoff = compiler_handoff(&bytes, manifest_entry, manifest_descriptor);
+    publish_compiler_module_handoff_v2(
+        &directory.0,
+        &producer,
+        attempt,
+        closure,
+        handoff.canonical_bytes(),
+    )
+    .unwrap();
+    let consumed =
+        consume_compiler_module_handoff_v2(&directory.0, &producer, attempt, closure).unwrap();
+    execute_protected_reproducible_first_build_worker_v2(
         consumed,
         &pinned_worker(),
         Vec::new(),
@@ -504,6 +743,11 @@ fn fixture(options: FixtureOptions<'_>) -> Fixture {
         write_u64(&mut bytes, export_symbol + 16, 64);
     }
 
+    write_u32(
+        &mut bytes,
+        descriptor_offset,
+        options.group_segment_fixed_size,
+    );
     write_u32(&mut bytes, descriptor_offset + 8, 272);
     write_i64(
         &mut bytes,
@@ -662,8 +906,14 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         (Value::from(".symbol"), Value::from(options.descriptor)),
         (Value::from(".args"), Value::Array(arguments)),
         (Value::from(".kernarg_segment_size"), Value::from(272)),
-        (Value::from(".kernarg_segment_align"), Value::from(8)),
-        (Value::from(".group_segment_fixed_size"), Value::from(0)),
+        (
+            Value::from(".kernarg_segment_align"),
+            Value::from(options.kernarg_segment_alignment),
+        ),
+        (
+            Value::from(".group_segment_fixed_size"),
+            Value::from(options.group_segment_fixed_size),
+        ),
         (Value::from(".private_segment_fixed_size"), Value::from(0)),
         (
             Value::from(".wavefront_size"),

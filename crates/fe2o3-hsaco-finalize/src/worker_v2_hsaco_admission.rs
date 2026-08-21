@@ -5,14 +5,19 @@
 
 use std::{collections::BTreeSet, error::Error, fmt};
 
-use fe2o3_artifact_transaction::{BuildAttempt, CompilerModuleHandoffIdentityV1};
+use fe2o3_artifact_transaction::{
+    BuildAttempt, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffIdentityV2,
+    CompilerModuleHandoffSlotV2,
+};
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiEnvelopeIdentityV1,
     CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
 };
 use fe2o3_hsaco::{
-    CodeObjectVersion as InspectedCodeObjectVersion, KernelBindingError,
-    inspect_and_bind_kernel_descriptors,
+    ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion as InspectedCodeObjectVersion,
+    ExplicitArgument, ExplicitValueKind, ExplicitValueType, HiddenArgument, HiddenValueKind,
+    InspectedKernelBindings, KernelBindingError, inspect_and_bind_kernel_descriptors,
 };
 use fe2o3_kernel_descriptor::{
     CodeObjectVersion, DeviceTargetV1, ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE,
@@ -24,8 +29,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME, FirstBuildWorkerV2IdentityV1,
-    InertFirstBuildWorkerV2EvidenceV1, MAX_WORKER_SYMBOLS, WorkerCompilerFfiEnvelopeIdentityV2,
-    WorkerMeasurementV1, request_construction::decode_link_options,
+    InertFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
+    MAX_WORKER_SYMBOLS, MultiInputLinkPlanV1, ProtectedFirstBuildWorkerV2IdentityV1,
+    WorkerCompilerFfiEnvelopeIdentityV2, WorkerMeasurementV1,
+    request_construction::decode_link_options,
 };
 
 const EXPECTED_PROCESSOR: &str = "gfx942";
@@ -35,6 +42,24 @@ const REQUIRED_WAVEFRONT_SIZE: u32 = 64;
 const POLICY_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-RAW-HSACO-POLICY/V1\0";
 const RESPONSE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-SEALED-RESPONSE/V1\0";
 const INSPECTION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-RAW-HSACO-INSPECTION/V1\0";
+const PROTECTED_INSPECTION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-RAW-HSACO-INSPECTION/V1\0";
+const PROTECTED_SOURCE_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"FE2O3/PROTECTED-RAW-HSACO/SOURCE-EVIDENCE/V1\0";
+const PROTECTED_ATTEMPT_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/ATTEMPT/V1\0";
+const PROTECTED_HANDOFF_DOMAIN_V2: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/HANDOFF/V2\0";
+const PROTECTED_COMPILER_CLOSURE_DOMAIN_V2: &[u8] =
+    b"FE2O3/PROTECTED-RAW-HSACO/COMPILER-CLOSURE/V2\0";
+const PROTECTED_WORKER_EXCHANGE_DOMAIN_V1: &[u8] =
+    b"FE2O3/PROTECTED-RAW-HSACO/WORKER-REQUEST-RESPONSE/V1\0";
+const PROTECTED_RAW_BYTES_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/EXACT-RAW-BYTES/V1\0";
+const PROTECTED_TARGET_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/TARGET/V1\0";
+const PROTECTED_CODE_OBJECT_VERSION_DOMAIN_V1: &[u8] =
+    b"FE2O3/PROTECTED-RAW-HSACO/CODE-OBJECT-VERSION/V1\0";
+const PROTECTED_POLICY_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/POLICY/V1\0";
+const PROTECTED_DESCRIPTOR_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/AMDHSA-DESCRIPTORS/V1\0";
+const PROTECTED_ABI_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/KERNEL-ABI/V1\0";
+const PROTECTED_RESOURCES_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/KERNEL-RESOURCES/V1\0";
 
 /// One exact kernel entry/descriptor pair independently observed in AMDHSA metadata and ELF.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -329,6 +354,154 @@ impl InspectedRawWorkerV2HsacoV1 {
     }
 
     pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Stable identity of one closure-protected raw Worker V2 HSACO inspection.
+///
+/// This identity has a distinct transcript from [`InspectedRawWorkerV2HsacoIdentityV1`]. It binds
+/// the exact V2 handoff and complete compiler closure without representing either as V1 evidence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct InspectedProtectedRawWorkerV2HsacoIdentityV1([u8; 32]);
+
+impl InspectedProtectedRawWorkerV2HsacoIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Inert closure-protected evidence that exact Worker V2 output passed raw-HSACO inspection.
+///
+/// The exact V2 transaction identity and full compiler closure remain directly inspectable. The
+/// retained plan and bytes are borrow-only restart inputs; this value grants no compiler, link,
+/// publication, loading, or launch authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct InspectedProtectedRawWorkerV2HsacoV1 {
+    identity: InspectedProtectedRawWorkerV2HsacoIdentityV1,
+    response_identity: SealedWorkerV2ResponseIdentityV1,
+    descriptor_section: CanonicalDescriptorSectionObservationV1,
+    policy: WorkerV2RawHsacoPolicyV1,
+    source: InertProtectedFirstBuildWorkerV2EvidenceV1,
+}
+
+impl InspectedProtectedRawWorkerV2HsacoV1 {
+    pub const fn identity(&self) -> InspectedProtectedRawWorkerV2HsacoIdentityV1 {
+        self.identity
+    }
+
+    /// Identity of the closure-protected first-build evidence consumed by this inspection.
+    pub const fn source_evidence_identity(&self) -> ProtectedFirstBuildWorkerV2IdentityV1 {
+        self.source.identity()
+    }
+
+    /// Schema-neutral name for the protected evidence identity used by restart persistence.
+    pub const fn upstream_evidence_identity(&self) -> ProtectedFirstBuildWorkerV2IdentityV1 {
+        self.source_evidence_identity()
+    }
+
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.source.attempt()
+    }
+
+    pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV2 {
+        self.source.slot()
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
+        self.source.handoff_identity()
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.source.compiler_closure()
+    }
+
+    /// Returns the complete retained link plan for schema-neutral restart persistence.
+    pub const fn plan(&self) -> &MultiInputLinkPlanV1 {
+        self.source.plan()
+    }
+
+    pub const fn link_plan_identity(&self) -> crate::LinkPlanIdentityV1 {
+        self.source.link_plan_identity()
+    }
+
+    pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
+        self.source.worker_measurement()
+    }
+
+    pub const fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
+        self.source.compiler_envelope_identity()
+    }
+
+    pub const fn sealed_compiler_envelope_identity(&self) -> WorkerCompilerFfiEnvelopeIdentityV2 {
+        self.source
+            .authorized()
+            .response()
+            .compiler_envelope_identity()
+    }
+
+    pub fn sealed_request_id(&self) -> &[u8; 32] {
+        self.source.authorized().response().request_id()
+    }
+
+    pub fn sealed_request_identity(&self) -> &[u8; 32] {
+        self.source.authorized().response().request_identity()
+    }
+
+    pub const fn response_identity(&self) -> SealedWorkerV2ResponseIdentityV1 {
+        self.response_identity
+    }
+
+    pub const fn linked_output_identity(&self) -> ContentIdentityV1 {
+        self.source.output_identity()
+    }
+
+    /// Borrows the exact inspected raw HSACO bytes for inert persistence or further inspection.
+    pub fn exact_bytes(&self) -> &[u8] {
+        self.source.output_bytes()
+    }
+
+    pub const fn target(&self) -> DeviceTargetV1 {
+        self.policy.target()
+    }
+
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.policy.code_object_version()
+    }
+
+    pub const fn policy(&self) -> &WorkerV2RawHsacoPolicyV1 {
+        &self.policy
+    }
+
+    pub const fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1 {
+        self.descriptor_section
+    }
+
+    pub const fn canonical_descriptor_finalization_ran(&self) -> bool {
+        false
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
         false
     }
 
@@ -853,6 +1026,33 @@ pub fn inspect_production_v1_worker_v2_raw_hsaco_v1(
     )
 }
 
+/// Consumes closure-protected first-build evidence and inspects its exact raw HSACO output.
+///
+/// This route retains the exact V2 handoff identity and full compiler closure. It is side-by-side
+/// with [`inspect_worker_v2_raw_hsaco_v1`] and never converts protected lineage to V1.
+pub fn inspect_protected_worker_v2_raw_hsaco_v1(
+    source: InertProtectedFirstBuildWorkerV2EvidenceV1,
+) -> Result<InspectedProtectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
+    inspect_protected_worker_v2_raw_hsaco_with_launch_v1(
+        source,
+        WorkerV2RawLaunchContractV1::GFX942_G1,
+        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1,
+    )
+}
+
+/// Consumes closure-protected production-v1 evidence under the fixed wave64 launch contract.
+///
+/// The caller cannot supply or weaken the required 64-thread workgroup or wavefront properties.
+pub fn inspect_protected_production_v1_worker_v2_raw_hsaco_v1(
+    source: InertProtectedFirstBuildWorkerV2EvidenceV1,
+) -> Result<InspectedProtectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
+    inspect_protected_worker_v2_raw_hsaco_with_launch_v1(
+        source,
+        WorkerV2RawLaunchContractV1::PRODUCTION_V1,
+        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
+    )
+}
+
 /// Consumes sealed Worker V2 evidence under the exact general-GEMM V1 launch contract.
 ///
 /// The caller cannot supply or weaken the required 64-thread wave64 launch profile.
@@ -872,6 +1072,108 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
     diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
 ) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
     validate_lineage(&source)?;
+    let raw = inspect_worker_v2_raw_hsaco_shared_v1(&source, launch, diagnostic_profile)?;
+    let response_identity =
+        calculate_response_identity(source.authorized().response().canonical_bytes());
+    let identity = calculate_inspection_identity(
+        &source,
+        &raw.policy,
+        response_identity,
+        raw.descriptor_section,
+    );
+    Ok(InspectedRawWorkerV2HsacoV1 {
+        identity,
+        response_identity,
+        descriptor_section: raw.descriptor_section,
+        policy: raw.policy,
+        source,
+    })
+}
+
+fn inspect_protected_worker_v2_raw_hsaco_with_launch_v1(
+    source: InertProtectedFirstBuildWorkerV2EvidenceV1,
+    launch: WorkerV2RawLaunchContractV1,
+    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
+) -> Result<InspectedProtectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
+    validate_protected_lineage(&source)?;
+    let raw = inspect_worker_v2_raw_hsaco_shared_v1(&source, launch, diagnostic_profile)?;
+    let response_identity =
+        calculate_response_identity(source.authorized().response().canonical_bytes());
+    let identity = calculate_protected_inspection_identity(&source, &raw, response_identity);
+    Ok(InspectedProtectedRawWorkerV2HsacoV1 {
+        identity,
+        response_identity,
+        descriptor_section: raw.descriptor_section,
+        policy: raw.policy,
+        source,
+    })
+}
+
+trait RawWorkerV2HsacoSourceV1 {
+    fn plan(&self) -> &MultiInputLinkPlanV1;
+    fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1;
+    fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1;
+    fn output_identity(&self) -> ContentIdentityV1;
+    fn output_bytes(&self) -> &[u8];
+}
+
+impl RawWorkerV2HsacoSourceV1 for InertFirstBuildWorkerV2EvidenceV1 {
+    fn plan(&self) -> &MultiInputLinkPlanV1 {
+        self.plan()
+    }
+
+    fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
+        self.symbol_manifest()
+    }
+
+    fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
+        self.compiler_envelope_identity()
+    }
+
+    fn output_identity(&self) -> ContentIdentityV1 {
+        self.output_identity()
+    }
+
+    fn output_bytes(&self) -> &[u8] {
+        self.output_bytes()
+    }
+}
+
+impl RawWorkerV2HsacoSourceV1 for InertProtectedFirstBuildWorkerV2EvidenceV1 {
+    fn plan(&self) -> &MultiInputLinkPlanV1 {
+        self.plan()
+    }
+
+    fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
+        self.symbol_manifest()
+    }
+
+    fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
+        self.compiler_envelope_identity()
+    }
+
+    fn output_identity(&self) -> ContentIdentityV1 {
+        self.output_identity()
+    }
+
+    fn output_bytes(&self) -> &[u8] {
+        self.output_bytes()
+    }
+}
+
+struct SharedRawWorkerV2HsacoInspectionV1 {
+    descriptor_section: CanonicalDescriptorSectionObservationV1,
+    policy: WorkerV2RawHsacoPolicyV1,
+    descriptor_identity: [u8; 32],
+    abi_identity: [u8; 32],
+    resource_identity: [u8; 32],
+}
+
+fn inspect_worker_v2_raw_hsaco_shared_v1(
+    source: &impl RawWorkerV2HsacoSourceV1,
+    launch: WorkerV2RawLaunchContractV1,
+    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
+) -> Result<SharedRawWorkerV2HsacoInspectionV1, WorkerV2RawHsacoInspectionError> {
     let target = source.plan().target();
     if target.as_amd_target_id().processor() != EXPECTED_PROCESSOR {
         return Err(WorkerV2RawHsacoInspectionError::UnsupportedTarget(
@@ -986,6 +1288,9 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
     }
 
     let descriptor_section = inspect_descriptor_section(exact_bytes)?;
+    let descriptor_identity = calculate_descriptor_identity(&inspected);
+    let abi_identity = calculate_abi_identity(&inspected);
+    let resource_identity = calculate_resource_identity(&inspected);
     let compiler_envelope = source.compiler_envelope_identity();
     let expected_defined_symbols = expected_defined_symbols(&symbol_manifest);
     let policy = WorkerV2RawHsacoPolicyV1 {
@@ -1006,16 +1311,12 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
         expected_defined_symbols,
         launch,
     };
-    let response_identity =
-        calculate_response_identity(source.authorized().response().canonical_bytes());
-    let identity =
-        calculate_inspection_identity(&source, &policy, response_identity, descriptor_section);
-    Ok(InspectedRawWorkerV2HsacoV1 {
-        identity,
-        response_identity,
+    Ok(SharedRawWorkerV2HsacoInspectionV1 {
         descriptor_section,
         policy,
-        source,
+        descriptor_identity,
+        abi_identity,
+        resource_identity,
     })
 }
 
@@ -1373,6 +1674,110 @@ fn validate_lineage(
     Ok(())
 }
 
+fn validate_protected_lineage(
+    source: &InertProtectedFirstBuildWorkerV2EvidenceV1,
+) -> Result<(), WorkerV2RawHsacoInspectionError> {
+    let bootstrap = source.bootstrap();
+    let authorized = source.authorized();
+    for execution in [bootstrap, authorized] {
+        if source.attempt() != execution.attempt() {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "protected build attempt",
+            ));
+        }
+        if source.slot() != execution.slot() {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "protected handoff slot",
+            ));
+        }
+        if source.handoff_identity() != execution.handoff_identity() {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "protected V2 handoff identity",
+            ));
+        }
+        if source.compiler_closure() != execution.compiler_closure() {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "protected compiler closure",
+            ));
+        }
+        if source.worker_measurement().executable() != execution.worker_executable()
+            || source.worker_measurement().worker_build_identity()
+                != execution.response().worker_build_identity()
+        {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "protected worker measurement",
+            ));
+        }
+        if execution.response().compiler_envelope_identity().as_bytes()
+            != source.compiler_envelope_identity().as_bytes()
+        {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "protected compiler envelope identity",
+            ));
+        }
+    }
+
+    if source.compiler_envelope().target().to_string() != source.plan().target().to_string()
+        || map_compiler_code_object_version(source.compiler_envelope().code_object_version())
+            != decode_link_options(source.plan().options())
+                .map_err(|_| WorkerV2RawHsacoInspectionError::LinkPolicy)?
+                .0
+    {
+        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "protected compiler envelope target/code-object version",
+        ));
+    }
+    let directional = source.compiler_envelope().directional_symbols();
+    if !source
+        .symbol_manifest()
+        .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
+        .eq(directional.imports())
+    {
+        return Err(WorkerV2RawHsacoInspectionError::CompilerEnvelopeImportRoleMismatch);
+    }
+    if !source
+        .symbol_manifest()
+        .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
+        .eq(directional.exports())
+    {
+        return Err(WorkerV2RawHsacoInspectionError::CompilerEnvelopeExportRoleMismatch);
+    }
+
+    let bootstrap_response = bootstrap.response();
+    let bootstrap_output =
+        bootstrap_response
+            .output()
+            .ok_or(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "missing protected bootstrap output",
+            ))?;
+    let authorized_response = authorized.response();
+    let authorized_output =
+        authorized_response
+            .output()
+            .ok_or(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "missing protected linked output",
+            ))?;
+    for (response, output) in [
+        (bootstrap_response, bootstrap_output),
+        (authorized_response, authorized_output),
+    ] {
+        if output.identity() != source.output_identity()
+            || output.request_identity() != response.request_identity()
+            || output.compiler_envelope_identity() != response.compiler_envelope_identity()
+        {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "protected sealed request/response/output identity",
+            ));
+        }
+    }
+    if bootstrap_output.bytes() != authorized_output.bytes() {
+        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "protected reproducible output bytes",
+        ));
+    }
+    Ok(())
+}
+
 fn expected_defined_symbols(manifest: &CompilerModuleSymbolManifestV1) -> Vec<String> {
     let mut symbols = Vec::new();
     for role in [
@@ -1427,6 +1832,239 @@ fn inspect_descriptor_section(
         }
     }
     Ok(CanonicalDescriptorSectionObservationV1::Missing)
+}
+
+fn calculate_descriptor_identity(inspected: &InspectedKernelBindings) -> [u8; 32] {
+    protected_component_identity(PROTECTED_DESCRIPTOR_DOMAIN_V1, |hasher| {
+        hasher.update((inspected.bindings().len() as u64).to_le_bytes());
+        for binding in inspected.bindings() {
+            let descriptor = binding.descriptor();
+            hasher.update((binding.kernel_index() as u64).to_le_bytes());
+            hasher.update(binding.descriptor_address().to_le_bytes());
+            hasher.update(binding.descriptor_file_offset().to_le_bytes());
+            hasher.update(binding.entry_address().to_le_bytes());
+            hasher.update(binding.entry_file_offset().to_le_bytes());
+            hasher.update(binding.entry_size().to_le_bytes());
+            hasher.update(descriptor.group_segment_fixed_size().to_le_bytes());
+            hasher.update(descriptor.private_segment_fixed_size().to_le_bytes());
+            hasher.update(descriptor.kernarg_size().to_le_bytes());
+            hasher.update(descriptor.kernel_code_entry_byte_offset().to_le_bytes());
+            hasher.update(descriptor.compute_pgm_rsrc3().to_le_bytes());
+            hasher.update(descriptor.compute_pgm_rsrc1().to_le_bytes());
+            hasher.update(descriptor.compute_pgm_rsrc2().to_le_bytes());
+            hasher.update(descriptor.kernel_code_properties().to_le_bytes());
+            hasher.update(descriptor.kernarg_preload().to_le_bytes());
+        }
+    })
+}
+
+fn calculate_abi_identity(inspected: &InspectedKernelBindings) -> [u8; 32] {
+    protected_component_identity(PROTECTED_ABI_DOMAIN_V1, |hasher| {
+        let metadata = inspected.inspection();
+        hasher.update(metadata.metadata_version().major().to_le_bytes());
+        hasher.update(metadata.metadata_version().minor().to_le_bytes());
+        hasher.update((metadata.kernels().len() as u64).to_le_bytes());
+        for kernel in metadata.kernels() {
+            hash_text(hasher, kernel.name());
+            hash_text(hasher, kernel.symbol());
+            hasher.update(kernel.kernarg_segment_size().to_le_bytes());
+            hasher.update(kernel.kernarg_segment_alignment().to_le_bytes());
+            hash_optional_u64(hasher, kernel.implicit_argument_offset());
+            hasher.update(kernel.implicit_argument_size().to_le_bytes());
+            hasher.update((kernel.explicit_arguments().len() as u64).to_le_bytes());
+            for argument in kernel.explicit_arguments() {
+                hash_explicit_argument(hasher, argument);
+            }
+            hasher.update((kernel.hidden_arguments().len() as u64).to_le_bytes());
+            for argument in kernel.hidden_arguments() {
+                hash_hidden_argument(hasher, *argument);
+            }
+        }
+    })
+}
+
+fn calculate_resource_identity(inspected: &InspectedKernelBindings) -> [u8; 32] {
+    protected_component_identity(PROTECTED_RESOURCES_DOMAIN_V1, |hasher| {
+        let kernels = inspected.inspection().kernels();
+        hasher.update((kernels.len() as u64).to_le_bytes());
+        for kernel in kernels {
+            hash_text(hasher, kernel.name());
+            hasher.update(kernel.group_segment_fixed_size().to_le_bytes());
+            hasher.update(kernel.private_segment_fixed_size().to_le_bytes());
+            hasher.update(kernel.wavefront_size().to_le_bytes());
+            hasher.update(kernel.sgpr_count().to_le_bytes());
+            hasher.update(kernel.vgpr_count().to_le_bytes());
+            hash_optional_u32(hasher, kernel.agpr_count());
+            hash_optional_u32(hasher, kernel.sgpr_spill_count());
+            hash_optional_u32(hasher, kernel.vgpr_spill_count());
+            hasher.update(kernel.max_flat_workgroup_size().to_le_bytes());
+            hash_optional_dimensions(hasher, kernel.required_workgroup_size());
+            for limit in kernel.max_workgroups() {
+                hash_optional_u32(hasher, limit);
+            }
+            hash_optional_dimensions(hasher, kernel.cluster_dims());
+            hash_optional_bool(hasher, kernel.uniform_work_group_size_declaration());
+            hash_optional_bool(hasher, kernel.uses_dynamic_stack_declaration());
+            hash_optional_bool(hasher, kernel.workgroup_processor_mode());
+        }
+    })
+}
+
+fn hash_explicit_argument(hasher: &mut Sha256, argument: &ExplicitArgument) {
+    hash_optional_text(hasher, argument.name());
+    hash_optional_text(hasher, argument.type_name());
+    hasher.update(argument.offset().to_le_bytes());
+    hasher.update(argument.size().to_le_bytes());
+    hash_optional_u64(hasher, argument.alignment());
+    hasher.update([explicit_value_kind_tag(argument.value_kind())]);
+    hash_optional_tag(hasher, argument.value_type().map(explicit_value_type_tag));
+    hash_optional_tag(hasher, argument.address_space().map(address_space_tag));
+    hash_optional_tag(hasher, argument.access().map(argument_access_tag));
+    hash_optional_tag(hasher, argument.actual_access().map(argument_access_tag));
+    hash_optional_u64(hasher, argument.pointee_alignment());
+    hash_optional_bool(hasher, argument.is_const());
+    hash_optional_bool(hasher, argument.is_restrict());
+    hash_optional_bool(hasher, argument.is_volatile());
+    hash_optional_bool(hasher, argument.is_pipe());
+}
+
+fn hash_hidden_argument(hasher: &mut Sha256, argument: HiddenArgument) {
+    hasher.update(argument.offset().to_le_bytes());
+    hasher.update(argument.size().to_le_bytes());
+    hasher.update([hidden_value_kind_tag(argument.value_kind())]);
+}
+
+fn hash_optional_text(hasher: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hash_text(hasher, value);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_optional_u64(hasher: &mut Sha256, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hasher.update(value.to_le_bytes());
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_optional_u32(hasher: &mut Sha256, value: Option<u32>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hasher.update(value.to_le_bytes());
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_optional_bool(hasher: &mut Sha256, value: Option<bool>) {
+    match value {
+        Some(value) => hasher.update([1, u8::from(value)]),
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_optional_tag(hasher: &mut Sha256, value: Option<u8>) {
+    match value {
+        Some(value) => hasher.update([1, value]),
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_optional_dimensions(hasher: &mut Sha256, value: Option<[u32; 3]>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            for dimension in value {
+                hasher.update(dimension.to_le_bytes());
+            }
+        }
+        None => hasher.update([0]),
+    }
+}
+
+const fn explicit_value_kind_tag(kind: ExplicitValueKind) -> u8 {
+    match kind {
+        ExplicitValueKind::ByValue => 0,
+        ExplicitValueKind::GlobalBuffer => 1,
+        ExplicitValueKind::DynamicSharedPointer => 2,
+        ExplicitValueKind::Sampler => 3,
+        ExplicitValueKind::Image => 4,
+        ExplicitValueKind::Pipe => 5,
+        ExplicitValueKind::Queue => 6,
+    }
+}
+
+const fn explicit_value_type_tag(value_type: ExplicitValueType) -> u8 {
+    match value_type {
+        ExplicitValueType::Struct => 0,
+        ExplicitValueType::I8 => 1,
+        ExplicitValueType::U8 => 2,
+        ExplicitValueType::I16 => 3,
+        ExplicitValueType::U16 => 4,
+        ExplicitValueType::F16 => 5,
+        ExplicitValueType::I32 => 6,
+        ExplicitValueType::U32 => 7,
+        ExplicitValueType::F32 => 8,
+        ExplicitValueType::I64 => 9,
+        ExplicitValueType::U64 => 10,
+        ExplicitValueType::F64 => 11,
+    }
+}
+
+const fn address_space_tag(address_space: ArgumentAddressSpace) -> u8 {
+    match address_space {
+        ArgumentAddressSpace::Private => 0,
+        ArgumentAddressSpace::Global => 1,
+        ArgumentAddressSpace::Constant => 2,
+        ArgumentAddressSpace::Local => 3,
+        ArgumentAddressSpace::Generic => 4,
+        ArgumentAddressSpace::Region => 5,
+    }
+}
+
+const fn argument_access_tag(access: ArgumentAccess) -> u8 {
+    match access {
+        ArgumentAccess::ReadOnly => 0,
+        ArgumentAccess::WriteOnly => 1,
+        ArgumentAccess::ReadWrite => 2,
+    }
+}
+
+const fn hidden_value_kind_tag(kind: HiddenValueKind) -> u8 {
+    match kind {
+        HiddenValueKind::BlockCountX => 0,
+        HiddenValueKind::BlockCountY => 1,
+        HiddenValueKind::BlockCountZ => 2,
+        HiddenValueKind::GroupSizeX => 3,
+        HiddenValueKind::GroupSizeY => 4,
+        HiddenValueKind::GroupSizeZ => 5,
+        HiddenValueKind::RemainderX => 6,
+        HiddenValueKind::RemainderY => 7,
+        HiddenValueKind::RemainderZ => 8,
+        HiddenValueKind::GlobalOffsetX => 9,
+        HiddenValueKind::GlobalOffsetY => 10,
+        HiddenValueKind::GlobalOffsetZ => 11,
+        HiddenValueKind::GridDimensions => 12,
+        HiddenValueKind::None => 13,
+        HiddenValueKind::PrintfBuffer => 14,
+        HiddenValueKind::HostcallBuffer => 15,
+        HiddenValueKind::HeapV1 => 16,
+        HiddenValueKind::DefaultQueue => 17,
+        HiddenValueKind::CompletionAction => 18,
+        HiddenValueKind::MultigridSyncArgument => 19,
+        HiddenValueKind::DynamicLdsSize => 20,
+        HiddenValueKind::PrivateBase => 21,
+        HiddenValueKind::SharedBase => 22,
+        HiddenValueKind::QueuePointer => 23,
+    }
 }
 
 fn calculate_policy_identity(
@@ -1490,11 +2128,83 @@ fn calculate_inspection_identity(
     hash_text(&mut hasher, &policy.target.to_string());
     hasher.update([code_object_version_tag(policy.code_object_version)]);
     hasher.update(policy.identity.0);
-    hasher.update([match descriptor_section {
-        CanonicalDescriptorSectionObservationV1::Missing => 0,
-        CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection => 1,
-    }]);
+    hasher.update([descriptor_section_tag(descriptor_section)]);
     InspectedRawWorkerV2HsacoIdentityV1(hasher.finalize().into())
+}
+
+fn calculate_protected_inspection_identity(
+    source: &InertProtectedFirstBuildWorkerV2EvidenceV1,
+    raw: &SharedRawWorkerV2HsacoInspectionV1,
+    response: SealedWorkerV2ResponseIdentityV1,
+) -> InspectedProtectedRawWorkerV2HsacoIdentityV1 {
+    let mut hasher = Sha256::new();
+    hasher.update(PROTECTED_INSPECTION_IDENTITY_DOMAIN_V1);
+    hasher.update(protected_component_identity(
+        PROTECTED_SOURCE_EVIDENCE_DOMAIN_V1,
+        |component| component.update(source.identity().as_bytes()),
+    ));
+    hasher.update(protected_component_identity(
+        PROTECTED_ATTEMPT_DOMAIN_V1,
+        |component| hash_attempt(component, source.attempt()),
+    ));
+    hasher.update(protected_component_identity(
+        PROTECTED_HANDOFF_DOMAIN_V2,
+        |component| {
+            component.update([source.slot() as u8]);
+            component.update(source.handoff_identity().as_bytes());
+        },
+    ));
+    hasher.update(protected_component_identity(
+        PROTECTED_COMPILER_CLOSURE_DOMAIN_V2,
+        |component| hash_compiler_closure_v2(component, source.compiler_closure()),
+    ));
+    hasher.update(protected_component_identity(
+        PROTECTED_WORKER_EXCHANGE_DOMAIN_V1,
+        |component| {
+            let worker = source.worker_measurement();
+            hash_content(component, worker.executable());
+            hash_text(component, worker.worker_build_identity());
+            hash_text(component, worker.llvm_build_identity());
+            hash_bytes(component, source.bootstrap_request_bytes());
+            hash_bytes(component, source.bootstrap().response().canonical_bytes());
+            hash_bytes(component, source.authorized_request_bytes());
+            hash_bytes(component, source.authorized().response().canonical_bytes());
+            component.update(response.0);
+        },
+    ));
+    hasher.update(protected_component_identity(
+        PROTECTED_RAW_BYTES_DOMAIN_V1,
+        |component| {
+            hash_content(component, source.output_identity());
+            hash_bytes(component, source.output_bytes());
+        },
+    ));
+    hasher.update(protected_component_identity(
+        PROTECTED_TARGET_DOMAIN_V1,
+        |component| hash_text(component, &raw.policy.target.to_string()),
+    ));
+    hasher.update(protected_component_identity(
+        PROTECTED_CODE_OBJECT_VERSION_DOMAIN_V1,
+        |component| component.update([code_object_version_tag(raw.policy.code_object_version)]),
+    ));
+    hasher.update(protected_component_identity(
+        PROTECTED_POLICY_DOMAIN_V1,
+        |component| {
+            component.update(raw.policy.identity.0);
+            component.update([descriptor_section_tag(raw.descriptor_section)]);
+        },
+    ));
+    hasher.update(raw.descriptor_identity);
+    hasher.update(raw.abi_identity);
+    hasher.update(raw.resource_identity);
+    InspectedProtectedRawWorkerV2HsacoIdentityV1(hasher.finalize().into())
+}
+
+fn protected_component_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    update(&mut hasher);
+    hasher.finalize().into()
 }
 
 fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
@@ -1503,9 +2213,29 @@ fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
     hasher.update(attempt.invocation().as_bytes());
 }
 
+fn hash_compiler_closure_v2(hasher: &mut Sha256, closure: CompilerClosureV2) {
+    hasher.update(closure.cargo_executable_sha256());
+    hasher.update(closure.cargo_binding_trampoline_sha256());
+    hasher.update(closure.cargo_fe2o3_binding_wrapper_sha256());
+    hasher.update(closure.rustc_executable_sha256());
+    hasher.update(closure.rustc_runtime_tree_sha256());
+    hasher.update(closure.codegen_backend_sha256());
+    hasher.update(
+        closure
+            .cargo_binding_transition_protocol_version()
+            .to_le_bytes(),
+    );
+    hasher.update(closure.identity_sha256());
+}
+
 fn hash_content(hasher: &mut Sha256, identity: ContentIdentityV1) {
     hasher.update(identity.sha256());
     hasher.update(identity.byte_len().to_le_bytes());
+}
+
+fn hash_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
 fn hash_strings(hasher: &mut Sha256, strings: &[String]) {
@@ -1518,6 +2248,13 @@ fn hash_strings(hasher: &mut Sha256, strings: &[String]) {
 fn hash_text(hasher: &mut Sha256, value: &str) {
     hasher.update((value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
+}
+
+const fn descriptor_section_tag(section: CanonicalDescriptorSectionObservationV1) -> u8 {
+    match section {
+        CanonicalDescriptorSectionObservationV1::Missing => 0,
+        CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection => 1,
+    }
 }
 
 const fn map_code_object_version(version: InspectedCodeObjectVersion) -> CodeObjectVersion {
