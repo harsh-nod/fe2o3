@@ -1,5 +1,6 @@
 use fe2o3_kernel_ir::{BlockId, LaunchDomain, WorkgroupSize, verify_module};
 use fe2o3_lower_mir_kernel::{
+    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
     ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
     ProductionSemanticKirResourceV1,
 };
@@ -190,6 +191,31 @@ fn independent_lowerings_are_deterministic() {
     .unwrap();
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
+}
+
+#[test]
+fn formal_memory_admission_retains_exact_kir_without_authority() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        semantic_owner(false, false),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let admitted = ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
+
+    admitted.verify_equivalence().unwrap();
+    assert_eq!(
+        admitted.witness_extent(),
+        PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
+    );
+    assert!(admitted.obligations().accesses().is_empty());
+    assert!(admitted.obligations().bounds_requirements().is_empty());
+    assert!(
+        admitted
+            .obligations()
+            .inter_invocation_conflicts()
+            .is_empty()
+    );
+    assert!(!admitted.grants_artifact_or_launch_authority());
 }
 
 #[test]
