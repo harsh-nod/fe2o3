@@ -54,16 +54,25 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 pub use attempt::{
-    AttemptCodecError, BackendPublicationReceiptV1, BuildAttempt, BuildInvocation, BuildSession,
+    AttemptCodecError, BackendPublicationReceiptV1, BackendPublicationReceiptV2, BuildAttempt,
+    BuildInvocation, BuildSession,
 };
 use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutcome};
 pub use attempt_scoped_hsaco_publication::{
-    AttemptScopedHsacoPublicationErrorV1, AttemptScopedHsacoPublicationOutcomeV1,
-    AttemptScopedHsacoPublicationResultV1, BackendPublicationReceiptValidationErrorV1,
-    PersistedBackendReceiptV1, UpstreamCodeObjectEvidenceIdentityV1, producer_package_identity_v1,
-    publish_exact_hsaco_evidence_for_attempt_v1,
-    publish_exact_hsaco_evidence_for_attempt_v1_with_options, read_backend_publication_receipt_v1,
-    recover_published_hsaco_claim_for_attempt_v1, validate_backend_publication_receipt_v1,
+    AttemptScopedHsacoPublicationBoundaryV2, AttemptScopedHsacoPublicationErrorV1,
+    AttemptScopedHsacoPublicationErrorV2, AttemptScopedHsacoPublicationFaultPointV2,
+    AttemptScopedHsacoPublicationFaultTimingV2, AttemptScopedHsacoPublicationOptionsV2,
+    AttemptScopedHsacoPublicationOutcomeV1, AttemptScopedHsacoPublicationOutcomeV2,
+    AttemptScopedHsacoPublicationResultV1, AttemptScopedHsacoPublicationResultV2,
+    BackendPublicationReceiptValidationErrorV1, BackendPublicationReceiptValidationErrorV2,
+    PersistedBackendReceiptV1, PersistedBackendReceiptV2, UpstreamCodeObjectEvidenceIdentityV1,
+    producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
+    publish_exact_hsaco_evidence_for_attempt_v1_with_options,
+    publish_exact_hsaco_evidence_for_attempt_v2,
+    publish_exact_hsaco_evidence_for_attempt_v2_with_options, read_backend_publication_receipt_v1,
+    read_backend_publication_receipt_v2, recover_published_hsaco_claim_for_attempt_v1,
+    recover_published_hsaco_claim_for_attempt_v2, validate_backend_publication_receipt_v1,
+    validate_backend_publication_receipt_v2,
 };
 pub use compiler_module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV1,
@@ -87,9 +96,12 @@ pub use durable_link_publication::{
     publish_durable_link_v1_with_options, recover_durable_link_publication_v1,
 };
 pub use durable_published_claim::{
-    DurablePublishedClaimCodecErrorV1, DurablePublishedClaimReacquisitionErrorV1,
-    DurablePublishedClaimReceiptFieldV1, DurablePublishedHsacoClaimV1,
-    MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES, reacquire_current_hsaco_publication_lease_v1,
+    DurablePublishedClaimCodecErrorV1, DurablePublishedClaimCodecErrorV2,
+    DurablePublishedClaimReacquisitionErrorV1, DurablePublishedClaimReacquisitionErrorV2,
+    DurablePublishedClaimReceiptFieldV1, DurablePublishedClaimReceiptFieldV2,
+    DurablePublishedHsacoClaimV1, DurablePublishedHsacoClaimV2,
+    MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES, MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V2,
+    reacquire_current_hsaco_publication_lease_v1, reacquire_current_hsaco_publication_lease_v2,
 };
 pub use link_publication::{
     AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, FinalizationIdentityV1,

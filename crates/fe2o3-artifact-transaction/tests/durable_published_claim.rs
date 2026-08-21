@@ -1,14 +1,18 @@
 use fe2o3_artifact_transaction::{
-    AtomicPublicationIdentityV1, BuildAttempt, BuildInvocation, BuildSession,
-    CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1,
-    DurablePublishedClaimCodecErrorV1, DurablePublishedClaimReacquisitionErrorV1,
-    DurablePublishedClaimReceiptFieldV1, DurablePublishedHsacoClaimV1, FinalizationIdentityV1,
-    FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
-    PackageIdentityV1, PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
+    AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV2, BuildAttempt,
+    BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1,
+    DurablePublishedClaimCodecErrorV1, DurablePublishedClaimCodecErrorV2,
+    DurablePublishedClaimReacquisitionErrorV1, DurablePublishedClaimReacquisitionErrorV2,
+    DurablePublishedClaimReceiptFieldV1, DurablePublishedHsacoClaimV1,
+    DurablePublishedHsacoClaimV2, FinalizationIdentityV1, FinalizedOutputIdentityV1,
+    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
+    PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
     UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
     fail_build_attempt, finish_build_attempt, publish_exact_hsaco_evidence_for_attempt_v1,
-    reacquire_current_hsaco_publication_lease_v1,
+    publish_exact_hsaco_evidence_for_attempt_v2, reacquire_current_hsaco_publication_lease_v1,
+    reacquire_current_hsaco_publication_lease_v2, recover_published_hsaco_claim_for_attempt_v2,
 };
+use fe2o3_build_authority::{CompilerClosureErrorV2, CompilerClosureV2};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,6 +20,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const CLAIM_MAGIC: &[u8] = b"FE2O3-PUBLISHED-HSACO-CLAIM-V1\0";
 const CLAIM_CHECKSUM_DOMAIN: &[u8] = b"fe2o3.published-hsaco-claim.checksum.v1\0";
+const CLAIM_MAGIC_V2: &[u8] = b"FE2O3-PUBLISHED-HSACO-CLAIM-V2\0";
+const CLAIM_CHECKSUM_DOMAIN_V2: &[u8] = b"fe2o3.published-hsaco-claim.checksum.v2\0";
 const ATTEMPT_REGISTRY: &str = ".fe2o3-attempts-v1";
 const RECORD_PREFIX: &str = ".fe2o3-link-publication-v1-";
 const RECORD_SUFFIX: &str = ".record";
@@ -119,10 +125,67 @@ fn publish(
     .unwrap()
 }
 
+fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+    CompilerClosureV2::new(
+        identity(seed),
+        identity(seed.wrapping_add(1)),
+        identity(seed.wrapping_add(2)),
+        identity(seed.wrapping_add(3)),
+        identity(seed.wrapping_add(4)),
+        identity(seed.wrapping_add(5)),
+    )
+    .unwrap()
+}
+
+fn publish_v2(
+    output: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    plan: DurableLinkPublicationPlanV1,
+    closure: CompilerClosureV2,
+    bytes: &[u8],
+) -> fe2o3_artifact_transaction::AttemptScopedHsacoPublicationResultV2 {
+    publish_exact_hsaco_evidence_for_attempt_v2(
+        output,
+        producer,
+        attempt,
+        plan,
+        upstream(plan),
+        closure,
+        bytes,
+    )
+    .unwrap()
+}
+
+fn encode_closure(closure: CompilerClosureV2) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(226);
+    bytes.extend_from_slice(&closure.cargo_executable_sha256());
+    bytes.extend_from_slice(&closure.cargo_binding_trampoline_sha256());
+    bytes.extend_from_slice(&closure.cargo_fe2o3_binding_wrapper_sha256());
+    bytes.extend_from_slice(&closure.rustc_executable_sha256());
+    bytes.extend_from_slice(&closure.rustc_runtime_tree_sha256());
+    bytes.extend_from_slice(&closure.codegen_backend_sha256());
+    bytes.extend_from_slice(
+        &closure
+            .cargo_binding_transition_protocol_version()
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(&closure.identity_sha256());
+    bytes
+}
+
 fn resign_claim(bytes: &mut [u8]) {
     let body_length = bytes.len() - 32;
     let mut digest = Sha256::new();
     digest.update(CLAIM_CHECKSUM_DOMAIN);
+    digest.update(&bytes[..body_length]);
+    bytes[body_length..].copy_from_slice(&digest.finalize());
+}
+
+fn resign_claim_v2(bytes: &mut [u8]) {
+    let body_length = bytes.len() - 32;
+    let mut digest = Sha256::new();
+    digest.update(CLAIM_CHECKSUM_DOMAIN_V2);
     digest.update(&bytes[..body_length]);
     bytes[body_length..].copy_from_slice(&digest.finalize());
 }
@@ -530,4 +593,147 @@ fn output_directory_replacement_is_rejected_even_with_copied_state() {
         reacquire_current_hsaco_publication_lease_v1(&output, &claim),
         Err(DurablePublishedClaimReacquisitionErrorV1::Publication(_))
     ));
+}
+
+#[test]
+fn protected_claim_codec_rejects_cross_version_and_all_noncanonical_inputs() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let owner = producer("protected_codec", "/src/protected-codec.rs");
+    let attempt = begin(&output, &owner, 20);
+    let bytes = b"protected claim codec payload";
+    let protected_plan = plan(attempt, scope(0xa0), 0xb0, bytes);
+    let closure = compiler_closure(0x10);
+    let result = publish_v2(&output, &owner, attempt, protected_plan, closure, bytes);
+    let claim = result.published_claim().clone();
+    let encoded = claim.encode_canonical().unwrap();
+    assert_eq!(
+        DurablePublishedHsacoClaimV2::decode_canonical(&encoded).unwrap(),
+        claim
+    );
+    assert_eq!(claim.compiler_closure(), closure);
+
+    for length in [0, 1, encoded.len() - 1] {
+        assert!(matches!(
+            DurablePublishedHsacoClaimV2::decode_canonical(&encoded[..length]),
+            Err(DurablePublishedClaimCodecErrorV2::Truncated)
+        ));
+    }
+    let mut trailing = encoded.clone();
+    trailing.push(0);
+    assert!(matches!(
+        DurablePublishedHsacoClaimV2::decode_canonical(&trailing),
+        Err(DurablePublishedClaimCodecErrorV2::TrailingBytes)
+    ));
+    assert!(matches!(
+        DurablePublishedHsacoClaimV2::decode_canonical(&vec![0; 1_025]),
+        Err(DurablePublishedClaimCodecErrorV2::TooLarge { .. })
+    ));
+
+    let mut checksum = encoded.clone();
+    checksum[CLAIM_MAGIC_V2.len() + 10] ^= 1;
+    assert!(matches!(
+        DurablePublishedHsacoClaimV2::decode_canonical(&checksum),
+        Err(DurablePublishedClaimCodecErrorV2::ChecksumMismatch)
+    ));
+    let mut magic = encoded.clone();
+    magic[0] ^= 1;
+    resign_claim_v2(&mut magic);
+    assert!(matches!(
+        DurablePublishedHsacoClaimV2::decode_canonical(&magic),
+        Err(DurablePublishedClaimCodecErrorV2::BadMagic)
+    ));
+    let mut version = encoded.clone();
+    version[CLAIM_MAGIC_V2.len()..CLAIM_MAGIC_V2.len() + 2].copy_from_slice(&3_u16.to_le_bytes());
+    resign_claim_v2(&mut version);
+    assert!(matches!(
+        DurablePublishedHsacoClaimV2::decode_canonical(&version),
+        Err(DurablePublishedClaimCodecErrorV2::UnsupportedVersion { actual: 3 })
+    ));
+
+    let closure_start =
+        CLAIM_MAGIC_V2.len() + 2 + 8 + 16 + 32 + (3 * 32) + (7 * 32) + 32 + (7 * 32);
+    let mut protocol = encoded.clone();
+    protocol[closure_start + 192..closure_start + 194].copy_from_slice(&2_u16.to_le_bytes());
+    resign_claim_v2(&mut protocol);
+    assert!(matches!(
+        DurablePublishedHsacoClaimV2::decode_canonical(&protocol),
+        Err(DurablePublishedClaimCodecErrorV2::InvalidCompilerClosure(
+            CompilerClosureErrorV2::UnsupportedTransitionProtocolVersion { version: 2 }
+        ))
+    ));
+    let mut aggregate = encoded.clone();
+    aggregate[closure_start + 194] ^= 1;
+    resign_claim_v2(&mut aggregate);
+    assert!(matches!(
+        DurablePublishedHsacoClaimV2::decode_canonical(&aggregate),
+        Err(DurablePublishedClaimCodecErrorV2::InvalidCompilerClosure(
+            CompilerClosureErrorV2::IdentityMismatch
+        ))
+    ));
+
+    let legacy_temp = TestDirectory::new();
+    let legacy_output = legacy_temp.output();
+    let legacy_owner = producer("legacy_codec", "/src/legacy-codec.rs");
+    let legacy_attempt = begin(&legacy_output, &legacy_owner, 21);
+    let legacy_plan = plan(legacy_attempt, scope(0xa1), 0xb1, bytes);
+    let legacy = publish(
+        &legacy_output,
+        &legacy_owner,
+        legacy_attempt,
+        legacy_plan,
+        bytes,
+    );
+    let legacy_encoded = legacy.published_claim().encode_canonical().unwrap();
+    assert!(DurablePublishedHsacoClaimV2::decode_canonical(&legacy_encoded).is_err());
+    assert!(DurablePublishedHsacoClaimV1::decode_canonical(&encoded).is_err());
+}
+
+#[test]
+fn canonical_substituted_closure_decodes_inertly_but_cannot_recover_or_reacquire() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let owner = producer(
+        "protected_substitution",
+        "/src/protected-claim-substitution.rs",
+    );
+    let attempt = begin(&output, &owner, 22);
+    let bytes = b"protected claim closure substitution";
+    let plan = plan(attempt, scope(0xa2), 0xb2, bytes);
+    let closure = compiler_closure(0x20);
+    let result = publish_v2(&output, &owner, attempt, plan, closure, bytes);
+    let original_receipt = result.receipt();
+    let original_claim = result.published_claim().clone();
+    let mut encoded = result.published_claim().encode_canonical().unwrap();
+    drop(result);
+
+    let alternate = compiler_closure(0x30);
+    let closure_start =
+        CLAIM_MAGIC_V2.len() + 2 + 8 + 16 + 32 + (3 * 32) + (7 * 32) + 32 + (7 * 32);
+    encoded[closure_start..closure_start + 226].copy_from_slice(&encode_closure(alternate));
+    resign_claim_v2(&mut encoded);
+    let substituted = DurablePublishedHsacoClaimV2::decode_canonical(&encoded).unwrap();
+    assert_eq!(substituted.compiler_closure(), alternate);
+    assert_ne!(substituted.receipt(), original_receipt);
+    assert!(!substituted.grants_compiler_authority());
+    assert!(!substituted.grants_proof_authority());
+    assert!(!substituted.grants_publication_authority());
+    assert!(matches!(
+        recover_published_hsaco_claim_for_attempt_v2(
+            &output,
+            &owner,
+            attempt,
+            plan,
+            upstream(plan),
+            alternate,
+            substituted.receipt(),
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV2::ReceiptPublicationMismatch)
+    ));
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v2(&output, &substituted),
+        Err(DurablePublishedClaimReacquisitionErrorV2::ReceiptMismatch)
+    ));
+    let lease = reacquire_current_hsaco_publication_lease_v2(&output, &original_claim).unwrap();
+    assert_eq!(lease.exact_artifact_bytes(), bytes);
 }

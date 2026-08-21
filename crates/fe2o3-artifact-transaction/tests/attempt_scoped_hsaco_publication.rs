@@ -1,19 +1,27 @@
 use fe2o3_artifact_transaction::{
-    AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV1,
-    AttemptScopedHsacoPublicationOutcomeV1, BackendPublicationReceiptValidationErrorV1,
-    BuildAttempt, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
-    DurableArtifactBoundaryV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
-    DurableJournalStageV1, DurableLinkPublicationError, DurableLinkPublicationFaultPointV1,
-    DurableLinkPublicationOptionsV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
-    FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
-    PackageIdentityV1, PersistedBackendReceiptV1, PinnedWorkerIdentityV1, ProducerIdentity,
+    AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationBoundaryV2,
+    AttemptScopedHsacoPublicationErrorV1, AttemptScopedHsacoPublicationErrorV2,
+    AttemptScopedHsacoPublicationFaultPointV2, AttemptScopedHsacoPublicationFaultTimingV2,
+    AttemptScopedHsacoPublicationOptionsV2, AttemptScopedHsacoPublicationOutcomeV1,
+    AttemptScopedHsacoPublicationOutcomeV2, BackendPublicationReceiptValidationErrorV1,
+    BackendPublicationReceiptValidationErrorV2, BuildAttempt, BuildInvocation, BuildSession,
+    CanonicalLinkRequestIdentityV1, DurableArtifactBoundaryV1, DurableFaultTimingV1,
+    DurableJournalBoundaryV1, DurableJournalStageV1, DurableLinkPublicationError,
+    DurableLinkPublicationFaultPointV1, DurableLinkPublicationOptionsV1,
+    DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
+    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
+    PersistedBackendReceiptV1, PersistedBackendReceiptV2, PinnedWorkerIdentityV1, ProducerIdentity,
     TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
     begin_build_attempt, fail_build_attempt, finish_build_attempt,
     publish_exact_hsaco_evidence_for_attempt_v1,
-    publish_exact_hsaco_evidence_for_attempt_v1_with_options, read_backend_publication_receipt_v1,
-    recover_durable_link_publication_v1, recover_published_hsaco_claim_for_attempt_v1,
-    validate_backend_publication_receipt_v1,
+    publish_exact_hsaco_evidence_for_attempt_v1_with_options,
+    publish_exact_hsaco_evidence_for_attempt_v2,
+    publish_exact_hsaco_evidence_for_attempt_v2_with_options, read_backend_publication_receipt_v1,
+    read_backend_publication_receipt_v2, recover_durable_link_publication_v1,
+    recover_published_hsaco_claim_for_attempt_v1, recover_published_hsaco_claim_for_attempt_v2,
+    validate_backend_publication_receipt_v1, validate_backend_publication_receipt_v2,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -142,6 +150,77 @@ fn publish_exact_with_options(
         attempt,
         plan,
         upstream_evidence(plan),
+        bytes,
+        options,
+    )
+}
+
+fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+    CompilerClosureV2::new(
+        identity(seed),
+        identity(seed.wrapping_add(1)),
+        identity(seed.wrapping_add(2)),
+        identity(seed.wrapping_add(3)),
+        identity(seed.wrapping_add(4)),
+        identity(seed.wrapping_add(5)),
+    )
+    .unwrap()
+}
+
+fn closure_with_substitution(closure: CompilerClosureV2, role: usize) -> CompilerClosureV2 {
+    let mut pins = [
+        closure.cargo_executable_sha256(),
+        closure.cargo_binding_trampoline_sha256(),
+        closure.cargo_fe2o3_binding_wrapper_sha256(),
+        closure.rustc_executable_sha256(),
+        closure.rustc_runtime_tree_sha256(),
+        closure.codegen_backend_sha256(),
+    ];
+    pins[role][0] ^= 0x80;
+    CompilerClosureV2::new(pins[0], pins[1], pins[2], pins[3], pins[4], pins[5]).unwrap()
+}
+
+fn publish_exact_v2(
+    output: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    plan: DurableLinkPublicationPlanV1,
+    closure: CompilerClosureV2,
+    bytes: &[u8],
+) -> Result<
+    fe2o3_artifact_transaction::AttemptScopedHsacoPublicationResultV2,
+    AttemptScopedHsacoPublicationErrorV2,
+> {
+    publish_exact_hsaco_evidence_for_attempt_v2(
+        output,
+        producer,
+        attempt,
+        plan,
+        upstream_evidence(plan),
+        closure,
+        bytes,
+    )
+}
+
+fn publish_exact_v2_with_options(
+    output: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    plan: DurableLinkPublicationPlanV1,
+    closure: CompilerClosureV2,
+    bytes: &[u8],
+    options: impl Into<AttemptScopedHsacoPublicationOptionsV2>,
+) -> Result<
+    fe2o3_artifact_transaction::AttemptScopedHsacoPublicationResultV2,
+    AttemptScopedHsacoPublicationErrorV2,
+> {
+    publish_exact_hsaco_evidence_for_attempt_v2_with_options(
+        output,
+        producer,
+        attempt,
+        plan,
+        upstream_evidence(plan),
+        closure,
         bytes,
         options,
     )
@@ -911,4 +990,659 @@ fn unrelated_global_attempts_may_skip_generations_within_one_scope() {
         .unwrap();
     assert_eq!(recovered.record().attempt(), later);
     assert_eq!(recovered.artifact().bytes(), later_bytes);
+}
+
+#[test]
+fn protected_v2_retains_exact_closure_and_rejects_all_six_substitutions() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let owner = producer("protected_kernel", "/src/protected-closure.rs");
+    let attempt = begin(&output, &owner, 100);
+    let bytes = b"protected closure hsaco";
+    let plan = plan(attempt, scope(0xa0), 0xb0, bytes);
+    let closure = compiler_closure(0x10);
+    let result = publish_exact_v2(&output, &owner, attempt, plan, closure, bytes).unwrap();
+
+    assert_eq!(
+        result.outcome(),
+        AttemptScopedHsacoPublicationOutcomeV2::Published
+    );
+    assert_eq!(result.compiler_closure(), closure);
+    assert_eq!(result.receipt().compiler_closure(), closure);
+    assert_eq!(result.published_claim().compiler_closure(), closure);
+    assert_eq!(result.published_claim().receipt(), result.receipt());
+    assert!(!result.grants_compiler_authority());
+    assert!(!result.grants_proof_authority());
+    assert!(!result.grants_publication_authority());
+    assert!(!result.grants_load_authority());
+    assert!(!result.grants_launch_authority());
+
+    for role in 0..6 {
+        let substituted = closure_with_substitution(closure, role);
+        assert_eq!(
+            validate_backend_publication_receipt_v2(
+                &owner,
+                attempt,
+                plan,
+                upstream_evidence(plan),
+                substituted,
+                result.receipt(),
+            ),
+            Err(BackendPublicationReceiptValidationErrorV2::CompilerClosureMismatch)
+        );
+        assert!(matches!(
+            recover_published_hsaco_claim_for_attempt_v2(
+                &output,
+                &owner,
+                attempt,
+                plan,
+                upstream_evidence(plan),
+                substituted,
+                result.receipt(),
+            ),
+            Err(AttemptScopedHsacoPublicationErrorV2::ReceiptPublicationMismatch)
+        ));
+        assert_eq!(
+            read_backend_publication_receipt_v2(&output, &owner, attempt).unwrap(),
+            PersistedBackendReceiptV2::Provenance(result.receipt())
+        );
+    }
+}
+
+#[test]
+fn protected_v2_never_uses_or_clears_v1_pending_or_final_receipts() {
+    for final_receipt in [false, true] {
+        let temp = TestDirectory::new();
+        let output = temp.output();
+        let source = if final_receipt {
+            "/src/v1-final-cross-use.rs"
+        } else {
+            "/src/v1-pending-cross-use.rs"
+        };
+        let owner = producer("legacy_kernel", source);
+        let attempt = begin(&output, &owner, 101 + u8::from(final_receipt));
+        let bytes = b"legacy receipt remains untouched";
+        let plan = plan(attempt, scope(0xa1), 0xb1, bytes);
+        if final_receipt {
+            publish_exact(&output, &owner, attempt, plan, bytes).unwrap();
+        } else {
+            let point = DurableLinkPublicationFaultPointV1::Journal {
+                stage: DurableJournalStageV1::Planned,
+                boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+                timing: DurableFaultTimingV1::After,
+            };
+            assert!(matches!(
+                publish_exact_with_options(
+                    &output,
+                    &owner,
+                    attempt,
+                    plan,
+                    bytes,
+                    DurableLinkPublicationOptionsV1::inject_crash(point),
+                ),
+                Err(AttemptScopedHsacoPublicationErrorV1::PublicationInterrupted(_))
+            ));
+        }
+        let registry = output.join(".fe2o3-attempts-v1");
+        let before = fs::read(&registry).unwrap();
+        assert!(matches!(
+            publish_exact_v2(
+                &output,
+                &owner,
+                attempt,
+                plan,
+                compiler_closure(0x20),
+                bytes,
+            ),
+            Err(AttemptScopedHsacoPublicationErrorV2::IncompatibleReceiptVersion)
+        ));
+        assert!(matches!(
+            read_backend_publication_receipt_v2(&output, &owner, attempt),
+            Err(AttemptScopedHsacoPublicationErrorV2::IncompatibleReceiptVersion)
+        ));
+        assert_eq!(fs::read(&registry).unwrap(), before);
+    }
+}
+
+#[test]
+fn v1_cannot_use_or_clear_protected_v2_pending_state() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let owner = producer("protected_kernel", "/src/v2-pending-cross-use.rs");
+    let attempt = begin(&output, &owner, 103);
+    let bytes = b"protected pending receipt remains untouched";
+    let plan = plan(attempt, scope(0xa2), 0xb2, bytes);
+    let closure = compiler_closure(0x30);
+    let point = DurableLinkPublicationFaultPointV1::Journal {
+        stage: DurableJournalStageV1::Planned,
+        boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+        timing: DurableFaultTimingV1::After,
+    };
+    assert!(matches!(
+        publish_exact_v2_with_options(
+            &output,
+            &owner,
+            attempt,
+            plan,
+            closure,
+            bytes,
+            DurableLinkPublicationOptionsV1::inject_crash(point),
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV2::PublicationInterrupted(_))
+    ));
+    let registry = output.join(".fe2o3-attempts-v1");
+    let before = fs::read(&registry).unwrap();
+    assert!(matches!(
+        publish_exact(&output, &owner, attempt, plan, bytes),
+        Err(AttemptScopedHsacoPublicationErrorV1::Attempt(_))
+    ));
+    assert_eq!(fs::read(&registry).unwrap(), before);
+    let recovered = publish_exact_v2(&output, &owner, attempt, plan, closure, bytes).unwrap();
+    assert_eq!(
+        recovered.outcome(),
+        AttemptScopedHsacoPublicationOutcomeV2::RecoveredAndPublished
+    );
+}
+
+#[test]
+fn protected_v2_exact_retry_recovers_earliest_absent_durable_plan() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let owner = producer("protected_kernel", "/src/v2-earliest-crash.rs");
+    let attempt = begin(&output, &owner, 104);
+    let bytes = b"earliest crash exact retry";
+    let plan = plan(attempt, scope(0xa3), 0xb3, bytes);
+    let closure = compiler_closure(0x31);
+    let point = DurableLinkPublicationFaultPointV1::Journal {
+        stage: DurableJournalStageV1::Planned,
+        boundary: DurableJournalBoundaryV1::CreateRedoTemp,
+        timing: DurableFaultTimingV1::Before,
+    };
+    assert!(matches!(
+        publish_exact_v2_with_options(
+            &output,
+            &owner,
+            attempt,
+            plan,
+            closure,
+            bytes,
+            DurableLinkPublicationOptionsV1::inject_crash(point),
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV2::PublicationInterrupted(
+            DurableLinkPublicationError::InjectedCrash { point: actual }
+        )) if actual == point
+    ));
+    assert!(matches!(
+        read_backend_publication_receipt_v2(&output, &owner, attempt).unwrap(),
+        PersistedBackendReceiptV2::PendingProvenance(_)
+    ));
+    let recovered = publish_exact_v2(&output, &owner, attempt, plan, closure, bytes).unwrap();
+    assert_eq!(
+        recovered.outcome(),
+        AttemptScopedHsacoPublicationOutcomeV2::Published
+    );
+    assert_eq!(recovered.snapshot().artifact().bytes(), bytes);
+}
+
+#[test]
+fn protected_v2_absent_plan_retry_still_rejects_changed_plan_closure_and_output() {
+    for substitution in 0..3 {
+        let temp = TestDirectory::new();
+        let output = temp.output();
+        let owner = producer(
+            "protected_kernel",
+            &format!("/src/v2-absent-substitution-{substitution}.rs"),
+        );
+        let attempt = begin(&output, &owner, 214 + substitution);
+        let bytes = b"absent plan substitution baseline";
+        let exact_plan = plan(attempt, scope(0xa9 + substitution), 0xb9, bytes);
+        let closure = compiler_closure(0x39 + substitution);
+        let point = DurableLinkPublicationFaultPointV1::Journal {
+            stage: DurableJournalStageV1::Planned,
+            boundary: DurableJournalBoundaryV1::CreateRedoTemp,
+            timing: DurableFaultTimingV1::Before,
+        };
+        assert!(matches!(
+            publish_exact_v2_with_options(
+                &output,
+                &owner,
+                attempt,
+                exact_plan,
+                closure,
+                bytes,
+                DurableLinkPublicationOptionsV1::inject_crash(point),
+            ),
+            Err(AttemptScopedHsacoPublicationErrorV2::PublicationInterrupted(_))
+        ));
+
+        let result = match substitution {
+            0 => {
+                let changed_plan = DurableLinkPublicationPlanV1::new(
+                    attempt,
+                    exact_plan.scope(),
+                    CanonicalLinkRequestIdentityV1::from_bytes([0xfa; 32]),
+                    exact_plan.worker(),
+                    exact_plan.response(),
+                    exact_plan.linked_output(),
+                    exact_plan.finalization(),
+                    exact_plan.finalized_output(),
+                    exact_plan.publication(),
+                );
+                publish_exact_v2(&output, &owner, attempt, changed_plan, closure, bytes)
+            }
+            1 => publish_exact_v2(
+                &output,
+                &owner,
+                attempt,
+                exact_plan,
+                closure_with_substitution(closure, 0),
+                bytes,
+            ),
+            _ => publish_exact_v2(
+                &output,
+                &owner,
+                attempt,
+                exact_plan,
+                closure,
+                b"changed output after absent plan",
+            ),
+        };
+        if substitution < 2 {
+            assert!(matches!(
+                result,
+                Err(AttemptScopedHsacoPublicationErrorV2::PendingReceiptMismatch)
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(AttemptScopedHsacoPublicationErrorV2::Durable(
+                    DurableLinkPublicationError::FinalizedArtifactDigestMismatch
+                ))
+            ));
+        }
+        assert_eq!(
+            read_backend_publication_receipt_v2(&output, &owner, attempt).unwrap(),
+            PersistedBackendReceiptV2::None
+        );
+    }
+}
+
+#[test]
+fn v1_cannot_use_or_clear_protected_v2_final_state() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let owner = producer("protected_kernel", "/src/v2-final-cross-use.rs");
+    let attempt = begin(&output, &owner, 217);
+    let bytes = b"protected final receipt remains untouched";
+    let plan = plan(attempt, scope(0xac), 0xbc, bytes);
+    let closure = compiler_closure(0x3c);
+    publish_exact_v2(&output, &owner, attempt, plan, closure, bytes).unwrap();
+    let registry = output.join(".fe2o3-attempts-v1");
+    let before = fs::read(&registry).unwrap();
+    assert!(matches!(
+        publish_exact(&output, &owner, attempt, plan, bytes),
+        Err(AttemptScopedHsacoPublicationErrorV1::Attempt(_))
+    ));
+    assert!(read_backend_publication_receipt_v1(&output, &owner, attempt).is_err());
+    assert_eq!(fs::read(&registry).unwrap(), before);
+    assert!(matches!(
+        read_backend_publication_receipt_v2(&output, &owner, attempt).unwrap(),
+        PersistedBackendReceiptV2::Provenance(receipt)
+            if receipt.compiler_closure() == closure
+    ));
+}
+
+#[test]
+fn protected_v2_receipt_commit_crashes_have_restart_safe_exact_retries() {
+    let points = [
+        AttemptScopedHsacoPublicationFaultPointV2 {
+            boundary: AttemptScopedHsacoPublicationBoundaryV2::CommitPendingReceipt,
+            timing: AttemptScopedHsacoPublicationFaultTimingV2::Before,
+        },
+        AttemptScopedHsacoPublicationFaultPointV2 {
+            boundary: AttemptScopedHsacoPublicationBoundaryV2::CommitPendingReceipt,
+            timing: AttemptScopedHsacoPublicationFaultTimingV2::After,
+        },
+        AttemptScopedHsacoPublicationFaultPointV2 {
+            boundary: AttemptScopedHsacoPublicationBoundaryV2::CommitFinalReceipt,
+            timing: AttemptScopedHsacoPublicationFaultTimingV2::Before,
+        },
+        AttemptScopedHsacoPublicationFaultPointV2 {
+            boundary: AttemptScopedHsacoPublicationBoundaryV2::CommitFinalReceipt,
+            timing: AttemptScopedHsacoPublicationFaultTimingV2::After,
+        },
+    ];
+    for (index, point) in points.into_iter().enumerate() {
+        let temp = TestDirectory::new();
+        let output = temp.output();
+        let owner = producer("protected_kernel", &format!("/src/v2-receipt-{index}.rs"));
+        let attempt = begin(&output, &owner, 105 + index as u8);
+        let bytes = format!("receipt crash {point:?}").into_bytes();
+        let plan = plan(attempt, scope(0xa4 + index as u8), 0xb4, &bytes);
+        let closure = compiler_closure(0x34 + index as u8);
+        assert!(matches!(
+            publish_exact_v2_with_options(
+                &output,
+                &owner,
+                attempt,
+                plan,
+                closure,
+                &bytes,
+                AttemptScopedHsacoPublicationOptionsV2::inject_receipt_crash(point),
+            ),
+            Err(AttemptScopedHsacoPublicationErrorV2::ReceiptCommitInterrupted {
+                point: actual
+            }) if actual == point
+        ));
+        let retried = publish_exact_v2(&output, &owner, attempt, plan, closure, &bytes);
+        if point.boundary == AttemptScopedHsacoPublicationBoundaryV2::CommitFinalReceipt
+            && point.timing == AttemptScopedHsacoPublicationFaultTimingV2::After
+        {
+            assert!(matches!(
+                retried,
+                Err(AttemptScopedHsacoPublicationErrorV2::ReceiptAlreadyPersisted { .. })
+            ));
+        } else {
+            let retried = retried.unwrap();
+            assert_eq!(retried.compiler_closure(), closure);
+            assert_eq!(retried.snapshot().artifact().bytes(), bytes);
+        }
+        assert!(matches!(
+            read_backend_publication_receipt_v2(&output, &owner, attempt).unwrap(),
+            PersistedBackendReceiptV2::Provenance(_)
+        ));
+    }
+}
+
+#[test]
+fn protected_v2_concurrent_exact_retry_after_pending_commit_has_one_publisher() {
+    let temp = TestDirectory::new();
+    let output = Arc::new(temp.output());
+    let owner = Arc::new(producer(
+        "protected_kernel",
+        "/src/v2-receipt-concurrent.rs",
+    ));
+    let attempt = begin(&output, &owner, 109);
+    let bytes: Arc<[u8]> = Arc::from(&b"concurrent exact retry"[..]);
+    let plan = plan(attempt, scope(0xa8), 0xb8, &bytes);
+    let closure = compiler_closure(0x38);
+    let point = AttemptScopedHsacoPublicationFaultPointV2 {
+        boundary: AttemptScopedHsacoPublicationBoundaryV2::CommitPendingReceipt,
+        timing: AttemptScopedHsacoPublicationFaultTimingV2::After,
+    };
+    assert!(matches!(
+        publish_exact_v2_with_options(
+            &output,
+            &owner,
+            attempt,
+            plan,
+            closure,
+            &bytes,
+            AttemptScopedHsacoPublicationOptionsV2::inject_receipt_crash(point),
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV2::ReceiptCommitInterrupted { .. })
+    ));
+
+    let barrier = Arc::new(Barrier::new(2));
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        let output = Arc::clone(&output);
+        let owner = Arc::clone(&owner);
+        let bytes = Arc::clone(&bytes);
+        let barrier = Arc::clone(&barrier);
+        threads.push(thread::spawn(move || {
+            barrier.wait();
+            publish_exact_v2(&output, &owner, attempt, plan, closure, &bytes)
+        }));
+    }
+    let results: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(AttemptScopedHsacoPublicationErrorV2::ReceiptAlreadyPersisted { .. })
+            ))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn protected_v2_reconciles_every_durable_boundary_and_timing() {
+    let stages = [
+        DurableJournalStageV1::Planned,
+        DurableJournalStageV1::WorkerPinned,
+        DurableJournalStageV1::ResponseValidated,
+        DurableJournalStageV1::Finalized,
+        DurableJournalStageV1::Published,
+    ];
+    let journal_boundaries = [
+        DurableJournalBoundaryV1::CreateRedoTemp,
+        DurableJournalBoundaryV1::WriteRedoTemp,
+        DurableJournalBoundaryV1::SyncRedoTemp,
+        DurableJournalBoundaryV1::RenameTempToRedo,
+        DurableJournalBoundaryV1::SyncRedoName,
+        DurableJournalBoundaryV1::RenameRedoToCanonical,
+        DurableJournalBoundaryV1::SyncCanonicalName,
+    ];
+    let timings = [DurableFaultTimingV1::Before, DurableFaultTimingV1::After];
+    for (index, (stage, boundary, timing)) in stages
+        .into_iter()
+        .flat_map(|stage| {
+            journal_boundaries.into_iter().flat_map(move |boundary| {
+                timings
+                    .into_iter()
+                    .map(move |timing| (stage, boundary, timing))
+            })
+        })
+        .enumerate()
+    {
+        let temp = TestDirectory::new();
+        let output = temp.output();
+        let owner = producer(
+            "protected_kernel",
+            &format!("/src/v2-journal-all-{index}.rs"),
+        );
+        let attempt = begin(&output, &owner, 120 + index as u8);
+        let bytes = format!("{stage:?}-{boundary:?}-{timing:?}").into_bytes();
+        let plan = plan(attempt, scope(0x40 + index as u8), 0x60, &bytes);
+        let closure = compiler_closure(0x80 + index as u8);
+        let point = DurableLinkPublicationFaultPointV1::Journal {
+            stage,
+            boundary,
+            timing,
+        };
+        assert!(matches!(
+            publish_exact_v2_with_options(
+                &output,
+                &owner,
+                attempt,
+                plan,
+                closure,
+                &bytes,
+                DurableLinkPublicationOptionsV1::inject_crash(point),
+            ),
+            Err(AttemptScopedHsacoPublicationErrorV2::PublicationInterrupted(
+                DurableLinkPublicationError::InjectedCrash { point: actual }
+            )) if actual == point
+        ));
+        match publish_exact_v2(&output, &owner, attempt, plan, closure, &bytes) {
+            Ok(result) => {
+                assert_eq!(result.compiler_closure(), closure);
+                assert_eq!(result.snapshot().artifact().bytes(), bytes);
+            }
+            Err(AttemptScopedHsacoPublicationErrorV2::ReceiptAlreadyPersisted { receipt }) => {
+                assert_eq!(receipt.compiler_closure(), closure);
+            }
+            Err(error) => panic!("failed to reconcile {point:?}: {error}"),
+        }
+    }
+
+    let artifact_boundaries = [
+        DurableArtifactBoundaryV1::CreateTemp,
+        DurableArtifactBoundaryV1::WriteTemp,
+        DurableArtifactBoundaryV1::SyncTemp,
+        DurableArtifactBoundaryV1::RenameToContentAddress,
+        DurableArtifactBoundaryV1::SyncDirectory,
+    ];
+    for (index, (boundary, timing)) in artifact_boundaries
+        .into_iter()
+        .flat_map(|boundary| timings.into_iter().map(move |timing| (boundary, timing)))
+        .enumerate()
+    {
+        let temp = TestDirectory::new();
+        let output = temp.output();
+        let owner = producer(
+            "protected_kernel",
+            &format!("/src/v2-artifact-all-{index}.rs"),
+        );
+        let attempt = begin(&output, &owner, 200 + index as u8);
+        let bytes = format!("{boundary:?}-{timing:?}").into_bytes();
+        let plan = plan(attempt, scope(0x90 + index as u8), 0xa0, &bytes);
+        let closure = compiler_closure(0xc0 + index as u8);
+        let point = DurableLinkPublicationFaultPointV1::Artifact { boundary, timing };
+        assert!(matches!(
+            publish_exact_v2_with_options(
+                &output,
+                &owner,
+                attempt,
+                plan,
+                closure,
+                &bytes,
+                DurableLinkPublicationOptionsV1::inject_crash(point),
+            ),
+            Err(AttemptScopedHsacoPublicationErrorV2::PublicationInterrupted(
+                DurableLinkPublicationError::InjectedCrash { point: actual }
+            )) if actual == point
+        ));
+        let recovered = publish_exact_v2(&output, &owner, attempt, plan, closure, &bytes).unwrap();
+        assert_eq!(recovered.compiler_closure(), closure);
+        assert_eq!(recovered.snapshot().artifact().bytes(), bytes);
+    }
+}
+
+#[test]
+fn protected_v2_rejects_plan_output_producer_attempt_directory_and_receipt_substitution() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let owner = producer("protected_kernel", "/src/v2-substitution.rs");
+    let attempt = begin(&output, &owner, 210);
+    let bytes = b"protected substitution baseline";
+    let baseline_plan = plan(attempt, scope(0xe0), 0xf0, bytes);
+    let closure = compiler_closure(0x20);
+    let result = publish_exact_v2(&output, &owner, attempt, baseline_plan, closure, bytes).unwrap();
+    let registry = output.join(".fe2o3-attempts-v1");
+    let original_registry = fs::read(&registry).unwrap();
+
+    let changed_plan = DurableLinkPublicationPlanV1::new(
+        attempt,
+        baseline_plan.scope(),
+        CanonicalLinkRequestIdentityV1::from_bytes([0xee; 32]),
+        baseline_plan.worker(),
+        baseline_plan.response(),
+        baseline_plan.linked_output(),
+        baseline_plan.finalization(),
+        baseline_plan.finalized_output(),
+        baseline_plan.publication(),
+    );
+    assert_eq!(
+        validate_backend_publication_receipt_v2(
+            &owner,
+            attempt,
+            changed_plan,
+            upstream_evidence(baseline_plan),
+            closure,
+            result.receipt(),
+        ),
+        Err(BackendPublicationReceiptValidationErrorV2::PlanCommitmentMismatch)
+    );
+    let other_owner = producer("protected_kernel", "/src/v2-substitution-other.rs");
+    assert!(matches!(
+        publish_exact_v2(
+            &output,
+            &other_owner,
+            attempt,
+            baseline_plan,
+            closure,
+            bytes,
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV2::Attempt(_))
+    ));
+    assert!(matches!(
+        publish_exact_v2(
+            &output,
+            &owner,
+            fake_attempt(attempt, 211),
+            baseline_plan,
+            closure,
+            bytes,
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV2::PlanAttemptMismatch)
+    ));
+    let other_directory = temp.path.join("substituted-output");
+    fs::create_dir(&other_directory).unwrap();
+    assert!(matches!(
+        publish_exact_v2(
+            &other_directory,
+            &owner,
+            attempt,
+            baseline_plan,
+            closure,
+            bytes,
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV2::Attempt(_))
+    ));
+    assert_eq!(fs::read(&registry).unwrap(), original_registry);
+
+    let second_temp = TestDirectory::new();
+    let second_output = second_temp.output();
+    let second_owner = producer("protected_kernel", "/src/v2-output-substitution.rs");
+    let second_attempt = begin(&second_output, &second_owner, 212);
+    let second_plan = plan(second_attempt, scope(0xe1), 0xf1, bytes);
+    assert!(matches!(
+        publish_exact_v2(
+            &second_output,
+            &second_owner,
+            second_attempt,
+            second_plan,
+            closure,
+            b"substituted output bytes",
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV2::Durable(
+            DurableLinkPublicationError::FinalizedArtifactDigestMismatch
+        ))
+    ));
+
+    let third_temp = TestDirectory::new();
+    let third_output = third_temp.output();
+    let third_owner = producer("protected_kernel", "/src/v2-valid-alternate-closure.rs");
+    let third_attempt = begin(&third_output, &third_owner, 213);
+    let third_plan = plan(third_attempt, scope(0xe2), 0xf2, bytes);
+    let alternate = closure_with_substitution(closure, 5);
+    let alternate_result = publish_exact_v2(
+        &third_output,
+        &third_owner,
+        third_attempt,
+        third_plan,
+        alternate,
+        bytes,
+    )
+    .unwrap();
+    assert_eq!(alternate_result.compiler_closure(), alternate);
+    assert_eq!(
+        validate_backend_publication_receipt_v2(
+            &third_owner,
+            third_attempt,
+            third_plan,
+            upstream_evidence(third_plan),
+            alternate,
+            result.receipt(),
+        ),
+        Err(BackendPublicationReceiptValidationErrorV2::AttemptIdentityMismatch)
+    );
 }
