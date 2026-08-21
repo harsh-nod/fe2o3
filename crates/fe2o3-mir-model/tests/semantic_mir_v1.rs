@@ -1425,6 +1425,7 @@ const FILL_DISJOINT_SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
 const FILL_DISJOINT_SLICE_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
 const FILL_ELEMENT_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
 const FILL_ACCESS_RESULT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
+const FILL_DISCRIMINANT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(11);
 
 fn fill_usize_type() -> SemanticTypeDeclV1 {
     SemanticTypeDeclV1::new(
@@ -1438,6 +1439,23 @@ fn fill_usize_type() -> SemanticTypeDeclV1 {
         ),
         SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
             signed: false,
+            bits: 64,
+        }),
+    )
+}
+
+fn fill_discriminant_type() -> SemanticTypeDeclV1 {
+    SemanticTypeDeclV1::new(
+        type_identity(12),
+        layout_identity(12),
+        scalar_layout(
+            8,
+            8,
+            SemanticBackendPrimitiveV1::integer(true, 64, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        ),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: true,
             bits: 64,
         }),
     )
@@ -1659,7 +1677,7 @@ fn fill_access_result_type() -> SemanticTypeDeclV1 {
         )
         .unwrap(),
         SemanticTypeShapeV1::enum_type(
-            FILL_ELEMENT,
+            FILL_DISCRIMINANT,
             vec![
                 SemanticEnumVariantV1::new(0, SemanticAggregateTypeV1::new(vec![]).unwrap()),
                 SemanticEnumVariantV1::new(
@@ -1672,7 +1690,14 @@ fn fill_access_result_type() -> SemanticTypeDeclV1 {
     )
     .with_rustc_abi_properties(
         SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
-            Some(SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap()),
+            Some(
+                SemanticAbiPointeeInfoV1::new(
+                    SemanticAbiPointeeKindV1::MutableReference { unpin: false },
+                    0,
+                    4,
+                )
+                .unwrap(),
+            ),
             None,
         ),
     )
@@ -1718,6 +1743,22 @@ fn fill_intrinsic_abi(
     inputs: Vec<SemanticTypeIdV1>,
     output: SemanticTypeIdV1,
 ) -> SemanticFunctionAbiV1 {
+    let return_value = if output == FILL_ACCESS_RESULT {
+        SemanticAbiValueV1::new(
+            output,
+            SemanticAbiPassModeV1::Direct(
+                SemanticAbiValueAttributesV1::new(
+                    SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                    SemanticAbiExtensionV1::None,
+                    0,
+                    Some(4),
+                )
+                .unwrap(),
+            ),
+        )
+    } else {
+        direct_value(output)
+    };
     SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256(bytes(identity)),
         layout_identity(identity),
@@ -1725,7 +1766,7 @@ fn fill_intrinsic_abi(
         false,
         false,
         inputs.into_iter().map(fill_intrinsic_argument).collect(),
-        direct_value(output),
+        return_value,
     )
     .unwrap()
 }
@@ -1897,6 +1938,7 @@ fn fill_intrinsic_request(
             fill_reference_type(9, FILL_DISJOINT_SLICE, SemanticMutabilityV1::Mutable),
             fill_reference_type(10, FILL_ELEMENT, SemanticMutabilityV1::Mutable),
             fill_access_result_type(),
+            fill_discriminant_type(),
         ],
         vec![],
         vec![],
@@ -1934,9 +1976,9 @@ fn production_fill_intrinsics_preserve_typed_safety_relationships_and_pinned_enc
     assert_eq!(
         admitted.semantic_sha256().as_bytes(),
         &[
-            0x07, 0x9c, 0xc6, 0x1c, 0x2d, 0xf8, 0xfd, 0x41, 0xdf, 0x09, 0xcb, 0x83, 0x7e, 0xdd,
-            0x6d, 0x6d, 0x0b, 0xbf, 0x1c, 0x4a, 0xdc, 0x5a, 0xae, 0x15, 0xd2, 0xd1, 0xd0, 0x42,
-            0xc2, 0x03, 0x11, 0x8a,
+            0x8c, 0x1f, 0x3b, 0x28, 0x35, 0x90, 0x63, 0x0a, 0xce, 0x1a, 0xe4, 0x26, 0xd8, 0xfe,
+            0x15, 0xfa, 0x3e, 0x5e, 0xc7, 0x6b, 0xf8, 0x3f, 0x9a, 0xfc, 0x56, 0x70, 0xce, 0xe7,
+            0x5c, 0xf9, 0x2b, 0x49,
         ]
     );
 }

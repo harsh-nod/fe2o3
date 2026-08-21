@@ -6346,7 +6346,7 @@ fn checked_mutable_access_result_matches(
         || !variants[0].fields.fields.is_empty()
         || variants[1].discriminant != 1
         || variants[1].fields.fields.len() != 1
-        || !is_unsigned_integer_type(request, *discriminant)
+        || !is_integer_type(request, *discriminant)
         || !mutable_reference_to(request, variants[1].fields.fields[0], element)
     {
         return false;
@@ -9171,10 +9171,14 @@ fn validate_abi_value(
             else {
                 return Err(SemanticMirErrorV1::InvalidFunctionAbi);
             };
+            let safe_non_null_override = value
+                .pointee_override
+                .is_some_and(|pointee| !matches!(pointee.kind, SemanticAbiPointeeKindV1::Raw));
             validate_scalar_abi_attributes(
                 *first,
                 first_scalar,
                 value.pointee_override.or(ty.abi_properties.first_pointee),
+                safe_non_null_override,
                 foreign_classified,
                 is_return,
             )?;
@@ -9182,6 +9186,7 @@ fn validate_abi_value(
                 *second,
                 second_scalar,
                 ty.abi_properties.second_pointee,
+                false,
                 foreign_classified,
                 is_return,
             )?;
@@ -9333,6 +9338,8 @@ fn validate_direct_abi_attributes(
     validate_abi_attributes(attributes)?;
     match &layout.backend_repr {
         SemanticBackendReprV1::Scalar(scalar) => {
+            let safe_non_null_override = pointee_override
+                .is_some_and(|pointee| !matches!(pointee.kind, SemanticAbiPointeeKindV1::Raw));
             let pointee = pointee_override
                 .or(ty.abi_properties.first_pointee)
                 .or_else(|| {
@@ -9348,6 +9355,7 @@ fn validate_direct_abi_attributes(
                 attributes,
                 *scalar,
                 pointee,
+                safe_non_null_override,
                 foreign_classified,
                 is_return,
             )
@@ -9370,6 +9378,7 @@ fn validate_scalar_abi_attributes(
     attributes: SemanticAbiValueAttributesV1,
     scalar: SemanticBackendScalarV1,
     pointee: Option<SemanticAbiPointeeInfoV1>,
+    safe_non_null_override: bool,
     foreign_classified: bool,
     is_return: bool,
 ) -> Result<(), SemanticMirErrorV1> {
@@ -9396,6 +9405,7 @@ fn validate_scalar_abi_attributes(
             validate_pointer_abi_attributes(
                 attributes,
                 pointee,
+                safe_non_null_override,
                 initialized,
                 requires_non_null,
                 is_return,
@@ -9446,6 +9456,7 @@ fn validate_scalar_abi_attributes(
 fn validate_pointer_abi_attributes(
     attributes: SemanticAbiValueAttributesV1,
     pointee: Option<SemanticAbiPointeeInfoV1>,
+    safe_non_null_override: bool,
     initialized: bool,
     requires_non_null: bool,
     is_return: bool,
@@ -9464,7 +9475,6 @@ fn validate_pointer_abi_attributes(
     };
     let expected_alignment =
         (pointee.reliable_alignment_bytes > 1).then_some(pointee.reliable_alignment_bytes);
-    let safe_non_null = !matches!(pointee.kind, SemanticAbiPointeeKindV1::Raw);
     let shared_frozen_argument = !is_return
         && matches!(
             pointee.kind,
@@ -9485,7 +9495,7 @@ fn validate_pointer_abi_attributes(
         || regular.pointer_capture()
             != shared_frozen_argument.then_some(SemanticAbiPointerCaptureV1::CapturesReadOnly)
         || regular.read_only() != shared_frozen_argument
-        || regular.non_null() != (requires_non_null || safe_non_null)
+        || regular.non_null() != (requires_non_null || safe_non_null_override)
         || regular.no_undef() != initialized
         || regular.in_register()
         || attributes.pointee_size_bytes != expected_size
