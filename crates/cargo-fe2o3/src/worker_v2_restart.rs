@@ -8254,7 +8254,7 @@ mod tests {
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     #[test]
-    fn protected_cleanup_reopens_every_intent_marker_and_input_boundary_after_hostile_envelope_substitution()
+    fn protected_cleanup_reopens_every_intent_marker_and_input_boundary_after_hostile_envelope_removal_and_substitution()
      {
         let boundaries = [
             ("intent", "protected-cleanup-evidence-published"),
@@ -8265,7 +8265,13 @@ mod tests {
             ("completed", "protected-cleanup-input-after-unlink"),
             ("completed", "protected-cleanup-input-directory-synced"),
         ];
-        for (case, (action, fault)) in boundaries.into_iter().enumerate() {
+        for (case, (action, fault, remove_envelope)) in boundaries
+            .into_iter()
+            .flat_map(|(action, fault)| [(action, fault, true), (action, fault, false)])
+            .enumerate()
+        {
+            let boundary_case = case / 2;
+            let tamper_case = case % 2;
             let seed = 140 + case as u8;
             let directory = TestDirectory::new();
             let producer = producer(seed);
@@ -8301,16 +8307,26 @@ mod tests {
             let envelope_path = directory.0.join(protected_envelope_name_v2(
                 fixture.receipt.publication_identity(),
             ));
-            let hostile =
-                envelope_with_resealed_claim_substitution(&fixture.envelope, (case % 4) * 16);
-            fs::write(&envelope_path, hostile.to_bytes()).unwrap();
+            if remove_envelope {
+                fs::remove_file(&envelope_path).unwrap();
+            } else {
+                let hostile = envelope_with_resealed_claim_substitution(
+                    &fixture.envelope,
+                    (boundary_case % 4) * 16,
+                );
+                fs::write(&envelope_path, hostile.to_bytes()).unwrap();
+            }
             assert!(
                 WorkerV2ResumeStoreV2::open(&directory.0, &producer).is_err(),
-                "{fault} accepted a hostile cleanup envelope"
+                "{fault} accepted hostile envelope tamper case {tamper_case}"
             );
-            assert!(marker_path.is_file(), "{fault} did not restore Completed");
+            assert!(
+                marker_path.is_file(),
+                "{fault} did not restore Completed for tamper case {tamper_case}"
+            );
 
             fs::write(&envelope_path, fixture.envelope.to_bytes()).unwrap();
+            fs::set_permissions(&envelope_path, fs::Permissions::from_mode(0o600)).unwrap();
             let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
             assert_eq!(restarted.load().unwrap(), Some(completed), "{fault}");
             assert_eq!(
@@ -8329,15 +8345,17 @@ mod tests {
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     #[test]
     fn protected_cleanup_evidence_retirement_reopens_every_boundary_with_a_new_ready_state() {
-        for (case, fault) in [
+        for (case, (fault, remove_envelope)) in [
             "protected-cleanup-evidence-before-unlink",
             "protected-cleanup-evidence-after-unlink",
             "protected-cleanup-evidence-directory-synced",
         ]
         .into_iter()
+        .flat_map(|fault| [(fault, true), (fault, false)])
         .enumerate()
         {
-            let producer_seed = 150 + case as u8 * 2;
+            let boundary_case = case / 2;
+            let producer_seed = 170 + case as u8 * 2;
             let next_seed = producer_seed + 1;
             let directory = TestDirectory::new();
             let producer = producer(producer_seed);
@@ -8403,8 +8421,15 @@ mod tests {
             let old_envelope_path = directory.0.join(protected_envelope_name_v2(
                 old.receipt.publication_identity(),
             ));
-            let hostile = envelope_with_resealed_claim_substitution(&old.envelope, case * 16);
-            fs::write(old_envelope_path, hostile.to_bytes()).unwrap();
+            if remove_envelope {
+                fs::remove_file(old_envelope_path).unwrap();
+            } else {
+                let hostile = envelope_with_resealed_claim_substitution(
+                    &old.envelope,
+                    (boundary_case % 4) * 16,
+                );
+                fs::write(old_envelope_path, hostile.to_bytes()).unwrap();
+            }
 
             let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
             let ready = restarted.load().unwrap().unwrap();
