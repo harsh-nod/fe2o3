@@ -45,7 +45,9 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest, Sha256};
 
 use crate::capability_broker;
-use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
+use crate::inert_rustc_invocation_capture::{
+    InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
+};
 use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
@@ -545,7 +547,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                         "reviewed invocation capture has no compiler capabilities".to_owned(),
                     )
                 })?;
-                let capture = InertRustcInvocationCaptureV2::capture(
+                let capture_v2 = InertRustcInvocationCaptureV2::capture(
                     command.as_command(),
                     command.configured_argv0(),
                     &execution_directory,
@@ -558,15 +560,31 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                         "cannot capture inert prepared rustc invocation: {error}"
                     ))
                 })?;
-                debug_assert_eq!(capture.descriptor().amd_target(), "gfx942:xnack-");
-                Ok::<_, BindingWrapperError>((capture.digest(), capture))
+                let protected_compiler_closure = capabilities.protected_compiler_closure()?;
+                let capture = InertPreparedRustcInvocationCapture::from_v2_and_protected_closure(
+                    capture_v2,
+                    protected_compiler_closure,
+                )
+                .map_err(|error| {
+                    BindingWrapperError::BuildObservation(format!(
+                        "cannot bind prepared rustc invocation to compiler closure: {error}"
+                    ))
+                })?;
+                debug_assert_eq!(capture.amd_target(), "gfx942:xnack-");
+                debug_assert_eq!(
+                    capture.descriptor_v3().is_some(),
+                    protected_compiler_closure.is_some()
+                );
+                Ok::<_, BindingWrapperError>(capture)
             })
             .transpose()?;
-        if let Some((digest, _)) = inert_rustc_invocation.as_ref()
+        if let Some(capture) = inert_rustc_invocation.as_ref()
             && std::env::var_os("FE2O3_VERBOSE").as_deref() == Some(OsStr::new("1"))
         {
+            let version = capture.descriptor_version();
+            let digest = capture.digest_hex();
             eprintln!(
-                "[cargo-fe2o3] inert prepared RustcInvocationDescriptorV2 observation sha256={digest}; no execution or authority claim"
+                "[cargo-fe2o3] inert prepared RustcInvocationDescriptorV{version} observation sha256={digest}; no execution or authority claim"
             );
         }
         let protected_source_tree_sha256 = if worker_build_observation.is_some() {
@@ -2344,6 +2362,28 @@ impl CompilerCapabilities {
 
     fn backend_sha256(&self) -> [u8; 32] {
         *self.backend.sha256()
+    }
+
+    fn protected_compiler_closure(
+        &self,
+    ) -> Result<Option<fe2o3_build_authority::CompilerClosureV2>, BindingWrapperError> {
+        let Some(capability) = &self.compiler_closure else {
+            return Ok(None);
+        };
+        capability
+            .revalidate()
+            .map_err(BindingWrapperError::CapabilityBroker)?;
+        let closure = capability.closure();
+        if closure.identity_sha256() != self.binding.compiler_closure_sha256()
+            || closure.rustc_executable_sha256() != self.binding.rustc_executable_sha256()
+            || closure.codegen_backend_sha256() != self.backend_sha256()
+        {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "revalidated compiler closure differs from the retained compiler capabilities"
+                    .to_owned(),
+            ));
+        }
+        Ok(Some(closure))
     }
 
     const fn compiler_closure_sha256(&self) -> [u8; 32] {

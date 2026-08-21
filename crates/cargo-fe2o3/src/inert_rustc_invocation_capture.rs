@@ -4,9 +4,10 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_rustc_invocation::{
-    CompileEnvironmentV2, DigestError, InvocationDigestV2, RustcInvocationDescriptorV2,
-    RustcUnitV2, ValidationError,
+    CompileEnvironmentV2, DigestError, InvocationDigestV2, InvocationDigestV3,
+    RustcInvocationDescriptorV2, RustcInvocationDescriptorV3, RustcUnitV2, ValidationError,
 };
 
 /// An in-memory description of prepared rustc inputs.
@@ -65,6 +66,83 @@ impl InertRustcInvocationCaptureV2 {
 
     pub(crate) const fn digest(&self) -> InvocationDigestV2 {
         self.digest
+    }
+
+    /// Upgrades the exact process description with a broker-authenticated compiler closure.
+    pub(crate) fn upgrade(
+        self,
+        compiler_closure: CompilerClosureV2,
+    ) -> Result<InertRustcInvocationCaptureV3, InertRustcInvocationCaptureErrorV2> {
+        let descriptor = RustcInvocationDescriptorV3::from_v2_and_compiler_closure(
+            self.descriptor,
+            compiler_closure,
+        )?;
+        let digest = InvocationDigestV3::calculate(&descriptor)?;
+        Ok(InertRustcInvocationCaptureV3 { descriptor, digest })
+    }
+}
+
+/// A protected invocation description containing one exact process and compiler closure.
+///
+/// Like V2, this is coordination data rather than execution, publication, or launch authority.
+pub(crate) struct InertRustcInvocationCaptureV3 {
+    descriptor: RustcInvocationDescriptorV3,
+    digest: InvocationDigestV3,
+}
+
+impl InertRustcInvocationCaptureV3 {
+    pub(crate) const fn descriptor(&self) -> &RustcInvocationDescriptorV3 {
+        &self.descriptor
+    }
+
+    pub(crate) const fn digest(&self) -> InvocationDigestV3 {
+        self.digest
+    }
+}
+
+/// The schema selected for one fully prepared rustc child.
+pub(crate) enum InertPreparedRustcInvocationCapture {
+    V2(InertRustcInvocationCaptureV2),
+    V3(Box<InertRustcInvocationCaptureV3>),
+}
+
+impl InertPreparedRustcInvocationCapture {
+    pub(crate) fn from_v2_and_protected_closure(
+        capture: InertRustcInvocationCaptureV2,
+        compiler_closure: Option<CompilerClosureV2>,
+    ) -> Result<Self, InertRustcInvocationCaptureErrorV2> {
+        match compiler_closure {
+            Some(compiler_closure) => Ok(Self::V3(Box::new(capture.upgrade(compiler_closure)?))),
+            None => Ok(Self::V2(capture)),
+        }
+    }
+
+    pub(crate) fn amd_target(&self) -> &str {
+        match self {
+            Self::V2(capture) => capture.descriptor().amd_target(),
+            Self::V3(capture) => capture.descriptor().amd_target(),
+        }
+    }
+
+    pub(crate) const fn descriptor_version(&self) -> u16 {
+        match self {
+            Self::V2(_) => 2,
+            Self::V3(_) => 3,
+        }
+    }
+
+    pub(crate) fn digest_hex(&self) -> String {
+        match self {
+            Self::V2(capture) => capture.digest().to_hex(),
+            Self::V3(capture) => capture.digest().to_hex(),
+        }
+    }
+
+    pub(crate) const fn descriptor_v3(&self) -> Option<&RustcInvocationDescriptorV3> {
+        match self {
+            Self::V2(_) => None,
+            Self::V3(capture) => Some(capture.descriptor()),
+        }
     }
 }
 
@@ -134,7 +212,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use super::InertRustcInvocationCaptureV2;
+    use fe2o3_build_authority::CompilerClosureV2;
+
+    use super::{InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2};
 
     const RUSTC_SHA256: [u8; 32] = [0x11; 32];
     const BACKEND_SHA256: [u8; 32] = [0x22; 32];
@@ -192,6 +272,13 @@ mod tests {
             "cdylib",
             "-Zcodegen-backend=/proc/./self/fd/198",
         ])
+    }
+
+    fn compiler_closure(rustc: [u8; 32], backend: [u8; 32]) -> CompilerClosureV2 {
+        CompilerClosureV2::new(
+            [0x31; 32], [0x32; 32], [0x33; 32], rustc, [0x35; 32], backend,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -262,6 +349,75 @@ mod tests {
             .digest(),
             baseline
         );
+    }
+
+    #[test]
+    fn protected_capture_upgrades_the_exact_v2_process_to_v3() {
+        let capture = capture(
+            &baseline_command(),
+            Path::new("/workspace/scalar"),
+            &environment(Some("1")),
+            RUSTC_SHA256,
+            BACKEND_SHA256,
+        );
+        let descriptor_v2 = capture.descriptor().clone();
+        let closure = compiler_closure(RUSTC_SHA256, BACKEND_SHA256);
+        let capture = capture.upgrade(closure).unwrap();
+
+        assert_eq!(capture.descriptor().descriptor_v2(), &descriptor_v2);
+        assert_eq!(capture.descriptor().compiler_closure(), &closure);
+        assert_eq!(
+            capture.descriptor().compiler_closure_identity_sha256(),
+            closure.identity_sha256()
+        );
+        assert_ne!(capture.digest().into_bytes(), [0; 32]);
+    }
+
+    #[test]
+    fn protected_capture_rejects_closure_process_pin_mismatches() {
+        for closure in [
+            compiler_closure([0x91; 32], BACKEND_SHA256),
+            compiler_closure(RUSTC_SHA256, [0x92; 32]),
+        ] {
+            let capture = capture(
+                &baseline_command(),
+                Path::new("/workspace/scalar"),
+                &environment(None),
+                RUSTC_SHA256,
+                BACKEND_SHA256,
+            );
+            assert!(capture.upgrade(closure).is_err());
+        }
+    }
+
+    #[test]
+    fn prepared_capture_selects_v2_or_v3_without_conflating_schemas() {
+        let make_capture = || {
+            capture(
+                &baseline_command(),
+                Path::new("/workspace/scalar"),
+                &environment(None),
+                RUSTC_SHA256,
+                BACKEND_SHA256,
+            )
+        };
+        let ordinary = InertPreparedRustcInvocationCapture::from_v2_and_protected_closure(
+            make_capture(),
+            None,
+        )
+        .unwrap();
+        let protected = InertPreparedRustcInvocationCapture::from_v2_and_protected_closure(
+            make_capture(),
+            Some(compiler_closure(RUSTC_SHA256, BACKEND_SHA256)),
+        )
+        .unwrap();
+
+        assert_eq!(ordinary.descriptor_version(), 2);
+        assert!(ordinary.descriptor_v3().is_none());
+        assert_eq!(protected.descriptor_version(), 3);
+        assert!(protected.descriptor_v3().is_some());
+        assert_eq!(ordinary.amd_target(), protected.amd_target());
+        assert_ne!(ordinary.digest_hex(), protected.digest_hex());
     }
 
     #[test]
