@@ -94,6 +94,24 @@ and decoding are unchanged. These values preserve compiler-supplied observations
 authenticated transaction; their public constructors do not themselves authenticate compiler
 origin or confer execution authority.
 
+`InertFinalCompilerModuleCommitmentV3` is the compact final-LLVM receipt preimage for one exact
+`CompilerModuleHandoffV2`. It binds the module kind, canonical target, code-object version, exact
+module digest and length, both the declared envelope identity and independently calculated
+canonical-envelope digest with the exact envelope length, the exact symbol-manifest identity and
+length, and the exact V2 handoff identity and length. It stores no raw LLVM, envelope, manifest, or
+handoff bytes, and its exported maximum is statically required to remain below the compiler-lineage
+4 MiB receipt-preimage limit.
+
+The V3 decoder accepts only its explicit domain, version, and exact-content policy. It rejects
+oversized input and impossible aggregate lengths before retaining storage, then checks canonical
+target spelling, valid module and code-object tags, zero flags and reserved fields, nonzero
+identities and lengths, agreement between the envelope's declared and canonical-byte identities,
+the domain-separated terminal commitment identity, and byte-for-byte re-encoding. It has no V1 or
+V2 fallback. `matches_handoff` compares every field with a supplied exact V2 handoff, but remains a
+structural equality check. Public construction and decoding authenticate no compiler or producer,
+prove no semantic refinement, establish no freshness, and grant no publication, link, load, or
+launch authority.
+
 The finished envelope exposes only a borrowed opaque directional-symbol projection over its
 retained validated contracts. The projection preserves canonical order and cannot be constructed,
 mutated, or kept independently of its envelope. It exposes no complete contract list, provider
