@@ -292,11 +292,11 @@ define_receipt!(
     MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3
 );
 define_receipt!(
-    /// Inert content identity of one final LLVM module.
-    InertLlvmModuleIdentityV3,
-    /// Inert final LLVM module content receipt.
-    InertLlvmModuleReceiptV3,
-    "final LLVM module",
-    b"FE2O3/INERT-LINEAGE-CONTENT/FINAL-LLVM-MODULE/V3\0",
+    /// Inert content identity of one compact final compiler-module commitment.
+    InertFinalCompilerModuleCommitmentIdentityV3,
+    /// Inert compact final compiler-module commitment content receipt.
+    InertFinalCompilerModuleCommitmentReceiptV3,
+    "final compiler module commitment",
+    b"FE2O3/INERT-LINEAGE-CONTENT/FINAL-COMPILER-MODULE-COMMITMENT/V3\0",
     MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3
 );

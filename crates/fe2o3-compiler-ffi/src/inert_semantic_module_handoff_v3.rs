@@ -946,12 +946,12 @@ mod tests_wire_adversarial {
     use fe2o3_build_authority::CompilerClosureV2;
     use fe2o3_compiler_lineage::{
         InertAbiReceiptV3, InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirReceiptV3,
-        InertDataLayoutReceiptV3, InertExportManifestReceiptV3, InertFormalMemoryReceiptV3,
-        InertKernelIrReceiptV3, InertLlvmModuleReceiptV3, InertMiddleEndReceiptV3,
-        InertMirToKirCorrespondenceReceiptV3, InertProofBindingReceiptV3,
-        InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
-        InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
-        OrderedInertSemanticLineageReceiptsV3,
+        InertDataLayoutReceiptV3, InertExportManifestReceiptV3,
+        InertFinalCompilerModuleCommitmentReceiptV3, InertFormalMemoryReceiptV3,
+        InertKernelIrReceiptV3, InertMiddleEndReceiptV3, InertMirToKirCorrespondenceReceiptV3,
+        InertProofBindingReceiptV3, InertRustcIdentityInventoryReceiptV3,
+        InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3,
+        InertTargetBindingReceiptV3, OrderedInertSemanticLineageReceiptsV3,
     };
     use fe2o3_rustc_invocation::{
         CompileEnvironmentV2, RustcInvocationDescriptorV2, RustcInvocationDescriptorV3, RustcUnitV2,
@@ -961,6 +961,7 @@ mod tests_wire_adversarial {
     use crate::{
         CodeObjectVersion, CompilerFfiEnvelopeV1, CompilerModuleHandoffV1, CompilerModuleKindV1,
         CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1, DeviceTargetV1,
+        InertFinalCompilerModuleCommitmentV3,
     };
 
     const TARGET: &str = "gfx942:xnack-";
@@ -1036,7 +1037,14 @@ mod tests_wire_adversarial {
         format!("fe2o3-outer-v3/{label}/seed-{seed:03}").into_bytes()
     }
 
-    fn receipts(seed: u8, llvm_module: &[u8]) -> OrderedInertSemanticLineageReceiptsV3 {
+    fn receipts(
+        seed: u8,
+        target_text: &str,
+        llvm_module: &[u8],
+    ) -> OrderedInertSemanticLineageReceiptsV3 {
+        let module_handoff = module_handoff_from_module(llvm_module, target_text);
+        let final_commitment =
+            InertFinalCompilerModuleCommitmentV3::from_handoff(&module_handoff).unwrap();
         OrderedInertSemanticLineageReceiptsV3::new(
             InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(payload(
                 "inventory",
@@ -1075,7 +1083,10 @@ mod tests_wire_adversarial {
                 seed,
             ))
             .unwrap(),
-            InertLlvmModuleReceiptV3::from_canonical_preimage(llvm_module.to_vec()).unwrap(),
+            InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(
+                final_commitment.canonical_bytes().to_vec(),
+            )
+            .unwrap(),
         )
     }
 
@@ -1094,7 +1105,7 @@ mod tests_wire_adversarial {
         InertProductionSemanticCapsuleV3::new(
             invocation(seed, target_text),
             target(target_text),
-            receipts(seed, llvm_module),
+            receipts(seed, target_text, llvm_module),
         )
         .expect("valid inert capsule fixture")
     }
@@ -1117,13 +1128,17 @@ mod tests_wire_adversarial {
 
     fn module_handoff(seed: u8, target_text: &str) -> CompilerModuleHandoffV2 {
         let module = llvm_module(seed);
+        module_handoff_from_module(&module, target_text)
+    }
+
+    fn module_handoff_from_module(module: &[u8], target_text: &str) -> CompilerModuleHandoffV2 {
         CompilerModuleHandoffV2::new(
             CompilerModuleKindV1::LlvmTextIr,
             target(target_text),
             CodeObjectVersion::V5,
             envelope(target_text),
             manifest(),
-            &module,
+            module,
         )
         .expect("valid V2 module handoff fixture")
     }
@@ -1278,6 +1293,19 @@ mod tests_wire_adversarial {
         );
         assert!(value.identity().matches_canonical_bytes(bytes));
         assert_eq!(value.identity().byte_len(), bytes.len() as u64);
+        let final_commitment = InertFinalCompilerModuleCommitmentV3::decode(
+            value
+                .capsule()
+                .receipts()
+                .final_compiler_module_commitment()
+                .canonical_preimage(),
+        )
+        .unwrap();
+        assert!(final_commitment.matches_handoff(value.module_handoff()));
+        assert_eq!(
+            value.module_handoff().module_bytes(),
+            llvm_module(0x10).as_slice()
+        );
     }
 
     #[test]
@@ -1326,10 +1354,14 @@ mod tests_wire_adversarial {
         let capsule_module = llvm_module(0x20);
         let capsule = capsule(0x20, TARGET, &capsule_module);
         let unrelated_handoff = module_handoff(0x21, TARGET);
-        assert_ne!(
-            capsule.receipts().llvm_module().canonical_preimage(),
-            unrelated_handoff.module_bytes()
-        );
+        let final_commitment = InertFinalCompilerModuleCommitmentV3::decode(
+            capsule
+                .receipts()
+                .final_compiler_module_commitment()
+                .canonical_preimage(),
+        )
+        .unwrap();
+        assert!(!final_commitment.matches_handoff(&unrelated_handoff));
 
         let splice = InertSemanticCompilerModuleHandoffV3::new(capsule, unrelated_handoff)
             .expect("public inert construction accepts an internally valid splice");

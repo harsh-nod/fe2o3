@@ -67,7 +67,7 @@ fn receipts_with_stage_seeds(
     base_seed: u8,
     semantic_mir_seed: u8,
     kernel_ir_seed: u8,
-    llvm_module_seed: u8,
+    final_compiler_module_commitment_seed: u8,
 ) -> OrderedInertSemanticLineageReceiptsV3 {
     OrderedInertSemanticLineageReceiptsV3::new(
         InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(payload(
@@ -114,8 +114,11 @@ fn receipts_with_stage_seeds(
             base_seed,
         ))
         .unwrap(),
-        InertLlvmModuleReceiptV3::from_canonical_preimage(payload("llvm-module", llvm_module_seed))
-            .unwrap(),
+        InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(payload(
+            "final-compiler-module-commitment",
+            final_compiler_module_commitment_seed,
+        ))
+        .unwrap(),
     )
 }
 
@@ -210,12 +213,19 @@ fn golden_encoding_round_trips_and_retains_complete_preimages() {
         decoded.receipts().semantic_mir().canonical_preimage(),
         payload("semantic-mir", 0x10)
     );
+    assert_eq!(
+        decoded
+            .receipts()
+            .final_compiler_module_commitment()
+            .canonical_preimage(),
+        payload("final-compiler-module-commitment", 0x10)
+    );
     assert_eq!(decoded.identity().byte_len(), encoded.len() as u64);
     assert!(decoded.identity().matches_canonical_bytes(encoded));
-    assert_eq!(encoded.len(), 1_817);
+    assert_eq!(encoded.len(), 1_838);
     assert_eq!(
         hex(decoded.identity().sha256()),
-        "c9584c1f685d33a9e120f3477ab4cfcdc935cc3ee99e7ed2562f23c68e7525bf"
+        "26925c1d98ab888b5a540538246d678d48d36bcfe35d0c7158e5bb00b0589ae9"
     );
 }
 
@@ -230,20 +240,36 @@ fn identities_are_deterministic_and_stage_domain_separated() {
 
     let same = b"one exact transcript".to_vec();
     let middle = InertMiddleEndReceiptV3::from_canonical_preimage(same.clone()).unwrap();
-    let kir = InertKernelIrReceiptV3::from_canonical_preimage(same).unwrap();
+    let kir = InertKernelIrReceiptV3::from_canonical_preimage(same.clone()).unwrap();
+    let final_commitment =
+        InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(same).unwrap();
     assert_ne!(middle.identity().sha256(), kir.identity().sha256());
+    assert_ne!(
+        kir.identity().sha256(),
+        final_commitment.identity().sha256()
+    );
     assert_eq!(middle.identity().byte_len(), kir.identity().byte_len());
+    assert_eq!(
+        kir.identity().byte_len(),
+        final_commitment.identity().byte_len()
+    );
 }
 
 #[test]
-fn same_llvm_with_different_semantic_content_changes_inert_capsule_identity() {
+fn same_final_commitment_with_different_semantic_content_changes_capsule_identity() {
     let first = capsule(0x22);
     let changed_semantic =
         capsule_with_receipts(0x22, receipts_with_stage_seeds(0x22, 0x23, 0x22, 0x22));
 
     assert_eq!(
-        first.receipts().llvm_module().identity(),
-        changed_semantic.receipts().llvm_module().identity()
+        first
+            .receipts()
+            .final_compiler_module_commitment()
+            .identity(),
+        changed_semantic
+            .receipts()
+            .final_compiler_module_commitment()
+            .identity()
     );
     assert_ne!(
         first.receipts().semantic_mir().identity(),
@@ -275,8 +301,14 @@ fn fully_rehashed_cross_stage_splice_is_accepted_only_as_inert_content() {
         decoded.receipts().semantic_to_llvm().identity()
     );
     assert_eq!(
-        recipient.receipts().llvm_module().identity(),
-        decoded.receipts().llvm_module().identity()
+        recipient
+            .receipts()
+            .final_compiler_module_commitment()
+            .identity(),
+        decoded
+            .receipts()
+            .final_compiler_module_commitment()
+            .identity()
     );
     assert!(!decoded.authenticates_producer());
 }

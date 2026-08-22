@@ -10,12 +10,12 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     InertAbiReceiptV3, InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirReceiptV3,
-    InertDataLayoutReceiptV3, InertExportManifestReceiptV3, InertFormalMemoryReceiptV3,
-    InertKernelIrReceiptV3, InertLlvmModuleReceiptV3, InertMiddleEndReceiptV3,
-    InertMirToKirCorrespondenceReceiptV3, InertProofBindingReceiptV3,
-    InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
-    InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3, LineageDecodeErrorV3,
-    LineageErrorV3,
+    InertDataLayoutReceiptV3, InertExportManifestReceiptV3,
+    InertFinalCompilerModuleCommitmentReceiptV3, InertFormalMemoryReceiptV3,
+    InertKernelIrReceiptV3, InertMiddleEndReceiptV3, InertMirToKirCorrespondenceReceiptV3,
+    InertProofBindingReceiptV3, InertRustcIdentityInventoryReceiptV3,
+    InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
+    LineageDecodeErrorV3, LineageErrorV3,
 };
 
 /// Fixed magic at the start of every inert production semantic capsule V3.
@@ -53,7 +53,8 @@ const MIN_CAPSULE_BYTES_V3: usize = HEADER_BYTES_V3
 /// Field order is normative: rustc inventory, rustc preflight, semantic MIR,
 /// middle end, Kernel IR, MIR-to-KIR correspondence, formal memory, proof
 /// binding, target binding, target data layout, ABI, export manifest, AMDGPU
-/// lowering, semantic-to-LLVM derivation, and final LLVM module.
+/// lowering, semantic-to-LLVM derivation, and compact final compiler-module
+/// commitment.
 #[derive(Debug, Eq, PartialEq)]
 pub struct OrderedInertSemanticLineageReceiptsV3 {
     rustc_identity_inventory: InertRustcIdentityInventoryReceiptV3,
@@ -70,7 +71,7 @@ pub struct OrderedInertSemanticLineageReceiptsV3 {
     export_manifest: InertExportManifestReceiptV3,
     amdgpu_lowering: InertAmdgpuLoweringReceiptV3,
     semantic_to_llvm: InertSemanticToLlvmReceiptV3,
-    llvm_module: InertLlvmModuleReceiptV3,
+    final_compiler_module_commitment: InertFinalCompilerModuleCommitmentReceiptV3,
 }
 
 impl OrderedInertSemanticLineageReceiptsV3 {
@@ -91,7 +92,7 @@ impl OrderedInertSemanticLineageReceiptsV3 {
         export_manifest: InertExportManifestReceiptV3,
         amdgpu_lowering: InertAmdgpuLoweringReceiptV3,
         semantic_to_llvm: InertSemanticToLlvmReceiptV3,
-        llvm_module: InertLlvmModuleReceiptV3,
+        final_compiler_module_commitment: InertFinalCompilerModuleCommitmentReceiptV3,
     ) -> Self {
         Self {
             rustc_identity_inventory,
@@ -108,7 +109,7 @@ impl OrderedInertSemanticLineageReceiptsV3 {
             export_manifest,
             amdgpu_lowering,
             semantic_to_llvm,
-            llvm_module,
+            final_compiler_module_commitment,
         }
     }
 
@@ -178,13 +179,22 @@ impl OrderedInertSemanticLineageReceiptsV3 {
     }
 
     /// Returns the semantic-to-LLVM derivation receipt.
+    ///
+    /// Its stage-specific producer codec is responsible for binding the exact
+    /// final LLVM module identity and compact final-module commitment identity
+    /// as distinct axes.
     pub const fn semantic_to_llvm(&self) -> &InertSemanticToLlvmReceiptV3 {
         &self.semantic_to_llvm
     }
 
-    /// Returns the exact final LLVM module receipt.
-    pub const fn llvm_module(&self) -> &InertLlvmModuleReceiptV3 {
-        &self.llvm_module
+    /// Returns the compact final compiler-module commitment receipt.
+    ///
+    /// Exact final LLVM bytes are retained by the surrounding V2 module handoff,
+    /// not duplicated in this capsule receipt.
+    pub const fn final_compiler_module_commitment(
+        &self,
+    ) -> &InertFinalCompilerModuleCommitmentReceiptV3 {
+        &self.final_compiler_module_commitment
     }
 }
 
@@ -409,7 +419,7 @@ impl InertProductionSemanticCapsuleV3 {
             decode_receipt!(InertExportManifestReceiptV3),
             decode_receipt!(InertAmdgpuLoweringReceiptV3),
             decode_receipt!(InertSemanticToLlvmReceiptV3),
-            decode_receipt!(InertLlvmModuleReceiptV3),
+            decode_receipt!(InertFinalCompilerModuleCommitmentReceiptV3),
         );
 
         let terminal_offset = reader.offset();
@@ -541,7 +551,10 @@ fn encoded_len(
         receipts.export_manifest.canonical_preimage().len(),
         receipts.amdgpu_lowering.canonical_preimage().len(),
         receipts.semantic_to_llvm.canonical_preimage().len(),
-        receipts.llvm_module.canonical_preimage().len(),
+        receipts
+            .final_compiler_module_commitment
+            .canonical_preimage()
+            .len(),
     ] {
         add_len(&mut length, 4 + payload_len + SHA256_BYTES)?;
     }
@@ -649,8 +662,13 @@ fn encode_receipts(
     )?;
     push_receipt(
         output,
-        receipts.llvm_module.canonical_preimage(),
-        receipts.llvm_module.identity().sha256(),
+        receipts
+            .final_compiler_module_commitment
+            .canonical_preimage(),
+        receipts
+            .final_compiler_module_commitment
+            .identity()
+            .sha256(),
     )
 }
 
