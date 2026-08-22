@@ -16,7 +16,9 @@ use sha2::{Digest, Sha256};
 mod descriptor_source;
 mod external_device_library_manifest;
 mod external_device_library_provider_set;
+mod final_compiler_module_commitment_v3;
 mod flash_attention_sections;
+mod inert_semantic_module_handoff_v3;
 mod module_handoff;
 mod module_handoff_v2;
 mod row_softmax_sections;
@@ -46,6 +48,13 @@ pub use external_device_library_provider_set::{
     ExternalDeviceLibraryProviderV1, MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CLOSURE_BYTES_V1,
     MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CONTENT_BYTES_V1,
 };
+pub use final_compiler_module_commitment_v3::{
+    FINAL_COMPILER_MODULE_COMMITMENT_DOMAIN_V3, FINAL_COMPILER_MODULE_COMMITMENT_POLICY_V3,
+    FINAL_COMPILER_MODULE_COMMITMENT_VERSION_V3, FinalCompilerModuleCommitmentErrorV3,
+    FinalCompilerModuleCommitmentIdentityV3, FinalCompilerModuleCommitmentPolicyV3,
+    FinalCompilerModuleContentIdentityV3, InertFinalCompilerModuleCommitmentV3,
+    MAX_FINAL_COMPILER_MODULE_COMMITMENT_BYTES_V3,
+};
 pub use flash_attention_sections::{
     DecodedFlashAttentionCompilerSectionsV1, FLASH_ATTENTION_AUTHORITY_BYTES_V1,
     FLASH_ATTENTION_AUTHORITY_SECTION_NAME_V1,
@@ -53,6 +62,15 @@ pub use flash_attention_sections::{
     FLASH_ATTENTION_OCML_EXP_BOUNDARY_BYTES_V1, FLASH_ATTENTION_OCML_EXP_BOUNDARY_SECTION_NAME_V1,
     FlashAttentionCompilerSectionsErrorV1, MAX_FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_BYTES_V1,
     decode_flash_attention_compiler_sections_v1,
+};
+pub use inert_semantic_module_handoff_v3::{
+    INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3, INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3,
+    INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3, INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3,
+    INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3, InertCompilerModulePairBindingIdentityV3,
+    InertCompilerModulePairBindingV3, InertSemanticCompilerModuleHandoffErrorV3,
+    InertSemanticCompilerModuleHandoffIdentityV3, InertSemanticCompilerModuleHandoffPreflightV3,
+    InertSemanticCompilerModuleHandoffV3, MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3,
+    preflight_inert_semantic_compiler_module_handoff_v3,
 };
 pub use module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,

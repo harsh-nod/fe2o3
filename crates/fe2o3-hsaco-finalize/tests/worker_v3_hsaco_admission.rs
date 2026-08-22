@@ -1,0 +1,616 @@
+#![cfg(target_os = "linux")]
+
+use std::{
+    any::TypeId,
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
+
+use fe2o3_artifact_transaction::{
+    BuildInvocation, BuildSession, CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3,
+    ConsumedCompilerModuleHandoffV3, ProducerIdentity, begin_build_attempt,
+    consume_compiler_module_handoff_in_slot_v3, publish_compiler_module_handoff_in_slot_v3,
+};
+use fe2o3_compiler_ffi::{
+    CodeObjectVersion, CompilerFfiEnvelopeV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
+    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3, INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3,
+    INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3, INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3,
+    INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3, InertFinalCompilerModuleCommitmentV3,
+    InertSemanticCompilerModuleHandoffV3,
+};
+use fe2o3_hsaco_finalize::{
+    ContentIdentityV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
+    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV2HsacoV1,
+    InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1,
+    WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV2RawHsacoInspectionError,
+    execute_protected_reproducible_first_build_worker_v3,
+    inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
+    inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
+};
+use fe2o3_kernel_descriptor::DeviceTargetV1;
+use sha2::{Digest, Sha256};
+
+#[path = "fixtures/worker_v2_hsaco_test_support.rs"]
+mod hsaco_fixture;
+
+use hsaco_fixture::{ScalarAddFixtureMutation, scalar_add_fixture_with};
+
+const TARGET: &str = "gfx942:xnack-";
+const WORKER_BUILD_ID: &str = "fixture-worker-v2-hsaco-v1";
+const RAW_HSACO_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
+const CAPSULE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V3\0";
+const PAIR_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-COMPILER-MODULE-PAIR-BINDING/V3\0";
+const OUTER_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-SEMANTIC-COMPILER-MODULE-HANDOFF/V3\0";
+const INVOCATION_DIGEST_DOMAIN_V3: &[u8] = b"FE2O3/RUSTC-BUILD-INVOCATION/V3\0";
+const CAPSULE_MAGIC_V3: &[u8; 8] = b"F2O3ISV3";
+const CAPSULE_VERSION_V3: u16 = 3;
+
+const RECEIPTS: [(&str, &[u8]); 14] = [
+    (
+        "inventory",
+        b"FE2O3/INERT-LINEAGE-CONTENT/RUSTC-IDENTITY-INVENTORY/V3\0",
+    ),
+    (
+        "preflight",
+        b"FE2O3/INERT-LINEAGE-CONTENT/RUSTC-PREFLIGHT-PLAN/V3\0",
+    ),
+    (
+        "mir",
+        b"FE2O3/INERT-LINEAGE-CONTENT/CANONICAL-SEMANTIC-MIR/V3\0",
+    ),
+    (
+        "middle",
+        b"FE2O3/INERT-LINEAGE-CONTENT/MIDDLE-END-PASS-CHAIN/V3\0",
+    ),
+    (
+        "kir",
+        b"FE2O3/INERT-LINEAGE-CONTENT/CANONICAL-KERNEL-IR/V3\0",
+    ),
+    (
+        "correspondence",
+        b"FE2O3/INERT-LINEAGE-CONTENT/MIR-TO-KIR-CORRESPONDENCE/V3\0",
+    ),
+    (
+        "memory",
+        b"FE2O3/INERT-LINEAGE-CONTENT/FORMAL-MEMORY-OBLIGATIONS/V3\0",
+    ),
+    (
+        "proof",
+        b"FE2O3/INERT-LINEAGE-CONTENT/PROOF-BINDING-SET/V3\0",
+    ),
+    ("target", b"FE2O3/INERT-LINEAGE-CONTENT/TARGET-BINDING/V3\0"),
+    (
+        "layout",
+        b"FE2O3/INERT-LINEAGE-CONTENT/TARGET-DATA-LAYOUT/V3\0",
+    ),
+    ("abi", b"FE2O3/INERT-LINEAGE-CONTENT/ABI/V3\0"),
+    (
+        "exports",
+        b"FE2O3/INERT-LINEAGE-CONTENT/EXPORT-MANIFEST/V3\0",
+    ),
+    (
+        "lowering",
+        b"FE2O3/INERT-LINEAGE-CONTENT/AMDGPU-LOWERING/V3\0",
+    ),
+    (
+        "semantic-llvm",
+        b"FE2O3/INERT-LINEAGE-CONTENT/SEMANTIC-TO-LLVM/V3\0",
+    ),
+];
+const FINAL_RECEIPT_DOMAIN_V3: &[u8] =
+    b"FE2O3/INERT-LINEAGE-CONTENT/FINAL-COMPILER-MODULE-COMMITMENT/V3\0";
+
+const INVOCATION_20_HEX: &str = "4645324f33524900030000007c02000000000000010021212121212121212121212121212121212121212121212121212121212121212222222222222222222222222222222222222222222222222222222222222222232323232323232323232323232323232323232323232323232323232323232324242424242424242424242424242424242424242424242424242424242424242525252525252525252525252525252525252525252525252525252525252525262626262626262626262626262626262626262626262626262626262626262624242424242424242424242424242424242424242424242424242424242424242626262626262626262626262626262626262626262626262626262626262626100000002f776f726b73706163652f6665326f3307000000100000002f6f70742f6665326f332f72757374630c0000002d2d63726174652d6e616d650c000000776f726b65725f76335f3230230000006372617465732f776f726b65722d76332d666978747572652f7372632f6c69622e7273100000002d2d63726174652d747970653d6c69620e0000002d2d65646974696f6e3d32303234360000002d5a636f646567656e2d6261636b656e643d2f6f70742f6665326f332f6c696272757374635f636f646567656e5f6665326f332e736f040000001500434152474f5f4346475f5441524745545f4152434806000000616d6467636e0f004645324f335f485341434f5f4449521d0000002f776f726b73706163652f6665326f332f7461726765742f6665326f330c004645324f335f5441524745540d0000006766783934323a786e61636b2d16004645324f335f5645524946595f4b45524e454c5f49520100000031";
+const INVOCATION_40_HEX: &str = "4645324f33524900030000007c02000000000000010041414141414141414141414141414141414141414141414141414141414141414242424242424242424242424242424242424242424242424242424242424242434343434343434343434343434343434343434343434343434343434343434344444444444444444444444444444444444444444444444444444444444444444545454545454545454545454545454545454545454545454545454545454545464646464646464646464646464646464646464646464646464646464646464644444444444444444444444444444444444444444444444444444444444444444646464646464646464646464646464646464646464646464646464646464646100000002f776f726b73706163652f6665326f3307000000100000002f6f70742f6665326f332f72757374630c0000002d2d63726174652d6e616d650c000000776f726b65725f76335f3430230000006372617465732f776f726b65722d76332d666978747572652f7372632f6c69622e7273100000002d2d63726174652d747970653d6c69620e0000002d2d65646974696f6e3d32303234360000002d5a636f646567656e2d6261636b656e643d2f6f70742f6665326f332f6c696272757374635f636f646567656e5f6665326f332e736f040000001500434152474f5f4346475f5441524745545f4152434806000000616d6467636e0f004645324f335f485341434f5f4449521d0000002f776f726b73706163652f6665326f332f7461726765742f6665326f330c004645324f335f5441524745540d0000006766783934323a786e61636b2d16004645324f335f5645524946595f4b45524e454c5f49520100000031";
+
+#[derive(Clone, Copy)]
+struct EvidenceConfig {
+    attempt_seed: u8,
+    slot: CompilerModuleHandoffSlotV3,
+    invocation_seed: u8,
+    module_seed: u8,
+    optimization: &'static str,
+    llvm_build_identity: &'static str,
+}
+
+impl EvidenceConfig {
+    const BASE: Self = Self {
+        attempt_seed: 0x61,
+        slot: CompilerModuleHandoffSlotV3::Default,
+        invocation_seed: 0x20,
+        module_seed: 0x11,
+        optimization: "2",
+        llvm_build_identity: "upstream-llvm-test-build-a",
+    };
+}
+
+#[test]
+fn native_v3_inspection_retains_every_boundary_axis_without_authority() {
+    let fixture = scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup);
+    let exact = fixture.bytes.clone();
+    let evidence = evidence(fixture.bytes, EvidenceConfig::BASE);
+    let source_identity = evidence.identity();
+    let binding = evidence.binding();
+    let expected = binding.expectation();
+    let plan = evidence.plan().identity();
+
+    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence).unwrap();
+    require_v3_inspection(&inspected);
+    assert_eq!(inspected.source_evidence_identity(), source_identity);
+    assert_eq!(inspected.binding_identity(), binding.identity());
+    assert_eq!(inspected.binding_expectation(), expected);
+    assert_eq!(inspected.attempt(), expected.attempt());
+    assert_eq!(inspected.handoff_slot(), expected.slot());
+    assert_eq!(
+        inspected.transaction_identity(),
+        expected.transaction_identity()
+    );
+    assert_eq!(
+        inspected.outer_handoff_identity(),
+        expected.outer_handoff_identity()
+    );
+    assert_eq!(
+        inspected.outer_handoff().identity(),
+        expected.outer_handoff_identity()
+    );
+    assert_eq!(inspected.compiler_closure(), expected.compiler_closure());
+    assert_eq!(inspected.link_plan_identity(), plan);
+    assert_eq!(inspected.exact_bytes(), exact);
+    assert_eq!(
+        inspected.raw_hsaco_identity(),
+        ContentIdentityV1::calculate(&exact)
+    );
+    assert_eq!(
+        inspected.linked_output_identity(),
+        inspected.raw_hsaco_identity()
+    );
+    assert_eq!(inspected.target().to_string(), TARGET);
+    assert_eq!(
+        inspected.code_object_version(),
+        fe2o3_kernel_descriptor::CodeObjectVersion::V6
+    );
+    assert_eq!(
+        inspected.policy().launch().required_workgroup_size(),
+        [64, 1, 1]
+    );
+    assert_eq!(inspected.policy().launch().wavefront_size(), 64);
+    assert!(!inspected.descriptor_observation_preimage().is_empty());
+    assert!(!inspected.abi_observation_preimage().is_empty());
+    assert!(!inspected.resource_observation_preimage().is_empty());
+    assert_eq!(inspected.source_evidence().identity(), source_identity);
+    assert!(!inspected.canonical_descriptor_finalization_ran());
+    assert!(!inspected.authenticates_compiler_origin());
+    assert!(!inspected.proves_semantic_correctness());
+    assert!(!inspected.grants_compiler_authority());
+    assert!(!inspected.grants_link_authority());
+    assert!(!inspected.grants_publication_authority());
+    assert!(!inspected.grants_load_authority());
+    assert!(!inspected.grants_launch_authority());
+}
+
+#[test]
+fn invocation_closure_transaction_plan_and_worker_axes_cannot_be_dropped() {
+    let fixture = || scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup).bytes;
+    let base = inspected(fixture(), EvidenceConfig::BASE);
+    let changed_attempt = inspected(
+        fixture(),
+        EvidenceConfig {
+            attempt_seed: 0x62,
+            ..EvidenceConfig::BASE
+        },
+    );
+    let changed_slot = inspected(
+        fixture(),
+        EvidenceConfig {
+            slot: CompilerModuleHandoffSlotV3::GeneralGemmReference,
+            ..EvidenceConfig::BASE
+        },
+    );
+    let changed_invocation = inspected(
+        fixture(),
+        EvidenceConfig {
+            invocation_seed: 0x40,
+            ..EvidenceConfig::BASE
+        },
+    );
+    let changed_module = inspected(
+        fixture(),
+        EvidenceConfig {
+            module_seed: 0x12,
+            ..EvidenceConfig::BASE
+        },
+    );
+    let changed_plan = inspected(
+        fixture(),
+        EvidenceConfig {
+            optimization: "3",
+            ..EvidenceConfig::BASE
+        },
+    );
+    let changed_worker = inspected(
+        fixture(),
+        EvidenceConfig {
+            llvm_build_identity: "upstream-llvm-test-build-b",
+            ..EvidenceConfig::BASE
+        },
+    );
+
+    for changed in [
+        &changed_attempt,
+        &changed_slot,
+        &changed_invocation,
+        &changed_module,
+        &changed_plan,
+        &changed_worker,
+    ] {
+        assert_eq!(base.exact_bytes(), changed.exact_bytes());
+        assert_eq!(base.raw_hsaco_identity(), changed.raw_hsaco_identity());
+        assert_ne!(base.identity(), changed.identity());
+    }
+    assert_ne!(base.attempt(), changed_attempt.attempt());
+    assert_ne!(
+        base.transaction_identity(),
+        changed_attempt.transaction_identity()
+    );
+    assert_ne!(base.handoff_slot(), changed_slot.handoff_slot());
+    assert_ne!(
+        base.transaction_identity(),
+        changed_slot.transaction_identity()
+    );
+    assert_ne!(base.binding_identity(), changed_slot.binding_identity());
+    assert_ne!(
+        base.binding_expectation().invocation_digest(),
+        changed_invocation.binding_expectation().invocation_digest()
+    );
+    assert_ne!(
+        base.compiler_closure(),
+        changed_invocation.compiler_closure()
+    );
+    assert_ne!(
+        base.outer_handoff_identity(),
+        changed_module.outer_handoff_identity()
+    );
+    assert_ne!(
+        base.link_plan_identity(),
+        changed_module.link_plan_identity()
+    );
+    assert_ne!(base.link_plan_identity(), changed_plan.link_plan_identity());
+    assert_ne!(
+        base.worker_measurement().llvm_build_identity(),
+        changed_worker.worker_measurement().llvm_build_identity()
+    );
+}
+
+#[test]
+fn raw_bytes_and_every_structural_hsaco_axis_are_checked() {
+    let valid = inspected(
+        scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup).bytes,
+        EvidenceConfig::BASE,
+    );
+    let mut changed_fixture = scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup);
+    changed_fixture.bytes[changed_fixture.text_offset] ^= 1;
+    let changed_bytes = inspected(
+        changed_fixture.bytes,
+        EvidenceConfig {
+            attempt_seed: 0x63,
+            ..EvidenceConfig::BASE
+        },
+    );
+    assert_ne!(valid.exact_bytes(), changed_bytes.exact_bytes());
+    assert_ne!(
+        valid.raw_hsaco_identity(),
+        changed_bytes.raw_hsaco_identity()
+    );
+    assert_ne!(valid.identity(), changed_bytes.identity());
+
+    for (attempt_seed, mutation) in [
+        (0x70, ScalarAddFixtureMutation::Target),
+        (0x71, ScalarAddFixtureMutation::CodeObjectVersion),
+        (0x72, ScalarAddFixtureMutation::EntrySymbol),
+        (0x74, ScalarAddFixtureMutation::None),
+        (0x77, ScalarAddFixtureMutation::DescriptorComputePgmRsrc1),
+        (0x78, ScalarAddFixtureMutation::TruncatedHeader),
+    ] {
+        let evidence = evidence(
+            scalar_add_fixture_with(mutation).bytes,
+            EvidenceConfig {
+                attempt_seed,
+                ..EvidenceConfig::BASE
+            },
+        );
+        assert!(inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence).is_err());
+    }
+}
+
+#[test]
+fn v2_and_v3_admission_schemas_are_compile_time_separate() {
+    let _: fn(
+        InertProtectedFirstBuildWorkerV2EvidenceV1,
+    )
+        -> Result<InspectedProtectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> =
+        inspect_protected_production_v1_worker_v2_raw_hsaco_v1;
+    let _: fn(
+        InertProtectedFirstBuildWorkerV3EvidenceV1,
+    )
+        -> Result<InspectedProtectedRawWorkerV3HsacoV1, WorkerV2RawHsacoInspectionError> =
+        inspect_protected_production_v1_worker_v3_raw_hsaco_v1;
+    assert_ne!(
+        TypeId::of::<InspectedProtectedRawWorkerV2HsacoV1>(),
+        TypeId::of::<InspectedProtectedRawWorkerV3HsacoV1>()
+    );
+}
+
+fn inspected(bytes: Vec<u8>, config: EvidenceConfig) -> InspectedProtectedRawWorkerV3HsacoV1 {
+    inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence(bytes, config)).unwrap()
+}
+
+fn require_v3_inspection(_: &InspectedProtectedRawWorkerV3HsacoV1) {}
+
+fn evidence(hsaco: Vec<u8>, config: EvidenceConfig) -> InertProtectedFirstBuildWorkerV3EvidenceV1 {
+    let directory = TestDirectory::new();
+    let attempt = begin_build_attempt(
+        &directory.0,
+        &producer(),
+        BuildInvocation::from_bytes([config.attempt_seed; 32]),
+        BuildSession::from_bytes([config.attempt_seed.wrapping_add(1); 16]),
+    )
+    .unwrap();
+    let handoff = outer(config.invocation_seed, config.module_seed, &hsaco);
+    let receipt = publish_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        config.slot,
+        &handoff,
+    )
+    .unwrap();
+    let consumed = consume_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        config.slot,
+        handoff.identity(),
+    )
+    .unwrap();
+    let worker = pinned(&directory, config.llvm_build_identity);
+    execute(config, receipt, consumed, &worker)
+}
+
+fn execute(
+    config: EvidenceConfig,
+    receipt: CompilerModuleHandoffReceiptV3,
+    consumed: ConsumedCompilerModuleHandoffV3,
+    worker: &PinnedWorkerV1,
+) -> InertProtectedFirstBuildWorkerV3EvidenceV1 {
+    let closure = *consumed.handoff().capsule().compiler_closure();
+    execute_protected_reproducible_first_build_worker_v3(
+        consumed,
+        receipt,
+        closure,
+        worker,
+        Vec::new(),
+        options(config.optimization),
+        WorkerOutputConstraintsV1::new(1024 * 1024).unwrap(),
+        WorkerExecutionLimitsV1::new(Duration::from_secs(3), 2 * 1024 * 1024, 64 * 1024).unwrap(),
+    )
+    .unwrap()
+}
+
+fn target() -> DeviceTargetV1 {
+    DeviceTargetV1::parse(TARGET).unwrap()
+}
+
+fn worker_path() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_fe2o3-worker-v2-hsaco-fixture"))
+}
+
+fn pinned(directory: &TestDirectory, llvm_build_identity: &str) -> PinnedWorkerV1 {
+    let private_worker = directory.0.join("worker");
+    fs::copy(worker_path(), &private_worker).unwrap();
+    let bytes = fs::read(&private_worker).unwrap();
+    let measurement = WorkerMeasurementV1::new(
+        ContentIdentityV1::calculate(&bytes),
+        WORKER_BUILD_ID,
+        llvm_build_identity,
+    )
+    .unwrap();
+    PinnedWorkerV1::open(private_worker, measurement).unwrap()
+}
+
+fn options(optimization: &str) -> Vec<LinkOptionV1> {
+    [
+        ("verify-each", "true"),
+        ("code-object-version", "6"),
+        ("strip-debug", "true"),
+        ("opt-level", optimization),
+    ]
+    .into_iter()
+    .map(|(name, value)| LinkOptionV1::new(name, value).unwrap())
+    .collect()
+}
+
+fn module_handoff(seed: u8, hsaco: &[u8]) -> CompilerModuleHandoffV2 {
+    let mut module = format!("; ModuleID = 'raw-hsaco-v3-{seed:02x}'\n").into_bytes();
+    module.extend_from_slice(RAW_HSACO_MARKER);
+    module.extend_from_slice(hsaco);
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target(), CodeObjectVersion::V6)
+            .unwrap();
+    let manifest = CompilerModuleSymbolManifestV1::new([
+        (CompilerModuleSymbolRoleV1::KernelEntry, "scalar_add"),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            "scalar_add.kd",
+        ),
+    ])
+    .unwrap();
+    CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmBitcode,
+        target(),
+        CodeObjectVersion::V6,
+        envelope,
+        manifest,
+        &module,
+    )
+    .unwrap()
+}
+
+fn outer(
+    invocation_seed: u8,
+    module_seed: u8,
+    hsaco: &[u8],
+) -> InertSemanticCompilerModuleHandoffV3 {
+    let handoff = module_handoff(module_seed, hsaco);
+    InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes(invocation_seed, &handoff),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap()
+}
+
+fn capsule_bytes(seed: u8, handoff: &CompilerModuleHandoffV2) -> Vec<u8> {
+    let invocation = invocation_bytes(seed);
+    let final_commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(handoff).unwrap();
+    let mut receipts = RECEIPTS
+        .iter()
+        .map(|(label, domain)| {
+            (
+                format!("worker-v3/receipt/{label}/{seed:02x}").into_bytes(),
+                *domain,
+            )
+        })
+        .collect::<Vec<_>>();
+    receipts.push((
+        final_commitment.canonical_bytes().to_vec(),
+        FINAL_RECEIPT_DOMAIN_V3,
+    ));
+    let total_len = 24
+        + 4
+        + invocation.len()
+        + 32
+        + 2
+        + TARGET.len()
+        + receipts
+            .iter()
+            .map(|(payload, _)| 4 + payload.len() + 32)
+            .sum::<usize>()
+        + 32;
+    let mut capsule = Vec::with_capacity(total_len);
+    capsule.extend_from_slice(CAPSULE_MAGIC_V3);
+    capsule.extend_from_slice(&CAPSULE_VERSION_V3.to_le_bytes());
+    capsule.extend_from_slice(&0_u16.to_le_bytes());
+    capsule.extend_from_slice(&(total_len as u64).to_le_bytes());
+    capsule.extend_from_slice(&0_u32.to_le_bytes());
+    push_blob(&mut capsule, &invocation);
+    capsule.extend_from_slice(&identity(INVOCATION_DIGEST_DOMAIN_V3, &invocation));
+    capsule.extend_from_slice(&(TARGET.len() as u16).to_le_bytes());
+    capsule.extend_from_slice(TARGET.as_bytes());
+    for (payload, domain) in receipts {
+        push_blob(&mut capsule, &payload);
+        capsule.extend_from_slice(&identity(domain, &payload));
+    }
+    let capsule_identity = identity(CAPSULE_IDENTITY_DOMAIN_V3, &capsule);
+    capsule.extend_from_slice(&capsule_identity);
+    assert_eq!(capsule.len(), total_len);
+    capsule
+}
+
+fn raw_outer(capsule: &[u8], handoff: &[u8]) -> Vec<u8> {
+    let capsule_sha256: [u8; 32] = capsule[capsule.len() - 32..].try_into().unwrap();
+    let handoff_sha256: [u8; 32] = Sha256::digest(handoff).into();
+    let mut pair = Vec::with_capacity(INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3);
+    pair.extend_from_slice(&INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3);
+    pair.extend_from_slice(&INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3.to_le_bytes());
+    pair.extend_from_slice(&0_u16.to_le_bytes());
+    pair.extend_from_slice(&(INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3 as u32).to_le_bytes());
+    pair.extend_from_slice(&0_u32.to_le_bytes());
+    pair.extend_from_slice(&capsule_sha256);
+    pair.extend_from_slice(&(capsule.len() as u64).to_le_bytes());
+    pair.extend_from_slice(&handoff_sha256);
+    pair.extend_from_slice(&(handoff.len() as u64).to_le_bytes());
+    let pair_identity = identity(PAIR_IDENTITY_DOMAIN_V3, &pair);
+    pair.extend_from_slice(&pair_identity);
+
+    let total_len = 40 + capsule.len() + handoff.len() + pair.len() + 32;
+    let mut outer = Vec::with_capacity(total_len);
+    outer.extend_from_slice(&INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3);
+    outer.extend_from_slice(&INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3.to_le_bytes());
+    outer.extend_from_slice(&0_u16.to_le_bytes());
+    outer.extend_from_slice(&(total_len as u64).to_le_bytes());
+    outer.extend_from_slice(&0_u32.to_le_bytes());
+    outer.extend_from_slice(&(capsule.len() as u64).to_le_bytes());
+    outer.extend_from_slice(&(handoff.len() as u64).to_le_bytes());
+    outer.extend_from_slice(capsule);
+    outer.extend_from_slice(handoff);
+    outer.extend_from_slice(&pair);
+    let outer_identity = identity(OUTER_IDENTITY_DOMAIN_V3, &outer);
+    outer.extend_from_slice(&outer_identity);
+    assert_eq!(outer.len(), total_len);
+    outer
+}
+
+fn invocation_bytes(seed: u8) -> Vec<u8> {
+    let encoded = match seed {
+        0x20 => INVOCATION_20_HEX,
+        0x40 => INVOCATION_40_HEX,
+        _ => panic!("unsupported strict invocation fixture seed {seed:#x}"),
+    };
+    encoded
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]))
+        .collect()
+}
+
+fn hex_nibble(value: u8) -> u8 {
+    match value {
+        b'0'..=b'9' => value - b'0',
+        b'a'..=b'f' => value - b'a' + 10,
+        _ => panic!("non-canonical fixture hex"),
+    }
+}
+
+fn push_blob(output: &mut Vec<u8>, bytes: &[u8]) {
+    output.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    output.extend_from_slice(bytes);
+}
+
+fn identity(domain: &[u8], preimage: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update((preimage.len() as u64).to_le_bytes());
+    digest.update(preimage);
+    digest.finalize().into()
+}
+
+fn producer() -> ProducerIdentity {
+    ProducerIdentity::from_codegen(
+        "worker_v3_hsaco_admission_fixture",
+        Some(Path::new("tests/worker_v3_hsaco_admission.rs")),
+    )
+    .unwrap()
+}
+
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-worker-v3-admission-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}

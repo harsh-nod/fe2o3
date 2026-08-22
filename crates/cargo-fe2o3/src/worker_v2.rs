@@ -14,17 +14,20 @@ use std::time::Duration;
 use crate::production_release::{
     ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1, RowSoftmaxV1ReleaseWorkloadV1,
 };
+use crate::protected_compiler_handoff_v3::ParentConsumedCompilerModuleHandoffV3;
 use fe2o3_artifact_transaction::{
     ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2,
 };
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1,
-    InertProtectedFirstBuildWorkerV2EvidenceV1, LinkOptionV1, LinkPlanError, MAX_LINK_INPUTS,
-    PinnedWorkerV1, ProtectedFirstBuildWorkerV2Error, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
+    InertProtectedFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
+    LinkOptionV1, LinkPlanError, MAX_LINK_INPUTS, PinnedWorkerV1, ProtectedFirstBuildWorkerV2Error,
+    ProtectedFirstBuildWorkerV3Error, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
     RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
     WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     execute_protected_reproducible_first_build_worker_v2,
+    execute_protected_reproducible_first_build_worker_v3,
     execute_reproducible_first_build_worker_v2,
 };
 use fe2o3_verifier::{
@@ -592,6 +595,24 @@ impl PreparedWorkerV2Config {
     ) -> Result<InertProtectedFirstBuildWorkerV2EvidenceV1, ProtectedFirstBuildWorkerV2Error> {
         execute_protected_reproducible_first_build_worker_v2(
             consumed,
+            &self.worker,
+            self.providers.clone(),
+            self.link_options.clone(),
+            self.candidate_output.clone(),
+            self.limits,
+        )
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn execute_protected_v3(
+        &self,
+        parent_consumed: ParentConsumedCompilerModuleHandoffV3,
+    ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
+        let (receipt, consumed, expected_compiler_closure) = parent_consumed.into_parts();
+        execute_protected_reproducible_first_build_worker_v3(
+            consumed,
+            receipt,
+            expected_compiler_closure,
             &self.worker,
             self.providers.clone(),
             self.link_options.clone(),
@@ -1637,6 +1658,17 @@ mod tests {
             InertProtectedFirstBuildWorkerV2EvidenceV1,
             ProtectedFirstBuildWorkerV2Error,
         > = PreparedWorkerV2Config::execute_protected;
+    }
+
+    #[test]
+    fn protected_v3_execute_path_retains_parent_receipt_and_native_evidence() {
+        let _execute: fn(
+            &PreparedWorkerV2Config,
+            ParentConsumedCompilerModuleHandoffV3,
+        ) -> Result<
+            InertProtectedFirstBuildWorkerV3EvidenceV1,
+            ProtectedFirstBuildWorkerV3Error,
+        > = PreparedWorkerV2Config::execute_protected_v3;
     }
 
     fn row_softmax_manifest(directory: &TestDirectory) -> PathBuf {

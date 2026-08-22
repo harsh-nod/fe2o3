@@ -205,6 +205,23 @@ pub(crate) struct ProductionRankedSemanticProgramV1 {
     receipt: ProductionRankedSemanticProjectionReceiptV1,
 }
 
+/// Move-only custody of the exact ranked graph and all successful general
+/// kernel checks. Only the production projection can construct this owner.
+#[must_use = "dropping ranked verification abandons its production lineage"]
+pub(crate) struct AuthenticatedRankedVerificationV3 {
+    middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV3,
+}
+
+impl AuthenticatedRankedVerificationV3 {
+    pub(crate) fn ranked_ir(&self) -> &str {
+        self.middle_end_evidence.ranked_ir()
+    }
+
+    pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV3 {
+        &self.middle_end_evidence
+    }
+}
+
 impl ProductionRankedSemanticProgramV1 {
     pub(crate) fn ranked_ir(&self) -> &str {
         self.receipt.ranked_ir()
@@ -234,8 +251,26 @@ impl ProductionRankedSemanticProgramV1 {
         false
     }
 
-    pub(crate) fn into_ranked_receipt(self) -> ProductionRankedSemanticProjectionReceiptV1 {
-        self.receipt
+    pub(crate) fn into_verified_receipt(
+        self,
+    ) -> Result<
+        (
+            ProductionRankedSemanticProjectionReceiptV1,
+            AuthenticatedRankedVerificationV3,
+        ),
+        fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV3,
+    > {
+        let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV3::try_new(
+            self.receipt.semantic(),
+            self.receipt.lowering(),
+            self.receipt.ranked_ir(),
+        )?;
+        Ok((
+            self.receipt,
+            AuthenticatedRankedVerificationV3 {
+                middle_end_evidence,
+            },
+        ))
     }
 }
 

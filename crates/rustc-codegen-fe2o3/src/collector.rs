@@ -37,6 +37,7 @@ use std::fmt;
 mod production_importer_v1;
 
 pub(crate) use production_importer_v1::{
+    AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
     ProductionSemanticImportErrorV1, construct_production_semantic_mir_v1,
 };
 

@@ -30,6 +30,7 @@ mod pinned_executable_test_directory;
 #[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
 mod production_release;
 mod project;
+mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
 mod rustc_lib_tree;
 mod tool_commands;

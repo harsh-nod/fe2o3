@@ -400,22 +400,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 .codegen_pipeline
                 .resolve()
                 .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
-            let protected_rustc_invocation =
+            let mut protected_rustc_invocation =
                 protected_rustc_invocation::admit_for_codegen(codegen_pipeline)
                     .unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
                         ))
                     });
-            let protected_compiler_closure = protected_rustc_invocation
-                .as_ref()
-                .map(|admitted| admitted.compiler_closure())
-                .transpose()
-                .unwrap_or_else(|error| {
-                    tcx.dcx().fatal(format!(
-                        "[rustc-codegen-fe2o3] admitted protected compiler closure revalidation failed without fallback: {error}"
-                    ))
-                });
             let mut production_target = None;
             if codegen_pipeline == CodegenPipeline::ProductionV1
                 && collector::count_production_roots_before_monomorphization_v1(tcx) > 0
@@ -501,16 +492,16 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         let output_dir = output_dir
                             .expect("device output was required above")
                             .to_path_buf();
-                        let publication = match protected_compiler_closure {
-                            Some(compiler_closure) => production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure_with_compiler_closure_v2(
+                        let publication = match protected_rustc_invocation.take() {
+                            Some(invocation) => production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure_with_protected_invocation_v3(
                                 tcx,
                                 closure,
                                 producer.clone(),
                                 output_dir,
                                 build_attempt,
-                                compiler_closure,
+                                invocation,
                             )
-                            .and_then(|transaction| transaction.publish_worker_handoff_v2())
+                            .and_then(|transaction| transaction.publish_worker_handoff_v3())
                             .map(|receipt| receipt.length()),
                             None => production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
                                 tcx,
@@ -984,6 +975,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         }
                         let canonical_handoff_bytes = handoff.handoff().canonical_bytes().len();
                         let llvm_bytes = handoff.handoff().module_bytes().len();
+                        let protected_compiler_closure = protected_rustc_invocation
+                            .as_ref()
+                            .map(|admitted| admitted.compiler_closure())
+                            .transpose()
+                            .map_err(|error| {
+                                format!("admitted protected compiler closure revalidation failed without fallback: {error}")
+                            })?;
                         let publication_length = match protected_compiler_closure {
                             Some(compiler_closure) => worker_v2_producer::publish_prepared_row_softmax_v1_worker_handoff_v2(
                                 output_dir,
@@ -2459,23 +2457,28 @@ mod tests {
     #[test]
     fn admitted_protected_modules_route_only_through_v2_publication() {
         let backend = include_str!("lib.rs");
-        let mut protected_arms = backend
-            .split("match protected_compiler_closure")
-            .skip(1)
-            .take(2)
-            .map(|body| {
-                body.split_once("None =>")
-                    .expect("protected and ordinary publication arms")
-            });
-
-        let (production_v2, production_v1) = protected_arms.next().unwrap();
-        assert!(production_v2.contains("from_collected_device_closure_with_compiler_closure_v2"));
-        assert!(production_v2.contains("publish_worker_handoff_v2"));
-        assert!(!production_v2.contains("publish_worker_handoff()"));
+        let production = backend
+            .split("match protected_rustc_invocation.take()")
+            .nth(1)
+            .expect("production consumes protected invocation custody");
+        let (production_v3, production_v1) = production
+            .split_once("None =>")
+            .expect("protected and ordinary production publication arms");
+        assert!(
+            production_v3.contains("from_collected_device_closure_with_protected_invocation_v3")
+        );
+        assert!(production_v3.contains("publish_worker_handoff_v3"));
+        assert!(!production_v3.contains("publish_worker_handoff()"));
         assert!(production_v1.contains("from_collected_device_closure("));
         assert!(production_v1.contains("publish_worker_handoff()"));
 
-        let (row_v2, row_v1) = protected_arms.next().unwrap();
+        let row = backend
+            .split("match protected_compiler_closure")
+            .nth(1)
+            .expect("row-softmax retains protected and ordinary arms");
+        let (row_v2, row_v1) = row
+            .split_once("None =>")
+            .expect("protected and ordinary row-softmax publication arms");
         assert!(row_v2.contains("publish_prepared_row_softmax_v1_worker_handoff_v2"));
         assert!(!row_v2.contains("publish_prepared_row_softmax_v1_worker_handoff("));
         assert!(row_v1.contains("publish_prepared_row_softmax_v1_worker_handoff("));

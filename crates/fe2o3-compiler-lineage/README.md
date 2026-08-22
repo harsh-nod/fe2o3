@@ -2,8 +2,11 @@
 
 This crate owns a canonical, bounded **inert content format**. It records one
 caller-selected Rust compilation invocation beside fifteen caller-supplied
-semantic compilation transcripts through the final LLVM module. That
-association is data, not proof that the inputs share a producer or derivation.
+semantic compilation transcripts through a compact final compiler-module
+commitment. The capsule does not duplicate exact final LLVM bytes; the nested
+`CompilerModuleHandoffV2` in the surrounding compiler-FFI handoff retains them.
+That association is data, not proof that the inputs share a producer or
+derivation.
 
 `InertProductionSemanticCapsuleV3` is deliberately inert. Its name is an API
 boundary: it must never be accepted where an authenticated producer-owned
@@ -25,11 +28,15 @@ capsule identity. It
 never falls back to another schema. Receipt payloads other than the rustc
 invocation and target remain opaque to this dependency-light crate; their
 stage-specific producers are responsible for supplying canonical transcripts.
+In particular, the producer-owned semantic-to-LLVM association codec must bind
+the exact final LLVM module identity from the nested V2 handoff and the compact
+final compiler-module commitment receipt identity as two distinct axes.
 
 Resource limits are part of the wire contract:
 
 - semantic MIR: at most 128 MiB;
-- every other stage transcript, including LLVM: at most 4 MiB each;
+- every other stage transcript, including the compact final compiler-module
+  commitment: at most 4 MiB each;
 - complete capsule: at most 160 MiB;
 - rustc invocation: the bound exported by `fe2o3-rustc-invocation`;
 - target spelling: at most 128 bytes.

@@ -120,7 +120,10 @@ fn validate(
 #[test]
 fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
     for pipeline in CodegenPipeline::ALL {
-        assert!(!requires_v3_capability(pipeline, true));
+        assert_eq!(
+            requires_v3_capability(pipeline, true),
+            pipeline == CodegenPipeline::ProductionV1
+        );
         assert_eq!(
             requires_v3_capability(pipeline, false),
             matches!(
@@ -134,6 +137,64 @@ fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
         admit_for_codegen(CodegenPipeline::LegacyV1)
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn unprotected_routes_reject_and_close_every_protected_signal() {
+    let _guard = FD_TEST_LOCK.lock().unwrap();
+    let descriptor_bytes =
+        fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
+
+    for pipeline in CodegenPipeline::ALL {
+        if requires_v3_capability(pipeline, false) {
+            continue;
+        }
+        let descriptor = sealed_image(&descriptor_bytes);
+        install_inherited(&descriptor, TEST_CHILD_FD);
+        assert!(matches!(
+            admit_for_codegen_at(pipeline, false, TEST_CHILD_FD, false, false),
+            Err(
+                ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                    descriptor_present: true,
+                    compiler_closure_marker_present: false,
+                    backend_marker_present: false,
+                }
+            )
+        ));
+        assert_eq!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
+    }
+
+    for (compiler_closure_marker_present, backend_marker_present) in
+        [(true, false), (false, true), (true, true)]
+    {
+        assert!(matches!(
+            admit_for_codegen_at(
+                CodegenPipeline::LegacyV1,
+                false,
+                TEST_CHILD_FD,
+                compiler_closure_marker_present,
+                backend_marker_present,
+            ),
+            Err(ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                descriptor_present: false,
+                compiler_closure_marker_present: observed_closure_marker,
+                backend_marker_present: observed_backend_marker,
+            }) if observed_closure_marker == compiler_closure_marker_present
+                && observed_backend_marker == backend_marker_present
+        ));
+    }
+
+    assert!(
+        admit_for_codegen_at(
+            CodegenPipeline::LegacyV1,
+            false,
+            TEST_CHILD_FD,
+            false,
+            false,
+        )
+        .unwrap()
+        .is_none()
     );
 }
 
@@ -181,6 +242,79 @@ fn present_v3_is_retained_once_and_exposes_only_the_full_closure() {
     ));
     let admitted = validate_capability(retained, observation(&expected)).unwrap();
     assert_eq!(admitted.compiler_closure().unwrap(), baseline_closure());
+}
+
+#[test]
+fn final_publication_transition_is_move_only_and_retains_exact_v3() {
+    let expected = baseline_descriptor();
+    let admitted = validate(expected.clone(), observation(&expected)).unwrap();
+    let finished = admitted
+        .finish_for_publication_with_observation(observation(&expected))
+        .unwrap();
+
+    assert_eq!(finished.descriptor(), &expected);
+    assert_eq!(
+        finished.descriptor().compiler_closure(),
+        expected.compiler_closure()
+    );
+    finished.revalidate().unwrap();
+}
+
+#[test]
+fn final_publication_transition_rejects_changed_process_observations() {
+    let expected = baseline_descriptor();
+
+    let mut changed = observation(&expected);
+    changed.argv[0].push_str("-changed");
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::ArgumentsMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.canonical_working_directory = "/changed".into();
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::WorkingDirectoryMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.running_rustc_sha256 = [0xa1; 32];
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::RunningRustcMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.running_codegen_backend_sha256 = [0xa2; 32];
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::RunningCodegenBackendMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    let mut entries = changed
+        .compile_environment
+        .entries()
+        .iter()
+        .map(|entry| (OsString::from(entry.key()), OsString::from(entry.value())))
+        .collect::<Vec<_>>();
+    entries.push((OsString::from("CHANGED"), OsString::from("1")));
+    changed.compile_environment = CompileEnvironmentV2::from_child_environment(entries).unwrap();
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::CompileEnvironmentMismatch)
+    ));
 }
 
 #[test]

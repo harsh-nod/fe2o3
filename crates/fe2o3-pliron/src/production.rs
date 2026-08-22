@@ -21,9 +21,11 @@ use super::{
     OperationShapeV1, PlironSession, ShellLimits, validate_name,
 };
 
+mod middle_end_evidence_v3;
 mod ranked;
 mod semantic_mir;
 
+pub use middle_end_evidence_v3::*;
 pub use ranked::*;
 pub use semantic_mir::*;
 

@@ -13,7 +13,9 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::artifact_transaction::{BuildAttempt, ProducerIdentity};
 use crate::collector::AuthenticatedCollectedKernelClosureV1;
-use fe2o3_build_authority::CompilerClosureV2;
+use crate::protected_rustc_invocation::{
+    AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
+};
 
 pub(crate) const PRODUCTION_PIPELINE_V1: &str = "production-v1";
 const PRODUCTION_GFX942_DEFAULT_WORKGROUP_X_V1: u32 = 64;
@@ -39,12 +41,15 @@ pub(crate) enum ProductionPipelineErrorV1 {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
+    MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV3),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
     Gfx942Lowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(String),
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
+    RustcLineageMismatch,
+    ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     ProtectedHandoffRequiresV2,
     UnprotectedHandoffRequiresV1,
     WorkerHandoff(crate::worker_v2_producer::WorkerV2ProducerError),
@@ -66,6 +71,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::RankedProjection(error) => {
                 write!(formatter, "production-v1 general kernel verification failed: {error}")
             }
+            Self::MiddleEndEvidence(error) => {
+                write!(formatter, "production-v1 middle-end evidence failed: {error}")
+            }
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production-v1 target-neutral lowering failed: {error}")
             }
@@ -84,6 +92,13 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::DescriptorEvidence(error) => {
                 write!(formatter, "production-v1 descriptor evidence failed: {error}")
             }
+            Self::RustcLineageMismatch => formatter.write_str(
+                "production-v1 rustc preflight plan is not bound to the retained identity inventory",
+            ),
+            Self::ProtectedRustcInvocation(error) => write!(
+                formatter,
+                "production-v1 final protected rustc invocation validation failed: {error}"
+            ),
             Self::ProtectedHandoffRequiresV2 => formatter.write_str(
                 "production-v1 protected compiler closure cannot publish through the V1 handoff protocol",
             ),
@@ -103,16 +118,19 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
+            Self::MiddleEndEvidence(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
             Self::Gfx942Lowering(error) => Some(error),
             Self::DescriptorEvidence(error) => Some(error),
+            Self::ProtectedRustcInvocation(error) => Some(error),
             Self::WorkerHandoff(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::ProtectedHandoffRequiresV2
             | Self::UnprotectedHandoffRequiresV1
+            | Self::RustcLineageMismatch
             | Self::UpstreamLlvmLayoutBinding(_) => None,
         }
     }
@@ -143,39 +161,37 @@ struct ProductionTransactionBindingsV1 {
     publication: ProductionCompilerModulePublicationV1,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProductionCompilerModulePublicationV1 {
-    compiler_closure: Option<CompilerClosureV2>,
+enum ProductionCompilerModulePublicationV1 {
+    OrdinaryV1,
+    ProtectedV3(Box<AdmittedProtectedRustcInvocationV1>),
 }
 
 impl ProductionCompilerModulePublicationV1 {
-    const ORDINARY_V1: Self = Self {
-        compiler_closure: None,
-    };
+    const ORDINARY_V1: Self = Self::OrdinaryV1;
 
-    const fn protected_v2(compiler_closure: CompilerClosureV2) -> Self {
-        Self {
-            compiler_closure: Some(compiler_closure),
-        }
+    fn protected_v3(invocation: AdmittedProtectedRustcInvocationV1) -> Self {
+        Self::ProtectedV3(Box::new(invocation))
     }
 
     fn require_v1(self) -> Result<(), ProductionPipelineErrorV1> {
-        if self.compiler_closure.is_none() {
-            Ok(())
-        } else {
-            Err(ProductionPipelineErrorV1::ProtectedHandoffRequiresV2)
+        match self {
+            Self::OrdinaryV1 => Ok(()),
+            Self::ProtectedV3(_) => Err(ProductionPipelineErrorV1::ProtectedHandoffRequiresV2),
         }
     }
 
-    fn require_v2(self) -> Result<CompilerClosureV2, ProductionPipelineErrorV1> {
-        self.compiler_closure
-            .ok_or(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1)
+    fn require_v3(self) -> Result<AdmittedProtectedRustcInvocationV1, ProductionPipelineErrorV1> {
+        match self {
+            Self::OrdinaryV1 => Err(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1),
+            Self::ProtectedV3(invocation) => Ok(*invocation),
+        }
     }
 }
 
 struct AuthenticatedProductionBindingsV1 {
-    rustc_identity_inventory_sha256: [u8; 32],
-    rustc_preflight_plan_sha256: [u8; 32],
+    rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
+    rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
+    rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindingsV1,
 }
@@ -211,6 +227,7 @@ pub(crate) struct RankedVerifiedProductionCompilationV1 {
 /// Kernel IR, correspondence evidence, and the original transaction bindings.
 pub(crate) struct TargetNeutralProductionCompilationV1 {
     lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
     bindings: AuthenticatedProductionBindingsV1,
 }
 
@@ -218,6 +235,7 @@ pub(crate) struct TargetNeutralProductionCompilationV1 {
 /// Kernel IR, complete formal memory obligations, and transaction bindings.
 pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
     bindings: AuthenticatedProductionBindingsV1,
 }
 
@@ -225,6 +243,7 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
 /// Kernel IR, deterministic gfx942 LLVM text, and transaction bindings.
 pub(crate) struct Gfx942LoweredProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
     bindings: AuthenticatedProductionBindingsV1,
@@ -245,7 +264,11 @@ struct PreparedProductionWorkerPublicationV1 {
     output_dir: PathBuf,
     attempt: BuildAttempt,
     publication: ProductionCompilerModulePublicationV1,
-    prepared: crate::worker_v2_producer::PreparedProductionV1WorkerHandoffV1,
+    rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
+    rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
+    rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
+    prepared: crate::worker_v2_producer::PreparedProductionLineageWorkerHandoffV3,
 }
 
 impl AuthenticatedProductionGfx942ModuleV1 {
@@ -272,10 +295,18 @@ impl TargetNeutralProductionCompilationV1 {
     fn admit_formal_memory(
         self,
     ) -> Result<FormalMemoryAdmittedProductionCompilationV1, ProductionPipelineErrorV1> {
-        let Self { lowered, bindings } = self;
+        let Self {
+            lowered,
+            ranked_verification,
+            bindings,
+        } = self;
         let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered)
             .map_err(ProductionPipelineErrorV1::FormalMemoryAdmission)?;
-        Ok(FormalMemoryAdmittedProductionCompilationV1 { admitted, bindings })
+        Ok(FormalMemoryAdmittedProductionCompilationV1 {
+            admitted,
+            ranked_verification,
+            bindings,
+        })
     }
 }
 
@@ -283,7 +314,11 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
     fn lower_gfx942(
         self,
     ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
-        let Self { admitted, bindings } = self;
+        let Self {
+            admitted,
+            ranked_verification,
+            bindings,
+        } = self;
         let mut target_module = admitted.semantic_kir().module().clone();
         let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
         let wave = fe2o3_kernel_ir::TargetCapability::WaveWidth(fe2o3_kernel_ir::WaveWidth::Wave64);
@@ -316,6 +351,7 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             .map_err(ProductionPipelineErrorV1::UpstreamLlvmLayoutBinding)?;
         Ok(Gfx942LoweredProductionCompilationV1 {
             admitted,
+            ranked_verification,
             target_module,
             llvm_ir,
             bindings,
@@ -411,8 +447,8 @@ impl Gfx942LoweredProductionCompilationV1 {
 
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
         let _ = (
-            &self.bindings.rustc_identity_inventory_sha256,
-            &self.bindings.rustc_preflight_plan_sha256,
+            &self.bindings.rustc_identity_inventory,
+            &self.bindings.rustc_preflight_plan,
             &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
@@ -446,13 +482,15 @@ impl Gfx942LoweredProductionCompilationV1 {
         );
         let Self {
             admitted,
+            ranked_verification,
             target_module,
             llvm_ir,
             bindings,
         } = self;
         let AuthenticatedProductionBindingsV1 {
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
+            rustc_identity_inventory,
+            rustc_preflight_plan,
+            rustc_target,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -463,6 +501,11 @@ impl Gfx942LoweredProductionCompilationV1 {
             compiler_ffi_envelope,
             publication,
         } = transaction;
+        if rustc_preflight_plan.rustc_identity_inventory_sha256()
+            != rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
+        }
         let compiler_module = AuthenticatedProductionGfx942ModuleV1 {
             admitted,
             target_module,
@@ -478,12 +521,15 @@ impl Gfx942LoweredProductionCompilationV1 {
                 crate::worker_v2_producer::WorkerV2ProducerError::MissingBuildAttempt,
             )
         })?;
-        let _ = (rustc_identity_inventory_sha256, rustc_preflight_plan_sha256);
         Ok(PreparedProductionWorkerPublicationV1 {
             producer,
             output_dir,
             attempt,
             publication,
+            rustc_identity_inventory,
+            rustc_preflight_plan,
+            rustc_target,
+            ranked_verification,
             prepared,
         })
     }
@@ -493,28 +539,60 @@ impl Gfx942LoweredProductionCompilationV1 {
     ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
     {
         let publication = self.prepare_worker_handoff()?;
+        let _ = (
+            publication.rustc_identity_inventory.canonical_transcript(),
+            publication.rustc_preflight_plan.canonical_transcript(),
+            publication.rustc_target.rustc_layout(),
+            publication.ranked_verification.ranked_ir(),
+            publication
+                .ranked_verification
+                .middle_end_evidence()
+                .canonical_bytes(),
+        );
         publication.publication.require_v1()?;
         crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff(
             &publication.output_dir,
             &publication.producer,
             publication.attempt,
-            publication.prepared,
+            publication.prepared.into_worker_handoff(),
         )
         .map_err(ProductionPipelineErrorV1::WorkerHandoff)
     }
 
-    fn publish_worker_handoff_v2(
+    fn publish_worker_handoff_v3(
         self,
     ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV2, ProductionPipelineErrorV1>
     {
         let publication = self.prepare_worker_handoff()?;
-        let compiler_closure = publication.publication.require_v2()?;
+        let _ = (
+            publication.rustc_identity_inventory.canonical_transcript(),
+            publication.rustc_preflight_plan.canonical_transcript(),
+            publication.rustc_target.rustc_layout(),
+            publication.ranked_verification.ranked_ir(),
+            publication
+                .ranked_verification
+                .middle_end_evidence()
+                .canonical_bytes(),
+        );
+        let invocation = publication
+            .publication
+            .require_v3()?
+            .finish_for_publication()
+            .map_err(ProductionPipelineErrorV1::ProtectedRustcInvocation)?;
+        invocation.revalidate().map_err(|detail| {
+            ProductionPipelineErrorV1::ProtectedRustcInvocation(
+                ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged(detail),
+            )
+        })?;
+        let compiler_closure = *invocation.descriptor().compiler_closure();
+        let (prepared, compiler_descriptor_source) = publication.prepared.into_parts();
+        let _ = compiler_descriptor_source.canonical_bytes();
         crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff_v2(
             &publication.output_dir,
             &publication.producer,
             publication.attempt,
             compiler_closure,
-            publication.prepared,
+            prepared,
         )
         .map_err(ProductionPipelineErrorV1::WorkerHandoff)
     }
@@ -547,8 +625,8 @@ impl RankedVerifiedProductionCompilationV1 {
 
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
         let _ = (
-            &self.bindings.rustc_identity_inventory_sha256,
-            &self.bindings.rustc_preflight_plan_sha256,
+            &self.bindings.rustc_identity_inventory,
+            &self.bindings.rustc_preflight_plan,
             &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
@@ -582,13 +660,13 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         )
     }
 
-    pub(crate) fn from_collected_device_closure_with_compiler_closure_v2(
+    pub(crate) fn from_collected_device_closure_with_protected_invocation_v3(
         tcx: TyCtxt<'tcx>,
         closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
         producer: ProducerIdentity,
         output_dir: PathBuf,
         build_attempt: Option<BuildAttempt>,
-        compiler_closure: CompilerClosureV2,
+        invocation: AdmittedProtectedRustcInvocationV1,
     ) -> Result<Self, ProductionPipelineErrorV1> {
         Self::from_collected_device_closure_with_publication(
             tcx,
@@ -596,7 +674,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             producer,
             output_dir,
             build_attempt,
-            ProductionCompilerModulePublicationV1::protected_v2(compiler_closure),
+            ProductionCompilerModulePublicationV1::protected_v3(invocation),
         )
     }
 
@@ -642,15 +720,16 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             typed_descriptor_roots,
             transaction,
         } = self.stage;
-        let (semantic_mir, rustc_identity_inventory_sha256, rustc_preflight_plan_sha256) =
+        let (semantic_mir, rustc_identity_inventory, rustc_preflight_plan, rustc_target) =
             crate::collector::construct_production_semantic_mir_v1(tcx, closure)
                 .map_err(ProductionPipelineErrorV1::SemanticImport)?;
         Ok(ProductionCompilationV1 {
             stage: AdmittedSemanticMirStageV1 {
                 semantic_mir,
                 bindings: AuthenticatedProductionBindingsV1 {
-                    rustc_identity_inventory_sha256,
-                    rustc_preflight_plan_sha256,
+                    rustc_identity_inventory,
+                    rustc_preflight_plan,
+                    rustc_target,
                     typed_descriptor_roots,
                     transaction,
                 },
@@ -691,11 +770,11 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         self.lower_gfx942()?.publish_worker_handoff()
     }
 
-    pub(crate) fn publish_worker_handoff_v2(
+    pub(crate) fn publish_worker_handoff_v3(
         self,
     ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV2, ProductionPipelineErrorV1>
     {
-        self.lower_gfx942()?.publish_worker_handoff_v2()
+        self.lower_gfx942()?.publish_worker_handoff_v3()
     }
 
     /// Retains the original extraction milestone while consuming the same
@@ -747,8 +826,8 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
             crate::collector::ProductionSemanticImportErrorV1::TargetNeutralLoweringPending {
                 functions: semantic_mir.semantic().functions().len(),
                 callables: semantic_mir.semantic().callables().len(),
-                rustc_identity_inventory_sha256: bindings.rustc_identity_inventory_sha256,
-                rustc_preflight_plan_sha256: bindings.rustc_preflight_plan_sha256,
+                rustc_identity_inventory_sha256: bindings.rustc_identity_inventory.sha256(),
+                rustc_preflight_plan_sha256: bindings.rustc_preflight_plan.sha256(),
                 semantic_sha256: *semantic_mir.semantic().semantic_sha256().as_bytes(),
             };
         drop((semantic_mir, bindings));
@@ -776,14 +855,20 @@ impl RankedVerifiedProductionCompilationV1 {
         self,
     ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
         let Self { ranked, bindings } = self;
-        let receipt = ranked.into_ranked_receipt();
+        let (receipt, ranked_verification) = ranked
+            .into_verified_receipt()
+            .map_err(ProductionPipelineErrorV1::MiddleEndEvidence)?;
         let lowered =
             fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
                 receipt,
                 fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
             )
             .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
-        Ok(TargetNeutralProductionCompilationV1 { lowered, bindings })
+        Ok(TargetNeutralProductionCompilationV1 {
+            lowered,
+            ranked_verification,
+            bindings,
+        })
     }
 }
 
@@ -800,20 +885,14 @@ mod tests {
             ProductionDispositionV1::DeviceTransaction
         );
 
-        let protected = ProductionCompilerModulePublicationV1::protected_v2(
-            CompilerClosureV2::new(
-                [0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], [0x55; 32], [0x66; 32],
-            )
-            .unwrap(),
-        );
         assert_eq!(disposition(0), ProductionDispositionV1::HostOnly);
-        assert!(protected.require_v2().is_ok());
+        assert!(
+            ProductionCompilerModulePublicationV1::ORDINARY_V1
+                .require_v1()
+                .is_ok()
+        );
         assert!(matches!(
-            protected.require_v1(),
-            Err(ProductionPipelineErrorV1::ProtectedHandoffRequiresV2)
-        ));
-        assert!(matches!(
-            ProductionCompilerModulePublicationV1::ORDINARY_V1.require_v2(),
+            ProductionCompilerModulePublicationV1::ORDINARY_V1.require_v3(),
             Err(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1)
         ));
     }

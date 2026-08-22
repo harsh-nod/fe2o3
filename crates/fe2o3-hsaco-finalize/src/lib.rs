@@ -20,6 +20,7 @@ use fe2o3_kernel_descriptor::{
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
+mod first_build_worker_v3;
 mod flash_attention_v1_finalizer;
 #[cfg(feature = "general-gemm-v1")]
 mod general_gemm_v1_artifact;
@@ -91,6 +92,13 @@ pub use first_build_worker_v2::{
     InertProtectedFirstBuildWorkerV2EvidenceV1, ProtectedFirstBuildWorkerV2Error,
     ProtectedFirstBuildWorkerV2IdentityV1, execute_protected_reproducible_first_build_worker_v2,
     execute_reproducible_first_build_worker_v2,
+};
+pub use first_build_worker_v3::{
+    InertProtectedCompilerHandoffExecutionV3, InertProtectedFirstBuildWorkerV3EvidenceV1,
+    ProtectedCompilerHandoffBindingErrorV3, ProtectedCompilerHandoffBindingIdentityV3,
+    ProtectedCompilerHandoffBindingV3, ProtectedCompilerHandoffExpectationV3,
+    ProtectedFirstBuildWorkerV3Error, ProtectedFirstBuildWorkerV3IdentityV1,
+    execute_protected_reproducible_first_build_worker_v3,
 };
 pub use flash_attention_v1_finalizer::{
     FinalizedFlashAttentionV1ReceiptV1, FlashAttentionV1FinalizationErrorV1,
@@ -228,12 +236,14 @@ pub use worker_protocol_v2::{
 };
 pub use worker_v2_hsaco_admission::{
     CanonicalDescriptorSectionObservationV1, InspectedProtectedRawWorkerV2HsacoIdentityV1,
-    InspectedProtectedRawWorkerV2HsacoV1, InspectedRawWorkerV2HsacoIdentityV1,
+    InspectedProtectedRawWorkerV2HsacoV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
+    InspectedProtectedRawWorkerV3HsacoV1, InspectedRawWorkerV2HsacoIdentityV1,
     InspectedRawWorkerV2HsacoV1, ObservedWorkerV2KernelSymbolsV1, SealedWorkerV2ResponseIdentityV1,
     WorkerV2RawHsacoInspectionError, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
     WorkerV2RawLaunchContractV1, inspect_general_gemm_worker_v2_raw_hsaco_v1,
     inspect_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
+    inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
     inspect_protected_worker_v2_raw_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
 };
 pub use worker_v2_hsaco_finalization::{
