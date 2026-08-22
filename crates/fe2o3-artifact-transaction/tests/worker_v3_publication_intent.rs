@@ -389,6 +389,49 @@ fn current_retirement_accepts_an_exact_protected_v2_receipt() {
 }
 
 #[test]
+fn receipt_bound_retirement_accepts_a_replayable_redo_record() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let owner = producer(25);
+    let attempt = begin(&output_dir, &owner, 26);
+    let output = b"redo retirement Worker V3 output";
+    let publication_plan = receipted_plan(&owner, attempt, output, 27);
+    let point = WorkerV3PublicationIntentFaultPointV1 {
+        boundary: WorkerV3PublicationIntentBoundaryV1::RenameRecordToRedo,
+        timing: WorkerV3PublicationIntentFaultTimingV1::After,
+    };
+    assert!(matches!(
+        persist_worker_v3_publication_intent_v1_with_options(
+            &output_dir,
+            &owner,
+            attempt,
+            publication_plan,
+            replay(b"redo retirement transcript"),
+            output.to_vec(),
+            WorkerV3PublicationIntentOptionsV1::inject_crash(point),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { point: actual }) if actual == point
+    ));
+    let redo = intent_entry(&output_dir, ".record.redo");
+    let record = fe2o3_artifact_transaction::WorkerV3PublicationIntentRecordV1::decode_canonical(
+        &fs::read(redo).unwrap(),
+    )
+    .unwrap();
+    publish_exact_hsaco_evidence_for_attempt_v1(
+        &output_dir,
+        &owner,
+        attempt,
+        publication_plan,
+        UpstreamCodeObjectEvidenceIdentityV1::from_bytes([28; 32]),
+        output,
+    )
+    .unwrap();
+
+    clear_worker_v3_publication_intent_v1(&output_dir, &owner, attempt, record.identity()).unwrap();
+    assert!(v3_namespace_entries(&output_dir).is_empty());
+}
+
+#[test]
 fn current_retirement_rejects_a_durable_receipt_for_another_plan() {
     let temp = TestDirectory::new();
     let output_dir = temp.output();
@@ -939,6 +982,10 @@ fn successor_scavenge_resumes_an_interrupted_receipt_bound_retirement() {
         Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { point: actual }) if actual == point
     ));
     assert_eq!(v3_namespace_entries(&output_dir).len(), 4);
+    assert!(matches!(
+        recover_worker_v3_publication_intent_v1(&output_dir, &owner, stale),
+        Err(WorkerV3PublicationIntentErrorV1::RetirementInProgress)
+    ));
 
     let successor = begin(&output_dir, &owner, 112);
     assert!(successor.generation() > stale.generation());
