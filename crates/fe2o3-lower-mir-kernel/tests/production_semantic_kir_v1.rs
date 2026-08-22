@@ -1,11 +1,15 @@
 use fe2o3_kernel_ir::{BlockId, LaunchDomain, WorkgroupSize, verify_module};
 use fe2o3_lower_mir_kernel::{
     PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
-    ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
-    ProductionSemanticKirResourceV1,
+    ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
+    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
-use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1};
+use fe2o3_pliron::{
+    ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
+    ProductionRankedTerminatorV1, ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+};
 
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
@@ -175,6 +179,40 @@ fn exact_nonzero_entry_lowers_to_verified_kir_with_correspondence() {
         Some(WorkgroupSize::new(64, 1, 1))
     );
     assert!(!lowered.grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
+    let kernel = ProductionRankedKernelV1::new(
+        "semantic_kir_test",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let construction =
+        ProductionConstructionV1::ranked_kernel("semantic_kir_test_module", kernel).unwrap();
+    let ranked =
+        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+            .unwrap();
+    let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
+        semantic_owner(false, false),
+        ranked,
+        "func @semantic_kir_test { kernel.return }".to_owned(),
+    )
+    .unwrap();
+    let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+        receipt,
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+
+    assert!(lowered.retains_mandatory_generic_checks());
+    lowered.verify_equivalence().unwrap();
+    let formal = ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
+    assert!(formal.semantic_kir().retains_mandatory_generic_checks());
 }
 
 #[test]

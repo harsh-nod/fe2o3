@@ -91,6 +91,7 @@ impl SemanticOptionProducerV1 {
         if !matches!(
             operation,
             SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
+                | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
         ) {

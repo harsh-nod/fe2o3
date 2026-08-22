@@ -27,7 +27,13 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1,
     SemanticUnaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
 };
-use fe2o3_pliron::{ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1};
+use fe2o3_mir_model::{
+    SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
+};
+use fe2o3_pliron::{
+    ProductionRankedKernelLoweringInputV1, ProductionSemanticMirErrorV1,
+    ProductionSemanticMirOwnerV1,
+};
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
@@ -222,12 +228,136 @@ impl Error for ProductionSemanticKirErrorV1 {
     }
 }
 
+/// Move-only custody for one compiler-asserted semantic-to-ranked projection.
+///
+/// The public minting API is intentionally named as an internal compiler
+/// assertion: this receipt prevents safe callers from later mixing independent
+/// semantic, ranked-graph, and diagnostic-IR values, but it does not authenticate
+/// a hostile caller that invokes the assertion with unrelated inputs.
+#[must_use = "dropping the receipt abandons the checked semantic-to-ranked projection"]
+pub struct ProductionRankedSemanticProjectionReceiptV1 {
+    semantic: ProductionSemanticMirOwnerV1,
+    lowering: ProductionRankedKernelLoweringInputV1,
+    ranked_ir: String,
+    semantic_sha256: [u8; 32],
+    function_name: String,
+}
+
+impl fmt::Debug for ProductionRankedSemanticProjectionReceiptV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProductionRankedSemanticProjectionReceiptV1")
+            .field("function_name", &self.function_name)
+            .field("ranked_ir_bytes", &self.ranked_ir.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProductionRankedSemanticProjectionReceiptV1 {
+    /// Asserts the result of the compiler's deterministic semantic projector.
+    ///
+    /// This is a compiler-internal trust assertion rather than public proof
+    /// authentication. It verifies all cheaply reconstructible bindings and
+    /// packages the three move-only inputs immediately at the projection
+    /// boundary so downstream safe code cannot substitute one independently.
+    #[doc(hidden)]
+    pub fn assert_compiler_internal_projection(
+        semantic: ProductionSemanticMirOwnerV1,
+        lowering: ProductionRankedKernelLoweringInputV1,
+        ranked_ir: String,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        semantic
+            .verify_equivalence()
+            .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
+        if !mandatory_generic_checks_are_clean(&lowering) {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "ranked projection receipt contains a rejected mandatory kernel check",
+            ));
+        }
+        if ranked_ir.is_empty() {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "ranked projection receipt has empty diagnostic IR",
+            ));
+        }
+        let document = semantic.semantic();
+        let root = document
+            .roots()
+            .first()
+            .and_then(|root| document.functions().get(root.index() as usize))
+            .and_then(SemanticFunctionDeclV1::kernel_entry)
+            .ok_or_else(|| {
+                unsupported(
+                    0,
+                    None,
+                    None,
+                    "ranked projection receipt has no exact kernel root",
+                )
+            })?;
+        let function_name = std::str::from_utf8(root.export_symbol().as_bytes()).map_err(|_| {
+            unsupported(
+                0,
+                None,
+                None,
+                "ranked projection receipt has a non-UTF-8 kernel symbol",
+            )
+        })?;
+        if function_name != lowering.kernel().function_name() {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "ranked projection receipt function identity changed",
+            ));
+        }
+        Ok(Self {
+            semantic_sha256: *document.semantic_sha256().as_bytes(),
+            function_name: function_name.to_owned(),
+            semantic,
+            lowering,
+            ranked_ir,
+        })
+    }
+
+    /// Borrows the exact semantic owner retained by this receipt.
+    pub const fn semantic(&self) -> &ProductionSemanticMirOwnerV1 {
+        &self.semantic
+    }
+
+    /// Borrows the owner-held ranked graph and mandatory check reports.
+    pub const fn lowering(&self) -> &ProductionRankedKernelLoweringInputV1 {
+        &self.lowering
+    }
+
+    /// Borrows the bounded diagnostic ranked IR emitted by the projector.
+    pub fn ranked_ir(&self) -> &str {
+        &self.ranked_ir
+    }
+
+    /// A projection receipt is custody only, never artifact or launch authority.
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
 /// Move-only owner of one exact semantic source and its verified Kernel IR.
 #[must_use = "dropping the owner abandons the verified target-neutral lowering"]
 pub struct ProductionSemanticKirOwnerV1 {
     semantic: ProductionSemanticMirOwnerV1,
     module: Module,
     correspondence: SemanticKirCorrespondenceV1,
+    generic_checks: Option<RetainedGenericKernelChecksV1>,
+}
+
+struct RetainedGenericKernelChecksV1 {
+    semantic_sha256: [u8; 32],
+    function_name: String,
+    ranked_ir: Box<str>,
+    lowering: ProductionRankedKernelLoweringInputV1,
 }
 
 impl fmt::Debug for ProductionSemanticKirOwnerV1 {
@@ -236,6 +366,7 @@ impl fmt::Debug for ProductionSemanticKirOwnerV1 {
             .debug_struct("ProductionSemanticKirOwnerV1")
             .field("module", &self.module.id)
             .field("correspondence", &self.correspondence)
+            .field("retains_generic_checks", &self.generic_checks.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -255,6 +386,48 @@ impl ProductionSemanticKirOwnerV1 {
             semantic,
             module,
             correspondence,
+            generic_checks: None,
+        };
+        owner.verify_equivalence()?;
+        Ok(owner)
+    }
+
+    /// Constructs Kernel IR while retaining the exact ranked graph and every
+    /// mandatory generic-check report that admitted the same semantic owner.
+    pub fn try_lower_after_ranked_checks(
+        receipt: ProductionRankedSemanticProjectionReceiptV1,
+        limits: ProductionSemanticKirLimitsV1,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let ProductionRankedSemanticProjectionReceiptV1 {
+            semantic,
+            lowering,
+            ranked_ir,
+            semantic_sha256,
+            function_name,
+        } = receipt;
+        semantic
+            .verify_equivalence()
+            .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
+        if !mandatory_generic_checks_are_clean(&lowering) {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "ranked proof custody contains a rejected mandatory kernel check",
+            ));
+        }
+        let (module, correspondence) = lower_module(&semantic, limits)?;
+        verify_module(&module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
+        let owner = Self {
+            semantic,
+            module,
+            correspondence,
+            generic_checks: Some(RetainedGenericKernelChecksV1 {
+                semantic_sha256,
+                function_name,
+                ranked_ir: ranked_ir.into_boxed_str(),
+                lowering,
+            }),
         };
         owner.verify_equivalence()?;
         Ok(owner)
@@ -280,6 +453,18 @@ impl ProductionSemanticKirOwnerV1 {
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
+        if let Some(generic_checks) = &self.generic_checks {
+            let Some(function) = self.module.functions.first() else {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            };
+            if generic_checks.semantic_sha256 != self.correspondence.semantic_sha256
+                || generic_checks.function_name != function.id.as_str()
+                || generic_checks.ranked_ir.is_empty()
+                || !mandatory_generic_checks_are_clean(&generic_checks.lowering)
+            {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+        }
         Ok(())
     }
 
@@ -298,10 +483,23 @@ impl ProductionSemanticKirOwnerV1 {
         &self.correspondence
     }
 
+    /// Reports whether mandatory ranked checks remain owned by this lowering.
+    pub const fn retains_mandatory_generic_checks(&self) -> bool {
+        self.generic_checks.is_some()
+    }
     /// Exact target-neutral lowering evidence is not artifact or launch authority.
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }
+}
+
+fn mandatory_generic_checks_are_clean(lowering: &ProductionRankedKernelLoweringInputV1) -> bool {
+    lowering.bounds_report().is_clean()
+        && lowering.atomic_report().is_clean()
+        && lowering.race_report().is_clean()
+        && lowering.barrier_report().is_clean()
+        && lowering.workgroup_report().is_clean()
+        && lowering.semantic_report().is_clean()
 }
 
 fn lower_module(
@@ -567,24 +765,31 @@ enum SemanticValueBindingV1 {
         id: ValueId,
         index_space: SemanticDisjointIndexSpaceV1,
         disjoint: bool,
+        availability: Option<SemanticOptionAvailabilityV1>,
     },
     OptionIndexWitness {
         present: ValueId,
         id: ValueId,
         index_space: SemanticDisjointIndexSpaceV1,
+        availability: SemanticOptionAvailabilityV1,
+    },
+    GridLeader {
+        availability: SemanticOptionAvailabilityV1,
     },
     BlockWitness {
         raw: ValueId,
         index_space: SemanticDisjointIndexSpaceV1,
+        availability: SemanticOptionAvailabilityV1,
     },
     OptionBlockWitness {
         present: ValueId,
         raw: ValueId,
         index_space: SemanticDisjointIndexSpaceV1,
+        availability: SemanticOptionAvailabilityV1,
     },
-    GridLeader,
     OptionGridLeader {
         present: ValueId,
+        availability: SemanticOptionAvailabilityV1,
     },
 }
 
@@ -596,9 +801,9 @@ impl SemanticValueBindingV1 {
             Self::Unit
             | Self::OptionPointer { .. }
             | Self::OptionIndexWitness { .. }
-            | Self::GridLeader
             | Self::BlockWitness { .. }
             | Self::OptionBlockWitness { .. }
+            | Self::GridLeader { .. }
             | Self::OptionGridLeader { .. } => {
                 Err("aggregate or capability value requires a semantic projection")
             }
@@ -611,6 +816,7 @@ struct SemanticFunctionLoweringV1<'a> {
     callables: &'a [SemanticCallableDeclV1],
     function: &'a SemanticFunctionDeclV1,
     locals: Vec<Option<SemanticValueBindingV1>>,
+    option_dominance: SemanticOptionDominanceV1,
     next_value: u32,
 }
 
@@ -624,6 +830,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         parameter_types: &[Type],
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
+        let option_producers = semantic_option_producers_v1(function, callables)
+            .map_err(|error| unsupported(0, None, None, error.detail()))?;
+        let option_dominance = SemanticOptionDominanceV1::analyze(function, &option_producers)
+            .map_err(|error| unsupported(0, None, None, error.detail()))?;
         for ((_, local, _), (value, ty)) in parameters
             .iter()
             .zip(parameter_values.iter().zip(parameter_types))
@@ -640,6 +850,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             callables,
             function,
             locals,
+            option_dominance,
             next_value,
         })
     }
@@ -717,7 +928,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     SemanticValueBindingV1::OptionPointer { present, .. }
                     | SemanticValueBindingV1::OptionIndexWitness { present, .. }
                     | SemanticValueBindingV1::OptionBlockWitness { present, .. }
-                    | SemanticValueBindingV1::OptionGridLeader { present } => {
+                    | SemanticValueBindingV1::OptionGridLeader { present, .. } => {
                         let target = lower_scalar_type(self.types, result_type)?;
                         if target == Type::BOOL {
                             Ok(SemanticValueBindingV1::Value {
@@ -747,7 +958,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticValueBindingV1::Value { .. }
                     | SemanticValueBindingV1::IndexWitness { .. }
                     | SemanticValueBindingV1::BlockWitness { .. }
-                    | SemanticValueBindingV1::GridLeader => Err(unsupported(
+                    | SemanticValueBindingV1::GridLeader { .. } => Err(unsupported(
                         0,
                         Some(block.index()),
                         statement,
@@ -1067,6 +1278,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     id,
                     index_space: SemanticDisjointIndexSpaceV1::Index1d,
                     disjoint: false,
+                    availability: None,
                 }
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => {
@@ -1080,6 +1292,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
                 let SemanticValueBindingV1::IndexWitness {
                     id,
+                    availability,
                     index_space: actual,
                     disjoint: false,
                 } = binding
@@ -1100,6 +1313,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ));
                 }
                 SemanticValueBindingV1::IndexWitness {
+                    availability,
                     id,
                     index_space: actual,
                     disjoint: true,
@@ -1141,6 +1355,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     id,
                     index_space: actual,
                     disjoint: true,
+                    ..
                 } = binding
                 else {
                     return Err(unsupported(
@@ -1262,12 +1477,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     )?
                     .value()
                     .expect("emitted leader predicate");
-                SemanticValueBindingV1::OptionGridLeader { present }
+                let availability = self
+                    .option_dominance
+                    .availability(destination.place().local())
+                    .ok_or_else(|| {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            None,
+                            "grid-leader Option lacks an authenticated Some edge",
+                        )
+                    })?;
+                SemanticValueBindingV1::OptionGridLeader {
+                    present,
+                    availability,
+                }
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. } => {
                 self.require_call_argument_count(block, call, 3)?;
                 let leader = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                if !matches!(leader, SemanticValueBindingV1::GridLeader) {
+                if !matches!(leader, SemanticValueBindingV1::GridLeader { .. }) {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
@@ -1290,6 +1519,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 let SemanticValueBindingV1::BlockWitness {
                     raw,
                     index_space: actual,
+                    ..
                 } = witness
                 else {
                     return Err(unsupported(
@@ -1404,6 +1634,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             id,
             index_space: actual,
             disjoint,
+            ..
         } = binding
         else {
             return Err(unsupported(
@@ -1486,6 +1717,22 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .expect("emitted shifted index");
         Ok(SemanticValueBindingV1::OptionIndexWitness {
             present,
+            availability: self
+                .option_dominance
+                .availability(
+                    call.destination()
+                        .expect("checked destination")
+                        .place()
+                        .local(),
+                )
+                .ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "checked-shift Option lacks an authenticated Some edge",
+                    )
+                })?,
             id: shifted,
             index_space: output_space,
         })
@@ -1508,6 +1755,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             id: raw,
             index_space: actual,
             disjoint: false,
+            availability: None,
         } = input
         else {
             return Err(unsupported(
@@ -1675,6 +1923,22 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             present,
             raw,
             index_space: expected,
+            availability: self
+                .option_dominance
+                .availability(
+                    call.destination()
+                        .expect("checked destination")
+                        .place()
+                        .local(),
+                )
+                .ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "checked-block Option lacks an authenticated Some edge",
+                    )
+                })?,
         })
     }
 
@@ -2072,24 +2336,35 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 },
                 (
                     SemanticValueBindingV1::OptionIndexWitness {
-                        id, index_space, ..
+                        id,
+                        index_space,
+                        availability,
+                        ..
                     },
                     SemanticProjectionKindV1::Field(_),
                 ) => SemanticValueBindingV1::IndexWitness {
                     id,
+                    availability: Some(availability),
                     index_space,
                     disjoint: true,
                 },
                 (
                     SemanticValueBindingV1::OptionBlockWitness {
-                        raw, index_space, ..
+                        raw,
+                        index_space,
+                        availability,
+                        ..
                     },
                     SemanticProjectionKindV1::Field(_),
-                ) => SemanticValueBindingV1::BlockWitness { raw, index_space },
+                ) => SemanticValueBindingV1::BlockWitness {
+                    raw,
+                    index_space,
+                    availability,
+                },
                 (
-                    SemanticValueBindingV1::OptionGridLeader { .. },
+                    SemanticValueBindingV1::OptionGridLeader { availability, .. },
                     SemanticProjectionKindV1::Field(_),
-                ) => SemanticValueBindingV1::GridLeader,
+                ) => SemanticValueBindingV1::GridLeader { availability },
                 (
                     binding @ SemanticValueBindingV1::OptionPointer { .. },
                     SemanticProjectionKindV1::Downcast(_),
@@ -2123,7 +2398,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticProjectionKindV1::Subtype,
                 ) => binding,
                 (
-                    binding @ SemanticValueBindingV1::GridLeader,
+                    binding @ SemanticValueBindingV1::GridLeader { .. },
                     SemanticProjectionKindV1::Dereference
                     | SemanticProjectionKindV1::Field(0)
                     | SemanticProjectionKindV1::Downcast(_)
@@ -2147,6 +2422,33 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ));
                 }
             };
+        }
+        let availability = match &binding {
+            SemanticValueBindingV1::IndexWitness {
+                availability: Some(availability),
+                ..
+            } => Some(*availability),
+            SemanticValueBindingV1::GridLeader { availability } => Some(*availability),
+            SemanticValueBindingV1::BlockWitness { availability, .. } => Some(*availability),
+            SemanticValueBindingV1::Unit
+            | SemanticValueBindingV1::Value { .. }
+            | SemanticValueBindingV1::OptionPointer { .. }
+            | SemanticValueBindingV1::IndexWitness {
+                availability: None, ..
+            }
+            | SemanticValueBindingV1::OptionIndexWitness { .. }
+            | SemanticValueBindingV1::OptionBlockWitness { .. }
+            | SemanticValueBindingV1::OptionGridLeader { .. } => None,
+        };
+        if availability
+            .is_some_and(|availability| !self.option_dominance.allows(availability, block))
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "capability payload is used outside its authenticated Some edge",
+            ));
         }
         Ok(binding)
     }
