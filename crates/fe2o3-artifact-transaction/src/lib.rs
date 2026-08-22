@@ -52,6 +52,7 @@ mod link_publication;
 mod managed_invocation_capability;
 mod retained_durable_directory;
 mod worker_v2_publication_intent;
+mod worker_v3_publication_binding;
 mod worker_v3_publication_intent;
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -199,6 +200,10 @@ pub use worker_v2_publication_intent::{
     recover_worker_v2_publication_intent_v1, recover_worker_v2_publication_intent_v2,
     rollback_worker_v2_publication_intent_cleanup_escrow_v1,
     rollback_worker_v2_publication_intent_cleanup_escrow_v1_with_options,
+};
+pub use worker_v3_publication_binding::{
+    MAX_WORKER_V3_PUBLICATION_BINDING_BYTES_V1, WorkerV3PublicationBindingErrorV1,
+    WorkerV3PublicationBindingIdentityFieldV1, WorkerV3PublicationBindingV1,
 };
 pub use worker_v3_publication_intent::{
     MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
