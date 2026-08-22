@@ -18,6 +18,7 @@ surfaces.
 | Compiler module handoff V2 | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Existing protected backend and wrapper/finalizer call sites have not been migrated by this crate-only change. |
 | Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, slot, and transaction identity in a separate V3 namespace. Cross-process receipt recovery validates the exact durable ready record and payload under the cooperative lock; additive currentness APIs retain pinned output/namespace/slot/record/payload descriptors in a move-only lease, mint a single-use token under the lock, and consume that token when committing the existing one-shot tombstone. | The transport, inert receipt recovery, and currentness custody are implemented and tested but production callers are not wired by this crate-only change. |
 | Worker V2 publication intent | The complete closure is committed with the attempt, producer, durable plan, upstream evidence, output identity, length, and exact retained bytes; V2 persist/recover/clear APIs reject closure mismatch. | Protected publication and restart-marker paths still persist, recover, and clear V1 intents. |
+| Worker V3 publication intent V1 | A side-by-side namespace commits one outer handoff, an ordered provider archive containing each external payload once, compact opaque replay metadata, one finalized output, the complete durable plan, and the producer occurrence. The record is committed last. | Storage and inert restart recovery are implemented here. Production finalizer wiring is blocked on a public deduplicated transcript constructor/replayer; V1/V2 intent and registry wires are unchanged. |
 
 V1 and V2 APIs, wire formats, and byte maxima remain unchanged and are not
 silently upgraded. V3 uses the compiler-FFI V3 maximum only in its own schema
@@ -48,6 +49,57 @@ After transient failure, a cooperating process can recover the exact inert
 receipt and retry parent-local lease acquisition. A stale generation, consumed
 record, changed producer or slot, or any record/payload mismatch remains an
 error; recovery never converts those states into success.
+
+## Worker V3 restart topology
+
+Worker V3 publication intent V1 stores four unique components beside its fixed record:
+
+- `.handoff` contains the exact outer semantic V3 handoff once;
+- `.providers` is a versioned, checksummed archive with each ordered external-provider payload once;
+- `.transcript` contains only compact worker, option, plan, diagnostics, provider-evidence, and
+  reconstruction metadata; and
+- `.output` contains the exact canonical finalized HSACO once.
+
+The protocol does not persist bootstrap or replay request/response aggregates. It also does not
+persist a second raw HSACO: production integration must use the independently verified
+`derive_unfinalized_hsaco_from_finalized_v1` operation introduced on public main by `8385253bf4`.
+The finalizer must then deterministically reconstruct or stream-hash both canonical worker
+exchanges from the handoff, providers, derived raw HSACO, finalized HSACO, and compact metadata.
+
+Each attachment is written to a private `0600` temporary file, synced, renamed without replacement,
+and followed by a directory sync. The checksummed record is written only after every attachment is
+durable, promoted through `.record.redo`, and renamed to `.record` last. Recovery uses
+descriptor-relative `O_NOFOLLOW` opens, checks file type/mode/link count/length and descriptor
+identity, validates every attachment hash, strictly decodes the provider archive and record, and
+rechecks the requested producer occurrence against the independent durable attempt registry.
+
+The compact transcript ceiling is a checked formula, not a request/response-sized allowance. It is
+the sum of one bounded canonical link plan, one deduplicated provider-evidence body, two diagnostic
+sets, worker/target/option metadata, and 64 KiB of framing and fixed identities. On this schema that
+is 1,423,449 bytes. The complete recovery ceiling is:
+
+```text
+MAX_COMPILER_MODULE_HANDOFF_BYTES_V3
++ 64 MiB aggregate external-provider payloads
++ 64 MiB finalized output
++ record + compact transcript + provider framing
++ parsed provider length/hash table + provider/top-level Vec owners
+= 387,838,263 bytes (about 369.9 MiB on 64-bit targets)
+```
+
+This budget is validated from the record before allocating any variable-size recovered attachment.
+Provider payload order and boundaries are bound by per-entry hashes, a domain-separated archive
+checksum, and the record's archive hash. The returned record and bytes remain inert: this crate does
+not authenticate transcript origin, assign semantic content identities, or grant publication,
+loading, or launch authority.
+
+The remaining integration blocker is in the higher-level finalizer API. On the assigned
+`9ca3226635` base, `InertProtectedFirstBuildWorkerV3EvidenceV1` owns complete bootstrap/replay
+request byte vectors and canonical response owners; it does not expose a public compact transcript
+codec that can reconstruct or stream-hash those canonical wires from deduplicated components.
+`516a101b8e` factors private replay-validation and identity seams, and `8385253bf4` supplies raw-HSACO
+derivation, but a public bounded transcript constructor/decoder/replayer is still required before
+this storage foundation can be wired into production without recreating the duplicate aggregates.
 
 ## Retained service directory
 
