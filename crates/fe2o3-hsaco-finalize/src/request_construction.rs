@@ -588,8 +588,16 @@ fn construct_worker_request_v2_engine(
     }
 
     let compiler_module = compiler_module.into_input();
-    let mut all_inputs = external_providers.clone();
-    all_inputs.push(compiler_module.clone());
+    let mut all_inputs = Vec::new();
+    all_inputs
+        .try_reserve_exact(external_providers.len() + 1)
+        .map_err(|_| {
+            WorkerRequestConstructionError::WorkerProtocol(WorkerProtocolError::AllocationFailed(
+                "worker input validation views",
+            ))
+        })?;
+    all_inputs.extend(external_providers.iter());
+    all_inputs.push(&compiler_module);
     all_inputs.sort_by_key(|input| (input.identity(), input.kind()));
     validate_inputs(plan, input_kinds, &all_inputs)?;
 
@@ -1234,10 +1242,26 @@ impl std::error::Error for WorkerRequestConstructionError {
     }
 }
 
-fn validate_inputs(
+trait WorkerInputView {
+    fn worker_input(&self) -> &WorkerInputV1;
+}
+
+impl WorkerInputView for WorkerInputV1 {
+    fn worker_input(&self) -> &WorkerInputV1 {
+        self
+    }
+}
+
+impl WorkerInputView for &WorkerInputV1 {
+    fn worker_input(&self) -> &WorkerInputV1 {
+        self
+    }
+}
+
+fn validate_inputs<T: WorkerInputView>(
     plan: &MultiInputLinkPlanV1,
     input_kinds: &LinkInputKindClosureV1,
-    inputs: &[WorkerInputV1],
+    inputs: &[T],
 ) -> Result<(), WorkerRequestConstructionError> {
     if input_kinds.plan_identity != plan.identity() {
         return Err(WorkerRequestConstructionError::InputKindPlanMismatch {
@@ -1258,6 +1282,7 @@ fn validate_inputs(
         .zip(inputs)
         .enumerate()
     {
+        let provided = provided.worker_input();
         if provided.identity() != planned.identity() {
             return Err(WorkerRequestConstructionError::InputIdentityMismatch {
                 index,

@@ -26,8 +26,9 @@ use fe2o3_hsaco_finalize::{
     ContentIdentityV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
     InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV2HsacoV1,
     InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1,
-    WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV2HsacoFinalizationError,
-    WorkerV2RawHsacoInspectionError, execute_protected_reproducible_first_build_worker_v3,
+    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
+    execute_protected_reproducible_first_build_worker_v3,
     finalize_inspected_protected_worker_v3_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
@@ -253,8 +254,19 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     let config = EvidenceConfig::BASE;
     let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
     let exact_raw = fixture.bytes.clone();
-    let (attempt, source) =
-        evidence_in_directory_for_kernel(&directory, fixture.bytes, config, "vecadd", "vecadd.kd");
+    let provider = WorkerInputV1::new(
+        WorkerInputKindV1::AmdGpuRelocatable,
+        b"worker-v3-publication-provider".to_vec(),
+    )
+    .unwrap();
+    let (attempt, source) = evidence_in_directory_for_kernel_and_providers(
+        &directory,
+        fixture.bytes,
+        config,
+        "vecadd",
+        "vecadd.kd",
+        vec![provider],
+    );
     let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
     let finalized = finalize_inspected_protected_worker_v3_hsaco_v1(inspected).unwrap();
     let exact_finalized = finalized.exact_finalized_bytes().to_vec();
@@ -511,6 +523,27 @@ fn evidence_in_directory_for_kernel(
     fe2o3_artifact_transaction::BuildAttempt,
     InertProtectedFirstBuildWorkerV3EvidenceV1,
 ) {
+    evidence_in_directory_for_kernel_and_providers(
+        directory,
+        hsaco,
+        config,
+        entry_symbol,
+        descriptor_symbol,
+        Vec::new(),
+    )
+}
+
+fn evidence_in_directory_for_kernel_and_providers(
+    directory: &TestDirectory,
+    hsaco: Vec<u8>,
+    config: EvidenceConfig,
+    entry_symbol: &str,
+    descriptor_symbol: &str,
+    external_providers: Vec<WorkerInputV1>,
+) -> (
+    fe2o3_artifact_transaction::BuildAttempt,
+    InertProtectedFirstBuildWorkerV3EvidenceV1,
+) {
     let attempt = begin_build_attempt(
         &directory.0,
         &producer(),
@@ -542,7 +575,7 @@ fn evidence_in_directory_for_kernel(
     )
     .unwrap();
     let worker = pinned(directory, config.llvm_build_identity);
-    let evidence = execute(config, receipt, consumed, &worker);
+    let evidence = execute(config, receipt, consumed, &worker, external_providers);
     (attempt, evidence)
 }
 
@@ -551,6 +584,7 @@ fn execute(
     receipt: CompilerModuleHandoffReceiptV3,
     consumed: ConsumedCompilerModuleHandoffV3,
     worker: &PinnedWorkerV1,
+    external_providers: Vec<WorkerInputV1>,
 ) -> InertProtectedFirstBuildWorkerV3EvidenceV1 {
     let closure = *consumed.handoff().capsule().compiler_closure();
     execute_protected_reproducible_first_build_worker_v3(
@@ -558,7 +592,7 @@ fn execute(
         receipt,
         closure,
         worker,
-        Vec::new(),
+        external_providers,
         options(config.optimization),
         WorkerOutputConstraintsV1::new(1024 * 1024).unwrap(),
         WorkerExecutionLimitsV1::new(Duration::from_secs(3), 2 * 1024 * 1024, 64 * 1024).unwrap(),

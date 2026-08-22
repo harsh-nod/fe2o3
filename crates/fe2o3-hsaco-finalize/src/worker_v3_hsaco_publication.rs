@@ -504,17 +504,15 @@ fn derive_link_plan(
     options: &[crate::LinkOptionV1],
     output_identity: ContentIdentityV1,
 ) -> Result<MultiInputLinkPlanV1, WorkerV3HsacoPublicationErrorV1> {
-    let mut inputs = try_vec(providers.len() + 1, "link inputs")?;
-    inputs.extend_from_slice(providers);
-    inputs.push(WorkerInputV1::new(
-        decoded.compiler_module_kind(),
-        try_copy_bytes(decoded.compiler_module_bytes(), "compiler module")?,
-    )?);
-    inputs.sort_by_key(|input| (input.identity(), input.kind()));
-    let mut link_inputs = try_vec(inputs.len(), "link plan inputs")?;
-    for input in &inputs {
-        link_inputs.push(LinkInputV1::new(input.identity(), decoded.target()));
+    let mut link_inputs = try_vec(providers.len() + 1, "link plan inputs")?;
+    for provider in providers {
+        link_inputs.push(LinkInputV1::new(provider.identity(), decoded.target()));
     }
+    link_inputs.push(LinkInputV1::new(
+        ContentIdentityV1::calculate(decoded.compiler_module_bytes()),
+        decoded.target(),
+    ));
+    link_inputs.sort_by_key(|input| input.identity());
     let mut provenance = try_vec(link_inputs.len() + 1, "link provenance")?;
     for input in &link_inputs {
         provenance.push(ProvenanceNodeV1::new(input.identity(), vec![])?);
