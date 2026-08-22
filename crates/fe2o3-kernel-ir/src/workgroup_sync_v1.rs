@@ -16,11 +16,11 @@ pub const LDS_REDUCTION_V1_MODULE_ID: &str = "fe2o3::workgroup_lds_reduction_v1"
 pub const LDS_REDUCTION_V1_FUNCTION_ID: &str = "__fe2o3_lds_publish_read_reduce_i32_v1_impl";
 pub const LDS_REDUCTION_V1_KERNEL_ID: &str = "lds_publish_read_reduce_i32_v1";
 pub const LDS_REDUCTION_V1_DESCRIPTOR_SYMBOL: &str = "lds_publish_read_reduce_i32_v1.kd";
-pub const LDS_REDUCTION_V1_EXPLICIT_KERNARG_BYTES: u32 = 40;
-pub const LDS_REDUCTION_V1_COMPLETE_COV6_KERNARG_BYTES: u32 = 296;
+pub const LDS_REDUCTION_V1_EXPLICIT_KERNARG_BYTES: u32 = 32;
+pub const LDS_REDUCTION_V1_COMPLETE_COV6_KERNARG_BYTES: u32 = 288;
 pub const LDS_REDUCTION_V1_SOURCE_SHA256: [u8; 32] = [
-    0x3e, 0x7e, 0xc0, 0x81, 0xc7, 0x95, 0x82, 0x88, 0xf9, 0xd9, 0x97, 0xd4, 0x0e, 0x6f, 0x41, 0xa7,
-    0xfa, 0xab, 0xc5, 0x6a, 0x3a, 0xdd, 0x73, 0x40, 0x99, 0xcd, 0x17, 0x77, 0x44, 0x3b, 0x29, 0x83,
+    0x1a, 0x28, 0xca, 0x6d, 0x97, 0xd1, 0x80, 0xc3, 0x47, 0xbe, 0x41, 0xce, 0x65, 0x37, 0x7d, 0x67,
+    0xe4, 0x47, 0x73, 0xc5, 0x39, 0xaa, 0x73, 0x61, 0x08, 0x08, 0x58, 0x5a, 0xed, 0xf1, 0x25, 0xbf,
 ];
 pub const LDS_REDUCTION_V1_NAMESPACE: [u8; 32] = [
     0x6b, 0xc8, 0xf4, 0x49, 0xf4, 0x58, 0xcf, 0x8f, 0x31, 0xb4, 0x62, 0x5b, 0x38, 0xb7, 0x20, 0x4d,
@@ -34,8 +34,8 @@ pub const SCOPED_ATOMIC_V1_DESCRIPTOR_SYMBOL: &str = "scoped_atomic_add_u32_v1.k
 pub const SCOPED_ATOMIC_V1_EXPLICIT_KERNARG_BYTES: u32 = 40;
 pub const SCOPED_ATOMIC_V1_COMPLETE_COV6_KERNARG_BYTES: u32 = 296;
 pub const SCOPED_ATOMIC_V1_SOURCE_SHA256: [u8; 32] = [
-    0xc0, 0xf0, 0x0a, 0x14, 0xc5, 0x94, 0x1f, 0x34, 0x74, 0x1f, 0xc1, 0x0c, 0xa7, 0x79, 0x8c, 0xe9,
-    0xcf, 0x47, 0x28, 0x82, 0x94, 0xb0, 0xbc, 0xc4, 0x3c, 0xdd, 0xb7, 0xd2, 0x2b, 0xbf, 0xe9, 0x7e,
+    0x05, 0x31, 0xf8, 0x94, 0xd0, 0xc6, 0xc9, 0x4a, 0xf9, 0x25, 0x87, 0x17, 0xcf, 0x7e, 0xd5, 0x2f,
+    0xab, 0x8f, 0x68, 0x78, 0x5b, 0x36, 0x1b, 0xd2, 0x61, 0xf1, 0x54, 0xac, 0x9c, 0xf7, 0xce, 0x14,
 ];
 pub const SCOPED_ATOMIC_V1_NAMESPACE: [u8; 32] = [
     0x40, 0x93, 0x57, 0xef, 0x99, 0xd9, 0xec, 0x78, 0xc9, 0x60, 0xcc, 0xa0, 0xe2, 0x1a, 0x4e, 0x15,
@@ -45,7 +45,6 @@ pub const SCOPED_ATOMIC_V1_NAMESPACE: [u8; 32] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkgroupSyncArgumentRoleV1 {
     Values,
-    Epoch,
     ReductionOutput,
     Eligibility,
     AtomicTarget,
@@ -119,7 +118,7 @@ pub struct LdsReductionKernelIrV1 {
     pub module_id: &'static str,
     pub function_id: &'static str,
     pub kernel_id: &'static str,
-    pub arguments: [WorkgroupSyncArgumentV1; 3],
+    pub arguments: [WorkgroupSyncArgumentV1; 2],
     pub lds: LinearLdsCapabilityV1,
     pub barriers: [WorkgroupBarrierV1; 2],
     pub operation: ReductionOperationV1,
@@ -300,18 +299,10 @@ pub const fn lds_reduction_v1_kernel_ir() -> LdsReductionKernelIrV1 {
                 8,
             ),
             argument(
-                WorkgroupSyncArgumentRoleV1::Epoch,
-                WorkgroupSyncArgumentShapeV1::Scalar,
-                ScalarType::U32,
-                16,
-                4,
-                4,
-            ),
-            argument(
                 WorkgroupSyncArgumentRoleV1::ReductionOutput,
                 WorkgroupSyncArgumentShapeV1::LaneZeroOwnedWriteSlice1,
                 ScalarType::I32,
-                24,
+                16,
                 16,
                 8,
             ),
