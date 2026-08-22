@@ -645,6 +645,43 @@ pub(crate) struct OwnedProtectedWorkerV3CompactFinalizerReplayPartsV2 {
     pub(crate) finalized_hsaco: Vec<u8>,
 }
 
+/// Named inert byte owners for one independently replayable V3 load envelope.
+///
+/// These components retain the same compact V2 transcript used by durable restart storage. They
+/// are descriptive bytes only and grant no compiler, publication, load, or launch authority.
+pub struct ProtectedWorkerV3CompactFinalizerReplayPartsV2 {
+    /// Exact canonical outer semantic handoff wire.
+    pub outer_handoff: Vec<u8>,
+    /// Exact external provider payloads in canonical request order.
+    pub external_provider_payloads: Vec<Vec<u8>>,
+    /// Exact canonical compact V2 finalizer replay transcript.
+    pub transcript: Vec<u8>,
+    /// Exact finalized canonical HSACO.
+    pub finalized_hsaco: Vec<u8>,
+}
+
+impl fmt::Debug for ProtectedWorkerV3CompactFinalizerReplayPartsV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let provider_bytes = self
+            .external_provider_payloads
+            .iter()
+            .fold(0_usize, |total, payload| {
+                total.saturating_add(payload.len())
+            });
+        formatter
+            .debug_struct("ProtectedWorkerV3CompactFinalizerReplayPartsV2")
+            .field("outer_handoff_bytes", &self.outer_handoff.len())
+            .field(
+                "external_provider_count",
+                &self.external_provider_payloads.len(),
+            )
+            .field("external_provider_bytes", &provider_bytes)
+            .field("transcript_bytes", &self.transcript.len())
+            .field("finalized_hsaco_bytes", &self.finalized_hsaco.len())
+            .finish()
+    }
+}
+
 impl PreparedProtectedWorkerV3CompactFinalizerReplayV2 {
     pub fn outer_handoff(&self) -> &[u8] {
         &self.outer_handoff
@@ -660,6 +697,16 @@ impl PreparedProtectedWorkerV3CompactFinalizerReplayV2 {
 
     pub fn exact_finalized_hsaco(&self) -> &[u8] {
         &self.finalized_hsaco
+    }
+
+    /// Transfers every unique replay owner without copying its large byte attachments.
+    pub fn into_parts(self) -> ProtectedWorkerV3CompactFinalizerReplayPartsV2 {
+        ProtectedWorkerV3CompactFinalizerReplayPartsV2 {
+            outer_handoff: self.outer_handoff,
+            external_provider_payloads: self.external_provider_payloads,
+            transcript: self.transcript.into_canonical_bytes(),
+            finalized_hsaco: self.finalized_hsaco,
+        }
     }
 
     pub(crate) fn into_storage_parts(self) -> OwnedProtectedWorkerV3CompactFinalizerReplayPartsV2 {

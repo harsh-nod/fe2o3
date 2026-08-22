@@ -26,10 +26,11 @@ use fe2o3_compiler_ffi::{
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
     InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV2HsacoV1,
-    InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1,
-    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
-    WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
-    WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
+    InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
+    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
+    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV2HsacoFinalizationError,
+    WorkerV2RawHsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
+    execute_protected_reproducible_first_build_worker_v3,
     finalize_inspected_protected_worker_v3_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
@@ -375,6 +376,34 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     assert_eq!(
         reconstructed.recovered_evidence().exact_finalized_hsaco(),
         exact_finalized
+    );
+    let binding = reconstructed.publication_result().publication_binding();
+    let (replay, record, claim, lease) = reconstructed
+        .into_load_envelope_parts_v1()
+        .expect("completed V3 publication must transfer into load-envelope custody")
+        .into_parts();
+    assert_eq!(
+        record.identity().as_bytes(),
+        binding.publication_intent_record_identity()
+    );
+    assert_eq!(record.plan(), claim.plan());
+    assert_eq!(claim.worker_v3_binding(), binding);
+    assert_eq!(replay.finalized_hsaco, exact_finalized);
+    assert_eq!(lease.exact_artifact_bytes(), exact_finalized);
+    let outer = InertSemanticCompilerModuleHandoffV3::decode(&replay.outer_handoff).unwrap();
+    assert_eq!(
+        *outer.capsule().compiler_closure(),
+        binding.compiler_closure()
+    );
+    let transcript =
+        ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&replay.transcript).unwrap();
+    assert_eq!(
+        transcript.expected_finalization_identity(),
+        &binding.finalization_identity()
+    );
+    assert_eq!(
+        transcript.source_evidence_identity(),
+        &binding.source_evidence_identity()
     );
 }
 

@@ -5,16 +5,17 @@ use std::{error::Error, fmt, path::Path, sync::Arc};
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV3,
     AttemptScopedHsacoPublicationResultV3, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV3, FinalizationIdentityV1,
-    FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
-    PackageIdentityV1, PinnedWorkerIdentityV1, ProducerIdentity,
-    RecoveredWorkerV3PublicationIntentV1, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
-    ValidatedResponseIdentityV1, VerifiedWorkerV3PublicationAuthorityV1,
-    WorkerV3FinalizerReplayAttachmentsV1, WorkerV3PublicationBindingErrorV1,
-    WorkerV3PublicationBindingV1, WorkerV3PublicationIntentErrorV1,
-    WorkerV3PublicationIntentOutcomeV1, WorkerV3PublicationIntentRecordV1,
-    persist_worker_v3_publication_intent_v1, producer_package_identity_v1,
-    publish_exact_hsaco_evidence_for_attempt_v3, recover_worker_v3_publication_intent_v1,
+    DurableCurrentLinkPublicationLeaseV1, DurableLinkPublicationPlanV1,
+    DurablePublishedHsacoClaimV3, FinalizationIdentityV1, FinalizedOutputIdentityV1,
+    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
+    PinnedWorkerIdentityV1, ProducerIdentity, RecoveredWorkerV3PublicationIntentV1,
+    TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
+    VerifiedWorkerV3PublicationAuthorityV1, WorkerV3FinalizerReplayAttachmentsV1,
+    WorkerV3PublicationBindingErrorV1, WorkerV3PublicationBindingV1,
+    WorkerV3PublicationIntentErrorV1, WorkerV3PublicationIntentOutcomeV1,
+    WorkerV3PublicationIntentRecordV1, persist_worker_v3_publication_intent_v1,
+    producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v3,
+    recover_worker_v3_publication_intent_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
@@ -38,7 +39,10 @@ use crate::{
         decode_link_options,
     },
     worker_protocol_v2::reconstruct_complete_worker_response_v2,
-    worker_v3_compact_finalizer_replay::OwnedProtectedWorkerV3CompactFinalizerReplayPartsV2,
+    worker_v3_compact_finalizer_replay::{
+        OwnedProtectedWorkerV3CompactFinalizerReplayPartsV2,
+        ProtectedWorkerV3CompactFinalizerReplayPartsV2,
+    },
 };
 
 const KERNEL_SET_DOMAIN_V1: &[u8] =
@@ -198,6 +202,84 @@ impl PublishedProtectedWorkerV3HsacoV1 {
 
     pub const fn grants_proof_authority(&self) -> bool {
         false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+
+    /// Transfers exact publication custody into the future V3 load-envelope layer.
+    ///
+    /// The compact replay components are regenerated from the independently reconstructed
+    /// finalizer owner. The returned lease pins the exact published files but still grants no load
+    /// or launch authority. No V1/V2 projection occurs at this boundary.
+    pub fn into_load_envelope_parts_v1(
+        self,
+    ) -> Result<PublishedProtectedWorkerV3LoadEnvelopePartsV1, WorkerV3HsacoPublicationErrorV1>
+    {
+        let Self {
+            recovered,
+            publication,
+        } = self;
+        let storage_record = recovered.record;
+        let claim = publication.published_claim().clone();
+        let current_lease = publication.into_current_lease();
+        let replay =
+            crate::prepare_protected_worker_v3_compact_finalizer_replay_v2(recovered.finalized)?
+                .into_parts();
+        Ok(PublishedProtectedWorkerV3LoadEnvelopePartsV1 {
+            replay,
+            storage_record,
+            claim,
+            current_lease,
+        })
+    }
+}
+
+/// Unique owners transferred from one completed V3 publication into load-envelope preparation.
+///
+/// This value cannot be constructed outside this crate. Its serialized fields remain inert; the
+/// retained current-publication lease is the only occurrence-sensitive component and still grants
+/// no HSA load or launch authority.
+pub struct PublishedProtectedWorkerV3LoadEnvelopePartsV1 {
+    replay: ProtectedWorkerV3CompactFinalizerReplayPartsV2,
+    storage_record: WorkerV3PublicationIntentRecordV1,
+    claim: DurablePublishedHsacoClaimV3,
+    current_lease: DurableCurrentLinkPublicationLeaseV1,
+}
+
+impl fmt::Debug for PublishedProtectedWorkerV3LoadEnvelopePartsV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PublishedProtectedWorkerV3LoadEnvelopePartsV1")
+            .field("replay", &self.replay)
+            .field("storage_record", &self.storage_record.identity())
+            .field("claim", &self.claim)
+            .field("current_lease", &self.current_lease)
+            .finish()
+    }
+}
+
+impl PublishedProtectedWorkerV3LoadEnvelopePartsV1 {
+    /// Transfers all exact inert bytes and the non-clone publication lease to the envelope owner.
+    pub fn into_parts(
+        self,
+    ) -> (
+        ProtectedWorkerV3CompactFinalizerReplayPartsV2,
+        WorkerV3PublicationIntentRecordV1,
+        DurablePublishedHsacoClaimV3,
+        DurableCurrentLinkPublicationLeaseV1,
+    ) {
+        (
+            self.replay,
+            self.storage_record,
+            self.claim,
+            self.current_lease,
+        )
     }
 
     pub const fn grants_load_authority(&self) -> bool {
