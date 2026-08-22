@@ -21,6 +21,7 @@ use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -318,7 +319,7 @@ pub fn consume_compiler_module_handoff_in_slot_v1(
     consume_in_slot_with_hooks(output_dir, producer, attempt, slot, &mut NoFaults)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileIdentity {
     device: u64,
     inode: u64,
@@ -881,8 +882,19 @@ fn consume_in_slot_engine<S: HandoffSchema>(
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
+    consume_in_slot_engine_locked::<S>(&output, producer, attempt, handoff_slot, binding, hooks)
+}
+
+fn consume_in_slot_engine_locked<S: HandoffSchema>(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    handoff_slot: S::Slot,
+    binding: S::Binding,
+    hooks: &mut impl HandoffHooks,
+) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
     output.verify_path_identity()?;
-    authorize(&output, producer, attempt)?;
+    authorize(output, producer, attempt)?;
     let producer_id = producer_identity_for::<S>(producer);
     let slot_id = slot_identity_for::<S>(producer_id, attempt, handoff_slot);
     let parent = open_private_directory(
@@ -3076,9 +3088,232 @@ mod semantic_v3 {
         }
     }
 
+    /// Publication result carrying inert evidence and one exact currentness lease.
+    ///
+    /// The result is deliberately move-only. The copyable [`CompilerModuleHandoffReceiptV3`]
+    /// remains inert, while [`Self::into_current_lease`] transfers the private filesystem custody
+    /// needed to prove that this exact V3 publication is still current.
+    #[derive(Debug)]
+    pub struct CompilerModuleHandoffPublicationV3 {
+        receipt: CompilerModuleHandoffReceiptV3,
+        lease: CompilerModuleHandoffCurrentnessLeaseV3,
+    }
+
+    impl CompilerModuleHandoffPublicationV3 {
+        /// Returns the inert durable receipt for this publication.
+        pub const fn receipt(&self) -> CompilerModuleHandoffReceiptV3 {
+            self.receipt
+        }
+
+        /// Moves the private currentness lease into the consumer path.
+        pub fn into_current_lease(self) -> CompilerModuleHandoffCurrentnessLeaseV3 {
+            self.lease
+        }
+
+        /// Separates the inert receipt from the move-only lease.
+        pub fn into_parts(
+            self,
+        ) -> (
+            CompilerModuleHandoffReceiptV3,
+            CompilerModuleHandoffCurrentnessLeaseV3,
+        ) {
+            (self.receipt, self.lease)
+        }
+    }
+
+    /// Move-only custody of one exact, currently committed V3 handoff publication.
+    ///
+    /// The lease retains pinned descriptors and metadata for the output, V3 producer namespace,
+    /// attempt slot, ready record, and payload. Its private binding includes the exact attempt,
+    /// producer, slot, transaction identity, native outer V3 identity, and committed generation.
+    /// It grants no compiler, publication, link, load, or launch authority.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_artifact_transaction::CompilerModuleHandoffCurrentnessLeaseV3;
+    ///
+    /// fn cannot_clone(
+    ///     lease: CompilerModuleHandoffCurrentnessLeaseV3,
+    /// ) -> (
+    ///     CompilerModuleHandoffCurrentnessLeaseV3,
+    ///     CompilerModuleHandoffCurrentnessLeaseV3,
+    /// ) {
+    ///     (lease.clone(), lease)
+    /// }
+    /// ```
+    pub struct CompilerModuleHandoffCurrentnessLeaseV3 {
+        binding: Arc<CompilerModuleHandoffCurrentnessBindingV3>,
+    }
+
+    struct CompilerModuleHandoffCurrentnessBindingV3 {
+        output: PinnedOutput,
+        producer: ProducerIdentity,
+        producer_identity: [u8; 32],
+        parent: PinnedDirectory,
+        slot_directory: PinnedDirectory,
+        ready_file: PinnedHandoffFileV3,
+        payload_file: PinnedHandoffFileV3,
+        receipt: CompilerModuleHandoffReceiptV3,
+        slot_identity: [u8; 32],
+        committed_generation: u64,
+    }
+
+    struct PinnedHandoffFileV3 {
+        file: fs::File,
+        identity: FileIdentity,
+    }
+
+    impl fmt::Debug for CompilerModuleHandoffCurrentnessLeaseV3 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let binding = &self.binding;
+            formatter
+                .debug_struct("CompilerModuleHandoffCurrentnessLeaseV3")
+                .field("attempt", &binding.receipt.attempt())
+                .field("slot", &binding.receipt.slot())
+                .field(
+                    "transaction_identity",
+                    &binding.receipt.transaction_identity(),
+                )
+                .field("handoff_identity", &binding.receipt.handoff_identity())
+                .field("committed_generation", &binding.committed_generation)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl CompilerModuleHandoffCurrentnessLeaseV3 {
+        /// Returns the inert receipt whose exact publication is pinned by this lease.
+        pub fn receipt(&self) -> CompilerModuleHandoffReceiptV3 {
+            self.binding.receipt
+        }
+
+        /// Revalidates this lease as the current exact V3 publication.
+        pub fn revalidate(&self) -> Result<(), CompilerModuleHandoffErrorV3> {
+            let token = self.acquire_current_token()?;
+            token.revalidate_locked_currentness()
+        }
+
+        /// Acquires the cooperative lock and mints a single-use consumption token.
+        ///
+        /// Strict V3 decoding and every retained binding are checked before the token is returned.
+        /// The token keeps the lock held until it is consumed or dropped.
+        pub fn acquire_current_token(
+            &self,
+        ) -> Result<CompilerModuleHandoffConsumptionTokenV3, CompilerModuleHandoffErrorV3> {
+            let lock = self
+                .binding
+                .output
+                .try_lock()
+                .map_err(CompilerModuleHandoffErrorV3::from)?
+                .ok_or(CompilerModuleHandoffErrorV3::Busy)?;
+            let handoff = load_current_handoff_locked(&self.binding)?;
+            Ok(CompilerModuleHandoffConsumptionTokenV3 {
+                binding: Arc::clone(&self.binding),
+                handoff,
+                _lock: lock,
+            })
+        }
+
+        /// Checks that a token was minted from this exact lease instance.
+        pub fn validate_current_token(
+            &self,
+            token: &CompilerModuleHandoffConsumptionTokenV3,
+        ) -> Result<(), CompilerModuleHandoffErrorV3> {
+            if Arc::ptr_eq(&self.binding, &token.binding) {
+                Ok(())
+            } else {
+                Err(CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken)
+            }
+        }
+
+        /// A currentness lease is local custody, not compiler authority.
+        pub const fn grants_compiler_authority(&self) -> bool {
+            false
+        }
+
+        /// A currentness lease does not authorize linking.
+        pub const fn grants_link_authority(&self) -> bool {
+            false
+        }
+
+        /// A currentness lease does not authorize loading.
+        pub const fn grants_load_authority(&self) -> bool {
+            false
+        }
+
+        /// A currentness lease does not authorize launch.
+        pub const fn grants_launch_authority(&self) -> bool {
+            false
+        }
+    }
+
+    /// Single-use proof that one exact V3 handoff remained current under the cooperative lock.
+    ///
+    /// The only successful consumption API takes this value by ownership. The token cannot be
+    /// reconstructed, serialized, or combined with a lease from another publication.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_artifact_transaction::CompilerModuleHandoffConsumptionTokenV3;
+    ///
+    /// fn cannot_clone(
+    ///     token: CompilerModuleHandoffConsumptionTokenV3,
+    /// ) -> (
+    ///     CompilerModuleHandoffConsumptionTokenV3,
+    ///     CompilerModuleHandoffConsumptionTokenV3,
+    /// ) {
+    ///     (token.clone(), token)
+    /// }
+    /// ```
+    pub struct CompilerModuleHandoffConsumptionTokenV3 {
+        binding: Arc<CompilerModuleHandoffCurrentnessBindingV3>,
+        handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+        _lock: crate::OutputLock,
+    }
+
+    impl fmt::Debug for CompilerModuleHandoffConsumptionTokenV3 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("CompilerModuleHandoffConsumptionTokenV3")
+                .field("attempt", &self.binding.receipt.attempt())
+                .field("slot", &self.binding.receipt.slot())
+                .field(
+                    "transaction_identity",
+                    &self.binding.receipt.transaction_identity(),
+                )
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl CompilerModuleHandoffConsumptionTokenV3 {
+        /// Revalidates the exact files and generation while this token keeps the lock held.
+        pub fn revalidate_locked_currentness(&self) -> Result<(), CompilerModuleHandoffErrorV3> {
+            validate_current_metadata_locked(&self.binding)
+        }
+
+        /// A currentness token is not compiler authority.
+        pub const fn grants_compiler_authority(&self) -> bool {
+            false
+        }
+
+        /// A currentness token does not authorize linking.
+        pub const fn grants_link_authority(&self) -> bool {
+            false
+        }
+
+        /// A currentness token does not authorize loading.
+        pub const fn grants_load_authority(&self) -> bool {
+            false
+        }
+
+        /// A currentness token does not authorize launch.
+        pub const fn grants_launch_authority(&self) -> bool {
+            false
+        }
+    }
+
     /// Failure to publish, recover, strictly decode, or consume a V3 handoff.
     #[derive(Debug)]
     pub enum CompilerModuleHandoffErrorV3 {
+        /// Another cooperating operation currently owns the artifact-store lock.
+        Busy,
         /// Filesystem operation failed.
         Io(std::io::Error),
         /// The exact build attempt is not authorized for this producer.
@@ -3103,11 +3338,15 @@ mod semantic_v3 {
         NonCanonicalHandoff(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3),
         /// Strictly decoded bytes disagree with the native identity in the transaction record.
         HandoffIdentityMismatch,
+        /// A consumption token was minted from a different private lease instance.
+        MismatchedCurrentnessToken,
     }
 
     impl fmt::Display for CompilerModuleHandoffErrorV3 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
+                Self::Busy => formatter
+                    .write_str("the V3 compiler module handoff currentness lock is already held"),
                 Self::Io(error) => write!(formatter, "{error}"),
                 Self::Attempt { reason } => {
                     write!(formatter, "invalid V3 build-attempt handoff: {reason}")
@@ -3147,6 +3386,8 @@ mod semantic_v3 {
                 Self::HandoffIdentityMismatch => formatter.write_str(
                     "strictly decoded V3 handoff identity disagrees with the transaction binding",
                 ),
+                Self::MismatchedCurrentnessToken => formatter
+                    .write_str("V3 currentness token belongs to a different publication lease"),
             }
         }
     }
@@ -3183,6 +3424,18 @@ mod semantic_v3 {
         }
     }
 
+    impl From<EmitError> for CompilerModuleHandoffErrorV3 {
+        fn from(error: EmitError) -> Self {
+            Self::from(CompilerModuleHandoffErrorV1::from(error))
+        }
+    }
+
+    impl From<std::io::Error> for CompilerModuleHandoffErrorV3 {
+        fn from(error: std::io::Error) -> Self {
+            Self::Io(error)
+        }
+    }
+
     /// Atomically publishes one exact strict compiler-FFI V3 handoff.
     ///
     /// The public API accepts the strict typed owner, never unclassified bytes,
@@ -3213,6 +3466,55 @@ mod semantic_v3 {
         handoff: &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
     ) -> Result<CompilerModuleHandoffReceiptV3, CompilerModuleHandoffErrorV3> {
         publish_in_slot_v3(output_dir, producer, attempt, slot, handoff, &mut NoFaults)
+    }
+
+    /// Publishes the default V3 slot and returns a move-only currentness lease.
+    ///
+    /// This additive API preserves the inert receipt API while giving an in-process consumer exact
+    /// filesystem custody. If a newer generation wins between durable publication and lease
+    /// issuance, issuance fails instead of returning a stale lease.
+    pub fn publish_compiler_module_handoff_with_currentness_v3(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        handoff: &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+    ) -> Result<CompilerModuleHandoffPublicationV3, CompilerModuleHandoffErrorV3> {
+        publish_compiler_module_handoff_in_slot_with_currentness_v3(
+            output_dir,
+            producer,
+            attempt,
+            CompilerModuleHandoffSlotV3::Default,
+            handoff,
+        )
+    }
+
+    /// Publishes one named V3 slot and returns a move-only currentness lease.
+    pub fn publish_compiler_module_handoff_in_slot_with_currentness_v3(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV3,
+        handoff: &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+    ) -> Result<CompilerModuleHandoffPublicationV3, CompilerModuleHandoffErrorV3> {
+        let receipt = publish_compiler_module_handoff_in_slot_v3(
+            output_dir, producer, attempt, slot, handoff,
+        )?;
+        let lease =
+            acquire_compiler_module_handoff_currentness_lease_v3(output_dir, producer, receipt)?;
+        Ok(CompilerModuleHandoffPublicationV3 { receipt, lease })
+    }
+
+    /// Reacquires private currentness custody for one exact inert V3 receipt.
+    ///
+    /// The receipt is not authority. Issuance succeeds only after the attempt registry, producer,
+    /// slot, committed record, payload, transaction identity, native outer identity, and all pinned
+    /// directory/file metadata are revalidated under the cooperative lock.
+    pub fn acquire_compiler_module_handoff_currentness_lease_v3(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        receipt: CompilerModuleHandoffReceiptV3,
+    ) -> Result<CompilerModuleHandoffCurrentnessLeaseV3, CompilerModuleHandoffErrorV3> {
+        mint_currentness_lease_v3(output_dir, producer, receipt)
     }
 
     /// Consumes and strictly decodes one V3 handoff exactly once.
@@ -3251,6 +3553,55 @@ mod semantic_v3 {
             expected_handoff_identity,
             &mut NoFaults,
         )
+    }
+
+    /// Consumes the exact V3 publication by moving its single-use currentness token.
+    ///
+    /// The lease/token pair is checked by private binding identity. The token keeps the cooperative
+    /// lock held while the existing durable `ready` record is atomically renamed to `consumed`.
+    /// The returned value retains the same inert semantics as the original V3 consume API.
+    pub fn consume_compiler_module_handoff_with_currentness_v3(
+        lease: &CompilerModuleHandoffCurrentnessLeaseV3,
+        token: CompilerModuleHandoffConsumptionTokenV3,
+    ) -> Result<ConsumedCompilerModuleHandoffV3, CompilerModuleHandoffErrorV3> {
+        lease.validate_current_token(&token)?;
+        token.revalidate_locked_currentness()?;
+
+        let CompilerModuleHandoffConsumptionTokenV3 {
+            binding,
+            handoff,
+            _lock,
+        } = token;
+        let receipt = binding.receipt;
+        binding.slot_directory.verify()?;
+        renameat_with(
+            &binding.slot_directory.fd,
+            READY_ENTRY,
+            &binding.slot_directory.fd,
+            CONSUMED_ENTRY,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        fsync(&binding.slot_directory.fd).map_err(std::io::Error::from)?;
+        binding.slot_directory.verify()?;
+        validate_renamed_pinned_handoff_file_v3(
+            &binding.slot_directory,
+            CONSUMED_ENTRY,
+            &binding.ready_file,
+        )?;
+        validate_pinned_handoff_file_v3(
+            &binding.slot_directory,
+            PAYLOAD_ENTRY,
+            &binding.payload_file,
+        )?;
+        cleanup_consumed_payload(&binding.slot_directory);
+
+        Ok(ConsumedCompilerModuleHandoffV3 {
+            attempt: receipt.attempt(),
+            slot: receipt.slot(),
+            transaction_identity: receipt.transaction_identity(),
+            handoff,
+        })
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3359,6 +3710,310 @@ mod semantic_v3 {
         }
     }
 
+    fn mint_currentness_lease_v3(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        receipt: CompilerModuleHandoffReceiptV3,
+    ) -> Result<CompilerModuleHandoffCurrentnessLeaseV3, CompilerModuleHandoffErrorV3> {
+        if usize::try_from(receipt.handoff_identity().byte_len()).ok() != Some(receipt.length()) {
+            return Err(CompilerModuleHandoffErrorV3::HandoffIdentityMismatch);
+        }
+
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output
+            .try_lock()?
+            .ok_or(CompilerModuleHandoffErrorV3::Busy)?;
+        output.verify_path_identity()?;
+        authorize(&output, producer, receipt.attempt())?;
+
+        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
+        let slot_identity = slot_identity_for::<HandoffV3Schema>(
+            producer_identity,
+            receipt.attempt(),
+            receipt.slot(),
+        );
+        let parent = open_private_directory(
+            &output.fd,
+            &output.display_path,
+            format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
+        )?
+        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
+        cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, receipt.attempt())
+            .map_err(engine_error_v3)?;
+        let slot_directory = open_private_directory(
+            &parent.fd,
+            &parent.path,
+            format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
+        )?
+        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
+        recover_slot::<HandoffV3Schema>(&slot_directory).map_err(engine_error_v3)?;
+        require_current_slot_shape_v3(&slot_directory)?;
+
+        let ready_file = open_pinned_handoff_file_v3(
+            &slot_directory,
+            READY_ENTRY,
+            HandoffV3Schema::RECORD_BYTES,
+        )?;
+        let payload_file =
+            open_pinned_handoff_file_v3(&slot_directory, PAYLOAD_ENTRY, receipt.length())?;
+        let binding = Arc::new(CompilerModuleHandoffCurrentnessBindingV3 {
+            output,
+            producer: producer.clone(),
+            producer_identity,
+            parent,
+            slot_directory,
+            ready_file,
+            payload_file,
+            receipt,
+            slot_identity,
+            committed_generation: receipt.attempt().generation(),
+        });
+        drop(load_current_handoff_locked(&binding)?);
+        Ok(CompilerModuleHandoffCurrentnessLeaseV3 { binding })
+    }
+
+    fn require_current_slot_shape_v3(
+        slot: &PinnedDirectory,
+    ) -> Result<(), CompilerModuleHandoffErrorV3> {
+        let entries = slot_entries(slot)?;
+        if entries.iter().any(|entry| entry == CONSUMED_ENTRY) {
+            return Err(CompilerModuleHandoffErrorV3::AlreadyConsumed);
+        }
+        if entries.len() == 2
+            && entries.iter().any(|entry| entry == READY_ENTRY)
+            && entries.iter().any(|entry| entry == PAYLOAD_ENTRY)
+        {
+            return Ok(());
+        }
+        if !entries.iter().any(|entry| entry == READY_ENTRY) {
+            return Err(CompilerModuleHandoffErrorV3::NotPublished);
+        }
+        Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+            path: slot.path.clone(),
+            reason: "current V3 slot must contain exactly the ready record and payload".to_string(),
+        })
+    }
+
+    fn open_pinned_handoff_file_v3(
+        slot: &PinnedDirectory,
+        entry: &str,
+        exact_length: usize,
+    ) -> Result<PinnedHandoffFileV3, CompilerModuleHandoffErrorV3> {
+        let fd = openat(
+            &slot.fd,
+            entry,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| CompilerModuleHandoffErrorV3::InvalidSlot {
+            path: slot.path.join(entry),
+            reason: std::io::Error::from(error).to_string(),
+        })?;
+        let file = fs::File::from(fd);
+        let opened = fstat(&file).map_err(std::io::Error::from)?;
+        let named =
+            statat(&slot.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+        if !same_private_file(&opened, &named, exact_length) {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: slot.path.join(entry),
+                reason: "file does not match its pinned private descriptor".to_string(),
+            });
+        }
+        Ok(PinnedHandoffFileV3 {
+            file,
+            identity: FileIdentity::from_stat(&opened),
+        })
+    }
+
+    fn validate_pinned_handoff_file_v3(
+        slot: &PinnedDirectory,
+        entry: &str,
+        pinned: &PinnedHandoffFileV3,
+    ) -> Result<(), CompilerModuleHandoffErrorV3> {
+        let opened = fstat(&pinned.file).map_err(std::io::Error::from)?;
+        let named = statat(&slot.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+            CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: slot.path.join(entry),
+                reason: std::io::Error::from(error).to_string(),
+            }
+        })?;
+        if !pinned.identity.matches(&opened) || !pinned.identity.matches(&named) {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: slot.path.join(entry),
+                reason: "file no longer matches the publication lease".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_renamed_pinned_handoff_file_v3(
+        slot: &PinnedDirectory,
+        entry: &str,
+        pinned: &PinnedHandoffFileV3,
+    ) -> Result<(), CompilerModuleHandoffErrorV3> {
+        let opened = fstat(&pinned.file).map_err(std::io::Error::from)?;
+        let named = statat(&slot.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+            CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: slot.path.join(entry),
+                reason: std::io::Error::from(error).to_string(),
+            }
+        })?;
+        let length = usize::try_from(pinned.identity.length).map_err(|_| {
+            CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: slot.path.join(entry),
+                reason: "pinned record length is invalid".to_string(),
+            }
+        })?;
+        if pinned.identity.device != opened.st_dev
+            || pinned.identity.inode != opened.st_ino
+            || !same_private_file(&opened, &named, length)
+        {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: slot.path.join(entry),
+                reason: "consumed record is not the exact renamed ready record".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn read_pinned_handoff_file_v3(
+        slot: &PinnedDirectory,
+        entry: &str,
+        pinned: &PinnedHandoffFileV3,
+        exact_length: usize,
+        maximum: usize,
+    ) -> Result<Vec<u8>, CompilerModuleHandoffErrorV3> {
+        if exact_length == 0 || exact_length > maximum {
+            return Err(CompilerModuleHandoffErrorV3::InvalidHandoffSize {
+                actual: exact_length,
+                maximum,
+            });
+        }
+        validate_pinned_handoff_file_v3(slot, entry, pinned)?;
+        let mut bytes = vec![0; exact_length];
+        pinned.file.read_exact_at(&mut bytes, 0)?;
+        let mut trailing = [0_u8; 1];
+        if pinned.file.read_at(&mut trailing, exact_length as u64)? != 0 {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: slot.path.join(entry),
+                reason: "pinned file grew beyond its committed length".to_string(),
+            });
+        }
+        validate_pinned_handoff_file_v3(slot, entry, pinned)?;
+        Ok(bytes)
+    }
+
+    fn read_current_record_locked(
+        binding: &CompilerModuleHandoffCurrentnessBindingV3,
+    ) -> Result<HandoffRecord<HandoffV3Schema>, CompilerModuleHandoffErrorV3> {
+        binding.output.verify_path_identity()?;
+        authorize(
+            &binding.output,
+            &binding.producer,
+            binding.receipt.attempt(),
+        )?;
+        if binding.committed_generation != binding.receipt.attempt().generation() {
+            return Err(CompilerModuleHandoffErrorV3::Attempt {
+                reason: "lease generation no longer matches its committed attempt".to_string(),
+            });
+        }
+        binding.parent.verify()?;
+        binding.slot_directory.verify()?;
+        require_current_slot_shape_v3(&binding.slot_directory)?;
+        validate_pinned_handoff_file_v3(&binding.slot_directory, READY_ENTRY, &binding.ready_file)?;
+        validate_pinned_handoff_file_v3(
+            &binding.slot_directory,
+            PAYLOAD_ENTRY,
+            &binding.payload_file,
+        )?;
+
+        let bytes = read_pinned_handoff_file_v3(
+            &binding.slot_directory,
+            READY_ENTRY,
+            &binding.ready_file,
+            HandoffV3Schema::RECORD_BYTES,
+            HandoffV3Schema::RECORD_BYTES,
+        )?;
+        let record = HandoffRecord::<HandoffV3Schema>::decode(&bytes).map_err(|reason| {
+            CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: binding.slot_directory.path.join(READY_ENTRY),
+                reason: reason.to_string(),
+            }
+        })?;
+        let receipt = binding.receipt;
+        if record.attempt != receipt.attempt()
+            || record.attempt.generation() != binding.committed_generation
+            || record.producer != binding.producer_identity
+            || record.slot != binding.slot_identity
+        {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: binding.slot_directory.path.join(READY_ENTRY),
+                reason: "record no longer matches the lease attempt, producer, slot, or generation"
+                    .to_string(),
+            });
+        }
+        if record.binding != HandoffBindingV3::from(receipt.handoff_identity()) {
+            return Err(CompilerModuleHandoffErrorV3::WrongHandoffIdentity);
+        }
+        if record.identity != *receipt.transaction_identity().as_bytes()
+            || record.length != receipt.length()
+        {
+            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
+        }
+        if record.file != binding.payload_file.identity {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: binding.slot_directory.path.join(PAYLOAD_ENTRY),
+                reason: "payload metadata no longer matches the committed record".to_string(),
+            });
+        }
+        Ok(record)
+    }
+
+    fn validate_current_metadata_locked(
+        binding: &CompilerModuleHandoffCurrentnessBindingV3,
+    ) -> Result<(), CompilerModuleHandoffErrorV3> {
+        read_current_record_locked(binding)?;
+        binding.output.verify_path_identity()?;
+        binding.parent.verify()?;
+        binding.slot_directory.verify()?;
+        Ok(())
+    }
+
+    fn load_current_handoff_locked(
+        binding: &CompilerModuleHandoffCurrentnessBindingV3,
+    ) -> Result<
+        fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+        CompilerModuleHandoffErrorV3,
+    > {
+        let record = read_current_record_locked(binding)?;
+        let bytes = read_pinned_handoff_file_v3(
+            &binding.slot_directory,
+            PAYLOAD_ENTRY,
+            &binding.payload_file,
+            record.length,
+            MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
+        )?;
+        let identity = HandoffV3Schema::derive_identity(
+            record.producer,
+            record.slot,
+            record.attempt,
+            record.binding,
+            &bytes,
+        );
+        if identity != record.identity
+            || identity != *binding.receipt.transaction_identity().as_bytes()
+        {
+            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
+        }
+        let handoff =
+            HandoffV3Schema::decode_payload(record.binding, bytes).map_err(engine_error_v3)?;
+        if handoff.identity() != binding.receipt.handoff_identity() {
+            return Err(CompilerModuleHandoffErrorV3::HandoffIdentityMismatch);
+        }
+        validate_current_metadata_locked(binding)?;
+        Ok(handoff)
+    }
+
     fn publish_in_slot_v3(
         output_dir: &Path,
         producer: &ProducerIdentity,
@@ -3457,6 +4112,7 @@ mod semantic_v3 {
             RustcUnitV2,
         };
         use std::ffi::OsString;
+        use std::os::unix::fs::PermissionsExt;
 
         const TARGET: &str = "gfx942:xnack-";
 
@@ -3752,6 +4408,207 @@ mod semantic_v3 {
             assert!(!consumed.grants_launch_authority());
             assert!(matches!(
                 consume_compiler_module_handoff_v3(&temp.0, &producer, attempt, expected_identity),
+                Err(CompilerModuleHandoffErrorV3::AlreadyConsumed)
+            ));
+        }
+
+        #[test]
+        fn currentness_token_consumes_once_and_preserves_inert_semantics() {
+            let temp = TestDirectory::new();
+            let producer = producer("currentness_round_trip_v3");
+            let attempt = begin(&temp.0, &producer, 13);
+            let handoff = outer(111);
+            let publication = publish_compiler_module_handoff_with_currentness_v3(
+                &temp.0, &producer, attempt, &handoff,
+            )
+            .unwrap();
+            let receipt = publication.receipt();
+            let lease = publication.into_current_lease();
+            assert_eq!(lease.receipt(), receipt);
+            assert!(!lease.grants_compiler_authority());
+            assert!(!lease.grants_link_authority());
+            assert!(!lease.grants_load_authority());
+            assert!(!lease.grants_launch_authority());
+            lease.revalidate().unwrap();
+
+            let token = lease.acquire_current_token().unwrap();
+            lease.validate_current_token(&token).unwrap();
+            token.revalidate_locked_currentness().unwrap();
+            assert!(!token.grants_compiler_authority());
+            assert!(!token.grants_link_authority());
+            assert!(!token.grants_load_authority());
+            assert!(!token.grants_launch_authority());
+            let consumed =
+                consume_compiler_module_handoff_with_currentness_v3(&lease, token).unwrap();
+            assert_eq!(consumed.attempt(), attempt);
+            assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV3::Default);
+            assert_eq!(consumed.handoff_identity(), receipt.handoff_identity());
+            assert_eq!(
+                consumed.transaction_identity(),
+                receipt.transaction_identity()
+            );
+            assert_eq!(consumed.bytes(), handoff.canonical_bytes());
+            assert!(!consumed.grants_publication_authority());
+            assert!(matches!(
+                lease.acquire_current_token(),
+                Err(CompilerModuleHandoffErrorV3::AlreadyConsumed)
+            ));
+            assert!(matches!(
+                consume_compiler_module_handoff_v3(&temp.0, &producer, attempt, handoff.identity()),
+                Err(CompilerModuleHandoffErrorV3::AlreadyConsumed)
+            ));
+        }
+
+        #[test]
+        fn prior_lease_rejects_a_newer_committed_attempt_generation() {
+            let temp = TestDirectory::new();
+            let producer = producer("stale_currentness_v3");
+            let first_attempt = begin(&temp.0, &producer, 14);
+            let handoff = outer(112);
+            let lease = publish_compiler_module_handoff_with_currentness_v3(
+                &temp.0,
+                &producer,
+                first_attempt,
+                &handoff,
+            )
+            .unwrap()
+            .into_current_lease();
+
+            let second_attempt = begin(&temp.0, &producer, 15);
+            assert!(second_attempt.generation() > first_attempt.generation());
+            assert!(matches!(
+                lease.acquire_current_token(),
+                Err(CompilerModuleHandoffErrorV3::Attempt { .. })
+            ));
+        }
+
+        #[test]
+        fn token_and_lease_from_different_v3_slots_never_combine() {
+            let temp = TestDirectory::new();
+            let producer = producer("cross_publication_token_v3");
+            let attempt = begin(&temp.0, &producer, 16);
+            let handoff = outer(113);
+            let reference = publish_compiler_module_handoff_in_slot_with_currentness_v3(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::GeneralGemmReference,
+                &handoff,
+            )
+            .unwrap()
+            .into_current_lease();
+            let vectorized = publish_compiler_module_handoff_in_slot_with_currentness_v3(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly,
+                &handoff,
+            )
+            .unwrap()
+            .into_current_lease();
+
+            let wrong_token = reference.acquire_current_token().unwrap();
+            assert!(matches!(
+                vectorized.validate_current_token(&wrong_token),
+                Err(CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken)
+            ));
+            assert!(matches!(
+                consume_compiler_module_handoff_with_currentness_v3(&vectorized, wrong_token),
+                Err(CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken)
+            ));
+
+            let token = reference.acquire_current_token().unwrap();
+            consume_compiler_module_handoff_with_currentness_v3(&reference, token).unwrap();
+            vectorized.revalidate().unwrap();
+        }
+
+        #[test]
+        fn currentness_rejects_file_tamper_and_file_or_directory_replacement() {
+            for (seed, mutation) in [
+                (17, "payload-tamper"),
+                (18, "ready-replacement"),
+                (19, "slot-replacement"),
+                (20, "output-replacement"),
+            ] {
+                let temp = TestDirectory::new();
+                let producer = producer(&format!("currentness_replacement_{seed}"));
+                let attempt = begin(&temp.0, &producer, seed);
+                let handoff = outer(seed.wrapping_add(100));
+                let lease = publish_compiler_module_handoff_with_currentness_v3(
+                    &temp.0, &producer, attempt, &handoff,
+                )
+                .unwrap()
+                .into_current_lease();
+                let slot = slot_path(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    CompilerModuleHandoffSlotV3::Default,
+                );
+
+                match mutation {
+                    "payload-tamper" => {
+                        let file = fs::OpenOptions::new()
+                            .write(true)
+                            .open(slot.join(PAYLOAD_ENTRY))
+                            .unwrap();
+                        file.write_all_at(b"X", 0).unwrap();
+                        file.sync_all().unwrap();
+                    }
+                    "ready-replacement" => {
+                        let ready = slot.join(READY_ENTRY);
+                        let displaced = slot.join("ready.displaced");
+                        fs::rename(&ready, &displaced).unwrap();
+                        fs::copy(&displaced, &ready).unwrap();
+                        fs::set_permissions(&ready, fs::Permissions::from_mode(0o600)).unwrap();
+                    }
+                    "slot-replacement" => {
+                        let displaced = slot.with_extension("displaced");
+                        fs::rename(&slot, &displaced).unwrap();
+                        fs::create_dir(&slot).unwrap();
+                        fs::set_permissions(&slot, fs::Permissions::from_mode(0o700)).unwrap();
+                    }
+                    "output-replacement" => {
+                        let displaced = temp.0.with_extension("displaced");
+                        fs::rename(&temp.0, &displaced).unwrap();
+                        fs::create_dir(&temp.0).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+
+                assert!(lease.acquire_current_token().is_err(), "{mutation}");
+                if mutation == "output-replacement" {
+                    drop(lease);
+                    fs::remove_dir_all(temp.0.with_extension("displaced")).unwrap();
+                }
+            }
+        }
+
+        #[test]
+        fn only_one_concurrent_currentness_token_holds_the_v3_lock() {
+            let temp = TestDirectory::new();
+            let producer = producer("currentness_concurrency_v3");
+            let attempt = begin(&temp.0, &producer, 21);
+            let handoff = outer(121);
+            let lease = Arc::new(
+                publish_compiler_module_handoff_with_currentness_v3(
+                    &temp.0, &producer, attempt, &handoff,
+                )
+                .unwrap()
+                .into_current_lease(),
+            );
+            let winner = lease.acquire_current_token().unwrap();
+            let contender_lease = Arc::clone(&lease);
+            let contender = std::thread::spawn(move || {
+                matches!(
+                    contender_lease.acquire_current_token(),
+                    Err(CompilerModuleHandoffErrorV3::Busy)
+                )
+            });
+            assert!(contender.join().unwrap());
+            consume_compiler_module_handoff_with_currentness_v3(&lease, winner).unwrap();
+            assert!(matches!(
+                lease.acquire_current_token(),
                 Err(CompilerModuleHandoffErrorV3::AlreadyConsumed)
             ));
         }
@@ -4139,11 +4996,16 @@ mod semantic_v3 {
 }
 
 pub use semantic_v3::{
-    CompilerModuleHandoffErrorV3, CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3,
+    CompilerModuleHandoffConsumptionTokenV3, CompilerModuleHandoffCurrentnessLeaseV3,
+    CompilerModuleHandoffErrorV3, CompilerModuleHandoffPublicationV3,
+    CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3,
     CompilerModuleHandoffTransactionIdentityV3, ConsumedCompilerModuleHandoffV3,
-    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, consume_compiler_module_handoff_in_slot_v3,
-    consume_compiler_module_handoff_v3, publish_compiler_module_handoff_in_slot_v3,
-    publish_compiler_module_handoff_v3,
+    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, acquire_compiler_module_handoff_currentness_lease_v3,
+    consume_compiler_module_handoff_in_slot_v3, consume_compiler_module_handoff_v3,
+    consume_compiler_module_handoff_with_currentness_v3,
+    publish_compiler_module_handoff_in_slot_v3,
+    publish_compiler_module_handoff_in_slot_with_currentness_v3,
+    publish_compiler_module_handoff_v3, publish_compiler_module_handoff_with_currentness_v3,
 };
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ surfaces.
 | Protocol | Version binding | Current production selection |
 |---|---|---|
 | Compiler module handoff V2 | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Existing protected backend and wrapper/finalizer call sites have not been migrated by this crate-only change. |
-| Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, and slot in a separate V3 namespace. Publication accepts only the strict typed owner; consumption requires the expected native identity and completes strict canonical decode before committing its one-shot tombstone. | The transport is implemented and tested but production callers are not wired by this crate-only change. |
+| Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, slot, and transaction identity in a separate V3 namespace. Additive currentness APIs retain pinned output/namespace/slot/record/payload descriptors in a move-only lease, mint a single-use token under the cooperative lock, and consume that token when committing the existing one-shot tombstone. | The transport and currentness custody are implemented and tested but production callers are not wired by this crate-only change. |
 | Worker V2 publication intent | The complete closure is committed with the attempt, producer, durable plan, upstream evidence, output identity, length, and exact retained bytes; V2 persist/recover/clear APIs reject closure mismatch. | Protected publication and restart-marker paths still persist, recover, and clear V1 intents. |
 
 V1 and V2 APIs, wire formats, and byte maxima remain unchanged and are not
@@ -24,6 +24,14 @@ silently upgraded. V3 uses the compiler-FFI V3 maximum only in its own schema
 and never falls back to V1 or V2 decoding. None of these versions authenticates
 compiler authorship or grants publication, linking, loading, launch, or
 execution authority.
+
+The V3 receipt and consumed value remain inert. A
+`CompilerModuleHandoffCurrentnessLeaseV3` is private local custody rather than
+serializable evidence: it binds one committed attempt generation, producer,
+closed V3 slot, transaction identity, native outer identity, and pinned
+directory/file metadata. `CompilerModuleHandoffConsumptionTokenV3` holds the
+cooperative lock and is consumed by value, so a stale generation, replaced or
+tampered path, replayed tombstone, or token from another lease fails closed.
 
 ## Retained service directory
 
