@@ -1798,6 +1798,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     TrustedDeviceItem::DisjointSlice
                     | TrustedDeviceItem::DeviceGlobalMutPtr
                     | TrustedDeviceItem::WorkgroupLdsScope
+                    | TrustedDeviceItem::Invocation3D
                     | TrustedDeviceItem::ThreadIndex
                     | TrustedDeviceItem::DisjointIndex
                     | TrustedDeviceItem::ShiftedIndexSpace
@@ -1824,13 +1825,15 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     TrustedDeviceItem::Bf16MfmaFragmentFromBits
                     | TrustedDeviceItem::F32AccumulatorFragmentFromValues
                     | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
-                    | TrustedDeviceItem::WaveLaneFromRaw
+                    | TrustedDeviceItem::WaveLaneCurrent
                     | TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16
-                    | TrustedDeviceItem::LdsTile16x16AssumeInit
+                    | TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16
                     | TrustedDeviceItem::LdsTile16x16WriteMfmaBf16
                     | TrustedDeviceItem::LdsTile16x16ReadMfmaBf16
                     | TrustedDeviceItem::WorkgroupSyncthreads
-                    | TrustedDeviceItem::DynamicLdsExactFromCompiler
+                    | TrustedDeviceItem::WorkgroupLdsScopeCurrent
+                    | TrustedDeviceItem::DynamicLdsExactCurrent
+                    | TrustedDeviceItem::Invocation3DCurrent
                     | TrustedDeviceItem::DisjointSliceLen
                     | TrustedDeviceItem::ThreadIndexIntoDisjoint
                     | TrustedDeviceItem::ThreadIndexCheckedShift
@@ -1891,7 +1894,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     unreachable!("memory operations are handled by semantic lowering")
                 }
                 Some(
-                    TrustedDeviceItem::Gfx942CollectivesFromCompiler
+                    TrustedDeviceItem::Gfx942CollectivesCurrent
                     | TrustedDeviceItem::Gfx942StaticLdsU32x256
                     | TrustedDeviceItem::Gfx942Wave64ReduceActiveU32
                     | TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32
@@ -1903,7 +1906,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum
                     | TrustedDeviceItem::Gfx942BarrierArrive
                     | TrustedDeviceItem::Gfx942BarrierWait
-                    | TrustedDeviceItem::DeviceMatrixFromCompiler
+                    | TrustedDeviceItem::DeviceMatrixCurrent
                     | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
                 ) => {
                     unreachable!("collective operations are handled by semantic lowering")

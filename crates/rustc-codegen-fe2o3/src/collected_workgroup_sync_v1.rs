@@ -19,7 +19,7 @@ use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
     Capability, DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, Dimensions,
     Endianness, IdentityText, LaunchContract, Mutability as ArtifactMutability, Name, PointerWidth,
-    RustScalarElementTypeV1, ScalarType, TargetIdentity, TypeIdentity,
+    RustScalarElementTypeV1, TargetIdentity, TypeIdentity,
 };
 use fe2o3_kernel_ir::{
     LDS_REDUCTION_V1_EXPLICIT_KERNARG_BYTES, LDS_REDUCTION_V1_KERNEL_ID,
@@ -80,7 +80,7 @@ const FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3.workgroup-sync.rustc-fn-abi.v1";
 const TRUSTED_DEFINITIONS_DOMAIN_V4: &[u8] =
     b"fe2o3.workgroup-sync.trusted-definitions-and-semantic-terminals.v4";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.workgroup-sync.compiler-semantics.v1";
-const LDS_ABI_BINDING_V1: &[u8] = b"ptr64;size=40;align=8;values@0:16:8:slice-i32:shared-readonly;epoch@16:4:4:u32:value;output@24:16:8:slice-i32:unique-readwrite";
+const LDS_ABI_BINDING_V1: &[u8] = b"ptr64;size=32;align=8;values@0:16:8:slice-i32:shared-readonly;output@16:16:8:slice-i32:unique-readwrite";
 const LDS_EFFECT_BINDING_V1: &[u8] = b"one-linear-lds-allocation:i32x64:256-bytes:align4:no-escape;all-64-threads-convergent;lane-publish;publish-read-barrier;read;read-reuse-barrier;lane0-only-output";
 const LDS_RESOURCE_BINDING_V1: &[u8] = b"target=gfx942:xnack-;cov=6;wave=64;block=64,1,1;grid=1,1,1;static-lds=0;required-dynamic-lds=256;maximum-dynamic-lds=256;cov6-hidden-dynamic-lds-size@relative120:field4:required-value256;allocation-count=1";
 const LDS_CANONICAL_IR_BINDING_V1: &[u8] = b"fe2o3::workgroup_lds_reduction_v1;exact-i32x64-scratch;epochs=uninitialized,lane-initialized,published,read,reusable;barriers=publish-read,read-reuse;output=lane0";
@@ -94,16 +94,16 @@ const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/
 // binds complete structured instance and body type semantics without rustc's
 // nonsemantic crate disambiguators.
 const LDS_PORTABLE_MIR_IDENTITY_V1: [u8; 32] = [
-    0x5c, 0x76, 0x4a, 0x50, 0xeb, 0x9a, 0xa3, 0xda, 0x6f, 0x34, 0x8e, 0x09, 0x83, 0x0c, 0xde, 0x04,
-    0x32, 0xe3, 0xfa, 0xbe, 0xfc, 0x8a, 0x3f, 0x2f, 0x37, 0x86, 0x5f, 0x4e, 0xea, 0x41, 0x55, 0x18,
+    0x6b, 0x59, 0x20, 0x0a, 0xb4, 0x77, 0x39, 0x22, 0x90, 0x01, 0xce, 0x82, 0xe4, 0xb7, 0x41, 0x54,
+    0x27, 0xcb, 0x1c, 0xb2, 0x8f, 0xf6, 0x5d, 0x0f, 0x99, 0x9c, 0xdf, 0xae, 0x7f, 0x50, 0xf6, 0x12,
 ];
 const ATOMIC_PORTABLE_MIR_IDENTITY_V1: [u8; 32] = [
     0xe1, 0xdc, 0x9e, 0xae, 0x7e, 0x22, 0x56, 0x6a, 0x0f, 0x85, 0x72, 0x2c, 0xc9, 0x75, 0x0b, 0x8f,
     0xe6, 0x24, 0x4e, 0x51, 0x97, 0xe8, 0x6e, 0x67, 0x8f, 0xfa, 0x09, 0xcf, 0xb7, 0x0a, 0x8a, 0x41,
 ];
 const LDS_FN_ABI_IDENTITY_V1: [u8; 32] = [
-    0xb3, 0x84, 0x04, 0x57, 0xdb, 0x66, 0x5f, 0x11, 0x4c, 0xae, 0xff, 0x92, 0xa4, 0xc7, 0xdd, 0xbe,
-    0x63, 0x88, 0xac, 0x14, 0xbe, 0xc4, 0x8c, 0x29, 0x77, 0xc9, 0xa6, 0x21, 0x16, 0x81, 0x40, 0xc6,
+    0x9c, 0xdb, 0xeb, 0x1e, 0xfd, 0xe9, 0xf0, 0x35, 0x90, 0x6c, 0x9d, 0x57, 0x51, 0xda, 0xf0, 0x8f,
+    0xff, 0x95, 0xfb, 0xb0, 0xbf, 0x41, 0x2b, 0x4e, 0xb0, 0xa1, 0xc4, 0x34, 0x12, 0xbb, 0xc0, 0xe6,
 ];
 const ATOMIC_FN_ABI_IDENTITY_V1: [u8; 32] = [
     0xfa, 0xd7, 0x32, 0x25, 0x2d, 0xa6, 0x44, 0xac, 0xb7, 0xa3, 0x8f, 0x09, 0x13, 0xe0, 0x62, 0x46,
@@ -122,17 +122,16 @@ const ATOMIC_COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
 // canonical workspaces. These values bind every trusted definition and
 // reviewed semantic terminal without rustc's path-source crate hash.
 const LDS_TRUSTED_TERMINAL_IDENTITY_V4: [u8; 32] = [
-    0x13, 0xfa, 0xf0, 0x6c, 0x6a, 0x7e, 0x88, 0x12, 0x32, 0x27, 0xdc, 0xdb, 0xe8, 0x42, 0xbf, 0x20,
-    0x66, 0x69, 0x2a, 0x16, 0xe3, 0xc8, 0xd4, 0x12, 0x60, 0x12, 0xdc, 0x27, 0x3c, 0xd5, 0x6a, 0xd5,
+    0x91, 0xb6, 0x20, 0x13, 0x11, 0x19, 0xa9, 0x04, 0xef, 0x28, 0x3d, 0xb7, 0xc9, 0x61, 0x08, 0xfa,
+    0x08, 0x85, 0x6d, 0x45, 0x9e, 0xd1, 0x24, 0x0d, 0x21, 0x6a, 0x9a, 0x88, 0x7d, 0x46, 0xdc, 0x1f,
 ];
 const ATOMIC_TRUSTED_TERMINAL_IDENTITY_V4: [u8; 32] = [
     0x0e, 0xc7, 0x04, 0x2c, 0x6e, 0x73, 0x1a, 0x52, 0x3a, 0xd6, 0x4d, 0x7e, 0x62, 0xdd, 0x60, 0xf9,
     0x3b, 0xd8, 0xfb, 0x21, 0x18, 0x76, 0x89, 0x08, 0xf9, 0x8f, 0xe9, 0x39, 0xb2, 0x57, 0x1e, 0x52,
 ];
 
-const LDS_ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 3] = [
+const LDS_ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 2] = [
     GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::I32),
-    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
     GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::I32),
 ];
 
@@ -141,9 +140,12 @@ const LDS_TRUSTED_ITEMS_V1: &[TrustedDeviceItem] = &[
     TrustedDeviceItem::DisjointSliceLen,
     TrustedDeviceItem::DisjointSliceGetMutAt,
     TrustedDeviceItem::WorkgroupLdsScope,
-    TrustedDeviceItem::DynamicLdsExactFromCompiler,
+    TrustedDeviceItem::WorkgroupLdsScopeCurrent,
+    TrustedDeviceItem::DynamicLdsExactCurrent,
+    TrustedDeviceItem::Invocation3D,
+    TrustedDeviceItem::Invocation3DCurrent,
     TrustedDeviceItem::Gfx942CollectivesContext,
-    TrustedDeviceItem::Gfx942CollectivesFromCompiler,
+    TrustedDeviceItem::Gfx942CollectivesCurrent,
     TrustedDeviceItem::Gfx942WorkgroupReduceSum,
     TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
 ];
@@ -800,16 +802,16 @@ fn require_signature<'tcx>(
     let common = signature.safety == Safety::Safe
         && signature.abi == ExternAbi::Rust
         && !signature.c_variadic
-        && signature.output() == tcx.types.unit
-        && signature.inputs().len() == 3;
+        && signature.output() == tcx.types.unit;
     let exact = match kind {
         WorkgroupSyncProfileKindV1::LdsReduction => {
-            is_shared_slice(signature.inputs()[0], IntTy::I32)
-                && matches!(signature.inputs()[1].kind(), TyKind::Uint(UintTy::U32))
-                && is_disjoint_i32_slice(tcx, signature.inputs()[2])
+            signature.inputs().len() == 2
+                && is_shared_slice(signature.inputs()[0], IntTy::I32)
+                && is_disjoint_i32_slice(tcx, signature.inputs()[1])
         }
         WorkgroupSyncProfileKindV1::ScopedAtomic => {
-            is_shared_u32_slice(signature.inputs()[0])
+            signature.inputs().len() == 3
+                && is_shared_u32_slice(signature.inputs()[0])
                 && is_shared_u32_slice(signature.inputs()[1])
                 && is_global_mut_u32(tcx, signature.inputs()[2])
         }
@@ -897,7 +899,7 @@ fn require_lds_layout(
             .typed_layout_identities
             .as_ref()
             .map(|identities| identities.len())
-            != Some(3)
+            != Some(2)
     {
         return Err(CollectedWorkgroupSyncErrorV1::Layout(format!(
             "expected exact LDS argument kinds {LDS_ARGUMENT_KINDS_V1:?}, found {actual:?}"
@@ -907,10 +909,10 @@ fn require_lds_layout(
     if abi.size() != u64::from(LDS_REDUCTION_V1_EXPLICIT_KERNARG_BYTES)
         || abi.alignment() != 8
         || abi.pointer_width() != PointerWidth::Bits64
-        || abi.fields().len() != 3
+        || abi.fields().len() != 2
     {
         return Err(CollectedWorkgroupSyncErrorV1::Layout(format!(
-            "expected ptr64 size-40 align-8 three-field LDS ABI, found {abi:?}"
+            "expected ptr64 size-32 align-8 two-field LDS ABI, found {abi:?}"
         )));
     }
     let fields = abi.fields();
@@ -923,22 +925,19 @@ fn require_lds_layout(
     ) && fields[0].offset() == 0
         && fields[0].access() == Access::ReadOnly
         && fields[0].ownership() == ArgumentOwnership::SharedBorrow
-        && fields[1].kind() == AbiKind::Scalar(ScalarType::U32)
         && fields[1].offset() == 16
-        && fields[1].access() == Access::ByValue
-        && fields[2].offset() == 24
         && matches!(
-            fields[2].kind(),
+            fields[1].kind(),
             AbiKind::Slice {
                 element_size: 4,
                 element_alignment: 4
             }
         )
-        && fields[2].mutability() == ArtifactMutability::Mutable
-        && fields[2].access() == Access::ReadWrite
-        && fields[2].address_space() == AddressSpace::Global
-        && fields[2].ownership() == ArgumentOwnership::UniqueBorrow
-        && fields[2].alias_class() == AliasClass::Exclusive;
+        && fields[1].mutability() == ArtifactMutability::Mutable
+        && fields[1].access() == Access::ReadWrite
+        && fields[1].address_space() == AddressSpace::Global
+        && fields[1].ownership() == ArgumentOwnership::UniqueBorrow
+        && fields[1].alias_class() == AliasClass::Exclusive;
     if !exact {
         return Err(CollectedWorkgroupSyncErrorV1::Layout(
             "LDS ABI access, ownership, type, address-space, or offset drifted".into(),
@@ -1065,24 +1064,28 @@ fn require_fn_abi<'tcx>(
     let abi = tcx.fn_abi_of_instance(query).map_err(|error| {
         CollectedWorkgroupSyncErrorV1::Abi(format!("FnAbi query failed: {error:?}"))
     })?;
+    let expected_count = match kind {
+        WorkgroupSyncProfileKindV1::LdsReduction => 2,
+        WorkgroupSyncProfileKindV1::ScopedAtomic => 3,
+    };
     if abi.conv != CanonAbi::Rust
         || abi.c_variadic
-        || abi.fixed_count != 3
-        || abi.args.len() != 3
+        || abi.fixed_count != expected_count
+        || abi.args.len() != expected_count as usize
         || !matches!(abi.ret.mode, PassMode::Ignore)
         || abi.ret.layout.size.bytes() != 0
     {
         return Err(CollectedWorkgroupSyncErrorV1::Abi(format!(
-            "FnAbi header must be Rust(args=3)->unit, found {abi:?}"
+            "FnAbi header must be Rust(args={expected_count})->unit, found {abi:?}"
         )));
     }
-    let expected_sizes = match kind {
-        WorkgroupSyncProfileKindV1::LdsReduction => [16, 4, 16],
-        WorkgroupSyncProfileKindV1::ScopedAtomic => [16, 16, 8],
+    let expected_sizes: &[u64] = match kind {
+        WorkgroupSyncProfileKindV1::LdsReduction => &[16, 16],
+        WorkgroupSyncProfileKindV1::ScopedAtomic => &[16, 16, 8],
     };
-    let expected_alignments = match kind {
-        WorkgroupSyncProfileKindV1::LdsReduction => [8, 4, 8],
-        WorkgroupSyncProfileKindV1::ScopedAtomic => [8, 8, 8],
+    let expected_alignments: &[u64] = match kind {
+        WorkgroupSyncProfileKindV1::LdsReduction => &[8, 8],
+        WorkgroupSyncProfileKindV1::ScopedAtomic => &[8, 8, 8],
     };
     let mut digest = Sha256::new();
     hash_field(&mut digest, FN_ABI_DOMAIN_V1);

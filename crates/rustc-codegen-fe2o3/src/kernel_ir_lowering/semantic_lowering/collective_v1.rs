@@ -79,7 +79,7 @@ pub(super) fn lower_call(
 
     match call.item {
         SessionRecognizedSemanticItem::TrustedDevice(
-            TrustedDeviceItem::Gfx942CollectivesFromCompiler,
+            TrustedDeviceItem::Gfx942CollectivesCurrent,
         ) => lower_context_constructor(lowerer, call),
         SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::Gfx942BarrierArrive) => {
             lower_arrive(lowerer, call, block)
@@ -115,7 +115,7 @@ fn is_owned_non_collective(item: SessionRecognizedSemanticItem) -> bool {
     matches!(
         item,
         SessionRecognizedSemanticItem::TrustedDevice(
-            TrustedDeviceItem::Gfx942CollectivesFromCompiler
+            TrustedDeviceItem::Gfx942CollectivesCurrent
                 | TrustedDeviceItem::Gfx942BarrierArrive
                 | TrustedDeviceItem::Gfx942BarrierWait
         )
@@ -358,6 +358,17 @@ fn lower_context_constructor(
             TranslationDiagnosticCode::UnsupportedProjection,
             call.location.clone(),
             "gfx942 collective context requires an unprojected destination",
+        ));
+    }
+    if lowerer
+        .locals
+        .values()
+        .any(|binding| matches!(binding, LocalBinding::Gfx942CollectiveCapability))
+    {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedCall,
+            call.location.clone(),
+            "Gfx942Collectives::current may be acquired only once per kernel invocation",
         ));
     }
     lowerer.bind_local(

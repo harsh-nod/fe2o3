@@ -99,6 +99,43 @@ fn exact_genuine_matrix_call_lowers_to_the_existing_gfx942_mfma_contract() {
 }
 
 #[test]
+fn duplicate_matrix_current_acquisition_fails_closed() {
+    let mut function = matrix_frontend_function();
+    function.local_count = 8;
+    function.locals.push(local(
+        7,
+        MirLocalRole::Temp,
+        matrix_shape(TrustedDeviceItem::DeviceMatrix),
+    ));
+    function.blocks = vec![
+        block(
+            0,
+            Vec::new(),
+            call(TrustedDeviceItem::DeviceMatrixCurrent, Vec::new(), 4, 1),
+        ),
+        block(
+            1,
+            Vec::new(),
+            call(TrustedDeviceItem::DeviceMatrixCurrent, Vec::new(), 7, 2),
+        ),
+        block(2, Vec::new(), MirTerminatorKind::Return),
+    ];
+    let error = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![function],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect_err("duplicate matrix authority");
+    assert!(
+        error
+            .to_string()
+            .contains("DeviceMatrix::current may be acquired only once per kernel invocation"),
+        "{error}"
+    );
+}
+
+#[test]
 fn matrix_frontend_rejects_arity_argument_result_receiver_and_identity_substitutions() {
     let exact = matrix_frontend_function();
 
@@ -517,12 +554,7 @@ fn matrix_frontend_function_with_workgroup(workgroup_x: u32) -> MirFunction {
             block(
                 0,
                 Vec::new(),
-                call(
-                    TrustedDeviceItem::DeviceMatrixFromCompiler,
-                    Vec::new(),
-                    4,
-                    1,
-                ),
+                call(TrustedDeviceItem::DeviceMatrixCurrent, Vec::new(), 4, 1),
             ),
             block(
                 1,

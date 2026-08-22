@@ -40,6 +40,10 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-IDENTITY/V1\0";
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
+const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
+    0x1b, 0xc7, 0x32, 0x10, 0x7d, 0x77, 0x17, 0x73, 0x79, 0xef, 0x7e, 0x92, 0xa5, 0x3f, 0x45, 0xb0,
+    0x39, 0x5a, 0xf5, 0x84, 0x90, 0x96, 0x1f, 0xaa, 0x5b, 0x08, 0x11, 0x44, 0xcf, 0x8d, 0x25, 0xa6,
+];
 #[allow(
     dead_code,
     reason = "consumed by the staged row-softmax V2 provider protocol"
@@ -75,8 +79,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x50, 0x41, 0x84, 0x08, 0x68, 0x78, 0xc4, 0x3c, 0x3e, 0x3f, 0xaa, 0x49, 0x83, 0xce, 0x36, 0xba,
-    0xde, 0xaa, 0xb8, 0x1a, 0x74, 0x91, 0x72, 0xcb, 0x6e, 0xa2, 0x41, 0xa5, 0xdd, 0x15, 0x56, 0xec,
+    0x75, 0x80, 0xa9, 0x0f, 0xf2, 0xd2, 0x78, 0xc4, 0xde, 0x86, 0x97, 0xb9, 0x8d, 0x79, 0xd8, 0xe4,
+    0x31, 0xeb, 0xd9, 0x55, 0x9c, 0x34, 0x5f, 0x62, 0x59, 0x9c, 0xa7, 0xfc, 0x47, 0x84, 0x51, 0x43,
 ];
 
 #[cfg(test)]
@@ -432,7 +436,10 @@ pub(crate) enum TrustedDeviceItem {
     DisjointSlice,
     DeviceGlobalMutPtr,
     WorkgroupLdsScope,
-    DynamicLdsExactFromCompiler,
+    WorkgroupLdsScopeCurrent,
+    DynamicLdsExactCurrent,
+    Invocation3D,
+    Invocation3DCurrent,
     ThreadIndex,
     DisjointIndex,
     ShiftedIndexSpace,
@@ -468,7 +475,7 @@ pub(crate) enum TrustedDeviceItem {
     MemoryVolatileStore,
     MemoryCopyNonOverlapping,
     Gfx942CollectivesContext,
-    Gfx942CollectivesFromCompiler,
+    Gfx942CollectivesCurrent,
     Gfx942StaticLdsU32x256,
     Gfx942StaticLdsU32x256Type,
     Gfx942Wave64ReduceActiveU32,
@@ -481,14 +488,14 @@ pub(crate) enum TrustedDeviceItem {
     Gfx942WorkgroupExclusiveScanSum,
     Gfx942BarrierArrive,
     Gfx942BarrierWait,
-    WaveLaneFromRaw,
+    WaveLaneCurrent,
     Gfx942LdsBf16TilePairM16x16,
-    LdsTile16x16AssumeInit,
+    Gfx942LdsBf16TilePairPublishM16x16,
     LdsTile16x16WriteMfmaBf16,
     LdsTile16x16ReadMfmaBf16,
     WorkgroupSyncthreads,
     DeviceMatrix,
-    DeviceMatrixFromCompiler,
+    DeviceMatrixCurrent,
     Bf16MfmaFragment,
     Bf16MfmaFragmentFromBits,
     F32AccumulatorFragment,
@@ -520,9 +527,24 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::WorkgroupLdsScope",
     ),
     (
-        TrustedDeviceItem::DynamicLdsExactFromCompiler,
-        "fe2o3_device_dynamic_lds_exact_from_compiler_v1",
-        "fe2o3_device::DynamicLds::<T>::exact_from_compiler",
+        TrustedDeviceItem::WorkgroupLdsScopeCurrent,
+        "fe2o3_device_workgroup_lds_scope_current",
+        "fe2o3_device::WorkgroupLdsScope::current",
+    ),
+    (
+        TrustedDeviceItem::DynamicLdsExactCurrent,
+        "fe2o3_device_dynamic_lds_exact_current_v1",
+        "fe2o3_device::DynamicLds::<T>::exact_current",
+    ),
+    (
+        TrustedDeviceItem::Invocation3D,
+        "fe2o3_device_invocation_3d",
+        "fe2o3_device::Invocation3D",
+    ),
+    (
+        TrustedDeviceItem::Invocation3DCurrent,
+        "fe2o3_device_invocation_3d_current",
+        "fe2o3_device::Invocation3D::current",
     ),
     (
         TrustedDeviceItem::ThreadIndex,
@@ -700,9 +722,9 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Gfx942Collectives",
     ),
     (
-        TrustedDeviceItem::Gfx942CollectivesFromCompiler,
-        "fe2o3_device_gfx942_collectives_from_compiler_v1",
-        "fe2o3_device::Gfx942Collectives::from_compiler",
+        TrustedDeviceItem::Gfx942CollectivesCurrent,
+        "fe2o3_device_gfx942_collectives_current_v1",
+        "fe2o3_device::Gfx942Collectives::current",
     ),
     (
         TrustedDeviceItem::Gfx942StaticLdsU32x256,
@@ -765,9 +787,9 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::sync::gfx942_barrier_wait",
     ),
     (
-        TrustedDeviceItem::WaveLaneFromRaw,
-        "fe2o3_device_wave_lane_from_raw",
-        "fe2o3_device::WaveLane::from_raw",
+        TrustedDeviceItem::WaveLaneCurrent,
+        "fe2o3_device_wave_lane_current",
+        "fe2o3_device::WaveLane::current",
     ),
     (
         TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16,
@@ -775,9 +797,9 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::gfx942_lds_bf16_tile_pair_m16x16_v1",
     ),
     (
-        TrustedDeviceItem::LdsTile16x16AssumeInit,
-        "fe2o3_device_lds_tile16x16_assume_init_v1",
-        "fe2o3_device::LdsTile16x16::assume_init",
+        TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16,
+        "fe2o3_device_gfx942_lds_bf16_tile_pair_publish_v1",
+        "fe2o3_device::gfx942_publish_lds_bf16_tile_pair_m16x16_v1",
     ),
     (
         TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,
@@ -800,9 +822,9 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::DeviceMatrix",
     ),
     (
-        TrustedDeviceItem::DeviceMatrixFromCompiler,
-        "fe2o3_device_matrix_context_from_compiler_v1",
-        "fe2o3_device::DeviceMatrix::from_compiler",
+        TrustedDeviceItem::DeviceMatrixCurrent,
+        "fe2o3_device_matrix_context_current_v1",
+        "fe2o3_device::DeviceMatrix::current",
     ),
     (
         TrustedDeviceItem::Bf16MfmaFragment,
@@ -1097,7 +1119,7 @@ const HALF_MATH_DIAGNOSTIC_ITEMS: &[(&str, &str)] = &[
     ("fe2o3_device_math_context_v1", "fe2o3_device::DeviceMath"),
     (
         "fe2o3_device_math_context_from_compiler_v1",
-        "fe2o3_device::DeviceMath::from_compiler",
+        "fe2o3_device::DeviceMath::current",
     ),
     (
         "fe2o3_device_math_sqrt_f32_v1",
@@ -1268,6 +1290,16 @@ pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Reject
 fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
     if matches!(item, TrustedDeviceItem::GeneralGemm(_, _)) {
         reviewed_general_gemm_provider_definition_v1(tcx, def_id, item)
+    } else if safe_execution_provider_bound_item(item) {
+        let definition = reviewed_provider_semantic_definition_v1(tcx, def_id)?;
+        let expected_definition_path = safe_execution_compiler_definition_path(item);
+        if definition.canonical_definition_path != expected_definition_path {
+            return Err(format!(
+                "provider definition path is `{}`, expected `{}`",
+                definition.canonical_definition_path, expected_definition_path
+            ));
+        }
+        validate_safe_execution_provider_definition_v1(&definition)
     } else if matrix_provider_bound_item(item) {
         reviewed_matrix_provider_observation(tcx, def_id).map(|_| ())
     } else if row_softmax_provider_bound_item(item) {
@@ -1425,6 +1457,131 @@ const fn safe_capability_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic
+fn validate_safe_execution_provider_definition_v1(
+    definition: &ReviewedProviderSemanticDefinitionV1,
+) -> Result<(), String> {
+    definition.validate()?;
+    if definition.profile != ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4 {
+        return Err("safe execution provider semantic profile was substituted".to_owned());
+    }
+    if definition.source_closure_identity != REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1 {
+        return Err(format!(
+            "safe execution provider source closure does not match the reviewed V1 identity: {:02x?}",
+            definition.source_closure_identity
+        ));
+    }
+    Ok(())
+}
+
+fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static str {
+    match item {
+        TrustedDeviceItem::WorkgroupLdsScope => "fe2o3_device::lds::WorkgroupLdsScope",
+        TrustedDeviceItem::WorkgroupLdsScopeCurrent => "fe2o3_device::lds::{impl#2}::current",
+        TrustedDeviceItem::DynamicLdsExactCurrent => "fe2o3_device::lds::{impl#4}::exact_current",
+        TrustedDeviceItem::Invocation3D => "fe2o3_device::thread::Invocation3D",
+        TrustedDeviceItem::Invocation3DCurrent => "fe2o3_device::thread::{impl#6}::current",
+        TrustedDeviceItem::Gfx942CollectivesContext => {
+            "fe2o3_device::collective::Gfx942Collectives"
+        }
+        TrustedDeviceItem::Gfx942CollectivesCurrent => {
+            "fe2o3_device::collective::{impl#0}::current"
+        }
+        TrustedDeviceItem::Gfx942StaticLdsU32x256 => {
+            "fe2o3_device::collective::{impl#0}::static_lds_u32x256"
+        }
+        TrustedDeviceItem::Gfx942StaticLdsU32x256Type => {
+            "fe2o3_device::collective::Gfx942StaticLdsU32x256"
+        }
+        TrustedDeviceItem::Gfx942Wave64ReduceActiveU32 => {
+            "fe2o3_device::collective::{impl#0}::wave64_reduce_sum_active_u32"
+        }
+        TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32 => {
+            "fe2o3_device::collective::{impl#0}::workgroup256_reduce_sum_active_u32"
+        }
+        TrustedDeviceItem::Gfx942Wave64ReduceSum => {
+            "fe2o3_device::collective::{impl#5}::reduce_sum"
+        }
+        TrustedDeviceItem::Gfx942Wave64InclusiveScanSum => {
+            "fe2o3_device::collective::{impl#5}::inclusive_scan_sum"
+        }
+        TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum => {
+            "fe2o3_device::collective::{impl#5}::exclusive_scan_sum"
+        }
+        TrustedDeviceItem::Gfx942WorkgroupReduceSum => {
+            "fe2o3_device::collective::{impl#6}::reduce_sum"
+        }
+        TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum => {
+            "fe2o3_device::collective::{impl#6}::inclusive_scan_sum"
+        }
+        TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum => {
+            "fe2o3_device::collective::{impl#6}::exclusive_scan_sum"
+        }
+        TrustedDeviceItem::WaveLaneCurrent => "fe2o3_device::wave::{impl#4}::current",
+        TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16 => {
+            "fe2o3_device::tensor::gfx942_lds_bf16_tile_pair_m16x16_v1"
+        }
+        TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16 => {
+            "fe2o3_device::tensor::gfx942_publish_lds_bf16_tile_pair_m16x16_v1"
+        }
+        TrustedDeviceItem::LdsTile16x16WriteMfmaBf16 => {
+            "fe2o3_device::tensor::{impl#9}::write_mfma_fragment"
+        }
+        TrustedDeviceItem::LdsTile16x16ReadMfmaBf16 => {
+            "fe2o3_device::tensor::{impl#10}::read_mfma_fragment"
+        }
+        TrustedDeviceItem::WorkgroupSyncthreads => "fe2o3_device::sync::syncthreads",
+        TrustedDeviceItem::DeviceMatrix => "fe2o3_device::tensor::DeviceMatrix",
+        TrustedDeviceItem::DeviceMatrixCurrent => "fe2o3_device::tensor::{impl#3}::current",
+        TrustedDeviceItem::Bf16MfmaFragment => "fe2o3_device::tensor::Bf16MfmaFragment",
+        TrustedDeviceItem::Bf16MfmaFragmentFromBits => "fe2o3_device::tensor::{impl#1}::from_bits",
+        TrustedDeviceItem::F32AccumulatorFragment => "fe2o3_device::tensor::F32AccumulatorFragment",
+        TrustedDeviceItem::F32AccumulatorFragmentFromValues => {
+            "fe2o3_device::tensor::{impl#2}::from_values"
+        }
+        TrustedDeviceItem::F32AccumulatorFragmentIntoValues => {
+            "fe2o3_device::tensor::{impl#2}::into_values"
+        }
+        TrustedDeviceItem::DeviceMatrixMultiplyAccumulate => {
+            "fe2o3_device::tensor::{impl#3}::multiply_accumulate"
+        }
+        _ => item.canonical_path(),
+    }
+}
+
+const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
+    matches!(
+        item,
+        TrustedDeviceItem::WorkgroupLdsScope
+            | TrustedDeviceItem::WorkgroupLdsScopeCurrent
+            | TrustedDeviceItem::DynamicLdsExactCurrent
+            | TrustedDeviceItem::Invocation3D
+            | TrustedDeviceItem::Invocation3DCurrent
+            | TrustedDeviceItem::Gfx942CollectivesContext
+            | TrustedDeviceItem::Gfx942CollectivesCurrent
+            | TrustedDeviceItem::Gfx942StaticLdsU32x256
+            | TrustedDeviceItem::Gfx942StaticLdsU32x256Type
+            | TrustedDeviceItem::Gfx942Wave64ReduceActiveU32
+            | TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32
+            | TrustedDeviceItem::Gfx942Wave64ReduceSum
+            | TrustedDeviceItem::Gfx942Wave64InclusiveScanSum
+            | TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum
+            | TrustedDeviceItem::Gfx942WorkgroupReduceSum
+            | TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum
+            | TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum
+            | TrustedDeviceItem::WaveLaneCurrent
+            | TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16
+            | TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16
+            | TrustedDeviceItem::LdsTile16x16WriteMfmaBf16
+            | TrustedDeviceItem::LdsTile16x16ReadMfmaBf16
+            | TrustedDeviceItem::WorkgroupSyncthreads
+            | TrustedDeviceItem::DeviceMatrix
+            | TrustedDeviceItem::DeviceMatrixCurrent
+            | TrustedDeviceItem::Bf16MfmaFragment
+            | TrustedDeviceItem::Bf16MfmaFragmentFromBits
+            | TrustedDeviceItem::F32AccumulatorFragment
+            | TrustedDeviceItem::F32AccumulatorFragmentFromValues
+            | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
+            | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
     )
 }
 
@@ -1446,7 +1603,7 @@ const fn matrix_provider_bound_item(item: TrustedDeviceItem) -> bool {
     matches!(
         item,
         TrustedDeviceItem::DeviceMatrix
-            | TrustedDeviceItem::DeviceMatrixFromCompiler
+            | TrustedDeviceItem::DeviceMatrixCurrent
             | TrustedDeviceItem::Bf16MfmaFragment
             | TrustedDeviceItem::Bf16MfmaFragmentFromBits
             | TrustedDeviceItem::F32AccumulatorFragment
@@ -1826,8 +1983,12 @@ fn reviewed_provider_semantic_definition_with_profile_v1(
     let crate_num = provider_definition.krate;
     let crate_name = named_external_provider(tcx, crate_num)?;
     let provider = compiler_provider_observation_v1(tcx, crate_num);
-    let definition_source_identity =
-        reviewed_provider_source_identity(tcx, provider_definition, definition_source_domain)?;
+    let definition_source_identity = reviewed_compiled_provider_source_identity_at_root(
+        tcx,
+        provider_definition,
+        Path::new(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT),
+        definition_source_domain,
+    )?;
     let source_closure_identity = source_closure_cache
         .get_or_init(|| {
             reviewed_provider_source_closure_identity(
@@ -2347,6 +2508,7 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2364,7 +2526,8 @@ mod tests {
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
         general_gemm_dependency_semantic_identity_v1, pinned_core_semantic_terminal_identity_v1,
         reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
-        reviewed_source_tree_identity, structural_local_definition_component_v1,
+        reviewed_source_tree_identity, safe_execution_compiler_definition_path,
+        safe_execution_provider_bound_item, structural_local_definition_component_v1,
         validate_compiled_provider_source_hash_v1,
         validate_ordered_provider_semantic_definitions_v1,
         validate_reviewed_general_gemm_definition_source_v1,
@@ -2626,7 +2789,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("2b9c60625eb166fc28b949bf64c06eeafc393172bd46adaefc5daa71934dc3e7")
+            digest("1bc732107d77177379ef7e92a53f45b0395af58490961faa5b081144cf8d25a6")
         );
 
         let definition = semantic_definition(
@@ -2645,6 +2808,25 @@ mod tests {
                 .unwrap(),
             digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
         );
+    }
+
+    #[test]
+    fn safe_execution_provider_validation_rejects_source_substitution() {
+        let exact = semantic_definition(
+            ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
+            "wave::{impl#4}::current",
+            super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+            [6; 32],
+        );
+        super::validate_safe_execution_provider_definition_v1(&exact).unwrap();
+
+        let mut changed = exact.clone();
+        changed.source_closure_identity[0] ^= 1;
+        assert!(super::validate_safe_execution_provider_definition_v1(&changed).is_err());
+
+        changed = exact;
+        changed.profile = ReviewedProviderSemanticProfileV1::MatrixV3;
+        assert!(super::validate_safe_execution_provider_definition_v1(&changed).is_err());
     }
 
     #[test]
@@ -3269,7 +3451,10 @@ mod tests {
             TrustedDeviceItem::DisjointSlice,
             TrustedDeviceItem::DeviceGlobalMutPtr,
             TrustedDeviceItem::WorkgroupLdsScope,
-            TrustedDeviceItem::DynamicLdsExactFromCompiler,
+            TrustedDeviceItem::WorkgroupLdsScopeCurrent,
+            TrustedDeviceItem::DynamicLdsExactCurrent,
+            TrustedDeviceItem::Invocation3D,
+            TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::ThreadIndex,
             TrustedDeviceItem::DisjointIndex,
             TrustedDeviceItem::ShiftedIndexSpace,
@@ -3296,7 +3481,7 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::Gfx942CollectivesContext,
-            TrustedDeviceItem::Gfx942CollectivesFromCompiler,
+            TrustedDeviceItem::Gfx942CollectivesCurrent,
             TrustedDeviceItem::Gfx942StaticLdsU32x256,
             TrustedDeviceItem::Gfx942StaticLdsU32x256Type,
             TrustedDeviceItem::Gfx942Wave64ReduceActiveU32,
@@ -3309,14 +3494,14 @@ mod tests {
             TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
             TrustedDeviceItem::Gfx942BarrierArrive,
             TrustedDeviceItem::Gfx942BarrierWait,
-            TrustedDeviceItem::WaveLaneFromRaw,
+            TrustedDeviceItem::WaveLaneCurrent,
             TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16,
-            TrustedDeviceItem::LdsTile16x16AssumeInit,
+            TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16,
             TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,
             TrustedDeviceItem::LdsTile16x16ReadMfmaBf16,
             TrustedDeviceItem::WorkgroupSyncthreads,
             TrustedDeviceItem::DeviceMatrix,
-            TrustedDeviceItem::DeviceMatrixFromCompiler,
+            TrustedDeviceItem::DeviceMatrixCurrent,
             TrustedDeviceItem::Bf16MfmaFragment,
             TrustedDeviceItem::F32AccumulatorFragment,
             TrustedDeviceItem::Bf16MfmaFragmentFromBits,
@@ -3469,6 +3654,49 @@ mod tests {
         for index in 0..markers.len() {
             assert!(!markers[..index].contains(&markers[index]));
             assert!(!paths[..index].contains(&paths[index]));
+        }
+    }
+
+    #[test]
+    fn safe_execution_items_have_exact_structural_provider_paths() {
+        let items = [
+            TrustedDeviceItem::WorkgroupLdsScope,
+            TrustedDeviceItem::WorkgroupLdsScopeCurrent,
+            TrustedDeviceItem::DynamicLdsExactCurrent,
+            TrustedDeviceItem::Invocation3D,
+            TrustedDeviceItem::Invocation3DCurrent,
+            TrustedDeviceItem::Gfx942CollectivesContext,
+            TrustedDeviceItem::Gfx942CollectivesCurrent,
+            TrustedDeviceItem::Gfx942StaticLdsU32x256,
+            TrustedDeviceItem::Gfx942Wave64ReduceActiveU32,
+            TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32,
+            TrustedDeviceItem::Gfx942Wave64ReduceSum,
+            TrustedDeviceItem::Gfx942WorkgroupReduceSum,
+            TrustedDeviceItem::WaveLaneCurrent,
+            TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16,
+            TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16,
+            TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,
+            TrustedDeviceItem::LdsTile16x16ReadMfmaBf16,
+            TrustedDeviceItem::WorkgroupSyncthreads,
+            TrustedDeviceItem::DeviceMatrix,
+            TrustedDeviceItem::DeviceMatrixCurrent,
+            TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+        ];
+        let mut paths = BTreeSet::new();
+        for item in items {
+            assert!(safe_execution_provider_bound_item(item));
+            let path = safe_execution_compiler_definition_path(item);
+            assert!(path.starts_with("fe2o3_device::"));
+            assert!(
+                path.contains("::collective::")
+                    || path.contains("::lds::")
+                    || path.contains("::sync::")
+                    || path.contains("::tensor::")
+                    || path.contains("::thread::")
+                    || path.contains("::wave::"),
+                "safe execution item retained only a public re-export path: {path}"
+            );
+            assert!(paths.insert(path), "duplicate provider DefPath: {path}");
         }
     }
 }

@@ -286,6 +286,52 @@ fn collective_calls_reject_wrong_target_type_context_and_arity() {
     );
 }
 
+#[test]
+fn duplicate_collective_current_acquisition_fails_closed() {
+    let mut module = collective_module(
+        TrustedDeviceItem::Gfx942Wave64ReduceSum,
+        MirTypeShape::U32,
+        true,
+    );
+    let function = &mut module.functions[0];
+    function.local_count = 7;
+    function.locals.push(local(
+        6,
+        MirLocalRole::Temp,
+        adt("fe2o3_device::Gfx942Collectives"),
+    ));
+    function.blocks = vec![
+        block(
+            0,
+            call(
+                TrustedDeviceItem::Gfx942CollectivesCurrent,
+                Vec::new(),
+                2,
+                1,
+            ),
+        ),
+        block(
+            1,
+            call(
+                TrustedDeviceItem::Gfx942CollectivesCurrent,
+                Vec::new(),
+                6,
+                2,
+            ),
+        ),
+        block(2, MirTerminatorKind::Return),
+    ];
+
+    let error = translate_and_verify_for_target(&module, &AmdGpuTarget::new("gfx942:xnack-"))
+        .expect_err("duplicate collective authority");
+    assert!(
+        error
+            .to_string()
+            .contains("Gfx942Collectives::current may be acquired only once per kernel invocation"),
+        "{error}"
+    );
+}
+
 fn collective_module(
     item: TrustedDeviceItem,
     value_shape: MirTypeShape,
@@ -302,7 +348,7 @@ fn collective_module(
         block(
             0,
             call(
-                TrustedDeviceItem::Gfx942CollectivesFromCompiler,
+                TrustedDeviceItem::Gfx942CollectivesCurrent,
                 Vec::new(),
                 2,
                 1,
@@ -432,7 +478,7 @@ fn wave_lds_v1_module(with_scratch: bool) -> MirModule {
                 block(
                     0,
                     call(
-                        TrustedDeviceItem::Gfx942CollectivesFromCompiler,
+                        TrustedDeviceItem::Gfx942CollectivesCurrent,
                         Vec::new(),
                         3,
                         1,

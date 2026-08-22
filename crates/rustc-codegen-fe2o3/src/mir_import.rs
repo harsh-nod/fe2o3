@@ -1803,7 +1803,7 @@ fn import_matrix_source_abi_v2<'tcx>(
             .map_err(MirImportError::new)?;
     let definition_identities = [
         TrustedDeviceItem::DeviceMatrix,
-        TrustedDeviceItem::DeviceMatrixFromCompiler,
+        TrustedDeviceItem::DeviceMatrixCurrent,
         TrustedDeviceItem::DeviceValue(dialect_amdgcn::DeviceValueDiagnosticItem::Bf16),
         TrustedDeviceItem::Bf16MfmaFragment,
         TrustedDeviceItem::F32AccumulatorFragment,

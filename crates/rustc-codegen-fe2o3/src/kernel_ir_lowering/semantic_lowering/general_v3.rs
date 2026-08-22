@@ -20,7 +20,7 @@ pub(super) fn claim_call(
     if matches!(
         call.item,
         SessionRecognizedSemanticItem::TrustedDevice(
-            TrustedDeviceItem::DeviceMatrixFromCompiler
+            TrustedDeviceItem::DeviceMatrixCurrent
                 | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
         )
     ) {
@@ -80,9 +80,9 @@ pub(super) fn lower_call(
         SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::DisjointSliceGetMut) => {
             lower_disjoint_slice_get_mut(lowerer, call, block)
         }
-        SessionRecognizedSemanticItem::TrustedDevice(
-            TrustedDeviceItem::DeviceMatrixFromCompiler,
-        ) => lower_device_matrix_from_compiler(lowerer, call),
+        SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::DeviceMatrixCurrent) => {
+            lower_device_matrix_current(lowerer, call)
+        }
         SessionRecognizedSemanticItem::TrustedDevice(
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
         ) => lower_device_matrix_multiply_accumulate(lowerer, call, block),
@@ -90,7 +90,7 @@ pub(super) fn lower_call(
     }
 }
 
-fn lower_device_matrix_from_compiler(
+fn lower_device_matrix_current(
     lowerer: &mut FunctionLowerer<'_, '_>,
     call: SessionRecognizedSemanticCall<'_>,
 ) -> Result<Terminator, TranslationDiagnostic> {
@@ -99,11 +99,22 @@ fn lower_device_matrix_from_compiler(
     }
     lowerer.require_strict_float_policy(call.location)?;
     let _binding = lowerer.require_matrix_frontend_abi(call.location)?;
+    if lowerer
+        .locals
+        .values()
+        .any(|binding| matches!(binding, LocalBinding::DeviceMatrixValueCapability))
+    {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedCall,
+            call.location.clone(),
+            "DeviceMatrix::current may be acquired only once per kernel invocation",
+        ));
+    }
     require_shape(
         lowerer,
         call.destination,
         TrustedDeviceItem::DeviceMatrix,
-        "DeviceMatrix::from_compiler destination",
+        "DeviceMatrix::current destination",
         call.location,
     )?;
     lowerer.bind_local(
