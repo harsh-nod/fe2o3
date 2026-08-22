@@ -4,7 +4,8 @@ use std::path::Path;
 
 use fe2o3_artifact_transaction::{
     BuildAttempt, CompilerModuleHandoffErrorV2, CompilerModuleHandoffErrorV3,
-    ConsumedCompilerModuleHandoffV2, ConsumedCompilerModuleHandoffV3, ProducerIdentity,
+    CompilerModuleHandoffReceiptV3, ConsumedCompilerModuleHandoffV2,
+    ConsumedCompilerModuleHandoffV3, ProducerIdentity,
     acquire_compiler_module_handoff_currentness_lease_v3, consume_compiler_module_handoff_v2,
     consume_compiler_module_handoff_with_currentness_v3,
     recover_compiler_module_handoff_receipt_v3,
@@ -134,6 +135,41 @@ impl fmt::Display for ParentProtectedRustcInvocationCustodyErrorV3 {
 
 impl Error for ParentProtectedRustcInvocationCustodyErrorV3 {}
 
+/// Move-only result of parent-authorized current V3 consumption.
+///
+/// The exact recovered receipt remains paired with the consumed transaction so
+/// downstream worker execution never reconstructs or drops its transaction
+/// identity. This remains inert and grants no compiler or runtime authority.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct ParentConsumedCompilerModuleHandoffV3 {
+    receipt: CompilerModuleHandoffReceiptV3,
+    consumed: ConsumedCompilerModuleHandoffV3,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl ParentConsumedCompilerModuleHandoffV3 {
+    pub(crate) const fn receipt(&self) -> CompilerModuleHandoffReceiptV3 {
+        self.receipt
+    }
+
+    pub(crate) const fn consumed(&self) -> &ConsumedCompilerModuleHandoffV3 {
+        &self.consumed
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        CompilerModuleHandoffReceiptV3,
+        ConsumedCompilerModuleHandoffV3,
+    ) {
+        (self.receipt, self.consumed)
+    }
+
+    pub(crate) const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Explicit selection of the protected compiler-module transport schema.
 ///
 /// Production remains on `ProtectedV2`. `ProtectedV3` is an additive, fail-closed intake path that
@@ -182,7 +218,8 @@ impl ProtectedCompilerModuleHandoffIntake {
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         parent_custody: &ParentRustcInvocationCustody,
-    ) -> Result<ConsumedCompilerModuleHandoffV3, ProtectedCompilerModuleHandoffIntakeError> {
+    ) -> Result<ParentConsumedCompilerModuleHandoffV3, ProtectedCompilerModuleHandoffIntakeError>
+    {
         let Self::ProtectedV3 = self else {
             return Err(ProtectedCompilerModuleHandoffIntakeError::WrongSchema {
                 requested: "V3",
@@ -228,7 +265,7 @@ impl ProtectedCompilerModuleHandoffIntake {
             return Err(ProtectedCompilerModuleHandoffIntakeError::TransportBindingMismatch);
         }
         debug_assert!(!consumed.grants_compiler_authority());
-        Ok(consumed)
+        Ok(ParentConsumedCompilerModuleHandoffV3 { receipt, consumed })
     }
 }
 
@@ -623,10 +660,16 @@ mod tests {
                 CompilerModuleHandoffErrorV3::Attempt { .. }
             ))
         ));
-        assert!(
-            intake
-                .consume_v3(&directory.0, &producer, attempt, &custody)
-                .is_ok()
+        let consumed = intake
+            .consume_v3(&directory.0, &producer, attempt, &custody)
+            .unwrap();
+        assert_eq!(consumed.receipt().attempt(), attempt);
+        assert_eq!(consumed.consumed().attempt(), attempt);
+        assert!(!consumed.grants_compiler_authority());
+        let (receipt, transaction) = consumed.into_parts();
+        assert_eq!(
+            receipt.transaction_identity(),
+            transaction.transaction_identity()
         );
     }
 
