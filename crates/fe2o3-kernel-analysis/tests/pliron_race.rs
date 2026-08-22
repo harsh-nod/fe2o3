@@ -1,7 +1,7 @@
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchOp, InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
-    RankedViewType, ReturnOp, register_dialect,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, DIALECT_NAME,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, RankedRaceFindingV1, RankedRaceStatusV1,
@@ -14,6 +14,7 @@ use pliron::{
     dialect::DialectName,
     op::Op,
     r#type::TypeHandle,
+    value::Value,
 };
 
 fn setup() -> Context {
@@ -52,6 +53,32 @@ fn block(context: &mut Context, function: &FuncOp, name: &str) -> Ptr<BasicBlock
 fn view(context: &mut Context, shape: Vec<u64>, memory_space: MemorySpaceAttr) -> RankedViewOp {
     let view_type = RankedViewType::new(context, 32, true, shape).expect("ranked view type");
     RankedViewOp::new_in_space(context, view_type, vec![], memory_space).expect("ranked view")
+}
+
+fn access(
+    context: &mut Context,
+    kind: AccessKindAttr,
+    view: Value,
+    index: Value,
+) -> RankedAccessOp {
+    let atomic_ordering = match kind {
+        AccessKindAttr::AtomicRead => Some(AtomicOrderingAttr::Acquire),
+        AccessKindAttr::AtomicWrite => Some(AtomicOrderingAttr::Release),
+        AccessKindAttr::AtomicReadModifyWrite => Some(AtomicOrderingAttr::AcquireRelease),
+        AccessKindAttr::Read | AccessKindAttr::Write => None,
+    };
+    match atomic_ordering {
+        Some(ordering) => RankedAccessOp::new_atomic(
+            context,
+            kind,
+            ordering,
+            AtomicScopeAttr::Device,
+            view,
+            vec![index],
+        ),
+        None => RankedAccessOp::new(context, kind, view, vec![index]),
+    }
+    .unwrap()
 }
 
 #[test]
@@ -188,20 +215,16 @@ fn atomics_order_with_atomics_but_not_with_plain_reads_or_writes() {
         let memory = view(context, vec![1], MemorySpaceAttr::Global);
         let invocation = InvocationIndexOp::new(context, 0, 4);
         let zero = IndexConstantOp::new(context, 0);
-        let atomic = RankedAccessOp::new(
+        let atomic = RankedAccessOp::new_atomic(
             context,
             AccessKindAttr::AtomicReadModifyWrite,
+            AtomicOrderingAttr::AcquireRelease,
+            AtomicScopeAttr::Device,
             memory.result(context),
             vec![zero.result(context)],
         )
         .unwrap();
-        let other = RankedAccessOp::new(
-            context,
-            other,
-            memory.result(context),
-            vec![zero.result(context)],
-        )
-        .unwrap();
+        let other = access(context, other, memory.result(context), zero.result(context));
         let ret = ReturnOp::new(context);
         append(context, entry, &memory);
         append(context, entry, &invocation);
@@ -231,20 +254,16 @@ fn atomic_reads_share_with_plain_reads_and_all_atomic_effects() {
         let memory = view(context, vec![1], MemorySpaceAttr::Global);
         let invocation = InvocationIndexOp::new(context, 0, 4);
         let zero = IndexConstantOp::new(context, 0);
-        let atomic_read = RankedAccessOp::new(
+        let atomic_read = RankedAccessOp::new_atomic(
             context,
             AccessKindAttr::AtomicRead,
+            AtomicOrderingAttr::Acquire,
+            AtomicScopeAttr::Device,
             memory.result(context),
             vec![zero.result(context)],
         )
         .unwrap();
-        let other = RankedAccessOp::new(
-            context,
-            other,
-            memory.result(context),
-            vec![zero.result(context)],
-        )
-        .unwrap();
+        let other = access(context, other, memory.result(context), zero.result(context));
         let ret = ReturnOp::new(context);
         append(context, entry, &memory);
         append(context, entry, &invocation);

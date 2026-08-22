@@ -7,7 +7,7 @@ structured-algorithm root, it defines a bounded ranked-memory vocabulary:
   zero shape entries are runtime dimensions and nonzero entries are static.
 - `kernel.index_constant` and `kernel.dim` produce unsigned index values.
 - `kernel.access` describes a read or write with exactly one index per
-  dimension.
+  dimension. Atomic forms additionally retain explicit ordering and scope.
 - `kernel.index_lt_br`, `kernel.br`, and `kernel.return` form the closed CFG
   vocabulary used by target-neutral safety analysis.
 
@@ -19,6 +19,15 @@ read-only views. The whole-function `kernel-memory-bounds-v1` stage lives in
 `index < extent` facts across all incoming control-flow paths for dynamic
 shapes. An unproved relation is a terminal pre-lowering compile-time error with
 the exact view, dimension, index, and extent in the diagnostic.
+
+The whole-function `kernel-atomic-legality-v1` stage rejects missing or invalid
+atomic ordering/scope contracts before race analysis may treat atomic effects
+as compatible. A valid contract is still incomplete without a matching bounded
+target-capability context, and system scope additionally requires authenticated
+coherent-allocation provenance.
+The current aggregate read-modify-write effect does not encode
+compare-exchange failure ordering; source projection must leave
+compare-exchange incomplete until that exact operation contract is represented.
 
 The vocabulary and analysis do not contain GEMM names, tiles, schedules, or
 target details. The same pass covers vectors, images, tensors, volumes, and

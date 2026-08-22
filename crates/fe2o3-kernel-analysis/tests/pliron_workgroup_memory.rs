@@ -1,8 +1,8 @@
 use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
-    register_dialect,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DIALECT_NAME, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, InvocationIndexOp, MemorySpaceAttr, RankedAccessOp,
+    RankedViewOp, RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, PlironWorkgroupMemoryFindingV1,
@@ -58,7 +58,24 @@ fn access(
     view: &RankedViewOp,
     index: Value,
 ) -> RankedAccessOp {
-    RankedAccessOp::new(context, kind, view.result(context), vec![index]).unwrap()
+    let atomic_ordering = match kind {
+        AccessKindAttr::AtomicRead => Some(AtomicOrderingAttr::Acquire),
+        AccessKindAttr::AtomicWrite => Some(AtomicOrderingAttr::Release),
+        AccessKindAttr::AtomicReadModifyWrite => Some(AtomicOrderingAttr::AcquireRelease),
+        AccessKindAttr::Read | AccessKindAttr::Write => None,
+    };
+    match atomic_ordering {
+        Some(ordering) => RankedAccessOp::new_atomic(
+            context,
+            kind,
+            ordering,
+            AtomicScopeAttr::Workgroup,
+            view.result(context),
+            vec![index],
+        ),
+        None => RankedAccessOp::new(context, kind, view.result(context), vec![index]),
+    }
+    .unwrap()
 }
 
 #[test]

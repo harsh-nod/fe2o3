@@ -1,9 +1,9 @@
 use dialect_kernel::{
-    AccessKindAttr, AlgorithmOp, AlgorithmType, DIALECT_NAME, DYNAMIC_EXTENT, DimensionAttr,
-    DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexType, IterationDomainAttr,
-    KernelError, MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedMemoryError,
-    RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner,
-    StructuredAlgorithmOp, register_dialect,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr, DIALECT_NAME,
+    DYNAMIC_EXTENT, DimensionAttr, DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp,
+    IndexType, IterationDomainAttr, KernelError, MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK,
+    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, RegistrationError,
+    RegistrationOutcome, SemanticOwner, StructuredAlgorithmOp, register_dialect,
 };
 use pliron::{
     attribute::Attribute,
@@ -196,6 +196,27 @@ fn ranked_memory_local_verifiers_reject_foreign_indices_rank_mismatch_and_writes
     )
     .unwrap();
     verify_op(&read, context).unwrap();
+    assert_eq!(
+        RankedAccessOp::new(
+            context,
+            AccessKindAttr::AtomicRead,
+            view.result(context),
+            vec![index.result(context), column.result(context)],
+        )
+        .err()
+        .unwrap(),
+        RankedMemoryError::MissingAtomicContract,
+    );
+    let atomic_read = RankedAccessOp::new_atomic(
+        context,
+        AccessKindAttr::AtomicRead,
+        AtomicOrderingAttr::Acquire,
+        AtomicScopeAttr::Device,
+        view.result(context),
+        vec![index.result(context), column.result(context)],
+    )
+    .unwrap();
+    verify_op(&atomic_read, context).unwrap();
     assert_eq!(
         RankedAccessOp::new(
             context,

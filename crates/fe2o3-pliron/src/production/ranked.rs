@@ -6,17 +6,17 @@ use std::{
 
 use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, DYNAMIC_EXTENT, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchOp, IndexType, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
-    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
-    SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
-    SemanticSymbolOp,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, DYNAMIC_EXTENT, DimensionOp,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
+    RankedViewType, RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
+    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
 };
 use fe2o3_kernel_analysis::{
     GeneralPlironKernelCheckErrorV1, GeneralPlironKernelCheckReportV1, MAX_RANKED_BOUNDS_BLOCKS,
-    MAX_RANKED_BOUNDS_OPERATIONS, PlironBarrierReportV1, PlironSemanticRefinementReportV1,
-    PlironWorkgroupMemoryReportV1, RankedBoundsReportV1, RankedRaceReportV1,
-    require_general_pliron_kernel_checks_before_lowering_v1,
+    MAX_RANKED_BOUNDS_OPERATIONS, PlironAtomicLegalityReportV1, PlironBarrierReportV1,
+    PlironSemanticRefinementReportV1, PlironWorkgroupMemoryReportV1, RankedBoundsReportV1,
+    RankedRaceReportV1, require_general_pliron_kernel_checks_before_lowering_v1,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -103,6 +103,13 @@ pub enum ProductionRankedOperationV1 {
     },
     Access {
         kind: AccessKindAttr,
+        view: ProductionRankedValueV1,
+        indices: Vec<ProductionRankedValueV1>,
+    },
+    AtomicAccess {
+        kind: AccessKindAttr,
+        ordering: AtomicOrderingAttr,
+        scope: AtomicScopeAttr,
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
     },
@@ -333,6 +340,8 @@ pub enum ProductionRankedKernelErrorV1 {
         actual: usize,
     },
     WriteThroughReadOnlyView,
+    AtomicContractRequired,
+    NonAtomicKindForAtomicAccess,
     InvalidBlockTarget(u32),
     NonEntryDefinition {
         block: usize,
@@ -400,6 +409,11 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             ),
             Self::WriteThroughReadOnlyView => {
                 formatter.write_str("ranked write targets a read-only view")
+            }
+            Self::AtomicContractRequired => formatter
+                .write_str("atomic ranked access requires the explicit AtomicAccess recipe"),
+            Self::NonAtomicKindForAtomicAccess => {
+                formatter.write_str("AtomicAccess recipe requires an atomic access kind")
             }
             Self::InvalidBlockTarget(target) => {
                 write!(formatter, "ranked terminator targets absent block {target}")
@@ -594,19 +608,22 @@ fn validate_operation(
             view,
             indices,
         } => {
-            let (rank, writable) = require_view(*view, argument_count, locals)?;
-            if indices.len() != rank {
-                return Err(ProductionRankedKernelErrorV1::AccessRankMismatch {
-                    expected: rank,
-                    actual: indices.len(),
-                });
+            if kind.is_atomic() {
+                return Err(ProductionRankedKernelErrorV1::AtomicContractRequired);
             }
-            if kind.writes_memory() && !writable {
-                return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
+            validate_access(*kind, *view, indices, argument_count, locals)?;
+            Ok(None)
+        }
+        ProductionRankedOperationV1::AtomicAccess {
+            kind,
+            view,
+            indices,
+            ..
+        } => {
+            if !kind.is_atomic() {
+                return Err(ProductionRankedKernelErrorV1::NonAtomicKindForAtomicAccess);
             }
-            for index in indices {
-                require_index(*index, argument_count, locals)?;
-            }
+            validate_access(*kind, *view, indices, argument_count, locals)?;
             Ok(None)
         }
         ProductionRankedOperationV1::Barrier { .. } => Ok(None),
@@ -627,6 +644,29 @@ fn validate_operation(
             Ok(None)
         }
     }
+}
+
+fn validate_access(
+    kind: AccessKindAttr,
+    view: ProductionRankedValueV1,
+    indices: &[ProductionRankedValueV1],
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    let (rank, writable) = require_view(view, argument_count, locals)?;
+    if indices.len() != rank {
+        return Err(ProductionRankedKernelErrorV1::AccessRankMismatch {
+            expected: rank,
+            actual: indices.len(),
+        });
+    }
+    if kind.writes_memory() && !writable {
+        return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
+    }
+    for index in indices {
+        require_index(*index, argument_count, locals)?;
+    }
+    Ok(())
 }
 
 fn validate_terminator(
@@ -981,11 +1021,18 @@ impl ProductionPlironSessionV1 {
                 ),
             ));
         }
-        let (bounds_report, race_report, barrier_report, workgroup_report, semantic_report) =
-            report.into_parts();
+        let (
+            bounds_report,
+            atomic_report,
+            race_report,
+            barrier_report,
+            workgroup_report,
+            semantic_report,
+        ) = report.into_parts();
         Ok(ProductionRankedKernelLoweringInputV1 {
             kernel,
             bounds_report,
+            atomic_report,
             race_report,
             barrier_report,
             workgroup_report,
@@ -1003,6 +1050,9 @@ fn production_general_check_error(
     match error {
         GeneralPlironKernelCheckErrorV1::Bounds(error) => {
             ProductionSessionErrorV1::RankedBounds(error)
+        }
+        GeneralPlironKernelCheckErrorV1::Atomic(error) => {
+            ProductionSessionErrorV1::RankedAtomic(error)
         }
         GeneralPlironKernelCheckErrorV1::Race(error) => ProductionSessionErrorV1::RankedRace(error),
         GeneralPlironKernelCheckErrorV1::Barrier(error) => {
@@ -1157,6 +1207,32 @@ fn materialize_operation(
             })?;
             (op.get_operation(), None)
         }
+        ProductionRankedOperationV1::AtomicAccess {
+            kind,
+            ordering,
+            scope,
+            view,
+            indices,
+        } => {
+            let indices = indices
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals))
+                .collect::<Result<Vec<_>, _>>()?;
+            let op = RankedAccessOp::new_atomic(
+                context,
+                *kind,
+                *ordering,
+                *scope,
+                resolve_value(*view, arguments, locals)?,
+                indices,
+            )
+            .map_err(|_| {
+                ProductionRankedKernelErrorV1::Materialization(
+                    "validated ranked atomic access failed materialization",
+                )
+            })?;
+            (op.get_operation(), None)
+        }
         ProductionRankedOperationV1::Barrier {
             execution_scope,
             memory_scope,
@@ -1265,6 +1341,7 @@ fn materialize_terminator(
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
     bounds_report: RankedBoundsReportV1,
+    atomic_report: PlironAtomicLegalityReportV1,
     race_report: RankedRaceReportV1,
     barrier_report: PlironBarrierReportV1,
     workgroup_report: PlironWorkgroupMemoryReportV1,
@@ -1292,6 +1369,10 @@ impl ProductionRankedKernelLoweringInputV1 {
 
     pub const fn bounds_report(&self) -> &RankedBoundsReportV1 {
         &self.bounds_report
+    }
+
+    pub const fn atomic_report(&self) -> &PlironAtomicLegalityReportV1 {
+        &self.atomic_report
     }
 
     pub const fn race_report(&self) -> &RankedRaceReportV1 {

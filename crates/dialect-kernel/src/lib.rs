@@ -33,11 +33,11 @@ mod ranked_memory;
 mod semantic_contract;
 
 pub use ranked_memory::{
-    AccessKindAttr, BranchOp, DYNAMIC_EXTENT, DimensionAttr, DimensionOp, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr,
-    InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr, MAX_RANKED_MEMORY_RANK,
-    MemorySpaceAttr, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
-    SUPPORTED_ELEMENT_WIDTHS, is_index_type, ranked_view_type,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, DYNAMIC_EXTENT, DimensionAttr,
+    DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
+    IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr,
+    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedMemoryError, RankedViewOp,
+    RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, is_index_type, ranked_view_type,
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
@@ -370,6 +370,8 @@ pub fn register_dialect(
     <IndexValueAttr as Attribute>::register::<IndexValueAttr>(context);
     <DimensionAttr as Attribute>::register::<DimensionAttr>(context);
     <AccessKindAttr as Attribute>::register::<AccessKindAttr>(context);
+    <AtomicOrderingAttr as Attribute>::register::<AtomicOrderingAttr>(context);
+    <AtomicScopeAttr as Attribute>::register::<AtomicScopeAttr>(context);
     <MemorySpaceAttr as Attribute>::register::<MemorySpaceAttr>(context);
     <InvocationDimensionAttr as Attribute>::register::<InvocationDimensionAttr>(context);
     <LaunchExtentAttr as Attribute>::register::<LaunchExtentAttr>(context);

@@ -222,6 +222,7 @@ pub enum ProductionSessionErrorV1 {
     RankedGraphChanged,
     RankedRecipe(ProductionRankedKernelErrorV1),
     RankedBounds(fe2o3_kernel_analysis::RankedBoundsCheckErrorV1),
+    RankedAtomic(fe2o3_kernel_analysis::PlironAtomicLegalityCheckErrorV1),
     RankedRace(fe2o3_kernel_analysis::RankedRaceCheckErrorV1),
     RankedBarrier(fe2o3_kernel_analysis::PlironBarrierCheckErrorV1),
     RankedWorkgroup(fe2o3_kernel_analysis::PlironWorkgroupMemoryCheckErrorV1),
@@ -262,6 +263,7 @@ impl fmt::Display for ProductionSessionErrorV1 {
                 write!(formatter, "production ranked recipe failed: {error}")
             }
             Self::RankedBounds(error) => error.fmt(formatter),
+            Self::RankedAtomic(error) => error.fmt(formatter),
             Self::RankedRace(error) => error.fmt(formatter),
             Self::RankedBarrier(error) => error.fmt(formatter),
             Self::RankedWorkgroup(error) => error.fmt(formatter),
@@ -277,6 +279,7 @@ impl Error for ProductionSessionErrorV1 {
             Self::Operation(error) => Some(error),
             Self::RankedRecipe(error) => Some(error),
             Self::RankedBounds(error) => Some(error),
+            Self::RankedAtomic(error) => Some(error),
             Self::RankedRace(error) => Some(error),
             Self::RankedBarrier(error) => Some(error),
             Self::RankedWorkgroup(error) => Some(error),

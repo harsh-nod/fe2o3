@@ -1,5 +1,7 @@
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
-use dialect_kernel::{AccessKindAttr, MemorySpaceAttr, SemanticBinaryKindAttr};
+use dialect_kernel::{
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr, SemanticBinaryKindAttr,
+};
 use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
     ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
@@ -104,6 +106,7 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
 
     assert_eq!(input.kernel().function_name(), "static_copy");
     assert!(input.bounds_report().is_clean());
+    assert!(input.atomic_report().is_clean());
     assert!(input.race_report().is_clean());
     assert!(!input.race_report().grants_compiler_refinement_authority());
     assert!(input.barrier_report().is_clean());
@@ -111,6 +114,81 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
     assert!(input.semantic_report().is_clean());
     assert!(!input.bounds_report().grants_compiler_refinement_authority());
     assert!(!input.grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn production_atomic_recipe_retains_its_contract_and_fails_closed_without_target_context() {
+    let legacy = ProductionRankedKernelV1::new(
+        "legacy_atomic",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: VIEW,
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![1],
+                    dynamic_extents: vec![],
+                    memory_space: MemorySpaceAttr::Global,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: INDEX,
+                    value: 0,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::AtomicWrite,
+                    view: local(VIEW),
+                    indices: vec![local(INDEX)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    );
+    assert_eq!(
+        legacy,
+        Err(ProductionRankedKernelErrorV1::AtomicContractRequired)
+    );
+
+    let kernel = ProductionRankedKernelV1::new(
+        "explicit_atomic",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: VIEW,
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![1],
+                    dynamic_extents: vec![],
+                    memory_space: MemorySpaceAttr::Global,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: INDEX,
+                    value: 0,
+                },
+                ProductionRankedOperationV1::AtomicAccess {
+                    kind: AccessKindAttr::AtomicWrite,
+                    ordering: AtomicOrderingAttr::Release,
+                    scope: AtomicScopeAttr::Device,
+                    view: local(VIEW),
+                    indices: vec![local(INDEX)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("explicit atomic contract is a valid production recipe");
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedAtomic(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-ATOMIC-002]"));
+    assert!(error.to_string().contains("no bound target capability"));
 }
 
 #[test]

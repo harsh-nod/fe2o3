@@ -11,6 +11,7 @@ mod kernel_check_pipeline;
 mod machine_effect;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_effect;
+mod pliron_atomic_legality;
 mod pliron_barrier;
 mod pliron_invocation_trace;
 mod pliron_pipeline;
@@ -39,6 +40,7 @@ pub use kernel_check_pipeline::*;
 pub use machine_effect::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_effect::*;
+pub use pliron_atomic_legality::*;
 pub use pliron_barrier::*;
 pub use pliron_pipeline::*;
 pub use pliron_race::*;

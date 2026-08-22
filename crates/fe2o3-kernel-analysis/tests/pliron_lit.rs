@@ -1,9 +1,11 @@
 use std::{fs, path::Path};
 
-use dialect_kernel::{DIALECT_NAME, register_dialect};
+use dialect_kernel::{AtomicScopeAttr, DIALECT_NAME, MemorySpaceAttr, register_dialect};
 use fe2o3_kernel_analysis::{
     GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1, KernelCheckPassKindV1,
+    PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1,
     require_general_pliron_kernel_checks_before_lowering_v1,
+    require_general_pliron_kernel_checks_with_atomic_target_before_lowering_v1,
 };
 use pliron::{
     builtin::ops::FuncOp,
@@ -29,7 +31,7 @@ fn textual_pliron_lit_suite() {
         .collect::<Vec<_>>();
     fixtures.sort();
     assert!(
-        fixtures.len() >= 19,
+        fixtures.len() >= 26,
         "generic kernel-check lit suite unexpectedly shrank"
     );
     for fixture in fixtures {
@@ -82,7 +84,20 @@ fn run_fixture(path: &Path) {
         .unwrap_or_else(|error| panic!("{} failed local verification: {error:?}", path.display()));
     assert!(Operation::is_op::<FuncOp>(operation, &context));
     let function = FuncOp::from_operation(operation);
-    let result = require_general_pliron_kernel_checks_before_lowering_v1(&context, &function);
+    let capabilities = source
+        .lines()
+        .filter_map(|line| line.strip_prefix("// ATOMIC-CAPABILITY: "))
+        .map(parse_atomic_capability)
+        .collect::<Vec<_>>();
+    let atomic_target = (!capabilities.is_empty()).then(|| {
+        PlironAtomicTargetContextV1::new(capabilities).expect("valid bounded atomic target context")
+    });
+    let result = match atomic_target.as_ref() {
+        Some(target) => require_general_pliron_kernel_checks_with_atomic_target_before_lowering_v1(
+            &context, &function, target,
+        ),
+        None => require_general_pliron_kernel_checks_before_lowering_v1(&context, &function),
+    };
     let output = match result {
         Ok(report) => {
             assert!(report.is_clean());
@@ -111,6 +126,7 @@ fn lit_pipeline_uses_the_fixed_workload_neutral_pass_order() {
         GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1,
         [
             KernelCheckPassKindV1::MemoryBounds,
+            KernelCheckPassKindV1::AtomicLegality,
             KernelCheckPassKindV1::RaceFreedom,
             KernelCheckPassKindV1::BarrierConvergence,
             KernelCheckPassKindV1::WorkgroupMemory,
@@ -122,6 +138,25 @@ fn lit_pipeline_uses_the_fixed_workload_neutral_pass_order() {
             .iter()
             .all(|pass| !pass.name().contains("gemm"))
     );
+}
+
+fn parse_atomic_capability(source: &str) -> PlironAtomicTargetCapabilityV1 {
+    let fields = source.split_ascii_whitespace().collect::<Vec<_>>();
+    assert_eq!(fields.len(), 3, "malformed ATOMIC-CAPABILITY directive");
+    let width = fields[0].parse::<u32>().expect("atomic capability width");
+    let memory_space = match fields[1] {
+        "Global" => MemorySpaceAttr::Global,
+        "Workgroup" => MemorySpaceAttr::Workgroup,
+        other => panic!("unsupported atomic capability memory space {other}"),
+    };
+    let max_scope = match fields[2] {
+        "Workgroup" => AtomicScopeAttr::Workgroup,
+        "Device" => AtomicScopeAttr::Device,
+        "System" => AtomicScopeAttr::System,
+        other => panic!("unsupported atomic capability scope {other}"),
+    };
+    PlironAtomicTargetCapabilityV1::new(width, memory_space, max_scope)
+        .expect("valid atomic capability")
 }
 
 fn result_is_rejected(output: &str) -> bool {

@@ -32,6 +32,15 @@ bounds, malformed CFG, and resource-limit failures are errors and cannot fall
 back to unchecked lowering. The Kernel IR runner and Pliron function stage are
 both closed and do not accept caller-registered executable passes.
 
+The ranked Pliron path has its own fixed workload-neutral suffix:
+`memory-bounds -> atomic-legality -> race-freedom -> barrier-convergence ->
+workgroup-memory -> semantic-refinement`. Atomic legality runs before race
+analysis because race analysis may classify two atomic effects as compatible
+only after explicit ordering, scope, memory-space, and target-capability
+requirements have been checked. Missing or invalid ordering/scope is
+`Rejected`; an absent matching target capability or unauthenticated
+system-coherent allocation is `Incomplete`.
+
 ## Fixed Pass Order
 
 `fe2o3-kernel-analysis::GENERAL_KERNEL_CHECK_PASS_ORDER_V1` defines the only V1
@@ -86,6 +95,7 @@ what GEMM, softmax, attention, or convolution means:
 | Existing failure class | General owner |
 |---|---|
 | out-of-bounds loads/stores | memory-bounds pass plus a frontend-supplied dimensional description |
+| invalid atomic ordering/scope or unsupported atomic target requirement | atomic-legality pass plus target/coherence admission |
 | duplicate lane/workgroup writes and LDS write conflicts | race-freedom pass |
 | missing publish, read-before-wait, or stale/reused LDS data | workgroup-memory pass |
 | divergent barriers | barrier-convergence pass |

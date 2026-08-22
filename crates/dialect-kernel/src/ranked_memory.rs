@@ -39,6 +39,8 @@ pub enum RankedMemoryError {
     ForeignIndexType { operand: usize },
     DimensionOutOfBounds { dimension: u32, rank: usize },
     WriteThroughReadOnlyView,
+    MissingAtomicContract,
+    UnexpectedAtomicContract,
     MalformedPayload(&'static str),
 }
 
@@ -73,6 +75,12 @@ impl fmt::Display for RankedMemoryError {
             ),
             Self::WriteThroughReadOnlyView => {
                 formatter.write_str("write access uses a read-only ranked view")
+            }
+            Self::MissingAtomicContract => {
+                formatter.write_str("atomic access requires explicit ordering and scope")
+            }
+            Self::UnexpectedAtomicContract => {
+                formatter.write_str("non-atomic access cannot carry an atomic contract")
             }
             Self::MalformedPayload(message) => formatter.write_str(message),
         }
@@ -200,6 +208,36 @@ pub enum AccessKindAttr {
     AtomicReadModifyWrite,
 }
 
+/// Ordering requested by one target-neutral atomic access.
+#[pliron_attr(name = "kernel.atomic_ordering", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AtomicOrderingAttr {
+    Relaxed,
+    Acquire,
+    Release,
+    AcquireRelease,
+    SequentiallyConsistent,
+}
+
+/// Visibility scope requested by one target-neutral atomic access.
+#[pliron_attr(name = "kernel.atomic_scope", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AtomicScopeAttr {
+    Workgroup,
+    Device,
+    System,
+}
+
+impl AtomicScopeAttr {
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Workgroup => 1,
+            Self::Device => 2,
+            Self::System => 3,
+        }
+    }
+}
+
 impl AccessKindAttr {
     pub const fn is_atomic(self) -> bool {
         matches!(
@@ -225,7 +263,7 @@ impl AccessKindAttr {
 
 /// Storage domain used by the target-neutral concurrent-effect analyses.
 #[pliron_attr(name = "kernel.memory_space", format, verifier = "succ")]
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MemorySpaceAttr {
     Private,
     Workgroup,
@@ -638,7 +676,11 @@ impl Verify for DimensionOp {
     name = "kernel.access",
     format,
     interfaces = [NResultsInterface<0>, NRegionsInterface<0>],
-    attributes = (kernel_access_kind: AccessKindAttr)
+    attributes = (
+        kernel_access_kind: AccessKindAttr,
+        kernel_atomic_ordering: AtomicOrderingAttr,
+        kernel_atomic_scope: AtomicScopeAttr
+    )
 )]
 pub struct RankedAccessOp;
 
@@ -646,6 +688,34 @@ impl RankedAccessOp {
     pub fn new(
         context: &mut Context,
         kind: AccessKindAttr,
+        view: Value,
+        indices: Vec<Value>,
+    ) -> Result<Self, RankedMemoryError> {
+        if kind.is_atomic() {
+            return Err(RankedMemoryError::MissingAtomicContract);
+        }
+        Self::build(context, kind, None, None, view, indices)
+    }
+
+    pub fn new_atomic(
+        context: &mut Context,
+        kind: AccessKindAttr,
+        ordering: AtomicOrderingAttr,
+        scope: AtomicScopeAttr,
+        view: Value,
+        indices: Vec<Value>,
+    ) -> Result<Self, RankedMemoryError> {
+        if !kind.is_atomic() {
+            return Err(RankedMemoryError::UnexpectedAtomicContract);
+        }
+        Self::build(context, kind, Some(ordering), Some(scope), view, indices)
+    }
+
+    fn build(
+        context: &mut Context,
+        kind: AccessKindAttr,
+        ordering: Option<AtomicOrderingAttr>,
+        scope: Option<AtomicScopeAttr>,
         view: Value,
         indices: Vec<Value>,
     ) -> Result<Self, RankedMemoryError> {
@@ -677,6 +747,12 @@ impl RankedAccessOp {
         );
         let op = Self::from_operation(operation);
         op.set_attr_kernel_access_kind(context, kind);
+        if let Some(ordering) = ordering {
+            op.set_attr_kernel_atomic_ordering(context, ordering);
+        }
+        if let Some(scope) = scope {
+            op.set_attr_kernel_atomic_scope(context, scope);
+        }
         Ok(op)
     }
 
@@ -686,6 +762,16 @@ impl RankedAccessOp {
 
     pub fn view(&self, context: &Context) -> Value {
         self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn atomic_ordering(&self, context: &Context) -> Option<AtomicOrderingAttr> {
+        self.get_attr_kernel_atomic_ordering(context)
+            .map(|ordering| *ordering)
+    }
+
+    pub fn atomic_scope(&self, context: &Context) -> Option<AtomicScopeAttr> {
+        self.get_attr_kernel_atomic_scope(context)
+            .map(|scope| *scope)
     }
 
     pub fn indices(&self, context: &Context) -> Vec<Value> {
@@ -703,7 +789,7 @@ impl Verify for RankedAccessOp {
         let operation = self.get_operation();
         let operation = operation.deref(context);
         if operation.get_num_operands() == 0
-            || payload_attribute_count(&operation) != 1
+            || !(1..=3).contains(&payload_attribute_count(&operation))
             || self.kind(context).is_none()
         {
             return verify_err!(
@@ -936,6 +1022,8 @@ fn verify_no_regions_results_successors(
                 "kernel_index_value"
                     | "kernel_dimension"
                     | "kernel_access_kind"
+                    | "kernel_atomic_ordering"
+                    | "kernel_atomic_scope"
                     | "kernel_memory_space"
                     | "kernel_invocation_dimension"
                     | "kernel_launch_extent"
