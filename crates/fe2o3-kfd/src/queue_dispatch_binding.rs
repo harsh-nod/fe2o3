@@ -10,7 +10,9 @@
 use core::fmt;
 
 use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
-use fe2o3_aql::{AQL_MAX_BATCH_PACKETS_V1, AqlDispatchGeometryV1, ObservedGpuAddressV1};
+use fe2o3_aql::{
+    AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlRingCapacityV1, ObservedGpuAddressV1,
+};
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 use sha2::{Digest, Sha256};
 
@@ -32,12 +34,12 @@ const KERNEL_DESCRIPTOR_BYTES_V1: u64 = 64;
 
 /// Frozen claim boundary for the private dispatch-binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r2-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r3-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=validated-amdhsa-kernel-envelope,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=private-typed-complete-image,exact-selected-size-and-power-of-two-alignment,checked-nonoverlapping-8-byte-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,initialized-before-map\n",
     "data=1-through-16-actual-linear-c3-mapped-device-memory-leases,exact-device-vm-generation-and-whole-allocation-nonalias,checked-valid-byte-extents,write-only-until-authenticated-copy-completion-authority-exists,declared-effects-retained\n",
-    "batch=1-through-256,one-code-owner,N-distinct-kernarg-owners,one-generation-bound-private-template-per-packet,C2-one-reservation-one-doorbell-and-C4-one-signal-per-packet-composition\n",
+    "batch=1-through-1024,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,one-code-owner,N-distinct-kernarg-owners,one-generation-bound-private-template-per-packet,C2-one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-C4-one-signal-per-packet-composition\n",
     "retention=queue-owns-code-kernarg-and-device-leases-through-exact-C4-ready-and-recycle,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-c3-authorities-with-owning-memory-session\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
     "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
@@ -49,7 +51,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "5f94ed69091dac7d1f405b4be9fa313878c6e9d1d0ee4783559ad4625db84d66";
+    "fe557859565195a4f24fb4e9689015c8845501afbdf2baddd3bd4415b1bda054";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -193,6 +195,7 @@ impl DispatchGeometryV1 {
 pub enum Gfx942DispatchBindingErrorV1 {
     ZeroPacketCount,
     PacketCountExceedsMaximum { requested: usize, maximum: usize },
+    RingCapacity { requested: usize, capacity: u32 },
     DataLeaseCount { requested: usize, maximum: usize },
     InvalidCode(&'static str),
     InvalidKernarg { packet: usize, detail: &'static str },
@@ -874,10 +877,29 @@ fn validate_packet_count<const N: usize>() -> Result<(), Gfx942DispatchBindingEr
     if N == 0 {
         return Err(Gfx942DispatchBindingErrorV1::ZeroPacketCount);
     }
-    if N > AQL_MAX_BATCH_PACKETS_V1 as usize {
+    if N > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
         return Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum {
             requested: N,
-            maximum: AQL_MAX_BATCH_PACKETS_V1 as usize,
+            maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize,
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn validate_fixed_batch_ring<const N: usize>(
+    ring_bytes: u32,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    validate_packet_count::<N>()?;
+    let capacity = AqlRingCapacityV1::from_ring_bytes(ring_bytes)
+        .map_err(|_| Gfx942DispatchBindingErrorV1::RingCapacity {
+            requested: N,
+            capacity: 0,
+        })?
+        .packets();
+    if N > capacity as usize {
+        return Err(Gfx942DispatchBindingErrorV1::RingCapacity {
+            requested: N,
+            capacity,
         });
     }
     Ok(())
@@ -1085,9 +1107,9 @@ mod tests {
             "ZeroPacketCount"
         );
         assert!(validate_packet_count::<1>().is_ok());
-        assert!(validate_packet_count::<256>().is_ok());
+        assert!(validate_packet_count::<1024>().is_ok());
         assert!(matches!(
-            validate_packet_count::<257>(),
+            validate_packet_count::<1025>(),
             Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum { .. })
         ));
         assert!(matches!(
@@ -1104,6 +1126,23 @@ mod tests {
         assert!(matches!(
             validate_data_inputs(&seventeen),
             Err(Gfx942DispatchBindingErrorV1::DataLeaseCount { .. })
+        ));
+    }
+
+    #[test]
+    fn fixed_batch_ring_must_cover_every_packet_before_native_preparation() {
+        assert!(validate_fixed_batch_ring::<768>(65_536).is_ok());
+        assert!(validate_fixed_batch_ring::<1024>(65_536).is_ok());
+        assert!(matches!(
+            validate_fixed_batch_ring::<1024>(32_768),
+            Err(Gfx942DispatchBindingErrorV1::RingCapacity {
+                requested: 1024,
+                capacity: 512,
+            })
+        ));
+        assert!(matches!(
+            validate_fixed_batch_ring::<1025>(131_072),
+            Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum { .. })
         ));
     }
 

@@ -9,26 +9,27 @@
 use core::fmt;
 
 use fe2o3_aql::{
-    AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AQL_MAX_BATCH_PACKETS_V1,
+    AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
     AmdBusyCompletionSignalV1, AqlCompletionObservationV1, AqlDispatchGeometryV1,
     AqlDispatchPacketError, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchErrorV1,
-    AqlPreparedKernelDispatchBatchV1, AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
+    AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
 };
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 
 use crate::shared_memory::SharedGttMappedResourceFactsV1;
 
-pub(crate) const COMPLETION_SIGNAL_CAPACITY_V1: usize = AQL_MAX_BATCH_PACKETS_V1 as usize;
+pub(crate) const COMPLETION_SIGNAL_CAPACITY_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
 pub(crate) const COMPLETION_SIGNAL_ARENA_BYTES_V1: usize =
     COMPLETION_SIGNAL_CAPACITY_V1 * AMD_SIGNAL_BYTES_V1;
 pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r2-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r3-v1\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
-    "arena=one-host-visible-coherent-gtt-allocation,16384-bytes,256-distinct-64-byte-aligned-user-signals\n",
-    "batch=1-through-256,one-unique-signal-per-packet,no-aggregate-alias\n",
+    "aql_fixed_batch_schema_sha256=3d8376174a564eaee500ad8849d8bf3a1a38d56f9e5bc50bf60aea408b25bf1d\n",
+    "arena=one-host-visible-coherent-gtt-allocation,65536-bytes,1024-distinct-64-byte-aligned-user-signals\n",
+    "batch=1-through-1024,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
     "binding=crate-private-packet-construction,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
     "observation=bounded-busy-poll,atomic-i64-acquire,all-signals-zero-before-ready,unexpected-value-is-fault\n",
@@ -41,7 +42,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "be1bdd6a05d19f0d269f7e72d6ade2b7918157bfebad2b01466a600f24a22c47";
+    "406f1f2f3e93eb4704fba3b5ead0d0d05639991949baff4ad3a0360c343fb7a4";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -99,6 +100,25 @@ pub(crate) struct CompletionPacketTemplateV1 {
     generations: CompletionDispatchGenerationBindingV1,
 }
 
+struct CompletionPacketTemplatesV1<const N: usize> {
+    values: Box<[CompletionPacketTemplateV1; N]>,
+}
+
+impl<const N: usize> CompletionPacketTemplatesV1<N> {
+    fn from_array(values: [CompletionPacketTemplateV1; N]) -> Self {
+        Self {
+            values: Box::new(values),
+        }
+    }
+
+    #[cfg(test)]
+    fn try_from_vec(values: Vec<CompletionPacketTemplateV1>) -> Result<Self, ()> {
+        Ok(Self {
+            values: values.into_boxed_slice().try_into().map_err(|_| ())?,
+        })
+    }
+}
+
 impl CompletionPacketTemplateV1 {
     #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) const fn new(
@@ -133,13 +153,13 @@ pub(super) struct CompletionBatchRetentionV1<const N: usize> {
     batch_id: u64,
     queue: QueueKeyV1,
     signal_mapping: MemoryMappingKeyV1,
-    slots: [CompletionSlotLeaseV1; N],
-    dispatches: [CompletionDispatchGenerationBindingV1; N],
+    slots: Box<[CompletionSlotLeaseV1; N]>,
+    dispatches: Box<[CompletionDispatchGenerationBindingV1; N]>,
     last_packet_id: Option<u64>,
 }
 
 pub(super) struct BoundCompletionBatchV1<const N: usize> {
-    packets: AqlPreparedKernelDispatchBatchV1<N>,
+    packets: AqlPreparedKernelDispatchBatchV2<N>,
     retention: CompletionBatchRetentionV1<N>,
 }
 
@@ -147,7 +167,7 @@ impl<const N: usize> BoundCompletionBatchV1<N> {
     pub(super) fn into_parts(
         self,
     ) -> (
-        AqlPreparedKernelDispatchBatchV1<N>,
+        AqlPreparedKernelDispatchBatchV2<N>,
         CompletionBatchRetentionV1<N>,
     ) {
         (self.packets, self.retention)
@@ -319,6 +339,13 @@ impl CompletionSignalArenaOwnerV1 {
         &mut self,
         templates: [CompletionPacketTemplateV1; N],
     ) -> Result<BoundCompletionBatchV1<N>, Gfx942CompletionErrorV1> {
+        self.bind_fixed_batch(CompletionPacketTemplatesV1::from_array(templates))
+    }
+
+    fn bind_fixed_batch<const N: usize>(
+        &mut self,
+        templates: CompletionPacketTemplatesV1<N>,
+    ) -> Result<BoundCompletionBatchV1<N>, Gfx942CompletionErrorV1> {
         self.require_ready()?;
         validate_packet_count::<N>()?;
         let next_batch_id = self
@@ -339,7 +366,7 @@ impl CompletionSignalArenaOwnerV1 {
         }
 
         let mut prepared = Vec::<AqlPreparedKernelDispatchV1>::with_capacity(N);
-        for (template, slot_index) in templates.iter().zip(&available) {
+        for (template, slot_index) in templates.values.iter().zip(&available) {
             self.validate_dispatch_binding(template.generations)?;
             let offset = u64::try_from(*slot_index)
                 .ok()
@@ -368,24 +395,35 @@ impl CompletionSignalArenaOwnerV1 {
                 .map_err(Gfx942CompletionErrorV1::PacketBinding)?,
             );
         }
-        let packets: [AqlPreparedKernelDispatchV1; N] = prepared
+        let packets: Box<[AqlPreparedKernelDispatchV1; N]> = prepared
+            .into_boxed_slice()
             .try_into()
             .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("packet array conversion"))?;
-        let packets = AqlPreparedKernelDispatchBatchV1::try_from_packets(packets)
+        let packets = AqlPreparedKernelDispatchBatchV2::try_from_boxed_packets(packets)
             .map_err(Gfx942CompletionErrorV1::BatchConstruction)?;
-        let slots = core::array::from_fn(|batch_index| {
-            let index = available[batch_index];
-            CompletionSlotLeaseV1 {
-                index: index as u32,
-                generation: self.slots[index].generation,
-            }
-        });
-        for slot in &slots {
+        let slots: Box<[CompletionSlotLeaseV1; N]> = available
+            .iter()
+            .map(|index| CompletionSlotLeaseV1 {
+                index: *index as u32,
+                generation: self.slots[*index].generation,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+            .try_into()
+            .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("slot array conversion"))?;
+        for slot in slots.iter() {
             self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Bound {
                 batch_id: self.next_batch_id,
             };
         }
-        let dispatches = templates.map(|template| template.generations);
+        let dispatches: Box<[CompletionDispatchGenerationBindingV1; N]> = templates
+            .values
+            .iter()
+            .map(|template| template.generations)
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+            .try_into()
+            .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("dispatch array conversion"))?;
         let retention = CompletionBatchRetentionV1 {
             batch_id: self.next_batch_id,
             queue: self.queue,
@@ -415,7 +453,7 @@ impl CompletionSignalArenaOwnerV1 {
         retention: CompletionBatchRetentionV1<N>,
     ) -> Result<(), Gfx942CompletionErrorV1> {
         self.validate_bound(&retention)?;
-        for slot in retention.slots {
+        for slot in retention.slots.iter() {
             self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Available;
         }
         Ok(())
@@ -427,7 +465,7 @@ impl CompletionSignalArenaOwnerV1 {
         last_packet_id: u64,
     ) -> Result<Gfx942CompletionBatchV1<N>, Gfx942CompletionErrorV1> {
         self.validate_bound(&retention)?;
-        for slot in retention.slots {
+        for slot in retention.slots.iter() {
             self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Published {
                 batch_id: retention.batch_id,
             };
@@ -445,7 +483,7 @@ impl CompletionSignalArenaOwnerV1 {
         self.validate_published(&batch.retention)?;
         self.checked_currentness(backend)?;
         let mut pending = false;
-        for slot in &batch.retention.slots {
+        for slot in batch.retention.slots.iter() {
             let observation = match backend.observe_acquire(slot.index) {
                 Ok(observation) => observation,
                 Err(_) => return self.poison(Gfx942CompletionErrorV1::Observation),
@@ -465,7 +503,7 @@ impl CompletionSignalArenaOwnerV1 {
         if pending {
             return Ok(Gfx942CompletionPollV1::Pending(batch));
         }
-        for slot in &batch.retention.slots {
+        for slot in batch.retention.slots.iter() {
             self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Completed {
                 batch_id: batch.retention.batch_id,
             };
@@ -515,13 +553,13 @@ impl CompletionSignalArenaOwnerV1 {
             return self.poison(Gfx942CompletionErrorV1::SignalGenerationExhausted);
         }
         self.checked_currentness(backend)?;
-        for slot in &completed.retention.slots {
+        for slot in completed.retention.slots.iter() {
             if backend.reset_pending_release(slot.index).is_err() {
                 return self.poison(Gfx942CompletionErrorV1::Recycle);
             }
         }
         self.checked_currentness(backend)?;
-        for slot in completed.retention.slots {
+        for slot in completed.retention.slots.iter() {
             let record = &mut self.slots[slot.index as usize];
             record.generation += 1;
             record.phase = CompletionSlotPhaseV1::Available;
@@ -874,7 +912,7 @@ mod tests {
 
     #[test]
     fn boundary_batches_bind_distinct_wrap_free_signal_slots() {
-        for count in [1_usize, 2, 4, 16, 256] {
+        for count in [1_usize, 2, 4, 16, 256, 1024] {
             let mut owner = owner();
             let templates: Vec<_> = (0..count).map(|index| template(index as u64)).collect();
             match count {
@@ -893,6 +931,11 @@ mod tests {
                     let values: [CompletionPacketTemplateV1; 256] = templates.try_into().unwrap();
                     assert!(owner.bind_batch(values).is_ok());
                 }
+                1024 => {
+                    let values: CompletionPacketTemplatesV1<1024> =
+                        CompletionPacketTemplatesV1::try_from_vec(templates).unwrap();
+                    assert!(owner.bind_fixed_batch(values).is_ok());
+                }
                 _ => unreachable!(),
             }
         }
@@ -902,10 +945,13 @@ mod tests {
             Err(Gfx942CompletionErrorV1::ZeroPacketCount)
         ));
         let mut over = owner();
-        let over_values: [CompletionPacketTemplateV1; 257] =
-            core::array::from_fn(|index| template(index as u64));
+        let over_values: CompletionPacketTemplatesV1<1025> =
+            CompletionPacketTemplatesV1::try_from_vec(
+                (0..1025).map(|index| template(index as u64)).collect(),
+            )
+            .unwrap();
         assert!(matches!(
-            over.bind_batch(over_values),
+            over.bind_fixed_batch(over_values),
             Err(Gfx942CompletionErrorV1::PacketCountExceedsMaximum { .. })
         ));
 
@@ -1105,9 +1151,11 @@ mod tests {
     #[test]
     fn capacity_and_identity_exhaustion_are_preflighted() {
         let mut full = owner();
-        let all: [CompletionPacketTemplateV1; 256] =
-            core::array::from_fn(|index| template(index as u64));
-        assert!(full.bind_batch(all).is_ok());
+        let all: CompletionPacketTemplatesV1<1024> = CompletionPacketTemplatesV1::try_from_vec(
+            (0..1024).map(|index| template(index as u64)).collect(),
+        )
+        .unwrap();
+        assert!(full.bind_fixed_batch(all).is_ok());
         assert!(matches!(
             full.bind_batch([template(300)]),
             Err(Gfx942CompletionErrorV1::InsufficientSignals)

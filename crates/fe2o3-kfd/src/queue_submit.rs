@@ -13,7 +13,7 @@ use core::sync::atomic::{Ordering, fence};
 
 use fe2o3_aql::{
     AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlKernelDispatchPacketV1,
-    AqlPacketBatchPublicationTargetV1, AqlPreparedKernelDispatchBatchV1, AqlRingBatchReservationV1,
+    AqlPacketBatchPublicationTargetV1, AqlPreparedKernelDispatchBatchV2, AqlRingBatchReservationV1,
     AqlRingCapacityV1, AqlRingReservationError, AqlSingleProducerRingModelV1,
 };
 use fe2o3_kfd_uapi::{
@@ -92,12 +92,12 @@ impl NativeAqlSubmissionOwnerV1 {
         packet: AqlPreparedKernelDispatchV1,
         backend: &mut B,
     ) -> Result<u64, NativeAqlSubmissionErrorV1> {
-        self.submit_batch(AqlPreparedKernelDispatchBatchV1::one(packet), backend)
+        self.submit_batch(AqlPreparedKernelDispatchBatchV2::one(packet), backend)
     }
 
     pub(super) fn submit_batch<const N: usize, B: NativeAqlSubmissionBackendV1>(
         &mut self,
-        batch: AqlPreparedKernelDispatchBatchV1<N>,
+        batch: AqlPreparedKernelDispatchBatchV2<N>,
         backend: &mut B,
     ) -> Result<u64, NativeAqlSubmissionErrorV1> {
         if self.phase != SubmissionPhaseV1::Ready {
@@ -130,7 +130,10 @@ impl NativeAqlSubmissionOwnerV1 {
             self.phase = SubmissionPhaseV1::Poisoned;
             return Err(error);
         }
-        let reservation = match self.ring.reserve_batch(observed_read, batch.packet_count()) {
+        let reservation = match self
+            .ring
+            .reserve_fixed_batch_v2(observed_read, batch.packet_count())
+        {
             Ok(reservation) => reservation,
             Err(error) if retryable_occupancy(&error) => {
                 return Err(NativeAqlSubmissionErrorV1::Ring(error));
@@ -409,12 +412,12 @@ fn release_fence_before_mmio() {
 mod tests {
     use super::*;
     use fe2o3_aql::{
-        AqlDispatchGeometryV1, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV1,
+        AqlDispatchGeometryV1, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV2,
         ObservedGpuAddressV1,
     };
 
     #[repr(align(64))]
-    struct AlignedRing([u8; 4_224]);
+    struct AlignedRing([u8; 65_664]);
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum FailureAfterV1 {
@@ -426,6 +429,7 @@ mod tests {
 
     struct FakeBackend {
         ring: AlignedRing,
+        logical_bytes: usize,
         write: AtomicU64,
         read: AtomicU64,
         checks: usize,
@@ -440,10 +444,15 @@ mod tests {
 
     impl FakeBackend {
         fn new(write: u64, read: u64) -> Self {
-            let mut ring = AlignedRing([0xa5; 4_224]);
-            initialize_invalid_ring(&mut ring.0[64..4_160]).unwrap();
+            Self::with_ring_bytes(4_096, write, read)
+        }
+
+        fn with_ring_bytes(logical_bytes: usize, write: u64, read: u64) -> Self {
+            let mut ring = AlignedRing([0xa5; 65_664]);
+            initialize_invalid_ring(&mut ring.0[64..64 + logical_bytes]).unwrap();
             Self {
                 ring,
+                logical_bytes,
                 write: AtomicU64::new(write),
                 read: AtomicU64::new(read),
                 checks: 0,
@@ -458,7 +467,7 @@ mod tests {
         }
 
         fn logical_ring(&mut self) -> &mut [u8] {
-            &mut self.ring.0[64..4_160]
+            &mut self.ring.0[64..64 + self.logical_bytes]
         }
 
         fn slot_word(&mut self, slot: u32, byte_offset: usize) -> u32 {
@@ -559,8 +568,8 @@ mod tests {
         .unwrap()
     }
 
-    fn batch<const N: usize>() -> AqlPreparedKernelDispatchBatchV1<N> {
-        AqlPreparedKernelDispatchBatchV1::try_from_packets(core::array::from_fn(|index| {
+    fn batch<const N: usize>() -> AqlPreparedKernelDispatchBatchV2<N> {
+        AqlPreparedKernelDispatchBatchV2::try_from_packets(core::array::from_fn(|index| {
             indexed_packet(index as u32)
         }))
         .unwrap()
@@ -706,6 +715,39 @@ mod tests {
         assert_successful_batch::<2>();
         assert_successful_batch::<4>();
         assert_successful_batch::<16>();
+    }
+
+    #[test]
+    fn fixed_batch_of_1024_uses_one_fetch_add_and_one_final_doorbell() {
+        let mut owner = NativeAqlSubmissionOwnerV1::new(65_536).unwrap();
+        let mut backend = FakeBackend::with_ring_bytes(65_536, 0, 0);
+        assert_eq!(owner.submit_batch(batch::<1024>(), &mut backend), Ok(1023));
+        assert_eq!(backend.write.load(Ordering::Relaxed), 1024);
+        assert_eq!(backend.body_calls, 1024);
+        assert_eq!(backend.header_calls, 1024);
+        assert_eq!(backend.doorbells, [1023]);
+        assert_eq!(
+            backend
+                .trace
+                .iter()
+                .filter(|event| **event == "fetch-add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            backend
+                .trace
+                .iter()
+                .filter(|event| **event == "doorbell")
+                .count(),
+            1
+        );
+        assert!(backend.trace[4..1028].iter().all(|event| *event == "body"));
+        assert!(
+            backend.trace[1028..2052]
+                .iter()
+                .all(|event| *event == "header")
+        );
     }
 
     #[test]

@@ -364,7 +364,8 @@ and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
 private submission foundation initializes every ring header to exact INVALID
 type 1 and the two control counters as atomics before GPU mapping. It uses the
 canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
-and an inert batch bound of one through 256 packets. One batch performs one
+and the additive V2 fixed-batch bound of one through 1024 packets. A maximum
+batch requires a ring of at least 64 KiB. One batch performs one
 acquire-release write-pointer fetch-add by the full count, copies all INVALID
 packet bodies before any aligned release header, publishes headers in packet
 order, and performs one release-fenced x86-SFENCE volatile `u64` doorbell
@@ -376,10 +377,11 @@ headers, payload, and currentness before publication. There is still no public
 launch API. The C5 path below is the only private producer that can compose
 code, kernarg, and data-allocation liveness.
 
-The private completion slice owns one separate 16 KiB host-coherent GTT arena
-containing exactly 256 distinct aligned `AmdBusyCompletionSignalV1` objects.
-All are constructed as exact pending user signals before GPU mapping. A batch
-of one through 256 packets receives one unique slot per packet; the private
+The private completion slice owns one separate 64 KiB host-coherent GTT arena
+containing exactly 1024 distinct aligned `AmdBusyCompletionSignalV1` objects.
+The large fixed-cardinality packet and retention arrays are heap-owned. All
+signals are constructed as exact pending user signals before GPU mapping. A
+batch of one through 1024 packets receives one unique slot per packet; the private
 binding retains the exact queue, signal allocation, code/kernarg mapping, and
 dispatch generations without exposing a numeric signal address. The generation
 keys detect substitution but do not themselves mint resource ownership,
@@ -398,7 +400,7 @@ releases the completion arena only after confirmed queue destruction.
 ### C5 private dispatch binding
 
 The private C5 constructor accepts one authenticated
-`ValidatedKernelEnvelope` for exact gfx942 COV6 code, one through 256 complete
+`ValidatedKernelEnvelope` for exact gfx942 COV6 code, one through 1024 complete
 typed kernarg images, bounded dispatch geometry, and one through 16 device-data
 allocation requests with role, valid-byte, and effect premises. Device-data
 reads and read/write effects are rejected; only write-only requests can pass
