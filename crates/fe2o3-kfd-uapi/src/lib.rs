@@ -221,6 +221,32 @@ pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
     0x52, 0xd4, 0xef, 0x41, 0x94, 0x03, 0x6a, 0x16, 0x59, 0xdc, 0x60, 0x19, 0x92, 0xcf, 0x70, 0x9a,
 ];
 
+/// Canonical manifest for CPU-initializable gfx942 device-local storage.
+///
+/// This additive profile retains the ordinary device-local schema unchanged.
+/// It admits one exact additional flag set and remains ABI evidence only.
+pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-gfx942-public-device-memory-1.18-v1\n",
+    "device_memory_schema_id=linux-kfd-gfx942-device-memory-lifecycle-1.18-v1\n",
+    "device_memory_schema_sha256=8592027abc19962181c29b42962909e152d4ef4194036a1659dc601992cf709a\n",
+    "target=gfx942:xnack-,SPX/NPS1,KFD-1.18\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "alloc_flags=vram:00000001,public:20000000,writable:80000000\n",
+    "alloc_profile=device_local_public_writable:a0000001\n",
+    "authority=wire-profile-only,no-ioctl-mmap-address-content-or-dispatch\n",
+);
+
+/// SHA-256 of [`KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST`].
+pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST_SHA256: &str =
+    "3b9f1164fc74672f019cbd092c142b4a6d830920424b87282cfdf5b8f50afd81";
+
+/// Typed digest bytes of [`KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST`].
+pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0x3b, 0x9f, 0x11, 0x64, 0xfc, 0x74, 0x67, 0x2f, 0x01, 0x9c, 0xbd, 0x09, 0x2c, 0x14, 0x2b, 0x4a,
+    0x6d, 0x83, 0x09, 0x20, 0x42, 0x4b, 0x87, 0x28, 0x2c, 0xfd, 0xf5, 0xb8, 0xf5, 0x0a, 0xfd, 0x81,
+];
+
 /// Canonical manifest for the reviewed R4 compute-AQL queue UAPI extension.
 ///
 /// Queue requests require the frozen R1 discovery schema and R2 memory schema,
@@ -355,6 +381,9 @@ pub const KFD_IOC_ALLOC_MEM_FLAGS_VRAM: u32 = 1 << 0;
 /// Permit GPU writes to the allocation.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE: u32 = 1 << 31;
 
+/// Permit CPU mappings of a device-local allocation.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC: u32 = 1 << 29;
+
 /// Permit GPU instruction fetches from the allocation.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE: u32 = 1 << 30;
 
@@ -387,6 +416,10 @@ pub const KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE: u32 =
 /// Exact gfx942 profile for writable device-local VRAM/HBM.
 pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL: u32 =
     KFD_IOC_ALLOC_MEM_FLAGS_VRAM | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE;
+
+/// Exact gfx942 profile for CPU-initializable writable device-local VRAM/HBM.
+pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC: u32 =
+    KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL | KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC;
 
 /// Exact UAPI queue type admitted by the R4 builder.
 pub const KFD_IOC_QUEUE_TYPE_COMPUTE_AQL: u32 = 0x2;
@@ -557,6 +590,7 @@ impl KfdAllocMemoryFlags {
     pub const AQL_QUEUE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE);
     pub const EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE);
     pub const DEVICE_LOCAL: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL);
+    pub const DEVICE_LOCAL_PUBLIC: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC);
 
     /// Returns the exact KFD UAPI bit pattern carried on the wire.
     pub const fn bits(self) -> u32 {
@@ -599,6 +633,19 @@ pub const fn admit_kfd_device_memory_flags(
 ) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
     match flags {
         KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL => Ok(KfdAllocMemoryFlags::DEVICE_LOCAL),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
+
+/// Admits only the additive CPU-initializable gfx942 device-local profile.
+///
+/// Keeping this separate from ordinary device-local admission prevents a
+/// caller from silently changing the visibility of an uninitialized lease.
+pub const fn admit_kfd_public_device_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC => Ok(KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC),
         flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
     }
 }
@@ -1492,7 +1539,9 @@ const _: () = {
     assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, gpu_id) == 32);
     assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, flags) == 36);
     assert!(KFD_IOC_ALLOC_MEM_FLAGS_VRAM == 0x0000_0001);
+    assert!(KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC == 0x2000_0000);
     assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL == 0x8000_0001);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC == 0xa000_0001);
 
     assert!(size_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);
     assert!(align_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);

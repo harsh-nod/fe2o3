@@ -268,9 +268,28 @@ complete, distinct set representing every live mapped C3 lease. That bridge
 retains the real lease and keeps its address facts private. It does not turn an
 initialization declaration into copy evidence or expose a numeric address.
 The dedicated bounded lease journal is not projected into the runtime memory
-model and has no Verus-to-Rust or syscall refinement. C3 itself still grants no
-CPU mapping, initialization, sync or async copy, alias, quiescence, public
-kernel launch, or hardware-completion authority.
+model and has no Verus-to-Rust or syscall refinement. Ordinary C3 leases still
+grant no CPU mapping, initialization, sync or async copy, alias, quiescence,
+public kernel launch, or hardware-completion authority.
+
+The separate `Gfx942InitializedDeviceMemoryV1` path admits exact
+`VRAM | PUBLIC | WRITABLE` flags (`0xa0000001`) without changing ordinary C3
+leases. It accepts an owned nonempty byte slice and a content descriptor, then
+checks their exact length and SHA-256 before allocation. After successful KFD
+allocation it maps the returned BO offset through the retained render file,
+uses the same `PROT_NONE -> MADV_DONTFORK -> read/write` setup as GTT, copies
+the complete requested extent, hashes the mapped bytes again, explicitly
+unmaps the CPU VMA, and only then maps the allocation to the selected GPU. The
+result binds private allocation/device/VM generations to the checked content
+descriptor and exposes no native address or mutable view. A descriptor alone
+cannot construct it.
+
+The exact checked gfx942 device profile and successful public-VRAM mmap are the
+only capability admission currently available. A driver or platform that
+rejects the flag profile or CPU mapping fails closed after retaining the native
+record in a quarantined session; it does not fall back to GTT or ordinary
+uninitialized VRAM. CPU/GPU coherence and device-read visibility remain
+contracted hardware behavior rather than proof claims.
 
 ## R4 queue-resource observations
 
@@ -451,8 +470,10 @@ confirmed destruction, but that return path is deliberately not connected to
 the content state machine. The next integration must authenticate an exact
 copy-kernel artifact and semantics and consume its exact C2 publication and C4
 completed batch to construct the opaque tokens above. Until those are
-composed, C6 provides no Linux copy backend, actual copy, initialized lease,
-read-dispatch premise, or hardware evidence.
+composed, C6 provides no Linux copy backend, actual copy, or
+copy-completion-derived initialized lease. The independent public-VRAM CPU
+initialization path above does not authenticate a device copy. Neither path
+currently supplies a public read-dispatch premise or hardware evidence.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,

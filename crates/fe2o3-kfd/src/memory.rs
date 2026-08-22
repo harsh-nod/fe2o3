@@ -158,6 +158,7 @@ pub enum MemorySessionError {
     },
     InvalidDeviceMemorySize,
     InvalidDeviceMemoryAlignment,
+    DeviceContentMismatch,
     InvalidDeviceMemoryAuthority,
     DeviceMemoryQueueBindingRequired,
     InvalidProfileSize(&'static str),
@@ -222,6 +223,8 @@ impl fmt::Display for MemorySessionError {
             }
             Self::InvalidDeviceMemoryAlignment => formatter
                 .write_str("device-memory alignment must be a power of two no larger than 4096"),
+            Self::DeviceContentMismatch => formatter
+                .write_str("device-memory bytes did not match the exact content descriptor"),
             Self::InvalidDeviceMemoryAuthority => formatter
                 .write_str("the device-memory lease is stale, substituted, or in the wrong state"),
             Self::DeviceMemoryQueueBindingRequired => formatter
