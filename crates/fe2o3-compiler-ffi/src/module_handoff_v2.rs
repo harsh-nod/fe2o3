@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, ops::Range, sync::Arc};
 
 use sha2::{Digest, Sha256};
 
@@ -64,7 +64,7 @@ impl CompilerModuleHandoffIdentityV2 {
 /// Its identity commits to the complete encoding, including the exact manifest identity and bytes.
 /// Public construction remains structural and grants no compiler, worker, link, load, or launch
 /// authority.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct CompilerModuleHandoffV2 {
     kind: CompilerModuleKindV1,
     target: DeviceTargetV1,
@@ -73,9 +73,63 @@ pub struct CompilerModuleHandoffV2 {
     envelope: CompilerFfiEnvelopeV1,
     symbol_manifest: CompilerModuleSymbolManifestV1,
     identity: CompilerModuleHandoffIdentityV2,
-    canonical_bytes: Vec<u8>,
+    canonical_bytes: CanonicalHandoffBytesV2,
     module_offset: usize,
 }
+
+#[derive(Clone)]
+enum CanonicalHandoffBytesV2 {
+    Vec(Vec<u8>),
+    Box(Box<[u8]>),
+    Shared {
+        backing: Arc<[u8]>,
+        range: Range<usize>,
+    },
+}
+
+impl CanonicalHandoffBytesV2 {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Vec(bytes) => bytes,
+            Self::Box(bytes) => bytes,
+            Self::Shared { backing, range } => &backing[range.clone()],
+        }
+    }
+
+    fn into_module_bytes(self, module_offset: usize) -> Vec<u8> {
+        match self {
+            Self::Vec(mut bytes) => {
+                bytes.drain(..module_offset);
+                bytes
+            }
+            Self::Box(bytes) => bytes[module_offset..].to_vec(),
+            Self::Shared { backing, range } => {
+                let module_start = range
+                    .start
+                    .checked_add(module_offset)
+                    .filter(|start| *start <= range.end)
+                    .expect("validated V2 module offset must remain in shared backing");
+                backing[module_start..range.end].to_vec()
+            }
+        }
+    }
+}
+
+impl PartialEq for CompilerModuleHandoffV2 {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.target == other.target
+            && self.code_object_version == other.code_object_version
+            && self.module_identity == other.module_identity
+            && self.envelope == other.envelope
+            && self.symbol_manifest == other.symbol_manifest
+            && self.identity == other.identity
+            && self.module_offset == other.module_offset
+            && self.canonical_bytes() == other.canonical_bytes()
+    }
+}
+
+impl Eq for CompilerModuleHandoffV2 {}
 
 impl fmt::Debug for CompilerModuleHandoffV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -170,6 +224,16 @@ impl CompilerModuleHandoffPartsV2 {
 }
 
 impl CompilerModuleHandoffV2 {
+    /// Additional complete canonical buffers retained by [`Self::decode_owned`].
+    pub const OWNED_DECODE_ADDITIONAL_CANONICAL_BUFFERS: usize = 0;
+
+    /// Additional complete canonical buffers retained by [`Self::decode_shared_range`].
+    pub const SHARED_DECODE_ADDITIONAL_CANONICAL_BUFFERS: usize = 0;
+
+    /// Maximum canonical bytes allocated by borrowed [`Self::decode`].
+    pub const MAX_BORROWED_DECODE_ADDITIONAL_CANONICAL_BYTES: usize =
+        MAX_COMPILER_MODULE_HANDOFF_BYTES_V2;
+
     pub fn new(
         kind: CompilerModuleKindV1,
         target: DeviceTargetV1,
@@ -221,7 +285,7 @@ impl CompilerModuleHandoffV2 {
 
         let module_identity = CompilerModuleIdentityV1::calculate(module_bytes);
         let manifest_identity = symbol_manifest.identity();
-        let mut canonical_bytes = Vec::with_capacity(exact_size);
+        let mut canonical_bytes = try_allocate_canonical_buffer(exact_size)?;
         canonical_bytes.extend_from_slice(HANDOFF_DOMAIN_V2);
         push_u32(&mut canonical_bytes, target_text.len())?;
         canonical_bytes.extend_from_slice(target_text.as_bytes());
@@ -247,13 +311,260 @@ impl CompilerModuleHandoffV2 {
             envelope,
             symbol_manifest,
             identity,
-            canonical_bytes,
+            canonical_bytes: CanonicalHandoffBytesV2::Vec(canonical_bytes),
             module_offset,
         })
     }
 
     /// Strictly decodes one complete canonical V2 handoff.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerModuleHandoffErrorV2> {
+        let validated = ValidatedHandoffWireV2::decode(bytes)?;
+        let mut canonical_bytes = try_allocate_canonical_buffer(bytes.len())?;
+        canonical_bytes.extend_from_slice(bytes);
+        Ok(Self::from_validated_wire(
+            CanonicalHandoffBytesV2::Vec(canonical_bytes),
+            validated,
+        ))
+    }
+
+    /// Strictly decodes and retains one owned canonical V2 handoff allocation.
+    pub fn decode_owned(canonical_bytes: Box<[u8]>) -> Result<Self, CompilerModuleHandoffErrorV2> {
+        let validated = ValidatedHandoffWireV2::decode(&canonical_bytes)?;
+        Ok(Self::from_validated_wire(
+            CanonicalHandoffBytesV2::Box(canonical_bytes),
+            validated,
+        ))
+    }
+
+    /// Strictly decodes one complete shared canonical V2 handoff allocation.
+    pub fn decode_shared(canonical_bytes: Arc<[u8]>) -> Result<Self, CompilerModuleHandoffErrorV2> {
+        let byte_len = canonical_bytes.len();
+        Self::decode_shared_range(canonical_bytes, 0, byte_len)
+    }
+
+    /// Strictly decodes a validated V2 byte range in immutable shared backing.
+    ///
+    /// The retained handoff shares `backing`; no complete V2 buffer is copied.
+    /// `offset + byte_len` is checked before the backing is indexed.
+    pub fn decode_shared_range(
+        backing: Arc<[u8]>,
+        offset: usize,
+        byte_len: usize,
+    ) -> Result<Self, CompilerModuleHandoffErrorV2> {
+        if byte_len > MAX_COMPILER_MODULE_HANDOFF_BYTES_V2 {
+            return Err(CompilerModuleHandoffErrorV2::HandoffByteBoundExceeded);
+        }
+        let end = offset
+            .checked_add(byte_len)
+            .ok_or(CompilerModuleHandoffErrorV2::SharedBackingRangeOverflow)?;
+        let range = offset..end;
+        let bytes = backing
+            .get(range.clone())
+            .ok_or(CompilerModuleHandoffErrorV2::SharedBackingRangeOutOfBounds)?;
+        let validated = ValidatedHandoffWireV2::decode(bytes)?;
+        Ok(Self::from_validated_wire(
+            CanonicalHandoffBytesV2::Shared { backing, range },
+            validated,
+        ))
+    }
+
+    fn from_validated_wire(
+        canonical_bytes: CanonicalHandoffBytesV2,
+        validated: ValidatedHandoffWireV2,
+    ) -> Self {
+        Self {
+            kind: validated.kind,
+            target: validated.target,
+            code_object_version: validated.code_object_version,
+            module_identity: validated.module_identity,
+            envelope: validated.envelope,
+            symbol_manifest: validated.symbol_manifest,
+            identity: validated.identity,
+            canonical_bytes,
+            module_offset: validated.module_offset,
+        }
+    }
+
+    pub const fn identity(&self) -> CompilerModuleHandoffIdentityV2 {
+        self.identity
+    }
+
+    pub const fn kind(&self) -> CompilerModuleKindV1 {
+        self.kind
+    }
+
+    pub const fn target(&self) -> DeviceTargetV1 {
+        self.target
+    }
+
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.code_object_version
+    }
+
+    pub const fn module_identity(&self) -> CompilerModuleIdentityV1 {
+        self.module_identity
+    }
+
+    pub const fn envelope(&self) -> &CompilerFfiEnvelopeV1 {
+        &self.envelope
+    }
+
+    pub const fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
+        &self.symbol_manifest
+    }
+
+    pub fn module_bytes(&self) -> &[u8] {
+        &self.canonical_bytes.as_slice()[self.module_offset..]
+    }
+
+    pub fn canonical_bytes(&self) -> &[u8] {
+        self.canonical_bytes.as_slice()
+    }
+
+    pub fn into_parts(self) -> CompilerModuleHandoffPartsV2 {
+        let Self {
+            kind,
+            module_identity,
+            envelope,
+            symbol_manifest,
+            canonical_bytes,
+            module_offset,
+            ..
+        } = self;
+        let canonical_bytes = canonical_bytes.into_module_bytes(module_offset);
+        debug_assert!(module_identity.matches(&canonical_bytes));
+        CompilerModuleHandoffPartsV2 {
+            envelope,
+            symbol_manifest,
+            module: CompilerModulePayloadV1::from_validated(kind, module_identity, canonical_bytes),
+        }
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_worker_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> TryFrom<&'a [u8]> for CompilerModuleHandoffV2 {
+    type Error = CompilerModuleHandoffErrorV2;
+
+    fn try_from(bytes: &'a [u8]) -> Result<Self, Self::Error> {
+        Self::decode(bytes)
+    }
+}
+
+impl TryFrom<Box<[u8]>> for CompilerModuleHandoffV2 {
+    type Error = CompilerModuleHandoffErrorV2;
+
+    fn try_from(bytes: Box<[u8]>) -> Result<Self, Self::Error> {
+        Self::decode_owned(bytes)
+    }
+}
+
+impl TryFrom<Arc<[u8]>> for CompilerModuleHandoffV2 {
+    type Error = CompilerModuleHandoffErrorV2;
+
+    fn try_from(bytes: Arc<[u8]>) -> Result<Self, Self::Error> {
+        Self::decode_shared(bytes)
+    }
+}
+
+/// Failure to construct or strictly decode a V2 module handoff.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CompilerModuleHandoffErrorV2 {
+    HandoffByteBoundExceeded,
+    ManifestByteBoundExceeded,
+    AllocationFailed,
+    SharedBackingRangeOverflow,
+    SharedBackingRangeOutOfBounds,
+    InvalidMagic,
+    ManifestIdentityMismatch,
+    FfiImportRoleMismatch,
+    FfiExportRoleMismatch,
+    NonCanonicalEncoding,
+    Handoff(CompilerModuleHandoffErrorV1),
+    Manifest(CompilerModuleSymbolManifestErrorV1),
+}
+
+impl fmt::Display for CompilerModuleHandoffErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HandoffByteBoundExceeded => {
+                formatter.write_str("V2 compiler module handoff byte bound exceeded")
+            }
+            Self::ManifestByteBoundExceeded => {
+                formatter.write_str("V2 compiler module manifest byte bound exceeded")
+            }
+            Self::AllocationFailed => {
+                formatter.write_str("could not allocate V2 compiler module handoff storage")
+            }
+            Self::SharedBackingRangeOverflow => {
+                formatter.write_str("V2 compiler module handoff shared backing range overflow")
+            }
+            Self::SharedBackingRangeOutOfBounds => formatter
+                .write_str("V2 compiler module handoff shared backing range is out of bounds"),
+            Self::InvalidMagic => formatter.write_str("invalid V2 compiler module handoff magic"),
+            Self::ManifestIdentityMismatch => {
+                formatter.write_str("compiler module symbol manifest identity mismatch")
+            }
+            Self::FfiImportRoleMismatch => formatter
+                .write_str("compiler FFI import is not an unresolved external module symbol"),
+            Self::FfiExportRoleMismatch => {
+                formatter.write_str("compiler FFI exports disagree with module symbol roles")
+            }
+            Self::NonCanonicalEncoding => {
+                formatter.write_str("noncanonical V2 compiler module handoff encoding")
+            }
+            Self::Handoff(error) => write!(formatter, "invalid compiler module data: {error}"),
+            Self::Manifest(error) => write!(formatter, "invalid compiler symbol manifest: {error}"),
+        }
+    }
+}
+
+impl Error for CompilerModuleHandoffErrorV2 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Handoff(error) => Some(error),
+            Self::Manifest(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+struct ValidatedHandoffWireV2 {
+    kind: CompilerModuleKindV1,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    module_identity: CompilerModuleIdentityV1,
+    envelope: CompilerFfiEnvelopeV1,
+    symbol_manifest: CompilerModuleSymbolManifestV1,
+    identity: CompilerModuleHandoffIdentityV2,
+    module_offset: usize,
+}
+
+impl ValidatedHandoffWireV2 {
+    fn decode(bytes: &[u8]) -> Result<Self, CompilerModuleHandoffErrorV2> {
         if bytes.len() > MAX_COMPILER_MODULE_HANDOFF_BYTES_V2 {
             return Err(CompilerModuleHandoffErrorV2::HandoffByteBoundExceeded);
         }
@@ -332,9 +643,14 @@ impl CompilerModuleHandoffV2 {
         cursor
             .finish()
             .map_err(CompilerModuleHandoffErrorV2::Handoff)?;
+        let module_offset = bytes.len().checked_sub(declared_module_len).ok_or(
+            CompilerModuleHandoffErrorV2::Handoff(CompilerModuleHandoffErrorV1::Truncated),
+        )?;
 
-        let actual_module_digest: [u8; 32] = Sha256::digest(module_bytes).into();
-        if actual_module_digest != declared_module_digest {
+        let module_identity = CompilerModuleIdentityV1::calculate(module_bytes);
+        if module_identity.byte_len() != declared_module_len_u64
+            || module_identity.sha256() != &declared_module_digest
+        {
             return Err(CompilerModuleHandoffErrorV2::Handoff(
                 CompilerModuleHandoffErrorV1::ModuleIdentityMismatch,
             ));
@@ -349,170 +665,33 @@ impl CompilerModuleHandoffV2 {
         validate_module_bytes(kind, module_bytes).map_err(CompilerModuleHandoffErrorV2::Handoff)?;
         let envelope =
             decode_envelope(envelope_bytes).map_err(CompilerModuleHandoffErrorV2::Handoff)?;
+        if envelope.target() != target {
+            return Err(CompilerModuleHandoffErrorV2::Handoff(
+                CompilerModuleHandoffErrorV1::TargetMismatch,
+            ));
+        }
+        if envelope.code_object_version() != code_object_version {
+            return Err(CompilerModuleHandoffErrorV2::Handoff(
+                CompilerModuleHandoffErrorV1::CodeObjectVersionMismatch,
+            ));
+        }
         let symbol_manifest = CompilerModuleSymbolManifestV1::decode(manifest_bytes)
             .map_err(CompilerModuleHandoffErrorV2::Manifest)?;
+        if symbol_manifest.identity() != declared_manifest_identity {
+            return Err(CompilerModuleHandoffErrorV2::ManifestIdentityMismatch);
+        }
+        validate_envelope_manifest(&envelope, &symbol_manifest)?;
 
-        let decoded = Self::new(
+        Ok(Self {
             kind,
             target,
             code_object_version,
-            envelope,
-            symbol_manifest,
-            module_bytes,
-        )?;
-        if decoded.module_identity.byte_len() != declared_module_len_u64
-            || decoded.module_identity.sha256() != &declared_module_digest
-        {
-            return Err(CompilerModuleHandoffErrorV2::Handoff(
-                CompilerModuleHandoffErrorV1::ModuleIdentityMismatch,
-            ));
-        }
-        if decoded.symbol_manifest.identity() != declared_manifest_identity {
-            return Err(CompilerModuleHandoffErrorV2::ManifestIdentityMismatch);
-        }
-        if decoded.canonical_bytes() != bytes {
-            return Err(CompilerModuleHandoffErrorV2::NonCanonicalEncoding);
-        }
-        Ok(decoded)
-    }
-
-    pub const fn identity(&self) -> CompilerModuleHandoffIdentityV2 {
-        self.identity
-    }
-
-    pub const fn kind(&self) -> CompilerModuleKindV1 {
-        self.kind
-    }
-
-    pub const fn target(&self) -> DeviceTargetV1 {
-        self.target
-    }
-
-    pub const fn code_object_version(&self) -> CodeObjectVersion {
-        self.code_object_version
-    }
-
-    pub const fn module_identity(&self) -> CompilerModuleIdentityV1 {
-        self.module_identity
-    }
-
-    pub const fn envelope(&self) -> &CompilerFfiEnvelopeV1 {
-        &self.envelope
-    }
-
-    pub const fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
-        &self.symbol_manifest
-    }
-
-    pub fn module_bytes(&self) -> &[u8] {
-        &self.canonical_bytes[self.module_offset..]
-    }
-
-    pub fn canonical_bytes(&self) -> &[u8] {
-        &self.canonical_bytes
-    }
-
-    pub fn into_parts(self) -> CompilerModuleHandoffPartsV2 {
-        let Self {
-            kind,
             module_identity,
             envelope,
             symbol_manifest,
-            mut canonical_bytes,
+            identity: CompilerModuleHandoffIdentityV2::calculate(bytes),
             module_offset,
-            ..
-        } = self;
-        canonical_bytes.drain(..module_offset);
-        debug_assert!(module_identity.matches(&canonical_bytes));
-        CompilerModuleHandoffPartsV2 {
-            envelope,
-            symbol_manifest,
-            module: CompilerModulePayloadV1::from_validated(kind, module_identity, canonical_bytes),
-        }
-    }
-
-    pub const fn authenticates_compiler_origin(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_compiler_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_worker_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_link_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
-
-impl<'a> TryFrom<&'a [u8]> for CompilerModuleHandoffV2 {
-    type Error = CompilerModuleHandoffErrorV2;
-
-    fn try_from(bytes: &'a [u8]) -> Result<Self, Self::Error> {
-        Self::decode(bytes)
-    }
-}
-
-/// Failure to construct or strictly decode a V2 module handoff.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum CompilerModuleHandoffErrorV2 {
-    HandoffByteBoundExceeded,
-    ManifestByteBoundExceeded,
-    InvalidMagic,
-    ManifestIdentityMismatch,
-    FfiImportRoleMismatch,
-    FfiExportRoleMismatch,
-    NonCanonicalEncoding,
-    Handoff(CompilerModuleHandoffErrorV1),
-    Manifest(CompilerModuleSymbolManifestErrorV1),
-}
-
-impl fmt::Display for CompilerModuleHandoffErrorV2 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::HandoffByteBoundExceeded => {
-                formatter.write_str("V2 compiler module handoff byte bound exceeded")
-            }
-            Self::ManifestByteBoundExceeded => {
-                formatter.write_str("V2 compiler module manifest byte bound exceeded")
-            }
-            Self::InvalidMagic => formatter.write_str("invalid V2 compiler module handoff magic"),
-            Self::ManifestIdentityMismatch => {
-                formatter.write_str("compiler module symbol manifest identity mismatch")
-            }
-            Self::FfiImportRoleMismatch => formatter
-                .write_str("compiler FFI import is not an unresolved external module symbol"),
-            Self::FfiExportRoleMismatch => {
-                formatter.write_str("compiler FFI exports disagree with module symbol roles")
-            }
-            Self::NonCanonicalEncoding => {
-                formatter.write_str("noncanonical V2 compiler module handoff encoding")
-            }
-            Self::Handoff(error) => write!(formatter, "invalid compiler module data: {error}"),
-            Self::Manifest(error) => write!(formatter, "invalid compiler symbol manifest: {error}"),
-        }
-    }
-}
-
-impl Error for CompilerModuleHandoffErrorV2 {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Handoff(error) => Some(error),
-            Self::Manifest(error) => Some(error),
-            _ => None,
-        }
+        })
     }
 }
 
@@ -521,24 +700,20 @@ fn validate_envelope_manifest(
     manifest: &CompilerModuleSymbolManifestV1,
 ) -> Result<(), CompilerModuleHandoffErrorV2> {
     let directional = envelope.directional_symbols();
-    let imports = manifest
-        .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
-        .collect::<Vec<_>>();
-    if directional.import_count() != imports.len()
-        || directional
+    if directional.import_count()
+        != manifest.role_count(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
+        || !directional
             .imports()
-            .any(|symbol| imports.binary_search(&symbol).is_err())
+            .eq(manifest.symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport))
     {
         return Err(CompilerModuleHandoffErrorV2::FfiImportRoleMismatch);
     }
 
-    let exports = manifest
-        .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
-        .collect::<Vec<_>>();
-    if directional.export_count() != exports.len()
-        || directional
+    if directional.export_count()
+        != manifest.role_count(CompilerModuleSymbolRoleV1::DeviceFfiExport)
+        || !directional
             .exports()
-            .any(|symbol| exports.binary_search(&symbol).is_err())
+            .eq(manifest.symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport))
     {
         return Err(CompilerModuleHandoffErrorV2::FfiExportRoleMismatch);
     }
@@ -550,6 +725,16 @@ fn push_u32(bytes: &mut Vec<u8>, value: usize) -> Result<(), CompilerModuleHando
         u32::try_from(value).map_err(|_| CompilerModuleHandoffErrorV2::HandoffByteBoundExceeded)?;
     bytes.extend_from_slice(&value.to_le_bytes());
     Ok(())
+}
+
+fn try_allocate_canonical_buffer(
+    exact_size: usize,
+) -> Result<Vec<u8>, CompilerModuleHandoffErrorV2> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(exact_size)
+        .map_err(|_| CompilerModuleHandoffErrorV2::AllocationFailed)?;
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -972,7 +1157,7 @@ mod tests {
     fn owned_parts_preserve_manifest_and_reuse_module_allocation() {
         let handoff = handoff(CompilerModuleKindV1::LlvmTextIr, LLVM_IR);
         let expected_manifest = handoff.symbol_manifest().clone();
-        let canonical_allocation = handoff.canonical_bytes.as_ptr();
+        let canonical_allocation = handoff.canonical_bytes().as_ptr();
         let location = offsets(handoff.canonical_bytes());
         assert_eq!(
             handoff.module_bytes().as_ptr(),
