@@ -52,6 +52,7 @@ mod link_publication;
 mod managed_invocation_capability;
 mod retained_durable_directory;
 mod worker_v2_publication_intent;
+mod worker_v3_publication_intent;
 
 fn encode_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -198,6 +199,24 @@ pub use worker_v2_publication_intent::{
     recover_worker_v2_publication_intent_v1, recover_worker_v2_publication_intent_v2,
     rollback_worker_v2_publication_intent_cleanup_escrow_v1,
     rollback_worker_v2_publication_intent_cleanup_escrow_v1_with_options,
+};
+pub use worker_v3_publication_intent::{
+    MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
+    MAX_WORKER_V3_PUBLICATION_INTENT_METADATA_BYTES_V1,
+    MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1,
+    MAX_WORKER_V3_PUBLICATION_INTENT_RECORD_BYTES_V1,
+    MAX_WORKER_V3_PUBLICATION_INTENT_RECOVERY_BYTES_V1,
+    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_ARCHIVE_BYTES_V1,
+    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1,
+    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1, RecoveredWorkerV3PublicationIntentV1,
+    WorkerV3ExternalProviderPayloadsV1, WorkerV3FinalizerReplayAttachmentsV1,
+    WorkerV3PublicationIntentBoundaryV1, WorkerV3PublicationIntentCodecErrorV1,
+    WorkerV3PublicationIntentErrorV1, WorkerV3PublicationIntentFaultPointV1,
+    WorkerV3PublicationIntentFaultTimingV1, WorkerV3PublicationIntentIdentityV1,
+    WorkerV3PublicationIntentInvalidReasonV1, WorkerV3PublicationIntentOptionsV1,
+    WorkerV3PublicationIntentOutcomeV1, WorkerV3PublicationIntentRecordV1,
+    persist_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1_with_options,
+    recover_worker_v3_publication_intent_v1,
 };
 
 /// Immutable bytes captured from one finalized artifact while its publication lock was held.
