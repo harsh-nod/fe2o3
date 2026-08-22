@@ -40,11 +40,56 @@ const CONTENT_IDENTITY_BYTES: usize = 32 + 8;
 const MAX_PROVIDER_IDENTITY_BYTES: usize = 128;
 const MAX_PROVIDER_FILES: usize = 16;
 const MAX_PROVIDER_BASENAME_BYTES: usize = 128;
-const MAX_PROVIDER_EVIDENCE_BYTES: usize = MAX_PROVIDER_IDENTITY_BYTES
-    + MAX_WORKER_TARGET_BYTES
-    + MAX_WORKER_SYMBOLS * (MAX_WORKER_SYMBOL_BYTES + 4)
-    + MAX_PROVIDER_FILES * (MAX_PROVIDER_BASENAME_BYTES + 36)
-    + 49;
+const MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES: usize = checked_bound_add(
+    checked_bound_add(
+        MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES,
+        checked_bound_mul(MAX_WORKER_DIAGNOSTICS, 4),
+    ),
+    4,
+);
+const MAX_RESPONSE_OUTPUT_BODY_BYTES: usize = checked_bound_add(MAX_WORKER_OUTPUT_BYTES, 45);
+const MAX_PROVIDER_EVIDENCE_BYTES: usize = checked_bound_add(
+    checked_bound_add(
+        checked_bound_add(MAX_PROVIDER_IDENTITY_BYTES, MAX_WORKER_TARGET_BYTES),
+        checked_bound_mul(
+            MAX_WORKER_SYMBOLS,
+            checked_bound_add(MAX_WORKER_SYMBOL_BYTES, 4),
+        ),
+    ),
+    checked_bound_add(
+        checked_bound_mul(
+            MAX_PROVIDER_FILES,
+            checked_bound_add(MAX_PROVIDER_BASENAME_BYTES, 36),
+        ),
+        49,
+    ),
+);
+
+/// Maximum exact response-body bytes retained by one replay metadata shell.
+pub(crate) const MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1: usize = checked_bound_add(
+    MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES,
+    MAX_PROVIDER_EVIDENCE_BYTES,
+);
+
+/// Maximum exact response-body bytes retained by two independent metadata shells.
+pub(crate) const MAX_WORKER_RESPONSE_REPLAY_METADATA_TWO_SHELL_BYTES_V1: usize = checked_bound_add(
+    MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
+    MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
+);
+
+const fn checked_bound_add(left: usize, right: usize) -> usize {
+    match left.checked_add(right) {
+        Some(value) => value,
+        None => panic!("worker response metadata bound overflow"),
+    }
+}
+
+const fn checked_bound_mul(left: usize, right: usize) -> usize {
+    match left.checked_mul(right) {
+        Some(value) => value,
+        None => panic!("worker response metadata bound overflow"),
+    }
+}
 
 /// Evidence available only from the sealed compiler-envelope V2 path.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -322,6 +367,26 @@ impl WorkerDeviceLibraryProviderEvidenceV1 {
     }
 }
 
+/// Borrowed canonical response bodies needed to reconstruct replay metadata.
+///
+/// This view deliberately carries neither the raw worker output nor any
+/// publication, load, launch, or execution authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkerResponseReplayMetadataV1<'response> {
+    diagnostics_body: &'response [u8],
+    provider_evidence_body: Option<&'response [u8]>,
+}
+
+impl<'response> WorkerResponseReplayMetadataV1<'response> {
+    pub(crate) const fn diagnostics_body(&self) -> &'response [u8] {
+        self.diagnostics_body
+    }
+
+    pub(crate) const fn provider_evidence_body(&self) -> Option<&'response [u8]> {
+        self.provider_evidence_body
+    }
+}
+
 /// Canonical worker response decoded only in the context of one sealed V2 request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerResponseV2 {
@@ -363,16 +428,13 @@ impl WorkerResponseV2 {
         )?;
         let stage = decode_stage(one_byte(decoder.field(5, 1)?)?)?;
         let diagnostics = decode_strings(
-            decoder.field(
-                6,
-                MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES + MAX_WORKER_DIAGNOSTICS * 4 + 4,
-            )?,
+            decoder.field(6, MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES)?,
             MAX_WORKER_DIAGNOSTICS,
             MAX_WORKER_DIAGNOSTIC_BYTES,
             MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES,
             true,
         )?;
-        let raw_output = decode_output(decoder.field(7, MAX_WORKER_OUTPUT_BYTES + 45)?)?;
+        let raw_output = decode_output(decoder.field(7, MAX_RESPONSE_OUTPUT_BODY_BYTES)?)?;
         let (device_library_provider, response_identity) = if has_provider_extension {
             let provider =
                 decode_provider_evidence(decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?)?;
@@ -437,6 +499,19 @@ impl WorkerResponseV2 {
         &self.canonical_bytes
     }
 
+    pub(crate) fn replay_metadata(
+        &self,
+    ) -> Result<WorkerResponseReplayMetadataV1<'_>, WorkerProtocolError> {
+        if self.stage != WorkerStageV1::Complete || self.output.is_none() {
+            return Err(WorkerProtocolError::InvalidResponseState);
+        }
+        let metadata = response_replay_metadata_from_bytes(self.canonical_bytes())?;
+        if metadata.provider_evidence_body.is_some() != self.device_library_provider.is_some() {
+            return Err(WorkerProtocolError::NonCanonicalEncoding);
+        }
+        Ok(metadata)
+    }
+
     pub const fn request_id(&self) -> &[u8; 32] {
         &self.request_id
     }
@@ -494,6 +569,130 @@ impl WorkerResponseV2 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+}
+
+fn response_replay_metadata_from_bytes(
+    bytes: &[u8],
+) -> Result<WorkerResponseReplayMetadataV1<'_>, WorkerProtocolError> {
+    if bytes.len() > MAX_WORKER_RESPONSE_BYTES {
+        return Err(WorkerProtocolError::ResponseTooLarge);
+    }
+    let magic = bytes
+        .get(..WORKER_RESPONSE_MAGIC_V2.len())
+        .ok_or(WorkerProtocolError::Truncated)?;
+    let has_provider_extension = if magic == WORKER_RESPONSE_MAGIC_V2 {
+        false
+    } else if magic == WORKER_RESPONSE_MAGIC_V3 {
+        true
+    } else {
+        return Err(WorkerProtocolError::BadMagic);
+    };
+    let (expected_magic, field_count) = if has_provider_extension {
+        (WORKER_RESPONSE_MAGIC_V3, RESPONSE_FIELD_COUNT_V3)
+    } else {
+        (WORKER_RESPONSE_MAGIC_V2, RESPONSE_FIELD_COUNT_V2)
+    };
+    let mut decoder = Decoder::new(bytes, expected_magic, field_count)?;
+
+    fixed::<32>(decoder.field(1, 32)?)?;
+    fixed::<32>(decoder.field(2, 32)?)?;
+    fixed::<32>(decoder.field(3, 32)?)?;
+    validate_text_body(
+        decoder.field(4, MAX_WORKER_TOOLCHAIN_ID_BYTES)?,
+        MAX_WORKER_TOOLCHAIN_ID_BYTES,
+        "worker build identity",
+    )?;
+    if decode_stage(one_byte(decoder.field(5, 1)?)?)? != WorkerStageV1::Complete {
+        return Err(WorkerProtocolError::InvalidResponseState);
+    }
+    let diagnostics_body = decoder.field(6, MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES)?;
+    validate_diagnostics_body(diagnostics_body)?;
+    validate_complete_output_body(decoder.field(7, MAX_RESPONSE_OUTPUT_BODY_BYTES)?)?;
+
+    let provider_evidence_body = if has_provider_extension {
+        let body = decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?;
+        if body.is_empty() {
+            return Err(WorkerProtocolError::InvalidFieldLength(8));
+        }
+        fixed::<32>(decoder.field(9, 32)?)?;
+        Some(body)
+    } else {
+        None
+    };
+    decoder.finish(field_count)?;
+
+    Ok(WorkerResponseReplayMetadataV1 {
+        diagnostics_body,
+        provider_evidence_body,
+    })
+}
+
+fn validate_diagnostics_body(bytes: &[u8]) -> Result<(), WorkerProtocolError> {
+    let mut cursor = Cursor::new(bytes);
+    let count = cursor.u32()? as usize;
+    if count > MAX_WORKER_DIAGNOSTICS {
+        return Err(WorkerProtocolError::TooManyDiagnostics);
+    }
+    let mut total = 0_usize;
+    let mut previous = None;
+    for _ in 0..count {
+        let len = cursor.u32()? as usize;
+        total = total
+            .checked_add(len)
+            .ok_or(WorkerProtocolError::IntegerOverflow)?;
+        if len == 0 || len > MAX_WORKER_DIAGNOSTIC_BYTES {
+            return Err(WorkerProtocolError::InvalidDiagnostic);
+        }
+        if total > MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES {
+            return Err(WorkerProtocolError::DiagnosticsTooLarge);
+        }
+        let value =
+            str::from_utf8(cursor.take(len)?).map_err(|_| WorkerProtocolError::InvalidUtf8)?;
+        if !value.is_ascii() || value.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(WorkerProtocolError::InvalidDiagnostic);
+        }
+        if let Some(prior) = previous {
+            if prior == value {
+                return Err(WorkerProtocolError::DuplicateDiagnostic);
+            }
+            if prior > value {
+                return Err(WorkerProtocolError::NonCanonicalDiagnostics);
+            }
+        }
+        previous = Some(value);
+    }
+    cursor.finish()
+}
+
+fn validate_complete_output_body(bytes: &[u8]) -> Result<(), WorkerProtocolError> {
+    let mut cursor = Cursor::new(bytes);
+    if cursor.byte()? != 1 {
+        return Err(WorkerProtocolError::InvalidResponseState);
+    }
+    cursor.fixed::<32>()?;
+    let byte_len_u64 = cursor.u64()?;
+    let byte_len =
+        usize::try_from(byte_len_u64).map_err(|_| WorkerProtocolError::InvalidOutputBound)?;
+    if byte_len == 0 || byte_len > MAX_WORKER_OUTPUT_BYTES {
+        return Err(WorkerProtocolError::InvalidOutputBound);
+    }
+    cursor.take(byte_len)?;
+    cursor.finish()
+}
+
+fn validate_text_body(
+    bytes: &[u8],
+    max: usize,
+    field: &'static str,
+) -> Result<(), WorkerProtocolError> {
+    if bytes.is_empty() || bytes.len() > max {
+        return Err(WorkerProtocolError::InvalidText(field));
+    }
+    let value = str::from_utf8(bytes).map_err(|_| WorkerProtocolError::InvalidUtf8)?;
+    if !value.is_ascii() || value.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(WorkerProtocolError::InvalidText(field));
+    }
+    Ok(())
 }
 
 /// Canonically decoded V2 request/response bytes with no execution provenance.
