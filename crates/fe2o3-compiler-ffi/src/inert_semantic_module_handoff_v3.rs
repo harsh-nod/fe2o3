@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, sync::Arc};
 
 use fe2o3_compiler_lineage::{
     InertProductionSemanticCapsuleIdentityV3, InertProductionSemanticCapsuleV3,
@@ -336,7 +336,7 @@ pub struct InertSemanticCompilerModuleHandoffV3 {
     module_handoff: CompilerModuleHandoffV2,
     pair_binding: InertCompilerModulePairBindingV3,
     identity: InertSemanticCompilerModuleHandoffIdentityV3,
-    canonical_bytes: Box<[u8]>,
+    canonical_bytes: Arc<Vec<u8>>,
 }
 
 impl InertSemanticCompilerModuleHandoffV3 {
@@ -394,7 +394,7 @@ impl InertSemanticCompilerModuleHandoffV3 {
             module_handoff,
             pair_binding,
             identity,
-            canonical_bytes: canonical.into_boxed_slice(),
+            canonical_bytes: Arc::new(canonical),
         })
     }
 
@@ -408,7 +408,7 @@ impl InertSemanticCompilerModuleHandoffV3 {
         let validated = ValidatedOuterWireV3::decode(bytes)?;
         let mut canonical_bytes = try_allocate_outer_buffer(bytes.len())?;
         canonical_bytes.extend_from_slice(bytes);
-        Self::from_validated_wire(canonical_bytes.into_boxed_slice(), validated)
+        Self::from_validated_wire(Arc::new(canonical_bytes), validated)
     }
 
     /// Strictly decodes and retains one owned canonical outer V3 handoff.
@@ -420,11 +420,22 @@ impl InertSemanticCompilerModuleHandoffV3 {
         canonical_bytes: Box<[u8]>,
     ) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
         let validated = ValidatedOuterWireV3::decode(&canonical_bytes)?;
+        Self::from_validated_wire(Arc::new(canonical_bytes.into_vec()), validated)
+    }
+
+    /// Strictly decodes one complete V3 handoff from shared `Vec` custody.
+    ///
+    /// The outer handoff, semantic capsule, all lineage receipts, and nested
+    /// V2 module handoff retain checked ranges in this same allocation.
+    pub fn decode_shared_vec(
+        canonical_bytes: Arc<Vec<u8>>,
+    ) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
+        let validated = ValidatedOuterWireV3::decode(&canonical_bytes)?;
         Self::from_validated_wire(canonical_bytes, validated)
     }
 
     fn from_validated_wire(
-        canonical_bytes: Box<[u8]>,
+        canonical_bytes: Arc<Vec<u8>>,
         validated: ValidatedOuterWireV3,
     ) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
         let ValidatedOuterWireV3 {
@@ -435,16 +446,17 @@ impl InertSemanticCompilerModuleHandoffV3 {
             outer_sha256,
             total_len,
         } = validated;
-        let capsule_bytes = canonical_bytes
-            .get(capsule_range.clone())
-            .ok_or(InertSemanticCompilerModuleHandoffErrorV3::Truncated)?;
-        let module_handoff_bytes = canonical_bytes
-            .get(module_handoff_range.clone())
-            .ok_or(InertSemanticCompilerModuleHandoffErrorV3::Truncated)?;
-        let capsule = InertProductionSemanticCapsuleV3::decode(capsule_bytes)
-            .map_err(InertSemanticCompilerModuleHandoffErrorV3::Capsule)?;
-        let module_handoff = CompilerModuleHandoffV2::decode(module_handoff_bytes)
-            .map_err(InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoff)?;
+        let capsule = InertProductionSemanticCapsuleV3::decode_shared_vec(
+            canonical_bytes.clone(),
+            capsule_range.clone(),
+        )
+        .map_err(InertSemanticCompilerModuleHandoffErrorV3::Capsule)?;
+        let module_handoff = CompilerModuleHandoffV2::decode_shared_vec_range(
+            canonical_bytes.clone(),
+            module_handoff_range.start,
+            module_handoff_range.len(),
+        )
+        .map_err(InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoff)?;
         if capsule.identity().sha256() != &parsed_pair_binding.capsule_sha256
             || capsule.identity().byte_len() != parsed_pair_binding.capsule_len
         {
@@ -512,7 +524,7 @@ impl InertSemanticCompilerModuleHandoffV3 {
 
     /// Returns the complete exact canonical outer encoding.
     pub fn canonical_bytes(&self) -> &[u8] {
-        &self.canonical_bytes
+        self.canonical_bytes.as_slice()
     }
 
     /// Moves both exact inner owners out of this inert outer owner.
@@ -1487,6 +1499,24 @@ mod tests_wire_adversarial {
             InertSemanticCompilerModuleHandoffV3::OWNED_DECODE_ADDITIONAL_OUTER_BUFFERS,
             0
         );
+
+        let outer_start = decoded.canonical_bytes().as_ptr() as usize;
+        let outer_end = outer_start + decoded.canonical_bytes().len();
+        for retained in [
+            decoded.capsule().canonical_bytes(),
+            decoded
+                .capsule()
+                .receipts()
+                .semantic_mir()
+                .canonical_preimage(),
+            decoded.module_handoff().canonical_bytes(),
+            decoded.module_handoff().module_bytes(),
+        ] {
+            let retained_start = retained.as_ptr() as usize;
+            let retained_end = retained_start + retained.len();
+            assert!(retained_start >= outer_start);
+            assert!(retained_end <= outer_end);
+        }
     }
 
     #[test]

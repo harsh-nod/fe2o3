@@ -372,6 +372,17 @@ impl InertProductionSemanticCapsuleV3 {
         Self::decode_shared_backing(SharedBackingV3::Slice(backing), capsule_range)
     }
 
+    /// Strictly decodes a checked range in one immutable shared `Vec` allocation.
+    ///
+    /// This entry point lets an outer transport transfer its existing `Vec`
+    /// allocation into `Arc` custody without copying the underlying payload.
+    pub fn decode_shared_vec(
+        backing: Arc<Vec<u8>>,
+        capsule_range: Range<usize>,
+    ) -> Result<Self, LineageDecodeErrorV3> {
+        Self::decode_shared_backing(SharedBackingV3::Vector(backing), capsule_range)
+    }
+
     fn decode_shared_backing(
         backing: SharedBackingV3,
         capsule_range: Range<usize>,

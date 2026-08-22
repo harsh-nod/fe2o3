@@ -85,6 +85,10 @@ enum CanonicalHandoffBytesV2 {
         backing: Arc<[u8]>,
         range: Range<usize>,
     },
+    SharedVector {
+        backing: Arc<Vec<u8>>,
+        range: Range<usize>,
+    },
 }
 
 impl CanonicalHandoffBytesV2 {
@@ -93,6 +97,7 @@ impl CanonicalHandoffBytesV2 {
             Self::Vec(bytes) => bytes,
             Self::Box(bytes) => bytes,
             Self::Shared { backing, range } => &backing[range.clone()],
+            Self::SharedVector { backing, range } => &backing[range.clone()],
         }
     }
 
@@ -104,6 +109,14 @@ impl CanonicalHandoffBytesV2 {
             }
             Self::Box(bytes) => bytes[module_offset..].to_vec(),
             Self::Shared { backing, range } => {
+                let module_start = range
+                    .start
+                    .checked_add(module_offset)
+                    .filter(|start| *start <= range.end)
+                    .expect("validated V2 module offset must remain in shared backing");
+                backing[module_start..range.end].to_vec()
+            }
+            Self::SharedVector { backing, range } => {
                 let module_start = range
                     .start
                     .checked_add(module_offset)
@@ -364,6 +377,33 @@ impl CompilerModuleHandoffV2 {
         let validated = ValidatedHandoffWireV2::decode(bytes)?;
         Ok(Self::from_validated_wire(
             CanonicalHandoffBytesV2::Shared { backing, range },
+            validated,
+        ))
+    }
+
+    /// Strictly decodes a validated V2 range in one immutable shared `Vec` allocation.
+    ///
+    /// Wrapping an existing payload `Vec` in `Arc` preserves its underlying
+    /// allocation, so an outer V3 owner can share these bytes without a
+    /// conversion through `Arc<[u8]>`.
+    pub fn decode_shared_vec_range(
+        backing: Arc<Vec<u8>>,
+        offset: usize,
+        byte_len: usize,
+    ) -> Result<Self, CompilerModuleHandoffErrorV2> {
+        if byte_len > MAX_COMPILER_MODULE_HANDOFF_BYTES_V2 {
+            return Err(CompilerModuleHandoffErrorV2::HandoffByteBoundExceeded);
+        }
+        let end = offset
+            .checked_add(byte_len)
+            .ok_or(CompilerModuleHandoffErrorV2::SharedBackingRangeOverflow)?;
+        let range = offset..end;
+        let bytes = backing
+            .get(range.clone())
+            .ok_or(CompilerModuleHandoffErrorV2::SharedBackingRangeOutOfBounds)?;
+        let validated = ValidatedHandoffWireV2::decode(bytes)?;
+        Ok(Self::from_validated_wire(
+            CanonicalHandoffBytesV2::SharedVector { backing, range },
             validated,
         ))
     }

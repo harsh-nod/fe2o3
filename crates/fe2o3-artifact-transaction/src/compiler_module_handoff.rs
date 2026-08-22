@@ -371,6 +371,7 @@ trait HandoffSchema: Sized {
     const RECORD_BYTES: usize;
     const MAX_HANDOFF_BYTES: usize;
     const DECODE_WORKING_SET_MULTIPLIER: usize;
+    const DECODE_WORKING_SET_FIXED_BYTES: usize;
     const MAX_DECODE_WORKING_SET_BYTES: usize;
     const VALIDATE_RECORD_DURING_RECOVERY: bool;
     const ALL_SLOTS: [Self::Slot; 3];
@@ -411,6 +412,7 @@ impl HandoffSchema for HandoffV1Schema {
     const RECORD_BYTES: usize = RECORD_BYTES;
     const MAX_HANDOFF_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
     const DECODE_WORKING_SET_MULTIPLIER: usize = 1;
+    const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
     const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
     const VALIDATE_RECORD_DURING_RECOVERY: bool = false;
     const ALL_SLOTS: [Self::Slot; 3] = [
@@ -1453,6 +1455,7 @@ fn validate_decode_working_set<S: HandoffSchema>(
 ) -> Result<usize, HandoffEngineError> {
     let required = payload_bytes
         .checked_mul(S::DECODE_WORKING_SET_MULTIPLIER)
+        .and_then(|bytes| bytes.checked_add(S::DECODE_WORKING_SET_FIXED_BYTES))
         .ok_or(HandoffEngineError::WorkingSetBudgetExceeded {
             required: usize::MAX,
             maximum,
@@ -2043,6 +2046,7 @@ mod protected_v2 {
         const RECORD_BYTES: usize = RECORD_BYTES_V2;
         const MAX_HANDOFF_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
         const DECODE_WORKING_SET_MULTIPLIER: usize = 1;
+        const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
         const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
         const ALL_SLOTS: [Self::Slot; 3] = [
@@ -3027,12 +3031,16 @@ mod semantic_v3 {
     pub const MAX_COMPILER_MODULE_HANDOFF_BYTES_V3: usize =
         fe2o3_compiler_ffi::MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3;
 
-    // During strict decode, the transaction input remains live alongside the outer owner, its
-    // capsule owner and receipt preimages, and the nested module owner. Six complete inputs are a
-    // conservative bound for those schema-bounded owners without changing any wire representation.
-    const V3_DECODE_WORKING_SET_MULTIPLIER: usize = 6;
+    // The admitted payload is the one shared canonical backing. This fixed allowance covers three
+    // bounded representations of the envelope and symbol manifest plus 8 MiB for the bounded
+    // invocation, collection metadata, and fixed decoded owners. Large module and receipt payloads
+    // are ranges in the canonical backing rather than additional complete buffers.
+    const V3_DECODE_WORKING_SET_MULTIPLIER: usize = 1;
+    const V3_DECODE_FIXED_BYTES: usize = 3 * fe2o3_compiler_ffi::MAX_COMPILER_FFI_ENVELOPE_BYTES_V1
+        + 3 * fe2o3_compiler_ffi::MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1
+        + 8 * 1024 * 1024;
     const MAX_V3_DECODE_WORKING_SET_BYTES: usize =
-        MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 * V3_DECODE_WORKING_SET_MULTIPLIER;
+        MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 + V3_DECODE_FIXED_BYTES;
     const STREAM_BUFFER_BYTES_V3: usize = 16 * 1024;
 
     /// Closed attempt-local transport slot for one strict semantic V3 handoff.
@@ -3819,6 +3827,7 @@ mod semantic_v3 {
         const RECORD_BYTES: usize = RECORD_BYTES_V3;
         const MAX_HANDOFF_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES_V3;
         const DECODE_WORKING_SET_MULTIPLIER: usize = V3_DECODE_WORKING_SET_MULTIPLIER;
+        const DECODE_WORKING_SET_FIXED_BYTES: usize = V3_DECODE_FIXED_BYTES;
         const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_V3_DECODE_WORKING_SET_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
         const ALL_SLOTS: [Self::Slot; 3] = [
@@ -3858,11 +3867,12 @@ mod semantic_v3 {
             binding: Self::Binding,
             bytes: Vec<u8>,
         ) -> Result<Self::Payload, HandoffEngineError> {
-            let handoff = fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3::decode(&bytes)
+            let handoff =
+                fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3::decode_shared_vec(
+                    Arc::new(bytes),
+                )
                 .map_err(HandoffEngineError::InvalidCanonicalV3)?;
-            if HandoffBindingV3::from(handoff.identity()) != binding
-                || handoff.canonical_bytes() != bytes
-            {
+            if HandoffBindingV3::from(handoff.identity()) != binding {
                 return Err(HandoffEngineError::PayloadBindingMismatch);
             }
             Ok(handoff)
@@ -5613,6 +5623,38 @@ mod semantic_v3 {
         }
 
         #[test]
+        fn v3_schema_decode_retains_one_shared_canonical_payload_allocation() {
+            let expected = outer(204);
+            let bytes = expected.canonical_bytes().to_vec();
+            let allocation = bytes.as_ptr();
+            let binding = HandoffBindingV3::from(expected.identity());
+
+            let decoded = match HandoffV3Schema::decode_payload(binding, bytes) {
+                Ok(decoded) => decoded,
+                Err(_) => panic!("canonical shared V3 fixture must decode"),
+            };
+
+            assert_eq!(decoded.canonical_bytes().as_ptr(), allocation);
+            let outer_start = allocation as usize;
+            let outer_end = outer_start + decoded.canonical_bytes().len();
+            for retained in [
+                decoded.capsule().canonical_bytes(),
+                decoded
+                    .capsule()
+                    .receipts()
+                    .semantic_mir()
+                    .canonical_preimage(),
+                decoded.module_handoff().canonical_bytes(),
+                decoded.module_handoff().module_bytes(),
+            ] {
+                let retained_start = retained.as_ptr() as usize;
+                let retained_end = retained_start + retained.len();
+                assert!(retained_start >= outer_start);
+                assert!(retained_end <= outer_end);
+            }
+        }
+
+        #[test]
         fn v3_working_set_rejection_is_retryable_before_tombstone() {
             let temp = TestDirectory::new();
             let producer = producer("working_set_retry_v3");
@@ -5625,7 +5667,8 @@ mod semantic_v3 {
                 attempt,
                 CompilerModuleHandoffSlotV3::Default,
             );
-            let required = handoff.canonical_bytes().len() * V3_DECODE_WORKING_SET_MULTIPLIER;
+            let required = handoff.canonical_bytes().len() * V3_DECODE_WORKING_SET_MULTIPLIER
+                + V3_DECODE_FIXED_BYTES;
 
             assert!(matches!(
                 consume_in_slot_engine_with_working_set_limit::<HandoffV3Schema>(
