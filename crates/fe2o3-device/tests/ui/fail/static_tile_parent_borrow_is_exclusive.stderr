@@ -1,7 +1,7 @@
 error[E0502]: cannot borrow `*parent` as immutable because it is also borrowed as mutable
  --> tests/ui/fail/static_tile_parent_borrow_is_exclusive.rs:5:13
   |
-4 |     let tile = parent.checked_static_tile_mut::<4>(0).unwrap();
+4 |     let tile = parent.checked_static_tile_mut::<4>(leader, 0).unwrap();
   |                ------ mutable borrow occurs here
 5 |     let _ = parent.len();
   |             ^^^^^^ immutable borrow occurs here

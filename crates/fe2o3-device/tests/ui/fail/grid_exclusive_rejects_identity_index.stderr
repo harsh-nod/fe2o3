@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/grid_exclusive_rejects_identity_index.rs:5:28
+  |
+5 |     let _ = output.get_mut(index);
+  |                    ------- ^^^^^ expected `ThreadIndex<GridExclusive>`, found `ThreadIndex`
+  |                    |
+  |                    arguments to this method are incorrect
+  |
+  = note: expected struct `ThreadIndex<GridExclusive>`
+             found struct `ThreadIndex<Index1D>`
+note: method defined here
+ --> src/lib.rs
+  |
+  |     pub fn get_mut(&mut self, index: ThreadIndex<IndexSpace>) -> Option<&mut T> {
+  |            ^^^^^^^

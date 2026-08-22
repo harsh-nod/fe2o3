@@ -4,8 +4,9 @@
 //! never provides mutation. [`StaticViewMut`] requires an unsafe constructor
 //! because a per-invocation Rust borrow does not establish GPU-wide partition
 //! authority. [`DisjointStaticTileMut`] instead borrows an existing
-//! [`crate::DisjointSlice`] authority and checks one parent-region-relative
-//! fixed extent before granting unchecked constant-index accesses.
+//! [`crate::DisjointSlice`] authority and an exclusive [`crate::GridLeader`]
+//! capability, then checks one parent-region-relative fixed extent before
+//! granting unchecked constant-index accesses.
 //!
 //! None of these types represents artifact, launch, or compiler-refinement
 //! authority. In particular, the static tile preserves the parent

@@ -75,8 +75,8 @@ pub use tensor::{
     gfx942_lds_bf16_tile_pair_m16x16_v1,
 };
 pub use thread::{
-    DisjointIndex, GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D,
-    Shifted, ThreadIndex, WorkgroupId, WorkgroupSize, WorkitemId,
+    DisjointIndex, GlobalGridSize, GlobalWorkitemId, GridExclusive, GridLeader, GridSize, Index1D,
+    Index2D, Invocation3D, Shifted, ThreadIndex, WorkgroupId, WorkgroupSize, WorkitemId,
 };
 pub use views::{
     DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,
@@ -302,22 +302,6 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
         self.len == 0
     }
 
-    /// Checks and borrows one fixed-size tile relative to this exact region.
-    ///
-    /// The returned tile embeds a private witness carrying this
-    /// `DisjointSlice`'s pointer, element extent, and checked start offset. The
-    /// extent check occurs only here; constant-index accesses on the returned
-    /// tile do not repeat it. The mutable borrow prevents the parent view from
-    /// being accessed until the tile is dropped.
-    pub fn checked_static_tile_mut<const N: usize>(
-        &mut self,
-        start_element: usize,
-    ) -> Result<DisjointStaticTileMut<'_, T, IndexSpace, N>, StaticViewError> {
-        let ptr = self.ptr;
-        let len = self.len;
-        DisjointStaticTileMut::from_disjoint_region(self, ptr, len, start_element)
-    }
-
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_mut"]
     pub fn get_mut(&mut self, index: ThreadIndex<IndexSpace>) -> Option<&mut T> {
         // SAFETY: `ThreadIndex` can only be produced for the current device
@@ -362,10 +346,42 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
     }
 }
 
+impl<T> DisjointSlice<T, GridExclusive> {
+    /// Checks and borrows one fixed-size tile for the unique grid leader.
+    ///
+    /// The returned tile embeds this view's pointer, extent, and checked start
+    /// offset. `GridExclusive` prevents non-leader safe access to the same
+    /// view, while the mutable borrow prevents the leader from reusing the
+    /// parent until the tile is dropped.
+    pub fn checked_static_tile_mut<const N: usize>(
+        &mut self,
+        _leader: &GridLeader,
+        start_element: usize,
+    ) -> Result<DisjointStaticTileMut<'_, T, GridExclusive, N>, StaticViewError> {
+        let ptr = self.ptr;
+        let len = self.len;
+        DisjointStaticTileMut::from_disjoint_region(self, ptr, len, start_element)
+    }
+
+    /// Returns mutable access at an arbitrary checked index for the unique
+    /// leader of the full grid.
+    ///
+    /// `GridExclusive` has no safe `ThreadIndex` producer, so no non-leader
+    /// invocation can access this view through another safe indexing API.
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_mut_exclusive"]
+    pub fn get_mut_exclusive(&mut self, _leader: &GridLeader, index: usize) -> Option<&mut T> {
+        // SAFETY: the capability establishes the unique executing invocation,
+        // the index-space type excludes competing safe access, and
+        // `get_mut_at` performs the bounds check.
+        unsafe { self.get_mut_at(index) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        DisjointIndex, DisjointSlice, Index1D, Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1,
+        DisjointIndex, DisjointSlice, GridExclusive, GridLeader, Index1D, Index2D,
+        KERNEL_MARKER_CONTRACT_VERSION_V1, Shifted, StaticIndex, StaticViewError,
     };
     use core::mem::{align_of, size_of};
 
@@ -387,6 +403,14 @@ mod tests {
         );
         assert_eq!(
             DisjointSlice::<u32, Index2D<64>>::__fe2o3_rust_layout_v1(),
+            (expected_size, expected_align, 0, size_of::<*mut u32>())
+        );
+        assert_eq!(
+            DisjointSlice::<u32, Shifted<Index1D, 1>>::__fe2o3_rust_layout_v1(),
+            (expected_size, expected_align, 0, size_of::<*mut u32>())
+        );
+        assert_eq!(
+            DisjointSlice::<u32, GridExclusive>::__fe2o3_rust_layout_v1(),
             (expected_size, expected_align, 0, size_of::<*mut u32>())
         );
     }
@@ -411,5 +435,81 @@ mod tests {
                 .is_none()
         );
         assert_eq!(storage, [10, 99, 30]);
+    }
+
+    #[test]
+    fn grid_leader_checks_arbitrary_access_bounds() {
+        let leader = GridLeader::for_host_test();
+        let mut storage = [10_u32, 20, 30];
+        let mut slice = unsafe {
+            DisjointSlice::<u32, GridExclusive>::from_raw_parts(storage.as_mut_ptr(), storage.len())
+        };
+
+        *slice.get_mut_exclusive(&leader, 2).unwrap() = 77;
+        assert!(slice.get_mut_exclusive(&leader, 3).is_none());
+        assert_eq!(storage, [10, 20, 77]);
+    }
+
+    #[test]
+    fn exclusive_checked_tile_preserves_and_mutates_its_parent_region() {
+        let leader = GridLeader::for_host_test();
+        let mut storage = [10_u32, 20, 30, 40, 50, 60];
+        let mut parent = unsafe {
+            DisjointSlice::<u32, GridExclusive>::from_raw_parts(storage.as_mut_ptr(), storage.len())
+        };
+
+        {
+            let mut tile = parent.checked_static_tile_mut::<3>(&leader, 2).unwrap();
+            let witness = tile.region_witness();
+            assert_eq!(witness.start_element(), 2);
+            assert_eq!(witness.parent_region_len(), 6);
+            assert_eq!(witness.tile_len(), 3);
+            assert_eq!(*tile.at_const(StaticIndex::<3, 0>::CHECKED), 30);
+
+            *tile.at_const_mut(StaticIndex::<3, 2>::CHECKED) = 55;
+            tile.as_mut_array()[1] = 44;
+            assert_eq!(tile.as_array(), &[30, 44, 55]);
+        }
+
+        assert_eq!(storage, [10, 20, 30, 44, 55, 60]);
+    }
+
+    #[test]
+    fn exclusive_checked_tile_rejects_invalid_extents() {
+        let leader = GridLeader::for_host_test();
+        let mut storage = [1_u32, 2, 3, 4];
+        let mut parent = unsafe {
+            DisjointSlice::<u32, GridExclusive>::from_raw_parts(storage.as_mut_ptr(), storage.len())
+        };
+
+        assert_eq!(
+            parent.checked_static_tile_mut::<0>(&leader, 0).unwrap_err(),
+            StaticViewError::EmptyView
+        );
+        assert_eq!(
+            parent.checked_static_tile_mut::<3>(&leader, 2).unwrap_err(),
+            StaticViewError::ElementRangeOutsideParent {
+                start: 2,
+                count: 3,
+                parent_count: 4,
+            }
+        );
+        assert_eq!(
+            parent
+                .checked_static_tile_mut::<2>(&leader, usize::MAX)
+                .unwrap_err(),
+            StaticViewError::ElementRangeOverflow
+        );
+
+        let mut units = [(); 1];
+        let mut zero_sized = unsafe {
+            DisjointSlice::<(), GridExclusive>::from_raw_parts(units.as_mut_ptr(), units.len())
+        };
+        assert_eq!(
+            zero_sized
+                .checked_static_tile_mut::<1>(&leader, 0)
+                .unwrap_err(),
+            StaticViewError::ZeroSizedElement
+        );
     }
 }

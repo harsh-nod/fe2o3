@@ -353,6 +353,15 @@ pub enum Shifted<IndexSpace, const OFFSET: usize> {
     _IndexSpace(core::convert::Infallible, PhantomData<fn() -> IndexSpace>),
 }
 
+/// Type-level mapping reserved for the unique leader of the full grid.
+///
+/// Unlike `Index1D`, this space has no safe `ThreadIndex` producer. Mutable
+/// views declared with it can therefore expose arbitrary-index operations only
+/// through [`GridLeader`] without racing an identity-mapped safe access.
+#[derive(Debug)]
+#[rustc_diagnostic_item = "fe2o3_device_grid_exclusive_index_space"]
+pub enum GridExclusive {}
+
 /// Type-level index space for a row-major two-dimensional launch.
 ///
 /// Encoding the row stride in the type prevents a witness derived for one
@@ -385,6 +394,20 @@ pub struct ThreadIndex<IndexSpace = Index1D> {
 pub struct DisjointIndex<IndexSpace = Index1D> {
     raw: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+/// Proof that the current invocation is the unique leader of the full grid.
+///
+/// Safe construction is available only through [`grid_leader`], which checks
+/// the compiler-issued global invocation index. The capability permits
+/// arbitrary sequential accesses, but grants no cross-invocation
+/// synchronization or host/device launch authority. It is neither `Copy`,
+/// `Clone`, `Send`, nor `Sync`.
+#[must_use = "exclusive grid authority is lost when the leader is discarded"]
+#[rustc_diagnostic_item = "fe2o3_device_grid_leader"]
+pub struct GridLeader {
+    _private: (),
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -491,6 +514,22 @@ impl<IndexSpace> fmt::Debug for DisjointIndex<IndexSpace> {
     }
 }
 
+impl fmt::Debug for GridLeader {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("GridLeader").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+impl GridLeader {
+    pub(crate) fn for_host_test() -> Self {
+        Self {
+            _private: (),
+            _not_send_sync: PhantomData,
+        }
+    }
+}
+
 /// Returns the current invocation's zero-based ID in the logical 1D launch.
 ///
 /// This is a target-neutral device intrinsic. A backend may derive it from
@@ -517,6 +556,26 @@ pub fn index_1d() -> ThreadIndex {
         raw: global_id_1d(),
         _index_space: PhantomData,
         _not_send_sync: PhantomData,
+    }
+}
+
+/// Returns exclusive grid authority to the unique global invocation zero.
+///
+/// This is safe for the same reason as [`index_1d`]: `global_id_1d` is a
+/// compiler-issued intrinsic, not caller-provided coordinate data. A backend
+/// must preserve the one-to-one logical launch mapping. Until the production
+/// importer recognizes this diagnostic identity, it must reject the call
+/// rather than lower it as an ordinary host function.
+#[inline(always)]
+#[rustc_diagnostic_item = "fe2o3_device_grid_leader_current"]
+pub fn grid_leader() -> Option<GridLeader> {
+    if global_id_1d() == 0 {
+        Some(GridLeader {
+            _private: (),
+            _not_send_sync: PhantomData,
+        })
+    } else {
+        None
     }
 }
 
@@ -602,10 +661,11 @@ pub fn block_dim_z() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DisjointIndex, GridSize, Index1D, Index2D, Invocation3D, Shifted, ThreadIndex, WorkgroupId,
-        WorkgroupSize, WorkitemId,
+        DisjointIndex, GridLeader, GridSize, Index1D, Index2D, Invocation3D, Shifted, ThreadIndex,
+        WorkgroupId, WorkgroupSize, WorkitemId,
     };
     use core::mem::{align_of, size_of};
+    use std::panic::catch_unwind;
 
     #[test]
     fn index_space_markers_do_not_change_the_witness_abi() {
@@ -638,6 +698,17 @@ mod tests {
                 .checked_shift::<1>()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn grid_leader_is_zero_sized_and_thread_bound() {
+        assert_eq!(size_of::<GridLeader>(), 0);
+        assert_eq!(align_of::<GridLeader>(), 1);
+    }
+
+    #[test]
+    fn grid_leader_acquisition_fails_closed_on_host() {
+        assert!(catch_unwind(super::grid_leader).is_err());
     }
 
     #[test]

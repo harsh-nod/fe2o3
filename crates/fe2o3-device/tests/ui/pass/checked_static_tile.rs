@@ -1,7 +1,7 @@
-use fe2o3_device::{DisjointSlice, StaticIndex};
+use fe2o3_device::{DisjointSlice, GridExclusive, GridLeader, StaticIndex};
 
-fn checked(mut parent: DisjointSlice<u32>) {
-    let mut tile = parent.checked_static_tile_mut::<4>(2).unwrap();
+fn checked(mut parent: DisjointSlice<u32, GridExclusive>, leader: &GridLeader) {
+    let mut tile = parent.checked_static_tile_mut::<4>(leader, 2).unwrap();
     let _: &u32 = tile.at_const(StaticIndex::<4, 0>::CHECKED);
     let _: &mut u32 = tile.at_const_mut(StaticIndex::<4, 3>::CHECKED);
     let _: &[u32; 4] = tile.as_array();
