@@ -11,7 +11,7 @@ pub const MOE_KERNEL_NAMESPACE_V1: &str =
 ///
 /// This lives outside `kernel.rs` to avoid a circular self-hash.
 pub const MOE_KERNEL_SOURCE_SHA256_V1: &str =
-    "b77016caa0c3708e420e583712e65e4e6428db7b4feafd8d0a1d4bdc475ef6ff";
+    "0260f144150e6fee7d9bd6a3d919e99ded0e43666509770f6e6186f5100fee25";
 
 /// Exact source-identity mismatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -6,7 +6,7 @@
 
 #![allow(missing_docs)] // The V1 kernel macro emits an undocumented helper module.
 
-use fe2o3_device::{DisjointSlice, kernel, thread};
+use fe2o3_device::{DisjointSlice, GridExclusive, GridLeader, kernel, thread};
 
 use crate::contract::{
     DROP_ROUTE_V1, MOE_EXPERT_CAPACITY_V1, MOE_EXPERTS_V1, MOE_LOGIT_ELEMENTS_V1,
@@ -69,10 +69,13 @@ fn logits_are_finite_v1(logits: &[f32]) -> bool {
     true
 }
 
-fn write_value_v1(output: &mut DisjointSlice<u32>, index: usize, value: u32) {
-    // SAFETY: only lane zero reaches the commit phase, every output has been
-    // admitted at its exact extent, and each index is visited exactly once.
-    let Some(slot) = (unsafe { output.get_mut_at(index) }) else {
+fn write_value_v1(
+    output: &mut DisjointSlice<u32, GridExclusive>,
+    leader: &GridLeader,
+    index: usize,
+    value: u32,
+) {
+    let Some(slot) = output.get_mut_exclusive(leader, index) else {
         fe2o3_device::trap();
         return;
     };
@@ -98,20 +101,18 @@ fn write_value_v1(output: &mut DisjointSlice<u32>, index: usize, value: u32) {
 #[allow(clippy::too_many_arguments)]
 pub fn moe_top2_route_f32_t8_e4_k2_c4_v1(
     logits: &[f32],
-    mut top2_experts: DisjointSlice<u32>,
-    mut requested_counts: DisjointSlice<u32>,
-    mut admitted_counts: DisjointSlice<u32>,
-    mut expert_offsets: DisjointSlice<u32>,
-    mut route_slots: DisjointSlice<u32>,
-    mut permutation: DisjointSlice<u32>,
-    mut inverse: DisjointSlice<u32>,
+    mut top2_experts: DisjointSlice<u32, GridExclusive>,
+    mut requested_counts: DisjointSlice<u32, GridExclusive>,
+    mut admitted_counts: DisjointSlice<u32, GridExclusive>,
+    mut expert_offsets: DisjointSlice<u32, GridExclusive>,
+    mut route_slots: DisjointSlice<u32, GridExclusive>,
+    mut permutation: DisjointSlice<u32, GridExclusive>,
+    mut inverse: DisjointSlice<u32, GridExclusive>,
 ) {
-    let lane = thread::index_1d().get();
-    if lane >= 64 {
-        fe2o3_device::trap();
-        return;
-    }
-    if lane != 0 {
+    let leader;
+    if let Some(current_leader) = thread::grid_leader() {
+        leader = current_leader;
+    } else {
         return;
     }
     if logits.len() != MOE_LOGIT_ELEMENTS_V1
@@ -174,21 +175,27 @@ pub fn moe_top2_route_f32_t8_e4_k2_c4_v1(
 
     let mut index = 0;
     while index < MOE_ROUTES_V1 {
-        write_value_v1(&mut top2_experts, index, staged_top2[index]);
-        write_value_v1(&mut route_slots, index, staged_slots[index]);
-        write_value_v1(&mut permutation, index, staged_permutation[index]);
-        write_value_v1(&mut inverse, index, staged_inverse[index]);
+        write_value_v1(&mut top2_experts, &leader, index, staged_top2[index]);
+        write_value_v1(&mut route_slots, &leader, index, staged_slots[index]);
+        write_value_v1(&mut permutation, &leader, index, staged_permutation[index]);
+        write_value_v1(&mut inverse, &leader, index, staged_inverse[index]);
         index += 1;
     }
     index = 0;
     while index < MOE_EXPERTS_V1 {
-        write_value_v1(&mut requested_counts, index, staged_requested[index]);
-        write_value_v1(&mut admitted_counts, index, staged_admitted[index]);
-        write_value_v1(&mut expert_offsets, index, staged_offsets[index]);
+        write_value_v1(
+            &mut requested_counts,
+            &leader,
+            index,
+            staged_requested[index],
+        );
+        write_value_v1(&mut admitted_counts, &leader, index, staged_admitted[index]);
+        write_value_v1(&mut expert_offsets, &leader, index, staged_offsets[index]);
         index += 1;
     }
     write_value_v1(
         &mut expert_offsets,
+        &leader,
         MOE_EXPERTS_V1,
         staged_offsets[MOE_EXPERTS_V1],
     );

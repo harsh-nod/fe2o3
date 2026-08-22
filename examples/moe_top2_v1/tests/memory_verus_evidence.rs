@@ -9,8 +9,8 @@ const README: &str = include_str!("../README.md");
 const CLOSURE: &[u8] = include_bytes!("../verus/MEMORY_VERUS_CLOSURE_MANIFEST");
 const NEGATIVES: &str = include_str!("../verus/MEMORY_NEGATIVE_SHA256");
 
-const PROOF_SHA256: &str = "a17fad7c3f774ba5d2756505a65173350b6706c5fa209e76556383ceed4a2ac9";
-const KERNEL_SHA256: &str = "b77016caa0c3708e420e583712e65e4e6428db7b4feafd8d0a1d4bdc475ef6ff";
+const PROOF_SHA256: &str = "dbe6dfc3efcf7af0e3ac3b73e9eb276386fb9bb31009f6042f571ec134824f13";
+const KERNEL_SHA256: &str = "0260f144150e6fee7d9bd6a3d919e99ded0e43666509770f6e6186f5100fee25";
 const CLOSURE_SHA256: &str = "f06883e4ce463bcb9a3c8f911064ac85054c7822dc331db1a79f75f9e8878b01";
 const TRANSCRIPT: &str = "FE2O3_MOE_TOP2_MEMORY_V1_VERUS_OK mutations=8 obligations=16";
 const TRANSCRIPT_SHA256: &str = "6344a0def7204969b6218f7e81a4edfb65f21fcb272bfd6af1db19917c46c3b9";

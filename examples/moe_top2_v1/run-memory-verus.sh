@@ -53,7 +53,7 @@ check_digest() {
 }
 
 check_digest "$expected_proof" "$proof"
-check_digest 'b77016caa0c3708e420e583712e65e4e6428db7b4feafd8d0a1d4bdc475ef6ff' "$kernel"
+check_digest '0260f144150e6fee7d9bd6a3d919e99ded0e43666509770f6e6186f5100fee25' "$kernel"
 check_digest 'a2cf9bebabb0a95b0b8c23586b1fe120a3d8571d9d7809be8ed9fdd2a035d531' "$source_checker"
 check_digest "$expected_closure" "$closure_manifest"
 

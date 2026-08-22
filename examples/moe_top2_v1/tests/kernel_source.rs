@@ -45,7 +45,8 @@ fn exact_ordinary_attributed_kernel_is_discovered() {
     assert!(arguments.contains("required = [64 , 1 , 1]"));
     assert!(arguments.contains("max = [64 , 1 , 1]"));
     assert!(arguments.contains("loop_bounds (8 , 4 , 16 , 16 , 4)"));
-    assert!(SOURCE.contains("if lane != 0"));
+    assert!(SOURCE.contains("thread::grid_leader()"));
+    assert!(SOURCE.contains("get_mut_exclusive"));
     assert!(SOURCE.contains("let mut staged_permutation"));
     assert!(file.items.iter().all(|item| !matches!(
         item,

@@ -47,13 +47,13 @@ fn hostile(source: &str, from: &str, to: &str) -> String {
 fn example_owns_the_only_ordinary_kernel_and_fixture_is_only_a_facade() {
     assert!(SOURCE.contains("#[kernel("));
     assert!(SOURCE.contains("pub fn row_softmax_v1"));
-    assert_eq!(SOURCE.len(), 1_289);
+    assert_eq!(SOURCE.len(), 1_297);
     assert_eq!(
         sha256(SOURCE.as_bytes()),
         [
-            0xc4, 0xe2, 0xd6, 0xbb, 0x6e, 0xeb, 0xe0, 0x1e, 0xb6, 0xae, 0x7c, 0x0d, 0xa1, 0xa5,
-            0x24, 0x11, 0x38, 0x19, 0xa3, 0x7b, 0x4e, 0xc2, 0xd0, 0xa5, 0x16, 0x7f, 0x32, 0xcc,
-            0x31, 0x34, 0xe6, 0xf4,
+            0x0b, 0x0d, 0x5e, 0x29, 0x64, 0xd4, 0x62, 0x7b, 0xc7, 0xef, 0x3d, 0xac, 0x88, 0x2f,
+            0x86, 0xa9, 0xb3, 0xc4, 0x9a, 0xb7, 0x15, 0x24, 0x5b, 0xac, 0xc3, 0xfc, 0x92, 0xf2,
+            0x8f, 0x0d, 0x08, 0xb0,
         ]
     );
     assert_eq!(
@@ -86,8 +86,8 @@ fn exact_source_admits_the_reviewed_lane_zero_three_loop_schedule() {
 #[test]
 fn comments_and_whitespace_do_not_change_the_ast_but_doc_attributes_do() {
     let with_comment = SOURCE.replacen(
-        "let lane = thread::index_1d().get();",
-        "/* inert comment */ let lane = thread::index_1d().get();",
+        "if let Some(leader) = thread::grid_leader() {",
+        "/* inert comment */ if let Some(leader) = thread::grid_leader() {",
         1,
     );
     assert!(collect_reviewed_row_softmax_algorithm_v1(&with_comment).is_ok());
@@ -111,7 +111,11 @@ fn malformed_and_hostile_source_mutations_fail_closed() {
     );
 
     let mutations = [
-        hostile(SOURCE, "if lane == 0", "if lane != 0"),
+        hostile(
+            SOURCE,
+            "thread::grid_leader()",
+            "thread::grid_leader_unchecked()",
+        ),
         hostile(SOURCE, "f32::NEG_INFINITY", "0.0_f32"),
         hostile(
             SOURCE,
@@ -148,8 +152,8 @@ fn malformed_and_hostile_source_mutations_fail_closed() {
         ),
         hostile(
             SOURCE,
-            "output.get_mut_at(index)",
-            "output.get_mut_at(index + 1)",
+            "output.get_mut_exclusive(&leader, index)",
+            "output.get_mut_exclusive(&leader, index + 1)",
         ),
         hostile(SOURCE, "*slot = probability", "*slot += probability"),
         hostile(
