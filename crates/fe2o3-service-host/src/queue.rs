@@ -14,9 +14,10 @@ use fe2o3_kfd::{
 };
 
 use crate::allocation::{
-    DeviceAllocationRoleMarkerV1, QuarantinedServiceAllocationsV1, ServiceAllocationErrorV1,
-    ServiceAllocationReleaseFailureV1, ServiceAllocationReleaseObservationV1,
-    ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1, ServiceDispatchRangeV1,
+    DeviceAllocationRoleMarkerV1, DeviceLocalAllocationV1, QuarantinedServiceAllocationsV1,
+    ServiceAllocationErrorV1, ServiceAllocationReleaseFailureV1,
+    ServiceAllocationReleaseObservationV1, ServiceAllocationSessionV1,
+    ServiceAllocationSubleaseSetV1, ServiceDeviceDispatchRangeV1, ServiceDispatchRangeV1,
     ServiceHostDispatchRangeV1, ServiceQueueAllocationLedgerV1,
     ServiceQueueAllocationRestoreFailureV1,
 };
@@ -24,14 +25,14 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r5-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r6-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
     "batch=1-through-8192-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add-one-final-doorbell-per-fixed-batch\n",
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,exact-completion-and-signal-recycle-before-detach-rebind-or-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
-    "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-exact-member-index-offset-and-extent,replacement-denies-old-allocation-generation\n",
+    "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-only-one-inspected-write-or-readwrite-subrange-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
     "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle\n",
     "release=return-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
@@ -42,7 +43,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "706b7a91410a03a1bd2f1398a3a870a0d243e7b5259372612c4e22927ecb35b2";
+    "5370f2b82c310f9ced62af2b4f53767cd0a20a8c5faa74e38f9acf76a7f75e0b";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -542,6 +543,53 @@ pub struct ServiceQueueUnboundSessionV1 {
     data: Vec<Gfx942FixedDispatchDataV1>,
 }
 
+/// Fresh queue, logical-partition, and member-range custody after one detached
+/// initialized device allocation is replaced.
+///
+/// This owner intentionally does not implement `Clone`. The queue and new
+/// partition generation must move together until the caller explicitly
+/// separates them for replacement-batch construction.
+#[must_use = "the live queue and replacement partition must remain retained"]
+pub struct ServiceQueuePartitionedDataUpdateV1<R, const N: usize>
+where
+    R: DeviceAllocationRoleMarkerV1,
+{
+    queue: ServiceQueueUnboundSessionV1,
+    subleases: ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+    ranges: [ServiceDeviceDispatchRangeV1; N],
+}
+
+impl<R, const N: usize> ServiceQueuePartitionedDataUpdateV1<R, N>
+where
+    R: DeviceAllocationRoleMarkerV1,
+{
+    /// Separates the still-live queue, fresh partition witness, and exact
+    /// addressless member ranges.
+    pub fn into_parts(
+        self,
+    ) -> (
+        ServiceQueueUnboundSessionV1,
+        ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+        [ServiceDeviceDispatchRangeV1; N],
+    ) {
+        (self.queue, self.subleases, self.ranges)
+    }
+}
+
+impl<R, const N: usize> fmt::Debug for ServiceQueuePartitionedDataUpdateV1<R, N>
+where
+    R: DeviceAllocationRoleMarkerV1,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServiceQueuePartitionedDataUpdateV1")
+            .field("queue", &self.queue)
+            .field("subleases", &self.subleases)
+            .field("member_count", &N)
+            .finish_non_exhaustive()
+    }
+}
+
 impl fmt::Debug for ServiceQueueUnboundSessionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -690,6 +738,104 @@ impl ServiceQueueUnboundSessionV1 {
             .ledger
             .commit_initialized_replacement(replacement);
         Ok((self, range))
+    }
+
+    /// Replaces one detached partitioned device allocation with verified bytes
+    /// and atomically installs a new exact logical partition at the same data
+    /// ordinal.
+    ///
+    /// The borrowed old sublease witness is checked against the retained queue
+    /// ledger before any native transition. The new layout is validated in full
+    /// before the old allocation is released. Success returns a fresh move-only
+    /// partition witness plus all exact addressless member ranges; every range
+    /// from the old allocation generation is stale. The member cardinality and
+    /// allocation extent may change across a long-lived queue rebind.
+    pub fn replace_initialized_partitioned_device_local<R, const OLD_N: usize, const NEW_N: usize>(
+        mut self,
+        old: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, OLD_N>,
+        bytes: Box<[u8]>,
+        alignment: u64,
+        content: Gfx942DeviceContentDescriptorV1,
+        new_members: [(u64, u64, u64); NEW_N],
+    ) -> Result<ServiceQueuePartitionedDataUpdateV1<R, NEW_N>, ServiceQueueDataUpdateFailureV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let observed = Gfx942DeviceContentDescriptorV1::from_bytes(content.role(), &bytes);
+        if observed.is_err() || observed.as_ref().is_ok_and(|actual| actual != &content) {
+            return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                error: ServiceQueueErrorV1::BatchContract("device content descriptor"),
+                queue: Box::new(self),
+            });
+        }
+        let extent_bytes = match u64::try_from(bytes.len()) {
+            Ok(extent_bytes) => extent_bytes,
+            Err(_) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                    error: ServiceQueueErrorV1::Allocation(ServiceAllocationErrorV1::InvalidExtent),
+                    queue: Box::new(self),
+                });
+            }
+        };
+        let (replacement, ranges) = match self
+            .owner
+            .ledger
+            .prepare_initialized_partition_replacement::<R, OLD_N, NEW_N>(
+                old,
+                extent_bytes,
+                alignment,
+                new_members,
+            ) {
+            Ok(replacement) => replacement,
+            Err(error) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                    error: ServiceQueueErrorV1::Allocation(error),
+                    queue: Box::new(self),
+                });
+            }
+        };
+        let data_index = replacement.data_index();
+        let old_data = self.data.remove(data_index);
+        if let Err(error) = self
+            .owner
+            .queue
+            .release_detached_fixed_dispatch_data(old_data)
+        {
+            return Err(ServiceQueueDataUpdateFailureV1::Terminal {
+                error: ServiceQueueErrorV1::Kfd(error),
+                retained: Box::new(QuarantinedServiceQueueV1 {
+                    owner: self.owner,
+                    detached_data: Some(self.data),
+                }),
+            });
+        }
+        self.owner.ledger.commit_replacement_release(&replacement);
+        let data = match self
+            .owner
+            .queue
+            .initialize_fixed_dispatch_data(bytes, alignment, content)
+        {
+            Ok(data) => data,
+            Err(error) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Terminal {
+                    error: ServiceQueueErrorV1::Kfd(error),
+                    retained: Box::new(QuarantinedServiceQueueV1 {
+                        owner: self.owner,
+                        detached_data: Some(self.data),
+                    }),
+                });
+            }
+        };
+        self.data.insert(data_index, data);
+        let (subleases, dispatch_ranges) = self
+            .owner
+            .ledger
+            .commit_initialized_partitioned_replacement::<R, NEW_N>(replacement, ranges);
+        Ok(ServiceQueuePartitionedDataUpdateV1 {
+            queue: self,
+            subleases,
+            ranges: dispatch_ranges,
+        })
     }
 }
 
