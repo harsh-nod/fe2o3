@@ -403,7 +403,7 @@ impl WorkerV3LoadEnvelopeV1 {
     ) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadEnvelopeErrorV1> {
         let exact_envelope = self.encode_canonical()?;
         let binding = WorkerV3LoadEnvelopeBindingV1::from_exact_bytes(&exact_envelope)?;
-        let authority = audited_replay_custody_authority_v1(binding);
+        let authority = audited_replay_custody_authority_v1(binding, &self.wire.claim)?;
         publish_worker_v3_load_readiness_v1(output_dir, &self.wire.claim, authority, exact_envelope)
             .map_err(Into::into)
     }
@@ -432,7 +432,8 @@ impl WorkerV3LoadEnvelopeV1 {
 )]
 fn audited_replay_custody_authority_v1(
     binding: WorkerV3LoadEnvelopeBindingV1,
-) -> VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
+    claim: &DurablePublishedHsacoClaimV3,
+) -> Result<VerifiedWorkerV3LoadEnvelopeAuthorityV1, WorkerV3LoadEnvelopeErrorV1> {
     // SAFETY: only `WorkerV3LoadEnvelopeV1::persist_durable_replay_custody_v1` calls this helper.
     // The live owner can only be constructed by consuming a completed V3 publication; construction
     // validates the exact intent record, claim, current lease, outer handoff, ordered providers,
@@ -441,9 +442,10 @@ fn audited_replay_custody_authority_v1(
     // current publication retain the exact finalized artifact checked by the persistence layer.
     unsafe {
         VerifiedWorkerV3LoadEnvelopeAuthorityV1::from_complete_compact_replay_preimages_unchecked(
-            binding,
+            binding, claim,
         )
     }
+    .map_err(WorkerV3LoadEnvelopeErrorV1::PublishedClaim)
 }
 
 /// Separately decoded inert V1 wire owner.
@@ -771,6 +773,7 @@ pub fn recover_worker_v3_load_envelope_v1(
     let receipt = custody.receipt();
     let exact_envelope = custody.into_exact_envelope_bytes();
     let wire = WorkerV3LoadEnvelopeWireV1::decode_canonical(&exact_envelope)?;
+    drop(exact_envelope);
     if wire.published_claim() != &expected_claim {
         return binding_mismatch(WorkerV3LoadEnvelopeBindingFieldV1::DurablePlan);
     }
