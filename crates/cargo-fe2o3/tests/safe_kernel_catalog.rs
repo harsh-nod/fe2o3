@@ -99,7 +99,7 @@ fn collect_reachable_unsafe(
 }
 
 #[test]
-fn positive_example_kernel_unsafe_debt_is_frozen() {
+fn positive_example_kernels_use_only_safe_rust() {
     let root = repository_root();
     let examples = root.join("examples");
     let mut sources = Vec::new();
@@ -150,14 +150,8 @@ fn positive_example_kernel_unsafe_debt_is_frozen() {
     }
 
     assert!(kernels >= 30, "positive kernel catalog unexpectedly shrank");
-    assert_eq!(
-        violations,
-        [
-            "examples/moe_expert_v1/src/kernel.rs::moe_expert_gemm_bf16_m16_n16_k16_v1",
-            "examples/tiled_gemm_v1/src/kernel.rs::tiled_gemm_lds_slice1",
-            "examples/wave64_collectives_v1/src/kernel.rs::wave64_collectives_v1",
-            "examples/workgroup_sync_v1/src/kernel.rs::lds_publish_read_reduce_i32_v1",
-        ],
-        "positive kernel unsafe debt changed; migrate removed entries and reject new ones"
+    assert!(
+        violations.is_empty(),
+        "positive example kernels must not contain or call local unsafe Rust: {violations:?}"
     );
 }
