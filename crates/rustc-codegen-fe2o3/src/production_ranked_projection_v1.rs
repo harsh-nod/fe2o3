@@ -2143,6 +2143,7 @@ mod tests {
                 ProductionRankedOperationV1::Access { kind, .. } => Some(*kind),
                 ProductionRankedOperationV1::View { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
+                | ProductionRankedOperationV1::AtomicAccess { .. }
                 | ProductionRankedOperationV1::IndexConstant { .. }
                 | ProductionRankedOperationV1::InvocationIndex { .. }
                 | ProductionRankedOperationV1::IndexBinary { .. }
