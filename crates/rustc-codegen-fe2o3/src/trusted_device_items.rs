@@ -28,7 +28,7 @@ use sha2::{Digest as _, Sha256};
 use dialect_amdgcn::{
     DeviceMathDiagnosticItem, DeviceValueDiagnosticItem, Fe2o3DeviceDiagnosticItem,
 };
-use fe2o3_kernel_ir::{F32MathFunction, NarrowFloatFormat, WidenedFloatBinaryOp};
+use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
 
@@ -41,8 +41,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x1b, 0xc7, 0x32, 0x10, 0x7d, 0x77, 0x17, 0x73, 0x79, 0xef, 0x7e, 0x92, 0xa5, 0x3f, 0x45, 0xb0,
-    0x39, 0x5a, 0xf5, 0x84, 0x90, 0x96, 0x1f, 0xaa, 0x5b, 0x08, 0x11, 0x44, 0xcf, 0x8d, 0x25, 0xa6,
+    0xf1, 0x63, 0x2c, 0x22, 0x70, 0x7f, 0xb4, 0x06, 0x87, 0xa2, 0xf8, 0xe4, 0xce, 0xb0, 0x76, 0x29,
+    0xa8, 0xe9, 0x47, 0x99, 0xc0, 0x11, 0x9d, 0xe3, 0xac, 0xac, 0x4d, 0xf7, 0xbc, 0x16, 0xa6, 0x3d,
 ];
 #[allow(
     dead_code,
@@ -79,8 +79,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x75, 0x80, 0xa9, 0x0f, 0xf2, 0xd2, 0x78, 0xc4, 0xde, 0x86, 0x97, 0xb9, 0x8d, 0x79, 0xd8, 0xe4,
-    0x31, 0xeb, 0xd9, 0x55, 0x9c, 0x34, 0x5f, 0x62, 0x59, 0x9c, 0xa7, 0xfc, 0x47, 0x84, 0x51, 0x43,
+    0xaa, 0xce, 0xa9, 0xab, 0x0e, 0x26, 0x97, 0x15, 0x6b, 0x29, 0xb6, 0x15, 0xf9, 0x23, 0xda, 0xd8,
+    0x65, 0xb5, 0x5e, 0x6b, 0xfe, 0x00, 0xfe, 0xbd, 0xf1, 0x97, 0x59, 0x30, 0x82, 0x9f, 0x87, 0x34,
 ];
 
 #[cfg(test)]
@@ -1290,174 +1290,88 @@ pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Reject
 fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
     if matches!(item, TrustedDeviceItem::GeneralGemm(_, _)) {
         reviewed_general_gemm_provider_definition_v1(tcx, def_id, item)
-    } else if safe_execution_provider_bound_item(item) {
-        let definition = reviewed_provider_semantic_definition_v1(tcx, def_id)?;
-        let expected_definition_path = safe_execution_compiler_definition_path(item);
-        if definition.canonical_definition_path != expected_definition_path {
-            return Err(format!(
-                "provider definition path is `{}`, expected `{}`",
-                definition.canonical_definition_path, expected_definition_path
-            ));
-        }
-        validate_safe_execution_provider_definition_v1(&definition)
-    } else if matrix_provider_bound_item(item) {
-        reviewed_matrix_provider_observation(tcx, def_id).map(|_| ())
-    } else if row_softmax_provider_bound_item(item) {
-        reviewed_row_softmax_provider_definition(tcx, def_id).map(|_| ())
-    } else if safe_capability_provider_bound_item(item) {
-        reviewed_safe_capability_provider_definition_v1(tcx, def_id, item)
     } else {
-        named_external_provider(tcx, def_id.krate).map(|_| ())
+        let definition = reviewed_provider_semantic_definition_v1(tcx, def_id)?;
+        validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)
     }
 }
 
-fn reviewed_safe_capability_provider_definition_v1(
-    tcx: TyCtxt<'_>,
-    provider_definition: DefId,
+fn validate_reviewed_fe2o3_device_provider_definition_v1(
     item: TrustedDeviceItem,
-) -> Result<(), String> {
-    let definition = reviewed_provider_semantic_definition_v1(tcx, provider_definition)?;
-    let compiled_source_identity = reviewed_compiled_provider_source_identity_at_root(
-        tcx,
-        provider_definition,
-        Path::new(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT),
-        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-    )?;
-    if compiled_source_identity != definition.definition_source_identity {
-        return Err(
-            "safe-capability compiled definition differs from the reviewed provider source"
-                .to_owned(),
-        );
-    }
-    let source =
-        Path::new(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).join(safe_capability_source_file_v1(item));
-    let observed_source_sha256 = Sha256::digest(std::fs::read(&source).map_err(|error| {
-        format!(
-            "reviewed safe-capability source `{}` is unavailable: {error}",
-            source.display()
-        )
-    })?);
-    validate_safe_capability_provider_definition_v1(
-        item.canonical_path(),
-        safe_capability_structural_path_v1(item),
-        safe_capability_source_sha256_v1(item),
-        observed_source_sha256.as_slice(),
-        &definition,
-    )
-}
-
-fn validate_safe_capability_provider_definition_v1(
-    expected_path: &str,
-    expected_structural_path: &str,
-    expected_source_sha256: &[u8],
-    observed_source_sha256: &[u8],
     definition: &ReviewedProviderSemanticDefinitionV1,
 ) -> Result<(), String> {
-    definition.validate()?;
-    if expected_source_sha256.len() != 32
-        || observed_source_sha256.len() != 32
-        || expected_source_sha256 != observed_source_sha256
-    {
-        return Err("reviewed safe-capability source digest changed".to_owned());
-    }
-    if definition.canonical_definition_path != expected_structural_path {
-        return Err(format!(
-            "reviewed safe-capability structural definition path is `{}`, expected `{expected_structural_path}` for `{expected_path}`",
-            definition.canonical_definition_path
-        ));
+    validate_safe_execution_provider_definition_v1(definition)?;
+    if let Some(expected_definition_path) = exact_provider_compiler_definition_path_v1(item) {
+        if definition.canonical_definition_path != expected_definition_path {
+            return Err(format!(
+                "provider definition path is `{}`, expected `{expected_definition_path}` for `{}`",
+                definition.canonical_definition_path,
+                item.canonical_path()
+            ));
+        }
     }
     definition.durable_semantic_identity(
         ProviderSemanticDefinitionRoleV1::SemanticTerminal,
-        expected_path,
+        item.canonical_path(),
     )?;
     Ok(())
 }
-
-const fn safe_capability_source_file_v1(item: TrustedDeviceItem) -> &'static str {
+fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
-        TrustedDeviceItem::BlockedIndexSpace
-        | TrustedDeviceItem::DisjointBlock
-        | TrustedDeviceItem::ThreadIndexCheckedBlock
-        | TrustedDeviceItem::DisjointBlockComponentIndex => "thread.rs",
-        TrustedDeviceItem::DisjointSliceGetBlockMut => "lib.rs",
-        TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
-        | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
-        | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
-        | TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic => "atomic.rs",
-        _ => "",
-    }
-}
-
-const fn safe_capability_source_sha256_v1(item: TrustedDeviceItem) -> &'static [u8; 32] {
-    const THREAD: &[u8; 32] = &[
-        0x24, 0x00, 0xae, 0xda, 0x67, 0xea, 0xd1, 0xa4, 0x1b, 0x0e, 0x99, 0x2a, 0x87, 0x16, 0x4f,
-        0x2c, 0x4a, 0x9e, 0xf8, 0xb5, 0x85, 0x32, 0xfa, 0xdf, 0xf2, 0x58, 0x15, 0xf4, 0x75, 0x71,
-        0xff, 0x1d,
-    ];
-    const LIB: &[u8; 32] = &[
-        0xf8, 0x90, 0x15, 0xf2, 0xfe, 0x0c, 0x0b, 0x3c, 0x2c, 0xfa, 0x90, 0x12, 0xc2, 0x4a, 0xa7,
-        0x64, 0x8e, 0x14, 0xaf, 0x1d, 0x48, 0xe1, 0xd2, 0x22, 0x34, 0x71, 0x78, 0x77, 0xca, 0x63,
-        0x15, 0x08,
-    ];
-    const ATOMIC: &[u8; 32] = &[
-        0x8a, 0xae, 0xbf, 0x54, 0xfc, 0x09, 0x62, 0xf5, 0x7a, 0x38, 0xda, 0x1e, 0x1c, 0x6e, 0xa5,
-        0x89, 0xf4, 0xd2, 0xfd, 0x59, 0x51, 0x0d, 0xd6, 0x4d, 0xa7, 0x8e, 0xee, 0x19, 0x5f, 0xf8,
-        0x63, 0xb1,
-    ];
-    match item {
-        TrustedDeviceItem::BlockedIndexSpace
-        | TrustedDeviceItem::DisjointBlock
-        | TrustedDeviceItem::ThreadIndexCheckedBlock
-        | TrustedDeviceItem::DisjointBlockComponentIndex => THREAD,
-        TrustedDeviceItem::DisjointSliceGetBlockMut => LIB,
-        TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
-        | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
-        | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
-        | TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic => ATOMIC,
-        _ => &[0; 32],
-    }
-}
-
-const fn safe_capability_structural_path_v1(item: TrustedDeviceItem) -> &'static str {
-    match item {
-        TrustedDeviceItem::BlockedIndexSpace => "fe2o3_device::thread::Blocked",
-        TrustedDeviceItem::DisjointBlock => "fe2o3_device::thread::DisjointBlock",
+        TrustedDeviceItem::DisjointSlice => Some("fe2o3_device::DisjointSlice"),
+        TrustedDeviceItem::ThreadIndex => Some("fe2o3_device::thread::ThreadIndex"),
+        TrustedDeviceItem::DisjointIndex => Some("fe2o3_device::thread::DisjointIndex"),
+        TrustedDeviceItem::ShiftedIndexSpace => Some("fe2o3_device::thread::Shifted"),
+        TrustedDeviceItem::BlockedIndexSpace => Some("fe2o3_device::thread::Blocked"),
+        TrustedDeviceItem::GridExclusiveIndexSpace => Some("fe2o3_device::thread::GridExclusive"),
+        TrustedDeviceItem::GridLeader => Some("fe2o3_device::thread::GridLeader"),
+        TrustedDeviceItem::DisjointBlock => Some("fe2o3_device::thread::DisjointBlock"),
+        TrustedDeviceItem::ThreadIndex1d => Some("fe2o3_device::thread::index_1d"),
+        TrustedDeviceItem::ThreadIndexGet => Some("fe2o3_device::thread::{impl#7}::get"),
+        TrustedDeviceItem::ThreadIndexIntoDisjoint => {
+            Some("fe2o3_device::thread::{impl#7}::into_disjoint")
+        }
+        TrustedDeviceItem::ThreadIndexCheckedShift => {
+            Some("fe2o3_device::thread::{impl#7}::checked_shift")
+        }
         TrustedDeviceItem::ThreadIndexCheckedBlock => {
-            "fe2o3_device::thread::{impl#7}::checked_block"
+            Some("fe2o3_device::thread::{impl#7}::checked_block")
+        }
+        TrustedDeviceItem::DisjointIndexGet => Some("fe2o3_device::thread::{impl#8}::get"),
+        TrustedDeviceItem::DisjointIndexCheckedShift => {
+            Some("fe2o3_device::thread::{impl#8}::checked_shift")
         }
         TrustedDeviceItem::DisjointBlockComponentIndex => {
-            "fe2o3_device::thread::{impl#10}::component_index"
+            Some("fe2o3_device::thread::{impl#10}::component_index")
         }
-        TrustedDeviceItem::DisjointSliceGetBlockMut => "fe2o3_device::{impl#2}::get_block_mut",
+        TrustedDeviceItem::GridLeaderCurrent => Some("fe2o3_device::thread::grid_leader"),
+        TrustedDeviceItem::DisjointSliceGetMut => Some("fe2o3_device::{impl#0}::get_mut"),
+        TrustedDeviceItem::DisjointSliceGetDisjointMut => {
+            Some("fe2o3_device::{impl#0}::get_disjoint_mut")
+        }
+        TrustedDeviceItem::DisjointSliceGetMutExclusive => {
+            Some("fe2o3_device::{impl#1}::get_mut_exclusive")
+        }
+        TrustedDeviceItem::DisjointSliceGetBlockMut => {
+            Some("fe2o3_device::{impl#2}::get_block_mut")
+        }
         TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic => {
-            "fe2o3_device::atomic::{impl#0}::as_atomic"
+            Some("fe2o3_device::atomic::{impl#0}::as_atomic")
         }
         TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic => {
-            "fe2o3_device::atomic::{impl#1}::as_atomic"
+            Some("fe2o3_device::atomic::{impl#1}::as_atomic")
         }
         TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic => {
-            "fe2o3_device::atomic::{impl#2}::as_atomic"
+            Some("fe2o3_device::atomic::{impl#2}::as_atomic")
         }
         TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic => {
-            "fe2o3_device::atomic::{impl#3}::as_atomic"
+            Some("fe2o3_device::atomic::{impl#3}::as_atomic")
         }
-        _ => "",
+        _ if safe_execution_provider_bound_item(item) => {
+            Some(safe_execution_compiler_definition_path(item))
+        }
+        _ => None,
     }
-}
-
-const fn safe_capability_provider_bound_item(item: TrustedDeviceItem) -> bool {
-    matches!(
-        item,
-        TrustedDeviceItem::BlockedIndexSpace
-            | TrustedDeviceItem::DisjointBlock
-            | TrustedDeviceItem::ThreadIndexCheckedBlock
-            | TrustedDeviceItem::DisjointBlockComponentIndex
-            | TrustedDeviceItem::DisjointSliceGetBlockMut
-            | TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
-            | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
-            | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
-            | TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic
-    )
 }
 fn validate_safe_execution_provider_definition_v1(
     definition: &ReviewedProviderSemanticDefinitionV1,
@@ -1577,34 +1491,6 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::LdsTile16x16ReadMfmaBf16
             | TrustedDeviceItem::WorkgroupSyncthreads
             | TrustedDeviceItem::DeviceMatrix
-            | TrustedDeviceItem::DeviceMatrixCurrent
-            | TrustedDeviceItem::Bf16MfmaFragment
-            | TrustedDeviceItem::Bf16MfmaFragmentFromBits
-            | TrustedDeviceItem::F32AccumulatorFragment
-            | TrustedDeviceItem::F32AccumulatorFragmentFromValues
-            | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
-            | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
-    )
-}
-
-const fn row_softmax_provider_bound_item(item: TrustedDeviceItem) -> bool {
-    matches!(
-        item,
-        TrustedDeviceItem::DisjointSlice
-            | TrustedDeviceItem::ThreadIndex
-            | TrustedDeviceItem::ThreadIndex1d
-            | TrustedDeviceItem::ThreadIndexGet
-            | TrustedDeviceItem::DisjointSliceGetMutAt
-            | TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::Context)
-            | TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::ContextFromCompiler)
-            | TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(F32MathFunction::Exp))
-    )
-}
-
-const fn matrix_provider_bound_item(item: TrustedDeviceItem) -> bool {
-    matches!(
-        item,
-        TrustedDeviceItem::DeviceMatrix
             | TrustedDeviceItem::DeviceMatrixCurrent
             | TrustedDeviceItem::Bf16MfmaFragment
             | TrustedDeviceItem::Bf16MfmaFragmentFromBits
@@ -2526,17 +2412,17 @@ mod tests {
         TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedGeneralGemmOperationV1,
         TrustedGeneralGemmSurfaceV1, WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
-        general_gemm_dependency_semantic_identity_v1, pinned_core_semantic_terminal_identity_v1,
-        reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
-        reviewed_source_tree_identity, safe_execution_compiler_definition_path,
-        safe_execution_provider_bound_item, structural_local_definition_component_v1,
-        validate_compiled_provider_source_hash_v1,
+        exact_provider_compiler_definition_path_v1, general_gemm_dependency_semantic_identity_v1,
+        pinned_core_semantic_terminal_identity_v1, reviewed_provider_source_closure_identity,
+        reviewed_provider_source_identity_from_path, reviewed_source_tree_identity,
+        safe_execution_compiler_definition_path, safe_execution_provider_bound_item,
+        structural_local_definition_component_v1, validate_compiled_provider_source_hash_v1,
         validate_ordered_provider_semantic_definitions_v1,
+        validate_reviewed_fe2o3_device_provider_definition_v1,
         validate_reviewed_general_gemm_definition_source_v1,
         validate_reviewed_general_gemm_dependency_identity_v1,
         validate_reviewed_general_gemm_source_tree_v1,
         validate_reviewed_general_gemm_terminal_provider_v1,
-        validate_safe_capability_provider_definition_v1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
     use rustc_span::{SourceFileHash, SourceFileHashAlgorithm};
@@ -2720,65 +2606,66 @@ mod tests {
     }
 
     #[test]
-    fn safe_capability_provider_rejects_same_name_path_and_source_substitution() {
-        let path = TrustedDeviceItem::ThreadIndexCheckedBlock.canonical_path();
-        let structural =
-            super::safe_capability_structural_path_v1(TrustedDeviceItem::ThreadIndexCheckedBlock);
+    fn exact_device_provider_rejects_same_name_path_and_source_substitution() {
+        let item = TrustedDeviceItem::ThreadIndexCheckedBlock;
+        let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
         let local = structural.strip_prefix("fe2o3_device::").unwrap();
         let exact = semantic_definition(
             ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
             local,
-            [5; 32],
+            super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
             [6; 32],
         );
-        validate_safe_capability_provider_definition_v1(
-            path, structural, &[7; 32], &[7; 32], &exact,
-        )
-        .expect("exact reviewed provider");
+        validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact)
+            .expect("exact reviewed provider");
 
-        assert!(
-            validate_safe_capability_provider_definition_v1(
-                path,
-                "fe2o3_device::thread::{impl#99}::checked_block",
-                &[7; 32],
-                &[7; 32],
-                &exact,
-            )
-            .is_err()
+        let wrong_path = semantic_definition(
+            ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
+            "thread::{impl#99}::checked_block",
+            super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+            [6; 32],
         );
+        assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &wrong_path).is_err());
         let mut impostor = exact.clone();
         impostor.provider.crate_name = "same_name_impostor".into();
-        assert!(
-            validate_safe_capability_provider_definition_v1(
-                path, structural, &[7; 32], &[7; 32], &impostor,
-            )
-            .is_err()
-        );
+        assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &impostor).is_err());
         impostor = exact.clone();
-        impostor.definition_source_identity[0] ^= 1;
-        assert!(
-            validate_safe_capability_provider_definition_v1(
-                path, structural, &[7; 32], &[8; 32], &impostor,
-            )
-            .is_err()
-        );
+        impostor.source_closure_identity[0] ^= 1;
+        assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &impostor).is_err());
     }
 
     #[test]
-    fn every_new_safe_capability_item_uses_reviewed_provider_authentication() {
+    fn every_production_safety_terminal_has_an_exact_structural_path() {
         for item in [
+            TrustedDeviceItem::DisjointSlice,
+            TrustedDeviceItem::ThreadIndex,
+            TrustedDeviceItem::DisjointIndex,
+            TrustedDeviceItem::ShiftedIndexSpace,
             TrustedDeviceItem::BlockedIndexSpace,
+            TrustedDeviceItem::GridExclusiveIndexSpace,
+            TrustedDeviceItem::GridLeader,
             TrustedDeviceItem::DisjointBlock,
+            TrustedDeviceItem::ThreadIndex1d,
+            TrustedDeviceItem::ThreadIndexGet,
+            TrustedDeviceItem::ThreadIndexIntoDisjoint,
+            TrustedDeviceItem::ThreadIndexCheckedShift,
             TrustedDeviceItem::ThreadIndexCheckedBlock,
+            TrustedDeviceItem::DisjointIndexGet,
+            TrustedDeviceItem::DisjointIndexCheckedShift,
             TrustedDeviceItem::DisjointBlockComponentIndex,
+            TrustedDeviceItem::GridLeaderCurrent,
+            TrustedDeviceItem::DisjointSliceGetMut,
+            TrustedDeviceItem::DisjointSliceGetDisjointMut,
+            TrustedDeviceItem::DisjointSliceGetMutExclusive,
             TrustedDeviceItem::DisjointSliceGetBlockMut,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic,
         ] {
-            assert!(super::safe_capability_provider_bound_item(item), "{item:?}");
-            assert!(!item.canonical_path().is_empty());
+            let path = exact_provider_compiler_definition_path_v1(item)
+                .unwrap_or_else(|| panic!("{item:?} lacks exact provider authentication"));
+            assert!(path.starts_with("fe2o3_device::"));
         }
     }
 
@@ -2791,7 +2678,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("1bc732107d77177379ef7e92a53f45b0395af58490961faa5b081144cf8d25a6")
+            digest("f1632c22707fb40687a2f8e4ceb07629a8e94799c0119de3acac4df7bc16a63d")
         );
 
         let definition = semantic_definition(
@@ -3460,14 +3347,18 @@ mod tests {
             TrustedDeviceItem::ThreadIndex,
             TrustedDeviceItem::DisjointIndex,
             TrustedDeviceItem::ShiftedIndexSpace,
+            TrustedDeviceItem::BlockedIndexSpace,
             TrustedDeviceItem::GridExclusiveIndexSpace,
             TrustedDeviceItem::GridLeader,
+            TrustedDeviceItem::DisjointBlock,
             TrustedDeviceItem::ThreadIndex1d,
             TrustedDeviceItem::ThreadIndexGet,
             TrustedDeviceItem::ThreadIndexIntoDisjoint,
             TrustedDeviceItem::ThreadIndexCheckedShift,
+            TrustedDeviceItem::ThreadIndexCheckedBlock,
             TrustedDeviceItem::DisjointIndexGet,
             TrustedDeviceItem::DisjointIndexCheckedShift,
+            TrustedDeviceItem::DisjointBlockComponentIndex,
             TrustedDeviceItem::GridLeaderCurrent,
             TrustedDeviceItem::ThreadIndexOffset,
             TrustedDeviceItem::ThreadIndexOffsetSigned,
@@ -3476,8 +3367,13 @@ mod tests {
             TrustedDeviceItem::DisjointSliceGetMut,
             TrustedDeviceItem::DisjointSliceGetDisjointMut,
             TrustedDeviceItem::DisjointSliceGetMutExclusive,
+            TrustedDeviceItem::DisjointSliceGetBlockMut,
             TrustedDeviceItem::DisjointSliceGetMutAt,
             TrustedDeviceItem::DisjointSliceLen,
+            TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
+            TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
+            TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
+            TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic,
             TrustedDeviceItem::MemoryOffsetFrom,
             TrustedDeviceItem::MemoryVolatileLoad,
             TrustedDeviceItem::MemoryVolatileStore,
