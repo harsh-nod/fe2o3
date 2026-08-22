@@ -15,7 +15,8 @@ use fe2o3_artifact_transaction::{
     persist_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1_with_options,
     producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
     publish_exact_hsaco_evidence_for_attempt_v2, recover_worker_v2_publication_intent_v1,
-    recover_worker_v3_publication_intent_v1, scavenge_worker_v3_publication_intent_occurrence_v1,
+    recover_worker_v3_publication_intent_v1, resume_worker_v3_publication_intent_retirement_v1,
+    scavenge_worker_v3_publication_intent_occurrence_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
@@ -23,11 +24,18 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+const RETIREMENT_CRASH_OUTPUT: &str = "FE2O3_V3_RETIREMENT_CRASH_OUTPUT";
+const RETIREMENT_CRASH_ATTEMPT: &str = "FE2O3_V3_RETIREMENT_CRASH_ATTEMPT";
+const RETIREMENT_CRASH_BOUNDARY: &str = "FE2O3_V3_RETIREMENT_CRASH_BOUNDARY";
+const RETIREMENT_CRASH_IDENTITY: &str = "FE2O3_V3_RETIREMENT_CRASH_IDENTITY";
+const RETIREMENT_CRASH_PRODUCER_SEED: &str = "FE2O3_V3_RETIREMENT_CRASH_PRODUCER_SEED";
 
 struct TestDirectory(PathBuf);
 
@@ -537,11 +545,16 @@ fn every_retirement_boundary_is_restart_safe() {
     let boundaries = [
         WorkerV3PublicationIntentBoundaryV1::RenameRecordToRetiring,
         WorkerV3PublicationIntentBoundaryV1::SyncRetiringName,
+        WorkerV3PublicationIntentBoundaryV1::RenameOuterHandoffToQuarantine,
         WorkerV3PublicationIntentBoundaryV1::RemoveOuterHandoff,
+        WorkerV3PublicationIntentBoundaryV1::RenameExternalProvidersToQuarantine,
         WorkerV3PublicationIntentBoundaryV1::RemoveExternalProviders,
+        WorkerV3PublicationIntentBoundaryV1::RenameTranscriptToQuarantine,
         WorkerV3PublicationIntentBoundaryV1::RemoveTranscript,
+        WorkerV3PublicationIntentBoundaryV1::RenameOutputToQuarantine,
         WorkerV3PublicationIntentBoundaryV1::RemoveOutput,
         WorkerV3PublicationIntentBoundaryV1::SyncRetiredAttachments,
+        WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
         WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
         WorkerV3PublicationIntentBoundaryV1::SyncRetirement,
     ];
@@ -610,6 +623,245 @@ fn every_retirement_boundary_is_restart_safe() {
         }
         assert!(v3_namespace_entries(&output_dir).is_empty());
     }
+}
+
+#[test]
+fn marker_only_retirement_crash_helper() {
+    let Some(output) = std::env::var_os(RETIREMENT_CRASH_OUTPUT) else {
+        return;
+    };
+    let owner = producer(
+        std::env::var(RETIREMENT_CRASH_PRODUCER_SEED)
+            .unwrap()
+            .parse()
+            .unwrap(),
+    );
+    let attempt =
+        BuildAttempt::from_env_value(&std::env::var(RETIREMENT_CRASH_ATTEMPT).unwrap()).unwrap();
+    let identity_bytes: [u8; 32] = fs::read(std::env::var_os(RETIREMENT_CRASH_IDENTITY).unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let boundary = match std::env::var(RETIREMENT_CRASH_BOUNDARY).unwrap().as_str() {
+        "SyncRetiringName" => WorkerV3PublicationIntentBoundaryV1::SyncRetiringName,
+        "RenameOuterHandoffToQuarantine" => {
+            WorkerV3PublicationIntentBoundaryV1::RenameOuterHandoffToQuarantine
+        }
+        "RenameRetiringRecordToQuarantine" => {
+            WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine
+        }
+        boundary => panic!("unsupported retirement crash boundary {boundary}"),
+    };
+    let point = WorkerV3PublicationIntentFaultPointV1 {
+        boundary,
+        timing: WorkerV3PublicationIntentFaultTimingV1::After,
+    };
+    assert!(matches!(
+        clear_worker_v3_publication_intent_v1_with_options(
+            Path::new(&output),
+            &owner,
+            attempt,
+            fe2o3_artifact_transaction::WorkerV3PublicationIntentIdentityV1::from_bytes(
+                identity_bytes,
+            ),
+            WorkerV3PublicationIntentOptionsV1::inject_crash(point),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { point: actual }) if actual == point
+    ));
+    std::process::exit(86);
+}
+
+#[test]
+fn durable_marker_resumes_after_identity_owner_process_is_lost() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let owner_seed = 147;
+    let owner = producer(owner_seed);
+    let attempt = begin(&output_dir, &owner, 148);
+    let output = b"marker-only restart output";
+    let publication_plan = receipted_plan(&owner, attempt, output, 149);
+    let identity_path = temp.0.join("transient-retirement-identity");
+
+    {
+        let persisted = persist_worker_v3_publication_intent_v1(
+            &output_dir,
+            &owner,
+            attempt,
+            publication_plan,
+            replay(b"marker-only restart transcript"),
+            output.to_vec(),
+        )
+        .unwrap();
+        publish_exact_hsaco_evidence_for_attempt_v2(
+            &output_dir,
+            &owner,
+            attempt,
+            publication_plan,
+            UpstreamCodeObjectEvidenceIdentityV1::from_bytes([150; 32]),
+            compiler_closure(151),
+            output,
+        )
+        .unwrap();
+        fs::write(&identity_path, persisted.record().identity().as_bytes()).unwrap();
+
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "marker_only_retirement_crash_helper",
+                "--nocapture",
+            ])
+            .env(RETIREMENT_CRASH_OUTPUT, &output_dir)
+            .env(RETIREMENT_CRASH_ATTEMPT, attempt.to_env_value())
+            .env(RETIREMENT_CRASH_BOUNDARY, "SyncRetiringName")
+            .env(RETIREMENT_CRASH_IDENTITY, &identity_path)
+            .env(RETIREMENT_CRASH_PRODUCER_SEED, owner_seed.to_string())
+            .output()
+            .unwrap();
+        assert_eq!(
+            child.status.code(),
+            Some(86),
+            "retirement crash helper failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr),
+        );
+    }
+
+    fs::remove_file(identity_path).unwrap();
+    assert!(
+        v3_namespace_entries(&output_dir)
+            .iter()
+            .any(|path| path.to_string_lossy().ends_with(".record.retiring"))
+    );
+    resume_worker_v3_publication_intent_retirement_v1(&output_dir, &owner, attempt).unwrap();
+    assert!(v3_namespace_entries(&output_dir).is_empty());
+}
+
+#[test]
+fn marker_only_resume_cleans_quarantined_attachment_and_terminal_marker() {
+    for (index, boundary) in [
+        WorkerV3PublicationIntentBoundaryV1::RenameOuterHandoffToQuarantine,
+        WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let temp = TestDirectory::new();
+        let output_dir = temp.output();
+        let owner_seed = 156_u8.wrapping_add(index as u8);
+        let owner = producer(owner_seed);
+        let attempt = begin(&output_dir, &owner, 158_u8.wrapping_add(index as u8));
+        let output = format!("quarantine restart output {boundary:?}").into_bytes();
+        let publication_plan =
+            receipted_plan(&owner, attempt, &output, 160_u8.wrapping_add(index as u8));
+        let identity_path = temp.0.join("transient-quarantine-identity");
+
+        {
+            let persisted = persist_worker_v3_publication_intent_v1(
+                &output_dir,
+                &owner,
+                attempt,
+                publication_plan,
+                replay(format!("quarantine restart transcript {boundary:?}").as_bytes()),
+                output.clone(),
+            )
+            .unwrap();
+            publish_exact_hsaco_evidence_for_attempt_v1(
+                &output_dir,
+                &owner,
+                attempt,
+                publication_plan,
+                UpstreamCodeObjectEvidenceIdentityV1::from_bytes(
+                    [162_u8.wrapping_add(index as u8); 32],
+                ),
+                &output,
+            )
+            .unwrap();
+            fs::write(&identity_path, persisted.record().identity().as_bytes()).unwrap();
+
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "marker_only_retirement_crash_helper",
+                    "--nocapture",
+                ])
+                .env(RETIREMENT_CRASH_OUTPUT, &output_dir)
+                .env(RETIREMENT_CRASH_ATTEMPT, attempt.to_env_value())
+                .env(RETIREMENT_CRASH_BOUNDARY, format!("{boundary:?}"))
+                .env(RETIREMENT_CRASH_IDENTITY, &identity_path)
+                .env(RETIREMENT_CRASH_PRODUCER_SEED, owner_seed.to_string())
+                .output()
+                .unwrap();
+            assert_eq!(
+                child.status.code(),
+                Some(86),
+                "quarantine crash helper failed at {boundary:?}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr),
+            );
+        }
+
+        fs::remove_file(identity_path).unwrap();
+        let entries = v3_namespace_entries(&output_dir);
+        assert!(entries.iter().any(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains(".tmp-retire-")
+        }));
+        if boundary == WorkerV3PublicationIntentBoundaryV1::RenameOuterHandoffToQuarantine {
+            assert!(
+                entries
+                    .iter()
+                    .any(|path| path.to_string_lossy().ends_with(".record.retiring"))
+            );
+        } else {
+            assert_eq!(entries.len(), 1);
+        }
+
+        resume_worker_v3_publication_intent_retirement_v1(&output_dir, &owner, attempt).unwrap();
+        assert!(v3_namespace_entries(&output_dir).is_empty());
+    }
+}
+
+#[test]
+fn marker_only_resume_does_not_start_canonical_retirement() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let owner = producer(152);
+    let attempt = begin(&output_dir, &owner, 153);
+    let output = b"canonical intent is not a retirement marker";
+    let publication_plan = receipted_plan(&owner, attempt, output, 154);
+    let persisted = persist_worker_v3_publication_intent_v1(
+        &output_dir,
+        &owner,
+        attempt,
+        publication_plan,
+        replay(b"canonical marker-only rejection transcript"),
+        output.to_vec(),
+    )
+    .unwrap();
+    publish_exact_hsaco_evidence_for_attempt_v1(
+        &output_dir,
+        &owner,
+        attempt,
+        publication_plan,
+        UpstreamCodeObjectEvidenceIdentityV1::from_bytes([155; 32]),
+        output,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        resume_worker_v3_publication_intent_retirement_v1(&output_dir, &owner, attempt),
+        Err(WorkerV3PublicationIntentErrorV1::RetirementNotInProgress)
+    ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
+    clear_worker_v3_publication_intent_v1(
+        &output_dir,
+        &owner,
+        attempt,
+        persisted.record().identity(),
+    )
+    .unwrap();
 }
 
 #[test]
