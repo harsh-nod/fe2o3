@@ -4654,7 +4654,13 @@ pub enum SemanticAxisV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticDisjointIndexSpaceV1 {
     Index1d,
-    ShiftedIndex1d { offset: u64 },
+    ShiftedIndex1d {
+        offset: u64,
+    },
+    BlockedIndex1d {
+        lanes_per_block: u64,
+        elements_per_lane: u64,
+    },
     GridExclusive,
 }
 
@@ -4691,6 +4697,15 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         output_space: SemanticDisjointIndexSpaceV1,
         offset: u64,
     },
+    ThreadIndexCheckedBlock {
+        input_witness: SemanticTypeIdV1,
+        output_block: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        input_space: SemanticDisjointIndexSpaceV1,
+        output_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_block: u64,
+        elements_per_lane: u64,
+    },
     DisjointIndexGet {
         index_witness: SemanticTypeIdV1,
         raw_index: SemanticTypeIdV1,
@@ -4726,6 +4741,15 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         grid_leader: SemanticTypeIdV1,
         element: SemanticTypeIdV1,
         raw_index: SemanticTypeIdV1,
+    },
+    DisjointSliceGetBlockMut {
+        disjoint_slice: SemanticTypeIdV1,
+        block_witness: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_block: u64,
+        elements_per_lane: u64,
     },
 }
 
@@ -6183,6 +6207,27 @@ fn record_intrinsic_capability_claims(
                 && claims.claim_mapping(input_witness, input_space)
                 && claims.claim_mapping(output_witness, output_space)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+            input_witness,
+            output_block,
+            input_space,
+            output_space,
+            lanes_per_block,
+            elements_per_lane,
+            ..
+        } => {
+            let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                lanes_per_block,
+                elements_per_lane,
+            };
+            input_space == SemanticDisjointIndexSpaceV1::Index1d
+                && output_space == expected
+                && lanes_per_block != 0
+                && elements_per_lane != 0
+                && lanes_per_block.checked_mul(elements_per_lane).is_some()
+                && claims.claim_mapping(input_witness, input_space)
+                && claims.claim_mapping(output_block, expected)
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
             index_witness,
             index_space,
@@ -6212,6 +6257,25 @@ fn record_intrinsic_capability_claims(
         } => {
             claims.claim_mapping(disjoint_slice, SemanticDisjointIndexSpaceV1::GridExclusive)
                 && claims.claim_grid_leader(grid_leader)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+            disjoint_slice,
+            block_witness,
+            index_space,
+            lanes_per_block,
+            elements_per_lane,
+            ..
+        } => {
+            let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                lanes_per_block,
+                elements_per_lane,
+            };
+            index_space == expected
+                && lanes_per_block != 0
+                && elements_per_lane != 0
+                && lanes_per_block.checked_mul(elements_per_lane).is_some()
+                && claims.claim_mapping(disjoint_slice, expected)
+                && claims.claim_mapping(block_witness, expected)
         }
         SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
             claims.claim_grid_leader(grid_leader)
@@ -6381,6 +6445,30 @@ fn compiler_intrinsic_signature_matches(
                 && transparent_index_witness_matches(request, output_witness, raw_index)
                 && option_value_result_matches(request, output, output_witness)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+            input_witness,
+            output_block,
+            raw_index,
+            input_space,
+            output_space,
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            inputs.len() == 1
+                && inputs[0] == input_witness
+                && input_space == SemanticDisjointIndexSpaceV1::Index1d
+                && output_space
+                    == SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                        lanes_per_block,
+                        elements_per_lane,
+                    }
+                && lanes_per_block != 0
+                && elements_per_lane != 0
+                && lanes_per_block.checked_mul(elements_per_lane).is_some()
+                && transparent_index_witness_matches(request, input_witness, raw_index)
+                && disjoint_block_witness_matches(request, output_block, raw_index)
+                && option_value_result_matches(request, output, output_block)
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
             index_witness,
             raw_index,
@@ -6452,7 +6540,82 @@ fn compiler_intrinsic_signature_matches(
                 )
                 && checked_mutable_access_result_matches(request, output, element)
         }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+            disjoint_slice,
+            block_witness,
+            element,
+            raw_index,
+            index_space,
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            inputs.len() == 3
+                && inputs[2] == raw_index
+                && index_space
+                    == SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                        lanes_per_block,
+                        elements_per_lane,
+                    }
+                && lanes_per_block != 0
+                && elements_per_lane != 0
+                && lanes_per_block.checked_mul(elements_per_lane).is_some()
+                && mutable_reference_to(request, inputs[0], disjoint_slice)
+                && shared_reference_to(request, inputs[1], block_witness)
+                && disjoint_block_witness_matches(request, block_witness, raw_index)
+                && exclusive_disjoint_slice_type_matches(
+                    request,
+                    disjoint_slice,
+                    element,
+                    raw_index,
+                )
+                && checked_mutable_access_result_matches(request, output, element)
+        }
     }
+}
+
+fn disjoint_block_witness_matches(
+    request: &InertSemanticMirRequestV1,
+    witness: SemanticTypeIdV1,
+    raw_index: SemanticTypeIdV1,
+) -> bool {
+    let Some(witness_decl) = request.types.get(witness.0 as usize) else {
+        return false;
+    };
+    let Some(raw_decl) = request.types.get(raw_index.0 as usize) else {
+        return false;
+    };
+    if !is_unsigned_integer_with_bits(request, raw_index, 64)
+        || witness_decl.layout.size_bytes
+            != raw_decl
+                .layout
+                .size_bytes
+                .and_then(|size| size.checked_mul(2))
+        || witness_decl.layout.alignment_bytes != raw_decl.layout.alignment_bytes
+    {
+        return false;
+    }
+    let SemanticTypeShapeV1::Aggregate(fields) = &witness_decl.shape else {
+        return false;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = &witness_decl.layout.details else {
+        return false;
+    };
+    let mut raw_offsets = BTreeSet::new();
+    let mut marker_fields = 0_usize;
+    for (field, offset) in fields.fields.iter().zip(layout.field_offsets.iter()) {
+        let Some(field_decl) = request.types.get(field.0 as usize) else {
+            return false;
+        };
+        if *field == raw_index {
+            raw_offsets.insert(*offset);
+        } else if field_decl.layout.size_bytes == Some(0) {
+            marker_fields += 1;
+        } else {
+            return false;
+        }
+    }
+    raw_offsets == BTreeSet::from([0, raw_decl.layout.size_bytes.unwrap_or(0)])
+        && marker_fields != 0
 }
 
 fn transparent_index_witness_matches(
@@ -11809,6 +11972,16 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(index_witness);
             pending.push_back(raw_index);
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+            input_witness,
+            output_block,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(input_witness);
+            pending.push_back(output_block);
+            pending.push_back(raw_index);
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
             input_witness,
             output_witness,
@@ -11873,6 +12046,18 @@ fn enqueue_compiler_intrinsic_type_references(
         } => {
             pending.push_back(disjoint_slice);
             pending.push_back(grid_leader);
+            pending.push_back(element);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+            disjoint_slice,
+            block_witness,
+            element,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(disjoint_slice);
+            pending.push_back(block_witness);
             pending.push_back(element);
             pending.push_back(raw_index);
         }
@@ -13215,6 +13400,42 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(element.0)?;
             writer.u32(raw_index.0)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+            input_witness,
+            output_block,
+            raw_index,
+            input_space,
+            output_space,
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            writer.u8(17)?;
+            writer.u32(input_witness.0)?;
+            writer.u32(output_block.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, input_space)?;
+            encode_disjoint_index_space(writer, output_space)?;
+            writer.u64(lanes_per_block)?;
+            writer.u64(elements_per_lane)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+            disjoint_slice,
+            block_witness,
+            element,
+            raw_index,
+            index_space,
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            writer.u8(18)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(block_witness.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)?;
+            writer.u64(lanes_per_block)?;
+            writer.u64(elements_per_lane)
+        }
     }
 }
 
@@ -13229,6 +13450,14 @@ fn encode_disjoint_index_space(
             writer.u64(offset)
         }
         SemanticDisjointIndexSpaceV1::GridExclusive => writer.u8(2),
+        SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            writer.u8(3)?;
+            writer.u64(lanes_per_block)?;
+            writer.u64(elements_per_lane)
+        }
     }
 }
 
@@ -14149,6 +14378,88 @@ mod private_tests {
             },
             &mut claims,
         ));
+    }
+
+    #[test]
+    fn blocked_mapping_claims_bind_exact_dimensions_and_reject_substitution() {
+        let raw = SemanticTypeIdV1::from_index(0);
+        let identity = SemanticTypeIdV1::from_index(1);
+        let block = SemanticTypeIdV1::from_index(2);
+        let slice = SemanticTypeIdV1::from_index(3);
+        let element = SemanticTypeIdV1::from_index(4);
+        let mapping = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block: 16,
+            elements_per_lane: 4,
+        };
+        let mut claims = IntrinsicCapabilityClaimsV1::default();
+        assert!(record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+                index_witness: identity,
+                raw_index: raw,
+            },
+            &mut claims,
+        ));
+        assert!(record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+                input_witness: identity,
+                output_block: block,
+                raw_index: raw,
+                input_space: SemanticDisjointIndexSpaceV1::Index1d,
+                output_space: mapping,
+                lanes_per_block: 16,
+                elements_per_lane: 4,
+            },
+            &mut claims,
+        ));
+        assert!(record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+                disjoint_slice: slice,
+                block_witness: block,
+                element,
+                raw_index: raw,
+                index_space: mapping,
+                lanes_per_block: 16,
+                elements_per_lane: 4,
+            },
+            &mut claims,
+        ));
+        assert!(!record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+                disjoint_slice: slice,
+                block_witness: block,
+                element,
+                raw_index: raw,
+                index_space: SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: 8,
+                    elements_per_lane: 8,
+                },
+                lanes_per_block: 8,
+                elements_per_lane: 8,
+            },
+            &mut claims,
+        ));
+    }
+
+    #[test]
+    fn blocked_mapping_claims_reject_zero_and_overflowing_dimensions() {
+        for (lanes_per_block, elements_per_lane) in [(0, 4), (16, 0), (u64::MAX, 2)] {
+            let mut claims = IntrinsicCapabilityClaimsV1::default();
+            assert!(!record_intrinsic_capability_claims(
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+                    input_witness: SemanticTypeIdV1::from_index(1),
+                    output_block: SemanticTypeIdV1::from_index(2),
+                    raw_index: SemanticTypeIdV1::from_index(0),
+                    input_space: SemanticDisjointIndexSpaceV1::Index1d,
+                    output_space: SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                        lanes_per_block,
+                        elements_per_lane,
+                    },
+                    lanes_per_block,
+                    elements_per_lane,
+                },
+                &mut claims,
+            ));
+        }
     }
 
     #[test]

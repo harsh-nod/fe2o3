@@ -571,6 +571,15 @@ enum SemanticValueBindingV1 {
         id: ValueId,
         index_space: SemanticDisjointIndexSpaceV1,
     },
+    BlockWitness {
+        raw: ValueId,
+        index_space: SemanticDisjointIndexSpaceV1,
+    },
+    OptionBlockWitness {
+        present: ValueId,
+        raw: ValueId,
+        index_space: SemanticDisjointIndexSpaceV1,
+    },
     GridLeader,
     OptionGridLeader {
         present: ValueId,
@@ -585,6 +594,8 @@ impl SemanticValueBindingV1 {
             Self::OptionPointer { .. }
             | Self::OptionIndexWitness { .. }
             | Self::GridLeader
+            | Self::BlockWitness { .. }
+            | Self::OptionBlockWitness { .. }
             | Self::OptionGridLeader { .. } => {
                 Err("aggregate or capability value requires a semantic projection")
             }
@@ -702,6 +713,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 match self.resolve_place(block, statement, place)? {
                     SemanticValueBindingV1::OptionPointer { present, .. }
                     | SemanticValueBindingV1::OptionIndexWitness { present, .. }
+                    | SemanticValueBindingV1::OptionBlockWitness { present, .. }
                     | SemanticValueBindingV1::OptionGridLeader { present } => {
                         let target = lower_scalar_type(self.types, result_type)?;
                         if target == Type::BOOL {
@@ -730,6 +742,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     }
                     SemanticValueBindingV1::Value { .. }
                     | SemanticValueBindingV1::IndexWitness { .. }
+                    | SemanticValueBindingV1::BlockWitness { .. }
                     | SemanticValueBindingV1::GridLeader => Err(unsupported(
                         0,
                         Some(block.index()),
@@ -1102,6 +1115,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 *offset,
                 false,
             )?,
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+                input_space,
+                output_space,
+                lanes_per_block,
+                elements_per_lane,
+                ..
+            } => self.lower_checked_block(
+                block,
+                call,
+                operations,
+                *input_space,
+                *output_space,
+                *lanes_per_block,
+                *elements_per_lane,
+            )?,
             SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { index_space, .. } => {
                 self.require_call_argument_count(block, call, 1)?;
                 let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
@@ -1176,7 +1204,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         "DisjointSlice::get_mut requires the identity thread-index witness",
                     ));
                 }
-                self.lower_checked_slice_access(block, call, operations, 0, index_binding)?
+                self.lower_checked_slice_access(block, call, operations, 0, index_binding, None)?
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
                 index_space,
@@ -1198,7 +1226,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         "get_disjoint_mut mapping authority does not match the slice",
                     ));
                 }
-                self.lower_checked_slice_access(block, call, operations, 0, index_binding)?
+                self.lower_checked_slice_access(block, call, operations, 0, index_binding, None)?
             }
             SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
@@ -1245,7 +1273,65 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
                 let index = self.lower_operand(block, None, &call.arguments()[2], operations)?;
                 let index = self.coerce_index(block, operations, index)?;
-                self.lower_checked_slice_access(block, call, operations, 0, index)?
+                self.lower_checked_slice_access(block, call, operations, 0, index, None)?
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+                index_space,
+                lanes_per_block,
+                elements_per_lane,
+                ..
+            } => {
+                self.require_call_argument_count(block, call, 3)?;
+                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let SemanticValueBindingV1::BlockWitness {
+                    raw,
+                    index_space: actual,
+                } = witness
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "get_block_mut lacks blocked ownership authority",
+                    ));
+                };
+                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: *lanes_per_block,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if actual != expected || *index_space != expected {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "get_block_mut mapping identity changed",
+                    ));
+                }
+                let component =
+                    self.lower_operand(block, None, &call.arguments()[2], operations)?;
+                let component = self.coerce_index(block, operations, component)?;
+                let (component, _) = component
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let (index, present) = self.lower_block_component_index(
+                    block,
+                    operations,
+                    raw,
+                    component,
+                    *lanes_per_block,
+                    *elements_per_lane,
+                )?;
+                self.lower_checked_slice_access(
+                    block,
+                    call,
+                    operations,
+                    0,
+                    SemanticValueBindingV1::Value {
+                        id: index,
+                        ty: Type::INDEX,
+                    },
+                    Some(present),
+                )?
             }
             SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
             | SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -1322,6 +1408,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset }
             }
             SemanticDisjointIndexSpaceV1::ShiftedIndex1d { .. }
+            | SemanticDisjointIndexSpaceV1::BlockedIndex1d { .. }
             | SemanticDisjointIndexSpaceV1::GridExclusive => {
                 return Err(unsupported(
                     0,
@@ -1386,6 +1473,322 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn lower_checked_block(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        input_space: SemanticDisjointIndexSpaceV1,
+        output_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_block: u64,
+        elements_per_lane: u64,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 1)?;
+        let input = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+        let SemanticValueBindingV1::IndexWitness {
+            id: raw,
+            index_space: actual,
+            disjoint: false,
+        } = input
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked_block receiver is not thread-index authority",
+            ));
+        };
+        let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block,
+            elements_per_lane,
+        };
+        let Some(block_elements) = lanes_per_block.checked_mul(elements_per_lane) else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked_block dimensions overflow",
+            ));
+        };
+        if actual != input_space
+            || input_space != SemanticDisjointIndexSpaceV1::Index1d
+            || output_space != expected
+            || lanes_per_block == 0
+            || elements_per_lane == 0
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked_block mapping identity is malformed",
+            ));
+        }
+        let (lanes, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(lanes_per_block)),
+            )?
+            .value()
+            .expect("emitted lanes constant");
+        let (block_elements_value, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(block_elements)),
+            )?
+            .value()
+            .expect("emitted block-elements constant");
+        let (block_index, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Divide,
+                    lhs: raw,
+                    rhs: lanes,
+                },
+            )?
+            .value()
+            .expect("emitted block quotient");
+        let (lane, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Remainder,
+                    lhs: raw,
+                    rhs: lanes,
+                },
+            )?
+            .value()
+            .expect("emitted lane remainder");
+        let (maximum_block, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(u64::MAX / block_elements)),
+            )?
+            .value()
+            .expect("emitted maximum block");
+        let (block_safe, _) = self
+            .emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThanOrEqual,
+                    lhs: block_index,
+                    rhs: maximum_block,
+                },
+            )?
+            .value()
+            .expect("emitted block overflow predicate");
+        let (block_base, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Multiply,
+                    lhs: block_index,
+                    rhs: block_elements_value,
+                },
+            )?
+            .value()
+            .expect("emitted block base");
+        let final_component_base = (elements_per_lane - 1) * lanes_per_block;
+        let (final_component, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(final_component_base)),
+            )?
+            .value()
+            .expect("emitted final-component base");
+        let (final_offset, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: final_component,
+                    rhs: lane,
+                },
+            )?
+            .value()
+            .expect("emitted final-component offset");
+        let (final_index, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: block_base,
+                    rhs: final_offset,
+                },
+            )?
+            .value()
+            .expect("emitted final blocked index");
+        let (sum_safe, _) = self
+            .emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThanOrEqual,
+                    lhs: block_base,
+                    rhs: final_index,
+                },
+            )?
+            .value()
+            .expect("emitted blocked sum predicate");
+        let (present, _) = self
+            .emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs: block_safe,
+                    rhs: sum_safe,
+                },
+            )?
+            .value()
+            .expect("emitted checked-block predicate");
+        Ok(SemanticValueBindingV1::OptionBlockWitness {
+            present,
+            raw,
+            index_space: expected,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_block_component_index(
+        &mut self,
+        block: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
+        raw: ValueId,
+        component: ValueId,
+        lanes_per_block: u64,
+        elements_per_lane: u64,
+    ) -> Result<(ValueId, ValueId), ProductionSemanticKirErrorV1> {
+        let Some(block_elements) = lanes_per_block.checked_mul(elements_per_lane) else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "blocked dimensions overflow during component projection",
+            ));
+        };
+        if lanes_per_block == 0 || elements_per_lane == 0 {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "blocked dimensions are zero during component projection",
+            ));
+        }
+        let mut constant = |value| {
+            self.emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(value)),
+            )
+        };
+        let (lanes, _) = constant(lanes_per_block)?
+            .value()
+            .expect("emitted lanes constant");
+        let (elements, _) = constant(elements_per_lane)?
+            .value()
+            .expect("emitted elements constant");
+        let (block_elements_value, _) = constant(block_elements)?
+            .value()
+            .expect("emitted block-elements constant");
+        let (component_present, _) = self
+            .emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: component,
+                    rhs: elements,
+                },
+            )?
+            .value()
+            .expect("emitted component predicate");
+        let (block_index, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Divide,
+                    lhs: raw,
+                    rhs: lanes,
+                },
+            )?
+            .value()
+            .expect("emitted block quotient");
+        let (lane, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Remainder,
+                    lhs: raw,
+                    rhs: lanes,
+                },
+            )?
+            .value()
+            .expect("emitted lane remainder");
+        let (block_base, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Multiply,
+                    lhs: block_index,
+                    rhs: block_elements_value,
+                },
+            )?
+            .value()
+            .expect("emitted block base");
+        let (component_offset, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Multiply,
+                    lhs: component,
+                    rhs: lanes,
+                },
+            )?
+            .value()
+            .expect("emitted component offset");
+        let (offset, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: component_offset,
+                    rhs: lane,
+                },
+            )?
+            .value()
+            .expect("emitted blocked lane offset");
+        let (index, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: block_base,
+                    rhs: offset,
+                },
+            )?
+            .value()
+            .expect("emitted blocked component index");
+        Ok((index, component_present))
+    }
+
     fn coerce_index(
         &mut self,
         block: SemanticBlockIdV1,
@@ -1424,6 +1827,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         operations: &mut Vec<Operation>,
         receiver: usize,
         index: SemanticValueBindingV1,
+        precondition: Option<ValueId>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         let (slice, slice_ty) = self
             .lower_operand(block, None, &call.arguments()[receiver], operations)?
@@ -1456,7 +1860,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?
             .value()
             .expect("emitted scalar value");
-        let (present, _) = self
+        let (extent_present, _) = self
             .emit(
                 operations,
                 Type::BOOL,
@@ -1468,6 +1872,22 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?
             .value()
             .expect("emitted scalar value");
+        let present = if let Some(precondition) = precondition {
+            self.emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs: precondition,
+                    rhs: extent_present,
+                },
+            )?
+            .value()
+            .expect("emitted combined checked-access predicate")
+            .0
+        } else {
+            extent_present
+        };
         let pointer_ty = Type::pointer(
             (*slice_type.element).clone(),
             slice_type.address_space,
@@ -1635,6 +2055,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     disjoint: true,
                 },
                 (
+                    SemanticValueBindingV1::OptionBlockWitness {
+                        raw, index_space, ..
+                    },
+                    SemanticProjectionKindV1::Field(_),
+                ) => SemanticValueBindingV1::BlockWitness { raw, index_space },
+                (
                     SemanticValueBindingV1::OptionGridLeader { .. },
                     SemanticProjectionKindV1::Field(_),
                 ) => SemanticValueBindingV1::GridLeader,
@@ -1648,6 +2074,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ) => binding,
                 (
                     binding @ SemanticValueBindingV1::OptionGridLeader { .. },
+                    SemanticProjectionKindV1::Downcast(_),
+                ) => binding,
+                (
+                    binding @ SemanticValueBindingV1::OptionBlockWitness { .. },
                     SemanticProjectionKindV1::Downcast(_),
                 ) => binding,
                 (
@@ -1668,6 +2098,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ) => binding,
                 (
                     binding @ SemanticValueBindingV1::GridLeader,
+                    SemanticProjectionKindV1::Dereference
+                    | SemanticProjectionKindV1::Field(0)
+                    | SemanticProjectionKindV1::Downcast(_)
+                    | SemanticProjectionKindV1::OpaqueCast
+                    | SemanticProjectionKindV1::Subtype,
+                ) => binding,
+                (
+                    binding @ SemanticValueBindingV1::BlockWitness { .. },
                     SemanticProjectionKindV1::Dereference
                     | SemanticProjectionKindV1::Field(0)
                     | SemanticProjectionKindV1::Downcast(_)
