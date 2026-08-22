@@ -372,7 +372,9 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
     );
     let transaction = consumed.transaction_identity();
     let outer_identity = consumed.handoff_identity();
+    let receipt_byte_len = receipt.length() as u64;
     let parent_closure = *consumed.handoff().capsule().compiler_closure();
+    let execution_limits = limits();
     let evidence = execute_protected_reproducible_first_build_worker_v3(
         consumed,
         receipt,
@@ -381,7 +383,7 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
         vec![provider()],
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
-        limits(),
+        execution_limits,
     )
     .unwrap();
 
@@ -389,6 +391,7 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
     assert_eq!(expected.attempt(), attempt);
     assert_eq!(expected.slot(), CompilerModuleHandoffSlotV3::Default);
     assert_eq!(expected.transaction_identity(), transaction);
+    assert_eq!(expected.receipt_byte_len(), receipt_byte_len);
     assert_eq!(expected.outer_handoff_identity(), outer_identity);
     let capsule_identity = evidence.handoff().capsule().identity();
     assert_eq!(expected.capsule_sha256(), *capsule_identity.sha256());
@@ -433,6 +436,7 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
         *evidence.handoff().capsule().compiler_closure()
     );
     assert_eq!(evidence.worker_measurement().llvm_build_identity(), LLVM_ID);
+    assert_eq!(evidence.execution_limits(), execution_limits);
     assert_eq!(&evidence.bootstrap_request_bytes()[..8], b"F3LREQ02");
     assert_eq!(&evidence.exact_replay_request_bytes()[..8], b"F3LREQ02");
     assert_ne!(
@@ -756,6 +760,60 @@ fn identical_v3_inputs_produce_deterministic_execution_evidence() {
         first.exact_replay().response().canonical_bytes(),
         second.exact_replay().response().canonical_bytes()
     );
+}
+
+#[test]
+fn execution_limits_are_retained_and_change_only_the_complete_evidence_identity() {
+    let first_directory = TestDirectory::new();
+    let second_directory = TestDirectory::new();
+    let (_, first_receipt, first) = consumed(
+        &first_directory,
+        0x7a,
+        CompilerModuleHandoffSlotV3::Default,
+        0x20,
+        0x5a,
+    );
+    let (_, second_receipt, second) = consumed(
+        &second_directory,
+        0x7a,
+        CompilerModuleHandoffSlotV3::Default,
+        0x20,
+        0x5a,
+    );
+    let first_closure = *first.handoff().capsule().compiler_closure();
+    let second_closure = *second.handoff().capsule().compiler_closure();
+    let first_limits = limits();
+    let second_limits =
+        WorkerExecutionLimitsV1::new(Duration::from_secs(3), 16 * 1024, 1024).unwrap();
+    let first = execute_protected_reproducible_first_build_worker_v3(
+        first,
+        first_receipt,
+        first_closure,
+        &pinned(),
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        first_limits,
+    )
+    .unwrap();
+    let second = execute_protected_reproducible_first_build_worker_v3(
+        second,
+        second_receipt,
+        second_closure,
+        &pinned(),
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        second_limits,
+    )
+    .unwrap();
+
+    assert_eq!(first.binding(), second.binding());
+    assert_eq!(first.plan(), second.plan());
+    assert_eq!(first.output_bytes(), second.output_bytes());
+    assert_eq!(first.execution_limits(), first_limits);
+    assert_eq!(second.execution_limits(), second_limits);
+    assert_ne!(first.identity(), second.identity());
 }
 
 #[test]

@@ -55,6 +55,7 @@ pub struct ProtectedCompilerHandoffExpectationV3 {
     attempt: BuildAttempt,
     slot: CompilerModuleHandoffSlotV3,
     transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+    receipt_byte_len: u64,
     outer_handoff_identity: InertSemanticCompilerModuleHandoffIdentityV3,
     capsule_sha256: [u8; 32],
     capsule_byte_len: u64,
@@ -83,6 +84,11 @@ impl ProtectedCompilerHandoffExpectationV3 {
     /// Returns the attempt-, producer-, slot-, and payload-bound transaction identity.
     pub const fn transaction_identity(self) -> CompilerModuleHandoffTransactionIdentityV3 {
         self.transaction_identity
+    }
+
+    /// Returns the exact canonical handoff length retained by the durable receipt.
+    pub const fn receipt_byte_len(self) -> u64 {
+        self.receipt_byte_len
     }
 
     /// Returns the terminal identity of the complete outer V3 handoff.
@@ -178,6 +184,13 @@ impl ProtectedCompilerHandoffBindingV3 {
         }
 
         let exact_bytes = consumed.bytes();
+        let receipt_byte_len = u64::try_from(expected_receipt.length())
+            .map_err(|_| binding_mismatch("parent receipt byte length"))?;
+        if expected_receipt.length() != exact_bytes.len()
+            || expected_receipt.handoff_identity().byte_len() != receipt_byte_len
+        {
+            return Err(binding_mismatch("parent receipt byte length"));
+        }
         let decoded = InertSemanticCompilerModuleHandoffV3::decode(exact_bytes)
             .map_err(ProtectedCompilerHandoffBindingErrorV3::OuterHandoff)?;
         if decoded.canonical_bytes() != exact_bytes
@@ -223,6 +236,7 @@ impl ProtectedCompilerHandoffBindingV3 {
             attempt: consumed.attempt(),
             slot: consumed.slot(),
             transaction_identity: consumed.transaction_identity(),
+            receipt_byte_len,
             outer_handoff_identity: consumed.handoff_identity(),
             capsule_sha256: *capsule_identity.sha256(),
             capsule_byte_len: capsule_identity.byte_len(),
@@ -419,6 +433,7 @@ pub struct InertProtectedFirstBuildWorkerV3EvidenceV1 {
     binding: ProtectedCompilerHandoffBindingV3,
     handoff: InertSemanticCompilerModuleHandoffV3,
     worker: WorkerMeasurementV1,
+    execution_limits: WorkerExecutionLimitsV1,
     plan: MultiInputLinkPlanV1,
     bootstrap_request_bytes: Vec<u8>,
     bootstrap: InertProtectedCompilerHandoffExecutionV3,
@@ -446,6 +461,11 @@ impl InertProtectedFirstBuildWorkerV3EvidenceV1 {
     /// Returns the exact measured worker declaration.
     pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
         &self.worker
+    }
+
+    /// Returns the exact resource limits applied to each measured worker execution.
+    pub const fn execution_limits(&self) -> WorkerExecutionLimitsV1 {
+        self.execution_limits
     }
 
     /// Returns the complete canonical link plan.
@@ -485,19 +505,6 @@ impl InertProtectedFirstBuildWorkerV3EvidenceV1 {
     /// Returns the exact output identity committed by the complete link plan.
     pub const fn output_identity(&self) -> ContentIdentityV1 {
         self.plan.output().identity()
-    }
-
-    /// Moves the complete outer V3 owner and exact replay execution to the next typed boundary.
-    pub fn into_handoff_and_exact_replay(
-        self,
-    ) -> (
-        InertSemanticCompilerModuleHandoffV3,
-        InertProtectedCompilerHandoffExecutionV3,
-    ) {
-        let Self {
-            handoff, replay, ..
-        } = self;
-        (handoff, replay)
     }
 
     /// Reports that this evidence does not authenticate compiler origin.
@@ -679,7 +686,7 @@ pub fn execute_protected_reproducible_first_build_worker_v3(
     .map_err(|error| map_engine_error(binding, error))?;
 
     validate_replay(binding, worker.measurement(), &result)?;
-    let identity = calculate_evidence_identity(binding, worker.measurement(), &result);
+    let identity = calculate_evidence_identity(binding, worker.measurement(), limits, &result);
     let bootstrap =
         InertProtectedCompilerHandoffExecutionV3::from_execution(binding, result.candidate);
     let replay =
@@ -689,6 +696,7 @@ pub fn execute_protected_reproducible_first_build_worker_v3(
         binding,
         handoff,
         worker: worker.measurement().clone(),
+        execution_limits: limits,
         plan: result.plan,
         bootstrap_request_bytes: result.candidate_request_bytes,
         bootstrap,
@@ -895,6 +903,7 @@ fn hash_binding_preimage(hasher: &mut Sha256, expectation: ProtectedCompilerHand
     hash_attempt(hasher, expectation.attempt);
     hasher.update([expectation.slot as u8]);
     hasher.update(expectation.transaction_identity.as_bytes());
+    hasher.update(expectation.receipt_byte_len.to_le_bytes());
     hasher.update(expectation.outer_handoff_identity.sha256());
     hasher.update(expectation.outer_handoff_identity.byte_len().to_le_bytes());
     hasher.update(expectation.capsule_sha256);
@@ -914,6 +923,7 @@ fn hash_binding_preimage(hasher: &mut Sha256, expectation: ProtectedCompilerHand
 fn calculate_evidence_identity(
     binding: ProtectedCompilerHandoffBindingV3,
     worker: &WorkerMeasurementV1,
+    limits: WorkerExecutionLimitsV1,
     result: &crate::first_build_worker_v2::FirstBuildWorkerV2EngineResult,
 ) -> ProtectedFirstBuildWorkerV3IdentityV1 {
     let mut hasher = Sha256::new();
@@ -922,6 +932,10 @@ fn calculate_evidence_identity(
     hash_content(&mut hasher, worker.executable());
     hash_blob(&mut hasher, worker.worker_build_identity().as_bytes());
     hash_blob(&mut hasher, worker.llvm_build_identity().as_bytes());
+    hasher.update(limits.timeout().as_secs().to_le_bytes());
+    hasher.update(limits.timeout().subsec_nanos().to_le_bytes());
+    hasher.update((limits.stdout_bytes() as u64).to_le_bytes());
+    hasher.update((limits.stderr_bytes() as u64).to_le_bytes());
     hash_blob(&mut hasher, &result.plan.canonical_bytes());
     hash_blob(&mut hasher, &result.candidate_request_bytes);
     hash_blob(&mut hasher, result.candidate.response().canonical_bytes());
