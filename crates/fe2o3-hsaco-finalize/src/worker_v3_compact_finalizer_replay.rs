@@ -2,6 +2,7 @@
 
 use std::{error::Error, fmt, ops::Range, time::Duration};
 
+use fe2o3_artifact_transaction::MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3;
 use sha2::{Digest, Sha256};
 
@@ -16,8 +17,7 @@ use crate::{
         OwnedWorkerV3ProviderReplayPartV1, extract_worker_v3_request_replay_parts_v1,
     },
     worker_protocol_v2::{
-        MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1, WorkerResponseReplayMetadataV1,
-        validate_worker_response_replay_metadata_bodies_v1,
+        WorkerResponseReplayMetadataV1, validate_worker_response_replay_metadata_bodies_v1,
     },
 };
 
@@ -30,17 +30,11 @@ const COMPACT_REPLAY_IDENTITY_DOMAIN_V1: &[u8] =
 
 const MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES_V1: usize = 16_644;
 const MAX_RESPONSE_PROVIDER_EVIDENCE_BODY_BYTES_V1: usize = 1_067_889;
-const MAX_RESPONSE_METADATA_SHELL_BYTES_V1: usize = 1_084_925;
-const MAX_SHARED_WORKER_OPTION_METADATA_BYTES_V1: usize = 21_480;
-const MAX_SHARED_FRAMING_AND_IDENTITIES_BYTES_V1: usize = 4_175;
 
 /// Maximum canonical bytes in one compact native-V3 finalizer replay transcript.
-pub const MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1: usize = 2
-    * MAX_RESPONSE_METADATA_SHELL_BYTES_V1
-    + MAX_SHARED_WORKER_OPTION_METADATA_BYTES_V1
-    + MAX_SHARED_FRAMING_AND_IDENTITIES_BYTES_V1;
+pub const MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1: usize =
+    MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1;
 
-const _: () = assert!(MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1 == 1_084_533);
 const _: () = assert!(MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1 == 2_195_505);
 
 /// Domain-separated identity of one exact compact V3 finalizer replay transcript.
