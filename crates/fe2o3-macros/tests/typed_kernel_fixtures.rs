@@ -211,6 +211,13 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
     let target_dir = manifest_dir.join("../../target/typed-kernel-invalid-test");
     let cases: &[(&str, &[&str])] = &[
         (
+            "invalid_safe_kernel",
+            &[
+                "ordinary #[kernel] functions must be safe",
+                "unsafe blocks are not allowed in ordinary #[kernel] bodies",
+            ],
+        ),
+        (
             "invalid_attribute",
             &["#[kernel] accepts only #[kernel], #[kernel(typed)]"],
         ),
@@ -298,4 +305,18 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
             "{bin} resolved host support before rejecting invalid syntax:\n{stderr}"
         );
     }
+}
+
+#[test]
+fn ordinary_kernel_profile_accepts_safe_only_source() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/typed-invalid/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/typed-kernel-invalid-test");
+    let output = cargo_check(&manifest, &target_dir, Some("safe_kernel"));
+
+    assert!(
+        output.status.success(),
+        "safe-only kernel fixture failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

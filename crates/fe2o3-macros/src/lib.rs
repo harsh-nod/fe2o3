@@ -217,10 +217,14 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
 /// product is at most 1024. Exact typed profiles require `required`; `max` may
 /// be omitted or identical. The occupancy field requires `max`.
 ///
-/// Target assembly must be declared with `unsafe_asm(target = "gfx942",
+/// Ordinary kernels are safe Rust entry points: their signatures and direct
+/// bodies may not contain unsafe Rust syntax. Target assembly is an explicitly
+/// separate low-level boundary declared with `unsafe_asm(target = "gfx942",
 /// operands(...), options(...), effects(...))` on an `unsafe fn`. The
 /// declaration is recorded for later compiler validation and grants no
-/// assembly, memory, loading, or launch authority by itself.
+/// assembly, memory, loading, or launch authority by itself. Raw device FFI is
+/// likewise kept behind the separate [`device_import`] and [`device_export`]
+/// attributes rather than weakening ordinary kernels.
 ///
 /// Direct source loops and integer `match` expressions require an ordered
 /// `control_flow(loop_bounds(...), integer_switches(...))` declaration. Every
@@ -781,6 +785,7 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
         validate_typed_kernel_profile_v1(&input, &options)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
+    validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
     validate_kernel_signature(&input)?;
 
     let crate_binding = if options.mode == KernelMode::Typed {
@@ -896,6 +901,7 @@ fn expand_legacy_kernel_with_imports(
         validate_typed_kernel_signature(&input)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
+    validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
     validate_kernel_signature(&input)?;
 
     let original_ident = input.sig.ident.clone();
@@ -1182,6 +1188,7 @@ fn expand_general_typed_kernel_with_imports(
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
+    validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
     if options.control_flow.is_some()
         && options
             .unsafe_assembly
@@ -3236,6 +3243,134 @@ impl<'ast> Visit<'ast> for KernelAssemblyUseVisitor {
     }
 }
 
+#[derive(Default)]
+struct KernelUnsafeSyntaxVisitor {
+    first_use: Option<(proc_macro2::Span, &'static str)>,
+}
+
+impl KernelUnsafeSyntaxVisitor {
+    fn record(&mut self, span: proc_macro2::Span, diagnostic: &'static str) {
+        self.first_use.get_or_insert((span, diagnostic));
+    }
+}
+
+impl<'ast> Visit<'ast> for KernelUnsafeSyntaxVisitor {
+    fn visit_expr_unsafe(&mut self, expression: &'ast syn::ExprUnsafe) {
+        self.record(
+            expression.unsafe_token.span,
+            "unsafe blocks are not allowed in ordinary #[kernel] bodies; use safe fe2o3 device APIs or an explicitly declared low-level provider boundary",
+        );
+        syn::visit::visit_expr_unsafe(self, expression);
+    }
+
+    fn visit_item_fn(&mut self, function: &'ast ItemFn) {
+        if let Some(unsafety) = function.sig.unsafety {
+            self.record(
+                unsafety.span,
+                "unsafe function declarations are not allowed inside ordinary #[kernel] bodies",
+            );
+        }
+        syn::visit::visit_item_fn(self, function);
+    }
+
+    fn visit_item_foreign_mod(&mut self, foreign: &'ast ItemForeignMod) {
+        if let Some(unsafety) = foreign.unsafety {
+            self.record(
+                unsafety.span,
+                "unsafe extern blocks are not allowed inside ordinary #[kernel] bodies; declare raw device FFI with device_import/device_export",
+            );
+        }
+        syn::visit::visit_item_foreign_mod(self, foreign);
+    }
+
+    fn visit_item_impl(&mut self, implementation: &'ast syn::ItemImpl) {
+        if let Some(unsafety) = implementation.unsafety {
+            self.record(
+                unsafety.span,
+                "unsafe impl declarations are not allowed inside ordinary #[kernel] bodies",
+            );
+        }
+        syn::visit::visit_item_impl(self, implementation);
+    }
+
+    fn visit_item_trait(&mut self, trait_item: &'ast syn::ItemTrait) {
+        if let Some(unsafety) = trait_item.unsafety {
+            self.record(
+                unsafety.span,
+                "unsafe trait declarations are not allowed inside ordinary #[kernel] bodies",
+            );
+        }
+        syn::visit::visit_item_trait(self, trait_item);
+    }
+
+    fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
+        if let Some(unsafety) = function.sig.unsafety {
+            self.record(
+                unsafety.span,
+                "unsafe method declarations are not allowed inside ordinary #[kernel] bodies",
+            );
+        }
+        syn::visit::visit_impl_item_fn(self, function);
+    }
+
+    fn visit_trait_item_fn(&mut self, function: &'ast syn::TraitItemFn) {
+        if let Some(unsafety) = function.sig.unsafety {
+            self.record(
+                unsafety.span,
+                "unsafe method declarations are not allowed inside ordinary #[kernel] bodies",
+            );
+        }
+        syn::visit::visit_trait_item_fn(self, function);
+    }
+
+    fn visit_foreign_item_fn(&mut self, function: &'ast syn::ForeignItemFn) {
+        if let Some(unsafety) = function.sig.unsafety {
+            self.record(
+                unsafety.span,
+                "unsafe foreign functions are not allowed inside ordinary #[kernel] bodies; declare raw device FFI with device_import/device_export",
+            );
+        }
+        syn::visit::visit_foreign_item_fn(self, function);
+    }
+
+    fn visit_type_bare_fn(&mut self, function: &'ast syn::TypeBareFn) {
+        if let Some(unsafety) = function.unsafety {
+            self.record(
+                unsafety.span,
+                "unsafe function pointer types are not allowed in ordinary #[kernel] signatures or bodies",
+            );
+        }
+        syn::visit::visit_type_bare_fn(self, function);
+    }
+}
+
+fn validate_kernel_source_safety(
+    input: &ItemFn,
+    declared_unsafe_assembly: bool,
+) -> syn::Result<()> {
+    if declared_unsafe_assembly {
+        return Ok(());
+    }
+    if let Some(unsafety) = input.sig.unsafety {
+        return Err(syn::Error::new(
+            unsafety.span,
+            "ordinary #[kernel] functions must be safe; use unsafe_asm(...) only for an explicitly declared low-level assembly kernel",
+        ));
+    }
+
+    let mut visitor = KernelUnsafeSyntaxVisitor::default();
+    visitor.visit_generics(&input.sig.generics);
+    for argument in &input.sig.inputs {
+        visitor.visit_fn_arg(argument);
+    }
+    visitor.visit_return_type(&input.sig.output);
+    visitor.visit_block(&input.block);
+    if let Some((span, diagnostic)) = visitor.first_use {
+        return Err(syn::Error::new(span, diagnostic));
+    }
+    Ok(())
+}
+
 fn validate_kernel_assembly_boundary(
     input: &ItemFn,
     declaration: Option<ParsedUnsafeAssemblyV1>,
@@ -4009,8 +4144,9 @@ mod tests {
         general_typed_global_mut_pointer_type_identity_v1, generated_general_typed_arguments_v1,
         host_import_for, model_general_typed_signature_v1, parse_device_ffi_options,
         parse_kernel_options, validate_generated_device_ffi_contract_grammar,
-        validate_kernel_assembly_boundary, validate_typed_kernel_profile_v1,
-        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
+        validate_kernel_assembly_boundary, validate_kernel_source_safety,
+        validate_typed_kernel_profile_v1, validate_typed_kernel_signature,
+        validate_typed_kernel_symbol_stem,
     };
     use fe2o3_artifacts::{
         AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
@@ -4531,6 +4667,63 @@ mod tests {
                 .to_string()
                 .contains("global_asm!")
         );
+    }
+
+    #[test]
+    fn ordinary_kernel_source_requires_safe_rust() {
+        let safe: ItemFn = parse_quote! {
+            fn kernel(value: u32) -> u32 { value + 1 }
+        };
+        validate_kernel_source_safety(&safe, false).unwrap();
+
+        let rejected: Vec<(ItemFn, &str)> = vec![
+            (
+                parse_quote!(
+                    unsafe fn kernel() {}
+                ),
+                "ordinary #[kernel] functions must be safe",
+            ),
+            (
+                parse_quote!(
+                    fn kernel() {
+                        unsafe {}
+                    }
+                ),
+                "unsafe blocks are not allowed in ordinary #[kernel] bodies",
+            ),
+            (
+                parse_quote!(
+                    fn kernel() {
+                        unsafe fn helper() {}
+                    }
+                ),
+                "unsafe function declarations are not allowed inside ordinary #[kernel] bodies",
+            ),
+            (
+                parse_quote!(
+                    fn kernel(callback: unsafe fn()) {
+                        let _ = callback;
+                    }
+                ),
+                "unsafe function pointer types are not allowed in ordinary #[kernel] signatures",
+            ),
+        ];
+        for (input, expected) in rejected {
+            assert!(
+                validate_kernel_source_safety(&input, false)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn declared_unsafe_assembly_keeps_a_separate_low_level_boundary() {
+        let input: ItemFn = parse_quote! {
+            unsafe fn kernel() { unsafe { core::arch::asm!("nop") } }
+        };
+        validate_kernel_source_safety(&input, true).unwrap();
     }
 
     #[test]
