@@ -93,17 +93,28 @@ impl FinishedProtectedRustcInvocationV3 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ProtectedRustcInvocationErrorV1 {
     Capability(String),
+    UnexpectedProtectedSignals {
+        descriptor_present: bool,
+        compiler_closure_marker_present: bool,
+        backend_marker_present: bool,
+    },
     Observation(String),
     ArgumentsMismatch,
     WorkingDirectoryMismatch,
     CompileEnvironmentMismatch,
-    TargetMismatch { found: String },
-    BackendPathMismatch { found: String },
+    TargetMismatch {
+        found: String,
+    },
+    BackendPathMismatch {
+        found: String,
+    },
     RustcClosurePinMismatch,
     CodegenBackendClosurePinMismatch,
     RunningRustcMismatch,
     RunningCodegenBackendMismatch,
-    InvalidClosedObservation { name: &'static str },
+    InvalidClosedObservation {
+        name: &'static str,
+    },
     CompilerClosureObservationMismatch,
     CodegenBackendObservationMismatch,
     RetainedCapabilityChanged(String),
@@ -115,6 +126,14 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
             Self::Capability(detail) => write!(
                 formatter,
                 "cannot admit canonical fd {RUSTC_INVOCATION_CHILD_FD_V1} as a sealed V3 capability: {detail}"
+            ),
+            Self::UnexpectedProtectedSignals {
+                descriptor_present,
+                compiler_closure_marker_present,
+                backend_marker_present,
+            } => write!(
+                formatter,
+                "protected rustc invocation signals are forbidden on this pipeline route (descriptor: {descriptor_present}, compiler-closure marker: {compiler_closure_marker_present}, backend marker: {backend_marker_present})"
             ),
             Self::Observation(detail) => write!(
                 formatter,
@@ -176,13 +195,69 @@ impl std::error::Error for ProtectedRustcInvocationErrorV1 {}
 pub(crate) fn admit_for_codegen(
     pipeline: CodegenPipeline,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
-    if !requires_v3_capability(pipeline, explicit_unprotected_qualification_enabled()) {
+    admit_for_codegen_at(
+        pipeline,
+        explicit_unprotected_qualification_enabled(),
+        RUSTC_INVOCATION_CHILD_FD_V1,
+        env::var_os(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1).is_some(),
+        env::var_os(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2).is_some(),
+    )
+}
+
+fn admit_for_codegen_at(
+    pipeline: CodegenPipeline,
+    explicit_unprotected_qualification: bool,
+    child_fd: RawFd,
+    compiler_closure_marker_present: bool,
+    backend_marker_present: bool,
+) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
+    if !requires_v3_capability(pipeline, explicit_unprotected_qualification) {
+        reject_unexpected_protected_signals_at(
+            child_fd,
+            compiler_closure_marker_present,
+            backend_marker_present,
+        )?;
         return Ok(None);
     }
 
-    let capability = retain_inherited_capability_at(RUSTC_INVOCATION_CHILD_FD_V1)?;
+    let capability = retain_inherited_capability_at(child_fd)?;
     let observation = RustcProcessObservationV1::capture(capability.descriptor())?;
     validate_capability(capability, observation).map(Some)
+}
+
+fn reject_unexpected_protected_signals_at(
+    child_fd: RawFd,
+    compiler_closure_marker_present: bool,
+    backend_marker_present: bool,
+) -> Result<(), ProtectedRustcInvocationErrorV1> {
+    // The fixed inherited slot is reserved by the protected broker. Closing it
+    // before reporting prevents malformed or older descriptors from surviving
+    // into any legacy fallback path.
+    // SAFETY: close accepts any integer descriptor and reports EBADF for an absent slot.
+    let close_result = unsafe { libc::close(child_fd) };
+    let descriptor_present = if close_result == 0 {
+        true
+    } else {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EBADF) {
+            false
+        } else {
+            return Err(ProtectedRustcInvocationErrorV1::Capability(format!(
+                "cannot close reserved inherited descriptor {child_fd}: {error}"
+            )));
+        }
+    };
+    if descriptor_present || compiler_closure_marker_present || backend_marker_present {
+        Err(
+            ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                descriptor_present,
+                compiler_closure_marker_present,
+                backend_marker_present,
+            },
+        )
+    } else {
+        Ok(())
+    }
 }
 
 fn requires_v3_capability(

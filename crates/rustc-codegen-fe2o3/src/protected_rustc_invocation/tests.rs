@@ -141,6 +141,64 @@ fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
 }
 
 #[test]
+fn unprotected_routes_reject_and_close_every_protected_signal() {
+    let _guard = FD_TEST_LOCK.lock().unwrap();
+    let descriptor_bytes =
+        fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
+
+    for pipeline in CodegenPipeline::ALL {
+        if requires_v3_capability(pipeline, false) {
+            continue;
+        }
+        let descriptor = sealed_image(&descriptor_bytes);
+        install_inherited(&descriptor, TEST_CHILD_FD);
+        assert!(matches!(
+            admit_for_codegen_at(pipeline, false, TEST_CHILD_FD, false, false),
+            Err(
+                ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                    descriptor_present: true,
+                    compiler_closure_marker_present: false,
+                    backend_marker_present: false,
+                }
+            )
+        ));
+        assert_eq!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
+    }
+
+    for (compiler_closure_marker_present, backend_marker_present) in
+        [(true, false), (false, true), (true, true)]
+    {
+        assert!(matches!(
+            admit_for_codegen_at(
+                CodegenPipeline::LegacyV1,
+                false,
+                TEST_CHILD_FD,
+                compiler_closure_marker_present,
+                backend_marker_present,
+            ),
+            Err(ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                descriptor_present: false,
+                compiler_closure_marker_present: observed_closure_marker,
+                backend_marker_present: observed_backend_marker,
+            }) if observed_closure_marker == compiler_closure_marker_present
+                && observed_backend_marker == backend_marker_present
+        ));
+    }
+
+    assert!(
+        admit_for_codegen_at(
+            CodegenPipeline::LegacyV1,
+            false,
+            TEST_CHILD_FD,
+            false,
+            false,
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
 fn zero_kernel_protected_selection_cannot_downgrade_or_leave_an_inherited_fd() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
     assert!(requires_v3_capability(CodegenPipeline::ProductionV1, false));
