@@ -1734,7 +1734,11 @@ mod tests {
         }
     }
 
-    fn success_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+    fn success_response_with_diagnostics(
+        request: &WorkerRequestV2,
+        output: &[u8],
+        diagnostics: &[String],
+    ) -> Vec<u8> {
         let mut encoded = Vec::new();
         encoded.extend_from_slice(WORKER_RESPONSE_MAGIC_V2);
         push_field(&mut encoded, 1, request.request_id()).unwrap();
@@ -1747,7 +1751,7 @@ mod tests {
         .unwrap();
         push_field(&mut encoded, 4, request.worker_build_identity().as_bytes()).unwrap();
         push_field(&mut encoded, 5, &[WorkerStageV1::Complete as u8]).unwrap();
-        push_field(&mut encoded, 6, &0_u32.to_le_bytes()).unwrap();
+        push_field(&mut encoded, 6, &encode_strings(diagnostics).unwrap()).unwrap();
         let identity = ContentIdentityV1::calculate(output);
         let mut output_field = vec![1];
         output_field.extend_from_slice(identity.sha256());
@@ -1757,12 +1761,13 @@ mod tests {
         encoded
     }
 
-    fn provider_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
-        let mut encoded = success_response(request, output);
-        encoded[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V3);
+    fn success_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+        success_response_with_diagnostics(request, output, &[])
+    }
 
+    fn provider_evidence_body(provider_identity: &str, file_digests: [[u8; 32]; 2]) -> Vec<u8> {
         let mut provider = Vec::new();
-        for value in ["gfx942-ocml-v1", "gfx942:xnack-"] {
+        for value in [provider_identity, "gfx942:xnack-"] {
             push_u32(&mut provider, value.len()).unwrap();
             provider.extend_from_slice(value.as_bytes());
         }
@@ -1771,17 +1776,72 @@ mod tests {
         push_u32(&mut provider, "external_helper".len()).unwrap();
         provider.extend_from_slice(b"external_helper");
         push_u32(&mut provider, 2).unwrap();
-        for (basename, digest) in [("ocml.bc", [0x41; 32]), ("isa.bc", [0x42; 32])] {
+        for (basename, digest) in [("ocml.bc", file_digests[0]), ("isa.bc", file_digests[1])] {
             push_u32(&mut provider, basename.len()).unwrap();
             provider.extend_from_slice(basename.as_bytes());
             provider.extend_from_slice(&digest);
         }
         let manifest_identity = calculate_provider_manifest_identity(&provider);
         provider.extend_from_slice(&manifest_identity);
+        provider
+    }
+
+    fn provider_response_with_metadata(
+        request: &WorkerRequestV2,
+        output: &[u8],
+        diagnostics: &[String],
+        provider_identity: &str,
+        file_digests: [[u8; 32]; 2],
+    ) -> Vec<u8> {
+        let mut encoded = success_response_with_diagnostics(request, output, diagnostics);
+        encoded[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V3);
+        let provider = provider_evidence_body(provider_identity, file_digests);
         push_field(&mut encoded, 8, &provider).unwrap();
         let response_identity = calculate_response_identity(&encoded);
         push_field(&mut encoded, 9, &response_identity).unwrap();
         encoded
+    }
+
+    fn provider_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+        provider_response_with_metadata(
+            request,
+            output,
+            &[],
+            "gfx942-ocml-v1",
+            [[0x41; 32], [0x42; 32]],
+        )
+    }
+
+    fn incomplete_response(request: &WorkerRequestV2) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(WORKER_RESPONSE_MAGIC_V2);
+        push_field(&mut encoded, 1, request.request_id()).unwrap();
+        push_field(&mut encoded, 2, request.identity()).unwrap();
+        push_field(
+            &mut encoded,
+            3,
+            &request.compiler_envelope_identity().as_bytes(),
+        )
+        .unwrap();
+        push_field(&mut encoded, 4, request.worker_build_identity().as_bytes()).unwrap();
+        push_field(&mut encoded, 5, &[WorkerStageV1::Codegen as u8]).unwrap();
+        push_field(&mut encoded, 6, &0_u32.to_le_bytes()).unwrap();
+        push_field(&mut encoded, 7, &[0]).unwrap();
+        encoded
+    }
+
+    fn response_field_body_range(bytes: &[u8], expected_tag: u16) -> std::ops::Range<usize> {
+        let mut cursor = Cursor::new(bytes);
+        cursor.take(WORKER_RESPONSE_MAGIC_V2.len()).unwrap();
+        loop {
+            let tag = cursor.u16().unwrap();
+            let len = cursor.u32().unwrap() as usize;
+            let start = cursor.position;
+            cursor.take(len).unwrap();
+            if tag == expected_tag {
+                return start..cursor.position;
+            }
+        }
     }
 
     fn request() -> WorkerRequestV2 {
@@ -1993,6 +2053,167 @@ mod tests {
         mixed[14] ^= 1;
         assert!(
             InertDecodedWorkerExchangeV2::decode(request_value.canonical_bytes(), &mixed).is_err()
+        );
+    }
+
+    #[test]
+    fn v2_response_replay_metadata_borrows_exact_diagnostics_body() {
+        let request_value = request();
+        let diagnostics = vec!["codegen complete".to_owned(), "output inspected".to_owned()];
+        let encoded =
+            success_response_with_diagnostics(&request_value, b"linked-cov6", &diagnostics);
+        let response = WorkerResponseV2::decode_for_request(&encoded, &request_value).unwrap();
+        let diagnostics_range = response_field_body_range(response.canonical_bytes(), 6);
+        let metadata = response.replay_metadata().unwrap();
+
+        assert_eq!(
+            metadata.diagnostics_body(),
+            &response.canonical_bytes()[diagnostics_range.clone()]
+        );
+        assert_eq!(
+            metadata.diagnostics_body().as_ptr(),
+            response.canonical_bytes()[diagnostics_range].as_ptr()
+        );
+        assert_eq!(
+            metadata.diagnostics_body(),
+            encode_strings(&diagnostics).unwrap()
+        );
+        assert_eq!(metadata.provider_evidence_body(), None);
+
+        let incomplete = incomplete_response(&request_value);
+        let incomplete = WorkerResponseV2::decode_for_request(&incomplete, &request_value).unwrap();
+        assert_eq!(
+            incomplete.replay_metadata(),
+            Err(WorkerProtocolError::InvalidResponseState)
+        );
+    }
+
+    #[test]
+    fn v3_response_replay_metadata_keeps_two_shells_independent() {
+        let request_value = request();
+        let bootstrap_diagnostics = vec!["bootstrap complete".to_owned()];
+        let replay_diagnostics = vec!["replay complete".to_owned()];
+        let bootstrap_bytes = provider_response_with_metadata(
+            &request_value,
+            b"bootstrap-output",
+            &bootstrap_diagnostics,
+            "gfx942-ocml-bootstrap-v1",
+            [[0x61; 32], [0x62; 32]],
+        );
+        let replay_bytes = provider_response_with_metadata(
+            &request_value,
+            b"replay-output",
+            &replay_diagnostics,
+            "gfx942-ocml-replay-v1",
+            [[0x71; 32], [0x72; 32]],
+        );
+        let bootstrap =
+            WorkerResponseV2::decode_for_request(&bootstrap_bytes, &request_value).unwrap();
+        let replay = WorkerResponseV2::decode_for_request(&replay_bytes, &request_value).unwrap();
+        let bootstrap_metadata = bootstrap.replay_metadata().unwrap();
+        let replay_metadata = replay.replay_metadata().unwrap();
+
+        for (response, metadata) in [(&bootstrap, bootstrap_metadata), (&replay, replay_metadata)] {
+            let diagnostics_range = response_field_body_range(response.canonical_bytes(), 6);
+            let provider_range = response_field_body_range(response.canonical_bytes(), 8);
+            assert_eq!(
+                metadata.diagnostics_body().as_ptr(),
+                response.canonical_bytes()[diagnostics_range].as_ptr()
+            );
+            assert_eq!(
+                metadata.provider_evidence_body().unwrap().as_ptr(),
+                response.canonical_bytes()[provider_range].as_ptr()
+            );
+        }
+        assert_ne!(
+            bootstrap_metadata.diagnostics_body(),
+            replay_metadata.diagnostics_body()
+        );
+        assert_ne!(
+            bootstrap_metadata.provider_evidence_body(),
+            replay_metadata.provider_evidence_body()
+        );
+    }
+
+    #[test]
+    fn response_replay_metadata_bytes_seam_rejects_malformed_framing() {
+        let request_value = request();
+        let valid_v2 = success_response(&request_value, b"linked-cov6");
+        assert!(response_replay_metadata_from_bytes(&valid_v2).is_ok());
+
+        let mut bad_magic = valid_v2.clone();
+        bad_magic[..8].copy_from_slice(b"F3LRSP04");
+        assert_eq!(
+            response_replay_metadata_from_bytes(&bad_magic),
+            Err(WorkerProtocolError::BadMagic)
+        );
+
+        let mut wrong_field_count = valid_v2.clone();
+        wrong_field_count[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V3);
+        assert!(response_replay_metadata_from_bytes(&wrong_field_count).is_err());
+
+        let mut wrong_tag = valid_v2.clone();
+        let diagnostics_range = response_field_body_range(&wrong_tag, 6);
+        wrong_tag[diagnostics_range.start - 6..diagnostics_range.start - 4]
+            .copy_from_slice(&5_u16.to_le_bytes());
+        assert!(response_replay_metadata_from_bytes(&wrong_tag).is_err());
+
+        let mut wrong_length = valid_v2.clone();
+        let request_id_range = response_field_body_range(&wrong_length, 1);
+        wrong_length[request_id_range.start - 4..request_id_range.start]
+            .copy_from_slice(&31_u32.to_le_bytes());
+        assert!(response_replay_metadata_from_bytes(&wrong_length).is_err());
+
+        let mut wrong_stage = valid_v2.clone();
+        let stage_range = response_field_body_range(&wrong_stage, 5);
+        wrong_stage[stage_range.start] = WorkerStageV1::Codegen as u8;
+        assert_eq!(
+            response_replay_metadata_from_bytes(&wrong_stage),
+            Err(WorkerProtocolError::InvalidResponseState)
+        );
+
+        let mut missing_output = valid_v2.clone();
+        let output_range = response_field_body_range(&missing_output, 7);
+        missing_output[output_range.start] = 0;
+        assert_eq!(
+            response_replay_metadata_from_bytes(&missing_output),
+            Err(WorkerProtocolError::InvalidResponseState)
+        );
+
+        let mut trailing = valid_v2;
+        trailing.push(0);
+        assert_eq!(
+            response_replay_metadata_from_bytes(&trailing),
+            Err(WorkerProtocolError::TrailingBytes)
+        );
+    }
+
+    #[test]
+    fn response_replay_metadata_shell_bounds_are_exact_and_independent() {
+        assert_eq!(MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES, 16_644);
+        assert_eq!(MAX_PROVIDER_EVIDENCE_BYTES, 1_067_889);
+
+        let bootstrap_shell = MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES
+            .checked_add(MAX_PROVIDER_EVIDENCE_BYTES)
+            .unwrap();
+        let replay_shell = MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES
+            .checked_add(MAX_PROVIDER_EVIDENCE_BYTES)
+            .unwrap();
+        assert_eq!(
+            MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
+            bootstrap_shell
+        );
+        assert_eq!(
+            MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
+            1_084_533
+        );
+        assert_eq!(
+            MAX_WORKER_RESPONSE_REPLAY_METADATA_TWO_SHELL_BYTES_V1,
+            bootstrap_shell.checked_add(replay_shell).unwrap()
+        );
+        assert_eq!(
+            MAX_WORKER_RESPONSE_REPLAY_METADATA_TWO_SHELL_BYTES_V1,
+            2_169_066
         );
     }
 
