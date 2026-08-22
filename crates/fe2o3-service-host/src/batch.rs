@@ -67,8 +67,10 @@ impl ServiceFixedDispatchBufferV1 {
 /// One inert packet description in a fixed service batch.
 ///
 /// `kernarg_bytes` must be the complete inspected kernarg image with zero bytes
-/// in every device-pointer field. The private KFD owner checks that condition
-/// and performs all pointer substitution after consuming allocation custody.
+/// in every device-pointer field. If supported COV6 implicit fields are
+/// declared, its exact trailing 256-byte implicit suffix must also be entirely
+/// zero. The private KFD owner checks those conditions and performs admitted
+/// pointer and implicit-value substitution after consuming allocation custody.
 pub struct ServiceFixedDispatchPacketV1 {
     program_index: usize,
     geometry: AqlDispatchGeometryV1,

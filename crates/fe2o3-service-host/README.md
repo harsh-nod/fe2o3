@@ -40,10 +40,12 @@ recycle are required before the same native queue can detach its current batch,
 replace a complete initialized allocation, bind a different fixed batch, or
 return allocation custody for explicit release.
 
-The current fixed-dispatch foundation rejects every inspected hidden or
-implicit kernarg field. Producing ABI-defined implicit bytes is a separate
-generic runtime prerequisite; this service layer does not ask callers to fill
-or assert them.
+For an admitted metadata-derived subset, callers supply a complete kernarg
+image whose exact trailing 256-byte COV6 implicit suffix is zero. The retained
+KFD owner privately fills block counts, group sizes, partial-group remainders,
+zero global offsets, grid dimensions, and dynamic LDS before GPU mapping. Queue
+pointers and all runtime-service or address fields remain rejected. This
+service layer does not ask callers to fill or assert implicit values.
 
 This layer does not establish executable correctness, device memory-effect
 refinement, current output content, numerical correctness, hardware execution,

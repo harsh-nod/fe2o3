@@ -409,11 +409,22 @@ alignments, and read/write effects come only from inspected kernel metadata.
 Read and read/write arguments require a sealed fully initialized allocation;
 write-only arguments may consume an uninitialized exclusive lease.
 
-Construction rejects hidden or implicit runtime arguments, missing or duplicate
-global-buffer bindings, nonzero pointer fields, range or alignment drift,
-intra-packet aliases, incomplete live lease sets, and read access without
-initialization before queue publication. It does not infer how many bytes a
-kernel actually accesses from a caller subrange.
+For kernels with hidden metadata, construction requires one exact trailing
+256-byte COV6 implicit suffix and requires every caller byte in that suffix to
+be zero. The retained owner privately initializes only metadata-declared block
+counts, group sizes, partial-group remainders, zero global offsets, grid
+dimensions, and dynamic LDS size before mapping the kernarg arena. Block counts
+are `grid / workgroup`; remainders are `grid % workgroup`. Inactive dimensions
+remain count one, group size one, and remainder zero. A kernel declared with
+uniform workgroups rejects any nonzero remainder. Queue pointers and every
+runtime-service or address field, including printf, hostcall, heap, default
+queue, completion action, multigrid, private base, and shared base, are rejected
+before native allocation.
+
+Construction also rejects missing or duplicate global-buffer bindings, nonzero
+pointer fields, range or alignment drift, intra-packet aliases, incomplete live
+lease sets, and read access without initialization before queue publication. It
+does not infer how many bytes a kernel actually accesses from a caller subrange.
 
 Each authenticated object is materialized exactly into an owned executable GTT
 allocation, hashed after materialization, CPU-sealed, and GPU-mapped. Each
@@ -449,10 +460,11 @@ or model-restoration failure yields no recoverable returned state. The consumed
 session and its no-effect drops retain any possibly live native resources for
 process teardown; there is no partial in-process cleanup or retry.
 
-There is no initialization boolean or caller-supplied read premise, and kernels
-with implicit or hidden kernarg fields are rejected. Per-segment GPU permission behavior for the uniformly mapped code
-allocation, concrete effect/alias semantics, CPU/GPU coherence, firmware packet
-execution, device-write visibility, and quiescence remain Contracted. The host
+There is no initialization boolean or caller-supplied read premise. Implicit
+fields outside the exact geometry/dynamic-LDS subset remain unsupported.
+Per-segment GPU permission behavior for the uniformly mapped code allocation,
+concrete effect/alias semantics, CPU/GPU coherence, firmware packet execution,
+device-write visibility, and quiescence remain Contracted. The host
 state machines and mock fault tests are not a concrete Verus or machine
 refinement; the public custody path alone is not hardware execution evidence.
 
