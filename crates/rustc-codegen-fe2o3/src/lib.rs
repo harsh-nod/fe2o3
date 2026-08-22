@@ -49,6 +49,7 @@ mod production_semantic_body_v1;
 mod production_semantic_fn_abi_v1;
 mod production_semantic_terminal_v1;
 mod production_semantic_types_v1;
+mod production_target_lineage_v3;
 mod production_target_v1;
 mod protected_rustc_invocation;
 mod record_lowering;
