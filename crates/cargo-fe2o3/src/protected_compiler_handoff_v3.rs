@@ -144,6 +144,7 @@ impl Error for ParentProtectedRustcInvocationCustodyErrorV3 {}
 pub(crate) struct ParentConsumedCompilerModuleHandoffV3 {
     receipt: CompilerModuleHandoffReceiptV3,
     consumed: ConsumedCompilerModuleHandoffV3,
+    compiler_closure: CompilerClosureV2,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -156,13 +157,18 @@ impl ParentConsumedCompilerModuleHandoffV3 {
         &self.consumed
     }
 
+    pub(crate) const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.compiler_closure
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
         CompilerModuleHandoffReceiptV3,
         ConsumedCompilerModuleHandoffV3,
+        CompilerClosureV2,
     ) {
-        (self.receipt, self.consumed)
+        (self.receipt, self.consumed, self.compiler_closure)
     }
 
     pub(crate) const fn grants_compiler_authority(&self) -> bool {
@@ -265,7 +271,11 @@ impl ProtectedCompilerModuleHandoffIntake {
             return Err(ProtectedCompilerModuleHandoffIntakeError::TransportBindingMismatch);
         }
         debug_assert!(!consumed.grants_compiler_authority());
-        Ok(ParentConsumedCompilerModuleHandoffV3 { receipt, consumed })
+        Ok(ParentConsumedCompilerModuleHandoffV3 {
+            receipt,
+            consumed,
+            compiler_closure: *protected_custody.descriptor().compiler_closure(),
+        })
     }
 }
 
@@ -665,12 +675,17 @@ mod tests {
             .unwrap();
         assert_eq!(consumed.receipt().attempt(), attempt);
         assert_eq!(consumed.consumed().attempt(), attempt);
+        assert_eq!(
+            consumed.compiler_closure(),
+            *handoff.capsule().compiler_closure()
+        );
         assert!(!consumed.grants_compiler_authority());
-        let (receipt, transaction) = consumed.into_parts();
+        let (receipt, transaction, compiler_closure) = consumed.into_parts();
         assert_eq!(
             receipt.transaction_identity(),
             transaction.transaction_identity()
         );
+        assert_eq!(compiler_closure, *handoff.capsule().compiler_closure());
     }
 
     #[test]

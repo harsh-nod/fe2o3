@@ -18,7 +18,6 @@ use crate::protected_compiler_handoff_v3::ParentConsumedCompilerModuleHandoffV3;
 use fe2o3_artifact_transaction::{
     ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2,
 };
-use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1,
     InertProtectedFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
@@ -608,9 +607,8 @@ impl PreparedWorkerV2Config {
     pub(crate) fn execute_protected_v3(
         &self,
         parent_consumed: ParentConsumedCompilerModuleHandoffV3,
-        expected_compiler_closure: CompilerClosureV2,
     ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
-        let (receipt, consumed) = parent_consumed.into_parts();
+        let (receipt, consumed, expected_compiler_closure) = parent_consumed.into_parts();
         execute_protected_reproducible_first_build_worker_v3(
             consumed,
             receipt,
@@ -1667,7 +1665,6 @@ mod tests {
         let _execute: fn(
             &PreparedWorkerV2Config,
             ParentConsumedCompilerModuleHandoffV3,
-            CompilerClosureV2,
         ) -> Result<
             InertProtectedFirstBuildWorkerV3EvidenceV1,
             ProtectedFirstBuildWorkerV3Error,
