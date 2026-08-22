@@ -75,6 +75,40 @@ fn production_backend() -> PathBuf {
     backend
 }
 
+fn materialize_source_safety_fixture(target: &ScratchTarget, source: &str) -> PathBuf {
+    let fixture = target.path().join("fixture");
+    std::fs::create_dir_all(fixture.join("src")).expect("create source-safety fixture");
+    let root = workspace();
+    let manifest = format!(
+        r#"[package]
+name = "fe2o3-production-extraction-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+fe2o3-device = {{ path = "{}" }}
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
+fe2o3-host = {{ path = "{}" }}
+
+[lib]
+name = "fe2o3_production_source_safety_fixture"
+path = "src/lib.rs"
+"#,
+        root.join("crates/fe2o3-device").display(),
+        root.join("crates/fe2o3-host").display(),
+    );
+    std::fs::write(fixture.join("Cargo.toml"), manifest)
+        .expect("write source-safety fixture manifest");
+    std::fs::copy(root.join("Cargo.lock"), fixture.join("Cargo.lock"))
+        .expect("copy pinned workspace lockfile into source-safety fixture");
+    std::fs::write(fixture.join("src/lib.rs"), source).expect("write source-safety fixture source");
+    fixture
+}
+
 fn production_fill_command(target: &ScratchTarget, artifacts: &Path, backend: &Path) -> Command {
     let mut command = Command::new(env!("CARGO"));
     command
@@ -107,6 +141,89 @@ fn production_fill_command(target: &ScratchTarget, artifacts: &Path, backend: &P
         .arg(target.path().join("cargo"))
         .args(["--", &format!("-Zcodegen-backend={}", backend.display())]);
     command
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() {
+    for (case, source, expected) in [
+        (
+            "reachable-unsafe-fn",
+            include_str!("fixtures/production-source-safety-device/reachable_unsafe_fn.rs"),
+            [
+                "ordinary production kernel `unsafe_reachable` reaches unsafe function instance",
+                "reachable call chain:",
+                "unsafe_reachable",
+                "safe_bridge_to_unsafe_leaf",
+                "unsafe_leaf",
+            ],
+        ),
+        (
+            "local-unsafe-block",
+            include_str!("fixtures/production-source-safety-device/local_unsafe_block.rs"),
+            [
+                "ordinary production kernel `unsafe_block_reachable` reaches a safe-signature local helper containing a user-provided unsafe block",
+                "reachable call chain:",
+                "unsafe_block_reachable",
+                "local_unsafe_block",
+                "src/lib.rs:",
+            ],
+        ),
+        (
+            "external-hir-gap",
+            include_str!("fixtures/production-source-safety-device/external_hir_gap.rs"),
+            [
+                "ordinary production kernel `external_hir_gap` cannot authenticate the absence of user-provided unsafe blocks in external helper",
+                "cross-crate HIR is unavailable",
+                "optimized MIR does not retain unsafe-block syntax",
+                "reachable call chain:",
+                "core::slice::<impl [T]>::is_empty",
+            ],
+        ),
+    ] {
+        let target = ScratchTarget::new();
+        let fixture = materialize_source_safety_fixture(&target, source);
+        let output = Command::new(env!("CARGO"))
+            .current_dir(fixture)
+            .env(
+                "RUSTC_WORKSPACE_WRAPPER",
+                env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+            )
+            .env(
+                "FE2O3_EXTRACT_CRATE_V1",
+                "fe2o3_production_source_safety_fixture",
+            )
+            .env(
+                "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .env(
+                "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+                "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+            )
+            .args([
+                "check",
+                "--offline",
+                "-Zbuild-std=core",
+                "--target",
+                "amdgcn-amd-amdhsa",
+                "--target-dir",
+            ])
+            .arg(target.path().join("cargo"))
+            .output()
+            .expect("run production source-safety fixture");
+        let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+        assert!(
+            !output.status.success(),
+            "unsafe production fixture `{case}` unexpectedly compiled"
+        );
+        for expected in expected {
+            assert!(
+                stderr.contains(expected),
+                "unsafe production fixture `{case}` omitted {expected:?}:\n{stderr}",
+            );
+        }
+    }
 }
 
 #[test]

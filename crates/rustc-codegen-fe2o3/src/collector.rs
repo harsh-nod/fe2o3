@@ -18,7 +18,8 @@ use reserved_fe2o3_symbols::{
 };
 use rustc_ast::InlineAsmOptions;
 use rustc_hir::def_id::{DefId, DefIndex, LOCAL_CRATE};
-use rustc_hir::{ItemKind, Safety};
+use rustc_hir::intravisit::{self, Visitor};
+use rustc_hir::{BlockCheckMode, ExprKind, ItemKind, Safety, UnsafeSource};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
@@ -2326,6 +2327,8 @@ struct DeviceCollector<'tcx> {
         crate::device_ffi::DeviceFfiInstanceIdentity,
         BTreeSet<crate::device_ffi::DeviceFfiInstanceIdentity>,
     >,
+    reachable_unsafe_calls:
+        BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, BTreeSet<String>>,
     inline_assembly:
         BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, ObservedInlineAssemblyV1>,
     used_export_names: BTreeSet<String>,
@@ -2366,6 +2369,73 @@ fn reconstruct_call_chain<T: Clone + Ord>(
     reverse_chain
 }
 
+fn root_scoped_call_chains<T: Clone + Ord>(
+    edges: &BTreeMap<T, BTreeSet<T>>,
+    labels: &BTreeMap<T, String>,
+    root: &T,
+) -> (BTreeMap<T, CallChainLink<T>>, Vec<T>) {
+    let Some(root_label) = labels.get(root) else {
+        return (BTreeMap::new(), Vec::new());
+    };
+    let mut links = BTreeMap::from([(
+        root.clone(),
+        CallChainLink {
+            predecessor: None,
+            label: root_label.clone(),
+        },
+    )]);
+    let mut order = Vec::new();
+    let mut pending = VecDeque::from([root.clone()]);
+    while let Some(caller) = pending.pop_front() {
+        order.push(caller.clone());
+        let Some(callees) = edges.get(&caller) else {
+            continue;
+        };
+        for callee in callees {
+            let Some(label) = labels.get(callee) else {
+                continue;
+            };
+            if links.contains_key(callee) {
+                continue;
+            }
+            links.insert(
+                callee.clone(),
+                CallChainLink {
+                    predecessor: Some(caller.clone()),
+                    label: label.clone(),
+                },
+            );
+            pending.push_back(callee.clone());
+        }
+    }
+    (links, order)
+}
+
+#[derive(Default)]
+struct UserUnsafeBlockVisitor {
+    first_span: Option<rustc_span::Span>,
+}
+
+impl<'tcx> Visitor<'tcx> for UserUnsafeBlockVisitor {
+    fn visit_block(&mut self, block: &'tcx rustc_hir::Block<'tcx>) {
+        if matches!(
+            block.rules,
+            BlockCheckMode::UnsafeBlock(UnsafeSource::UserProvided)
+        ) {
+            self.first_span.get_or_insert(block.span);
+        }
+        intravisit::walk_block(self, block);
+    }
+
+    fn visit_expr(&mut self, expression: &'tcx rustc_hir::Expr<'tcx>) {
+        // A closure body is authenticated when its concrete callable instance
+        // enters the collected graph, not merely when a closure value is made.
+        if !matches!(expression.kind, ExprKind::Closure(_)) {
+            intravisit::walk_expr(self, expression);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ObservedInlineAssemblyV1 {
     blocks: u32,
@@ -2385,6 +2455,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             seen: BTreeSet::new(),
             call_chains: BTreeMap::new(),
             call_edges: BTreeMap::new(),
+            reachable_unsafe_calls: BTreeMap::new(),
             inline_assembly: BTreeMap::new(),
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
@@ -2632,6 +2703,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             self.result.push(function);
         }
 
+        self.authenticate_production_kernel_source_safety()?;
         self.authenticate_reachable_frontend_contracts()?;
 
         let device_ffi = crate::device_ffi::validate_local_closure(
@@ -2913,6 +2985,103 @@ impl<'tcx> DeviceCollector<'tcx> {
         Ok(())
     }
 
+    fn authenticate_production_kernel_source_safety(&self) -> Result<(), CollectError> {
+        if self.traversal != CollectorTraversalPolicyV1::ProductionV1 {
+            return Ok(());
+        }
+
+        let functions = self
+            .result
+            .iter()
+            .map(|function| (self.instance_identity(function.instance), function))
+            .collect::<BTreeMap<_, _>>();
+        let labels = functions
+            .iter()
+            .map(|(identity, function)| (identity.clone(), self.instance_label(function.instance)))
+            .collect::<BTreeMap<_, _>>();
+
+        for root in self
+            .result
+            .iter()
+            .filter(|function| function.is_kernel_entry())
+        {
+            if root
+                .frontend_contract
+                .as_ref()
+                .and_then(|contract| contract.contract.unsafe_assembly())
+                .is_some()
+            {
+                continue;
+            }
+            let logical_name = root.logical_name.as_deref().unwrap_or(&root.export_name);
+            let root_identity = self.instance_identity(root.instance);
+            let (links, order) = root_scoped_call_chains(&self.call_edges, &labels, &root_identity);
+
+            for identity in order {
+                let function = functions
+                    .get(&identity)
+                    .expect("root-scoped traversal retains only collected function labels");
+                let chain = || reconstruct_call_chain(&links, &identity).join(" -> ");
+                if self
+                    .tcx
+                    .fn_sig(function.instance.def_id())
+                    .skip_binder()
+                    .safety()
+                    == Safety::Unsafe
+                {
+                    return Err(CollectError {
+                        message: format!(
+                            "ordinary production kernel `{logical_name}` reaches unsafe function instance `{}`; reachable call chain: {}",
+                            self.instance_label(function.instance),
+                            chain(),
+                        ),
+                    });
+                }
+                if let Some(callees) = self.reachable_unsafe_calls.get(&identity)
+                    && let Some(callee) = callees.first()
+                {
+                    return Err(CollectError {
+                        message: format!(
+                            "ordinary production kernel `{logical_name}` reaches unsafe function instance `{callee}`; reachable call chain: {} -> {callee}",
+                            chain(),
+                        ),
+                    });
+                }
+
+                let Some(local_def_id) = function.instance.def_id().as_local() else {
+                    return Err(CollectError {
+                        message: format!(
+                            "ordinary production kernel `{logical_name}` cannot authenticate the absence of user-provided unsafe blocks in external helper `{}`: cross-crate HIR is unavailable and optimized MIR does not retain unsafe-block syntax; reachable call chain: {}",
+                            self.instance_label(function.instance),
+                            chain(),
+                        ),
+                    });
+                };
+                let Some(body) = self.tcx.hir_maybe_body_owned_by(local_def_id) else {
+                    return Err(CollectError {
+                        message: format!(
+                            "ordinary production kernel `{logical_name}` cannot authenticate local HIR for reachable function `{}`; reachable call chain: {}",
+                            self.instance_label(function.instance),
+                            chain(),
+                        ),
+                    });
+                };
+                let mut visitor = UserUnsafeBlockVisitor::default();
+                visitor.visit_body(body);
+                if let Some(span) = visitor.first_span {
+                    return Err(CollectError {
+                        message: format!(
+                            "ordinary production kernel `{logical_name}` reaches a safe-signature local helper containing a user-provided unsafe block at {}; reachable call chain: {}",
+                            self.tcx.sess.source_map().span_to_diagnostic_string(span),
+                            chain(),
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn reachable_inline_assembly(
         &self,
         root: &crate::device_ffi::DeviceFfiInstanceIdentity,
@@ -2999,6 +3168,15 @@ impl<'tcx> DeviceCollector<'tcx> {
             TypingEnv::fully_monomorphized(),
             EarlyBinder::bind(*args),
         );
+        if self.traversal == CollectorTraversalPolicyV1::ProductionV1
+            && self.tcx.fn_sig(*def_id).skip_binder().safety() == Safety::Unsafe
+        {
+            let caller_identity = self.instance_identity(*caller);
+            self.reachable_unsafe_calls
+                .entry(caller_identity)
+                .or_default()
+                .insert(format!("{callee_path} [{ty}]"));
+        }
         let marked_contract = crate::device_ffi::contract_assertion_for_def(self.tcx, *def_id)
             .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
         if marked_contract.is_some() {
@@ -3535,7 +3713,7 @@ mod tests {
         AuthenticatedKernelFrontendContractV1, CallChainLink, CollectorTraversalPolicyV1,
         KernelRoot, ObservedInlineAssemblyV1, RegistrationError, RegistrationRecord,
         TypedArgumentListError, TypedArgumentListV1, TypedKernelProfile, general_typed_launch_v3,
-        reconcile_frontend_contract, reconstruct_call_chain,
+        reconcile_frontend_contract, reconstruct_call_chain, root_scoped_call_chains,
         validate_registration_records as validate_records,
     };
     use fe2o3_artifacts::{
@@ -3591,6 +3769,35 @@ mod tests {
             ["root", "helper_a", "helper_b"],
         );
         assert!(reconstruct_call_chain(&links, &9).is_empty());
+    }
+
+    #[test]
+    fn source_safety_call_chains_are_reconstructed_per_root() {
+        let edges = BTreeMap::from([
+            (1_u8, BTreeSet::from([3_u8])),
+            (2_u8, BTreeSet::from([3_u8])),
+            (3_u8, BTreeSet::from([4_u8])),
+        ]);
+        let labels = BTreeMap::from([
+            (1_u8, "ordinary_root".to_owned()),
+            (2_u8, "low_level_root".to_owned()),
+            (3_u8, "shared_helper".to_owned()),
+            (4_u8, "unsafe_leaf".to_owned()),
+        ]);
+
+        let (ordinary, order) = root_scoped_call_chains(&edges, &labels, &1);
+        assert_eq!(order, [1, 3, 4]);
+        assert_eq!(
+            reconstruct_call_chain(&ordinary, &4),
+            ["ordinary_root", "shared_helper", "unsafe_leaf"],
+        );
+
+        let (low_level, order) = root_scoped_call_chains(&edges, &labels, &2);
+        assert_eq!(order, [2, 3, 4]);
+        assert_eq!(
+            reconstruct_call_chain(&low_level, &4),
+            ["low_level_root", "shared_helper", "unsafe_leaf"],
+        );
     }
 
     fn type_identity(byte: u8) -> TypeIdentity {
