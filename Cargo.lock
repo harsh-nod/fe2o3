@@ -1480,7 +1480,9 @@ name = "fe2o3-service-host"
 version = "0.1.0"
 dependencies = [
  "fe2o3-host-api",
+ "fe2o3-kfd",
  "fe2o3-service-model",
+ "sha2 0.11.0",
 ]
 
 [[package]]

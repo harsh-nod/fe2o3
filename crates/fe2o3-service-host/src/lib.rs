@@ -5,13 +5,16 @@
 // allocation and returning only an error would discharge storage borrows.
 #![allow(clippy::result_large_err)]
 
-//! Authority-free host typestate and model adapters for persistent services.
+//! Host typestate, model adapters, and typed allocation ownership for
+//! persistent services.
 //!
 //! This crate retains caller-owned storage borrows while it checks inert
 //! lifecycle, persistent-task dispatch, ticket, wait, epoch, and generation
 //! descriptions. It consumes the canonical [`fe2o3_service_model`] and
-//! [`fe2o3_host_api`] contracts; it does not allocate, load, launch, execute,
-//! wait, persist, authenticate, prove, or grant storage-release authority.
+//! [`fe2o3_host_api`] contracts. On Linux x86_64 its allocation module can own
+//! real KFD-backed device-local and host-visible coherent allocations. That
+//! module does not load, launch, publish, wait, authenticate device content,
+//! or grant completion authority.
 //!
 //! The ownership shape rejects early use of retained storage while a service
 //! value remains live:
@@ -79,10 +82,29 @@
 //! }
 //! ```
 
+extern crate alloc;
+
 mod binding;
 mod error;
 mod lifecycle;
 mod task;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod allocation;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use allocation::{
+    DEVICE_LOCAL_ALLOCATION_ROLES_V1, DeviceAllocationRoleMarkerV1, DeviceInputRoleV1,
+    DeviceLocalAllocationV1, DeviceOutputRoleV1, DeviceStateRoleV1, DeviceWorkspaceRoleV1,
+    HOST_VISIBLE_ALLOCATION_ROLES_V1, HostAllocationRoleMarkerV1, HostDownloadRoleV1,
+    HostUploadRoleV1, HostVisibleAllocationV1, NeverPublishedV1, QuarantinedServiceAllocationsV1,
+    SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_SHA256_V1, SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1,
+    ServiceAllocationAcquireErrorV1, ServiceAllocationErrorV1, ServiceAllocationKeyV1,
+    ServiceAllocationKindMarkerV1, ServiceAllocationPhaseV1, ServiceAllocationRangePairV1,
+    ServiceAllocationRangeV1, ServiceAllocationReleaseFailureV1,
+    ServiceAllocationReleaseObservationV1, ServiceAllocationRoleMarkerV1,
+    ServiceAllocationSessionV1,
+};
 
 pub use binding::{QueueSlotBindingV1, ServiceContractV1, ServiceKeyV1};
 pub use error::{BindingFieldV1, ServiceHostErrorV1};
