@@ -13,9 +13,12 @@ test-hooks = []
 
 [dependencies]
 fe2o3-build-authority.workspace = true
+fe2o3-compiler-ffi.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["process"] }
 sha2.workspace = true
 
 [dev-dependencies]
+fe2o3-compiler-lineage.workspace = true
+fe2o3-rustc-invocation.workspace = true
 sha2 = { version = "0.11.0", default-features = false }

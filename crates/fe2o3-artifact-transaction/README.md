@@ -5,22 +5,25 @@ descriptor-relative filesystem operations, and one cooperative output-directory 
 
 ## Compiler provenance records
 
-The compiler-module handoff and Worker V2 publication-intent protocols expose
-both V1 compatibility records and closure-bound V2 records. Their V1 and V2
+The compiler-module handoff protocol exposes V1 compatibility records,
+closure-bound V2 records, and strict semantic V3 records. The Worker V2
+publication-intent protocol exposes V1 and closure-bound V2 records. These
 implementations use shared internal engines for slot ownership, bounded
 filesystem operations, recovery, and fault boundaries; version-specific
-schemas retain distinct names, domains, encodings, and error surfaces.
+schemas retain distinct names, domains, encodings, byte ceilings, and error
+surfaces.
 
-| Protocol | V2 binding | Current production selection |
+| Protocol | Version binding | Current production selection |
 |---|---|---|
-| Compiler module handoff | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Protected backend and wrapper/finalizer call sites still publish and consume V1. |
+| Compiler module handoff V2 | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Existing protected backend and wrapper/finalizer call sites have not been migrated by this crate-only change. |
+| Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, and slot in a separate V3 namespace. Publication accepts only the strict typed owner; consumption requires the expected native identity and completes strict canonical decode before committing its one-shot tombstone. | The transport is implemented and tested but production callers are not wired by this crate-only change. |
 | Worker V2 publication intent | The complete closure is committed with the attempt, producer, durable plan, upstream evidence, output identity, length, and exact retained bytes; V2 persist/recover/clear APIs reject closure mismatch. | Protected publication and restart-marker paths still persist, recover, and clear V1 intents. |
 
-The V2 engines and crash-recovery tests are implemented, but the
-protected production call sites and restart flow are not wired to them. V1
-APIs and wire formats remain available and are not silently upgraded. Neither
-version authenticates compiler authorship or grants publication, linking,
-loading, launch, or execution authority.
+V1 and V2 APIs, wire formats, and byte maxima remain unchanged and are not
+silently upgraded. V3 uses the compiler-FFI V3 maximum only in its own schema
+and never falls back to V1 or V2 decoding. None of these versions authenticates
+compiler authorship or grants publication, linking, loading, launch, or
+execution authority.
 
 ## Retained service directory
 
