@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffV2,
+    FinalCompilerModuleCommitmentErrorV3, InertFinalCompilerModuleCommitmentV3,
     MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
 };
 
@@ -300,6 +301,16 @@ pub fn preflight_inert_semantic_compiler_module_handoff_v3(
     }
     if capsule.target() != module_handoff.target() {
         return Err(InertSemanticCompilerModuleHandoffErrorV3::TargetMismatch);
+    }
+    let final_commitment = InertFinalCompilerModuleCommitmentV3::decode(
+        capsule
+            .receipts()
+            .final_compiler_module_commitment()
+            .canonical_preimage(),
+    )
+    .map_err(InertSemanticCompilerModuleHandoffErrorV3::FinalCommitment)?;
+    if !final_commitment.matches_handoff(module_handoff) {
+        return Err(InertSemanticCompilerModuleHandoffErrorV3::FinalCommitmentMismatch);
     }
     let exact_outer_bytes = exact_outer_len(capsule_bytes.len(), module_handoff_bytes.len())?;
 
@@ -653,6 +664,10 @@ pub enum InertSemanticCompilerModuleHandoffErrorV3 {
     ModuleHandoffIdentityMismatch,
     /// The complete capsule and module handoff name different canonical targets.
     TargetMismatch,
+    /// Strict decoding of the compact final module commitment failed.
+    FinalCommitment(FinalCompilerModuleCommitmentErrorV3),
+    /// The compact commitment does not match the exact nested V2 handoff.
+    FinalCommitmentMismatch,
     /// The terminal outer identity does not match the complete outer preimage.
     OuterIdentityMismatch,
     /// Decoding and reconstruction did not reproduce the exact input bytes.
@@ -731,6 +746,15 @@ impl fmt::Display for InertSemanticCompilerModuleHandoffErrorV3 {
             Self::TargetMismatch => {
                 formatter.write_str("semantic capsule and module handoff target mismatch")
             }
+            Self::FinalCommitment(error) => {
+                write!(
+                    formatter,
+                    "invalid final compiler module commitment: {error}"
+                )
+            }
+            Self::FinalCommitmentMismatch => {
+                formatter.write_str("final compiler module commitment does not match V2 handoff")
+            }
             Self::OuterIdentityMismatch => {
                 formatter.write_str("inert outer V3 handoff identity mismatch")
             }
@@ -750,6 +774,7 @@ impl Error for InertSemanticCompilerModuleHandoffErrorV3 {
         match self {
             Self::Capsule(error) => Some(error),
             Self::ModuleHandoff(error) => Some(error),
+            Self::FinalCommitment(error) => Some(error),
             _ => None,
         }
     }
@@ -1350,7 +1375,7 @@ mod tests_wire_adversarial {
     }
 
     #[test]
-    fn fully_rehashed_cross_producer_splice_is_accepted_only_as_inert_content() {
+    fn cross_producer_splice_with_stale_final_commitment_is_rejected() {
         let capsule_module = llvm_module(0x20);
         let capsule = capsule(0x20, TARGET, &capsule_module);
         let unrelated_handoff = module_handoff(0x21, TARGET);
@@ -1363,25 +1388,10 @@ mod tests_wire_adversarial {
         .unwrap();
         assert!(!final_commitment.matches_handoff(&unrelated_handoff));
 
-        let splice = InertSemanticCompilerModuleHandoffV3::new(capsule, unrelated_handoff)
-            .expect("public inert construction accepts an internally valid splice");
-        let decoded = InertSemanticCompilerModuleHandoffV3::decode(splice.canonical_bytes())
-            .expect("fully rehashed inert content remains structurally valid");
-
-        assert_eq!(decoded, splice);
-        assert!(!decoded.authenticates_producer());
-        assert!(!decoded.authenticates_compiler_origin());
-        assert!(!decoded.grants_compiler_authority());
-        assert!(!decoded.grants_artifact_authority());
-        assert!(!decoded.grants_worker_authority());
-        assert!(!decoded.grants_link_authority());
-        assert!(!decoded.grants_publication_authority());
-        assert!(!decoded.grants_load_authority());
-        assert!(!decoded.grants_launch_authority());
-        assert!(!decoded.pair_binding().authenticates_producer());
-        assert!(!decoded.pair_binding().grants_publication_authority());
-        assert!(!decoded.pair_binding().grants_load_authority());
-        assert!(!decoded.pair_binding().grants_launch_authority());
+        assert!(matches!(
+            InertSemanticCompilerModuleHandoffV3::new(capsule, unrelated_handoff),
+            Err(InertSemanticCompilerModuleHandoffErrorV3::FinalCommitmentMismatch)
+        ));
     }
 
     #[test]
