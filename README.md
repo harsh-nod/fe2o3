@@ -628,6 +628,14 @@ turn the foundations below into end-to-end features.
   ordinary compatibility route remains schema-separated on V1. This is durable
   provenance and crash recovery, not the still-missing production proof
   authenticator or host/HSA dispatch-authority bridge.
+  Strict Worker V3 finalization now has a separate bounded restart route: a
+  move-only compact transcript retains the slot and transaction axes, durable
+  storage owns each unique outer/provider/finalized component, and fresh
+  persistence and process recovery share one validator that reconstructs both
+  worker exchanges, rederives the complete semantic binding, re-inspects raw
+  HSACO, and requires byte-identical canonical re-finalization. This route is
+  inert and is not yet connected to a V3 load envelope, application handoff,
+  host admission, exclusive Cargo routing, or HSA launch.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper

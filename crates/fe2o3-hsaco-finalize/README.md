@@ -143,6 +143,22 @@ the measured worker declaration, canonical link plan, and exact bootstrap and re
 response bytes. Execution reuses the existing supervised upstream LLVM/LLD engine and Worker V2
 wire format, with no COMGR path or legacy transaction fallback.
 
+`prepare_protected_worker_v3_compact_finalizer_replay_v2` consumes the finalized V3 owner and
+moves its unique outer-handoff, provider, and finalized-HSACO allocations into a restart owner. Its
+side-by-side V2 transcript retains the attempt-local handoff slot and transaction identity needed
+to rederive the complete V3 binding after process loss; V1 bytes remain unchanged. The canonical
+transcript is bounded by the shared `2,195,505`-byte artifact-transaction storage cap and stores
+only request/response metadata shells rather than duplicate module, provider, request, response,
+raw-HSACO, or finalized-HSACO payloads.
+
+`prepare_protected_worker_v3_hsaco_publication_v1` seals the durable publication plan internally;
+callers cannot supply a plan or decompose the move-only owner into storage parts. Persistence and
+restart recovery run one common validator that decodes the exact outer handoff, rederives the V3
+binding, reconstructs both canonical worker exchanges, recovers the inert first-build evidence,
+re-inspects raw HSACO derived from the finalized artifact, re-finalizes it, and requires the exact
+source, finalization, plan, and finalized bytes to match. The recovered value remains inert and
+grants no publication, load, or launch authority.
+
 These checks establish structural consistency and retain current consumed-transaction evidence.
 They do not authenticate compiler origin, independently prove what implementation produced a
 measured worker binary, prove compiler correctness or kernel semantics, or grant link, publication,
@@ -187,6 +203,11 @@ HSA loading authority, or grants kernel-launch authority. On `mi300x`, the ignor
 `worker_v2_real_source_links_an_external_bitcode_provider` tests pass with an unoptimized Debug
 worker for `gfx942:xnack-`, through durable publication. Those tests do not load or launch the HSACO,
 and no optimized Release-worker result is claimed.
+
+The strict V3 durable bridge has a synthetic descriptor-bearing `vecadd` process-restart test. It
+does not yet provide a V3 load envelope, application descriptor transfer, host admission before
+HSA, exclusive Cargo V3 routing, authenticated compiler-produced descriptor-source evidence, or a
+gfx942 compile/recover/load/launch numerical result.
 
 ### Tiled GEMM V1 structural artifact policy
 
