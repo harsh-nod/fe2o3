@@ -16,7 +16,7 @@ It provides:
 - a fixed prepared-batch value that drives all INVALID body writes before any
   ordered release-header callback;
 - an additive V2 fixed-batch type and reservation transition for 1 through
-  1024 packets, with the exact-cardinality packet array heap-owned, while
+  8192 packets, with the exact-cardinality packet array heap-owned, while
   retaining the exact V1 256-packet boundary;
 - the exact 64-byte, 64-aligned busy-wait completion signal initialized to one,
   plus an exact inert pending-signal byte image;
@@ -48,7 +48,7 @@ publication, reserve the actual write counter once, copy every INVALID packet
 body, release-publish every paired header, and ring the exact admitted
 doorbell under a separately reviewed batch-publication contract.
 
-The V2 maximum occupies 64 KiB of logical ring slots. A ring smaller than the
+The V2 maximum occupies 512 KiB of logical ring slots. A ring smaller than the
 requested fixed batch is rejected before the reservation model changes; a
 later native owner must still admit and own the corresponding ring, completion
 signals, one write-counter increment, and one final doorbell publication.

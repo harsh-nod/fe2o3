@@ -35,7 +35,7 @@ from owned bytes through KFD's checked public-device-local mapping path. It can
 also consume inspected executable envelopes, complete kernarg byte images, and
 checked addressless device-local or host-visible coherent ranges into a fixed
 batch. Native addresses are
-substituted only inside KFD. A batch of 1 through 1024 packets uses one ring
+substituted only inside KFD. A batch of 1 through 8192 packets uses one ring
 reservation and one final doorbell publication. Exact completion and signal
 recycle are required before the same native queue can detach its current batch,
 replace a complete initialized allocation, bind a different fixed batch, or

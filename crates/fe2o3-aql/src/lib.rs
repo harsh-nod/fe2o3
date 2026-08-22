@@ -66,15 +66,15 @@ pub const AQL_MAX_RING_BYTES_V1: u32 = 1 << 31;
 ///
 /// At 64 bytes per packet this bounds one reservation to 16 KiB of logical
 /// ring slots. It does not size a native queue or claim that one batch is a
-/// complete inference schedule.
+/// complete command schedule.
 pub const AQL_MAX_BATCH_PACKETS_V1: u32 = 256;
 
 /// Maximum packets admitted by one V2 fixed-capacity publication.
 ///
-/// At 64 bytes per packet this requires at least a 64 KiB ring for the
+/// At 64 bytes per packet this requires at least a 512 KiB ring for the
 /// maximum batch. The bound is a host resource policy, not a hardware queue
 /// limit.
-pub const AQL_MAX_FIXED_BATCH_PACKETS_V2: u32 = 1024;
+pub const AQL_MAX_FIXED_BATCH_PACKETS_V2: u32 = 8192;
 
 /// Stable name of the inert V1 batch-reservation model.
 pub const AQL_BATCH_RESERVATION_MODEL_SCHEMA_ID_V1: &str =
@@ -97,9 +97,9 @@ pub const AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1: &str =
 /// Additive fixed-capacity reservation/publication profile retaining V1.
 pub const AQL_FIXED_BATCH_MODEL_MANIFEST_V2: &str = r#"schema=fe2o3-aql-single-producer-fixed-batch-v2
 v1_schema_sha256=0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83
-packet-count=1..1024
+packet-count=1..8192
 packet-bytes=64
-minimum-ring-for-maximum-batch=65536
+minimum-ring-for-maximum-batch=524288
 state=single-producer-write,last-observed-read,power-of-two-ring-capacity
 admission=nondecreasing-read,read<=write,distance<=capacity,count<=capacity,count<=available,checked-u64-next-write
 slots=packet-id&(capacity-1),ordered,distinct-within-admitted-batch,wrap-aware
@@ -110,7 +110,7 @@ authority=inert-arithmetic-and-packet-values-only,no-native-reservation,no-count
 
 /// SHA-256 of [`AQL_FIXED_BATCH_MODEL_MANIFEST_V2`].
 pub const AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2: &str =
-    "3d8376174a564eaee500ad8849d8bf3a1a38d56f9e5bc50bf60aea408b25bf1d";
+    "e989398f327c97df8108855a9c97316dd5c6b6b5af68704a14da64990dc4aa8a";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqlAddressObservationError {
@@ -742,7 +742,7 @@ impl AqlPreparedKernelDispatchBatchV1<1> {
     }
 }
 
-/// A fixed inert V2 batch supporting one through 1024 packet values.
+/// A fixed inert V2 batch supporting one through 8192 packet values.
 ///
 /// Like V1, this owns no queue, slot, address, counter, completion signal, or
 /// publication authority. The separate type preserves the frozen V1 bound.

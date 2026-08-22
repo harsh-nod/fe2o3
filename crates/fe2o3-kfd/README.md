@@ -364,8 +364,8 @@ and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
 internal submission foundation initializes every ring header to exact INVALID
 type 1 and the two control counters as atomics before GPU mapping. It uses the
 canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
-and the additive V2 fixed-batch bound of one through 1024 packets. A maximum
-batch requires a ring of at least 64 KiB. One batch performs one
+and the additive V2 fixed-batch bound of one through 8192 packets. A maximum
+batch requires a ring of at least 512 KiB. One batch performs one
 acquire-release write-pointer fetch-add by the full count, copies all INVALID
 packet bodies before any aligned release header, publishes headers in packet
 order, and performs one release-fenced x86-SFENCE volatile `u64` doorbell
@@ -376,11 +376,11 @@ path revalidates the live process-global runtime transition, event, all shadow
 headers, payload, and currentness before publication. Public submission is
 reachable only through the addressless fixed-dispatch custody path below.
 
-The private completion slice owns one separate 64 KiB host-coherent GTT arena
-containing exactly 1024 distinct aligned `AmdBusyCompletionSignalV1` objects.
+The private completion slice owns one separate 512 KiB host-coherent GTT arena
+containing exactly 8192 distinct aligned `AmdBusyCompletionSignalV1` objects.
 The large fixed-cardinality packet and retention arrays are heap-owned. All
 signals are constructed as exact pending user signals before GPU mapping. A
-batch of one through 1024 packets receives one unique slot per packet; the
+batch of one through 8192 packets receives one unique slot per packet; the
 binding retains the exact queue, signal allocation, code/kernarg mapping, and
 dispatch generations without exposing a numeric signal address. The generation
 keys detect substitution but do not themselves mint resource ownership,
@@ -400,7 +400,7 @@ releases the completion arena only after confirmed queue destruction.
 
 `SharedGttMemorySessionV1::create_compute_aql_queue_with_fixed_dispatch`
 consumes the exact existing checked device/VM session, one through 32
-authenticated `ValidatedKernelEnvelope` values, one through 1024 complete
+authenticated `ValidatedKernelEnvelope` values, one through 8192 complete
 packet descriptions, and one through 16 existing mapped device-local or
 host-visible coherent data authorities.
 Packet descriptions contain program indices, checked geometry, scalar kernarg

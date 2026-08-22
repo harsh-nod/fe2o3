@@ -112,7 +112,7 @@ an `AtomicU32`, and both control counters are explicitly initialized as
 Submission acquire-loads the actual shared write and read counters, requires
 the write observation to equal the retained model, and applies
 `AqlSingleProducerRingModelV1` with the additive V2 transition to reserve one
-through 1024 packets while
+through 8192 packets while
 rejecting over-capacity, full, insufficient, replayed, regressed, impossible,
 or exhausted observations. After a second PID/device-currentness check it
 performs exactly one acquire-release fetch-add by the complete batch count on
@@ -205,7 +205,7 @@ teardown; cleanup and retry are not admitted.
 ## Private completion-signal boundary
 
 The owned KFD event remains only the queue-exception route. Dispatch completion
-uses a separate exact 64 KiB host-coherent allocation with 1024 unique 64-byte
+uses a separate exact 512 KiB host-coherent allocation with 8192 unique 64-byte
 ROCr user signals. Each signal object is initialized to pending before GPU map.
 The arena and its address facts stay crate-private and linearly owned by the
 queue session; no KFD wakeup or public address is introduced.
