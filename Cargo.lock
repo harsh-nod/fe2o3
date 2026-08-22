@@ -1089,6 +1089,7 @@ dependencies = [
  "fe2o3-amdhsa-loader",
  "fe2o3-aql",
  "fe2o3-drm-uapi",
+ "fe2o3-hsaco",
  "fe2o3-kfd-uapi",
  "fe2o3-runtime-model",
  "rustix",

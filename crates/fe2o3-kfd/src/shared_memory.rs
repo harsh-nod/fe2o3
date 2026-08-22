@@ -2027,6 +2027,13 @@ impl SharedGttMemorySessionV1 {
         self.model_device
     }
 
+    pub(crate) fn plan_aql_queue_resources(
+        &self,
+        ring_bytes: u32,
+    ) -> Result<crate::Gfx942AqlQueueResourcePlanV1, crate::Gfx942QueueResourcePlanningError> {
+        self.engine.backend.plan_aql_queue_resources(ring_bytes)
+    }
+
     pub(crate) fn take_queue_model_foundation(
         &mut self,
     ) -> Result<(DeviceIdentityStateV1, MemoryLifecycleStateV1), MemorySessionError> {
@@ -2053,6 +2060,20 @@ impl SharedGttMemorySessionV1 {
             self.vm,
         )?;
         self.take_queue_model_foundation_after_device_memory_check()
+    }
+
+    /// Revalidates the exact complete mapped device-memory set after queue
+    /// model ownership has already transferred into a live queue engine.
+    pub(crate) fn validate_live_queue_dispatch_memory(
+        &mut self,
+        authorities: &[Gfx942DeviceMemoryDispatchAuthorityV1],
+    ) -> Result<(), MemorySessionError> {
+        self.check_queue_currentness()?;
+        self.engine.validate_dispatch_device_memory_set(
+            authorities,
+            self.model_device.model_key(),
+            self.vm,
+        )
     }
 
     fn take_queue_model_foundation_after_device_memory_check(

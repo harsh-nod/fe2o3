@@ -81,6 +81,17 @@ impl LinuxMemoryBackend {
         self.device.observation().aperture().gpuvm()
     }
 
+    pub(super) fn plan_aql_queue_resources(
+        &self,
+        ring_bytes: u32,
+    ) -> Result<crate::Gfx942AqlQueueResourcePlanV1, crate::Gfx942QueueResourcePlanningError> {
+        crate::plan_gfx942_aql_queue_resources(
+            self.device.topology_snapshot(),
+            self.device.observation().unique_id(),
+            ring_bytes,
+        )
+    }
+
     fn discard_unprepared_mapping_or_abort(mapping: &mut LinuxCpuMapping) {
         if !mapping.active {
             return;
