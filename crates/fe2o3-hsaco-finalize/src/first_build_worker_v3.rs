@@ -806,8 +806,6 @@ pub fn preflight_protected_reproducible_first_build_worker_v3(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProtectedV3WorkingSetDimensions {
     outer_handoff_bytes: usize,
-    decoded_capsule_bytes: usize,
-    nested_handoff_bytes: usize,
     compiler_module_bytes: usize,
     provider_payload_bytes: usize,
     provider_count: usize,
@@ -835,8 +833,6 @@ fn enforce_protected_v3_working_set_budget(
     let nested = handoff.module_handoff();
     validate_working_set_dimensions(ProtectedV3WorkingSetDimensions {
         outer_handoff_bytes: handoff.canonical_bytes().len(),
-        decoded_capsule_bytes: handoff.capsule().canonical_bytes().len(),
-        nested_handoff_bytes: nested.canonical_bytes().len(),
         compiler_module_bytes: nested.module_bytes().len(),
         provider_payload_bytes,
         provider_count: external_providers.len(),
@@ -932,9 +928,7 @@ fn validate_working_set_dimensions(
         )?;
     let required_bytes = dimensions
         .outer_handoff_bytes
-        .checked_add(dimensions.decoded_capsule_bytes)
-        .and_then(|bytes| bytes.checked_add(dimensions.nested_handoff_bytes))
-        .and_then(|bytes| bytes.checked_add(retained_inputs))
+        .checked_add(retained_inputs)
         .and_then(|bytes| bytes.checked_add(retained_requests))
         .and_then(|bytes| bytes.checked_add(dimensions.option_text_bytes))
         .ok_or(
@@ -1995,8 +1989,6 @@ mod working_set_tests {
     fn dimensions() -> ProtectedV3WorkingSetDimensions {
         ProtectedV3WorkingSetDimensions {
             outer_handoff_bytes: 4096,
-            decoded_capsule_bytes: 2048,
-            nested_handoff_bytes: 2048,
             compiler_module_bytes: 1024,
             provider_payload_bytes: 1024,
             provider_count: 1,
@@ -2038,8 +2030,6 @@ mod working_set_tests {
     fn adversarial_aggregate_size_fails_before_any_large_allocation() {
         let mut oversized = dimensions();
         oversized.outer_handoff_bytes = 224 * 1024 * 1024;
-        oversized.decoded_capsule_bytes = 160 * 1024 * 1024;
-        oversized.nested_handoff_bytes = 64 * 1024 * 1024;
         oversized.compiler_module_bytes = 64 * 1024 * 1024;
         oversized.provider_payload_bytes = 0;
         oversized.provider_count = 0;
