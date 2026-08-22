@@ -27,7 +27,8 @@ pub fn wave64_collectives_v1(
     mut inclusive_output: DisjointSlice<f32>,
     mut exclusive_output: DisjointSlice<f32>,
 ) {
-    let lane = thread::index_1d().get();
+    let lane_index = thread::index_1d();
+    let lane = lane_index.get();
     if lane >= 64
         || input.len() != 64
         || reduction_output.len() != 64
@@ -41,40 +42,26 @@ pub fn wave64_collectives_v1(
     let active = active_mask & (1_u64 << lane) != 0;
     let contribution = if active { input[lane] } else { 0.0_f32 };
 
-    // SAFETY: the exact launch contract fixes this index to one physical
-    // Wave64 lane, and the check above excludes every other value.
-    let Some(lane_snapshot) = (unsafe { WaveLane::<Wave64>::from_raw(lane as u32) }) else {
-        fe2o3_device::trap();
-        return;
-    };
+    let lane_snapshot = WaveLane::<Wave64>::current();
     let wave = SubgroupTile::<64>::from_wave64_snapshot(&lane_snapshot);
 
-    // SAFETY: authenticated lowering may create this capability only for the
-    // declared gfx942 strict-FP Wave64 profile. Phase A does not claim that
-    // compiler authentication has been joined to this source.
-    let context = unsafe { Gfx942Collectives::from_compiler() };
+    let context = Gfx942Collectives::current();
 
-    // SAFETY: all 64 physical lanes execute these calls in identical order.
-    // Logical inactivity is represented only by a +0.0 contribution.
-    let reduction = unsafe { wave.reduce_sum(&context, contribution) };
-    let inclusive = unsafe { wave.inclusive_scan_sum(&context, contribution) };
-    let exclusive = unsafe { wave.exclusive_scan_sum(&context, contribution) };
+    let reduction = wave.reduce_sum(&context, contribution);
+    let inclusive = wave.inclusive_scan_sum(&context, contribution);
+    let exclusive = wave.exclusive_scan_sum(&context, contribution);
 
     let published_reduction = if active { reduction } else { 0.0 };
     let published_inclusive = if active { inclusive } else { 0.0 };
     let published_exclusive = if active { exclusive } else { 0.0 };
 
-    // SAFETY: lane identity is injective over `0..64`, and each view denotes a
-    // distinct output allocation supplied under the typed kernel contract.
-    if let Some(output) = unsafe { reduction_output.get_mut_at(lane) } {
+    if let Some(output) = reduction_output.get_mut(lane_index) {
         *output = published_reduction;
     }
-    // SAFETY: the same identity ownership argument applies to this allocation.
-    if let Some(output) = unsafe { inclusive_output.get_mut_at(lane) } {
+    if let Some(output) = inclusive_output.get_mut(thread::index_1d()) {
         *output = published_inclusive;
     }
-    // SAFETY: the same identity ownership argument applies to this allocation.
-    if let Some(output) = unsafe { exclusive_output.get_mut_at(lane) } {
+    if let Some(output) = exclusive_output.get_mut(thread::index_1d()) {
         *output = published_exclusive;
     }
 }

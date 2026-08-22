@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `DeviceMatrix` in the current scope
+ --> tests/ui/fail/device_matrix_is_not_clone.rs:4:20
+  |
+4 |     let _ = matrix.clone();
+  |                    ^^^^^ method not found in `DeviceMatrix`

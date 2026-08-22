@@ -1,11 +1,11 @@
 error[E0599]: no associated function or constant named `default` found for struct `DeviceMatrix` in the current scope
- --> tests/ui/fail/device_matrix_has_no_safe_constructor.rs:4:27
+ --> tests/ui/fail/device_matrix_has_no_default_constructor.rs:4:27
   |
 4 |     let _ = DeviceMatrix::default();
   |                           ^^^^^^^ associated function or constant not found in `DeviceMatrix`
   |
-note: if you're trying to build a new `DeviceMatrix`, consider using `DeviceMatrix::from_compiler` which returns `DeviceMatrix`
+note: if you're trying to build a new `DeviceMatrix`, consider using `DeviceMatrix::current` which returns `DeviceMatrix`
  --> src/tensor.rs
   |
-  |     pub unsafe fn from_compiler() -> Self {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     pub fn current() -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^

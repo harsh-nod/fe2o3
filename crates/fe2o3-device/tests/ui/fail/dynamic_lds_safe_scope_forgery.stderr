@@ -1,7 +1,11 @@
-error[E0133]: call to unsafe function `WorkgroupLdsScope::<'workgroup>::from_compiler` is unsafe and requires unsafe block
- --> tests/ui/fail/dynamic_lds_safe_scope_forgery.rs:4:13
+error[E0599]: no associated function or constant named `from_compiler` found for struct `WorkgroupLdsScope<'workgroup>` in the current scope
+ --> tests/ui/fail/dynamic_lds_safe_scope_forgery.rs:4:32
   |
 4 |     let _ = WorkgroupLdsScope::from_compiler();
-  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |                                ^^^^^^^^^^^^^ associated function or constant not found in `WorkgroupLdsScope<'_>`
   |
-  = note: consult the function's documentation for information on how to avoid undefined behavior
+note: if you're trying to build a new `WorkgroupLdsScope<'_>`, consider using `WorkgroupLdsScope::<'workgroup>::current` which returns `WorkgroupLdsScope<'_>`
+ --> src/lds.rs
+  |
+  |     pub fn current() -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^

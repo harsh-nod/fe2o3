@@ -302,13 +302,11 @@ fn oversized_groups_fail_closed_instead_of_truncating() {
 }
 
 #[test]
-fn unsafe_workgroup_synchronization_panics_closed_on_the_host() {
+fn workgroup_synchronization_panics_closed_on_the_host() {
     let invocation = invocation([0, 0, 0], [0, 0, 0], [1, 1, 1], [1, 1, 1]);
     let group = Workgroup::from_invocation_snapshot(&invocation).unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // SAFETY: This one-work-item modeled workgroup reaches this exact
-        // dynamic barrier once. The unsupported host path must still fail closed.
-        unsafe { group.synchronize() };
+        group.synchronize();
     }));
     assert!(result.is_err());
 }

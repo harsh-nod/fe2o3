@@ -1,8 +1,8 @@
 use fe2o3_device::{DynamicLds, WorkgroupLdsScope};
 
 fn duplicate<'group>(scope: &'group mut WorkgroupLdsScope<'group>) {
-    let first = unsafe { DynamicLds::<i32>::exact_from_compiler::<64>(scope, 0) };
-    let second = unsafe { DynamicLds::<i32>::exact_from_compiler::<64>(scope, 0) };
+    let first = DynamicLds::<i32>::exact_current::<64>(scope);
+    let second = DynamicLds::<i32>::exact_current::<64>(scope);
     let _ = (first, second);
 }
 

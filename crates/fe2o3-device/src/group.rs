@@ -219,21 +219,17 @@ impl<'invocation> Workgroup<'invocation> {
 
     /// Executes one CUDA-compatible workgroup barrier.
     ///
-    /// # Safety
-    ///
-    /// This arithmetic snapshot must still describe the calling invocation's
-    /// current workgroup. Every active work-item in that workgroup must execute
-    /// this exact dynamic call once and in the same barrier sequence. No
+    /// The compiler must prove that this arithmetic snapshot still describes
+    /// the calling invocation's current workgroup. Every active work-item must
+    /// execute this exact dynamic call once and in the same barrier sequence. No
     /// participating work-item may take a conditional path that skips the call,
     /// return, panic, or otherwise exit early. The compiler must preserve all
     /// semantics in [`WorkgroupSynchronization`], including workgroup-uniform
     /// convergence and acquire-release visibility for global and workgroup
-    /// memory. The current source compiler establishes none of these facts.
+    /// memory. Unsupported lowering rejects the call or retains the panic stub.
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_synchronize_v1"]
-    pub unsafe fn synchronize(&self) {
-        // SAFETY: The caller owns every dynamic convergence, snapshot-currentness,
-        // and compiler-lowering obligation required by `sync::syncthreads`.
-        unsafe { sync::syncthreads() }
+    pub fn synchronize(&self) {
+        sync::syncthreads()
     }
 }
 

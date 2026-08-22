@@ -15,7 +15,7 @@ fn host_contract_reuses_the_device_matrix_profile_exactly() {
 
 #[test]
 fn kernel_boundary_has_only_the_existing_fragment_signature() {
-    let _: unsafe fn(
+    let _: fn(
         &DeviceMatrix,
         Bf16MfmaFragment,
         Bf16MfmaFragment,

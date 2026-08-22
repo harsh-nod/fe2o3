@@ -1,0 +1,5 @@
+error[E0599]: no method named `assume_init` found for struct `LdsTile16x16<'workgroup, T, State>` in the current scope
+ --> tests/ui/fail/lds_tile_unverified_publish_is_unavailable.rs:4:18
+  |
+4 |     let _ = tile.assume_init();
+  |                  ^^^^^^^^^^^ method not found in `LdsTile16x16<'_, Bf16>`

@@ -48,7 +48,8 @@ pub fn wave64_collectives_v1(
     mut inclusive_output: DisjointSlice<f32>,
     mut exclusive_output: DisjointSlice<f32>,
 ) {
-    let lane = thread::index_1d().get();
+    let lane_index = thread::index_1d();
+    let lane = lane_index.get();
     if lane >= 64
         || input.len() != 64
         || reduction_output.len() != 64
@@ -62,28 +63,25 @@ pub fn wave64_collectives_v1(
     let active = active_mask & (1_u64 << lane) != 0;
     let contribution = if active { input[lane] } else { 0.0_f32 };
 
-    let Some(lane_snapshot) = (unsafe { WaveLane::<Wave64>::from_raw(lane as u32) }) else {
-        fe2o3_device::trap();
-        return;
-    };
+    let lane_snapshot = WaveLane::<Wave64>::current();
     let wave = SubgroupTile::<64>::from_wave64_snapshot(&lane_snapshot);
-    let context = unsafe { Gfx942Collectives::from_compiler() };
+    let context = Gfx942Collectives::current();
 
-    let reduction = unsafe { wave.reduce_sum(&context, contribution) };
-    let inclusive = unsafe { wave.inclusive_scan_sum(&context, contribution) };
-    let exclusive = unsafe { wave.exclusive_scan_sum(&context, contribution) };
+    let reduction = wave.reduce_sum(&context, contribution);
+    let inclusive = wave.inclusive_scan_sum(&context, contribution);
+    let exclusive = wave.exclusive_scan_sum(&context, contribution);
 
     let published_reduction = if active { reduction } else { 0.0 };
     let published_inclusive = if active { inclusive } else { 0.0 };
     let published_exclusive = if active { exclusive } else { 0.0 };
 
-    if let Some(output) = unsafe { reduction_output.get_mut_at(lane) } {
+    if let Some(output) = reduction_output.get_mut(lane_index) {
         *output = published_reduction;
     }
-    if let Some(output) = unsafe { inclusive_output.get_mut_at(lane) } {
+    if let Some(output) = inclusive_output.get_mut(thread::index_1d()) {
         *output = published_inclusive;
     }
-    if let Some(output) = unsafe { exclusive_output.get_mut_at(lane) } {
+    if let Some(output) = exclusive_output.get_mut(thread::index_1d()) {
         *output = published_exclusive;
     }
 }

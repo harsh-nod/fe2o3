@@ -55,12 +55,12 @@ unsafe fn caller_asserted_snapshot_boundary(
     let _ = active.map(|group| (inspect(&group), group.caller_asserted_mask()));
 }
 
-unsafe fn caller_proven_uniform_synchronization(group: &Workgroup<'_>) {
-    unsafe { group.synchronize() };
+fn compiler_verified_uniform_synchronization(group: &Workgroup<'_>) {
+    group.synchronize();
 }
 
 fn main() {
     let _ = workgroup_policy_is_typed;
     let _ = caller_asserted_snapshot_boundary;
-    let _ = caller_proven_uniform_synchronization;
+    let _ = compiler_verified_uniform_synchronization;
 }

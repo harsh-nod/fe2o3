@@ -18,7 +18,7 @@ fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
         "typed,",
         "launch(required = [64, 1, 1], max = [64, 1, 1])",
         "pub fn lds_publish_read_reduce_i32_v1",
-        "DynamicLds::<i32>::exact_from_compiler::<64>",
+        "DynamicLds::<i32>::exact_current::<64>",
         "WorkgroupCollectiveScratch::from_dynamic_lds",
         "group.reduce_sum",
         "if lane == 0",
@@ -28,6 +28,7 @@ fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
     assert!(!REDUCTION_SOURCE.contains("macro_rules!"));
     assert!(!REDUCTION_SOURCE.contains("from_raw_parts(&group"));
     assert!(!REDUCTION_SOURCE.contains("*mut i32"));
+    assert!(!REDUCTION_SOURCE.contains("unsafe"));
 }
 
 #[test]

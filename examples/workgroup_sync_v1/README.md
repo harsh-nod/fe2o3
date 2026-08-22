@@ -12,7 +12,7 @@ deterministic reduction barriers, and final reuse barrier. Lane zero is the
 only global output writer. Admission rejects mathematical sums outside `i32`,
 so the device's wrapping tree computes the exact mathematical sum.
 
-The source now requests `DynamicLds::<i32>::exact_from_compiler::<64>` and
+The source now requests `DynamicLds::<i32>::exact_current::<64>` and
 consumes that linear capability directly into collective scratch. It cannot
 substitute a host/global raw pointer or expose the LDS pointer. The exact
 collected compiler profile authenticates this source and its complete reachable

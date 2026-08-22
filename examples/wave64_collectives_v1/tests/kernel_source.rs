@@ -46,6 +46,9 @@ fn source_uses_explicit_mask_and_all_three_bounded_collectives() {
     ] {
         assert!(SOURCE.contains(marker), "missing source contract {marker}");
     }
+    assert!(SOURCE.contains("WaveLane::<Wave64>::current()"));
+    assert!(SOURCE.contains("Gfx942Collectives::current()"));
+    assert!(!SOURCE.contains("unsafe"));
 }
 
 #[test]

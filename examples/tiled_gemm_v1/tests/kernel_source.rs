@@ -58,11 +58,7 @@ fn calls(function: &syn::ItemFn) -> BodyCalls {
 
 #[test]
 fn attributed_kernel_and_generated_marker_compile_with_the_exact_abi() {
-    type KernelFn = fn(
-        &[u16],
-        &[u16],
-        DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
-    );
+    type KernelFn = fn(&[u16], &[u16], DisjointSlice<f32, Blocked<Index1D, 16, 4>>);
     let function: KernelFn =
         <__fe2o3_kernel_marker_tiled_gemm_lds_slice1 as KernelMarkerV1>::FUNCTION;
     let _: KernelFn = function;
@@ -73,11 +69,7 @@ fn attributed_kernel_and_generated_marker_compile_with_the_exact_abi() {
 
 #[test]
 fn ordinary_host_invocation_panics_before_mutating_output() {
-    type KernelFn = fn(
-        &[u16],
-        &[u16],
-        DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
-    );
+    type KernelFn = fn(&[u16], &[u16], DisjointSlice<f32, Blocked<Index1D, 16, 4>>);
     let function: KernelFn =
         <__fe2o3_kernel_marker_tiled_gemm_lds_slice1 as KernelMarkerV1>::FUNCTION;
     let a = [0_u16; 256];
@@ -153,10 +145,9 @@ fn executable_function_body_contains_the_slice1_algorithm() {
     for required in [
         "index_1d",
         "from_bits",
-        "from_raw",
+        "current",
         "gfx942_lds_bf16_tile_pair_m16x16_v1",
-        "syncthreads",
-        "from_compiler",
+        "gfx942_publish_lds_bf16_tile_pair_m16x16_v1",
     ] {
         assert!(
             calls.functions.iter().any(|call| call == required),
@@ -165,7 +156,6 @@ fn executable_function_body_contains_the_slice1_algorithm() {
     }
     for required in [
         "write_mfma_fragment",
-        "assume_init",
         "read_mfma_fragment",
         "multiply_accumulate",
         "into_values",
@@ -186,6 +176,7 @@ fn executable_function_body_contains_the_slice1_algorithm() {
         4
     );
     assert!(!calls.methods.iter().any(|call| call == "get_mut_at"));
+    assert!(!SOURCE.contains("unsafe"));
     assert!(calls.macros.is_empty());
     for forbidden in ["from_raw_parts", "unreachable_unchecked"] {
         assert!(!calls.functions.iter().any(|call| call == forbidden));

@@ -9,7 +9,7 @@ fn type_check_matrix(
     rhs: Bf16MfmaFragment,
     accumulator: F32AccumulatorFragment,
 ) {
-    let _: F32AccumulatorFragment = unsafe { matrix.multiply_accumulate(lhs, rhs, accumulator) };
+    let _: F32AccumulatorFragment = matrix.multiply_accumulate(lhs, rhs, accumulator);
 }
 
 fn type_check_initialized_tile(tile: &LdsTile16x16<'_, Bf16, LdsInitialized>) {

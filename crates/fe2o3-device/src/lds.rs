@@ -87,8 +87,9 @@ pub enum DynamicLdsError {
 
 /// Compiler-created, non-duplicable identity for one workgroup's LDS lifetime.
 ///
-/// The type is neither `Send` nor `Sync`. Its private fields and unsafe
-/// constructor prevent safe code from inventing workgroup identity. Borrowing
+/// The type is neither `Send` nor `Sync`. Its private fields and
+/// compiler-recognized constructor prevent safe code from supplying workgroup
+/// identity. Borrowing
 /// it for [`DynamicLds::from_raw_parts`] ties the view to the scope and permits
 /// only one root view; disjoint views must be derived with
 /// [`DynamicLds::split_at`].
@@ -99,20 +100,17 @@ pub struct WorkgroupLdsScope<'workgroup> {
 }
 
 impl<'workgroup> WorkgroupLdsScope<'workgroup> {
-    /// Creates the scope identity consumed by dynamic LDS lowering.
+    /// Returns compiler-owned authority for the current workgroup's LDS.
     ///
-    /// # Safety
-    ///
-    /// This function may be called only by compiler-generated device code,
-    /// once for the active workgroup execution. The chosen lifetime must not
-    /// outlive that workgroup, and the value must not cross an invocation or a
-    /// host thread. The current backend does not lower this constructor yet.
-    #[doc(hidden)]
-    #[rustc_diagnostic_item = "fe2o3_device_workgroup_lds_scope_from_compiler"]
-    pub unsafe fn from_compiler() -> Self {
-        Self::new_identity()
+    /// Unsupported lowering and host execution trap. The value accepts no
+    /// caller-provided epoch or workgroup identity.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_lds_scope_current"]
+    pub fn current() -> Self {
+        unreachable!("the current LDS scope must be issued by authenticated lowering")
     }
 
+    #[cfg(test)]
     fn new_identity() -> Self {
         Self {
             _brand: PhantomData,
@@ -162,27 +160,15 @@ pub struct DynamicLds<'workgroup, T: LdsElement, State = LdsUninitialized> {
 }
 
 impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
-    /// Creates one exact compiler-owned workgroup allocation.
+    /// Creates one exact compiler-owned allocation in the current LDS scope.
     ///
-    /// `ELEMENTS` is part of the compiler-recognized source contract. The
-    /// authenticated lowering supplies one allocation of
-    /// `ELEMENTS * size_of::<T>()` bytes aligned for `T`, shared by every
-    /// convergent invocation in the workgroup. No global or generic pointer is
-    /// accepted by this API.
-    ///
-    /// # Safety
-    ///
-    /// This call must be replaced by authenticated device lowering. Every
-    /// invocation in the workgroup must call it convergently with the same
-    /// `epoch`, `T`, and `ELEMENTS`. `scope` must be the compiler-created scope
-    /// for that workgroup and epoch. The resulting root capability is unique
-    /// for the scope and must not overlap any other LDS capability.
-    #[doc(hidden)]
+    /// `ELEMENTS` and `T` are part of the authenticated source contract. The
+    /// compiler must prove one convergent, non-overlapping allocation for this
+    /// scope. Unsupported lowering and host execution trap.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_dynamic_lds_exact_from_compiler_v1"]
-    pub unsafe fn exact_from_compiler<const ELEMENTS: usize>(
+    #[rustc_diagnostic_item = "fe2o3_device_dynamic_lds_exact_current_v1"]
+    pub fn exact_current<const ELEMENTS: usize>(
         _scope: &'workgroup mut WorkgroupLdsScope<'workgroup>,
-        epoch: u32,
     ) -> Self {
         const {
             assert!(ELEMENTS > 0, "compiler-created dynamic LDS cannot be empty");
@@ -199,7 +185,6 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
                 "compiler-created dynamic LDS extent overflows"
             );
         }
-        let _ = epoch;
         unreachable!("exact dynamic LDS must be created by authenticated lowering")
     }
 
@@ -468,6 +453,19 @@ mod tests {
         validate_layout,
     };
     use core::mem::{MaybeUninit, align_of, size_of};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn compiler_owned_lds_acquisition_fails_closed_on_host() {
+        assert!(catch_unwind(WorkgroupLdsScope::<'static>::current).is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let mut scope = WorkgroupLdsScope::for_host_test();
+                let _ = DynamicLds::<u32>::exact_current::<64>(&mut scope);
+            }))
+            .is_err()
+        );
+    }
 
     #[test]
     fn layout_validation_is_exact_and_bounded() {

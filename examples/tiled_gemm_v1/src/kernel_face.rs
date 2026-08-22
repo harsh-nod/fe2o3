@@ -10,23 +10,6 @@
 //! let _matrix = DeviceMatrix::default();
 //! ```
 //!
-//! The matrix operation is explicitly unsafe because all wave64 lanes must
-//! participate in converged control flow:
-//!
-//! ```compile_fail
-//! use fe2o3_device::{
-//!     Bf16MfmaFragment, DeviceMatrix, F32AccumulatorFragment,
-//! };
-//!
-//! fn rejected(matrix: &DeviceMatrix) {
-//!     let _ = matrix.multiply_accumulate(
-//!         Bf16MfmaFragment::ZERO,
-//!         Bf16MfmaFragment::ZERO,
-//!         F32AccumulatorFragment::ZERO,
-//!     );
-//! }
-//! ```
-//!
 //! The capability is intentionally not transferable between host threads:
 //!
 //! ```compile_fail
@@ -54,19 +37,14 @@ const _: () = assert!(BF16_F32_MFMA_WAVE_LANES == WAVE_LANES_V1 as usize);
 /// validation. A future authenticated frontend must retain those obligations
 /// while lowering the existing `fe2o3-device` contract.
 ///
-/// # Safety
-///
-/// All 64 lanes of one wave64 must invoke this function in converged control
-/// flow. `lhs` and `rhs` must be the V1 fragments for the same reduction tile,
-/// and `accumulator` must be the calling lane's four FP32 accumulators for the
-/// same output tile.
+/// The compiler verifies that all lanes invoke this operation in converged
+/// control flow with fragments from the same matrix operation.
 #[must_use]
-pub unsafe fn accumulate_fragment_v1(
+pub fn accumulate_fragment_v1(
     matrix: &DeviceMatrix,
     lhs: Bf16MfmaFragment,
     rhs: Bf16MfmaFragment,
     accumulator: F32AccumulatorFragment,
 ) -> F32AccumulatorFragment {
-    // SAFETY: the caller must satisfy the exact DeviceMatrix wave64 contract.
-    unsafe { matrix.multiply_accumulate(lhs, rhs, accumulator) }
+    matrix.multiply_accumulate(lhs, rhs, accumulator)
 }

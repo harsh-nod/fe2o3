@@ -1,11 +1,11 @@
 error[E0599]: no method named `reduce_sum` found for reference `&fe2o3_device::Grid<'_>` in the current scope
- --> tests/ui/fail/collective_unsupported_scope.rs:4:27
+ --> tests/ui/fail/collective_unsupported_scope.rs:4:18
   |
-4 |     let _ = unsafe { grid.reduce_sum(context, 1_u32) };
-  |                           ^^^^^^^^^^ method not found in `&fe2o3_device::Grid<'_>`
+4 |     let _ = grid.reduce_sum(context, 1_u32);
+  |                  ^^^^^^^^^^ method not found in `&fe2o3_device::Grid<'_>`
 
 error[E0599]: no method named `reduce_sum` found for reference `&ActiveLaneGroup<'_>` in the current scope
- --> tests/ui/fail/collective_unsupported_scope.rs:8:29
+ --> tests/ui/fail/collective_unsupported_scope.rs:8:20
   |
-8 |     let _ = unsafe { active.reduce_sum(context, 1_u32) };
-  |                             ^^^^^^^^^^ method not found in `&ActiveLaneGroup<'_>`
+8 |     let _ = active.reduce_sum(context, 1_u32);
+  |                    ^^^^^^^^^^ method not found in `&ActiveLaneGroup<'_>`

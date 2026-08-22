@@ -95,8 +95,8 @@ fn exact_syntax_collects_all_reviewed_algorithm_fields() {
 
 #[test]
 fn hostile_semantic_mutations_retain_names_but_fail_exact_ast_admission() {
-    let call_order = "    let reduction = unsafe { wave.reduce_sum(&context, contribution) };\n    let inclusive = unsafe { wave.inclusive_scan_sum(&context, contribution) };";
-    let swapped_order = "    let inclusive = unsafe { wave.inclusive_scan_sum(&context, contribution) };\n    let reduction = unsafe { wave.reduce_sum(&context, contribution) };";
+    let call_order = "    let reduction = wave.reduce_sum(&context, contribution);\n    let inclusive = wave.inclusive_scan_sum(&context, contribution);";
+    let swapped_order = "    let inclusive = wave.inclusive_scan_sum(&context, contribution);\n    let reduction = wave.reduce_sum(&context, contribution);";
     let mutations = [
         replace_once(SOURCE, "!= 0;", "== 0;"),
         replace_once(SOURCE, "1_u64 << lane", "1_u64 << (lane ^ 1)"),
@@ -120,14 +120,14 @@ fn hostile_semantic_mutations_retain_names_but_fail_exact_ast_admission() {
         ),
         replace_once(
             SOURCE,
-            "reduction_output.get_mut_at(lane)",
-            "reduction_output.get_mut_at(lane ^ 1)",
+            "reduction_output.get_mut(lane_index)",
+            "reduction_output.get_mut(thread::index_1d())",
         ),
         replace_once(SOURCE, "input.len() != 64", "input.len() < 64"),
         replace_once(
             SOURCE,
-            "let reduction = unsafe { wave.reduce_sum(&context, contribution) };",
-            "let reduction = if active { unsafe { wave.reduce_sum(&context, contribution) } } else { 0.0 };",
+            "let reduction = wave.reduce_sum(&context, contribution);",
+            "let reduction = if active { wave.reduce_sum(&context, contribution) } else { 0.0 };",
         ),
         replace_once(
             SOURCE,
@@ -145,7 +145,7 @@ fn hostile_semantic_mutations_retain_names_but_fail_exact_ast_admission() {
             "reduction_output",
             "inclusive_output",
             "exclusive_output",
-            "get_mut_at",
+            "get_mut",
         ] {
             assert!(
                 mutation.contains(retained),

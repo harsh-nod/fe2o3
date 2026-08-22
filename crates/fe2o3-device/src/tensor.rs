@@ -99,15 +99,13 @@ pub struct DeviceMatrix {
 }
 
 impl DeviceMatrix {
-    /// # Safety
+    /// Returns compiler-authenticated authority for matrix operations.
     ///
-    /// Only compiler-generated device code may call this. The compiler must
-    /// replace it after proving wave64 mode, gfx942 MFMA support, and the V1
-    /// floating-point policy.
-    #[doc(hidden)]
+    /// The compiler proves wave64 mode, gfx942 MFMA support, convergence, and
+    /// the V1 floating-point policy. Unsupported lowering and host execution trap.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_matrix_context_from_compiler_v1"]
-    pub unsafe fn from_compiler() -> Self {
+    #[rustc_diagnostic_item = "fe2o3_device_matrix_context_current_v1"]
+    pub fn current() -> Self {
         unreachable!("DeviceMatrix must be created by provider-bound device lowering")
     }
 
@@ -119,14 +117,12 @@ impl DeviceMatrix {
     /// for the reviewed provider and exact observed source ABI; every other path
     /// retains the panic stub.
     ///
-    /// # Safety
-    ///
-    /// All 64 lanes of one wave64 must execute this call in converged control
-    /// flow with fragments belonging to the same matrix operation.
+    /// The compiler rejects calls unless all 64 lanes of one wave64 execute in
+    /// converged control flow with fragments from the same matrix operation.
     #[must_use]
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_matrix_mfma_bf16_f32_m16n16k16_v1"]
-    pub unsafe fn multiply_accumulate(
+    pub fn multiply_accumulate(
         &self,
         lhs: Bf16MfmaFragment,
         rhs: Bf16MfmaFragment,
@@ -204,15 +200,12 @@ pub struct LdsTile16x16<'workgroup, T: LdsElement, State = LdsUninitialized> {
 /// source profile. Recognition creates two distinct 512-byte, 16-byte-aligned
 /// workgroup allocations. Unsupported compilation and host execution trap.
 ///
-/// # Safety
-///
-/// The caller must be the exact compiler-authenticated Slice 1 kernel. The
-/// returned lifetime is the active workgroup lifetime and the two linear
-/// capabilities must not escape, alias one another, or be duplicated.
+/// The compiler issues this pair only for the exact authenticated Slice 1
+/// kernel. The returned linear capabilities cannot be duplicated in safe Rust.
 #[doc(hidden)]
 #[inline(never)]
 #[rustc_diagnostic_item = "fe2o3_device_gfx942_lds_bf16_tile_pair_m16x16_v1"]
-pub unsafe fn gfx942_lds_bf16_tile_pair_m16x16_v1<'workgroup>() -> (
+pub fn gfx942_lds_bf16_tile_pair_m16x16_v1<'workgroup>() -> (
     LdsTile16x16<'workgroup, Bf16>,
     LdsTile16x16<'workgroup, Bf16>,
 ) {
@@ -252,12 +245,9 @@ impl<'workgroup, T: LdsElement, State> LdsTile16x16<'workgroup, T, State> {
 impl<T: LdsElement> LdsTile16x16<'_, T, LdsUninitialized> {
     /// Writes only the four elements owned by the current wave64 lane.
     ///
-    /// # Safety
-    ///
-    /// `lane` must identify the calling invocation. If compiler-issued
-    /// cooperative aliases exist, no other invocation may write this lane's
-    /// four indices during the same initialization epoch.
-    pub unsafe fn write_wave_fragment(&mut self, lane: &WaveLane<Wave64>, values: [T; 4]) -> bool {
+    /// The compiler-issued lane capability maps each wave64 lane to four
+    /// disjoint elements during the initialization epoch.
+    pub fn write_wave_fragment(&mut self, lane: &WaveLane<Wave64>, values: [T; 4]) -> bool {
         let indices = RowMajorXor4::lane_fragment_indices(lane.get() as usize)
             .expect("authenticated wave64 lane is in range");
         for (index, value) in indices.into_iter().zip(values) {
@@ -268,12 +258,8 @@ impl<T: LdsElement> LdsTile16x16<'_, T, LdsUninitialized> {
 }
 
 impl<'workgroup, T: LdsElement> LdsTile16x16<'workgroup, T, LdsUninitialized> {
-    /// # Safety
-    ///
-    /// All 256 elements must be initialized and cooperative writes must happen
-    /// before subsequent reads.
-    #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_assume_init_v1"]
-    pub unsafe fn assume_init(self) -> LdsTile16x16<'workgroup, T, LdsInitialized> {
+    #[cfg(test)]
+    unsafe fn assume_init_for_host_test(self) -> LdsTile16x16<'workgroup, T, LdsInitialized> {
         LdsTile16x16 {
             lds: unsafe { self.lds.assume_init() },
         }
@@ -288,19 +274,34 @@ impl<T: LdsElement + Copy> LdsTile16x16<'_, T, LdsInitialized> {
 }
 
 impl LdsTile16x16<'_, Bf16, LdsUninitialized> {
-    /// # Safety
-    ///
-    /// The lane and cooperative aliasing requirements of
-    /// [`Self::write_wave_fragment`] must hold.
+    /// Writes the four BF16 elements owned by the compiler-issued wave lane.
     #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_write_mfma_bf16_v1"]
-    pub unsafe fn write_mfma_fragment(
+    pub fn write_mfma_fragment(
         &mut self,
         lane: &WaveLane<Wave64>,
         fragment: Bf16MfmaFragment,
     ) -> bool {
-        // SAFETY: forwarded to the caller.
-        unsafe { self.write_wave_fragment(lane, fragment.to_array()) }
+        self.write_wave_fragment(lane, fragment.to_array())
     }
+}
+
+/// Publishes a completely initialized BF16 LDS tile pair.
+///
+/// Authenticated lowering proves that every lane wrote its four disjoint
+/// elements in both tiles and inserts the required workgroup barrier. The
+/// consuming typestate transition makes initialized reads unavailable before
+/// that proof. Unsupported lowering and host execution trap.
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_gfx942_lds_bf16_tile_pair_publish_v1"]
+pub fn gfx942_publish_lds_bf16_tile_pair_m16x16_v1<'workgroup>(
+    lhs: LdsTile16x16<'workgroup, Bf16, LdsUninitialized>,
+    rhs: LdsTile16x16<'workgroup, Bf16, LdsUninitialized>,
+) -> (
+    LdsTile16x16<'workgroup, Bf16, LdsInitialized>,
+    LdsTile16x16<'workgroup, Bf16, LdsInitialized>,
+) {
+    let _ = (lhs, rhs);
+    unreachable!("initialized BF16 LDS tile pairs must be published by authenticated lowering")
 }
 
 impl LdsTile16x16<'_, Bf16, LdsInitialized> {
@@ -382,9 +383,9 @@ mod tests {
         let mut tile = LdsTile16x16::try_from_dynamic(lds).ok().unwrap();
         for lane in 0..64 {
             let witness = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
-            assert!(unsafe { tile.write_wave_fragment(&witness, [lane; 4]) });
+            assert!(tile.write_wave_fragment(&witness, [lane; 4]));
         }
-        let tile = unsafe { tile.assume_init() };
+        let tile = unsafe { tile.assume_init_for_host_test() };
         for lane in 0..64 {
             assert_eq!(tile.read_wave_fragment(lane), Some([lane as u32; 4]));
         }
@@ -418,14 +419,48 @@ mod tests {
 
     #[test]
     fn intrinsic_stub_fails_closed_on_host() {
+        assert!(catch_unwind(DeviceMatrix::current).is_err());
+        assert!(catch_unwind(|| gfx942_lds_bf16_tile_pair_m16x16_v1()).is_err());
         let matrix = DeviceMatrix::for_host_test();
         assert!(
-            catch_unwind(AssertUnwindSafe(|| unsafe {
+            catch_unwind(AssertUnwindSafe(|| {
                 matrix.multiply_accumulate(
                     Bf16MfmaFragment::ZERO,
                     Bf16MfmaFragment::ZERO,
                     F32AccumulatorFragment::ZERO,
                 )
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn lds_tile_publish_fails_closed_on_host() {
+        let mut lhs_storage = [Bf16::ZERO; TILE_ELEMENTS];
+        let mut rhs_storage = [Bf16::ZERO; TILE_ELEMENTS];
+        let mut lhs_scope = WorkgroupLdsScope::for_host_test();
+        let mut rhs_scope = WorkgroupLdsScope::for_host_test();
+        let lhs = unsafe {
+            DynamicLds::<Bf16>::from_host_parts_for_test(
+                &mut lhs_scope,
+                lhs_storage.as_mut_ptr().cast(),
+                size_of::<[Bf16; TILE_ELEMENTS]>(),
+            )
+            .unwrap()
+        };
+        let rhs = unsafe {
+            DynamicLds::<Bf16>::from_host_parts_for_test(
+                &mut rhs_scope,
+                rhs_storage.as_mut_ptr().cast(),
+                size_of::<[Bf16; TILE_ELEMENTS]>(),
+            )
+            .unwrap()
+        };
+        let lhs = LdsTile16x16::try_from_dynamic(lhs).ok().unwrap();
+        let rhs = LdsTile16x16::try_from_dynamic(rhs).ok().unwrap();
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                gfx942_publish_lds_bf16_tile_pair_m16x16_v1(lhs, rhs)
             }))
             .is_err()
         );

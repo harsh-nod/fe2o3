@@ -151,8 +151,8 @@ collective_element!(
 /// Compiler-created authority for the exact gfx942 wave64 collective profile.
 ///
 /// The capability is neither `Copy`, `Clone`, `Send`, nor `Sync`. It does not
-/// authenticate a launch or convergence point; those obligations remain on
-/// each unsafe collective operation.
+/// carry caller-provided identity. Authenticated lowering proves the launch
+/// and convergence requirements of each operation.
 #[rustc_diagnostic_item = "fe2o3_device_gfx942_collectives_context_v1"]
 pub struct Gfx942Collectives {
     _private: (),
@@ -160,17 +160,13 @@ pub struct Gfx942Collectives {
 }
 
 impl Gfx942Collectives {
-    /// Creates target authority for compiler-generated device code.
+    /// Returns compiler-authenticated authority for gfx942 wave64 collectives.
     ///
-    /// # Safety
-    ///
-    /// The backend must replace this call only after authenticating gfx942,
-    /// wave64 mode, the strict floating-point policy, and the collective
-    /// lowering contract represented by this crate version.
-    #[doc(hidden)]
+    /// The compiler proves the target, wave mode, convergence, and floating
+    /// point policy. Unsupported lowering and host execution trap.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx942_collectives_from_compiler_v1"]
-    pub unsafe fn from_compiler() -> Self {
+    #[rustc_diagnostic_item = "fe2o3_device_gfx942_collectives_current_v1"]
+    pub fn current() -> Self {
         unreachable!("gfx942 collective authority must be created by authenticated lowering")
     }
 
@@ -180,13 +176,11 @@ impl Gfx942Collectives {
     /// forged in safe Rust. Authenticated lowering replaces this call with one
     /// 1,024-byte, four-byte-aligned AMDGPU workgroup-address-space allocation.
     ///
-    /// # Safety
-    ///
-    /// `self` must be the compiler-created capability for this exact gfx942
-    /// kernel. This constructor may execute only in a 256x1x1 launch profile.
+    /// The compiler accepts this operation only in its exact 256x1x1 launch
+    /// profile.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_static_lds_u32x256_v1"]
-    pub unsafe fn static_lds_u32x256(&self) -> Gfx942StaticLdsU32x256 {
+    pub fn static_lds_u32x256(&self) -> Gfx942StaticLdsU32x256 {
         unreachable!("gfx942 static LDS must be allocated by authenticated lowering")
     }
 
@@ -198,16 +192,14 @@ impl Gfx942Collectives {
     /// the logical mask with a wave64 ballot and uses a fixed six-shuffle XOR
     /// tree.
     ///
-    /// # Safety
-    ///
-    /// `self` must describe the current gfx942 wave64 epoch. All 64 physical
-    /// lanes must be active and execute this exact call convergently. The
+    /// The compiler proves that `self` describes the current gfx942 wave64
+    /// epoch and that all 64 physical lanes execute this call convergently. The
     /// lane-local `active_flag` may differ, but each lane must evaluate it once
     /// for this call. This logical mask does not authorize a partially active
     /// physical EXEC mask.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_wave64_reduce_active_u32_v1"]
-    pub unsafe fn wave64_reduce_sum_active_u32(&self, active_flag: u32, value: u32) -> u32 {
+    pub fn wave64_reduce_sum_active_u32(&self, active_flag: u32, value: u32) -> u32 {
         let _ = (active_flag, value);
         unreachable!("gfx942 wave64 reduction must be lowered by the fe2o3 backend")
     }
@@ -219,16 +211,14 @@ impl Gfx942Collectives {
     /// reads, reduction writes, and the final shared read. Inactive logical
     /// threads write zero and still participate in every physical barrier.
     ///
-    /// # Safety
-    ///
-    /// `self` and `scratch` must originate from authenticated lowering for the
-    /// same 256x1x1 gfx942 workgroup. Every physical work-item must execute this
-    /// exact call convergently and in the same barrier sequence. `active_flag`
+    /// The compiler proves that `self` and `scratch` belong to the same
+    /// 256x1x1 gfx942 workgroup and that every physical work-item executes this
+    /// exact call convergently in the same barrier sequence. `active_flag`
     /// has the same lane-local logical semantics as
     /// [`Self::wave64_reduce_sum_active_u32`].
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_workgroup256_reduce_active_u32_v1"]
-    pub unsafe fn workgroup256_reduce_sum_active_u32(
+    pub fn workgroup256_reduce_sum_active_u32(
         &self,
         scratch: &mut Gfx942StaticLdsU32x256,
         active_flag: u32,
@@ -401,13 +391,10 @@ impl<T: Gfx942CollectiveElement> fmt::Debug for WorkgroupCollectiveScratch<'_, T
 impl SubgroupTile<'_, 64> {
     /// Returns the wave64 sum to every lane using a fixed XOR shuffle tree.
     ///
-    /// # Safety
-    ///
-    /// The context and tile must describe the current gfx942 wave64 epoch, all
-    /// 64 lanes must be active and execute this call uniformly, and the backend
-    /// must authenticate and lower every diagnostic item in this operation.
+    /// The compiler proves that the context and tile describe the current
+    /// gfx942 wave64 epoch and that all lanes execute this call uniformly.
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_wave64_reduce_sum_v1"]
-    pub unsafe fn reduce_sum<T: Gfx942CollectiveElement>(
+    pub fn reduce_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
         value: T,
@@ -425,11 +412,9 @@ impl SubgroupTile<'_, 64> {
 
     /// Returns the inclusive wave64 prefix sum in increasing lane order.
     ///
-    /// # Safety
-    ///
-    /// The safety requirements of [`Self::reduce_sum`] apply.
+    /// The compiler requirements of [`Self::reduce_sum`] apply.
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_wave64_inclusive_scan_sum_v1"]
-    pub unsafe fn inclusive_scan_sum<T: Gfx942CollectiveElement>(
+    pub fn inclusive_scan_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
         value: T,
@@ -441,10 +426,9 @@ impl SubgroupTile<'_, 64> {
     ///
     /// Lane zero receives `T::ZERO`.
     ///
-    /// # Safety
-    /// The safety requirements of [`Self::reduce_sum`] apply.
+    /// The compiler requirements of [`Self::reduce_sum`] apply.
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_wave64_exclusive_scan_sum_v1"]
-    pub unsafe fn exclusive_scan_sum<T: Gfx942CollectiveElement>(
+    pub fn exclusive_scan_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
         value: T,
@@ -478,13 +462,11 @@ unsafe fn wave64_inclusive_scan<T: Gfx942CollectiveElement>(
 impl Workgroup<'_> {
     /// Returns the workgroup sum to every invocation through LDS scratch.
     ///
-    /// # Safety
-    ///
-    /// The context, workgroup, and scratch binding must describe the current
-    /// gfx942 execution. Every work-item must execute the same call uniformly.
+    /// The compiler proves that the context, workgroup, and scratch binding
+    /// describe the current gfx942 execution and execute uniformly.
     /// The compiler must preserve each LDS access and convergent barrier.
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_workgroup_reduce_sum_v1"]
-    pub unsafe fn reduce_sum<T: Gfx942CollectiveElement>(
+    pub fn reduce_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
         scratch: &mut WorkgroupCollectiveScratch<'_, T>,
@@ -494,7 +476,7 @@ impl Workgroup<'_> {
         let size = self.size() as u32;
         debug_assert_eq!(size, scratch.slots);
         unsafe { T::__fe2o3_lds_store(context, scratch.base, rank, value) };
-        unsafe { self.synchronize() };
+        self.synchronize();
 
         let mut offset = size >> 1;
         while offset != 0 {
@@ -505,26 +487,24 @@ impl Workgroup<'_> {
             } else {
                 None
             };
-            unsafe { self.synchronize() };
+            self.synchronize();
             if let Some(sum) = pair {
                 unsafe { T::__fe2o3_lds_store(context, scratch.base, rank, sum) };
             }
-            unsafe { self.synchronize() };
+            self.synchronize();
             offset >>= 1;
         }
 
         let result = unsafe { T::__fe2o3_lds_load(context, scratch.base, 0) };
-        unsafe { self.synchronize() };
+        self.synchronize();
         result
     }
 
     /// Returns the inclusive workgroup prefix sum in increasing thread rank.
     ///
-    /// # Safety
-    ///
-    /// The safety requirements of [`Self::reduce_sum`] apply.
+    /// The compiler requirements of [`Self::reduce_sum`] apply.
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_workgroup_inclusive_scan_sum_v1"]
-    pub unsafe fn inclusive_scan_sum<T: Gfx942CollectiveElement>(
+    pub fn inclusive_scan_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
         scratch: &mut WorkgroupCollectiveScratch<'_, T>,
@@ -537,10 +517,9 @@ impl Workgroup<'_> {
     ///
     /// Thread rank zero receives `T::ZERO`.
     ///
-    /// # Safety
-    /// The safety requirements of [`Self::reduce_sum`] apply.
+    /// The compiler requirements of [`Self::reduce_sum`] apply.
     #[rustc_diagnostic_item = "fe2o3_device_gfx942_workgroup_exclusive_scan_sum_v1"]
-    pub unsafe fn exclusive_scan_sum<T: Gfx942CollectiveElement>(
+    pub fn exclusive_scan_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
         scratch: &mut WorkgroupCollectiveScratch<'_, T>,
@@ -553,7 +532,7 @@ impl Workgroup<'_> {
         } else {
             unsafe { T::__fe2o3_lds_load(context, scratch.base, rank - 1) }
         };
-        unsafe { self.synchronize() };
+        self.synchronize();
         let _ = inclusive;
         result
     }
@@ -569,7 +548,7 @@ unsafe fn workgroup_inclusive_scan<T: Gfx942CollectiveElement>(
     let size = group.size() as u32;
     debug_assert_eq!(size, scratch.slots);
     unsafe { T::__fe2o3_lds_store(context, scratch.base, rank, value) };
-    unsafe { group.synchronize() };
+    group.synchronize();
 
     let mut offset = 1;
     while offset < size {
@@ -579,15 +558,15 @@ unsafe fn workgroup_inclusive_scan<T: Gfx942CollectiveElement>(
         } else {
             None
         };
-        unsafe { group.synchronize() };
+        group.synchronize();
         let next = prefix.map_or(current, |prefix| prefix.__fe2o3_add(current));
         unsafe { T::__fe2o3_lds_store(context, scratch.base, rank, next) };
-        unsafe { group.synchronize() };
+        group.synchronize();
         offset <<= 1;
     }
 
     let result = unsafe { T::__fe2o3_lds_load(context, scratch.base, rank) };
-    unsafe { group.synchronize() };
+    group.synchronize();
     result
 }
 

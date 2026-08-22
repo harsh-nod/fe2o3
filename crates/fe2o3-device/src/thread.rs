@@ -248,6 +248,16 @@ pub struct Invocation3D {
 }
 
 impl Invocation3D {
+    /// Returns a compiler-authenticated snapshot of the current invocation.
+    ///
+    /// Unsupported lowering and host execution trap. Unlike
+    /// [`Self::from_raw_parts`], this API accepts no caller-asserted identity.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_invocation_3d_current"]
+    pub fn current() -> Self {
+        unreachable!("the current invocation must be issued by authenticated lowering")
+    }
+
     /// Constructs an invocation snapshot from caller-asserted coordinates.
     ///
     /// Returns `None` when either coordinate is outside its corresponding
@@ -762,6 +772,11 @@ mod tests {
     use core::mem::{align_of, size_of};
     use std::collections::BTreeSet;
     use std::panic::catch_unwind;
+
+    #[test]
+    fn current_invocation_fails_closed_on_host() {
+        assert!(catch_unwind(Invocation3D::current).is_err());
+    }
 
     #[test]
     fn index_space_markers_do_not_change_the_witness_abi() {

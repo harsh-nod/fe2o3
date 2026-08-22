@@ -50,6 +50,16 @@ pub struct WaveLane<Width: WaveWidth> {
 }
 
 impl<Width: WaveWidth> WaveLane<Width> {
+    /// Returns the current invocation's compiler-authenticated wave lane.
+    ///
+    /// Authenticated lowering must prove that the target's native wave width
+    /// is exactly `Width::LANES`. Unsupported lowering and host execution trap.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_wave_lane_current"]
+    pub fn current() -> Self {
+        unreachable!("the current wave lane must be issued by authenticated lowering")
+    }
+
     /// Constructs a lane witness from a backend-provided lane ID.
     ///
     /// Returns `None` when `lane` is outside `Width`. This API is unsafe because
@@ -141,5 +151,10 @@ mod tests {
         assert_eq!(align_of::<WaveLane<Wave32>>(), align_of::<u32>());
         assert_eq!(size_of::<WaveLane<Wave64>>(), size_of::<u32>());
         assert_eq!(align_of::<WaveLane<Wave64>>(), align_of::<u32>());
+    }
+
+    #[test]
+    fn current_lane_fails_closed_on_host() {
+        assert!(std::panic::catch_unwind(WaveLane::<Wave64>::current).is_err());
     }
 }

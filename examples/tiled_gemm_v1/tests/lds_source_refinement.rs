@@ -212,9 +212,7 @@ fn attributed_source_and_exact_ir_have_the_bound_operation_order() {
             "gfx942_lds_bf16_tile_pair_m16x16_v1",
             "write_mfma_fragment",
             "write_mfma_fragment",
-            "syncthreads",
-            "assume_init",
-            "assume_init",
+            "gfx942_publish_lds_bf16_tile_pair_m16x16_v1",
             "read_mfma_fragment",
             "read_mfma_fragment",
             "multiply_accumulate",
@@ -227,8 +225,7 @@ fn attributed_source_and_exact_ir_have_the_bound_operation_order() {
     );
     for (call, expected) in [
         ("write_mfma_fragment", 2),
-        ("syncthreads", 1),
-        ("assume_init", 2),
+        ("gfx942_publish_lds_bf16_tile_pair_m16x16_v1", 1),
         ("read_mfma_fragment", 2),
         ("multiply_accumulate", 1),
         ("checked_block", 1),

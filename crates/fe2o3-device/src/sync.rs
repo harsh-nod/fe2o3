@@ -190,7 +190,7 @@ impl<'workgroup> ManagedBarrier<'workgroup, Gfx942, BarrierReady, 0> {
     /// All active work-items must execute this dynamic call in uniform order.
     pub unsafe fn arrive_and_wait(self) -> Self {
         // SAFETY: the caller establishes the convergence contract.
-        unsafe { syncthreads() };
+        syncthreads();
         self
     }
 
@@ -326,12 +326,9 @@ pub unsafe fn gfx942_barrier_wait() {
 /// Executes one uniform workgroup barrier with acquire-release ordering over
 /// global and workgroup memory.
 ///
-/// This low-level entry point is intentionally unsafe. The typed
-/// [`crate::Workgroup::synchronize`] operation remains unsafe for the same reasons.
-/// The current compiler does not recognize or lower this function, so calling
-/// it on a host or through an unsupported compilation path always panics.
-///
-/// # Safety
+/// The typed [`crate::Workgroup::synchronize`] carries the same compiler contract. The
+/// compiler rejects calls that it cannot prove workgroup-uniform. Calling this
+/// on a host or through unsupported lowering always panics.
 ///
 /// Every active work-item in the current workgroup must execute this exact
 /// dynamic call once and in the same barrier sequence. No work-item may reach
@@ -347,6 +344,14 @@ pub unsafe fn gfx942_barrier_wait() {
 /// properties does not synchronize a device program.
 #[inline(never)]
 #[rustc_diagnostic_item = "fe2o3_device_workgroup_syncthreads_v1"]
-pub unsafe fn syncthreads() {
+pub fn syncthreads() {
     unreachable!("syncthreads must be lowered by the fe2o3 backend")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn syncthreads_fails_closed_on_host() {
+        assert!(std::panic::catch_unwind(super::syncthreads).is_err());
+    }
 }
