@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `index`
+ --> tests/ui/fail/disjoint_index_is_not_copy.rs:5:19
+  |
+3 | fn duplicate(index: DisjointIndex) {
+  |              ----- move occurs because `index` has type `DisjointIndex`, which does not implement the `Copy` trait
+4 |     let _first = index;
+  |                  ----- value moved here
+5 |     let _second = index;
+  |                   ^^^^^ value used here after move

@@ -337,6 +337,22 @@ impl Invocation3D {
 #[derive(Debug)]
 pub enum Index1D {}
 
+/// Type-level mapping for an injective positive translation of an index space.
+///
+/// The mapping is part of a [`crate::DisjointSlice`] type so safe code cannot
+/// use an identity index and a translated index interchangeably. `OFFSET` is a
+/// compile-time constant shared by every invocation; invocation-dependent
+/// offsets remain ordinary integers and grant no disjoint-write authority.
+///
+/// This revision defines the device-side type contract. Production typed
+/// artifact extraction still admits only `Index1D` and must fail closed until
+/// it learns to authenticate this mapping.
+#[derive(Debug)]
+#[rustc_diagnostic_item = "fe2o3_device_shifted_index_space"]
+pub enum Shifted<IndexSpace, const OFFSET: usize> {
+    _IndexSpace(core::convert::Infallible, PhantomData<fn() -> IndexSpace>),
+}
+
 /// Type-level index space for a row-major two-dimensional launch.
 ///
 /// Encoding the row stride in the type prevents a witness derived for one
@@ -352,6 +368,21 @@ pub enum Index2D<const ROW_STRIDE: usize> {}
 #[repr(transparent)]
 #[rustc_diagnostic_item = "fe2o3_device_thread_index"]
 pub struct ThreadIndex<IndexSpace = Index1D> {
+    raw: usize,
+    _index_space: PhantomData<fn() -> IndexSpace>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+/// A non-forgeable element index for one declared disjoint mapping.
+///
+/// Safe construction starts with a compiler-issued [`ThreadIndex`]. The
+/// mapping remains in `IndexSpace`, preventing an index transformed under one
+/// mapping from accessing a [`crate::DisjointSlice`] declared for another.
+/// This value is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`.
+#[repr(transparent)]
+#[must_use = "disjoint write authority is lost when the index is discarded"]
+#[rustc_diagnostic_item = "fe2o3_device_disjoint_index"]
+pub struct DisjointIndex<IndexSpace = Index1D> {
     raw: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
     _not_send_sync: PhantomData<*mut ()>,
@@ -386,12 +417,75 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
     pub fn in_bounds(&self, len: usize) -> bool {
         self.raw < len
     }
+
+    /// Converts the current invocation's index into identity-mapped disjoint
+    /// write authority.
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_into_disjoint"]
+    pub fn into_disjoint(self) -> DisjointIndex<IndexSpace> {
+        DisjointIndex {
+            raw: self.raw,
+            _index_space: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+
+    /// Applies one compile-time constant, overflow-checked positive shift.
+    ///
+    /// The returned type records the mapping. This is injective for all
+    /// successfully translated inputs; overflow produces `None` instead of
+    /// wrapping two invocation indices onto the same element.
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_shift"]
+    pub fn checked_shift<const OFFSET: usize>(
+        self,
+    ) -> Option<DisjointIndex<Shifted<IndexSpace, OFFSET>>> {
+        self.into_disjoint().checked_shift::<OFFSET>()
+    }
 }
 
 impl<IndexSpace> fmt::Debug for ThreadIndex<IndexSpace> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_tuple("ThreadIndex")
+            .field(&self.raw)
+            .finish()
+    }
+}
+
+impl<IndexSpace> DisjointIndex<IndexSpace> {
+    /// Returns the mapped element index as coordinate data.
+    ///
+    /// The integer does not carry the disjoint-write authority of `self`.
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_index_get"]
+    pub fn get(&self) -> usize {
+        self.raw
+    }
+
+    /// Applies another compile-time constant, overflow-checked positive shift.
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_index_checked_shift"]
+    pub fn checked_shift<const OFFSET: usize>(
+        self,
+    ) -> Option<DisjointIndex<Shifted<IndexSpace, OFFSET>>> {
+        Some(DisjointIndex {
+            raw: self.raw.checked_add(OFFSET)?,
+            _index_space: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_model_index(raw: usize) -> Self {
+        Self {
+            raw,
+            _index_space: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+}
+
+impl<IndexSpace> fmt::Debug for DisjointIndex<IndexSpace> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("DisjointIndex")
             .field(&self.raw)
             .finish()
     }
@@ -508,8 +602,8 @@ pub fn block_dim_z() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        GridSize, Index1D, Index2D, Invocation3D, ThreadIndex, WorkgroupId, WorkgroupSize,
-        WorkitemId,
+        DisjointIndex, GridSize, Index1D, Index2D, Invocation3D, Shifted, ThreadIndex, WorkgroupId,
+        WorkgroupSize, WorkitemId,
     };
     use core::mem::{align_of, size_of};
 
@@ -519,6 +613,31 @@ mod tests {
         assert_eq!(align_of::<ThreadIndex<Index1D>>(), align_of::<usize>());
         assert_eq!(size_of::<ThreadIndex<Index2D<64>>>(), size_of::<usize>());
         assert_eq!(align_of::<ThreadIndex<Index2D<64>>>(), align_of::<usize>());
+        assert_eq!(size_of::<DisjointIndex<Index1D>>(), size_of::<usize>());
+        assert_eq!(align_of::<DisjointIndex<Index1D>>(), align_of::<usize>());
+        assert_eq!(
+            size_of::<DisjointIndex<Shifted<Index1D, 1>>>(),
+            size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn checked_shift_preserves_distinct_indices_and_rejects_overflow() {
+        let first = DisjointIndex::<Index1D>::from_model_index(7)
+            .checked_shift::<3>()
+            .unwrap();
+        let second = DisjointIndex::<Index1D>::from_model_index(8)
+            .checked_shift::<3>()
+            .unwrap();
+        assert_eq!(first.get(), 10);
+        assert_eq!(second.get(), 11);
+        assert_ne!(first.get(), second.get());
+
+        assert!(
+            DisjointIndex::<Index1D>::from_model_index(usize::MAX)
+                .checked_shift::<1>()
+                .is_none()
+        );
     }
 
     #[test]

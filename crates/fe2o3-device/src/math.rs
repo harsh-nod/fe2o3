@@ -1,8 +1,8 @@
 //! Target-gated device math intrinsics.
 //!
-//! Every operation requires a compiler-created [`DeviceMath`] capability.
-//! Host rustc cannot create one through safe code, and the fallback bodies
-//! panic if reached. The fe2o3 backend must recognize the diagnostic identity,
+//! Every operation requires a compiler-recognized [`DeviceMath`] capability.
+//! The safe acquisition and operation fallback bodies panic if reached on the
+//! host. The fe2o3 backend must recognize the diagnostic identity,
 //! authenticate the target and floating-point policy, and replace the complete
 //! call before emitting AMDGPU code.
 //!
@@ -20,8 +20,9 @@ pub const DEVICE_MATH_CONTRACT_VERSION_V1: u16 = 1;
 /// Compiler-created authority to call target-specific device math operations.
 ///
 /// The value is neither `Copy`, `Clone`, `Send`, nor `Sync`. It carries no
-/// launch authority; it only prevents ordinary host code from accidentally
-/// treating device intrinsic stubs as a software math library.
+/// memory, launch, synchronization, or cross-invocation authority. Safe
+/// acquisition is sound because an unsupported call fails closed; target and
+/// floating-point-policy validation remains a compiler obligation.
 #[rustc_diagnostic_item = "fe2o3_device_math_context_v1"]
 pub struct DeviceMath {
     _private: (),
@@ -67,18 +68,17 @@ macro_rules! device_ternary_intrinsic {
 }
 
 impl DeviceMath {
-    /// Creates the capability consumed by device intrinsic lowering.
+    /// Acquires the capability consumed by device intrinsic lowering.
     ///
-    /// # Safety
-    ///
-    /// Only authenticated fe2o3 compiler-generated device code may call this
-    /// function. The backend must replace the call after validating the AMDGPU
-    /// target, code-object version, denormal mode, contraction policy, and
-    /// linked OCML/OCKL identity required by every reachable operation.
-    #[doc(hidden)]
+    /// The fallback always panics. The backend may replace it only after
+    /// validating the AMDGPU target, code-object version, denormal mode,
+    /// contraction policy, and linked OCML/OCKL identity required by every
+    /// reachable operation. Making acquisition safe does not relax any of
+    /// those checks and grants no memory or collective-execution authority.
+    #[must_use]
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_math_context_from_compiler_v1"]
-    pub unsafe fn from_compiler() -> Self {
+    pub fn current() -> Self {
         unreachable!("DeviceMath must be created by authenticated fe2o3 device lowering")
     }
 
@@ -200,8 +200,8 @@ mod tests {
     }
 
     #[test]
-    fn compiler_constructor_fails_closed_on_host() {
-        let result = catch_unwind(|| unsafe { DeviceMath::from_compiler() });
+    fn safe_acquisition_fails_closed_on_host() {
+        let result = catch_unwind(DeviceMath::current);
         assert!(result.is_err());
     }
 

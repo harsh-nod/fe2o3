@@ -75,8 +75,8 @@ pub use tensor::{
     gfx942_lds_bf16_tile_pair_m16x16_v1,
 };
 pub use thread::{
-    GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
-    WorkgroupId, WorkgroupSize, WorkitemId,
+    DisjointIndex, GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D,
+    Shifted, ThreadIndex, WorkgroupId, WorkgroupSize, WorkitemId,
 };
 pub use views::{
     DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,
@@ -327,6 +327,20 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
         unsafe { self.get_mut_at(index.get()) }
     }
 
+    /// Returns mutable access selected by a mapping-matched disjoint index.
+    ///
+    /// Bounds are checked dynamically. The `IndexSpace` match additionally
+    /// prevents identity and transformed mappings from being mixed through
+    /// this safe API.
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_disjoint_mut"]
+    pub fn get_disjoint_mut(&mut self, index: DisjointIndex<IndexSpace>) -> Option<&mut T> {
+        // SAFETY: safe `DisjointIndex` construction starts with the current
+        // invocation's compiler-issued index and retains every injective
+        // transformation in `IndexSpace`. Matching that type with this view
+        // preserves the view's declared per-invocation partition.
+        unsafe { self.get_mut_at(index.get()) }
+    }
+
     /// Returns mutable access to an arbitrary integer index in this view.
     ///
     /// Returns `None` when `index` is outside the view's element extent.
@@ -350,7 +364,9 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DisjointSlice, Index1D, Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1};
+    use super::{
+        DisjointIndex, DisjointSlice, Index1D, Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1,
+    };
     use core::mem::{align_of, size_of};
 
     #[test]
@@ -378,5 +394,22 @@ mod tests {
     #[test]
     fn kernel_marker_contract_version_is_stable() {
         assert_eq!(KERNEL_MARKER_CONTRACT_VERSION_V1, 1);
+    }
+
+    #[test]
+    fn disjoint_index_access_checks_the_slice_extent() {
+        let mut storage = [10_u32, 20, 30];
+        let mut slice =
+            unsafe { DisjointSlice::<u32>::from_raw_parts(storage.as_mut_ptr(), storage.len()) };
+
+        *slice
+            .get_disjoint_mut(DisjointIndex::<Index1D>::from_model_index(1))
+            .unwrap() = 99;
+        assert!(
+            slice
+                .get_disjoint_mut(DisjointIndex::<Index1D>::from_model_index(3))
+                .is_none()
+        );
+        assert_eq!(storage, [10, 99, 30]);
     }
 }

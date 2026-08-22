@@ -1,19 +1,17 @@
 use fe2o3_core::{DeviceBuffer, GpuContext, LaunchConfig};
-use fe2o3_device::{DisjointSlice, kernel, thread};
+use fe2o3_device::{DisjointSlice, Index1D, Shifted, kernel, thread};
 use fe2o3_host::launch;
 use std::path::PathBuf;
 
 #[kernel]
-pub fn raw_disjoint_inplace_shift(x: &[f32], mut out: DisjointSlice<f32>) {
+pub fn raw_disjoint_inplace_shift(x: &[f32], mut out: DisjointSlice<f32, Shifted<Index1D, 1>>) {
     let idx = thread::index_1d();
     let source = idx.get();
-    let target = source + 1;
     if source < x.len() {
-        // SAFETY: each invocation maps its unique `source` to the unique
-        // `source + 1` output element, and the bounds check is performed by
-        // `get_mut_at`.
-        if let Some(value) = unsafe { out.get_mut_at(target) } {
-            *value = *value + x[source];
+        if let Some(target) = idx.checked_shift::<1>() {
+            if let Some(value) = out.get_disjoint_mut(target) {
+                *value = *value + x[source];
+            }
         }
     }
 }

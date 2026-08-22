@@ -23,7 +23,7 @@ pub fn row_softmax_v1(input: &[f32], mut output: DisjointSlice<f32>) {
             index += 1;
         }
 
-        let math = unsafe { DeviceMath::from_compiler() };
+        let math = DeviceMath::current();
         let mut denominator = 0.0_f32;
         index = 0;
         while index < ROW_ELEMENTS {

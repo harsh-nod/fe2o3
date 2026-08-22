@@ -151,7 +151,7 @@ pub fn flash_attention_causal_f32_b1_h1_n8_d16_v1(
 
     // SAFETY: only authenticated gfx942 strict-FP device lowering may replace
     // this capability. Phase A intentionally has no such compiler authority.
-    let math = unsafe { DeviceMath::from_compiler() };
+    let math = DeviceMath::current();
     let Some(values) = output_pair_v1(&math, q, k, v, query_row, output_column) else {
         fe2o3_device::trap();
         return;

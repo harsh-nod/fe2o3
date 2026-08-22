@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/shifted_index_rejects_identity_output.rs:5:37
+  |
+5 |     let _ = output.get_disjoint_mut(shifted);
+  |                    ---------------- ^^^^^^^ expected `DisjointIndex`, found `DisjointIndex<Shifted<Index1D, 1>>`
+  |                    |
+  |                    arguments to this method are incorrect
+  |
+  = note: expected struct `DisjointIndex<Index1D>`
+             found struct `DisjointIndex<Shifted<Index1D, 1>>`
+note: method defined here
+ --> src/lib.rs
+  |
+  |     pub fn get_disjoint_mut(&mut self, index: DisjointIndex<IndexSpace>) -> Option<&mut T> {
+  |            ^^^^^^^^^^^^^^^^

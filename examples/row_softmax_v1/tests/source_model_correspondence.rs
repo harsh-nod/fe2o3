@@ -123,8 +123,8 @@ fn malformed_and_hostile_source_mutations_fail_closed() {
         hostile(SOURCE, "maximum = value", "maximum = input[0]"),
         hostile(
             SOURCE,
-            "DeviceMath::from_compiler()",
-            "DeviceMath::from_compiler_unchecked()",
+            "DeviceMath::current()",
+            "DeviceMath::current_unchecked()",
         ),
         hostile(
             SOURCE,
