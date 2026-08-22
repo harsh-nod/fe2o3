@@ -67,12 +67,12 @@ pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
 
 /// Canonical contract for CPU initialization of public device-local storage.
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-device-memory-initialization-r2-v1\n",
+    "profile=fe2o3-mi300x-gfx942-device-memory-initialization-r3-v1\n",
     "uapi_profile_sha256=3b9f1164fc74672f019cbd092c142b4a6d830920424b87282cfdf5b8f50afd81\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device-and-vm\n",
     "allocation=device-local-vram-hbm-public-writable:0xa0000001,separate-from-uninitialized:0x80000001\n",
     "source=owned-nonempty-byte-slice-or-private-field-repeated-byte-recipe,exact-length-and-sha256-content-precommit,bounded-memory-repeated-byte-hash-before-native-allocation\n",
-    "cpu-map=returned-mmap-offset,prot-none-then-dontfork-then-read-write,whole-request-copy-or-direct-repeated-byte-fill,full-readback-sha256,explicit-munmap-before-gpu-map\n",
+    "cpu-map=returned-mmap-offset,prot-none-then-dontfork-then-read-write,whole-request-copy-with-full-readback-sha256-or-private-recipe-complete-safe-slice-repeated-byte-fill-without-redundant-hbm-readback,explicit-munmap-before-gpu-map\n",
     "authority=linear-initialized-mapped-lease,private-allocation-device-vm-generation-and-address,public-layout-and-content-descriptor-only\n",
     "failure=preflight-no-side-effects,post-allocation-or-mapping-failure-quarantines-session,no-retry-or-drop-cleanup\n",
     "excluded=caller-asserted-initialization,callback-content-claim,persistent-cpu-mapping,gpu-address,copy-queue,execution,hardware-coherence-proof\n",
@@ -80,7 +80,7 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1`].
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
-    "8b173c6142b6052473c222e6c08a77b3a2388f50e7d966639ae3a5507773325a";
+    "edb019f0d3787705d92e879e5353cfd776a2a97fea5129a498bc57226131b730";
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
@@ -201,12 +201,14 @@ pub struct Gfx942DeviceMemoryLeaseV1<S: Gfx942DeviceMemoryStateV1> {
     marker: PhantomData<S>,
 }
 
-/// Linear mapped device-local storage whose exact byte extent was written and
-/// read back through an owned CPU mapping before GPU publication.
+/// Linear mapped device-local storage whose exact byte extent was initialized
+/// through an owned CPU mapping before GPU publication.
 ///
 /// The authority binds the private allocation generation to one content
-/// descriptor. It has no public constructor, address, handle, pointer, or
-/// mutable-byte accessor and is neither `Clone` nor `Copy`.
+/// descriptor. Arbitrary owned images are read back before this authority is
+/// minted; the private repeated-byte recipe instead uses one complete safe-slice
+/// fill without a redundant HBM readback. It has no public constructor, address,
+/// handle, pointer, or mutable-byte accessor and is neither `Clone` nor `Copy`.
 ///
 /// ```compile_fail
 /// use fe2o3_kfd::Gfx942InitializedDeviceMemoryV1;
@@ -1156,6 +1158,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             bytes.len(),
             content,
             |mapped| mapped.copy_from_slice(bytes),
+            true,
         )
     }
 
@@ -1177,6 +1180,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             expected_len,
             content,
             |mapped| mapped.fill(initialization.repeated_byte()),
+            false,
         )
     }
 
@@ -1186,6 +1190,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         expected_len: usize,
         content: Gfx942DeviceContentDescriptorV1,
         write: impl FnOnce(&mut [u8]),
+        verify_readback: bool,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
         let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
         self.check_currentness()?;
@@ -1216,18 +1221,22 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         if let Err(error) = prepare_result {
             return self.quarantine(error);
         }
-        let observed: [u8; 32] = {
+        let observed: Option<[u8; 32]> = {
             let record = &mut self.device_memory[index];
             let mapping = record
                 .mapping
                 .as_mut()
                 .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
             B::with_bytes_mut(mapping, expected_len, write);
-            B::with_bytes(mapping, expected_len, |mapped| {
-                Sha256::digest(mapped).into()
-            })
+            if verify_readback {
+                Some(B::with_bytes(mapping, expected_len, |mapped| {
+                    Sha256::digest(mapped).into()
+                }))
+            } else {
+                None
+            }
         };
-        if observed != content.sha256() {
+        if observed.is_some_and(|observed| observed != content.sha256()) {
             return self.quarantine(MemorySessionError::DeviceContentMismatch);
         }
         let unmap_result = {
@@ -2093,13 +2102,15 @@ impl SharedGttMemorySessionV1 {
     }
 
     /// Allocates CPU-visible device-local storage, fills its complete logical
-    /// extent from a bounded-memory repeated-byte recipe, verifies mapped bytes,
-    /// removes CPU access, and maps the allocation to the selected GPU.
+    /// extent from a bounded-memory repeated-byte recipe, removes CPU access,
+    /// and maps the allocation to the selected GPU.
     ///
     /// The recipe has private fields and precommits the exact role, nonzero
     /// extent, repeated byte, and SHA-256 before this method begins any native
-    /// allocation. Success returns the same linear initialized authority as the
-    /// owned-byte initializer without exposing a native address or mapping.
+    /// allocation. The private exact recipe and complete safe-slice fill make a
+    /// second HBM readback redundant; unlike caller-supplied arbitrary bytes,
+    /// this path does not scan the mapped extent again. Success returns the same
+    /// linear initialized authority without exposing a native address or mapping.
     pub fn initialize_gfx942_device_memory_repeated_byte(
         &mut self,
         initialization: Gfx942RepeatedByteContentV1,
@@ -3681,7 +3692,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_byte_initialization_fills_reads_back_and_releases_exact_extent() {
+    fn repeated_byte_initialization_fills_without_readback_and_releases_exact_extent() {
         for (byte_len, repeated_byte) in [(1_u64, 0_u8), (4096, 0x5a), (4097, 0xff)] {
             let mut engine = acquired();
             let (device, vm) = device_vm(7);
@@ -3695,6 +3706,7 @@ mod tests {
                     KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
                 )
                 .unwrap();
+            engine.backend.corrupt_readback = true;
             let initialized = engine
                 .initialize_public_device_memory_repeated_byte(
                     lease,
@@ -3708,7 +3720,7 @@ mod tests {
             assert_eq!(engine.backend.flags, vec![0xa000_0001]);
             assert_eq!(engine.backend.map_cpu_calls, 1);
             assert_eq!(engine.backend.map_gpu_calls, 1);
-            assert_eq!(engine.backend.last_unmapped_readback_calls, 1);
+            assert_eq!(engine.backend.last_unmapped_readback_calls, 0);
             assert_eq!(
                 engine.backend.operations,
                 ["map_cpu", "prepare_cpu_mapping", "unmap_cpu", "map_gpu"]
@@ -3736,16 +3748,17 @@ mod tests {
     }
 
     #[test]
-    fn repeated_byte_readback_mismatch_quarantines_and_retains_accounting() {
+    fn arbitrary_owned_bytes_still_reject_a_readback_mismatch() {
         let mut engine = acquired();
         let (device, vm) = device_vm(7);
-        let byte_len = 4097_u64;
-        let initialization = repeated_content(byte_len, 0x3c);
+        let bytes = vec![0x3c; 4097];
+        let role = crate::Gfx942DeviceContentRoleV1::new([0x62; 32], 8).unwrap();
+        let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &bytes).unwrap();
         let lease = engine
             .allocate_device_memory_with_flags(
                 device,
                 vm,
-                byte_len,
+                bytes.len() as u64,
                 4096,
                 KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
             )
@@ -3753,11 +3766,7 @@ mod tests {
         engine.backend.corrupt_readback = true;
 
         assert!(matches!(
-            engine.initialize_public_device_memory_repeated_byte(
-                lease,
-                initialization,
-                byte_len as usize,
-            ),
+            engine.initialize_public_device_memory(lease, &bytes, content),
             Err(MemorySessionError::DeviceContentMismatch)
         ));
         assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);

@@ -274,15 +274,17 @@ public kernel launch, or hardware-completion authority.
 
 The separate `Gfx942InitializedDeviceMemoryV1` path admits exact
 `VRAM | PUBLIC | WRITABLE` flags (`0xa0000001`) without changing ordinary C3
-leases. It accepts an owned nonempty byte slice and a content descriptor, then
-checks their exact length and SHA-256 before allocation. After successful KFD
-allocation it maps the returned BO offset through the retained render file,
-uses the same `PROT_NONE -> MADV_DONTFORK -> read/write` setup as GTT, copies
-the complete requested extent, hashes the mapped bytes again, explicitly
-unmaps the CPU VMA, and only then maps the allocation to the selected GPU. The
-result binds private allocation/device/VM generations to the checked content
-descriptor and exposes no native address or mutable view. A descriptor alone
-cannot construct it.
+leases. One entry point accepts an owned nonempty byte slice and a content
+descriptor, checks their exact length and SHA-256 before allocation, copies the
+complete requested extent, and hashes the mapped bytes again. The private
+repeated-byte entry point instead precommits the exact nonempty extent, byte,
+role, and SHA-256, then fills the complete safe mapping slice without a second
+HBM scan. Both paths map the returned BO offset through the retained render
+file, use the same `PROT_NONE -> MADV_DONTFORK -> read/write` setup as GTT,
+explicitly unmap the CPU VMA, and only then map the allocation to the selected
+GPU. The result binds private allocation/device/VM generations to the checked
+content descriptor and exposes no native address or mutable view. A descriptor
+alone cannot construct it.
 
 The exact checked gfx942 device profile and successful public-VRAM mmap are the
 only capability admission currently available. A driver or platform that
