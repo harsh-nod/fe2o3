@@ -378,6 +378,17 @@ pub(crate) struct WorkerResponseReplayMetadataV1<'response> {
 }
 
 impl<'response> WorkerResponseReplayMetadataV1<'response> {
+    #[cfg(test)]
+    pub(crate) const fn from_test_bodies(
+        diagnostics_body: &'response [u8],
+        provider_evidence_body: Option<&'response [u8]>,
+    ) -> Self {
+        Self {
+            diagnostics_body,
+            provider_evidence_body,
+        }
+    }
+
     pub(crate) const fn diagnostics_body(&self) -> &'response [u8] {
         self.diagnostics_body
     }
@@ -625,6 +636,23 @@ fn response_replay_metadata_from_bytes(
         diagnostics_body,
         provider_evidence_body,
     })
+}
+
+pub(crate) fn validate_worker_response_replay_metadata_bodies_v1(
+    diagnostics_body: &[u8],
+    provider_evidence_body: Option<&[u8]>,
+) -> Result<(), WorkerProtocolError> {
+    if diagnostics_body.len() > MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES {
+        return Err(WorkerProtocolError::DiagnosticsTooLarge);
+    }
+    validate_diagnostics_body(diagnostics_body)?;
+    if let Some(provider) = provider_evidence_body {
+        if provider.is_empty() || provider.len() > MAX_PROVIDER_EVIDENCE_BYTES {
+            return Err(WorkerProtocolError::InvalidFieldLength(8));
+        }
+        decode_provider_evidence(provider)?;
+    }
+    Ok(())
 }
 
 fn validate_diagnostics_body(bytes: &[u8]) -> Result<(), WorkerProtocolError> {

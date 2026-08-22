@@ -546,6 +546,19 @@ pub struct InertProtectedFirstBuildWorkerV3EvidenceV1 {
     _validation: ValidatedProtectedFirstBuildReplayV3,
 }
 
+pub(crate) struct OwnedProtectedFirstBuildWorkerV3ReplayPartsV1 {
+    pub(crate) identity: ProtectedFirstBuildWorkerV3IdentityV1,
+    pub(crate) binding: ProtectedCompilerHandoffBindingV3,
+    pub(crate) handoff: InertSemanticCompilerModuleHandoffV3,
+    pub(crate) worker: WorkerMeasurementV1,
+    pub(crate) execution_limits: WorkerExecutionLimitsV1,
+    pub(crate) plan: MultiInputLinkPlanV1,
+    pub(crate) bootstrap_request_bytes: Vec<u8>,
+    pub(crate) bootstrap_response: WorkerResponseV2,
+    pub(crate) replay_request_bytes: Vec<u8>,
+    pub(crate) replay_response: WorkerResponseV2,
+}
+
 impl InertProtectedFirstBuildWorkerV3EvidenceV1 {
     /// Returns the complete evidence identity.
     pub const fn identity(&self) -> ProtectedFirstBuildWorkerV3IdentityV1 {
@@ -639,6 +652,36 @@ impl InertProtectedFirstBuildWorkerV3EvidenceV1 {
     /// Reports that this evidence grants no launch authority.
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    pub(crate) fn into_compact_replay_parts(self) -> OwnedProtectedFirstBuildWorkerV3ReplayPartsV1 {
+        let Self {
+            identity,
+            binding,
+            handoff,
+            worker,
+            execution_limits,
+            plan,
+            bootstrap_request_bytes,
+            bootstrap,
+            replay_request_bytes,
+            replay,
+            _validation: _,
+        } = self;
+        debug_assert_eq!(bootstrap.binding, binding);
+        debug_assert_eq!(replay.binding, binding);
+        OwnedProtectedFirstBuildWorkerV3ReplayPartsV1 {
+            identity,
+            binding,
+            handoff,
+            worker,
+            execution_limits,
+            plan,
+            bootstrap_request_bytes,
+            bootstrap_response: bootstrap.execution.into_response(),
+            replay_request_bytes,
+            replay_response: replay.execution.into_response(),
+        }
     }
 }
 
@@ -1280,6 +1323,17 @@ struct BorrowedRequestInputsV2 {
     providers: Vec<BorrowedInputIdentityV2>,
 }
 
+pub(crate) struct OwnedWorkerV3ProviderReplayPartV1 {
+    pub(crate) kind: WorkerInputKindV1,
+    pub(crate) identity: ContentIdentityV1,
+    pub(crate) bytes: Vec<u8>,
+}
+
+pub(crate) struct OwnedWorkerV3RequestReplayPartsV1 {
+    pub(crate) bootstrap_output_bound: u64,
+    pub(crate) external_providers: Vec<OwnedWorkerV3ProviderReplayPartV1>,
+}
+
 struct BorrowedWorkerRequestV2<'bytes> {
     fields: [&'bytes [u8]; WORKER_REQUEST_FIELD_COUNT_V2],
 }
@@ -1455,6 +1509,88 @@ fn decode_borrowed_inputs(
         return Err(replay_error("provider input trailing bytes"));
     }
     Ok(inputs)
+}
+
+pub(crate) fn extract_worker_v3_request_replay_parts_v1(
+    bootstrap_request_bytes: &[u8],
+    replay_request_bytes: &[u8],
+) -> Result<OwnedWorkerV3RequestReplayPartsV1, ProtectedFirstBuildWorkerV3Error> {
+    let bootstrap = BorrowedWorkerRequestV2::decode(bootstrap_request_bytes)
+        .map_err(|_| replay_error("bootstrap request canonical transcript"))?;
+    let replay = BorrowedWorkerRequestV2::decode(replay_request_bytes)
+        .map_err(|_| replay_error("exact-replay request canonical transcript"))?;
+    validate_stable_request_fields(&bootstrap, &replay)
+        .map_err(|_| replay_error("stable bootstrap/replay request fields"))?;
+    let bootstrap_output_bound =
+        decode_u64(bootstrap.field(14)).map_err(|_| replay_error("bootstrap output bound"))?;
+    if bootstrap_output_bound == 0 || bootstrap_output_bound > crate::MAX_WORKER_OUTPUT_BYTES as u64
+    {
+        return Err(replay_error("bootstrap output bound"));
+    }
+
+    let field = bootstrap.field(10);
+    let count = u32::from_le_bytes(
+        field
+            .get(..4)
+            .ok_or_else(|| replay_error("provider input count"))?
+            .try_into()
+            .map_err(|_| replay_error("provider input count"))?,
+    ) as usize;
+    if count > MAX_LINK_INPUTS.saturating_sub(1) {
+        return Err(replay_error("provider input count"));
+    }
+    let mut external_providers = Vec::new();
+    external_providers
+        .try_reserve_exact(count)
+        .map_err(|_| allocation_error("provider replay owners"))?;
+    let mut remaining = field
+        .get(4..)
+        .ok_or_else(|| replay_error("provider inputs"))?;
+    let mut total_payload_bytes = 0_usize;
+    let mut previous: Option<(ContentIdentityV1, WorkerInputKindV1)> = None;
+    for _ in 0..count {
+        let encoded_input = remaining;
+        let (input, next) = decode_borrowed_input(encoded_input)
+            .map_err(|_| replay_error("provider input encoding"))?;
+        if previous.is_some_and(|before| {
+            before.0 == input.identity || before >= (input.identity, input.kind)
+        }) {
+            return Err(replay_error("provider input canonical order"));
+        }
+        let payload_len = usize::try_from(input.identity.byte_len())
+            .map_err(|_| replay_error("provider input length"))?;
+        total_payload_bytes = total_payload_bytes
+            .checked_add(payload_len)
+            .ok_or_else(|| replay_error("provider input length"))?;
+        if total_payload_bytes > MAX_WORKER_TOTAL_INPUT_BYTES {
+            return Err(replay_error("provider input length"));
+        }
+        let payload_end = WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2
+            .checked_add(payload_len)
+            .ok_or_else(|| replay_error("provider input length"))?;
+        let payload = encoded_input
+            .get(WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2..payload_end)
+            .ok_or_else(|| replay_error("provider input bytes"))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(payload_len)
+            .map_err(|_| allocation_error("provider replay payload"))?;
+        bytes.extend_from_slice(payload);
+        external_providers.push(OwnedWorkerV3ProviderReplayPartV1 {
+            kind: input.kind,
+            identity: input.identity,
+            bytes,
+        });
+        previous = Some((input.identity, input.kind));
+        remaining = next;
+    }
+    if !remaining.is_empty() {
+        return Err(replay_error("provider input trailing bytes"));
+    }
+    Ok(OwnedWorkerV3RequestReplayPartsV1 {
+        bootstrap_output_bound,
+        external_providers,
+    })
 }
 
 fn decode_borrowed_input(field: &[u8]) -> Result<(BorrowedInputIdentityV2, &[u8]), ()> {

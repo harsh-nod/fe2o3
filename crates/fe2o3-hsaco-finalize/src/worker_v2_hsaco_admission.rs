@@ -546,6 +546,10 @@ impl InspectedProtectedRawWorkerV3HsacoV1 {
         &self.source
     }
 
+    pub(crate) fn into_source_evidence(self) -> InertProtectedFirstBuildWorkerV3EvidenceV1 {
+        self.source
+    }
+
     /// Returns the exact canonical descriptor observation transcript.
     pub fn descriptor_observation_preimage(&self) -> &[u8] {
         &self.descriptor_observation_preimage

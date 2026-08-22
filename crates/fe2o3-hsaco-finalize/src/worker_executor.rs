@@ -482,6 +482,10 @@ impl InertWorkerExecutionV2 {
         &self.response
     }
 
+    pub(crate) fn into_response(self) -> WorkerResponseV2 {
+        self.response
+    }
+
     pub const fn evidence_class(&self) -> WorkerEvidenceClassV2 {
         WorkerEvidenceClassV2::CompilerFfiLink
     }
