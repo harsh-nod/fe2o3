@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -609,7 +610,7 @@ impl<'a> Decoder<'a> {
 struct PinnedDirectory {
     fd: OwnedFd,
     parent_fd: OwnedFd,
-    name: String,
+    name: PathBuf,
     path: PathBuf,
     device: u64,
     inode: u64,
@@ -853,14 +854,14 @@ fn consume_in_slot_engine<S: HandoffSchema>(
     let parent = open_private_directory(
         &output.fd,
         &output.display_path,
-        &format!("{}{}", S::PARENT_PREFIX, hex(&producer_id)),
+        format!("{}{}", S::PARENT_PREFIX, hex(&producer_id)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
     cleanup_stale_slots::<S>(&parent, producer_id, attempt)?;
     let slot = open_private_directory(
         &parent.fd,
         &parent.path,
-        &format!("{}{}", S::SLOT_PREFIX, hex(&slot_id)),
+        format!("{}{}", S::SLOT_PREFIX, hex(&slot_id)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
     recover_slot::<S>(&slot)?;
@@ -1004,8 +1005,9 @@ fn open_or_create_private_directory(
 fn open_private_directory(
     parent_fd: &OwnedFd,
     parent_path: &Path,
-    name: &str,
+    name: impl AsRef<Path>,
 ) -> Result<Option<PinnedDirectory>, CompilerModuleHandoffErrorV1> {
+    let name = name.as_ref();
     let fd = match openat(
         parent_fd,
         name,
@@ -1031,7 +1033,7 @@ fn open_private_directory(
     let directory = PinnedDirectory {
         fd,
         parent_fd: rustix::io::fcntl_dupfd_cloexec(parent_fd, 0).map_err(std::io::Error::from)?,
-        name: name.to_string(),
+        name: name.to_path_buf(),
         path: parent_path.join(name),
         device: stat.st_dev,
         inode: stat.st_ino,
@@ -1055,15 +1057,38 @@ fn cleanup_stale_slots<S: HandoffSchema>(
     let scan = rustix::io::fcntl_dupfd_cloexec(&parent.fd, 0).map_err(std::io::Error::from)?;
     let mut entries = Dir::read_from(&scan).map_err(std::io::Error::from)?;
     let mut stale = Vec::new();
+    let maximum_entries = MAX_STALE_SLOTS.checked_add(current.len()).ok_or_else(|| {
+        invalid_slot(
+            &parent.path,
+            "producer directory scan entry bound overflowed",
+        )
+    })?;
+    let mut scanned_entries = 0usize;
     for entry in &mut entries {
         let entry = entry.map_err(std::io::Error::from)?;
-        let name = entry.file_name().to_string_lossy();
-        if name == "." || name == ".." || current.iter().any(|current| name == current.as_str()) {
+        let name_bytes = entry.file_name().to_bytes();
+        if name_bytes == b"." || name_bytes == b".." {
             continue;
         }
-        if !name.starts_with(S::SLOT_PREFIX) {
+        scanned_entries = scanned_entries.checked_add(1).ok_or_else(|| {
+            invalid_slot(
+                &parent.path,
+                "producer directory entry count overflowed during stale cleanup",
+            )
+        })?;
+        if scanned_entries > maximum_entries {
+            return Err(invalid_slot(&parent.path, "too many stale handoff slots").into());
+        }
+        if current
+            .iter()
+            .any(|current| name_bytes == current.as_bytes())
+        {
+            continue;
+        }
+        let name = PathBuf::from(std::ffi::OsStr::from_bytes(name_bytes));
+        if !name_bytes.starts_with(S::SLOT_PREFIX.as_bytes()) {
             return Err(invalid_slot(
-                &parent.path.join(name.as_ref()),
+                &parent.path.join(&name),
                 "unexpected producer handoff entry",
             )
             .into());
@@ -1071,12 +1096,12 @@ fn cleanup_stale_slots<S: HandoffSchema>(
         if stale.len() == MAX_STALE_SLOTS {
             return Err(invalid_slot(&parent.path, "too many stale handoff slots").into());
         }
-        stale.push(name.into_owned());
+        stale.push(name);
     }
     for name in stale {
         remove_slot_entry(parent, &name)?;
     }
-    if parent_entry_count(parent)? > current.len() {
+    if parent_entry_count(parent, current.len())? > current.len() {
         return Err(invalid_slot(
             &parent.path,
             "handoff producer directory exceeds its entry bound",
@@ -1089,7 +1114,7 @@ fn cleanup_stale_slots<S: HandoffSchema>(
 
 fn remove_slot_entry(
     parent: &PinnedDirectory,
-    name: &str,
+    name: &Path,
 ) -> Result<(), CompilerModuleHandoffErrorV1> {
     let stat = statat(&parent.fd, name, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
@@ -1113,22 +1138,23 @@ fn remove_all_slot_entries(slot: &PinnedDirectory) -> Result<(), CompilerModuleH
     let mut names = Vec::new();
     for entry in &mut entries {
         let entry = entry.map_err(std::io::Error::from)?;
-        let name = entry.file_name().to_string_lossy();
-        if name == "." || name == ".." {
+        let name_bytes = entry.file_name().to_bytes();
+        if name_bytes == b"." || name_bytes == b".." {
             continue;
         }
         if names.len() == MAX_SLOT_ENTRIES {
             return Err(invalid_slot(&slot.path, "slot exceeds its entry bound"));
         }
-        let stat = statat(&slot.fd, name.as_ref(), AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(std::io::Error::from)?;
+        let name = PathBuf::from(std::ffi::OsStr::from_bytes(name_bytes));
+        let stat =
+            statat(&slot.fd, &name, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
         if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
             return Err(invalid_slot(
-                &slot.path.join(name.as_ref()),
+                &slot.path.join(&name),
                 "nested directories are forbidden",
             ));
         }
-        names.push(name.into_owned());
+        names.push(name);
     }
     for name in names {
         unlinkat(&slot.fd, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
@@ -1140,8 +1166,9 @@ fn remove_all_slot_entries(slot: &PinnedDirectory) -> Result<(), CompilerModuleH
 fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffEngineError> {
     let names = slot_entries(slot)?;
     for name in &names {
-        if !matches!(name.as_str(), PAYLOAD_ENTRY | READY_ENTRY | CONSUMED_ENTRY)
-            && !name.starts_with(TEMP_PREFIX)
+        let name_bytes = name.as_os_str().as_bytes();
+        if !matches!(name_bytes, b"module" | b"ready" | b"consumed")
+            && !name_bytes.starts_with(TEMP_PREFIX.as_bytes())
         {
             return Err(invalid_slot(&slot.path.join(name), "unexpected slot entry").into());
         }
@@ -1151,15 +1178,22 @@ fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffE
     {
         return Err(invalid_slot(&slot.path, "ready and consumed records coexist").into());
     }
-    let committed_entry = names.iter().find_map(|name| match name.as_str() {
-        READY_ENTRY => Some(READY_ENTRY),
-        CONSUMED_ENTRY => Some(CONSUMED_ENTRY),
-        _ => None,
+    let committed_entry = names.iter().find_map(|name| {
+        let name = name.as_os_str().as_bytes();
+        if name == READY_ENTRY.as_bytes() {
+            Some(READY_ENTRY)
+        } else if name == CONSUMED_ENTRY.as_bytes() {
+            Some(CONSUMED_ENTRY)
+        } else {
+            None
+        }
     });
     let residue = names
         .into_iter()
         .filter(|name| {
-            name.starts_with(TEMP_PREFIX) || (committed_entry.is_none() && name == PAYLOAD_ENTRY)
+            let name = name.as_os_str().as_bytes();
+            name.starts_with(TEMP_PREFIX.as_bytes())
+                || (committed_entry.is_none() && name == PAYLOAD_ENTRY.as_bytes())
         })
         .collect::<Vec<_>>();
     for name in &residue {
@@ -1174,7 +1208,9 @@ fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffE
             .map_err(|reason| invalid_slot(&slot.path.join(entry), reason))?;
     }
     for name in residue {
-        if name.starts_with(TEMP_PREFIX) || name == PAYLOAD_ENTRY {
+        let name_bytes = name.as_os_str().as_bytes();
+        if name_bytes.starts_with(TEMP_PREFIX.as_bytes()) || name_bytes == PAYLOAD_ENTRY.as_bytes()
+        {
             unlinkat(&slot.fd, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
         }
     }
@@ -1185,25 +1221,28 @@ fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffE
     Ok(())
 }
 
-fn slot_entries(slot: &PinnedDirectory) -> Result<Vec<String>, CompilerModuleHandoffErrorV1> {
+fn slot_entries(slot: &PinnedDirectory) -> Result<Vec<PathBuf>, CompilerModuleHandoffErrorV1> {
     let scan = rustix::io::fcntl_dupfd_cloexec(&slot.fd, 0).map_err(std::io::Error::from)?;
     let mut directory = Dir::read_from(&scan).map_err(std::io::Error::from)?;
     let mut names = Vec::new();
     for entry in &mut directory {
         let entry = entry.map_err(std::io::Error::from)?;
-        let name = entry.file_name().to_string_lossy();
-        if name == "." || name == ".." {
+        let name_bytes = entry.file_name().to_bytes();
+        if name_bytes == b"." || name_bytes == b".." {
             continue;
         }
         if names.len() == MAX_SLOT_ENTRIES {
             return Err(invalid_slot(&slot.path, "slot exceeds its entry bound"));
         }
-        names.push(name.into_owned());
+        names.push(PathBuf::from(std::ffi::OsStr::from_bytes(name_bytes)));
     }
     Ok(names)
 }
 
-fn parent_entry_count(parent: &PinnedDirectory) -> Result<usize, CompilerModuleHandoffErrorV1> {
+fn parent_entry_count(
+    parent: &PinnedDirectory,
+    maximum: usize,
+) -> Result<usize, CompilerModuleHandoffErrorV1> {
     let scan = rustix::io::fcntl_dupfd_cloexec(&parent.fd, 0).map_err(std::io::Error::from)?;
     let mut directory = Dir::read_from(&scan).map_err(std::io::Error::from)?;
     let mut count = 0usize;
@@ -1211,7 +1250,15 @@ fn parent_entry_count(parent: &PinnedDirectory) -> Result<usize, CompilerModuleH
         let entry = entry.map_err(std::io::Error::from)?;
         let name = entry.file_name().to_bytes();
         if name != b"." && name != b".." {
-            count = count.saturating_add(1);
+            count = count.checked_add(1).ok_or_else(|| {
+                invalid_slot(
+                    &parent.path,
+                    "producer directory entry count overflowed during verification",
+                )
+            })?;
+            if count > maximum {
+                return Ok(count);
+            }
         }
     }
     Ok(count)
@@ -1414,7 +1461,7 @@ fn cleanup_consumed_payload(slot: &PinnedDirectory) {
 
 fn reject_nonregular_before_cleanup(
     slot: &PinnedDirectory,
-    entry: &str,
+    entry: &Path,
 ) -> Result<(), CompilerModuleHandoffErrorV1> {
     let stat = statat(&slot.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
     if !is_private_file(&stat) {
@@ -2783,6 +2830,8 @@ pub use protected_v2::{
 mod tests {
     use super::*;
     use crate::{BuildInvocation, BuildSession, begin_build_attempt};
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -2843,6 +2892,16 @@ mod tests {
                 "{SLOT_PREFIX}{}",
                 hex(&slot_identity(producer_id, attempt, slot))
             ))
+    }
+
+    fn write_private_test_file(path: &Path, bytes: &[u8]) {
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn create_private_test_directory(path: &Path) {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[test]
@@ -3293,6 +3352,200 @@ mod tests {
         ));
         assert_eq!(fs::read(slot.join(PAYLOAD_ENTRY)).unwrap(), b"module");
         assert_eq!(fs::read(outside).unwrap(), b"outside");
+    }
+
+    #[test]
+    fn non_utf8_residue_is_statted_exactly_without_touching_its_utf8_alias() {
+        let temp = TestDirectory::new();
+        let producer = producer("non_utf8_residue");
+        let attempt = begin(&temp.0, &producer, 16);
+        assert!(
+            publish_with_hooks(
+                &temp.0,
+                &producer,
+                attempt,
+                b"module",
+                &mut FailAt(FaultPoint::PayloadRenamed),
+            )
+            .is_err()
+        );
+        let slot = slot_path(&temp.0, &producer, attempt);
+        let raw_name = OsString::from_vec([TEMP_PREFIX.as_bytes(), b"alias-", &[0xff]].concat());
+        let alias_name = format!("{TEMP_PREFIX}alias-\u{fffd}");
+        assert_eq!(raw_name.to_string_lossy(), alias_name);
+        let raw_path = slot.join(&raw_name);
+        let alias_path = slot.join(&alias_name);
+        symlink("missing-target", &raw_path).unwrap();
+        write_private_test_file(&alias_path, b"valid UTF-8 alias");
+
+        let error =
+            publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, b"module").unwrap_err();
+
+        assert!(matches!(
+            error,
+            CompilerModuleHandoffErrorV1::InvalidSlot { ref path, ref reason }
+                if path == &raw_path
+                    && reason == "recovery residue is not a private single-link regular file"
+        ));
+        assert!(
+            fs::symlink_metadata(&raw_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&alias_path).unwrap(), b"valid UTF-8 alias");
+        assert_eq!(fs::read(slot.join(PAYLOAD_ENTRY)).unwrap(), b"module");
+    }
+
+    #[test]
+    fn stale_cleanup_unlinks_non_utf8_names_and_utf8_aliases_exactly() {
+        let temp = TestDirectory::new();
+        let producer = producer("non_utf8_stale_cleanup");
+        let stale = begin(&temp.0, &producer, 17);
+        publish_compiler_module_handoff_v1(&temp.0, &producer, stale, b"stale").unwrap();
+        let stale_slot = slot_path(&temp.0, &producer, stale);
+        let raw_entry = OsString::from_vec([TEMP_PREFIX.as_bytes(), b"stale-", &[0xff]].concat());
+        let alias_entry = format!("{TEMP_PREFIX}stale-\u{fffd}");
+        assert_eq!(raw_entry.to_string_lossy(), alias_entry);
+        write_private_test_file(&stale_slot.join(&raw_entry), b"raw stale entry");
+        write_private_test_file(&stale_slot.join(&alias_entry), b"UTF-8 stale alias");
+
+        let parent = stale_slot.parent().unwrap();
+        let raw_slot = OsString::from_vec([SLOT_PREFIX.as_bytes(), b"stale-", &[0xff]].concat());
+        let alias_slot = format!("{SLOT_PREFIX}stale-\u{fffd}");
+        assert_eq!(raw_slot.to_string_lossy(), alias_slot);
+        let raw_slot_path = parent.join(&raw_slot);
+        let alias_slot_path = parent.join(&alias_slot);
+        create_private_test_directory(&raw_slot_path);
+        create_private_test_directory(&alias_slot_path);
+
+        let current = begin(&temp.0, &producer, 18);
+        publish_compiler_module_handoff_v1(&temp.0, &producer, current, b"current").unwrap();
+
+        assert!(!stale_slot.exists());
+        assert!(!raw_slot_path.exists());
+        assert!(!alias_slot_path.exists());
+        assert_eq!(
+            consume_compiler_module_handoff_v1(&temp.0, &producer, current)
+                .unwrap()
+                .bytes(),
+            b"current"
+        );
+    }
+
+    #[test]
+    fn recovery_cleanup_enforces_the_exact_slot_bound_without_partial_mutation() {
+        let exact = TestDirectory::new();
+        let exact_producer = producer("exact_slot_bound");
+        let exact_attempt = begin(&exact.0, &exact_producer, 19);
+        assert!(
+            publish_with_hooks(
+                &exact.0,
+                &exact_producer,
+                exact_attempt,
+                b"exact module",
+                &mut FailAt(FaultPoint::PayloadRenamed),
+            )
+            .is_err()
+        );
+        let exact_slot = slot_path(&exact.0, &exact_producer, exact_attempt);
+        for index in 0..MAX_SLOT_ENTRIES - 1 {
+            write_private_test_file(
+                &exact_slot.join(format!("{TEMP_PREFIX}exact-bound-{index}")),
+                b"exact-bound residue",
+            );
+        }
+        assert_eq!(fs::read_dir(&exact_slot).unwrap().count(), MAX_SLOT_ENTRIES);
+
+        publish_compiler_module_handoff_v1(
+            &exact.0,
+            &exact_producer,
+            exact_attempt,
+            b"exact module",
+        )
+        .unwrap();
+        assert_eq!(
+            consume_compiler_module_handoff_v1(&exact.0, &exact_producer, exact_attempt)
+                .unwrap()
+                .bytes(),
+            b"exact module"
+        );
+
+        let over = TestDirectory::new();
+        let over_producer = producer("over_slot_bound");
+        let over_attempt = begin(&over.0, &over_producer, 20);
+        assert!(
+            publish_with_hooks(
+                &over.0,
+                &over_producer,
+                over_attempt,
+                b"over module",
+                &mut FailAt(FaultPoint::PayloadRenamed),
+            )
+            .is_err()
+        );
+        let over_slot = slot_path(&over.0, &over_producer, over_attempt);
+        for index in 0..MAX_SLOT_ENTRIES {
+            write_private_test_file(
+                &over_slot.join(format!("{TEMP_PREFIX}over-bound-{index}")),
+                b"over-bound residue",
+            );
+        }
+        assert_eq!(
+            fs::read_dir(&over_slot).unwrap().count(),
+            MAX_SLOT_ENTRIES + 1
+        );
+
+        let error = publish_compiler_module_handoff_v1(
+            &over.0,
+            &over_producer,
+            over_attempt,
+            b"over module",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CompilerModuleHandoffErrorV1::InvalidSlot { ref reason, .. }
+                if reason == "slot exceeds its entry bound"
+        ));
+        assert_eq!(
+            fs::read(over_slot.join(PAYLOAD_ENTRY)).unwrap(),
+            b"over module"
+        );
+        for index in 0..MAX_SLOT_ENTRIES {
+            assert_eq!(
+                fs::read(over_slot.join(format!("{TEMP_PREFIX}over-bound-{index}"))).unwrap(),
+                b"over-bound residue"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_slot_overflow_fails_before_removing_any_slot() {
+        let temp = TestDirectory::new();
+        let producer = producer("stale_slot_overflow");
+        let stale = begin(&temp.0, &producer, 21);
+        publish_compiler_module_handoff_v1(&temp.0, &producer, stale, b"stale").unwrap();
+        let stale_slot = slot_path(&temp.0, &producer, stale);
+        let parent = stale_slot.parent().unwrap();
+        for index in 0..MAX_STALE_SLOTS {
+            fs::create_dir(parent.join(format!("{SLOT_PREFIX}overflow-{index}"))).unwrap();
+        }
+        assert_eq!(fs::read_dir(parent).unwrap().count(), MAX_STALE_SLOTS + 1);
+        let current = begin(&temp.0, &producer, 22);
+
+        let error = publish_compiler_module_handoff_v1(&temp.0, &producer, current, b"current")
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CompilerModuleHandoffErrorV1::InvalidSlot { ref reason, .. }
+                if reason == "too many stale handoff slots"
+        ));
+        assert!(stale_slot.exists());
+        assert_eq!(fs::read_dir(parent).unwrap().count(), MAX_STALE_SLOTS + 1);
+        assert!(!slot_path(&temp.0, &producer, current).exists());
     }
 
     #[test]
