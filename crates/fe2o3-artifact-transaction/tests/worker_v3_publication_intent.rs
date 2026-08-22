@@ -4,19 +4,21 @@ use fe2o3_artifact_transaction::{
     FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
     MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1, PackageIdentityV1, PinnedWorkerIdentityV1,
     ProducerIdentity, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
-    ValidatedResponseIdentityV1, WorkerV2PublicationIntentOutcomeV1,
-    WorkerV3FinalizerReplayAttachmentsV1, WorkerV3PublicationIntentBoundaryV1,
+    ValidatedResponseIdentityV1, VerifiedWorkerV3PublicationAuthorityV1,
+    WorkerV2PublicationIntentOutcomeV1, WorkerV3FinalizerReplayAttachmentsV1,
+    WorkerV3PublicationBindingV1, WorkerV3PublicationIntentBoundaryV1,
     WorkerV3PublicationIntentCodecErrorV1, WorkerV3PublicationIntentErrorV1,
     WorkerV3PublicationIntentFaultPointV1, WorkerV3PublicationIntentFaultTimingV1,
     WorkerV3PublicationIntentInvalidReasonV1, WorkerV3PublicationIntentOptionsV1,
     WorkerV3PublicationIntentOutcomeV1, WorkerV3PublicationIntentScavengeOutcomeV1,
     begin_build_attempt, clear_worker_v3_publication_intent_v1,
-    clear_worker_v3_publication_intent_v1_with_options, persist_worker_v2_publication_intent_v1,
-    persist_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1_with_options,
-    producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
-    publish_exact_hsaco_evidence_for_attempt_v2, recover_worker_v2_publication_intent_v1,
+    persist_worker_v2_publication_intent_v1, persist_worker_v3_publication_intent_v1,
+    persist_worker_v3_publication_intent_v1_with_options, producer_package_identity_v1,
+    publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
+    publish_exact_hsaco_evidence_for_attempt_v3, recover_worker_v2_publication_intent_v1,
     recover_worker_v3_publication_intent_v1, resume_worker_v3_publication_intent_retirement_v1,
     scavenge_worker_v3_publication_intent_occurrence_v1,
+    scavenge_worker_v3_publication_intent_occurrence_v1_with_options,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
@@ -276,7 +278,7 @@ fn compact_replay_inputs_and_output_round_trip_inertly_after_restart() {
 }
 
 #[test]
-fn current_retirement_requires_the_exact_identity_and_durable_v1_receipt() {
+fn current_retirement_stays_blocked_after_an_exact_v1_receipt() {
     let temp = TestDirectory::new();
     let output_dir = temp.output();
     let owner = producer(4);
@@ -339,14 +341,6 @@ fn current_retirement_requires_the_exact_identity_and_durable_v1_receipt() {
     ));
     assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
 
-    clear_worker_v3_publication_intent_v1(
-        &output_dir,
-        &owner,
-        attempt,
-        persisted.record().identity(),
-    )
-    .unwrap();
-    assert!(v3_namespace_entries(&output_dir).is_empty());
     assert!(matches!(
         clear_worker_v3_publication_intent_v1(
             &output_dir,
@@ -354,12 +348,13 @@ fn current_retirement_requires_the_exact_identity_and_durable_v1_receipt() {
             attempt,
             persisted.record().identity(),
         ),
-        Err(WorkerV3PublicationIntentErrorV1::NotFound)
+        Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
     ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
 }
 
 #[test]
-fn current_retirement_accepts_an_exact_protected_v2_receipt() {
+fn current_retirement_stays_blocked_after_an_exact_protected_v2_receipt() {
     let temp = TestDirectory::new();
     let output_dir = temp.output();
     let owner = producer(11);
@@ -386,18 +381,81 @@ fn current_retirement_accepts_an_exact_protected_v2_receipt() {
     )
     .unwrap();
 
-    clear_worker_v3_publication_intent_v1(
-        &output_dir,
-        &owner,
-        attempt,
-        persisted.record().identity(),
-    )
-    .unwrap();
-    assert!(v3_namespace_entries(&output_dir).is_empty());
+    assert!(matches!(
+        clear_worker_v3_publication_intent_v1(
+            &output_dir,
+            &owner,
+            attempt,
+            persisted.record().identity(),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
+    ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
 }
 
 #[test]
-fn receipt_bound_retirement_accepts_a_replayable_redo_record() {
+fn current_retirement_stays_blocked_after_an_exact_worker_v3_receipt() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let owner = producer(31);
+    let attempt = begin(&output_dir, &owner, 32);
+    let output = b"strict V3 receipt Worker V3 output";
+    let publication_plan = receipted_plan(&owner, attempt, output, 33);
+    let persisted = persist_worker_v3_publication_intent_v1(
+        &output_dir,
+        &owner,
+        attempt,
+        publication_plan,
+        replay(b"strict V3 receipt transcript"),
+        output.to_vec(),
+    )
+    .unwrap();
+    let output_sha256: [u8; 32] = Sha256::digest(output).into();
+    let binding = WorkerV3PublicationBindingV1::new(
+        compiler_closure(34),
+        persisted.record().identity().as_bytes(),
+        [35; 32],
+        [36; 32],
+        [37; 32],
+        [38; 32],
+        [39; 32],
+        40,
+        output_sha256,
+        output.len() as u64,
+    )
+    .unwrap();
+    // SAFETY: this storage-layer test constructs a deliberate inert binding fixture and never
+    // promotes its receipt to load or launch authority.
+    let authority = unsafe {
+        VerifiedWorkerV3PublicationAuthorityV1::from_authenticated_finalizer_replay_unchecked(
+            binding,
+        )
+    };
+    publish_exact_hsaco_evidence_for_attempt_v3(
+        &output_dir,
+        &owner,
+        attempt,
+        publication_plan,
+        UpstreamCodeObjectEvidenceIdentityV1::from_bytes([41; 32]),
+        authority,
+        output,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        clear_worker_v3_publication_intent_v1(
+            &output_dir,
+            &owner,
+            attempt,
+            persisted.record().identity(),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
+    ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
+}
+
+#[test]
+fn current_redo_intent_stays_replayable_after_backend_publication() {
     let temp = TestDirectory::new();
     let output_dir = temp.output();
     let owner = producer(25);
@@ -435,12 +493,15 @@ fn receipt_bound_retirement_accepts_a_replayable_redo_record() {
     )
     .unwrap();
 
-    clear_worker_v3_publication_intent_v1(&output_dir, &owner, attempt, record.identity()).unwrap();
-    assert!(v3_namespace_entries(&output_dir).is_empty());
+    assert!(matches!(
+        clear_worker_v3_publication_intent_v1(&output_dir, &owner, attempt, record.identity()),
+        Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
+    ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
 }
 
 #[test]
-fn current_retirement_rejects_a_durable_receipt_for_another_plan() {
+fn current_retirement_stays_blocked_with_a_receipt_for_another_plan() {
     let temp = TestDirectory::new();
     let output_dir = temp.output();
     let owner = producer(16);
@@ -480,7 +541,7 @@ fn current_retirement_rejects_a_durable_receipt_for_another_plan() {
 }
 
 #[test]
-fn retirement_rejects_link_substitution_before_changing_any_protocol_name() {
+fn current_retirement_touches_no_protocol_names_before_load_readiness() {
     let temp = TestDirectory::new();
     let output_dir = temp.output();
     let owner = producer(21);
@@ -516,10 +577,7 @@ fn retirement_rejects_link_substitution_before_changing_any_protocol_name() {
             attempt,
             persisted.record().identity(),
         ),
-        Err(WorkerV3PublicationIntentErrorV1::InvalidIntent {
-            reason: WorkerV3PublicationIntentInvalidReasonV1::EntryNotPrivate,
-            ..
-        })
+        Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
     ));
     assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
     assert!(intent_entry(&output_dir, ".record").is_file());
@@ -530,14 +588,16 @@ fn retirement_rejects_link_substitution_before_changing_any_protocol_name() {
     );
 
     fs::remove_file(hostile_link).unwrap();
-    clear_worker_v3_publication_intent_v1(
-        &output_dir,
-        &owner,
-        attempt,
-        persisted.record().identity(),
-    )
-    .unwrap();
-    assert!(v3_namespace_entries(&output_dir).is_empty());
+    assert!(matches!(
+        clear_worker_v3_publication_intent_v1(
+            &output_dir,
+            &owner,
+            attempt,
+            persisted.record().identity(),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
+    ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
 }
 
 #[test]
@@ -574,7 +634,7 @@ fn every_retirement_boundary_is_restart_safe() {
         let output = format!("retirement output {boundary:?} {timing:?}").into_bytes();
         let publication_plan =
             receipted_plan(&owner, attempt, &output, 90_u8.wrapping_add(index as u8));
-        let persisted = persist_worker_v3_publication_intent_v1(
+        persist_worker_v3_publication_intent_v1(
             &output_dir,
             &owner,
             attempt,
@@ -594,32 +654,29 @@ fn every_retirement_boundary_is_restart_safe() {
             &output,
         )
         .unwrap();
+        let successor = begin(&output_dir, &owner, 180_u8.wrapping_add(index as u8));
+        assert!(successor.generation() > attempt.generation());
         let point = WorkerV3PublicationIntentFaultPointV1 { boundary, timing };
         assert!(matches!(
-            clear_worker_v3_publication_intent_v1_with_options(
+            scavenge_worker_v3_publication_intent_occurrence_v1_with_options(
                 &output_dir,
                 &owner,
                 attempt,
-                persisted.record().identity(),
                 WorkerV3PublicationIntentOptionsV1::inject_crash(point),
             ),
             Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { point: actual })
                 if actual == point
         ));
 
-        let resumed = clear_worker_v3_publication_intent_v1(
-            &output_dir,
-            &owner,
-            attempt,
-            persisted.record().identity(),
-        );
+        let resumed =
+            scavenge_worker_v3_publication_intent_occurrence_v1(&output_dir, &owner, attempt);
         if !v3_namespace_entries(&output_dir).is_empty() {
             resumed.unwrap();
         } else {
-            assert!(matches!(
-                resumed,
-                Ok(()) | Err(WorkerV3PublicationIntentErrorV1::NotFound)
-            ));
+            assert!(
+                resumed.is_ok()
+                    || matches!(resumed, Err(WorkerV3PublicationIntentErrorV1::NotFound))
+            );
         }
         assert!(v3_namespace_entries(&output_dir).is_empty());
     }
@@ -638,7 +695,7 @@ fn marker_only_retirement_crash_helper() {
     );
     let attempt =
         BuildAttempt::from_env_value(&std::env::var(RETIREMENT_CRASH_ATTEMPT).unwrap()).unwrap();
-    let identity_bytes: [u8; 32] = fs::read(std::env::var_os(RETIREMENT_CRASH_IDENTITY).unwrap())
+    let _identity_bytes: [u8; 32] = fs::read(std::env::var_os(RETIREMENT_CRASH_IDENTITY).unwrap())
         .unwrap()
         .try_into()
         .unwrap();
@@ -657,13 +714,10 @@ fn marker_only_retirement_crash_helper() {
         timing: WorkerV3PublicationIntentFaultTimingV1::After,
     };
     assert!(matches!(
-        clear_worker_v3_publication_intent_v1_with_options(
+        scavenge_worker_v3_publication_intent_occurrence_v1_with_options(
             Path::new(&output),
             &owner,
             attempt,
-            fe2o3_artifact_transaction::WorkerV3PublicationIntentIdentityV1::from_bytes(
-                identity_bytes,
-            ),
             WorkerV3PublicationIntentOptionsV1::inject_crash(point),
         ),
         Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { point: actual }) if actual == point
@@ -703,6 +757,8 @@ fn durable_marker_resumes_after_identity_owner_process_is_lost() {
         )
         .unwrap();
         fs::write(&identity_path, persisted.record().identity().as_bytes()).unwrap();
+        let successor = begin(&output_dir, &owner, 200);
+        assert!(successor.generation() > attempt.generation());
 
         let child = Command::new(std::env::current_exe().unwrap())
             .args([
@@ -777,6 +833,8 @@ fn marker_only_resume_cleans_quarantined_attachment_and_terminal_marker() {
             )
             .unwrap();
             fs::write(&identity_path, persisted.record().identity().as_bytes()).unwrap();
+            let successor = begin(&output_dir, &owner, 201_u8.wrapping_add(index as u8));
+            assert!(successor.generation() > attempt.generation());
 
             let child = Command::new(std::env::current_exe().unwrap())
                 .args([
@@ -855,13 +913,15 @@ fn marker_only_resume_does_not_start_canonical_retirement() {
         Err(WorkerV3PublicationIntentErrorV1::RetirementNotInProgress)
     ));
     assert_eq!(v3_namespace_entries(&output_dir).len(), 5);
-    clear_worker_v3_publication_intent_v1(
-        &output_dir,
-        &owner,
-        attempt,
-        persisted.record().identity(),
-    )
-    .unwrap();
+    assert!(matches!(
+        clear_worker_v3_publication_intent_v1(
+            &output_dir,
+            &owner,
+            attempt,
+            persisted.record().identity(),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
+    ));
 }
 
 #[test]
@@ -1200,7 +1260,7 @@ fn successor_scavenge_resumes_an_interrupted_receipt_bound_retirement() {
     let stale = begin(&output_dir, &owner, 108);
     let output = b"partially retired predecessor output";
     let publication_plan = receipted_plan(&owner, stale, output, 109);
-    let persisted = persist_worker_v3_publication_intent_v1(
+    persist_worker_v3_publication_intent_v1(
         &output_dir,
         &owner,
         stale,
@@ -1219,28 +1279,24 @@ fn successor_scavenge_resumes_an_interrupted_receipt_bound_retirement() {
         output,
     )
     .unwrap();
+    let successor = begin(&output_dir, &owner, 112);
+    assert!(successor.generation() > stale.generation());
     let point = WorkerV3PublicationIntentFaultPointV1 {
         boundary: WorkerV3PublicationIntentBoundaryV1::RemoveOuterHandoff,
         timing: WorkerV3PublicationIntentFaultTimingV1::After,
     };
     assert!(matches!(
-        clear_worker_v3_publication_intent_v1_with_options(
+        scavenge_worker_v3_publication_intent_occurrence_v1_with_options(
             &output_dir,
             &owner,
             stale,
-            persisted.record().identity(),
             WorkerV3PublicationIntentOptionsV1::inject_crash(point),
         ),
         Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { point: actual }) if actual == point
     ));
     assert_eq!(v3_namespace_entries(&output_dir).len(), 4);
-    assert!(matches!(
-        recover_worker_v3_publication_intent_v1(&output_dir, &owner, stale),
-        Err(WorkerV3PublicationIntentErrorV1::RetirementInProgress)
-    ));
+    assert!(recover_worker_v3_publication_intent_v1(&output_dir, &owner, stale).is_err());
 
-    let successor = begin(&output_dir, &owner, 112);
-    assert!(successor.generation() > stale.generation());
     assert_eq!(
         scavenge_worker_v3_publication_intent_occurrence_v1(&output_dir, &owner, stale).unwrap(),
         WorkerV3PublicationIntentScavengeOutcomeV1::Removed { entries: 4 }
