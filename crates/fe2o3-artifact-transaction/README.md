@@ -16,7 +16,7 @@ surfaces.
 | Protocol | Version binding | Current production selection |
 |---|---|---|
 | Compiler module handoff V2 | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Existing protected backend and wrapper/finalizer call sites have not been migrated by this crate-only change. |
-| Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, slot, and transaction identity in a separate V3 namespace. Additive currentness APIs retain pinned output/namespace/slot/record/payload descriptors in a move-only lease, mint a single-use token under the cooperative lock, and consume that token when committing the existing one-shot tombstone. | The transport and currentness custody are implemented and tested but production callers are not wired by this crate-only change. |
+| Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, slot, and transaction identity in a separate V3 namespace. Cross-process receipt recovery validates the exact durable ready record and payload under the cooperative lock; additive currentness APIs retain pinned output/namespace/slot/record/payload descriptors in a move-only lease, mint a single-use token under the lock, and consume that token when committing the existing one-shot tombstone. | The transport, inert receipt recovery, and currentness custody are implemented and tested but production callers are not wired by this crate-only change. |
 | Worker V2 publication intent | The complete closure is committed with the attempt, producer, durable plan, upstream evidence, output identity, length, and exact retained bytes; V2 persist/recover/clear APIs reject closure mismatch. | Protected publication and restart-marker paths still persist, recover, and clear V1 intents. |
 
 V1 and V2 APIs, wire formats, and byte maxima remain unchanged and are not
@@ -32,6 +32,22 @@ closed V3 slot, transaction identity, native outer identity, and pinned
 directory/file metadata. `CompilerModuleHandoffConsumptionTokenV3` holds the
 cooperative lock and is consumed by value, so a stale generation, replaced or
 tampered path, replayed tombstone, or token from another lease fails closed.
+
+The rustc child and Cargo parent do not share process-local leases. The parent
+recovers only an inert `CompilerModuleHandoffReceiptV3` from the exact default
+or named V3 slot, then independently asks for a parent-local currentness lease.
+Recovery requires the requested attempt to remain current and claimable,
+strictly checks the record, native handoff identity, transaction identity, file
+metadata, and complete canonical payload, and never consumes or consults V1 or
+V2 state.
+
+`publish_compiler_module_handoff_with_currentness_v3` deliberately preserves a
+lease-minting failure even if its first phase already committed the publication.
+Callers must not interpret that error as proof that no durable record exists.
+After transient failure, a cooperating process can recover the exact inert
+receipt and retry parent-local lease acquisition. A stale generation, consumed
+record, changed producer or slot, or any record/payload mismatch remains an
+error; recovery never converts those states into success.
 
 ## Retained service directory
 

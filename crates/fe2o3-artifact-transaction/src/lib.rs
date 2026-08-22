@@ -105,6 +105,7 @@ pub use compiler_module_handoff::{
     publish_compiler_module_handoff_in_slot_with_currentness_v3,
     publish_compiler_module_handoff_v1, publish_compiler_module_handoff_v2,
     publish_compiler_module_handoff_v3, publish_compiler_module_handoff_with_currentness_v3,
+    recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
 };
 pub use durable_link_publication::{
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
