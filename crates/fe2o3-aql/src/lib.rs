@@ -66,6 +66,13 @@ pub const AQL_MAX_RING_BYTES_V1: u32 = 1 << 31;
 /// complete inference schedule.
 pub const AQL_MAX_BATCH_PACKETS_V1: u32 = 256;
 
+/// Maximum packets admitted by one V2 fixed-capacity publication.
+///
+/// At 64 bytes per packet this requires at least a 64 KiB ring for the
+/// maximum batch. The bound is a host resource policy, not a hardware queue
+/// limit.
+pub const AQL_MAX_FIXED_BATCH_PACKETS_V2: u32 = 1024;
+
 /// Stable name of the inert V1 batch-reservation model.
 pub const AQL_BATCH_RESERVATION_MODEL_SCHEMA_ID_V1: &str =
     "fe2o3-aql-single-producer-batch-reservation-v1";
@@ -83,6 +90,24 @@ authority=inert-arithmetic-only,no-native-reservation,no-counter-access,no-packe
 /// SHA-256 of [`AQL_BATCH_RESERVATION_MODEL_MANIFEST_V1`].
 pub const AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1: &str =
     "0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83";
+
+/// Additive fixed-capacity reservation/publication profile retaining V1.
+pub const AQL_FIXED_BATCH_MODEL_MANIFEST_V2: &str = r#"schema=fe2o3-aql-single-producer-fixed-batch-v2
+v1_schema_sha256=0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83
+packet-count=1..1024
+packet-bytes=64
+minimum-ring-for-maximum-batch=65536
+state=single-producer-write,last-observed-read,power-of-two-ring-capacity
+admission=nondecreasing-read,read<=write,distance<=capacity,count<=capacity,count<=available,checked-u64-next-write
+slots=packet-id&(capacity-1),ordered,distinct-within-admitted-batch,wrap-aware
+transition=all-checks-before-write-or-last-read-mutation
+publication=all-invalid-bodies-before-any-release-header,one-final-doorbell-required-by-later-native-owner
+authority=inert-arithmetic-and-packet-values-only,no-native-reservation,no-counter-access,no-packet-write,no-publication,no-doorbell,no-completion
+"#;
+
+/// SHA-256 of [`AQL_FIXED_BATCH_MODEL_MANIFEST_V2`].
+pub const AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2: &str =
+    "3d8376174a564eaee500ad8849d8bf3a1a38d56f9e5bc50bf60aea408b25bf1d";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqlAddressObservationError {
@@ -239,13 +264,31 @@ impl AqlSingleProducerRingModelV1 {
         observed_read: u64,
         packet_count: u32,
     ) -> Result<AqlRingBatchReservationV1, AqlRingReservationError> {
+        self.reserve_batch_with_maximum(observed_read, packet_count, AQL_MAX_BATCH_PACKETS_V1)
+    }
+
+    /// Reserves one additive V2 fixed batch without changing the V1 bound.
+    pub const fn reserve_fixed_batch_v2(
+        &mut self,
+        observed_read: u64,
+        packet_count: u32,
+    ) -> Result<AqlRingBatchReservationV1, AqlRingReservationError> {
+        self.reserve_batch_with_maximum(observed_read, packet_count, AQL_MAX_FIXED_BATCH_PACKETS_V2)
+    }
+
+    const fn reserve_batch_with_maximum(
+        &mut self,
+        observed_read: u64,
+        packet_count: u32,
+        maximum: u32,
+    ) -> Result<AqlRingBatchReservationV1, AqlRingReservationError> {
         if packet_count == 0 {
             return Err(AqlRingReservationError::ZeroPacketCount);
         }
-        if packet_count > AQL_MAX_BATCH_PACKETS_V1 {
+        if packet_count > maximum {
             return Err(AqlRingReservationError::PacketCountExceedsReviewedMaximum {
                 requested: packet_count,
-                maximum: AQL_MAX_BATCH_PACKETS_V1,
+                maximum,
             });
         }
         if packet_count > self.capacity.packets {
@@ -691,6 +734,61 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV1<N> {
 }
 
 impl AqlPreparedKernelDispatchBatchV1<1> {
+    pub const fn one(packet: AqlPreparedKernelDispatchV1) -> Self {
+        Self { packets: [packet] }
+    }
+}
+
+/// A fixed inert V2 batch supporting one through 1024 packet values.
+///
+/// Like V1, this owns no queue, slot, address, counter, completion signal, or
+/// publication authority. The separate type preserves the frozen V1 bound.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlPreparedKernelDispatchBatchV2<const N: usize> {
+    packets: [AqlPreparedKernelDispatchV1; N],
+}
+
+impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
+    pub fn try_from_packets(
+        packets: [AqlPreparedKernelDispatchV1; N],
+    ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
+        if N == 0 {
+            return Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount);
+        }
+        if N > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
+            return Err(
+                AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
+                    requested: N,
+                    maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2,
+                },
+            );
+        }
+        Ok(Self { packets })
+    }
+
+    pub const fn packet_count(&self) -> u32 {
+        N as u32
+    }
+
+    /// Preserves the V1 all-body-before-any-header publication order.
+    pub fn publish_with<T: AqlPacketBatchPublicationTargetV1>(
+        self,
+        target: &mut T,
+    ) -> Result<(), T::Error> {
+        for (batch_index, packet) in self.packets.iter().enumerate() {
+            target.write_unpublished(batch_index as u32, &packet.packet)?;
+        }
+        for batch_index in 0..N {
+            target.publish_release_header(
+                batch_index as u32,
+                AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl AqlPreparedKernelDispatchBatchV2<1> {
     pub const fn one(packet: AqlPreparedKernelDispatchV1) -> Self {
         Self { packets: [packet] }
     }
