@@ -156,8 +156,6 @@ fn positive_example_kernel_unsafe_debt_is_frozen() {
             "examples/flash_attention_v1/src/kernel.rs::flash_attention_causal_f32_b1_h1_n8_d16_v1",
             "examples/moe_expert_v1/src/kernel.rs::moe_expert_gemm_bf16_m16_n16_k16_v1",
             "examples/moe_top2_v1/src/kernel.rs::moe_top2_route_f32_t8_e4_k2_c4_v1 -> write_value_v1",
-            "examples/raw_disjoint_inplace_shift/src/main.rs::raw_disjoint_inplace_shift",
-            "examples/raw_disjoint_shift/src/main.rs::raw_disjoint_shift",
             "examples/row_softmax_v1/src/kernel.rs::row_softmax_v1",
             "examples/tiled_gemm_v1/src/kernel.rs::tiled_gemm_lds_slice1",
             "examples/wave64_collectives_v1/src/kernel.rs::wave64_collectives_v1",
