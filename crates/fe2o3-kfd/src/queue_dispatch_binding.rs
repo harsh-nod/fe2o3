@@ -13,7 +13,10 @@ use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
 use fe2o3_aql::{
     AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlRingCapacityV1, ObservedGpuAddressV1,
 };
-use fe2o3_hsaco::{ArgumentAccess, ArgumentAddressSpace, ExplicitValueKind};
+use fe2o3_hsaco::{
+    ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, ExplicitValueKind,
+    HiddenValueKind, InspectedKernel,
+};
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 use sha2::{Digest, Sha256};
 
@@ -36,6 +39,22 @@ pub(crate) const MAX_DISPATCH_KERNARG_BYTES_V1: usize = 65_536;
 pub const GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1: usize = 32;
 pub const GFX942_MAX_FIXED_DISPATCH_PACKETS_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
 const KERNEL_DESCRIPTOR_BYTES_V1: u64 = 64;
+const COV6_IMPLICIT_ARGUMENT_BYTES_V1: usize = COV6_IMPLICIT_ARGUMENT_BYTES as usize;
+
+const COV6_BLOCK_COUNT_X_OFFSET_V1: usize = 0;
+const COV6_BLOCK_COUNT_Y_OFFSET_V1: usize = 4;
+const COV6_BLOCK_COUNT_Z_OFFSET_V1: usize = 8;
+const COV6_GROUP_SIZE_X_OFFSET_V1: usize = 12;
+const COV6_GROUP_SIZE_Y_OFFSET_V1: usize = 14;
+const COV6_GROUP_SIZE_Z_OFFSET_V1: usize = 16;
+const COV6_REMAINDER_X_OFFSET_V1: usize = 18;
+const COV6_REMAINDER_Y_OFFSET_V1: usize = 20;
+const COV6_REMAINDER_Z_OFFSET_V1: usize = 22;
+const COV6_GLOBAL_OFFSET_X_OFFSET_V1: usize = 40;
+const COV6_GLOBAL_OFFSET_Y_OFFSET_V1: usize = 48;
+const COV6_GLOBAL_OFFSET_Z_OFFSET_V1: usize = 56;
+const COV6_GRID_DIMENSIONS_OFFSET_V1: usize = 64;
+const COV6_DYNAMIC_LDS_SIZE_OFFSET_V1: usize = 120;
 
 /// One inert device-buffer field in a fixed dispatch kernarg image.
 ///
@@ -69,10 +88,12 @@ impl Gfx942DispatchBufferBindingV1 {
 /// One inert packet description for a checked fixed dispatch batch.
 ///
 /// The caller supplies scalar bytes, geometry, and buffer indices. Every
-/// device-pointer field must be zero. Queue construction derives pointer
-/// locations, alignments, and access effects from the selected inspected
-/// kernel, validates all subranges, and performs numeric address substitution
-/// only inside the retained native owner.
+/// device-pointer field must be zero. When the inspected COV6 metadata declares
+/// the supported implicit geometry or dynamic-LDS fields, the caller must also
+/// provide the exact trailing 256-byte implicit suffix entirely zero. Queue
+/// construction derives pointer locations, alignments, access effects, and the
+/// admitted implicit values from inspected metadata and checked geometry, then
+/// performs substitution only inside the retained native owner.
 ///
 /// ```compile_fail
 /// use fe2o3_kfd::Gfx942FixedDispatchPacketV1;
@@ -229,10 +250,11 @@ impl fmt::Debug for Gfx942FixedDispatchDataV1 {
 
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r4-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r5-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,descriptor-resolution-with-checked-relative-arithmetic\n",
-    "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,no-hidden-or-implicit-runtime-fields,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,initialized-before-map\n",
+    "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
+    "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-memory-leases,exact-device-vm-generation-and-complete-live-set,checked-bounded-subranges,inspected-actual-access-derived-internally,read-or-readwrite-requires-sealed-host-initialized-authority,write-only-admits-uninitialized-exclusive-lease\n",
     "batch=1-through-1024,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,one-generation-bound-template-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
     "retention=queue-owns-all-code-kernarg-and-device-leases-through-exact-ready-and-recycle,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
@@ -240,13 +262,13 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
     "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
     "authority=public-linear-addressless-construction-submit-poll-wait-recycle-and-returning-destroy,no-address-handle-pointer-fd-packet-template-signal-or-mmio-export\n",
     "proof=bounded-host-state-machine-and-mock-fault-tests-only,no-concrete-verus-or-machine-refinement\n",
-    "contracted=code-segment-permission-refinement,implicit-kernarg-producer,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence\n",
-    "excluded=caller-effect-assertion,caller-initialization-assertion,public-packet-template,async-copy,device-address-export,peer-map,kernel-memory-effect-refinement,numerical-correctness,hardware-execution\n",
+    "contracted=code-segment-permission-refinement,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence\n",
+    "excluded=queue-pointer,printf-hostcall-heap-default-queue-completion-action-multigrid-private-base-shared-base-and-unknown-implicit-fields,caller-effect-assertion,caller-initialization-assertion,public-packet-template,async-copy,device-address-export,peer-map,kernel-memory-effect-refinement,numerical-correctness,hardware-execution\n",
 );
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "7dceb951b02a9368a6b558aec4a3aa8df9b0c56e4aecbd5f4ee8eff612edf76b";
+    "2f337a89375dd67c11055f2ba39c64fabf6c9b16ae593634670c77a974a3bc08";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -958,7 +980,11 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
             .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
                 "kernarg arena size",
             ))?;
-    validate_geometry(resources, &geometry)?;
+    validate_geometry(
+        resources,
+        kernel.selected_kernel().uniform_work_group_size(),
+        &geometry,
+    )?;
     validate_data_inputs(&data)?;
     validate_kernargs(&kernargs, kernarg_size, &data)?;
     let requests: Vec<_> = data
@@ -1094,15 +1120,48 @@ struct FixedDispatchProgramPlanV1 {
     image_len: usize,
     descriptor_offset: u64,
     resources: fe2o3_amdhsa_loader::SelectedKernelResourceBindingV1,
+    implicit_kernarg: Option<Cov6ImplicitKernargPlanV1>,
 }
 
 struct FixedDispatchPacketPlanV1 {
     input: Gfx942FixedDispatchPacketV1,
     patches: Box<[DevicePointerPatchV1]>,
+    implicit_kernarg: Option<Cov6ImplicitKernargValuesV1>,
     kernarg_offset: usize,
     kernarg_alignment: usize,
     private_segment_size: u32,
     group_segment_size: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cov6ImplicitKernargFieldKindV1 {
+    BlockCount(usize),
+    GroupSize(usize),
+    Remainder(usize),
+    GlobalOffset(usize),
+    GridDimensions,
+    DynamicLdsSize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cov6ImplicitKernargFieldV1 {
+    kind: Cov6ImplicitKernargFieldKindV1,
+    relative_offset: usize,
+    byte_len: usize,
+}
+
+struct Cov6ImplicitKernargPlanV1 {
+    byte_offset: usize,
+    fields: Box<[Cov6ImplicitKernargFieldV1]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cov6ImplicitKernargValuesV1 {
+    block_count: [u32; 3],
+    group_size: [u16; 3],
+    remainder: [u16; 3],
+    grid_dimensions: u16,
+    dynamic_lds_size: u32,
 }
 
 /// Consumes inspected executable custody and exact mapped data authorities,
@@ -1158,20 +1217,13 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
                 "descriptor image range",
             ));
         }
-        let selected = kernel.selected_kernel();
-        if !selected.hidden_arguments().is_empty()
-            || selected.implicit_argument_offset().is_some()
-            || selected.implicit_argument_size() != 0
-        {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
-                "runtime-populated kernarg fields",
-            ));
-        }
+        let implicit_kernarg = validate_cov6_implicit_kernarg_layout(kernel.selected_kernel())?;
         validate_kernarg_resource_shape(resources)?;
         program_plans.push(FixedDispatchProgramPlanV1 {
             image_len,
             descriptor_offset,
             resources,
+            implicit_kernarg,
         });
     }
 
@@ -1222,7 +1274,17 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             &mut data_effects,
         )?;
         let geometry = DispatchGeometryV1::new(input.geometry, input.dynamic_group_segment_bytes);
-        validate_geometry(program_plan.resources, &[geometry])?;
+        validate_geometry(
+            program_plan.resources,
+            kernel.selected_kernel().uniform_work_group_size(),
+            &[geometry],
+        )?;
+        let implicit_kernarg = validate_and_derive_cov6_implicit_kernarg(
+            packet_index,
+            kernel.selected_kernel(),
+            &input,
+            program_plan.implicit_kernarg.as_ref(),
+        )?;
         let private_segment_size =
             u32::try_from(program_plan.resources.private_segment_fixed_size())
                 .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("private segment size"))?;
@@ -1236,6 +1298,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         packet_plans.push(FixedDispatchPacketPlanV1 {
             input,
             patches,
+            implicit_kernarg,
             kernarg_offset,
             kernarg_alignment,
             private_segment_size,
@@ -1329,6 +1392,18 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
                 packet_bytes[patch.byte_offset..patch.byte_offset + 8]
                     .copy_from_slice(&address.to_le_bytes());
             }
+            match (
+                program_plans[packet.input.program_index]
+                    .implicit_kernarg
+                    .as_ref(),
+                packet.implicit_kernarg,
+            ) {
+                (Some(plan), Some(values)) => {
+                    initialize_cov6_implicit_kernarg(packet_bytes, plan, values)
+                }
+                (None, None) => {}
+                _ => unreachable!("implicit-kernarg preflight plan/value mismatch"),
+            }
         }
     })?;
     let kernarg = memory.map_to_gpu(kernarg)?;
@@ -1388,6 +1463,297 @@ fn validate_kernarg_resource_shape(
         ));
     }
     Ok(())
+}
+
+fn validate_cov6_implicit_kernarg_layout(
+    kernel: &InspectedKernel,
+) -> Result<Option<Cov6ImplicitKernargPlanV1>, Gfx942DispatchBindingErrorV1> {
+    let hidden = kernel.hidden_arguments();
+    if hidden.is_empty() {
+        if kernel.implicit_argument_offset().is_some() || kernel.implicit_argument_size() != 0 {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "implicit-kernarg metadata without hidden fields",
+            ));
+        }
+        return Ok(None);
+    }
+
+    let byte_offset = exact_cov6_implicit_kernarg_offset(
+        kernel.implicit_argument_offset(),
+        kernel.implicit_argument_size(),
+        kernel.kernarg_segment_size(),
+    )
+    .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+        "exact trailing COV6 implicit-kernarg extent",
+    ))?;
+
+    let mut fields = Vec::with_capacity(hidden.len());
+    for argument in hidden {
+        let field = admitted_cov6_implicit_kernarg_field(argument.value_kind()).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidCode(
+                "unsupported runtime or address implicit-kernarg field",
+            ),
+        )?;
+        let observed_offset = argument
+            .offset()
+            .checked_sub(byte_offset as u64)
+            .and_then(|offset| usize::try_from(offset).ok());
+        if observed_offset != Some(field.relative_offset)
+            || usize::try_from(argument.size()).ok() != Some(field.byte_len)
+            || field
+                .relative_offset
+                .checked_add(field.byte_len)
+                .is_none_or(|end| end > COV6_IMPLICIT_ARGUMENT_BYTES_V1)
+            || fields
+                .iter()
+                .any(|prior: &Cov6ImplicitKernargFieldV1| prior.kind == field.kind)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "noncanonical COV6 implicit-kernarg field",
+            ));
+        }
+        fields.push(field);
+    }
+
+    Ok(Some(Cov6ImplicitKernargPlanV1 {
+        byte_offset,
+        fields: fields.into_boxed_slice(),
+    }))
+}
+
+fn exact_cov6_implicit_kernarg_offset(
+    byte_offset: Option<u64>,
+    byte_len: u64,
+    kernarg_byte_len: u64,
+) -> Option<usize> {
+    let byte_offset = byte_offset?;
+    if byte_len != COV6_IMPLICIT_ARGUMENT_BYTES
+        || byte_offset.checked_add(byte_len) != Some(kernarg_byte_len)
+    {
+        return None;
+    }
+    usize::try_from(byte_offset).ok()
+}
+
+fn admitted_cov6_implicit_kernarg_field(
+    kind: HiddenValueKind,
+) -> Option<Cov6ImplicitKernargFieldV1> {
+    let (kind, relative_offset, byte_len) = match kind {
+        HiddenValueKind::BlockCountX => (
+            Cov6ImplicitKernargFieldKindV1::BlockCount(0),
+            COV6_BLOCK_COUNT_X_OFFSET_V1,
+            4,
+        ),
+        HiddenValueKind::BlockCountY => (
+            Cov6ImplicitKernargFieldKindV1::BlockCount(1),
+            COV6_BLOCK_COUNT_Y_OFFSET_V1,
+            4,
+        ),
+        HiddenValueKind::BlockCountZ => (
+            Cov6ImplicitKernargFieldKindV1::BlockCount(2),
+            COV6_BLOCK_COUNT_Z_OFFSET_V1,
+            4,
+        ),
+        HiddenValueKind::GroupSizeX => (
+            Cov6ImplicitKernargFieldKindV1::GroupSize(0),
+            COV6_GROUP_SIZE_X_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::GroupSizeY => (
+            Cov6ImplicitKernargFieldKindV1::GroupSize(1),
+            COV6_GROUP_SIZE_Y_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::GroupSizeZ => (
+            Cov6ImplicitKernargFieldKindV1::GroupSize(2),
+            COV6_GROUP_SIZE_Z_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::RemainderX => (
+            Cov6ImplicitKernargFieldKindV1::Remainder(0),
+            COV6_REMAINDER_X_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::RemainderY => (
+            Cov6ImplicitKernargFieldKindV1::Remainder(1),
+            COV6_REMAINDER_Y_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::RemainderZ => (
+            Cov6ImplicitKernargFieldKindV1::Remainder(2),
+            COV6_REMAINDER_Z_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::GlobalOffsetX => (
+            Cov6ImplicitKernargFieldKindV1::GlobalOffset(0),
+            COV6_GLOBAL_OFFSET_X_OFFSET_V1,
+            8,
+        ),
+        HiddenValueKind::GlobalOffsetY => (
+            Cov6ImplicitKernargFieldKindV1::GlobalOffset(1),
+            COV6_GLOBAL_OFFSET_Y_OFFSET_V1,
+            8,
+        ),
+        HiddenValueKind::GlobalOffsetZ => (
+            Cov6ImplicitKernargFieldKindV1::GlobalOffset(2),
+            COV6_GLOBAL_OFFSET_Z_OFFSET_V1,
+            8,
+        ),
+        HiddenValueKind::GridDimensions => (
+            Cov6ImplicitKernargFieldKindV1::GridDimensions,
+            COV6_GRID_DIMENSIONS_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::DynamicLdsSize => (
+            Cov6ImplicitKernargFieldKindV1::DynamicLdsSize,
+            COV6_DYNAMIC_LDS_SIZE_OFFSET_V1,
+            4,
+        ),
+        HiddenValueKind::None
+        | HiddenValueKind::PrintfBuffer
+        | HiddenValueKind::HostcallBuffer
+        | HiddenValueKind::HeapV1
+        | HiddenValueKind::DefaultQueue
+        | HiddenValueKind::CompletionAction
+        | HiddenValueKind::MultigridSyncArgument
+        | HiddenValueKind::PrivateBase
+        | HiddenValueKind::SharedBase
+        | HiddenValueKind::QueuePointer => return None,
+    };
+    Some(Cov6ImplicitKernargFieldV1 {
+        kind,
+        relative_offset,
+        byte_len,
+    })
+}
+
+fn validate_and_derive_cov6_implicit_kernarg(
+    packet: usize,
+    kernel: &InspectedKernel,
+    input: &Gfx942FixedDispatchPacketV1,
+    plan: Option<&Cov6ImplicitKernargPlanV1>,
+) -> Result<Option<Cov6ImplicitKernargValuesV1>, Gfx942DispatchBindingErrorV1> {
+    let Some(plan) = plan else {
+        return Ok(None);
+    };
+    validate_caller_zero_cov6_implicit_suffix(packet, &input.kernarg_bytes, plan)?;
+    derive_cov6_implicit_kernarg_values(
+        input.geometry,
+        input.dynamic_group_segment_bytes,
+        kernel.uniform_work_group_size(),
+    )
+    .map(Some)
+    .map_err(|detail| Gfx942DispatchBindingErrorV1::Geometry { packet, detail })
+}
+
+fn validate_caller_zero_cov6_implicit_suffix(
+    packet: usize,
+    kernarg: &[u8],
+    plan: &Cov6ImplicitKernargPlanV1,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    let suffix_end = plan
+        .byte_offset
+        .checked_add(COV6_IMPLICIT_ARGUMENT_BYTES_V1)
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "implicit-kernarg suffix overflow",
+        })?;
+    if kernarg
+        .get(plan.byte_offset..suffix_end)
+        .is_none_or(|suffix| suffix.iter().any(|byte| *byte != 0))
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "caller must zero the complete COV6 implicit-kernarg suffix",
+        });
+    }
+    Ok(())
+}
+
+fn derive_cov6_implicit_kernarg_values(
+    geometry: AqlDispatchGeometryV1,
+    dynamic_lds_size: u32,
+    uniform_workgroup: bool,
+) -> Result<Cov6ImplicitKernargValuesV1, &'static str> {
+    let dimensions = usize::from(geometry.dimensions());
+    if !(1..=3).contains(&dimensions) {
+        return Err("implicit-kernarg grid dimensions");
+    }
+    let grid = geometry.grid();
+    let observed_workgroup = geometry.workgroup();
+    let mut block_count = [1; 3];
+    let mut group_size = [1; 3];
+    let mut remainder = [0; 3];
+    for axis in 0..3 {
+        let workgroup = u32::from(observed_workgroup[axis]);
+        if axis >= dimensions {
+            if grid[axis] != 1 || workgroup != 1 {
+                return Err("inactive implicit-kernarg dimension");
+            }
+            continue;
+        }
+        block_count[axis] = grid[axis] / workgroup;
+        group_size[axis] = observed_workgroup[axis];
+        remainder[axis] = (grid[axis] % workgroup) as u16;
+    }
+    if uniform_workgroup && remainder != [0; 3] {
+        return Err("uniform workgroup has a partial remainder");
+    }
+    Ok(Cov6ImplicitKernargValuesV1 {
+        block_count,
+        group_size,
+        remainder,
+        grid_dimensions: geometry.dimensions(),
+        dynamic_lds_size,
+    })
+}
+
+fn initialize_cov6_implicit_kernarg(
+    kernarg: &mut [u8],
+    plan: &Cov6ImplicitKernargPlanV1,
+    values: Cov6ImplicitKernargValuesV1,
+) {
+    debug_assert!(
+        kernarg[plan.byte_offset..plan.byte_offset + COV6_IMPLICIT_ARGUMENT_BYTES_V1]
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+    for field in &plan.fields {
+        let offset = plan.byte_offset + field.relative_offset;
+        match field.kind {
+            Cov6ImplicitKernargFieldKindV1::BlockCount(axis) => {
+                put_u32(kernarg, offset, values.block_count[axis]);
+            }
+            Cov6ImplicitKernargFieldKindV1::GroupSize(axis) => {
+                put_u16(kernarg, offset, values.group_size[axis]);
+            }
+            Cov6ImplicitKernargFieldKindV1::Remainder(axis) => {
+                put_u16(kernarg, offset, values.remainder[axis]);
+            }
+            Cov6ImplicitKernargFieldKindV1::GlobalOffset(axis) => {
+                let _ = axis;
+                put_u64(kernarg, offset, 0);
+            }
+            Cov6ImplicitKernargFieldKindV1::GridDimensions => {
+                put_u16(kernarg, offset, values.grid_dimensions);
+            }
+            Cov6ImplicitKernargFieldKindV1::DynamicLdsSize => {
+                put_u32(kernarg, offset, values.dynamic_lds_size);
+            }
+        }
+    }
+}
+
+fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 fn validate_public_packet_bindings(
@@ -1756,6 +2122,7 @@ fn validate_kernargs<const N: usize>(
 
 fn validate_geometry<const N: usize>(
     resources: fe2o3_amdhsa_loader::SelectedKernelResourceBindingV1,
+    uniform_workgroup: bool,
     geometry: &[DispatchGeometryV1; N],
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
     for (packet, dispatch) in geometry.iter().enumerate() {
@@ -1777,6 +2144,17 @@ fn validate_geometry<const N: usize>(
             return Err(Gfx942DispatchBindingErrorV1::Geometry {
                 packet,
                 detail: "workgroup resource contract",
+            });
+        }
+        if uniform_workgroup
+            && grid
+                .iter()
+                .zip(workgroup)
+                .any(|(grid, workgroup)| !grid.is_multiple_of(workgroup))
+        {
+            return Err(Gfx942DispatchBindingErrorV1::Geometry {
+                packet,
+                detail: "uniform workgroup has a partial remainder",
             });
         }
         for dimension in 0..3 {
@@ -1838,11 +2216,253 @@ mod tests {
         }
     }
 
+    fn implicit_plan(byte_offset: usize, kinds: &[HiddenValueKind]) -> Cov6ImplicitKernargPlanV1 {
+        Cov6ImplicitKernargPlanV1 {
+            byte_offset,
+            fields: kinds
+                .iter()
+                .map(|kind| admitted_cov6_implicit_kernarg_field(*kind).unwrap())
+                .collect(),
+        }
+    }
+
     #[test]
     fn manifest_digest_is_frozen() {
         let digest = Sha256::digest(GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1);
         let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(rendered, GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1);
+    }
+
+    #[test]
+    fn implicit_kernarg_admits_only_geometry_and_dynamic_lds_fields() {
+        let admitted = [
+            (
+                HiddenValueKind::BlockCountX,
+                Cov6ImplicitKernargFieldKindV1::BlockCount(0),
+                0,
+                4,
+            ),
+            (
+                HiddenValueKind::BlockCountY,
+                Cov6ImplicitKernargFieldKindV1::BlockCount(1),
+                4,
+                4,
+            ),
+            (
+                HiddenValueKind::BlockCountZ,
+                Cov6ImplicitKernargFieldKindV1::BlockCount(2),
+                8,
+                4,
+            ),
+            (
+                HiddenValueKind::GroupSizeX,
+                Cov6ImplicitKernargFieldKindV1::GroupSize(0),
+                12,
+                2,
+            ),
+            (
+                HiddenValueKind::GroupSizeY,
+                Cov6ImplicitKernargFieldKindV1::GroupSize(1),
+                14,
+                2,
+            ),
+            (
+                HiddenValueKind::GroupSizeZ,
+                Cov6ImplicitKernargFieldKindV1::GroupSize(2),
+                16,
+                2,
+            ),
+            (
+                HiddenValueKind::RemainderX,
+                Cov6ImplicitKernargFieldKindV1::Remainder(0),
+                18,
+                2,
+            ),
+            (
+                HiddenValueKind::RemainderY,
+                Cov6ImplicitKernargFieldKindV1::Remainder(1),
+                20,
+                2,
+            ),
+            (
+                HiddenValueKind::RemainderZ,
+                Cov6ImplicitKernargFieldKindV1::Remainder(2),
+                22,
+                2,
+            ),
+            (
+                HiddenValueKind::GlobalOffsetX,
+                Cov6ImplicitKernargFieldKindV1::GlobalOffset(0),
+                40,
+                8,
+            ),
+            (
+                HiddenValueKind::GlobalOffsetY,
+                Cov6ImplicitKernargFieldKindV1::GlobalOffset(1),
+                48,
+                8,
+            ),
+            (
+                HiddenValueKind::GlobalOffsetZ,
+                Cov6ImplicitKernargFieldKindV1::GlobalOffset(2),
+                56,
+                8,
+            ),
+            (
+                HiddenValueKind::GridDimensions,
+                Cov6ImplicitKernargFieldKindV1::GridDimensions,
+                64,
+                2,
+            ),
+            (
+                HiddenValueKind::DynamicLdsSize,
+                Cov6ImplicitKernargFieldKindV1::DynamicLdsSize,
+                120,
+                4,
+            ),
+        ];
+        for (metadata_kind, kind, relative_offset, byte_len) in admitted {
+            assert_eq!(
+                admitted_cov6_implicit_kernarg_field(metadata_kind),
+                Some(Cov6ImplicitKernargFieldV1 {
+                    kind,
+                    relative_offset,
+                    byte_len,
+                })
+            );
+        }
+
+        for rejected in [
+            HiddenValueKind::None,
+            HiddenValueKind::PrintfBuffer,
+            HiddenValueKind::HostcallBuffer,
+            HiddenValueKind::HeapV1,
+            HiddenValueKind::DefaultQueue,
+            HiddenValueKind::CompletionAction,
+            HiddenValueKind::MultigridSyncArgument,
+            HiddenValueKind::PrivateBase,
+            HiddenValueKind::SharedBase,
+            HiddenValueKind::QueuePointer,
+        ] {
+            assert_eq!(admitted_cov6_implicit_kernarg_field(rejected), None);
+        }
+    }
+
+    #[test]
+    fn implicit_kernarg_requires_one_exact_trailing_256_byte_extent() {
+        assert_eq!(
+            exact_cov6_implicit_kernarg_offset(Some(48), 256, 304),
+            Some(48)
+        );
+        for invalid in [
+            exact_cov6_implicit_kernarg_offset(None, 256, 304),
+            exact_cov6_implicit_kernarg_offset(Some(48), 255, 303),
+            exact_cov6_implicit_kernarg_offset(Some(48), 256, 305),
+            exact_cov6_implicit_kernarg_offset(Some(u64::MAX - 127), 256, u64::MAX),
+        ] {
+            assert_eq!(invalid, None);
+        }
+    }
+
+    #[test]
+    fn caller_must_zero_every_byte_of_the_implicit_suffix() {
+        let plan = implicit_plan(16, &[]);
+        let mut kernarg = vec![0; 16 + COV6_IMPLICIT_ARGUMENT_BYTES_V1];
+        kernarg[0] = 0xa5;
+        assert!(validate_caller_zero_cov6_implicit_suffix(7, &kernarg, &plan).is_ok());
+
+        for index in [16, 16 + 127, kernarg.len() - 1] {
+            let mut hostile = kernarg.clone();
+            hostile[index] = 1;
+            assert!(matches!(
+                validate_caller_zero_cov6_implicit_suffix(7, &hostile, &plan),
+                Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                    packet: 7,
+                    detail: "caller must zero the complete COV6 implicit-kernarg suffix"
+                })
+            ));
+        }
+        assert!(validate_caller_zero_cov6_implicit_suffix(7, &kernarg[..271], &plan).is_err());
+    }
+
+    #[test]
+    fn implicit_kernarg_uses_full_block_counts_and_partial_remainders() {
+        let values = derive_cov6_implicit_kernarg_values(
+            AqlDispatchGeometryV1::new([257, 3, 1], [64, 2, 1]).unwrap(),
+            384,
+            false,
+        )
+        .unwrap();
+        assert_eq!(values.block_count, [4, 1, 1]);
+        assert_eq!(values.group_size, [64, 2, 1]);
+        assert_eq!(values.remainder, [1, 1, 0]);
+        assert_eq!(values.grid_dimensions, 2);
+        assert_eq!(values.dynamic_lds_size, 384);
+
+        assert!(
+            derive_cov6_implicit_kernarg_values(
+                AqlDispatchGeometryV1::new([257, 3, 1], [64, 2, 1]).unwrap(),
+                384,
+                true,
+            )
+            .is_err()
+        );
+        let uniform = derive_cov6_implicit_kernarg_values(
+            AqlDispatchGeometryV1::new([256, 4, 1], [64, 2, 1]).unwrap(),
+            0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(uniform.block_count, [4, 2, 1]);
+        assert_eq!(uniform.remainder, [0, 0, 0]);
+    }
+
+    #[test]
+    fn private_initializer_writes_only_metadata_declared_implicit_fields() {
+        let kinds = [
+            HiddenValueKind::BlockCountX,
+            HiddenValueKind::BlockCountY,
+            HiddenValueKind::BlockCountZ,
+            HiddenValueKind::GroupSizeX,
+            HiddenValueKind::GroupSizeY,
+            HiddenValueKind::GroupSizeZ,
+            HiddenValueKind::RemainderX,
+            HiddenValueKind::RemainderY,
+            HiddenValueKind::RemainderZ,
+            HiddenValueKind::GlobalOffsetX,
+            HiddenValueKind::GlobalOffsetY,
+            HiddenValueKind::GlobalOffsetZ,
+            HiddenValueKind::GridDimensions,
+            HiddenValueKind::DynamicLdsSize,
+        ];
+        let plan = implicit_plan(8, &kinds);
+        let values = derive_cov6_implicit_kernarg_values(
+            AqlDispatchGeometryV1::new([257, 3, 1], [64, 2, 1]).unwrap(),
+            384,
+            false,
+        )
+        .unwrap();
+        let mut actual = vec![0; 8 + COV6_IMPLICIT_ARGUMENT_BYTES_V1];
+        actual[..8].fill(0xa5);
+        initialize_cov6_implicit_kernarg(&mut actual, &plan, values);
+
+        let mut expected = vec![0; actual.len()];
+        expected[..8].fill(0xa5);
+        put_u32(&mut expected, 8, 4);
+        put_u32(&mut expected, 12, 1);
+        put_u32(&mut expected, 16, 1);
+        put_u16(&mut expected, 20, 64);
+        put_u16(&mut expected, 22, 2);
+        put_u16(&mut expected, 24, 1);
+        put_u16(&mut expected, 26, 1);
+        put_u16(&mut expected, 28, 1);
+        put_u16(&mut expected, 30, 0);
+        put_u64(&mut expected, 48, 0);
+        put_u64(&mut expected, 56, 0);
+        put_u64(&mut expected, 64, 0);
+        put_u16(&mut expected, 72, 2);
+        put_u32(&mut expected, 128, 384);
+        assert_eq!(actual, expected);
     }
 
     fn inspected(

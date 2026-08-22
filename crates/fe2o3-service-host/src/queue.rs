@@ -22,10 +22,10 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r1-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r2-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
     "batch=1-through-1024-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-ranges\n",
-    "implicit-kernarg=current-fixed-dispatch-foundation-rejects-every-hidden-or-implicit-field,population-remains-a-separate-runtime-prerequisite\n",
+    "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add-one-final-doorbell-per-fixed-batch\n",
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,exact-completion-and-signal-recycle-before-detach-rebind-or-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
@@ -38,7 +38,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "90aa6eefada59e867709292f2c530d695104550d335a3bf84e8732499241849c";
+    "eef3ad44ab906d85e3c904b80725712d243f4bb7e16e5c1cc062e311789edcc5";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]

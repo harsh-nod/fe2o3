@@ -59,14 +59,14 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r12-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r13-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=032e68de9b493deb70326fe8e65bb90248ff3a0d02d6a77f3e939df15262b33e\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_fixed_batch_schema_sha256=3d8376174a564eaee500ad8849d8bf3a1a38d56f9e5bc50bf60aea408b25bf1d\n",
     "aql_completion_schema_sha256=406f1f2f3e93eb4704fba3b5ead0d0d05639991949baff4ad3a0360c343fb7a4\n",
-    "dispatch_binding_schema_sha256=7dceb951b02a9368a6b558aec4a3aa8df9b0c56e4aecbd5f4ee8eff612edf76b\n",
+    "dispatch_binding_schema_sha256=2f337a89375dd67c11055f2ba39c64fabf6c9b16ae593634670c77a974a3bc08\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -81,7 +81,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-1024-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-1024-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll,pending-ready-fault-timeout-distinct,release-reset-only-after-all-signals-zero\n",
-    "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-1024-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,exact-mapped-lease-set,inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-return-after-destroy\n",
+    "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-1024-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-lease-set,inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-return-after-destroy\n",
     "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-detached-device-lease-ledger,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
@@ -96,7 +96,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "14a391951f01b8fc51f175eea6fe5fe97bb4e5685aff7203ba7bb207f693903e";
+    "80aa507a4d8fa6d07ca8a4ba39922ffcfec267671988f31c01eb575b5104dbf6";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -2001,6 +2001,10 @@ mod tests {
         assert_eq!(
             super::super::completion::GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1,
             "406f1f2f3e93eb4704fba3b5ead0d0d05639991949baff4ad3a0360c343fb7a4"
+        );
+        assert_eq!(
+            super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
+            "2f337a89375dd67c11055f2ba39c64fabf6c9b16ae593634670c77a974a3bc08"
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
