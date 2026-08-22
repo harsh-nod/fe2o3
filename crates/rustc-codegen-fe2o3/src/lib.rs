@@ -47,6 +47,7 @@ mod production_ranked_projection_v1;
 mod production_rustc_driver_v1;
 mod production_semantic_body_v1;
 mod production_semantic_fn_abi_v1;
+mod production_semantic_lineage_v3;
 mod production_semantic_terminal_v1;
 mod production_semantic_types_v1;
 mod production_target_lineage_v3;
@@ -519,7 +520,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             Ok(publication_length) => {
                                 production_device_transaction_complete = true;
                                 eprintln!(
-                                    "[rustc-codegen-fe2o3] production-v1 published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the managed Worker V2 transaction; link, artifact, load, and launch authority remain false",
+                                    "[rustc-codegen-fe2o3] production-v1 published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
                                     publication_length,
                                 );
                             }
@@ -2472,8 +2473,9 @@ mod tests {
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
-    fn admitted_protected_modules_route_only_through_v2_publication() {
+    fn admitted_protected_modules_route_only_through_strict_v3_publication() {
         let backend = include_str!("lib.rs");
+        let production_pipeline = include_str!("production_pipeline_v1.rs");
         let production = backend
             .split("match protected_rustc_invocation.take()")
             .nth(1)
@@ -2486,6 +2488,10 @@ mod tests {
         );
         assert!(production_v3.contains("publish_worker_handoff_v3"));
         assert!(!production_v3.contains("publish_worker_handoff()"));
+        assert!(production_pipeline.contains("publish_compiler_module_handoff_v3"));
+        assert!(!production_pipeline.contains(
+            "publish_prepared_production_v1_worker_handoff_v2(\n            &publication.output_dir"
+        ));
         assert!(production_v1.contains("from_collected_device_closure("));
         assert!(production_v1.contains("publish_worker_handoff()"));
 

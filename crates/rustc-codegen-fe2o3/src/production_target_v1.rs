@@ -73,6 +73,11 @@ impl AuthenticatedProductionTargetV1 {
     pub(crate) fn rustc_layout(&self) -> &SemanticLayoutTargetV1 {
         &self.rustc_layout
     }
+
+    pub(crate) fn device_target(&self) -> fe2o3_compiler_ffi::DeviceTargetV1 {
+        fe2o3_compiler_ffi::DeviceTargetV1::parse(PRODUCTION_TARGET_V1)
+            .expect("the authenticated fixed production target is valid")
+    }
 }
 
 fn validate_authoritative_rustc_target_v1(

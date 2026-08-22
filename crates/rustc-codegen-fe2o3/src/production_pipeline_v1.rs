@@ -48,11 +48,13 @@ pub(crate) enum ProductionPipelineErrorV1 {
     Gfx942Lowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(String),
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
+    SemanticLineage(crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3),
     RustcLineageMismatch,
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     ProtectedHandoffRequiresV2,
     UnprotectedHandoffRequiresV1,
     WorkerHandoff(crate::worker_v2_producer::WorkerV2ProducerError),
+    StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
 }
 
 impl fmt::Display for ProductionPipelineErrorV1 {
@@ -92,6 +94,7 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::DescriptorEvidence(error) => {
                 write!(formatter, "production-v1 descriptor evidence failed: {error}")
             }
+            Self::SemanticLineage(error) => write!(formatter, "production-v1 {error}"),
             Self::RustcLineageMismatch => formatter.write_str(
                 "production-v1 rustc preflight plan is not bound to the retained identity inventory",
             ),
@@ -106,7 +109,10 @@ impl fmt::Display for ProductionPipelineErrorV1 {
                 "production-v1 unprotected qualification cannot publish through the V2 handoff protocol",
             ),
             Self::WorkerHandoff(error) => {
-                write!(formatter, "production-v1 Worker V2 handoff failed: {error}")
+                write!(formatter, "production-v1 compiler-module handoff failed: {error}")
+            }
+            Self::StrictV3Publication(error) => {
+                write!(formatter, "production-v1 strict V3 publication failed: {error}")
             }
         }
     }
@@ -124,8 +130,10 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::TargetBinding(error) => Some(error),
             Self::Gfx942Lowering(error) => Some(error),
             Self::DescriptorEvidence(error) => Some(error),
+            Self::SemanticLineage(error) => Some(error),
             Self::ProtectedRustcInvocation(error) => Some(error),
             Self::WorkerHandoff(error) => Some(error),
+            Self::StrictV3Publication(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::ProtectedHandoffRequiresV2
@@ -172,18 +180,40 @@ impl ProductionCompilerModulePublicationV1 {
     fn protected_v3(invocation: AdmittedProtectedRustcInvocationV1) -> Self {
         Self::ProtectedV3(Box::new(invocation))
     }
+}
 
+enum PreparedProductionCompilerPublicationV1 {
+    OrdinaryV1,
+    ProtectedV3 {
+        invocation: Box<AdmittedProtectedRustcInvocationV1>,
+        semantic_lineage:
+            crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
+    },
+}
+
+impl PreparedProductionCompilerPublicationV1 {
     fn require_v1(self) -> Result<(), ProductionPipelineErrorV1> {
         match self {
             Self::OrdinaryV1 => Ok(()),
-            Self::ProtectedV3(_) => Err(ProductionPipelineErrorV1::ProtectedHandoffRequiresV2),
+            Self::ProtectedV3 { .. } => Err(ProductionPipelineErrorV1::ProtectedHandoffRequiresV2),
         }
     }
 
-    fn require_v3(self) -> Result<AdmittedProtectedRustcInvocationV1, ProductionPipelineErrorV1> {
+    fn require_v3(
+        self,
+    ) -> Result<
+        (
+            AdmittedProtectedRustcInvocationV1,
+            crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
+        ),
+        ProductionPipelineErrorV1,
+    > {
         match self {
             Self::OrdinaryV1 => Err(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1),
-            Self::ProtectedV3(invocation) => Ok(*invocation),
+            Self::ProtectedV3 {
+                invocation,
+                semantic_lineage,
+            } => Ok((*invocation, semantic_lineage)),
         }
     }
 }
@@ -263,7 +293,7 @@ struct PreparedProductionWorkerPublicationV1 {
     producer: ProducerIdentity,
     output_dir: PathBuf,
     attempt: BuildAttempt,
-    publication: ProductionCompilerModulePublicationV1,
+    publication: PreparedProductionCompilerPublicationV1,
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
@@ -469,7 +499,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         self,
     ) -> Result<PreparedProductionWorkerPublicationV1, ProductionPipelineErrorV1> {
         eprintln!(
-            "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact Worker V2 handoff",
+            "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
@@ -511,6 +541,27 @@ impl Gfx942LoweredProductionCompilationV1 {
         {
             return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
         }
+        let publication = match publication {
+            ProductionCompilerModulePublicationV1::OrdinaryV1 => {
+                PreparedProductionCompilerPublicationV1::OrdinaryV1
+            }
+            ProductionCompilerModulePublicationV1::ProtectedV3(invocation) => {
+                let semantic_lineage = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::try_prepare(
+                    &rustc_identity_inventory,
+                    &rustc_preflight_plan,
+                    &rustc_target,
+                    &ranked_verification,
+                    &admitted,
+                    &target_module,
+                    &llvm_ir,
+                )
+                .map_err(ProductionPipelineErrorV1::SemanticLineage)?;
+                PreparedProductionCompilerPublicationV1::ProtectedV3 {
+                    invocation,
+                    semantic_lineage,
+                }
+            }
+        };
         let compiler_module = AuthenticatedProductionGfx942ModuleV1 {
             admitted,
             target_module,
@@ -566,22 +617,11 @@ impl Gfx942LoweredProductionCompilationV1 {
 
     fn publish_worker_handoff_v3(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV2, ProductionPipelineErrorV1>
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineErrorV1>
     {
         let publication = self.prepare_worker_handoff()?;
-        let _ = (
-            publication.rustc_identity_inventory.canonical_transcript(),
-            publication.rustc_preflight_plan.canonical_transcript(),
-            publication.rustc_target.rustc_layout(),
-            publication.ranked_verification.ranked_ir(),
-            publication
-                .ranked_verification
-                .middle_end_evidence()
-                .canonical_bytes(),
-        );
-        let invocation = publication
-            .publication
-            .require_v3()?
+        let (invocation, semantic_lineage) = publication.publication.require_v3()?;
+        let invocation = invocation
             .finish_for_publication()
             .map_err(ProductionPipelineErrorV1::ProtectedRustcInvocation)?;
         invocation.revalidate().map_err(|detail| {
@@ -589,17 +629,26 @@ impl Gfx942LoweredProductionCompilationV1 {
                 ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged(detail),
             )
         })?;
-        let compiler_closure = *invocation.descriptor().compiler_closure();
-        let (prepared, compiler_descriptor_source) = publication.prepared.into_parts();
-        let _ = compiler_descriptor_source.canonical_bytes();
-        crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff_v2(
+        let invocation_descriptor = invocation.descriptor().clone();
+        let (module_handoff, compiler_descriptor_source) = publication
+            .prepared
+            .into_validated_parts()
+            .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
+        let strict_handoff = semantic_lineage
+            .finish(
+                invocation_descriptor,
+                publication.rustc_target.device_target(),
+                &compiler_descriptor_source,
+                module_handoff,
+            )
+            .map_err(ProductionPipelineErrorV1::SemanticLineage)?;
+        fe2o3_artifact_transaction::publish_compiler_module_handoff_v3(
             &publication.output_dir,
             &publication.producer,
             publication.attempt,
-            compiler_closure,
-            prepared,
+            &strict_handoff,
         )
-        .map_err(ProductionPipelineErrorV1::WorkerHandoff)
+        .map_err(ProductionPipelineErrorV1::StrictV3Publication)
     }
 }
 
@@ -766,7 +815,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     }
 
     /// Publishes the exact production compiler module into the managed,
-    /// attempt-scoped Worker V2 protocol. This grants no link, artifact, load,
+    /// preselected attempt-scoped protocol. This grants no link, artifact, load,
     /// or launch authority.
     pub(crate) fn publish_worker_handoff(
         self,
@@ -777,7 +826,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
 
     pub(crate) fn publish_worker_handoff_v3(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV2, ProductionPipelineErrorV1>
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineErrorV1>
     {
         self.lower_gfx942()?.publish_worker_handoff_v3()
     }
@@ -892,12 +941,12 @@ mod tests {
 
         assert_eq!(disposition(0), ProductionDispositionV1::HostOnly);
         assert!(
-            ProductionCompilerModulePublicationV1::ORDINARY_V1
+            PreparedProductionCompilerPublicationV1::OrdinaryV1
                 .require_v1()
                 .is_ok()
         );
         assert!(matches!(
-            ProductionCompilerModulePublicationV1::ORDINARY_V1.require_v3(),
+            PreparedProductionCompilerPublicationV1::OrdinaryV1.require_v3(),
             Err(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1)
         ));
     }

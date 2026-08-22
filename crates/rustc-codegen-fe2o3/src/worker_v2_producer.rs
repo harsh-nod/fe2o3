@@ -94,13 +94,15 @@ impl PreparedProductionLineageWorkerHandoffV3 {
         self.worker_handoff
     }
 
-    pub(crate) fn into_parts(
+    pub(crate) fn into_validated_parts(
         self,
-    ) -> (
-        PreparedProductionV1WorkerHandoffV1,
-        CompilerDescriptorSourceV1,
-    ) {
-        (self.worker_handoff, self.compiler_descriptor_source)
+    ) -> Result<(CompilerModuleHandoffV2, CompilerDescriptorSourceV1), WorkerV2ProducerError> {
+        let Self {
+            worker_handoff,
+            compiler_descriptor_source,
+        } = self;
+        let handoff = validate_prepared_production_v1_worker_handoff(worker_handoff)?;
+        Ok((handoff, compiler_descriptor_source))
     }
 }
 
