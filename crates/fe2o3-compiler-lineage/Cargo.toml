@@ -1,0 +1,15 @@
+[package]
+name = "fe2o3-compiler-lineage"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Canonical inert semantic-lineage content records for fe2o3 compilation."
+publish = false
+
+[dependencies]
+fe2o3-build-authority.workspace = true
+fe2o3-kernel-descriptor.workspace = true
+fe2o3-rustc-invocation.workspace = true
+sha2.workspace = true
