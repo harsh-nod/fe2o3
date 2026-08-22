@@ -2622,6 +2622,7 @@ name = "rustc-codegen-fe2o3"
 version = "0.1.0"
 dependencies = [
  "dialect-amdgcn",
+ "dialect-gpu",
  "dialect-kernel",
  "dialect-mir",
  "fe2o3-amd-target",

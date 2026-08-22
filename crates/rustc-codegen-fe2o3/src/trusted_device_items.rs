@@ -1457,6 +1457,8 @@ const fn safe_capability_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic
+    )
+}
 fn validate_safe_execution_provider_definition_v1(
     definition: &ReviewedProviderSemanticDefinitionV1,
 ) -> Result<(), String> {

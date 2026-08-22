@@ -1669,6 +1669,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         ProductionTerminalExpansionV1::GridLeaderCurrent => Some(0),
         ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => Some(3),
         ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => Some(3),
+        ProductionTerminalExpansionV1::WorkgroupBarrier => Some(0),
     }
 }
 

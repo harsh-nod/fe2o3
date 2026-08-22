@@ -6,6 +6,7 @@
 
 use std::{collections::VecDeque, fmt};
 
+use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr,
     MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, SUPPORTED_ELEMENT_WIDTHS,
@@ -357,23 +358,7 @@ fn project_intrinsic_contracts(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
-    for block in function.blocks() {
-        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
-            continue;
-        };
-        if matches!(
-            callables.get(call.callee().index() as usize),
-            Some(SemanticCallableDeclV1::CompilerIntrinsic {
-                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
-                    | SemanticCompilerIntrinsicOperationV1::WaveBarrier,
-                ..
-            })
-        ) {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a barrier before exact semantic CFG projection is available",
-            ));
-        }
-    }
+    require_linear_barrier_control_flow(callables, function)?;
     let mut index_values = vec![None; function.locals().len()];
     let mut grid_leader_destinations = vec![false; function.locals().len()];
     let mut grid_leader_precondition = None;
@@ -862,6 +847,67 @@ fn project_intrinsic_contracts(
         extent_argument_count: guarded_accesses.len(),
         guarded_accesses,
     })
+}
+
+fn require_linear_barrier_control_flow(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    let has_barrier = function.blocks().iter().any(|block| {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            return false;
+        };
+        matches!(
+            callables.get(call.callee().index() as usize),
+            Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+                ..
+            })
+        )
+    });
+    if !has_barrier {
+        return Ok(());
+    }
+
+    let mut visited = vec![false; function.blocks().len()];
+    let mut current = 0_usize;
+    loop {
+        let Some(block) = function.blocks().get(current) else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a barrier CFG edge targets an out-of-range semantic block",
+            ));
+        };
+        if visited[current] {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a barrier in cyclic control flow before exact dynamic convergence analysis",
+            ));
+        }
+        visited[current] = true;
+        if matches!(block.terminator().kind(), SemanticTerminatorKindV1::Return) {
+            break;
+        }
+        let mut successors = Vec::new();
+        block
+            .terminator()
+            .kind()
+            .try_for_each_edge::<std::convert::Infallible>(|edge| {
+                successors.push(edge.target().index() as usize);
+                Ok(())
+            })
+            .expect("infallible semantic CFG visitor");
+        if successors.len() != 1 {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup barrier with divergent or early-return control flow",
+            ));
+        }
+        current = successors[0];
+    }
+    if visited.iter().any(|visited| !*visited) {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a workgroup barrier with unreachable or alternate control flow",
+        ));
+    }
+    Ok(())
 }
 
 fn projected_disjoint_operand_v1(
@@ -1612,6 +1658,26 @@ fn project_direct_call_accesses(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if matches!(
+        callables.get(call.callee().index() as usize),
+        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+            ..
+        })
+    ) {
+        reserve_operation(operations)?;
+        operations.push(ProductionRankedOperationV1::Barrier {
+            execution_scope: HierarchyAttr::Workgroup,
+            memory_scope: MemoryScopeAttr::Workgroup,
+            address_space: AddressSpaceAttr::Workgroup,
+            order: MemoryOrderAttr::AcquireRelease,
+        });
+        push_ranked_ir(
+            ranked_ir,
+            "  gpu.barrier <workgroup, workgroup, workgroup, acquire_release>\n",
+        )?;
+        return Ok(());
+    }
     if matches!(
         callables.get(call.callee().index() as usize),
         Some(SemanticCallableDeclV1::CompilerIntrinsic {
@@ -2589,6 +2655,57 @@ mod tests {
         .unwrap()
     }
 
+    fn compiler_intrinsic(
+        operation: SemanticCompilerIntrinsicOperationV1,
+    ) -> SemanticCallableDeclV1 {
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(bytes(60)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(60)),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(SCALAR_TYPE, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256(bytes(61)),
+                SemanticItemDefinitionIdentityV1::from_sha256(bytes(62)),
+                SemanticMonomorphizationIdentityV1::from_sha256(bytes(63)),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(64)),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(65)),
+                SemanticSourceProvenanceV1::unavailable(),
+                abi,
+            ),
+            operation,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(66)),
+        }
+    }
+
+    fn barrier_call(target: Option<u32>) -> SemanticTerminatorKindV1 {
+        let destination = target.map(|target| {
+            SemanticCallDestinationV1::new(
+                scalar_place(),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(target),
+                ),
+            )
+        });
+        SemanticTerminatorKindV1::Call(
+            SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(0),
+                vec![],
+                destination,
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap(),
+        )
+    }
+
     fn statement(kind: SemanticStatementKindV1) -> SemanticStatementV1 {
         SemanticStatementV1::new(SemanticSourceProvenanceV1::unavailable(), kind)
     }
@@ -2823,6 +2940,73 @@ mod tests {
         assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
         assert!(ranked_ir.contains("kernel.br ^bounds0"));
         assert!(!ranked_ir.contains("^guard0"));
+    }
+
+    #[test]
+    fn safe_syncthreads_reaches_mandatory_barrier_and_workgroup_checks() {
+        let kernel = ProductionRankedKernelV1::new(
+            "safe_syncthreads",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::Barrier {
+                    execution_scope: HierarchyAttr::Workgroup,
+                    memory_scope: MemoryScopeAttr::Workgroup,
+                    address_space: AddressSpaceAttr::Workgroup,
+                    order: MemoryOrderAttr::AcquireRelease,
+                }],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let construction =
+            ProductionConstructionV1::ranked_kernel("safe_syncthreads_module", kernel).unwrap();
+        let lowering = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        assert!(lowering.barrier_report().is_clean());
+        assert!(lowering.workgroup_report().is_clean());
+    }
+
+    #[test]
+    fn workgroup_barrier_cfg_requires_one_complete_linear_path() {
+        let callables = [compiler_intrinsic(
+            SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+        )];
+        let linear = projection_function(vec![
+            block(70, vec![], barrier_call(Some(1))),
+            block(71, vec![], SemanticTerminatorKindV1::Return),
+        ]);
+        require_linear_barrier_control_flow(&callables, &linear).unwrap();
+
+        let early_return = projection_function(vec![block(72, vec![], barrier_call(None))]);
+        assert!(matches!(
+            require_linear_barrier_control_flow(&callables, &early_return),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup barrier with divergent or early-return control flow"
+            ))
+        ));
+
+        let cycle = projection_function(vec![block(73, vec![], barrier_call(Some(0)))]);
+        assert!(matches!(
+            require_linear_barrier_control_flow(&callables, &cycle),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a barrier in cyclic control flow before exact dynamic convergence analysis"
+            ))
+        ));
+
+        let alternate = projection_function(vec![
+            block(74, vec![], barrier_call(Some(1))),
+            block(75, vec![], SemanticTerminatorKindV1::Return),
+            block(76, vec![], SemanticTerminatorKindV1::Return),
+        ]);
+        assert!(matches!(
+            require_linear_barrier_control_flow(&callables, &alternate),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup barrier with unreachable or alternate control flow"
+            ))
+        ));
     }
 
     #[test]

@@ -687,6 +687,13 @@ fn terminal_operation_v1<'tcx>(
     let rust_inputs = signature.inputs();
     let rust_output = signature.output();
     match expansion {
+        ProductionTerminalExpansionV1::WorkgroupBarrier
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && matches!(rust_output.kind(), TyKind::Tuple(fields) if fields.is_empty()) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier)
+        }
         ProductionTerminalExpansionV1::ThreadIndex1d
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -954,7 +961,8 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::GridLeaderCurrent
         | ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive
         | ProductionTerminalExpansionV1::ThreadIndexCheckedBlock
-        | ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => {
+        | ProductionTerminalExpansionV1::DisjointSliceGetBlockMut
+        | ProductionTerminalExpansionV1::WorkgroupBarrier => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
         }
     }
@@ -1222,6 +1230,7 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => 9,
         ProductionTerminalExpansionV1::ThreadIndexCheckedBlock => 10,
         ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => 11,
+        ProductionTerminalExpansionV1::WorkgroupBarrier => 12,
     }
 }
 

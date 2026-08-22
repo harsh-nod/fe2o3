@@ -19,6 +19,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     GridLeaderCurrent,
     DisjointSliceGetMutExclusive,
     DisjointSliceGetBlockMut,
+    WorkgroupBarrier,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +67,9 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::DisjointSliceGetBlockMut => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetBlockMut)
             }
+            TrustedDeviceItem::WorkgroupSyncthreads => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier)
+            }
             unsupported => Self::Reject(unsupported),
         }
     }
@@ -108,6 +112,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetBlockMut) => {
                 TrustedDeviceItem::DisjointSliceGetBlockMut
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier) => {
+                TrustedDeviceItem::WorkgroupSyncthreads
             }
             Self::Reject(item) => item,
         }
@@ -166,6 +173,10 @@ mod tests {
                 TrustedDeviceItem::DisjointSliceGetMutExclusive,
                 ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive,
             ),
+            (
+                TrustedDeviceItem::WorkgroupSyncthreads,
+                ProductionTerminalExpansionV1::WorkgroupBarrier,
+            ),
         ];
         for (item, expansion) in cases {
             let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
@@ -180,7 +191,6 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileLoad,
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
-            TrustedDeviceItem::WorkgroupSyncthreads,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,

@@ -10,11 +10,12 @@
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate,
-    Constant, Function, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
-    LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
-    Signature, SwitchCase, Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
-    WorkgroupSize, verify_module,
+    AccessMode, AddressSpace, Axis, BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind,
+    ComparePredicate, Constant, Convergence, Function, FunctionId, IndexKind, IntrinsicKind,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module,
+    Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, Terminator,
+    Type, UnaryOp, ValueDef, ValueId, VerificationErrors, WorkgroupBarrier, WorkgroupSize,
+    verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAxisV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
@@ -552,6 +553,7 @@ fn semantic_cfg_preorder(
 
 #[derive(Clone, Debug)]
 enum SemanticValueBindingV1 {
+    Unit,
     Value {
         id: ValueId,
         ty: Type,
@@ -591,7 +593,8 @@ impl SemanticValueBindingV1 {
         match self {
             Self::Value { id, ty } => Ok((*id, ty.clone())),
             Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
-            Self::OptionPointer { .. }
+            Self::Unit
+            | Self::OptionPointer { .. }
             | Self::OptionIndexWitness { .. }
             | Self::GridLeader
             | Self::BlockWitness { .. }
@@ -740,7 +743,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             ))
                         }
                     }
-                    SemanticValueBindingV1::Value { .. }
+                    SemanticValueBindingV1::Unit
+                    | SemanticValueBindingV1::Value { .. }
                     | SemanticValueBindingV1::IndexWitness { .. }
                     | SemanticValueBindingV1::BlockWitness { .. }
                     | SemanticValueBindingV1::GridLeader => Err(unsupported(
@@ -1333,8 +1337,22 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     Some(present),
                 )?
             }
-            SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
-            | SemanticCompilerIntrinsicOperationV1::WaveBarrier
+            SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier => {
+                self.require_call_argument_count(block, call, 0)?;
+                operations.push(Operation::new(
+                    Vec::new(),
+                    OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                        memory_scope: SynchronizationScope::Workgroup,
+                        semantics: BarrierSemantics::new(
+                            MemoryOrdering::AcquireRelease,
+                            [AddressSpace::Workgroup],
+                        ),
+                        convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+                    }),
+                ));
+                SemanticValueBindingV1::Unit
+            }
+            SemanticCompilerIntrinsicOperationV1::WaveBarrier
             | SemanticCompilerIntrinsicOperationV1::FabsF32 => {
                 return Err(unsupported(
                     0,
@@ -2033,6 +2051,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         )?;
         for projection in place.projections() {
             binding = match (binding, projection.kind()) {
+                (SemanticValueBindingV1::Unit, _) => {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "unit capability result cannot be projected",
+                    ));
+                }
                 (
                     SemanticValueBindingV1::OptionPointer {
                         pointer,

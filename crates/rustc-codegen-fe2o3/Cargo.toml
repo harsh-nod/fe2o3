@@ -13,6 +13,7 @@ row-softmax-metadata-mutation-test-only = []
 
 [dependencies]
 dialect-amdgcn.workspace = true
+dialect-gpu.workspace = true
 dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-amd-target.workspace = true
