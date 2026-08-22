@@ -60,13 +60,14 @@ pub use queue::{
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_SHA256_V1,
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1, GFX942_MAX_FIXED_DISPATCH_PACKETS_V1,
     GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1, Gfx942CompletedBatchV1, Gfx942CompletedDispatchBatchV1,
+    Gfx942CompletedDispatchReadRequestV1, Gfx942CompletedDispatchReadbackV1,
     Gfx942CompletionBatchV1, Gfx942CompletionErrorV1, Gfx942CompletionPollV1,
     Gfx942CompletionRecycleObservationV1, Gfx942DetachedFixedDispatchV1,
     Gfx942DeviceContentDescriptorErrorV1, Gfx942DeviceContentDescriptorV1,
     Gfx942DeviceContentRoleV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
-    Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1,
-    Gfx942FixedDispatchPacketV1, Gfx942RecycledDispatchResourcesV1,
-    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
+    Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataKindV1,
+    Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
+    Gfx942RecycledDispatchResourcesV1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1,
 };
 

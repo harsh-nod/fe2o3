@@ -108,7 +108,8 @@ pub use allocation::{
     ServiceAllocationKindMarkerV1, ServiceAllocationPhaseV1, ServiceAllocationRangePairV1,
     ServiceAllocationRangeV1, ServiceAllocationReleaseFailureV1,
     ServiceAllocationReleaseObservationV1, ServiceAllocationRoleMarkerV1,
-    ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1,
+    ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1, ServiceDispatchRangeV1,
+    ServiceHostDispatchRangeV1,
 };
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use batch::{ServiceFixedBatchV1, ServiceFixedDispatchBufferV1, ServiceFixedDispatchPacketV1};
@@ -116,11 +117,11 @@ pub use batch::{ServiceFixedBatchV1, ServiceFixedDispatchBufferV1, ServiceFixedD
 pub use queue::{
     QuarantinedServiceQueueResourcesV1, QuarantinedServiceQueueV1,
     SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1, SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1,
-    ServiceCompletedQueueSessionV1, ServicePublishedQueueSessionV1, ServiceQueueBindFailureV1,
-    ServiceQueueCreateFailureV1, ServiceQueueDataUpdateFailureV1, ServiceQueueErrorV1,
-    ServiceQueueOperationFailureV1, ServiceQueuePollV1, ServiceQueueReleaseFailureV1,
-    ServiceQueueReleaseObservationV1, ServiceQueueSessionV1, ServiceQueueUnboundSessionV1,
-    ServiceRecycledQueueSessionV1,
+    ServiceCompletedQueueSessionV1, ServiceCompletedReadRequestV1, ServiceCompletedReadbackV1,
+    ServicePublishedQueueSessionV1, ServiceQueueBindFailureV1, ServiceQueueCreateFailureV1,
+    ServiceQueueDataUpdateFailureV1, ServiceQueueErrorV1, ServiceQueueOperationFailureV1,
+    ServiceQueuePollV1, ServiceQueueReleaseFailureV1, ServiceQueueReleaseObservationV1,
+    ServiceQueueSessionV1, ServiceQueueUnboundSessionV1, ServiceRecycledQueueSessionV1,
 };
 
 pub use binding::{QueueSlotBindingV1, ServiceContractV1, ServiceKeyV1};

@@ -401,13 +401,16 @@ releases the completion arena only after confirmed queue destruction.
 `SharedGttMemorySessionV1::create_compute_aql_queue_with_fixed_dispatch`
 consumes the exact existing checked device/VM session, one through 32
 authenticated `ValidatedKernelEnvelope` values, one through 1024 complete
-packet descriptions, and one through 16 existing mapped device-data leases.
+packet descriptions, and one through 16 existing mapped device-local or
+host-visible coherent data authorities.
 Packet descriptions contain program indices, checked geometry, scalar kernarg
 bytes, zero device-pointer fields, and bounded allocation subranges. They
 contain no native address or caller-supplied effect. Pointer offsets,
 alignments, and read/write effects come only from inspected kernel metadata.
-Read and read/write arguments require a sealed fully initialized allocation;
-write-only arguments may consume an uninitialized exclusive lease.
+Read and read/write arguments require sealed full-extent initialization;
+write-only arguments may consume uninitialized exclusive storage. Coherent GTT
+can obtain that sealed state only from an owned whole-extent copy before map;
+the arbitrary scoped-write API does not mint it.
 
 For kernels with hidden metadata, construction requires one exact trailing
 256-byte COV6 implicit suffix and requires every caller byte in that suffix to
@@ -445,7 +448,7 @@ after every signal was recycled. A recycled-only detach releases code and
 kernarg while keeping the same native queue, ring, completion arena, event,
 runtime, and doorbell alive. Its exact detached-lease ledger must be consumed by
 a later `bind_fixed_dispatch` or explicit release. The later batch may have a
-different program count, packet count, geometry, scalar bytes, and device-data
+different program count, packet count, geometry, scalar bytes, and dispatch-data
 set. It is still published by one reservation and one final doorbell store.
 
 Storage that entered fully initialized remains fully initialized across generic
@@ -453,6 +456,16 @@ completion and can be rebound without another upload. Exact pre-publication
 content descriptors are not returned as current after device publication.
 Storage admitted uninitialized under inspected write-only access remains
 uninitialized until a separate exact full-coverage effect join exists.
+
+While the same batch remains attached, the completed-and-recycled generation
+can copy an owned byte range from host-visible coherent data. A request binds
+the exact dispatch generation and data ordinal and must be contained in exactly
+one global-buffer binding whose inspected actual access is write-only or
+read-write. Device-local, read-only, unwritten, out-of-range, multiply
+intersecting, stale-generation, pre-completion, and pre-recycle requests fail.
+The CPU mapping never escapes, no GPU address is returned, and copying bytes
+does not promote partial writes to full-allocation initialization. Reusing or
+rebinding the queue advances the dispatch generation and stales old requests.
 
 Return is all-or-terminal. Once queue destruction is confirmed, any later
 event, runtime, doorbell, CWSR, queue-resource, code, kernarg, completion-arena,
@@ -464,7 +477,7 @@ There is no initialization boolean or caller-supplied read premise. Implicit
 fields outside the exact geometry/dynamic-LDS subset remain unsupported.
 Per-segment GPU permission behavior for the uniformly mapped code allocation,
 concrete effect/alias semantics, CPU/GPU coherence, firmware packet execution,
-device-write visibility, and quiescence remain Contracted. The host
+acquire-observed device-write visibility, and quiescence remain Contracted. The host
 state machines and mock fault tests are not a concrete Verus or machine
 refinement; the public custody path alone is not hardware execution evidence.
 
