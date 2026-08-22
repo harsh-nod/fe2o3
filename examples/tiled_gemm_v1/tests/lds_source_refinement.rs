@@ -218,10 +218,11 @@ fn attributed_source_and_exact_ir_have_the_bound_operation_order() {
             "read_mfma_fragment",
             "read_mfma_fragment",
             "multiply_accumulate",
-            "get_mut_at",
-            "get_mut_at",
-            "get_mut_at",
-            "get_mut_at",
+            "checked_block",
+            "get_block_mut",
+            "get_block_mut",
+            "get_block_mut",
+            "get_block_mut",
         ],
     );
     for (call, expected) in [
@@ -230,7 +231,8 @@ fn attributed_source_and_exact_ir_have_the_bound_operation_order() {
         ("assume_init", 2),
         ("read_mfma_fragment", 2),
         ("multiply_accumulate", 1),
-        ("get_mut_at", 4),
+        ("checked_block", 1),
+        ("get_block_mut", 4),
     ] {
         assert_eq!(
             source_calls.iter().filter(|actual| *actual == call).count(),

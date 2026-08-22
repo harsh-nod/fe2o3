@@ -103,8 +103,9 @@ fn source_contains_online_attention_without_external_linker_escape_hatches() {
         "current_weight",
         "math.exp_f32",
         "numerator[0] / running_sum",
-        "output.get_mut_at(first_output)",
-        "output.get_mut_at(first_output + 1)",
+        "lane_index.checked_block::<1, 2>()",
+        "output.get_block_mut(&output_block, 0)",
+        "output.get_block_mut(&output_block, 1)",
     ] {
         assert!(SOURCE.contains(marker), "missing algorithm marker {marker}");
     }
@@ -113,6 +114,7 @@ fn source_contains_online_attention_without_external_linker_escape_hatches() {
     assert!(!lowercase.contains("comgr"));
     assert!(!lowercase.contains("command::new"));
     assert!(!lowercase.contains("std::process"));
+    assert!(!SOURCE.contains("get_mut_at"));
     let words: BTreeSet<_> = lowercase
         .split(|character: char| !character.is_ascii_alphanumeric())
         .collect();

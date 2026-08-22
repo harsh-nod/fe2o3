@@ -353,6 +353,19 @@ pub enum Shifted<IndexSpace, const OFFSET: usize> {
     _IndexSpace(core::convert::Infallible, PhantomData<fn() -> IndexSpace>),
 }
 
+/// Type-level mapping for fixed-width, component-interleaved output blocks.
+///
+/// For source index `i`, lane count `L`, and component count `E`, component
+/// `c` maps to `(i / L) * L * E + c * L + i % L`. Both dimensions are part of
+/// the output view's type, so incompatible block layouts cannot be mixed.
+/// Production lowering must authenticate the diagnostic items on this marker,
+/// [`DisjointBlock`], and their accessors before treating them as GPU authority.
+#[derive(Debug)]
+#[rustc_diagnostic_item = "fe2o3_device_blocked_index_space"]
+pub enum Blocked<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize> {
+    _IndexSpace(core::convert::Infallible, PhantomData<fn() -> IndexSpace>),
+}
+
 /// Type-level mapping reserved for the unique leader of the full grid.
 ///
 /// Unlike `Index1D`, this space has no safe `ThreadIndex` producer. Mutable
@@ -393,6 +406,20 @@ pub struct ThreadIndex<IndexSpace = Index1D> {
 #[rustc_diagnostic_item = "fe2o3_device_disjoint_index"]
 pub struct DisjointIndex<IndexSpace = Index1D> {
     raw: usize,
+    _index_space: PhantomData<fn() -> IndexSpace>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+/// Move-only authority for one lane's elements in a fixed blocked mapping.
+///
+/// Borrowing this witness permits repeated component writes through a matching
+/// [`crate::DisjointSlice`]. Its fields are private, and it is neither `Copy`,
+/// `Clone`, `Send`, nor `Sync`.
+#[must_use = "blocked output authority is lost when the witness is discarded"]
+#[rustc_diagnostic_item = "fe2o3_device_disjoint_block"]
+pub struct DisjointBlock<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize> {
+    block_base: usize,
+    lane: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
     _not_send_sync: PhantomData<*mut ()>,
 }
@@ -463,6 +490,18 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
     ) -> Option<DisjointIndex<Shifted<IndexSpace, OFFSET>>> {
         self.into_disjoint().checked_shift::<OFFSET>()
     }
+
+    /// Converts this invocation index into one fixed blocked-output witness.
+    ///
+    /// Zero dimensions and every arithmetic overflow return `None`. The
+    /// returned witness can address exactly `ELEMENTS_PER_LANE` components in
+    /// a matching [`crate::DisjointSlice`] mapping.
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_block"]
+    pub fn checked_block<const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>(
+        self,
+    ) -> Option<DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>> {
+        DisjointBlock::checked_from_raw(self.raw)
+    }
 }
 
 impl<IndexSpace> fmt::Debug for ThreadIndex<IndexSpace> {
@@ -511,6 +550,62 @@ impl<IndexSpace> fmt::Debug for DisjointIndex<IndexSpace> {
             .debug_tuple("DisjointIndex")
             .field(&self.raw)
             .finish()
+    }
+}
+
+impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>
+    DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>
+{
+    fn checked_from_raw(raw: usize) -> Option<Self> {
+        if LANES_PER_BLOCK == 0 || ELEMENTS_PER_LANE == 0 {
+            return None;
+        }
+
+        let block = raw / LANES_PER_BLOCK;
+        let lane = raw % LANES_PER_BLOCK;
+        let block_elements = LANES_PER_BLOCK.checked_mul(ELEMENTS_PER_LANE)?;
+        let block_base = block.checked_mul(block_elements)?;
+        let final_component_offset = (ELEMENTS_PER_LANE - 1)
+            .checked_mul(LANES_PER_BLOCK)?
+            .checked_add(lane)?;
+        block_base.checked_add(final_component_offset)?;
+
+        Some(Self {
+            block_base,
+            lane,
+            _index_space: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    /// Returns the checked element index for one component of this lane.
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_block_component_index"]
+    pub fn component_index(&self, component: usize) -> Option<usize> {
+        if component >= ELEMENTS_PER_LANE {
+            return None;
+        }
+        let component_offset = component.checked_mul(LANES_PER_BLOCK)?;
+        self.block_base
+            .checked_add(component_offset.checked_add(self.lane)?)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_model_index(raw: usize) -> Option<Self> {
+        Self::checked_from_raw(raw)
+    }
+}
+
+impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize> fmt::Debug
+    for DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DisjointBlock")
+            .field("block_base", &self.block_base)
+            .field("lane", &self.lane)
+            .field("lanes_per_block", &LANES_PER_BLOCK)
+            .field("elements_per_lane", &ELEMENTS_PER_LANE)
+            .finish_non_exhaustive()
     }
 }
 
@@ -661,10 +756,11 @@ pub fn block_dim_z() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DisjointIndex, GridLeader, GridSize, Index1D, Index2D, Invocation3D, Shifted, ThreadIndex,
-        WorkgroupId, WorkgroupSize, WorkitemId,
+        DisjointBlock, DisjointIndex, GridLeader, GridSize, Index1D, Index2D, Invocation3D,
+        Shifted, ThreadIndex, WorkgroupId, WorkgroupSize, WorkitemId,
     };
     use core::mem::{align_of, size_of};
+    use std::collections::BTreeSet;
     use std::panic::catch_unwind;
 
     #[test]
@@ -698,6 +794,35 @@ mod tests {
                 .checked_shift::<1>()
                 .is_none()
         );
+    }
+
+    fn assert_block_mapping_is_injective<const L: usize, const E: usize>(raw_count: usize) {
+        let mut indices = BTreeSet::new();
+        for raw in 0..raw_count {
+            let block = DisjointBlock::<Index1D, L, E>::from_model_index(raw).unwrap();
+            for component in 0..E {
+                assert!(indices.insert(block.component_index(component).unwrap()));
+            }
+            assert_eq!(block.component_index(E), None);
+        }
+        assert_eq!(indices.len(), raw_count * E);
+    }
+
+    #[test]
+    fn blocked_mappings_are_injective_for_contiguous_and_interleaved_outputs() {
+        assert_block_mapping_is_injective::<1, 2>(64);
+        assert_block_mapping_is_injective::<16, 4>(64);
+    }
+
+    #[test]
+    fn blocked_mapping_rejects_zero_dimensions_and_overflow() {
+        assert!(DisjointBlock::<Index1D, 0, 2>::from_model_index(0).is_none());
+        assert!(DisjointBlock::<Index1D, 2, 0>::from_model_index(0).is_none());
+        assert!(DisjointBlock::<Index1D, 2, 2>::from_model_index(usize::MAX).is_none());
+        assert!(DisjointBlock::<Index1D, { usize::MAX }, 2>::from_model_index(0).is_none());
+
+        let last = DisjointBlock::<Index1D, 1, 1>::from_model_index(usize::MAX).unwrap();
+        assert_eq!(last.component_index(0), Some(usize::MAX));
     }
 
     #[test]

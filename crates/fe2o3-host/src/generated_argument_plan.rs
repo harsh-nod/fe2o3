@@ -10,7 +10,7 @@ use fe2o3_artifacts::{
     ScalarType, TypeIdentity, ValidationError,
 };
 use fe2o3_core::DeviceCopy;
-use std::{fmt, marker::PhantomData, sync::Arc};
+use std::{fmt, marker::PhantomData, num::NonZeroU64, sync::Arc};
 
 mod generated_device_scalar_seal {
     pub trait Sealed {}
@@ -65,6 +65,23 @@ pub trait GeneratedDeviceScalarV1: generated_device_scalar_seal::Sealed + Device
             Self::RUST_SCALAR_TYPE,
             pointer_width,
             RustDisjointIndexSpaceV1::GridExclusive,
+        )
+        .type_identity()
+    }
+
+    #[doc(hidden)]
+    fn blocked_disjoint_slice_type_identity_v1(
+        pointer_width: PointerWidth,
+        lanes_per_block: NonZeroU64,
+        elements_per_lane: NonZeroU64,
+    ) -> TypeIdentity {
+        canonical_disjoint_slice_layout_v1(
+            Self::RUST_SCALAR_TYPE,
+            pointer_width,
+            RustDisjointIndexSpaceV1::BlockedIndex1D {
+                lanes_per_block,
+                elements_per_lane,
+            },
         )
         .type_identity()
     }
@@ -1858,6 +1875,8 @@ fn packing_components(layout: &AbiLayout) -> Vec<GeneratedPackingComponentV1> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use super::{
         CompilerGeneratedArgumentLayoutV1, GeneratedArgumentBorrowV1,
         GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
@@ -2127,11 +2146,25 @@ mod tests {
         let shifted = f32::shifted_disjoint_slice_type_identity_v1(PointerWidth::Bits64, 1);
         let shifted_again = f32::shifted_disjoint_slice_type_identity_v1(PointerWidth::Bits64, 2);
         let grid_exclusive = f32::grid_exclusive_slice_type_identity_v1(PointerWidth::Bits64);
+        let blocked = f32::blocked_disjoint_slice_type_identity_v1(
+            PointerWidth::Bits64,
+            NonZeroU64::new(16).unwrap(),
+            NonZeroU64::new(4).unwrap(),
+        );
+        let blocked_other = f32::blocked_disjoint_slice_type_identity_v1(
+            PointerWidth::Bits64,
+            NonZeroU64::new(16).unwrap(),
+            NonZeroU64::new(2).unwrap(),
+        );
 
         assert_ne!(identity, shifted);
         assert_ne!(shifted, shifted_again);
         assert_ne!(identity, grid_exclusive);
         assert_ne!(shifted, grid_exclusive);
+        assert_ne!(identity, blocked);
+        assert_ne!(shifted, blocked);
+        assert_ne!(grid_exclusive, blocked);
+        assert_ne!(blocked, blocked_other);
     }
 
     #[test]

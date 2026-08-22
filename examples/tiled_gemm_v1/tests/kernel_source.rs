@@ -1,4 +1,4 @@
-use fe2o3_device::{DisjointSlice, KernelMarkerV1};
+use fe2o3_device::{Blocked, DisjointSlice, Index1D, KernelMarkerV1};
 use fe2o3_tiled_gemm_v1::kernel::{
     __fe2o3_kernel_marker_tiled_gemm_lds_slice1, LDS_SLICE1_OPERAND_BYTES_V1,
     LDS_SLICE1_OPERAND_ELEMENTS_V1, LDS_SLICE1_SOURCE_BLOCKER_V1, LDS_SLICE1_SOURCE_BLOCKERS_V1,
@@ -58,7 +58,11 @@ fn calls(function: &syn::ItemFn) -> BodyCalls {
 
 #[test]
 fn attributed_kernel_and_generated_marker_compile_with_the_exact_abi() {
-    type KernelFn = fn(&[u16], &[u16], DisjointSlice<f32>);
+    type KernelFn = fn(
+        &[u16],
+        &[u16],
+        DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
+    );
     let function: KernelFn =
         <__fe2o3_kernel_marker_tiled_gemm_lds_slice1 as KernelMarkerV1>::FUNCTION;
     let _: KernelFn = function;
@@ -69,7 +73,11 @@ fn attributed_kernel_and_generated_marker_compile_with_the_exact_abi() {
 
 #[test]
 fn ordinary_host_invocation_panics_before_mutating_output() {
-    type KernelFn = fn(&[u16], &[u16], DisjointSlice<f32>);
+    type KernelFn = fn(
+        &[u16],
+        &[u16],
+        DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
+    );
     let function: KernelFn =
         <__fe2o3_kernel_marker_tiled_gemm_lds_slice1 as KernelMarkerV1>::FUNCTION;
     let a = [0_u16; 256];
@@ -78,7 +86,12 @@ fn ordinary_host_invocation_panics_before_mutating_output() {
     let mut output = [sentinel; 256];
     // SAFETY: `output` is live and exclusively borrowed by the view for the
     // duration of the caught invocation.
-    let output_view = unsafe { DisjointSlice::from_raw_parts(output.as_mut_ptr(), output.len()) };
+    let output_view = unsafe {
+        DisjointSlice::<f32, Blocked<Index1D, 16, 4>>::from_raw_parts(
+            output.as_mut_ptr(),
+            output.len(),
+        )
+    };
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         function(&a, &b, output_view);
     }));
@@ -156,7 +169,8 @@ fn executable_function_body_contains_the_slice1_algorithm() {
         "read_mfma_fragment",
         "multiply_accumulate",
         "into_values",
-        "get_mut_at",
+        "checked_block",
+        "get_block_mut",
     ] {
         assert!(
             calls.methods.iter().any(|call| call == required),
@@ -167,10 +181,11 @@ fn executable_function_body_contains_the_slice1_algorithm() {
         calls
             .methods
             .iter()
-            .filter(|call| call.as_str() == "get_mut_at")
+            .filter(|call| call.as_str() == "get_block_mut")
             .count(),
         4
     );
+    assert!(!calls.methods.iter().any(|call| call == "get_mut_at"));
     assert!(calls.macros.is_empty());
     for forbidden in ["from_raw_parts", "unreachable_unchecked"] {
         assert!(!calls.functions.iter().any(|call| call == forbidden));

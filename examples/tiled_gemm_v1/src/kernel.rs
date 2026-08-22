@@ -8,8 +8,8 @@
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16MfmaFragment, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Wave64, WaveLane,
-    gfx942_lds_bf16_tile_pair_m16x16_v1, kernel, sync, thread,
+    Bf16MfmaFragment, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Index1D,
+    Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1, kernel, sync, thread,
 };
 
 /// Exact workgroup dimensions required by the Slice 1 source contract.
@@ -59,8 +59,13 @@ pub const LDS_SLICE1_SOURCE_BLOCKERS_V1: [&str; 4] = [
     namespace = "c09558e16157fec495e78bc32a23b082213fa4a6ddabe48445a54cb3de591295",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
-pub fn tiled_gemm_lds_slice1(a: &[u16], b: &[u16], mut c: DisjointSlice<f32>) {
-    let lane_index = thread::index_1d().get();
+pub fn tiled_gemm_lds_slice1(
+    a: &[u16],
+    b: &[u16],
+    mut c: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
+) {
+    let thread_index = thread::index_1d();
+    let lane_index = thread_index.get();
     if lane_index >= 64 || a.len() != 256 || b.len() != 256 || c.len() != 256 {
         fe2o3_device::trap();
         return;
@@ -125,18 +130,21 @@ pub fn tiled_gemm_lds_slice1(a: &[u16], b: &[u16], mut c: DisjointSlice<f32>) {
     let matrix = unsafe { DeviceMatrix::from_compiler() };
     let result =
         unsafe { matrix.multiply_accumulate(lhs, rhs, F32AccumulatorFragment::ZERO) }.into_values();
+    let Some(output_block) = thread_index.checked_block::<16, 4>() else {
+        fe2o3_device::trap();
+        return;
+    };
 
-    // SAFETY: (lane, component) maps bijectively to all 256 C coordinates.
-    if let Some(output) = unsafe { c.get_mut_at(depth_base * 16 + lane_column) } {
+    if let Some(output) = c.get_block_mut(&output_block, 0) {
         *output = result[0];
     }
-    if let Some(output) = unsafe { c.get_mut_at((depth_base + 1) * 16 + lane_column) } {
+    if let Some(output) = c.get_block_mut(&output_block, 1) {
         *output = result[1];
     }
-    if let Some(output) = unsafe { c.get_mut_at((depth_base + 2) * 16 + lane_column) } {
+    if let Some(output) = c.get_block_mut(&output_block, 2) {
         *output = result[2];
     }
-    if let Some(output) = unsafe { c.get_mut_at((depth_base + 3) * 16 + lane_column) } {
+    if let Some(output) = c.get_block_mut(&output_block, 3) {
         *output = result[3];
     }
 }

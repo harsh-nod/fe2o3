@@ -2732,6 +2732,24 @@ fn parse_disjoint_index_space_v1(ty: &Type) -> Option<RustDisjointIndexSpaceV1> 
     if segment.ident == "GridExclusive" && matches!(segment.arguments, PathArguments::None) {
         return Some(RustDisjointIndexSpaceV1::GridExclusive);
     }
+    if segment.ident == "Blocked" {
+        let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+            return None;
+        };
+        if arguments.colon2_token.is_some() || arguments.args.len() != 3 {
+            return None;
+        }
+        let mut arguments = arguments.args.iter();
+        let Some(GenericArgument::Type(base)) = arguments.next() else {
+            return None;
+        };
+        if !is_index_1d_v1(base) {
+            return None;
+        }
+        let lanes_per_block = parse_u64_const_argument_v1(arguments.next()?)?;
+        let elements_per_lane = parse_u64_const_argument_v1(arguments.next()?)?;
+        return RustDisjointIndexSpaceV1::blocked_index_1d(lanes_per_block, elements_per_lane);
+    }
     if segment.ident != "Shifted" {
         return None;
     }
@@ -2748,15 +2766,18 @@ fn parse_disjoint_index_space_v1(ty: &Type) -> Option<RustDisjointIndexSpaceV1> 
     if !is_index_1d_v1(base) {
         return None;
     }
-    let Some(GenericArgument::Const(syn::Expr::Lit(offset))) = arguments.next() else {
+    let offset = parse_u64_const_argument_v1(arguments.next()?)?;
+    Some(RustDisjointIndexSpaceV1::ShiftedIndex1D { offset })
+}
+
+fn parse_u64_const_argument_v1(argument: &GenericArgument) -> Option<u64> {
+    let GenericArgument::Const(syn::Expr::Lit(value)) = argument else {
         return None;
     };
-    let syn::Lit::Int(offset) = &offset.lit else {
+    let syn::Lit::Int(value) = &value.lit else {
         return None;
     };
-    Some(RustDisjointIndexSpaceV1::ShiftedIndex1D {
-        offset: offset.base10_parse().ok()?,
-    })
+    value.base10_parse().ok()
 }
 
 fn general_typed_abi_v1(
@@ -4833,6 +4854,12 @@ mod tests {
         let grid_exclusive: ItemFn = parse_quote! {
             pub fn grid_exclusive(output: DisjointSlice<f32, GridExclusive>) {}
         };
+        let blocked: ItemFn = parse_quote! {
+            pub fn blocked(output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>) {}
+        };
+        let blocked_other: ItemFn = parse_quote! {
+            pub fn blocked_other(output: DisjointSlice<f32, Blocked<Index1D, 16, 2>>) {}
+        };
         let options = parse_kernel_options(quote!(typed)).unwrap();
         let identity = model_general_typed_signature_v1(&identity, &options, [0x71; 32])
             .unwrap()
@@ -4850,10 +4877,38 @@ mod tests {
                 .abi
                 .fields()[0]
                 .type_identity();
+        let blocked = model_general_typed_signature_v1(&blocked, &options, [0x74; 32])
+            .unwrap()
+            .abi
+            .fields()[0]
+            .type_identity();
+        let blocked_other = model_general_typed_signature_v1(&blocked_other, &options, [0x75; 32])
+            .unwrap()
+            .abi
+            .fields()[0]
+            .type_identity();
 
         assert_ne!(identity, shifted);
         assert_ne!(identity, grid_exclusive);
         assert_ne!(shifted, grid_exclusive);
+        assert_ne!(identity, blocked);
+        assert_ne!(shifted, blocked);
+        assert_ne!(grid_exclusive, blocked);
+        assert_ne!(blocked, blocked_other);
+
+        for invalid in [
+            parse_quote! {
+                pub fn zero_lanes(output: DisjointSlice<f32, Blocked<Index1D, 0, 4>>) {}
+            },
+            parse_quote! {
+                pub fn zero_elements(output: DisjointSlice<f32, Blocked<Index1D, 16, 0>>) {}
+            },
+            parse_quote! {
+                pub fn wrong_base(output: DisjointSlice<f32, Blocked<GridExclusive, 16, 4>>) {}
+            },
+        ] {
+            assert!(model_general_typed_signature_v1(&invalid, &options, [0x76; 32]).is_err());
+        }
     }
 
     #[test]

@@ -6,8 +6,8 @@
 #![allow(missing_docs)] // V1 generated typed-kernel modules lack rustdoc.
 
 use fe2o3_device::{
-    Bf16MfmaFragment, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Wave64, WaveLane,
-    gfx942_lds_bf16_tile_pair_m16x16_v1, kernel, sync, thread,
+    Bf16MfmaFragment, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Index1D,
+    Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1, kernel, sync, thread,
 };
 
 use crate::contract::{
@@ -29,9 +29,10 @@ use crate::contract::{
 pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
     activations: &[u16],
     weights: &[u16],
-    mut output: DisjointSlice<f32>,
+    mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
 ) {
-    let lane_index = thread::index_1d().get();
+    let thread_index = thread::index_1d();
+    let lane_index = thread_index.get();
     if lane_index >= 64
         || activations.len() != MOE_EXPERT_TILE_ELEMENTS_V1
         || weights.len() != MOE_EXPERT_TILE_ELEMENTS_V1
@@ -89,26 +90,21 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
     let matrix = unsafe { DeviceMatrix::from_compiler() };
     let result =
         unsafe { matrix.multiply_accumulate(lhs, rhs, F32AccumulatorFragment::ZERO) }.into_values();
+    let Some(output_block) = thread_index.checked_block::<16, 4>() else {
+        fe2o3_device::trap();
+        return;
+    };
 
-    // SAFETY: `(lane, component)` is a bijection over the 256 output elements.
-    if let Some(slot) =
-        unsafe { output.get_mut_at(depth_base * MOE_EXPERT_OUTPUT_WIDTH_V1 + lane_column) }
-    {
+    if let Some(slot) = output.get_block_mut(&output_block, 0) {
         *slot = result[0];
     }
-    if let Some(slot) =
-        unsafe { output.get_mut_at((depth_base + 1) * MOE_EXPERT_OUTPUT_WIDTH_V1 + lane_column) }
-    {
+    if let Some(slot) = output.get_block_mut(&output_block, 1) {
         *slot = result[1];
     }
-    if let Some(slot) =
-        unsafe { output.get_mut_at((depth_base + 2) * MOE_EXPERT_OUTPUT_WIDTH_V1 + lane_column) }
-    {
+    if let Some(slot) = output.get_block_mut(&output_block, 2) {
         *slot = result[2];
     }
-    if let Some(slot) =
-        unsafe { output.get_mut_at((depth_base + 3) * MOE_EXPERT_OUTPUT_WIDTH_V1 + lane_column) }
-    {
+    if let Some(slot) = output.get_block_mut(&output_block, 3) {
         *slot = result[3];
     }
 }

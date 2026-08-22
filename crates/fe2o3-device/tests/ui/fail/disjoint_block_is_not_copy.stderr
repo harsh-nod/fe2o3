@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `block`
+ --> tests/ui/fail/disjoint_block_is_not_copy.rs:5:19
+  |
+3 | fn duplicate(block: DisjointBlock<Index1D, 16, 4>) {
+  |              ----- move occurs because `block` has type `DisjointBlock<Index1D, 16, 4>`, which does not implement the `Copy` trait
+4 |     let _first = block;
+  |                  ----- value moved here
+5 |     let _second = block;
+  |                   ^^^^^ value used here after move

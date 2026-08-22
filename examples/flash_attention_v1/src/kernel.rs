@@ -5,7 +5,7 @@
 
 #![allow(missing_docs)] // The V1 kernel macro emits an undocumented helper module.
 
-use fe2o3_device::{DeviceMath, DisjointSlice, kernel, thread};
+use fe2o3_device::{Blocked, DeviceMath, DisjointSlice, Index1D, kernel, thread};
 
 use crate::contract::{
     ATTENTION_SCALE_BITS_V1, FLASH_ATTENTION_HEAD_DIMENSION_V1, FLASH_ATTENTION_INPUT_ELEMENTS_V1,
@@ -131,9 +131,10 @@ pub fn flash_attention_causal_f32_b1_h1_n8_d16_v1(
     q: &[f32],
     k: &[f32],
     v: &[f32],
-    mut output: DisjointSlice<f32>,
+    mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>,
 ) {
-    let lane = thread::index_1d().get();
+    let lane_index = thread::index_1d();
+    let lane = lane_index.get();
     if lane >= FLASH_ATTENTION_WAVE_LANES_V1
         || q.len() != FLASH_ATTENTION_INPUT_ELEMENTS_V1
         || k.len() != FLASH_ATTENTION_INPUT_ELEMENTS_V1
@@ -156,15 +157,15 @@ pub fn flash_attention_causal_f32_b1_h1_n8_d16_v1(
         fe2o3_device::trap();
         return;
     };
+    let Some(output_block) = lane_index.checked_block::<1, 2>() else {
+        fe2o3_device::trap();
+        return;
+    };
 
-    // SAFETY: exact length admission above and the injective lane ownership
-    // map give this lane exclusive access to both adjacent output elements.
-    if let Some(first) = unsafe { output.get_mut_at(first_output) } {
+    if let Some(first) = output.get_block_mut(&output_block, 0) {
         *first = values[0];
     }
-    // SAFETY: `first_output + 1` is the second element of the same disjoint
-    // ownership pair and is less than 128 for every admitted lane.
-    if let Some(second) = unsafe { output.get_mut_at(first_output + 1) } {
+    if let Some(second) = output.get_block_mut(&output_block, 1) {
         *second = values[1];
     }
 }

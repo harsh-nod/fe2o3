@@ -75,8 +75,9 @@ pub use tensor::{
     gfx942_lds_bf16_tile_pair_m16x16_v1,
 };
 pub use thread::{
-    DisjointIndex, GlobalGridSize, GlobalWorkitemId, GridExclusive, GridLeader, GridSize, Index1D,
-    Index2D, Invocation3D, Shifted, ThreadIndex, WorkgroupId, WorkgroupSize, WorkitemId,
+    Blocked, DisjointBlock, DisjointIndex, GlobalGridSize, GlobalWorkitemId, GridExclusive,
+    GridLeader, GridSize, Index1D, Index2D, Invocation3D, Shifted, ThreadIndex, WorkgroupId,
+    WorkgroupSize, WorkitemId,
 };
 pub use views::{
     DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,
@@ -377,11 +378,32 @@ impl<T> DisjointSlice<T, GridExclusive> {
     }
 }
 
+impl<T, IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>
+    DisjointSlice<T, Blocked<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>>
+{
+    /// Returns mutable access to one component owned by a blocked witness.
+    ///
+    /// The blocked formula is injective over `(invocation, component)`, both
+    /// layout dimensions are part of this view's type, and the component and
+    /// final slice extent are checked before returning a reference.
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_block_mut"]
+    pub fn get_block_mut(
+        &mut self,
+        block: &DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>,
+        component: usize,
+    ) -> Option<&mut T> {
+        // SAFETY: `DisjointBlock` is compiler-index-derived and implements the
+        // injective mapping encoded by this exact view type. The component
+        // calculation and `get_mut_at` both fail closed on invalid extents.
+        unsafe { self.get_mut_at(block.component_index(component)?) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        DisjointIndex, DisjointSlice, GridExclusive, GridLeader, Index1D, Index2D,
-        KERNEL_MARKER_CONTRACT_VERSION_V1, Shifted, StaticIndex, StaticViewError,
+        Blocked, DisjointBlock, DisjointIndex, DisjointSlice, GridExclusive, GridLeader, Index1D,
+        Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1, Shifted, StaticIndex, StaticViewError,
     };
     use core::mem::{align_of, size_of};
 
@@ -411,6 +433,10 @@ mod tests {
         );
         assert_eq!(
             DisjointSlice::<u32, GridExclusive>::__fe2o3_rust_layout_v1(),
+            (expected_size, expected_align, 0, size_of::<*mut u32>())
+        );
+        assert_eq!(
+            DisjointSlice::<u32, Blocked<Index1D, 16, 4>>::__fe2o3_rust_layout_v1(),
             (expected_size, expected_align, 0, size_of::<*mut u32>())
         );
     }
@@ -448,6 +474,29 @@ mod tests {
         *slice.get_mut_exclusive(&leader, 2).unwrap() = 77;
         assert!(slice.get_mut_exclusive(&leader, 3).is_none());
         assert_eq!(storage, [10, 20, 77]);
+    }
+
+    #[test]
+    fn blocked_access_checks_components_and_slice_bounds() {
+        let mut storage = [0_u32; 4];
+        let mut slice = unsafe {
+            DisjointSlice::<u32, Blocked<Index1D, 2, 2>>::from_raw_parts(
+                storage.as_mut_ptr(),
+                storage.len(),
+            )
+        };
+        let lane_zero = DisjointBlock::<Index1D, 2, 2>::from_model_index(0).unwrap();
+        let lane_one = DisjointBlock::<Index1D, 2, 2>::from_model_index(1).unwrap();
+
+        *slice.get_block_mut(&lane_zero, 0).unwrap() = 10;
+        *slice.get_block_mut(&lane_zero, 1).unwrap() = 20;
+        *slice.get_block_mut(&lane_one, 0).unwrap() = 11;
+        *slice.get_block_mut(&lane_one, 1).unwrap() = 21;
+        assert!(slice.get_block_mut(&lane_zero, 2).is_none());
+        assert_eq!(storage, [10, 11, 20, 21]);
+
+        let outside = DisjointBlock::<Index1D, 2, 2>::from_model_index(2).unwrap();
+        assert!(slice.get_block_mut(&outside, 0).is_none());
     }
 
     #[test]

@@ -195,6 +195,44 @@ fn shifted_disjoint_index_space_has_a_distinct_bounded_identity() {
         shifted.declared_identity(),
         grid_exclusive.declared_identity()
     );
+
+    let blocked = RustDisjointIndexSpaceV1::blocked_index_1d(16, 4).unwrap();
+    let blocked = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        blocked,
+    ));
+    assert_eq!(
+        hex(&blocked.canonical_bytes()),
+        concat!(
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100",
+            "13000000020a0410000000000000000400000000000000"
+        )
+    );
+    assert_ne!(identity.declared_identity(), blocked.declared_identity());
+    assert_ne!(shifted.declared_identity(), blocked.declared_identity());
+    assert_ne!(
+        grid_exclusive.declared_identity(),
+        blocked.declared_identity()
+    );
+
+    let blocked_other_lanes = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::blocked_index_1d(8, 4).unwrap(),
+    ));
+    let blocked_other_elements = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::blocked_index_1d(16, 2).unwrap(),
+    ));
+    assert_ne!(
+        blocked.declared_identity(),
+        blocked_other_lanes.declared_identity()
+    );
+    assert_ne!(
+        blocked.declared_identity(),
+        blocked_other_elements.declared_identity()
+    );
+    assert_eq!(RustDisjointIndexSpaceV1::blocked_index_1d(0, 4), None);
+    assert_eq!(RustDisjointIndexSpaceV1::blocked_index_1d(16, 0), None);
 }
 
 #[test]

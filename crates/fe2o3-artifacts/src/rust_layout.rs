@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU64};
 
 use crate::{
     DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm, PointerWidth,
@@ -57,6 +57,27 @@ pub enum RustDisjointIndexSpaceV1 {
     },
     /// One globally unique invocation owns every element in the view.
     GridExclusive,
+    /// One fixed injective blocked mapping of the logical 1D invocation ID.
+    BlockedIndex1D {
+        lanes_per_block: NonZeroU64,
+        elements_per_lane: NonZeroU64,
+    },
+}
+
+impl RustDisjointIndexSpaceV1 {
+    /// Constructs a blocked 1D mapping only when both dimensions are nonzero.
+    pub const fn blocked_index_1d(lanes_per_block: u64, elements_per_lane: u64) -> Option<Self> {
+        let Some(lanes_per_block) = NonZeroU64::new(lanes_per_block) else {
+            return None;
+        };
+        let Some(elements_per_lane) = NonZeroU64::new(elements_per_lane) else {
+            return None;
+        };
+        Some(Self::BlockedIndex1D {
+            lanes_per_block,
+            elements_per_lane,
+        })
+    }
 }
 
 /// Fully specified source-level Rust type shape.
@@ -647,6 +668,14 @@ fn encode_index_space(writer: &mut CanonicalWriter, index_space: RustDisjointInd
             writer.u64(offset);
         }
         RustDisjointIndexSpaceV1::GridExclusive => writer.u8(3),
+        RustDisjointIndexSpaceV1::BlockedIndex1D {
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            writer.u8(4);
+            writer.u64(lanes_per_block.get());
+            writer.u64(elements_per_lane.get());
+        }
     }
 }
 

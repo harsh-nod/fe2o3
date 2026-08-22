@@ -44,6 +44,9 @@ fn source_contains_two_ordinary_attributed_kernels_without_macro_facades() {
     );
     assert!(source.contains("gfx942_lds_bf16_tile_pair_m16x16_v1"));
     assert!(source.contains("DeviceMatrix::from_compiler"));
+    assert!(source.contains("thread_index.checked_block::<16, 4>()"));
+    assert_eq!(source.matches("output.get_block_mut").count(), 4);
+    assert!(!source.contains("output.get_mut_at"));
     assert!(source.contains("inverse[route]"));
     assert!(source.contains("route_weights[route]"));
 }
