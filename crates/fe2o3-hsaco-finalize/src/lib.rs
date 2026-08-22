@@ -320,6 +320,7 @@ const GENERAL_V3_COV6_DEVICE_TARGET_V1: &str = "gfx942:xnack-";
 #[non_exhaustive]
 pub enum FinalizationError {
     InputTooLarge,
+    AllocationFailed,
     HsacoBinding(KernelBindingError),
     InvalidElf(&'static str),
     MissingDescriptorSection,
@@ -400,6 +401,7 @@ impl fmt::Display for FinalizationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InputTooLarge => formatter.write_str("HSACO exceeds the input size limit"),
+            Self::AllocationFailed => formatter.write_str("HSACO replay buffer allocation failed"),
             Self::HsacoBinding(error) => write!(formatter, "HSACO binding failed: {error}"),
             Self::InvalidElf(reason) => write!(formatter, "invalid ELF section layout: {reason}"),
             Self::MissingDescriptorSection => write!(
@@ -811,6 +813,40 @@ fn inspect_finalized_with_placement(
 /// This spelling emphasizes an integrity check; it still grants no load or launch authority.
 pub fn verify_finalized(bytes: &[u8]) -> Result<FinalizedDescriptorInspection, FinalizationError> {
     inspect_finalized(bytes)
+}
+
+/// Reconstructs the exact pre-finalization HSACO from one canonical finalized HSACO.
+///
+/// Canonical finalization changes only the fixed 32-byte digest field. This operation first
+/// verifies the finalized artifact, fallibly allocates one output buffer, clears that field, and
+/// independently reinspects the result as unfinalized HSACO. The returned bytes are inert and
+/// grant no publication, loading, or launch authority.
+pub fn derive_unfinalized_hsaco_from_finalized_v1(
+    finalized_bytes: &[u8],
+) -> Result<Vec<u8>, FinalizationError> {
+    let finalized = verify_finalized(finalized_bytes)?;
+    let digest_start = finalized.location().digest_offset();
+    let digest_end = digest_start
+        .checked_add(32)
+        .ok_or(FinalizationError::DescriptorSectionOutOfBounds)?;
+
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(finalized_bytes.len())
+        .map_err(|_| FinalizationError::AllocationFailed)?;
+    raw.extend_from_slice(finalized_bytes);
+    raw.get_mut(digest_start..digest_end)
+        .ok_or(FinalizationError::DescriptorSectionOutOfBounds)?
+        .fill(0);
+
+    let unfinalized = inspect_unfinalized(&raw)?;
+    if unfinalized.location() != finalized.location()
+        || CanonicalCodeObjectDigest::calculate_from_canonicalized_hsaco(&raw) != finalized.digest()
+    {
+        return Err(FinalizationError::OutputVerification(
+            "derived raw HSACO does not reproduce the finalized digest",
+        ));
+    }
+    Ok(raw)
 }
 
 pub(crate) fn verify_allocated_read_only_finalized(
