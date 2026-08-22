@@ -120,7 +120,10 @@ fn validate(
 #[test]
 fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
     for pipeline in CodegenPipeline::ALL {
-        assert!(!requires_v3_capability(pipeline, true));
+        assert_eq!(
+            requires_v3_capability(pipeline, true),
+            pipeline == CodegenPipeline::ProductionV1
+        );
         assert_eq!(
             requires_v3_capability(pipeline, false),
             matches!(

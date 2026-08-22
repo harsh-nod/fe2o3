@@ -49,6 +49,7 @@ impl AdmittedProtectedRustcInvocationV1 {
         self.finish_after_publication_observation(observation)
     }
 
+    #[cfg(test)]
     fn finish_for_publication_with_observation(
         self,
         observation: RustcProcessObservationV1,
@@ -188,11 +189,11 @@ fn requires_v3_capability(
     pipeline: CodegenPipeline,
     explicit_unprotected_qualification: bool,
 ) -> bool {
-    !explicit_unprotected_qualification
-        && matches!(
-            pipeline,
-            CodegenPipeline::ProductionV1 | CodegenPipeline::CollectedRowSoftmaxV1
-        )
+    match pipeline {
+        CodegenPipeline::ProductionV1 => true,
+        CodegenPipeline::CollectedRowSoftmaxV1 => !explicit_unprotected_qualification,
+        _ => false,
+    }
 }
 
 fn explicit_unprotected_qualification_enabled() -> bool {
