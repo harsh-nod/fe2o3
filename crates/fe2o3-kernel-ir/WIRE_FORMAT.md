@@ -9,6 +9,31 @@ migration safety. Every encoder always emits exactly its named version.
 domain separator for identities derived from canonical V5 module bytes. It is
 not an additional wire prefix; the versioned header remains part of the bytes.
 
+### Content and Verified-Policy Identities
+
+Canonical V5 bytes and verified V5 ownership have deliberately different
+identity namespaces. `KERNEL_IR_DOMAIN_V5` identifies exact raw V5 content. A
+content identity says only that two identities cover the same canonical wire
+bytes; it does not claim that `verify_module` accepted the decoded module.
+
+`VerifiedCanonicalKernelIrIdentityV5` instead identifies bytes admitted by
+`VerifiedCanonicalKernelIrV5` under a specific semantic-verification policy.
+Policy version 1 hashes this tuple with SHA-256:
+
+```text
+u32(len("FE2O3/VERIFIED-CANONICAL-KERNEL-IR/V5\0")) ||
+"FE2O3/VERIFIED-CANONICAL-KERNEL-IR/V5\0" ||
+u16(VERIFIED_CANONICAL_KERNEL_IR_POLICY_V5) ||
+u64(canonical_v5_byte_length) ||
+canonical_v5_bytes
+```
+
+All integers in that tuple are little-endian. The separate domain and policy
+version prevent a raw content identity from being confused with a verified
+owner and allow future verification-policy changes to produce distinct
+identities even for unchanged bytes. Neither identity is a proof-discharge,
+artifact-publication, executable, or runtime-launch authority.
+
 ## Trust Boundary
 
 The decoder accepts untrusted bytes. It checks the total byte bound, every
