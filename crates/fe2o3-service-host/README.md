@@ -12,7 +12,9 @@ consumes `fe2o3-service-model` and `fe2o3-host-api` and defines:
 - independent access to cancellation, quiescence, and progress property
   classifications without implication or promotion; and
 - on Linux x86_64, non-Clone ownership of bounded device-local and host-visible
-  coherent allocations obtained from a real checked gfx942 KFD device/VM.
+  coherent allocations obtained from a real checked gfx942 KFD device/VM; and
+- addressless fixed-batch descriptions and linear prepared, published,
+  completed, recycled, and unbound ownership of one long-lived KFD queue.
 
 The crate is `no_std` and contains no raw handles or unsafe code. The allocation
 owner composes `fe2o3-kfd` production APIs; the underlying KFD adapter owns the
@@ -28,15 +30,30 @@ return a raw CPU pointer or numerical address from that slice. Rust provides no
 safe dereference after the callback borrow ends; unsafe later use is outside
 this owner's guarantees.
 
-This crate performs no artifact load, kernel launch, queue publication,
-execution, runtime wait, authentication, device-content initialization, copy,
-completion, proof, quiescence attestation, or progress inference. The current
-allocation owner has only a `NeverPublished` release path: because this owner
-exposes no GPU address or queue bridge, explicit reverse-order unmap and free
-is GPU-quiescent by construction. That is not a guarantee about unsafe later
-use of a raw CPU pointer safely retained from a scoped callback. Any future
-in-flight transition must be composed with exact completion authority inside
-the private KFD dispatch boundary.
+The Linux x86_64 composition path can initialize complete device-local extents
+from owned bytes through KFD's checked public-device-local mapping path. It can
+also consume inspected executable envelopes, complete kernarg byte images, and
+checked addressless device ranges into a fixed batch. Native addresses are
+substituted only inside KFD. A batch of 1 through 1024 packets uses one ring
+reservation and one final doorbell publication. Exact completion and signal
+recycle are required before the same native queue can detach its current batch,
+replace a complete initialized allocation, bind a different fixed batch, or
+return allocation custody for explicit release.
+
+The current fixed-dispatch foundation rejects every inspected hidden or
+implicit kernarg field. Producing ABI-defined implicit bytes is a separate
+generic runtime prerequisite; this service layer does not ask callers to fill
+or assert them.
+
+This layer does not establish executable correctness, device memory-effect
+refinement, current output content, numerical correctness, hardware execution,
+or performance. Generic completion preserves only whether a complete device
+allocation was already initialized, never its stale pre-dispatch content
+digest. An allocation admitted uninitialized remains content-opaque after
+generic completion. Queue and allocation failures after ambiguous native
+effects are terminal and expose no retry. `NeverPublished` release remains
+available only before queue composition and is not a guarantee about unsafe
+later use of a raw CPU pointer safely retained from a scoped callback.
 
 Live typestate values retain Rust borrows of queue, state, input, and output
 storage. Only stopped or quiesced-failure typestates expose the conversion that

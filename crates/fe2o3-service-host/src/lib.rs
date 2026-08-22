@@ -12,9 +12,10 @@
 //! lifecycle, persistent-task dispatch, ticket, wait, epoch, and generation
 //! descriptions. It consumes the canonical [`fe2o3_service_model`] and
 //! [`fe2o3_host_api`] contracts. On Linux x86_64 its allocation module can own
-//! real KFD-backed device-local and host-visible coherent allocations. That
-//! module does not load, launch, publish, wait, authenticate device content,
-//! or grant completion authority.
+//! real KFD-backed device-local and host-visible coherent allocations. Its
+//! addressless fixed-batch layer composes inspected executables, exact kernarg
+//! images, and checked device ranges into a long-lived KFD queue with linear
+//! publish, completion, recycle, detach, rebind, and release custody.
 //!
 //! The ownership shape rejects early use of retained storage while a service
 //! value remains live:
@@ -91,6 +92,10 @@ mod task;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod allocation;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod batch;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod queue;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use allocation::{
@@ -103,7 +108,19 @@ pub use allocation::{
     ServiceAllocationKindMarkerV1, ServiceAllocationPhaseV1, ServiceAllocationRangePairV1,
     ServiceAllocationRangeV1, ServiceAllocationReleaseFailureV1,
     ServiceAllocationReleaseObservationV1, ServiceAllocationRoleMarkerV1,
-    ServiceAllocationSessionV1,
+    ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use batch::{ServiceFixedBatchV1, ServiceFixedDispatchBufferV1, ServiceFixedDispatchPacketV1};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use queue::{
+    QuarantinedServiceQueueResourcesV1, QuarantinedServiceQueueV1,
+    SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1, SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1,
+    ServiceCompletedQueueSessionV1, ServicePublishedQueueSessionV1, ServiceQueueBindFailureV1,
+    ServiceQueueCreateFailureV1, ServiceQueueDataUpdateFailureV1, ServiceQueueErrorV1,
+    ServiceQueueOperationFailureV1, ServiceQueuePollV1, ServiceQueueReleaseFailureV1,
+    ServiceQueueReleaseObservationV1, ServiceQueueSessionV1, ServiceQueueUnboundSessionV1,
+    ServiceRecycledQueueSessionV1,
 };
 
 pub use binding::{QueueSlotBindingV1, ServiceContractV1, ServiceKeyV1};

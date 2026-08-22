@@ -7,30 +7,31 @@ use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_kfd::{
-    CheckedGfx942XnackMinusDevice, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
-    Gfx942DeviceMemoryUnmappedV1, GttCpuWritableV1, GttGpuAccessibleMutableV1,
-    HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, HostVisibleCoherentGttV1, MemorySessionError,
-    SharedGttAllocationV1, SharedGttMemorySessionV1, SharedMemorySessionPhaseV1,
+    CheckedGfx942XnackMinusDevice, Gfx942DeviceContentDescriptorV1, Gfx942DeviceMemoryLeaseV1,
+    Gfx942DeviceMemoryMappedV1, Gfx942DeviceMemoryUnmappedV1, Gfx942FixedDispatchDataV1,
+    GttCpuWritableV1, GttGpuAccessibleMutableV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+    HostVisibleCoherentGttV1, MemorySessionError, SharedGttAllocationV1, SharedGttMemorySessionV1,
+    SharedMemorySessionPhaseV1,
 };
 
 /// Canonical scope and non-claims for the first service allocation owner.
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-m1-service-allocation-owner-r1-v1\n",
+    "profile=fe2o3-service-allocation-owner-r2-v1\n",
     "backend=checked-gfx942-xnack-minus-device,shared-kfd-vm-session\n",
-    "device=device-local-vram-hbm,linear-unmapped-or-mapped-kfd-lease\n",
+    "device=device-local-vram-hbm,linear-unmapped-mapped-or-fixed-dispatch-kfd-custody,optional-exact-host-verified-public-device-local-initialization\n",
     "host=host-visible-coherent-gtt,linear-cpu-writable-or-gpu-mapped-token\n",
     "identity=service-scoped-process-local-owner-device-vm-allocation-labels-retained-beside-private-kfd-native-tokens\n",
     "views=typed-role-kind-offset-extent-alignment,no-handle-fd-gpu-address-or-persistent-raw-pointer-accessor\n",
     "cpu-write=scoped-mutable-slice-before-gpu-map,safe-caller-may-return-or-retain-raw-cpu-pointer-or-address,no-safe-post-borrow-dereference\n",
     "bounds=32-live-allocations,device-192gib,host-2gib,page-and-device-alignment-max-4096\n",
-    "release=gpu-never-published-only,reverse-order-unmap-then-free,consuming-owner\n",
+    "release=gpu-never-published-or-exact-completed-recycled-queue-return,reverse-order-unmap-then-free,consuming-owner\n",
     "failure=preflight-retains-owner,consumed-token-failure-quarantines-retained-session,no-drop-cleanup\n",
-    "excluded=device-content-initialization,copy,packet,queue,launch,completion,hardware-execution,m1-closure\n",
+    "excluded=caller-minted-initialization,host-visible-packet-data,copy-kernel,current-content-after-dispatch,device-memory-effect-refinement,hardware-execution\n",
 );
 
 /// SHA-256 of [`SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "b1b901ea2b950510f7f22d50c5ec89dd20eb0a37baadc9056518c204b6c653c7";
+    "be7fd95193d2d47c4ea7de675791f7607772fb46b2e67075d2eadddf04e61ad2";
 
 /// Maximum live allocations owned by one service allocation session.
 const MAX_SERVICE_ALLOCATIONS_V1: usize = 32;
@@ -188,7 +189,7 @@ struct OwnerBindingV1 {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct AllocationBindingV1 {
+pub(crate) struct AllocationBindingV1 {
     owner: OwnerBindingV1,
     id: u64,
     generation: u64,
@@ -348,14 +349,15 @@ pub type ServiceAllocationRangePairV1<R, K> = (
     ServiceAllocationRangeV1<R, K>,
 );
 
-enum AllocationTokenV1 {
+pub(crate) enum AllocationTokenV1 {
     DeviceUnmapped(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>),
     DeviceMapped(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+    DeviceFixedDispatch(Gfx942FixedDispatchDataV1),
     HostCpuWritable(SharedGttAllocationV1<HostVisibleCoherentGttV1, GttCpuWritableV1>),
     HostMapped(SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>),
 }
 
-struct OwnedAllocationV1 {
+pub(crate) struct OwnedAllocationV1 {
     binding: AllocationBindingV1,
     token: Option<AllocationTokenV1>,
 }
@@ -368,6 +370,245 @@ struct AllocationOwnerV1 {
     allocations: Vec<OwnedAllocationV1>,
     device_bytes: u64,
     host_bytes: u64,
+}
+
+/// Addressless, owner-checked device range admitted for service batch binding.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ServiceDeviceDispatchRangeV1 {
+    pub(crate) binding: AllocationBindingV1,
+    pub(crate) data_index: usize,
+    pub(crate) offset_bytes: u64,
+    pub(crate) extent_bytes: u64,
+}
+
+impl fmt::Debug for ServiceDeviceDispatchRangeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServiceDeviceDispatchRangeV1")
+            .field("data_index", &self.data_index)
+            .field("offset_bytes", &self.offset_bytes)
+            .field("extent_bytes", &self.extent_bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ServiceDeviceDispatchRangeV1 {
+    /// Returns the checked byte offset without exposing a device address.
+    pub const fn offset_bytes(self) -> u64 {
+        self.offset_bytes
+    }
+
+    /// Returns the checked byte extent.
+    pub const fn extent_bytes(self) -> u64 {
+        self.extent_bytes
+    }
+}
+
+pub(crate) struct ServiceQueueAllocationLedgerV1 {
+    owner: OwnerBindingV1,
+    next_allocation_id: u64,
+    allocations: Vec<OwnedAllocationV1>,
+    device_bytes: u64,
+    host_bytes: u64,
+    device_bindings: Vec<AllocationBindingV1>,
+}
+
+pub(crate) struct ServiceQueueAllocationTransferV1 {
+    pub(crate) session: SharedGttMemorySessionV1,
+    pub(crate) ledger: ServiceQueueAllocationLedgerV1,
+    pub(crate) data: Vec<Gfx942FixedDispatchDataV1>,
+}
+
+pub(crate) struct ServiceQueueAllocationRestoreFailureV1 {
+    pub(crate) ledger: ServiceQueueAllocationLedgerV1,
+    pub(crate) session: SharedGttMemorySessionV1,
+    pub(crate) data: Vec<Gfx942FixedDispatchDataV1>,
+    pub(crate) error: ServiceAllocationErrorV1,
+}
+
+pub(crate) struct ServiceQueueAllocationReplacementV1 {
+    allocation_index: usize,
+    data_index: usize,
+    old_binding: AllocationBindingV1,
+    new_binding: AllocationBindingV1,
+}
+
+impl ServiceQueueAllocationLedgerV1 {
+    pub(crate) fn device_allocation_count(&self) -> usize {
+        self.device_bindings.len()
+    }
+
+    pub(crate) fn validate_range(
+        &self,
+        range: ServiceDeviceDispatchRangeV1,
+    ) -> Result<(), ServiceAllocationErrorV1> {
+        let expected = self
+            .device_bindings
+            .get(range.data_index)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        if range.binding.owner != self.owner {
+            return Err(ServiceAllocationErrorV1::OwnerBindingMismatch);
+        }
+        if expected != &range.binding {
+            return Err(ServiceAllocationErrorV1::AllocationGenerationMismatch);
+        }
+        validate_dispatch_range_bounds(range, *expected)
+    }
+
+    pub(crate) fn prepare_initialized_replacement<R>(
+        &mut self,
+        range: ServiceDeviceDispatchRangeV1,
+        extent_bytes: u64,
+        alignment: u64,
+    ) -> Result<ServiceQueueAllocationReplacementV1, ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        self.validate_range(range)?;
+        if range.offset_bytes != 0 || range.extent_bytes != range.binding.extent_bytes {
+            return Err(ServiceAllocationErrorV1::InvalidRange);
+        }
+        if range.binding.role_id != R::ROLE_ID {
+            return Err(ServiceAllocationErrorV1::RoleMismatch);
+        }
+        if extent_bytes == 0 {
+            return Err(ServiceAllocationErrorV1::InvalidExtent);
+        }
+        if alignment == 0 || !alignment.is_power_of_two() || alignment > MAX_SERVICE_ALIGNMENT_V1 {
+            return Err(ServiceAllocationErrorV1::InvalidAlignment);
+        }
+        let retained_without_old = self
+            .device_bytes
+            .checked_sub(range.binding.extent_bytes)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        if retained_without_old
+            .checked_add(extent_bytes)
+            .is_none_or(|total| total > MAX_SERVICE_DEVICE_BYTES_V1)
+        {
+            return Err(ServiceAllocationErrorV1::ByteCapacity {
+                maximum_bytes: MAX_SERVICE_DEVICE_BYTES_V1,
+            });
+        }
+        let next_allocation_id = self
+            .next_allocation_id
+            .checked_add(1)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let allocation_index = self
+            .allocations
+            .iter()
+            .position(|allocation| allocation.binding == range.binding)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let new_binding = AllocationBindingV1 {
+            owner: self.owner,
+            id: self.next_allocation_id,
+            generation: 1,
+            role_id: R::ROLE_ID,
+            kind_id: AllocationKindV1::DeviceLocal as u8,
+            extent_bytes,
+            alignment,
+        };
+        self.next_allocation_id = next_allocation_id;
+        Ok(ServiceQueueAllocationReplacementV1 {
+            allocation_index,
+            data_index: range.data_index,
+            old_binding: range.binding,
+            new_binding,
+        })
+    }
+
+    pub(crate) fn commit_replacement_release(
+        &mut self,
+        replacement: &ServiceQueueAllocationReplacementV1,
+    ) {
+        let removed = self.allocations.remove(replacement.allocation_index);
+        debug_assert!(removed.binding == replacement.old_binding);
+        debug_assert!(removed.token.is_none());
+        let removed_binding = self.device_bindings.remove(replacement.data_index);
+        debug_assert!(removed_binding == replacement.old_binding);
+        self.device_bytes -= replacement.old_binding.extent_bytes;
+    }
+
+    pub(crate) fn commit_initialized_replacement(
+        &mut self,
+        replacement: ServiceQueueAllocationReplacementV1,
+    ) -> ServiceDeviceDispatchRangeV1 {
+        self.allocations.insert(
+            replacement.allocation_index,
+            OwnedAllocationV1 {
+                binding: replacement.new_binding,
+                token: None,
+            },
+        );
+        self.device_bindings
+            .insert(replacement.data_index, replacement.new_binding);
+        self.device_bytes += replacement.new_binding.extent_bytes;
+        ServiceDeviceDispatchRangeV1 {
+            binding: replacement.new_binding,
+            data_index: replacement.data_index,
+            offset_bytes: 0,
+            extent_bytes: replacement.new_binding.extent_bytes,
+        }
+    }
+
+    pub(crate) fn restore(
+        mut self,
+        session: SharedGttMemorySessionV1,
+        data: Vec<Gfx942FixedDispatchDataV1>,
+    ) -> Result<ServiceAllocationSessionV1, ServiceQueueAllocationRestoreFailureV1> {
+        let device_record_count = self
+            .allocations
+            .iter()
+            .filter(|allocation| allocation.binding.kind_id == AllocationKindV1::DeviceLocal as u8)
+            .count();
+        let valid = session.phase() == SharedMemorySessionPhaseV1::Active
+            && data.len() == self.device_bindings.len()
+            && data.len() == device_record_count
+            && self
+                .allocations
+                .iter()
+                .filter(|allocation| {
+                    allocation.binding.kind_id == AllocationKindV1::DeviceLocal as u8
+                })
+                .zip(&self.device_bindings)
+                .zip(&data)
+                .all(|((allocation, binding), dispatch)| {
+                    let layout = dispatch.layout();
+                    allocation.token.is_none()
+                        && allocation.binding == *binding
+                        && layout.requested_bytes() == allocation.binding.extent_bytes
+                        && layout.alignment() == allocation.binding.alignment
+                });
+        if !valid {
+            return Err(ServiceQueueAllocationRestoreFailureV1 {
+                ledger: self,
+                session,
+                data,
+                error: ServiceAllocationErrorV1::AllocationGenerationMismatch,
+            });
+        }
+
+        let mut data = data.into_iter();
+        for allocation in &mut self.allocations {
+            if allocation.binding.kind_id == AllocationKindV1::DeviceLocal as u8 {
+                allocation.token = Some(AllocationTokenV1::DeviceFixedDispatch(
+                    data.next().expect("validated device-data cardinality"),
+                ));
+            }
+        }
+        debug_assert!(data.next().is_none());
+        Ok(ServiceAllocationSessionV1 {
+            owner: AllocationOwnerV1 {
+                session,
+                owner: self.owner,
+                phase: ServiceAllocationPhaseV1::Active,
+                next_allocation_id: self.next_allocation_id,
+                allocations: self.allocations,
+                device_bytes: self.device_bytes,
+                host_bytes: self.host_bytes,
+            },
+            quiescence: PhantomData,
+        })
+    }
 }
 
 /// A non-Clone owner of one exact KFD device/VM and its service allocations.
@@ -711,6 +952,48 @@ impl ServiceAllocationSessionV1 {
         Ok(key(binding))
     }
 
+    /// Allocates a device-local extent whose complete owned bytes are written,
+    /// read back, CPU-unmapped, and GPU-mapped by the retained KFD session.
+    pub fn allocate_initialized_device_local<R>(
+        &mut self,
+        bytes: Box<[u8]>,
+        alignment: u64,
+        content: Gfx942DeviceContentDescriptorV1,
+    ) -> Result<ServiceAllocationKeyV1<R, DeviceLocalAllocationV1>, ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        self.require_active()?;
+        let requested_bytes =
+            u64::try_from(bytes.len()).map_err(|_| ServiceAllocationErrorV1::InvalidExtent)?;
+        self.preflight_allocation(requested_bytes, alignment, AllocationKindV1::DeviceLocal)?;
+        self.owner
+            .allocations
+            .try_reserve(1)
+            .map_err(|_| ServiceAllocationErrorV1::AllocationRegistryReservation)?;
+        let binding =
+            self.reserve_binding::<R, DeviceLocalAllocationV1>(requested_bytes, alignment)?;
+        let initialized = match self
+            .owner
+            .session
+            .initialize_gfx942_device_memory(bytes, alignment, content)
+        {
+            Ok(initialized) => initialized,
+            Err(error) => {
+                self.sync_phase_after_nonconsuming_failure();
+                return Err(error.into());
+            }
+        };
+        self.owner.allocations.push(OwnedAllocationV1 {
+            binding,
+            token: Some(AllocationTokenV1::DeviceFixedDispatch(
+                Gfx942FixedDispatchDataV1::initialized(initialized),
+            )),
+        });
+        self.owner.device_bytes += requested_bytes;
+        Ok(key(binding))
+    }
+
     /// Maps one exact uninitialized device-local allocation to the owned GPU/VM.
     pub fn map_device_local<R>(
         &mut self,
@@ -892,6 +1175,69 @@ impl ServiceAllocationSessionV1 {
         })
     }
 
+    /// Erases a checked device role range into an addressless service-batch binding.
+    ///
+    /// The owner validates the exact allocation generation and mapped state.
+    /// Queue composition later revalidates the retained service binding at the
+    /// stable device-record ordinal before producing a KFD buffer binding.
+    pub fn device_dispatch_range<R>(
+        &self,
+        range: ServiceAllocationRangeV1<R, DeviceLocalAllocationV1>,
+    ) -> Result<ServiceDeviceDispatchRangeV1, ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        self.require_active()?;
+        let allocation_index = self.validate_key(range.key)?;
+        let token = self.owner.allocations[allocation_index]
+            .token
+            .as_ref()
+            .ok_or(ServiceAllocationErrorV1::Quarantined)?;
+        if !matches!(
+            token,
+            AllocationTokenV1::DeviceMapped(_) | AllocationTokenV1::DeviceFixedDispatch(_)
+        ) {
+            return Err(ServiceAllocationErrorV1::AllocationState);
+        }
+        let data_index = self.owner.allocations[..allocation_index]
+            .iter()
+            .filter(|allocation| allocation.binding.kind_id == AllocationKindV1::DeviceLocal as u8)
+            .count();
+        Ok(ServiceDeviceDispatchRangeV1 {
+            binding: range.key.binding,
+            data_index,
+            offset_bytes: range.offset_bytes,
+            extent_bytes: range.extent_bytes,
+        })
+    }
+
+    pub(crate) fn validate_device_dispatch_range(
+        &self,
+        range: ServiceDeviceDispatchRangeV1,
+    ) -> Result<(), ServiceAllocationErrorV1> {
+        self.require_active()?;
+        if range.binding.owner != self.owner.owner {
+            return Err(ServiceAllocationErrorV1::OwnerBindingMismatch);
+        }
+        let allocation = self
+            .owner
+            .allocations
+            .iter()
+            .filter(|allocation| allocation.binding.kind_id == AllocationKindV1::DeviceLocal as u8)
+            .nth(range.data_index)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        if allocation.binding != range.binding {
+            return Err(ServiceAllocationErrorV1::AllocationGenerationMismatch);
+        }
+        if !matches!(
+            allocation.token.as_ref(),
+            Some(AllocationTokenV1::DeviceMapped(_) | AllocationTokenV1::DeviceFixedDispatch(_))
+        ) {
+            return Err(ServiceAllocationErrorV1::AllocationState);
+        }
+        validate_dispatch_range_bounds(range, allocation.binding)
+    }
+
     /// Checks two non-overlapping subranges of the same mapped allocation.
     pub fn disjoint_ranges<R, K>(
         &self,
@@ -937,6 +1283,91 @@ impl ServiceAllocationSessionV1 {
     /// }
     /// ```
     pub fn release_unpublished(
+        self,
+    ) -> Result<ServiceAllocationReleaseObservationV1, ServiceAllocationReleaseFailureV1> {
+        self.release_all()
+    }
+
+    pub(crate) fn into_queue_transfer(
+        mut self,
+    ) -> Result<
+        ServiceQueueAllocationTransferV1,
+        (ServiceAllocationSessionV1, ServiceAllocationErrorV1),
+    > {
+        if let Err(error) = self.require_active() {
+            return Err((self, error));
+        }
+        let device_count = self
+            .owner
+            .allocations
+            .iter()
+            .filter(|allocation| allocation.binding.kind_id == AllocationKindV1::DeviceLocal as u8)
+            .count();
+        if device_count == 0 {
+            return Err((self, ServiceAllocationErrorV1::AllocationState));
+        }
+        if self.owner.allocations.iter().any(|allocation| {
+            allocation.binding.kind_id == AllocationKindV1::DeviceLocal as u8
+                && !matches!(
+                    allocation.token.as_ref(),
+                    Some(
+                        AllocationTokenV1::DeviceMapped(_)
+                            | AllocationTokenV1::DeviceFixedDispatch(_)
+                    )
+                )
+        }) {
+            return Err((self, ServiceAllocationErrorV1::AllocationState));
+        }
+        let mut data = Vec::new();
+        let mut device_bindings = Vec::new();
+        if data.try_reserve(device_count).is_err()
+            || device_bindings.try_reserve(device_count).is_err()
+        {
+            return Err((
+                self,
+                ServiceAllocationErrorV1::AllocationRegistryReservation,
+            ));
+        }
+        for allocation in &mut self.owner.allocations {
+            if allocation.binding.kind_id != AllocationKindV1::DeviceLocal as u8 {
+                continue;
+            }
+            let token = allocation
+                .token
+                .take()
+                .expect("device transfer preflight checked token");
+            let dispatch = match token {
+                AllocationTokenV1::DeviceMapped(lease) => {
+                    Gfx942FixedDispatchDataV1::uninitialized(lease)
+                }
+                AllocationTokenV1::DeviceFixedDispatch(dispatch) => dispatch,
+                _ => unreachable!("device transfer preflight checked state"),
+            };
+            data.push(dispatch);
+            device_bindings.push(allocation.binding);
+        }
+        let owner = self.owner;
+        Ok(ServiceQueueAllocationTransferV1 {
+            session: owner.session,
+            ledger: ServiceQueueAllocationLedgerV1 {
+                owner: owner.owner,
+                next_allocation_id: owner.next_allocation_id,
+                allocations: owner.allocations,
+                device_bytes: owner.device_bytes,
+                host_bytes: owner.host_bytes,
+                device_bindings,
+            },
+            data,
+        })
+    }
+
+    pub(crate) fn release_quiescent(
+        self,
+    ) -> Result<ServiceAllocationReleaseObservationV1, ServiceAllocationReleaseFailureV1> {
+        self.release_all()
+    }
+
+    fn release_all(
         mut self,
     ) -> Result<ServiceAllocationReleaseObservationV1, ServiceAllocationReleaseFailureV1> {
         let observation = ServiceAllocationReleaseObservationV1 {
@@ -1110,6 +1541,21 @@ where
     }
 }
 
+fn validate_dispatch_range_bounds(
+    range: ServiceDeviceDispatchRangeV1,
+    binding: AllocationBindingV1,
+) -> Result<(), ServiceAllocationErrorV1> {
+    if range.extent_bytes == 0
+        || range
+            .offset_bytes
+            .checked_add(range.extent_bytes)
+            .is_none_or(|end| end > binding.extent_bytes)
+    {
+        return Err(ServiceAllocationErrorV1::InvalidRange);
+    }
+    Ok(())
+}
+
 fn apply_scoped_host_write<T>(bytes: &mut [u8], write: impl FnOnce(&mut [u8]) -> T) -> T {
     write(bytes)
 }
@@ -1138,7 +1584,11 @@ fn remaining_bytes_after_release(
 fn is_mapped(token: Option<&AllocationTokenV1>) -> bool {
     matches!(
         token,
-        Some(AllocationTokenV1::DeviceMapped(_) | AllocationTokenV1::HostMapped(_))
+        Some(
+            AllocationTokenV1::DeviceMapped(_)
+                | AllocationTokenV1::DeviceFixedDispatch(_)
+                | AllocationTokenV1::HostMapped(_)
+        )
     )
 }
 
@@ -1168,6 +1618,9 @@ fn release_token(
                 .release_gfx942_device_memory(token)
                 .map_err(Into::into)
         }
+        AllocationTokenV1::DeviceFixedDispatch(token) => session
+            .release_fixed_dispatch_data(token)
+            .map_err(Into::into),
         AllocationTokenV1::HostCpuWritable(token) => session.release(token).map_err(Into::into),
         AllocationTokenV1::HostMapped(token) => {
             let token = session
@@ -1521,5 +1974,111 @@ mod tests {
         let left = checked(retained, 0, 8_192, 4_096).unwrap();
         let right = checked(retained, 4_096, 8_192, 4_096).unwrap();
         assert!(left.0 < right.0 + right.1 && right.0 < left.0 + left.1);
+    }
+
+    fn queue_ledger(expected: AllocationBindingV1) -> ServiceQueueAllocationLedgerV1 {
+        ServiceQueueAllocationLedgerV1 {
+            owner: expected.owner,
+            next_allocation_id: 2,
+            allocations: vec![OwnedAllocationV1 {
+                binding: expected,
+                token: None,
+            }],
+            device_bytes: expected.extent_bytes,
+            host_bytes: 0,
+            device_bindings: vec![expected],
+        }
+    }
+
+    #[test]
+    fn queue_range_revalidation_rejects_owner_generation_index_and_extent_drift() {
+        let expected = binding(AllocationRoleV1::DeviceInput, AllocationKindV1::DeviceLocal);
+        let ledger = queue_ledger(expected);
+        let retained = ServiceDeviceDispatchRangeV1 {
+            binding: expected,
+            data_index: 0,
+            offset_bytes: 4_096,
+            extent_bytes: 4_096,
+        };
+        assert!(ledger.validate_range(retained).is_ok());
+
+        let mut wrong_owner = retained;
+        wrong_owner.binding.owner.vm_owner_generation += 1;
+        assert!(matches!(
+            ledger.validate_range(wrong_owner),
+            Err(ServiceAllocationErrorV1::OwnerBindingMismatch)
+        ));
+        let mut wrong_generation = retained;
+        wrong_generation.binding.generation += 1;
+        assert!(matches!(
+            ledger.validate_range(wrong_generation),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        let mut wrong_index = retained;
+        wrong_index.data_index = 1;
+        assert!(matches!(
+            ledger.validate_range(wrong_index),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        let mut wrong_extent = retained;
+        wrong_extent.extent_bytes = expected.extent_bytes;
+        assert!(matches!(
+            ledger.validate_range(wrong_extent),
+            Err(ServiceAllocationErrorV1::InvalidRange)
+        ));
+    }
+
+    #[test]
+    fn replacement_changes_generation_and_stales_the_prior_range() {
+        let expected = binding(AllocationRoleV1::DeviceInput, AllocationKindV1::DeviceLocal);
+        let mut ledger = queue_ledger(expected);
+        let old = ServiceDeviceDispatchRangeV1 {
+            binding: expected,
+            data_index: 0,
+            offset_bytes: 0,
+            extent_bytes: expected.extent_bytes,
+        };
+        let replacement = ledger
+            .prepare_initialized_replacement::<DeviceInputRoleV1>(old, 8_192, 4_096)
+            .unwrap();
+        ledger.commit_replacement_release(&replacement);
+        let new = ledger.commit_initialized_replacement(replacement);
+
+        assert_eq!(new.data_index, old.data_index);
+        assert_eq!(new.extent_bytes, 8_192);
+        assert_ne!(new.binding.id, old.binding.id);
+        assert!(matches!(
+            ledger.validate_range(old),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        assert!(ledger.validate_range(new).is_ok());
+        assert_eq!(ledger.device_bytes, 8_192);
+    }
+
+    #[test]
+    fn replacement_rejects_partial_range_and_role_drift_before_mutation() {
+        let expected = binding(AllocationRoleV1::DeviceInput, AllocationKindV1::DeviceLocal);
+        let mut ledger = queue_ledger(expected);
+        let partial = ServiceDeviceDispatchRangeV1 {
+            binding: expected,
+            data_index: 0,
+            offset_bytes: 0,
+            extent_bytes: 4_096,
+        };
+        assert!(matches!(
+            ledger.prepare_initialized_replacement::<DeviceInputRoleV1>(partial, 4_096, 4_096),
+            Err(ServiceAllocationErrorV1::InvalidRange)
+        ));
+        let full = ServiceDeviceDispatchRangeV1 {
+            extent_bytes: expected.extent_bytes,
+            ..partial
+        };
+        assert!(matches!(
+            ledger.prepare_initialized_replacement::<DeviceStateRoleV1>(full, 4_096, 4_096),
+            Err(ServiceAllocationErrorV1::RoleMismatch)
+        ));
+        assert_eq!(ledger.next_allocation_id, 2);
+        assert_eq!(ledger.device_bytes, expected.extent_bytes);
+        assert!(ledger.validate_range(full).is_ok());
     }
 }
