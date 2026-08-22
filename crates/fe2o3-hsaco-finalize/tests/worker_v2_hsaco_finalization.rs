@@ -28,6 +28,7 @@ use fe2o3_hsaco_finalize::{
     RowSoftmaxV1StructuralArtifactErrorV1, TiledGemmV1StructuralArtifactErrorV1,
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
     WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
+    derive_unfinalized_hsaco_from_finalized_v1,
     execute_protected_reproducible_first_build_worker_v2,
     execute_reproducible_first_build_worker_v2, finalize_inspected_protected_worker_v2_hsaco_v2,
     finalize_inspected_worker_v2_hsaco_v1, finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
@@ -339,6 +340,17 @@ fn protected_finalization_preserves_closure_handoff_and_exact_bytes() {
             .unwrap()
             .digest()
     );
+    assert_eq!(
+        derive_unfinalized_hsaco_from_finalized_v1(finalized.exact_finalized_bytes()).unwrap(),
+        raw_bytes
+    );
+    assert_eq!(
+        derive_unfinalized_hsaco_from_finalized_v1(&raw_bytes).unwrap_err(),
+        FinalizationError::ExpectedFinalizedDigest
+    );
+    let mut mutated_finalized = finalized.exact_finalized_bytes().to_vec();
+    mutated_finalized[0x80] ^= 1;
+    assert!(derive_unfinalized_hsaco_from_finalized_v1(&mutated_finalized).is_err());
     for (index, (before, after)) in raw_bytes
         .iter()
         .zip(finalized.exact_finalized_bytes())

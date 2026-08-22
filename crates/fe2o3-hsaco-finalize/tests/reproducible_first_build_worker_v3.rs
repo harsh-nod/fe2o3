@@ -514,6 +514,49 @@ fn deterministic_preflight_completes_before_transaction_consumption() {
 }
 
 #[test]
+fn deterministic_preflight_rejects_same_length_foreign_handoff_for_receipt() {
+    let directory = TestDirectory::new();
+    let attempt = begin(&directory, 0x64);
+    let expected = outer(0x20, 0x14);
+    let foreign = outer(0x20, 0x15);
+    assert_eq!(
+        expected.canonical_bytes().len(),
+        foreign.canonical_bytes().len()
+    );
+    assert_ne!(expected.identity(), foreign.identity());
+    let receipt = publish_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        CompilerModuleHandoffSlotV3::Default,
+        &expected,
+    )
+    .unwrap();
+
+    let error = match preflight_protected_reproducible_first_build_worker_v3(
+        &foreign,
+        receipt,
+        *foreign.capsule().compiler_closure(),
+        &pinned(),
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    ) {
+        Ok(_) => panic!("same-length foreign handoff unexpectedly matched receipt"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        ProtectedFirstBuildWorkerV3Error::Binding(
+            ProtectedCompilerHandoffBindingErrorV3::RelationshipMismatch {
+                field: "parent outer V3 handoff identity"
+            }
+        )
+    ));
+}
+
+#[test]
 fn deterministic_preflight_rejection_leaves_transaction_unconsumed() {
     let directory = TestDirectory::new();
     let attempt = begin(&directory, 0x63);

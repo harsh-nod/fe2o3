@@ -32,13 +32,14 @@ use sha2::{Digest, Sha256};
 use crate::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME,
     FinalizationError, FinalizedHsaco, FirstBuildWorkerV2IdentityV1, InertDecodedWorkerExchangeV2,
-    InspectedProtectedRawWorkerV2HsacoIdentityV1, InspectedProtectedRawWorkerV2HsacoV1,
-    InspectedProtectedRawWorkerV3HsacoIdentityV1, InspectedProtectedRawWorkerV3HsacoV1,
-    InspectedRawWorkerV2HsacoIdentityV1, InspectedRawWorkerV2HsacoV1, LinkInputV1, LinkOptionV1,
-    LinkOutputV1, MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES,
-    MAX_LINK_OPTIONS, MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES,
-    MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES,
-    MAX_WORKER_TOOLCHAIN_ID_BYTES, MultiInputLinkPlanV1, ObservedWorkerV2KernelSymbolsV1,
+    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV2HsacoIdentityV1,
+    InspectedProtectedRawWorkerV2HsacoV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
+    InspectedProtectedRawWorkerV3HsacoV1, InspectedRawWorkerV2HsacoIdentityV1,
+    InspectedRawWorkerV2HsacoV1, LinkInputV1, LinkOptionV1, LinkOutputV1, MAX_LINK_INPUTS,
+    MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
+    MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MAX_WORKER_EXECUTABLE_BYTES,
+    MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
+    MultiInputLinkPlanV1, ObservedWorkerV2KernelSymbolsV1,
     ProtectedCompilerHandoffBindingIdentityV3, ProtectedCompilerHandoffExpectationV3,
     ProtectedFirstBuildWorkerV2IdentityV1, ProtectedFirstBuildWorkerV3IdentityV1, ProvenanceNodeV1,
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerV2RawHsacoPolicyIdentityV1,
@@ -143,6 +144,11 @@ pub struct FinalizedProtectedWorkerV3HsacoIdentityV1([u8; 32]);
 impl FinalizedProtectedWorkerV3HsacoIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_test_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 }
 
@@ -632,6 +638,12 @@ pub struct PreparedFinalizedProtectedWorkerV3HsacoV1 {
     canonical_descriptor_evidence: ContentIdentityV1,
 }
 
+pub(crate) struct OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1 {
+    pub(crate) identity: FinalizedProtectedWorkerV3HsacoIdentityV1,
+    pub(crate) source: InertProtectedFirstBuildWorkerV3EvidenceV1,
+    pub(crate) finalized_bytes: Vec<u8>,
+}
+
 impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
     pub const fn identity(&self) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
         self.identity
@@ -756,6 +768,23 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    pub(crate) fn into_compact_replay_parts(
+        self,
+    ) -> OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1 {
+        let Self {
+            identity,
+            raw,
+            finalized,
+            finalized_output: _,
+            canonical_descriptor_evidence: _,
+        } = self;
+        OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1 {
+            identity,
+            source: raw.into_source_evidence(),
+            finalized_bytes: finalized.into_bytes(),
+        }
     }
 }
 

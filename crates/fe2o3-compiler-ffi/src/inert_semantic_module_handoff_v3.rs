@@ -527,6 +527,28 @@ impl InertSemanticCompilerModuleHandoffV3 {
         self.canonical_bytes.as_slice()
     }
 
+    /// Moves the complete exact canonical wire allocation out of this owner.
+    ///
+    /// Borrowed and owned decoding retain inner views in the same shared allocation. This method
+    /// drops those private views before unwrapping the backing `Arc`, so a successful transfer
+    /// neither copies nor reallocates the potentially large outer handoff. It fails closed if a
+    /// future internal owner unexpectedly retains another share.
+    pub fn try_into_canonical_bytes(
+        self,
+    ) -> Result<Vec<u8>, InertSemanticCompilerModuleHandoffErrorV3> {
+        let Self {
+            capsule,
+            module_handoff,
+            pair_binding: _,
+            identity: _,
+            canonical_bytes,
+        } = self;
+        drop(capsule);
+        drop(module_handoff);
+        Arc::try_unwrap(canonical_bytes)
+            .map_err(|_| InertSemanticCompilerModuleHandoffErrorV3::SharedBackingRetained)
+    }
+
     /// Moves both exact inner owners out of this inert outer owner.
     pub fn into_capsule_and_module_handoff(
         self,
@@ -622,6 +644,8 @@ pub enum InertSemanticCompilerModuleHandoffErrorV3 {
     LengthOverflow,
     /// Retained canonical storage could not be allocated.
     AllocationFailed,
+    /// A private decoded view unexpectedly retained the canonical outer allocation.
+    SharedBackingRetained,
     /// The outer magic does not identify this exact V3 schema.
     InvalidMagic,
     /// The outer version is not the one exact supported V3 version.
@@ -690,6 +714,9 @@ impl fmt::Display for InertSemanticCompilerModuleHandoffErrorV3 {
             Self::LengthOverflow => formatter.write_str("inert outer V3 handoff length overflow"),
             Self::AllocationFailed => {
                 formatter.write_str("could not allocate inert outer V3 handoff storage")
+            }
+            Self::SharedBackingRetained => {
+                formatter.write_str("inert outer V3 handoff retained an unexpected shared backing")
             }
             Self::InvalidMagic => formatter.write_str("invalid inert outer V3 handoff magic"),
             Self::UnsupportedVersion(version) => {
@@ -1574,6 +1601,32 @@ mod tests_wire_adversarial {
             try_allocate_outer_buffer(usize::MAX),
             Err(InertSemanticCompilerModuleHandoffErrorV3::AllocationFailed)
         );
+    }
+
+    #[test]
+    fn canonical_outer_allocation_transfers_without_copy_or_reallocation() {
+        let constructed = outer(0x31);
+        let constructed_pointer = constructed.canonical_bytes().as_ptr();
+        let constructed_bytes = constructed.canonical_bytes().to_vec();
+        let transferred = constructed.try_into_canonical_bytes().unwrap();
+        assert_eq!(transferred.as_ptr(), constructed_pointer);
+        assert_eq!(transferred, constructed_bytes);
+
+        let decoded = InertSemanticCompilerModuleHandoffV3::decode(&transferred).unwrap();
+        let decoded_pointer = decoded.canonical_bytes().as_ptr();
+        let decoded_bytes = decoded.canonical_bytes().to_vec();
+        let transferred = decoded.try_into_canonical_bytes().unwrap();
+        assert_eq!(transferred.as_ptr(), decoded_pointer);
+        assert_eq!(transferred, decoded_bytes);
+
+        let owned =
+            InertSemanticCompilerModuleHandoffV3::decode_owned(transferred.into_boxed_slice())
+                .unwrap();
+        let owned_pointer = owned.canonical_bytes().as_ptr();
+        let owned_bytes = owned.canonical_bytes().to_vec();
+        let transferred = owned.try_into_canonical_bytes().unwrap();
+        assert_eq!(transferred.as_ptr(), owned_pointer);
+        assert_eq!(transferred, owned_bytes);
     }
 
     #[test]

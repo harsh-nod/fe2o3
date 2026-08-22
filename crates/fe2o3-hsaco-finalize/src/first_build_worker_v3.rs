@@ -259,18 +259,48 @@ impl ProtectedCompilerHandoffBindingV3 {
         expected_receipt: CompilerModuleHandoffReceiptV3,
         expected_compiler_closure: CompilerClosureV2,
     ) -> Result<Self, ProtectedCompilerHandoffBindingErrorV3> {
-        if handoff.identity() != expected_receipt.handoff_identity() {
+        let exact_bytes = handoff.canonical_bytes();
+        let expected_identity = expected_receipt.handoff_identity();
+        let receipt_byte_len = u64::try_from(expected_receipt.length())
+            .map_err(|_| binding_mismatch("parent receipt byte length"))?;
+        if handoff.identity() != expected_identity
+            || expected_receipt.length() != exact_bytes.len()
+            || expected_identity.byte_len() != receipt_byte_len
+            || !expected_identity.matches_canonical_bytes(exact_bytes)
+        {
+            return Err(binding_mismatch("parent outer V3 handoff identity"));
+        }
+        Self::from_handoff_parts(
+            handoff,
+            expected_receipt.attempt(),
+            expected_receipt.slot(),
+            expected_receipt.transaction_identity(),
+            expected_receipt.length(),
+            expected_compiler_closure,
+        )
+    }
+
+    fn from_handoff_parts(
+        handoff: &InertSemanticCompilerModuleHandoffV3,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV3,
+        transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+        receipt_byte_len: usize,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<Self, ProtectedCompilerHandoffBindingErrorV3> {
+        if handoff.identity().byte_len()
+            != u64::try_from(receipt_byte_len)
+                .map_err(|_| binding_mismatch("parent receipt byte length"))?
+        {
             return Err(binding_mismatch("parent outer V3 handoff identity"));
         }
 
         let exact_bytes = handoff.canonical_bytes();
-        let receipt_byte_len = u64::try_from(expected_receipt.length())
+        let receipt_byte_len_u64 = u64::try_from(receipt_byte_len)
             .map_err(|_| binding_mismatch("parent receipt byte length"))?;
-        if expected_receipt.length() != exact_bytes.len()
-            || expected_receipt.handoff_identity().byte_len() != receipt_byte_len
-            || !expected_receipt
-                .handoff_identity()
-                .matches_canonical_bytes(exact_bytes)
+        if receipt_byte_len != exact_bytes.len()
+            || handoff.identity().byte_len() != receipt_byte_len_u64
+            || !handoff.identity().matches_canonical_bytes(exact_bytes)
         {
             return Err(binding_mismatch("parent receipt byte length"));
         }
@@ -307,11 +337,11 @@ impl ProtectedCompilerHandoffBindingV3 {
         let final_receipt_identity = final_receipt.identity();
         let final_commitment_identity = final_commitment.identity();
         let expectation = ProtectedCompilerHandoffExpectationV3 {
-            attempt: expected_receipt.attempt(),
-            slot: expected_receipt.slot(),
-            transaction_identity: expected_receipt.transaction_identity(),
-            receipt_byte_len,
-            outer_handoff_identity: expected_receipt.handoff_identity(),
+            attempt,
+            slot,
+            transaction_identity,
+            receipt_byte_len: receipt_byte_len_u64,
+            outer_handoff_identity: handoff.identity(),
             capsule_sha256: *capsule_identity.sha256(),
             capsule_byte_len: capsule_identity.byte_len(),
             invocation_digest: *capsule.invocation_digest().as_bytes(),
@@ -516,6 +546,19 @@ pub struct InertProtectedFirstBuildWorkerV3EvidenceV1 {
     _validation: ValidatedProtectedFirstBuildReplayV3,
 }
 
+pub(crate) struct OwnedProtectedFirstBuildWorkerV3ReplayPartsV1 {
+    pub(crate) identity: ProtectedFirstBuildWorkerV3IdentityV1,
+    pub(crate) binding: ProtectedCompilerHandoffBindingV3,
+    pub(crate) handoff: InertSemanticCompilerModuleHandoffV3,
+    pub(crate) worker: WorkerMeasurementV1,
+    pub(crate) execution_limits: WorkerExecutionLimitsV1,
+    pub(crate) plan: MultiInputLinkPlanV1,
+    pub(crate) bootstrap_request_bytes: Vec<u8>,
+    pub(crate) bootstrap_response: WorkerResponseV2,
+    pub(crate) replay_request_bytes: Vec<u8>,
+    pub(crate) replay_response: WorkerResponseV2,
+}
+
 impl InertProtectedFirstBuildWorkerV3EvidenceV1 {
     /// Returns the complete evidence identity.
     pub const fn identity(&self) -> ProtectedFirstBuildWorkerV3IdentityV1 {
@@ -609,6 +652,36 @@ impl InertProtectedFirstBuildWorkerV3EvidenceV1 {
     /// Reports that this evidence grants no launch authority.
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    pub(crate) fn into_compact_replay_parts(self) -> OwnedProtectedFirstBuildWorkerV3ReplayPartsV1 {
+        let Self {
+            identity,
+            binding,
+            handoff,
+            worker,
+            execution_limits,
+            plan,
+            bootstrap_request_bytes,
+            bootstrap,
+            replay_request_bytes,
+            replay,
+            _validation: _,
+        } = self;
+        debug_assert_eq!(bootstrap.binding, binding);
+        debug_assert_eq!(replay.binding, binding);
+        OwnedProtectedFirstBuildWorkerV3ReplayPartsV1 {
+            identity,
+            binding,
+            handoff,
+            worker,
+            execution_limits,
+            plan,
+            bootstrap_request_bytes,
+            bootstrap_response: bootstrap.execution.into_response(),
+            replay_request_bytes,
+            replay_response: replay.execution.into_response(),
+        }
     }
 }
 
@@ -1072,12 +1145,33 @@ fn validate_replay(
     worker: &WorkerMeasurementV1,
     result: &crate::first_build_worker_v2::FirstBuildWorkerV2EngineResult,
 ) -> Result<ValidatedProtectedFirstBuildReplayV3, ProtectedFirstBuildWorkerV3Error> {
-    let bootstrap_request = BorrowedWorkerRequestV2::decode(&result.candidate_request_bytes)
+    validate_replay_parts(
+        binding,
+        worker,
+        &result.decoded,
+        &result.plan,
+        &result.candidate_request_bytes,
+        result.candidate.response(),
+        &result.authorized_request_bytes,
+        result.authorized.response(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_replay_parts(
+    binding: ProtectedCompilerHandoffBindingV3,
+    worker: &WorkerMeasurementV1,
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+    plan: &MultiInputLinkPlanV1,
+    bootstrap_request_bytes: &[u8],
+    bootstrap_response: &WorkerResponseV2,
+    replay_request_bytes: &[u8],
+    replay_response: &WorkerResponseV2,
+) -> Result<ValidatedProtectedFirstBuildReplayV3, ProtectedFirstBuildWorkerV3Error> {
+    let bootstrap_request = BorrowedWorkerRequestV2::decode(bootstrap_request_bytes)
         .map_err(|_| replay_error("bootstrap request canonical transcript"))?;
-    let replay_request = BorrowedWorkerRequestV2::decode(&result.authorized_request_bytes)
+    let replay_request = BorrowedWorkerRequestV2::decode(replay_request_bytes)
         .map_err(|_| replay_error("exact-replay request canonical transcript"))?;
-    let bootstrap_response = result.candidate.response();
-    let replay_response = result.authorized.response();
     validate_request_response_binding(&bootstrap_request, bootstrap_response)
         .map_err(|_| replay_error("bootstrap request/response canonical exchange"))?;
     validate_request_response_binding(&replay_request, replay_response)
@@ -1097,16 +1191,16 @@ fn validate_replay(
         return Err(replay_error("reproducible output bytes and identity"));
     }
 
-    let (_, options) = decode_link_options(result.plan.options())
-        .map_err(|_| replay_error("canonical link options"))?;
+    let (_, options) =
+        decode_link_options(plan.options()).map_err(|_| replay_error("canonical link options"))?;
     let request_inputs =
-        validate_request_common_fields(&bootstrap_request, worker, &result.decoded, options)?;
+        validate_request_common_fields(&bootstrap_request, worker, decoded, options)?;
     validate_stable_request_fields(&bootstrap_request, &replay_request)
         .map_err(|_| replay_error("stable bootstrap/replay request fields"))?;
     let expected_bootstrap_request_id = calculate_bootstrap_request_id(
         binding,
         worker,
-        &result.decoded,
+        decoded,
         &bootstrap_request,
         &request_inputs,
     )?;
@@ -1115,12 +1209,12 @@ fn validate_replay(
     }
 
     let (reconstructed_plan, all_inputs) = reconstruct_plan(
-        &result.decoded,
+        decoded,
         &request_inputs,
-        result.plan.options(),
+        plan.options(),
         bootstrap_output.identity(),
     )?;
-    if reconstructed_plan != result.plan {
+    if &reconstructed_plan != plan {
         return Err(replay_error("complete canonical link plan"));
     }
     if decode_u64(replay_request.field(14)).ok() != Some(bootstrap_output.identity().byte_len()) {
@@ -1129,9 +1223,9 @@ fn validate_replay(
     let expected_replay_request_id = calculate_replay_request_id(
         binding,
         worker,
-        &result.decoded,
+        decoded,
         &replay_request,
-        &result.plan,
+        plan,
         &request_inputs,
         &all_inputs,
     )?;
@@ -1227,6 +1321,17 @@ struct BorrowedInputIdentityV2 {
 struct BorrowedRequestInputsV2 {
     compiler: BorrowedInputIdentityV2,
     providers: Vec<BorrowedInputIdentityV2>,
+}
+
+pub(crate) struct OwnedWorkerV3ProviderReplayPartV1 {
+    pub(crate) kind: WorkerInputKindV1,
+    pub(crate) identity: ContentIdentityV1,
+    pub(crate) bytes: Vec<u8>,
+}
+
+pub(crate) struct OwnedWorkerV3RequestReplayPartsV1 {
+    pub(crate) bootstrap_output_bound: u64,
+    pub(crate) external_providers: Vec<OwnedWorkerV3ProviderReplayPartV1>,
 }
 
 struct BorrowedWorkerRequestV2<'bytes> {
@@ -1404,6 +1509,88 @@ fn decode_borrowed_inputs(
         return Err(replay_error("provider input trailing bytes"));
     }
     Ok(inputs)
+}
+
+pub(crate) fn extract_worker_v3_request_replay_parts_v1(
+    bootstrap_request_bytes: &[u8],
+    replay_request_bytes: &[u8],
+) -> Result<OwnedWorkerV3RequestReplayPartsV1, ProtectedFirstBuildWorkerV3Error> {
+    let bootstrap = BorrowedWorkerRequestV2::decode(bootstrap_request_bytes)
+        .map_err(|_| replay_error("bootstrap request canonical transcript"))?;
+    let replay = BorrowedWorkerRequestV2::decode(replay_request_bytes)
+        .map_err(|_| replay_error("exact-replay request canonical transcript"))?;
+    validate_stable_request_fields(&bootstrap, &replay)
+        .map_err(|_| replay_error("stable bootstrap/replay request fields"))?;
+    let bootstrap_output_bound =
+        decode_u64(bootstrap.field(14)).map_err(|_| replay_error("bootstrap output bound"))?;
+    if bootstrap_output_bound == 0 || bootstrap_output_bound > crate::MAX_WORKER_OUTPUT_BYTES as u64
+    {
+        return Err(replay_error("bootstrap output bound"));
+    }
+
+    let field = bootstrap.field(10);
+    let count = u32::from_le_bytes(
+        field
+            .get(..4)
+            .ok_or_else(|| replay_error("provider input count"))?
+            .try_into()
+            .map_err(|_| replay_error("provider input count"))?,
+    ) as usize;
+    if count > MAX_LINK_INPUTS.saturating_sub(1) {
+        return Err(replay_error("provider input count"));
+    }
+    let mut external_providers = Vec::new();
+    external_providers
+        .try_reserve_exact(count)
+        .map_err(|_| allocation_error("provider replay owners"))?;
+    let mut remaining = field
+        .get(4..)
+        .ok_or_else(|| replay_error("provider inputs"))?;
+    let mut total_payload_bytes = 0_usize;
+    let mut previous: Option<(ContentIdentityV1, WorkerInputKindV1)> = None;
+    for _ in 0..count {
+        let encoded_input = remaining;
+        let (input, next) = decode_borrowed_input(encoded_input)
+            .map_err(|_| replay_error("provider input encoding"))?;
+        if previous.is_some_and(|before| {
+            before.0 == input.identity || before >= (input.identity, input.kind)
+        }) {
+            return Err(replay_error("provider input canonical order"));
+        }
+        let payload_len = usize::try_from(input.identity.byte_len())
+            .map_err(|_| replay_error("provider input length"))?;
+        total_payload_bytes = total_payload_bytes
+            .checked_add(payload_len)
+            .ok_or_else(|| replay_error("provider input length"))?;
+        if total_payload_bytes > MAX_WORKER_TOTAL_INPUT_BYTES {
+            return Err(replay_error("provider input length"));
+        }
+        let payload_end = WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2
+            .checked_add(payload_len)
+            .ok_or_else(|| replay_error("provider input length"))?;
+        let payload = encoded_input
+            .get(WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2..payload_end)
+            .ok_or_else(|| replay_error("provider input bytes"))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(payload_len)
+            .map_err(|_| allocation_error("provider replay payload"))?;
+        bytes.extend_from_slice(payload);
+        external_providers.push(OwnedWorkerV3ProviderReplayPartV1 {
+            kind: input.kind,
+            identity: input.identity,
+            bytes,
+        });
+        previous = Some((input.identity, input.kind));
+        remaining = next;
+    }
+    if !remaining.is_empty() {
+        return Err(replay_error("provider input trailing bytes"));
+    }
+    Ok(OwnedWorkerV3RequestReplayPartsV1 {
+        bootstrap_output_bound,
+        external_providers,
+    })
 }
 
 fn decode_borrowed_input(field: &[u8]) -> Result<(BorrowedInputIdentityV2, &[u8]), ()> {
@@ -1832,6 +2019,29 @@ fn calculate_evidence_identity(
     limits: WorkerExecutionLimitsV1,
     result: &crate::first_build_worker_v2::FirstBuildWorkerV2EngineResult,
 ) -> Result<ProtectedFirstBuildWorkerV3IdentityV1, ProtectedFirstBuildWorkerV3Error> {
+    calculate_evidence_identity_parts(
+        binding,
+        worker,
+        limits,
+        &result.plan,
+        &result.candidate_request_bytes,
+        result.candidate.response().canonical_bytes(),
+        &result.authorized_request_bytes,
+        result.authorized.response().canonical_bytes(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calculate_evidence_identity_parts(
+    binding: ProtectedCompilerHandoffBindingV3,
+    worker: &WorkerMeasurementV1,
+    limits: WorkerExecutionLimitsV1,
+    plan: &MultiInputLinkPlanV1,
+    bootstrap_request_bytes: &[u8],
+    bootstrap_response_bytes: &[u8],
+    replay_request_bytes: &[u8],
+    replay_response_bytes: &[u8],
+) -> Result<ProtectedFirstBuildWorkerV3IdentityV1, ProtectedFirstBuildWorkerV3Error> {
     let mut hasher = Sha256::new();
     hasher.update(EVIDENCE_IDENTITY_DOMAIN_V3);
     binding.hash_identity_preimage(&mut hasher);
@@ -1842,11 +2052,11 @@ fn calculate_evidence_identity(
     hasher.update(limits.timeout().subsec_nanos().to_le_bytes());
     hasher.update((limits.stdout_bytes() as u64).to_le_bytes());
     hasher.update((limits.stderr_bytes() as u64).to_le_bytes());
-    hash_canonical_plan_blob(&mut hasher, &result.plan)?;
-    hash_blob(&mut hasher, &result.candidate_request_bytes);
-    hash_blob(&mut hasher, result.candidate.response().canonical_bytes());
-    hash_blob(&mut hasher, &result.authorized_request_bytes);
-    hash_blob(&mut hasher, result.authorized.response().canonical_bytes());
+    hash_canonical_plan_blob(&mut hasher, plan)?;
+    hash_blob(&mut hasher, bootstrap_request_bytes);
+    hash_blob(&mut hasher, bootstrap_response_bytes);
+    hash_blob(&mut hasher, replay_request_bytes);
+    hash_blob(&mut hasher, replay_response_bytes);
     Ok(ProtectedFirstBuildWorkerV3IdentityV1(
         hasher.finalize().into(),
     ))

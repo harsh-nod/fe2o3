@@ -40,11 +40,56 @@ const CONTENT_IDENTITY_BYTES: usize = 32 + 8;
 const MAX_PROVIDER_IDENTITY_BYTES: usize = 128;
 const MAX_PROVIDER_FILES: usize = 16;
 const MAX_PROVIDER_BASENAME_BYTES: usize = 128;
-const MAX_PROVIDER_EVIDENCE_BYTES: usize = MAX_PROVIDER_IDENTITY_BYTES
-    + MAX_WORKER_TARGET_BYTES
-    + MAX_WORKER_SYMBOLS * (MAX_WORKER_SYMBOL_BYTES + 4)
-    + MAX_PROVIDER_FILES * (MAX_PROVIDER_BASENAME_BYTES + 36)
-    + 49;
+const MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES: usize = checked_bound_add(
+    checked_bound_add(
+        MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES,
+        checked_bound_mul(MAX_WORKER_DIAGNOSTICS, 4),
+    ),
+    4,
+);
+const MAX_RESPONSE_OUTPUT_BODY_BYTES: usize = checked_bound_add(MAX_WORKER_OUTPUT_BYTES, 45);
+const MAX_PROVIDER_EVIDENCE_BYTES: usize = checked_bound_add(
+    checked_bound_add(
+        checked_bound_add(MAX_PROVIDER_IDENTITY_BYTES, MAX_WORKER_TARGET_BYTES),
+        checked_bound_mul(
+            MAX_WORKER_SYMBOLS,
+            checked_bound_add(MAX_WORKER_SYMBOL_BYTES, 4),
+        ),
+    ),
+    checked_bound_add(
+        checked_bound_mul(
+            MAX_PROVIDER_FILES,
+            checked_bound_add(MAX_PROVIDER_BASENAME_BYTES, 36),
+        ),
+        49,
+    ),
+);
+
+/// Maximum exact response-body bytes retained by one replay metadata shell.
+pub(crate) const MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1: usize = checked_bound_add(
+    MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES,
+    MAX_PROVIDER_EVIDENCE_BYTES,
+);
+
+/// Maximum exact response-body bytes retained by two independent metadata shells.
+pub(crate) const MAX_WORKER_RESPONSE_REPLAY_METADATA_TWO_SHELL_BYTES_V1: usize = checked_bound_add(
+    MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
+    MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
+);
+
+const fn checked_bound_add(left: usize, right: usize) -> usize {
+    match left.checked_add(right) {
+        Some(value) => value,
+        None => panic!("worker response metadata bound overflow"),
+    }
+}
+
+const fn checked_bound_mul(left: usize, right: usize) -> usize {
+    match left.checked_mul(right) {
+        Some(value) => value,
+        None => panic!("worker response metadata bound overflow"),
+    }
+}
 
 /// Evidence available only from the sealed compiler-envelope V2 path.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -322,6 +367,37 @@ impl WorkerDeviceLibraryProviderEvidenceV1 {
     }
 }
 
+/// Borrowed canonical response bodies needed to reconstruct replay metadata.
+///
+/// This view deliberately carries neither the raw worker output nor any
+/// publication, load, launch, or execution authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkerResponseReplayMetadataV1<'response> {
+    diagnostics_body: &'response [u8],
+    provider_evidence_body: Option<&'response [u8]>,
+}
+
+impl<'response> WorkerResponseReplayMetadataV1<'response> {
+    #[cfg(test)]
+    pub(crate) const fn from_test_bodies(
+        diagnostics_body: &'response [u8],
+        provider_evidence_body: Option<&'response [u8]>,
+    ) -> Self {
+        Self {
+            diagnostics_body,
+            provider_evidence_body,
+        }
+    }
+
+    pub(crate) const fn diagnostics_body(&self) -> &'response [u8] {
+        self.diagnostics_body
+    }
+
+    pub(crate) const fn provider_evidence_body(&self) -> Option<&'response [u8]> {
+        self.provider_evidence_body
+    }
+}
+
 /// Canonical worker response decoded only in the context of one sealed V2 request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerResponseV2 {
@@ -363,16 +439,13 @@ impl WorkerResponseV2 {
         )?;
         let stage = decode_stage(one_byte(decoder.field(5, 1)?)?)?;
         let diagnostics = decode_strings(
-            decoder.field(
-                6,
-                MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES + MAX_WORKER_DIAGNOSTICS * 4 + 4,
-            )?,
+            decoder.field(6, MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES)?,
             MAX_WORKER_DIAGNOSTICS,
             MAX_WORKER_DIAGNOSTIC_BYTES,
             MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES,
             true,
         )?;
-        let raw_output = decode_output(decoder.field(7, MAX_WORKER_OUTPUT_BYTES + 45)?)?;
+        let raw_output = decode_output(decoder.field(7, MAX_RESPONSE_OUTPUT_BODY_BYTES)?)?;
         let (device_library_provider, response_identity) = if has_provider_extension {
             let provider =
                 decode_provider_evidence(decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?)?;
@@ -429,12 +502,25 @@ impl WorkerResponseV2 {
             output,
             device_library_provider,
             response_identity,
-            canonical_bytes: bytes.to_vec(),
+            canonical_bytes: copy_bytes(bytes, "decoded response canonical bytes")?,
         })
     }
 
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
+    }
+
+    pub(crate) fn replay_metadata(
+        &self,
+    ) -> Result<WorkerResponseReplayMetadataV1<'_>, WorkerProtocolError> {
+        if self.stage != WorkerStageV1::Complete || self.output.is_none() {
+            return Err(WorkerProtocolError::InvalidResponseState);
+        }
+        let metadata = response_replay_metadata_from_bytes(self.canonical_bytes())?;
+        if metadata.provider_evidence_body.is_some() != self.device_library_provider.is_some() {
+            return Err(WorkerProtocolError::NonCanonicalEncoding);
+        }
+        Ok(metadata)
     }
 
     pub const fn request_id(&self) -> &[u8; 32] {
@@ -494,6 +580,147 @@ impl WorkerResponseV2 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+}
+
+fn response_replay_metadata_from_bytes(
+    bytes: &[u8],
+) -> Result<WorkerResponseReplayMetadataV1<'_>, WorkerProtocolError> {
+    if bytes.len() > MAX_WORKER_RESPONSE_BYTES {
+        return Err(WorkerProtocolError::ResponseTooLarge);
+    }
+    let magic = bytes
+        .get(..WORKER_RESPONSE_MAGIC_V2.len())
+        .ok_or(WorkerProtocolError::Truncated)?;
+    let has_provider_extension = if magic == WORKER_RESPONSE_MAGIC_V2 {
+        false
+    } else if magic == WORKER_RESPONSE_MAGIC_V3 {
+        true
+    } else {
+        return Err(WorkerProtocolError::BadMagic);
+    };
+    let (expected_magic, field_count) = if has_provider_extension {
+        (WORKER_RESPONSE_MAGIC_V3, RESPONSE_FIELD_COUNT_V3)
+    } else {
+        (WORKER_RESPONSE_MAGIC_V2, RESPONSE_FIELD_COUNT_V2)
+    };
+    let mut decoder = Decoder::new(bytes, expected_magic, field_count)?;
+
+    fixed::<32>(decoder.field(1, 32)?)?;
+    fixed::<32>(decoder.field(2, 32)?)?;
+    fixed::<32>(decoder.field(3, 32)?)?;
+    validate_text_body(
+        decoder.field(4, MAX_WORKER_TOOLCHAIN_ID_BYTES)?,
+        MAX_WORKER_TOOLCHAIN_ID_BYTES,
+        "worker build identity",
+    )?;
+    if decode_stage(one_byte(decoder.field(5, 1)?)?)? != WorkerStageV1::Complete {
+        return Err(WorkerProtocolError::InvalidResponseState);
+    }
+    let diagnostics_body = decoder.field(6, MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES)?;
+    validate_diagnostics_body(diagnostics_body)?;
+    validate_complete_output_body(decoder.field(7, MAX_RESPONSE_OUTPUT_BODY_BYTES)?)?;
+
+    let provider_evidence_body = if has_provider_extension {
+        let body = decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?;
+        if body.is_empty() {
+            return Err(WorkerProtocolError::InvalidFieldLength(8));
+        }
+        fixed::<32>(decoder.field(9, 32)?)?;
+        Some(body)
+    } else {
+        None
+    };
+    decoder.finish(field_count)?;
+
+    Ok(WorkerResponseReplayMetadataV1 {
+        diagnostics_body,
+        provider_evidence_body,
+    })
+}
+
+pub(crate) fn validate_worker_response_replay_metadata_bodies_v1(
+    diagnostics_body: &[u8],
+    provider_evidence_body: Option<&[u8]>,
+) -> Result<(), WorkerProtocolError> {
+    if diagnostics_body.len() > MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES {
+        return Err(WorkerProtocolError::DiagnosticsTooLarge);
+    }
+    validate_diagnostics_body(diagnostics_body)?;
+    if let Some(provider) = provider_evidence_body {
+        if provider.is_empty() || provider.len() > MAX_PROVIDER_EVIDENCE_BYTES {
+            return Err(WorkerProtocolError::InvalidFieldLength(8));
+        }
+        decode_provider_evidence(provider)?;
+    }
+    Ok(())
+}
+
+fn validate_diagnostics_body(bytes: &[u8]) -> Result<(), WorkerProtocolError> {
+    let mut cursor = Cursor::new(bytes);
+    let count = cursor.u32()? as usize;
+    if count > MAX_WORKER_DIAGNOSTICS {
+        return Err(WorkerProtocolError::TooManyDiagnostics);
+    }
+    let mut total = 0_usize;
+    let mut previous = None;
+    for _ in 0..count {
+        let len = cursor.u32()? as usize;
+        total = total
+            .checked_add(len)
+            .ok_or(WorkerProtocolError::IntegerOverflow)?;
+        if len == 0 || len > MAX_WORKER_DIAGNOSTIC_BYTES {
+            return Err(WorkerProtocolError::InvalidDiagnostic);
+        }
+        if total > MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES {
+            return Err(WorkerProtocolError::DiagnosticsTooLarge);
+        }
+        let value =
+            str::from_utf8(cursor.take(len)?).map_err(|_| WorkerProtocolError::InvalidUtf8)?;
+        if !value.is_ascii() || value.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(WorkerProtocolError::InvalidDiagnostic);
+        }
+        if let Some(prior) = previous {
+            if prior == value {
+                return Err(WorkerProtocolError::DuplicateDiagnostic);
+            }
+            if prior > value {
+                return Err(WorkerProtocolError::NonCanonicalDiagnostics);
+            }
+        }
+        previous = Some(value);
+    }
+    cursor.finish()
+}
+
+fn validate_complete_output_body(bytes: &[u8]) -> Result<(), WorkerProtocolError> {
+    let mut cursor = Cursor::new(bytes);
+    if cursor.byte()? != 1 {
+        return Err(WorkerProtocolError::InvalidResponseState);
+    }
+    cursor.fixed::<32>()?;
+    let byte_len_u64 = cursor.u64()?;
+    let byte_len =
+        usize::try_from(byte_len_u64).map_err(|_| WorkerProtocolError::InvalidOutputBound)?;
+    if byte_len == 0 || byte_len > MAX_WORKER_OUTPUT_BYTES {
+        return Err(WorkerProtocolError::InvalidOutputBound);
+    }
+    cursor.take(byte_len)?;
+    cursor.finish()
+}
+
+fn validate_text_body(
+    bytes: &[u8],
+    max: usize,
+    field: &'static str,
+) -> Result<(), WorkerProtocolError> {
+    if bytes.is_empty() || bytes.len() > max {
+        return Err(WorkerProtocolError::InvalidText(field));
+    }
+    let value = str::from_utf8(bytes).map_err(|_| WorkerProtocolError::InvalidUtf8)?;
+    if !value.is_ascii() || value.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(WorkerProtocolError::InvalidText(field));
+    }
+    Ok(())
 }
 
 /// Canonically decoded V2 request/response bytes with no execution provenance.
@@ -666,7 +893,7 @@ fn encode_request(request: &WorkerRequestV2) -> Result<(Vec<u8>, [u8; 32]), Work
         return Err(WorkerProtocolError::RequestTooLarge);
     }
 
-    let mut encoded = Vec::with_capacity(total_len);
+    let mut encoded = fallible_vec(total_len, "encoded worker request")?;
     encoded.extend_from_slice(WORKER_REQUEST_MAGIC_V2);
     push_field(&mut encoded, 1, &request.request_id)?;
     push_field(&mut encoded, 2, request.llvm_build_identity.as_bytes())?;
@@ -781,7 +1008,7 @@ fn decode_request(bytes: &[u8]) -> Result<WorkerRequestV2, WorkerProtocolError> 
         export_symbols: parts.export_symbols,
         final_symbols: parts.final_symbols,
         output: parts.output,
-        canonical_bytes: bytes.to_vec(),
+        canonical_bytes: copy_bytes(bytes, "decoded request canonical bytes")?,
         identity: declared_identity,
     };
     if encode_request(&request)?.0 != bytes {
@@ -821,7 +1048,7 @@ fn encode_input(input: &WorkerInputV1) -> Result<Vec<u8>, WorkerProtocolError> {
     let capacity = INPUT_OVERHEAD_BYTES
         .checked_add(input.bytes().len())
         .ok_or(WorkerProtocolError::IntegerOverflow)?;
-    let mut encoded = Vec::with_capacity(capacity);
+    let mut encoded = fallible_vec(capacity, "encoded worker input")?;
     encoded.push(input.kind() as u8);
     encoded.extend_from_slice(input.identity().sha256());
     encoded.extend_from_slice(&input.identity().byte_len().to_le_bytes());
@@ -839,7 +1066,7 @@ fn decode_input(bytes: &[u8]) -> Result<WorkerInputV1, WorkerProtocolError> {
     if byte_len == 0 || byte_len > MAX_WORKER_TOTAL_INPUT_BYTES {
         return Err(WorkerProtocolError::InputBytesTooLarge);
     }
-    let payload = cursor.take(byte_len)?.to_vec();
+    let payload = copy_bytes(cursor.take(byte_len)?, "decoded compiler module")?;
     cursor.finish()?;
     WorkerInputV1::from_declared(
         kind,
@@ -853,7 +1080,7 @@ fn encode_inputs(inputs: &[WorkerInputV1]) -> Result<Vec<u8>, WorkerProtocolErro
         sum.checked_add(INPUT_OVERHEAD_BYTES + input.bytes().len())
             .ok_or(WorkerProtocolError::IntegerOverflow)
     })?;
-    let mut encoded = Vec::with_capacity(exact);
+    let mut encoded = fallible_vec(exact, "encoded worker inputs")?;
     push_u32(&mut encoded, inputs.len())?;
     for input in inputs {
         encoded.extend_from_slice(&encode_input(input)?);
@@ -873,7 +1100,7 @@ fn decode_inputs(
     if count == 0 && !allow_empty {
         return Err(WorkerProtocolError::EmptyInput);
     }
-    let mut inputs = Vec::with_capacity(count);
+    let mut inputs = fallible_vec(count, "decoded worker input records")?;
     let mut total = 0_usize;
     for _ in 0..count {
         let kind = decode_input_kind(cursor.byte()?)?;
@@ -890,7 +1117,7 @@ fn decode_inputs(
         if total > MAX_WORKER_TOTAL_INPUT_BYTES {
             return Err(WorkerProtocolError::InputBytesTooLarge);
         }
-        let payload = cursor.take(byte_len)?.to_vec();
+        let payload = copy_bytes(cursor.take(byte_len)?, "decoded provider input")?;
         inputs.push(WorkerInputV1::from_declared(
             kind,
             ContentIdentityV1::from_parts(digest, byte_len_u64),
@@ -916,7 +1143,7 @@ fn encode_strings(values: &[String]) -> Result<Vec<u8>, WorkerProtocolError> {
         sum.checked_add(4 + value.len())
             .ok_or(WorkerProtocolError::IntegerOverflow)
     })?;
-    let mut encoded = Vec::with_capacity(exact);
+    let mut encoded = fallible_vec(exact, "encoded worker strings")?;
     push_u32(&mut encoded, values.len())?;
     for value in values {
         push_u32(&mut encoded, value.len())?;
@@ -953,7 +1180,7 @@ fn decode_strings(
             WorkerProtocolError::TooManySymbols
         });
     }
-    let mut values = Vec::with_capacity(count);
+    let mut values = fallible_vec(count, "decoded worker strings")?;
     let mut total = 0_usize;
     for _ in 0..count {
         let len = cursor.u32()? as usize;
@@ -974,11 +1201,9 @@ fn decode_strings(
                 WorkerProtocolError::TooManySymbols
             });
         }
-        values.push(
-            str::from_utf8(cursor.take(len)?)
-                .map_err(|_| WorkerProtocolError::InvalidUtf8)?
-                .to_owned(),
-        );
+        let value =
+            str::from_utf8(cursor.take(len)?).map_err(|_| WorkerProtocolError::InvalidUtf8)?;
+        values.push(copy_text(value, "decoded worker string")?);
     }
     cursor.finish()?;
     if diagnostics {
@@ -1036,7 +1261,7 @@ fn decode_provider_evidence(
     if import_count == 0 || import_count > MAX_WORKER_SYMBOLS {
         return Err(WorkerProtocolError::TooManySymbols);
     }
-    let mut import_symbols = Vec::with_capacity(import_count);
+    let mut import_symbols = fallible_vec(import_count, "decoded provider imports")?;
     let mut total_import_bytes = 0_usize;
     for _ in 0..import_count {
         let len = cursor.u32()? as usize;
@@ -1049,11 +1274,9 @@ fn decode_provider_evidence(
         if total_import_bytes > MAX_WORKER_SYMBOLS * MAX_WORKER_SYMBOL_BYTES {
             return Err(WorkerProtocolError::TooManySymbols);
         }
-        import_symbols.push(
-            str::from_utf8(cursor.take(len)?)
-                .map_err(|_| WorkerProtocolError::InvalidUtf8)?
-                .to_owned(),
-        );
+        let value =
+            str::from_utf8(cursor.take(len)?).map_err(|_| WorkerProtocolError::InvalidUtf8)?;
+        import_symbols.push(copy_text(value, "decoded provider import")?);
     }
     validate_symbols(&import_symbols)?;
 
@@ -1061,7 +1284,7 @@ fn decode_provider_evidence(
     if file_count == 0 || file_count > MAX_PROVIDER_FILES {
         return Err(WorkerProtocolError::InvalidFieldLength(8));
     }
-    let mut files = Vec::with_capacity(file_count);
+    let mut files = fallible_vec(file_count, "decoded provider files")?;
     for _ in 0..file_count {
         let len = cursor.u32()? as usize;
         let basename = text(
@@ -1135,7 +1358,7 @@ fn decode_output(
             if byte_len == 0 || byte_len > MAX_WORKER_OUTPUT_BYTES {
                 return Err(WorkerProtocolError::InvalidOutputBound);
             }
-            let payload = cursor.take(byte_len)?.to_vec();
+            let payload = copy_bytes(cursor.take(byte_len)?, "decoded worker output")?;
             cursor.finish()?;
             let identity = ContentIdentityV1::from_parts(digest, byte_len_u64);
             if !identity.matches(&payload) {
@@ -1224,7 +1447,33 @@ fn text(bytes: &[u8], max: usize, field: &'static str) -> Result<String, WorkerP
     if !value.is_ascii() || value.bytes().any(|byte| byte.is_ascii_control()) {
         return Err(WorkerProtocolError::InvalidText(field));
     }
-    Ok(value.to_owned())
+    copy_text(value, field)
+}
+
+fn fallible_vec<T>(
+    capacity: usize,
+    component: &'static str,
+) -> Result<Vec<T>, WorkerProtocolError> {
+    let mut value = Vec::new();
+    value
+        .try_reserve_exact(capacity)
+        .map_err(|_| WorkerProtocolError::AllocationFailed(component))?;
+    Ok(value)
+}
+
+fn copy_bytes(bytes: &[u8], component: &'static str) -> Result<Vec<u8>, WorkerProtocolError> {
+    let mut value = fallible_vec(bytes.len(), component)?;
+    value.extend_from_slice(bytes);
+    Ok(value)
+}
+
+fn copy_text(value: &str, component: &'static str) -> Result<String, WorkerProtocolError> {
+    let mut output = String::new();
+    output
+        .try_reserve_exact(value.len())
+        .map_err(|_| WorkerProtocolError::AllocationFailed(component))?;
+    output.push_str(value);
+    Ok(output)
 }
 
 fn one_byte(bytes: &[u8]) -> Result<u8, WorkerProtocolError> {
@@ -1377,10 +1626,147 @@ impl fmt::Display for WorkerCompilerFfiEnvelopeIdentityV2 {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)] // Test-only forwarding allocator for deterministic allocation qualification.
 mod tests {
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+        ptr,
+    };
+
     use super::*;
 
-    fn success_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+    const MAX_RECORDED_ALLOCATIONS: usize = 256;
+
+    #[derive(Clone, Copy)]
+    struct AllocationProbe {
+        enabled: bool,
+        fail_at_or_above: usize,
+        event_count: usize,
+        total_bytes: usize,
+        sizes: [usize; MAX_RECORDED_ALLOCATIONS],
+        overflowed: bool,
+    }
+
+    impl AllocationProbe {
+        const fn disabled() -> Self {
+            Self {
+                enabled: false,
+                fail_at_or_above: usize::MAX,
+                event_count: 0,
+                total_bytes: 0,
+                sizes: [0; MAX_RECORDED_ALLOCATIONS],
+                overflowed: false,
+            }
+        }
+    }
+
+    thread_local! {
+        static ALLOCATION_PROBE: Cell<AllocationProbe> = const {
+            Cell::new(AllocationProbe::disabled())
+        };
+    }
+
+    struct ForwardingProbeAllocator;
+
+    #[global_allocator]
+    static TEST_ALLOCATOR: ForwardingProbeAllocator = ForwardingProbeAllocator;
+
+    // The probe is thread-local and forwards every unselected operation to the
+    // process allocator. Tests enable it only around one synchronous decode.
+    unsafe impl GlobalAlloc for ForwardingProbeAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if allocation_must_fail(layout.size()) {
+                return ptr::null_mut();
+            }
+            // SAFETY: this forwards the allocator contract and the exact layout.
+            let pointer = unsafe { System.alloc(layout) };
+            record_allocation(pointer, layout.size());
+            pointer
+        }
+
+        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            // SAFETY: this forwards the pointer and layout supplied by the caller.
+            unsafe { System.dealloc(pointer, layout) };
+        }
+
+        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            if allocation_must_fail(new_size) {
+                return ptr::null_mut();
+            }
+            // SAFETY: this forwards the allocator contract and exact arguments.
+            let new_pointer = unsafe { System.realloc(pointer, layout, new_size) };
+            record_allocation(new_pointer, new_size);
+            new_pointer
+        }
+    }
+
+    fn allocation_must_fail(size: usize) -> bool {
+        ALLOCATION_PROBE
+            .try_with(|probe| {
+                let probe = probe.get();
+                probe.enabled && size >= probe.fail_at_or_above
+            })
+            .unwrap_or(false)
+    }
+
+    fn record_allocation(pointer: *mut u8, size: usize) {
+        if pointer.is_null() {
+            return;
+        }
+        let _ = ALLOCATION_PROBE.try_with(|probe| {
+            let mut state = probe.get();
+            if !state.enabled {
+                return;
+            }
+            if let Some(total_bytes) = state.total_bytes.checked_add(size) {
+                state.total_bytes = total_bytes;
+            } else {
+                state.overflowed = true;
+            }
+            if state.event_count < state.sizes.len() {
+                state.sizes[state.event_count] = size;
+                state.event_count += 1;
+            } else {
+                state.overflowed = true;
+            }
+            probe.set(state);
+        });
+    }
+
+    fn probe_allocations<T>(
+        fail_at_or_above: usize,
+        operation: impl FnOnce() -> T,
+    ) -> (T, AllocationProbe) {
+        ALLOCATION_PROBE.with(|probe| {
+            assert!(!probe.get().enabled, "allocation probes must not nest");
+            let mut state = AllocationProbe::disabled();
+            state.enabled = true;
+            state.fail_at_or_above = fail_at_or_above;
+            probe.set(state);
+        });
+        let guard = AllocationProbeGuard;
+        let result = operation();
+        let snapshot = ALLOCATION_PROBE.with(Cell::get);
+        drop(guard);
+        (result, snapshot)
+    }
+
+    struct AllocationProbeGuard;
+
+    impl Drop for AllocationProbeGuard {
+        fn drop(&mut self) {
+            let _ = ALLOCATION_PROBE.try_with(|probe| {
+                probe.set(AllocationProbe::disabled());
+            });
+        }
+    }
+
+    fn success_response_with_diagnostics(
+        request: &WorkerRequestV2,
+        output: &[u8],
+        diagnostics: &[String],
+    ) -> Vec<u8> {
         let mut encoded = Vec::new();
         encoded.extend_from_slice(WORKER_RESPONSE_MAGIC_V2);
         push_field(&mut encoded, 1, request.request_id()).unwrap();
@@ -1393,7 +1779,7 @@ mod tests {
         .unwrap();
         push_field(&mut encoded, 4, request.worker_build_identity().as_bytes()).unwrap();
         push_field(&mut encoded, 5, &[WorkerStageV1::Complete as u8]).unwrap();
-        push_field(&mut encoded, 6, &0_u32.to_le_bytes()).unwrap();
+        push_field(&mut encoded, 6, &encode_strings(diagnostics).unwrap()).unwrap();
         let identity = ContentIdentityV1::calculate(output);
         let mut output_field = vec![1];
         output_field.extend_from_slice(identity.sha256());
@@ -1403,12 +1789,13 @@ mod tests {
         encoded
     }
 
-    fn provider_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
-        let mut encoded = success_response(request, output);
-        encoded[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V3);
+    fn success_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+        success_response_with_diagnostics(request, output, &[])
+    }
 
+    fn provider_evidence_body(provider_identity: &str, file_digests: [[u8; 32]; 2]) -> Vec<u8> {
         let mut provider = Vec::new();
-        for value in ["gfx942-ocml-v1", "gfx942:xnack-"] {
+        for value in [provider_identity, "gfx942:xnack-"] {
             push_u32(&mut provider, value.len()).unwrap();
             provider.extend_from_slice(value.as_bytes());
         }
@@ -1417,17 +1804,72 @@ mod tests {
         push_u32(&mut provider, "external_helper".len()).unwrap();
         provider.extend_from_slice(b"external_helper");
         push_u32(&mut provider, 2).unwrap();
-        for (basename, digest) in [("ocml.bc", [0x41; 32]), ("isa.bc", [0x42; 32])] {
+        for (basename, digest) in [("ocml.bc", file_digests[0]), ("isa.bc", file_digests[1])] {
             push_u32(&mut provider, basename.len()).unwrap();
             provider.extend_from_slice(basename.as_bytes());
             provider.extend_from_slice(&digest);
         }
         let manifest_identity = calculate_provider_manifest_identity(&provider);
         provider.extend_from_slice(&manifest_identity);
+        provider
+    }
+
+    fn provider_response_with_metadata(
+        request: &WorkerRequestV2,
+        output: &[u8],
+        diagnostics: &[String],
+        provider_identity: &str,
+        file_digests: [[u8; 32]; 2],
+    ) -> Vec<u8> {
+        let mut encoded = success_response_with_diagnostics(request, output, diagnostics);
+        encoded[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V3);
+        let provider = provider_evidence_body(provider_identity, file_digests);
         push_field(&mut encoded, 8, &provider).unwrap();
         let response_identity = calculate_response_identity(&encoded);
         push_field(&mut encoded, 9, &response_identity).unwrap();
         encoded
+    }
+
+    fn provider_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+        provider_response_with_metadata(
+            request,
+            output,
+            &[],
+            "gfx942-ocml-v1",
+            [[0x41; 32], [0x42; 32]],
+        )
+    }
+
+    fn incomplete_response(request: &WorkerRequestV2) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(WORKER_RESPONSE_MAGIC_V2);
+        push_field(&mut encoded, 1, request.request_id()).unwrap();
+        push_field(&mut encoded, 2, request.identity()).unwrap();
+        push_field(
+            &mut encoded,
+            3,
+            &request.compiler_envelope_identity().as_bytes(),
+        )
+        .unwrap();
+        push_field(&mut encoded, 4, request.worker_build_identity().as_bytes()).unwrap();
+        push_field(&mut encoded, 5, &[WorkerStageV1::Codegen as u8]).unwrap();
+        push_field(&mut encoded, 6, &0_u32.to_le_bytes()).unwrap();
+        push_field(&mut encoded, 7, &[0]).unwrap();
+        encoded
+    }
+
+    fn response_field_body_range(bytes: &[u8], expected_tag: u16) -> std::ops::Range<usize> {
+        let mut cursor = Cursor::new(bytes);
+        cursor.take(WORKER_RESPONSE_MAGIC_V2.len()).unwrap();
+        loop {
+            let tag = cursor.u16().unwrap();
+            let len = cursor.u32().unwrap() as usize;
+            let start = cursor.position;
+            cursor.take(len).unwrap();
+            if tag == expected_tag {
+                return start..cursor.position;
+            }
+        }
     }
 
     fn request() -> WorkerRequestV2 {
@@ -1458,6 +1900,132 @@ mod tests {
             output: WorkerOutputConstraintsV1::new(4096).unwrap(),
         })
         .unwrap()
+    }
+
+    fn maximum_payload_request() -> WorkerRequestV2 {
+        WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
+            request_id: [0x51; 32],
+            llvm_build_identity: "llvm-v2-allocation-qualification".to_owned(),
+            worker_build_identity: "worker-v2-allocation-qualification".to_owned(),
+            worker_executable: ContentIdentityV1::from_parts([0x52; 32], 4096),
+            target: DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+            code_object_version: CodeObjectVersion::V6,
+            options: WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
+            compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2([0x53; 32]),
+            compiler_module: WorkerInputV1::new(
+                WorkerInputKindV1::LlvmBitcode,
+                vec![0x54; MAX_WORKER_TOTAL_INPUT_BYTES],
+            )
+            .unwrap(),
+            external_providers: Vec::new(),
+            import_symbols: Vec::new(),
+            export_symbols: vec!["kernel".to_owned()],
+            final_symbols: vec!["kernel".to_owned()],
+            output: WorkerOutputConstraintsV1::new(MAX_WORKER_OUTPUT_BYTES as u64).unwrap(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn maximum_request_response_and_output_allocations_are_bounded_and_fallible() {
+        let request = maximum_payload_request();
+        assert_eq!(
+            request.compiler_module().bytes().len(),
+            MAX_WORKER_TOTAL_INPUT_BYTES
+        );
+        assert!(request.canonical_bytes().len() <= MAX_WORKER_REQUEST_BYTES);
+
+        let (decoded_request, request_allocations) = probe_allocations(usize::MAX, || {
+            WorkerRequestV2::decode_for_test(request.canonical_bytes())
+        });
+        let decoded_request = decoded_request.unwrap();
+        assert_eq!(decoded_request, request);
+        assert!(!request_allocations.overflowed);
+        assert!(request_allocations.event_count > 0);
+        assert!(
+            request_allocations.sizes[..request_allocations.event_count]
+                .iter()
+                .all(|size| *size <= MAX_WORKER_REQUEST_BYTES)
+        );
+        assert!(
+            request_allocations.total_bytes <= 4 * MAX_WORKER_REQUEST_BYTES + 1024 * 1024,
+            "request decode allocated {} bytes",
+            request_allocations.total_bytes
+        );
+        assert!(
+            request_allocations.sizes[..request_allocations.event_count]
+                .iter()
+                .filter(|size| **size >= MAX_WORKER_TOTAL_INPUT_BYTES)
+                .count()
+                <= 4
+        );
+        drop(decoded_request);
+
+        let (failed_request, request_failure_allocations) =
+            probe_allocations(MAX_WORKER_TOTAL_INPUT_BYTES, || {
+                WorkerRequestV2::decode_for_test(request.canonical_bytes())
+            });
+        assert_eq!(
+            failed_request,
+            Err(WorkerProtocolError::AllocationFailed(
+                "decoded compiler module"
+            ))
+        );
+        assert!(!request_failure_allocations.overflowed);
+        assert!(
+            request_failure_allocations.sizes[..request_failure_allocations.event_count]
+                .iter()
+                .all(|size| *size < MAX_WORKER_TOTAL_INPUT_BYTES)
+        );
+
+        let output = vec![0x55; MAX_WORKER_OUTPUT_BYTES];
+        let response = success_response(&request, &output);
+        assert!(response.len() <= MAX_WORKER_RESPONSE_BYTES);
+        let (decoded_response, response_allocations) = probe_allocations(usize::MAX, || {
+            WorkerResponseV2::decode_for_request(&response, &request)
+        });
+        let decoded_response = decoded_response.unwrap();
+        assert_eq!(
+            decoded_response.output().unwrap().bytes().len(),
+            MAX_WORKER_OUTPUT_BYTES
+        );
+        assert!(!response_allocations.overflowed);
+        assert!(response_allocations.event_count > 0);
+        assert!(
+            response_allocations.sizes[..response_allocations.event_count]
+                .iter()
+                .all(|size| *size <= MAX_WORKER_RESPONSE_BYTES)
+        );
+        assert!(
+            response_allocations.total_bytes <= 2 * MAX_WORKER_RESPONSE_BYTES + 1024 * 1024,
+            "response decode allocated {} bytes",
+            response_allocations.total_bytes
+        );
+        assert!(
+            response_allocations.sizes[..response_allocations.event_count]
+                .iter()
+                .filter(|size| **size >= MAX_WORKER_OUTPUT_BYTES)
+                .count()
+                <= 2
+        );
+        drop(decoded_response);
+
+        let (failed_response, response_failure_allocations) =
+            probe_allocations(MAX_WORKER_OUTPUT_BYTES, || {
+                WorkerResponseV2::decode_for_request(&response, &request)
+            });
+        assert_eq!(
+            failed_response,
+            Err(WorkerProtocolError::AllocationFailed(
+                "decoded worker output"
+            ))
+        );
+        assert!(!response_failure_allocations.overflowed);
+        assert!(
+            response_failure_allocations.sizes[..response_failure_allocations.event_count]
+                .iter()
+                .all(|size| *size < MAX_WORKER_OUTPUT_BYTES)
+        );
     }
 
     #[test]
@@ -1513,6 +2081,167 @@ mod tests {
         mixed[14] ^= 1;
         assert!(
             InertDecodedWorkerExchangeV2::decode(request_value.canonical_bytes(), &mixed).is_err()
+        );
+    }
+
+    #[test]
+    fn v2_response_replay_metadata_borrows_exact_diagnostics_body() {
+        let request_value = request();
+        let diagnostics = vec!["codegen complete".to_owned(), "output inspected".to_owned()];
+        let encoded =
+            success_response_with_diagnostics(&request_value, b"linked-cov6", &diagnostics);
+        let response = WorkerResponseV2::decode_for_request(&encoded, &request_value).unwrap();
+        let diagnostics_range = response_field_body_range(response.canonical_bytes(), 6);
+        let metadata = response.replay_metadata().unwrap();
+
+        assert_eq!(
+            metadata.diagnostics_body(),
+            &response.canonical_bytes()[diagnostics_range.clone()]
+        );
+        assert_eq!(
+            metadata.diagnostics_body().as_ptr(),
+            response.canonical_bytes()[diagnostics_range].as_ptr()
+        );
+        assert_eq!(
+            metadata.diagnostics_body(),
+            encode_strings(&diagnostics).unwrap()
+        );
+        assert_eq!(metadata.provider_evidence_body(), None);
+
+        let incomplete = incomplete_response(&request_value);
+        let incomplete = WorkerResponseV2::decode_for_request(&incomplete, &request_value).unwrap();
+        assert_eq!(
+            incomplete.replay_metadata(),
+            Err(WorkerProtocolError::InvalidResponseState)
+        );
+    }
+
+    #[test]
+    fn v3_response_replay_metadata_keeps_two_shells_independent() {
+        let request_value = request();
+        let bootstrap_diagnostics = vec!["bootstrap complete".to_owned()];
+        let replay_diagnostics = vec!["replay complete".to_owned()];
+        let bootstrap_bytes = provider_response_with_metadata(
+            &request_value,
+            b"bootstrap-output",
+            &bootstrap_diagnostics,
+            "gfx942-ocml-bootstrap-v1",
+            [[0x61; 32], [0x62; 32]],
+        );
+        let replay_bytes = provider_response_with_metadata(
+            &request_value,
+            b"replay-output",
+            &replay_diagnostics,
+            "gfx942-ocml-replay-v1",
+            [[0x71; 32], [0x72; 32]],
+        );
+        let bootstrap =
+            WorkerResponseV2::decode_for_request(&bootstrap_bytes, &request_value).unwrap();
+        let replay = WorkerResponseV2::decode_for_request(&replay_bytes, &request_value).unwrap();
+        let bootstrap_metadata = bootstrap.replay_metadata().unwrap();
+        let replay_metadata = replay.replay_metadata().unwrap();
+
+        for (response, metadata) in [(&bootstrap, bootstrap_metadata), (&replay, replay_metadata)] {
+            let diagnostics_range = response_field_body_range(response.canonical_bytes(), 6);
+            let provider_range = response_field_body_range(response.canonical_bytes(), 8);
+            assert_eq!(
+                metadata.diagnostics_body().as_ptr(),
+                response.canonical_bytes()[diagnostics_range].as_ptr()
+            );
+            assert_eq!(
+                metadata.provider_evidence_body().unwrap().as_ptr(),
+                response.canonical_bytes()[provider_range].as_ptr()
+            );
+        }
+        assert_ne!(
+            bootstrap_metadata.diagnostics_body(),
+            replay_metadata.diagnostics_body()
+        );
+        assert_ne!(
+            bootstrap_metadata.provider_evidence_body(),
+            replay_metadata.provider_evidence_body()
+        );
+    }
+
+    #[test]
+    fn response_replay_metadata_bytes_seam_rejects_malformed_framing() {
+        let request_value = request();
+        let valid_v2 = success_response(&request_value, b"linked-cov6");
+        assert!(response_replay_metadata_from_bytes(&valid_v2).is_ok());
+
+        let mut bad_magic = valid_v2.clone();
+        bad_magic[..8].copy_from_slice(b"F3LRSP04");
+        assert_eq!(
+            response_replay_metadata_from_bytes(&bad_magic),
+            Err(WorkerProtocolError::BadMagic)
+        );
+
+        let mut wrong_field_count = valid_v2.clone();
+        wrong_field_count[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V3);
+        assert!(response_replay_metadata_from_bytes(&wrong_field_count).is_err());
+
+        let mut wrong_tag = valid_v2.clone();
+        let diagnostics_range = response_field_body_range(&wrong_tag, 6);
+        wrong_tag[diagnostics_range.start - 6..diagnostics_range.start - 4]
+            .copy_from_slice(&5_u16.to_le_bytes());
+        assert!(response_replay_metadata_from_bytes(&wrong_tag).is_err());
+
+        let mut wrong_length = valid_v2.clone();
+        let request_id_range = response_field_body_range(&wrong_length, 1);
+        wrong_length[request_id_range.start - 4..request_id_range.start]
+            .copy_from_slice(&31_u32.to_le_bytes());
+        assert!(response_replay_metadata_from_bytes(&wrong_length).is_err());
+
+        let mut wrong_stage = valid_v2.clone();
+        let stage_range = response_field_body_range(&wrong_stage, 5);
+        wrong_stage[stage_range.start] = WorkerStageV1::Codegen as u8;
+        assert_eq!(
+            response_replay_metadata_from_bytes(&wrong_stage),
+            Err(WorkerProtocolError::InvalidResponseState)
+        );
+
+        let mut missing_output = valid_v2.clone();
+        let output_range = response_field_body_range(&missing_output, 7);
+        missing_output[output_range.start] = 0;
+        assert_eq!(
+            response_replay_metadata_from_bytes(&missing_output),
+            Err(WorkerProtocolError::InvalidResponseState)
+        );
+
+        let mut trailing = valid_v2;
+        trailing.push(0);
+        assert_eq!(
+            response_replay_metadata_from_bytes(&trailing),
+            Err(WorkerProtocolError::TrailingBytes)
+        );
+    }
+
+    #[test]
+    fn response_replay_metadata_shell_bounds_are_exact_and_independent() {
+        assert_eq!(MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES, 16_644);
+        assert_eq!(MAX_PROVIDER_EVIDENCE_BYTES, 1_067_889);
+
+        let bootstrap_shell = MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES
+            .checked_add(MAX_PROVIDER_EVIDENCE_BYTES)
+            .unwrap();
+        let replay_shell = MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES
+            .checked_add(MAX_PROVIDER_EVIDENCE_BYTES)
+            .unwrap();
+        assert_eq!(
+            MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
+            bootstrap_shell
+        );
+        assert_eq!(
+            MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
+            1_084_533
+        );
+        assert_eq!(
+            MAX_WORKER_RESPONSE_REPLAY_METADATA_TWO_SHELL_BYTES_V1,
+            bootstrap_shell.checked_add(replay_shell).unwrap()
+        );
+        assert_eq!(
+            MAX_WORKER_RESPONSE_REPLAY_METADATA_TWO_SHELL_BYTES_V1,
+            2_169_066
         );
     }
 

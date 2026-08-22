@@ -1,0 +1,11 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/ui/application_handoff_v3/worker_v3_occurrence_identity_is_opaque.rs:4:5
+  |
+4 |     WorkerV3ApplicationOccurrenceIdentityV1([7; 32])
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/application_handoff_v3.rs
+  |
+  | pub struct WorkerV3ApplicationOccurrenceIdentityV1([u8; IDENTITY_BYTES_V1]);
+  |                                                    ^^^^^^^^^^^^^^^^^^^^^^^ private field
