@@ -55,6 +55,8 @@ pub enum RustDisjointIndexSpaceV1 {
     ShiftedIndex1D {
         offset: u64,
     },
+    /// One globally unique invocation owns every element in the view.
+    GridExclusive,
 }
 
 /// Fully specified source-level Rust type shape.
@@ -644,6 +646,7 @@ fn encode_index_space(writer: &mut CanonicalWriter, index_space: RustDisjointInd
             writer.u8(2);
             writer.u64(offset);
         }
+        RustDisjointIndexSpaceV1::GridExclusive => writer.u8(3),
     }
 }
 

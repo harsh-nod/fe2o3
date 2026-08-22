@@ -175,6 +175,26 @@ fn shifted_disjoint_index_space_has_a_distinct_bounded_identity() {
         )
     );
     assert_ne!(identity.declared_identity(), shifted.declared_identity());
+
+    let grid_exclusive = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::GridExclusive,
+    ));
+    assert_eq!(
+        hex(&grid_exclusive.canonical_bytes()),
+        concat!(
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100",
+            "03000000020a03"
+        )
+    );
+    assert_ne!(
+        identity.declared_identity(),
+        grid_exclusive.declared_identity()
+    );
+    assert_ne!(
+        shifted.declared_identity(),
+        grid_exclusive.declared_identity()
+    );
 }
 
 #[test]

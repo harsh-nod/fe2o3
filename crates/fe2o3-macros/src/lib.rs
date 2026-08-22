@@ -1732,6 +1732,7 @@ enum GeneralTypedArgumentKindV1 {
     Scalar(GeneralTypedScalarV1),
     SharedSlice(GeneralTypedScalarV1),
     ExclusiveSlice(GeneralTypedScalarV1),
+    MappedExclusiveSlice(GeneralTypedScalarV1, RustDisjointIndexSpaceV1),
     GlobalMutPointer(GeneralTypedScalarV1),
 }
 
@@ -1805,6 +1806,15 @@ fn generated_general_typed_arguments_v1(
                     >
                 )
             }
+            GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => {
+                let scalar = scalar.rust_type_tokens();
+                quote!(
+                    __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                        'allocation,
+                        #scalar
+                    >
+                )
+            }
             GeneralTypedArgumentKindV1::GlobalMutPointer(scalar) => {
                 let scalar = scalar.rust_type_tokens();
                 quote!(GlobalMut<'allocation, #scalar>)
@@ -1816,6 +1826,7 @@ fn generated_general_typed_arguments_v1(
             argument,
             GeneralTypedArgumentKindV1::SharedSlice(_)
                 | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
                 | GeneralTypedArgumentKindV1::GlobalMutPointer(_)
         )
     });
@@ -2554,7 +2565,7 @@ fn parse_general_typed_argument_v1(
         syn::Error::new_spanned(
             &argument.ty,
             format!(
-                "general typed V1 argument {position} must be a supported scalar, `&[T]`, `fe2o3_device::DisjointSlice<T, Index1D>`, or `fe2o3_device::DeviceGlobalMutPtr<T>`"
+                "general typed V1 argument {position} must be a supported scalar, `&[T]`, a supported branded `fe2o3_device::DisjointSlice<T, IndexSpace>`, or `fe2o3_device::DeviceGlobalMutPtr<T>`"
             ),
         )
     })
@@ -2622,15 +2633,22 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
     let scalar = parse_general_typed_scalar_v1(element).ok_or(())?;
     match kind {
         GeneralTypedPointerPathV1::DisjointSlice => {
-            if let Some(index_space) = arguments.args.iter().nth(1) {
+            let index_space = if let Some(index_space) = arguments.args.iter().nth(1) {
                 let GenericArgument::Type(index_space) = index_space else {
                     return Err(());
                 };
-                if !is_index_1d_v1(index_space) {
-                    return Err(());
-                }
+                parse_disjoint_index_space_v1(index_space).ok_or(())?
+            } else {
+                RustDisjointIndexSpaceV1::Index1D
+            };
+            if index_space == RustDisjointIndexSpaceV1::Index1D {
+                Ok(GeneralTypedArgumentKindV1::ExclusiveSlice(scalar))
+            } else {
+                Ok(GeneralTypedArgumentKindV1::MappedExclusiveSlice(
+                    scalar,
+                    index_space,
+                ))
             }
-            Ok(GeneralTypedArgumentKindV1::ExclusiveSlice(scalar))
         }
         GeneralTypedPointerPathV1::DeviceGlobalMutPointer => {
             Ok(GeneralTypedArgumentKindV1::GlobalMutPointer(scalar))
@@ -2690,6 +2708,57 @@ fn is_index_1d_v1(ty: &Type) -> bool {
     }
 }
 
+fn parse_disjoint_index_space_v1(ty: &Type) -> Option<RustDisjointIndexSpaceV1> {
+    if is_index_1d_v1(ty) {
+        return Some(RustDisjointIndexSpaceV1::Index1D);
+    }
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    if path.qself.is_some() || path.path.leading_colon.is_some() {
+        return None;
+    }
+    let segments = path.path.segments.iter().collect::<Vec<_>>();
+    let segment = match segments.as_slice() {
+        [segment] => *segment,
+        [namespace, segment]
+            if namespace.ident == "fe2o3_device"
+                && matches!(namespace.arguments, PathArguments::None) =>
+        {
+            *segment
+        }
+        _ => return None,
+    };
+    if segment.ident == "GridExclusive" && matches!(segment.arguments, PathArguments::None) {
+        return Some(RustDisjointIndexSpaceV1::GridExclusive);
+    }
+    if segment.ident != "Shifted" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    if arguments.colon2_token.is_some() || arguments.args.len() != 2 {
+        return None;
+    }
+    let mut arguments = arguments.args.iter();
+    let Some(GenericArgument::Type(base)) = arguments.next() else {
+        return None;
+    };
+    if !is_index_1d_v1(base) {
+        return None;
+    }
+    let Some(GenericArgument::Const(syn::Expr::Lit(offset))) = arguments.next() else {
+        return None;
+    };
+    let syn::Lit::Int(offset) = &offset.lit else {
+        return None;
+    };
+    Some(RustDisjointIndexSpaceV1::ShiftedIndex1D {
+        offset: offset.base10_parse().ok()?,
+    })
+}
+
 fn general_typed_abi_v1(
     arguments: &[GeneralTypedArgumentKindV1],
     exact_argument_names: Option<&[&str]>,
@@ -2702,7 +2771,8 @@ fn general_typed_abi_v1(
         let (size, alignment) = match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.size_alignment(),
             GeneralTypedArgumentKindV1::SharedSlice(_)
-            | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => (
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+            | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _) => (
                 GENERAL_TYPED_SLICE_SIZE_V1,
                 GENERAL_TYPED_POINTER_ALIGNMENT_V1,
             ),
@@ -2781,6 +2851,16 @@ fn general_typed_abi_field_v1(
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
+            GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => (
+                GENERAL_TYPED_SLICE_SIZE_V1,
+                GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+                general_typed_slice_kind_v1(scalar),
+                Mutability::Mutable,
+                Access::ReadWrite,
+                AddressSpace::Global,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
             GeneralTypedArgumentKindV1::GlobalMutPointer(scalar) => {
                 let (pointee_size, pointee_alignment) = scalar.size_alignment();
                 (
@@ -2829,6 +2909,9 @@ fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeI
         }
         GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
             general_typed_slice_type_identity_v1(scalar, true)
+        }
+        GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, index_space) => {
+            general_typed_mapped_slice_type_identity_v1(scalar, index_space)
         }
         GeneralTypedArgumentKindV1::GlobalMutPointer(scalar) => {
             general_typed_global_mut_pointer_type_identity_v1(scalar)
@@ -2940,6 +3023,40 @@ fn general_typed_slice_type_identity_v1(
         vec![pointer, length],
     )
     .expect("the fixed V1 slice layout is valid")
+    .type_identity()
+}
+
+fn general_typed_mapped_slice_type_identity_v1(
+    scalar: GeneralTypedScalarV1,
+    index_space: RustDisjointIndexSpaceV1,
+) -> TypeIdentity {
+    let scalar = scalar.rust_layout_scalar();
+    let pointer = RustPhysicalComponentV1::new(
+        0,
+        GENERAL_TYPED_POINTER_SIZE_V1,
+        GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+        RustPhysicalComponentKindV1::Pointer {
+            mutability: RustPointerMutabilityV1::Mut,
+            pointee: scalar,
+        },
+    )
+    .expect("the fixed V1 pointer component is valid");
+    let length = RustPhysicalComponentV1::new(
+        GENERAL_TYPED_POINTER_SIZE_V1,
+        GENERAL_TYPED_POINTER_SIZE_V1,
+        GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+        RustPhysicalComponentKindV1::Usize,
+    )
+    .expect("the fixed V1 usize component is valid");
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(scalar, index_space)),
+        RustcAbiClassV1::ScalarPair,
+        PointerWidth::Bits64,
+        GENERAL_TYPED_SLICE_SIZE_V1,
+        GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+        vec![pointer, length],
+    )
+    .expect("the fixed V1 mapped slice layout is valid")
     .type_identity()
 }
 
@@ -4703,6 +4820,40 @@ mod tests {
                 "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64"
             ]
         );
+    }
+
+    #[test]
+    fn general_typed_contract_retains_disjoint_mapping_brands() {
+        let identity: ItemFn = parse_quote! {
+            pub fn identity(output: DisjointSlice<f32, Index1D>) {}
+        };
+        let shifted: ItemFn = parse_quote! {
+            pub fn shifted(output: DisjointSlice<f32, Shifted<Index1D, 7>>) {}
+        };
+        let grid_exclusive: ItemFn = parse_quote! {
+            pub fn grid_exclusive(output: DisjointSlice<f32, GridExclusive>) {}
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let identity = model_general_typed_signature_v1(&identity, &options, [0x71; 32])
+            .unwrap()
+            .abi
+            .fields()[0]
+            .type_identity();
+        let shifted = model_general_typed_signature_v1(&shifted, &options, [0x72; 32])
+            .unwrap()
+            .abi
+            .fields()[0]
+            .type_identity();
+        let grid_exclusive =
+            model_general_typed_signature_v1(&grid_exclusive, &options, [0x73; 32])
+                .unwrap()
+                .abi
+                .fields()[0]
+                .type_identity();
+
+        assert_ne!(identity, shifted);
+        assert_ne!(identity, grid_exclusive);
+        assert_ne!(shifted, grid_exclusive);
     }
 
     #[test]

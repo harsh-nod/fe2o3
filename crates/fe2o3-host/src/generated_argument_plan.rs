@@ -45,6 +45,29 @@ pub trait GeneratedDeviceScalarV1: generated_device_scalar_seal::Sealed + Device
     fn disjoint_slice_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
         canonical_slice_layout_v1(Self::RUST_SCALAR_TYPE, pointer_width, true).type_identity()
     }
+
+    #[doc(hidden)]
+    fn shifted_disjoint_slice_type_identity_v1(
+        pointer_width: PointerWidth,
+        offset: u64,
+    ) -> TypeIdentity {
+        canonical_disjoint_slice_layout_v1(
+            Self::RUST_SCALAR_TYPE,
+            pointer_width,
+            RustDisjointIndexSpaceV1::ShiftedIndex1D { offset },
+        )
+        .type_identity()
+    }
+
+    #[doc(hidden)]
+    fn grid_exclusive_slice_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
+        canonical_disjoint_slice_layout_v1(
+            Self::RUST_SCALAR_TYPE,
+            pointer_width,
+            RustDisjointIndexSpaceV1::GridExclusive,
+        )
+        .type_identity()
+    }
 }
 
 macro_rules! impl_generated_device_integer_scalar_v1 {
@@ -131,13 +154,42 @@ fn canonical_slice_layout_v1(
     pointer_width: PointerWidth,
     disjoint: bool,
 ) -> RustLayoutEvidenceV1 {
+    if disjoint {
+        return canonical_disjoint_slice_layout_v1(
+            element,
+            pointer_width,
+            RustDisjointIndexSpaceV1::Index1D,
+        );
+    }
+    canonical_slice_layout_with_source_v1(
+        element,
+        pointer_width,
+        RustSourceTypeShapeV1::shared_slice(element),
+        false,
+    )
+}
+
+fn canonical_disjoint_slice_layout_v1(
+    element: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+    index_space: RustDisjointIndexSpaceV1,
+) -> RustLayoutEvidenceV1 {
+    canonical_slice_layout_with_source_v1(
+        element,
+        pointer_width,
+        RustSourceTypeShapeV1::disjoint_slice(element, index_space),
+        true,
+    )
+}
+
+fn canonical_slice_layout_with_source_v1(
+    element: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+    source_type: RustSourceTypeShapeV1,
+    disjoint: bool,
+) -> RustLayoutEvidenceV1 {
     let width = pointer_width.bytes();
     let alignment = u32::try_from(width).expect("pointer width fits u32");
-    let source_type = if disjoint {
-        RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D)
-    } else {
-        RustSourceTypeShapeV1::shared_slice(element)
-    };
     let pointer = RustPhysicalComponentV1::new(
         0,
         width,
@@ -2067,6 +2119,19 @@ mod tests {
         generated: &CompilerGeneratedArgumentLayoutV1,
     ) -> Result<super::GeneratedArgumentPackingPlanV1, GeneratedArgumentPackingError> {
         validate_argument_packing(KERNEL_ID, manifest, generated)
+    }
+
+    #[test]
+    fn disjoint_mapping_brands_have_distinct_host_binding_identities() {
+        let identity = f32::disjoint_slice_type_identity_v1(PointerWidth::Bits64);
+        let shifted = f32::shifted_disjoint_slice_type_identity_v1(PointerWidth::Bits64, 1);
+        let shifted_again = f32::shifted_disjoint_slice_type_identity_v1(PointerWidth::Bits64, 2);
+        let grid_exclusive = f32::grid_exclusive_slice_type_identity_v1(PointerWidth::Bits64);
+
+        assert_ne!(identity, shifted);
+        assert_ne!(shifted, shifted_again);
+        assert_ne!(identity, grid_exclusive);
+        assert_ne!(shifted, grid_exclusive);
     }
 
     #[test]
