@@ -1,8 +1,10 @@
 use fe2o3_device::{DisjointSlice, KernelMarkerV1};
 use fe2o3_tiled_gemm_general_v1::{
-    GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1, GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1,
-    GENERAL_TILED_GEMM_SOURCE_BLOCKER_V1, GENERAL_TILED_GEMM_SOURCE_BLOCKERS_V1,
-    GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1, GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1,
+    GENERAL_TILED_GEMM_PROTECTED_EXECUTION_BLOCKER_V1,
+    GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1,
+    GENERAL_TILED_GEMM_QUALIFICATION_EXECUTION_SUPPORTED_V1,
+    GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1, GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1,
+    GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1,
     kernel::{
         __fe2o3_kernel_marker_tiled_gemm_general_v1, GENERAL_TILED_GEMM_MAX_PHASES_V1,
         GENERAL_TILED_GEMM_WORKGROUP_V1,
@@ -14,7 +16,7 @@ const LIB_SOURCE: &str = include_str!("../src/lib.rs");
 const KERNEL_SOURCE: &str = include_str!("../src/kernel.rs");
 
 type GeneralKernelFn =
-    fn(&[u16], &[u16], DisjointSlice<f32>, u32, u32, u32, u32, u32, u32, f32, f32);
+    fn(&[f32], &[f32], DisjointSlice<f32>, u32, u32, u32, u32, u32, u32, f32, f32);
 
 #[derive(Default)]
 struct SourceFacts {
@@ -63,7 +65,7 @@ fn attributed_safe_kernel_compiles_with_the_dynamic_abi() {
 }
 
 #[test]
-fn source_forbids_unsafe_and_contains_the_full_phase_sequence() {
+fn source_forbids_unsafe_and_contains_dynamic_indexing_and_epilogue() {
     let library = syn::parse_file(LIB_SOURCE).expect("library source parses");
     assert!(library.attrs.iter().any(|attribute| {
         attribute.path().is_ident("forbid")
@@ -78,18 +80,11 @@ fn source_forbids_unsafe_and_contains_the_full_phase_sequence() {
     facts.visit_file(&syntax);
     assert_eq!(facts.unsafe_blocks, 0);
     assert_eq!(facts.unsafe_functions, 0);
-    for required in ["from_compiler", "load_bf16_or_zero"] {
-        assert!(facts.function_calls.iter().any(|call| call == required));
+    assert!(facts.function_calls.iter().any(|call| call == "index_1d"));
+    for required in ["a[a_index]", "b[b_index]"] {
+        assert!(KERNEL_SOURCE.contains(required));
     }
-    for required in [
-        "stage",
-        "publish",
-        "multiply_accumulate",
-        "reuse",
-        "store_c_fragment",
-    ] {
-        assert!(facts.method_calls.iter().any(|call| call == required));
-    }
+    assert!(facts.method_calls.iter().any(|call| call == "get_mut"));
     for forbidden in ["get_unchecked", "get_unchecked_mut", "get_mut_at"] {
         assert!(!facts.method_calls.iter().any(|call| call == forbidden));
     }
@@ -99,8 +94,8 @@ fn source_forbids_unsafe_and_contains_the_full_phase_sequence() {
 fn ordinary_host_execution_panics_before_output_mutation() {
     let function: GeneralKernelFn =
         <__fe2o3_kernel_marker_tiled_gemm_general_v1 as KernelMarkerV1>::FUNCTION;
-    let a = [0x3f80_u16; 17];
-    let b = [0x3f80_u16; 19];
+    let a = [1.0_f32; 17];
+    let b = [1.0_f32; 19];
     let sentinel = f32::from_bits(0x7f7f_ffff);
     let mut output = [sentinel; 19];
     // SAFETY: the test exclusively owns `output` for the caught invocation.
@@ -117,24 +112,26 @@ fn ordinary_host_execution_panics_before_output_mutation() {
 }
 
 #[test]
-fn status_is_explicitly_source_only_and_fail_closed() {
-    assert_eq!(GENERAL_TILED_GEMM_WORKGROUP_V1, [64, 1, 1]);
-    assert_eq!(GENERAL_TILED_GEMM_MAX_PHASES_V1, 1 << 28);
+fn status_records_end_to_end_qualification_and_protected_boundary() {
+    assert_eq!(GENERAL_TILED_GEMM_WORKGROUP_V1, [256, 1, 1]);
+    assert_eq!(GENERAL_TILED_GEMM_MAX_PHASES_V1, u32::MAX);
     assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1
     ));
-    assert!(!std::hint::black_box(
+    assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1
     ));
-    assert!(!std::hint::black_box(
+    assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1
+    ));
+    assert!(std::hint::black_box(
+        GENERAL_TILED_GEMM_QUALIFICATION_EXECUTION_SUPPORTED_V1
     ));
     assert!(!std::hint::black_box(
         GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1
     ));
     assert_eq!(
-        GENERAL_TILED_GEMM_SOURCE_BLOCKER_V1,
-        "authenticated optimized MIR receives only non-authoritative structural analysis; production frontend correspondence is disabled until the complete optimized-MIR authority proof is closed"
+        GENERAL_TILED_GEMM_PROTECTED_EXECUTION_BLOCKER_V1,
+        "protected Worker publication and artifact-currentness admission remain separate from the qualification runner"
     );
-    assert_eq!(GENERAL_TILED_GEMM_SOURCE_BLOCKERS_V1.len(), 5);
 }
