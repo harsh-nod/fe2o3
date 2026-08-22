@@ -188,6 +188,10 @@ impl WorkerRequestV2 {
         Ok(request)
     }
 
+    pub(crate) fn into_external_providers(self) -> Vec<WorkerInputV1> {
+        self.external_providers
+    }
+
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }

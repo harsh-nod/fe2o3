@@ -418,12 +418,17 @@ fn validate_recovered_publication(
     let decoded = decode_compiler_module_handoff_v2(outer.module_handoff().canonical_bytes())
         .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
     let (_, worker_options) = decode_link_options(replay.link_options)?;
+    let raw_hsaco = derive_unfinalized_hsaco_from_finalized_v1(&exact_finalized_hsaco)?;
+    let raw_identity = ContentIdentityV1::calculate(&raw_hsaco);
+    let plan = derive_link_plan(&decoded, &providers, replay.link_options, raw_identity)?;
+    let input_kinds =
+        LinkInputKindClosureV1::new(&plan, plan_inputs_with_kinds(&decoded, &providers)?)?;
     let bootstrap_output = WorkerOutputConstraintsV1::new(replay.bootstrap_output_bound)?;
     let bootstrap = construct_first_build_worker_request_v2_from_decoded(
         CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
         replay.worker,
         &decoded,
-        providers.clone(),
+        providers,
         worker_options,
         bootstrap_output,
     )?;
@@ -431,11 +436,12 @@ fn validate_recovered_publication(
         bootstrap.sealed_request().canonical_bytes(),
         "bootstrap request wire",
     )?;
-    let raw_hsaco = derive_unfinalized_hsaco_from_finalized_v1(&exact_finalized_hsaco)?;
-    let raw_identity = ContentIdentityV1::calculate(&raw_hsaco);
-    let plan = derive_link_plan(&decoded, &providers, replay.link_options, raw_identity)?;
-    let input_kinds =
-        LinkInputKindClosureV1::new(&plan, plan_inputs_with_kinds(&decoded, &providers)?)?;
+    let bootstrap_response = reconstruct_complete_worker_response_v2(
+        bootstrap.sealed_request(),
+        &raw_hsaco,
+        replay.bootstrap_metadata,
+    )?;
+    let providers = bootstrap.into_external_providers();
     let replay_output = WorkerOutputConstraintsV1::new(raw_identity.byte_len())?;
     let replay_request = construct_plan_worker_request_v2_from_decoded(
         CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
@@ -449,11 +455,6 @@ fn validate_recovered_publication(
     let replay_request_bytes = try_copy_bytes(
         replay_request.sealed_request().canonical_bytes(),
         "replay request wire",
-    )?;
-    let bootstrap_response = reconstruct_complete_worker_response_v2(
-        bootstrap.sealed_request(),
-        &raw_hsaco,
-        replay.bootstrap_metadata,
     )?;
     let replay_response = reconstruct_complete_worker_response_v2(
         replay_request.sealed_request(),

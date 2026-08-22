@@ -795,6 +795,10 @@ impl ConstructedCompilerHandoffWorkerRequestV2 {
     pub(crate) const fn sealed_request(&self) -> &WorkerRequestV2 {
         &self.request
     }
+
+    pub(crate) fn into_external_providers(self) -> Vec<WorkerInputV1> {
+        self.request.into_external_providers()
+    }
 }
 
 pub(crate) fn construct_first_build_worker_request_v2_from_decoded(
