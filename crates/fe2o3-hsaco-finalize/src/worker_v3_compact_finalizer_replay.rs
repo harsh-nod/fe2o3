@@ -2,7 +2,10 @@
 
 use std::{error::Error, fmt, ops::Range, time::Duration};
 
-use fe2o3_artifact_transaction::MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1;
+use fe2o3_artifact_transaction::{
+    CompilerModuleHandoffSlotV3, CompilerModuleHandoffTransactionIdentityV3,
+    MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
+};
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3;
 use sha2::{Digest, Sha256};
 
@@ -23,10 +26,16 @@ use crate::{
 
 const COMPACT_REPLAY_MAGIC_V1: &[u8; 8] = b"F2V3CFR1";
 const COMPACT_REPLAY_VERSION_V1: u16 = 1;
+const COMPACT_REPLAY_MAGIC_V2: &[u8; 8] = b"F2V3CFR2";
+const COMPACT_REPLAY_VERSION_V2: u16 = 2;
 const COMPACT_REPLAY_CHECKSUM_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-CHECKSUM/V1\0";
 const COMPACT_REPLAY_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-IDENTITY/V1\0";
+const COMPACT_REPLAY_CHECKSUM_DOMAIN_V2: &[u8] =
+    b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-CHECKSUM/V2\0";
+const COMPACT_REPLAY_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-IDENTITY/V2\0";
 
 const MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES_V1: usize = 16_644;
 const MAX_RESPONSE_PROVIDER_EVIDENCE_BODY_BYTES_V1: usize = 1_067_889;
@@ -47,16 +56,47 @@ impl ProtectedWorkerV3CompactFinalizerReplayIdentityV1 {
     }
 }
 
+/// Domain-separated identity of one exact transaction-replayable compact V2 transcript.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProtectedWorkerV3CompactFinalizerReplayIdentityV2([u8; 32]);
+
+impl ProtectedWorkerV3CompactFinalizerReplayIdentityV2 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WorkerV3ProviderReplayReferenceV1 {
-    kind: WorkerInputKindV1,
-    identity: ContentIdentityV1,
+pub(crate) struct WorkerV3ProviderReplayReferenceV1 {
+    pub(crate) kind: WorkerInputKindV1,
+    pub(crate) identity: ContentIdentityV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CompactResponseMetadataRangesV1 {
     diagnostics: Range<usize>,
     provider_evidence: Option<Range<usize>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DecodedCompactReplayTailV1 {
+    worker: WorkerMeasurementV1,
+    execution_limits: WorkerExecutionLimitsV1,
+    bootstrap_output_bound: u64,
+    external_providers: Vec<WorkerV3ProviderReplayReferenceV1>,
+    link_options: Vec<LinkOptionV1>,
+    bootstrap_metadata: CompactResponseMetadataRangesV1,
+    replay_metadata: CompactResponseMetadataRangesV1,
+}
+
+pub(crate) struct ProtectedWorkerV3CompactFinalizerReplayViewV2<'replay> {
+    pub(crate) worker: &'replay WorkerMeasurementV1,
+    pub(crate) execution_limits: WorkerExecutionLimitsV1,
+    pub(crate) bootstrap_output_bound: u64,
+    pub(crate) external_providers: &'replay [WorkerV3ProviderReplayReferenceV1],
+    pub(crate) link_options: &'replay [LinkOptionV1],
+    pub(crate) bootstrap_metadata: WorkerResponseReplayMetadataV1<'replay>,
+    pub(crate) replay_metadata: WorkerResponseReplayMetadataV1<'replay>,
 }
 
 /// Opaque bounded transcript that reconstructs exact V3 request and response wires.
@@ -155,95 +195,7 @@ impl ProtectedWorkerV3CompactFinalizerReplayV1 {
         if source_evidence_identity == [0; 32] || binding_identity == [0; 32] {
             return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity);
         }
-        let worker_executable = decode_content_identity(&mut reader, MAX_WORKER_EXECUTABLE_BYTES)?;
-        let worker_build_identity = copy_text(
-            reader.text_u8(MAX_WORKER_TOOLCHAIN_ID_BYTES)?,
-            "worker build identity",
-        )?;
-        let llvm_build_identity = copy_text(
-            reader.text_u8(MAX_WORKER_TOOLCHAIN_ID_BYTES)?,
-            "LLVM build identity",
-        )?;
-        let worker = WorkerMeasurementV1::new(
-            worker_executable,
-            worker_build_identity,
-            llvm_build_identity,
-        )
-        .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Worker)?;
-        let timeout_seconds = reader.u64()?;
-        let timeout_nanoseconds = reader.u32()?;
-        if timeout_nanoseconds >= 1_000_000_000 {
-            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Limits);
-        }
-        let timeout = Duration::new(timeout_seconds, timeout_nanoseconds);
-        let stdout_bytes = usize::try_from(reader.u64()?)
-            .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Limits)?;
-        let stderr_bytes = usize::try_from(reader.u64()?)
-            .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Limits)?;
-        let execution_limits = WorkerExecutionLimitsV1::new(timeout, stdout_bytes, stderr_bytes)
-            .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Limits)?;
-        let bootstrap_output_bound = reader.u64()?;
-        if bootstrap_output_bound == 0 || bootstrap_output_bound > MAX_WORKER_OUTPUT_BYTES as u64 {
-            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::OutputBound);
-        }
-
-        let provider_count = reader.u8()? as usize;
-        if provider_count > MAX_LINK_INPUTS.saturating_sub(1) {
-            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Providers);
-        }
-        let mut external_providers = try_vec(provider_count, "provider references")?;
-        let mut provider_payload_bytes = 0_u64;
-        let mut previous_provider = None;
-        for _ in 0..provider_count {
-            let kind = decode_input_kind(reader.u8()?)?;
-            let identity =
-                decode_content_identity(&mut reader, MAX_WORKER_TOTAL_INPUT_BYTES as u64)?;
-            provider_payload_bytes = provider_payload_bytes
-                .checked_add(identity.byte_len())
-                .ok_or(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Providers)?;
-            if provider_payload_bytes > MAX_WORKER_TOTAL_INPUT_BYTES as u64
-                || previous_provider.is_some_and(
-                    |before: (ContentIdentityV1, WorkerInputKindV1)| {
-                        before.0 == identity || before >= (identity, kind)
-                    },
-                )
-            {
-                return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Providers);
-            }
-            external_providers.push(WorkerV3ProviderReplayReferenceV1 { kind, identity });
-            previous_provider = Some((identity, kind));
-        }
-
-        let option_count = reader.u8()? as usize;
-        if option_count > MAX_LINK_OPTIONS {
-            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Options);
-        }
-        let mut link_options = try_vec(option_count, "link options")?;
-        for _ in 0..option_count {
-            let name = copy_text(
-                reader.text_u8(MAX_LINK_OPTION_NAME_BYTES)?,
-                "link option name",
-            )?;
-            let value = copy_text(
-                reader.text_u16_allow_empty(MAX_LINK_OPTION_VALUE_BYTES)?,
-                "link option value",
-            )?;
-            let option = LinkOptionV1::new(name, value)
-                .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Options)?;
-            if link_options
-                .last()
-                .is_some_and(|before: &LinkOptionV1| before.name() >= option.name())
-            {
-                return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Options);
-            }
-            link_options.push(option);
-        }
-
-        let bootstrap_metadata = decode_response_metadata(&mut reader)?;
-        let replay_metadata = decode_response_metadata(&mut reader)?;
-        if !reader.finished() {
-            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::TrailingBytes);
-        }
+        let tail = decode_compact_replay_tail(&mut reader)?;
         let identity = ProtectedWorkerV3CompactFinalizerReplayIdentityV1(hash_domain_blob(
             COMPACT_REPLAY_IDENTITY_DOMAIN_V1,
             &canonical_bytes,
@@ -253,13 +205,283 @@ impl ProtectedWorkerV3CompactFinalizerReplayV1 {
             expected_finalization_identity,
             source_evidence_identity,
             binding_identity,
-            worker,
-            execution_limits,
-            bootstrap_output_bound,
-            external_providers,
-            link_options,
-            bootstrap_metadata,
-            replay_metadata,
+            worker: tail.worker,
+            execution_limits: tail.execution_limits,
+            bootstrap_output_bound: tail.bootstrap_output_bound,
+            external_providers: tail.external_providers,
+            link_options: tail.link_options,
+            bootstrap_metadata: tail.bootstrap_metadata,
+            replay_metadata: tail.replay_metadata,
+            canonical_bytes,
+        })
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+fn decode_compact_replay_tail(
+    reader: &mut CompactReplayReaderV1<'_>,
+) -> Result<DecodedCompactReplayTailV1, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    let worker_executable = decode_content_identity(reader, MAX_WORKER_EXECUTABLE_BYTES)?;
+    let worker_build_identity = copy_text(
+        reader.text_u8(MAX_WORKER_TOOLCHAIN_ID_BYTES)?,
+        "worker build identity",
+    )?;
+    let llvm_build_identity = copy_text(
+        reader.text_u8(MAX_WORKER_TOOLCHAIN_ID_BYTES)?,
+        "LLVM build identity",
+    )?;
+    let worker = WorkerMeasurementV1::new(
+        worker_executable,
+        worker_build_identity,
+        llvm_build_identity,
+    )
+    .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Worker)?;
+    let timeout_seconds = reader.u64()?;
+    let timeout_nanoseconds = reader.u32()?;
+    if timeout_nanoseconds >= 1_000_000_000 {
+        return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Limits);
+    }
+    let timeout = Duration::new(timeout_seconds, timeout_nanoseconds);
+    let stdout_bytes = usize::try_from(reader.u64()?)
+        .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Limits)?;
+    let stderr_bytes = usize::try_from(reader.u64()?)
+        .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Limits)?;
+    let execution_limits = WorkerExecutionLimitsV1::new(timeout, stdout_bytes, stderr_bytes)
+        .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Limits)?;
+    let bootstrap_output_bound = reader.u64()?;
+    if bootstrap_output_bound == 0 || bootstrap_output_bound > MAX_WORKER_OUTPUT_BYTES as u64 {
+        return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::OutputBound);
+    }
+
+    let provider_count = reader.u8()? as usize;
+    if provider_count > MAX_LINK_INPUTS.saturating_sub(1) {
+        return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Providers);
+    }
+    let mut external_providers = try_vec(provider_count, "provider references")?;
+    let mut provider_payload_bytes = 0_u64;
+    let mut previous_provider = None;
+    for _ in 0..provider_count {
+        let kind = decode_input_kind(reader.u8()?)?;
+        let identity = decode_content_identity(reader, MAX_WORKER_TOTAL_INPUT_BYTES as u64)?;
+        provider_payload_bytes = provider_payload_bytes
+            .checked_add(identity.byte_len())
+            .ok_or(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Providers)?;
+        if provider_payload_bytes > MAX_WORKER_TOTAL_INPUT_BYTES as u64
+            || previous_provider.is_some_and(|before: (ContentIdentityV1, WorkerInputKindV1)| {
+                before.0 == identity || before >= (identity, kind)
+            })
+        {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Providers);
+        }
+        external_providers.push(WorkerV3ProviderReplayReferenceV1 { kind, identity });
+        previous_provider = Some((identity, kind));
+    }
+
+    let option_count = reader.u8()? as usize;
+    if option_count > MAX_LINK_OPTIONS {
+        return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Options);
+    }
+    let mut link_options = try_vec(option_count, "link options")?;
+    for _ in 0..option_count {
+        let name = copy_text(
+            reader.text_u8(MAX_LINK_OPTION_NAME_BYTES)?,
+            "link option name",
+        )?;
+        let value = copy_text(
+            reader.text_u16_allow_empty(MAX_LINK_OPTION_VALUE_BYTES)?,
+            "link option value",
+        )?;
+        let option = LinkOptionV1::new(name, value)
+            .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Options)?;
+        if link_options
+            .last()
+            .is_some_and(|before: &LinkOptionV1| before.name() >= option.name())
+        {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Options);
+        }
+        link_options.push(option);
+    }
+
+    let bootstrap_metadata = decode_response_metadata(reader)?;
+    let replay_metadata = decode_response_metadata(reader)?;
+    if !reader.finished() {
+        return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::TrailingBytes);
+    }
+    Ok(DecodedCompactReplayTailV1 {
+        worker,
+        execution_limits,
+        bootstrap_output_bound,
+        external_providers,
+        link_options,
+        bootstrap_metadata,
+        replay_metadata,
+    })
+}
+
+/// Compact replay metadata that can independently rederive the strict V3 transaction binding.
+///
+/// V1 remains decodable for storage compatibility, but carries only an opaque binding digest.
+/// V2 instead retains the bounded slot and transaction identity; the build attempt comes from the
+/// durable occurrence record and every other binding axis is rederived from the outer handoff.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtectedWorkerV3CompactFinalizerReplayV2 {
+    identity: ProtectedWorkerV3CompactFinalizerReplayIdentityV2,
+    expected_finalization_identity: [u8; 32],
+    source_evidence_identity: [u8; 32],
+    handoff_slot: CompilerModuleHandoffSlotV3,
+    transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+    worker: WorkerMeasurementV1,
+    execution_limits: WorkerExecutionLimitsV1,
+    bootstrap_output_bound: u64,
+    external_providers: Vec<WorkerV3ProviderReplayReferenceV1>,
+    link_options: Vec<LinkOptionV1>,
+    bootstrap_metadata: CompactResponseMetadataRangesV1,
+    replay_metadata: CompactResponseMetadataRangesV1,
+    canonical_bytes: Vec<u8>,
+}
+
+impl ProtectedWorkerV3CompactFinalizerReplayV2 {
+    pub const fn identity(&self) -> ProtectedWorkerV3CompactFinalizerReplayIdentityV2 {
+        self.identity
+    }
+
+    pub const fn expected_finalization_identity(&self) -> &[u8; 32] {
+        &self.expected_finalization_identity
+    }
+
+    pub const fn source_evidence_identity(&self) -> &[u8; 32] {
+        &self.source_evidence_identity
+    }
+
+    pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV3 {
+        self.handoff_slot
+    }
+
+    pub const fn transaction_identity(&self) -> CompilerModuleHandoffTransactionIdentityV3 {
+        self.transaction_identity
+    }
+
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub fn try_encode_canonical(
+        &self,
+    ) -> Result<Vec<u8>, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+        try_copy_bytes(&self.canonical_bytes, "compact V2 transcript encoding")
+    }
+
+    pub fn into_canonical_bytes(self) -> Vec<u8> {
+        self.canonical_bytes
+    }
+
+    pub(crate) fn replay_view(&self) -> ProtectedWorkerV3CompactFinalizerReplayViewV2<'_> {
+        let bootstrap_provider = self
+            .bootstrap_metadata
+            .provider_evidence
+            .as_ref()
+            .map(|range| &self.canonical_bytes[range.clone()]);
+        let replay_provider = self
+            .replay_metadata
+            .provider_evidence
+            .as_ref()
+            .map(|range| &self.canonical_bytes[range.clone()]);
+        ProtectedWorkerV3CompactFinalizerReplayViewV2 {
+            worker: &self.worker,
+            execution_limits: self.execution_limits,
+            bootstrap_output_bound: self.bootstrap_output_bound,
+            external_providers: &self.external_providers,
+            link_options: &self.link_options,
+            bootstrap_metadata: WorkerResponseReplayMetadataV1::from_bodies(
+                &self.canonical_bytes[self.bootstrap_metadata.diagnostics.clone()],
+                bootstrap_provider,
+            ),
+            replay_metadata: WorkerResponseReplayMetadataV1::from_bodies(
+                &self.canonical_bytes[self.replay_metadata.diagnostics.clone()],
+                replay_provider,
+            ),
+        }
+    }
+
+    pub fn decode_canonical(
+        bytes: &[u8],
+    ) -> Result<Self, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+        if bytes.len() < COMPACT_REPLAY_MAGIC_V2.len() + 2 + 32
+            || bytes.len() > MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1
+        {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Length);
+        }
+        Self::decode_owned(try_copy_bytes(bytes, "compact V2 transcript decode")?)
+    }
+
+    fn decode_owned(
+        canonical_bytes: Vec<u8>,
+    ) -> Result<Self, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+        if canonical_bytes.len() < COMPACT_REPLAY_MAGIC_V2.len() + 2 + 32
+            || canonical_bytes.len() > MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1
+        {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Length);
+        }
+        let checksum_offset = canonical_bytes
+            .len()
+            .checked_sub(32)
+            .ok_or(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Length)?;
+        let (body, checksum) = canonical_bytes.split_at(checksum_offset);
+        if hash_domain_blob(COMPACT_REPLAY_CHECKSUM_DOMAIN_V2, body) != checksum {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Checksum);
+        }
+
+        let mut reader = CompactReplayReaderV1::new(body);
+        if reader.take(COMPACT_REPLAY_MAGIC_V2.len())? != COMPACT_REPLAY_MAGIC_V2 {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Magic);
+        }
+        if reader.u16()? != COMPACT_REPLAY_VERSION_V2 {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Version);
+        }
+        let expected_finalization_identity = reader.array()?;
+        let source_evidence_identity = reader.array()?;
+        if expected_finalization_identity == [0; 32] || source_evidence_identity == [0; 32] {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity);
+        }
+        let handoff_slot = decode_handoff_slot_v3(reader.u8()?)?;
+        let transaction_identity =
+            CompilerModuleHandoffTransactionIdentityV3::from_bytes(reader.array()?);
+        if transaction_identity.as_bytes() == &[0; 32] {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity);
+        }
+        let tail = decode_compact_replay_tail(&mut reader)?;
+        let identity = ProtectedWorkerV3CompactFinalizerReplayIdentityV2(hash_domain_blob(
+            COMPACT_REPLAY_IDENTITY_DOMAIN_V2,
+            &canonical_bytes,
+        ));
+        Ok(Self {
+            identity,
+            expected_finalization_identity,
+            source_evidence_identity,
+            handoff_slot,
+            transaction_identity,
+            worker: tail.worker,
+            execution_limits: tail.execution_limits,
+            bootstrap_output_bound: tail.bootstrap_output_bound,
+            external_providers: tail.external_providers,
+            link_options: tail.link_options,
+            bootstrap_metadata: tail.bootstrap_metadata,
+            replay_metadata: tail.replay_metadata,
             canonical_bytes,
         })
     }
@@ -385,6 +607,83 @@ impl PreparedProtectedWorkerV3CompactFinalizerReplayV1 {
     }
 }
 
+/// Unique restart owners using the transaction-replayable compact V2 transcript.
+pub struct PreparedProtectedWorkerV3CompactFinalizerReplayV2 {
+    outer_handoff: Vec<u8>,
+    external_provider_payloads: Vec<Vec<u8>>,
+    transcript: ProtectedWorkerV3CompactFinalizerReplayV2,
+    finalized_hsaco: Vec<u8>,
+}
+
+impl fmt::Debug for PreparedProtectedWorkerV3CompactFinalizerReplayV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let provider_bytes = self
+            .external_provider_payloads
+            .iter()
+            .fold(0_usize, |total, payload| {
+                total.saturating_add(payload.len())
+            });
+        formatter
+            .debug_struct("PreparedProtectedWorkerV3CompactFinalizerReplayV2")
+            .field("outer_handoff_bytes", &self.outer_handoff.len())
+            .field(
+                "external_provider_count",
+                &self.external_provider_payloads.len(),
+            )
+            .field("external_provider_bytes", &provider_bytes)
+            .field("transcript_identity", &self.transcript.identity())
+            .field("transcript_bytes", &self.transcript.canonical_bytes().len())
+            .field("finalized_hsaco_bytes", &self.finalized_hsaco.len())
+            .finish()
+    }
+}
+
+pub(crate) struct OwnedProtectedWorkerV3CompactFinalizerReplayPartsV2 {
+    pub(crate) outer_handoff: Vec<u8>,
+    pub(crate) external_provider_payloads: Vec<Vec<u8>>,
+    pub(crate) transcript: Vec<u8>,
+    pub(crate) finalized_hsaco: Vec<u8>,
+}
+
+impl PreparedProtectedWorkerV3CompactFinalizerReplayV2 {
+    pub fn outer_handoff(&self) -> &[u8] {
+        &self.outer_handoff
+    }
+
+    pub fn external_provider_payloads(&self) -> impl ExactSizeIterator<Item = &[u8]> {
+        self.external_provider_payloads.iter().map(Vec::as_slice)
+    }
+
+    pub const fn transcript(&self) -> &ProtectedWorkerV3CompactFinalizerReplayV2 {
+        &self.transcript
+    }
+
+    pub fn exact_finalized_hsaco(&self) -> &[u8] {
+        &self.finalized_hsaco
+    }
+
+    pub(crate) fn into_storage_parts(self) -> OwnedProtectedWorkerV3CompactFinalizerReplayPartsV2 {
+        OwnedProtectedWorkerV3CompactFinalizerReplayPartsV2 {
+            outer_handoff: self.outer_handoff,
+            external_provider_payloads: self.external_provider_payloads,
+            transcript: self.transcript.into_canonical_bytes(),
+            finalized_hsaco: self.finalized_hsaco,
+        }
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Consumes finalized native-V3 evidence into unique durable restart components.
 pub fn prepare_protected_worker_v3_compact_finalizer_replay_v1(
     finalized: PreparedFinalizedProtectedWorkerV3HsacoV1,
@@ -426,6 +725,56 @@ pub fn prepare_protected_worker_v3_compact_finalizer_replay_v1(
     );
     let outer_handoff = source.handoff.try_into_canonical_bytes()?;
     Ok(PreparedProtectedWorkerV3CompactFinalizerReplayV1 {
+        outer_handoff,
+        external_provider_payloads,
+        transcript,
+        finalized_hsaco: finalized.finalized_bytes,
+    })
+}
+
+/// Consumes finalized native-V3 evidence into independently replayable durable components.
+pub fn prepare_protected_worker_v3_compact_finalizer_replay_v2(
+    finalized: PreparedFinalizedProtectedWorkerV3HsacoV1,
+) -> Result<
+    PreparedProtectedWorkerV3CompactFinalizerReplayV2,
+    ProtectedWorkerV3CompactFinalizerReplayErrorV1,
+> {
+    let finalized = finalized.into_compact_replay_parts();
+    let source = finalized.source.into_compact_replay_parts();
+    let request_parts = extract_worker_v3_request_replay_parts_v1(
+        &source.bootstrap_request_bytes,
+        &source.replay_request_bytes,
+    )?;
+    let bootstrap_metadata = source.bootstrap_response.replay_metadata()?;
+    let replay_metadata = source.replay_response.replay_metadata()?;
+    let expectation = source.binding.expectation();
+    let transcript_bytes = encode_compact_replay_v2(
+        finalized.identity,
+        *source.identity.as_bytes(),
+        expectation.slot(),
+        expectation.transaction_identity(),
+        &source.worker,
+        source.execution_limits,
+        request_parts.bootstrap_output_bound,
+        &request_parts.external_providers,
+        source.plan.options(),
+        bootstrap_metadata,
+        replay_metadata,
+    )?;
+    let transcript = ProtectedWorkerV3CompactFinalizerReplayV2::decode_owned(transcript_bytes)?;
+
+    let mut external_provider_payloads = try_vec(
+        request_parts.external_providers.len(),
+        "provider payload owners",
+    )?;
+    external_provider_payloads.extend(
+        request_parts
+            .external_providers
+            .into_iter()
+            .map(|provider| provider.bytes),
+    );
+    let outer_handoff = source.handoff.try_into_canonical_bytes()?;
+    Ok(PreparedProtectedWorkerV3CompactFinalizerReplayV2 {
         outer_handoff,
         external_provider_payloads,
         transcript,
@@ -530,6 +879,116 @@ fn encode_compact_replay(
     bootstrap_metadata: WorkerResponseReplayMetadataV1<'_>,
     replay_metadata: WorkerResponseReplayMetadataV1<'_>,
 ) -> Result<Vec<u8>, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    encode_compact_replay_with_binding(
+        finalization_identity,
+        source_evidence_identity,
+        CompactReplayBindingHeaderV1::OpaqueV1(binding_identity),
+        worker,
+        limits,
+        bootstrap_output_bound,
+        external_providers,
+        link_options,
+        bootstrap_metadata,
+        replay_metadata,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_compact_replay_v2(
+    finalization_identity: FinalizedProtectedWorkerV3HsacoIdentityV1,
+    source_evidence_identity: [u8; 32],
+    handoff_slot: CompilerModuleHandoffSlotV3,
+    transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+    worker: &WorkerMeasurementV1,
+    limits: WorkerExecutionLimitsV1,
+    bootstrap_output_bound: u64,
+    external_providers: &[OwnedWorkerV3ProviderReplayPartV1],
+    link_options: &[LinkOptionV1],
+    bootstrap_metadata: WorkerResponseReplayMetadataV1<'_>,
+    replay_metadata: WorkerResponseReplayMetadataV1<'_>,
+) -> Result<Vec<u8>, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    encode_compact_replay_with_binding(
+        finalization_identity,
+        source_evidence_identity,
+        CompactReplayBindingHeaderV1::TransactionV2 {
+            handoff_slot,
+            transaction_identity,
+        },
+        worker,
+        limits,
+        bootstrap_output_bound,
+        external_providers,
+        link_options,
+        bootstrap_metadata,
+        replay_metadata,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum CompactReplayBindingHeaderV1 {
+    OpaqueV1([u8; 32]),
+    TransactionV2 {
+        handoff_slot: CompilerModuleHandoffSlotV3,
+        transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+    },
+}
+
+impl CompactReplayBindingHeaderV1 {
+    const fn encoded_len(self) -> usize {
+        match self {
+            Self::OpaqueV1(_) => 32,
+            Self::TransactionV2 { .. } => 33,
+        }
+    }
+
+    const fn magic(self) -> &'static [u8; 8] {
+        match self {
+            Self::OpaqueV1(_) => COMPACT_REPLAY_MAGIC_V1,
+            Self::TransactionV2 { .. } => COMPACT_REPLAY_MAGIC_V2,
+        }
+    }
+
+    const fn version(self) -> u16 {
+        match self {
+            Self::OpaqueV1(_) => COMPACT_REPLAY_VERSION_V1,
+            Self::TransactionV2 { .. } => COMPACT_REPLAY_VERSION_V2,
+        }
+    }
+
+    const fn checksum_domain(self) -> &'static [u8] {
+        match self {
+            Self::OpaqueV1(_) => COMPACT_REPLAY_CHECKSUM_DOMAIN_V1,
+            Self::TransactionV2 { .. } => COMPACT_REPLAY_CHECKSUM_DOMAIN_V2,
+        }
+    }
+
+    fn encode(self, bytes: &mut Vec<u8>) {
+        match self {
+            Self::OpaqueV1(binding_identity) => bytes.extend_from_slice(&binding_identity),
+            Self::TransactionV2 {
+                handoff_slot,
+                transaction_identity,
+            } => {
+                bytes.push(handoff_slot as u8);
+                bytes.extend_from_slice(transaction_identity.as_bytes());
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_compact_replay_with_binding(
+    finalization_identity: FinalizedProtectedWorkerV3HsacoIdentityV1,
+    source_evidence_identity: [u8; 32],
+    binding: CompactReplayBindingHeaderV1,
+    worker: &WorkerMeasurementV1,
+    limits: WorkerExecutionLimitsV1,
+    bootstrap_output_bound: u64,
+    external_providers: &[OwnedWorkerV3ProviderReplayPartV1],
+    link_options: &[LinkOptionV1],
+    bootstrap_metadata: WorkerResponseReplayMetadataV1<'_>,
+    replay_metadata: WorkerResponseReplayMetadataV1<'_>,
+) -> Result<Vec<u8>, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
     validate_construction_parts(
         bootstrap_output_bound,
         external_providers,
@@ -538,6 +997,7 @@ fn encode_compact_replay(
         replay_metadata,
     )?;
     let exact_length = compact_replay_encoded_length(
+        binding.encoded_len(),
         worker,
         external_providers,
         link_options,
@@ -553,11 +1013,11 @@ fn encode_compact_replay(
             component: "canonical bytes",
         }
     })?;
-    bytes.extend_from_slice(COMPACT_REPLAY_MAGIC_V1);
-    bytes.extend_from_slice(&COMPACT_REPLAY_VERSION_V1.to_le_bytes());
+    bytes.extend_from_slice(binding.magic());
+    bytes.extend_from_slice(&binding.version().to_le_bytes());
     bytes.extend_from_slice(finalization_identity.as_bytes());
     bytes.extend_from_slice(&source_evidence_identity);
-    bytes.extend_from_slice(&binding_identity);
+    binding.encode(&mut bytes);
     encode_content_identity(&mut bytes, worker.executable());
     push_u8_text(&mut bytes, worker.worker_build_identity())?;
     push_u8_text(&mut bytes, worker.llvm_build_identity())?;
@@ -588,7 +1048,7 @@ fn encode_compact_replay(
     }
     encode_response_metadata(&mut bytes, bootstrap_metadata)?;
     encode_response_metadata(&mut bytes, replay_metadata)?;
-    let checksum = hash_domain_blob(COMPACT_REPLAY_CHECKSUM_DOMAIN_V1, &bytes);
+    let checksum = hash_domain_blob(binding.checksum_domain(), &bytes);
     bytes.extend_from_slice(&checksum);
     debug_assert_eq!(bytes.len(), exact_length);
     Ok(bytes)
@@ -648,6 +1108,7 @@ fn validate_construction_parts(
 }
 
 fn compact_replay_encoded_length(
+    binding_header_bytes: usize,
     worker: &WorkerMeasurementV1,
     external_providers: &[OwnedWorkerV3ProviderReplayPartV1],
     link_options: &[LinkOptionV1],
@@ -658,7 +1119,7 @@ fn compact_replay_encoded_length(
         + 2
         + 32
         + 32
-        + 32
+        + binding_header_bytes
         + 40
         + 1
         + 1
@@ -749,6 +1210,17 @@ fn decode_input_kind(
         2 => Ok(WorkerInputKindV1::AmdGpuRelocatable),
         3 => Ok(WorkerInputKindV1::LlvmTextIr),
         _ => Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Providers),
+    }
+}
+
+fn decode_handoff_slot_v3(
+    value: u8,
+) -> Result<CompilerModuleHandoffSlotV3, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    match value {
+        0 => Ok(CompilerModuleHandoffSlotV3::Default),
+        1 => Ok(CompilerModuleHandoffSlotV3::GeneralGemmReference),
+        2 => Ok(CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly),
+        _ => Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity),
     }
 }
 
@@ -976,9 +1448,35 @@ mod tests {
         .unwrap()
     }
 
+    fn valid_v2_bytes() -> Vec<u8> {
+        let diagnostics = 0_u32.to_le_bytes();
+        let metadata = WorkerResponseReplayMetadataV1::from_test_bodies(&diagnostics, None);
+        let (worker, limits) = valid_parts();
+        encode_compact_replay_v2(
+            FinalizedProtectedWorkerV3HsacoIdentityV1::from_test_bytes([1; 32]),
+            [2; 32],
+            CompilerModuleHandoffSlotV3::GeneralGemmReference,
+            CompilerModuleHandoffTransactionIdentityV3::from_bytes([3; 32]),
+            &worker,
+            limits,
+            4096,
+            &[],
+            &[],
+            metadata,
+            metadata,
+        )
+        .unwrap()
+    }
+
     fn reseal(bytes: &mut [u8]) {
         let body_end = bytes.len() - 32;
         let checksum = hash_domain_blob(COMPACT_REPLAY_CHECKSUM_DOMAIN_V1, &bytes[..body_end]);
+        bytes[body_end..].copy_from_slice(&checksum);
+    }
+
+    fn reseal_v2(bytes: &mut [u8]) {
+        let body_end = bytes.len() - 32;
+        let checksum = hash_domain_blob(COMPACT_REPLAY_CHECKSUM_DOMAIN_V2, &bytes[..body_end]);
         bytes[body_end..].copy_from_slice(&checksum);
     }
 
@@ -1001,6 +1499,56 @@ mod tests {
             ProtectedWorkerV3CompactFinalizerReplayV1::decode_canonical(&bytes).unwrap();
         assert_eq!(decoded_again.identity(), replay.identity());
         assert_eq!(decoded_again.into_canonical_bytes(), bytes);
+    }
+
+    #[test]
+    fn compact_v2_round_trips_transaction_axes_and_rejects_v1_cross_use() {
+        let bytes = valid_v2_bytes();
+        let replay = ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&bytes).unwrap();
+
+        assert_eq!(replay.canonical_bytes(), bytes);
+        assert_eq!(replay.try_encode_canonical().unwrap(), bytes);
+        assert_eq!(replay.expected_finalization_identity(), &[1; 32]);
+        assert_eq!(replay.source_evidence_identity(), &[2; 32]);
+        assert_eq!(
+            replay.handoff_slot(),
+            CompilerModuleHandoffSlotV3::GeneralGemmReference
+        );
+        assert_eq!(replay.transaction_identity().as_bytes(), &[3; 32]);
+        assert!(!replay.authenticates_compiler_origin());
+        assert!(!replay.grants_publication_authority());
+        assert!(!replay.grants_load_authority());
+        assert!(!replay.grants_launch_authority());
+        assert_eq!(
+            ProtectedWorkerV3CompactFinalizerReplayV1::decode_canonical(&bytes),
+            Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Checksum)
+        );
+        assert_eq!(
+            ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&valid_bytes()),
+            Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Checksum)
+        );
+    }
+
+    #[test]
+    fn compact_v2_rejects_unknown_slot_and_zero_transaction_identity() {
+        let bytes = valid_v2_bytes();
+        let slot_offset = COMPACT_REPLAY_MAGIC_V2.len() + 2 + 2 * 32;
+
+        let mut unknown_slot = bytes.clone();
+        unknown_slot[slot_offset] = u8::MAX;
+        reseal_v2(&mut unknown_slot);
+        assert_eq!(
+            ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&unknown_slot),
+            Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity)
+        );
+
+        let mut zero_transaction = bytes;
+        zero_transaction[slot_offset + 1..slot_offset + 33].fill(0);
+        reseal_v2(&mut zero_transaction);
+        assert_eq!(
+            ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&zero_transaction),
+            Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity)
+        );
     }
 
     #[test]
@@ -1152,7 +1700,8 @@ mod tests {
 
     #[test]
     fn compact_replay_maximum_encoding_fits_the_storage_contract() {
-        const FIXED_BYTES: usize = 218;
+        const V1_FIXED_BYTES: usize = 218;
+        const V2_FIXED_BYTES: usize = V1_FIXED_BYTES + 1;
         const MAX_BUILD_ID_BYTES: usize = 2 * MAX_WORKER_TOOLCHAIN_ID_BYTES;
         const MAX_PROVIDER_REFERENCE_BYTES: usize = (MAX_LINK_INPUTS - 1) * 41;
         const MAX_OPTION_BYTES: usize =
@@ -1161,16 +1710,22 @@ mod tests {
             * (2 + MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES_V1
                 + 4
                 + MAX_RESPONSE_PROVIDER_EVIDENCE_BODY_BYTES_V1);
-        const CODEC_MAXIMUM: usize = FIXED_BYTES
+        const V1_CODEC_MAXIMUM: usize = V1_FIXED_BYTES
+            + MAX_BUILD_ID_BYTES
+            + MAX_PROVIDER_REFERENCE_BYTES
+            + MAX_OPTION_BYTES
+            + MAX_RESPONSE_BYTES;
+        const V2_CODEC_MAXIMUM: usize = V2_FIXED_BYTES
             + MAX_BUILD_ID_BYTES
             + MAX_PROVIDER_REFERENCE_BYTES
             + MAX_OPTION_BYTES
             + MAX_RESPONSE_BYTES;
 
-        assert_eq!(CODEC_MAXIMUM, 2_195_495);
+        assert_eq!(V1_CODEC_MAXIMUM, 2_195_495);
+        assert_eq!(V2_CODEC_MAXIMUM, 2_195_496);
         assert_eq!(
-            MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1 - CODEC_MAXIMUM,
-            10
+            MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1 - V2_CODEC_MAXIMUM,
+            9
         );
     }
 }
