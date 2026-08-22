@@ -1954,6 +1954,19 @@ impl SharedGttMemorySessionV1 {
         self.engine.release_device_memory(lease)
     }
 
+    /// Unmaps and releases one addressless fixed-dispatch data authority.
+    ///
+    /// This consumes both uninitialized and fully initialized variants without
+    /// exposing their private allocation identity or address.
+    pub fn release_fixed_dispatch_data(
+        &mut self,
+        data: crate::Gfx942FixedDispatchDataV1,
+    ) -> Result<(), MemorySessionError> {
+        let (lease, _, _) = data.into_parts();
+        let lease = self.engine.unmap_device_memory(lease)?;
+        self.engine.release_device_memory(lease)
+    }
+
     pub fn model_journal_summary(&self) -> MemoryModelJournalSummary {
         MemoryModelJournalSummary::from_model(&self.model)
     }
