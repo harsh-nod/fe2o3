@@ -36,8 +36,8 @@ const EFFECTS_PROJECTION_DOMAIN_V2: &[u8] = b"fe2o3.moe-top2.canonical-effects-p
 const ROUTING_PROJECTION_DOMAIN_V2: &[u8] = b"fe2o3.moe-top2.canonical-routing-projection.v2\0";
 
 const SOURCE_IDENTITY: [u8; 32] = [
-    0xb7, 0x70, 0x16, 0xca, 0xa0, 0xc3, 0x70, 0x8e, 0x42, 0x0e, 0x58, 0x37, 0x12, 0xe6, 0x5e, 0x4e,
-    0x64, 0x28, 0xdb, 0x7b, 0x4f, 0xea, 0xfd, 0x8d, 0x0a, 0x1d, 0x4b, 0xdc, 0x47, 0x5e, 0xf6, 0xff,
+    0x02, 0x60, 0xf1, 0x44, 0x15, 0x0e, 0x6f, 0xee, 0x7d, 0x9b, 0xd6, 0xa3, 0xd9, 0x19, 0xe9, 0x9d,
+    0xed, 0x0e, 0x43, 0x66, 0x65, 0x09, 0x77, 0x0f, 0x6e, 0x61, 0x86, 0xf5, 0x10, 0x0f, 0xee, 0x25,
 ];
 const PORTABLE_MIR_IDENTITY: [u8; 32] = [
     0x93, 0x4c, 0x22, 0x05, 0x97, 0x3e, 0x24, 0x21, 0x6d, 0x53, 0x7c, 0x5f, 0x89, 0xbc, 0x65, 0xd8,
@@ -53,17 +53,17 @@ const FN_ABI_IDENTITY: [u8; 32] = [
 // reverse-engineering the final record digest.
 pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
     "schema=moe-top2-private-structural-v2;",
-    "source=b77016caa0c3708e420e583712e65e4e6428db7b4feafd8d0a1d4bdc475ef6ff;",
+    "source=0260f144150e6fee7d9bd6a3d919e99ded0e43666509770f6e6186f5100fee25;",
     "fnabi=ddc0172cfc37016c86be2b579c4c98b14f823dd9371816b6648f1b8bd061bd88:",
     "rust=1:variadic=0:fixed=8:unwind=1:ignored=1:result=0:",
     "args=[16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,",
     "16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0];",
     "mir=934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13:",
     "functions=6:roots=1:helpers=5:blocks=120:statements=222:terminators=120:",
-    "edges=142:imports=0:root-args=8:root-locals=171:assignments=220:calls=27:",
+    "edges=142:imports=0:root-args=8:root-locals=171:assignments=221:calls=27:",
     "indexed=36:repeats=8:binops=0x0000ec05;",
     "kir=bdf19330357f898eb0267372e4115b33e4b60902c94b5b3b6e358f5703ee7eb0;",
-    "profile=deedd95c97b7bc3f146798f468c5eee6934a870d319fe441c6f0ec01f6a6afd8;",
+    "profile=0b705d56abdaf76a3c36fa3894e50ee8fc70524a75410473590ea67feab7d25c;",
     "abi=f0abdc459360d1760e22c62f77830472ae9a3e151b5ec7323d56c5298dc87365;",
     "effects=4f7a7d0996535ee75ff22216c776666526caa93106a49c2e8cfb4956cb0f7716;",
     "routing=dc93201e71d4ba820f52bb44833f4592383b2023f67089a4cc1b73aae14f051b;",
@@ -71,7 +71,7 @@ pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
     "trusted=d4b3798966bc3f91ce41d968ebdf8b1e4e774052781091767b831e9264026e04;",
     "root=kernel::__fe2o3_host_kernel_v1_",
     "0d0504325353eb74b0c9ace47560290e2278a7cd7c20e3b1c6c70f4a7e37b1ab;",
-    "authority=04e4c6724f0b7fb78650ae7e67d8211811fed6be9e8e705fa2df073663059a78",
+    "authority=118ab50d69b5b80ff0e9c29934f06c8aa142c7e16115de5a275390fcbaf16d39",
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1453,7 +1453,7 @@ fn candidate_inputs_for_test() -> StructuralClassifierCandidateV2 {
             external_import_count: 0,
             root_argument_count: 8,
             root_local_count: 171,
-            assignment_count: 220,
+            assignment_count: 221,
             call_count: 27,
             indexed_place_count: 36,
             repeat_count: 8,
