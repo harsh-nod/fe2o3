@@ -7,6 +7,9 @@
 //! addresses, publish packets, map a doorbell, create a queue, or establish
 //! that firmware consumed a packet.
 
+extern crate alloc;
+
+use alloc::boxed::Box;
 use core::{
     mem::{align_of, offset_of, size_of},
     sync::atomic::{AtomicI64, Ordering},
@@ -745,12 +748,19 @@ impl AqlPreparedKernelDispatchBatchV1<1> {
 /// publication authority. The separate type preserves the frozen V1 bound.
 #[derive(Debug, Eq, PartialEq)]
 pub struct AqlPreparedKernelDispatchBatchV2<const N: usize> {
-    packets: [AqlPreparedKernelDispatchV1; N],
+    packets: Box<[AqlPreparedKernelDispatchV1; N]>,
 }
 
 impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
     pub fn try_from_packets(
         packets: [AqlPreparedKernelDispatchV1; N],
+    ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
+        Self::try_from_boxed_packets(Box::new(packets))
+    }
+
+    /// Admits an already heap-owned exact-cardinality packet set.
+    pub fn try_from_boxed_packets(
+        packets: Box<[AqlPreparedKernelDispatchV1; N]>,
     ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
         if N == 0 {
             return Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount);
@@ -789,8 +799,10 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
 }
 
 impl AqlPreparedKernelDispatchBatchV2<1> {
-    pub const fn one(packet: AqlPreparedKernelDispatchV1) -> Self {
-        Self { packets: [packet] }
+    pub fn one(packet: AqlPreparedKernelDispatchV1) -> Self {
+        Self {
+            packets: Box::new([packet]),
+        }
     }
 }
 

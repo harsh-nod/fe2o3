@@ -16,7 +16,8 @@ It provides:
 - a fixed prepared-batch value that drives all INVALID body writes before any
   ordered release-header callback;
 - an additive V2 fixed-batch type and reservation transition for 1 through
-  1024 packets while retaining the exact V1 256-packet boundary;
+  1024 packets, with the exact-cardinality packet array heap-owned, while
+  retaining the exact V1 256-packet boundary;
 - the exact 64-byte, 64-aligned busy-wait completion signal initialized to one,
   plus an exact inert pending-signal byte image;
 - pure classification of a completion value already acquired elsewhere;

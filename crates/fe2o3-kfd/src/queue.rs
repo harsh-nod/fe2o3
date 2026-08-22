@@ -64,7 +64,7 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r7-v1\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r8-v1\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -73,8 +73,8 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "release=explicit-only-after-confirmed-destroy,no-drop-ioctl\n",
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
     "composition=shared-gtt-linear-role-authorities,exact-set-device-memory-dispatch-transfer,transferred-model-foundation,whole-slice-doorbell-mmap\n",
-    "submission=crate-private-single-producer-bounded-batch-reservation,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
-    "completion=separate-linear-256-signal-host-coherent-arena,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,release-reset-after-exact-batch-completion\n",
+    "submission=crate-private-single-producer-aql-fixed-batch-v2-through-1024,ring-capacity-checked,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
+    "completion=separate-linear-1024-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,release-reset-after-exact-batch-completion\n",
     "dispatch-binding=private-authenticated-code-typed-kernarg-c3-device-lease-c2-batch-c4-completion-generation-composition,real-resource-retention-through-recycle,actual-mapped-c3-authority-return-only-after-exact-recycle-and-confirmed-destroy\n",
     "missing=public-dispatch,kernel-launch,production-data-initialization-premise-mint,hardware-completion-and-exception-evidence,live-batch-evidence\n",
     "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
@@ -83,7 +83,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "eb71a92b046ea5bbd41dee2ec4fdd738fbc61ec9be1540f50ffe786ddb4424ac";
+    "5074005514d4e396afab81677060bee1d87f28cf6eb2d6c4e771a743e61c732d";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
