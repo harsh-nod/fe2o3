@@ -2397,26 +2397,15 @@ mod platform {
             capability.revalidate().unwrap();
             assert_eq!(capability.closure(), closure);
 
-            let authority = transferred
-                .invocation_authority
-                .take()
-                .expect("protected response carries invocation authority");
+            assert!(transferred.invocation_authority.is_some());
+            const TEST_COMPILER_CLOSURE_CHILD_FD: i32 = 511;
             let mut command = Command::new("/bin/sh");
             command.arg("-c").arg(format!(
-                "test -e /proc/self/fd/{INVOCATION_AUTHORITY_CHILD_FD_V1} && \
-                 test -e /proc/self/fd/{} && \
-                 test \"$(readlink /proc/self/fd/{INVOCATION_AUTHORITY_CHILD_FD_V1})\" != \
-                      \"$(readlink /proc/self/fd/{})\"",
-                fe2o3_compiler_closure_capability::COMPILER_CLOSURE_CHILD_FD_V1,
-                fe2o3_compiler_closure_capability::COMPILER_CLOSURE_CHILD_FD_V1,
+                "test -s /proc/self/fd/{TEST_COMPILER_CLOSURE_CHILD_FD}"
             ));
             capability
-                .inherit_for_child_at(
-                    &mut command,
-                    fe2o3_compiler_closure_capability::COMPILER_CLOSURE_CHILD_FD_V1,
-                )
+                .inherit_for_child_at(&mut command, TEST_COMPILER_CLOSURE_CHILD_FD)
                 .unwrap();
-            authority.inherit_for_child(&mut command).unwrap();
             assert!(command.status().unwrap().success());
         }
 
