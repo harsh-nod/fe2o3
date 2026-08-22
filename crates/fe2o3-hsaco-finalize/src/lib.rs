@@ -47,6 +47,7 @@ mod worker_v2_hsaco_admission;
 mod worker_v2_hsaco_finalization;
 mod worker_v2_hsaco_publication;
 mod worker_v3_compact_finalizer_replay;
+mod worker_v3_hsaco_publication;
 mod workgroup_lds_reduction_v1_profile;
 mod workgroup_scoped_atomic_v1_profile;
 mod workgroup_sync_v1_artifact;
@@ -278,10 +279,21 @@ pub use worker_v2_hsaco_publication::{
 pub use worker_v3_compact_finalizer_replay::{
     MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1,
     PreparedProtectedWorkerV3CompactFinalizerReplayV1,
+    PreparedProtectedWorkerV3CompactFinalizerReplayV2,
     ProtectedWorkerV3CompactFinalizerReplayErrorV1,
     ProtectedWorkerV3CompactFinalizerReplayIdentityV1,
+    ProtectedWorkerV3CompactFinalizerReplayIdentityV2,
     ProtectedWorkerV3CompactFinalizerReplayPartsV1, ProtectedWorkerV3CompactFinalizerReplayV1,
+    ProtectedWorkerV3CompactFinalizerReplayV2,
     prepare_protected_worker_v3_compact_finalizer_replay_v1,
+    prepare_protected_worker_v3_compact_finalizer_replay_v2,
+};
+pub use worker_v3_hsaco_publication::{
+    PreparedProtectedWorkerV3HsacoPublicationV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
+    SealedProtectedWorkerV3HsacoPublicationIntentV1, WorkerV3HsacoPublicationErrorV1,
+    persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    prepare_protected_worker_v3_hsaco_publication_v1,
+    recover_protected_worker_v3_hsaco_publication_v1,
 };
 pub use workgroup_sync_v1_artifact::{
     FinalizedWorkgroupSyncHsacoIdentityV1, PreparedFinalizedWorkgroupSyncHsacoV1,

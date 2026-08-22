@@ -1,0 +1,56 @@
+error[E0616]: field `transcript` of struct `PreparedProtectedWorkerV3CompactFinalizerReplayV2` is private
+ --> tests/ui/worker_v2_finalization/protected_worker_v3_publication_fields_are_private.rs:7:21
+  |
+7 |     let _ = &replay.transcript;
+  |                     ^^^^^^^^^^ private field
+  |
+help: a method `transcript` also exists, call it with parentheses
+  |
+7 |     let _ = &replay.transcript();
+  |                               ++
+
+error[E0616]: field `outer_handoff` of struct `PreparedProtectedWorkerV3CompactFinalizerReplayV2` is private
+ --> tests/ui/worker_v2_finalization/protected_worker_v3_publication_fields_are_private.rs:8:21
+  |
+8 |     let _ = &replay.outer_handoff;
+  |                     ^^^^^^^^^^^^^ private field
+  |
+help: a method `outer_handoff` also exists, call it with parentheses
+  |
+8 |     let _ = &replay.outer_handoff();
+  |                                  ++
+
+error[E0616]: field `external_provider_payloads` of struct `PreparedProtectedWorkerV3CompactFinalizerReplayV2` is private
+ --> tests/ui/worker_v2_finalization/protected_worker_v3_publication_fields_are_private.rs:9:21
+  |
+9 |     let _ = &replay.external_provider_payloads;
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+  |
+help: a method `external_provider_payloads` also exists, call it with parentheses
+  |
+9 |     let _ = &replay.external_provider_payloads();
+  |                                               ++
+
+error[E0616]: field `finalized_hsaco` of struct `PreparedProtectedWorkerV3CompactFinalizerReplayV2` is private
+  --> tests/ui/worker_v2_finalization/protected_worker_v3_publication_fields_are_private.rs:10:21
+   |
+10 |     let _ = &replay.finalized_hsaco;
+   |                     ^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `producer_package` of struct `PreparedProtectedWorkerV3HsacoPublicationV1` is private
+  --> tests/ui/worker_v2_finalization/protected_worker_v3_publication_fields_are_private.rs:14:25
+   |
+14 |     let _ = publication.producer_package;
+   |                         ^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `intent` of struct `PreparedProtectedWorkerV3HsacoPublicationV1` is private
+  --> tests/ui/worker_v2_finalization/protected_worker_v3_publication_fields_are_private.rs:15:25
+   |
+15 |     let _ = publication.intent;
+   |                         ^^^^^^ private field
+
+error[E0616]: field `replay` of struct `PreparedProtectedWorkerV3HsacoPublicationV1` is private
+  --> tests/ui/worker_v2_finalization/protected_worker_v3_publication_fields_are_private.rs:16:26
+   |
+16 |     let _ = &publication.replay;
+   |                          ^^^^^^ private field

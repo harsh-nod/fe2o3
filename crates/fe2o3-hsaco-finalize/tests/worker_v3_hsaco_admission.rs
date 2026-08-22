@@ -10,8 +10,9 @@ use std::{
 
 use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3,
-    ConsumedCompilerModuleHandoffV3, ProducerIdentity, begin_build_attempt,
-    consume_compiler_module_handoff_in_slot_v3, publish_compiler_module_handoff_in_slot_v3,
+    ConsumedCompilerModuleHandoffV3, ProducerIdentity, WorkerV3PublicationIntentOutcomeV1,
+    begin_build_attempt, consume_compiler_module_handoff_in_slot_v3,
+    publish_compiler_module_handoff_in_slot_v3,
 };
 use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerFfiEnvelopeV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
@@ -30,14 +31,26 @@ use fe2o3_hsaco_finalize::{
     finalize_inspected_protected_worker_v3_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
+    persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    prepare_protected_worker_v3_hsaco_publication_v1,
+    recover_protected_worker_v3_hsaco_publication_v1,
 };
-use fe2o3_kernel_descriptor::DeviceTargetV1;
+use fe2o3_kernel_descriptor::{
+    BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest,
+    CodeObjectVersion as DescriptorCodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1,
+    DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest,
+    EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1,
+    LogicalArgumentV1, ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1,
+    SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
+};
 use sha2::{Digest, Sha256};
 
 #[path = "fixtures/worker_v2_hsaco_test_support.rs"]
 mod hsaco_fixture;
 
-use hsaco_fixture::{ScalarAddFixtureMutation, scalar_add_fixture_with};
+use hsaco_fixture::{
+    ScalarAddFixtureMutation, scalar_add_fixture_with, slice_fixture_with_descriptor_table,
+};
 
 const TARGET: &str = "gfx942:xnack-";
 const WORKER_BUILD_ID: &str = "fixture-worker-v2-hsaco-v1";
@@ -235,6 +248,86 @@ fn native_v3_finalization_fails_closed_without_descriptor_source_evidence() {
 }
 
 #[test]
+fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart() {
+    let directory = TestDirectory::new();
+    let config = EvidenceConfig::BASE;
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let exact_raw = fixture.bytes.clone();
+    let (attempt, source) =
+        evidence_in_directory_for_kernel(&directory, fixture.bytes, config, "vecadd", "vecadd.kd");
+    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+    let finalized = finalize_inspected_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    let exact_finalized = finalized.exact_finalized_bytes().to_vec();
+    let prepared =
+        prepare_protected_worker_v3_hsaco_publication_v1(&producer(), finalized).unwrap();
+    assert_eq!(prepared.attempt(), attempt);
+    assert!(!prepared.grants_publication_authority());
+    assert!(!prepared.grants_load_authority());
+    assert!(!prepared.grants_launch_authority());
+
+    let persisted = persist_prepared_protected_worker_v3_hsaco_publication_v1(
+        &directory.0,
+        &producer(),
+        prepared,
+    )
+    .unwrap();
+    assert_eq!(
+        persisted.outcome(),
+        WorkerV3PublicationIntentOutcomeV1::Persisted
+    );
+    assert_eq!(persisted.exact_finalized_hsaco(), exact_finalized);
+    assert_eq!(
+        fe2o3_hsaco_finalize::derive_unfinalized_hsaco_from_finalized_v1(
+            persisted.exact_finalized_hsaco()
+        )
+        .unwrap(),
+        exact_raw
+    );
+    let expected_intent = persisted.publication_intent();
+    drop(persisted);
+
+    let recovered =
+        recover_protected_worker_v3_hsaco_publication_v1(&directory.0, &producer(), attempt)
+            .unwrap();
+    assert_eq!(
+        recovered.outcome(),
+        WorkerV3PublicationIntentOutcomeV1::Recovered
+    );
+    assert_eq!(recovered.exact_finalized_hsaco(), exact_finalized);
+    assert_eq!(recovered.publication_intent(), expected_intent);
+    assert!(!recovered.grants_publication_authority());
+    assert!(!recovered.grants_load_authority());
+    assert!(!recovered.grants_launch_authority());
+}
+
+#[test]
+fn native_v3_publication_rejects_a_different_producer() {
+    let directory = TestDirectory::new();
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let (_, source) = evidence_in_directory_for_kernel(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig::BASE,
+        "vecadd",
+        "vecadd.kd",
+    );
+    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+    let finalized = finalize_inspected_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    let prepared =
+        prepare_protected_worker_v3_hsaco_publication_v1(&producer(), finalized).unwrap();
+    let other = ProducerIdentity::from_codegen(
+        "worker_v3_hsaco_admission_other",
+        Some(Path::new("tests/worker_v3_hsaco_admission_other.rs")),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        persist_prepared_protected_worker_v3_hsaco_publication_v1(&directory.0, &other, prepared,),
+        Err(fe2o3_hsaco_finalize::WorkerV3HsacoPublicationErrorV1::ProducerIdentityMismatch)
+    ));
+}
+
+#[test]
 fn invocation_closure_transaction_plan_and_worker_axes_cannot_be_dropped() {
     let fixture = || scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup).bytes;
     let base = inspected(fixture(), EvidenceConfig::BASE);
@@ -394,6 +487,30 @@ fn require_v3_inspection(_: &InspectedProtectedRawWorkerV3HsacoV1) {}
 
 fn evidence(hsaco: Vec<u8>, config: EvidenceConfig) -> InertProtectedFirstBuildWorkerV3EvidenceV1 {
     let directory = TestDirectory::new();
+    evidence_in_directory(&directory, hsaco, config).1
+}
+
+fn evidence_in_directory(
+    directory: &TestDirectory,
+    hsaco: Vec<u8>,
+    config: EvidenceConfig,
+) -> (
+    fe2o3_artifact_transaction::BuildAttempt,
+    InertProtectedFirstBuildWorkerV3EvidenceV1,
+) {
+    evidence_in_directory_for_kernel(directory, hsaco, config, "scalar_add", "scalar_add.kd")
+}
+
+fn evidence_in_directory_for_kernel(
+    directory: &TestDirectory,
+    hsaco: Vec<u8>,
+    config: EvidenceConfig,
+    entry_symbol: &str,
+    descriptor_symbol: &str,
+) -> (
+    fe2o3_artifact_transaction::BuildAttempt,
+    InertProtectedFirstBuildWorkerV3EvidenceV1,
+) {
     let attempt = begin_build_attempt(
         &directory.0,
         &producer(),
@@ -401,7 +518,13 @@ fn evidence(hsaco: Vec<u8>, config: EvidenceConfig) -> InertProtectedFirstBuildW
         BuildSession::from_bytes([config.attempt_seed.wrapping_add(1); 16]),
     )
     .unwrap();
-    let handoff = outer(config.invocation_seed, config.module_seed, &hsaco);
+    let handoff = outer_for_kernel(
+        config.invocation_seed,
+        config.module_seed,
+        &hsaco,
+        entry_symbol,
+        descriptor_symbol,
+    );
     let receipt = publish_compiler_module_handoff_in_slot_v3(
         &directory.0,
         &producer(),
@@ -418,8 +541,9 @@ fn evidence(hsaco: Vec<u8>, config: EvidenceConfig) -> InertProtectedFirstBuildW
         handoff.identity(),
     )
     .unwrap();
-    let worker = pinned(&directory, config.llvm_build_identity);
-    execute(config, receipt, consumed, &worker)
+    let worker = pinned(directory, config.llvm_build_identity);
+    let evidence = execute(config, receipt, consumed, &worker);
+    (attempt, evidence)
 }
 
 fn execute(
@@ -444,6 +568,67 @@ fn execute(
 
 fn target() -> DeviceTargetV1 {
     DeviceTargetV1::parse(TARGET).unwrap()
+}
+
+fn slice_descriptor_table() -> Vec<u8> {
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([0xa1; 32]),
+        ValidName::new("vecadd").unwrap(),
+        ValidName::new("vecadd").unwrap(),
+        ValidName::new("vecadd.kd").unwrap(),
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes([0xa2; 32]),
+            EvidenceDigest::from_sha256_bytes([0xa3; 32]),
+        ),
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes([0xa4; 32]),
+            EvidenceDigest::from_sha256_bytes([0xa5; 32]),
+        ),
+        Vec::new(),
+        KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1).unwrap()),
+            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+            64,
+            0,
+            64 * 1024,
+        )
+        .unwrap(),
+        vec![
+            LogicalArgumentV1::shared_slice(
+                0,
+                ValidName::new("values").unwrap(),
+                &source,
+                &layout,
+                0,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        DescriptorCodeObjectVersion::V6,
+        CompilerIdentityV1::new(
+            Text::new("rustc-codegen-fe2o3").unwrap(),
+            Text::new("test").unwrap(),
+            [0xa6; 20],
+        ),
+        ProducerIdentityV1::new(
+            Text::new("rustc-codegen-fe2o3-worker-v3").unwrap(),
+            Text::new("test").unwrap(),
+        ),
+        target(),
+        vec![source],
+        vec![layout],
+        vec![kernel],
+    )
+    .unwrap();
+    encode_device_descriptor_table_v1(&table).unwrap()
 }
 
 fn worker_path() -> &'static Path {
@@ -475,7 +660,12 @@ fn options(optimization: &str) -> Vec<LinkOptionV1> {
     .collect()
 }
 
-fn module_handoff(seed: u8, hsaco: &[u8]) -> CompilerModuleHandoffV2 {
+fn module_handoff_for_kernel(
+    seed: u8,
+    hsaco: &[u8],
+    entry_symbol: &str,
+    descriptor_symbol: &str,
+) -> CompilerModuleHandoffV2 {
     let mut module = format!("; ModuleID = 'raw-hsaco-v3-{seed:02x}'\n").into_bytes();
     module.extend_from_slice(RAW_HSACO_MARKER);
     module.extend_from_slice(hsaco);
@@ -483,10 +673,10 @@ fn module_handoff(seed: u8, hsaco: &[u8]) -> CompilerModuleHandoffV2 {
         CompilerFfiEnvelopeV1::for_module_without_device_ffi(target(), CodeObjectVersion::V6)
             .unwrap();
     let manifest = CompilerModuleSymbolManifestV1::new([
-        (CompilerModuleSymbolRoleV1::KernelEntry, "scalar_add"),
+        (CompilerModuleSymbolRoleV1::KernelEntry, entry_symbol),
         (
             CompilerModuleSymbolRoleV1::KernelDescriptor,
-            "scalar_add.kd",
+            descriptor_symbol,
         ),
     ])
     .unwrap();
@@ -501,12 +691,14 @@ fn module_handoff(seed: u8, hsaco: &[u8]) -> CompilerModuleHandoffV2 {
     .unwrap()
 }
 
-fn outer(
+fn outer_for_kernel(
     invocation_seed: u8,
     module_seed: u8,
     hsaco: &[u8],
+    entry_symbol: &str,
+    descriptor_symbol: &str,
 ) -> InertSemanticCompilerModuleHandoffV3 {
-    let handoff = module_handoff(module_seed, hsaco);
+    let handoff = module_handoff_for_kernel(module_seed, hsaco, entry_symbol, descriptor_symbol);
     InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
         &capsule_bytes(invocation_seed, &handoff),
         handoff.canonical_bytes(),

@@ -580,6 +580,16 @@ pub(crate) fn scalar_add_fixture_with(mutation: ScalarAddFixtureMutation) -> Fix
 }
 
 #[allow(dead_code)]
+pub(crate) fn slice_fixture_with_descriptor_table(descriptor_table: &[u8]) -> Fixture {
+    let mut options = FixtureOptions::valid();
+    options.target = "gfx942:xnack-";
+    options.include_export = false;
+    options.required_workgroup_size = [64, 1, 1];
+    options.max_flat_workgroup_size = 64;
+    fixture_with_descriptor_table(options, Some(descriptor_table))
+}
+
+#[allow(dead_code)]
 fn replace_metadata_fixint(bytes: &mut [u8], key: &[u8], expected: u8, replacement: u8) {
     let position = bytes
         .windows(key.len())
