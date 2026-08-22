@@ -41,6 +41,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
+    MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV3),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
@@ -69,6 +70,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             }
             Self::RankedProjection(error) => {
                 write!(formatter, "production-v1 general kernel verification failed: {error}")
+            }
+            Self::MiddleEndEvidence(error) => {
+                write!(formatter, "production-v1 middle-end evidence failed: {error}")
             }
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production-v1 target-neutral lowering failed: {error}")
@@ -114,6 +118,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
+            Self::MiddleEndEvidence(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
@@ -534,6 +539,10 @@ impl Gfx942LoweredProductionCompilationV1 {
             publication.rustc_identity_inventory.canonical_transcript(),
             publication.rustc_preflight_plan.canonical_transcript(),
             publication.ranked_verification.ranked_ir(),
+            publication
+                .ranked_verification
+                .middle_end_evidence()
+                .canonical_bytes(),
         );
         publication.publication.require_v1()?;
         crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff(
@@ -554,6 +563,10 @@ impl Gfx942LoweredProductionCompilationV1 {
             publication.rustc_identity_inventory.canonical_transcript(),
             publication.rustc_preflight_plan.canonical_transcript(),
             publication.ranked_verification.lowering(),
+            publication
+                .ranked_verification
+                .middle_end_evidence()
+                .canonical_bytes(),
         );
         let invocation = publication
             .publication
@@ -835,7 +848,9 @@ impl RankedVerifiedProductionCompilationV1 {
         self,
     ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
         let Self { ranked, bindings } = self;
-        let (semantic, ranked_verification) = ranked.into_verified_owners();
+        let (semantic, ranked_verification) = ranked
+            .into_verified_owners()
+            .map_err(ProductionPipelineErrorV1::MiddleEndEvidence)?;
         let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower(
             semantic,
             fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),

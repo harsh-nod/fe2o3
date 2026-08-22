@@ -79,6 +79,7 @@ pub(crate) struct ProductionRankedSemanticProgramV1 {
 pub(crate) struct AuthenticatedRankedVerificationV3 {
     lowering: ProductionRankedKernelLoweringInputV1,
     ranked_ir: String,
+    middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV3,
 }
 
 impl AuthenticatedRankedVerificationV3 {
@@ -88,6 +89,10 @@ impl AuthenticatedRankedVerificationV3 {
 
     pub(crate) fn ranked_ir(&self) -> &str {
         &self.ranked_ir
+    }
+
+    pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV3 {
+        &self.middle_end_evidence
     }
 }
 
@@ -126,22 +131,28 @@ impl ProductionRankedSemanticProgramV1 {
 
     pub(crate) fn into_verified_owners(
         self,
-    ) -> (
-        ProductionSemanticMirOwnerV1,
-        AuthenticatedRankedVerificationV3,
-    ) {
+    ) -> Result<
+        (
+            ProductionSemanticMirOwnerV1,
+            AuthenticatedRankedVerificationV3,
+        ),
+        fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV3,
+    > {
         let Self {
             semantic,
             lowering,
             ranked_ir,
         } = self;
-        (
+        let middle_end_evidence =
+            fe2o3_pliron::ProductionMiddleEndEvidenceV3::try_new(&semantic, &lowering, &ranked_ir)?;
+        Ok((
             semantic,
             AuthenticatedRankedVerificationV3 {
                 lowering,
                 ranked_ir,
+                middle_end_evidence,
             },
-        )
+        ))
     }
 }
 
