@@ -954,7 +954,7 @@ pub(crate) fn recover_worker_v2_intent_v1(
     recover_worker_v2_intent::<OrdinaryIntentSchemaV1>(store, producer, state, ())
 }
 
-/// Recovers only a closure-equal V2 record and promotes only its protected pending marker.
+/// Recovers only a closure-equal V2 record, promotes Pending, and resumes interrupted Ready cleanup.
 #[allow(dead_code)] // The protected binding caller lands with its inspected wrapper.
 pub(crate) fn recover_worker_v2_intent_v2(
     store: &WorkerV2ResumeStoreV2,
@@ -1462,7 +1462,10 @@ impl WorkerV2IntentSchema for ProtectedIntentSchemaV2 {
         if current_admission != Self::state_admission(state) {
             return Err(Self::identity_mismatch());
         }
-        if matches!(state, ResumeMarkerStateV2::Pending { .. }) {
+        if matches!(
+            state,
+            ResumeMarkerStateV2::Pending { .. } | ResumeMarkerStateV2::Ready { .. }
+        ) {
             store
                 .persist_ready(state.publication(), state.attempt(), recovered, binding)
                 .map_err(Self::marker_error)?;
@@ -5543,6 +5546,8 @@ impl WorkerV2ResumeStoreV2 {
                     intent,
                 };
                 self.inner.write_protected(ready, true)?;
+                #[cfg(feature = "worker-v2-fault-injection-test-only")]
+                injected_fault_point_v1("protected-ready-after-marker-publication");
                 ready
             }
             Some(
@@ -9886,6 +9891,150 @@ mod tests {
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     #[test]
+    fn durable_ready_recovery_completes_interrupted_predecessor_retirement() {
+        let producer_seed = 168;
+        let next_seed = 169;
+        let directory = TestDirectory::new();
+        let producer = producer(producer_seed);
+        let old_attempt = attempt(&directory.0, &producer, producer_seed);
+        let old_closure = compiler_closure(producer_seed);
+        let old = protected_envelope_fixture(&directory.0, &producer, old_attempt, old_closure);
+        let store = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        stage_protected_required_ready(&store, &old, old_closure);
+        let old_completed = store
+            .persist_envelope_and_completed(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                old_attempt,
+                old.intent,
+                old.receipt,
+                old_closure,
+                &old.envelope,
+            )
+            .unwrap();
+        clear_worker_v2_intent_v2(&store, &producer, old_completed, old.receipt, old_closure)
+            .unwrap();
+        let old_evidence = store.read_protected_cleanup_evidence().unwrap().unwrap();
+        let old_local_names = ProtectedCleanupLocalNamesV1::new(&old_evidence);
+        store
+            .prepare_protected_cleanup_local_quarantine(&old_evidence)
+            .unwrap();
+        assert_eq!(store.load().unwrap(), None);
+        assert_eq!(
+            recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                &directory.0,
+                &producer,
+                old_evidence.escrow,
+            )
+            .unwrap(),
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared
+        );
+
+        let next_attempt = attempt(&directory.0, &producer, next_seed);
+        let next_closure = compiler_closure(next_seed);
+        let next = protected_envelope_fixture_with_binding_seed(
+            &directory.0,
+            &producer,
+            next_attempt,
+            next_closure,
+            producer_seed,
+        );
+        store
+            .persist_envelope_inputs(next_attempt, &next.envelope_inputs)
+            .unwrap();
+        store
+            .persist_pending_with_envelope_inputs(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                next_attempt,
+                restart_admission_commitment_with_inputs_v2(
+                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                    next.plan,
+                    next.upstream,
+                    &next.output,
+                    Some(next.envelope_inputs.identity()),
+                    next_closure,
+                ),
+                Some(next.envelope_inputs.identity()),
+            )
+            .unwrap();
+        drop(store);
+
+        let output = run_protected_cleanup_crash_helper(
+            &directory.0,
+            producer_seed,
+            next_seed,
+            "ready",
+            "protected-ready-after-marker-publication",
+        );
+        assert_eq!(output.status.code(), Some(86), "{output:?}");
+
+        let restarted = WorkerV2ResumeStoreV2::open(&directory.0, &producer).unwrap();
+        let ready = restarted.load().unwrap().unwrap();
+        assert!(matches!(ready, ResumeMarkerStateV2::Ready { .. }));
+        assert_eq!(ready.attempt(), next_attempt);
+        assert_eq!(
+            restarted.read_protected_cleanup_evidence().unwrap(),
+            Some(old_evidence)
+        );
+        assert_eq!(
+            recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                &directory.0,
+                &producer,
+                old_evidence.escrow,
+            )
+            .unwrap(),
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Prepared
+        );
+
+        let recovered =
+            recover_worker_v2_intent_v2(&restarted, &producer, ready, next_closure).unwrap();
+        assert_eq!(recovered.record().identity(), next.intent);
+        assert_eq!(recovered.exact_output(), next.output);
+        assert_eq!(restarted.load().unwrap(), Some(ready));
+        assert!(
+            restarted
+                .read_protected_cleanup_evidence()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            recover_worker_v2_publication_intent_cleanup_escrow_v1(
+                &directory.0,
+                &producer,
+                old_evidence.escrow,
+            )
+            .unwrap(),
+            WorkerV2PublicationIntentCleanupEscrowStateV1::Committed
+        );
+        assert!(!directory.0.join(old_local_names.marker).exists());
+        assert!(!directory.0.join(old_local_names.inputs).exists());
+
+        let completed = restarted
+            .persist_envelope_and_completed(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
+                next_attempt,
+                next.intent,
+                next.receipt,
+                next_closure,
+                &next.envelope,
+            )
+            .unwrap();
+        clear_worker_v2_intent_v2(&restarted, &producer, completed, next.receipt, next_closure)
+            .unwrap();
+        assert_eq!(restarted.load().unwrap(), Some(completed));
+        assert!(
+            restarted
+                .read_protected_cleanup_evidence()
+                .unwrap()
+                .is_some()
+        );
+        restarted
+            .clear_completed_and_envelope_inputs(completed, next.receipt, next_closure)
+            .unwrap();
+        assert_eq!(restarted.load().unwrap(), None);
+    }
+
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    #[test]
     fn protected_cleanup_evidence_retirement_reopens_every_boundary_with_a_new_ready_state() {
         for (case, (fault, remove_envelope)) in [
             "protected-cleanup-newer-ready-after-predecessor-commit",
@@ -9994,21 +10143,10 @@ mod tests {
                 "{fault}"
             );
             assert_eq!(ready.attempt(), next_attempt, "{fault}");
-            let recovered = recover_worker_v2_publication_intent_v2(
-                &directory.0,
-                &producer,
-                next_attempt,
-                next_closure,
-            )
-            .unwrap();
-            restarted
-                .persist_ready(
-                    WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
-                    next_attempt,
-                    &recovered,
-                    next_closure,
-                )
-                .unwrap();
+            let recovered =
+                recover_worker_v2_intent_v2(&restarted, &producer, ready, next_closure).unwrap();
+            assert_eq!(recovered.record().identity(), next.intent, "{fault}");
+            assert_eq!(recovered.exact_output(), next.output, "{fault}");
             assert!(
                 restarted
                     .read_protected_cleanup_evidence()
