@@ -13,8 +13,8 @@ const NEGATIVE_MANIFEST: &str = include_str!("../verus/NEGATIVE_SHA256");
 
 const PROFILE_IDENTITY: &str = "fe2o3.flash_attention_v1.causal.qkv_f32.b1_h1_n8_d16.row_major.scale_0p25.gfx942_xnack_minus.wave64";
 const MODEL_SCHEMA: &str = "fe2o3.flash_attention_verus_v1.exact_rational.b1_h1_n8_d16.causal_online_max_rescale_sum_numerator_output_ownership";
-const PROOF_SHA256: &str = "e1f48bb3dc7bee0678898d13660bf4ce02d9d8e5706e3969f11b11c8b1d7a2da";
-const KERNEL_SHA256: &str = "2b00a64e43e69c416e70080e013edf90e861fef94ee66441da93d2c11b3e8f17";
+const PROOF_SHA256: &str = "18ab50eed50eb50e08ac0f34793a9a564a9f8e8ad69cd7d5e2684ccac039292b";
+const KERNEL_SHA256: &str = "a10fcfb5ebc3fc1319aa36a951d86f0fdcdab9ec62708c89ea10f3b5a51fb717";
 const PROFILE_SHA256: &str = "4dfe870bb76dd32b49144ee70ec4925eab8677b7cbd1a1bfe99fa2294f85fec8";
 const MODEL_SCHEMA_SHA256: &str =
     "f26a435e375adfeb1753dd7429870532b90c88bbd46054b9498c82408bcd062b";

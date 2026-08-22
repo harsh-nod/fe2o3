@@ -9,14 +9,11 @@ const CLOSURE: &[u8] = include_bytes!("../verus/MEMORY_VERUS_CLOSURE_MANIFEST");
 const RUNNER: &str = include_str!("../run-memory-verus.sh");
 const NEGATIVES: &str = include_str!("../verus/MEMORY_NEGATIVE_SHA256");
 
-const PROOF_SHA256: &str = "ccb365d1f23c8ccd5758a54531456c1188652e43e98b2de776396fba91a6e3dc";
-const KERNEL_SHA256: &str = "2b00a64e43e69c416e70080e013edf90e861fef94ee66441da93d2c11b3e8f17";
-const CLOSURE_SHA256: &str =
-    "f06883e4ce463bcb9a3c8f911064ac85054c7822dc331db1a79f75f9e8878b01";
-const TRANSCRIPT: &str =
-    "FE2O3_FLASH_ATTENTION_MEMORY_V1_VERUS_OK mutations=8 obligations=13";
-const TRANSCRIPT_SHA256: &str =
-    "b72d9ec94325fc134abe7f1aa0f1bb434f2d14882807497eadb43c2746f369f5";
+const PROOF_SHA256: &str = "21e862ab2c9798dd808b9d75d3aa1ea1476ad382c7cf05f0a48035f5251af7f4";
+const KERNEL_SHA256: &str = "a10fcfb5ebc3fc1319aa36a951d86f0fdcdab9ec62708c89ea10f3b5a51fb717";
+const CLOSURE_SHA256: &str = "f06883e4ce463bcb9a3c8f911064ac85054c7822dc331db1a79f75f9e8878b01";
+const TRANSCRIPT: &str = "FE2O3_FLASH_ATTENTION_MEMORY_V1_VERUS_OK mutations=8 obligations=13";
+const TRANSCRIPT_SHA256: &str = "b72d9ec94325fc134abe7f1aa0f1bb434f2d14882807497eadb43c2746f369f5";
 
 fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -110,7 +107,11 @@ fn transcript_and_proof_mutations_change_expected_evidence_identity() {
     proof[PROOF.len() / 2] ^= 1;
     assert_ne!(sha256(&proof), PROOF_SHA256);
     assert_ne!(
-        sha256(TRANSCRIPT.replace("obligations=13", "obligations=12").as_bytes()),
+        sha256(
+            TRANSCRIPT
+                .replace("obligations=13", "obligations=12")
+                .as_bytes()
+        ),
         TRANSCRIPT_SHA256
     );
 }

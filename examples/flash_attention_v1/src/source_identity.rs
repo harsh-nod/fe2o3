@@ -13,7 +13,7 @@ pub const FLASH_ATTENTION_KERNEL_NAMESPACE_V1: &str =
 /// bytes. It is intentionally stored outside `kernel.rs` to avoid a circular
 /// self-hash.
 pub const FLASH_ATTENTION_KERNEL_SOURCE_SHA256_V1: &str =
-    "2b00a64e43e69c416e70080e013edf90e861fef94ee66441da93d2c11b3e8f17";
+    "a10fcfb5ebc3fc1319aa36a951d86f0fdcdab9ec62708c89ea10f3b5a51fb717";
 
 /// Exact source-identity mismatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

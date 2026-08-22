@@ -13,8 +13,8 @@ pub open spec fn access_width_v1() -> nat { 4 }
 
 pub open spec fn source_identity_v1() -> Seq<u64> {
     seq![
-        0x2b00a64e43e69c41u64, 0x6e70080e013edf90u64,
-        0xe861fef94ee66441u64, 0xda93d2c11b3e8f17u64,
+        0xa10fcfb5ebc3fc13u64, 0x19aa36a951d86f0fu64,
+        0xdcdab9ec62708c89u64, 0xea10f3b5a51fb717u64,
     ]
 }
 
