@@ -487,12 +487,13 @@ pub fn derive_kernel_memory_obligations_from_verified(
         for (operation_index, operation) in block.operations.iter().enumerate() {
             let location = FunctionOperationLocation::new(block.id, operation_index);
             match &operation.kind {
-                OperationKind::Call { callee, .. } => {
+                OperationKind::Call { callee, .. } if !operation.has_complete_effect_summary() => {
                     reasons.insert(FormalMemoryIncompleteReason::CallEffectsUnavailable {
                         location,
                         callee: callee.clone(),
                     });
                 }
+                OperationKind::Call { .. } => {}
                 OperationKind::Load { pointer, access } => {
                     if let Some(invocations) = access_invocations {
                         match derive_access(

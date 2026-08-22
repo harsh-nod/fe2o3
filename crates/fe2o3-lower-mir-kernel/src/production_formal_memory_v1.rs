@@ -79,15 +79,19 @@ impl Error for ProductionFormalMemoryErrorV1 {
     }
 }
 
-/// Move-only owner of exact semantic KIR and complete formal memory obligations.
+/// Move-only owner of exact semantic KIR and composed memory-safety evidence.
 ///
 /// Admission uses a two-invocation witness so cross-invocation affine overlap
-/// is observable. The retained bounds and alias records are runtime obligations,
-/// not evidence about any concrete launch or allocation.
+/// is observable. Affine effects retain complete formal obligations. Dynamic
+/// index expressions may instead be discharged by the exact owner-held ranked
+/// bounds/race receipt; no other incomplete formal reason is admitted. Retained
+/// bounds and alias records are runtime obligations, not evidence about any
+/// concrete launch or allocation.
 #[must_use = "dropping formal admission abandons the target-neutral safety witness"]
 pub struct ProductionFormalMemoryOwnerV1 {
     semantic_kir: ProductionSemanticKirOwnerV1,
     obligations: FormalMemoryObligations,
+    ranked_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
 }
 
 impl fmt::Debug for ProductionFormalMemoryOwnerV1 {
@@ -105,6 +109,10 @@ impl fmt::Debug for ProductionFormalMemoryOwnerV1 {
                 "runtime_alias_requirements",
                 &self.obligations.runtime_alias_requirements().len(),
             )
+            .field(
+                "ranked_discharged_reasons",
+                &self.ranked_discharged_reasons.len(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -118,10 +126,11 @@ impl ProductionFormalMemoryOwnerV1 {
         semantic_kir
             .verify_equivalence()
             .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
-        let obligations = derive_complete_obligations(&semantic_kir)?;
+        let (obligations, ranked_discharged_reasons) = derive_admitted_obligations(&semantic_kir)?;
         let owner = Self {
             semantic_kir,
             obligations,
+            ranked_discharged_reasons,
         };
         owner.verify_equivalence()?;
         Ok(owner)
@@ -133,8 +142,11 @@ impl ProductionFormalMemoryOwnerV1 {
         self.semantic_kir
             .verify_equivalence()
             .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
-        let obligations = derive_complete_obligations(&self.semantic_kir)?;
-        if obligations != self.obligations {
+        let (obligations, ranked_discharged_reasons) =
+            derive_admitted_obligations(&self.semantic_kir)?;
+        if obligations != self.obligations
+            || ranked_discharged_reasons != self.ranked_discharged_reasons
+        {
             return Err(ProductionFormalMemoryErrorV1::ObligationMismatch);
         }
         Ok(())
@@ -150,6 +162,12 @@ impl ProductionFormalMemoryOwnerV1 {
         &self.obligations
     }
 
+    /// Returns dynamic index derivations discharged by the retained, exact
+    /// ranked bounds/race receipt rather than the affine formal engine.
+    pub fn ranked_discharged_reasons(&self) -> &[FormalMemoryIncompleteReason] {
+        &self.ranked_discharged_reasons
+    }
+
     /// Returns the fixed two-invocation structural witness extent.
     pub const fn witness_extent(&self) -> u64 {
         PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1
@@ -161,9 +179,12 @@ impl ProductionFormalMemoryOwnerV1 {
     }
 }
 
-fn derive_complete_obligations(
+fn derive_admitted_obligations(
     semantic_kir: &ProductionSemanticKirOwnerV1,
-) -> Result<FormalMemoryObligations, ProductionFormalMemoryErrorV1> {
+) -> Result<
+    (FormalMemoryObligations, Box<[FormalMemoryIncompleteReason]>),
+    ProductionFormalMemoryErrorV1,
+> {
     let module = semantic_kir.module();
     if module.kernels.len() != 1 {
         return Err(ProductionFormalMemoryErrorV1::KernelCount {
@@ -177,10 +198,26 @@ fn derive_complete_obligations(
         FormalIndexWidth::Bits64,
     )
     .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
-    let FormalMemoryObligationAnalysis::Complete(obligations) = analysis else {
-        return Err(ProductionFormalMemoryErrorV1::Incomplete {
-            reasons: analysis.incomplete_reasons().to_vec().into_boxed_slice(),
-        });
+    let (obligations, ranked_discharged_reasons) = match analysis {
+        FormalMemoryObligationAnalysis::Complete(obligations) => {
+            (obligations, Vec::new().into_boxed_slice())
+        }
+        FormalMemoryObligationAnalysis::Incomplete { partial, reasons }
+            if semantic_kir.retained_generic_checks_discharge_dynamic_indices()
+                && reasons.iter().all(|reason| {
+                    matches!(
+                        reason,
+                        FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }
+                    )
+                }) =>
+        {
+            (partial, reasons.into_boxed_slice())
+        }
+        analysis => {
+            return Err(ProductionFormalMemoryErrorV1::Incomplete {
+                reasons: analysis.incomplete_reasons().to_vec().into_boxed_slice(),
+            });
+        }
     };
     if !obligations.inter_invocation_conflicts().is_empty() {
         return Err(ProductionFormalMemoryErrorV1::InterInvocationConflicts {
@@ -190,5 +227,5 @@ fn derive_complete_obligations(
                 .into_boxed_slice(),
         });
     }
-    Ok(obligations)
+    Ok((obligations, ranked_discharged_reasons))
 }

@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAbiIdentityV1, SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticFunctionIdV1,
-    SemanticFunctionIdentityV1, SemanticLayoutIdentityV1, SemanticLocalIdV1,
+    SemanticAbiIdentityV1, SemanticAxisV1, SemanticBlockIdV1, SemanticBlockIdentityV1,
+    SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticLayoutIdentityV1, SemanticLocalIdV1,
     SemanticLocalIdentityV1, SemanticMirLimitsV1, SemanticMirResourceV1,
     SemanticSourceFileIdentityV1, SemanticSourceOriginV1, SemanticSourceProvenanceV1,
     SemanticTargetDataLayoutV1, SemanticTypeIdV1, SemanticTypeIdentityV1,
@@ -880,7 +880,19 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 self.charge(SemanticMirResourceV1::Operands, count - 1)
             }
             Rvalue::RawPtr(..) => Err(reject("RawPtr rvalue", site)),
-            Rvalue::Cast(..) => Err(reject("Cast rvalue", site)),
+            Rvalue::Cast(
+                rustc_middle::mir::CastKind::IntToInt
+                | rustc_middle::mir::CastKind::IntToFloat
+                | rustc_middle::mir::CastKind::FloatToInt
+                | rustc_middle::mir::CastKind::FloatToFloat
+                | rustc_middle::mir::CastKind::PtrToPtr
+                | rustc_middle::mir::CastKind::FnPtrToPtr
+                | rustc_middle::mir::CastKind::PointerExposeProvenance
+                | rustc_middle::mir::CastKind::PointerWithExposedProvenance,
+                operand,
+                _,
+            ) => self.inspect_operand(operand, site),
+            Rvalue::Cast(..) => Err(reject("unsupported Cast rvalue", site)),
             Rvalue::BinaryOp(
                 BinOp::Add
                 | BinOp::Sub
@@ -905,7 +917,7 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 self.inspect_operand(&operands.1, site)
             }
             Rvalue::BinaryOp(..) => Err(reject("unsupported BinaryOp rvalue", site)),
-            Rvalue::UnaryOp(..) => Err(reject("UnaryOp rvalue", site)),
+            Rvalue::UnaryOp(_, operand) => self.inspect_operand(operand, site),
             Rvalue::ThreadLocalRef(..) => Err(reject("ThreadLocalRef rvalue", site)),
             Rvalue::WrapUnsafeBinder(..) => Err(reject("WrapUnsafeBinder rvalue", site)),
         }
@@ -953,11 +965,26 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 }
                 self.inspect_operand(cond, site)?;
                 match msg.as_ref() {
-                    AssertKind::BoundsCheck { len, index } => {
+                    AssertKind::BoundsCheck { len, index }
+                    | AssertKind::Overflow(_, len, index)
+                    | AssertKind::MisalignedPointerDereference {
+                        required: len,
+                        found: index,
+                    } => {
                         self.inspect_operand(len, site)?;
                         self.inspect_operand(index, site)
                     }
-                    _ => Err(reject("non-bounds Assert terminator", site)),
+                    AssertKind::DivisionByZero(operand) | AssertKind::RemainderByZero(operand) => {
+                        self.inspect_operand(operand, site)
+                    }
+                    AssertKind::NullPointerDereference
+                    | AssertKind::ResumedAfterReturn(_)
+                    | AssertKind::ResumedAfterPanic(_) => Ok(()),
+                    AssertKind::OverflowNeg(_)
+                    | AssertKind::InvalidEnumConstruction(_)
+                    | AssertKind::ResumedAfterDrop(_) => {
+                        Err(reject("unsupported Assert terminator", site))
+                    }
                 }
             }
             TerminatorKind::UnwindResume => Err(reject("UnwindResume terminator", site)),
@@ -1212,7 +1239,7 @@ fn capture_body_sources_v1<'tcx>(
         };
         locals.push(capture_source_v1(
             tcx,
-            declaration.source_info.span,
+            source_span_or_body_v1(declaration.source_info.span, body.span),
             site,
             cache,
             counts,
@@ -1245,7 +1272,7 @@ fn capture_body_sources_v1<'tcx>(
             };
             statements.push(capture_source_v1(
                 tcx,
-                statement.source_info.span,
+                source_span_or_body_v1(statement.source_info.span, body.span),
                 site,
                 cache,
                 counts,
@@ -1261,7 +1288,7 @@ fn capture_body_sources_v1<'tcx>(
         };
         let terminator = capture_source_v1(
             tcx,
-            terminator.source_info.span,
+            source_span_or_body_v1(terminator.source_info.span, body.span),
             terminator_site,
             cache,
             counts,
@@ -1282,6 +1309,10 @@ fn capture_body_sources_v1<'tcx>(
         locals: locals.into_boxed_slice(),
         blocks: blocks.into_boxed_slice(),
     })
+}
+
+fn source_span_or_body_v1(span: Span, body: Span) -> Span {
+    if span.is_dummy() { body } else { span }
 }
 
 fn capture_source_v1(
@@ -2042,6 +2073,19 @@ const fn function_role_tag_v1(role: CollectedFunctionRole) -> u8 {
 
 const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> u8 {
     match expansion {
+        ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X) => 13,
+        ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y) => 14,
+        ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Z) => 15,
+        ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::X) => 16,
+        ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::Y) => 17,
+        ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::Z) => 18,
+        ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::X) => 19,
+        ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::Y) => 20,
+        ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::Z) => 21,
+        ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::X) => 22,
+        ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Y) => 23,
+        ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Z) => 24,
+        ProductionTerminalExpansionV1::DisjointSliceLen => 25,
         ProductionTerminalExpansionV1::ThreadIndex1d => 0,
         ProductionTerminalExpansionV1::ThreadIndexGet => 1,
         ProductionTerminalExpansionV1::DisjointSliceGetMut => 2,

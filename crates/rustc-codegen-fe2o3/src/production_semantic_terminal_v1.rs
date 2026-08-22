@@ -3,10 +3,16 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
+use fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1;
+
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
+    ThreadIndex(SemanticAxisV1),
+    WorkgroupIndex(SemanticAxisV1),
+    WorkgroupDimension(SemanticAxisV1),
+    GridDimension(SemanticAxisV1),
     ThreadIndex1d,
     ThreadIndexGet,
     ThreadIndexIntoDisjoint,
@@ -14,6 +20,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     ThreadIndexCheckedBlock,
     DisjointIndexGet,
     DisjointIndexCheckedShift,
+    DisjointSliceLen,
     DisjointSliceGetMut,
     DisjointSliceGetDisjointMut,
     GridLeaderCurrent,
@@ -31,6 +38,42 @@ pub(crate) enum ProductionSemanticTerminalRuleV1 {
 impl ProductionSemanticTerminalRuleV1 {
     pub(crate) const fn from_trusted_device_item(item: TrustedDeviceItem) -> Self {
         match item {
+            TrustedDeviceItem::ThreadIndexX => Self::Expand(
+                ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X),
+            ),
+            TrustedDeviceItem::ThreadIndexY => Self::Expand(
+                ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y),
+            ),
+            TrustedDeviceItem::ThreadIndexZ => Self::Expand(
+                ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Z),
+            ),
+            TrustedDeviceItem::WorkgroupIndexX => Self::Expand(
+                ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::X),
+            ),
+            TrustedDeviceItem::WorkgroupIndexY => Self::Expand(
+                ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::Y),
+            ),
+            TrustedDeviceItem::WorkgroupIndexZ => Self::Expand(
+                ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::Z),
+            ),
+            TrustedDeviceItem::WorkgroupDimensionX => Self::Expand(
+                ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::X),
+            ),
+            TrustedDeviceItem::WorkgroupDimensionY => Self::Expand(
+                ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::Y),
+            ),
+            TrustedDeviceItem::WorkgroupDimensionZ => Self::Expand(
+                ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::Z),
+            ),
+            TrustedDeviceItem::GridDimensionX => Self::Expand(
+                ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::X),
+            ),
+            TrustedDeviceItem::GridDimensionY => Self::Expand(
+                ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Y),
+            ),
+            TrustedDeviceItem::GridDimensionZ => Self::Expand(
+                ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Z),
+            ),
             TrustedDeviceItem::ThreadIndex1d => {
                 Self::Expand(ProductionTerminalExpansionV1::ThreadIndex1d)
             }
@@ -51,6 +94,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::DisjointIndexCheckedShift => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointIndexCheckedShift)
+            }
+            TrustedDeviceItem::DisjointSliceLen => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointSliceLen)
             }
             TrustedDeviceItem::DisjointSliceGetMut => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetMut)
@@ -77,6 +123,42 @@ impl ProductionSemanticTerminalRuleV1 {
     #[cfg(test)]
     const fn trusted_device_item(self) -> TrustedDeviceItem {
         match self {
+            Self::Expand(ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X)) => {
+                TrustedDeviceItem::ThreadIndexX
+            }
+            Self::Expand(ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y)) => {
+                TrustedDeviceItem::ThreadIndexY
+            }
+            Self::Expand(ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Z)) => {
+                TrustedDeviceItem::ThreadIndexZ
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::X)) => {
+                TrustedDeviceItem::WorkgroupIndexX
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::Y)) => {
+                TrustedDeviceItem::WorkgroupIndexY
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::Z)) => {
+                TrustedDeviceItem::WorkgroupIndexZ
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::X)) => {
+                TrustedDeviceItem::WorkgroupDimensionX
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::Y)) => {
+                TrustedDeviceItem::WorkgroupDimensionY
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::Z)) => {
+                TrustedDeviceItem::WorkgroupDimensionZ
+            }
+            Self::Expand(ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::X)) => {
+                TrustedDeviceItem::GridDimensionX
+            }
+            Self::Expand(ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Y)) => {
+                TrustedDeviceItem::GridDimensionY
+            }
+            Self::Expand(ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Z)) => {
+                TrustedDeviceItem::GridDimensionZ
+            }
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndex1d) => {
                 TrustedDeviceItem::ThreadIndex1d
             }
@@ -97,6 +179,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::DisjointIndexCheckedShift) => {
                 TrustedDeviceItem::DisjointIndexCheckedShift
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointSliceLen) => {
+                TrustedDeviceItem::DisjointSliceLen
             }
             Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetMut) => {
                 TrustedDeviceItem::DisjointSliceGetMut
@@ -134,6 +219,54 @@ mod tests {
     fn fill_terminals_have_explicit_workload_neutral_expansions() {
         let cases = [
             (
+                TrustedDeviceItem::ThreadIndexX,
+                ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X),
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexY,
+                ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y),
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexZ,
+                ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Z),
+            ),
+            (
+                TrustedDeviceItem::WorkgroupIndexX,
+                ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::X),
+            ),
+            (
+                TrustedDeviceItem::WorkgroupIndexY,
+                ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::Y),
+            ),
+            (
+                TrustedDeviceItem::WorkgroupIndexZ,
+                ProductionTerminalExpansionV1::WorkgroupIndex(SemanticAxisV1::Z),
+            ),
+            (
+                TrustedDeviceItem::WorkgroupDimensionX,
+                ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::X),
+            ),
+            (
+                TrustedDeviceItem::WorkgroupDimensionY,
+                ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::Y),
+            ),
+            (
+                TrustedDeviceItem::WorkgroupDimensionZ,
+                ProductionTerminalExpansionV1::WorkgroupDimension(SemanticAxisV1::Z),
+            ),
+            (
+                TrustedDeviceItem::GridDimensionX,
+                ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::X),
+            ),
+            (
+                TrustedDeviceItem::GridDimensionY,
+                ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Y),
+            ),
+            (
+                TrustedDeviceItem::GridDimensionZ,
+                ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Z),
+            ),
+            (
                 TrustedDeviceItem::ThreadIndex1d,
                 ProductionTerminalExpansionV1::ThreadIndex1d,
             ),
@@ -156,6 +289,10 @@ mod tests {
             (
                 TrustedDeviceItem::DisjointIndexCheckedShift,
                 ProductionTerminalExpansionV1::DisjointIndexCheckedShift,
+            ),
+            (
+                TrustedDeviceItem::DisjointSliceLen,
+                ProductionTerminalExpansionV1::DisjointSliceLen,
             ),
             (
                 TrustedDeviceItem::DisjointSliceGetMut,

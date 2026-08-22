@@ -410,6 +410,19 @@ impl Operation {
         MemoryEffectSummary::new(self.memory_effects())
     }
 
+    /// Reports whether this operation's memory effects are fully described by
+    /// its registered Kernel IR contract.
+    pub fn has_complete_effect_summary(&self) -> bool {
+        match &self.kind {
+            OperationKind::Call { callee, arguments } => {
+                AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_some()
+                    || FloatOperation::from_intrinsic_call(callee, arguments).is_some()
+            }
+            OperationKind::InlineAssembly(_) => false,
+            _ => true,
+        }
+    }
+
     pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
         if let Some(semantic) = self.kind.semantic_operation() {
             return semantic.contract().required_capabilities;

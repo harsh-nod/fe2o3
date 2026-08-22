@@ -8,6 +8,7 @@ use fe2o3_rustc_invocation::{RustcInvocationV2, classify_rustc_invocation_v2};
 
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_RANKED_MEMORY_ENV_V1: &str = "FE2O3_EXTRACT_RANKED_MEMORY_V1";
+const EXTRACT_GFX942_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1";
 
 fn main() {
     let code = match run(env::args_os().collect()) {
@@ -53,15 +54,33 @@ fn run(argv: Vec<OsString>) -> Result<i32, String> {
                 .ok_or_else(|| "selected extraction argv must be valid UTF-8".to_owned())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    match env::var_os(EXTRACT_RANKED_MEMORY_ENV_V1) {
-        None => rustc_codegen_fe2o3::run_production_extraction_driver_v1(&args)?,
-        Some(value) if value == "1" => {
-            rustc_codegen_fe2o3::run_production_ranked_extraction_driver_v1(&args)?;
-        }
-        Some(_) => {
+    let llvm_output = env::var_os(EXTRACT_GFX942_LLVM_PATH_ENV_V1);
+    if llvm_output.is_some() && env::var_os(EXTRACT_RANKED_MEMORY_ENV_V1).is_some() {
+        return Err(format!(
+            "{EXTRACT_RANKED_MEMORY_ENV_V1} and {EXTRACT_GFX942_LLVM_PATH_ENV_V1} are mutually exclusive"
+        ));
+    }
+    if let Some(output) = llvm_output {
+        if output.is_empty() {
             return Err(format!(
-                "{EXTRACT_RANKED_MEMORY_ENV_V1} must be exactly `1` when present"
+                "{EXTRACT_GFX942_LLVM_PATH_ENV_V1} must not be empty"
             ));
+        }
+        rustc_codegen_fe2o3::run_production_gfx942_llvm_extraction_driver_v1(
+            &args,
+            std::path::Path::new(&output),
+        )?;
+    } else {
+        match env::var_os(EXTRACT_RANKED_MEMORY_ENV_V1) {
+            None => rustc_codegen_fe2o3::run_production_extraction_driver_v1(&args)?,
+            Some(value) if value == "1" => {
+                rustc_codegen_fe2o3::run_production_ranked_extraction_driver_v1(&args)?;
+            }
+            Some(_) => {
+                return Err(format!(
+                    "{EXTRACT_RANKED_MEMORY_ENV_V1} must be exactly `1` when present"
+                ));
+            }
         }
     }
     Ok(0)

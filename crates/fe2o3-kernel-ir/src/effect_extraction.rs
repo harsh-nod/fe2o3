@@ -297,7 +297,9 @@ pub fn extract_function_region_effects(
     for block in &body.blocks {
         for (operation_index, operation) in block.operations.iter().enumerate() {
             let location = FunctionOperationLocation::new(block.id, operation_index);
-            if let OperationKind::Call { callee, .. } = &operation.kind {
+            if let OperationKind::Call { callee, .. } = &operation.kind
+                && !operation.has_complete_effect_summary()
+            {
                 extraction_issues.push(EffectExtractionIssue::CallEffectsUnavailable {
                     location,
                     callee: callee.clone(),

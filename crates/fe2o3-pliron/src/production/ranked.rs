@@ -6,10 +6,10 @@ use std::{
 
 use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, DYNAMIC_EXTENT, DimensionOp,
-    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
-    RankedViewType, RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
+    AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, DYNAMIC_EXTENT,
+    DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
+    IndexType, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp,
+    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
     SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
 };
 use fe2o3_kernel_analysis::{
@@ -146,6 +146,10 @@ pub enum ProductionRankedTerminatorV1 {
         rhs: ProductionRankedValueV1,
         true_block: u32,
         false_block: u32,
+    },
+    AnalysisSplit {
+        first_block: u32,
+        second_block: u32,
     },
     Branch {
         target: u32,
@@ -693,6 +697,13 @@ fn validate_terminator(
             require_index(*rhs, argument_count, locals)?;
             target(*true_block)?;
             target(*false_block)
+        }
+        ProductionRankedTerminatorV1::AnalysisSplit {
+            first_block,
+            second_block,
+        } => {
+            target(*first_block)?;
+            target(*second_block)
         }
         ProductionRankedTerminatorV1::Branch {
             target: destination,
@@ -1311,6 +1322,15 @@ fn materialize_terminator(
             resolve_value(*rhs, arguments, locals)?,
             blocks[*true_block as usize],
             blocks[*false_block as usize],
+        )
+        .get_operation(),
+        ProductionRankedTerminatorV1::AnalysisSplit {
+            first_block,
+            second_block,
+        } => AnalysisSplitOp::new(
+            context,
+            blocks[*first_block as usize],
+            blocks[*second_block as usize],
         )
         .get_operation(),
         ProductionRankedTerminatorV1::Branch { target } => {

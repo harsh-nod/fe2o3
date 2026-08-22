@@ -1,62 +1,55 @@
-# General tiled GEMM safe-source fixture
+# Dynamic strided GEMM
 
-This standalone crate contains the positive ordinary-Rust kernel source for
-issue #138. The kernel accepts dynamic `M`, `N`, `K`, `lda`, `ldb`, and `ldc`,
-uses 16x16x16 BF16/F32 phases across a 2D grid, zero-fills guarded operand
-tails, carries its accumulator across all phases, and applies `alpha`/`beta`
-only to valid output coordinates.
-
-The kernel crate uses `#![forbid(unsafe_code)]`. Compiler-only operations are
-exposed through the sealed linear `Gfx942TiledGemmWave64V1` typestate in the
-standalone `fe2o3-gemm-device-v1` companion crate. Keeping the new intrinsics
-outside `fe2o3-device` preserves the reviewed provider-tree identities used by
-existing kernels. The capability hides wave identity, two separate XOR4 LDS
-tiles, publish/reuse barriers, MFMA state, the accumulator, phase epochs, and
-disjoint output addressing. Its only phase sequence is:
+This example is an end-to-end safe Rust GPU kernel for
 
 ```text
-Ready -> Staged -> Published -> Consumed -> Ready
+C = alpha * A * B + beta * C
 ```
 
-## Compile-time enforcement boundary
+`M`, `N`, `K`, `lda`, `ldb`, `ldc`, `alpha`, and `beta` are runtime values.
+One global invocation owns one physical slot in `C`; padding columns and the
+rounded-up grid edge return without a memory access. Every active invocation
+runs the full dynamic K loop and applies the epilogue once.
 
-The V1 contract records one enforcement owner for each of issue #138's 15
-semantic mutations. Ten companion UI fixtures exercise local Rust typestate and
-sealed-surface restrictions. Those rustc failures remain distinct from a
-distributed safety proof.
+The kernel is deliberately the scalar correctness baseline. It exercises the
+general compiler path for dynamic control flow and memory safety without
+special-casing matrix multiplication in the compiler. LDS/MFMA scheduling is a
+separate optimization of the same verified Kernel IR, not a condition for this
+kernel to compile or execute.
 
-The separate mutation-oracle corpus keeps the same `#![forbid(unsafe_code)]`
-root and derives every negative kernel by one reversible source edit of a full
-dynamic baseline. Authenticated optimized-MIR analysis rejects all 15 exact
-mutations at compiler preflight with their frozen property, stage, and
-`0x464701xx` diagnostic. Each diagnostic retains the kernel root, source and
-terminal spans, and reachable call chain. The managed build leaves no current
-or stale artifact output. This is source-to-diagnostic evidence for the exact
-corpus, not proof authority for the positive kernel or arbitrary Rust source.
+## Run on gfx942
 
-## Current boundary
+From this directory:
 
-Provider authentication covers the compiled semantic surface: imported source
-hashes for all six terminals and the provider-owned context type, plus the
-reviewed `fe2o3_device::DisjointSlice` dependency in the compiled store
-signature. It does not authenticate Cargo-manifest authorship, package
-publication, or publisher identity. An alternate manifest that selects the
-exact reviewed source and dependency is therefore semantically equivalent;
-package provenance needs a separate signature or transparency-log authority.
+```bash
+./run-gfx942.sh
+```
 
-This is a compile-tested source contract, not GPU execution authority. The
-safe compiler operations are panic stubs under host rustc. The compiler may run
-non-authoritative structural diagnostics over the positive source, but positive
-frontend correspondence is disabled until the complete optimized-MIR authority
-proof is closed. No receipt or correspondence crosses production preflight.
+The script performs the complete qualification flow:
 
-The compiler also contains structural Pliron/GPU lowering, two separately
-identified reference and vectorized machine schedules, measured Worker/finalizer
-observations, and a private owner-retaining pair join. The exact
-`collected-general-gemm-v1` selector now enters a dedicated, no-fallback
-in-process route, but both positive correspondence and Verus proof execution
-remain fail-closed until the complete MIR authority proof and exact root-owned
-runtime closure are provisioned. The route therefore stops before Worker
-execution or the pair join, and no proof, durable artifact publication, load,
-launch, or protected general-GEMM hardware authority can be issued. The existing
-exact `tiled_gemm_v1` Slice 1 source and identities are unchanged.
+```text
+safe Rust
+  -> semantic MIR
+  -> ranked PLIRON verification
+  -> Kernel IR
+  -> formal memory admission
+  -> gfx942 LLVM
+  -> HSACO
+  -> fe2o3-host launch
+```
+
+It runs packed, fully strided/edge, multi-workgroup dynamic-K, and zero-K epilogue
+cases against an independent CPU reference. Temporary AMD Cargo output, LLVM,
+and object files are deleted on exit. The final HSACO is retained under
+`target/fe2o3-gfx942/`.
+
+## Safety boundary
+
+The library containing the kernel uses `#![forbid(unsafe_code)]`. Ordinary Rust
+slice indexing and `DisjointSlice::get_mut` remain visible to the compiler, so
+generic bounds and ownership analysis can verify them. The host binary contains
+the two required documented unsafe operations: loading external machine code
+and launching it with an exact physical ABI.
+
+The resulting HSACO is qualification output. Protected release publication and
+artifact-currentness admission remain a separate, fail-closed pipeline.

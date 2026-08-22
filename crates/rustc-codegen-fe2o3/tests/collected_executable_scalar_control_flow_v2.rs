@@ -4182,7 +4182,7 @@ fn tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_ha
     let backend = build_collection_backend(&workspace);
     assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("pub fn tiled_gemm_lds_slice1"));
     assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("gfx942_lds_bf16_tile_pair_m16x16_v1"));
-    assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("sync::syncthreads"));
+    assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("gfx942_publish_lds_bf16_tile_pair_m16x16_v1"));
     assert!(!TILED_GEMM_LDS_SLICE1_FIXTURE.contains("\nmacro_rules!"));
 
     let exact_output = TestOutputDir::new(&workspace);

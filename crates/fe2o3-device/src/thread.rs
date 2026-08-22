@@ -449,6 +449,7 @@ pub struct GridLeader {
 }
 
 impl<IndexSpace> ThreadIndex<IndexSpace> {
+    #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_get"]
     pub fn get(&self) -> usize {
         self.raw
@@ -654,7 +655,7 @@ pub fn launch_extent_1d() -> usize {
     unreachable!("launch_extent_1d must be lowered by the fe2o3 backend")
 }
 
-#[inline(always)]
+#[inline(never)]
 #[rustc_diagnostic_item = "fe2o3_device_thread_index_1d"]
 pub fn index_1d() -> ThreadIndex {
     ThreadIndex {
@@ -719,48 +720,78 @@ pub fn index_2d_col() -> usize {
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_thread_index_x_v1"]
 pub fn thread_idx_x() -> u32 {
     unreachable!("thread_idx_x must be lowered by the fe2o3 backend")
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_thread_index_y_v1"]
 pub fn thread_idx_y() -> u32 {
     unreachable!("thread_idx_y must be lowered by the fe2o3 backend")
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_thread_index_z_v1"]
 pub fn thread_idx_z() -> u32 {
     unreachable!("thread_idx_z must be lowered by the fe2o3 backend")
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_index_x_v1"]
 pub fn block_idx_x() -> u32 {
     unreachable!("block_idx_x must be lowered by the fe2o3 backend")
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_index_y_v1"]
 pub fn block_idx_y() -> u32 {
     unreachable!("block_idx_y must be lowered by the fe2o3 backend")
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_index_z_v1"]
 pub fn block_idx_z() -> u32 {
     unreachable!("block_idx_z must be lowered by the fe2o3 backend")
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_dimension_x_v1"]
 pub fn block_dim_x() -> u32 {
     unreachable!("block_dim_x must be lowered by the fe2o3 backend")
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_dimension_y_v1"]
 pub fn block_dim_y() -> u32 {
     unreachable!("block_dim_y must be lowered by the fe2o3 backend")
 }
 
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_dimension_z_v1"]
 pub fn block_dim_z() -> u32 {
     unreachable!("block_dim_z must be lowered by the fe2o3 backend")
+}
+
+/// Returns the number of workgroups in the x dimension of the active launch.
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_grid_dimension_x_v1"]
+pub fn grid_dim_x() -> u32 {
+    unreachable!("grid_dim_x must be lowered by the fe2o3 backend")
+}
+
+/// Returns the number of workgroups in the y dimension of the active launch.
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_grid_dimension_y_v1"]
+pub fn grid_dim_y() -> u32 {
+    unreachable!("grid_dim_y must be lowered by the fe2o3 backend")
+}
+
+/// Returns the number of workgroups in the z dimension of the active launch.
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_grid_dimension_z_v1"]
+pub fn grid_dim_z() -> u32 {
+    unreachable!("grid_dim_z must be lowered by the fe2o3 backend")
 }
 
 #[cfg(test)]

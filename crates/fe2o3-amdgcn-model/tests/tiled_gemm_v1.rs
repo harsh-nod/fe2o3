@@ -174,14 +174,15 @@ fn rejects_valid_but_noncanonical_kernel_ir() {
 }
 
 #[test]
-fn generic_gfx942_lowering_still_rejects_index_division_and_remainder() {
+fn generic_gfx942_lowering_selects_index_division_and_remainder_by_type() {
     let module = tiled_gemm_v1_module();
-    let remainder = lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir(
         &module,
         &KernelId::new(TILED_GEMM_V1_KERNEL_ID),
     )
-    .expect_err("generic exact-target lowering must reject tiled index remainder");
-    assert!(remainder.to_string().contains("does not lower Remainder"));
+    .expect("generic gfx942 lowering supports ordinary index arithmetic");
+    assert!(llvm.contains("urem i64"));
+    assert!(llvm.contains("udiv i64"));
 
     let mut divide_only = module;
     let operations = &mut divide_only.functions[0].body.as_mut().unwrap().blocks[0].operations;
@@ -193,8 +194,8 @@ fn generic_gfx942_lowering_still_rejects_index_division_and_remainder() {
         &divide_only,
         &KernelId::new(TILED_GEMM_V1_KERNEL_ID),
     )
-    .expect_err("generic exact-target lowering must reject tiled index division");
-    assert!(divide.to_string().contains("does not lower Divide"));
+    .expect("generic gfx942 lowering supports division without a workload profile");
+    assert!(divide.contains("udiv i64"));
 }
 
 #[test]

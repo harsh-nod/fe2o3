@@ -2061,13 +2061,9 @@ fn excluded_operations_constants_casts_and_comparisons_have_located_errors() {
     assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(0)));
     assert_eq!(error.diagnostics()[0].location.operation, Some(0));
     let exact_divide = exact_gfx942_xnack_minus(divide);
-    assert_eq!(
-        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&exact_divide, &KernelId::new("fill"))
-            .unwrap_err()
-            .diagnostics()[0]
-            .code,
-        LoweringDiagnosticCode::UnsupportedOperation
-    );
+    let exact_divide =
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&exact_divide, &KernelId::new("fill")).unwrap();
+    assert!(exact_divide.contains("%v20 = fdiv float %arg1, %arg1"));
 
     let mut nan = fill_module();
     nan.functions[0].body.as_mut().unwrap().blocks[0]
@@ -2125,13 +2121,10 @@ fn excluded_operations_constants_casts_and_comparisons_have_located_errors() {
         LoweringDiagnosticCode::UnsupportedOperation
     );
     let exact_float_compare = exact_gfx942_xnack_minus(float_compare);
-    assert_eq!(
-        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&exact_float_compare, &KernelId::new("fill"),)
-            .unwrap_err()
-            .diagnostics()[0]
-            .code,
-        LoweringDiagnosticCode::UnsupportedOperation
-    );
+    let exact_float_compare =
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&exact_float_compare, &KernelId::new("fill"))
+            .unwrap();
+    assert!(exact_float_compare.contains("%v4 = fcmp olt float %arg1, %arg1"));
 }
 
 #[test]

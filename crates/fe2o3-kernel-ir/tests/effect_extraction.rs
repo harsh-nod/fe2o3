@@ -503,6 +503,24 @@ fn unsupported_widths_and_calls_are_reported_as_incomplete() {
 }
 
 #[test]
+fn registered_diagnostic_intrinsics_have_a_complete_empty_effect_summary() {
+    let trap = AmdGpuDiagnosticOperation::Trap;
+    let function = function(vec![], vec![trap.operation(None)]);
+    let function_id = function.id.clone();
+    let module = module_with_functions(vec![function, trap.declaration()]);
+    let report =
+        extract_function_region_effects(&module, &function_id, &FunctionEffectBindings::new())
+            .unwrap();
+
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::CompleteUnderSuppliedBindings
+    );
+    assert!(report.effects().is_empty());
+    assert!(report.extraction_issues().is_empty());
+}
+
+#[test]
 fn unresolved_calls_force_incomplete_status_despite_favorable_modeled_effects() {
     let access = MemoryAccess::new(AddressSpace::Global, 4);
     let call = Operation::new(

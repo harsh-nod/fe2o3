@@ -294,6 +294,7 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
         }
     }
 
+    #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_len"]
     pub fn len(&self) -> usize {
         self.len
@@ -303,6 +304,7 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
         self.len == 0
     }
 
+    #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_mut"]
     pub fn get_mut(&mut self, index: ThreadIndex<IndexSpace>) -> Option<&mut T> {
         // SAFETY: `ThreadIndex` can only be produced for the current device

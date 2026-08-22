@@ -11,11 +11,11 @@ use std::fmt;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAssignmentV1, SemanticBasicBlockV1,
     SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticBorrowKindV1,
-    SemanticCallDestinationV1, SemanticCallableIdV1, SemanticConstGenericArgumentsIdentityV1,
-    SemanticConstantBytesV1, SemanticConstantV1, SemanticConstantValueV1,
-    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1, SemanticFunctionAbiV1,
-    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
-    SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+    SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCastKindV1,
+    SemanticConstGenericArgumentsIdentityV1, SemanticConstantBytesV1, SemanticConstantV1,
+    SemanticConstantValueV1, SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1,
+    SemanticFunctionAbiV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
     SemanticItemDefinitionIdentityV1, SemanticKernelEntryV1, SemanticLinkSymbolV1,
     SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticLocalRoleV1,
     SemanticMemoryLoadV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
@@ -23,13 +23,14 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticProjectionKindV1, SemanticProjectionV1, SemanticRvalueKindV1, SemanticRvalueV1,
     SemanticScalarValueV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
     SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1,
-    SemanticTerminatorV1, SemanticTypeIdV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticTerminatorV1, SemanticTypeIdV1, SemanticUnaryOpV1, SemanticUnwindActionV1,
+    SemanticVolatilityV1,
 };
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::{
-    AggregateKind, AssertKind, BinOp, Body, BorrowKind, ConstValue, MutBorrowKind, Operand, Place,
-    PlaceTy, ProjectionElem, RETURN_PLACE, Rvalue, START_BLOCK, StatementKind, TerminatorKind,
-    UnwindAction,
+    AggregateKind, AssertKind, BinOp, Body, BorrowKind, CastKind, ConstValue, MutBorrowKind,
+    Operand, Place, PlaceTy, ProjectionElem, RETURN_PLACE, Rvalue, START_BLOCK, StatementKind,
+    TerminatorKind, UnOp, UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
@@ -869,7 +870,23 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             Rvalue::RawPtr(..) => {
                 return Err(unsupported("RawPtr rvalue", block, statement));
             }
-            Rvalue::Cast(..) => return Err(unsupported("Cast rvalue", block, statement)),
+            Rvalue::Cast(kind, operand, _) => SemanticRvalueKindV1::Cast {
+                kind: match kind {
+                    CastKind::IntToInt | CastKind::FloatToInt => SemanticCastKindV1::Integer,
+                    CastKind::IntToFloat | CastKind::FloatToFloat => SemanticCastKindV1::Float,
+                    CastKind::PtrToPtr | CastKind::FnPtrToPtr => SemanticCastKindV1::Pointer,
+                    CastKind::PointerExposeProvenance => {
+                        SemanticCastKindV1::PointerExposeProvenance
+                    }
+                    CastKind::PointerWithExposedProvenance => {
+                        SemanticCastKindV1::PointerWithExposedProvenance
+                    }
+                    CastKind::Transmute | CastKind::PointerCoercion(..) | CastKind::Subtype => {
+                        return Err(unsupported("unsupported Cast rvalue", block, statement));
+                    }
+                },
+                operand: self.construct_operand(operand, block, statement)?,
+            },
             Rvalue::BinaryOp(operation, operands) => {
                 let operation = semantic_binary_operation(*operation)
                     .ok_or_else(|| unsupported("unsupported BinaryOp rvalue", block, statement))?;
@@ -879,9 +896,14 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     right: self.construct_operand(&operands.1, block, statement)?,
                 }
             }
-            Rvalue::UnaryOp(..) => {
-                return Err(unsupported("UnaryOp rvalue", block, statement));
-            }
+            Rvalue::UnaryOp(operation, operand) => SemanticRvalueKindV1::Unary {
+                operation: match operation {
+                    UnOp::Not => SemanticUnaryOpV1::Not,
+                    UnOp::Neg => SemanticUnaryOpV1::Negate,
+                    UnOp::PtrMetadata => SemanticUnaryOpV1::PointerMetadata,
+                },
+                operand: self.construct_operand(operand, block, statement)?,
+            },
             Rvalue::ThreadLocalRef(..) => {
                 return Err(unsupported("ThreadLocalRef rvalue", block, statement));
             }
@@ -983,7 +1005,42 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                             index: self.construct_operand(index, block, None)?,
                         }
                     }
-                    _ => return Err(unsupported("non-bounds Assert terminator", block, None)),
+                    AssertKind::Overflow(operation, left, right) => {
+                        let operation = semantic_binary_operation(*operation).ok_or_else(|| {
+                            unsupported("unsupported overflow Assert operation", block, None)
+                        })?;
+                        SemanticAssertMessageV1::Overflow {
+                            operation,
+                            left: self.construct_operand(left, block, None)?,
+                            right: self.construct_operand(right, block, None)?,
+                        }
+                    }
+                    AssertKind::DivisionByZero(operand) => SemanticAssertMessageV1::DivisionByZero(
+                        self.construct_operand(operand, block, None)?,
+                    ),
+                    AssertKind::RemainderByZero(operand) => {
+                        SemanticAssertMessageV1::RemainderByZero(
+                            self.construct_operand(operand, block, None)?,
+                        )
+                    }
+                    AssertKind::MisalignedPointerDereference { required, found } => {
+                        SemanticAssertMessageV1::MisalignedPointerDereference {
+                            required_alignment: self.construct_operand(required, block, None)?,
+                            found_alignment: self.construct_operand(found, block, None)?,
+                        }
+                    }
+                    AssertKind::NullPointerDereference => {
+                        SemanticAssertMessageV1::NullPointerDereference
+                    }
+                    AssertKind::ResumedAfterReturn(_) => {
+                        SemanticAssertMessageV1::ResumedAfterReturn
+                    }
+                    AssertKind::ResumedAfterPanic(_) => SemanticAssertMessageV1::ResumedAfterPanic,
+                    AssertKind::OverflowNeg(_)
+                    | AssertKind::InvalidEnumConstruction(_)
+                    | AssertKind::ResumedAfterDrop(_) => {
+                        return Err(unsupported("unsupported Assert terminator", block, None));
+                    }
                 };
                 let unwind = match unwind {
                     UnwindAction::Continue => SemanticUnwindActionV1::Continue,
@@ -1090,9 +1147,9 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     u32::try_from(field.index()).map_err(|_| table("field projection"))?,
                 ),
                 ProjectionElem::Index(index) => {
-                    if !matches!(derived.ty.kind(), TyKind::Array(..)) {
+                    if !matches!(derived.ty.kind(), TyKind::Array(..) | TyKind::Slice(..)) {
                         return Err(unsupported(
-                            "Index projection on a non-array place",
+                            "Index projection on a non-array/slice place",
                             block,
                             statement,
                         ));
@@ -1657,8 +1714,13 @@ fn semantic_borrow_kind_v1(
 
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
-        ProductionTerminalExpansionV1::ThreadIndex1d => Some(0),
-        ProductionTerminalExpansionV1::ThreadIndexGet => Some(1),
+        ProductionTerminalExpansionV1::ThreadIndex(_)
+        | ProductionTerminalExpansionV1::WorkgroupIndex(_)
+        | ProductionTerminalExpansionV1::WorkgroupDimension(_)
+        | ProductionTerminalExpansionV1::GridDimension(_)
+        | ProductionTerminalExpansionV1::ThreadIndex1d => Some(0),
+        ProductionTerminalExpansionV1::ThreadIndexGet
+        | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::DisjointSliceGetMut => Some(2),
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
         | ProductionTerminalExpansionV1::ThreadIndexCheckedShift

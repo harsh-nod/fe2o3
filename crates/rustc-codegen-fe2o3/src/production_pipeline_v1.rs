@@ -232,7 +232,7 @@ pub(crate) struct TargetNeutralProductionCompilationV1 {
 }
 
 /// Move-only production stage retaining exact semantic ownership, verified
-/// Kernel IR, complete formal memory obligations, and transaction bindings.
+/// Kernel IR, composed formal/ranked memory evidence, and transaction bindings.
 pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
@@ -427,6 +427,10 @@ impl Gfx942LoweredProductionCompilationV1 {
         self.admitted.obligations().accesses().len()
     }
 
+    pub(crate) fn ranked_dynamic_index_discharge_count(&self) -> usize {
+        self.admitted.ranked_discharged_reasons().len()
+    }
+
     pub(crate) fn runtime_bounds_requirement_count(&self) -> usize {
         self.admitted.obligations().bounds_requirements().len()
     }
@@ -465,13 +469,14 @@ impl Gfx942LoweredProductionCompilationV1 {
         self,
     ) -> Result<PreparedProductionWorkerPublicationV1, ProductionPipelineErrorV1> {
         eprintln!(
-            "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted complete formal memory obligations for a {}-invocation structural witness with {} allocation(s), {} access(es), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact Worker V2 handoff",
+            "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact Worker V2 handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
             self.formal_witness_extent(),
             self.formal_allocation_count(),
             self.formal_access_count(),
+            self.ranked_dynamic_index_discharge_count(),
             self.runtime_bounds_requirement_count(),
             self.runtime_alias_requirement_count(),
             self.inter_invocation_conflict_count(),

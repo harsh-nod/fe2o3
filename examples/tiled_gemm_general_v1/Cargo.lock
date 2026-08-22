@@ -295,6 +295,7 @@ dependencies = [
 name = "fe2o3-tiled-gemm-general-v1"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-core",
  "fe2o3-device",
  "fe2o3-gemm-device-v1",
  "fe2o3-host",

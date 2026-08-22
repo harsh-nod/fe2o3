@@ -3569,12 +3569,10 @@ mod tests {
     }
 
     #[test]
-    fn exact_row_softmax_uses_only_the_authenticated_gfx942_ocml_exp_lowering() {
+    fn exact_row_softmax_profile_remains_stable_after_generic_float_lowering() {
         let module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
-        assert!(
-            dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module).is_err(),
-            "generic gfx942 lowering admitted row-only f32 operations"
-        );
+        let generic =
+            dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module).unwrap();
         let profile =
             dialect_amdgcn::authenticate_gfx942_row_softmax_lowering_profile_v1(&module).unwrap();
         let dedicated =
@@ -3583,6 +3581,7 @@ mod tests {
                 &profile,
             )
             .unwrap();
+        assert_eq!(generic, dedicated);
         assert_eq!(
             <[u8; 32]>::from(Sha256::digest(dedicated.as_bytes())),
             REVIEWED_ROW_SOFTMAX_LEGACY_LLVM_SHA256,

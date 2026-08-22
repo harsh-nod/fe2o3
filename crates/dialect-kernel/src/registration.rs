@@ -3,8 +3,8 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
-    AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
-    DIALECT_NAME, DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, AnalysisSplitOp, AtomicOrderingAttr,
+    AtomicScopeAttr, BranchOp, DIALECT_NAME, DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr,
     GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp,
     IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr,
     InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, RankedAccessOp,
@@ -45,6 +45,7 @@ fn registration_hook(
     service.register_operation::<DimensionOp>()?;
     service.register_operation::<RankedAccessOp>()?;
     service.register_operation::<IndexLessThanBranchOp>()?;
+    service.register_operation::<AnalysisSplitOp>()?;
     service.register_operation::<BranchOp>()?;
     service.register_operation::<ReturnOp>()?;
     service.register_operation::<SemanticSymbolOp>()?;
