@@ -11,8 +11,9 @@ use std::{
 use fe2o3_artifact_transaction::{
     AttemptScopedHsacoPublicationOutcomeV3, BuildInvocation, BuildSession,
     CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3, ConsumedCompilerModuleHandoffV3,
-    DurablePublishedHsacoClaimV3, ProducerIdentity, WorkerV3PublicationIntentOutcomeV1,
-    begin_build_attempt, consume_compiler_module_handoff_in_slot_v3, finish_build_attempt,
+    DurablePublishedHsacoClaimV3, ProducerIdentity, WorkerV3ExternalProviderPayloadsV1,
+    WorkerV3PublicationIntentOutcomeV1, begin_build_attempt,
+    consume_compiler_module_handoff_in_slot_v3, finish_build_attempt,
     publish_compiler_module_handoff_in_slot_v3, reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_compiler_ffi::{
@@ -390,6 +391,45 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     assert_eq!(claim.worker_v3_binding(), binding);
     assert_eq!(replay.finalized_hsaco, exact_finalized);
     assert_eq!(lease.exact_artifact_bytes(), exact_finalized);
+    assert_eq!(replay.external_provider_payloads.len(), 1);
+    assert_eq!(
+        replay.external_provider_payloads[0],
+        b"worker-v3-publication-provider"
+    );
+    let providers =
+        WorkerV3ExternalProviderPayloadsV1::new(replay.external_provider_payloads.clone()).unwrap();
+    assert_eq!(
+        providers.canonical_sha256(),
+        record.external_provider_archive_sha256()
+    );
+    assert_eq!(
+        providers.canonical_length(),
+        record.external_provider_archive_length()
+    );
+    assert_eq!(
+        providers.payload_length(),
+        record.external_provider_payload_length()
+    );
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(&replay.outer_handoff)),
+        record.outer_handoff_sha256()
+    );
+    assert_eq!(replay.outer_handoff.len(), record.outer_handoff_length());
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(&replay.transcript)),
+        record.transcript_sha256()
+    );
+    assert_eq!(replay.transcript.len(), record.transcript_length());
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(&replay.finalized_hsaco)),
+        record.output_sha256()
+    );
+    assert_eq!(replay.finalized_hsaco.len(), record.output_length());
+    let current = lease.acquire_current_token().unwrap();
+    lease.validate_current_token(&current).unwrap();
+    assert_eq!(current.exact_artifact_bytes(), exact_finalized);
+    current.revalidate_locked_currentness().unwrap();
+    drop(current);
     let outer = InertSemanticCompilerModuleHandoffV3::decode(&replay.outer_handoff).unwrap();
     assert_eq!(
         *outer.capsule().compiler_closure(),
