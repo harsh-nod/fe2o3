@@ -199,7 +199,7 @@ impl Gfx942FixedDispatchDataV1 {
         !matches!(self.storage, DispatchDataStorageV1::Uninitialized(_))
     }
 
-    pub(super) fn into_parts(
+    pub(crate) fn into_parts(
         self,
     ) -> (
         Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
