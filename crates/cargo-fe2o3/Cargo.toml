@@ -12,6 +12,7 @@ description = "Cargo subcommand for fe2o3."
 compiler-handoff-observation-test-only = []
 worker-v2-fault-injection-test-only = []
 host-consumer-fixture = ["fe2o3-host/hardware-test-hooks"]
+worker-v3-envelope-integration-test-only = []
 
 [dependencies]
 cap-primitives = "=4.0.2"
@@ -59,6 +60,13 @@ name = "cargo-fe2o3-envelope-input-fixture"
 path = "tests/fixtures/envelope_input_fixture.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fe2o3-worker-v2-hsaco-fixture"
+path = "../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_fixture.rs"
+test = false
+bench = false
+required-features = ["worker-v3-envelope-integration-test-only"]
 
 [[bin]]
 name = "cargo-fe2o3-cargo-fixture"

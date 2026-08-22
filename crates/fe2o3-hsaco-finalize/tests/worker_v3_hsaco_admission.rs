@@ -146,6 +146,58 @@ impl EvidenceConfig {
     };
 }
 
+pub(crate) struct PublishedWorkerV3Fixture {
+    pub(crate) directory: TestDirectory,
+    pub(crate) producer: ProducerIdentity,
+    pub(crate) attempt: fe2o3_artifact_transaction::BuildAttempt,
+    pub(crate) published: fe2o3_hsaco_finalize::PublishedProtectedWorkerV3HsacoV1,
+}
+
+pub(crate) fn published_worker_v3_fixture() -> PublishedWorkerV3Fixture {
+    let directory = TestDirectory::new();
+    let producer = producer();
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let provider = WorkerInputV1::new(
+        WorkerInputKindV1::AmdGpuRelocatable,
+        b"worker-v3-load-envelope-provider".to_vec(),
+    )
+    .unwrap();
+    let (attempt, source) = evidence_in_directory_for_kernel_and_providers(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig::BASE,
+        "vecadd",
+        "vecadd.kd",
+        vec![provider],
+    );
+    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+    let finalized = finalize_inspected_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&producer, finalized).unwrap();
+    let persisted = persist_prepared_protected_worker_v3_hsaco_publication_v1(
+        &directory.0,
+        &producer,
+        prepared,
+    )
+    .unwrap();
+    let compiler_closure = persisted
+        .finalized_evidence()
+        .binding_expectation()
+        .compiler_closure();
+    let published = publish_recovered_protected_worker_v3_hsaco_v1(
+        &directory.0,
+        &producer,
+        compiler_closure,
+        persisted,
+    )
+    .unwrap();
+    PublishedWorkerV3Fixture {
+        directory,
+        producer,
+        attempt,
+        published,
+    }
+}
+
 #[test]
 fn native_v3_inspection_retains_every_boundary_axis_without_authority() {
     let fixture = scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup);
@@ -998,7 +1050,7 @@ fn producer() -> ProducerIdentity {
     .unwrap()
 }
 
-struct TestDirectory(PathBuf);
+pub(crate) struct TestDirectory(pub(crate) PathBuf);
 
 impl TestDirectory {
     fn new() -> Self {
