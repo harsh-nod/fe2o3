@@ -17,7 +17,7 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 
 const MAGIC: &[u8] = b"fe2o3.inert-semantic-mir";
-pub const INERT_SEMANTIC_MIR_VERSION_V1: u16 = 1;
+pub const INERT_SEMANTIC_MIR_VERSION_V2: u16 = 2;
 
 pub const HARD_MAX_TYPES_V1: u64 = 16_384;
 pub const HARD_MAX_FUNCTIONS_V1: u64 = 4_096;
@@ -12236,7 +12236,7 @@ fn encode_request(
 ) -> Result<Vec<u8>, SemanticMirErrorV1> {
     let mut writer = CanonicalWriterV1::new(limits.limit(SemanticMirResourceV1::CanonicalBytes));
     writer.raw(MAGIC)?;
-    writer.u16(INERT_SEMANTIC_MIR_VERSION_V1)?;
+    writer.u16(INERT_SEMANTIC_MIR_VERSION_V2)?;
     writer.identity(request.target.identity.0)?;
     writer.u8(match request.target.architecture {
         SemanticTargetArchitectureV1::AmdGpuGfx942 => 0,

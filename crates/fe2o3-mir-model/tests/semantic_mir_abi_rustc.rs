@@ -397,13 +397,13 @@ fn corrected_rustc_abi_grammar_has_a_golden_encoding() {
     assert!(
         admitted
             .canonical_encoding()
-            .starts_with(b"fe2o3.inert-semantic-mir\x01\x00")
+            .starts_with(b"fe2o3.inert-semantic-mir\x02\x00")
     );
     assert_eq!(
         admitted.semantic_sha256().as_bytes(),
         &[
-            165, 38, 252, 232, 12, 108, 129, 12, 177, 177, 167, 0, 234, 114, 137, 221, 54, 214,
-            135, 163, 42, 149, 185, 65, 43, 202, 87, 144, 93, 25, 0, 102,
+            190, 251, 75, 165, 38, 138, 60, 149, 34, 195, 202, 249, 68, 24, 239, 106, 224, 89, 91,
+            204, 214, 66, 17, 141, 181, 159, 73, 139, 8, 92, 203, 189,
         ],
         "update only when the corrected ABI grammar intentionally changes"
     );

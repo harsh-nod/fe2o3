@@ -438,13 +438,13 @@ fn backend_facts_are_canonical_and_collision_separated() {
     assert_eq!(&encoding[..magic.len()], magic);
     assert_eq!(
         u16::from_le_bytes([encoding[magic.len()], encoding[magic.len() + 1]]),
-        INERT_SEMANTIC_MIR_VERSION_V1
+        INERT_SEMANTIC_MIR_VERSION_V2
     );
     assert_eq!(
         initialized_full.semantic_sha256().as_bytes(),
         &[
-            236, 8, 247, 169, 142, 167, 21, 183, 70, 14, 203, 54, 196, 73, 22, 112, 251, 6, 49, 64,
-            244, 27, 69, 118, 242, 252, 39, 174, 213, 84, 17, 36,
+            226, 57, 77, 14, 16, 183, 42, 234, 36, 11, 68, 211, 228, 130, 10, 31, 155, 129, 124,
+            78, 156, 53, 230, 74, 2, 132, 173, 102, 59, 240, 185, 114,
         ],
     );
 }

@@ -873,14 +873,14 @@ fn canonical_encoding_is_pinned_deterministic_and_semantically_complete() {
     assert_eq!(left.semantic_sha256(), right.semantic_sha256());
     assert!(
         left.canonical_encoding()
-            .starts_with(b"fe2o3.inert-semantic-mir\x01\x00")
+            .starts_with(b"fe2o3.inert-semantic-mir\x02\x00")
     );
     assert_eq!(
         left.semantic_sha256().as_bytes(),
         &[
-            0xa7, 0xbe, 0x9f, 0xa7, 0x23, 0xc5, 0xa7, 0xda, 0x9c, 0xe2, 0x3e, 0xb7, 0x15, 0x3d,
-            0x9e, 0x83, 0x48, 0xf5, 0xc7, 0xa9, 0xda, 0xaa, 0x85, 0x7d, 0xd9, 0xd8, 0x96, 0xa7,
-            0xbf, 0x39, 0x5f, 0x46,
+            0x8e, 0x20, 0x41, 0x50, 0x10, 0x69, 0x7c, 0x22, 0xd7, 0xb5, 0x43, 0xe4, 0x25, 0xda,
+            0xce, 0xf3, 0xc0, 0x9c, 0xfb, 0x74, 0xe5, 0xfc, 0x6c, 0x65, 0xda, 0x49, 0xfc, 0x8c,
+            0x20, 0xd1, 0x4e, 0x76,
         ]
     );
 
@@ -956,8 +956,8 @@ fn function_pointer_safety_is_retained_and_canonical() {
     assert_eq!(
         unsafe_pointer.semantic_sha256().as_bytes(),
         &[
-            130, 169, 22, 16, 232, 79, 99, 4, 116, 31, 182, 159, 84, 35, 59, 188, 254, 124, 242,
-            157, 33, 119, 221, 50, 195, 5, 126, 30, 137, 202, 136, 77,
+            0, 147, 243, 163, 118, 9, 124, 207, 144, 190, 112, 241, 157, 156, 71, 38, 18, 86, 121,
+            40, 152, 59, 39, 32, 183, 69, 201, 60, 166, 202, 231, 168,
         ]
     );
 }

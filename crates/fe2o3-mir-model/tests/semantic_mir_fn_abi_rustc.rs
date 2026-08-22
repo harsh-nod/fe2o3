@@ -919,7 +919,7 @@ fn hidden_and_adjusted_arguments_are_canonical_and_charged() {
     assert!(
         admitted
             .canonical_encoding()
-            .starts_with(b"fe2o3.inert-semantic-mir\x01\x00")
+            .starts_with(b"fe2o3.inert-semantic-mir\x02\x00")
     );
 
     assert!(matches!(
@@ -938,9 +938,9 @@ fn hidden_and_adjusted_arguments_are_canonical_and_charged() {
     assert_eq!(
         admitted.semantic_sha256().as_bytes(),
         &[
-            52, 217, 222, 4, 167, 210, 104, 129, 33, 31, 203, 243, 18, 239, 147, 220, 106, 64, 137,
-            118, 15, 158, 248, 169, 53, 43, 132, 117, 211, 37, 236, 78,
+            155, 29, 213, 4, 219, 168, 54, 143, 39, 137, 90, 181, 33, 48, 31, 180, 117, 122, 37,
+            10, 71, 158, 49, 110, 213, 145, 71, 147, 250, 31, 73, 234,
         ],
-        "replace with the intentional V1 ABI golden"
+        "replace with the intentional V2 ABI golden"
     );
 }
