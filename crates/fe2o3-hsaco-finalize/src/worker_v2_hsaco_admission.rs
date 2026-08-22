@@ -7,12 +7,15 @@ use std::{collections::BTreeSet, error::Error, fmt};
 
 use fe2o3_artifact_transaction::{
     BuildAttempt, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffIdentityV2,
-    CompilerModuleHandoffSlotV2,
+    CompilerModuleHandoffSlotV2, CompilerModuleHandoffSlotV3,
+    CompilerModuleHandoffTransactionIdentityV3,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiEnvelopeIdentityV1,
     CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    InertFinalCompilerModuleCommitmentV3, InertSemanticCompilerModuleHandoffIdentityV3,
+    InertSemanticCompilerModuleHandoffV3,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion as InspectedCodeObjectVersion,
@@ -30,7 +33,9 @@ use sha2::{Digest, Sha256};
 use crate::{
     ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME, FirstBuildWorkerV2IdentityV1,
     InertFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
-    MAX_WORKER_SYMBOLS, MultiInputLinkPlanV1, ProtectedFirstBuildWorkerV2IdentityV1,
+    InertProtectedFirstBuildWorkerV3EvidenceV1, MAX_WORKER_SYMBOLS, MultiInputLinkPlanV1,
+    ProtectedCompilerHandoffBindingIdentityV3, ProtectedCompilerHandoffExpectationV3,
+    ProtectedFirstBuildWorkerV2IdentityV1, ProtectedFirstBuildWorkerV3IdentityV1,
     WorkerCompilerFfiEnvelopeIdentityV2, WorkerMeasurementV1,
     request_construction::decode_link_options,
 };
@@ -44,6 +49,8 @@ const RESPONSE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-SEALED-RESPONSE/V1\
 const INSPECTION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-RAW-HSACO-INSPECTION/V1\0";
 const PROTECTED_INSPECTION_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-RAW-HSACO-INSPECTION/V1\0";
+const PROTECTED_V3_INSPECTION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/STRICT-V3-PROTECTED-WORKER-RAW-HSACO-INSPECTION/V1\0";
 const PROTECTED_SOURCE_EVIDENCE_DOMAIN_V1: &[u8] =
     b"FE2O3/PROTECTED-RAW-HSACO/SOURCE-EVIDENCE/V1\0";
 const PROTECTED_ATTEMPT_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/ATTEMPT/V1\0";
@@ -400,6 +407,209 @@ pub struct InspectedProtectedRawWorkerV2HsacoIdentityV1([u8; 32]);
 impl InspectedProtectedRawWorkerV2HsacoIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+/// Stable identity of one strict-V3 protected raw-HSACO inspection.
+///
+/// This transcript is separate from both unprotected and protected V2 inspection. It retains the
+/// complete V3 transaction, semantic handoff, compiler closure, worker exchange, and raw-HSACO
+/// observations without converting any of them to V2 evidence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct InspectedProtectedRawWorkerV3HsacoIdentityV1([u8; 32]);
+
+impl InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Inert strict-V3 evidence that exact direct-LLVM Worker output passed raw-HSACO inspection.
+///
+/// The complete V3 first-build evidence remains owned by this value. Structural inspection does
+/// not authenticate the compiler, prove semantic correctness, or grant publication, load, or
+/// launch authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct InspectedProtectedRawWorkerV3HsacoV1 {
+    identity: InspectedProtectedRawWorkerV3HsacoIdentityV1,
+    response_identity: SealedWorkerV2ResponseIdentityV1,
+    descriptor_section: CanonicalDescriptorSectionObservationV1,
+    descriptor_observation_preimage: Vec<u8>,
+    abi_observation_preimage: Vec<u8>,
+    resource_observation_preimage: Vec<u8>,
+    policy: WorkerV2RawHsacoPolicyV1,
+    source: InertProtectedFirstBuildWorkerV3EvidenceV1,
+}
+
+impl InspectedProtectedRawWorkerV3HsacoV1 {
+    pub const fn identity(&self) -> InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+        self.identity
+    }
+
+    pub const fn source_evidence_identity(&self) -> ProtectedFirstBuildWorkerV3IdentityV1 {
+        self.source.identity()
+    }
+
+    pub const fn binding_identity(&self) -> ProtectedCompilerHandoffBindingIdentityV3 {
+        self.source.binding().identity()
+    }
+
+    pub const fn binding_expectation(&self) -> ProtectedCompilerHandoffExpectationV3 {
+        self.source.binding().expectation()
+    }
+
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.binding_expectation().attempt()
+    }
+
+    pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV3 {
+        self.binding_expectation().slot()
+    }
+
+    pub const fn transaction_identity(&self) -> CompilerModuleHandoffTransactionIdentityV3 {
+        self.binding_expectation().transaction_identity()
+    }
+
+    pub const fn outer_handoff_identity(&self) -> InertSemanticCompilerModuleHandoffIdentityV3 {
+        self.binding_expectation().outer_handoff_identity()
+    }
+
+    pub const fn outer_handoff(&self) -> &InertSemanticCompilerModuleHandoffV3 {
+        self.source.handoff()
+    }
+
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.binding_expectation().compiler_closure()
+    }
+
+    pub const fn plan(&self) -> &MultiInputLinkPlanV1 {
+        self.source.plan()
+    }
+
+    pub const fn link_plan_identity(&self) -> crate::LinkPlanIdentityV1 {
+        self.source.plan().identity()
+    }
+
+    pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
+        self.source.worker_measurement()
+    }
+
+    pub const fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
+        self.source.handoff().module_handoff().envelope().identity()
+    }
+
+    pub const fn sealed_compiler_envelope_identity(&self) -> WorkerCompilerFfiEnvelopeIdentityV2 {
+        self.source
+            .exact_replay()
+            .response()
+            .compiler_envelope_identity()
+    }
+
+    pub fn sealed_request_id(&self) -> &[u8; 32] {
+        self.source.exact_replay().response().request_id()
+    }
+
+    pub fn sealed_request_identity(&self) -> &[u8; 32] {
+        self.source.exact_replay().response().request_identity()
+    }
+
+    pub const fn response_identity(&self) -> SealedWorkerV2ResponseIdentityV1 {
+        self.response_identity
+    }
+
+    pub const fn linked_output_identity(&self) -> ContentIdentityV1 {
+        self.source.output_identity()
+    }
+
+    pub const fn raw_hsaco_identity(&self) -> ContentIdentityV1 {
+        self.linked_output_identity()
+    }
+
+    pub fn exact_bytes(&self) -> &[u8] {
+        self.source.output_bytes()
+    }
+
+    pub const fn target(&self) -> DeviceTargetV1 {
+        self.policy.target()
+    }
+
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.policy.code_object_version()
+    }
+
+    pub const fn policy(&self) -> &WorkerV2RawHsacoPolicyV1 {
+        &self.policy
+    }
+
+    /// Borrows the complete native V3 first-build evidence retained by this inspection.
+    pub const fn source_evidence(&self) -> &InertProtectedFirstBuildWorkerV3EvidenceV1 {
+        &self.source
+    }
+
+    /// Returns the exact canonical descriptor observation transcript.
+    pub fn descriptor_observation_preimage(&self) -> &[u8] {
+        &self.descriptor_observation_preimage
+    }
+
+    /// Returns the exact canonical kernel-ABI observation transcript.
+    pub fn abi_observation_preimage(&self) -> &[u8] {
+        &self.abi_observation_preimage
+    }
+
+    /// Returns the exact canonical kernel-resource observation transcript.
+    pub fn resource_observation_preimage(&self) -> &[u8] {
+        &self.resource_observation_preimage
+    }
+
+    /// Returns descriptor, ABI, and resource identities in that order.
+    pub fn observation_identities(&self) -> ([u8; 32], [u8; 32], [u8; 32]) {
+        (
+            calculate_observation_identity(
+                PROTECTED_DESCRIPTOR_DOMAIN_V1,
+                &self.descriptor_observation_preimage,
+            ),
+            calculate_observation_identity(PROTECTED_ABI_DOMAIN_V1, &self.abi_observation_preimage),
+            calculate_observation_identity(
+                PROTECTED_RESOURCES_DOMAIN_V1,
+                &self.resource_observation_preimage,
+            ),
+        )
+    }
+
+    pub const fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1 {
+        self.descriptor_section
+    }
+
+    pub const fn canonical_descriptor_finalization_ran(&self) -> bool {
+        false
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_semantic_correctness(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
     }
 }
 
@@ -1106,6 +1316,34 @@ pub fn inspect_protected_production_v1_worker_v2_raw_hsaco_v1(
     )
 }
 
+/// Consumes native strict-V3 first-build evidence under the fixed production-v1 contract.
+///
+/// The complete V3 transaction and outer semantic handoff remain owned by the result. This route
+/// neither constructs protected V2 evidence nor falls back to a V1/V2 admission entry.
+pub fn inspect_protected_production_v1_worker_v3_raw_hsaco_v1(
+    source: InertProtectedFirstBuildWorkerV3EvidenceV1,
+) -> Result<InspectedProtectedRawWorkerV3HsacoV1, WorkerV2RawHsacoInspectionError> {
+    validate_protected_v3_lineage(&source)?;
+    let raw = inspect_worker_v2_raw_hsaco_shared_v1(
+        &source,
+        WorkerV2RawLaunchContractV1::PRODUCTION_V1,
+        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
+    )?;
+    let response_identity =
+        calculate_response_identity(source.exact_replay().response().canonical_bytes());
+    let identity = calculate_protected_v3_inspection_identity(&source, &raw, response_identity);
+    Ok(InspectedProtectedRawWorkerV3HsacoV1 {
+        identity,
+        response_identity,
+        descriptor_section: raw.descriptor_section,
+        descriptor_observation_preimage: raw.descriptor_observation_preimage,
+        abi_observation_preimage: raw.abi_observation_preimage,
+        resource_observation_preimage: raw.resource_observation_preimage,
+        policy: raw.policy,
+        source,
+    })
+}
+
 /// Consumes sealed Worker V2 evidence under the exact general-GEMM V1 launch contract.
 ///
 /// The caller cannot supply or weaken the required 64-thread wave64 launch profile.
@@ -1206,6 +1444,28 @@ impl RawWorkerV2HsacoSourceV1 for InertProtectedFirstBuildWorkerV2EvidenceV1 {
 
     fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
         self.compiler_envelope_identity()
+    }
+
+    fn output_identity(&self) -> ContentIdentityV1 {
+        self.output_identity()
+    }
+
+    fn output_bytes(&self) -> &[u8] {
+        self.output_bytes()
+    }
+}
+
+impl RawWorkerV2HsacoSourceV1 for InertProtectedFirstBuildWorkerV3EvidenceV1 {
+    fn plan(&self) -> &MultiInputLinkPlanV1 {
+        self.plan()
+    }
+
+    fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
+        self.handoff().module_handoff().symbol_manifest()
+    }
+
+    fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
+        self.handoff().module_handoff().envelope().identity()
     }
 
     fn output_identity(&self) -> ContentIdentityV1 {
@@ -1875,6 +2135,148 @@ fn validate_protected_lineage(
     Ok(())
 }
 
+fn validate_protected_v3_lineage(
+    source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
+) -> Result<(), WorkerV2RawHsacoInspectionError> {
+    let binding = source.binding();
+    let expected = binding.expectation();
+    let handoff = source.handoff();
+    let capsule = handoff.capsule();
+    let nested = handoff.module_handoff();
+    let pair = handoff.pair_binding();
+
+    if source.bootstrap().binding() != binding || source.exact_replay().binding() != binding {
+        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "strict V3 worker binding",
+        ));
+    }
+    if expected.outer_handoff_identity() != handoff.identity()
+        || !expected
+            .outer_handoff_identity()
+            .matches_canonical_bytes(handoff.canonical_bytes())
+    {
+        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "strict V3 outer handoff",
+        ));
+    }
+
+    let capsule_identity = capsule.identity();
+    let pair_identity = pair.identity();
+    if expected.capsule_sha256() != *capsule_identity.sha256()
+        || expected.capsule_byte_len() != capsule_identity.byte_len()
+        || expected.invocation_digest() != *capsule.invocation_digest().as_bytes()
+        || expected.pair_binding_sha256() != *pair_identity.sha256()
+        || expected.pair_binding_byte_len() != pair_identity.byte_len()
+        || expected.nested_handoff_identity() != nested.identity()
+        || pair.capsule_identity() != capsule_identity
+        || pair.module_handoff_identity() != nested.identity()
+        || expected.compiler_closure() != *capsule.compiler_closure()
+        || expected.compiler_closure() != *capsule.invocation().compiler_closure()
+    {
+        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "strict V3 semantic handoff association",
+        ));
+    }
+
+    let final_receipt = capsule.receipts().final_compiler_module_commitment();
+    let final_receipt_identity = final_receipt.identity();
+    let final_commitment = InertFinalCompilerModuleCommitmentV3::decode(
+        final_receipt.canonical_preimage(),
+    )
+    .map_err(|_| {
+        WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "strict V3 final compiler-module commitment",
+        )
+    })?;
+    let final_identity = final_commitment.identity();
+    if expected.final_commitment_receipt_sha256() != *final_receipt_identity.sha256()
+        || expected.final_commitment_receipt_byte_len() != final_receipt_identity.byte_len()
+        || expected.final_commitment_sha256() != *final_identity.sha256()
+        || expected.final_commitment_byte_len() != final_identity.byte_len()
+        || !final_commitment.matches_handoff(nested)
+    {
+        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "strict V3 final compiler-module commitment association",
+        ));
+    }
+
+    if nested.target().to_string() != source.plan().target().to_string()
+        || map_compiler_code_object_version(nested.code_object_version())
+            != decode_link_options(source.plan().options())
+                .map_err(|_| WorkerV2RawHsacoInspectionError::LinkPolicy)?
+                .0
+    {
+        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "strict V3 compiler envelope target/code-object version",
+        ));
+    }
+    let directional = nested.envelope().directional_symbols();
+    if !nested
+        .symbol_manifest()
+        .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
+        .eq(directional.imports())
+    {
+        return Err(WorkerV2RawHsacoInspectionError::CompilerEnvelopeImportRoleMismatch);
+    }
+    if !nested
+        .symbol_manifest()
+        .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
+        .eq(directional.exports())
+    {
+        return Err(WorkerV2RawHsacoInspectionError::CompilerEnvelopeExportRoleMismatch);
+    }
+
+    let expected_envelope = nested.envelope().identity();
+    let bootstrap = source.bootstrap();
+    let replay = source.exact_replay();
+    for execution in [bootstrap, replay] {
+        let response = execution.response();
+        if source.worker_measurement().executable() != execution.worker_executable()
+            || source.worker_measurement().worker_build_identity()
+                != response.worker_build_identity()
+        {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "strict V3 worker measurement",
+            ));
+        }
+        if response.compiler_envelope_identity().as_bytes() != expected_envelope.as_bytes() {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "strict V3 compiler envelope identity",
+            ));
+        }
+        let output = response
+            .output()
+            .ok_or(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "missing strict V3 linked output",
+            ))?;
+        if output.identity() != source.output_identity()
+            || output.request_identity() != response.request_identity()
+            || output.compiler_envelope_identity() != response.compiler_envelope_identity()
+        {
+            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+                "strict V3 sealed request/response/output identity",
+            ));
+        }
+    }
+
+    let bootstrap_output = bootstrap
+        .response()
+        .output()
+        .expect("strict V3 bootstrap output checked above");
+    let replay_output = replay
+        .response()
+        .output()
+        .expect("strict V3 replay output checked above");
+    if bootstrap_output.bytes() != replay_output.bytes()
+        || replay_output.bytes() != source.output_bytes()
+    {
+        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
+            "strict V3 reproducible output bytes",
+        ));
+    }
+    Ok(())
+}
+
 fn expected_defined_symbols(manifest: &CompilerModuleSymbolManifestV1) -> Vec<String> {
     let mut symbols = Vec::new();
     for role in [
@@ -2290,6 +2692,62 @@ fn calculate_protected_inspection_identity(
             resource_identity: raw.resource_identity,
         },
     ))
+}
+
+fn calculate_protected_v3_inspection_identity(
+    source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
+    raw: &SharedRawWorkerV2HsacoInspectionV1,
+    response: SealedWorkerV2ResponseIdentityV1,
+) -> InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+    let binding = source.binding();
+    let expected = binding.expectation();
+    let worker = source.worker_measurement();
+    let outer_identity = expected.outer_handoff_identity();
+    let nested_identity = expected.nested_handoff_identity();
+    let mut hasher = Sha256::new();
+    hasher.update(PROTECTED_V3_INSPECTION_IDENTITY_DOMAIN_V1);
+    hasher.update(source.identity().as_bytes());
+    hasher.update(binding.identity().as_bytes());
+    hash_attempt(&mut hasher, expected.attempt());
+    hasher.update([expected.slot() as u8]);
+    hasher.update(expected.transaction_identity().as_bytes());
+    hasher.update(outer_identity.sha256());
+    hasher.update(outer_identity.byte_len().to_le_bytes());
+    hasher.update(expected.capsule_sha256());
+    hasher.update(expected.capsule_byte_len().to_le_bytes());
+    hasher.update(expected.invocation_digest());
+    hasher.update(expected.pair_binding_sha256());
+    hasher.update(expected.pair_binding_byte_len().to_le_bytes());
+    hasher.update(nested_identity.sha256());
+    hasher.update(nested_identity.byte_len().to_le_bytes());
+    hasher.update(expected.final_commitment_receipt_sha256());
+    hasher.update(expected.final_commitment_receipt_byte_len().to_le_bytes());
+    hasher.update(expected.final_commitment_sha256());
+    hasher.update(expected.final_commitment_byte_len().to_le_bytes());
+    hash_compiler_closure_v2(&mut hasher, expected.compiler_closure());
+    hash_bytes(&mut hasher, source.handoff().canonical_bytes());
+    hash_content(&mut hasher, worker.executable());
+    hash_text(&mut hasher, worker.worker_build_identity());
+    hash_text(&mut hasher, worker.llvm_build_identity());
+    hash_bytes(&mut hasher, &source.plan().canonical_bytes());
+    hash_bytes(&mut hasher, source.bootstrap_request_bytes());
+    hash_bytes(&mut hasher, source.bootstrap().response().canonical_bytes());
+    hash_bytes(&mut hasher, source.exact_replay_request_bytes());
+    hash_bytes(
+        &mut hasher,
+        source.exact_replay().response().canonical_bytes(),
+    );
+    hasher.update(response.0);
+    hash_content(&mut hasher, source.output_identity());
+    hash_bytes(&mut hasher, source.output_bytes());
+    hash_text(&mut hasher, &raw.policy.target.to_string());
+    hasher.update([code_object_version_tag(raw.policy.code_object_version)]);
+    hasher.update(raw.policy.identity.0);
+    hasher.update([descriptor_section_tag(raw.descriptor_section)]);
+    hasher.update(raw.descriptor_identity);
+    hasher.update(raw.abi_identity);
+    hasher.update(raw.resource_identity);
+    InspectedProtectedRawWorkerV3HsacoIdentityV1(hasher.finalize().into())
 }
 
 pub(crate) struct ProtectedInspectionIdentityPreimageV2<'a> {

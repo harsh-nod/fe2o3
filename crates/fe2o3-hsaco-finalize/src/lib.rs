@@ -236,12 +236,14 @@ pub use worker_protocol_v2::{
 };
 pub use worker_v2_hsaco_admission::{
     CanonicalDescriptorSectionObservationV1, InspectedProtectedRawWorkerV2HsacoIdentityV1,
-    InspectedProtectedRawWorkerV2HsacoV1, InspectedRawWorkerV2HsacoIdentityV1,
+    InspectedProtectedRawWorkerV2HsacoV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
+    InspectedProtectedRawWorkerV3HsacoV1, InspectedRawWorkerV2HsacoIdentityV1,
     InspectedRawWorkerV2HsacoV1, ObservedWorkerV2KernelSymbolsV1, SealedWorkerV2ResponseIdentityV1,
     WorkerV2RawHsacoInspectionError, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
     WorkerV2RawLaunchContractV1, inspect_general_gemm_worker_v2_raw_hsaco_v1,
     inspect_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
+    inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
     inspect_protected_worker_v2_raw_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
 };
 pub use worker_v2_hsaco_finalization::{
