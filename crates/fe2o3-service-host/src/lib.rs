@@ -108,8 +108,8 @@ pub use allocation::{
     ServiceAllocationKindMarkerV1, ServiceAllocationPhaseV1, ServiceAllocationRangePairV1,
     ServiceAllocationRangeV1, ServiceAllocationReleaseFailureV1,
     ServiceAllocationReleaseObservationV1, ServiceAllocationRoleMarkerV1,
-    ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1, ServiceDispatchRangeV1,
-    ServiceHostDispatchRangeV1,
+    ServiceAllocationSessionV1, ServiceAllocationSubleaseSetV1, ServiceDeviceDispatchRangeV1,
+    ServiceDispatchRangeV1, ServiceHostDispatchRangeV1,
 };
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use batch::{ServiceFixedBatchV1, ServiceFixedDispatchBufferV1, ServiceFixedDispatchPacketV1};
