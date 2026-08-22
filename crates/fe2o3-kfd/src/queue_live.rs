@@ -26,9 +26,9 @@ use super::dispatch_binding::{
     Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942CompletedDispatchReadbackV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
     Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
-    ReturnedDispatchDataV1, TypedKernargImageV1, prepare_dispatch_resources,
-    prepare_public_fixed_dispatch_resources, unwrap_completed, unwrap_published,
-    validate_fixed_batch_ring, wrap_completed, wrap_poll, wrap_published,
+    Gfx942FixedDispatchStorageIdentityV1, ReturnedDispatchDataV1, TypedKernargImageV1,
+    prepare_dispatch_resources, prepare_public_fixed_dispatch_resources, unwrap_completed,
+    unwrap_published, validate_fixed_batch_ring, wrap_completed, wrap_poll, wrap_published,
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
@@ -60,7 +60,7 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r15-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r16-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
@@ -82,9 +82,9 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll,pending-ready-fault-timeout-distinct,release-reset-only-after-all-signals-zero\n",
-    "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set,inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-return-after-destroy\n",
+    "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set,inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation-and-one-inspected-write-or-readwrite-binding,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-detached-data-authority-ledger,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
@@ -98,7 +98,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "0bfbb22470523f50d62e986c6a0df17e072a1c255dd89f9c2732249928231a1a";
+    "0f3ff908248c2316523709e4b0fb8f3b0e427f7d3e27b9a4e0dcdc406bf1736e";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -390,7 +390,8 @@ impl ComputeAqlQueueDestroyedV1 {
 pub struct Gfx942RecycledDispatchResourcesV1 {
     destroyed: ComputeAqlQueueDestroyedV1,
     memory: SharedGttMemorySessionV1,
-    dispatch: ReturnedDispatchDataV1,
+    dispatch_generation: u64,
+    data: Vec<Gfx942FixedDispatchDataV1>,
 }
 
 /// Data custody detached from a still-live queue after exact completion and recycle.
@@ -424,15 +425,11 @@ impl Gfx942RecycledDispatchResourcesV1 {
     }
 
     pub const fn dispatch_generation(&self) -> u64 {
-        self.dispatch.generation()
+        self.dispatch_generation
     }
 
     pub fn data_lease_count(&self) -> usize {
-        self.dispatch.data().len()
-    }
-
-    pub(super) fn into_parts(self) -> (SharedGttMemorySessionV1, ReturnedDispatchDataV1) {
-        (self.memory, self.dispatch)
+        self.data.len()
     }
 
     /// Returns the exact owning KFD session and every executed mapped
@@ -440,9 +437,7 @@ impl Gfx942RecycledDispatchResourcesV1 {
     pub fn into_session_and_data(
         self,
     ) -> (SharedGttMemorySessionV1, Vec<Gfx942FixedDispatchDataV1>) {
-        let (memory, dispatch) = self.into_parts();
-        let data = recover_fixed_dispatch_data(dispatch);
-        (memory, data)
+        (self.memory, self.data)
     }
 }
 
@@ -454,9 +449,40 @@ fn recover_fixed_dispatch_data(dispatch: ReturnedDispatchDataV1) -> Vec<Gfx942Fi
         .collect()
 }
 
+fn fixed_dispatch_storage_identities(
+    data: &[Gfx942FixedDispatchDataV1],
+) -> Vec<Gfx942FixedDispatchStorageIdentityV1> {
+    data.iter()
+        .map(Gfx942FixedDispatchDataV1::storage_identity)
+        .collect()
+}
+
+fn first_ordered_identity_mismatch<T: Eq>(expected: &[T], actual: &[T]) -> Option<usize> {
+    expected
+        .iter()
+        .zip(actual)
+        .position(|(expected, actual)| expected != actual)
+        .or_else(|| (expected.len() != actual.len()).then(|| expected.len().min(actual.len())))
+}
+
+fn insert_detached_identity<T>(
+    identities: &mut Vec<T>,
+    next_insertion_index: &mut Option<usize>,
+    identity: T,
+) {
+    let index = next_insertion_index.take().unwrap_or(identities.len());
+    identities.insert(index, identity);
+}
+
 enum QueueDestroyOutcomeV1 {
     Released(ComputeAqlQueueDestroyedV1),
     Returned(Box<Gfx942RecycledDispatchResourcesV1>),
+}
+
+enum QueueDestroyModeV1 {
+    Release,
+    ReturnAttached,
+    ReturnDetached(Vec<Gfx942FixedDispatchDataV1>),
 }
 
 #[derive(Debug)]
@@ -508,6 +534,69 @@ impl From<LinuxDoorbellErrorV1> for ComputeAqlQueueSessionErrorV1 {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DetachedReturningDestroyPreflightV1 {
+    dispatch_attached: bool,
+    detached_data_count: usize,
+    detached_dispatch_generation: Option<u64>,
+    detached_identity_count: usize,
+    returned_data_count: usize,
+    identity_mismatch: Option<usize>,
+}
+
+fn admit_detached_returning_destroy(
+    terminal_poisoned: &mut bool,
+    preflight: DetachedReturningDestroyPreflightV1,
+) -> Result<u64, ComputeAqlQueueSessionErrorV1> {
+    if *terminal_poisoned {
+        return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+    }
+    if preflight.dispatch_attached || preflight.detached_dispatch_generation.is_none() {
+        *terminal_poisoned = true;
+        return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+    }
+    if preflight.detached_data_count > super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {
+        *terminal_poisoned = true;
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "detached dispatch-data ledger bound",
+        ));
+    }
+    if preflight.detached_identity_count != preflight.detached_data_count {
+        *terminal_poisoned = true;
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "detached dispatch-data identity ledger cardinality",
+        ));
+    }
+    if preflight.returned_data_count != preflight.detached_data_count {
+        *terminal_poisoned = true;
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: preflight
+                .returned_data_count
+                .min(preflight.detached_data_count),
+            detail: "detached returning-destroy cardinality",
+        }
+        .into());
+    }
+    if let Some(index) = preflight.identity_mismatch {
+        *terminal_poisoned = true;
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index,
+            detail: "detached returning-destroy storage identity",
+        }
+        .into());
+    }
+    let generation = preflight
+        .detached_dispatch_generation
+        .expect("checked detached generation");
+    if generation == 0 {
+        *terminal_poisoned = true;
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "detached dispatch generation was zero",
+        ));
+    }
+    Ok(generation)
+}
+
 #[must_use = "queue destruction and resource return are explicit"]
 pub struct ComputeAqlQueueSessionV1 {
     engine: Option<NativeQueueEngineV1<LinuxNativeQueueBackendV1>>,
@@ -518,6 +607,9 @@ pub struct ComputeAqlQueueSessionV1 {
     completion_owner: CompletionSignalArenaOwnerV1,
     dispatch: Option<DispatchResourceOwnerV1>,
     detached_data_count: usize,
+    detached_dispatch_generation: Option<u64>,
+    detached_data_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
+    detached_next_insertion_index: Option<usize>,
     exception: Option<QueueExceptionStateV1>,
     terminal_poisoned: bool,
     observation: ComputeAqlQueueObservationV1,
@@ -776,6 +868,9 @@ impl ComputeAqlQueueSessionV1 {
             completion_owner,
             dispatch,
             detached_data_count: 0,
+            detached_dispatch_generation: None,
+            detached_data_identities: Vec::new(),
+            detached_next_insertion_index: None,
             exception: Some(QueueExceptionStateV1 {
                 runtime,
                 event,
@@ -818,6 +913,16 @@ impl ComputeAqlQueueSessionV1 {
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
+        if self.detached_data_count != 0
+            || self.detached_dispatch_generation.is_some()
+            || !self.detached_data_identities.is_empty()
+            || self.detached_next_insertion_index.is_some()
+        {
+            self.poison_terminal();
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "detached dispatch-data ledger was not empty",
+            ));
+        }
         self.completion_owner.ensure_releasable()?;
         let dispatch = self
             .dispatch
@@ -843,13 +948,16 @@ impl ComputeAqlQueueSessionV1 {
         };
         let generation = returned.generation();
         let data = recover_fixed_dispatch_data(returned);
-        if self.detached_data_count != 0 {
+        if generation == 0 {
             self.poison_terminal();
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "detached dispatch-data ledger was not empty",
+                "detached dispatch generation was zero",
             ));
         }
         self.detached_data_count = data.len();
+        self.detached_dispatch_generation = Some(generation);
+        self.detached_data_identities = fixed_dispatch_storage_identities(&data);
+        self.detached_next_insertion_index = None;
         Ok(Gfx942DetachedFixedDispatchV1 { generation, data })
     }
 
@@ -870,10 +978,35 @@ impl ComputeAqlQueueSessionV1 {
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
+        if self
+            .detached_dispatch_generation
+            .is_none_or(|generation| generation == 0)
+        {
+            self.poison_terminal();
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        let data_identities = fixed_dispatch_storage_identities(&data);
+        if self.detached_data_identities.len() != self.detached_data_count {
+            self.poison_terminal();
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "detached dispatch-data identity ledger cardinality",
+            ));
+        }
         if data.len() != self.detached_data_count {
+            self.poison_terminal();
             return Err(Gfx942DispatchBindingErrorV1::InvalidData {
                 index: data.len().min(self.detached_data_count),
                 detail: "detached dispatch-data cardinality",
+            }
+            .into());
+        }
+        if let Some(index) =
+            first_ordered_identity_mismatch(&self.detached_data_identities, &data_identities)
+        {
+            self.poison_terminal();
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index,
+                detail: "detached rebind storage identity",
             }
             .into());
         }
@@ -911,6 +1044,9 @@ impl ComputeAqlQueueSessionV1 {
         }
         self.dispatch = Some(prepared);
         self.detached_data_count = 0;
+        self.detached_dispatch_generation = None;
+        self.detached_data_identities.clear();
+        self.detached_next_insertion_index = None;
         Ok(())
     }
 
@@ -938,12 +1074,9 @@ impl ComputeAqlQueueSessionV1 {
         };
         match result {
             Ok(lease) => {
-                self.detached_data_count = self.detached_data_count.checked_add(1).ok_or(
-                    ComputeAqlQueueSessionErrorV1::Contract(
-                        "detached dispatch-data ledger overflow",
-                    ),
-                )?;
-                Ok(Gfx942FixedDispatchDataV1::uninitialized(lease))
+                let data = Gfx942FixedDispatchDataV1::uninitialized(lease);
+                self.record_new_detached_data(&data);
+                Ok(data)
             }
             Err(error) => {
                 self.poison_terminal();
@@ -973,12 +1106,9 @@ impl ComputeAqlQueueSessionV1 {
             .initialize_gfx942_device_memory(bytes, alignment, content);
         match result {
             Ok(memory) => {
-                self.detached_data_count = self.detached_data_count.checked_add(1).ok_or(
-                    ComputeAqlQueueSessionErrorV1::Contract(
-                        "detached dispatch-data ledger overflow",
-                    ),
-                )?;
-                Ok(Gfx942FixedDispatchDataV1::initialized(memory))
+                let data = Gfx942FixedDispatchDataV1::initialized(memory);
+                self.record_new_detached_data(&data);
+                Ok(data)
             }
             Err(error) => {
                 self.poison_terminal();
@@ -993,6 +1123,26 @@ impl ComputeAqlQueueSessionV1 {
         data: Gfx942FixedDispatchDataV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.require_unbound_fixed_dispatch()?;
+        let identity = data.storage_identity();
+        let mut matching = self
+            .detached_data_identities
+            .iter()
+            .enumerate()
+            .filter(|(_, retained)| **retained == identity);
+        let Some((identity_index, _)) = matching.next() else {
+            self.poison_terminal();
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: self.detached_data_count,
+                detail: "detached release storage identity",
+            }
+            .into());
+        };
+        if matching.next().is_some() {
+            self.poison_terminal();
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "duplicate detached storage identity",
+            ));
+        }
         let result = {
             let memory = &mut self
                 .engine
@@ -1011,6 +1161,8 @@ impl ComputeAqlQueueSessionV1 {
         self.detached_data_count = self.detached_data_count.checked_sub(1).ok_or(
             ComputeAqlQueueSessionErrorV1::Contract("detached dispatch-data ledger underflow"),
         )?;
+        self.detached_data_identities.remove(identity_index);
+        self.detached_next_insertion_index = Some(identity_index);
         Ok(())
     }
 
@@ -1021,13 +1173,37 @@ impl ComputeAqlQueueSessionV1 {
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
+        if self
+            .detached_dispatch_generation
+            .is_none_or(|generation| generation == 0)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
         if self.detached_data_count > super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "detached dispatch-data ledger bound",
             ));
         }
+        if self.detached_data_identities.len() != self.detached_data_count
+            || self
+                .detached_next_insertion_index
+                .is_some_and(|index| index > self.detached_data_identities.len())
+        {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "detached dispatch-data identity ledger",
+            ));
+        }
         self.completion_owner.ensure_releasable()?;
         Ok(())
+    }
+
+    fn record_new_detached_data(&mut self, data: &Gfx942FixedDispatchDataV1) {
+        insert_detached_identity(
+            &mut self.detached_data_identities,
+            &mut self.detached_next_insertion_index,
+            data.storage_identity(),
+        );
+        self.detached_data_count += 1;
     }
 
     fn require_detached_allocation_capacity(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
@@ -1579,7 +1755,7 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     pub fn destroy(self) -> Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1> {
-        match self.destroy_inner(false)? {
+        match self.destroy_inner(QueueDestroyModeV1::Release)? {
             QueueDestroyOutcomeV1::Released(destroyed) => Ok(destroyed),
             QueueDestroyOutcomeV1::Returned(_) => Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "ordinary destroy returned dispatch resources",
@@ -1595,7 +1771,26 @@ impl ComputeAqlQueueSessionV1 {
     pub fn destroy_returning_fixed_dispatch_resources(
         self,
     ) -> Result<Gfx942RecycledDispatchResourcesV1, ComputeAqlQueueSessionErrorV1> {
-        match self.destroy_inner(true)? {
+        match self.destroy_inner(QueueDestroyModeV1::ReturnAttached)? {
+            QueueDestroyOutcomeV1::Returned(resources) => Ok(*resources),
+            QueueDestroyOutcomeV1::Released(_) => Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "returning destroy released dispatch resources",
+            )),
+        }
+    }
+
+    /// Destroys an unbound queue and returns the exact detached mapped data.
+    ///
+    /// The complete detached vector must be returned in one move. Its
+    /// cardinality is checked against the private queue ledger, and the
+    /// returned generation is the one recorded by exact recycle and detach.
+    /// Any mismatch terminally poisons the consumed session before native
+    /// teardown, so a caller cannot retry with substituted custody.
+    pub fn destroy_returning_detached_fixed_dispatch_resources(
+        self,
+        data: Vec<Gfx942FixedDispatchDataV1>,
+    ) -> Result<Gfx942RecycledDispatchResourcesV1, ComputeAqlQueueSessionErrorV1> {
+        match self.destroy_inner(QueueDestroyModeV1::ReturnDetached(data))? {
             QueueDestroyOutcomeV1::Returned(resources) => Ok(*resources),
             QueueDestroyOutcomeV1::Released(_) => Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "returning destroy released dispatch resources",
@@ -1605,28 +1800,58 @@ impl ComputeAqlQueueSessionV1 {
 
     fn destroy_inner(
         mut self,
-        return_dispatch_data: bool,
+        mode: QueueDestroyModeV1,
     ) -> Result<QueueDestroyOutcomeV1, ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal queue session requires process teardown",
             ));
         }
-        if self.detached_data_count != 0 {
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "detached dispatch data must be rebound or released before destroy",
-            ));
-        }
         self.completion_owner.ensure_releasable()?;
-        if let Some(dispatch) = self.dispatch.as_ref() {
-            if return_dispatch_data {
-                dispatch.ensure_returnable()?;
-            } else {
-                dispatch.ensure_releasable()?;
+        let (return_attached, detached_return) = match mode {
+            QueueDestroyModeV1::Release => {
+                if self.detached_data_count != 0 {
+                    return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "detached dispatch data must be rebound or released before destroy",
+                    ));
+                }
+                if let Some(dispatch) = self.dispatch.as_ref() {
+                    dispatch.ensure_releasable()?;
+                }
+                (false, None)
             }
-        } else if return_dispatch_data {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
-        }
+            QueueDestroyModeV1::ReturnAttached => {
+                if self.detached_data_count != 0 {
+                    return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "detached dispatch data must be rebound or released before destroy",
+                    ));
+                }
+                self.dispatch
+                    .as_ref()
+                    .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
+                    .ensure_returnable()?;
+                (true, None)
+            }
+            QueueDestroyModeV1::ReturnDetached(data) => {
+                let returned_data_identities = fixed_dispatch_storage_identities(&data);
+                let identity_mismatch = first_ordered_identity_mismatch(
+                    &self.detached_data_identities,
+                    &returned_data_identities,
+                );
+                let generation = admit_detached_returning_destroy(
+                    &mut self.terminal_poisoned,
+                    DetachedReturningDestroyPreflightV1 {
+                        dispatch_attached: self.dispatch.is_some(),
+                        detached_data_count: self.detached_data_count,
+                        detached_dispatch_generation: self.detached_dispatch_generation,
+                        detached_identity_count: self.detached_data_identities.len(),
+                        returned_data_count: returned_data_identities.len(),
+                        identity_mismatch,
+                    },
+                )?;
+                (false, Some((generation, data)))
+            }
+        };
         let engine = self
             .engine
             .as_mut()
@@ -1676,16 +1901,17 @@ impl ComputeAqlQueueSessionV1 {
             shadow_release,
         )?;
         let returned_dispatch = match self.dispatch.take() {
-            Some(dispatch) if return_dispatch_data => Some(
-                dispatch.release_non_data_after_recycle(
+            Some(dispatch) if return_attached => {
+                let returned = dispatch.release_non_data_after_recycle(
                     &mut self
                         .engine
                         .as_mut()
                         .expect("session engine")
                         .backend
                         .session,
-                )?,
-            ),
+                )?;
+                Some((returned.generation(), recover_fixed_dispatch_data(returned)))
+            }
             Some(dispatch) => {
                 dispatch.release(
                     &mut self
@@ -1697,7 +1923,7 @@ impl ComputeAqlQueueSessionV1 {
                 )?;
                 None
             }
-            None => None,
+            None => detached_return,
         };
         let completion_signals =
             self.completion_signals
@@ -1717,7 +1943,7 @@ impl ComputeAqlQueueSessionV1 {
             queue_id: self.observation.queue_id,
             released_resources: 5,
         };
-        let Some(dispatch) = returned_dispatch else {
+        let Some((dispatch_generation, data)) = returned_dispatch else {
             return Ok(QueueDestroyOutcomeV1::Released(destroyed));
         };
         let backend = self
@@ -1730,7 +1956,8 @@ impl ComputeAqlQueueSessionV1 {
             Gfx942RecycledDispatchResourcesV1 {
                 destroyed,
                 memory: backend.session,
-                dispatch,
+                dispatch_generation,
+                data,
             },
         )))
     }
@@ -2020,6 +2247,140 @@ fn map_submission(error: NativeAqlSubmissionErrorV1) -> ComputeAqlQueueSessionEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn detached_preflight(
+        dispatch_attached: bool,
+        data_count: usize,
+        generation: Option<u64>,
+        identity_count: usize,
+        returned_count: usize,
+        identity_mismatch: Option<usize>,
+    ) -> DetachedReturningDestroyPreflightV1 {
+        DetachedReturningDestroyPreflightV1 {
+            dispatch_attached,
+            detached_data_count: data_count,
+            detached_dispatch_generation: generation,
+            detached_identity_count: identity_count,
+            returned_data_count: returned_count,
+            identity_mismatch,
+        }
+    }
+
+    #[test]
+    fn detached_returning_destroy_observes_exact_private_generation() {
+        let mut poisoned = false;
+        let generation = admit_detached_returning_destroy(
+            &mut poisoned,
+            detached_preflight(false, 3, Some(17), 3, 3, None),
+        )
+        .unwrap();
+        assert_eq!(generation, 17);
+        assert!(!poisoned);
+    }
+
+    #[test]
+    fn detached_returning_destroy_rejects_fabricated_unbound_phase() {
+        for (dispatch_attached, generation) in [(true, None), (false, None)] {
+            let mut poisoned = false;
+            let error = admit_detached_returning_destroy(
+                &mut poisoned,
+                detached_preflight(dispatch_attached, 0, generation, 0, 0, None),
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                    Gfx942DispatchBindingErrorV1::ResourcePhase
+                )
+            ));
+            assert!(poisoned);
+        }
+    }
+
+    #[test]
+    fn detached_returning_destroy_cardinality_mismatch_is_terminal() {
+        let mut poisoned = false;
+        let error = admit_detached_returning_destroy(
+            &mut poisoned,
+            detached_preflight(false, 4, Some(29), 4, 3, None),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: 3,
+                    detail: "detached returning-destroy cardinality",
+                }
+            )
+        ));
+        assert!(poisoned);
+        assert!(matches!(
+            admit_detached_returning_destroy(
+                &mut poisoned,
+                detached_preflight(false, 4, Some(29), 4, 4, None),
+            ),
+            Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::Poisoned
+            ))
+        ));
+    }
+
+    #[test]
+    fn detached_storage_identity_rejects_cross_queue_substitution_and_reordering() {
+        let first_queue = [(1_u64, 11_u64), (1, 12), (1, 13)];
+        let second_queue = [(2_u64, 11_u64), (2, 12), (2, 13)];
+        assert_eq!(
+            first_ordered_identity_mismatch(&first_queue, &second_queue),
+            Some(0)
+        );
+
+        let reordered = [first_queue[1], first_queue[0], first_queue[2]];
+        assert_eq!(
+            first_ordered_identity_mismatch(&first_queue, &reordered),
+            Some(0)
+        );
+
+        let substituted = [first_queue[0], second_queue[1], first_queue[2]];
+        assert_eq!(
+            first_ordered_identity_mismatch(&first_queue, &substituted),
+            Some(1)
+        );
+
+        let mut poisoned = false;
+        let error = admit_detached_returning_destroy(
+            &mut poisoned,
+            detached_preflight(false, 3, Some(11), 3, 3, Some(1)),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: 1,
+                    detail: "detached returning-destroy storage identity",
+                }
+            )
+        ));
+        assert!(poisoned);
+    }
+
+    #[test]
+    fn detached_storage_identity_replacement_preserves_the_released_ordinal() {
+        let mut identities = vec![11_u64, 12, 13];
+        let removed_index = 1;
+        assert_eq!(identities.remove(removed_index), 12);
+        let mut next_insertion_index = Some(removed_index);
+
+        insert_detached_identity(&mut identities, &mut next_insertion_index, 22);
+
+        assert_eq!(identities, [11, 22, 13]);
+        assert_eq!(next_insertion_index, None);
+        assert_eq!(
+            first_ordered_identity_mismatch(&identities, &[11, 22, 13]),
+            None
+        );
+    }
 
     #[test]
     fn session_manifest_digest_is_frozen() {

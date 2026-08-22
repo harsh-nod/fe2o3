@@ -3,7 +3,7 @@
 use core::fmt;
 use core::marker::PhantomData;
 use std::os::fd::BorrowedFd;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_kfd_uapi::{
     KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL,
@@ -33,6 +33,7 @@ pub const MAX_SHARED_GTT_ALLOCATIONS_V1: usize = 64;
 pub const MAX_SHARED_GTT_SINGLE_CPU_BYTES_V1: u64 = 1 << 31;
 pub const MAX_SHARED_GTT_GPU_VA_BYTES_V1: u64 = 8 << 30;
 pub const MIN_AQL_QUEUE_BYTES_V1: u64 = 4_096;
+static NEXT_SHARED_MEMORY_SESSION_ID_V1: AtomicU64 = AtomicU64::new(1);
 pub const MAX_AQL_QUEUE_BYTES_V1: u64 = 1 << 31;
 pub const MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1: usize = 64;
 pub const MAX_GFX942_DEVICE_MEMORY_BYTES_V1: u64 = 192 << 30;
@@ -253,6 +254,10 @@ impl Gfx942InitializedHostVisibleMemoryV1 {
         self.token.layout()
     }
 
+    pub(crate) const fn storage_identity(&self) -> SharedGttAllocationIdentityV1 {
+        self.token.storage_identity()
+    }
+
     pub(crate) fn from_completed_dispatch(
         token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
     ) -> Self {
@@ -287,6 +292,10 @@ impl Gfx942InitializedDeviceMemoryV1 {
         self.content
     }
 
+    pub(crate) const fn storage_identity(&self) -> Gfx942DeviceMemoryIdentityV1 {
+        self.lease.storage_identity()
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -311,6 +320,15 @@ impl<S: Gfx942DeviceMemoryStateV1> Gfx942DeviceMemoryLeaseV1<S> {
         self.layout
     }
 
+    pub(crate) const fn storage_identity(&self) -> Gfx942DeviceMemoryIdentityV1 {
+        Gfx942DeviceMemoryIdentityV1 {
+            id: self.id,
+            generation: self.generation,
+            device: self.device,
+            vm: self.vm,
+        }
+    }
+
     fn retag<T: Gfx942DeviceMemoryStateV1>(self) -> Gfx942DeviceMemoryLeaseV1<T> {
         Gfx942DeviceMemoryLeaseV1 {
             id: self.id,
@@ -321,6 +339,15 @@ impl<S: Gfx942DeviceMemoryStateV1> Gfx942DeviceMemoryLeaseV1<S> {
             marker: PhantomData,
         }
     }
+}
+
+/// Crate-private non-authority identity for one exact device allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Gfx942DeviceMemoryIdentityV1 {
+    id: u64,
+    generation: u64,
+    device: DeviceKeyV1,
+    vm: VmKeyV1,
 }
 
 mod sealed {
@@ -462,6 +489,7 @@ impl SharedGttAllocationLayoutV1 {
 /// }
 /// ```
 pub struct SharedGttAllocationV1<P: GttProfileV1, S: GttAllocationStateV1> {
+    session_id: u64,
     id: u64,
     generation: u64,
     layout: SharedGttAllocationLayoutV1,
@@ -484,12 +512,29 @@ impl<P: GttProfileV1, S: GttAllocationStateV1> SharedGttAllocationV1<P, S> {
 
     fn retag<T: GttAllocationStateV1>(self) -> SharedGttAllocationV1<P, T> {
         SharedGttAllocationV1 {
+            session_id: self.session_id,
             id: self.id,
             generation: self.generation,
             layout: self.layout,
             marker: PhantomData,
         }
     }
+
+    pub(crate) const fn storage_identity(&self) -> SharedGttAllocationIdentityV1 {
+        SharedGttAllocationIdentityV1 {
+            session_id: self.session_id,
+            id: self.id,
+            generation: self.generation,
+        }
+    }
+}
+
+/// Crate-private non-authority identity for one exact shared allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SharedGttAllocationIdentityV1 {
+    session_id: u64,
+    id: u64,
+    generation: u64,
 }
 
 trait GpuMappedGttStateV1: GttAllocationStateV1 {
@@ -754,6 +799,7 @@ struct DeviceMemoryRecord<B: MemoryBackend> {
 
 struct SharedMemoryEngine<B: MemoryBackend> {
     backend: B,
+    session_id: u64,
     phase: SharedMemorySessionPhaseV1,
     allocations: Vec<SharedAllocationRecord<B>>,
     next_id: u64,
@@ -765,6 +811,11 @@ struct SharedMemoryEngine<B: MemoryBackend> {
 
 impl<B: MemoryBackend> SharedMemoryEngine<B> {
     fn acquire(mut backend: B) -> Result<Self, MemorySessionError> {
+        let session_id = NEXT_SHARED_MEMORY_SESSION_ID_V1
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| MemorySessionError::SizeOverflow)?;
         if backend.opener_pid() != std::process::id() {
             return Err(MemorySessionError::ProcessChanged);
         }
@@ -776,6 +827,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         backend.check_currentness()?;
         Ok(Self {
             backend,
+            session_id,
             phase: SharedMemorySessionPhaseV1::Active,
             allocations: Vec::new(),
             next_id: 1,
@@ -929,6 +981,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         self.next_id = next_id;
         self.retained_gpu_va_bytes = new_total;
         Ok(SharedGttAllocationV1 {
+            session_id: self.session_id,
             id,
             generation: 1,
             layout,
@@ -1332,7 +1385,8 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         self.allocations
             .iter()
             .position(|record| {
-                record.id == token.id
+                self.session_id == token.session_id
+                    && record.id == token.id
                     && record.generation == token.generation
                     && record.profile == P::PROFILE
                     && record.layout == token.layout
@@ -1350,7 +1404,8 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .allocations
             .iter()
             .find(|record| {
-                record.id == token.id
+                self.session_id == token.session_id
+                    && record.id == token.id
                     && record.generation == token.generation
                     && record.profile == P::PROFILE
                     && record.layout == token.layout
@@ -3158,6 +3213,7 @@ mod tests {
         );
 
         let stale = SharedGttAllocationV1 {
+            session_id: token.session_id,
             id: token.id,
             generation: token.generation + 1,
             layout: token.layout,
@@ -3166,6 +3222,26 @@ mod tests {
         assert!(
             engine
                 .copy_mapped_host_visible_subrange(&stale, 64, 32)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn shared_allocation_identity_rejects_cross_session_substitution() {
+        let mut first = acquired();
+        let mut second = acquired();
+        let first_token = first.allocate::<HostVisibleCoherentGttV1>(256).unwrap();
+        let second_token = second.allocate::<HostVisibleCoherentGttV1>(256).unwrap();
+
+        assert_eq!(first_token.id, second_token.id);
+        assert_eq!(first_token.generation, second_token.generation);
+        assert_ne!(
+            first_token.storage_identity(),
+            second_token.storage_identity()
+        );
+        assert!(
+            second
+                .index(&first_token, SharedAllocationPhaseV1::CpuWritable)
                 .is_err()
         );
     }

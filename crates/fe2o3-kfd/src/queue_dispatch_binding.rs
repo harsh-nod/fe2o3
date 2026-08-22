@@ -30,9 +30,10 @@ use crate::MemorySessionError;
 use crate::shared_memory::{
     AqlDispatchCodeResourceRoleV1, AqlDispatchHostDataResourceRoleV1,
     AqlDispatchKernargResourceRoleV1, ExecutableGttV1, Gfx942DeviceMemoryDispatchAuthorityV1,
-    Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1, Gfx942InitializedDeviceMemoryV1,
-    Gfx942InitializedHostVisibleMemoryV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
-    HostVisibleCoherentGttV1, KernargGttV1, SharedGttAllocationV1, SharedGttMemorySessionV1,
+    Gfx942DeviceMemoryIdentityV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
+    Gfx942InitializedDeviceMemoryV1, Gfx942InitializedHostVisibleMemoryV1,
+    GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1,
+    KernargGttV1, SharedGttAllocationIdentityV1, SharedGttAllocationV1, SharedGttMemorySessionV1,
     SharedGttQueueResourceAuthorityV1,
 };
 
@@ -199,6 +200,16 @@ enum DispatchDataStorageV1 {
     HostVisibleInitialized(Gfx942InitializedHostVisibleMemoryV1),
 }
 
+/// Ordered non-authority identity retained by an unbound queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Gfx942FixedDispatchStorageIdentityV1 {
+    DeviceUninitialized(Gfx942DeviceMemoryIdentityV1),
+    DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1),
+    DeviceInitializedAfterDispatch(Gfx942DeviceMemoryIdentityV1),
+    HostVisibleUninitialized(SharedGttAllocationIdentityV1),
+    HostVisibleInitialized(SharedGttAllocationIdentityV1),
+}
+
 /// Move-only device-local or coherent host-visible input for fixed dispatch.
 ///
 /// Uninitialized storage is admitted only for inspected write-only arguments.
@@ -283,6 +294,34 @@ impl Gfx942FixedDispatchDataV1 {
                     requested_bytes: memory.layout().requested_bytes() as u64,
                     alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
                 }
+            }
+        }
+    }
+
+    pub(crate) const fn storage_identity(&self) -> Gfx942FixedDispatchStorageIdentityV1 {
+        match &self.storage {
+            DispatchDataStorageV1::Uninitialized(lease) => {
+                Gfx942FixedDispatchStorageIdentityV1::DeviceUninitialized(lease.storage_identity())
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedContent(
+                    memory.storage_identity(),
+                )
+            }
+            DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedAfterDispatch(
+                    lease.storage_identity(),
+                )
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                Gfx942FixedDispatchStorageIdentityV1::HostVisibleUninitialized(
+                    token.storage_identity(),
+                )
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                Gfx942FixedDispatchStorageIdentityV1::HostVisibleInitialized(
+                    memory.storage_identity(),
+                )
             }
         }
     }
