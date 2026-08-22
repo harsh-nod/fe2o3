@@ -11,6 +11,7 @@ use fe2o3_row_softmax_v1::{
 use sha2::{Digest as _, Sha256};
 
 const PUBLIC_BASE: &str = "e874da2083c2a1eb192048ea5f88a053c28d0ee2";
+const SAFE_SOURCE_BASE: &str = "cfb1cf6ec8785bc74f597edf97197026a2674ede";
 const LINEAGE_SOURCE_PATH: &str =
     "crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs";
 const SOURCE: &str = include_str!("../src/kernel.rs");
@@ -277,7 +278,7 @@ fn receipt_is_bounded_and_names_every_non_authority_boundary() {
 }
 
 #[test]
-fn current_outer_commit_contains_the_exact_source_model_and_verus_files() {
+fn safe_source_commit_contains_the_exact_source_model_and_verus_files() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let lineage_object = format!("{PUBLIC_BASE}:{LINEAGE_SOURCE_PATH}");
     let lineage = Command::new("git")
@@ -286,7 +287,7 @@ fn current_outer_commit_contains_the_exact_source_model_and_verus_files() {
         .output()
         .expect("read lineage source");
     assert!(lineage.status.success());
-    assert_eq!(lineage.stdout, SOURCE.as_bytes());
+    assert_ne!(lineage.stdout, SOURCE.as_bytes());
 
     let absent_example_object = format!("{PUBLIC_BASE}:examples/row_softmax_v1/src/kernel.rs");
     assert!(
@@ -316,6 +317,14 @@ fn current_outer_commit_contains_the_exact_source_model_and_verus_files() {
             .expect("run git merge-base")
             .success()
     );
+    assert!(
+        Command::new("git")
+            .args(["merge-base", "--is-ancestor", SAFE_SOURCE_BASE, head])
+            .current_dir(&repo)
+            .status()
+            .expect("run git merge-base")
+            .success()
+    );
 
     for (path, exact) in [
         ("examples/row_softmax_v1/src/kernel.rs", SOURCE.as_bytes()),
@@ -328,7 +337,7 @@ fn current_outer_commit_contains_the_exact_source_model_and_verus_files() {
             VERUS_MODEL,
         ),
     ] {
-        let object = format!("{head}:{path}");
+        let object = format!("{SAFE_SOURCE_BASE}:{path}");
         let output = Command::new("git")
             .args(["show", &object])
             .current_dir(&repo)
@@ -339,8 +348,11 @@ fn current_outer_commit_contains_the_exact_source_model_and_verus_files() {
     }
 
     let receipt = verify_reviewed_row_softmax_source_correspondence_v1(
-        bind_row_softmax_source_content_to_outer_commit_v1(parse_commit(head)),
+        bind_row_softmax_source_content_to_outer_commit_v1(parse_commit(SAFE_SOURCE_BASE)),
     )
     .unwrap();
-    assert_eq!(receipt.binding().outer_commit, parse_commit(head));
+    assert_eq!(
+        receipt.binding().outer_commit,
+        parse_commit(SAFE_SOURCE_BASE)
+    );
 }

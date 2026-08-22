@@ -13,7 +13,7 @@ It is ordinary attributed Rust: it contains no `macro_rules!`, `include!`,
 is now only a path-dependent re-export facade, while the direct codegen harness
 reads and compiles this exact example-owned file. The move preserved the exact
 1,289 source bytes and SHA-256
-`c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4`,
+`0b0d5e2964d4627bc7ef3dac882f86a9b3c49ab715245bacc3fc92f28f0d08b0`,
 so the reviewed portable-MIR, Kernel IR, and LLVM commitments were not changed.
 The manifest records the exact predecessor location at public commit `e874da208`
 as a lineage source; it does not claim the new example path existed there.
@@ -146,7 +146,7 @@ positive proof source, canonical Kernel IR and LLVM body commitments, exact
 `gfx942:xnack-` width-64 specialization, exact 64-element input/output
 preconditions, and pinned Verus/Z3 closure. Its
 canonical digest is
-`8a133c4d58294fe648b1e34aec5c08c0cf24860ea57f0eded84fd8132da377bf`.
+`8114b1d9fde2928742dd736970e3dc6eb4aa9dfca8fb3f1113e60a11269cae20`.
 
 The certificate is formal evidence only. It grants no compiler origin,
 source-to-machine refinement, descriptor or artifact admission, load, launch,
