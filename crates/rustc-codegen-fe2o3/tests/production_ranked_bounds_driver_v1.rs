@@ -66,7 +66,7 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
                 .stderr
                 .contains("all mandatory kernel checks clean true")
             && shifted.stderr.contains("kernel.index_binary Add")
-            && shifted.stderr.contains("kernel.br ^guard0")
+            && shifted.stderr.contains("kernel.cond_br")
             && shifted.stderr.contains("kernel.access Write"),
         "safe shifted disjoint access did not pass production extraction:\n{}",
         shifted.stderr,
@@ -79,7 +79,7 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
                 .stderr
                 .contains("all mandatory kernel checks clean true")
             && exclusive.stderr.contains("kernel.index_constant 7")
-            && exclusive.stderr.contains("kernel.br ^guard0")
+            && exclusive.stderr.contains("kernel.cond_br")
             && exclusive.stderr.contains("kernel.access Write"),
         "safe grid-exclusive access did not pass production extraction:\n{}",
         exclusive.stderr,
@@ -107,7 +107,7 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         oob.stderr.contains("error[FE2O3-BOUNDS-001]")
             && oob.stderr.contains("required: 64 < 64")
             && oob.stderr.contains("Rust source")
-            && oob.stderr.contains(":39:20")
+            && oob.stderr.contains(":65:20")
             && oob.stderr.contains("kernel.index_constant 64")
             && oob
                 .stderr
@@ -171,6 +171,54 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
             .next()
             .is_none(),
         "ranked verification emitted a production artifact",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn production_barrier_cfg_preserves_order_and_fails_closed() {
+    for feature in ["barrier_after_access", "barrier_before_access"] {
+        let output = run_feature_extraction(&ScratchTarget::new(), feature);
+        assert!(
+            output.status.success()
+                && output
+                    .stderr
+                    .contains("all mandatory kernel checks clean true")
+                && output.stderr.contains("kernel.access Write")
+                && output.stderr.contains("gpu.barrier"),
+            "{feature} did not preserve a clean ranked CFG:\n{}",
+            output.stderr,
+        );
+    }
+
+    for feature in ["barrier_divergent", "barrier_early_return"] {
+        let output = run_feature_extraction(&ScratchTarget::new(), feature);
+        assert!(
+            !output.status.success()
+                && output.stderr.contains("error[FE2O3-BARRIER-001]")
+                && output.stderr.contains("divergent collective barrier paths"),
+            "{feature} did not fail closed as divergent:\n{}",
+            output.stderr,
+        );
+    }
+
+    let cyclic = run_feature_extraction(&ScratchTarget::new(), "barrier_loop");
+    assert!(
+        !cyclic.status.success()
+            && cyclic.stderr.contains("error[FE2O3-BARRIER-002]")
+            && cyclic.stderr.contains("cyclic control flow"),
+        "cyclic barrier did not remain incomplete:\n{}",
+        cyclic.stderr,
+    );
+
+    let helper = run_feature_extraction(&ScratchTarget::new(), "barrier_helper");
+    assert!(
+        !helper.status.success()
+            && helper
+                .stderr
+                .contains("semantic closure that is not one kernel root without helpers"),
+        "helper-mediated barrier bypassed the semantic boundary:\n{}",
+        helper.stderr,
     );
 }
 

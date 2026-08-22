@@ -106,14 +106,14 @@ fn invocation_varying_branch_reports_exact_divergent_witnesses() {
 }
 
 #[test]
-fn uniform_branch_that_reconverges_before_barrier_is_clean() {
+fn unresolved_branch_that_reconverges_before_barrier_is_clean() {
     let context = &mut setup();
     let function = function(context, "reconverged_barrier");
     let entry = function.get_entry_block(context);
     let left = block(context, &function, "left");
     let right = block(context, &function, "right");
     let join = block(context, &function, "join");
-    let invocation = InvocationIndexOp::new(context, 0, 8);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
     let four = IndexConstantOp::new(context, 4);
     let choose = IndexLessThanBranchOp::new(
         context,
@@ -134,6 +134,45 @@ fn uniform_branch_that_reconverges_before_barrier_is_clean() {
     append(context, join, &sync);
     append(context, join, &ret);
     assert!(run_pliron_barrier_convergence_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn unresolved_divergent_paths_are_rejected_without_inventing_a_trace() {
+    let context = &mut setup();
+    let function = function(context, "unresolved_divergent_barrier");
+    let entry = function.get_entry_block(context);
+    let sync_block = block(context, &function, "sync");
+    let exit = block(context, &function, "exit");
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let choose = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        one.result(context),
+        sync_block,
+        exit,
+    );
+    let sync = barrier(context);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &invocation);
+    append(context, entry, &one);
+    append(context, entry, &choose);
+    append(context, sync_block, &sync);
+    append(context, sync_block, &to_exit);
+    append(context, exit, &ret);
+
+    let error =
+        require_pliron_barrier_convergence_before_lowering_v1(context, &function).unwrap_err();
+    assert!(matches!(
+        error.report().findings(),
+        [PlironBarrierFindingV1::DivergentBarrierPaths { .. }]
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("divergent collective barrier paths")
+    );
 }
 
 #[test]

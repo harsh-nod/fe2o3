@@ -1,12 +1,9 @@
 //! Barrier-convergence verification over bounded PLIRON invocation traces.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-};
+use std::{collections::HashMap, fmt};
 
 use dialect_gpu::{AddressSpaceAttr, BarrierOp};
-use dialect_kernel::{BranchOp, ReturnOp};
+use dialect_kernel::{BranchOp, IndexLessThanBranchOp, ReturnOp};
 use pliron::{
     basic_block::BasicBlock,
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -33,6 +30,10 @@ pub enum PlironBarrierFindingV1 {
         second_invocation: Vec<u64>,
         second_trace: Vec<(usize, usize)>,
     },
+    DivergentBarrierPaths {
+        first_trace: Vec<(usize, usize)>,
+        second_trace: Vec<(usize, usize)>,
+    },
 }
 
 impl fmt::Display for PlironBarrierFindingV1 {
@@ -53,6 +54,15 @@ impl fmt::Display for PlironBarrierFindingV1 {
             } => write!(
                 formatter,
                 "error[FE2O3-BARRIER-001]: divergent collective barrier trace; invocation {first_invocation:?} executes {}, while invocation {second_invocation:?} executes {}; failed proof: every participating invocation reaches the same barriers in the same order; help: move the barrier out of invocation-varying control flow",
+                describe_trace(first_trace),
+                describe_trace(second_trace),
+            ),
+            Self::DivergentBarrierPaths {
+                first_trace,
+                second_trace,
+            } => write!(
+                formatter,
+                "error[FE2O3-BARRIER-001]: divergent collective barrier paths execute {} and {}; failed proof: every possible invocation path must reach the same barriers in the same order; help: move the barrier after the branch reconverges",
                 describe_trace(first_trace),
                 describe_trace(second_trace),
             ),
@@ -140,46 +150,65 @@ pub(crate) fn run_pliron_barrier_convergence_check_after_bounds_v1(
     {
         return PlironBarrierReportV1 { findings: vec![] };
     }
-    if has_one_unconditional_control_flow_trace(context, function) {
-        return PlironBarrierReportV1 { findings: vec![] };
-    }
-    let traces = match trace_pliron_invocations_v1(context, function) {
-        Ok(traces) => traces,
-        Err(failure) => {
-            return report(PlironBarrierFindingV1::AnalysisIncomplete {
-                detail: trace_failure_detail(failure),
-            });
+    let trace_failure = match trace_pliron_invocations_v1(context, function) {
+        Ok(traces) => {
+            let Some(first) = traces.first() else {
+                return report(PlironBarrierFindingV1::AnalysisIncomplete {
+                    detail: "the launch domain is empty".to_owned(),
+                });
+            };
+            let first_barriers = barrier_trace(first);
+            for trace in traces.iter().skip(1) {
+                let barriers = barrier_trace(trace);
+                if barriers != first_barriers {
+                    return report(PlironBarrierFindingV1::DivergentBarrierTrace {
+                        first_invocation: first.invocation.clone(),
+                        first_trace: first_barriers
+                            .iter()
+                            .map(|(location, _)| (location.block, location.operation))
+                            .collect(),
+                        second_invocation: trace.invocation.clone(),
+                        second_trace: barriers
+                            .iter()
+                            .map(|(location, _)| (location.block, location.operation))
+                            .collect(),
+                    });
+                }
+            }
+            return PlironBarrierReportV1 { findings: vec![] };
         }
+        Err(failure) => failure,
     };
-    let Some(first) = traces.first() else {
-        return report(PlironBarrierFindingV1::AnalysisIncomplete {
-            detail: "the launch domain is empty".to_owned(),
-        });
-    };
-    let first_barriers = barrier_trace(first);
-    for trace in traces.iter().skip(1) {
-        let barriers = barrier_trace(trace);
-        if barriers != first_barriers {
-            return report(PlironBarrierFindingV1::DivergentBarrierTrace {
-                first_invocation: first.invocation.clone(),
-                first_trace: first_barriers
-                    .iter()
-                    .map(|(location, _)| (location.block, location.operation))
-                    .collect(),
-                second_invocation: trace.invocation.clone(),
-                second_trace: barriers
-                    .iter()
-                    .map(|(location, _)| (location.block, location.operation))
-                    .collect(),
-            });
+    match summarize_all_barrier_paths(context, function) {
+        BarrierPathSummaryV1::Unique => PlironBarrierReportV1 { findings: vec![] },
+        BarrierPathSummaryV1::Divergent {
+            first_trace,
+            second_trace,
+        } => report(PlironBarrierFindingV1::DivergentBarrierPaths {
+            first_trace,
+            second_trace,
+        }),
+        BarrierPathSummaryV1::Incomplete(path_detail) => {
+            report(PlironBarrierFindingV1::AnalysisIncomplete {
+                detail: format!(
+                    "{}; all-path convergence proof also failed: {path_detail}",
+                    trace_failure_detail(trace_failure),
+                ),
+            })
         }
     }
-    PlironBarrierReportV1 { findings: vec![] }
 }
 
-/// Proves convergence without enumerating invocations when every invocation
-/// necessarily follows one finite chain of unconditional CFG edges.
-fn has_one_unconditional_control_flow_trace(context: &Context, function: &FuncOp) -> bool {
+enum BarrierPathSummaryV1 {
+    Unique,
+    Divergent {
+        first_trace: Vec<(usize, usize)>,
+        second_trace: Vec<(usize, usize)>,
+    },
+    Incomplete(String),
+}
+
+fn summarize_all_barrier_paths(context: &Context, function: &FuncOp) -> BarrierPathSummaryV1 {
     let blocks = function
         .get_region(context)
         .deref(context)
@@ -190,37 +219,134 @@ fn has_one_unconditional_control_flow_trace(context: &Context, function: &FuncOp
         .enumerate()
         .map(|(index, block)| (*block, index))
         .collect::<HashMap<Ptr<BasicBlock>, usize>>();
-    let Some(mut block) = blocks.first().copied() else {
-        return false;
-    };
-    let mut visited = HashSet::new();
-    loop {
-        if !visited.insert(block) {
-            return false;
-        }
-        let Some(terminator) = block.deref(context).get_terminator(context) else {
-            return false;
-        };
-        let terminator = Operation::get_op_dyn(terminator, context);
-        if terminator.downcast_ref::<ReturnOp>().is_some() {
-            return true;
-        }
-        if terminator.downcast_ref::<BranchOp>().is_none() {
-            return false;
-        }
-        let Some(successor) = terminator
-            .get_operation()
-            .deref(context)
-            .successors()
-            .next()
-        else {
-            return false;
-        };
-        let Some(index) = block_indices.get(&successor).copied() else {
-            return false;
-        };
-        block = blocks[index];
+    if blocks.is_empty() {
+        return BarrierPathSummaryV1::Incomplete("the kernel CFG is empty".to_owned());
     }
+    let mut states = vec![0_u8; blocks.len()];
+    let mut summaries = vec![None; blocks.len()];
+    match summarize_barrier_paths_from(
+        context,
+        &blocks,
+        &block_indices,
+        0,
+        &mut states,
+        &mut summaries,
+    ) {
+        Ok(_) => BarrierPathSummaryV1::Unique,
+        Err(BarrierPathFailureV1::Divergent {
+            first_trace,
+            second_trace,
+        }) => BarrierPathSummaryV1::Divergent {
+            first_trace,
+            second_trace,
+        },
+        Err(BarrierPathFailureV1::Incomplete(detail)) => BarrierPathSummaryV1::Incomplete(detail),
+    }
+}
+
+enum BarrierPathFailureV1 {
+    Divergent {
+        first_trace: Vec<(usize, usize)>,
+        second_trace: Vec<(usize, usize)>,
+    },
+    Incomplete(String),
+}
+
+fn summarize_barrier_paths_from(
+    context: &Context,
+    blocks: &[Ptr<BasicBlock>],
+    block_indices: &HashMap<Ptr<BasicBlock>, usize>,
+    block_index: usize,
+    states: &mut [u8],
+    summaries: &mut [Option<Vec<(usize, usize)>>],
+) -> Result<Vec<(usize, usize)>, BarrierPathFailureV1> {
+    match states.get(block_index).copied() {
+        Some(2) => {
+            return Ok(summaries[block_index]
+                .as_ref()
+                .expect("completed barrier path summary")
+                .clone());
+        }
+        Some(1) => {
+            return Err(BarrierPathFailureV1::Incomplete(format!(
+                "block {block_index} participates in cyclic control flow"
+            )));
+        }
+        Some(_) => {}
+        None => {
+            return Err(BarrierPathFailureV1::Incomplete(
+                "a CFG successor is outside the kernel".to_owned(),
+            ));
+        }
+    }
+    states[block_index] = 1;
+    let block = blocks[block_index];
+    let terminator = block
+        .deref(context)
+        .get_terminator(context)
+        .ok_or_else(|| {
+            BarrierPathFailureV1::Incomplete(format!("block {block_index} has no terminator"))
+        })?;
+    let mut local = Vec::new();
+    for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
+        if operation == terminator {
+            continue;
+        }
+        if Operation::get_op_dyn(operation, context)
+            .downcast_ref::<BarrierOp>()
+            .is_some()
+        {
+            local.push((block_index, operation_index));
+        }
+    }
+    let terminator = Operation::get_op_dyn(terminator, context);
+    let raw = terminator.get_operation().deref(context);
+    let successors = if terminator.downcast_ref::<ReturnOp>().is_some() {
+        Vec::new()
+    } else if terminator.downcast_ref::<BranchOp>().is_some()
+        || terminator.downcast_ref::<IndexLessThanBranchOp>().is_some()
+    {
+        raw.successors()
+            .map(|successor| {
+                block_indices.get(&successor).copied().ok_or_else(|| {
+                    BarrierPathFailureV1::Incomplete(format!(
+                        "block {block_index} targets a block outside the kernel"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        return Err(BarrierPathFailureV1::Incomplete(format!(
+            "block {block_index} has an unsupported terminator"
+        )));
+    };
+    let mut complete: Option<Vec<(usize, usize)>> = None;
+    for successor in successors {
+        let suffix = summarize_barrier_paths_from(
+            context,
+            blocks,
+            block_indices,
+            successor,
+            states,
+            summaries,
+        )?;
+        let mut candidate = local.clone();
+        candidate.extend(suffix);
+        if let Some(first) = &complete {
+            if first != &candidate {
+                return Err(BarrierPathFailureV1::Divergent {
+                    first_trace: first.clone(),
+                    second_trace: candidate,
+                });
+            }
+        } else {
+            complete = Some(candidate);
+        }
+    }
+    let complete = complete.unwrap_or(local);
+    states[block_index] = 2;
+    summaries[block_index] = Some(complete.clone());
+    Ok(complete)
 }
 
 pub(crate) fn require_pliron_barrier_convergence_after_bounds_v1(

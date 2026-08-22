@@ -14,6 +14,12 @@ grid_exclusive = []
 production_safe = []
 production_oob = []
 blocked = []
+barrier_after_access = []
+barrier_before_access = []
+barrier_divergent = []
+barrier_early_return = []
+barrier_loop = []
+barrier_helper = []
 
 [dependencies]
 fe2o3-device.workspace = true
