@@ -370,6 +370,8 @@ trait HandoffSchema: Sized {
     const RECORD_DOMAIN: &'static [u8];
     const RECORD_BYTES: usize;
     const MAX_HANDOFF_BYTES: usize;
+    const DECODE_WORKING_SET_MULTIPLIER: usize;
+    const MAX_DECODE_WORKING_SET_BYTES: usize;
     const VALIDATE_RECORD_DURING_RECOVERY: bool;
     const ALL_SLOTS: [Self::Slot; 3];
 
@@ -408,6 +410,8 @@ impl HandoffSchema for HandoffV1Schema {
     const RECORD_DOMAIN: &'static [u8] = RECORD_DOMAIN;
     const RECORD_BYTES: usize = RECORD_BYTES;
     const MAX_HANDOFF_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
+    const DECODE_WORKING_SET_MULTIPLIER: usize = 1;
+    const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
     const VALIDATE_RECORD_DURING_RECOVERY: bool = false;
     const ALL_SLOTS: [Self::Slot; 3] = [
         CompilerModuleHandoffSlotV1::Default,
@@ -455,6 +459,8 @@ enum HandoffEngineError {
     Common(CompilerModuleHandoffErrorV1),
     WrongBinding,
     PayloadBindingMismatch,
+    WorkingSetBudgetExceeded { required: usize, maximum: usize },
+    PayloadAllocationFailed { requested: usize },
     InvalidCanonicalV3(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3),
 }
 
@@ -487,6 +493,16 @@ impl HandoffEngineError {
             Self::PayloadBindingMismatch => invalid_slot(
                 Path::new(""),
                 "V1 handoff unexpectedly failed a protocol payload binding",
+            ),
+            Self::WorkingSetBudgetExceeded { required, maximum } => invalid_slot(
+                Path::new(""),
+                format!(
+                    "V1 handoff unexpectedly required {required} bytes of decode working set with a {maximum}-byte limit"
+                ),
+            ),
+            Self::PayloadAllocationFailed { requested } => invalid_slot(
+                Path::new(""),
+                format!("could not reserve {requested} bytes for the V1 handoff payload"),
             ),
             Self::InvalidCanonicalV3(error) => invalid_slot(
                 Path::new(""),
@@ -760,7 +776,8 @@ fn publish_in_slot_engine<S: HandoffSchema>(
     if entry_exists(&slot, READY_ENTRY)? {
         let committed =
             read_bound_record::<S>(&slot, READY_ENTRY, producer_id, slot_id, attempt, binding)?;
-        let committed_bytes = read_payload::<S>(&slot, &committed)?;
+        let committed_bytes =
+            read_payload::<S>(&slot, &committed, S::MAX_DECODE_WORKING_SET_BYTES)?;
         return if committed_bytes == handoff_bytes {
             Err(CompilerModuleHandoffErrorV1::AlreadyPublished.into())
         } else {
@@ -880,9 +897,37 @@ fn consume_in_slot_engine<S: HandoffSchema>(
     binding: S::Binding,
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
+    consume_in_slot_engine_with_working_set_limit::<S>(
+        output_dir,
+        producer,
+        attempt,
+        handoff_slot,
+        binding,
+        S::MAX_DECODE_WORKING_SET_BYTES,
+        hooks,
+    )
+}
+
+fn consume_in_slot_engine_with_working_set_limit<S: HandoffSchema>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    handoff_slot: S::Slot,
+    binding: S::Binding,
+    maximum_working_set_bytes: usize,
+    hooks: &mut impl HandoffHooks,
+) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
-    consume_in_slot_engine_locked::<S>(&output, producer, attempt, handoff_slot, binding, hooks)
+    consume_in_slot_engine_locked::<S>(
+        &output,
+        producer,
+        attempt,
+        handoff_slot,
+        binding,
+        maximum_working_set_bytes,
+        hooks,
+    )
 }
 
 fn consume_in_slot_engine_locked<S: HandoffSchema>(
@@ -891,6 +936,7 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
     attempt: BuildAttempt,
     handoff_slot: S::Slot,
     binding: S::Binding,
+    maximum_working_set_bytes: usize,
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
     output.verify_path_identity()?;
@@ -925,7 +971,7 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
     }
     let record =
         read_bound_record::<S>(&slot, READY_ENTRY, producer_id, slot_id, attempt, binding)?;
-    let bytes = read_payload::<S>(&slot, &record)?;
+    let bytes = read_payload::<S>(&slot, &record, maximum_working_set_bytes)?;
     let payload = S::decode_payload(record.binding, bytes)?;
     hooks.hit(FaultPoint::PayloadValidated)?;
     slot.verify()?;
@@ -1342,6 +1388,7 @@ fn create_temp(
 fn read_payload<S: HandoffSchema>(
     slot: &PinnedDirectory,
     record: &HandoffRecord<S>,
+    maximum_working_set_bytes: usize,
 ) -> Result<Vec<u8>, HandoffEngineError> {
     let fd = openat(
         &slot.fd,
@@ -1366,14 +1413,18 @@ fn read_payload<S: HandoffSchema>(
         )
         .into());
     }
-    let mut bytes = Vec::with_capacity(record.length);
+    validate_decode_working_set::<S>(record.length, maximum_working_set_bytes)?;
+    let mut bytes = try_allocate_payload_buffer(record.length)?;
     Read::by_ref(&mut file)
-        .take(S::MAX_HANDOFF_BYTES.saturating_add(1) as u64)
+        .take(record.length as u64)
         .read_to_end(&mut bytes)?;
+    let mut trailing = [0_u8; 1];
+    let has_trailing_bytes = file.read(&mut trailing)? != 0;
     let after = fstat(&file).map_err(std::io::Error::from)?;
     let still_named =
         statat(&slot.fd, PAYLOAD_ENTRY, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
     if bytes.len() != record.length
+        || has_trailing_bytes
         || !record.file.matches(&after)
         || !record.file.matches(&still_named)
     {
@@ -1393,6 +1444,30 @@ fn read_payload<S: HandoffSchema>(
     if identity != record.identity {
         return Err(CompilerModuleHandoffErrorV1::DigestMismatch.into());
     }
+    Ok(bytes)
+}
+
+fn validate_decode_working_set<S: HandoffSchema>(
+    payload_bytes: usize,
+    maximum: usize,
+) -> Result<usize, HandoffEngineError> {
+    let required = payload_bytes
+        .checked_mul(S::DECODE_WORKING_SET_MULTIPLIER)
+        .ok_or(HandoffEngineError::WorkingSetBudgetExceeded {
+            required: usize::MAX,
+            maximum,
+        })?;
+    if required > maximum {
+        return Err(HandoffEngineError::WorkingSetBudgetExceeded { required, maximum });
+    }
+    Ok(required)
+}
+
+fn try_allocate_payload_buffer(length: usize) -> Result<Vec<u8>, HandoffEngineError> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| HandoffEngineError::PayloadAllocationFailed { requested: length })?;
     Ok(bytes)
 }
 
@@ -1967,6 +2042,8 @@ mod protected_v2 {
         const RECORD_DOMAIN: &'static [u8] = RECORD_DOMAIN_V2;
         const RECORD_BYTES: usize = RECORD_BYTES_V2;
         const MAX_HANDOFF_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
+        const DECODE_WORKING_SET_MULTIPLIER: usize = 1;
+        const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
         const ALL_SLOTS: [Self::Slot; 3] = [
             CompilerModuleHandoffSlotV2::Default,
@@ -2210,6 +2287,22 @@ mod protected_v2 {
                 CompilerModuleHandoffErrorV2::InvalidSlot {
                     path: PathBuf::new(),
                     reason: "V2 handoff unexpectedly failed a protocol payload binding".into(),
+                }
+            }
+            HandoffEngineError::WorkingSetBudgetExceeded { required, maximum } => {
+                CompilerModuleHandoffErrorV2::InvalidSlot {
+                    path: PathBuf::new(),
+                    reason: format!(
+                        "V2 handoff unexpectedly required {required} bytes of decode working set with a {maximum}-byte limit"
+                    ),
+                }
+            }
+            HandoffEngineError::PayloadAllocationFailed { requested } => {
+                CompilerModuleHandoffErrorV2::InvalidSlot {
+                    path: PathBuf::new(),
+                    reason: format!(
+                        "could not reserve {requested} bytes for the V2 handoff payload"
+                    ),
                 }
             }
             HandoffEngineError::InvalidCanonicalV3(error) => {
@@ -2934,6 +3027,14 @@ mod semantic_v3 {
     pub const MAX_COMPILER_MODULE_HANDOFF_BYTES_V3: usize =
         fe2o3_compiler_ffi::MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3;
 
+    // During strict decode, the transaction input remains live alongside the outer owner, its
+    // capsule owner and receipt preimages, and the nested module owner. Six complete inputs are a
+    // conservative bound for those schema-bounded owners without changing any wire representation.
+    const V3_DECODE_WORKING_SET_MULTIPLIER: usize = 6;
+    const MAX_V3_DECODE_WORKING_SET_BYTES: usize =
+        MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 * V3_DECODE_WORKING_SET_MULTIPLIER;
+    const STREAM_BUFFER_BYTES_V3: usize = 16 * 1024;
+
     /// Closed attempt-local transport slot for one strict semantic V3 handoff.
     #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
     #[repr(u8)]
@@ -3348,6 +3449,10 @@ mod semantic_v3 {
         NonCanonicalHandoff(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3),
         /// Strictly decoded bytes disagree with the native identity in the transaction record.
         HandoffIdentityMismatch,
+        /// The admitted payload would exceed the explicit V3 decode working-set budget.
+        WorkingSetBudgetExceeded { required: usize, maximum: usize },
+        /// Reserving the complete V3 input buffer failed before any tombstone was committed.
+        PayloadAllocationFailed { requested: usize },
         /// A consumption token was minted from a different private lease instance.
         MismatchedCurrentnessToken,
     }
@@ -3395,6 +3500,14 @@ mod semantic_v3 {
                 }
                 Self::HandoffIdentityMismatch => formatter.write_str(
                     "strictly decoded V3 handoff identity disagrees with the transaction binding",
+                ),
+                Self::WorkingSetBudgetExceeded { required, maximum } => write!(
+                    formatter,
+                    "V3 handoff decode requires {required} bytes of working set, exceeding the {maximum}-byte limit"
+                ),
+                Self::PayloadAllocationFailed { requested } => write!(
+                    formatter,
+                    "could not reserve the {requested}-byte V3 handoff input buffer"
                 ),
                 Self::MismatchedCurrentnessToken => formatter
                     .write_str("V3 currentness token belongs to a different publication lease"),
@@ -3705,6 +3818,8 @@ mod semantic_v3 {
         const RECORD_DOMAIN: &'static [u8] = RECORD_DOMAIN_V3;
         const RECORD_BYTES: usize = RECORD_BYTES_V3;
         const MAX_HANDOFF_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES_V3;
+        const DECODE_WORKING_SET_MULTIPLIER: usize = V3_DECODE_WORKING_SET_MULTIPLIER;
+        const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_V3_DECODE_WORKING_SET_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
         const ALL_SLOTS: [Self::Slot; 3] = [
             CompilerModuleHandoffSlotV3::Default,
@@ -3760,21 +3875,36 @@ mod semantic_v3 {
             binding: Self::Binding,
             handoff_bytes: &[u8],
         ) -> [u8; 32] {
-            let generation = attempt.generation().to_le_bytes();
-            let length = (handoff_bytes.len() as u64).to_le_bytes();
-            sha256_parts(&[
-                TRANSACTION_IDENTITY_DOMAIN_V3,
-                &binding.sha256,
-                &binding.byte_len.to_le_bytes(),
-                &slot,
-                &producer,
-                &generation,
-                attempt.session().as_bytes(),
-                attempt.invocation().as_bytes(),
-                &length,
-                handoff_bytes,
-            ])
+            let mut digest = transaction_identity_digest_v3(
+                producer,
+                slot,
+                attempt,
+                binding,
+                handoff_bytes.len(),
+            );
+            digest.update(handoff_bytes);
+            digest.finalize().into()
         }
+    }
+
+    fn transaction_identity_digest_v3(
+        producer: [u8; 32],
+        slot: [u8; 32],
+        attempt: BuildAttempt,
+        binding: HandoffBindingV3,
+        payload_length: usize,
+    ) -> Sha256 {
+        let mut digest = Sha256::new();
+        digest.update(TRANSACTION_IDENTITY_DOMAIN_V3);
+        digest.update(binding.sha256);
+        digest.update(binding.byte_len.to_le_bytes());
+        digest.update(slot);
+        digest.update(producer);
+        digest.update(attempt.generation().to_le_bytes());
+        digest.update(attempt.session().as_bytes());
+        digest.update(attempt.invocation().as_bytes());
+        digest.update((payload_length as u64).to_le_bytes());
+        digest
     }
 
     fn recover_receipt_in_slot_v3(
@@ -3844,6 +3974,11 @@ mod semantic_v3 {
                 reason: "payload metadata does not match the durable ready record".to_string(),
             });
         }
+        validate_decode_working_set::<HandoffV3Schema>(
+            record.length,
+            MAX_V3_DECODE_WORKING_SET_BYTES,
+        )
+        .map_err(engine_error_v3)?;
         let payload_bytes = read_pinned_handoff_file_v3(
             &slot_directory,
             PAYLOAD_ENTRY,
@@ -3955,7 +4090,7 @@ mod semantic_v3 {
             slot_identity,
             committed_generation: receipt.attempt().generation(),
         });
-        drop(load_current_handoff_locked(&binding)?);
+        validate_current_payload_identity_locked(&binding)?;
         Ok(CompilerModuleHandoffCurrentnessLeaseV3 { binding })
     }
 
@@ -4077,7 +4212,13 @@ mod semantic_v3 {
             });
         }
         validate_pinned_handoff_file_v3(slot, entry, pinned)?;
-        let mut bytes = vec![0; exact_length];
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(exact_length).map_err(|_| {
+            CompilerModuleHandoffErrorV3::PayloadAllocationFailed {
+                requested: exact_length,
+            }
+        })?;
+        bytes.resize(exact_length, 0);
         pinned.file.read_exact_at(&mut bytes, 0)?;
         let mut trailing = [0_u8; 1];
         if pinned.file.read_at(&mut trailing, exact_length as u64)? != 0 {
@@ -4173,6 +4314,11 @@ mod semantic_v3 {
         CompilerModuleHandoffErrorV3,
     > {
         let record = read_current_record_locked(binding)?;
+        validate_decode_working_set::<HandoffV3Schema>(
+            record.length,
+            MAX_V3_DECODE_WORKING_SET_BYTES,
+        )
+        .map_err(engine_error_v3)?;
         let bytes = read_pinned_handoff_file_v3(
             &binding.slot_directory,
             PAYLOAD_ENTRY,
@@ -4199,6 +4345,64 @@ mod semantic_v3 {
         }
         validate_current_metadata_locked(binding)?;
         Ok(handoff)
+    }
+
+    fn validate_current_payload_identity_locked(
+        binding: &CompilerModuleHandoffCurrentnessBindingV3,
+    ) -> Result<(), CompilerModuleHandoffErrorV3> {
+        let record = read_current_record_locked(binding)?;
+        validate_pinned_handoff_file_v3(
+            &binding.slot_directory,
+            PAYLOAD_ENTRY,
+            &binding.payload_file,
+        )?;
+
+        let mut digest = transaction_identity_digest_v3(
+            record.producer,
+            record.slot,
+            record.attempt,
+            record.binding,
+            record.length,
+        );
+        let mut offset = 0_u64;
+        let mut remaining = record.length;
+        let mut buffer = [0_u8; STREAM_BUFFER_BYTES_V3];
+        while remaining != 0 {
+            let requested = remaining.min(buffer.len());
+            let read = binding
+                .payload_file
+                .file
+                .read_at(&mut buffer[..requested], offset)?;
+            if read == 0 {
+                return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                    path: binding.slot_directory.path.join(PAYLOAD_ENTRY),
+                    reason: "pinned payload ended before its committed length".to_string(),
+                });
+            }
+            digest.update(&buffer[..read]);
+            remaining -= read;
+            offset += read as u64;
+        }
+        let mut trailing = [0_u8; 1];
+        if binding.payload_file.file.read_at(&mut trailing, offset)? != 0 {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: binding.slot_directory.path.join(PAYLOAD_ENTRY),
+                reason: "pinned payload grew beyond its committed length".to_string(),
+            });
+        }
+        validate_pinned_handoff_file_v3(
+            &binding.slot_directory,
+            PAYLOAD_ENTRY,
+            &binding.payload_file,
+        )?;
+
+        let identity: [u8; 32] = digest.finalize().into();
+        if identity != record.identity
+            || identity != *binding.receipt.transaction_identity().as_bytes()
+        {
+            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
+        }
+        validate_current_metadata_locked(binding)
     }
 
     fn publish_in_slot_v3(
@@ -4268,6 +4472,12 @@ mod semantic_v3 {
             HandoffEngineError::WrongBinding => CompilerModuleHandoffErrorV3::WrongHandoffIdentity,
             HandoffEngineError::PayloadBindingMismatch => {
                 CompilerModuleHandoffErrorV3::HandoffIdentityMismatch
+            }
+            HandoffEngineError::WorkingSetBudgetExceeded { required, maximum } => {
+                CompilerModuleHandoffErrorV3::WorkingSetBudgetExceeded { required, maximum }
+            }
+            HandoffEngineError::PayloadAllocationFailed { requested } => {
+                CompilerModuleHandoffErrorV3::PayloadAllocationFailed { requested }
             }
             HandoffEngineError::InvalidCanonicalV3(error) => {
                 CompilerModuleHandoffErrorV3::NonCanonicalHandoff(error)
@@ -4573,13 +4783,21 @@ mod semantic_v3 {
                 attempt,
                 CompilerModuleHandoffSlotV3::Default,
             );
-            let independently_derived = HandoffV3Schema::derive_identity(
-                producer_id,
-                slot_id,
-                attempt,
-                expected_identity.into(),
+            let binding = HandoffBindingV3::from(expected_identity);
+            let generation = attempt.generation().to_le_bytes();
+            let length = (expected_bytes.len() as u64).to_le_bytes();
+            let independently_derived = sha256_parts(&[
+                TRANSACTION_IDENTITY_DOMAIN_V3,
+                &binding.sha256,
+                &binding.byte_len.to_le_bytes(),
+                &slot_id,
+                &producer_id,
+                &generation,
+                attempt.session().as_bytes(),
+                attempt.invocation().as_bytes(),
+                &length,
                 &expected_bytes,
-            );
+            ]);
             assert_eq!(
                 receipt.transaction_identity().as_bytes(),
                 &independently_derived
@@ -5362,6 +5580,77 @@ mod semantic_v3 {
         }
 
         #[test]
+        fn v3_decode_working_set_has_an_exact_maximum_and_fallible_input_allocation() {
+            assert!(matches!(
+                validate_decode_working_set::<HandoffV3Schema>(
+                    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
+                    MAX_V3_DECODE_WORKING_SET_BYTES,
+                ),
+                Ok(required) if required == MAX_V3_DECODE_WORKING_SET_BYTES
+            ));
+            assert!(matches!(
+                validate_decode_working_set::<HandoffV3Schema>(
+                    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
+                    MAX_V3_DECODE_WORKING_SET_BYTES - 1,
+                ),
+                Err(HandoffEngineError::WorkingSetBudgetExceeded { required, maximum })
+                    if required == MAX_V3_DECODE_WORKING_SET_BYTES
+                        && maximum == MAX_V3_DECODE_WORKING_SET_BYTES - 1
+            ));
+            assert!(matches!(
+                validate_decode_working_set::<HandoffV3Schema>(usize::MAX, usize::MAX),
+                Err(HandoffEngineError::WorkingSetBudgetExceeded {
+                    required: usize::MAX,
+                    maximum: usize::MAX,
+                })
+            ));
+            assert!(matches!(
+                try_allocate_payload_buffer(usize::MAX),
+                Err(HandoffEngineError::PayloadAllocationFailed {
+                    requested: usize::MAX,
+                })
+            ));
+        }
+
+        #[test]
+        fn v3_working_set_rejection_is_retryable_before_tombstone() {
+            let temp = TestDirectory::new();
+            let producer = producer("working_set_retry_v3");
+            let attempt = begin(&temp.0, &producer, 105);
+            let handoff = outer(205);
+            publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+            let slot = slot_path(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Default,
+            );
+            let required = handoff.canonical_bytes().len() * V3_DECODE_WORKING_SET_MULTIPLIER;
+
+            assert!(matches!(
+                consume_in_slot_engine_with_working_set_limit::<HandoffV3Schema>(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    CompilerModuleHandoffSlotV3::Default,
+                    handoff.identity().into(),
+                    required - 1,
+                    &mut NoFaults,
+                ),
+                Err(HandoffEngineError::WorkingSetBudgetExceeded {
+                    required: actual,
+                    maximum,
+                }) if actual == required && maximum == required - 1
+            ));
+            assert!(slot.join(READY_ENTRY).exists());
+            assert!(slot.join(PAYLOAD_ENTRY).exists());
+            assert!(!slot.join(CONSUMED_ENTRY).exists());
+
+            consume_compiler_module_handoff_v3(&temp.0, &producer, attempt, handoff.identity())
+                .unwrap();
+        }
+
+        #[test]
         fn oversized_v3_record_is_rejected_before_payload_allocation() {
             let temp = TestDirectory::new();
             let producer = producer("oversized_record_v3");
@@ -5375,8 +5664,8 @@ mod semantic_v3 {
                 CompilerModuleHandoffSlotV3::Default,
             );
             let ready = slot.join(READY_ENTRY);
-            let mut record =
-                HandoffRecord::<HandoffV3Schema>::decode(&fs::read(&ready).unwrap()).unwrap();
+            let original_record = fs::read(&ready).unwrap();
+            let mut record = HandoffRecord::<HandoffV3Schema>::decode(&original_record).unwrap();
             record.length = MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 + 1;
             record.binding.byte_len = record.length as u64;
             fs::write(ready, record.encode()).unwrap();
@@ -5391,6 +5680,12 @@ mod semantic_v3 {
                 Err(CompilerModuleHandoffErrorV3::InvalidSlot { ref reason, .. })
                     if reason == "record contains an invalid module length"
             ));
+            assert!(slot.join(READY_ENTRY).exists());
+            assert!(!slot.join(CONSUMED_ENTRY).exists());
+
+            fs::write(slot.join(READY_ENTRY), original_record).unwrap();
+            consume_compiler_module_handoff_v3(&temp.0, &producer, attempt, handoff.identity())
+                .unwrap();
         }
 
         #[test]
