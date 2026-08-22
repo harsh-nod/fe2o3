@@ -95,10 +95,13 @@ pub use first_build_worker_v2::{
 };
 pub use first_build_worker_v3::{
     InertProtectedCompilerHandoffExecutionV3, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    ProtectedCompilerHandoffBindingErrorV3, ProtectedCompilerHandoffBindingIdentityV3,
-    ProtectedCompilerHandoffBindingV3, ProtectedCompilerHandoffExpectationV3,
-    ProtectedFirstBuildWorkerV3Error, ProtectedFirstBuildWorkerV3IdentityV1,
+    PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedCompilerHandoffBindingErrorV3,
+    ProtectedCompilerHandoffBindingIdentityV3, ProtectedCompilerHandoffBindingV3,
+    ProtectedCompilerHandoffExpectationV3, ProtectedFirstBuildWorkerV3Error,
+    ProtectedFirstBuildWorkerV3IdentityV1,
+    execute_preflighted_protected_reproducible_first_build_worker_v3,
     execute_protected_reproducible_first_build_worker_v3,
+    preflight_protected_reproducible_first_build_worker_v3,
 };
 pub use flash_attention_v1_finalizer::{
     FinalizedFlashAttentionV1ReceiptV1, FlashAttentionV1FinalizationErrorV1,
@@ -248,14 +251,17 @@ pub use worker_v2_hsaco_admission::{
 };
 pub use worker_v2_hsaco_finalization::{
     DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV2HsacoIdentityV2,
-    FinalizedWorkerV2HsacoIdentityV1, MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2,
+    FinalizedProtectedWorkerV3HsacoIdentityV1, FinalizedWorkerV2HsacoIdentityV1,
+    MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2,
     MissingAuthenticatedDescriptorSourceEvidenceV1,
     MissingAuthenticatedProtectedDescriptorSourceEvidenceV2,
-    PreparedFinalizedProtectedWorkerV2HsacoV2, PreparedFinalizedWorkerV2HsacoV1,
-    ProtectedWorkerV2FinalizerLineageDecodeErrorV2, ProtectedWorkerV2FinalizerLineageIdentityV2,
-    ProtectedWorkerV2FinalizerLineageRouteV2, ProtectedWorkerV2FinalizerLineageV2,
-    WorkerV2HsacoFinalizationError, finalize_inspected_protected_worker_v2_hsaco_v2,
-    finalize_inspected_worker_v2_hsaco_v1,
+    MissingAuthenticatedProtectedDescriptorSourceEvidenceV3,
+    PreparedFinalizedProtectedWorkerV2HsacoV2, PreparedFinalizedProtectedWorkerV3HsacoV1,
+    PreparedFinalizedWorkerV2HsacoV1, ProtectedWorkerV2FinalizerLineageDecodeErrorV2,
+    ProtectedWorkerV2FinalizerLineageIdentityV2, ProtectedWorkerV2FinalizerLineageRouteV2,
+    ProtectedWorkerV2FinalizerLineageV2, WorkerV2HsacoFinalizationError,
+    finalize_inspected_protected_worker_v2_hsaco_v2,
+    finalize_inspected_protected_worker_v3_hsaco_v1, finalize_inspected_worker_v2_hsaco_v1,
 };
 pub use worker_v2_hsaco_publication::{
     PreparedFinalizedProtectedWorkerV2HsacoPublicationV2,

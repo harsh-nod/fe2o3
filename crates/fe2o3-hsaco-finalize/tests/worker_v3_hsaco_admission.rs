@@ -25,8 +25,9 @@ use fe2o3_hsaco_finalize::{
     ContentIdentityV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
     InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV2HsacoV1,
     InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1,
-    WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV2RawHsacoInspectionError,
-    execute_protected_reproducible_first_build_worker_v3,
+    WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV2HsacoFinalizationError,
+    WorkerV2RawHsacoInspectionError, execute_protected_reproducible_first_build_worker_v3,
+    finalize_inspected_protected_worker_v3_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
 };
@@ -189,6 +190,48 @@ fn native_v3_inspection_retains_every_boundary_axis_without_authority() {
     assert!(!inspected.grants_publication_authority());
     assert!(!inspected.grants_load_authority());
     assert!(!inspected.grants_launch_authority());
+}
+
+#[test]
+fn native_v3_finalization_fails_closed_without_descriptor_source_evidence() {
+    let raw = inspected(
+        scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup).bytes,
+        EvidenceConfig::BASE,
+    );
+    let raw_identity = raw.identity();
+    let source_identity = raw.source_evidence_identity();
+    let binding = raw.binding_identity();
+    let expected = raw.binding_expectation();
+    let raw_output = raw.raw_hsaco_identity();
+    let blocker = match finalize_inspected_protected_worker_v3_hsaco_v1(raw) {
+        Err(
+            WorkerV2HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
+                blocker,
+            ),
+        ) => blocker,
+        result => panic!("expected native V3 descriptor-source blocker, found {result:?}"),
+    };
+
+    assert_eq!(blocker.raw_inspection_identity(), raw_identity);
+    assert_eq!(blocker.source_evidence_identity(), source_identity);
+    assert_eq!(blocker.binding_identity(), binding);
+    assert_eq!(blocker.binding_expectation(), expected);
+    assert_eq!(blocker.attempt(), expected.attempt());
+    assert_eq!(blocker.handoff_slot(), expected.slot());
+    assert_eq!(
+        blocker.transaction_identity(),
+        expected.transaction_identity()
+    );
+    assert_eq!(
+        blocker.outer_handoff_identity(),
+        expected.outer_handoff_identity()
+    );
+    assert_eq!(blocker.compiler_closure(), expected.compiler_closure());
+    assert_eq!(blocker.raw_output_identity(), raw_output);
+    assert!(!blocker.may_infer_descriptor_claims_from_executable_metadata());
+    assert!(!blocker.grants_publication_authority());
+    assert!(!blocker.grants_load_authority());
+    assert!(!blocker.grants_launch_authority());
 }
 
 #[test]

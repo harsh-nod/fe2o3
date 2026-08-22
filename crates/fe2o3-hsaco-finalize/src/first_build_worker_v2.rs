@@ -20,8 +20,9 @@ use crate::{
     WorkerExecutionLimitsV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
     WorkerProtocolError, WorkerRequestConstructionError, WorkerRequestV2, WorkerResponseV2,
     request_construction::{
-        CompilerHandoffRequestBindingV2, DecodedCompilerModuleHandoffV2,
-        ProtectedCompilerHandoffBindingV2, construct_first_build_worker_request_v2_from_decoded,
+        CompilerHandoffRequestBindingV2, ConstructedCompilerHandoffWorkerRequestV2,
+        DecodedCompilerModuleHandoffV2, ProtectedCompilerHandoffBindingV2,
+        construct_first_build_worker_request_v2_from_decoded,
         construct_plan_worker_request_v2_from_decoded, decode_compiler_module_handoff_v2,
         decode_link_options, reconstruct_compiler_module_handoff_v2,
     },
@@ -820,6 +821,20 @@ pub(crate) struct FirstBuildWorkerV2EngineResult {
     pub(crate) protected_replay_validation: Option<ValidatedProtectedFirstBuildReplayV2>,
 }
 
+/// Deterministically validated first-build inputs prepared before worker execution.
+///
+/// This owner contains no process or artifact authority. Its construction performs every check
+/// that depends only on the handoff, configured providers/options/output bound, and measured worker
+/// identity. The candidate and replay request shapes are both validated before this value exists.
+pub(crate) struct FirstBuildWorkerV2EnginePreflight {
+    decoded: DecodedCompilerModuleHandoffV2,
+    external_providers: Vec<WorkerInputV1>,
+    link_options: Vec<LinkOptionV1>,
+    all_inputs: Vec<WorkerInputV1>,
+    candidate_request: ConstructedCompilerHandoffWorkerRequestV2,
+    candidate_request_bytes: Vec<u8>,
+}
+
 pub(crate) enum FirstBuildWorkerV2EngineError {
     LinkPlan(LinkPlanError),
     RequestConstruction(WorkerRequestConstructionError),
@@ -839,15 +854,14 @@ pub(crate) enum FirstBuildWorkerV2EngineError {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn execute_reproducible_first_build_worker_v2_engine(
+pub(crate) fn preflight_reproducible_first_build_worker_v2_engine(
     binding: CompilerHandoffRequestBindingV2<'_>,
     decoded: DecodedCompilerModuleHandoffV2,
     worker: &PinnedWorkerV1,
     mut external_providers: Vec<WorkerInputV1>,
     mut link_options: Vec<LinkOptionV1>,
     candidate_output_bound: WorkerOutputConstraintsV1,
-    limits: WorkerExecutionLimitsV1,
-) -> Result<FirstBuildWorkerV2EngineResult, FirstBuildWorkerV2EngineError> {
+) -> Result<FirstBuildWorkerV2EnginePreflight, FirstBuildWorkerV2EngineError> {
     canonicalize_options(&mut link_options)?;
     let (planned_code_object_version, options) = decode_link_options(&link_options)
         .map_err(FirstBuildWorkerV2EngineError::RequestConstruction)?;
@@ -877,13 +891,66 @@ pub(crate) fn execute_reproducible_first_build_worker_v2_engine(
         &decoded,
         external_providers.clone(),
         options,
-        candidate_output_bound,
+        candidate_output_bound.clone(),
     )
     .map_err(FirstBuildWorkerV2EngineError::RequestConstruction)?;
     let candidate_request_bytes = candidate_request
         .sealed_request()
         .canonical_bytes()
         .to_vec();
+
+    // The replay output identity is worker-produced, but its encoded shape and bounded length are
+    // fixed. Validate the complete replay request with a collision-free synthetic identity now so
+    // no configuration-only error remains after worker execution begins.
+    let synthetic_output =
+        synthetic_preflight_output_identity(&all_inputs, &candidate_output_bound);
+    let synthetic_plan = derive_plan(
+        decoded.target(),
+        &all_inputs,
+        link_options.clone(),
+        synthetic_output,
+    )?;
+    let input_kinds = LinkInputKindClosureV1::new(
+        &synthetic_plan,
+        all_inputs.iter().map(|input| input.kind()).collect(),
+    )
+    .map_err(FirstBuildWorkerV2EngineError::RequestConstruction)?;
+    construct_plan_worker_request_v2_from_decoded(
+        binding,
+        &synthetic_plan,
+        worker.measurement(),
+        &decoded,
+        external_providers.clone(),
+        &input_kinds,
+        candidate_output_bound.clone(),
+    )
+    .map_err(FirstBuildWorkerV2EngineError::RequestConstruction)?;
+
+    Ok(FirstBuildWorkerV2EnginePreflight {
+        decoded,
+        external_providers,
+        link_options,
+        all_inputs,
+        candidate_request,
+        candidate_request_bytes,
+    })
+}
+
+pub(crate) fn execute_preflighted_reproducible_first_build_worker_v2_engine(
+    binding: CompilerHandoffRequestBindingV2<'_>,
+    preflight: FirstBuildWorkerV2EnginePreflight,
+    worker: &PinnedWorkerV1,
+    limits: WorkerExecutionLimitsV1,
+) -> Result<FirstBuildWorkerV2EngineResult, FirstBuildWorkerV2EngineError> {
+    let FirstBuildWorkerV2EnginePreflight {
+        decoded,
+        external_providers,
+        link_options,
+        all_inputs,
+        candidate_request,
+        candidate_request_bytes,
+    } = preflight;
+
     let candidate = worker
         .execute_v2(candidate_request.sealed_request(), limits)
         .map_err(FirstBuildWorkerV2EngineError::CandidateExecution)?;
@@ -970,6 +1037,29 @@ pub(crate) fn execute_reproducible_first_build_worker_v2_engine(
         authorized,
         protected_replay_validation,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_reproducible_first_build_worker_v2_engine(
+    binding: CompilerHandoffRequestBindingV2<'_>,
+    decoded: DecodedCompilerModuleHandoffV2,
+    worker: &PinnedWorkerV1,
+    external_providers: Vec<WorkerInputV1>,
+    link_options: Vec<LinkOptionV1>,
+    candidate_output_bound: WorkerOutputConstraintsV1,
+    limits: WorkerExecutionLimitsV1,
+) -> Result<FirstBuildWorkerV2EngineResult, FirstBuildWorkerV2EngineError> {
+    let preflight = preflight_reproducible_first_build_worker_v2_engine(
+        binding,
+        decoded,
+        worker,
+        external_providers,
+        link_options,
+        candidate_output_bound,
+    )?;
+    execute_preflighted_reproducible_first_build_worker_v2_engine(
+        binding, preflight, worker, limits,
+    )
 }
 
 fn map_existing_engine_error(
@@ -1108,6 +1198,25 @@ fn reject_duplicate_content_identities(
         }
     }
     Ok(())
+}
+
+fn synthetic_preflight_output_identity(
+    inputs: &[WorkerInputV1],
+    output: &WorkerOutputConstraintsV1,
+) -> ContentIdentityV1 {
+    let mut counter = 0_u64;
+    loop {
+        let mut hasher = Sha256::new();
+        hasher.update(b"FE2O3/FIRST-BUILD/PREFLIGHT-OUTPUT/V1\0");
+        hasher.update(counter.to_le_bytes());
+        let identity = ContentIdentityV1::from_parts(hasher.finalize().into(), output.max_bytes());
+        if inputs.iter().all(|input| input.identity() != identity) {
+            return identity;
+        }
+        counter = counter
+            .checked_add(1)
+            .expect("finite bounded input identities cannot exhaust u64 preflight probes");
+    }
 }
 
 fn derive_plan(
