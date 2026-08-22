@@ -2,22 +2,23 @@ use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildInvocation, BuildSession,
     CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
-    PackageIdentityV1, PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
-    UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
-    WorkerV2PublicationIntentOutcomeV1, WorkerV3FinalizerReplayAttachmentsV1,
-    WorkerV3PublicationIntentBoundaryV1, WorkerV3PublicationIntentCodecErrorV1,
-    WorkerV3PublicationIntentErrorV1, WorkerV3PublicationIntentFaultPointV1,
-    WorkerV3PublicationIntentFaultTimingV1, WorkerV3PublicationIntentInvalidReasonV1,
-    WorkerV3PublicationIntentOptionsV1, WorkerV3PublicationIntentOutcomeV1, begin_build_attempt,
-    persist_worker_v2_publication_intent_v1, persist_worker_v3_publication_intent_v1,
-    persist_worker_v3_publication_intent_v1_with_options,
+    MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1, PackageIdentityV1, PinnedWorkerIdentityV1,
+    ProducerIdentity, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+    ValidatedResponseIdentityV1, WorkerV2PublicationIntentOutcomeV1,
+    WorkerV3FinalizerReplayAttachmentsV1, WorkerV3PublicationIntentBoundaryV1,
+    WorkerV3PublicationIntentCodecErrorV1, WorkerV3PublicationIntentErrorV1,
+    WorkerV3PublicationIntentFaultPointV1, WorkerV3PublicationIntentFaultTimingV1,
+    WorkerV3PublicationIntentInvalidReasonV1, WorkerV3PublicationIntentOptionsV1,
+    WorkerV3PublicationIntentOutcomeV1, WorkerV3PublicationIntentScavengeOutcomeV1,
+    begin_build_attempt, persist_worker_v2_publication_intent_v1,
+    persist_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1_with_options,
     publish_exact_hsaco_evidence_for_attempt_v1, recover_worker_v2_publication_intent_v1,
-    recover_worker_v3_publication_intent_v1,
+    recover_worker_v3_publication_intent_v1, scavenge_worker_v3_publication_intent_occurrence_v1,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
@@ -114,8 +115,34 @@ fn replay(transcript: &[u8]) -> WorkerV3FinalizerReplayAttachmentsV1 {
     .unwrap()
 }
 
+fn replay_parts(
+    outer: &[u8],
+    providers: &[&[u8]],
+    transcript: &[u8],
+) -> WorkerV3FinalizerReplayAttachmentsV1 {
+    WorkerV3FinalizerReplayAttachmentsV1::new(
+        outer.to_vec(),
+        providers.iter().map(|payload| payload.to_vec()).collect(),
+        transcript.to_vec(),
+    )
+    .unwrap()
+}
+
+fn v3_namespace_entries(output: &Path) -> Vec<PathBuf> {
+    fs::read_dir(output)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".fe2o3-worker-v3-publication-intent-v1-")
+        })
+        .collect()
+}
+
 #[test]
-fn deduplicated_replay_inputs_and_output_round_trip_inertly_after_restart() {
+fn compact_replay_inputs_and_output_round_trip_inertly_after_restart() {
     let temp = TestDirectory::new();
     let output_dir = temp.output();
     let producer = producer(1);
@@ -311,6 +338,27 @@ fn every_durable_boundary_is_idempotently_recoverable() {
             Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { point: actual })
                 if actual == point
         ));
+        let record_recoverable = matches!(
+            boundary,
+            WorkerV3PublicationIntentBoundaryV1::SyncRedoName
+                | WorkerV3PublicationIntentBoundaryV1::RenameRedoToCanonical
+                | WorkerV3PublicationIntentBoundaryV1::SyncCanonicalName
+        ) || (boundary
+            == WorkerV3PublicationIntentBoundaryV1::RenameRecordToRedo
+            && timing == WorkerV3PublicationIntentFaultTimingV1::After);
+        let direct_recovery =
+            recover_worker_v3_publication_intent_v1(&output_dir, &producer, attempt);
+        if record_recoverable {
+            let recovered = direct_recovery.unwrap();
+            assert_eq!(recovered.exact_output(), output);
+            assert_eq!(recovered.finalizer_replay_transcript(), transcript);
+        } else {
+            assert!(matches!(
+                direct_recovery,
+                Err(WorkerV3PublicationIntentErrorV1::NotFound)
+            ));
+            assert!(v3_namespace_entries(&output_dir).is_empty());
+        }
         let reconciled = persist_worker_v3_publication_intent_v1(
             &output_dir,
             &producer,
@@ -320,6 +368,14 @@ fn every_durable_boundary_is_idempotently_recoverable() {
             output.clone(),
         )
         .unwrap();
+        assert_eq!(
+            reconciled.outcome(),
+            if record_recoverable {
+                WorkerV3PublicationIntentOutcomeV1::Recovered
+            } else {
+                WorkerV3PublicationIntentOutcomeV1::Persisted
+            }
+        );
         assert_eq!(reconciled.exact_output(), output);
         assert_eq!(reconciled.finalizer_replay_transcript(), transcript);
         let restarted =
@@ -328,6 +384,246 @@ fn every_durable_boundary_is_idempotently_recoverable() {
         assert_eq!(restarted.exact_output(), output);
         assert_eq!(restarted.finalizer_replay_transcript(), transcript);
     }
+}
+
+#[test]
+fn same_input_retry_revalidates_and_reuses_every_canonical_attachment() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let producer = producer(84);
+    let attempt = begin(&output_dir, &producer, 85);
+    let output = b"same retry output";
+    let transcript = b"same retry transcript";
+    let publication_plan = plan(attempt, output, 86);
+    let point = WorkerV3PublicationIntentFaultPointV1 {
+        boundary: WorkerV3PublicationIntentBoundaryV1::RenameOutput,
+        timing: WorkerV3PublicationIntentFaultTimingV1::After,
+    };
+    assert!(matches!(
+        persist_worker_v3_publication_intent_v1_with_options(
+            &output_dir,
+            &producer,
+            attempt,
+            publication_plan,
+            replay(transcript),
+            output.to_vec(),
+            WorkerV3PublicationIntentOptionsV1::inject_crash(point),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { .. })
+    ));
+    let before = [".handoff", ".providers", ".transcript", ".output"].map(|suffix| {
+        let path = intent_entry(&output_dir, suffix);
+        (
+            path,
+            fs::metadata(intent_entry(&output_dir, suffix))
+                .unwrap()
+                .ino(),
+        )
+    });
+
+    let persisted = persist_worker_v3_publication_intent_v1(
+        &output_dir,
+        &producer,
+        attempt,
+        publication_plan,
+        replay(transcript),
+        output.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        persisted.outcome(),
+        WorkerV3PublicationIntentOutcomeV1::Persisted
+    );
+    for (path, inode) in before {
+        assert_eq!(fs::metadata(path).unwrap().ino(), inode);
+    }
+}
+
+#[test]
+fn different_input_retry_replaces_the_complete_uncommitted_attachment_set() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let producer = producer(88);
+    let attempt = begin(&output_dir, &producer, 89);
+    let old_output = b"old finalized output";
+    let point = WorkerV3PublicationIntentFaultPointV1 {
+        boundary: WorkerV3PublicationIntentBoundaryV1::RenameOutput,
+        timing: WorkerV3PublicationIntentFaultTimingV1::After,
+    };
+    assert!(matches!(
+        persist_worker_v3_publication_intent_v1_with_options(
+            &output_dir,
+            &producer,
+            attempt,
+            plan(attempt, old_output, 90),
+            replay_parts(
+                b"old outer handoff",
+                &[b"old provider"],
+                b"old transcript",
+            ),
+            old_output.to_vec(),
+            WorkerV3PublicationIntentOptionsV1::inject_crash(point),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { point: actual }) if actual == point
+    ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), 4);
+
+    let new_output = b"new finalized output";
+    let persisted = persist_worker_v3_publication_intent_v1(
+        &output_dir,
+        &producer,
+        attempt,
+        plan(attempt, new_output, 91),
+        replay_parts(
+            b"new outer handoff",
+            &[b"new provider alpha", b"new provider beta"],
+            b"new transcript",
+        ),
+        new_output.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        persisted.outcome(),
+        WorkerV3PublicationIntentOutcomeV1::Persisted
+    );
+    assert_eq!(persisted.outer_handoff(), b"new outer handoff");
+    assert_eq!(persisted.external_providers().len(), 2);
+    assert_eq!(persisted.finalizer_replay_transcript(), b"new transcript");
+    assert_eq!(persisted.exact_output(), new_output);
+
+    let recovered =
+        recover_worker_v3_publication_intent_v1(&output_dir, &producer, attempt).unwrap();
+    assert_eq!(recovered.outer_handoff(), b"new outer handoff");
+    assert_eq!(
+        recovered.external_providers().get(0),
+        Some(&b"new provider alpha"[..])
+    );
+    assert_eq!(recovered.exact_output(), new_output);
+}
+
+#[test]
+fn superseded_same_producer_can_scavenge_only_an_uncommitted_exact_namespace() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let producer = producer(92);
+    let stale = begin(&output_dir, &producer, 93);
+    let output = b"abandoned output";
+    let point = WorkerV3PublicationIntentFaultPointV1 {
+        boundary: WorkerV3PublicationIntentBoundaryV1::RenameOutput,
+        timing: WorkerV3PublicationIntentFaultTimingV1::After,
+    };
+    assert!(matches!(
+        persist_worker_v3_publication_intent_v1_with_options(
+            &output_dir,
+            &producer,
+            stale,
+            plan(stale, output, 94),
+            replay(b"abandoned transcript"),
+            output.to_vec(),
+            WorkerV3PublicationIntentOptionsV1::inject_crash(point),
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::InjectedCrash { .. })
+    ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), 4);
+    let current = begin(&output_dir, &producer, 95);
+    assert!(current.generation() > stale.generation());
+
+    assert_eq!(
+        scavenge_worker_v3_publication_intent_occurrence_v1(&output_dir, &producer, stale).unwrap(),
+        WorkerV3PublicationIntentScavengeOutcomeV1::Removed { entries: 4 }
+    );
+    assert!(v3_namespace_entries(&output_dir).is_empty());
+    assert_eq!(
+        scavenge_worker_v3_publication_intent_occurrence_v1(&output_dir, &producer, stale).unwrap(),
+        WorkerV3PublicationIntentScavengeOutcomeV1::NotFound
+    );
+
+    let current_output = b"current committed output";
+    persist_worker_v3_publication_intent_v1(
+        &output_dir,
+        &producer,
+        current,
+        plan(current, current_output, 96),
+        replay(b"current transcript"),
+        current_output.to_vec(),
+    )
+    .unwrap();
+    let _successor = begin(&output_dir, &producer, 97);
+    assert!(matches!(
+        scavenge_worker_v3_publication_intent_occurrence_v1(&output_dir, &producer, current),
+        Err(WorkerV3PublicationIntentErrorV1::CommittedIntentCannotBeScavenged)
+    ));
+}
+
+#[test]
+fn scavenge_rejects_wrong_authority_and_unsafe_exact_entries_without_partial_cleanup() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let producer = producer(98);
+    let stale = begin(&output_dir, &producer, 99);
+    let output = b"unsafe abandoned output";
+    let point = WorkerV3PublicationIntentFaultPointV1 {
+        boundary: WorkerV3PublicationIntentBoundaryV1::RenameOutput,
+        timing: WorkerV3PublicationIntentFaultTimingV1::After,
+    };
+    assert!(
+        persist_worker_v3_publication_intent_v1_with_options(
+            &output_dir,
+            &producer,
+            stale,
+            plan(stale, output, 100),
+            replay(b"unsafe transcript"),
+            output.to_vec(),
+            WorkerV3PublicationIntentOptionsV1::inject_crash(point),
+        )
+        .is_err()
+    );
+    let wrong_producer =
+        ProducerIdentity::from_codegen("wrong_crate_name", Some(Path::new("/src/worker-v3-98.rs")))
+            .unwrap();
+    assert!(matches!(
+        scavenge_worker_v3_publication_intent_occurrence_v1(&output_dir, &wrong_producer, stale,),
+        Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized)
+    ));
+
+    let _current = begin(&output_dir, &producer, 103);
+    let unsafe_entry = intent_entry(&output_dir, ".transcript");
+    fs::remove_file(&unsafe_entry).unwrap();
+    symlink("nonexistent", &unsafe_entry).unwrap();
+    let entries_before = v3_namespace_entries(&output_dir).len();
+    assert!(matches!(
+        scavenge_worker_v3_publication_intent_occurrence_v1(&output_dir, &producer, stale),
+        Err(WorkerV3PublicationIntentErrorV1::InvalidIntent {
+            reason: WorkerV3PublicationIntentInvalidReasonV1::EntryNotPrivate,
+            ..
+        })
+    ));
+    assert_eq!(v3_namespace_entries(&output_dir).len(), entries_before);
+}
+
+#[test]
+fn persist_rejects_oversized_spare_output_capacity_before_writing() {
+    let temp = TestDirectory::new();
+    let output_dir = temp.output();
+    let producer = producer(104);
+    let attempt = begin(&output_dir, &producer, 105);
+    let mut output = Vec::with_capacity(MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1 + 1);
+    output.extend_from_slice(b"small output in oversized owner");
+    let publication_plan = plan(attempt, &output, 106);
+    assert!(matches!(
+        persist_worker_v3_publication_intent_v1(
+            &output_dir,
+            &producer,
+            attempt,
+            publication_plan,
+            replay(b"capacity transcript"),
+            output,
+        ),
+        Err(WorkerV3PublicationIntentErrorV1::Codec(
+            WorkerV3PublicationIntentCodecErrorV1::InvalidOutputCapacity { .. }
+        ))
+    ));
+    assert!(v3_namespace_entries(&output_dir).is_empty());
 }
 
 #[test]
