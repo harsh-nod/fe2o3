@@ -22,11 +22,11 @@ use fe2o3_artifact_transaction::{
     RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
     WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentErrorV2,
     WorkerV2PublicationIntentRecordV2, begin_build_attempt, clear_worker_v2_publication_intent_v1,
-    clear_worker_v2_publication_intent_v2, consume_compiler_module_handoff_v1,
-    consume_compiler_module_handoff_v2, fail_build_attempt, finish_build_attempt,
-    publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
-    read_backend_publication_receipt_v1, read_backend_publication_receipt_v2,
-    recover_published_hsaco_claim_for_attempt_v1, recover_published_hsaco_claim_for_attempt_v2,
+    clear_worker_v2_publication_intent_v2, consume_compiler_module_handoff_v1, fail_build_attempt,
+    finish_build_attempt, publish_exact_hsaco_evidence_for_attempt_v1,
+    publish_exact_hsaco_evidence_for_attempt_v2, read_backend_publication_receipt_v1,
+    read_backend_publication_receipt_v2, recover_published_hsaco_claim_for_attempt_v1,
+    recover_published_hsaco_claim_for_attempt_v2,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{CompilerModuleHandoffV2, decode_row_softmax_compiler_sections_v1};
@@ -63,6 +63,9 @@ use crate::inert_rustc_invocation_capture::{
 use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
+use crate::protected_compiler_handoff_v3::{
+    ParentRustcInvocationCustody, ProtectedCompilerModuleHandoffIntake,
+};
 use crate::worker_v2::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
     PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
@@ -455,7 +458,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         .as_ref()
         .is_some_and(ManagedAttempt::is_worker_v2_recovery)
     {
-        complete_managed_attempt(managed_attempt.expect("managed recovery exists"))?;
+        complete_managed_attempt(managed_attempt.expect("managed recovery exists"), None)?;
         return Ok(success_exit_status());
     }
 
@@ -685,10 +688,15 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     .map_err(|error| BindingWrapperError::CapabilityBroker(error.to_string()))?;
             capabilities.prepare_invocation_authority(claim)?;
         }
+        let parent_rustc_invocation_custody = ParentRustcInvocationCustody::retain(
+            inert_rustc_invocation,
+            rustc_invocation_capability,
+        )
+        .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))?;
         let status = command.status();
-        Ok((status, inert_rustc_invocation, rustc_invocation_capability))
+        Ok((status, parent_rustc_invocation_custody))
     })();
-    let (status, inert_rustc_invocation, rustc_invocation_capability) = match pre_spawn_result {
+    let (status, parent_rustc_invocation_custody) = match pre_spawn_result {
         Ok(prepared) => {
             if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
                 guard.disarm();
@@ -699,10 +707,6 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             return Err(pre_spawn_failure(pre_spawn_attempt_guard.as_mut(), primary));
         }
     };
-    // Keep the in-memory descriptor alive across the exact spawn it describes.
-    drop(inert_rustc_invocation);
-    // Keep the immutable transport object alive across the same spawn boundary.
-    drop(rustc_invocation_capability);
     let status = match status {
         Ok(status) => status,
         Err(error) => {
@@ -737,7 +741,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     return Err(BindingWrapperError::ManagedCompletion { primary, cleanup });
                 }
             }
-            complete_managed_attempt(managed)?;
+            complete_managed_attempt(managed, parent_rustc_invocation_custody)?;
         } else if let Err(cleanup) =
             fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
         {
@@ -3058,68 +3062,22 @@ fn prepare_managed_attempt(
     Ok(managed)
 }
 
-fn complete_managed_attempt(mut managed: ManagedAttempt) -> Result<(), BindingWrapperError> {
-    let completion = (|| -> Result<(), CompletionFailure> {
-        if managed.row_softmax_provision {
-            return complete_row_softmax_v1_provision(&managed);
-        }
-        if let Some(worker_v2) = managed.worker_v2.take() {
-            return match worker_v2 {
-                ManagedWorkerV2::InProcessGeneralGemm { config } => {
-                    debug_assert!(config.executes_worker_in_rustc());
-                    debug_assert!(config.general_gemm_v1().is_some());
-                    Err(CompletionFailure::Uncommitted(
-                        "in-process general-GEMM qualification remains inert until rustc's private frontend correspondence and final join are connected"
-                            .to_owned(),
-                    ))
-                }
-                ManagedWorkerV2::FreshV1 {
-                    config,
-                    envelope_inputs,
-                    resume,
-                } => complete_fresh_worker_v2(
-                    &mut managed,
-                    &config,
-                    envelope_inputs.as_ref(),
-                    &resume,
-                ),
-                ManagedWorkerV2::RecoveryV1 { resume, state } => {
-                    complete_recovered_worker_v2(&managed, &resume, *state)
-                }
-                ManagedWorkerV2::FreshV2 {
-                    config,
-                    envelope_inputs,
-                    resume,
-                    compiler_closure,
-                    producer_binding,
-                } => complete_fresh_protected_worker_v2(
-                    &managed,
-                    &config,
-                    envelope_inputs.as_ref(),
-                    &resume,
-                    compiler_closure,
-                    &producer_binding,
-                ),
-                ManagedWorkerV2::RecoveryV2 {
-                    resume,
-                    state,
-                    compiler_closure,
-                    producer_binding,
-                } => complete_recovered_protected_worker_v2(
-                    &managed,
-                    &resume,
-                    *state,
-                    compiler_closure,
-                    &producer_binding,
-                ),
-            };
-        }
-        finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
-            |error| {
-                CompletionFailure::Uncommitted(format!("build-attempt completion failed: {error}"))
-            },
-        )
-    })();
+fn complete_managed_attempt(
+    mut managed: ManagedAttempt,
+    parent_rustc_invocation_custody: Option<ParentRustcInvocationCustody>,
+) -> Result<(), BindingWrapperError> {
+    let completion = match parent_rustc_invocation_custody {
+        Some(custody) => custody.retain_through(|custody| {
+            custody.revalidate().map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "parent protected rustc invocation custody failed before managed completion: {error}"
+                ))
+            })?;
+            debug_assert!(!custody.grants_compiler_authority());
+            complete_managed_attempt_inner(&mut managed)
+        }),
+        None => complete_managed_attempt_inner(&mut managed),
+    };
 
     match completion {
         Ok(()) => Ok(()),
@@ -3135,6 +3093,61 @@ fn complete_managed_attempt(mut managed: ManagedAttempt) -> Result<(), BindingWr
             })
         }
     }
+}
+
+fn complete_managed_attempt_inner(managed: &mut ManagedAttempt) -> Result<(), CompletionFailure> {
+    if managed.row_softmax_provision {
+        return complete_row_softmax_v1_provision(managed);
+    }
+    if let Some(worker_v2) = managed.worker_v2.take() {
+        return match worker_v2 {
+            ManagedWorkerV2::InProcessGeneralGemm { config } => {
+                debug_assert!(config.executes_worker_in_rustc());
+                debug_assert!(config.general_gemm_v1().is_some());
+                Err(CompletionFailure::Uncommitted(
+                    "in-process general-GEMM qualification remains inert until rustc's private frontend correspondence and final join are connected"
+                        .to_owned(),
+                ))
+            }
+            ManagedWorkerV2::FreshV1 {
+                config,
+                envelope_inputs,
+                resume,
+            } => complete_fresh_worker_v2(managed, &config, envelope_inputs.as_ref(), &resume),
+            ManagedWorkerV2::RecoveryV1 { resume, state } => {
+                complete_recovered_worker_v2(managed, &resume, *state)
+            }
+            ManagedWorkerV2::FreshV2 {
+                config,
+                envelope_inputs,
+                resume,
+                compiler_closure,
+                producer_binding,
+            } => complete_fresh_protected_worker_v2(
+                managed,
+                &config,
+                envelope_inputs.as_ref(),
+                &resume,
+                compiler_closure,
+                &producer_binding,
+            ),
+            ManagedWorkerV2::RecoveryV2 {
+                resume,
+                state,
+                compiler_closure,
+                producer_binding,
+            } => complete_recovered_protected_worker_v2(
+                managed,
+                &resume,
+                *state,
+                compiler_closure,
+                &producer_binding,
+            ),
+        };
+    }
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
+        CompletionFailure::Uncommitted(format!("build-attempt completion failed: {error}"))
+    })
 }
 
 fn row_softmax_provisioning_requested() -> bool {
@@ -3362,17 +3375,14 @@ fn complete_fresh_protected_worker_v2(
         ));
     }
 
-    let consumed = consume_compiler_module_handoff_v2(
-        &managed.output_dir,
-        &managed.producer,
-        managed.attempt,
-        compiler_closure,
-    )
-    .map_err(|error| {
-        CompletionFailure::Uncommitted(format!(
-            "protected compiler-module V2 handoff consumption failed: {error}"
-        ))
-    })?;
+    let intake = ProtectedCompilerModuleHandoffIntake::protected_v2(compiler_closure);
+    let consumed = intake
+        .consume_v2(&managed.output_dir, &managed.producer, managed.attempt)
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "protected compiler-module V2 handoff consumption failed: {error}"
+            ))
+        })?;
     let evidence = worker_v2.execute_protected(consumed).map_err(|error| {
         CompletionFailure::Uncommitted(format!(
             "closure-bound reproducible Worker V2 execution failed: {error}"
