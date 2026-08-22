@@ -280,6 +280,27 @@ impl ProtectedCompilerHandoffBindingV3 {
         )
     }
 
+    /// Rederives a binding after restart from the durable occurrence and compact V2 transcript.
+    ///
+    /// The slot and transaction identity are inert transaction observations. Every semantic,
+    /// invocation, closure, pair, nested-handoff, and final-commitment axis is independently
+    /// recovered from the exact outer handoff rather than accepted from replay metadata.
+    pub(crate) fn from_replay_parts(
+        handoff: &InertSemanticCompilerModuleHandoffV3,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV3,
+        transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+    ) -> Result<Self, ProtectedCompilerHandoffBindingErrorV3> {
+        Self::from_handoff_parts(
+            handoff,
+            attempt,
+            slot,
+            transaction_identity,
+            handoff.canonical_bytes().len(),
+            *handoff.capsule().compiler_closure(),
+        )
+    }
+
     fn from_handoff_parts(
         handoff: &InertSemanticCompilerModuleHandoffV3,
         attempt: BuildAttempt,
@@ -683,6 +704,72 @@ impl InertProtectedFirstBuildWorkerV3EvidenceV1 {
             replay_response: replay.execution.into_response(),
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn recover_inert_protected_first_build_worker_v3_evidence_v1(
+    binding: ProtectedCompilerHandoffBindingV3,
+    handoff: InertSemanticCompilerModuleHandoffV3,
+    worker: WorkerMeasurementV1,
+    execution_limits: WorkerExecutionLimitsV1,
+    plan: MultiInputLinkPlanV1,
+    bootstrap_request_bytes: Vec<u8>,
+    bootstrap_response: WorkerResponseV2,
+    replay_request_bytes: Vec<u8>,
+    replay_response: WorkerResponseV2,
+) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
+    let decoded = crate::request_construction::decode_compiler_module_handoff_v2(
+        handoff.module_handoff().canonical_bytes(),
+    )
+    .map_err(ProtectedFirstBuildWorkerV3Error::CompilerModuleHandoff)?;
+    let validation = validate_replay_parts(
+        binding,
+        &worker,
+        &decoded,
+        &plan,
+        &bootstrap_request_bytes,
+        &bootstrap_response,
+        &replay_request_bytes,
+        &replay_response,
+    )?;
+    let identity = calculate_evidence_identity_parts(
+        binding,
+        &worker,
+        execution_limits,
+        &plan,
+        &bootstrap_request_bytes,
+        bootstrap_response.canonical_bytes(),
+        &replay_request_bytes,
+        replay_response.canonical_bytes(),
+    )?;
+    let worker_executable = worker.executable();
+    let bootstrap = InertProtectedCompilerHandoffExecutionV3::from_execution(
+        binding,
+        crate::worker_executor::InertWorkerExecutionV2::from_recovered_response(
+            worker_executable,
+            bootstrap_response,
+        ),
+    );
+    let replay = InertProtectedCompilerHandoffExecutionV3::from_execution(
+        binding,
+        crate::worker_executor::InertWorkerExecutionV2::from_recovered_response(
+            worker_executable,
+            replay_response,
+        ),
+    );
+    Ok(InertProtectedFirstBuildWorkerV3EvidenceV1 {
+        identity,
+        binding,
+        handoff,
+        worker,
+        execution_limits,
+        plan,
+        bootstrap_request_bytes,
+        bootstrap,
+        replay_request_bytes,
+        replay,
+        _validation: validation,
+    })
 }
 
 /// Failure from the native strict-V3 bootstrap and exact replay workflow.

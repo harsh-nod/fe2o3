@@ -474,6 +474,16 @@ impl InertProtectedCompilerHandoffExecutionV2 {
 
 #[allow(dead_code)]
 impl InertWorkerExecutionV2 {
+    pub(crate) const fn from_recovered_response(
+        worker_executable: ContentIdentityV1,
+        response: WorkerResponseV2,
+    ) -> Self {
+        Self {
+            worker_executable,
+            response,
+        }
+    }
+
     pub const fn worker_executable(&self) -> ContentIdentityV1 {
         self.worker_executable
     }

@@ -378,8 +378,7 @@ pub(crate) struct WorkerResponseReplayMetadataV1<'response> {
 }
 
 impl<'response> WorkerResponseReplayMetadataV1<'response> {
-    #[cfg(test)]
-    pub(crate) const fn from_test_bodies(
+    pub(crate) const fn from_bodies(
         diagnostics_body: &'response [u8],
         provider_evidence_body: Option<&'response [u8]>,
     ) -> Self {
@@ -389,6 +388,14 @@ impl<'response> WorkerResponseReplayMetadataV1<'response> {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) const fn from_test_bodies(
+        diagnostics_body: &'response [u8],
+        provider_evidence_body: Option<&'response [u8]>,
+    ) -> Self {
+        Self::from_bodies(diagnostics_body, provider_evidence_body)
+    }
+
     pub(crate) const fn diagnostics_body(&self) -> &'response [u8] {
         self.diagnostics_body
     }
@@ -396,6 +403,75 @@ impl<'response> WorkerResponseReplayMetadataV1<'response> {
     pub(crate) const fn provider_evidence_body(&self) -> Option<&'response [u8]> {
         self.provider_evidence_body
     }
+}
+
+/// Reconstructs and strictly decodes one complete canonical success response after restart.
+///
+/// The request supplies every sealed request axis. Metadata bodies are validated as canonical
+/// field bodies before they are framed, and `output` is measured rather than paired with a
+/// caller-selected identity.
+pub(crate) fn reconstruct_complete_worker_response_v2(
+    request: &WorkerRequestV2,
+    output: &[u8],
+    metadata: WorkerResponseReplayMetadataV1<'_>,
+) -> Result<WorkerResponseV2, WorkerProtocolError> {
+    validate_worker_response_replay_metadata_bodies_v1(
+        metadata.diagnostics_body(),
+        metadata.provider_evidence_body(),
+    )?;
+    let output_identity = ContentIdentityV1::calculate(output);
+    let output_body_len = 1_usize
+        .checked_add(32 + 8)
+        .and_then(|value| value.checked_add(output.len()))
+        .ok_or(WorkerProtocolError::IntegerOverflow)?;
+    let mut output_body = fallible_vec(output_body_len, "reconstructed response output")?;
+    output_body.push(1);
+    output_body.extend_from_slice(output_identity.sha256());
+    output_body.extend_from_slice(&output_identity.byte_len().to_le_bytes());
+    output_body.extend_from_slice(output);
+
+    let provider = metadata.provider_evidence_body();
+    let magic = if provider.is_some() {
+        WORKER_RESPONSE_MAGIC_V3
+    } else {
+        WORKER_RESPONSE_MAGIC_V2
+    };
+    let estimated_len = magic
+        .len()
+        .checked_add(7 * 6)
+        .and_then(|value| value.checked_add(32 + 32 + 32 + 1))
+        .and_then(|value| value.checked_add(request.worker_build_identity().len()))
+        .and_then(|value| value.checked_add(metadata.diagnostics_body().len()))
+        .and_then(|value| value.checked_add(output_body.len()))
+        .and_then(|value| {
+            provider.map_or(Some(value), |body| {
+                value.checked_add(2 * 6 + body.len() + 32)
+            })
+        })
+        .ok_or(WorkerProtocolError::IntegerOverflow)?;
+    if estimated_len > MAX_WORKER_RESPONSE_BYTES {
+        return Err(WorkerProtocolError::ResponseTooLarge);
+    }
+    let mut encoded = fallible_vec(estimated_len, "reconstructed response wire")?;
+    encoded.extend_from_slice(magic);
+    push_field(&mut encoded, 1, request.request_id())?;
+    push_field(&mut encoded, 2, request.identity())?;
+    push_field(
+        &mut encoded,
+        3,
+        &request.compiler_envelope_identity().as_bytes(),
+    )?;
+    push_field(&mut encoded, 4, request.worker_build_identity().as_bytes())?;
+    push_field(&mut encoded, 5, &[WorkerStageV1::Complete as u8])?;
+    push_field(&mut encoded, 6, metadata.diagnostics_body())?;
+    push_field(&mut encoded, 7, &output_body)?;
+    if let Some(provider) = provider {
+        push_field(&mut encoded, 8, provider)?;
+        let response_identity = calculate_response_identity(&encoded);
+        push_field(&mut encoded, 9, &response_identity)?;
+    }
+    debug_assert_eq!(encoded.len(), estimated_len);
+    WorkerResponseV2::decode_for_request(&encoded, request)
 }
 
 /// Canonical worker response decoded only in the context of one sealed V2 request.
