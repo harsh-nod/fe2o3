@@ -23,10 +23,10 @@ pub open spec fn profile_identity_v1() -> Seq<u64> {
 /// SHA-256 limbs for the exact public `src/kernel.rs` at this boundary.
 pub open spec fn source_identity_v1() -> Seq<u64> {
     seq![
-        0xa10fcfb5ebc3fc13u64,
-        0x19aa36a951d86f0fu64,
-        0xdcdab9ec62708c89u64,
-        0xea10f3b5a51fb717u64,
+        0x6dbaa2af88fd5edcu64,
+        0xdf0485f3da47b131u64,
+        0x9ce299422a77b99au64,
+        0xf56f9a3e77c2a421u64,
     ]
 }
 

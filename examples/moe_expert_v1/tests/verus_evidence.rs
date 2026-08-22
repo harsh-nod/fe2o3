@@ -12,7 +12,7 @@ const CLOSURE_MANIFEST: &[u8] = include_bytes!("../../row_softmax_v1/verus/VERUS
 const TRANSCRIPT: &str = "FE2O3_MOE_EXPERT_MEMORY_V1_VERUS_OK mutations=6 obligations=15";
 
 const PROOF_SHA256: &str = "617e6741c5f1415a8e792e5e36e3526c04ba18903438e3af178bb107766383d1";
-const KERNEL_SHA256: &str = "aeb772a09c7a81e624b72e7e9a84f7b7cd8f63110d3ced5ed975c0104036f8ba";
+const KERNEL_SHA256: &str = "5ae3cfe59494347838fe4160c99c5b67968642d26550c01e27d2ee1247511aec";
 const RUNNER_SHA256: &str = "140acb3aadc38d59d7e485e7d2044dfed5d03219af16d4fc58c7eeb23c41dc29";
 const NEGATIVE_MANIFEST_SHA256: &str =
     "b4690271f253f42bacd387698930064a48f191db5af5743d4cad8ba49084efec";
@@ -30,7 +30,7 @@ fn sha256(bytes: &[u8]) -> String {
 #[test]
 fn proof_kernel_runner_closure_mutations_and_transcript_are_pinned() {
     assert_eq!(PROOF.len(), 6_720);
-    assert_eq!(KERNEL.len(), 6_980);
+    assert_eq!(KERNEL.len(), 6_103);
     assert_eq!(sha256(PROOF), PROOF_SHA256);
     assert_eq!(sha256(KERNEL), KERNEL_SHA256);
     assert_eq!(sha256(RUNNER.as_bytes()), RUNNER_SHA256);

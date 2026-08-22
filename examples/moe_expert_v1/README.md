@@ -76,7 +76,7 @@ Those V2 mechanics do not create an executable path. There is no production
 issuer for completion/readback provenance or the expert-weight binding, making
 safe upload and preparation constructively unreachable. V2 grants no artifact,
 copy, load, or dispatch authority and proves no routing/expert semantics,
-source-to-machine refinement, generalized memory safety or race freedom, or
+source/model-to-machine refinement, generalized memory safety or race freedom, or
 numerical correctness. The V1 `gfx942` offsets/inverse upload-readback test is
 not V2 evidence; no V2 GPU observation or parity promotion is claimed.
 

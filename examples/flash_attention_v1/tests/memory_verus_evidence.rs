@@ -9,8 +9,8 @@ const CLOSURE: &[u8] = include_bytes!("../verus/MEMORY_VERUS_CLOSURE_MANIFEST");
 const RUNNER: &str = include_str!("../run-memory-verus.sh");
 const NEGATIVES: &str = include_str!("../verus/MEMORY_NEGATIVE_SHA256");
 
-const PROOF_SHA256: &str = "21e862ab2c9798dd808b9d75d3aa1ea1476ad382c7cf05f0a48035f5251af7f4";
-const KERNEL_SHA256: &str = "a10fcfb5ebc3fc1319aa36a951d86f0fdcdab9ec62708c89ea10f3b5a51fb717";
+const PROOF_SHA256: &str = "b31171a3e41633c63797edca7599add8598156caee7a42d19d6d74475bd44cc4";
+const KERNEL_SHA256: &str = "6dbaa2af88fd5edcdf0485f3da47b1319ce299422a77b99af56f9a3e77c2a421";
 const CLOSURE_SHA256: &str = "f06883e4ce463bcb9a3c8f911064ac85054c7822dc331db1a79f75f9e8878b01";
 const TRANSCRIPT: &str = "FE2O3_FLASH_ATTENTION_MEMORY_V1_VERUS_OK mutations=8 obligations=13";
 const TRANSCRIPT_SHA256: &str = "b72d9ec94325fc134abe7f1aa0f1bb434f2d14882807497eadb43c2746f369f5";
