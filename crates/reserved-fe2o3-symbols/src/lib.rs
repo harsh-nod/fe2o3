@@ -611,10 +611,11 @@ fn consume_device_ffi_physical_type_v1(input: &str) -> Option<(DeviceFfiPhysical
 
     let (access, rest) = if let Some(rest) = input.strip_prefix("const_ptr<") {
         (DeviceFfiPointerAccessV1::Const, rest)
-    } else if let Some(rest) = input.strip_prefix("mut_ptr<") {
-        (DeviceFfiPointerAccessV1::Mut, rest)
     } else {
-        return None;
+        (
+            DeviceFfiPointerAccessV1::Mut,
+            input.strip_prefix("mut_ptr<")?,
+        )
     };
     let (address_space, rest, suffix) = if let Some(rest) = rest.strip_prefix("constant,") {
         (
@@ -634,14 +635,12 @@ fn consume_device_ffi_physical_type_v1(input: &str) -> Option<(DeviceFfiPhysical
             rest,
             ">[size=8,align=8,as=private]",
         )
-    } else if let Some(rest) = rest.strip_prefix("workgroup,") {
+    } else {
         (
             DeviceFfiAddressSpaceV1::Workgroup,
-            rest,
+            rest.strip_prefix("workgroup,")?,
             ">[size=8,align=8,as=workgroup]",
         )
-    } else {
-        return None;
     };
     if access == DeviceFfiPointerAccessV1::Mut && address_space == DeviceFfiAddressSpaceV1::Constant
     {
