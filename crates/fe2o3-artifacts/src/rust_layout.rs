@@ -51,6 +51,10 @@ impl RustScalarElementTypeV1 {
 #[non_exhaustive]
 pub enum RustDisjointIndexSpaceV1 {
     Index1D,
+    /// One injective constant translation of the logical 1D invocation ID.
+    ShiftedIndex1D {
+        offset: u64,
+    },
 }
 
 /// Fully specified source-level Rust type shape.
@@ -584,7 +588,7 @@ fn encode_source_type(source_type: RustSourceTypeShapeV1) -> Vec<u8> {
         } => {
             writer.u8(2);
             writer.u8(scalar_tag(element));
-            writer.u8(index_space_tag(index_space));
+            encode_index_space(&mut writer, index_space);
         }
     }
     writer.finish()
@@ -633,9 +637,13 @@ const fn scalar_tag(scalar: RustScalarElementTypeV1) -> u8 {
     }
 }
 
-const fn index_space_tag(index_space: RustDisjointIndexSpaceV1) -> u8 {
+fn encode_index_space(writer: &mut CanonicalWriter, index_space: RustDisjointIndexSpaceV1) {
     match index_space {
-        RustDisjointIndexSpaceV1::Index1D => 1,
+        RustDisjointIndexSpaceV1::Index1D => writer.u8(1),
+        RustDisjointIndexSpaceV1::ShiftedIndex1D { offset } => {
+            writer.u8(2);
+            writer.u64(offset);
+        }
     }
 }
 

@@ -157,6 +157,27 @@ fn exact_vecadd_evidence_has_stable_golden_encodings_and_identities() {
 }
 
 #[test]
+fn shifted_disjoint_index_space_has_a_distinct_bounded_identity() {
+    let identity = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::Index1D,
+    ));
+    let shifted = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::ShiftedIndex1D { offset: 7 },
+    ));
+
+    assert_eq!(
+        hex(&shifted.canonical_bytes()),
+        concat!(
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100",
+            "0b000000020a020700000000000000"
+        )
+    );
+    assert_ne!(identity.declared_identity(), shifted.declared_identity());
+}
+
+#[test]
 fn scalar_evidence_has_stable_golden_encodings_and_identities() {
     let scalar = scalar_layout(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
 
