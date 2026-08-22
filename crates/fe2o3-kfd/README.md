@@ -361,7 +361,7 @@ CREATE returns an admitted process-local queue ID, including zero, and the
 adapter maps the exact complete 8192-byte KFD process doorbell slice. It checks
 the encoded returned offset, installs MADV_DONTFORK before enabling the VMA,
 and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
-private submission foundation initializes every ring header to exact INVALID
+internal submission foundation initializes every ring header to exact INVALID
 type 1 and the two control counters as atomics before GPU mapping. It uses the
 canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
 and the additive V2 fixed-batch bound of one through 1024 packets. A maximum
@@ -371,17 +371,16 @@ packet bodies before any aligned release header, publishes headers in packet
 order, and performs one release-fenced x86-SFENCE volatile `u64` doorbell
 store of the last packet ID. Counter divergence/regression and every possible
 side-effect failure poison the non-Clone owner; only full or insufficient
-space before the actual reservation is retryable. The private publication
+space before the actual reservation is retryable. The publication
 path revalidates the live process-global runtime transition, event, all shadow
-headers, payload, and currentness before publication. There is still no public
-launch API. The C5 path below is the only private producer that can compose
-code, kernarg, and data-allocation liveness.
+headers, payload, and currentness before publication. Public submission is
+reachable only through the addressless fixed-dispatch custody path below.
 
 The private completion slice owns one separate 64 KiB host-coherent GTT arena
 containing exactly 1024 distinct aligned `AmdBusyCompletionSignalV1` objects.
 The large fixed-cardinality packet and retention arrays are heap-owned. All
 signals are constructed as exact pending user signals before GPU mapping. A
-batch of one through 1024 packets receives one unique slot per packet; the private
+batch of one through 1024 packets receives one unique slot per packet; the
 binding retains the exact queue, signal allocation, code/kernarg mapping, and
 dispatch generations without exposing a numeric signal address. The generation
 keys detect substitution but do not themselves mint resource ownership,
@@ -397,41 +396,52 @@ release reset to pending, after which their slot generations advance. Queue
 destroy refuses any bound, published, or completed-but-unrecycled batch and
 releases the completion arena only after confirmed queue destruction.
 
-### C5 private dispatch binding
+### Addressless fixed dispatch binding
 
-The private C5 constructor accepts one authenticated
-`ValidatedKernelEnvelope` for exact gfx942 COV6 code, one through 1024 complete
-typed kernarg images, bounded dispatch geometry, and one through 16 device-data
-allocation requests with role, valid-byte, and effect premises. Device-data
-reads and read/write effects are rejected; only write-only requests can pass
-until an authenticated initialized-content authority exists.
-It validates all identities, sizes, alignments, geometry, pointer-field ranges,
-and whole-allocation nonalias structure before native preparation. It then uses
-the actual C3 API to allocate and map every device-data lease in the queue's VM.
+`SharedGttMemorySessionV1::create_compute_aql_queue_with_fixed_dispatch`
+consumes the exact existing checked device/VM session, one through 32
+authenticated `ValidatedKernelEnvelope` values, one through 1024 complete
+packet descriptions, and one through 16 existing mapped device-data leases.
+Packet descriptions contain program indices, checked geometry, scalar kernarg
+bytes, zero device-pointer fields, and bounded allocation subranges. They
+contain no native address or caller-supplied effect. Pointer offsets,
+alignments, and read/write effects come only from inspected kernel metadata.
+Read and read/write arguments require a sealed fully initialized allocation;
+write-only arguments may consume an uninitialized exclusive lease.
 
-The authenticated object is materialized exactly into one owned executable GTT
-allocation, hashed after materialization, CPU-sealed, and GPU-mapped. The
+Construction rejects hidden or implicit runtime arguments, missing or duplicate
+global-buffer bindings, nonzero pointer fields, range or alignment drift,
+intra-packet aliases, incomplete live lease sets, and read access without
+initialization before queue publication. It does not infer how many bytes a
+kernel actually accesses from a caller subrange.
+
+Each authenticated object is materialized exactly into an owned executable GTT
+allocation, hashed after materialization, CPU-sealed, and GPU-mapped. Each
 selected kernel descriptor is resolved by checked subtraction from the loader's
-image base and checked addition to the private mapped base. Kernargs occupy one
+image base and checked addition to its private mapped base. Kernargs occupy one
 owned mapped arena with distinct aligned slices per packet. Device pointers are
 inserted only inside a closure-scoped CPU initialization borrow; no numeric code,
 kernarg, or device address is returned by safe public API.
 
-The queue retains the real code allocation, kernarg arena, and every C3 lease
-while C2 publishes the batch and C4 observes its unique per-packet signals. One
+The queue retains every code allocation, the kernarg arena, and every data lease
+while it publishes the batch and observes its unique per-packet signals. One
 nonzero dispatch generation advances from prepared to in-flight to completed to
 recycled in lockstep with C4. Ordinary pre-publication ring occupancy can cancel
 the inert binding. Any generation divergence, currentness loss, publication or
 observation ambiguity, timeout, fault, partial recycle, or teardown ambiguity
 poisons the session and requires process teardown. Explicit release occurs only
-after every signal was recycled and the queue was confirmed destroyed. A
-separate crate-private consuming teardown is available only after one exact
-dispatch generation reached completion and signal recycle. It releases code,
-kernarg, signals, and queue resources, then returns the actual still-mapped C3
-authorities beside their owning shared-memory session. Prepared, canceled,
-in-flight, completed-but-unrecycled, stale-generation, and poisoned states
-cannot enter that path. The returned values still carry no content authority
-or public native identity.
+after every signal was recycled. A recycled-only detach releases code and
+kernarg while keeping the same native queue, ring, completion arena, event,
+runtime, and doorbell alive. Its exact detached-lease ledger must be consumed by
+a later `bind_fixed_dispatch` or explicit release. The later batch may have a
+different program count, packet count, geometry, scalar bytes, and device-data
+set. It is still published by one reservation and one final doorbell store.
+
+Storage that entered fully initialized remains fully initialized across generic
+completion and can be rebound without another upload. Exact pre-publication
+content descriptors are not returned as current after device publication.
+Storage admitted uninitialized under inspected write-only access remains
+uninitialized until a separate exact full-coverage effect join exists.
 
 Return is all-or-terminal. Once queue destruction is confirmed, any later
 event, runtime, doorbell, CWSR, queue-resource, code, kernarg, completion-arena,
@@ -439,13 +449,12 @@ or model-restoration failure yields no recoverable returned state. The consumed
 session and its no-effect drops retain any possibly live native resources for
 process teardown; there is no partial in-process cleanup or retry.
 
-This is not a public safe launch API. There is no initialization boolean or
-other caller-supplied read premise, and no generated implicit-kernarg producer
-is connected. Per-segment GPU permission behavior for the uniformly mapped code
+There is no initialization boolean or caller-supplied read premise, and kernels
+with implicit or hidden kernarg fields are rejected. Per-segment GPU permission behavior for the uniformly mapped code
 allocation, concrete effect/alias semantics, CPU/GPU coherence, firmware packet
 execution, device-write visibility, and quiescence remain Contracted. The host
 state machines and mock fault tests are not a concrete Verus or machine
-refinement, and C5 performed no GPU workload.
+refinement; the public custody path alone is not hardware execution evidence.
 
 ### C6 unbacked device-content copy foundation
 

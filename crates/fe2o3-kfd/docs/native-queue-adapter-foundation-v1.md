@@ -99,10 +99,10 @@ MMIO write escapes. The store width/value and CPU ordering sequence are tested,
 but GPU coherence, firmware observation, reset races, and write-combining MMIO
 semantics remain Contracted rather than proved.
 
-## Private packet publication boundary
+## Fixed packet publication boundary
 
 The production composition now depends canonically on `fe2o3-aql` and retains
-one crate-private, non-`Clone` single-producer submission owner. Before CREATE,
+one internal, non-`Clone` single-producer submission owner. Before CREATE,
 every logical 64-byte ring slot contains the exact little-endian `u32` INVALID
 header value `1`; an all-zero slot would encode VENDOR_SPECIFIC and is rejected
 by the initialization contract. Each slot header is explicitly initialized as
@@ -177,23 +177,24 @@ MMIO stores; it does not inject a fault or prove actual exception delivery.
 Foreign KFD clients in the same process are also outside the crate-global
 runtime ownership claim.
 
-The private C5 dispatch layer now consumes real code, kernarg, and C3
-device-data allocation liveness authorities. Exact-set admission permits
-queue-model transfer only when every retained device lease is represented once.
-The queue owns those resources through C2 publication, C4 completion, and
-signal recycle; generation keys are substitution checks rather than ownership.
+The public addressless fixed-dispatch layer consumes one through 32 inspected
+code envelopes, zero-pointer kernarg images, and the exact complete set of
+mapped device-data authorities. Access effects come from inspected metadata;
+read access requires sealed full-byte initialization. Exact-set admission
+permits queue-model transfer only when every retained device lease is
+represented once. The queue owns those resources through publication,
+completion, and signal recycle; generation keys are substitution checks rather
+than ownership.
 A doorbell failure after publication is not rollback evidence and remains
 process-teardown-only poison.
 
-Ordinary confirmed teardown releases every C3 allocation as before. A second
-crate-private consuming path is admitted only after one exact dispatch
-generation has reached C4 completion and signal recycle. It confirms queue
-destroy, releases event/runtime/doorbell/CWSR/queue/code/kernarg/completion
-resources, restores the memory model, and returns the actual mapped C3
-authorities with the owning shared-memory session. Initial preparation,
-pre-publication cancellation, in-flight work, completion without recycle,
-stale generations, and poison all reject before queue teardown starts. This is
-a concrete lease-return prerequisite, not initialized-content evidence.
+After one exact dispatch generation reaches completion and signal recycle, a
+detach transition releases code and kernarg while keeping the queue, ring,
+completion arena, event, runtime, and doorbell live. A later fixed batch may use
+a different packet/program cardinality, geometry, scalar kernarg bytes, and
+device-data set. The detached-lease ledger forbids queue destruction until all
+data is rebound or explicitly released. Fully initialized state survives this
+transition, but no pre-publication content digest is restored as current.
 
 After DESTROY is confirmed, return is all-or-terminal. Any later
 event/runtime/doorbell/CWSR/queue/code/kernarg/completion release or model
@@ -209,7 +210,7 @@ ROCr user signals. Each signal object is initialized to pending before GPU map.
 The arena and its address facts stay crate-private and linearly owned by the
 queue session; no KFD wakeup or public address is introduced.
 
-One private batch binding reserves a distinct signal per packet and retains the
+One fixed batch binding reserves a distinct signal per packet and retains the
 exact queue, signal-allocation, code-mapping, kernarg-mapping, and dispatch
 generations.
 It publishes through the existing one-reservation/one-doorbell primitive.
@@ -224,10 +225,10 @@ The relationship between a firmware signal write, dispatch completion,
 system-scope coherence, visibility of device result writes, and dispatch
 quiescence is **Contracted**. Host mocks exercise the lifecycle and every
 effect boundary, but there is no concrete Verus refinement or hardware run.
-No safe launch layer is public. Production data-copy initialization,
-implicit-kernarg construction, concrete alias/effect semantics, and hardware
-quiescence remain unimplemented obligations rather than properties inferred
-from generation keys.
+The public layer exposes no packet template, signal, pointer, address, or MMIO
+capability. Implicit-kernarg construction is rejected. Concrete kernel
+alias/effect refinement and hardware quiescence remain unimplemented
+obligations rather than properties inferred from generation keys.
 
 ## Verification boundary
 
