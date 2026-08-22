@@ -9,21 +9,21 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, Gfx942DeviceContentDescriptorV1, Gfx942DeviceMemoryLeaseV1,
     Gfx942DeviceMemoryMappedV1, Gfx942DeviceMemoryUnmappedV1, Gfx942FixedDispatchDataKindV1,
-    Gfx942FixedDispatchDataV1, Gfx942InitializedHostVisibleMemoryV1, GttCpuWritableV1,
-    GttGpuAccessibleMutableV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, HostVisibleCoherentGttV1,
-    MemorySessionError, SharedGttAllocationV1, SharedGttMemorySessionV1,
+    Gfx942FixedDispatchDataV1, Gfx942InitializedHostVisibleMemoryV1, Gfx942RepeatedByteContentV1,
+    GttCpuWritableV1, GttGpuAccessibleMutableV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+    HostVisibleCoherentGttV1, MemorySessionError, SharedGttAllocationV1, SharedGttMemorySessionV1,
     SharedMemorySessionPhaseV1,
 };
 
 /// Canonical scope and non-claims for the first service allocation owner.
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-allocation-owner-r5-v1\n",
+    "profile=fe2o3-service-allocation-owner-r6-v1\n",
     "backend=checked-gfx942-xnack-minus-device,shared-kfd-vm-session\n",
-    "device=device-local-vram-hbm,linear-unmapped-mapped-or-fixed-dispatch-kfd-custody,optional-exact-host-verified-public-device-local-initialization\n",
+    "device=device-local-vram-hbm,linear-unmapped-mapped-or-fixed-dispatch-kfd-custody,optional-exact-host-verified-owned-image-or-bounded-memory-repeated-byte-public-device-local-initialization\n",
     "host=host-visible-coherent-gtt,linear-cpu-writable-gpu-mapped-sealed-full-initialized-or-fixed-dispatch-custody\n",
     "identity=service-scoped-process-local-owner-device-vm-allocation-labels-retained-beside-private-kfd-native-tokens\n",
     "views=typed-role-kind-offset-extent-alignment,no-handle-fd-gpu-address-or-persistent-raw-pointer-accessor\n",
-    "cpu-write=scoped-mutable-slice-before-gpu-map,safe-caller-may-return-or-retain-raw-cpu-pointer-or-address,no-safe-post-borrow-dereference;separate-owned-full-extent-copy-mints-sealed-initialized-mapped-authority\n",
+    "cpu-write=scoped-mutable-slice-before-gpu-map,safe-caller-may-return-or-retain-raw-cpu-pointer-or-address,no-safe-post-borrow-dereference;separate-owned-full-extent-copy-or-bounded-memory-repeated-byte-fill-mints-sealed-initialized-mapped-authority\n",
     "dispatch-ranges=device-local-or-host-visible,owner-allocation-kind-generation-ordinal-offset-and-extent-bound,no-native-address,device-ordinals-before-host-ordinals\n",
     "subleases=one-atomic-move-only-layout-per-allocation,typed-role-kind-and-exact-generation,pairwise-disjoint-nonempty-aligned-bounded-members,checked-member-contained-subranges,legacy-ranges-denied-after-partition,replacement-stales-old-layout\n",
     "bounds=32-live-allocations,device-192gib,host-2gib,page-and-device-alignment-max-4096\n",
@@ -34,7 +34,7 @@ pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "c10eba9cbd78bb5d740a0262fd62cd20457578256ec4a6785f9570bf4c088c8e";
+    "c03c379df16817376d6cd330a71ec548412d58b4ad80d7ce90ea3f963b81741c";
 
 /// Maximum live allocations owned by one service allocation session.
 const MAX_SERVICE_ALLOCATIONS_V1: usize = 32;
@@ -1396,6 +1396,63 @@ impl ServiceAllocationSessionV1 {
         Ok(key(binding))
     }
 
+    /// Allocates a device-local extent whose complete logical bytes are filled
+    /// from one bounded-memory repeated-byte recipe, read back, CPU-unmapped,
+    /// and GPU-mapped by the retained KFD session.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_kfd::{Gfx942DeviceContentRoleV1, Gfx942RepeatedByteContentV1};
+    /// use fe2o3_service_host::{HostUploadRoleV1, ServiceAllocationSessionV1};
+    ///
+    /// fn host_role_cannot_be_repeated_device_local(owner: &mut ServiceAllocationSessionV1) {
+    ///     let role = Gfx942DeviceContentRoleV1::new([1; 32], 0).unwrap();
+    ///     let initialization = Gfx942RepeatedByteContentV1::new(role, 4096, 0).unwrap();
+    ///     let _ = owner
+    ///         .allocate_initialized_device_local_repeated_byte::<HostUploadRoleV1>(
+    ///             initialization,
+    ///             4096,
+    ///         );
+    /// }
+    /// ```
+    pub fn allocate_initialized_device_local_repeated_byte<R>(
+        &mut self,
+        initialization: Gfx942RepeatedByteContentV1,
+        alignment: u64,
+    ) -> Result<ServiceAllocationKeyV1<R, DeviceLocalAllocationV1>, ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        self.require_active()?;
+        let requested_bytes = initialization.content().byte_len();
+        self.preflight_allocation(requested_bytes, alignment, AllocationKindV1::DeviceLocal)?;
+        self.owner
+            .allocations
+            .try_reserve(1)
+            .map_err(|_| ServiceAllocationErrorV1::AllocationRegistryReservation)?;
+        let binding =
+            self.reserve_binding::<R, DeviceLocalAllocationV1>(requested_bytes, alignment)?;
+        let initialized = match self
+            .owner
+            .session
+            .initialize_gfx942_device_memory_repeated_byte(initialization, alignment)
+        {
+            Ok(initialized) => initialized,
+            Err(error) => {
+                self.sync_phase_after_nonconsuming_failure();
+                return Err(error.into());
+            }
+        };
+        self.owner.allocations.push(OwnedAllocationV1 {
+            binding,
+            token: Some(AllocationTokenV1::FixedDispatch(
+                Gfx942FixedDispatchDataV1::initialized(initialized),
+            )),
+            subleases: None,
+        });
+        self.owner.device_bytes += requested_bytes;
+        Ok(key(binding))
+    }
+
     /// Maps one exact uninitialized device-local allocation to the owned GPU/VM.
     pub fn map_device_local<R>(
         &mut self,
@@ -2568,6 +2625,29 @@ mod tests {
             ["host-upload", "host-download"]
         );
         assert_eq!(MAX_SERVICE_ALIGNMENT_V1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1);
+    }
+
+    #[test]
+    fn repeated_byte_entry_point_preserves_typed_device_state_custody() {
+        type EntryPoint = fn(
+            &mut ServiceAllocationSessionV1,
+            Gfx942RepeatedByteContentV1,
+            u64,
+        ) -> Result<
+            ServiceAllocationKeyV1<DeviceStateRoleV1, DeviceLocalAllocationV1>,
+            ServiceAllocationErrorV1,
+        >;
+
+        let entry_point: EntryPoint =
+            ServiceAllocationSessionV1::allocate_initialized_device_local_repeated_byte::<
+                DeviceStateRoleV1,
+            >;
+        let role = fe2o3_kfd::Gfx942DeviceContentRoleV1::new([0x52; 32], 3).unwrap();
+        let initialization = Gfx942RepeatedByteContentV1::new(role, 4097, 0).unwrap();
+        assert_eq!(initialization.content().role(), role);
+        assert_eq!(initialization.content().byte_len(), 4097);
+        assert_eq!(initialization.repeated_byte(), 0);
+        let _ = entry_point;
     }
 
     #[test]

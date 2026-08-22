@@ -27,7 +27,7 @@ use super::memory::{
     MemorySessionError, NEXT_MODEL_VM_ID, begin_process_vm_attempt, finish_process_vm_attempt,
 };
 use crate::CheckedGfx942XnackMinusDevice;
-use crate::queue::Gfx942DeviceContentDescriptorV1;
+use crate::queue::{Gfx942DeviceContentDescriptorV1, Gfx942RepeatedByteContentV1};
 
 pub const MAX_SHARED_GTT_ALLOCATIONS_V1: usize = 64;
 pub const MAX_SHARED_GTT_SINGLE_CPU_BYTES_V1: u64 = 1 << 31;
@@ -67,12 +67,12 @@ pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
 
 /// Canonical contract for CPU initialization of public device-local storage.
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-device-memory-initialization-r1-v1\n",
+    "profile=fe2o3-mi300x-gfx942-device-memory-initialization-r2-v1\n",
     "uapi_profile_sha256=3b9f1164fc74672f019cbd092c142b4a6d830920424b87282cfdf5b8f50afd81\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device-and-vm\n",
     "allocation=device-local-vram-hbm-public-writable:0xa0000001,separate-from-uninitialized:0x80000001\n",
-    "source=owned-nonempty-byte-slice,exact-length-and-sha256-must-match-content-descriptor-before-native-allocation\n",
-    "cpu-map=returned-mmap-offset,prot-none-then-dontfork-then-read-write,whole-request-copy,readback-sha256,explicit-munmap-before-gpu-map\n",
+    "source=owned-nonempty-byte-slice-or-private-field-repeated-byte-recipe,exact-length-and-sha256-content-precommit,bounded-memory-repeated-byte-hash-before-native-allocation\n",
+    "cpu-map=returned-mmap-offset,prot-none-then-dontfork-then-read-write,whole-request-copy-or-direct-repeated-byte-fill,full-readback-sha256,explicit-munmap-before-gpu-map\n",
     "authority=linear-initialized-mapped-lease,private-allocation-device-vm-generation-and-address,public-layout-and-content-descriptor-only\n",
     "failure=preflight-no-side-effects,post-allocation-or-mapping-failure-quarantines-session,no-retry-or-drop-cleanup\n",
     "excluded=caller-asserted-initialization,callback-content-claim,persistent-cpu-mapping,gpu-address,copy-queue,execution,hardware-coherence-proof\n",
@@ -80,7 +80,7 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1`].
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
-    "6b9eb7763e83ec2bdf4f19b62af05451f3fa288ae50a6c47ddba8e8778071162";
+    "8b173c6142b6052473c222e6c08a77b3a2388f50e7d966639ae3a5507773325a";
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
@@ -1151,6 +1151,42 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         {
             return self.quarantine(MemorySessionError::DeviceContentMismatch);
         }
+        self.initialize_public_device_memory_after_preflight(
+            lease,
+            bytes.len(),
+            content,
+            |mapped| mapped.copy_from_slice(bytes),
+        )
+    }
+
+    fn initialize_public_device_memory_repeated_byte(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        initialization: Gfx942RepeatedByteContentV1,
+        expected_len: usize,
+    ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
+        let content = initialization.content();
+        if lease.layout.uapi_flags != KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC
+            || content.byte_len() != lease.layout.requested_bytes
+            || u64::try_from(expected_len) != Ok(content.byte_len())
+        {
+            return self.quarantine(MemorySessionError::DeviceContentMismatch);
+        }
+        self.initialize_public_device_memory_after_preflight(
+            lease,
+            expected_len,
+            content,
+            |mapped| mapped.fill(initialization.repeated_byte()),
+        )
+    }
+
+    fn initialize_public_device_memory_after_preflight(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        expected_len: usize,
+        content: Gfx942DeviceContentDescriptorV1,
+        write: impl FnOnce(&mut [u8]),
+    ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
         let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
         self.check_currentness()?;
         let mapping_bytes = usize::try_from(self.device_memory[index].layout.backing_bytes)
@@ -1186,8 +1222,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 .mapping
                 .as_mut()
                 .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
-            B::with_bytes_mut(mapping, bytes.len(), |mapped| mapped.copy_from_slice(bytes));
-            B::with_bytes(mapping, bytes.len(), |mapped| Sha256::digest(mapped).into())
+            B::with_bytes_mut(mapping, expected_len, write);
+            B::with_bytes(mapping, expected_len, |mapped| {
+                Sha256::digest(mapped).into()
+            })
         };
         if observed != content.sha256() {
             return self.quarantine(MemorySessionError::DeviceContentMismatch);
@@ -2052,6 +2090,36 @@ impl SharedGttMemorySessionV1 {
         )?;
         self.engine
             .initialize_public_device_memory(lease, &bytes, content)
+    }
+
+    /// Allocates CPU-visible device-local storage, fills its complete logical
+    /// extent from a bounded-memory repeated-byte recipe, verifies mapped bytes,
+    /// removes CPU access, and maps the allocation to the selected GPU.
+    ///
+    /// The recipe has private fields and precommits the exact role, nonzero
+    /// extent, repeated byte, and SHA-256 before this method begins any native
+    /// allocation. Success returns the same linear initialized authority as the
+    /// owned-byte initializer without exposing a native address or mapping.
+    pub fn initialize_gfx942_device_memory_repeated_byte(
+        &mut self,
+        initialization: Gfx942RepeatedByteContentV1,
+        alignment: u64,
+    ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
+        let requested_bytes = initialization.content().byte_len();
+        let expected_len =
+            usize::try_from(requested_bytes).map_err(|_| MemorySessionError::SizeOverflow)?;
+        let lease = self.engine.allocate_device_memory_with_flags(
+            self.model_device.model_key(),
+            self.vm,
+            requested_bytes,
+            alignment,
+            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+        )?;
+        self.engine.initialize_public_device_memory_repeated_byte(
+            lease,
+            initialization,
+            expected_len,
+        )
     }
 
     /// Maps one exact device-local lease to the selected GPU only.
@@ -2926,6 +2994,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
     use fe2o3_kfd_uapi::KfdIoctlAllocMemoryOfGpuArgs;
     use sha2::{Digest, Sha256};
 
@@ -2935,6 +3004,8 @@ mod tests {
         bytes: Vec<u8>,
         active: bool,
         writable: bool,
+        corrupt_readback: bool,
+        readback_calls: Cell<usize>,
     }
 
     struct FakeBackend {
@@ -2958,6 +3029,10 @@ mod tests {
         unmap_gpu_calls: usize,
         free_calls: usize,
         release_va_calls: usize,
+        corrupt_readback: bool,
+        last_unmapped_bytes: Option<Vec<u8>>,
+        last_unmapped_readback_calls: usize,
+        operations: Vec<&'static str>,
     }
 
     impl FakeBackend {
@@ -2983,6 +3058,10 @@ mod tests {
                 unmap_gpu_calls: 0,
                 free_calls: 0,
                 release_va_calls: 0,
+                corrupt_readback: false,
+                last_unmapped_bytes: None,
+                last_unmapped_readback_calls: 0,
+                operations: Vec::new(),
             }
         }
 
@@ -3075,17 +3154,21 @@ mod tests {
             _retain_gpu_va_guard: bool,
         ) -> Result<Self::Mapping, MemorySessionError> {
             self.map_cpu_calls += 1;
+            self.operations.push("map_cpu");
             self.check("map_cpu")?;
             Ok(FakeMapping {
                 bytes: vec![0; bytes],
                 active: true,
                 writable: false,
+                corrupt_readback: self.corrupt_readback,
+                readback_calls: Cell::new(0),
             })
         }
         fn prepare_cpu_mapping(
             &mut self,
             mapping: &mut Self::Mapping,
         ) -> Result<(), MemorySessionError> {
+            self.operations.push("prepare_cpu_mapping");
             self.check("prepare_cpu_mapping")?;
             mapping.writable = true;
             Ok(())
@@ -3100,6 +3183,7 @@ mod tests {
         }
         fn map_gpu(&mut self, _handle: u64, _old_success: u32) -> KernelOutcome<u32> {
             self.map_gpu_calls += 1;
+            self.operations.push("map_gpu");
             KernelOutcome {
                 value: self.map_progress,
                 result: if self.map_errno {
@@ -3126,7 +3210,14 @@ mod tests {
             f: impl FnOnce(&[u8]) -> R,
         ) -> R {
             assert!(mapping.active);
-            f(&mapping.bytes[..requested_bytes])
+            mapping.readback_calls.set(mapping.readback_calls.get() + 1);
+            if mapping.corrupt_readback {
+                let mut corrupted = mapping.bytes[..requested_bytes].to_vec();
+                corrupted[0] ^= 1;
+                f(&corrupted)
+            } else {
+                f(&mapping.bytes[..requested_bytes])
+            }
         }
         fn with_bytes_mut<R>(
             mapping: &mut Self::Mapping,
@@ -3137,7 +3228,10 @@ mod tests {
             f(&mut mapping.bytes[..requested_bytes])
         }
         fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
+            self.operations.push("unmap_cpu");
             self.check("unmap_cpu")?;
+            self.last_unmapped_bytes = Some(mapping.bytes.clone());
+            self.last_unmapped_readback_calls = mapping.readback_calls.get();
             mapping.active = false;
             Ok(())
         }
@@ -3579,6 +3673,101 @@ mod tests {
         let lease = engine.unmap_device_memory(lease).unwrap();
         engine.release_device_memory(lease).unwrap();
         assert_eq!(engine.retained_device_memory_bytes, 0);
+    }
+
+    fn repeated_content(byte_len: u64, repeated_byte: u8) -> Gfx942RepeatedByteContentV1 {
+        let role = crate::Gfx942DeviceContentRoleV1::new([0x62; 32], 8).unwrap();
+        Gfx942RepeatedByteContentV1::new(role, byte_len, repeated_byte).unwrap()
+    }
+
+    #[test]
+    fn repeated_byte_initialization_fills_reads_back_and_releases_exact_extent() {
+        for (byte_len, repeated_byte) in [(1_u64, 0_u8), (4096, 0x5a), (4097, 0xff)] {
+            let mut engine = acquired();
+            let (device, vm) = device_vm(7);
+            let initialization = repeated_content(byte_len, repeated_byte);
+            let lease = engine
+                .allocate_device_memory_with_flags(
+                    device,
+                    vm,
+                    byte_len,
+                    4096,
+                    KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+                )
+                .unwrap();
+            let initialized = engine
+                .initialize_public_device_memory_repeated_byte(
+                    lease,
+                    initialization,
+                    byte_len as usize,
+                )
+                .unwrap();
+
+            assert_eq!(initialized.content(), initialization.content());
+            assert_eq!(initialized.layout().requested_bytes(), byte_len);
+            assert_eq!(engine.backend.flags, vec![0xa000_0001]);
+            assert_eq!(engine.backend.map_cpu_calls, 1);
+            assert_eq!(engine.backend.map_gpu_calls, 1);
+            assert_eq!(engine.backend.last_unmapped_readback_calls, 1);
+            assert_eq!(
+                engine.backend.operations,
+                ["map_cpu", "prepare_cpu_mapping", "unmap_cpu", "map_gpu"]
+            );
+            assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Mapped);
+            assert!(engine.device_memory[0].mapping.is_none());
+            let mapped = engine.backend.last_unmapped_bytes.as_ref().unwrap();
+            let logical_len = byte_len as usize;
+            assert!(
+                mapped[..logical_len]
+                    .iter()
+                    .all(|byte| *byte == repeated_byte)
+            );
+            assert!(mapped[logical_len..].iter().all(|byte| *byte == 0));
+
+            let (lease, content) = initialized.into_parts();
+            assert_eq!(content, initialization.content());
+            let lease = engine.unmap_device_memory(lease).unwrap();
+            engine.release_device_memory(lease).unwrap();
+            assert_eq!(engine.backend.free_calls, 1);
+            assert_eq!(engine.backend.release_va_calls, 1);
+            assert_eq!(engine.retained_device_memory_bytes, 0);
+            assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Released);
+        }
+    }
+
+    #[test]
+    fn repeated_byte_readback_mismatch_quarantines_and_retains_accounting() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(7);
+        let byte_len = 4097_u64;
+        let initialization = repeated_content(byte_len, 0x3c);
+        let lease = engine
+            .allocate_device_memory_with_flags(
+                device,
+                vm,
+                byte_len,
+                4096,
+                KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+            )
+            .unwrap();
+        engine.backend.corrupt_readback = true;
+
+        assert!(matches!(
+            engine.initialize_public_device_memory_repeated_byte(
+                lease,
+                initialization,
+                byte_len as usize,
+            ),
+            Err(MemorySessionError::DeviceContentMismatch)
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(engine.backend.map_cpu_calls, 1);
+        assert_eq!(engine.backend.map_gpu_calls, 0);
+        assert_eq!(engine.retained_device_memory_bytes, 8192);
+        assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Unmapped);
+        assert!(engine.device_memory[0].mapping.is_some());
+        assert_eq!(engine.backend.free_calls, 0);
+        assert_eq!(engine.backend.release_va_calls, 0);
     }
 
     #[test]

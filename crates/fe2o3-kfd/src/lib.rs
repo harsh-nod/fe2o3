@@ -70,7 +70,8 @@ pub use queue::{
     Gfx942DeviceContentRoleV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
     Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataKindV1,
     Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
-    Gfx942RecycledDispatchResourcesV1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
+    Gfx942RecycledDispatchResourcesV1, Gfx942RepeatedByteContentV1,
+    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1,
 };
 

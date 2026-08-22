@@ -18,6 +18,8 @@ use fe2o3_runtime_model::{
 };
 use sha2::{Digest, Sha256};
 
+const REPEATED_BYTE_HASH_CHUNK_BYTES_V1: usize = 64 * 1024;
+
 /// Frozen claim boundary for the unbacked KFD copy-composition foundation.
 pub const GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-mi300x-gfx942-device-content-copy-foundation-r2-v1\n",
@@ -137,6 +139,68 @@ impl Gfx942DeviceContentDescriptorV1 {
     pub const fn identity(self) -> [u8; 32] {
         self.identity
     }
+}
+
+/// Inert recipe for one exact nonempty repeated-byte device-memory image.
+///
+/// Private fields bind the repeated byte to the descriptor produced by hashing
+/// the complete logical extent with bounded host memory. This value is content
+/// data only: it carries no allocation, mapping, address, or initialization
+/// authority.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Gfx942RepeatedByteContentV1 {
+    repeated_byte: u8,
+    content: Gfx942DeviceContentDescriptorV1,
+}
+
+impl Gfx942RepeatedByteContentV1 {
+    /// Constructs an exact repeated-byte recipe without materializing its full
+    /// host image.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Gfx942DeviceContentDescriptorErrorV1::ZeroByteExtent`] for an
+    /// empty extent. Other descriptor validation errors are forwarded.
+    pub fn new(
+        role: Gfx942DeviceContentRoleV1,
+        byte_len: u64,
+        repeated_byte: u8,
+    ) -> Result<Self, Gfx942DeviceContentDescriptorErrorV1> {
+        if byte_len == 0 {
+            return Err(Gfx942DeviceContentDescriptorErrorV1::ZeroByteExtent);
+        }
+        let content = Gfx942DeviceContentDescriptorV1::new(
+            role,
+            byte_len,
+            repeated_byte_sha256(byte_len, repeated_byte),
+        )?;
+        Ok(Self {
+            repeated_byte,
+            content,
+        })
+    }
+
+    /// Returns the repeated byte written across the complete logical extent.
+    pub const fn repeated_byte(self) -> u8 {
+        self.repeated_byte
+    }
+
+    /// Returns the descriptor precommitted to the complete repeated-byte image.
+    pub const fn content(self) -> Gfx942DeviceContentDescriptorV1 {
+        self.content
+    }
+}
+
+fn repeated_byte_sha256(byte_len: u64, repeated_byte: u8) -> [u8; 32] {
+    let chunk = [repeated_byte; REPEATED_BYTE_HASH_CHUNK_BYTES_V1];
+    let mut remaining = byte_len;
+    let mut hasher = Sha256::new();
+    while remaining >= REPEATED_BYTE_HASH_CHUNK_BYTES_V1 as u64 {
+        hasher.update(chunk.as_slice());
+        remaining -= REPEATED_BYTE_HASH_CHUNK_BYTES_V1 as u64;
+    }
+    hasher.update(&chunk[..remaining as usize]);
+    hasher.finalize().into()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -728,6 +792,34 @@ mod tests {
         assert_eq!(
             Gfx942DeviceContentDescriptorV1::new(base.role(), 1, [0; 32]),
             Err(Gfx942DeviceContentDescriptorErrorV1::ZeroContentSha256)
+        );
+    }
+
+    #[test]
+    fn repeated_byte_recipe_matches_materialized_descriptors_at_chunk_boundaries() {
+        let role = Gfx942DeviceContentRoleV1::new([0x63; 32], 9).unwrap();
+        for repeated_byte in [0, 0x5a, 0xff] {
+            for byte_len in [
+                1,
+                REPEATED_BYTE_HASH_CHUNK_BYTES_V1 - 1,
+                REPEATED_BYTE_HASH_CHUNK_BYTES_V1,
+                REPEATED_BYTE_HASH_CHUNK_BYTES_V1 + 1,
+                2 * REPEATED_BYTE_HASH_CHUNK_BYTES_V1 + 17,
+            ] {
+                let recipe =
+                    Gfx942RepeatedByteContentV1::new(role, byte_len as u64, repeated_byte).unwrap();
+                let materialized = vec![repeated_byte; byte_len];
+                assert_eq!(
+                    recipe.content(),
+                    Gfx942DeviceContentDescriptorV1::from_bytes(role, &materialized).unwrap()
+                );
+                assert_eq!(recipe.repeated_byte(), repeated_byte);
+            }
+        }
+
+        assert_eq!(
+            Gfx942RepeatedByteContentV1::new(role, 0, 0),
+            Err(Gfx942DeviceContentDescriptorErrorV1::ZeroByteExtent)
         );
     }
 
