@@ -52,6 +52,7 @@ mod link_publication;
 mod managed_invocation_capability;
 mod retained_durable_directory;
 mod worker_v2_publication_intent;
+mod worker_v3_load_readiness;
 mod worker_v3_publication_binding;
 mod worker_v3_publication_intent;
 
@@ -210,6 +211,16 @@ pub use worker_v2_publication_intent::{
     rollback_worker_v2_publication_intent_cleanup_escrow_v1,
     rollback_worker_v2_publication_intent_cleanup_escrow_v1_with_options,
 };
+pub use worker_v3_load_readiness::{
+    MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1, MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1,
+    VerifiedWorkerV3LoadEnvelopeAuthorityV1, WorkerV3LoadEnvelopeBindingV1,
+    WorkerV3LoadReadinessBoundaryV1, WorkerV3LoadReadinessCodecErrorV1,
+    WorkerV3LoadReadinessErrorV1, WorkerV3LoadReadinessFaultPointV1,
+    WorkerV3LoadReadinessFaultTimingV1, WorkerV3LoadReadinessOptionsV1,
+    WorkerV3LoadReadinessOutcomeV1, WorkerV3LoadReadinessReceiptV1, WorkerV3LoadReadinessResultV1,
+    publish_worker_v3_load_readiness_v1, publish_worker_v3_load_readiness_v1_with_options,
+    recover_worker_v3_load_readiness_v1,
+};
 pub use worker_v3_publication_binding::{
     MAX_WORKER_V3_PUBLICATION_BINDING_BYTES_V1, WorkerV3PublicationBindingErrorV1,
     WorkerV3PublicationBindingIdentityFieldV1, WorkerV3PublicationBindingV1,
@@ -234,6 +245,8 @@ pub use worker_v3_publication_intent::{
     clear_worker_v3_publication_intent_v1, clear_worker_v3_publication_intent_v1_with_options,
     persist_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1_with_options,
     recover_worker_v3_publication_intent_v1, resume_worker_v3_publication_intent_retirement_v1,
+    retire_worker_v3_publication_intent_after_load_readiness_v1,
+    retire_worker_v3_publication_intent_after_load_readiness_v1_with_options,
     scavenge_worker_v3_publication_intent_occurrence_v1,
     scavenge_worker_v3_publication_intent_occurrence_v1_with_options,
 };

@@ -5,7 +5,10 @@ use std::str::FromStr;
 
 use sha2::{Digest as _, Sha256};
 
-use crate::{WorkerV3PublicationBindingErrorV1, WorkerV3PublicationBindingV1};
+use crate::{
+    WorkerV3LoadReadinessCodecErrorV1, WorkerV3LoadReadinessReceiptV1,
+    WorkerV3PublicationBindingErrorV1, WorkerV3PublicationBindingV1,
+};
 
 const ATTEMPT_MAGIC: &[u8] = b"FE2O3-ATTEMPTS-V1\0";
 const MAX_ATTEMPT_RECORDS: usize = 1024;
@@ -22,13 +25,14 @@ const BACKEND_RECEIPT_PROVENANCE_V2: u8 = 4;
 const BACKEND_RECEIPT_PENDING_PROVENANCE_V2: u8 = 5;
 const BACKEND_RECEIPT_PROVENANCE_V3: u8 = 6;
 const BACKEND_RECEIPT_PENDING_PROVENANCE_V3: u8 = 7;
+const BACKEND_RECEIPT_LOAD_READY_V3: u8 = 8;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V1: usize = 7 * 32;
 pub(crate) const COMPILER_CLOSURE_BYTES_V2: usize = (6 * 32) + 2 + 32;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V2: usize =
     BACKEND_PROVENANCE_RECEIPT_BYTES_V1 + COMPILER_CLOSURE_BYTES_V2;
 const WORKER_V3_PUBLICATION_BINDING_BYTES_V1: usize =
     COMPILER_CLOSURE_BYTES_V2 + (7 * 32) + (2 * 8);
-const BACKEND_PROVENANCE_RECEIPT_BYTES_V3: usize =
+pub(crate) const BACKEND_PROVENANCE_RECEIPT_BYTES_V3: usize =
     BACKEND_PROVENANCE_RECEIPT_BYTES_V1 + WORKER_V3_PUBLICATION_BINDING_BYTES_V1;
 const COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1: &[u8] =
     b"FE2O3/COMPILER-CLOSURE-BOUND-BUILD-INVOCATION/V1\0";
@@ -585,6 +589,7 @@ pub(crate) enum BackendReceiptV1 {
     ProvenanceV2(BackendPublicationReceiptV2),
     PendingProvenanceV3(BackendPublicationReceiptV3),
     ProvenanceV3(BackendPublicationReceiptV3),
+    LoadReadyV3(BackendPublicationReceiptV3, WorkerV3LoadReadinessReceiptV1),
 }
 
 impl BackendReceiptV1 {
@@ -595,6 +600,7 @@ impl BackendReceiptV1 {
                 | Self::Provenance(_)
                 | Self::ProvenanceV2(_)
                 | Self::ProvenanceV3(_)
+                | Self::LoadReadyV3(_, _)
         )
     }
 }
@@ -633,7 +639,10 @@ pub enum AttemptCodecError {
     InvalidBackendReceiptTag(u8),
     InvalidCompilerClosureV2(CompilerClosureErrorV2),
     InvalidWorkerV3PublicationBinding(WorkerV3PublicationBindingErrorV1),
+    InvalidWorkerV3LoadReadinessReceipt(WorkerV3LoadReadinessCodecErrorV1),
     WorkerV3FinalizedOutputIdentityMismatch,
+    WorkerV3LoadReadinessMismatch,
+    AllocationFailed { requested: usize },
     ZeroGeneration,
     GenerationBeyondWatermark,
     DuplicateGeneration,
@@ -675,9 +684,16 @@ impl fmt::Display for AttemptCodecError {
             Self::InvalidWorkerV3PublicationBinding(_) => {
                 "invalid Worker V3 publication binding in backend receipt"
             }
+            Self::InvalidWorkerV3LoadReadinessReceipt(_) => {
+                "invalid Worker V3 load-readiness receipt"
+            }
             Self::WorkerV3FinalizedOutputIdentityMismatch => {
                 "Worker V3 receipt finalized-output identity does not match its binding"
             }
+            Self::WorkerV3LoadReadinessMismatch => {
+                "Worker V3 load-readiness receipt does not match its backend receipt"
+            }
+            Self::AllocationFailed { .. } => "attempt registry allocation failed",
             Self::ZeroGeneration => "attempt generation is zero",
             Self::GenerationBeyondWatermark => "attempt generation exceeds registry watermark",
             Self::DuplicateGeneration => "duplicate active attempt generation",
@@ -701,6 +717,12 @@ impl fmt::Display for AttemptCodecError {
             Self::InvalidWorkerV3PublicationBinding(error) => {
                 write!(formatter, "{message}: {error}")
             }
+            Self::InvalidWorkerV3LoadReadinessReceipt(error) => {
+                write!(formatter, "{message}: {error}")
+            }
+            Self::AllocationFailed { requested } => {
+                write!(formatter, "{message}: requested {requested} bytes")
+            }
             _ => formatter.write_str(message),
         }
     }
@@ -711,8 +733,15 @@ impl std::error::Error for AttemptCodecError {
         match self {
             Self::InvalidCompilerClosureV2(error) => Some(error),
             Self::InvalidWorkerV3PublicationBinding(error) => Some(error),
+            Self::InvalidWorkerV3LoadReadinessReceipt(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+impl From<WorkerV3LoadReadinessCodecErrorV1> for AttemptCodecError {
+    fn from(error: WorkerV3LoadReadinessCodecErrorV1) -> Self {
+        Self::InvalidWorkerV3LoadReadinessReceipt(error)
     }
 }
 
@@ -725,7 +754,13 @@ pub(crate) struct AttemptRegistry {
 impl AttemptRegistry {
     pub(crate) fn encode(&self) -> Result<Vec<u8>, AttemptCodecError> {
         self.validate()?;
+        let canonical_size = self.canonical_size()?;
         let mut bytes = Vec::new();
+        bytes.try_reserve_exact(canonical_size).map_err(|_| {
+            AttemptCodecError::AllocationFailed {
+                requested: canonical_size,
+            }
+        })?;
         bytes.extend_from_slice(ATTEMPT_MAGIC);
         bytes.extend_from_slice(&self.last_issued_generation.to_le_bytes());
         push_u32(&mut bytes, self.records.len())?;
@@ -764,6 +799,11 @@ impl AttemptRegistry {
                 Some(BackendReceiptV1::PendingProvenanceV3(receipt)) => {
                     bytes.push(BACKEND_RECEIPT_PENDING_PROVENANCE_V3);
                     push_backend_publication_receipt_v3(&mut bytes, receipt)?;
+                }
+                Some(BackendReceiptV1::LoadReadyV3(receipt, readiness)) => {
+                    bytes.push(BACKEND_RECEIPT_LOAD_READY_V3);
+                    push_backend_publication_receipt_v3(&mut bytes, receipt)?;
+                    bytes.extend_from_slice(&readiness.encode_canonical()?);
                 }
             }
         }
@@ -824,6 +864,16 @@ impl AttemptRegistry {
                     Some(BackendReceiptV1::PendingProvenanceV3(
                         decode_backend_publication_receipt_v3(&mut decoder)?,
                     ))
+                }
+                BACKEND_RECEIPT_LOAD_READY_V3 => {
+                    let receipt = decode_backend_publication_receipt_v3(&mut decoder)?;
+                    let readiness = WorkerV3LoadReadinessReceiptV1::decode_canonical(
+                        decoder.take(crate::MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1)?,
+                    )?;
+                    if !readiness.matches_backend_receipt(receipt)? {
+                        return Err(AttemptCodecError::WorkerV3LoadReadinessMismatch);
+                    }
+                    Some(BackendReceiptV1::LoadReadyV3(receipt, readiness))
                 }
                 value => return Err(AttemptCodecError::InvalidBackendReceiptTag(value)),
             };
@@ -1067,6 +1117,33 @@ impl AttemptRegistry {
                 Ok(())
             }
             Some(BackendReceiptV1::ProvenanceV3(existing)) if existing == receipt => Ok(()),
+            Some(_) => Err(AttemptCodecError::BackendAlreadySeen),
+            None => Err(AttemptCodecError::InvalidTransition),
+        }
+    }
+
+    pub(crate) fn record_worker_v3_load_readiness(
+        &mut self,
+        stable_source: &str,
+        attempt: BuildAttempt,
+        receipt: BackendPublicationReceiptV3,
+        readiness: WorkerV3LoadReadinessReceiptV1,
+    ) -> Result<(), AttemptCodecError> {
+        receipt.validate()?;
+        if !readiness.matches_backend_receipt(receipt)? || readiness.attempt() != attempt {
+            return Err(AttemptCodecError::WorkerV3LoadReadinessMismatch);
+        }
+        let record = self.exact_record_mut(stable_source, attempt)?;
+        match record.backend_receipt {
+            Some(BackendReceiptV1::ProvenanceV3(existing)) if existing == receipt => {
+                record.backend_receipt = Some(BackendReceiptV1::LoadReadyV3(receipt, readiness));
+                Ok(())
+            }
+            Some(BackendReceiptV1::LoadReadyV3(existing, durable))
+                if existing == receipt && durable == readiness =>
+            {
+                Ok(())
+            }
             Some(_) => Err(AttemptCodecError::BackendAlreadySeen),
             None => Err(AttemptCodecError::InvalidTransition),
         }
@@ -1346,6 +1423,20 @@ fn push_backend_publication_receipt_v3(
     Ok(())
 }
 
+pub(crate) fn encode_backend_publication_receipt_v3(
+    receipt: BackendPublicationReceiptV3,
+) -> Result<Vec<u8>, AttemptCodecError> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(BACKEND_PROVENANCE_RECEIPT_BYTES_V3)
+        .map_err(|_| AttemptCodecError::AllocationFailed {
+            requested: BACKEND_PROVENANCE_RECEIPT_BYTES_V3,
+        })?;
+    push_backend_publication_receipt_v3(&mut bytes, receipt)?;
+    debug_assert_eq!(bytes.len(), BACKEND_PROVENANCE_RECEIPT_BYTES_V3);
+    Ok(bytes)
+}
+
 fn push_worker_v3_publication_binding_v1(
     bytes: &mut Vec<u8>,
     binding: WorkerV3PublicationBindingV1,
@@ -1497,6 +1588,10 @@ fn record_size(
             }
             Some(BackendReceiptV1::PendingProvenanceV3(_) | BackendReceiptV1::ProvenanceV3(_)) => {
                 BACKEND_PROVENANCE_RECEIPT_BYTES_V3
+            }
+            Some(BackendReceiptV1::LoadReadyV3(_, _)) => {
+                BACKEND_PROVENANCE_RECEIPT_BYTES_V3
+                    + crate::MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1
             }
             Some(BackendReceiptV1::LegacyCoordination) | None => 0,
         }
@@ -2302,8 +2397,8 @@ mod tests {
             Err(AttemptCodecError::InvalidPhase(9))
         );
         assert_eq!(
-            AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 8)])),
-            Err(AttemptCodecError::InvalidBackendReceiptTag(8))
+            AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 9)])),
+            Err(AttemptCodecError::InvalidBackendReceiptTag(9))
         );
         assert_eq!(
             AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 1)])),

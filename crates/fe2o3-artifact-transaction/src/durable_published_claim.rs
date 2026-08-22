@@ -186,6 +186,9 @@ pub enum DurablePublishedClaimCodecErrorV3 {
     WorkerV3BindingMismatch {
         field: DurablePublishedClaimWorkerV3BindingFieldV1,
     },
+    AllocationFailed {
+        requested: usize,
+    },
     NonCanonical,
 }
 
@@ -310,6 +313,10 @@ impl fmt::Display for DurablePublishedClaimCodecErrorV3 {
             Self::WorkerV3BindingMismatch { field } => write!(
                 formatter,
                 "strict Worker V3 published claim binding {field:?} does not match"
+            ),
+            Self::AllocationFailed { requested } => write!(
+                formatter,
+                "strict Worker V3 published claim allocation of {requested} bytes failed"
             ),
             Self::NonCanonical => {
                 formatter.write_str("noncanonical strict Worker V3 published claim")
@@ -975,7 +982,7 @@ impl DurablePublishedHsacoClaimV3 {
     /// Encodes this claim under its independent fixed V3 schema.
     pub fn encode_canonical(&self) -> Result<Vec<u8>, DurablePublishedClaimCodecErrorV3> {
         self.validate()?;
-        let mut bytes = Vec::with_capacity(CLAIM_CANONICAL_BYTES_V3);
+        let mut bytes = claim_encoding_vec_v3(CLAIM_CANONICAL_BYTES_V3)?;
         bytes.extend_from_slice(CLAIM_MAGIC_V3);
         bytes.extend_from_slice(&CLAIM_VERSION_V3.to_le_bytes());
         push_attempt(&mut bytes, self.plan.attempt());
@@ -1155,6 +1162,14 @@ impl DurablePublishedHsacoClaimV3 {
     }
 }
 
+fn claim_encoding_vec_v3(requested: usize) -> Result<Vec<u8>, DurablePublishedClaimCodecErrorV3> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(requested)
+        .map_err(|_| DurablePublishedClaimCodecErrorV3::AllocationFailed { requested })?;
+    Ok(bytes)
+}
+
 /// Reacquires a fresh non-`Clone` lease from one inert cross-process claim.
 ///
 /// The operation takes the existing output directory's cooperative lock without blocking, then
@@ -1186,6 +1201,14 @@ pub fn reacquire_current_hsaco_publication_lease_v3(
     claim: &DurablePublishedHsacoClaimV3,
 ) -> Result<DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV3> {
     reacquire_current_hsaco_publication_lease::<ClaimSchemaV3>(output_dir, claim)
+        .map_err(reacquisition_error_v3)
+}
+
+pub(crate) fn validate_current_hsaco_publication_locked_v3(
+    output: &PinnedOutput,
+    claim: &DurablePublishedHsacoClaimV3,
+) -> Result<DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV3> {
+    reacquire_current_hsaco_publication_lease_locked::<ClaimSchemaV3>(output, claim)
         .map_err(reacquisition_error_v3)
 }
 
@@ -1284,7 +1307,12 @@ impl ClaimSchema for ClaimSchemaV3 {
     }
 
     fn receipt_matches(receipt: Option<BackendReceiptV1>, claim: &Self::Claim) -> bool {
-        matches!(receipt, Some(BackendReceiptV1::ProvenanceV3(actual)) if actual == claim.receipt)
+        matches!(
+            receipt,
+            Some(BackendReceiptV1::ProvenanceV3(actual))
+                | Some(BackendReceiptV1::LoadReadyV3(actual, _))
+                if actual == claim.receipt
+        )
     }
 
     fn producer_matches(stable_source: &str, crate_name: &str, claim: &Self::Claim) -> bool {
@@ -1305,12 +1333,23 @@ fn reacquire_current_hsaco_publication_lease<S: ClaimSchema>(
     output
         .verify_path_identity()
         .map_err(ReacquisitionError::Filesystem)?;
-    validate_persisted_receipt::<S>(&output, claim)?;
-    let lease =
-        reacquire_current_publication_lease_locked(&output, S::plan(claim), S::files(claim))
-            .map_err(ReacquisitionError::Publication)?;
-    validate_persisted_receipt::<S>(&output, claim)?;
+    let lease = reacquire_current_hsaco_publication_lease_locked::<S>(&output, claim)?;
     drop(lock);
+    Ok(lease)
+}
+
+fn reacquire_current_hsaco_publication_lease_locked<S: ClaimSchema>(
+    output: &PinnedOutput,
+    claim: &S::Claim,
+) -> Result<DurableCurrentLinkPublicationLeaseV1, ReacquisitionError<S::CodecError>> {
+    S::validate(claim).map_err(ReacquisitionError::InvalidClaim)?;
+    output
+        .verify_path_identity()
+        .map_err(ReacquisitionError::Filesystem)?;
+    validate_persisted_receipt::<S>(output, claim)?;
+    let lease = reacquire_current_publication_lease_locked(output, S::plan(claim), S::files(claim))
+        .map_err(ReacquisitionError::Publication)?;
+    validate_persisted_receipt::<S>(output, claim)?;
     Ok(lease)
 }
 
@@ -1931,6 +1970,20 @@ mod tests {
         assert_eq!(
             DurablePublishedHsacoClaimV3::decode_canonical(&corrupt),
             Err(DurablePublishedClaimCodecErrorV3::ChecksumMismatch)
+        );
+    }
+
+    #[test]
+    fn v3_claim_encoding_uses_fallible_exact_reservation_without_changing_bytes() {
+        let claim = full_v3_claim();
+        let encoded = claim.encode_canonical().unwrap();
+        assert_eq!(encoded.len(), CLAIM_CANONICAL_BYTES_V3);
+        assert_eq!(encoded, claim.encode_canonical().unwrap());
+        assert_eq!(
+            claim_encoding_vec_v3(usize::MAX),
+            Err(DurablePublishedClaimCodecErrorV3::AllocationFailed {
+                requested: usize::MAX,
+            })
         );
     }
 

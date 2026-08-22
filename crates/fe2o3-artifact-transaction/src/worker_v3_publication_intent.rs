@@ -14,14 +14,16 @@
 //! component's producer, establish that metadata is a canonical finalizer transcript, derive
 //! semantic identities, or grant publication, loading, or launch authority.
 
-use crate::attempt::AttemptPhase;
+use crate::attempt::{AttemptPhase, BackendReceiptV1};
+use crate::worker_v3_load_readiness::validate_durable_worker_v3_load_readiness_locked_v1;
 use crate::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildInvocation, BuildSession,
     CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
     MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, MAX_OUTPUT_ENTRIES,
     PackageIdentityV1, PinnedOutput, PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
-    ValidatedResponseIdentityV1, read_attempt_registry,
+    ValidatedResponseIdentityV1, WorkerV3LoadReadinessErrorV1, WorkerV3LoadReadinessReceiptV1,
+    read_attempt_registry,
 };
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, RenameFlags, fstat, fsync, openat, renameat, renameat_with,
@@ -1288,6 +1290,8 @@ pub enum WorkerV3PublicationIntentErrorV1 {
     IdentityMismatch,
     /// The current occurrence has no exact completed backend publication receipt.
     ReceiptNotDurable,
+    /// Exact durable load-envelope custody could not be revalidated.
+    LoadReadiness(WorkerV3LoadReadinessErrorV1),
     /// Durable cleanup has started and normal restart recovery is no longer available.
     RetirementInProgress,
     /// Marker-only retirement resume was requested before a durable retirement marker existed.
@@ -1358,6 +1362,10 @@ impl fmt::Display for WorkerV3PublicationIntentErrorV1 {
             Self::ReceiptNotDurable => formatter.write_str(
                 "the exact backend publication receipt is not durable for this Worker V3 intent",
             ),
+            Self::LoadReadiness(error) => write!(
+                formatter,
+                "Worker V3 publication intent has no exact durable load-envelope custody: {error}"
+            ),
             Self::RetirementInProgress => formatter.write_str(
                 "Worker V3 publication-intent retirement is already in progress",
             ),
@@ -1387,6 +1395,7 @@ impl std::error::Error for WorkerV3PublicationIntentErrorV1 {
             Self::Store(error) => Some(error),
             Self::Io(error) => Some(error),
             Self::Codec(error) => Some(error),
+            Self::LoadReadiness(error) => Some(error),
             _ => None,
         }
     }
@@ -1407,6 +1416,12 @@ impl From<std::io::Error> for WorkerV3PublicationIntentErrorV1 {
 impl From<WorkerV3PublicationIntentCodecErrorV1> for WorkerV3PublicationIntentErrorV1 {
     fn from(error: WorkerV3PublicationIntentCodecErrorV1) -> Self {
         Self::Codec(error)
+    }
+}
+
+impl From<WorkerV3LoadReadinessErrorV1> for WorkerV3PublicationIntentErrorV1 {
+    fn from(error: WorkerV3LoadReadinessErrorV1) -> Self {
+        Self::LoadReadiness(error)
     }
 }
 
@@ -1544,11 +1559,11 @@ pub fn persist_worker_v3_publication_intent_v1_with_options(
 
 /// Durably retires one exact committed Worker V3 restart intent.
 ///
-/// Current-generation restart evidence remains protected even after backend publication because
-/// publication does not prove that a durable load envelope can be reconstructed. Until that later
-/// readiness receipt exists, this operation returns
-/// [`WorkerV3PublicationIntentErrorV1::ReceiptNotDurable`] for the current occurrence. A strictly
-/// newer same-producer generation may retire a superseded intent. Cleanup first renames and
+/// Current-generation restart evidence remains protected even after backend publication. This
+/// legacy API intentionally accepts no readiness receipt and therefore always returns
+/// [`WorkerV3PublicationIntentErrorV1::ReceiptNotDurable`] for the current occurrence. Use
+/// [`retire_worker_v3_publication_intent_after_load_readiness_v1`] for current retirement. A
+/// strictly newer same-producer generation may retire a superseded intent. Cleanup first renames and
 /// synchronizes the validated record as an inert retirement marker, removes and synchronizes all
 /// attachments, and removes the marker last. Repeating this call resumes an interrupted
 /// retirement without making restart bytes recoverable again.
@@ -1590,7 +1605,60 @@ pub fn clear_worker_v3_publication_intent_v1_with_options(
         producer,
         attempt,
         Some(identity),
-        RetirementAuthorizationV1::ReceiptOrSuccessor,
+        RetirementAuthorizationV1::SuccessorOnly,
+        &mut faults,
+    )?;
+    Ok(())
+}
+
+/// Retires one exact current V3 intent only after exact durable envelope custody is revalidated.
+///
+/// The readiness receipt is sufficient solely because its exact opaque envelope durably retains
+/// all compact replay preimages. It does not authenticate descriptor-source evidence, perform
+/// semantic load admission, establish HSA readiness, or grant load or launch authority.
+pub fn retire_worker_v3_publication_intent_after_load_readiness_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    identity: WorkerV3PublicationIntentIdentityV1,
+    readiness: WorkerV3LoadReadinessReceiptV1,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    retire_worker_v3_publication_intent_after_load_readiness_v1_with_options(
+        output_dir,
+        producer,
+        attempt,
+        identity,
+        readiness,
+        WorkerV3PublicationIntentOptionsV1::default(),
+    )
+}
+
+/// Fault-injectable form of
+/// [`retire_worker_v3_publication_intent_after_load_readiness_v1`].
+pub fn retire_worker_v3_publication_intent_after_load_readiness_v1_with_options(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    identity: WorkerV3PublicationIntentIdentityV1,
+    readiness: WorkerV3LoadReadinessReceiptV1,
+    options: WorkerV3PublicationIntentOptionsV1,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    if attempt.session() == BuildSession::DIRECT || readiness.attempt() != attempt {
+        return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
+    }
+    let output = PinnedOutput::open_existing(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    let producer_key = producer_key(producer);
+    let names = IntentNames::new(producer_key, occurrence_key(producer_key, attempt))?;
+    let mut faults = FaultInjector::new(options.injected_crash);
+    retire_committed_occurrence_locked(
+        &output,
+        &names,
+        producer,
+        attempt,
+        Some(identity),
+        RetirementAuthorizationV1::ExactLoadReadiness(readiness),
         &mut faults,
     )?;
     Ok(())
@@ -1627,7 +1695,7 @@ pub fn resume_worker_v3_publication_intent_retirement_v1(
             attempt,
             candidate,
             None,
-            RetirementAuthorizationV1::ReceiptOrSuccessor,
+            RetirementAuthorizationV1::SuccessorOnly,
         )?;
         return Ok(());
     }
@@ -1647,7 +1715,7 @@ pub fn resume_worker_v3_publication_intent_retirement_v1(
             producer,
             attempt,
             expected_identity: None,
-            authorization: RetirementAuthorizationV1::ReceiptOrSuccessor,
+            authorization: RetirementAuthorizationV1::SuccessorOnly,
         },
         &mut faults,
     )?;
@@ -1899,8 +1967,8 @@ fn authorize_occurrence_scavenge(
 
 #[derive(Clone, Copy)]
 enum RetirementAuthorizationV1 {
-    ReceiptOrSuccessor,
     SuccessorOnly,
+    ExactLoadReadiness(WorkerV3LoadReadinessReceiptV1),
 }
 
 #[derive(Clone, Copy)]
@@ -2212,7 +2280,7 @@ fn authorize_retirement(
     output: &PinnedOutput,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
-    _intent: WorkerV3PublicationIntentRecordV1,
+    intent: WorkerV3PublicationIntentRecordV1,
     authorization: RetirementAuthorizationV1,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
     let attempts = read_attempt_registry(output)?;
@@ -2226,12 +2294,25 @@ fn authorize_retirement(
         && current.session == attempt.session()
         && current.invocation == attempt.invocation();
     if exact {
-        if matches!(authorization, RetirementAuthorizationV1::SuccessorOnly) {
-            return Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized);
+        let RetirementAuthorizationV1::ExactLoadReadiness(readiness) = authorization else {
+            return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
+        };
+        let Some(BackendReceiptV1::LoadReadyV3(backend, durable_readiness)) =
+            current.backend_receipt
+        else {
+            return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
+        };
+        if durable_readiness != readiness
+            || readiness.attempt() != attempt
+            || backend
+                .publication_binding()
+                .publication_intent_record_identity()
+                != intent.identity().as_bytes()
+        {
+            return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
         }
-        // Publication alone is insufficient: restart preimages must survive until a later
-        // durable load-envelope readiness receipt exists.
-        return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
+        validate_durable_worker_v3_load_readiness_locked_v1(output, backend, readiness)?;
+        return Ok(());
     }
     if current.generation > attempt.generation() {
         return Ok(());
