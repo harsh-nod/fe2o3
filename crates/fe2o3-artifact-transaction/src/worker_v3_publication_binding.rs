@@ -55,6 +55,9 @@ pub enum WorkerV3PublicationBindingErrorV1 {
         actual: u64,
     },
     InvalidCompilerClosure(CompilerClosureErrorV2),
+    AllocationFailed {
+        requested: usize,
+    },
     TooLarge {
         actual: usize,
         maximum: usize,
@@ -78,6 +81,10 @@ impl fmt::Display for WorkerV3PublicationBindingErrorV1 {
                 "{field} length {actual} is outside the durable artifact bound"
             ),
             Self::InvalidCompilerClosure(error) => error.fmt(formatter),
+            Self::AllocationFailed { requested } => write!(
+                formatter,
+                "could not reserve {requested} bytes for a Worker V3 publication binding"
+            ),
             Self::TooLarge { actual, maximum } => write!(
                 formatter,
                 "Worker V3 publication binding is {actual} bytes; maximum is {maximum}"
@@ -199,7 +206,12 @@ impl WorkerV3PublicationBindingV1 {
 
     pub fn encode_canonical(self) -> Result<Vec<u8>, WorkerV3PublicationBindingErrorV1> {
         self.validate()?;
-        let mut bytes = Vec::with_capacity(BINDING_CANONICAL_BYTES_V1);
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(BINDING_CANONICAL_BYTES_V1)
+            .map_err(|_| WorkerV3PublicationBindingErrorV1::AllocationFailed {
+                requested: BINDING_CANONICAL_BYTES_V1,
+            })?;
         bytes.extend_from_slice(BINDING_MAGIC_V1);
         bytes.extend_from_slice(&BINDING_VERSION_V1.to_le_bytes());
         push_compiler_closure(&mut bytes, self.compiler_closure);
