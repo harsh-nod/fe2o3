@@ -56,7 +56,7 @@ fn proof_names_every_phase_a_obligation() {
 fn refinement_proof_binds_identity_profile_mask_values_and_ownership() {
     for marker in [
         "pub open spec fn attributed_source_identity_v1",
-        "word0: 0x01ac1365b0fdfe91",
+        "word0: 0xc649e38712232ed4",
         "pub open spec fn kernel_ir_schema_identity_v1",
         "word0: 0x382fcf4c8733e55d",
         "pub open spec fn exact_source_model_to_kernel_ir_profile_v1",
@@ -222,9 +222,9 @@ fn documentation_keeps_refinement_and_execution_boundaries_explicit() {
     for marker in [
         "Source-model-to-Kernel-IR refinement",
         "Reviewed attributed-source-to-CPU correspondence",
-        "01ac1365b0fdfe91cdc8f7cf6a14ae5acbea41528103ec3de5fe6d895261625e",
+        "c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2",
         "837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407",
-        "7b910de7f37d5fbdf8e72103f353dc743bd1292af39c6efcee405f3fcf5a9514",
+        "7ac5f3d6b90891c4a3e0b6e932a71c46ff26a65102cc24186a5c543f94abe177",
         "b8daeb2bc953924a424542820bed566e52d57290",
         "382fcf4c8733e55dcacaf8b25691a270a9adcf68912a679c6ea848fee62f84be",
         "proves_source_to_model_refinement=false",

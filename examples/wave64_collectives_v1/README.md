@@ -63,9 +63,9 @@ bit exact.
 
 The content binding carries exact SHA-256 identities:
 
-- attributed source: `01ac1365b0fdfe91cdc8f7cf6a14ae5acbea41528103ec3de5fe6d895261625e`;
+- attributed source: `c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2`;
 - CPU oracle: `837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407`;
-- reviewed correspondence: `7b910de7f37d5fbdf8e72103f353dc743bd1292af39c6efcee405f3fcf5a9514`.
+- reviewed correspondence: `7ac5f3d6b90891c4a3e0b6e932a71c46ff26a65102cc24186a5c543f94abe177`.
 
 Those identities are domain-separated with an outer 20-byte Git commit. The
 formal profile pins public base
@@ -92,7 +92,7 @@ Rust syntax an operational semantics and connects that semantics to the model.
 CPU source model and an independent interpreter of the exact canonical
 semantic Kernel IR. It binds both checked-in files by SHA-256:
 
-- attributed source: `01ac1365b0fdfe91cdc8f7cf6a14ae5acbea41528103ec3de5fe6d895261625e`;
+- attributed source: `c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2`;
 - Kernel-IR schema: `382fcf4c8733e55dcacaf8b25691a270a9adcf68912a679c6ea848fee62f84be`.
 
 The checker first requires the exact gfx942:xnack-, COV6, Wave64, WG64,
@@ -145,5 +145,6 @@ with `requires the measured direct LLVM/LLD worker built for gfx942`; the
 current protected hardware test is separately ignored with `requires all exact
 build pins and one isolated MI300X gfx942:xnack- device`. These independently
 bounded and differently timed receipts are not silently joined into this proof.
+The bounded worker uses target-machine emission and the in-process LLD library API.
 No COMGR path or shell invocation of `clang`, `llc`, or `ld.lld` is introduced
-here.
+by this proof.

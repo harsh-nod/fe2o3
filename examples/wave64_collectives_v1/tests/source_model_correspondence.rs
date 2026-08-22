@@ -278,7 +278,7 @@ fn exact_identities_and_transcript_fail_closed_under_mutation() {
     let exact = exact_source_cpu_content_identities_v2();
     assert_eq!(
         encode_hex(&exact.attributed_source_sha256),
-        "01ac1365b0fdfe91cdc8f7cf6a14ae5acbea41528103ec3de5fe6d895261625e"
+        "c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2"
     );
     assert_eq!(
         encode_hex(&exact.cpu_oracle_sha256),
@@ -286,7 +286,7 @@ fn exact_identities_and_transcript_fail_closed_under_mutation() {
     );
     assert_eq!(
         encode_hex(&exact.correspondence_sha256),
-        "7b910de7f37d5fbdf8e72103f353dc743bd1292af39c6efcee405f3fcf5a9514"
+        "7ac5f3d6b90891c4a3e0b6e932a71c46ff26a65102cc24186a5c543f94abe177"
     );
     assert_eq!(
         verus_digest("attributed_source_identity_v2"),

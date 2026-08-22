@@ -13,10 +13,10 @@ pub struct Digest256V1 {
 /// SHA-256 of the exact checked-in attributed `src/kernel.rs`.
 pub open spec fn attributed_source_identity_v1() -> Digest256V1 {
     Digest256V1 {
-        word0: 0x01ac1365b0fdfe91,
-        word1: 0xcdc8f7cf6a14ae5a,
-        word2: 0xcbea41528103ec3d,
-        word3: 0xe5fe6d895261625e,
+        word0: 0xc649e38712232ed4,
+        word1: 0x5c1d2f6f8a2a4940,
+        word2: 0x5f12a5e308907b32,
+        word3: 0x65c2415f227803a2,
     }
 }
 
