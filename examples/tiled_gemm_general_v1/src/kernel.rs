@@ -2,7 +2,7 @@
 
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
-use fe2o3_device::{kernel, trap, DisjointSlice};
+use fe2o3_device::{DisjointSlice, kernel, trap};
 use fe2o3_gemm_device_v1::Gfx942TiledGemmWave64V1;
 
 /// Exact workgroup dimensions required by the positive source contract.

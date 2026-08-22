@@ -16,7 +16,7 @@ fn type_check_initialized_tile(
     tile: &LdsTile16x16<'_, Bf16, LdsInitialized>,
     lane: &WaveLane<Wave64>,
 ) {
-    let _: Option<Bf16MfmaFragment> = tile.read_mfma_fragment(lane);
+    let _: Bf16MfmaFragment = tile.read_mfma_fragment(lane);
 }
 
 fn main() {

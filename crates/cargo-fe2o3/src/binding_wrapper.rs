@@ -107,6 +107,8 @@ const ROW_SOFTMAX_V1_PROVISION_VALUE: &str = "row-softmax-v1-provision";
 const ROW_SOFTMAX_V1_RUN_VALUE: &str = "row-softmax-v1-run";
 const ROW_SOFTMAX_V1_PROVISION_PREFIX: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_OBSERVATION=";
 const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
+const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
+    "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1";
 const WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2";
 const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
@@ -382,6 +384,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         Err(error) => return Err(error.into()),
     };
     let pinned_rustc = pin_parent_rustc_descriptor(invocation.executable(), expected_rustc_sha256)?;
+    let protected_invocation = selected_pipeline_requires_protected_invocation();
     let (
         build_observation,
         managed_attempt,
@@ -493,8 +496,10 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
             {
                 capabilities.prepare_unmanaged_production_command(command.as_command_mut())?;
+            } else if protected_invocation {
+                capabilities.prepare_protected_command(command.as_command_mut())?;
             } else {
-                capabilities.prepare_command(command.as_command_mut())?;
+                capabilities.prepare_qualification_command(command.as_command_mut())?;
             }
         }
         configure_build_observation_environment(command.as_command_mut(), build_observation);
@@ -585,7 +590,11 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                         "cannot capture inert prepared rustc invocation: {error}"
                     ))
                 })?;
-                let protected_compiler_closure = capabilities.protected_compiler_closure()?;
+                let protected_compiler_closure = if protected_invocation {
+                    capabilities.protected_compiler_closure()?
+                } else {
+                    None
+                };
                 let capture = InertPreparedRustcInvocationCapture::from_v2_and_protected_closure(
                     capture_v2,
                     protected_compiler_closure,
@@ -760,6 +769,24 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         }
     }
     Ok(status)
+}
+
+fn selected_pipeline_requires_protected_invocation() -> bool {
+    pipeline_requires_protected_invocation(
+        std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref(),
+        cfg!(debug_assertions)
+            && std::env::var_os(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref()
+                == Some(OsStr::new("1")),
+    )
+}
+
+fn pipeline_requires_protected_invocation(
+    pipeline: Option<&OsStr>,
+    explicit_unprotected_qualification: bool,
+) -> bool {
+    pipeline == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
+        || (pipeline == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+            && !explicit_unprotected_qualification)
 }
 
 fn configure_build_observation_environment(
@@ -1431,23 +1458,28 @@ fn materialize_row_softmax_v1_child_environment(
             }
         }
     }
-    let closure = final_environment
-        .get(OsStr::new(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV))
-        .ok_or_else(|| {
-            BindingWrapperError::BuildObservation(
-                "row-softmax command has no broker-authenticated compiler closure".to_owned(),
-            )
-        })?;
-    let closure = os_bytes(closure);
-    if closure.len() != 64
-        || closure.iter().all(|byte| *byte == b'0')
-        || !closure
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
-    {
-        return Err(BindingWrapperError::BuildObservation(
-            "row-softmax command has a noncanonical compiler closure".to_owned(),
-        ));
+    let unprotected_qualification = final_environment
+        .get(OsStr::new(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV))
+        .is_some_and(|value| value == "1");
+    let backend_name = if unprotected_qualification {
+        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1
+    } else {
+        CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2
+    };
+    require_canonical_sha256_environment(&final_environment, backend_name, "row-softmax")?;
+    if unprotected_qualification {
+        if final_environment.contains_key(OsStr::new(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)) {
+            return Err(BindingWrapperError::BuildObservation(
+                "unprotected row-softmax qualification received protected compiler authority"
+                    .to_owned(),
+            ));
+        }
+    } else {
+        require_canonical_sha256_environment(
+            &final_environment,
+            crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
+            "row-softmax",
+        )?;
     }
     command.env_clear();
     command.envs(&final_environment);
@@ -1864,17 +1896,11 @@ fn validate_scalar_gemm_v1_final_environment(
             "scalar GEMM final environment has invalid FE2O3_BUILD_ATTEMPT_V1".to_owned(),
         ));
     }
-    let backend = required(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)?;
-    if backend.len() != 64
-        || backend.bytes().all(|byte| byte == b'0')
-        || !backend
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(BindingWrapperError::BuildObservation(
-            "scalar GEMM final environment has invalid backend observation".to_owned(),
-        ));
-    }
+    require_canonical_sha256_environment(
+        environment,
+        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
+        "scalar GEMM",
+    )?;
     Ok(())
 }
 
@@ -1934,16 +1960,36 @@ fn validate_general_gemm_v1_final_environment(
             "general GEMM final environment has invalid FE2O3_BUILD_ATTEMPT_V1".to_owned(),
         ));
     }
-    let backend = required(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)?;
-    if backend.len() != 64
-        || backend.bytes().all(|byte| byte == b'0')
-        || !backend
+    require_canonical_sha256_environment(
+        environment,
+        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
+        "general GEMM",
+    )?;
+    Ok(())
+}
+
+fn require_canonical_sha256_environment(
+    environment: &BTreeMap<OsString, OsString>,
+    name: &'static str,
+    profile: &'static str,
+) -> Result<(), BindingWrapperError> {
+    let value = environment
+        .get(OsStr::new(name))
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            BindingWrapperError::BuildObservation(format!(
+                "{profile} final environment is missing valid {name}"
+            ))
+        })?;
+    if value.len() != 64
+        || value.bytes().all(|byte| byte == b'0')
+        || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(BindingWrapperError::BuildObservation(
-            "general GEMM final environment has invalid backend observation".to_owned(),
-        ));
+        return Err(BindingWrapperError::BuildObservation(format!(
+            "{profile} final environment has invalid {name}"
+        )));
     }
     Ok(())
 }
@@ -1985,6 +2031,7 @@ fn managed_s09_child_environment(name: &OsStr) -> bool {
             | b"FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2"
             | b"FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1"
             | b"FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2"
+            | b"FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1"
             | b"FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2"
             | b"FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2"
             | b"FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2"
@@ -2478,13 +2525,19 @@ impl CompilerCapabilities {
         )))
     }
 
-    fn prepare_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
+    fn prepare_artifact_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
         let artifact_path = PathBuf::from(format!("/proc/self/fd/{ARTIFACT_CHILD_FD}"));
         self.prepare_backend_command(command)?;
         self.artifact
             .replace_for_child_at(command, ARTIFACT_CHILD_FD)
             .map_err(BindingWrapperError::ChildCapability)?;
         command.env(HSACO_DIR_ENV, artifact_path);
+        Ok(())
+    }
+
+    fn prepare_protected_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
+        self.prepare_artifact_command(command)?;
+        command.env_remove(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1);
         command.env(
             CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
             hex(&self.backend.sha256()[..]),
@@ -2498,6 +2551,21 @@ impl CompilerCapabilities {
                 .inherit_for_child(command)
                 .map_err(BindingWrapperError::CapabilityBroker)?;
         }
+        Ok(())
+    }
+
+    fn prepare_qualification_command(
+        &self,
+        command: &mut Command,
+    ) -> Result<(), BindingWrapperError> {
+        self.prepare_artifact_command(command)?;
+        command
+            .env_remove(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)
+            .env_remove(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)
+            .env(
+                QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
+                hex(&self.backend.sha256()[..]),
+            );
         Ok(())
     }
 
@@ -2567,6 +2635,7 @@ fn scope_unmanaged_production_environment(command: &mut Command) {
         "FE2O3_CODEGEN_PIPELINE",
         HSACO_DIR_ENV,
         CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
+        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
         crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
         crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV,
         WORKER_V2_CONFIG_ENV,
@@ -4663,8 +4732,9 @@ mod tests {
         LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3, ManagedAttempt,
         ManagedAttemptRevocationGuard, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
-        PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
-        ProtectedWorkerV2TransitionBlocker, ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1,
+        PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PRODUCTION_V1_PIPELINE,
+        PreparedRustcConsistencyExpectation, ProtectedWorkerV2TransitionBlocker,
+        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1,
         ROW_SOFTMAX_V1_PIPELINE, ROW_SOFTMAX_V1_RUN_VALUE, RustcInvocationV2,
         WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
         WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, WorkerV2BindingSchema,
@@ -4678,8 +4748,9 @@ mod tests {
         materialize_row_softmax_v1_child_environment, materialize_s09_child_environment,
         materialize_scalar_gemm_v1_child_environment, measure_build_executable,
         observe_pinned_cargo_image_and_parent, ordered_metadata_values, os_bytes,
-        pre_spawn_failure, prepare_managed_attempt, prepared_rustc_command_sha256,
-        process_start_time_ticks, protected_worker_v2_transition_blocker, publish_finish_and_clear,
+        pipeline_requires_protected_invocation, pre_spawn_failure, prepare_managed_attempt,
+        prepared_rustc_command_sha256, process_start_time_ticks,
+        protected_worker_v2_transition_blocker, publish_finish_and_clear,
         publish_finish_and_clear_protected, reject_authority_linker_arguments,
         reject_uninspectable_rustc_args, resolve_command_executable_with_path,
         row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
@@ -5640,6 +5711,30 @@ mod tests {
     }
 
     #[test]
+    fn protected_invocation_authority_is_scoped_to_production_routes() {
+        assert!(pipeline_requires_protected_invocation(
+            Some(OsStr::new(PRODUCTION_V1_PIPELINE)),
+            false,
+        ));
+        assert!(pipeline_requires_protected_invocation(
+            Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)),
+            false,
+        ));
+        assert!(!pipeline_requires_protected_invocation(
+            Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)),
+            true,
+        ));
+        for pipeline in [
+            None,
+            Some(OsStr::new("kernel-ir-v1")),
+            Some(OsStr::new("kernel-ir-worker-v2")),
+            Some(OsStr::new("collected-general-gemm-v1")),
+        ] {
+            assert!(!pipeline_requires_protected_invocation(pipeline, false));
+        }
+    }
+
+    #[test]
     fn unmanaged_dependencies_do_not_inherit_production_authority_signals() {
         let mut command = Command::new("/proc/self/fd/194");
         for (name, value) in [
@@ -5699,7 +5794,7 @@ mod tests {
             .env("FE2O3_HSACO_DIR", "/proc/self/fd/197")
             .env("FE2O3_BUILD_ATTEMPT_V1", "attempt")
             .env(
-                "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
+                "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1",
                 "44".repeat(32),
             );
         let inherited = [
@@ -5801,7 +5896,7 @@ mod tests {
             .env("FE2O3_BUILD_ATTEMPT_V1", attempt)
             .env("FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2", "33".repeat(32))
             .env(
-                "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
+                "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1",
                 "44".repeat(32),
             )
             .env("FE2O3_CRATE_BINDING_ID_V1", "55".repeat(32))
@@ -5853,7 +5948,7 @@ mod tests {
             .env("FE2O3_HSACO_DIR", "/proc/self/fd/197")
             .env("FE2O3_BUILD_ATTEMPT_V1", attempt)
             .env(
-                "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
+                "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1",
                 "44".repeat(32),
             )
             .env_remove("FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1");
@@ -6067,7 +6162,9 @@ mod tests {
             Some(&OsStr::new("/proc/self/fd/197"))
         );
         assert!(effective.contains_key(OsStr::new("FE2O3_BUILD_ATTEMPT_V1")));
-        assert!(effective.contains_key(OsStr::new("FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2")));
+        assert!(
+            effective.contains_key(OsStr::new("FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1"))
+        );
         for discarded in [
             "HOME",
             "CARGO_PKG_NAME",
@@ -6300,7 +6397,7 @@ mod tests {
             .env("TMPDIR", "/proc/self/fd/197/private")
             .env("LD_LIBRARY_PATH", "/proc/self/fd/193")
             .env_remove("LD_PRELOAD")
-            .env(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV, "ab".repeat(32))
+            .env(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, "ab".repeat(32))
             .env("FE2O3_BUILD_ATTEMPT_V1", "attempt");
         let mut inherited = fixed().to_vec();
         inherited.push((
@@ -6324,9 +6421,14 @@ mod tests {
                 .any(|(name, _)| name == "LD_PRELOAD")
         );
         assert!(complete.entries.contains(&(
-            OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
+            OsString::from(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1),
             OsString::from("ab".repeat(32)),
         )));
+        assert!(
+            !complete.entries.iter().any(|(name, _)| {
+                name == OsStr::new(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)
+            })
+        );
         assert!(complete.entries.contains(&(
             OsString::from(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV),
             OsString::from("1"),
@@ -6345,7 +6447,7 @@ mod tests {
                 .env("LANG", "C.UTF-8")
                 .env("PATH", "/usr/bin")
                 .env("TMPDIR", "/proc/self/fd/197/private")
-                .env(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV, "ab".repeat(32));
+                .env(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, "ab".repeat(32));
             let mut inherited = fixed().to_vec();
             inherited.push((OsString::from(name), OsString::from("attacker")));
             let error =

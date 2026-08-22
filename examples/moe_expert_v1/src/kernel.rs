@@ -65,14 +65,8 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
     weight_lds.write_mfma_fragment(&lane, weight_fragment);
     let (activation_lds, weight_lds) =
         gfx942_publish_lds_bf16_tile_pair_m16x16_v1(activation_lds, weight_lds);
-    let Some(lhs) = activation_lds.read_mfma_fragment(&lane) else {
-        fe2o3_device::trap();
-        return;
-    };
-    let Some(rhs) = weight_lds.read_mfma_fragment(&lane) else {
-        fe2o3_device::trap();
-        return;
-    };
+    let lhs = activation_lds.read_mfma_fragment(&lane);
+    let rhs = weight_lds.read_mfma_fragment(&lane);
     let matrix = DeviceMatrix::current();
     let result = matrix
         .multiply_accumulate(lhs, rhs, F32AccumulatorFragment::ZERO)

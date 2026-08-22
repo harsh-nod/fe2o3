@@ -1,4 +1,4 @@
-use fe2o3_core::{DeviceBuffer, GpuContext};
+use fe2o3_core::{DeviceBuffer, Event, GpuContext};
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
 include!("vecadd_body.rs");
@@ -16,25 +16,83 @@ pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    const N: usize = 1024;
+    const DEFAULT_N: usize = 1024;
 
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    let (n, warmups, samples, launches_per_sample) = match arguments.as_slice() {
+        [] => (DEFAULT_N, 0, 0, 1),
+        [mode, n, warmups, samples, launches] if mode == "--benchmark" => (
+            n.parse()?,
+            warmups.parse()?,
+            samples.parse()?,
+            launches.parse()?,
+        ),
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "usage: fe2o3-vecadd [--benchmark N WARMUPS SAMPLES LAUNCHES_PER_SAMPLE]",
+            )
+            .into());
+        }
+    };
+    if n == 0 || n > u32::MAX as usize || (samples != 0 && launches_per_sample == 0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "VecAdd requires 1 <= N <= u32::MAX and a nonzero timed batch",
+        )
+        .into());
+    }
     let context = GpuContext::new(0)?;
     let stream = context.default_stream();
 
-    let a_host: Vec<f32> = (0..N).map(|i| i as f32).collect();
-    let b_host: Vec<f32> = (0..N).map(|i| (i * 2) as f32).collect();
+    let a_host: Vec<f32> = (0..n).map(|i| i as f32).collect();
+    let b_host: Vec<f32> = (0..n).map(|i| i as f32 * 2.0).collect();
 
     let a_dev = DeviceBuffer::from_host(&stream, &a_host)?;
     let b_dev = DeviceBuffer::from_host(&stream, &b_host)?;
-    let mut c_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
+    let mut c_dev = DeviceBuffer::<f32>::zeroed(&stream, n)?;
 
     let kernel = vecadd_gpu::Kernel::load(&context)?;
-    kernel
-        .prepare(&a_dev, &b_dev, &mut c_dev)?
-        .launch(&stream)?;
+    for _ in 0..warmups {
+        kernel
+            .prepare(&a_dev, &b_dev, &mut c_dev)?
+            .launch(&stream)?;
+    }
+
+    if samples == 0 {
+        kernel
+            .prepare(&a_dev, &b_dev, &mut c_dev)?
+            .launch(&stream)?;
+    } else {
+        stream.synchronize()?;
+        let mut start = Event::new(&context)?;
+        let mut stop = Event::new(&context)?;
+        let mut microseconds = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            start.record(&stream)?;
+            for _ in 0..launches_per_sample {
+                kernel
+                    .prepare(&a_dev, &b_dev, &mut c_dev)?
+                    .launch(&stream)?;
+            }
+            stop.record(&stream)?;
+            stop.synchronize()?;
+            microseconds
+                .push(stop.elapsed_time_ms_since(&start)? * 1_000.0 / launches_per_sample as f32);
+        }
+        microseconds.sort_by(f32::total_cmp);
+        let median_us = percentile(&microseconds, 50);
+        let bytes_per_launch = (3 * n * std::mem::size_of::<f32>()) as f64;
+        let bandwidth_gb_s = bytes_per_launch / f64::from(median_us) / 1_000.0;
+        println!(
+            "fe2o3 vecadd dispatch path: n={n} samples={samples} batch={launches_per_sample} event_interval_median_us={median_us:.3} p10_us={:.3} p90_us={:.3} effective_bandwidth_gb_s={bandwidth_gb_s:.2}",
+            percentile(&microseconds, 10),
+            percentile(&microseconds, 90),
+        );
+    }
 
     let c_host = c_dev.to_host_vec(&stream)?;
-    for i in 0..N {
+    for i in 0..n {
         let expected = a_host[i] + b_host[i];
         assert!(
             (c_host[i] - expected).abs() < 1e-5,
@@ -43,8 +101,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    println!("vecadd passed for {N} elements");
+    println!("vecadd passed for {n} elements");
     Ok(())
+}
+
+fn percentile(sorted: &[f32], percentile: usize) -> f32 {
+    sorted[(sorted.len() - 1) * percentile / 100]
 }
 
 #[cfg(test)]

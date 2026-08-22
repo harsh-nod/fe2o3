@@ -97,14 +97,8 @@ pub fn tiled_gemm_lds_slice1(
     b_lds.write_mfma_fragment(&lane, b_global);
 
     let (a_lds, b_lds) = gfx942_publish_lds_bf16_tile_pair_m16x16_v1(a_lds, b_lds);
-    let Some(lhs) = a_lds.read_mfma_fragment(&lane) else {
-        fe2o3_device::trap();
-        return;
-    };
-    let Some(rhs) = b_lds.read_mfma_fragment(&lane) else {
-        fe2o3_device::trap();
-        return;
-    };
+    let lhs = a_lds.read_mfma_fragment(&lane);
+    let rhs = b_lds.read_mfma_fragment(&lane);
 
     let matrix = DeviceMatrix::current();
     let result = matrix

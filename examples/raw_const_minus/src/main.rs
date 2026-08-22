@@ -9,12 +9,20 @@ const LAST: usize = N - 1;
 #[kernel]
 pub fn raw_const_minus(x: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
-    let source = LAST - idx.get();
-    if source < x.len() {
-        if let Some(value) = out.get_mut(idx) {
-            *value = x[source];
-        }
+    let base = idx.get();
+    let Some(value) = out.get_mut(idx) else {
+        return;
+    };
+    if base > LAST {
+        fe2o3_device::trap();
+        return;
     }
+    let source = LAST - base;
+    if source >= x.len() {
+        fe2o3_device::trap();
+        return;
+    }
+    *value = x[source];
 }
 
 fn main() -> fe2o3_core::Result<()> {

@@ -5,15 +5,17 @@ use crate::{
     HsaExecutableObjectIdentityV1, HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1,
     HsaLaunchGeometryV1, HsaUnloadObservationV1, ReviewedHsaExecutableLifecycleAdapterV1,
     generated_workgroup_lds_reduction_v1::{
-        COMPLETE_KERNARG_BYTES, DESCRIPTOR_KERNARG_ALIGNMENT, DYNAMIC_LDS_BYTES,
-        EXPLICIT_KERNARG_BYTES, EXPORT_SYMBOL as LDS_EXPORT_SYMBOL, GRID,
-        GeneratedWorkgroupLdsReductionV1HostAdapterV1, HIDDEN_DYNAMIC_LDS_OFFSET,
-        HIDDEN_DYNAMIC_LDS_VALUE, PRIVATE_SEGMENT_BYTES, RUNTIME_KERNARG_ALIGNMENT,
-        STATIC_GROUP_SEGMENT_BYTES, TARGET, WAVEFRONT_SIZE, WORKGROUP,
+        COMPLETE_KERNARG_BYTES as LDS_COMPLETE_KERNARG_BYTES, DESCRIPTOR_KERNARG_ALIGNMENT,
+        DYNAMIC_LDS_BYTES, EXPLICIT_KERNARG_BYTES as LDS_EXPLICIT_KERNARG_BYTES,
+        EXPORT_SYMBOL as LDS_EXPORT_SYMBOL, GRID, GeneratedWorkgroupLdsReductionV1HostAdapterV1,
+        HIDDEN_DYNAMIC_LDS_OFFSET, HIDDEN_DYNAMIC_LDS_VALUE, PRIVATE_SEGMENT_BYTES,
+        RUNTIME_KERNARG_ALIGNMENT, STATIC_GROUP_SEGMENT_BYTES, TARGET, WAVEFRONT_SIZE, WORKGROUP,
     },
     generated_workgroup_scoped_atomic_v1::{
-        DYNAMIC_LDS_BYTES as ATOMIC_DYNAMIC_LDS_BYTES, EXPORT_SYMBOL as ATOMIC_EXPORT_SYMBOL,
-        GeneratedWorkgroupScopedAtomicV1HostAdapterV1,
+        COMPLETE_KERNARG_BYTES as ATOMIC_COMPLETE_KERNARG_BYTES,
+        DYNAMIC_LDS_BYTES as ATOMIC_DYNAMIC_LDS_BYTES,
+        EXPLICIT_KERNARG_BYTES as ATOMIC_EXPLICIT_KERNARG_BYTES,
+        EXPORT_SYMBOL as ATOMIC_EXPORT_SYMBOL, GeneratedWorkgroupScopedAtomicV1HostAdapterV1,
     },
 };
 use fe2o3_amd_target::AmdTargetId;
@@ -28,7 +30,8 @@ use fe2o3_kernel_descriptor::CodeObjectVersion;
 use sha2::{Digest, Sha256};
 use std::{error::Error, fmt, marker::PhantomData};
 
-const IMPLICIT_KERNARG_BYTES: usize = COMPLETE_KERNARG_BYTES - EXPLICIT_KERNARG_BYTES;
+const IMPLICIT_KERNARG_BYTES: usize = 256;
+const MAX_COMPLETE_KERNARG_BYTES: usize = ATOMIC_COMPLETE_KERNARG_BYTES;
 const UNLOAD_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKGROUP-SYNC/UNLOAD/V1\0";
 
 /// Exact finalizer and compiler-profile identities retained by the lifecycle.
@@ -381,6 +384,8 @@ pub struct WorkgroupScopedAtomicProfileV1;
 pub trait ExactWorkgroupSyncHostProfileV1 {
     const KIND: WorkgroupSyncProfileKindV1;
     const EXPORT_SYMBOL: &'static str;
+    const EXPLICIT_KERNARG_BYTES: usize;
+    const COMPLETE_KERNARG_BYTES: usize;
     const DYNAMIC_LDS_BYTES: u32;
     const HIDDEN_DYNAMIC_LDS_OFFSET: Option<usize>;
     const HIDDEN_DYNAMIC_LDS_VALUE: u32;
@@ -389,6 +394,8 @@ pub trait ExactWorkgroupSyncHostProfileV1 {
 impl ExactWorkgroupSyncHostProfileV1 for WorkgroupLdsReductionProfileV1 {
     const KIND: WorkgroupSyncProfileKindV1 = WorkgroupSyncProfileKindV1::LdsReduction;
     const EXPORT_SYMBOL: &'static str = LDS_EXPORT_SYMBOL;
+    const EXPLICIT_KERNARG_BYTES: usize = LDS_EXPLICIT_KERNARG_BYTES;
+    const COMPLETE_KERNARG_BYTES: usize = LDS_COMPLETE_KERNARG_BYTES;
     const DYNAMIC_LDS_BYTES: u32 = DYNAMIC_LDS_BYTES;
     const HIDDEN_DYNAMIC_LDS_OFFSET: Option<usize> = Some(HIDDEN_DYNAMIC_LDS_OFFSET);
     const HIDDEN_DYNAMIC_LDS_VALUE: u32 = HIDDEN_DYNAMIC_LDS_VALUE;
@@ -397,6 +404,8 @@ impl ExactWorkgroupSyncHostProfileV1 for WorkgroupLdsReductionProfileV1 {
 impl ExactWorkgroupSyncHostProfileV1 for WorkgroupScopedAtomicProfileV1 {
     const KIND: WorkgroupSyncProfileKindV1 = WorkgroupSyncProfileKindV1::ScopedAtomic;
     const EXPORT_SYMBOL: &'static str = ATOMIC_EXPORT_SYMBOL;
+    const EXPLICIT_KERNARG_BYTES: usize = ATOMIC_EXPLICIT_KERNARG_BYTES;
+    const COMPLETE_KERNARG_BYTES: usize = ATOMIC_COMPLETE_KERNARG_BYTES;
     const DYNAMIC_LDS_BYTES: u32 = ATOMIC_DYNAMIC_LDS_BYTES;
     const HIDDEN_DYNAMIC_LDS_OFFSET: Option<usize> = None;
     const HIDDEN_DYNAMIC_LDS_VALUE: u32 = 0;
@@ -414,7 +423,7 @@ impl ExactHostArgumentsV1<'_, '_, '_> {
             Self::Atomic(host) => host.observed_context_v1(),
         }
     }
-    fn explicit_kernarg(&self) -> &[u8; EXPLICIT_KERNARG_BYTES] {
+    fn explicit_kernarg(&self) -> &[u8] {
         match self {
             Self::Lds(host) => host.explicit_kernarg_bytes_v1(),
             Self::Atomic(host) => host.explicit_kernarg_bytes_v1(),
@@ -518,7 +527,7 @@ trait RetainedWorkgroupSyncV1 {
     fn ordinal_v1(&self) -> i32;
     fn finalized_bytes_v1(&self) -> &[u8];
     fn finalized_identity_v1(&self) -> ContentIdentityV1;
-    fn explicit_kernarg_v1(&self) -> &[u8; EXPLICIT_KERNARG_BYTES];
+    fn explicit_kernarg_v1(&self) -> &[u8];
 }
 
 impl<P> RetainedWorkgroupSyncV1 for JoinedWorkgroupSyncV1<'_, '_, '_, P> {
@@ -539,22 +548,24 @@ impl<P> RetainedWorkgroupSyncV1 for JoinedWorkgroupSyncV1<'_, '_, '_, P> {
     fn finalized_identity_v1(&self) -> ContentIdentityV1 {
         self.lineage.finalized_output
     }
-    fn explicit_kernarg_v1(&self) -> &[u8; EXPLICIT_KERNARG_BYTES] {
+    fn explicit_kernarg_v1(&self) -> &[u8] {
         self.host.explicit_kernarg()
     }
 }
 
 #[repr(C, align(16))]
 struct CompleteKernargV1 {
-    bytes: [u8; COMPLETE_KERNARG_BYTES],
+    bytes: [u8; MAX_COMPLETE_KERNARG_BYTES],
 }
 
 impl CompleteKernargV1 {
-    fn from_explicit(explicit: &[u8; EXPLICIT_KERNARG_BYTES]) -> Self {
+    fn from_explicit(explicit: &[u8], complete_bytes: usize) -> Self {
+        assert_eq!(complete_bytes - explicit.len(), IMPLICIT_KERNARG_BYTES);
+        assert!(complete_bytes <= MAX_COMPLETE_KERNARG_BYTES);
         let mut value = Self {
-            bytes: [0; COMPLETE_KERNARG_BYTES],
+            bytes: [0; MAX_COMPLETE_KERNARG_BYTES],
         };
-        value.bytes[..EXPLICIT_KERNARG_BYTES].copy_from_slice(explicit);
+        value.bytes[..explicit.len()].copy_from_slice(explicit);
         value
     }
 }
@@ -806,7 +817,8 @@ fn dispatch_and_wait<
     mut state: LoadedStateV1<R, A>,
 ) -> Result<QuiescentStateV1<R, A>, WorkgroupSyncDispatchErrorV1<A::Error>> {
     let geometry = exact_geometry::<P>();
-    let explicit = state.kernarg.bytes[..EXPLICIT_KERNARG_BYTES].to_vec();
+    let explicit = state.kernarg.bytes[..P::EXPLICIT_KERNARG_BYTES].to_vec();
+    let kernarg = &mut state.kernarg.bytes[..P::COMPLETE_KERNARG_BYTES];
     let executable = state.executable.as_ref().expect("loaded executable");
     let kernel = state.kernel.as_ref().expect("loaded kernel");
     let adapter = state.adapter.as_mut().expect("loaded adapter");
@@ -816,21 +828,21 @@ fn dispatch_and_wait<
             executable,
             kernel,
             geometry,
-            EXPLICIT_KERNARG_BYTES,
-            EXPLICIT_KERNARG_BYTES,
+            P::EXPLICIT_KERNARG_BYTES,
+            P::EXPLICIT_KERNARG_BYTES,
             IMPLICIT_KERNARG_BYTES,
-            &mut state.kernarg.bytes,
+            kernarg,
         )
     })
     .map_err(WorkgroupSyncDispatchErrorV1::ImplicitAdapter)?;
-    if state.kernarg.bytes[..EXPLICIT_KERNARG_BYTES] != *explicit {
+    if kernarg[..P::EXPLICIT_KERNARG_BYTES] != *explicit {
         return Err(WorkgroupSyncDispatchErrorV1::ExplicitKernargMutation);
     }
     validate_implicit::<P>(&state.load, &state.resolution, geometry, implicit)
         .map_err(WorkgroupSyncDispatchErrorV1::ImplicitObservation)?;
     if let Some(offset) = P::HIDDEN_DYNAMIC_LDS_OFFSET {
         let actual = u32::from_le_bytes(
-            state.kernarg.bytes[offset..offset + 4]
+            kernarg[offset..offset + 4]
                 .try_into()
                 .expect("exact hidden field"),
         );
@@ -838,10 +850,9 @@ fn dispatch_and_wait<
             return Err(WorkgroupSyncDispatchErrorV1::HiddenDynamicLdsMutation);
         }
     }
-    let dispatch = reviewed_call(|| unsafe {
-        adapter.launch_and_wait(executable, kernel, geometry, &mut state.kernarg.bytes)
-    })
-    .map_err(WorkgroupSyncDispatchErrorV1::DispatchAdapter)?;
+    let dispatch =
+        reviewed_call(|| unsafe { adapter.launch_and_wait(executable, kernel, geometry, kernarg) })
+            .map_err(WorkgroupSyncDispatchErrorV1::DispatchAdapter)?;
     validate_dispatch(&state.load, &state.resolution, geometry, &dispatch)
         .map_err(WorkgroupSyncDispatchErrorV1::DispatchObservation)?;
     drop(state.kernel.take());
@@ -911,7 +922,15 @@ fn load_after_context_match<
         terminal_unload(&mut adapter, executable, &environment, &load);
         return Err(WorkgroupSyncLoadErrorV1::ResourceObservation(field));
     }
-    let kernarg = CompleteKernargV1::from_explicit(retained.explicit_kernarg_v1());
+    let explicit = retained.explicit_kernarg_v1();
+    if explicit.len() != P::EXPLICIT_KERNARG_BYTES {
+        drop(kernel);
+        terminal_unload(&mut adapter, executable, &environment, &load);
+        return Err(WorkgroupSyncLoadErrorV1::KernelObservation(
+            "explicit kernarg length",
+        ));
+    }
+    let kernarg = CompleteKernargV1::from_explicit(explicit, P::COMPLETE_KERNARG_BYTES);
     if !(kernarg.bytes.as_ptr() as usize).is_multiple_of(RUNTIME_KERNARG_ALIGNMENT as usize) {
         drop(kernel);
         terminal_unload(&mut adapter, executable, &environment, &load);
@@ -984,8 +1003,8 @@ fn validate_join_borrowed<P: ExactWorkgroupSyncHostProfileV1>(
             host.grid() == GRID,
             host.workgroup() == WORKGROUP,
             host.wavefront_size() == WAVEFRONT_SIZE,
-            host.explicit_kernarg_byte_len() == EXPLICIT_KERNARG_BYTES,
-            host.complete_kernarg_byte_len() == COMPLETE_KERNARG_BYTES,
+            host.explicit_kernarg_byte_len() == P::EXPLICIT_KERNARG_BYTES,
+            host.complete_kernarg_byte_len() == P::COMPLETE_KERNARG_BYTES,
             host.descriptor_kernarg_alignment() == DESCRIPTOR_KERNARG_ALIGNMENT,
             host.runtime_kernarg_alignment() == RUNTIME_KERNARG_ALIGNMENT,
             host.static_group_segment_bytes() == STATIC_GROUP_SEGMENT_BYTES,
@@ -1002,8 +1021,8 @@ fn validate_join_borrowed<P: ExactWorkgroupSyncHostProfileV1>(
             host.grid() == GRID,
             host.workgroup() == WORKGROUP,
             host.wavefront_size() == WAVEFRONT_SIZE,
-            host.explicit_kernarg_byte_len() == EXPLICIT_KERNARG_BYTES,
-            host.complete_kernarg_byte_len() == COMPLETE_KERNARG_BYTES,
+            host.explicit_kernarg_byte_len() == P::EXPLICIT_KERNARG_BYTES,
+            host.complete_kernarg_byte_len() == P::COMPLETE_KERNARG_BYTES,
             host.descriptor_kernarg_alignment() == DESCRIPTOR_KERNARG_ALIGNMENT,
             host.runtime_kernarg_alignment() == RUNTIME_KERNARG_ALIGNMENT,
             host.static_group_segment_bytes() == STATIC_GROUP_SEGMENT_BYTES,
@@ -1117,7 +1136,7 @@ fn validate_kernel<P: ExactWorkgroupSyncHostProfileV1>(
         load.executable_object(),
         value.kernel_object(),
         P::EXPORT_SYMBOL,
-        COMPLETE_KERNARG_BYTES as u64,
+        P::COMPLETE_KERNARG_BYTES as u64,
         RUNTIME_KERNARG_ALIGNMENT,
     )
     .expect("static kernel observation");
@@ -1158,8 +1177,8 @@ fn validate_implicit<P: ExactWorkgroupSyncHostProfileV1>(
         load.executable_object(),
         resolution.kernel_object(),
         geometry,
-        EXPLICIT_KERNARG_BYTES as u64,
-        EXPLICIT_KERNARG_BYTES as u64,
+        P::EXPLICIT_KERNARG_BYTES as u64,
+        P::EXPLICIT_KERNARG_BYTES as u64,
         IMPLICIT_KERNARG_BYTES as u64,
         P::HIDDEN_DYNAMIC_LDS_OFFSET.map(|offset| offset as u64),
         P::HIDDEN_DYNAMIC_LDS_VALUE,
@@ -1241,12 +1260,14 @@ fn unload_identity(
     WorkgroupSyncUnloadIdentityV1(digest.finalize().into())
 }
 
-const _: () = assert!(EXPLICIT_KERNARG_BYTES == 40);
-const _: () = assert!(COMPLETE_KERNARG_BYTES == 296);
+const _: () = assert!(LDS_EXPLICIT_KERNARG_BYTES == 32);
+const _: () = assert!(LDS_COMPLETE_KERNARG_BYTES == 288);
+const _: () = assert!(ATOMIC_EXPLICIT_KERNARG_BYTES == 40);
+const _: () = assert!(ATOMIC_COMPLETE_KERNARG_BYTES == 296);
 const _: () = assert!(IMPLICIT_KERNARG_BYTES == 256);
 const _: () = assert!(STATIC_GROUP_SEGMENT_BYTES == 0);
 const _: () = assert!(PRIVATE_SEGMENT_BYTES == 0);
-const _: () = assert!(HIDDEN_DYNAMIC_LDS_OFFSET == 160);
+const _: () = assert!(HIDDEN_DYNAMIC_LDS_OFFSET == 152);
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -1259,7 +1280,7 @@ pub(crate) mod test_support {
     struct TestRetainedV1 {
         bytes: Vec<u8>,
         identity: ContentIdentityV1,
-        explicit: [u8; EXPLICIT_KERNARG_BYTES],
+        explicit: Vec<u8>,
         drops: Arc<AtomicUsize>,
     }
 
@@ -1282,7 +1303,7 @@ pub(crate) mod test_support {
         fn finalized_identity_v1(&self) -> ContentIdentityV1 {
             self.identity
         }
-        fn explicit_kernarg_v1(&self) -> &[u8; EXPLICIT_KERNARG_BYTES] {
+        fn explicit_kernarg_v1(&self) -> &[u8] {
             &self.explicit
         }
     }
@@ -1366,7 +1387,9 @@ pub(crate) mod test_support {
         let retained = TestRetainedV1 {
             identity: ContentIdentityV1::calculate(&bytes),
             bytes,
-            explicit: std::array::from_fn(|index| index as u8),
+            explicit: (0..P::EXPLICIT_KERNARG_BYTES)
+                .map(|index| index as u8)
+                .collect(),
             drops,
         };
         if !context_matches {
@@ -1380,11 +1403,17 @@ pub(crate) mod test_support {
         })
     }
 
-    pub(crate) const fn test_complete_bytes_v1() -> usize {
-        COMPLETE_KERNARG_BYTES
+    pub(crate) const fn test_complete_bytes_v1(profile: WorkgroupSyncProfileKindV1) -> usize {
+        match profile {
+            WorkgroupSyncProfileKindV1::LdsReduction => LDS_COMPLETE_KERNARG_BYTES,
+            WorkgroupSyncProfileKindV1::ScopedAtomic => ATOMIC_COMPLETE_KERNARG_BYTES,
+        }
     }
-    pub(crate) const fn test_explicit_bytes_v1() -> usize {
-        EXPLICIT_KERNARG_BYTES
+    pub(crate) const fn test_explicit_bytes_v1(profile: WorkgroupSyncProfileKindV1) -> usize {
+        match profile {
+            WorkgroupSyncProfileKindV1::LdsReduction => LDS_EXPLICIT_KERNARG_BYTES,
+            WorkgroupSyncProfileKindV1::ScopedAtomic => ATOMIC_EXPLICIT_KERNARG_BYTES,
+        }
     }
     pub(crate) const fn test_hidden_lds_offset_v1() -> usize {
         HIDDEN_DYNAMIC_LDS_OFFSET

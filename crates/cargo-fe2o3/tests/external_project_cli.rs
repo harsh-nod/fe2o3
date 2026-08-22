@@ -3225,10 +3225,16 @@ fn application_runner_scrubs_build_environment_and_preserves_non_utf8_argv() {
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(&report).expect("read runner report"))
             .expect("decode runner report");
-    assert_eq!(report["artifact_fd_open"], false);
+    assert_eq!(report["artifact_fd_open"], true);
     assert_eq!(report["backend_fd_open"], false);
     assert_eq!(report["leaked_environment"], serde_json::json!([]));
-    assert_eq!(report["inherited_fds"], serde_json::json!([]));
+    assert_eq!(report["inherited_fds"].as_array().unwrap().len(), 1);
+    assert_eq!(report["inherited_fds"][0]["fd"], 197);
+    assert_eq!(
+        report["inherited_fds"][0]["target"],
+        root.join("runner-artifact").to_str().unwrap()
+    );
+    assert_eq!(report["runtime_artifact_directory"], "/proc/self/fd/197");
     assert_eq!(report["slot_unlocks"], serde_json::json!([]));
     assert_eq!(report["payload_hex"], "6170706c69636174696f6e2dff");
     fs::remove_dir_all(root).expect("remove runner fixture");

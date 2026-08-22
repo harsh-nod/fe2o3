@@ -1,16 +1,24 @@
 use fe2o3_core::{DeviceBuffer, GpuContext, LaunchConfig};
-use fe2o3_device::{kernel, thread};
+use fe2o3_device::{DisjointSlice, Index1D, Shifted, kernel, thread};
 use fe2o3_host::launch;
 use std::path::PathBuf;
 
 #[kernel]
-pub fn raw_output_shift(x: &[f32], out: &mut [f32]) {
+pub fn raw_output_shift(x: &[f32], mut out: DisjointSlice<f32, Shifted<Index1D, 1>>) {
     let idx = thread::index_1d();
     let source = idx.get();
-    let target = source + 1;
-    if source < x.len() && target < out.len() {
-        out[target] = x[source] * 2.0;
+    if source >= x.len() {
+        return;
     }
+    let Some(target) = idx.checked_shift::<1>() else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Some(value) = out.get_disjoint_mut(target) else {
+        fe2o3_device::trap();
+        return;
+    };
+    *value = x[source] * 2.0;
 }
 
 fn main() -> fe2o3_core::Result<()> {

@@ -1,15 +1,20 @@
 use fe2o3_core::{DeviceBuffer, GpuContext, LaunchConfig};
-use fe2o3_device::{kernel, thread};
+use fe2o3_device::{DisjointSlice, kernel, thread};
 use fe2o3_host::launch;
 use std::path::PathBuf;
 
 #[kernel]
-pub fn axpy_inplace(alpha: f32, x: &[f32], y: &mut [f32]) {
+pub fn axpy_inplace(alpha: f32, x: &[f32], mut y: DisjointSlice<f32>) {
     let idx = thread::index_1d();
     let i = idx.get();
-    if i < y.len() {
-        y[i] = alpha * x[i] + y[i];
+    let Some(y_value) = y.get_mut(idx) else {
+        return;
+    };
+    if i >= x.len() {
+        fe2o3_device::trap();
+        return;
     }
+    *y_value = alpha * x[i] + *y_value;
 }
 
 fn main() -> fe2o3_core::Result<()> {

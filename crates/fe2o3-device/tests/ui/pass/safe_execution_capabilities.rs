@@ -25,8 +25,8 @@ fn safe_execution_surface() {
     let _: () = lhs.write_mfma_fragment(&lane, Bf16MfmaFragment::ZERO);
     let _: () = rhs.write_mfma_fragment(&lane, Bf16MfmaFragment::ZERO);
     let (lhs, rhs) = gfx942_publish_lds_bf16_tile_pair_m16x16_v1(lhs, rhs);
-    let lhs = lhs.read_mfma_fragment(&lane).unwrap();
-    let rhs = rhs.read_mfma_fragment(&lane).unwrap();
+    let lhs = lhs.read_mfma_fragment(&lane);
+    let rhs = rhs.read_mfma_fragment(&lane);
     let matrix = DeviceMatrix::current();
     let _ = matrix.multiply_accumulate(lhs, rhs, F32AccumulatorFragment::ZERO);
 }

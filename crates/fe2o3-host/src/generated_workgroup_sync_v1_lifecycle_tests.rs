@@ -207,10 +207,16 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for FakeAdapter {
         } else {
             export_symbol
         };
-        let size = if self.fault == Fault::ResolutionSize {
-            test_complete_bytes_v1() as u64 - 8
+        let profile = if export_symbol == WorkgroupLdsReductionProfileV1::EXPORT_SYMBOL {
+            WorkgroupSyncProfileKindV1::LdsReduction
         } else {
-            test_complete_bytes_v1() as u64
+            WorkgroupSyncProfileKindV1::ScopedAtomic
+        };
+        let complete_bytes = test_complete_bytes_v1(profile) as u64;
+        let size = if self.fault == Fault::ResolutionSize {
+            complete_bytes - 8
+        } else {
+            complete_bytes
         };
         let alignment = if self.fault == Fault::ResolutionAlignment {
             8
@@ -447,11 +453,18 @@ fn both_exact_profiles_complete_and_terminally_unload_once() {
     exercise_success::<WorkgroupScopedAtomicProfileV1>(0);
     assert_eq!(
         (
-            test_explicit_bytes_v1(),
+            test_explicit_bytes_v1(WorkgroupSyncProfileKindV1::LdsReduction),
             test_implicit_bytes_v1(),
-            test_complete_bytes_v1()
+            test_complete_bytes_v1(WorkgroupSyncProfileKindV1::LdsReduction)
         ),
-        (40, 256, 296)
+        (32, 256, 288)
+    );
+    assert_eq!(
+        (
+            test_explicit_bytes_v1(WorkgroupSyncProfileKindV1::ScopedAtomic),
+            test_complete_bytes_v1(WorkgroupSyncProfileKindV1::ScopedAtomic)
+        ),
+        (40, 296)
     );
 }
 

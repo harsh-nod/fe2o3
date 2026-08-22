@@ -7,13 +7,16 @@ use std::path::PathBuf;
 pub fn raw_neighbors(x: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
     let center = idx.get();
-    if center > 0 && center + 1 < x.len() {
-        let left = center - 1;
-        let right = center + 1;
-        if let Some(value) = out.get_mut(idx) {
-            *value = 0.25 * x[left] + 0.75 * x[right];
-        }
+    let Some(value) = out.get_mut(idx) else {
+        return;
+    };
+    let right = center + 1;
+    if center == 0 || right >= x.len() {
+        *value = 0.0;
+        return;
     }
+    let left = center - 1;
+    *value = 0.25 * x[left] + 0.75 * x[right];
 }
 
 fn main() -> fe2o3_core::Result<()> {

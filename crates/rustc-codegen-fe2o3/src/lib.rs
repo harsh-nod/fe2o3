@@ -2269,18 +2269,9 @@ pub fn compile_llvm_ir_to_hsaco_with_toolchain(
     let hsaco_path = hsaco_path.as_ref();
     let obj_path = hsaco_path.with_extension("o");
 
-    let mcpu = format!("-mcpu={}", target.as_str());
-    run(Command::new(&toolchain.clang).args([
-        "-target",
-        dialect_amdgcn::AMDGPU_TRIPLE,
-        mcpu.as_str(),
-        "-x",
-        "ir",
-        "-c",
-        path_arg(ll_path).as_str(),
-        "-o",
-        path_arg(&obj_path).as_str(),
-    ]))?;
+    run(&mut llvm_compile_command(
+        ll_path, &obj_path, target, toolchain,
+    ))?;
 
     run(Command::new(&toolchain.ld_lld).args([
         "-shared",
@@ -2291,6 +2282,29 @@ pub fn compile_llvm_ir_to_hsaco_with_toolchain(
     validate_hsaco_metadata(hsaco_path, target, toolchain)?;
 
     Ok(())
+}
+
+fn llvm_compile_command(
+    ll_path: &Path,
+    obj_path: &Path,
+    target: &AmdGpuTarget,
+    toolchain: &RocmToolchain,
+) -> Command {
+    let mcpu = format!("-mcpu={}", target.as_str());
+    let mut command = Command::new(&toolchain.clang);
+    command.args([
+        "-O2",
+        "-target",
+        dialect_amdgcn::AMDGPU_TRIPLE,
+        mcpu.as_str(),
+        "-x",
+        "ir",
+        "-c",
+        path_arg(ll_path).as_str(),
+        "-o",
+        path_arg(&obj_path).as_str(),
+    ]);
+    command
 }
 
 fn validate_hsaco_metadata(
@@ -2439,9 +2453,10 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         AmdGpuTarget, BackendConfig, BuildAttemptSelection, CodegenPipeline, PipelineSelection,
-        TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
-        generate_typed_host_objects, managed_artifact_output, match_typed_artifacts,
-        run_optional_kernel_ir_analysis, validate_hsaco_metadata_text,
+        RocmToolchain, TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError,
+        finalized_artifact_bytes, generate_typed_host_objects, llvm_compile_command,
+        managed_artifact_output, match_typed_artifacts, run_optional_kernel_ir_analysis,
+        validate_hsaco_metadata_text,
     };
     use crate::amdgpu_llvm::DeviceArtifact;
     use crate::collector::TypedKernelProfile;
@@ -2790,6 +2805,43 @@ amdhsa.target:   amdgcn-amd-amdhsa--gfx1201
 "#;
 
         validate_hsaco_metadata_text(text, &AmdGpuTarget::new("gfx1201"), "vecadd").unwrap();
+    }
+
+    #[test]
+    fn ordinary_device_codegen_uses_the_production_optimization_level() {
+        let toolchain = RocmToolchain {
+            rocm_path: PathBuf::from("/opt/rocm"),
+            clang: PathBuf::from("/pinned/clang"),
+            ld_lld: PathBuf::from("/pinned/ld.lld"),
+            llc: None,
+            llvm_readobj: None,
+            hip_library: PathBuf::from("/pinned/libamdhip64.so"),
+        };
+        let command = llvm_compile_command(
+            Path::new("kernel.ll"),
+            Path::new("kernel.o"),
+            &AmdGpuTarget::new("gfx942:xnack-"),
+            &toolchain,
+        );
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(arguments.first().map(String::as_str), Some("-O2"));
+        assert_eq!(
+            arguments
+                .iter()
+                .filter(|argument| *argument == "-O2")
+                .count(),
+            1
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-target", "amdgcn-amd-amdhsa"])
+        );
+        assert!(arguments.contains(&"-mcpu=gfx942:xnack-".to_owned()));
     }
 
     #[test]

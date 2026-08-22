@@ -17,14 +17,14 @@ pub(crate) const LANES: usize = 64;
 pub(crate) const GRID: [u32; 3] = [1, 1, 1];
 pub(crate) const WORKGROUP: [u32; 3] = [64, 1, 1];
 pub(crate) const WAVEFRONT_SIZE: u32 = 64;
-pub(crate) const EXPLICIT_KERNARG_BYTES: usize = 40;
-pub(crate) const COMPLETE_KERNARG_BYTES: usize = 296;
+pub(crate) const EXPLICIT_KERNARG_BYTES: usize = 32;
+pub(crate) const COMPLETE_KERNARG_BYTES: usize = 288;
 pub(crate) const DESCRIPTOR_KERNARG_ALIGNMENT: u32 = 8;
 pub(crate) const RUNTIME_KERNARG_ALIGNMENT: u64 = 16;
 pub(crate) const STATIC_GROUP_SEGMENT_BYTES: u32 = 0;
 pub(crate) const PRIVATE_SEGMENT_BYTES: u32 = 0;
 pub(crate) const DYNAMIC_LDS_BYTES: u32 = 256;
-pub(crate) const HIDDEN_DYNAMIC_LDS_OFFSET: usize = 160;
+pub(crate) const HIDDEN_DYNAMIC_LDS_OFFSET: usize = 152;
 pub(crate) const HIDDEN_DYNAMIC_LDS_VALUE: u32 = 256;
 
 #[repr(C, align(8))]
@@ -130,7 +130,6 @@ impl Error for GeneratedWorkgroupLdsReductionV1HostAdapterErrorV1 {}
 #[must_use = "the prepared LDS-reduction arguments must enter the typed lifecycle"]
 pub struct GeneratedWorkgroupLdsReductionV1HostAdapterV1<'values, 'output> {
     observed: ObservedContext,
-    epoch: u32,
     explicit_kernarg: ExactLdsReductionExplicitKernargV1,
     _values: DeviceBufferView<'values, i32>,
     _output: DeviceBufferViewMut<'output, i32>,
@@ -141,7 +140,6 @@ impl fmt::Debug for GeneratedWorkgroupLdsReductionV1HostAdapterV1<'_, '_> {
         formatter
             .debug_struct("GeneratedWorkgroupLdsReductionV1HostAdapterV1")
             .field("target", &TARGET)
-            .field("epoch", &self.epoch)
             .field("grid", &GRID)
             .field("workgroup", &WORKGROUP)
             .finish_non_exhaustive()
@@ -153,7 +151,6 @@ impl<'values, 'output> GeneratedWorkgroupLdsReductionV1HostAdapterV1<'values, 'o
     pub fn prepare(
         observed: &ObservedContext,
         values: DeviceBufferView<'values, i32>,
-        epoch: u32,
         output: DeviceBufferViewMut<'output, i32>,
     ) -> Result<Self, GeneratedWorkgroupLdsReductionV1HostAdapterErrorV1> {
         validate_target(observed.device().target())?;
@@ -175,10 +172,9 @@ impl<'values, 'output> GeneratedWorkgroupLdsReductionV1HostAdapterV1<'values, 'o
             checked_region(WorkgroupLdsReductionBufferRoleV1::Values, LANES, &values)?;
         let output_region = checked_region(WorkgroupLdsReductionBufferRoleV1::Output, 1, &output)?;
         validate_disjoint(values_region, output_region)?;
-        let bytes = pack_explicit_kernarg_v1(values_region.address, epoch, output_region.address);
+        let bytes = pack_explicit_kernarg_v1(values_region.address, output_region.address);
         Ok(Self {
             observed: observed.clone(),
-            epoch,
             explicit_kernarg: ExactLdsReductionExplicitKernargV1 { bytes },
             _values: values,
             _output: output,
@@ -190,9 +186,6 @@ impl<'values, 'output> GeneratedWorkgroupLdsReductionV1HostAdapterV1<'values, 'o
     }
     pub const fn export_symbol(&self) -> &'static str {
         EXPORT_SYMBOL
-    }
-    pub const fn epoch(&self) -> u32 {
-        self.epoch
     }
     pub const fn grid(&self) -> [u32; 3] {
         GRID
@@ -380,13 +373,12 @@ fn put_u64(bytes: &mut [u8; EXPLICIT_KERNARG_BYTES], offset: usize, value: u64) 
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
-fn pack_explicit_kernarg_v1(values: u64, epoch: u32, output: u64) -> [u8; 40] {
+fn pack_explicit_kernarg_v1(values: u64, output: u64) -> [u8; EXPLICIT_KERNARG_BYTES] {
     let mut bytes = [0; EXPLICIT_KERNARG_BYTES];
     put_u64(&mut bytes, 0, values);
     put_u64(&mut bytes, 8, LANES as u64);
-    bytes[16..20].copy_from_slice(&epoch.to_le_bytes());
-    put_u64(&mut bytes, 24, output);
-    put_u64(&mut bytes, 32, 1);
+    put_u64(&mut bytes, 16, output);
+    put_u64(&mut bytes, 24, 1);
     bytes
 }
 
@@ -416,17 +408,15 @@ mod tests {
 
     #[test]
     fn exact_abi_and_resources_are_fixed() {
-        let bytes = pack_explicit_kernarg_v1(0x1000, 0x4433_2211, 0x2000);
+        let bytes = pack_explicit_kernarg_v1(0x1000, 0x2000);
         assert_eq!(u64::from_le_bytes(bytes[0..8].try_into().unwrap()), 0x1000);
         assert_eq!(u64::from_le_bytes(bytes[8..16].try_into().unwrap()), 64);
-        assert_eq!(&bytes[16..20], &0x4433_2211_u32.to_le_bytes());
-        assert_eq!(&bytes[20..24], &[0; 4]);
         assert_eq!(
-            u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+            u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
             0x2000
         );
-        assert_eq!(u64::from_le_bytes(bytes[32..40].try_into().unwrap()), 1);
-        assert_eq!((EXPLICIT_KERNARG_BYTES, COMPLETE_KERNARG_BYTES), (40, 296));
+        assert_eq!(u64::from_le_bytes(bytes[24..32].try_into().unwrap()), 1);
+        assert_eq!((EXPLICIT_KERNARG_BYTES, COMPLETE_KERNARG_BYTES), (32, 288));
         assert_eq!((STATIC_GROUP_SEGMENT_BYTES, PRIVATE_SEGMENT_BYTES), (0, 0));
         assert_eq!(
             (
@@ -434,7 +424,7 @@ mod tests {
                 HIDDEN_DYNAMIC_LDS_OFFSET,
                 HIDDEN_DYNAMIC_LDS_VALUE
             ),
-            (256, 160, 256)
+            (256, 152, 256)
         );
     }
 

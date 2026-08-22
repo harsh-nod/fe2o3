@@ -185,7 +185,6 @@ fn protected_gfx942_lds_reduction_exact_nominal_vector() -> Result<(), Box<dyn s
     let host = GeneratedWorkgroupLdsReductionV1HostAdapterV1::prepare(
         &observed,
         values.view(1..65)?,
-        7,
         output.view_mut(1..2)?,
     )?;
     let joined = join_workgroup_lds_reduction_v1(receipt, host)?;

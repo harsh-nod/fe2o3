@@ -6,14 +6,17 @@ use std::path::PathBuf;
 #[kernel]
 pub fn stencil(x: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
-    let left = idx.offset_signed(-1);
     let center = idx.get();
     let right = idx.offset(1);
-    if left < x.len() && right < x.len() {
-        if let Some(value) = out.get_mut(idx) {
-            *value = 0.25 * x[left] + 0.5 * x[center] + 0.25 * x[right];
-        }
+    let Some(value) = out.get_mut(idx) else {
+        return;
+    };
+    if center == 0 || right >= x.len() {
+        *value = 0.0;
+        return;
     }
+    let left = center - 1;
+    *value = 0.25 * x[left] + 0.5 * x[center] + 0.25 * x[right];
 }
 
 fn main() -> fe2o3_core::Result<()> {

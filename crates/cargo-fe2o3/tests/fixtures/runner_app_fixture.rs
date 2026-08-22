@@ -220,6 +220,8 @@ fn run() -> Result<(), String> {
         "probe_fd_open": probe_fd_open,
         "preserved_environment_hex": env::var_os("RUNNER_CHAIN_ENV")
             .map(|value| hex(os_bytes(&value))),
+        "runtime_artifact_directory": env::var_os("FE2O3_HSACO_DIR")
+            .map(|value| value.to_string_lossy().into_owned()),
         "unexpected_environment": unexpected_environment,
         "slot_unlocks": slot_unlocks,
         "forged_supervisor_result": forged_supervisor_result,
@@ -808,6 +810,7 @@ fn is_handoff_environment(name: &OsStr) -> bool {
         WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
         WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
         TEST_ACK_READY_FD_ENV,
+        "FE2O3_HSACO_DIR",
     ]
     .iter()
     .any(|allowed| name == OsStr::new(allowed))
