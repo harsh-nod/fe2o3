@@ -20,6 +20,7 @@ use fe2o3_kernel_descriptor::{
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
+mod first_build_worker_v3;
 mod flash_attention_v1_finalizer;
 #[cfg(feature = "general-gemm-v1")]
 mod general_gemm_v1_artifact;
@@ -91,6 +92,13 @@ pub use first_build_worker_v2::{
     InertProtectedFirstBuildWorkerV2EvidenceV1, ProtectedFirstBuildWorkerV2Error,
     ProtectedFirstBuildWorkerV2IdentityV1, execute_protected_reproducible_first_build_worker_v2,
     execute_reproducible_first_build_worker_v2,
+};
+pub use first_build_worker_v3::{
+    InertProtectedCompilerHandoffExecutionV3, InertProtectedFirstBuildWorkerV3EvidenceV1,
+    ProtectedCompilerHandoffBindingErrorV3, ProtectedCompilerHandoffBindingIdentityV3,
+    ProtectedCompilerHandoffBindingV3, ProtectedCompilerHandoffExpectationV3,
+    ProtectedFirstBuildWorkerV3Error, ProtectedFirstBuildWorkerV3IdentityV1,
+    execute_protected_reproducible_first_build_worker_v3,
 };
 pub use flash_attention_v1_finalizer::{
     FinalizedFlashAttentionV1ReceiptV1, FlashAttentionV1FinalizationErrorV1,

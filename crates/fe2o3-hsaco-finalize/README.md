@@ -126,6 +126,28 @@ the V2 execution to reproduce those bytes exactly. Both executions use the super
 worker's pinned upstream LLVM module, optimization, and target-machine APIs plus the in-process LLD
 library API. They use no COMGR and do not invoke `clang`, `llc`, or `ld.lld` as subprocesses.
 
+### Protected Worker V3 execution
+
+`execute_protected_reproducible_first_build_worker_v3` is the strict V3 transaction entry. It
+consumes `ConsumedCompilerModuleHandoffV3` directly and accepts no V1 or V2 transaction fallback.
+The caller must also provide the exact durable V3 publication receipt and parent-retained compiler
+closure. Before worker execution, the entry strictly redecodes the complete outer handoff and
+checks its attempt, slot, transaction, outer identity, semantic capsule, invocation digest,
+compiler closure, capsule-to-module pair, final-module commitment, and embedded V2 module
+relationships.
+
+The embedded V2 value is the compiler module carried by the V3 schema; it is decoded as worker
+input without constructing or projecting a consumed V2 transaction. A V3-specific binding is
+included in both direct-worker request identities. Successful evidence binds that complete binding,
+the measured worker declaration, canonical link plan, and exact bootstrap and replay request and
+response bytes. Execution reuses the existing supervised upstream LLVM/LLD engine and Worker V2
+wire format, with no COMGR path or legacy transaction fallback.
+
+These checks establish structural consistency and retain current consumed-transaction evidence.
+They do not authenticate compiler origin, independently prove what implementation produced a
+measured worker binary, prove compiler correctness or kernel semantics, or grant link, publication,
+load, or launch authority.
+
 `inspect_worker_v2_raw_hsaco_v1` then consumes the sealed reproducibility evidence and independently
 checks the exact raw HSACO against its retained lineage, target, code-object version, symbol-role
 manifest, defined-symbol closure, descriptors, and `gfx942` launch metadata. It accepts no caller

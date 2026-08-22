@@ -810,17 +810,17 @@ pub fn execute_protected_reproducible_first_build_worker_v2(
     })
 }
 
-struct FirstBuildWorkerV2EngineResult {
-    decoded: DecodedCompilerModuleHandoffV2,
-    plan: MultiInputLinkPlanV1,
-    candidate_request_bytes: Vec<u8>,
-    candidate: InertWorkerExecutionV2,
-    authorized_request_bytes: Vec<u8>,
-    authorized: InertWorkerExecutionV2,
-    protected_replay_validation: Option<ValidatedProtectedFirstBuildReplayV2>,
+pub(crate) struct FirstBuildWorkerV2EngineResult {
+    pub(crate) decoded: DecodedCompilerModuleHandoffV2,
+    pub(crate) plan: MultiInputLinkPlanV1,
+    pub(crate) candidate_request_bytes: Vec<u8>,
+    pub(crate) candidate: InertWorkerExecutionV2,
+    pub(crate) authorized_request_bytes: Vec<u8>,
+    pub(crate) authorized: InertWorkerExecutionV2,
+    pub(crate) protected_replay_validation: Option<ValidatedProtectedFirstBuildReplayV2>,
 }
 
-enum FirstBuildWorkerV2EngineError {
+pub(crate) enum FirstBuildWorkerV2EngineError {
     LinkPlan(LinkPlanError),
     RequestConstruction(WorkerRequestConstructionError),
     CandidateRequest(WorkerProtocolError),
@@ -839,7 +839,7 @@ enum FirstBuildWorkerV2EngineError {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_reproducible_first_build_worker_v2_engine(
+pub(crate) fn execute_reproducible_first_build_worker_v2_engine(
     binding: CompilerHandoffRequestBindingV2<'_>,
     decoded: DecodedCompilerModuleHandoffV2,
     worker: &PinnedWorkerV1,
@@ -957,7 +957,8 @@ fn execute_reproducible_first_build_worker_v2_engine(
             })
             .map_err(FirstBuildWorkerV2EngineError::ReplayValidation)?,
         ),
-        CompilerHandoffRequestBindingV2::Existing { .. } => None,
+        CompilerHandoffRequestBindingV2::Existing { .. }
+        | CompilerHandoffRequestBindingV2::ProtectedV3(_) => None,
     };
 
     Ok(FirstBuildWorkerV2EngineResult {
