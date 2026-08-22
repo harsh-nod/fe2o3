@@ -24,9 +24,9 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r3-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r4-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
-    "batch=1-through-1024-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges\n",
+    "batch=1-through-8192-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add-one-final-doorbell-per-fixed-batch\n",
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,exact-completion-and-signal-recycle-before-detach-rebind-or-returning-destroy\n",
@@ -41,7 +41,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "6b42d97c782264bc42ef5e5a07affc5fad833b9a1f40fcfecb248ec941b4b09e";
+    "d0d461a03b680e91bb3bc7abdefa19bb36c1b8c85ed761c22adac6e148e74ae5";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -991,14 +991,14 @@ mod tests {
     #[test]
     fn fixed_batch_ring_preflight_covers_large_single_publications() {
         assert!(validate_ring::<1>(4_096).is_ok());
-        assert!(validate_ring::<544>(65_536).is_ok());
         assert!(validate_ring::<1024>(65_536).is_ok());
+        assert!(validate_ring::<8192>(524_288).is_ok());
         assert!(matches!(
-            validate_ring::<0>(65_536),
+            validate_ring::<0>(524_288),
             Err(ServiceQueueErrorV1::BatchContract(_))
         ));
         assert!(matches!(
-            validate_ring::<1025>(131_072),
+            validate_ring::<8193>(1_048_576),
             Err(ServiceQueueErrorV1::BatchContract(_))
         ));
         assert!(matches!(
@@ -1006,7 +1006,7 @@ mod tests {
             Err(ServiceQueueErrorV1::BatchContract(_))
         ));
         assert!(matches!(
-            validate_ring::<544>(32_768),
+            validate_ring::<8192>(262_144),
             Err(ServiceQueueErrorV1::BatchContract(_))
         ));
     }

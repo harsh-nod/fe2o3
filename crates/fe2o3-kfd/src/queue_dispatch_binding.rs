@@ -419,13 +419,13 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r6-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r7-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,checked-bounded-subranges,inspected-actual-access-derived-internally,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage\n",
-    "batch=1-through-1024,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,one-generation-bound-template-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
+    "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,one-generation-bound-template-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
     "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
     "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding,device-local-readonly-unwritten-out-of-range-overlapping-and-stale-requests-rejected,no-initialization-promotion\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
@@ -438,7 +438,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "62e93a879af8af93d7cbbe498b80d9b1518464d4b85efd9e061ebd8edb41eee2";
+    "e2514abead2b8d453b9e1af9f4fbc1c3bc28733ee359307fee4b9e746a554483";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -3012,9 +3012,9 @@ mod tests {
             "ZeroPacketCount"
         );
         assert!(validate_packet_count::<1>().is_ok());
-        assert!(validate_packet_count::<1024>().is_ok());
+        assert!(validate_packet_count::<8192>().is_ok());
         assert!(matches!(
-            validate_packet_count::<1025>(),
+            validate_packet_count::<8193>(),
             Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum { .. })
         ));
         assert!(matches!(
@@ -3036,17 +3036,17 @@ mod tests {
 
     #[test]
     fn fixed_batch_ring_must_cover_every_packet_before_native_preparation() {
-        assert!(validate_fixed_batch_ring::<768>(65_536).is_ok());
         assert!(validate_fixed_batch_ring::<1024>(65_536).is_ok());
+        assert!(validate_fixed_batch_ring::<8192>(524_288).is_ok());
         assert!(matches!(
-            validate_fixed_batch_ring::<1024>(32_768),
+            validate_fixed_batch_ring::<8192>(262_144),
             Err(Gfx942DispatchBindingErrorV1::RingCapacity {
-                requested: 1024,
-                capacity: 512,
+                requested: 8192,
+                capacity: 4096,
             })
         ));
         assert!(matches!(
-            validate_fixed_batch_ring::<1025>(131_072),
+            validate_fixed_batch_ring::<8193>(1_048_576),
             Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum { .. })
         ));
     }

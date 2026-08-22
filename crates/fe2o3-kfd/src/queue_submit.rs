@@ -417,7 +417,7 @@ mod tests {
     };
 
     #[repr(align(64))]
-    struct AlignedRing([u8; 65_664]);
+    struct AlignedRing([u8; 524_416]);
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum FailureAfterV1 {
@@ -428,7 +428,7 @@ mod tests {
     }
 
     struct FakeBackend {
-        ring: AlignedRing,
+        ring: Box<AlignedRing>,
         logical_bytes: usize,
         write: AtomicU64,
         read: AtomicU64,
@@ -448,7 +448,15 @@ mod tests {
         }
 
         fn with_ring_bytes(logical_bytes: usize, write: u64, read: u64) -> Self {
-            let mut ring = AlignedRing([0xa5; 65_664]);
+            let mut ring = Box::<AlignedRing>::new_uninit();
+            // SAFETY: every byte pattern is valid for the wrapped byte array.
+            // Initializing the allocation in place avoids a maximum-ring-sized
+            // temporary on the test thread's stack.
+            unsafe {
+                ring.as_mut_ptr().cast::<u8>().write_bytes(0xa5, 524_416);
+            }
+            // SAFETY: the complete allocation was initialized above.
+            let mut ring = unsafe { ring.assume_init() };
             initialize_invalid_ring(&mut ring.0[64..64 + logical_bytes]).unwrap();
             Self {
                 ring,
@@ -569,10 +577,13 @@ mod tests {
     }
 
     fn batch<const N: usize>() -> AqlPreparedKernelDispatchBatchV2<N> {
-        AqlPreparedKernelDispatchBatchV2::try_from_packets(core::array::from_fn(|index| {
-            indexed_packet(index as u32)
-        }))
-        .unwrap()
+        let packets = (0..N)
+            .map(|index| indexed_packet(index as u32))
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
+        AqlPreparedKernelDispatchBatchV2::try_from_boxed_packets(packets).unwrap()
     }
 
     #[test]
@@ -718,14 +729,14 @@ mod tests {
     }
 
     #[test]
-    fn fixed_batch_of_1024_uses_one_fetch_add_and_one_final_doorbell() {
-        let mut owner = NativeAqlSubmissionOwnerV1::new(65_536).unwrap();
-        let mut backend = FakeBackend::with_ring_bytes(65_536, 0, 0);
-        assert_eq!(owner.submit_batch(batch::<1024>(), &mut backend), Ok(1023));
-        assert_eq!(backend.write.load(Ordering::Relaxed), 1024);
-        assert_eq!(backend.body_calls, 1024);
-        assert_eq!(backend.header_calls, 1024);
-        assert_eq!(backend.doorbells, [1023]);
+    fn fixed_batch_of_8192_uses_one_fetch_add_and_one_final_doorbell() {
+        let mut owner = NativeAqlSubmissionOwnerV1::new(524_288).unwrap();
+        let mut backend = FakeBackend::with_ring_bytes(524_288, 0, 0);
+        assert_eq!(owner.submit_batch(batch::<8192>(), &mut backend), Ok(8191));
+        assert_eq!(backend.write.load(Ordering::Relaxed), 8192);
+        assert_eq!(backend.body_calls, 8192);
+        assert_eq!(backend.header_calls, 8192);
+        assert_eq!(backend.doorbells, [8191]);
         assert_eq!(
             backend
                 .trace
@@ -742,9 +753,9 @@ mod tests {
                 .count(),
             1
         );
-        assert!(backend.trace[4..1028].iter().all(|event| *event == "body"));
+        assert!(backend.trace[4..8196].iter().all(|event| *event == "body"));
         assert!(
-            backend.trace[1028..2052]
+            backend.trace[8196..16388]
                 .iter()
                 .all(|event| *event == "header")
         );

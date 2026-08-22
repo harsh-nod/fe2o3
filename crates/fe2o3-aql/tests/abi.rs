@@ -34,7 +34,7 @@ fn fixed_batch_v2_is_additive_and_frozen() {
     let digest = Sha256::digest(AQL_FIXED_BATCH_MODEL_MANIFEST_V2);
     assert_eq!(hex(&digest), AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2);
     assert_eq!(AQL_MAX_BATCH_PACKETS_V1, 256);
-    assert_eq!(AQL_MAX_FIXED_BATCH_PACKETS_V2, 1024);
+    assert_eq!(AQL_MAX_FIXED_BATCH_PACKETS_V2, 8192);
     assert!(
         AQL_FIXED_BATCH_MODEL_MANIFEST_V2.contains(AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1)
     );
@@ -167,32 +167,38 @@ fn prepared_batch_rejects_counts_outside_the_reviewed_bound() {
 }
 
 #[test]
-fn fixed_batch_v2_admits_1024_with_one_two_phase_publication() {
-    let batch =
-        AqlPreparedKernelDispatchBatchV2::<1024>::try_from_packets(core::array::from_fn(|_| {
-            prepared_packet()
-        }))
+fn fixed_batch_v2_admits_8192_with_one_two_phase_publication() {
+    let packets = (0..8192)
+        .map(|_| prepared_packet())
+        .collect::<Vec<_>>()
+        .into_boxed_slice()
+        .try_into()
         .unwrap();
-    assert_eq!(batch.packet_count(), 1024);
+    let batch = AqlPreparedKernelDispatchBatchV2::<8192>::try_from_boxed_packets(packets).unwrap();
+    assert_eq!(batch.packet_count(), 8192);
     let mut target = BatchCaptureTarget::default();
     batch.publish_with(&mut target).unwrap();
-    assert_eq!(target.events.len(), 2048);
+    assert_eq!(target.events.len(), 16384);
     assert!(matches!(target.events[0], BatchEvent::Body(0)));
-    assert!(matches!(target.events[1023], BatchEvent::Body(1023)));
-    assert!(matches!(target.events[1024], BatchEvent::Header(0, 0x1402)));
+    assert!(matches!(target.events[8191], BatchEvent::Body(8191)));
+    assert!(matches!(target.events[8192], BatchEvent::Header(0, 0x1402)));
     assert!(matches!(
-        target.events[2047],
-        BatchEvent::Header(1023, 0x1402)
+        target.events[16383],
+        BatchEvent::Header(8191, 0x1402)
     ));
 
+    let over_bound = (0..8193)
+        .map(|_| prepared_packet())
+        .collect::<Vec<_>>()
+        .into_boxed_slice()
+        .try_into()
+        .unwrap();
     assert_eq!(
-        AqlPreparedKernelDispatchBatchV2::<1025>::try_from_packets(core::array::from_fn(|_| {
-            prepared_packet()
-        })),
+        AqlPreparedKernelDispatchBatchV2::<8193>::try_from_boxed_packets(over_bound),
         Err(
             AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
-                requested: 1025,
-                maximum: 1024,
+                requested: 8193,
+                maximum: 8192,
             }
         )
     );
@@ -577,8 +583,8 @@ fn maximum_batch_and_last_nonoverflowing_counter_are_admitted() {
 }
 
 #[test]
-fn fixed_batch_v2_reservation_is_bounded_by_64k_ring_and_checked_arithmetic() {
-    let capacity = AqlRingCapacityV1::from_ring_bytes(65_536).unwrap();
+fn fixed_batch_v2_reservation_is_bounded_by_512k_ring_and_checked_arithmetic() {
+    let capacity = AqlRingCapacityV1::from_ring_bytes(524_288).unwrap();
     let mut model = AqlSingleProducerRingModelV1::new(capacity, 777, 777).unwrap();
     assert_eq!(
         model.reserve_batch(777, 257).unwrap_err(),
@@ -590,11 +596,11 @@ fn fixed_batch_v2_reservation_is_bounded_by_64k_ring_and_checked_arithmetic() {
     let reservation = model
         .reserve_fixed_batch_v2(777, AQL_MAX_FIXED_BATCH_PACKETS_V2)
         .unwrap();
-    assert_eq!(reservation.packet_count(), 1024);
+    assert_eq!(reservation.packet_count(), 8192);
     assert_eq!(reservation.first_packet_id(), 777);
-    assert_eq!(reservation.last_packet_id(), 1800);
-    assert_eq!(reservation.next_write(), 1801);
-    assert_eq!(reservation.entries().len(), 1024);
+    assert_eq!(reservation.last_packet_id(), 8968);
+    assert_eq!(reservation.next_write(), 8969);
+    assert_eq!(reservation.entries().len(), 8192);
 
     let mut too_many = AqlSingleProducerRingModelV1::new(capacity, 0, 0).unwrap();
     assert_eq!(
@@ -602,17 +608,17 @@ fn fixed_batch_v2_reservation_is_bounded_by_64k_ring_and_checked_arithmetic() {
             .reserve_fixed_batch_v2(0, AQL_MAX_FIXED_BATCH_PACKETS_V2 + 1)
             .unwrap_err(),
         AqlRingReservationError::PacketCountExceedsReviewedMaximum {
-            requested: 1025,
-            maximum: 1024,
+            requested: 8193,
+            maximum: 8192,
         }
     );
 
     let mut exhausted =
-        AqlSingleProducerRingModelV1::new(capacity, u64::MAX - 1023, u64::MAX - 1023).unwrap();
+        AqlSingleProducerRingModelV1::new(capacity, u64::MAX - 8191, u64::MAX - 8191).unwrap();
     let before = exhausted.write();
     assert_eq!(
         exhausted
-            .reserve_fixed_batch_v2(u64::MAX - 1023, 1024)
+            .reserve_fixed_batch_v2(u64::MAX - 8191, 8192)
             .unwrap_err(),
         AqlRingReservationError::WriteCounterExhausted
     );

@@ -25,11 +25,11 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r3-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r4-v1\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
-    "aql_fixed_batch_schema_sha256=3d8376174a564eaee500ad8849d8bf3a1a38d56f9e5bc50bf60aea408b25bf1d\n",
-    "arena=one-host-visible-coherent-gtt-allocation,65536-bytes,1024-distinct-64-byte-aligned-user-signals\n",
-    "batch=1-through-1024,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
+    "aql_fixed_batch_schema_sha256=e989398f327c97df8108855a9c97316dd5c6b6b5af68704a14da64990dc4aa8a\n",
+    "arena=one-host-visible-coherent-gtt-allocation,524288-bytes,8192-distinct-64-byte-aligned-user-signals\n",
+    "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
     "binding=crate-private-packet-construction,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
     "observation=bounded-busy-poll,atomic-i64-acquire,all-signals-zero-before-ready,unexpected-value-is-fault\n",
@@ -42,7 +42,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "406f1f2f3e93eb4704fba3b5ead0d0d05639991949baff4ad3a0360c343fb7a4";
+    "abb0fe30cddd4a93bf36ba3df4dea38bd899339e9e62eaacceeb5bbc5208378b";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -912,7 +912,7 @@ mod tests {
 
     #[test]
     fn boundary_batches_bind_distinct_wrap_free_signal_slots() {
-        for count in [1_usize, 2, 4, 16, 256, 1024] {
+        for count in [1_usize, 2, 4, 16, 256, 8192] {
             let mut owner = owner();
             let templates: Vec<_> = (0..count).map(|index| template(index as u64)).collect();
             match count {
@@ -931,8 +931,8 @@ mod tests {
                     let values: [CompletionPacketTemplateV1; 256] = templates.try_into().unwrap();
                     assert!(owner.bind_batch(values).is_ok());
                 }
-                1024 => {
-                    let values: CompletionPacketTemplatesV1<1024> =
+                8192 => {
+                    let values: CompletionPacketTemplatesV1<8192> =
                         CompletionPacketTemplatesV1::try_from_vec(templates).unwrap();
                     assert!(owner.bind_fixed_batch(values).is_ok());
                 }
@@ -945,9 +945,9 @@ mod tests {
             Err(Gfx942CompletionErrorV1::ZeroPacketCount)
         ));
         let mut over = owner();
-        let over_values: CompletionPacketTemplatesV1<1025> =
+        let over_values: CompletionPacketTemplatesV1<8193> =
             CompletionPacketTemplatesV1::try_from_vec(
-                (0..1025).map(|index| template(index as u64)).collect(),
+                (0..8193).map(|index| template(index as u64)).collect(),
             )
             .unwrap();
         assert!(matches!(
@@ -1151,8 +1151,8 @@ mod tests {
     #[test]
     fn capacity_and_identity_exhaustion_are_preflighted() {
         let mut full = owner();
-        let all: CompletionPacketTemplatesV1<1024> = CompletionPacketTemplatesV1::try_from_vec(
-            (0..1024).map(|index| template(index as u64)).collect(),
+        let all: CompletionPacketTemplatesV1<8192> = CompletionPacketTemplatesV1::try_from_vec(
+            (0..8192).map(|index| template(index as u64)).collect(),
         )
         .unwrap();
         assert!(full.bind_fixed_batch(all).is_ok());
