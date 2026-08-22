@@ -3,9 +3,11 @@
 #![doc = include_str!("../README.md")]
 
 mod production_formal_memory_v1;
+mod production_lineage_evidence_v3;
 mod production_semantic_kir_v1;
 
 pub use production_formal_memory_v1::*;
+pub use production_lineage_evidence_v3::*;
 pub use production_semantic_kir_v1::*;
 
 use std::{
