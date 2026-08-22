@@ -16,19 +16,25 @@ use crate::production_release::{
 };
 use crate::protected_compiler_handoff_v3::ParentConsumedCompilerModuleHandoffV3;
 use fe2o3_artifact_transaction::{
-    ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2,
+    CompilerModuleHandoffReceiptV3, ConsumedCompilerModuleHandoffV1,
+    ConsumedCompilerModuleHandoffV2,
 };
+use fe2o3_build_authority::CompilerClosureV2;
+use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1,
     InertProtectedFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    LinkOptionV1, LinkPlanError, MAX_LINK_INPUTS, PinnedWorkerV1, ProtectedFirstBuildWorkerV2Error,
+    LinkOptionV1, LinkPlanError, MAX_LINK_INPUTS, PinnedWorkerV1,
+    PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedFirstBuildWorkerV2Error,
     ProtectedFirstBuildWorkerV3Error, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
     RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
     WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    execute_preflighted_protected_reproducible_first_build_worker_v3,
     execute_protected_reproducible_first_build_worker_v2,
     execute_protected_reproducible_first_build_worker_v3,
     execute_reproducible_first_build_worker_v2,
+    preflight_protected_reproducible_first_build_worker_v3,
 };
 use fe2o3_verifier::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256, MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1,
@@ -618,6 +624,40 @@ impl PreparedWorkerV2Config {
             self.link_options.clone(),
             self.candidate_output.clone(),
             self.limits,
+        )
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn preflight_protected_v3(
+        &self,
+        handoff: &InertSemanticCompilerModuleHandoffV3,
+        receipt: CompilerModuleHandoffReceiptV3,
+        compiler_closure: CompilerClosureV2,
+    ) -> Result<PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedFirstBuildWorkerV3Error>
+    {
+        preflight_protected_reproducible_first_build_worker_v3(
+            handoff,
+            receipt,
+            compiler_closure,
+            &self.worker,
+            self.providers.clone(),
+            self.link_options.clone(),
+            self.candidate_output.clone(),
+            self.limits,
+        )
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn execute_preflighted_protected_v3(
+        &self,
+        parent_consumed: ParentConsumedCompilerModuleHandoffV3,
+        preflight: PreparedProtectedFirstBuildWorkerV3PreflightV1,
+    ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
+        let (_, consumed, _) = parent_consumed.into_parts();
+        execute_preflighted_protected_reproducible_first_build_worker_v3(
+            consumed,
+            preflight,
+            &self.worker,
         )
     }
 }
@@ -1669,6 +1709,25 @@ mod tests {
             InertProtectedFirstBuildWorkerV3EvidenceV1,
             ProtectedFirstBuildWorkerV3Error,
         > = PreparedWorkerV2Config::execute_protected_v3;
+
+        let _preflight: fn(
+            &PreparedWorkerV2Config,
+            &InertSemanticCompilerModuleHandoffV3,
+            CompilerModuleHandoffReceiptV3,
+            CompilerClosureV2,
+        ) -> Result<
+            PreparedProtectedFirstBuildWorkerV3PreflightV1,
+            ProtectedFirstBuildWorkerV3Error,
+        > = PreparedWorkerV2Config::preflight_protected_v3;
+
+        let _execute_preflighted: fn(
+            &PreparedWorkerV2Config,
+            ParentConsumedCompilerModuleHandoffV3,
+            PreparedProtectedFirstBuildWorkerV3PreflightV1,
+        ) -> Result<
+            InertProtectedFirstBuildWorkerV3EvidenceV1,
+            ProtectedFirstBuildWorkerV3Error,
+        > = PreparedWorkerV2Config::execute_preflighted_protected_v3;
     }
 
     fn row_softmax_manifest(directory: &TestDirectory) -> PathBuf {

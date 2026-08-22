@@ -12,6 +12,8 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1;
+use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
+use fe2o3_hsaco_finalize::ProtectedFirstBuildWorkerV3Error;
 use fe2o3_rustc_invocation::RustcInvocationDescriptorV3;
 
 use crate::inert_rustc_invocation_capture::{
@@ -226,6 +228,26 @@ impl ProtectedCompilerModuleHandoffIntake {
         parent_custody: &ParentRustcInvocationCustody,
     ) -> Result<ParentConsumedCompilerModuleHandoffV3, ProtectedCompilerModuleHandoffIntakeError>
     {
+        self.consume_v3_after_preflight(output_dir, producer, attempt, parent_custody, |_, _, _| {
+            Ok(())
+        })
+        .map(|(consumed, ())| consumed)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn consume_v3_after_preflight<T>(
+        &self,
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        parent_custody: &ParentRustcInvocationCustody,
+        preflight: impl FnOnce(
+            &InertSemanticCompilerModuleHandoffV3,
+            CompilerModuleHandoffReceiptV3,
+            CompilerClosureV2,
+        ) -> Result<T, ProtectedFirstBuildWorkerV3Error>,
+    ) -> Result<(ParentConsumedCompilerModuleHandoffV3, T), ProtectedCompilerModuleHandoffIntakeError>
+    {
         let Self::ProtectedV3 = self else {
             return Err(ProtectedCompilerModuleHandoffIntakeError::WrongSchema {
                 requested: "V3",
@@ -258,6 +280,9 @@ impl ProtectedCompilerModuleHandoffIntake {
         if token.handoff().capsule().invocation() != protected_custody.descriptor() {
             return Err(ProtectedCompilerModuleHandoffIntakeError::InvocationMismatch);
         }
+        let compiler_closure = *protected_custody.descriptor().compiler_closure();
+        let prepared = preflight(token.handoff(), receipt, compiler_closure)
+            .map_err(ProtectedCompilerModuleHandoffIntakeError::WorkerPreflight)?;
         parent_custody
             .revalidate()
             .map_err(ProtectedCompilerModuleHandoffIntakeError::ParentCustody)?;
@@ -271,11 +296,12 @@ impl ProtectedCompilerModuleHandoffIntake {
             return Err(ProtectedCompilerModuleHandoffIntakeError::TransportBindingMismatch);
         }
         debug_assert!(!consumed.grants_compiler_authority());
-        Ok(ParentConsumedCompilerModuleHandoffV3 {
+        let consumed = ParentConsumedCompilerModuleHandoffV3 {
             receipt,
             consumed,
-            compiler_closure: *protected_custody.descriptor().compiler_closure(),
-        })
+            compiler_closure,
+        };
+        Ok((consumed, prepared))
     }
 }
 
@@ -288,6 +314,7 @@ pub(crate) enum ProtectedCompilerModuleHandoffIntakeError {
     ParentCustody(ParentProtectedRustcInvocationCustodyErrorV3),
     V2(CompilerModuleHandoffErrorV2),
     V3(CompilerModuleHandoffErrorV3),
+    WorkerPreflight(ProtectedFirstBuildWorkerV3Error),
     TransportBindingMismatch,
     InvocationMismatch,
     UnprotectedParentCustody,
@@ -306,6 +333,7 @@ impl fmt::Display for ProtectedCompilerModuleHandoffIntakeError {
             Self::ParentCustody(error) => error.fmt(formatter),
             Self::V2(error) => error.fmt(formatter),
             Self::V3(error) => error.fmt(formatter),
+            Self::WorkerPreflight(error) => write!(formatter, "protected V3 worker preflight failed before handoff consumption: {error}"),
             Self::TransportBindingMismatch => formatter.write_str(
                 "consumed V3 compiler-module handoff changed its exact transaction binding",
             ),
@@ -325,6 +353,7 @@ impl Error for ProtectedCompilerModuleHandoffIntakeError {
             Self::ParentCustody(error) => Some(error),
             Self::V2(error) => Some(error),
             Self::V3(error) => Some(error),
+            Self::WorkerPreflight(error) => Some(error),
             Self::WrongSchema { .. }
             | Self::TransportBindingMismatch
             | Self::InvocationMismatch
@@ -365,7 +394,7 @@ mod tests {
 
     use super::{
         ParentRustcInvocationCustody, ProtectedCompilerModuleHandoffIntake,
-        ProtectedCompilerModuleHandoffIntakeError,
+        ProtectedCompilerModuleHandoffIntakeError, ProtectedFirstBuildWorkerV3Error,
     };
     use crate::inert_rustc_invocation_capture::{
         InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
@@ -686,6 +715,72 @@ mod tests {
             transaction.transaction_identity()
         );
         assert_eq!(compiler_closure, *handoff.capsule().compiler_closure());
+    }
+
+    #[test]
+    fn protected_v3_intake_runs_preflight_before_one_shot_consumption() {
+        let directory = TestDirectory::new("preflight-order");
+        let producer = producer(0x24);
+        let attempt = begin(&directory.0, &producer, 0x25);
+        let (custody, _) = protected_parent_custody(0x26);
+        let handoff = outer(&custody, 0x27);
+        let receipt =
+            publish_compiler_module_handoff_v3(&directory.0, &producer, attempt, &handoff).unwrap();
+        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+
+        let (consumed, marker) = intake
+            .consume_v3_after_preflight(
+                &directory.0,
+                &producer,
+                attempt,
+                &custody,
+                |observed, observed_receipt, compiler_closure| {
+                    assert_eq!(observed, &handoff);
+                    assert_eq!(observed_receipt, receipt);
+                    assert_eq!(compiler_closure, *handoff.capsule().compiler_closure());
+                    Ok("preflight-complete")
+                },
+            )
+            .unwrap();
+        assert_eq!(marker, "preflight-complete");
+        assert_eq!(consumed.receipt(), receipt);
+        assert!(matches!(
+            intake.consume_v3(&directory.0, &producer, attempt, &custody),
+            Err(ProtectedCompilerModuleHandoffIntakeError::V3(
+                CompilerModuleHandoffErrorV3::AlreadyConsumed
+            ))
+        ));
+    }
+
+    #[test]
+    fn protected_v3_preflight_rejection_leaves_transaction_unconsumed() {
+        let directory = TestDirectory::new("preflight-rejection");
+        let producer = producer(0x28);
+        let attempt = begin(&directory.0, &producer, 0x29);
+        let (custody, _) = protected_parent_custody(0x2a);
+        let handoff = outer(&custody, 0x2b);
+        publish_compiler_module_handoff_v3(&directory.0, &producer, attempt, &handoff).unwrap();
+        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+
+        assert!(matches!(
+            intake.consume_v3_after_preflight(
+                &directory.0,
+                &producer,
+                attempt,
+                &custody,
+                |_, _, _| Err::<(), _>(ProtectedFirstBuildWorkerV3Error::ReplayValidation {
+                    field: "fixture deterministic rejection",
+                }),
+            ),
+            Err(ProtectedCompilerModuleHandoffIntakeError::WorkerPreflight(
+                _
+            ))
+        ));
+        assert!(
+            intake
+                .consume_v3(&directory.0, &producer, attempt, &custody)
+                .is_ok()
+        );
     }
 
     #[test]
