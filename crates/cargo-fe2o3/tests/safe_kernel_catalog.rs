@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,6 +13,23 @@ impl<'ast> Visit<'ast> for UnsafeKernelAudit {
     fn visit_expr_unsafe(&mut self, expression: &'ast syn::ExprUnsafe) {
         self.unsafe_blocks += 1;
         visit::visit_expr_unsafe(self, expression);
+    }
+}
+
+#[derive(Default)]
+struct DirectCallAudit {
+    callees: BTreeSet<String>,
+}
+
+impl<'ast> Visit<'ast> for DirectCallAudit {
+    fn visit_expr_call(&mut self, expression: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = expression.func.as_ref()
+            && path.qself.is_none()
+            && let Some(segment) = path.path.segments.last()
+        {
+            self.callees.insert(segment.ident.to_string());
+        }
+        visit::visit_expr_call(self, expression);
     }
 }
 
@@ -48,6 +66,38 @@ fn repository_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn collect_reachable_unsafe(
+    root: &str,
+    current: &str,
+    functions: &BTreeMap<String, &syn::ItemFn>,
+    visited: &mut BTreeSet<String>,
+    violations: &mut BTreeSet<String>,
+) {
+    if !visited.insert(current.to_owned()) {
+        return;
+    }
+    let Some(function) = functions.get(current) else {
+        return;
+    };
+
+    let mut unsafe_audit = UnsafeKernelAudit::default();
+    unsafe_audit.visit_block(&function.block);
+    if function.sig.unsafety.is_some() || unsafe_audit.unsafe_blocks != 0 {
+        let location = if current == root {
+            root.to_owned()
+        } else {
+            format!("{root} -> {current}")
+        };
+        violations.insert(location);
+    }
+
+    let mut call_audit = DirectCallAudit::default();
+    call_audit.visit_block(&function.block);
+    for callee in call_audit.callees {
+        collect_reachable_unsafe(root, &callee, functions, visited, violations);
+    }
+}
+
 #[test]
 fn positive_example_kernel_unsafe_debt_is_frozen() {
     let root = repository_root();
@@ -74,18 +124,27 @@ fn positive_example_kernel_unsafe_debt_is_frozen() {
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", relative.display()));
         let syntax = syn::parse_file(&bytes)
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", relative.display()));
-        for item in syntax.items {
-            let syn::Item::Fn(function) = item else {
-                continue;
-            };
-            if !is_kernel(&function) {
-                continue;
-            }
+        let functions = syntax
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Fn(function) => Some((function.sig.ident.to_string(), function)),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        for function in functions.values().filter(|function| is_kernel(function)) {
             kernels += 1;
-            let mut audit = UnsafeKernelAudit::default();
-            audit.visit_block(&function.block);
-            if function.sig.unsafety.is_some() || audit.unsafe_blocks != 0 {
-                violations.push(format!("{}::{}", relative.display(), function.sig.ident));
+            let kernel = function.sig.ident.to_string();
+            let mut reachable = BTreeSet::new();
+            collect_reachable_unsafe(
+                &kernel,
+                &kernel,
+                &functions,
+                &mut BTreeSet::new(),
+                &mut reachable,
+            );
+            for location in reachable {
+                violations.push(format!("{}::{location}", relative.display()));
             }
         }
     }
@@ -96,6 +155,7 @@ fn positive_example_kernel_unsafe_debt_is_frozen() {
         [
             "examples/flash_attention_v1/src/kernel.rs::flash_attention_causal_f32_b1_h1_n8_d16_v1",
             "examples/moe_expert_v1/src/kernel.rs::moe_expert_gemm_bf16_m16_n16_k16_v1",
+            "examples/moe_top2_v1/src/kernel.rs::moe_top2_route_f32_t8_e4_k2_c4_v1 -> write_value_v1",
             "examples/raw_disjoint_inplace_shift/src/main.rs::raw_disjoint_inplace_shift",
             "examples/raw_disjoint_shift/src/main.rs::raw_disjoint_shift",
             "examples/row_softmax_v1/src/kernel.rs::row_softmax_v1",
