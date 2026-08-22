@@ -217,6 +217,7 @@ pub use worker_v3_publication_intent::{
     WorkerV3PublicationIntentIdentityV1, WorkerV3PublicationIntentInvalidReasonV1,
     WorkerV3PublicationIntentOptionsV1, WorkerV3PublicationIntentOutcomeV1,
     WorkerV3PublicationIntentRecordV1, WorkerV3PublicationIntentScavengeOutcomeV1,
+    clear_worker_v3_publication_intent_v1, clear_worker_v3_publication_intent_v1_with_options,
     persist_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1_with_options,
     recover_worker_v3_publication_intent_v1, scavenge_worker_v3_publication_intent_occurrence_v1,
 };
