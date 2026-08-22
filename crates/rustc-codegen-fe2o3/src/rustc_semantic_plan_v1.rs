@@ -263,6 +263,7 @@ pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     direct_calls: Box<[DirectCallRecipeV1]>,
     terminal_expansions: Box<[TerminalExpansionRecipeV1<'tcx>]>,
     sha256: [u8; 32],
+    canonical_transcript: Box<[u8]>,
 }
 
 impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
@@ -298,8 +299,12 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
         &self.terminal_expansions
     }
 
-    pub(crate) const fn sha256(&self) -> [u8; 32] {
-        self.sha256
+    pub(crate) fn canonical_transcript(&self) -> &[u8] {
+        &self.canonical_transcript
+    }
+
+    pub(crate) fn into_identity_and_canonical_transcript(self) -> ([u8; 32], Box<[u8]>) {
+        (self.sha256, self.canonical_transcript)
     }
 }
 
@@ -707,7 +712,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
 
     let direct_calls = direct_calls.into_iter().collect::<Box<[_]>>();
     let terminal_expansions = terminal_expansions.into_boxed_slice();
-    let sha256 = preflight_plan_sha256_v1(
+    let (sha256, canonical_transcript) = preflight_plan_identity_and_transcript_v1(
         target,
         identity_inventory_sha256,
         &types,
@@ -733,6 +738,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         direct_calls,
         terminal_expansions,
         sha256,
+        canonical_transcript,
     })
 }
 
@@ -1846,7 +1852,7 @@ fn bounded_diagnostic_component_v1(value: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn preflight_plan_sha256_v1<'tcx>(
+fn preflight_plan_identity_and_transcript_v1<'tcx>(
     target: SemanticTargetDataLayoutV1,
     identity_inventory_sha256: [u8; 32],
     types: &[RetainedSemanticTypeProducerV1<'tcx>],
@@ -1861,8 +1867,9 @@ fn preflight_plan_sha256_v1<'tcx>(
     terminal_expansions: &[TerminalExpansionRecipeV1<'tcx>],
     counts: RawMirPreflightCountsV1,
     tcx: TyCtxt<'tcx>,
-) -> [u8; 32] {
-    let mut digest = SemanticIdentityDigestV1::new(PREFLIGHT_PLAN_DOMAIN_V1);
+) -> ([u8; 32], Box<[u8]>) {
+    let mut digest =
+        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V1);
     digest.field(target.identity().as_bytes());
     digest.field(&identity_inventory_sha256);
     for cardinality in [
@@ -1976,7 +1983,7 @@ fn preflight_plan_sha256_v1<'tcx>(
         digest.field(&recipe.terminal.to_le_bytes());
         digest.field(&rustc_mir_body_sha256_v1(tcx, recipe.instance));
     }
-    digest.finish()
+    digest.finish_with_canonical_transcript()
 }
 
 fn source_provenance_producer_count_v1(bodies: &[RetainedSemanticBodyProducerV1]) -> usize {

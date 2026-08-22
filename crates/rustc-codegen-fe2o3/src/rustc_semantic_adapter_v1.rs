@@ -59,6 +59,7 @@ pub(crate) struct CanonicalFunctionIdentitiesV1 {
 
 pub(crate) struct SemanticIdentityDigestV1 {
     digest: Sha256,
+    canonical_transcript: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -112,15 +113,39 @@ impl SemanticIdentityDigestV1 {
     pub(crate) fn new(domain: &[u8]) -> Self {
         let mut digest = Sha256::new();
         append_field(&mut digest, domain);
-        Self { digest }
+        Self {
+            digest,
+            canonical_transcript: None,
+        }
+    }
+
+    pub(crate) fn new_with_canonical_transcript(domain: &[u8]) -> Self {
+        let mut digest = Sha256::new();
+        let mut canonical_transcript = Vec::with_capacity(8 + domain.len());
+        append_field(&mut digest, domain);
+        append_transcript_field(&mut canonical_transcript, domain);
+        Self {
+            digest,
+            canonical_transcript: Some(canonical_transcript),
+        }
     }
 
     pub(crate) fn field(&mut self, field: &[u8]) {
         append_field(&mut self.digest, field);
+        if let Some(transcript) = &mut self.canonical_transcript {
+            append_transcript_field(transcript, field);
+        }
     }
 
     pub(crate) fn finish(self) -> [u8; 32] {
         self.digest.finalize().into()
+    }
+
+    pub(crate) fn finish_with_canonical_transcript(self) -> ([u8; 32], Box<[u8]>) {
+        let transcript = self
+            .canonical_transcript
+            .expect("canonical transcript capture was explicitly requested");
+        (self.digest.finalize().into(), transcript.into_boxed_slice())
     }
 }
 
@@ -463,9 +488,31 @@ fn append_field(digest: &mut Sha256, field: &[u8]) {
     digest.update(field);
 }
 
+fn append_transcript_field(transcript: &mut Vec<u8>, field: &[u8]) {
+    transcript.extend_from_slice(&(field.len() as u64).to_le_bytes());
+    transcript.extend_from_slice(field);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captured_identity_transcript_is_the_exact_digest_preimage() {
+        let mut captured = SemanticIdentityDigestV1::new_with_canonical_transcript(b"domain");
+        captured.field(b"first");
+        captured.field(b"");
+        captured.field(b"third");
+        let (identity, transcript) = captured.finish_with_canonical_transcript();
+
+        assert_eq!(identity, <[u8; 32]>::from(Sha256::digest(&transcript)));
+
+        let mut digest_only = SemanticIdentityDigestV1::new(b"domain");
+        digest_only.field(b"first");
+        digest_only.field(b"");
+        digest_only.field(b"third");
+        assert_eq!(digest_only.finish(), identity);
+    }
 
     fn target(features: &str) -> SemanticLayoutTargetV1 {
         SemanticLayoutTargetV1::new_with_codegen_profile(

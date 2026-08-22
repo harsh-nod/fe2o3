@@ -2634,6 +2634,7 @@ dependencies = [
  "fe2o3-compiler-api",
  "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-general-gemm-compiler",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",

@@ -153,14 +153,14 @@ struct ProductionTransactionBindingsV1 {
 
 enum ProductionCompilerModulePublicationV1 {
     OrdinaryV1,
-    ProtectedV3(AdmittedProtectedRustcInvocationV1),
+    ProtectedV3(Box<AdmittedProtectedRustcInvocationV1>),
 }
 
 impl ProductionCompilerModulePublicationV1 {
     const ORDINARY_V1: Self = Self::OrdinaryV1;
 
-    const fn protected_v3(invocation: AdmittedProtectedRustcInvocationV1) -> Self {
-        Self::ProtectedV3(invocation)
+    fn protected_v3(invocation: AdmittedProtectedRustcInvocationV1) -> Self {
+        Self::ProtectedV3(Box::new(invocation))
     }
 
     fn require_v1(self) -> Result<(), ProductionPipelineErrorV1> {
@@ -173,14 +173,14 @@ impl ProductionCompilerModulePublicationV1 {
     fn require_v3(self) -> Result<AdmittedProtectedRustcInvocationV1, ProductionPipelineErrorV1> {
         match self {
             Self::OrdinaryV1 => Err(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1),
-            Self::ProtectedV3(invocation) => Ok(invocation),
+            Self::ProtectedV3(invocation) => Ok(*invocation),
         }
     }
 }
 
 struct AuthenticatedProductionBindingsV1 {
-    rustc_identity_inventory_sha256: [u8; 32],
-    rustc_preflight_plan_sha256: [u8; 32],
+    rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
+    rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindingsV1,
 }
@@ -416,8 +416,8 @@ impl Gfx942LoweredProductionCompilationV1 {
 
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
         let _ = (
-            &self.bindings.rustc_identity_inventory_sha256,
-            &self.bindings.rustc_preflight_plan_sha256,
+            &self.bindings.rustc_identity_inventory,
+            &self.bindings.rustc_preflight_plan,
             &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
@@ -456,8 +456,8 @@ impl Gfx942LoweredProductionCompilationV1 {
             bindings,
         } = self;
         let AuthenticatedProductionBindingsV1 {
-            rustc_identity_inventory_sha256,
-            rustc_preflight_plan_sha256,
+            rustc_identity_inventory,
+            rustc_preflight_plan,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -483,7 +483,10 @@ impl Gfx942LoweredProductionCompilationV1 {
                 crate::worker_v2_producer::WorkerV2ProducerError::MissingBuildAttempt,
             )
         })?;
-        let _ = (rustc_identity_inventory_sha256, rustc_preflight_plan_sha256);
+        let _ = (
+            rustc_identity_inventory.canonical_transcript(),
+            rustc_preflight_plan.canonical_transcript(),
+        );
         Ok(PreparedProductionWorkerPublicationV1 {
             producer,
             output_dir,
@@ -562,8 +565,8 @@ impl RankedVerifiedProductionCompilationV1 {
 
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
         let _ = (
-            &self.bindings.rustc_identity_inventory_sha256,
-            &self.bindings.rustc_preflight_plan_sha256,
+            &self.bindings.rustc_identity_inventory,
+            &self.bindings.rustc_preflight_plan,
             &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
@@ -657,15 +660,15 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             typed_descriptor_roots,
             transaction,
         } = self.stage;
-        let (semantic_mir, rustc_identity_inventory_sha256, rustc_preflight_plan_sha256) =
+        let (semantic_mir, rustc_identity_inventory, rustc_preflight_plan) =
             crate::collector::construct_production_semantic_mir_v1(tcx, closure)
                 .map_err(ProductionPipelineErrorV1::SemanticImport)?;
         Ok(ProductionCompilationV1 {
             stage: AdmittedSemanticMirStageV1 {
                 semantic_mir,
                 bindings: AuthenticatedProductionBindingsV1 {
-                    rustc_identity_inventory_sha256,
-                    rustc_preflight_plan_sha256,
+                    rustc_identity_inventory,
+                    rustc_preflight_plan,
                     typed_descriptor_roots,
                     transaction,
                 },
@@ -762,8 +765,8 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
             crate::collector::ProductionSemanticImportErrorV1::TargetNeutralLoweringPending {
                 functions: semantic_mir.semantic().functions().len(),
                 callables: semantic_mir.semantic().callables().len(),
-                rustc_identity_inventory_sha256: bindings.rustc_identity_inventory_sha256,
-                rustc_preflight_plan_sha256: bindings.rustc_preflight_plan_sha256,
+                rustc_identity_inventory_sha256: bindings.rustc_identity_inventory.sha256(),
+                rustc_preflight_plan_sha256: bindings.rustc_preflight_plan.sha256(),
                 semantic_sha256: *semantic_mir.semantic().semantic_sha256().as_bytes(),
             };
         drop((semantic_mir, bindings));

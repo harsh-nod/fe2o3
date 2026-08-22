@@ -63,6 +63,11 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     FunctionAbiConstruction(Box<ProductionSemanticFnAbiErrorV1>),
     BodyConstruction(Box<ProductionSemanticBodyErrorV1>),
     SemanticSchema(SemanticMirErrorV1),
+    LineageTranscriptTooLarge {
+        field: &'static str,
+        actual: usize,
+        maximum: usize,
+    },
     TargetNeutralLoweringPending {
         functions: usize,
         callables: usize,
@@ -107,6 +112,14 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::SemanticSchema(error) => {
                 write!(formatter, "semantic importer rejected complete semantic MIR: {error}")
             }
+            Self::LineageTranscriptTooLarge {
+                field,
+                actual,
+                maximum,
+            } => write!(
+                formatter,
+                "semantic importer {field} transcript uses {actual} bytes, exceeding the lineage receipt maximum {maximum}"
+            ),
             Self::TargetNeutralLoweringPending {
                 functions,
                 callables,
@@ -135,6 +148,7 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
             Self::SemanticSchema(error) => Some(error),
             Self::RootCustodyMismatch
             | Self::LimitExceeded { .. }
+            | Self::LineageTranscriptTooLarge { .. }
             | Self::FunctionIdentityCollision
             | Self::RootIdentityMismatch
             | Self::TargetNeutralLoweringPending { .. } => None,
@@ -147,12 +161,54 @@ struct ProductionSemanticIdentityInventoryV1<'tcx> {
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
     roots: Box<[SemanticFunctionIdV1]>,
     sha256: [u8; 32],
+    canonical_transcript: Box<[u8]>,
+}
+
+/// Move-only rustc-produced identity-inventory evidence retained by the
+/// production transaction. Public hashes cannot construct this owner.
+pub(crate) struct AuthenticatedRustcIdentityInventoryV3 {
+    sha256: [u8; 32],
+    canonical_transcript: Box<[u8]>,
+}
+
+impl AuthenticatedRustcIdentityInventoryV3 {
+    pub(crate) const fn sha256(&self) -> [u8; 32] {
+        self.sha256
+    }
+
+    pub(crate) fn canonical_transcript(&self) -> &[u8] {
+        &self.canonical_transcript
+    }
+}
+
+/// Move-only rustc-produced preflight-plan evidence retained by the
+/// production transaction. Public hashes cannot construct this owner.
+pub(crate) struct AuthenticatedRustcPreflightPlanV3 {
+    sha256: [u8; 32],
+    canonical_transcript: Box<[u8]>,
+}
+
+impl AuthenticatedRustcPreflightPlanV3 {
+    pub(crate) const fn sha256(&self) -> [u8; 32] {
+        self.sha256
+    }
+
+    pub(crate) fn canonical_transcript(&self) -> &[u8] {
+        &self.canonical_transcript
+    }
 }
 
 pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
-) -> Result<(AdmittedInertSemanticMirV1, [u8; 32], [u8; 32]), ProductionSemanticImportErrorV1> {
+) -> Result<
+    (
+        AdmittedInertSemanticMirV1,
+        AuthenticatedRustcIdentityInventoryV3,
+        AuthenticatedRustcPreflightPlanV3,
+    ),
+    ProductionSemanticImportErrorV1,
+> {
     let AuthenticatedCollectedKernelClosureV1 {
         target,
         collection,
@@ -186,11 +242,16 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         return Err(ProductionSemanticImportErrorV1::RootCustodyMismatch);
     }
     let identity_inventory = build_identity_inventory_v1(tcx, &target, &collection, &roots)?;
+    require_lineage_transcript_bound_v3(
+        "rustc identity inventory",
+        &identity_inventory.canonical_transcript,
+    )?;
 
     let ProductionSemanticIdentityInventoryV1 {
         functions,
         roots,
         sha256: rustc_identity_inventory_sha256,
+        canonical_transcript: rustc_identity_inventory_transcript,
     } = identity_inventory;
     let plan = match build_production_semantic_preflight_plan_v1(
         tcx,
@@ -202,6 +263,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         Ok(plan) => plan,
         Err(error) => return Err(ProductionSemanticImportErrorV1::Preflight(Box::new(error))),
     };
+    require_lineage_transcript_bound_v3("rustc preflight plan", plan.canonical_transcript())?;
     let semantic_types = match construct_production_semantic_types_v1(tcx, plan.type_producers()) {
         Ok(types) => types,
         Err(error) => {
@@ -239,7 +301,6 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
             ));
         }
     };
-    let rustc_preflight_plan_sha256 = plan.sha256();
     let semantic_mir = construct_complete_request_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
@@ -248,12 +309,35 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         semantic_function_abis,
         semantic_terminal_abis,
     )?;
+    let (rustc_preflight_plan_sha256, rustc_preflight_plan_transcript) =
+        plan.into_identity_and_canonical_transcript();
     drop((target, collection));
     Ok((
         semantic_mir,
-        rustc_identity_inventory_sha256,
-        rustc_preflight_plan_sha256,
+        AuthenticatedRustcIdentityInventoryV3 {
+            sha256: rustc_identity_inventory_sha256,
+            canonical_transcript: rustc_identity_inventory_transcript,
+        },
+        AuthenticatedRustcPreflightPlanV3 {
+            sha256: rustc_preflight_plan_sha256,
+            canonical_transcript: rustc_preflight_plan_transcript,
+        },
     ))
+}
+
+fn require_lineage_transcript_bound_v3(
+    field: &'static str,
+    transcript: &[u8],
+) -> Result<(), ProductionSemanticImportErrorV1> {
+    if transcript.len() > fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3 {
+        Err(ProductionSemanticImportErrorV1::LineageTranscriptTooLarge {
+            field,
+            actual: transcript.len(),
+            maximum: fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3,
+        })
+    } else {
+        Ok(())
+    }
 }
 
 fn construct_complete_request_v1<'tcx>(
@@ -817,20 +901,23 @@ fn build_identity_inventory_v1<'tcx>(
         return Err(ProductionSemanticImportErrorV1::RootIdentityMismatch);
     }
 
-    let sha256 = identity_inventory_sha256_v1(target, &functions, &canonical_roots);
+    let (sha256, canonical_transcript) =
+        identity_inventory_identity_and_transcript_v1(target, &functions, &canonical_roots);
     Ok(ProductionSemanticIdentityInventoryV1 {
         functions: functions.into_boxed_slice(),
         roots: canonical_roots.into_boxed_slice(),
         sha256,
+        canonical_transcript,
     })
 }
 
-fn identity_inventory_sha256_v1(
+fn identity_inventory_identity_and_transcript_v1(
     target: SemanticTargetDataLayoutV1,
     functions: &[RetainedSemanticFunctionProducerV1<'_>],
     roots: &[SemanticFunctionIdV1],
-) -> [u8; 32] {
-    let mut digest = SemanticIdentityDigestV1::new(IDENTITY_INVENTORY_DOMAIN_V1);
+) -> ([u8; 32], Box<[u8]>) {
+    let mut digest =
+        SemanticIdentityDigestV1::new_with_canonical_transcript(IDENTITY_INVENTORY_DOMAIN_V1);
     digest.field(target.identity().as_bytes());
     for function in functions {
         digest.field(function.identities.function().as_bytes());
@@ -868,7 +955,7 @@ fn identity_inventory_sha256_v1(
     for root in roots {
         digest.field(&root.index().to_le_bytes());
     }
-    digest.finish()
+    digest.finish_with_canonical_transcript()
 }
 
 const fn function_role_tag_v1(role: CollectedFunctionRole) -> u8 {
