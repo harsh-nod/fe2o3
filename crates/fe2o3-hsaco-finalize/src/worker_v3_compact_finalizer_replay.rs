@@ -288,12 +288,68 @@ impl ProtectedWorkerV3CompactFinalizerReplayV1 {
 }
 
 /// Unique large owners and compact transcript prepared for durable V3 restart storage.
-#[derive(Debug)]
 pub struct PreparedProtectedWorkerV3CompactFinalizerReplayV1 {
     outer_handoff: Vec<u8>,
     external_provider_payloads: Vec<Vec<u8>>,
     transcript: ProtectedWorkerV3CompactFinalizerReplayV1,
     finalized_hsaco: Vec<u8>,
+}
+
+impl fmt::Debug for PreparedProtectedWorkerV3CompactFinalizerReplayV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let provider_bytes = self
+            .external_provider_payloads
+            .iter()
+            .fold(0_usize, |total, payload| {
+                total.saturating_add(payload.len())
+            });
+        formatter
+            .debug_struct("PreparedProtectedWorkerV3CompactFinalizerReplayV1")
+            .field("outer_handoff_bytes", &self.outer_handoff.len())
+            .field(
+                "external_provider_count",
+                &self.external_provider_payloads.len(),
+            )
+            .field("external_provider_bytes", &provider_bytes)
+            .field("transcript_identity", &self.transcript.identity())
+            .field("transcript_bytes", &self.transcript.canonical_bytes().len())
+            .field("finalized_hsaco_bytes", &self.finalized_hsaco.len())
+            .finish()
+    }
+}
+
+/// Named inert byte owners ready for the durable Worker V3 storage bridge.
+pub struct ProtectedWorkerV3CompactFinalizerReplayPartsV1 {
+    /// Exact canonical outer semantic handoff wire.
+    pub outer_handoff: Vec<u8>,
+    /// Exact external provider payloads in canonical request order.
+    pub external_provider_payloads: Vec<Vec<u8>>,
+    /// Exact canonical compact finalizer replay transcript.
+    pub transcript: Vec<u8>,
+    /// Exact finalized canonical HSACO.
+    pub finalized_hsaco: Vec<u8>,
+}
+
+impl fmt::Debug for ProtectedWorkerV3CompactFinalizerReplayPartsV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let provider_bytes = self
+            .external_provider_payloads
+            .iter()
+            .fold(0_usize, |total, payload| {
+                total.saturating_add(payload.len())
+            });
+        formatter
+            .debug_struct("ProtectedWorkerV3CompactFinalizerReplayPartsV1")
+            .field("outer_handoff_bytes", &self.outer_handoff.len())
+            .field(
+                "external_provider_count",
+                &self.external_provider_payloads.len(),
+            )
+            .field("external_provider_bytes", &provider_bytes)
+            .field("transcript_bytes", &self.transcript.len())
+            .field("finalized_hsaco_bytes", &self.finalized_hsaco.len())
+            .finish()
+    }
 }
 
 impl PreparedProtectedWorkerV3CompactFinalizerReplayV1 {
@@ -313,13 +369,13 @@ impl PreparedProtectedWorkerV3CompactFinalizerReplayV1 {
         &self.finalized_hsaco
     }
 
-    pub fn into_parts(self) -> (Vec<u8>, Vec<Vec<u8>>, Vec<u8>, Vec<u8>) {
-        (
-            self.outer_handoff,
-            self.external_provider_payloads,
-            self.transcript.into_canonical_bytes(),
-            self.finalized_hsaco,
-        )
+    pub fn into_parts(self) -> ProtectedWorkerV3CompactFinalizerReplayPartsV1 {
+        ProtectedWorkerV3CompactFinalizerReplayPartsV1 {
+            outer_handoff: self.outer_handoff,
+            external_provider_payloads: self.external_provider_payloads,
+            transcript: self.transcript.into_canonical_bytes(),
+            finalized_hsaco: self.finalized_hsaco,
+        }
     }
 
     pub const fn grants_publication_authority(&self) -> bool {

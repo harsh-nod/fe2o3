@@ -279,7 +279,8 @@ pub use worker_v3_compact_finalizer_replay::{
     MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1,
     PreparedProtectedWorkerV3CompactFinalizerReplayV1,
     ProtectedWorkerV3CompactFinalizerReplayErrorV1,
-    ProtectedWorkerV3CompactFinalizerReplayIdentityV1, ProtectedWorkerV3CompactFinalizerReplayV1,
+    ProtectedWorkerV3CompactFinalizerReplayIdentityV1,
+    ProtectedWorkerV3CompactFinalizerReplayPartsV1, ProtectedWorkerV3CompactFinalizerReplayV1,
     prepare_protected_worker_v3_compact_finalizer_replay_v1,
 };
 pub use workgroup_sync_v1_artifact::{
