@@ -776,11 +776,13 @@ impl RankedVerifiedProductionCompilationV1 {
         self,
     ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
         let Self { ranked, bindings } = self;
-        let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower(
-            ranked.into_verified_semantic_owner(),
-            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-        )
-        .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
+        let receipt = ranked.into_ranked_receipt();
+        let lowered =
+            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+                receipt,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+            )
+            .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
         Ok(TargetNeutralProductionCompilationV1 { lowered, bindings })
     }
 }
